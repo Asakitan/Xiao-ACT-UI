@@ -1,0 +1,31 @@
+# SAO Auto — 游戏 HUD 与自动化
+# 依赖清单 (完全复刻 28midi SAO-UI, 去除 MIDI 功能)
+
+# ═══ 核心 (与 28midi 一致) ═══
+pywebview>=4.0                  # 透明 WebView HUD (EdgeChromium/WebView2)
+numpy>=1.20                     # 图像处理 / 鱼眼变换
+Pillow>=9.0                     # 截图回退 (PIL.ImageGrab)
+mss>=9.0                        # 高性能截图 (优先)
+pythonnet>=3.0                  # .NET WinForms 透明 (clr, System.Drawing)
+
+# ═══ 特效 ═══
+moderngl>=5.8                   # LinkStart 3D 粒子隧道 (OpenGL)
+
+# ═══ 识别 ═══
+opencv-python>=4.5              # 颜色过滤、条形检测
+# OCR 引擎 (三选一, 按优先级):
+paddleocr>=2.6                  # 推荐: PaddleOCR (中文最准)
+# easyocr>=1.6                  # 备选: EasyOCR
+# pytesseract>=0.3              # 备选: Tesseract (需系统安装 tesseract-ocr)
+
+# ═══ 热键 ═══
+pynput>=1.7                     # 全局热键监听
+
+# ═══ 音效 ═══
+pygame>=2.0                     # SAO 音效系统
+
+# ═══ 抓包数据源 (可选, data_source=packet 时需要) ═══
+zstandard>=0.20                 # zstd 解压 (游戏协议压缩)
+# dpkt>=1.9                     # 以太网/IP/TCP 解析 (已内置手动解析, 可选)
+# protobuf>=4.0                 # Protobuf 解码 (已内置 mini 解码器, 可选)
+# Npcap 驱动需单独安装: https://npcap.com

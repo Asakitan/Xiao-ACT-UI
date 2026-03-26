@@ -1,0 +1,31 @@
+# ── Python cache ──────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+
+# ── User data (excluded from repo) ────────────────
+player_profile.json
+settings.json
+
+# ── Debug / log files ─────────────────────────────
+packet_debug.jsonl
+*.log
+*.jsonl
+
+# ── Test files ────────────────────────────────────
+test_*.py
+*_test.py
+tests/
+
+# ── Build / dist ──────────────────────────────────
+dist/
+build/
+*.spec
+*.exe
+
+# ── IDE / OS ──────────────────────────────────────
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

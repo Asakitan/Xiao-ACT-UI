@@ -1,0 +1,1327 @@
+﻿# -*- coding: utf-8 -*-
+"""
+Packet parser for the SAO Auto overlay.
+
+This module decodes the framed game packets produced by `packet_capture.py`:
+  [4B size BE][2B type BE][payload]
+
+Supported features:
+  - MessageType dispatch (Notify / FrameDown / Return)
+  - Zstd decompression
+  - Lightweight protobuf field decoding for the sync messages we use
+  - AttrCollection parsing
+  - SyncContainerDirtyData stream parsing
+"""
+
+import math
+import struct
+import logging
+import os
+import json
+import time
+from typing import Optional, Callable, Dict, Any
+
+logger = logging.getLogger('sao_auto.parser')
+
+
+
+
+
+_zstd = None
+_pb = None
+_pb_loaded = False
+
+
+def _ensure_zstd():
+    global _zstd
+    if _zstd is not None:
+        return _zstd
+    try:
+        import zstandard
+        _zstd = zstandard.ZstdDecompressor(max_window_size=2**25)
+        return _zstd
+    except ImportError:
+        raise RuntimeError('缺少 zstandard 模块，请运行: pip install zstandard')
+
+
+def _ensure_pb():
+    """Load compiled protobuf module if available."""
+    global _pb, _pb_loaded
+    if _pb_loaded:
+        return _pb
+    _pb_loaded = True
+
+
+    try:
+        from proto import star_resonance_pb2
+        _pb = star_resonance_pb2
+        logger.info('[Parser] using compiled protobuf')
+        return _pb
+    except ImportError:
+        pass
+
+
+    try:
+        from google.protobuf import descriptor_pb2, descriptor_pool, symbol_database
+        from google.protobuf import reflection, descriptor
+        import google.protobuf.descriptor as _desc
+
+
+        proto_path = os.path.join(os.path.dirname(__file__), 'proto', 'star_resonance.proto')
+        if os.path.exists(proto_path):
+
+
+            pass
+    except ImportError:
+        pass
+
+    logger.info('[Parser] using built-in mini protobuf decoder')
+    return None
+
+
+
+# Mini protobuf helpers
+
+
+
+def _read_varint(data: bytes, pos: int):
+    """Read a protobuf varint and return `(value, new_pos)`."""
+    result = 0
+    shift = 0
+    while pos < len(data):
+        b = data[pos]
+        pos += 1
+        result |= (b & 0x7F) << shift
+        if (b & 0x80) == 0:
+            return result, pos
+        shift += 7
+    return result, pos
+
+
+def _read_signed_varint(data: bytes, pos: int):
+    """Read a signed varint using direct int32 two's-complement semantics."""
+    val, pos = _read_varint(data, pos)
+    if val > 0x7FFFFFFF:
+        val -= 0x100000000
+    return val, pos
+
+
+def _decode_fields(data: bytes) -> Dict[int, list]:
+    """
+    Decode protobuf bytes into a `{field_number: [values]}` dictionary.
+
+    Supported wire types:
+      0 = varint
+      1 = 64-bit
+      2 = length-delimited
+      5 = 32-bit
+    """
+    fields: Dict[int, list] = {}
+    pos = 0
+    length = len(data)
+    while pos < length:
+        tag, pos = _read_varint(data, pos)
+        field_num = tag >> 3
+        wire_type = tag & 0x07
+        if wire_type == 0:  # varint
+            val, pos = _read_varint(data, pos)
+            fields.setdefault(field_num, []).append(val)
+        elif wire_type == 1:  # 64-bit
+            if pos + 8 > length:
+                break
+            val = struct.unpack_from('<q', data, pos)[0]
+            pos += 8
+            fields.setdefault(field_num, []).append(val)
+        elif wire_type == 2:  # length-delimited
+            vlen, pos = _read_varint(data, pos)
+            if pos + vlen > length:
+                break
+            val = data[pos:pos + vlen]
+            pos += vlen
+            fields.setdefault(field_num, []).append(val)
+        elif wire_type == 5:  # 32-bit
+            if pos + 4 > length:
+                break
+            val = struct.unpack_from('<f', data, pos)[0]
+            pos += 4
+            fields.setdefault(field_num, []).append(val)
+        else:
+            break  # unknown wire type
+    return fields
+
+
+def _varint_to_int64(val: int) -> int:
+    """Convert a protobuf varint to signed int64."""
+    if val > 0x7FFFFFFFFFFFFFFF:
+        val -= 0x10000000000000000
+    return val
+
+
+def _varint_to_int32(val: int) -> int:
+    if val > 0x7FFFFFFF:
+        val -= 0x100000000
+    return val
+
+
+def _decode_string_from_raw(raw: bytes) -> str:
+    """Match protobufjs `reader.string()`: `[varint length][utf-8 bytes]`."""
+    if not raw:
+        return ''
+    try:
+        str_len, pos = _read_varint(raw, 0)
+        if str_len > 0 and pos + str_len <= len(raw):
+            return raw[pos:pos + str_len].decode('utf-8', 'ignore')
+    except Exception:
+        pass
+
+    try:
+        return raw.decode('utf-8', 'ignore')
+    except Exception:
+        return ''
+
+
+def _decode_int32_from_raw(raw: bytes) -> int:
+    """Match protobufjs `reader.int32()` on a raw varint payload."""
+    if not raw:
+        return 0
+    try:
+        val, _ = _read_varint(raw, 0)
+        return _varint_to_int32(val)
+    except Exception:
+        return 0
+
+
+def _decode_float32_from_raw(raw: bytes) -> Optional[float]:
+    if not raw or len(raw) < 4:
+        return None
+    try:
+        return struct.unpack_from('<f', raw, 0)[0]
+    except Exception:
+        return None
+
+
+def _append_packet_debug(tag: str, payload: Dict[str, Any]):
+    """Append a small packet debug snapshot for later field confirmation."""
+    try:
+        debug_path = os.path.join(os.path.dirname(__file__), 'packet_debug.jsonl')
+        row = {
+            'ts': round(time.time(), 3),
+            'tag': tag,
+            **payload,
+        }
+        with open(debug_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(row, ensure_ascii=False) + '\n')
+    except Exception:
+        pass
+
+
+
+
+
+
+class MessageType:
+    NONE = 0
+    CALL = 1
+    NOTIFY = 2
+    RETURN = 3
+    ECHO = 4
+    FRAME_UP = 5
+    FRAME_DOWN = 6
+
+
+class NotifyMethod:
+    SYNC_NEAR_ENTITIES = 0x06
+    SYNC_CONTAINER_DATA = 0x15
+    SYNC_CONTAINER_DIRTY_DATA = 0x16
+    SYNC_SERVER_TIME = 0x2B
+    SYNC_NEAR_DELTA_INFO = 0x2D
+    SYNC_TO_ME_DELTA_INFO = 0x2E
+
+
+class AttrType:
+    NAME = 0x01
+    ID = 0x0A
+    PROFESSION_ID = 0xDC
+    FIGHT_POINT = 0x272E
+    LEVEL = 0x2710
+    RANK_LEVEL = 0x274C
+    CRI = 0x2B66
+    LUCKY = 0x2B7A
+    HP = 0x2C2E
+    MAX_HP = 0x2C38
+    ELEMENT_FLAG = 0x646D6C
+    REDUCTION_LEVEL = 0x64696D
+    ENERGY_FLAG = 0x543CD3C6    # Flag field, not a stamina value
+    STA_MAX_FALLBACK = 11324
+    STA_RATIO_SET = (11850, 11851, 11852)
+    SEASON_LEVEL_FALLBACK = 71
+    SEASON_LEVEL_X10_SET = (20050, 20051, 20052)
+
+
+SERVICE_UUID_C3SB = 0x0000000063335342
+
+PROFESSION_NAMES = {
+    1:  '雷影剑士',
+    2:  '冰魔导师',
+    3:  '涤罪恶火·战斧',
+    4:  '青岚骑士',
+    5:  '森语者',
+    8:  '雷霆一闪·手炮',
+    9:  '巨刃守护者',
+    10: '暗灵祈舞·仪刀',
+    11: '神射手',
+    12: '神盾骑士',
+    13: '灵魂乐手',
+}
+
+
+
+# UUID helpers
+
+
+def _is_player(uuid: int) -> bool:
+    return (uuid & 0xFFFF) == 640
+
+
+def _uuid_to_uid(uuid: int) -> int:
+    return uuid >> 16
+
+
+
+
+
+
+class PlayerData:
+    """Tracks one player's parsed data."""
+    __slots__ = ('uid', 'name', 'level', 'rank_level', 'season_level', 'fight_point',
+                 'hp', 'max_hp', 'energy', 'energy_limit', 'extra_energy_limit',
+                 'energy_info_value', 'energy_valid', 'energy_source_priority',
+                 'profession', 'profession_id',
+                 'hp_from_full_sync')
+
+    def __init__(self, uid: int):
+        self.uid = uid
+        self.name: str = ''
+        self.level: int = 0          # Visible character level from AttrLevel 0x2710
+        self.rank_level: int = 0     # Rank/star level from AttrRankLevel 0x274C
+        self.season_level: int = 0   # Seasonal extra level shown as (+XX)
+        self.fight_point: int = 0
+        self.hp: int = 0
+        self.max_hp: int = 0
+        self.energy: float = 0.0
+        self.energy_limit: int = 0
+        self.extra_energy_limit: int = 0
+        self.energy_info_value: int = 0
+        self.energy_valid: bool = False
+        self.energy_source_priority: int = 0
+        self.profession: str = ''
+        self.profession_id: int = 0
+        self.hp_from_full_sync: bool = False  # Whether HP came from a trusted full sync
+
+
+def _decode_energy_item(data: bytes) -> Dict[str, Any]:
+    """Decode CharSerialize.EnergyItem (field 13) from the upstream schema."""
+    result = {
+        'energy_limit': 0,
+        'extra_energy_limit': 0,
+        'energy_values': [],
+        'current_energy_value': 0,
+        'derived_total_limit': 0,
+    }
+    if not isinstance(data, bytes) or not data:
+        return result
+
+    fields = _decode_fields(data)
+    energy_limit = fields.get(1, [0])[0]
+    extra_energy_limit = fields.get(2, [0])[0]
+    if isinstance(energy_limit, int) and energy_limit > 0:
+        result['energy_limit'] = energy_limit
+    if isinstance(extra_energy_limit, int) and extra_energy_limit > 0:
+        result['extra_energy_limit'] = extra_energy_limit
+
+    for entry_raw in fields.get(3, []):
+        if not isinstance(entry_raw, bytes):
+            continue
+        entry = _decode_fields(entry_raw)
+        value_raw = entry.get(2, [None])[0]
+        if not isinstance(value_raw, bytes):
+            continue
+        energy_info = _decode_fields(value_raw)
+        energy_value = energy_info.get(1, [None])[0]
+        if isinstance(energy_value, int) and energy_value >= 0:
+            result['energy_values'].append(energy_value)
+
+    total_limit = result['energy_limit'] + result['extra_energy_limit']
+    sane_limit = total_limit if total_limit > 0 else 20000
+    sane_values = [v for v in result['energy_values'] if 0 <= v <= sane_limit]
+    if sane_values:
+        result['derived_total_limit'] = max(sane_values)
+    if sane_values:
+        result['current_energy_value'] = max(sane_values)
+
+    return result
+
+
+def _decode_battlepass_level(data: bytes) -> int:
+    """Decode SeasonCenter.BattlePass.Level from CharSerialize field 50."""
+    if not isinstance(data, bytes) or not data:
+        return 0
+
+    season_center = _decode_fields(data)
+    battlepass_raw = season_center.get(2, [None])[0]
+    if not isinstance(battlepass_raw, bytes):
+        return 0
+
+    battlepass = _decode_fields(battlepass_raw)
+    level_raw = battlepass.get(2, [None])[0]
+    if isinstance(level_raw, int) and level_raw > 0:
+        return level_raw
+    return 0
+
+
+def _decode_season_medal_level(data: bytes) -> int:
+    """Decode the most likely seasonal level from SeasonMedalInfo (field 52)."""
+    if not isinstance(data, bytes) or not data:
+        return 0
+
+    medal = _decode_fields(data)
+    core_hole_raw = medal.get(3, [None])[0]
+    if isinstance(core_hole_raw, bytes):
+        core_hole = _decode_fields(core_hole_raw)
+        core_level = core_hole.get(2, [None])[0]
+        if isinstance(core_level, int) and core_level > 0:
+            return _normalize_season_medal_level(core_level)
+
+    normal_levels = []
+    for entry_raw in medal.get(2, []):
+        if not isinstance(entry_raw, bytes):
+            continue
+        entry = _decode_fields(entry_raw)
+        hole_raw = entry.get(2, [None])[0]
+        if not isinstance(hole_raw, bytes):
+            continue
+        hole = _decode_fields(hole_raw)
+        hole_level = hole.get(2, [None])[0]
+        if isinstance(hole_level, int) and hole_level > 0:
+            normal_levels.append(_normalize_season_medal_level(hole_level))
+
+    return max(normal_levels) if normal_levels else 0
+
+
+def _decode_monster_hunt_level(data: bytes) -> int:
+    """Decode MonsterHuntInfo.CurLevel from CharSerialize field 56."""
+    if not isinstance(data, bytes) or not data:
+        return 0
+
+    hunt = _decode_fields(data)
+    cur_level = hunt.get(2, [None])[0]
+    if isinstance(cur_level, int) and cur_level > 0:
+        return cur_level
+    return 0
+
+
+def _normalize_season_medal_level(raw_level: int) -> int:
+    """Normalize raw SeasonMedal level values to the UI-visible seasonal level."""
+    if raw_level <= 0:
+        return 0
+    if raw_level >= 100 and raw_level % 10 == 0:
+        return max(0, (raw_level // 10) - 1)
+    return raw_level
+
+
+def _decode_battlepass_data_level(data: bytes) -> int:
+    """Decode the highest BattlePass.Level from BattlePassData (field 86)."""
+    if not isinstance(data, bytes) or not data:
+        return 0
+
+    bp_data = _decode_fields(data)
+    levels = []
+    for entry_raw in bp_data.get(1, []):
+        if not isinstance(entry_raw, bytes):
+            continue
+        entry = _decode_fields(entry_raw)
+        battle_raw = entry.get(2, [None])[0]
+        if not isinstance(battle_raw, bytes):
+            continue
+        battle = _decode_fields(battle_raw)
+        level = battle.get(2, [None])[0]
+        if isinstance(level, int) and level > 0:
+            levels.append(level)
+    return max(levels) if levels else 0
+
+
+def _decode_dirty_energy_value(raw_u32: int, raw_f32: float, stamina_max: int = 0) -> Optional[float]:
+    """Pick the sane representation from dirty-stream energy payload."""
+    max_allowed = max(20000.0, float(stamina_max) * 1.2) if stamina_max > 0 else 20000.0
+    if math.isfinite(raw_f32):
+        if 0.0 <= raw_f32 <= 1.05 and stamina_max > 0:
+            return float(raw_f32)
+        if 0.01 <= raw_f32 <= max_allowed:
+            return float(raw_f32)
+        if raw_f32 == 0.0:
+            return 0.0
+    if 0 <= raw_u32 <= max_allowed:
+        return float(raw_u32)
+    return None
+
+
+def _decode_attr_season_level(attr_id: int, value: int) -> int:
+    """Pick conservative season-level candidates from self attr mirrors."""
+    if attr_id in AttrType.SEASON_LEVEL_X10_SET:
+        if 10 <= value <= 600 and value % 10 == 0:
+            return value // 10
+        return 0
+    if attr_id == AttrType.SEASON_LEVEL_FALLBACK and 10 <= value <= 60:
+        return value
+    return 0
+
+
+def _is_sane_attr_stamina_max(value: int) -> bool:
+    # Current observed self STA caps stay around 1200; larger attr spikes
+    # like 2100/3100 are unstable and should not overwrite the HUD max.
+    return 0 < value <= 1500
+
+
+class PacketParser:
+    """Parse game packets and notify the callback when self data changes."""
+
+    def __init__(self, on_self_update: Callable[[PlayerData], None], preferred_uid: int = 0):
+        self._on_update = on_self_update
+        self._current_uuid: int = 0   # Current player UUID
+        self._current_uid: int = max(0, int(preferred_uid))    # Current player UID (uuid >> 16)
+        self._players: Dict[int, PlayerData] = {}  # uid -> PlayerData
+        self._zstd = None
+        if self._current_uid > 0:
+            logger.info(f'[Parser] bootstrap self UID from cache: {self._current_uid}')
+        try:
+            debug_path = os.path.join(os.path.dirname(__file__), 'packet_debug.jsonl')
+            if os.path.exists(debug_path):
+                os.remove(debug_path)
+        except Exception:
+            pass
+
+    def _get_player(self, uid: int) -> PlayerData:
+        if uid not in self._players:
+            self._players[uid] = PlayerData(uid)
+        return self._players[uid]
+
+    def _notify_self(self):
+        """Notify callback for current player if available."""
+        if self._current_uid and self._current_uid in self._players:
+            p = self._players[self._current_uid]
+            logger.debug(f'[Parser] notify_self: name={p.name!r} lv={p.level} rank_lv={p.rank_level} '
+                         f'hp={p.hp}/{p.max_hp} uid={self._current_uid}')
+            try:
+                self._on_update(p)
+            except Exception as e:
+                logger.error(f'[Parser] callback error: {e}')
+
+
+
+
+
+    def process_packet(self, frame: bytes):
+        """Process one framed packet: `[4B size][2B type][payload]`."""
+        if len(frame) < 6:
+            return
+        offset = 0
+        total = len(frame)
+        while offset < total:
+            if offset + 6 > total:
+                break
+            pkt_size = struct.unpack_from('>I', frame, offset)[0]
+            if pkt_size < 6 or offset + pkt_size > total:
+                break
+            pkt_type = struct.unpack_from('>H', frame, offset + 4)[0]
+            is_zstd = bool(pkt_type & 0x8000)
+            msg_type = pkt_type & 0x7FFF
+            payload = frame[offset + 6:offset + pkt_size]
+            offset += pkt_size
+
+            try:
+                if msg_type == MessageType.NOTIFY:
+                    self._on_notify(payload, is_zstd)
+                elif msg_type == MessageType.FRAME_DOWN:
+                    self._on_frame_down(payload, is_zstd)
+
+            except Exception as e:
+                logger.debug(f'[Parser] message handling error (type={msg_type}): {e}')
+
+
+    #  FrameDown
+
+
+    def _on_frame_down(self, payload: bytes, is_zstd: bool):
+        if len(payload) < 4:
+            return
+        # server_seq_id = struct.unpack_from('>I', payload, 0)[0]
+        nested = payload[4:]
+        if not nested:
+            return
+        if is_zstd:
+            nested = self._decompress(nested)
+            if nested is None:
+                return
+
+        self.process_packet(nested)
+
+
+    #  Notify
+
+
+    def _on_notify(self, payload: bytes, is_zstd: bool):
+        if len(payload) < 16:
+            return
+        # serviceUuid (8B) + stubId (4B) + methodId (4B)
+        service_uuid = struct.unpack_from('>Q', payload, 0)[0]
+        # stub_id = struct.unpack_from('>I', payload, 8)[0]
+        method_id = struct.unpack_from('>I', payload, 12)[0]
+
+        if service_uuid != SERVICE_UUID_C3SB:
+            return
+
+        msg_payload = payload[16:]
+        if is_zstd:
+            msg_payload = self._decompress(msg_payload)
+            if msg_payload is None:
+                return
+
+        if method_id == NotifyMethod.SYNC_CONTAINER_DATA:
+            self._on_sync_container_data(msg_payload)
+        elif method_id == NotifyMethod.SYNC_CONTAINER_DIRTY_DATA:
+            self._on_sync_container_dirty(msg_payload)
+        elif method_id == NotifyMethod.SYNC_NEAR_ENTITIES:
+            self._on_sync_near_entities(msg_payload)
+        elif method_id == NotifyMethod.SYNC_TO_ME_DELTA_INFO:
+            self._on_sync_to_me_delta(msg_payload)
+        elif method_id == NotifyMethod.SYNC_NEAR_DELTA_INFO:
+            self._on_sync_near_delta(msg_payload)
+
+
+    # SyncContainerData (full character sync)
+
+
+    def _on_sync_container_data(self, data: bytes):
+        """
+        SyncContainerData { CharSerialize VData = 1 }
+        CharSerialize {
+            int64 CharId = 1;
+            CharBaseInfo CharBase = 2;
+            EnergyItem EnergyItem = 13;
+            UserFightAttr Attr = 16;
+            RoleLevel RoleLevel = 22;
+            ProfessionList ProfessionList = 61;
+        }
+        """
+        outer = _decode_fields(data)
+        vdata_raw = outer.get(1, [None])[0]
+        if not vdata_raw or not isinstance(vdata_raw, bytes):
+            return
+        vdata = _decode_fields(vdata_raw)
+
+
+        char_id_raw = vdata.get(1, [0])[0]
+        if isinstance(char_id_raw, int):
+            uid = char_id_raw
+        else:
+            return
+        if uid <= 0:
+            return
+
+        player = self._get_player(uid)
+        changed = False
+
+        # CharBase (field 2)
+        char_base_raw = vdata.get(2, [None])[0]
+        if isinstance(char_base_raw, bytes):
+            cb = _decode_fields(char_base_raw)
+            # Name (field 5)
+            name_raw = cb.get(5, [None])[0]
+            if isinstance(name_raw, bytes):
+                name = name_raw.decode('utf-8', 'ignore')
+                if name:
+                    player.name = name
+                    changed = True
+                    logger.info(f'[Parser] SyncContainerData CharBase Name={name!r} uid={uid}')
+            # FightPoint (field 35)
+            fp = cb.get(35, [None])[0]
+            if isinstance(fp, int) and fp > 0:
+                player.fight_point = fp
+                changed = True
+
+        # UserFightAttr (field 16)
+        attr_raw = vdata.get(16, [None])[0]
+        attr_resource_ids = []
+        attr_resources = []
+        if isinstance(attr_raw, bytes):
+            attr = _decode_fields(attr_raw)
+            # CurHp (field 1)
+            cur_hp = attr.get(1, [None])[0]
+            if isinstance(cur_hp, int):
+                player.hp = _varint_to_int64(cur_hp)
+                player.hp_from_full_sync = True  # HP from the full sync path is trusted
+                changed = True
+            # MaxHp (field 2)
+            max_hp = attr.get(2, [None])[0]
+            if isinstance(max_hp, int):
+                player.max_hp = _varint_to_int64(max_hp)
+                changed = True
+            # OriginEnergy (field 3, wire=5 float)
+            energy = attr.get(3, [None])[0]
+            if energy is not None:
+                if isinstance(energy, float) and player.energy_source_priority <= 1:
+                    player.energy = energy
+                    player.energy_valid = math.isfinite(energy) and energy >= 0.0
+                    if player.energy_valid:
+                        player.energy_source_priority = 1
+                    changed = True
+                elif isinstance(energy, int) and player.energy_source_priority <= 1:
+                    player.energy = float(energy)
+                    player.energy_valid = energy >= 0
+                    if player.energy_valid:
+                        player.energy_source_priority = 1
+                    changed = True
+            attr_resource_ids = [v for v in attr.get(4, []) if isinstance(v, int)]
+            attr_resources = [v for v in attr.get(5, []) if isinstance(v, int)]
+
+        # EnergyItem (field 13)
+        energy_item_raw = vdata.get(13, [None])[0]
+        if isinstance(energy_item_raw, bytes):
+            energy_item = _decode_energy_item(energy_item_raw)
+            total_limit = energy_item['energy_limit'] + energy_item['extra_energy_limit']
+            if total_limit > 0:
+                player.energy_limit = energy_item['energy_limit']
+                player.extra_energy_limit = energy_item['extra_energy_limit']
+                changed = True
+                logger.info(
+                    f'[Parser] SyncContainerData EnergyItem '
+                    f'limit={energy_item["energy_limit"]} '
+                    f'extra={energy_item["extra_energy_limit"]} uid={uid}'
+                )
+            elif energy_item['derived_total_limit'] > 0:
+                player.energy_limit = energy_item['derived_total_limit']
+                player.extra_energy_limit = 0
+                changed = True
+                logger.info(
+                    f'[Parser] SyncContainerData EnergyItem derived_limit='
+                    f'{energy_item["derived_total_limit"]} uid={uid}'
+                )
+            if energy_item['current_energy_value'] > 0:
+                player.energy_info_value = energy_item['current_energy_value']
+
+        season_medal_raw = vdata.get(52, [None])[0]
+        monster_hunt_raw = vdata.get(56, [None])[0]
+        season_center_raw = vdata.get(50, [None])[0]
+        battlepass_data_raw = vdata.get(86, [None])[0]
+        season_medal_level = _decode_season_medal_level(season_medal_raw) if isinstance(season_medal_raw, bytes) else 0
+        monster_hunt_level = _decode_monster_hunt_level(monster_hunt_raw) if isinstance(monster_hunt_raw, bytes) else 0
+        battlepass_level = _decode_battlepass_level(season_center_raw) if isinstance(season_center_raw, bytes) else 0
+        battlepass_data_level = _decode_battlepass_data_level(battlepass_data_raw) if isinstance(battlepass_data_raw, bytes) else 0
+        chosen_season_level = season_medal_level or monster_hunt_level
+        if chosen_season_level > 0 and chosen_season_level >= player.season_level:
+            player.season_level = chosen_season_level
+            changed = True
+            logger.info(
+                f'[Parser] SyncContainerData season_level={chosen_season_level} '
+                f'(medal={season_medal_level}, hunt={monster_hunt_level}, bp={battlepass_level}, bp_data={battlepass_data_level}) uid={uid}'
+            )
+        _append_packet_debug(
+            'sync_container_data',
+            {
+                'uid': uid,
+                'energy_limit': player.energy_limit,
+                'extra_energy_limit': player.extra_energy_limit,
+                'energy': player.energy,
+                'energy_valid': player.energy_valid,
+                'energy_info_value': player.energy_info_value,
+                'season_level': player.season_level,
+                'season_medal_level': season_medal_level,
+                'monster_hunt_level': monster_hunt_level,
+                'battlepass_level': battlepass_level,
+                'battlepass_data_level': battlepass_data_level,
+                'attr_resource_ids': attr_resource_ids,
+                'attr_resources': attr_resources,
+            }
+        )
+
+        role_lv_raw = vdata.get(22, [None])[0]
+        if isinstance(role_lv_raw, bytes):
+            rl = _decode_fields(role_lv_raw)
+            role_level = rl.get(1, [None])[0]
+            prev_season_max_lv = rl.get(11, [None])[0]
+            role_level_debug = {
+                'uid': uid,
+                'role_level': role_level,
+                'prev_season_max_lv': prev_season_max_lv,
+                'last_season_day': rl.get(6, [None])[0],
+                'bless_exp_pool': rl.get(7, [None])[0],
+                'grant_bless_exp': rl.get(8, [None])[0],
+                'accumulate_bless_exp': rl.get(9, [None])[0],
+                'accumulate_exp': rl.get(10, [None])[0],
+            }
+            logger.info(
+                f'[Parser] SyncContainerData RoleLevel raw_fields={dict(rl)}, '
+                f'role_level={role_level}, prev_season_max_lv={prev_season_max_lv}, uid={uid}'
+            )
+            _append_packet_debug('role_level', role_level_debug)
+            if isinstance(role_level, int) and role_level > 0 and player.level <= 0:
+                # Upstream packet.js treats RoleLevel.Level like the visible level.
+                player.level = role_level
+                changed = True
+
+        # ProfessionList (field 61)
+        prof_raw = vdata.get(61, [None])[0]
+        if isinstance(prof_raw, bytes):
+            pl = _decode_fields(prof_raw)
+            pid = pl.get(1, [None])[0]
+            if isinstance(pid, int) and pid > 0:
+                player.profession_id = pid
+                player.profession = PROFESSION_NAMES.get(pid, '')
+                changed = True
+
+        if changed:
+            if uid == self._current_uid:
+                self._notify_self()
+
+
+    # SyncContainerDirtyData (incremental updates)
+
+
+    def _on_sync_container_dirty(self, data: bytes):
+        """Handle the custom dirty-data stream wrapper."""
+        if self._current_uid == 0:
+            return
+
+        outer = _decode_fields(data)
+        buf_raw = outer.get(1, [None])[0]
+        if not isinstance(buf_raw, bytes):
+            return
+        buf_fields = _decode_fields(buf_raw)
+        buf_bytes = buf_fields.get(1, [None])[0]
+        if not isinstance(buf_bytes, bytes) or len(buf_bytes) < 8:
+            return
+
+        self._parse_dirty_stream(buf_bytes)
+
+    def _parse_dirty_stream(self, data: bytes):
+        """Parse the custom dirty-data binary stream used by V3.3.6."""
+        pos = 0
+        uid = self._current_uid
+        player = self._get_player(uid)
+        changed = False
+
+
+        if pos + 8 > len(data):
+            return
+        ident = struct.unpack_from('<I', data, pos)[0]
+        if ident != 0xFFFFFFFE:
+            return
+        pos += 4
+        # skip validation int32BE
+        pos += 4
+
+        if pos + 4 > len(data):
+            return
+        field_index = struct.unpack_from('<I', data, pos)[0]
+        pos += 4
+        debug_info = {
+            'uid': uid,
+            'field_index': field_index,
+        }
+
+        if field_index == 2:  # CharBase
+
+            if pos + 8 > len(data):
+                return
+            ident2 = struct.unpack_from('<I', data, pos)[0]
+            if ident2 != 0xFFFFFFFE:
+                return
+            pos += 8  # skip identifier + validation
+            if pos + 4 > len(data):
+                return
+            sub_field = struct.unpack_from('<I', data, pos)[0]
+            pos += 4
+            if sub_field == 5:  # Name
+                if pos + 4 > len(data):
+                    return
+                str_len = struct.unpack_from('<I', data, pos)[0]
+                pos += 4
+                if pos + str_len > len(data):
+                    return
+                name = data[pos:pos + str_len].decode('utf-8', 'ignore')
+                if name:
+                    player.name = name
+                    changed = True
+            elif sub_field == 35:  # FightPoint
+                if pos + 4 > len(data):
+                    return
+                fp = struct.unpack_from('<I', data, pos)[0]
+                if fp > 0:
+                    player.fight_point = fp
+                    changed = True
+
+        elif field_index == 16:  # UserFightAttr
+            if pos + 8 > len(data):
+                return
+            ident2 = struct.unpack_from('<I', data, pos)[0]
+            if ident2 != 0xFFFFFFFE:
+                return
+            pos += 8
+            if pos + 4 > len(data):
+                return
+            sub_field = struct.unpack_from('<I', data, pos)[0]
+            pos += 4
+            debug_info['sub_field'] = sub_field
+            if sub_field == 1:  # CurHp
+                if pos + 4 > len(data):
+                    return
+                hp = struct.unpack_from('<I', data, pos)[0]
+                debug_info['u32'] = hp
+
+                if hp > 0 or player.max_hp == 0:
+                    player.hp = hp
+                    changed = True
+                else:
+                    logger.debug(f'[Parser] DirtyData ignored CurHp=0 (max_hp={player.max_hp})')
+            elif sub_field == 2:  # MaxHp
+                if pos + 4 > len(data):
+                    return
+                max_hp = struct.unpack_from('<I', data, pos)[0]
+                debug_info['u32'] = max_hp
+                player.max_hp = max_hp
+                changed = True
+            elif sub_field == 3:  # OriginEnergy (stamina)
+                if pos + 4 > len(data):
+                    return
+
+                try:
+                    energy_f = struct.unpack_from('<f', data, pos)[0]
+                    energy_i = struct.unpack_from('<I', data, pos)[0]
+                    stamina_max = max(0, player.energy_limit) + max(0, player.extra_energy_limit)
+                    energy_v = _decode_dirty_energy_value(energy_i, energy_f, stamina_max=stamina_max)
+                    if energy_v is not None and player.energy_source_priority <= 1:
+                        player.energy = energy_v
+                        player.energy_valid = True
+                        player.energy_source_priority = 1
+                        changed = True
+                        debug_info.update({
+                            'energy_float': energy_f,
+                            'energy_int': energy_i,
+                            'energy_picked': energy_v,
+                            'stamina_max': stamina_max,
+                        })
+                        logger.debug(
+                            f'[Parser] DirtyData OriginEnergy: '
+                            f'f={energy_f}, i={energy_i}, picked={energy_v}'
+                        )
+                except Exception:
+                    pass
+            else:
+                debug_info['raw_hex'] = data[pos:].hex()[:128]
+
+        elif field_index == 22:  # RoleLevel
+            if pos + 8 > len(data):
+                return
+            ident2 = struct.unpack_from('<I', data, pos)[0]
+            if ident2 != 0xFFFFFFFE:
+                return
+            pos += 8
+            if pos + 4 > len(data):
+                return
+            sub_field = struct.unpack_from('<I', data, pos)[0]
+            pos += 4
+            debug_info['sub_field'] = sub_field
+            if sub_field == 1:  # Level
+                if pos + 4 > len(data):
+                    return
+                lv = struct.unpack_from('<I', data, pos)[0]
+                debug_info['u32'] = lv
+                if lv > 0:
+                    player.level = lv
+                    changed = True
+                    debug_info['role_level'] = lv
+                    logger.info(f'[Parser] DirtyData Level -> {lv}')
+            elif pos + 4 <= len(data):
+                debug_info['u32'] = struct.unpack_from('<I', data, pos)[0]
+                debug_info['raw_hex'] = data[pos:].hex()[:128]
+
+        elif field_index == 50:  # SeasonCenter
+            if pos + 8 > len(data):
+                return
+            ident2 = struct.unpack_from('<I', data, pos)[0]
+            if ident2 != 0xFFFFFFFE:
+                return
+            pos += 8
+            if pos + 4 > len(data):
+                return
+            sub_field = struct.unpack_from('<I', data, pos)[0]
+            pos += 4
+            debug_info['sub_field'] = sub_field
+            if sub_field == 2:  # BattlePass
+                if pos + 8 > len(data):
+                    return
+                ident3 = struct.unpack_from('<I', data, pos)[0]
+                if ident3 != 0xFFFFFFFE:
+                    return
+                pos += 8
+                if pos + 4 > len(data):
+                    return
+                bp_sub_field = struct.unpack_from('<I', data, pos)[0]
+                pos += 4
+                debug_info['nested_sub_field'] = bp_sub_field
+                if bp_sub_field == 2 and pos + 4 <= len(data):  # BattlePass.Level
+                    battlepass_lv = struct.unpack_from('<I', data, pos)[0]
+                    debug_info['u32'] = battlepass_lv
+                    if battlepass_lv > 0:
+                        debug_info['battlepass_level'] = battlepass_lv
+                        logger.info(f'[Parser] DirtyData SeasonCenter.BattlePass.Level -> {battlepass_lv}')
+                else:
+                    debug_info['raw_hex'] = data[pos:].hex()[:128]
+            else:
+                debug_info['raw_hex'] = data[pos:].hex()[:128]
+
+        elif field_index == 52:  # SeasonMedalInfo
+            if pos + 8 > len(data):
+                return
+            ident2 = struct.unpack_from('<I', data, pos)[0]
+            if ident2 != 0xFFFFFFFE:
+                return
+            pos += 8
+            if pos + 4 > len(data):
+                return
+            sub_field = struct.unpack_from('<I', data, pos)[0]
+            pos += 4
+            debug_info['sub_field'] = sub_field
+            if sub_field == 3:  # CoreHoleInfo
+                if pos + 8 > len(data):
+                    return
+                ident3 = struct.unpack_from('<I', data, pos)[0]
+                if ident3 != 0xFFFFFFFE:
+                    return
+                pos += 8
+                if pos + 4 > len(data):
+                    return
+                hole_sub_field = struct.unpack_from('<I', data, pos)[0]
+                pos += 4
+                debug_info['nested_sub_field'] = hole_sub_field
+                if hole_sub_field == 2 and pos + 4 <= len(data):  # HoleLevel
+                    medal_lv_raw = struct.unpack_from('<I', data, pos)[0]
+                    medal_lv = _normalize_season_medal_level(medal_lv_raw)
+                    debug_info['u32'] = medal_lv_raw
+                    debug_info['season_medal_level_raw'] = medal_lv_raw
+                    if medal_lv > 0 and medal_lv >= player.season_level:
+                        player.season_level = medal_lv
+                        changed = True
+                        debug_info['season_medal_level'] = medal_lv
+                        logger.info(
+                            f'[Parser] DirtyData SeasonMedalInfo.CoreHoleInfo.HoleLevel '
+                            f'raw={medal_lv_raw} normalized={medal_lv}'
+                        )
+                else:
+                    debug_info['raw_hex'] = data[pos:].hex()[:128]
+            else:
+                debug_info['raw_hex'] = data[pos:].hex()[:128]
+
+        elif field_index == 56:  # MonsterHuntInfo
+            if pos + 8 > len(data):
+                return
+            ident2 = struct.unpack_from('<I', data, pos)[0]
+            if ident2 != 0xFFFFFFFE:
+                return
+            pos += 8
+            if pos + 4 > len(data):
+                return
+            sub_field = struct.unpack_from('<I', data, pos)[0]
+            pos += 4
+            debug_info['sub_field'] = sub_field
+            if sub_field == 2 and pos + 4 <= len(data):  # CurLevel
+                hunt_lv = struct.unpack_from('<I', data, pos)[0]
+                debug_info['u32'] = hunt_lv
+                if hunt_lv > 0 and player.season_level <= 0:
+                    player.season_level = hunt_lv
+                    changed = True
+                debug_info['monster_hunt_level'] = hunt_lv
+                logger.info(f'[Parser] DirtyData MonsterHuntInfo.CurLevel -> {hunt_lv}')
+            else:
+                debug_info['raw_hex'] = data[pos:].hex()[:128]
+
+        elif field_index == 86:  # BattlePassData
+            debug_info['raw_hex'] = data[pos:].hex()[:128]
+
+        elif field_index == 61:  # ProfessionList
+            if pos + 8 > len(data):
+                return
+            ident2 = struct.unpack_from('<I', data, pos)[0]
+            if ident2 != 0xFFFFFFFE:
+                return
+            pos += 8
+            if pos + 4 > len(data):
+                return
+            sub_field = struct.unpack_from('<I', data, pos)[0]
+            pos += 4
+            debug_info['sub_field'] = sub_field
+            if sub_field == 1:  # CurProfessionId
+                if pos + 4 > len(data):
+                    return
+                pid = struct.unpack_from('<I', data, pos)[0]
+                debug_info['u32'] = pid
+                if pid > 0:
+                    player.profession_id = pid
+                    player.profession = PROFESSION_NAMES.get(pid, '')
+                    changed = True
+
+        if field_index in (16, 22, 50, 52, 56, 61, 86):
+            _append_packet_debug('dirty_update', debug_info)
+        if changed:
+            self._notify_self()
+
+
+    # SyncNearEntities (0x06)
+
+
+    def _on_sync_near_entities(self, data: bytes):
+        outer = _decode_fields(data)
+        # Appear (field 1, repeated)
+        for entity_raw in outer.get(1, []):
+            if not isinstance(entity_raw, bytes):
+                continue
+            ef = _decode_fields(entity_raw)
+            uuid_raw = ef.get(1, [0])[0]
+            if not isinstance(uuid_raw, int) or uuid_raw == 0:
+                continue
+            uuid = _varint_to_int64(uuid_raw)
+            ent_type = ef.get(2, [0])[0]
+
+            if not _is_player(uuid):
+                continue  # Skip non-player entities.
+            uid = _uuid_to_uid(uuid)
+
+            # AttrCollection (field 3)
+            attr_raw = ef.get(3, [None])[0]
+            if isinstance(attr_raw, bytes):
+                self._process_attr_collection(uid, attr_raw)
+
+
+    #  SyncToMeDeltaInfo (0x2E)
+
+
+    def _on_sync_to_me_delta(self, data: bytes):
+        outer = _decode_fields(data)
+        delta_raw = outer.get(1, [None])[0]
+        if not isinstance(delta_raw, bytes):
+            return
+
+        df = _decode_fields(delta_raw)
+
+        # UUID helpers
+        uuid_raw = df.get(5, [0])[0]
+        if isinstance(uuid_raw, int) and uuid_raw != 0:
+            uuid = _varint_to_int64(uuid_raw)
+            if _is_player(uuid):
+                new_uid = _uuid_to_uid(uuid)
+                if self._current_uuid != uuid:
+                    self._current_uuid = uuid
+                    self._current_uid = new_uid
+                    logger.info(f'[Parser] confirmed self UUID={uuid}, UID={new_uid}')
+                    if new_uid in self._players:
+                        self._notify_self()
+
+        # AoiSyncDelta handling
+        base_raw = df.get(1, [None])[0]
+        if isinstance(base_raw, bytes):
+            self._process_aoi_sync_delta(base_raw)
+
+
+    #  SyncNearDeltaInfo (0x2D)
+
+
+    def _on_sync_near_delta(self, data: bytes):
+        outer = _decode_fields(data)
+        for delta_raw in outer.get(1, []):
+            if isinstance(delta_raw, bytes):
+                self._process_aoi_sync_delta(delta_raw)
+
+
+    # AoiSyncDelta handling
+
+
+    def _process_aoi_sync_delta(self, data: bytes):
+        df = _decode_fields(data)
+        uuid_raw = df.get(1, [0])[0]
+        if not isinstance(uuid_raw, int) or uuid_raw == 0:
+            return
+        uuid = _varint_to_int64(uuid_raw)
+        if not _is_player(uuid):
+            return
+        uid = _uuid_to_uid(uuid)
+
+        # Attrs (field 2)
+        attr_raw = df.get(2, [None])[0]
+        if isinstance(attr_raw, bytes):
+            self._process_attr_collection(uid, attr_raw)
+
+
+    # AttrCollection parsing
+
+
+    def _process_attr_collection(self, uid: int, data: bytes):
+        ac = _decode_fields(data)
+        attrs_list = ac.get(2, [])
+        if not attrs_list:
+            return
+
+        player = self._get_player(uid)
+        changed = False
+        stamina_max_candidate = 0
+        stamina_ratio_values = []
+        season_level_candidates = []
+
+        for attr_raw in attrs_list:
+            if not isinstance(attr_raw, bytes):
+                continue
+            af = _decode_fields(attr_raw)
+            attr_id = af.get(1, [0])[0]
+            raw_data = af.get(2, [None])[0]
+            if not isinstance(raw_data, bytes) or not attr_id:
+                continue
+            int_value = _decode_int32_from_raw(raw_data)
+
+            if uid == self._current_uid or self._current_uid == 0:
+                _append_packet_debug(
+                    'attr_collection',
+                    {
+                        'uid': uid,
+                        'attr_id': attr_id,
+                        'raw_hex': raw_data.hex(),
+                        'int32': int_value,
+                        'float32': _decode_float32_from_raw(raw_data),
+                    }
+                )
+
+            if attr_id == AttrType.NAME:
+                name = _decode_string_from_raw(raw_data)
+                if name:
+                    player.name = name
+                    changed = True
+                    logger.info(f'[Parser] AttrCollection NAME={name!r} uid={uid}')
+            elif attr_id == AttrType.LEVEL:
+                lv = int_value
+                logger.info(f'[Parser] AttrCollection LEVEL={lv} raw={raw_data.hex()} uid={uid}')
+                if lv > 0:
+                    player.level = lv
+                    changed = True
+            elif attr_id == AttrType.RANK_LEVEL:
+                rl = int_value
+                logger.info(f'[Parser] AttrCollection RANK_LEVEL={rl} raw={raw_data.hex()} uid={uid}')
+                if rl >= 0:
+                    player.rank_level = rl
+                    changed = True
+            elif attr_id == AttrType.FIGHT_POINT:
+                fp = int_value
+                if fp > 0:
+                    player.fight_point = fp
+                    changed = True
+            elif attr_id == AttrType.HP:
+                hp = int_value
+                # Ignore transient HP=0 attr updates to avoid false death states.
+                # A real zero is accepted from the full sync path instead.
+                if hp > 0 or player.max_hp == 0:
+                    player.hp = hp
+                    changed = True
+                else:
+                    logger.debug(f'[Parser] AttrCollection ignored HP=0 (max_hp={player.max_hp})')
+            elif attr_id == AttrType.MAX_HP:
+                mhp = int_value
+                if mhp > 0:
+                    player.max_hp = mhp
+                    changed = True
+            elif attr_id == AttrType.PROFESSION_ID:
+                pid = int_value
+                if pid > 0:
+                    player.profession_id = pid
+                    player.profession = PROFESSION_NAMES.get(pid, '')
+                    changed = True
+            elif attr_id == AttrType.ENERGY_FLAG:
+                # This is a flag field, not the actual stamina value.
+                ef_i = int_value
+                logger.debug(f'[Parser] AttrCollection EnergyFlag={ef_i} (flag only)')
+            elif attr_id in (AttrType.CRI, AttrType.LUCKY, AttrType.ELEMENT_FLAG,
+                             AttrType.REDUCTION_LEVEL, AttrType.ID):
+                pass
+            else:
+                if attr_id == AttrType.STA_MAX_FALLBACK and _is_sane_attr_stamina_max(int_value):
+                    stamina_max_candidate = max(stamina_max_candidate, int_value)
+                elif attr_id in AttrType.STA_RATIO_SET and 0 <= int_value <= 1000:
+                    stamina_ratio_values.append(int_value)
+
+                season_level = _decode_attr_season_level(attr_id, int_value)
+                if season_level > 0:
+                    season_priority = 0 if attr_id == AttrType.SEASON_LEVEL_FALLBACK else 1
+                    season_level_candidates.append((season_priority, attr_id, season_level))
+
+
+                logger.debug(f'[Parser] Unknown AttrType 0x{attr_id:X}, len={len(raw_data)}, uid={uid}')
+
+        if _is_sane_attr_stamina_max(stamina_max_candidate):
+            if player.energy_limit != stamina_max_candidate or player.extra_energy_limit != 0:
+                player.energy_limit = stamina_max_candidate
+                player.extra_energy_limit = 0
+                changed = True
+                logger.info(f'[Parser] AttrCollection STA max fallback={stamina_max_candidate} uid={uid}')
+
+        if stamina_ratio_values:
+            ratio_counts = {}
+            for value in stamina_ratio_values:
+                ratio_counts[value] = ratio_counts.get(value, 0) + 1
+            picked_ratio, picked_count = max(ratio_counts.items(), key=lambda item: (item[1], item[0]))
+            if picked_count >= 2:
+                new_energy = picked_ratio / 1000.0
+                if (
+                    player.energy_source_priority < 2 or
+                    not player.energy_valid or
+                    abs(player.energy - new_energy) > 1e-6
+                ):
+                    player.energy = new_energy
+                    player.energy_valid = True
+                    player.energy_source_priority = 2
+                    changed = True
+                    logger.info(
+                        f'[Parser] AttrCollection STA ratio fallback={picked_ratio}/1000 '
+                        f'(samples={picked_count}) uid={uid}'
+                    )
+
+        if season_level_candidates and player.season_level <= 0:
+            season_level_candidates.sort(key=lambda item: (item[0], -item[2]))
+            _, picked_attr_id, picked_season_level = season_level_candidates[0]
+            if picked_season_level > 0:
+                player.season_level = picked_season_level
+                changed = True
+                logger.info(
+                    f'[Parser] AttrCollection season_level fallback={picked_season_level} '
+                    f'(attr={picked_attr_id}) uid={uid}'
+                )
+
+        if changed and uid == self._current_uid:
+            self._notify_self()
+
+
+    #  Zstd
+
+
+    def _decompress(self, data: bytes) -> Optional[bytes]:
+        """Zstd decompression helper matching the Node.js reference behavior."""
+        try:
+            if self._zstd is None:
+                self._zstd = _ensure_zstd()
+
+            try:
+                return self._zstd.decompress(data, max_output_size=16 * 1024 * 1024)
+            except Exception:
+                pass
+
+            dobj = self._zstd.decompressobj()
+            result = dobj.decompress(data)
+            return result
+        except Exception as e:
+            logger.debug(f'[Parser] zstd decompress failed: {e}')
+            return None

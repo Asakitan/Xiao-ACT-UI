@@ -1,0 +1,145 @@
+// Star Resonance (星痕共鸣) — 游戏协议 Protobuf Schema
+// 还原自 StarResonanceDamageCounter V3.3.6 blueprotobuf.js
+// 仅包含 SAO-UI 需要的消息类型
+
+syntax = "proto3";
+
+package star;
+
+// ═══════ Enums ═══════
+
+enum EEntityType {
+    EntErrType     = 0;
+    EntMonster     = 1;
+    EntNpc         = 2;
+    EntSceneObject = 3;
+    EntZone        = 5;
+    EntBullet      = 6;
+    EntClientBullet = 7;
+    EntPet         = 8;
+    EntChar        = 10;
+    EntDummy       = 11;
+    EntDrop        = 12;
+    EntField       = 14;
+    EntTrap        = 15;
+    EntCollection  = 16;
+    EntStaticObject = 18;
+    EntVehicle     = 19;
+    EntToy         = 20;
+}
+
+enum EDisappearType {
+    EDisappearNormal             = 0;
+    EDisappearDead               = 1;
+    EDisappearDestroy            = 2;
+    EDisappearTransferLeave      = 3;
+    EDisappearTransferPassLineLeave = 4;
+}
+
+// ═══════ Top-level sync messages ═══════
+
+message SyncNearEntities {
+    repeated Entity           Appear    = 1;
+    repeated DisappearEntity  Disappear = 2;
+}
+
+message SyncNearDeltaInfo {
+    repeated AoiSyncDelta  DeltaInfos = 1;
+}
+
+message SyncToMeDeltaInfo {
+    AoiSyncToMeDelta  DeltaInfo = 1;
+}
+
+message SyncContainerData {
+    CharSerialize  VData = 1;
+}
+
+message SyncContainerDirtyData {
+    BufferStream  VData = 1;
+}
+
+// ═══════ Entity / Delta ═══════
+
+message Entity {
+    int64           Uuid     = 1;
+    EEntityType     EntType  = 2;
+    AttrCollection  Attrs    = 3;
+}
+
+message DisappearEntity {
+    int64            Uuid = 1;
+    EDisappearType   Type = 2;
+}
+
+message AoiSyncDelta {
+    int64           Uuid        = 1;
+    AttrCollection  Attrs       = 2;
+    SkillEffect     SkillEffects = 7;
+}
+
+message AoiSyncToMeDelta {
+    AoiSyncDelta  BaseDelta = 1;
+    int64         Uuid      = 5;
+}
+
+// ═══════ Attributes ═══════
+
+message AttrCollection {
+    int64          Uuid     = 1;
+    repeated Attr  Attrs    = 2;
+}
+
+message Attr {
+    int32  Id      = 1;
+    bytes  RawData = 2;
+}
+
+// ═══════ Damage (read-only, for HP=0 detection) ═══════
+
+message SkillEffect {
+    int64                   Uuid    = 1;
+    repeated SyncDamageInfo Damages = 2;
+}
+
+message SyncDamageInfo {
+    int64  AttackerUuid  = 11;
+    bool   IsDead        = 17;
+    int64  TopSummonerId = 21;
+}
+
+// ═══════ Character serialization (SyncContainerData) ═══════
+
+message CharSerialize {
+    int64           CharId         = 1;
+    CharBaseInfo    CharBase       = 2;
+    UserFightAttr   Attr           = 16;
+    RoleLevel       RoleLevel      = 22;
+    ProfessionList  ProfessionList = 61;
+}
+
+message CharBaseInfo {
+    int64   CharId     = 1;
+    string  Name       = 5;
+    int32   FightPoint = 35;
+}
+
+message UserFightAttr {
+    int64  CurHp        = 1;
+    int64  MaxHp        = 2;
+    float  OriginEnergy = 3;
+}
+
+message RoleLevel {
+    int32  Level = 1;
+}
+
+message ProfessionList {
+    int32  CurProfessionId = 1;
+}
+
+// ═══════ Dirty data wrapper ═══════
+
+message BufferStream {
+    bytes  Buffer = 1;
+}
