@@ -23,7 +23,7 @@ import time
 from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger('sao_auto.parser')
-_PACKET_DEBUG_ENABLED = False   # 调试写盘已暂时关闭
+_PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
 
 
 
@@ -323,6 +323,53 @@ PROFESSION_ULTIMATE: Dict[int, int] = {
     13: 2314,   # 灵魂乐手 — 升格·劲爆全场
 }
 
+# ── 每个职业的职业技能变体 (两个分支子职业) ──
+# 来源: StarResonanceDps ProfessionExtends.cs
+# 每个职业有两个子专精分支，slot 2 的职业技能随分支不同而不同
+PROFESSION_SKILL_VARIANTS: Dict[int, tuple] = {
+    1:  (1714, 44701),             # 雷影剑士:   居合斩(居合) / 月刃(月刃)
+    2:  (1242, 1241),              # 冰魔导师:   冰霜之矛(冰矛) / 寒冰射线(射线)
+    3:  (1609, 1605, 1606),        # 涤罪恶火:   红莲 / 无相 / 赤红
+    4:  (1418, 1419),              # 青岚骑士:   疾风刺(重装) / 翔返(空枪)
+    5:  (1518, 20301),             # 森语者:     狂野绽放(惩戒) / 生命绽放(愈合)
+    8:  (1806,),                   # 雷霆一闪·手炮
+    9:  (1922, 1930, 199902),      # 巨刃守护者: 护盾猛击 / 格挡冲击(格挡) / 地崩山摧(岩盾)
+    10: (2105,),                   # 暗灵祈舞·仪刀
+    11: (2220, 2292, 220112),      # 神射手:     暴风箭矢 / 幻影魔狼(狼弓) / 光能箭矢(鹰弓)
+    12: (2405, 2406),              # 神盾骑士:   英勇盾击(防盾) / 先锋追击(光盾)
+    13: (2306, 2307),              # 灵魂乐手:   增幅节拍(狂音) / 协奏
+}
+
+# ── 子职业分支名称映射 (skill_id → 分支名) ──
+# 来源: StarResonanceDps ProfessionExtends.cs GetSubProfessionBySkillId()
+SUB_PROFESSION_NAMES: Dict[int, str] = {
+    # 雷影剑士
+    1714: '居合', 1734: '居合',
+    44701: '月刃', 179906: '月刃',
+    # 冰魔导师
+    120901: '冰矛', 120902: '冰矛', 1242: '冰矛',
+    1241: '射线',
+    # 涤罪恶火
+    1605: '无相', 1606: '赤红',
+    # 青岚骑士
+    1405: '重装', 1418: '重装',
+    1419: '空枪',
+    # 森语者
+    1518: '惩戒', 1541: '惩戒', 21402: '惩戒',
+    20301: '愈合',
+    # 巨刃守护者
+    199902: '岩盾',
+    1930: '格挡', 1931: '格挡', 1934: '格挡', 1935: '格挡', 1922: '格挡',
+    # 神射手
+    2292: '狼弓', 1700820: '狼弓', 1700825: '狼弓', 1700827: '狼弓',
+    220112: '鹰弓', 2203622: '鹰弓', 220106: '鹰弓',
+    # 神盾骑士
+    2405: '防盾', 2406: '光盾',
+    # 灵魂乐手
+    2306: '狂音',
+    2307: '协奏', 2361: '协奏', 55302: '协奏',
+}
+
 
 
 # UUID helpers
@@ -336,8 +383,27 @@ def _uuid_to_uid(uuid: int) -> int:
     return uuid >> 16
 
 
+# Reverse lookup: base_skill_id → profession_id (for auto-detection when
+# SyncContainerData is missed, e.g. tool started after login)
+_SKILL_TO_PROFESSION: Dict[int, int] = {}
+for _pid, _sid in PROFESSION_NORMAL_ATTACK.items():
+    _SKILL_TO_PROFESSION[_sid] = _pid
+for _pid, _sid in PROFESSION_SKILL.items():
+    _SKILL_TO_PROFESSION[_sid] = _pid
+for _pid, _sid in PROFESSION_ULTIMATE.items():
+    _SKILL_TO_PROFESSION[_sid] = _pid
+# Include all sub-profession branch variants for reverse lookup
+for _pid, _variants in PROFESSION_SKILL_VARIANTS.items():
+    for _sid in _variants:
+        _SKILL_TO_PROFESSION[_sid] = _pid
 
-
+# Profession skill prefix: each profession uses a unique 2-digit
+# prefix (base_skill_id // 100).  Used to filter out other-profession
+# skills during slot inference.
+_PROFESSION_PREFIX: Dict[int, int] = {}   # profession_id → prefix
+for _pid, _sid in PROFESSION_NORMAL_ATTACK.items():
+    _PROFESSION_PREFIX[_pid] = _sid // 100
+_ALL_PROFESSION_PREFIXES: frozenset = frozenset(_PROFESSION_PREFIX.values())
 
 
 class PlayerData:
@@ -353,7 +419,7 @@ class PlayerData:
                  'stamina_ratio', 'stamina_ratio_observed_at',
                  'season_medal_level', 'monster_hunt_level',
                  'battlepass_level', 'battlepass_data_level',
-                 'profession', 'profession_id',
+                 'profession', 'profession_id', 'sub_profession',
                  'hp_from_full_sync',
                  'skill_slot_map', 'skill_level_info_map',
                  'slot_bar_map',
@@ -391,6 +457,7 @@ class PlayerData:
         self.battlepass_data_level: int = 0
         self.profession: str = ''
         self.profession_id: int = 0
+        self.sub_profession: str = ''     # 子职业分支名 (e.g. '防盾', '光盾')
         self.hp_from_full_sync: bool = False  # Whether HP came from a trusted full sync
         self.skill_slot_map: Dict[int, int] = {}
         self.skill_level_info_map: Dict[int, Dict[str, int]] = {}
@@ -771,6 +838,14 @@ def _decode_skill_cd(data: bytes) -> Dict[str, int]:
     charge_count_raw = fields.get(7, [None])[0]
     charge_count = _varint_to_int32(charge_count_raw) if isinstance(charge_count_raw, int) else 0
 
+    # CD acceleration fields (SkillCDInfo only, fields 9/10/11)
+    sub_cd_ratio_raw = fields.get(9, [None])[0]
+    sub_cd_fixed_raw = fields.get(10, [None])[0]
+    accel_cd_ratio_raw = fields.get(11, [None])[0]
+    sub_cd_ratio = _varint_to_int32(sub_cd_ratio_raw) if isinstance(sub_cd_ratio_raw, int) else 0
+    sub_cd_fixed = _varint_to_int64(sub_cd_fixed_raw) if isinstance(sub_cd_fixed_raw, int) else 0
+    accel_cd_ratio = _varint_to_int32(accel_cd_ratio_raw) if isinstance(accel_cd_ratio_raw, int) else 0
+
     skill_level_id = _varint_to_int32(skill_level_id_raw) if isinstance(skill_level_id_raw, int) else 0
     return {
         'skill_level_id': skill_level_id,
@@ -779,6 +854,9 @@ def _decode_skill_cd(data: bytes) -> Dict[str, int]:
         'skill_cd_type': _varint_to_int32(cd_type_raw) if isinstance(cd_type_raw, int) else 0,
         'valid_cd_time': max(0, valid_cd_time),
         'charge_count': max(0, charge_count),
+        'sub_cd_ratio': max(0, sub_cd_ratio),
+        'sub_cd_fixed': max(0, int(sub_cd_fixed)),
+        'accelerate_cd_ratio': max(0, accel_cd_ratio),
     }
 
 
@@ -799,6 +877,10 @@ def _decode_skill_cd_info(data: bytes) -> Dict[str, int]:
     cd_type_raw = fields.get(4, [None])[0]
     charge_count_raw = fields.get(7, [None])[0]    # field 7 per StarResonanceDps
     valid_cd_time_raw = fields.get(8, [None])[0]    # field 8 per StarResonanceDps
+    # CD acceleration fields (fields 9/10/11)
+    sub_cd_ratio_raw = fields.get(9, [None])[0]
+    sub_cd_fixed_raw = fields.get(10, [None])[0]
+    accel_cd_ratio_raw = fields.get(11, [None])[0]
     skill_level_id = _varint_to_int32(skill_level_id_raw) if isinstance(skill_level_id_raw, int) else 0
     return {
         'skill_level_id': skill_level_id,
@@ -807,6 +889,9 @@ def _decode_skill_cd_info(data: bytes) -> Dict[str, int]:
         'skill_cd_type': _varint_to_int32(cd_type_raw) if isinstance(cd_type_raw, int) else 0,
         'valid_cd_time': _varint_to_int32(valid_cd_time_raw) if isinstance(valid_cd_time_raw, int) else 0,
         'charge_count': _varint_to_int32(charge_count_raw) if isinstance(charge_count_raw, int) else 0,
+        'sub_cd_ratio': max(0, _varint_to_int32(sub_cd_ratio_raw)) if isinstance(sub_cd_ratio_raw, int) else 0,
+        'sub_cd_fixed': max(0, int(_varint_to_int64(sub_cd_fixed_raw))) if isinstance(sub_cd_fixed_raw, int) else 0,
+        'accelerate_cd_ratio': max(0, _varint_to_int32(accel_cd_ratio_raw)) if isinstance(accel_cd_ratio_raw, int) else 0,
     }
 
 
@@ -1018,6 +1103,9 @@ class PacketParser:
             try:
                 self._on_update(p)
             except Exception as e:
+                print(f'[Parser] !! 回调异常 (bridge callback): {e}', flush=True)
+                import traceback
+                print(traceback.format_exc(), flush=True)
                 logger.error(f'[Parser] callback error: {e}')
 
     def _apply_cached_profession_slots(self, player: PlayerData) -> bool:
@@ -1030,6 +1118,40 @@ class PacketParser:
             return False
         player.skill_slot_map = dict(cached_slot_map)
         return True
+
+    def _try_detect_profession(self, player: PlayerData, skill_level_id: int) -> bool:
+        """Auto-detect profession from observed skill IDs when SyncContainerData was missed.
+
+        Uses reverse lookup from PROFESSION_NORMAL_ATTACK / PROFESSION_SKILL /
+        PROFESSION_ULTIMATE / PROFESSION_SKILL_VARIANTS tables to identify
+        the player's current profession from any matching skill_level_id.
+        Also detects sub-profession branch from SUB_PROFESSION_NAMES.
+        """
+        base = skill_level_id // 100 if skill_level_id >= 100 else skill_level_id
+
+        # Try to detect sub-profession branch even if profession is already known
+        if base in SUB_PROFESSION_NAMES:
+            sub = SUB_PROFESSION_NAMES[base]
+            if sub and sub != getattr(player, 'sub_profession', ''):
+                player.sub_profession = sub
+                logger.info(
+                    f'[Parser] detected sub_profession={sub!r} '
+                    f'from skill_level_id={skill_level_id} (base={base})'
+                )
+
+        if int(getattr(player, 'profession_id', 0) or 0) > 0:
+            return False  # Profession already known
+        pid = _SKILL_TO_PROFESSION.get(base, 0)
+        if pid > 0:
+            player.profession_id = pid
+            player.profession = PROFESSION_NAMES.get(pid, '')
+            logger.info(
+                f'[Parser] auto-detected profession={pid} ({player.profession}) '
+                f'from skill_level_id={skill_level_id} (base={base})'
+            )
+            self._apply_cached_profession_slots(player)
+            return True
+        return False
 
     def _remember_seen_skill(self, player: PlayerData, skill_level_id: int) -> bool:
         """Cache every observed skill id, including zero-duration attack pings."""
@@ -1066,6 +1188,9 @@ class PacketParser:
                 'valid_cd_time': max(0, int(skill_cd.get('valid_cd_time') or 0)),
                 'skill_cd_type': max(0, int(skill_cd.get('skill_cd_type') or 0)),
                 'charge_count': max(0, int(skill_cd.get('charge_count') or 0)),
+                'sub_cd_ratio': max(0, int(skill_cd.get('sub_cd_ratio') or 0)),
+                'sub_cd_fixed': max(0, int(skill_cd.get('sub_cd_fixed') or 0)),
+                'accelerate_cd_ratio': max(0, int(skill_cd.get('accelerate_cd_ratio') or 0)),
                 'observed_at_ms': observed_at_ms,
                 'source': 'full_sync',
             }
@@ -1086,6 +1211,9 @@ class PacketParser:
             return False
         seen_changed = self._remember_seen_skill(player, skill_level_id)
 
+        # Auto-detect profession from observed skill IDs when SyncContainerData missed
+        self._try_detect_profession(player, skill_level_id)
+
         total_ms = int(skill_cd.get('duration') or 0)
         if total_ms <= 0:
             player.skill_last_use_at[skill_level_id] = time.time()
@@ -1102,6 +1230,9 @@ class PacketParser:
             'valid_cd_time': max(0, int(skill_cd.get('valid_cd_time') or 0)),
             'skill_cd_type': max(0, int(skill_cd.get('skill_cd_type') or 0)),
             'charge_count': max(0, int(skill_cd.get('charge_count') or 0)),
+            'sub_cd_ratio': max(0, int(skill_cd.get('sub_cd_ratio') or 0)),
+            'sub_cd_fixed': max(0, int(skill_cd.get('sub_cd_fixed') or 0)),
+            'accelerate_cd_ratio': max(0, int(skill_cd.get('accelerate_cd_ratio') or 0)),
             'observed_at_ms': observed_at_ms,
             'source': 'delta',
         }
@@ -1112,7 +1243,8 @@ class PacketParser:
                 prev.get('duration') == new_entry['duration'] and
                 prev.get('valid_cd_time') == new_entry['valid_cd_time'] and
                 prev.get('skill_cd_type') == new_entry['skill_cd_type'] and
-                prev.get('charge_count') == new_entry['charge_count']
+                prev.get('charge_count') == new_entry['charge_count'] and
+                prev.get('accelerate_cd_ratio') == new_entry['accelerate_cd_ratio']
             )
             if same_core:
                 new_entry['observed_at_ms'] = prev.get('observed_at_ms', observed_at_ms)
@@ -1138,6 +1270,8 @@ class PacketParser:
         if len(frame) < 6:
             return
         self.stats['raw_frames'] += 1
+        if self.stats['raw_frames'] == 1:
+            print(f'[Parser] 首个数据帧到达 (size={len(frame)})', flush=True)
         offset = 0
         total = len(frame)
         while offset < total:
@@ -1163,7 +1297,10 @@ class PacketParser:
                     self.stats['unknown_message_types'] += 1
 
             except Exception as e:
-                logger.debug(f'[Parser] message handling error (type={msg_type}): {e}')
+                import traceback
+                print(f'[Parser] !! 消息处理异常 (type={msg_type}): {e}', flush=True)
+                print(traceback.format_exc(), flush=True)
+                logger.error(f'[Parser] message handling error (type={msg_type}): {e}\n{traceback.format_exc()}')
 
 
     #  FrameDown
@@ -1197,6 +1334,11 @@ class PacketParser:
 
         if service_uuid != SERVICE_UUID_C3SB:
             return
+
+        # 首次收到游戏消息时打印
+        if not getattr(self, '_first_notify_printed', False):
+            self._first_notify_printed = True
+            print(f'[Parser] 首个游戏Notify: method=0x{method_id:02X} zstd={is_zstd}', flush=True)
 
         msg_payload = payload[16:]
         if is_zstd:
@@ -1273,6 +1415,13 @@ class PacketParser:
             return
 
         logger.info(f'[Parser] SyncContainerData received: uid={uid}, current_uid={self._current_uid}')
+        print(f'[Parser] SyncContainerData: uid={uid}, current_uid={self._current_uid}', flush=True)
+
+        # SyncContainerData 是登录时的完整同步, 如果当前 UID 未知则自动采纳
+        if self._current_uid == 0:
+            self._current_uid = uid
+            logger.info(f'[Parser] auto-adopt self UID from SyncContainerData: {uid}')
+
         player = self._get_player(uid)
         changed = False
 
@@ -1451,7 +1600,7 @@ class PacketParser:
                 f'role_level={role_level}, prev_season_max_lv={prev_season_max_lv}, uid={uid}'
             )
             _append_packet_debug('role_level', role_level_debug)
-            if isinstance(role_level, int) and role_level > 0 and player.level <= 0:
+            if isinstance(role_level, int) and role_level > 0:
                 # Upstream packet.js treats RoleLevel.Level like the visible level.
                 player.level = role_level
                 changed = True
@@ -1817,7 +1966,9 @@ class PacketParser:
     def _on_sync_near_entities(self, data: bytes):
         outer = _decode_fields(data)
         # Appear (field 1, repeated)
-        for entity_raw in outer.get(1, []):
+        appear_list = outer.get(1, [])
+        player_uids_appeared = []
+        for entity_raw in appear_list:
             if not isinstance(entity_raw, bytes):
                 continue
             ef = _decode_fields(entity_raw)
@@ -1830,11 +1981,20 @@ class PacketParser:
             if not _is_player(uuid):
                 continue  # Skip non-player entities.
             uid = _uuid_to_uid(uuid)
+            player_uids_appeared.append(uid)
 
             # AttrCollection (field 3)
             attr_raw = ef.get(3, [None])[0]
             if isinstance(attr_raw, bytes):
                 self._process_attr_collection(uid, attr_raw)
+
+        if player_uids_appeared:
+            is_self = self._current_uid in player_uids_appeared
+            logger.info(
+                f'[Parser] SyncNearEntities: {len(player_uids_appeared)} players appeared '
+                f'(self={is_self}, current_uid={self._current_uid}, '
+                f'appeared_uids={player_uids_appeared[:5]})'
+            )
 
 
     #  SyncToMeDeltaInfo (0x2E)
@@ -1876,6 +2036,16 @@ class PacketParser:
                 sync_skill_cds.append(decoded_cd)
                 if self._update_skill_cd(player, decoded_cd):
                     skill_cd_changed = True
+                # Log when CD acceleration is active (光盾被动 / 时间法令 etc.)
+                accel = int(decoded_cd.get('accelerate_cd_ratio') or 0)
+                sub_r = int(decoded_cd.get('sub_cd_ratio') or 0)
+                sub_f = int(decoded_cd.get('sub_cd_fixed') or 0)
+                if accel > 0 or sub_r > 0 or sub_f > 0:
+                    logger.info(
+                        f'[Parser] SkillCD acceleration: slid={decoded_cd["skill_level_id"]} '
+                        f'accel_ratio={accel} sub_ratio={sub_r} sub_fixed={sub_f} '
+                        f'duration={decoded_cd.get("duration")} valid_cd={decoded_cd.get("valid_cd_time")}'
+                    )
             if sync_skill_cds:
                 _append_packet_debug(
                     'sync_skill_cd',
@@ -2107,6 +2277,8 @@ class PacketParser:
                 return b''.join(chunks)
         except Exception as e:
             self.stats['zstd_failures'] += 1
+            if self.stats['zstd_failures'] <= 3:
+                print(f'[Parser] zstd解压失败 ({self.stats["zstd_failures"]}): {e}', flush=True)
             logger.debug(f'[Parser] zstd decompress failed: {e}')
             _append_packet_debug('zstd_failure', {
                 'error': str(e),

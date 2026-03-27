@@ -42,8 +42,7 @@ VISUAL_RECT_SPECS: Dict[str, Dict[str, int]] = {
     "skill_slot_9": {"right": 1177, "bottom": 1007, "width": 74, "height": 119},
 }
 
-# Packet / watched slot numbers keep the original logical order, but the last
-# three on-screen boxes are laid out as 9, 7, 8 from left to right.
+# Packet / watched slot numbers now match the on-screen boxes directly.
 SKILL_SLOT_VISUAL_INDEX = {
     1: 1,
     2: 2,
@@ -51,9 +50,9 @@ SKILL_SLOT_VISUAL_INDEX = {
     4: 4,
     5: 5,
     6: 6,
-    7: 8,
-    8: 9,
-    9: 7,
+    7: 7,
+    8: 8,
+    9: 9,
 }
 
 

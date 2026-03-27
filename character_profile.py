@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 角色识别与配置模块
 基于 StarResonanceDamageCounter 项目的人物职业数据
