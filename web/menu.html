@@ -360,6 +360,8 @@ html, body {
     opacity: 0;
     filter: blur(10px);
     transform: translateY(-80px);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.05), 0 8px 22px rgba(0, 0, 0, 0.18);
+    backdrop-filter: blur(10px);
 }
 .item:nth-child(1) { animation-delay: 0.20s; }
 .item:nth-child(2) { animation-delay: 0.15s; }
@@ -384,17 +386,32 @@ html, body {
     width: calc(var(--radius) - 8px);
     height: calc(var(--radius) - 8px);
     border-radius: 50%;
-    background: rgba(255, 255, 255, .85);
+    background:
+        radial-gradient(circle at 32% 28%, rgba(255,255,255,0.96), rgba(255,255,255,0.82) 56%, rgba(226,226,226,0.86) 100%);
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.2s ease;
+    transition: background 0.22s ease, box-shadow 0.22s ease, transform 0.22s ease;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.46), inset 0 -8px 16px rgba(0,0,0,0.06);
+    position: relative;
+    overflow: hidden;
+}
+
+.item .in-circle::after {
+    content: '';
+    position: absolute;
+    inset: 7px;
+    border-radius: 50%;
+    border: 1px solid rgba(104, 228, 255, 0.14);
+    opacity: 0.9;
+    pointer-events: none;
 }
 
 .item .in-circle i,
 .item .in-circle .sao-icon {
     color: rgb(185, 183, 183);
     transition: color 0.2s ease;
+    display: block;
 }
 
 .sao-icon {
@@ -403,6 +420,8 @@ html, body {
     height: 24px;
     display: inline-block;
     flex: 0 0 auto;
+    margin: 0 auto;
+    overflow: visible;
 }
 .sao-icon::before,
 .sao-icon::after {
@@ -524,26 +543,521 @@ html, body {
     box-shadow: 6px 0 0 currentColor, 12px 0 0 currentColor;
 }
 
+/* ═══ Icon: Skill (lightning bolt) ═══ */
+.sao-icon-skill {
+    width: 20px;
+    height: 20px;
+    transform: translateX(1px);
+}
+.sao-icon-skill::before {
+    left: 3px;
+    top: 1px;
+    width: 14px;
+    height: 18px;
+    clip-path: polygon(46% 0, 100% 0, 61% 38%, 86% 38%, 29% 100%, 43% 60%, 16% 60%);
+    background: currentColor;
+    transform: skewX(-8deg);
+    filter: drop-shadow(0 0 2px rgba(255,255,255,0.12));
+}
+.sao-icon-skill::after {
+    left: 7px;
+    top: 1px;
+    width: 8px;
+    height: 14px;
+    clip-path: polygon(48% 0, 100% 0, 63% 42%, 84% 42%, 25% 100%, 43% 60%, 16% 60%);
+    background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0));
+    opacity: 0.65;
+}
+
+/* ═══ Custom sub-menu widgets ═══ */
+.child-menu li.widget-row {
+    height: auto;
+    min-height: 52px;
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(244,244,244,0.84));
+    border: 1px solid rgba(255,255,255,0.62);
+    border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.12), inset 0 0 0 1px rgba(104,228,255,0.10);
+    cursor: default;
+}
+.child-menu li.widget-row:hover {
+    background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(247,247,247,0.90));
+    color: inherit;
+}
+.widget-label {
+    font-family: var(--font-ui);
+    font-size: 11px;
+    color: rgba(74, 92, 104, 0.88);
+    letter-spacing: 1.4px;
+    min-width: 100%;
+    margin-bottom: 8px;
+}
+.widget-note {
+    min-width: 100%;
+    margin-top: 8px;
+    font-size: 10px;
+    line-height: 1.45;
+    letter-spacing: 0.5px;
+    color: rgba(91, 96, 103, 0.82);
+}
+/* SAO-style toggle switch */
+.sao-toggle {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    letter-spacing: 0.8px;
+    color: rgba(60, 62, 50, 0.8);
+    width: 100%;
+}
+.sao-toggle input { display: none; }
+.sao-toggle .toggle-track {
+    width: 34px; height: 18px;
+    border-radius: 8px;
+    background: rgba(180, 182, 170, 0.5);
+    position: relative;
+    transition: background 0.25s ease;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.12);
+}
+.sao-toggle .toggle-thumb {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: rgba(97, 98, 86, 0.75);
+    transition: left 0.25s ease, background 0.25s ease;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+}
+.sao-toggle input:checked + .toggle-track {
+    background: rgba(104, 228, 255, 0.5);
+}
+.sao-toggle input:checked + .toggle-track .toggle-thumb {
+    left: 18px;
+    background: rgba(104, 228, 255, 0.95);
+}
+/* Volume slider */
+.sao-slider {
+    width: 100%;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(180, 182, 170, 0.4);
+    outline: none;
+    margin: 8px 0 2px;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.08);
+}
+.sao-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: rgba(104, 228, 255, 0.85);
+    cursor: pointer;
+    box-shadow: 0 0 6px rgba(104, 228, 255, 0.4);
+}
+/* Slot checkbox grid */
+.slot-grid {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    width: 100%;
+}
+.slot-chk {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px; height: 32px;
+    border: 1px solid rgba(180, 182, 170, 0.45);
+    border-radius: 8px;
+    background: linear-gradient(180deg, rgba(238,239,233,0.84), rgba(214,216,205,0.55));
+    font-family: var(--font-sao);
+    font-size: 11px;
+    color: rgba(97, 98, 86, 0.7);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.4);
+}
+.slot-chk.active {
+    background: linear-gradient(180deg, rgba(162,241,255,0.38), rgba(104,228,255,0.18));
+    border-color: rgba(104, 228, 255, 0.6);
+    color: rgba(60, 62, 50, 0.95);
+    box-shadow: 0 0 12px rgba(104, 228, 255, 0.2), inset 0 1px 0 rgba(255,255,255,0.35);
+}
+.slot-chk:hover {
+    border-color: rgba(243, 175, 18, 0.6);
+    transform: translateY(-1px);
+}
+/* Mode selector buttons */
+.mode-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+}
+.mode-btn {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid rgba(180, 182, 170, 0.4);
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(223,225,217,0.52));
+    font-family: var(--font-sao);
+    font-size: 10px;
+    letter-spacing: 0.8px;
+    color: rgba(60, 62, 50, 0.75);
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.32);
+}
+.mode-btn.active {
+    background: linear-gradient(180deg, rgba(175,247,255,0.38), rgba(104,228,255,0.18));
+    border-color: rgba(104, 228, 255, 0.6);
+    color: rgba(60, 62, 50, 0.95);
+    box-shadow: 0 0 14px rgba(104, 228, 255, 0.16), inset 0 1px 0 rgba(255,255,255,0.3);
+}
+.mode-btn:hover {
+    border-color: rgba(243, 175, 18, 0.5);
+    transform: translateY(-1px);
+}
+.mode-btn.disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.source-summary {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid rgba(180, 182, 170, 0.38);
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(226,228,220,0.46));
+    color: rgba(60, 62, 50, 0.82);
+    font-family: var(--font-ui);
+    font-size: 10px;
+    letter-spacing: 0.55px;
+    line-height: 1.6;
+}
+.source-msgbox {
+    width: 420px;
+}
+.source-dialog-body {
+    padding: 14px 18px 8px;
+    background: rgba(250, 250, 246, 0.88);
+}
+.source-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(110, 112, 96, 0.12);
+}
+.source-row:last-of-type {
+    border-bottom: none;
+}
+.child-menu.auto-key-menu {
+    min-width: 688px;
+}
+.child-menu.auto-key-menu li {
+    width: 688px;
+}
+.auto-key-shell-row {
+    align-items: flex-start;
+}
+.auto-key-runtime {
+    width: 100%;
+    margin-top: 10px;
+    padding: 9px 11px;
+    border: 1px solid rgba(180, 182, 170, 0.38);
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.76), rgba(226,228,220,0.46));
+    color: rgba(60, 62, 50, 0.82);
+    font-size: 10px;
+    letter-spacing: 0.6px;
+    line-height: 1.55;
+}
+.auto-key-tabs {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 12px;
+}
+.auto-key-tab {
+    flex: 1 1 0;
+    min-width: 0;
+    border: 1px solid rgba(180, 182, 170, 0.42);
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(224,226,218,0.56));
+    color: rgba(60, 62, 50, 0.78);
+    font-family: var(--font-sao);
+    font-size: 11px;
+    letter-spacing: 1px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: all 0.18s ease;
+}
+.auto-key-tab:hover {
+    border-color: rgba(243, 175, 18, 0.5);
+    transform: translateY(-1px);
+}
+.auto-key-tab.active {
+    background: linear-gradient(180deg, rgba(175,247,255,0.38), rgba(104,228,255,0.18));
+    border-color: rgba(104, 228, 255, 0.6);
+    color: rgba(60, 62, 50, 0.95);
+    box-shadow: 0 0 14px rgba(104, 228, 255, 0.16), inset 0 1px 0 rgba(255,255,255,0.3);
+}
+.auto-key-shell {
+    width: 100%;
+}
+.auto-key-panel {
+    display: none;
+    width: 100%;
+}
+.auto-key-panel.show {
+    display: block;
+}
+.auto-key-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 12px;
+}
+.auto-key-btn {
+    border: 1px solid rgba(180, 182, 170, 0.42);
+    border-radius: 9px;
+    padding: 8px 12px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(224,226,218,0.56));
+    color: rgba(60, 62, 50, 0.85);
+    font-family: var(--font-sao);
+    font-size: 10px;
+    letter-spacing: 0.9px;
+    cursor: pointer;
+    transition: all 0.18s ease;
+}
+.auto-key-btn:hover {
+    border-color: rgba(243, 175, 18, 0.5);
+    transform: translateY(-1px);
+}
+.auto-key-btn.primary {
+    background: linear-gradient(180deg, rgba(175,247,255,0.42), rgba(104,228,255,0.20));
+    border-color: rgba(104, 228, 255, 0.58);
+}
+.auto-key-btn.warn {
+    background: linear-gradient(180deg, rgba(255,244,232,0.90), rgba(248,214,168,0.56));
+    border-color: rgba(243, 175, 18, 0.45);
+}
+.auto-key-list,
+.auto-key-cloud-results,
+.auto-key-action-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    max-height: 360px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+.auto-key-profile,
+.auto-key-cloud-card,
+.auto-key-action-card {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid rgba(180, 182, 170, 0.38);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(237,239,232,0.74));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.4);
+}
+.auto-key-profile.active {
+    border-color: rgba(104, 228, 255, 0.62);
+    box-shadow: 0 0 18px rgba(104, 228, 255, 0.16), inset 0 1px 0 rgba(255,255,255,0.4);
+}
+.auto-key-profile.selected {
+    border-color: rgba(243, 175, 18, 0.48);
+}
+.auto-key-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.auto-key-card-title {
+    min-width: 0;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    color: rgba(44, 52, 59, 0.96);
+    letter-spacing: 0.6px;
+}
+.auto-key-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    margin-bottom: 10px;
+    color: rgba(78, 87, 93, 0.84);
+    font-size: 10px;
+    line-height: 1.45;
+}
+.auto-key-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(180, 182, 170, 0.38);
+    background: rgba(255,255,255,0.72);
+    font-size: 9px;
+    letter-spacing: 0.7px;
+}
+.auto-key-pill.active {
+    border-color: rgba(104, 228, 255, 0.56);
+    color: rgba(48, 86, 92, 0.92);
+}
+.auto-key-pill.warn {
+    border-color: rgba(243, 175, 18, 0.45);
+    color: rgba(126, 84, 14, 0.92);
+}
+.auto-key-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.auto-key-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+    width: 100%;
+    margin-bottom: 12px;
+}
+.auto-key-grid.compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.auto-key-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+.auto-key-field.span-2 {
+    grid-column: span 2;
+}
+.auto-key-field.span-3 {
+    grid-column: span 3;
+}
+.auto-key-field label {
+    font-size: 10px;
+    letter-spacing: 0.8px;
+    color: rgba(74, 92, 104, 0.88);
+}
+.auto-key-field input,
+.auto-key-field select,
+.auto-key-field textarea {
+    width: 100%;
+    border: 1px solid rgba(180, 182, 170, 0.38);
+    border-radius: 9px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(231,233,226,0.58));
+    color: rgba(49, 55, 60, 0.92);
+    padding: 9px 10px;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    outline: none;
+}
+.auto-key-field textarea {
+    min-height: 84px;
+    resize: vertical;
+    line-height: 1.5;
+}
+.auto-key-field input:focus,
+.auto-key-field select:focus,
+.auto-key-field textarea:focus {
+    border-color: rgba(104, 228, 255, 0.58);
+    box-shadow: 0 0 0 3px rgba(104, 228, 255, 0.10);
+}
+.auto-key-empty {
+    width: 100%;
+    padding: 20px 12px;
+    text-align: center;
+    color: rgba(95, 101, 108, 0.78);
+    font-size: 11px;
+    line-height: 1.6;
+}
+.auto-key-condition-note {
+    margin-top: 8px;
+    color: rgba(91, 96, 103, 0.82);
+    font-size: 10px;
+    line-height: 1.5;
+}
+.auto-key-mono {
+    font-family: Consolas, 'Courier New', monospace;
+    letter-spacing: 0;
+}
+@media (max-width: 1200px) {
+    .child-menu.auto-key-menu {
+        min-width: 580px;
+    }
+    .child-menu.auto-key-menu li {
+        width: 580px;
+    }
+    .auto-key-grid.compact {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .auto-key-field.span-3 {
+        grid-column: span 2;
+    }
+}
+.source-name {
+    width: 86px;
+    flex: 0 0 86px;
+    color: rgba(80, 82, 70, 0.84);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    letter-spacing: 0.9px;
+}
+.source-row .mode-group {
+    flex-direction: row;
+    gap: 8px;
+}
+.source-row .mode-btn {
+    text-align: center;
+}
+.source-note {
+    padding: 10px 0 4px;
+    color: rgba(84, 86, 74, 0.64);
+    font-family: var(--font-ui);
+    font-size: 10px;
+    letter-spacing: 0.35px;
+    line-height: 1.6;
+}
+
 /* Active circle */
 .item.active {
     border: 2px solid rgba(243, 175, 18, 0.6) !important;
+    box-shadow: 0 0 0 1px rgba(243,175,18,0.18), 0 10px 28px rgba(243, 175, 18, 0.18);
 }
 .item.active .in-circle {
-    background: rgba(243, 175, 18, 0.8) !important;
+    background: radial-gradient(circle at 32% 28%, rgba(255,237,186,0.98), rgba(243, 175, 18, 0.86) 58%, rgba(218, 142, 12, 0.92) 100%) !important;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3), 0 0 16px rgba(243,175,18,0.18);
 }
-.item.active .in-circle i {
+.item.active .in-circle i,
+.item.active .in-circle .sao-icon {
     color: rgba(255, 255, 255, .9) !important;
 }
 
 /* Hover */
 .item:hover .in-circle {
-    background: rgba(243, 175, 18, 0.8);
+    background: radial-gradient(circle at 32% 28%, rgba(255,237,186,0.98), rgba(243, 175, 18, 0.84) 58%, rgba(218, 142, 12, 0.92) 100%);
+    transform: scale(1.02);
 }
-.item:hover .in-circle i {
+.item:hover .in-circle i,
+.item:hover .in-circle .sao-icon {
     color: rgba(255, 255, 255, .9);
 }
 .item:hover {
     border: 2px solid rgba(243, 175, 18, 0.6);
+    transform: translateX(-2px);
 }
 
 /* ═══════════════════════════════════════
@@ -667,8 +1181,8 @@ html, body {
    ═══════════════════════════════════════ */
 .cb_position {
     position: absolute;
-    left: 86px;
-    top: 27px;
+    left: 96px;
+    top: 16px;
 }
 
 .cb_position .line {
@@ -676,17 +1190,18 @@ html, body {
     width: 2px;
     position: absolute;
     top: 50%;
-    left: -5px;
+    left: -12px;
     transform: translateY(-50%);
-    background: linear-gradient(transparent, rgb(124,124,124) 15%, rgb(124,124,124) 85%, transparent);
+    background: linear-gradient(transparent, rgba(104,228,255,0.92) 14%, rgba(243,175,18,0.96) 48%, rgba(104,228,255,0.92) 84%, transparent);
     transition: opacity 0.2s ease, height 0.3s ease;
+    box-shadow: 0 0 10px rgba(104,228,255,0.24);
 }
 .cb_position .line.show { opacity: 1; }
 
 .cb_position .arrow {
     opacity: 0;
     position: absolute;
-    left: -22px;
+    left: -28px;
     width: 19px;
     height: 17px;
     overflow: hidden;
@@ -697,14 +1212,15 @@ html, body {
 .cb_position .arrow.show { opacity: 1; }
 
 .cb_position .circle-dot {
-    width: 5px;
-    height: 5px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(34%, -50%);
-    box-shadow: 0px 0px 0px 100px rgb(212,212,212);
+    background: rgba(243,175,18,0.95);
+    box-shadow: 0 0 0 100px rgba(232,236,240,0.96), 0 0 12px rgba(243,175,18,0.36);
 }
 
 .child-menu {
@@ -712,6 +1228,7 @@ html, body {
     top: 0;
     left: 0;
     list-style: none;
+    min-width: 238px;
     opacity: 0;
     filter: blur(12px);
     transform: translateY(-30px);
@@ -727,32 +1244,42 @@ html, body {
 
 .child-menu li {
     height: 40px;
-    margin-bottom: 3px;
-    width: 180px;
-    background: rgba(255, 255, 255, .85);
+    margin-bottom: 8px;
+    width: 238px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(239,240,236,0.86));
     display: flex;
     align-items: center;
     font-size: 15px;
     text-align: left;
     cursor: pointer;
     padding-left: 12px;
-    transition: background 0.15s ease, color 0.15s ease;
+    padding-right: 10px;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.18s ease, box-shadow 0.18s ease;
+    border: 1px solid rgba(255,255,255,0.54);
+    border-radius: 10px;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.10), inset 0 0 0 1px rgba(104,228,255,0.05);
+    backdrop-filter: blur(12px);
 }
 .child-menu li:last-child { margin-bottom: 0; }
 .child-menu li.sep {
-    height: 1px; padding: 0; margin: 4px 8px;
-    background: rgba(255,255,255,0.15);
+    height: 1px; padding: 0; margin: 2px 12px 8px;
+    background: linear-gradient(90deg, rgba(104,228,255,0), rgba(104,228,255,0.38), rgba(243,175,18,0.42), rgba(104,228,255,0));
     pointer-events: none;
+    box-shadow: none;
+    border: 0;
 }
 
 .child-menu li:hover {
-    background: rgb(222, 166, 32);
+    background: linear-gradient(90deg, rgba(243,175,18,0.94), rgba(227,157,26,0.94));
     color: rgb(251, 245, 231);
+    transform: translateX(3px);
+    box-shadow: 0 14px 30px rgba(243,175,18,0.16);
 }
 
 .child-menu li span {
     display: inline-block;
-    width: 140px;
+    flex: 1;
+    min-width: 0;
     text-overflow: ellipsis;
     overflow: hidden;
     white-space: nowrap;
@@ -1278,11 +1805,28 @@ html, body {
     left: 50%;
     transform: translateX(-50%);
     font-size: 13px;
-    color: rgba(255,255,255,0.5);
+    color: rgba(255,255,255,0.86);
     max-width: 60vw;
     text-overflow: ellipsis;
     overflow: hidden;
     white-space: nowrap;
+    pointer-events: none;
+    padding: 8px 14px;
+    background: linear-gradient(180deg, rgba(8,18,28,0.28), rgba(8,18,28,0.18));
+    border: 1px solid rgba(104,228,255,0.14);
+    border-radius: 6px;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.12);
+}
+
+.menu-hint {
+    position: fixed;
+    bottom: 5px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: rgba(255,255,255,0.34);
+    font-family: var(--font-ui);
+    letter-spacing: 0.8px;
     pointer-events: none;
 }
 
@@ -1364,7 +1908,13 @@ html, body {
             <li class="item active" data-name="userInfo" data-idx="0">
                 <div class="in-circle"><span class="sao-icon sao-icon-user"></span></div>
             </li>
-            <li class="item" data-name="panels" data-idx="1">
+            <li class="item" data-name="skillEffects" data-idx="1">
+                <div class="in-circle"><span class="sao-icon sao-icon-skill"></span></div>
+            </li>
+            <li class="item" data-name="autoKeys" data-idx="2">
+                <div class="in-circle"><span class="sao-icon sao-icon-keys"></span></div>
+            </li>
+            <li class="item" data-name="panels" data-idx="3">
                 <div class="in-circle"><span class="sao-icon sao-icon-settings"></span></div>
             </li>
         </ul>
@@ -1376,9 +1926,169 @@ html, body {
                 <div class="circle-dot"></div>
             </div>
 
+            <!-- Skill Effects sub-menu -->
+            <ul class="child-menu" id="sub-skillEffects" data-group="skillEffects">
+                <li class="widget-row">
+                    <div class="widget-label">SKILL SLOTS</div>
+                    <div class="slot-grid" id="slot-grid">
+                        <div class="slot-chk active" data-slot="1">1</div>
+                        <div class="slot-chk active" data-slot="2">2</div>
+                        <div class="slot-chk active" data-slot="3">3</div>
+                        <div class="slot-chk active" data-slot="4">4</div>
+                        <div class="slot-chk active" data-slot="5">5</div>
+                        <div class="slot-chk active" data-slot="6">6</div>
+                        <div class="slot-chk active" data-slot="7">7</div>
+                        <div class="slot-chk active" data-slot="8">8</div>
+                        <div class="slot-chk active" data-slot="9">9</div>
+                    </div>
+                    <div class="widget-note">所选技能槽全部转好时，将触发 Burst Ready 提示。</div>
+                </li>
+                <li class="widget-row">
+                    <label class="sao-toggle">
+                        <input type="checkbox" id="burst-enabled" checked />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>BURST MODE ALERT</span>
+                    </label>
+                    <div class="widget-note">关闭后保留冷却跟踪，但不再弹出动画提醒。</div>
+                </li>
+            </ul>
+
+            <!-- Auto Keys sub-menu -->
+            <ul class="child-menu auto-key-menu" id="sub-autoKeys" data-group="autoKeys">
+                <li class="widget-row">
+                    <div class="widget-label">AUTO KEY ENGINE</div>
+                    <label class="sao-toggle">
+                        <input type="checkbox" id="auto-key-enabled" />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>AUTO SCRIPT ACTIVE</span>
+                    </label>
+                    <div class="auto-key-runtime" id="auto-key-runtime">AUTO KEY RUNTIME: IDLE</div>
+                    <div class="widget-note">F6 can toggle the engine instantly. Actions use packet skill state, HP, STA, burst state, foreground checks, and death pause rules.</div>
+                </li>
+                <li class="widget-row auto-key-shell-row">
+                    <div class="auto-key-tabs" id="auto-key-tabs">
+                        <button class="auto-key-tab active" data-tab="local" type="button">LOCAL</button>
+                        <button class="auto-key-tab" data-tab="editor" type="button">EDITOR</button>
+                        <button class="auto-key-tab" data-tab="cloud" type="button">CLOUD</button>
+                    </div>
+                    <div class="auto-key-shell">
+                        <div class="auto-key-panel show" data-tab="local">
+                            <div class="auto-key-toolbar">
+                                <button class="auto-key-btn primary" type="button" onclick="_akCreateProfile(); return false;">NEW PROFILE</button>
+                                <button class="auto-key-btn" type="button" onclick="_akImportProfile(); return false;">IMPORT JSON</button>
+                                <button class="auto-key-btn" type="button" onclick="_akRefreshState(); return false;">REFRESH</button>
+                            </div>
+                            <div class="auto-key-list" id="auto-key-profile-list"></div>
+                        </div>
+                        <div class="auto-key-panel" data-tab="editor">
+                            <div class="auto-key-grid">
+                                <div class="auto-key-field">
+                                    <label for="ak-profile-name">PROFILE NAME</label>
+                                    <input id="ak-profile-name" type="text" placeholder="Profile name" />
+                                </div>
+                                <div class="auto-key-field">
+                                    <label for="ak-profile-profession-name">PROFESSION NAME</label>
+                                    <input id="ak-profile-profession-name" type="text" placeholder="Profession name" />
+                                </div>
+                                <div class="auto-key-field">
+                                    <label for="ak-profile-profession-id">PROFESSION ID</label>
+                                    <input id="ak-profile-profession-id" type="number" min="0" step="1" />
+                                </div>
+                                <div class="auto-key-field">
+                                    <label for="ak-engine-tick-ms">TICK MS</label>
+                                    <input id="ak-engine-tick-ms" type="number" min="10" step="10" />
+                                </div>
+                                <div class="auto-key-field span-2">
+                                    <label for="ak-profile-description">DESCRIPTION</label>
+                                    <textarea id="ak-profile-description" placeholder="What this script does and when to use it"></textarea>
+                                </div>
+                            </div>
+                            <div class="auto-key-toolbar">
+                                <label class="sao-toggle" style="max-width:220px;">
+                                    <input type="checkbox" id="ak-engine-require-foreground" />
+                                    <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                                    <span>REQUIRE FOREGROUND</span>
+                                </label>
+                                <label class="sao-toggle" style="max-width:220px;">
+                                    <input type="checkbox" id="ak-engine-pause-on-death" />
+                                    <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                                    <span>PAUSE ON DEATH</span>
+                                </label>
+                                <button class="auto-key-btn primary" type="button" onclick="_akSaveDraft(); return false;">SAVE PROFILE</button>
+                                <button class="auto-key-btn" type="button" onclick="_akAddAction(); return false;">ADD ACTION</button>
+                                <button class="auto-key-btn" type="button" onclick="_akActivateDraft(); return false;">ACTIVATE</button>
+                                <button class="auto-key-btn" type="button" onclick="_akExportDraft(); return false;">EXPORT</button>
+                            </div>
+                            <div class="auto-key-action-list" id="auto-key-action-list"></div>
+                        </div>
+                        <div class="auto-key-panel" data-tab="cloud">
+                            <div class="auto-key-grid compact">
+                                <div class="auto-key-field span-3">
+                                    <label for="ak-server-url">SERVER URL</label>
+                                    <input id="ak-server-url" type="text" placeholder="http://47.82.157.220:8000" />
+                                </div>
+                                <div class="auto-key-field span-3">
+                                    <label for="ak-upload-token">UPLOAD TOKEN</label>
+                                    <input id="ak-upload-token" type="password" placeholder="Upload token" />
+                                </div>
+                                <div class="auto-key-field">
+                                    <label for="ak-search-q">KEYWORD</label>
+                                    <input id="ak-search-q" type="text" placeholder="Profile / player / profession" />
+                                </div>
+                                <div class="auto-key-field">
+                                    <label for="ak-search-profile-name">PROFILE NAME</label>
+                                    <input id="ak-search-profile-name" type="text" placeholder="Profile name" />
+                                </div>
+                                <div class="auto-key-field">
+                                    <label for="ak-search-player-uid">PLAYER UID</label>
+                                    <input id="ak-search-player-uid" type="text" placeholder="UID" />
+                                </div>
+                                <div class="auto-key-field">
+                                    <label for="ak-search-player-name">PLAYER NAME</label>
+                                    <input id="ak-search-player-name" type="text" placeholder="Player name" />
+                                </div>
+                                <div class="auto-key-field">
+                                    <label for="ak-search-profession-name">PROFESSION</label>
+                                    <input id="ak-search-profession-name" type="text" placeholder="Profession" />
+                                </div>
+                            </div>
+                            <div class="auto-key-toolbar">
+                                <button class="auto-key-btn" type="button" onclick="_akSaveCloudSettings(); return false;">SAVE SERVER</button>
+                                <button class="auto-key-btn primary" type="button" onclick="_akSearchRemote(); return false;">SEARCH</button>
+                                <button class="auto-key-btn" type="button" onclick="_akUploadActive(); return false;">UPLOAD ACTIVE</button>
+                            </div>
+                            <div class="auto-key-cloud-results" id="auto-key-cloud-results"></div>
+                        </div>
+                    </div>
+                </li>
+            </ul>
+
             <!-- Panels & Actions sub-menu -->
             <ul class="child-menu" id="sub-panels" data-group="panels">
+                <li data-action="toggle_auto_script"><i class="menu-glyph mi-play"></i><span>AUTO KEY ENGINE</span><small class="shortcut">F6</small></li>
                 <li data-action="toggle_recognition"><i class="menu-glyph mi-play"></i><span>识别 开/关</span><small class="shortcut">F5</small></li>
+                <li class="sep"></li>
+                <li class="widget-row">
+                    <div class="widget-label">SOUND</div>
+                    <label class="sao-toggle" style="margin-bottom:6px;">
+                        <input type="checkbox" id="sound-enabled" checked />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>SFX ON/OFF</span>
+                    </label>
+                    <input type="range" class="sao-slider" id="sound-volume" min="0" max="100" value="70" />
+                    <div class="widget-note">控制菜单提示音与 Burst Ready 音效，不影响游戏本体声音。</div>
+                </li>
+                <li class="sep"></li>
+                <li class="widget-row">
+                    <div class="widget-label">VISION PIPELINE</div>
+                    <div class="widget-note">目前内存注入安全性仍在确认，暂时使用packet捕捉与识图，不提供切换。</div>
+                    <div class="source-summary" id="data-source-summary" style="display:none">
+                        HP: NETWORK · LV: NETWORK · STA: VISION · SKILL: VISION
+                    </div>
+                    <div class="mode-group" style="display:none; margin-top: 6px;">
+                        <div class="mode-btn active" id="open-data-source-panel">CONFIGURE</div>
+                    </div>
+                </li>
                 <li class="sep"></li>
                 <li data-action="exit"><i class="menu-glyph mi-exit"></i><span>退出</span></li>
             </ul>
@@ -1388,7 +2098,7 @@ html, body {
 
 <!-- Current file display -->
 <div class="current-file" id="current-file"></div>
-<div class="current-file" style="bottom:5px;font-size:10px;color:rgba(255,255,255,0.3);font-family:var(--font-ui);letter-spacing:0.8px;">F5 识别开关</div>
+<div class="menu-hint">F5 识别开关</div>
 
 <!-- TV Off Overlay -->
 <div id="tv-off-overlay"></div>
@@ -1442,6 +2152,56 @@ html, body {
     </div>
 </div>
 
+<!-- Data Source Dialog -->
+<div class="saoMsgBox_fa" id="source-dialog" style="display:none" aria-hidden="true">
+    <div class="saoMsgBox source-msgbox">
+        <div class="alert-title"><span>DATA SOURCE</span></div>
+        <div class="source-dialog-body">
+            <div class="source-row">
+                <div class="source-name">HP</div>
+                <div class="mode-group">
+                    <div class="mode-btn source-mode-btn" data-component="hp" data-mode="packet">NETWORK</div>
+                    <div class="mode-btn source-mode-btn" data-component="hp" data-mode="vision">VISION</div>
+                </div>
+            </div>
+            <div class="source-row">
+                <div class="source-name">LEVEL</div>
+                <div class="mode-group">
+                    <div class="mode-btn source-mode-btn" data-component="level" data-mode="packet">NETWORK</div>
+                    <div class="mode-btn source-mode-btn" data-component="level" data-mode="vision">VISION</div>
+                </div>
+            </div>
+            <div class="source-row">
+                <div class="source-name">STA</div>
+                <div class="mode-group">
+                    <div class="mode-btn source-mode-btn" data-component="stamina" data-mode="packet">NETWORK</div>
+                    <div class="mode-btn source-mode-btn" data-component="stamina" data-mode="vision">VISION</div>
+                </div>
+            </div>
+            <div class="source-row">
+                <div class="source-name">SKILL CD</div>
+                <div class="mode-group">
+                    <div class="mode-btn source-mode-btn" data-component="skills" data-mode="packet">NETWORK</div>
+                    <div class="mode-btn source-mode-btn" data-component="skills" data-mode="vision">VISION</div>
+                </div>
+            </div>
+            <div class="source-row">
+                <div class="source-name">NAME / UID</div>
+                <div class="mode-group">
+                    <div class="mode-btn source-mode-btn" data-component="identity" data-mode="packet">NETWORK</div>
+                    <div class="mode-btn source-mode-btn" data-component="identity" data-mode="vision">VISION</div>
+                </div>
+            </div>
+            <div class="source-note">
+                Packet stays closest to raw game state. Vision uses the on-screen HUD and now runs through the OpenCV/OpenCL preprocessing path when the local machine supports it.
+            </div>
+        </div>
+        <div class="alert-footer">
+            <div class="btn-circle btn-close" id="source-close"><div class="inner"></div></div>
+        </div>
+    </div>
+</div>
+
 <!-- Alert Dialog -->
 <div class="saoMsgBox_fa" id="alert-dialog">
     <div class="saoMsgBox">
@@ -1468,6 +2228,45 @@ var cbArrow = document.getElementById('cb-arrow');
 
 var currentActive = 'userInfo';
 var menuOpen = false;
+var _dataSourceMap = {
+    hp: 'packet',
+    level: 'packet',
+    stamina: 'vision',
+    skills: 'vision',
+    identity: 'packet'
+};
+
+function _sourceLabel(mode) {
+    return mode === 'vision' ? 'VISION' : 'NETWORK';
+}
+
+function _syncSourceButtons() {
+    document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
+        var component = btn.getAttribute('data-component');
+        var mode = btn.getAttribute('data-mode');
+        btn.classList.toggle('active', _dataSourceMap[component] === mode);
+    });
+}
+
+function _updateSourceSummary() {
+    var summary = [
+        'HP: ' + _sourceLabel(_dataSourceMap.hp),
+        'LV: ' + _sourceLabel(_dataSourceMap.level),
+        'STA: ' + _sourceLabel(_dataSourceMap.stamina),
+        'SKILL: ' + _sourceLabel(_dataSourceMap.skills)
+    ].join(' · ');
+    document.getElementById('data-source-summary').textContent = summary;
+}
+
+function openSourceDialog() {
+    playSound('snd-panel');
+    _syncSourceButtons();
+    document.getElementById('source-dialog').classList.add('show');
+}
+
+function closeSourceDialog() {
+    document.getElementById('source-dialog').classList.remove('show');
+}
 
 /* ═══ Sound helpers — via Python bridge ═══ */
 var _sndMap = {
@@ -1757,9 +2556,9 @@ function activateCircle(name) {
         if (sub) {
             sub.classList.add('show');
             playSound('snd-menu');
-            /* Update line height */
-            var itemCount = sub.querySelectorAll('li').length;
-            cbLine.style.height = (itemCount * 43 - 9) + 'px';
+            /* Update line height using rendered height so large panels also fit */
+            var rect = sub.getBoundingClientRect();
+            cbLine.style.height = Math.max(48, Math.round(rect.height - 18)) + 'px';
             cbLine.classList.add('show');
             cbArrow.classList.add('show');
         }
@@ -1819,7 +2618,17 @@ function showFilePicker(dataJson) {
             playSound('snd-click');
             closeFilePicker();
             if (window.pywebview && window.pywebview.api) {
-                window.pywebview.api.select_file(f.path);
+                window.pywebview.api.select_file(f.path).then(function(result) {
+                    var data = _akParseApiResult(result);
+                    if (data && data.state) {
+                        _syncAutoKeyState(data.state);
+                    }
+                    if (data && data.ok) {
+                        showToast('IMPORT COMPLETE');
+                    } else if (data && data.message) {
+                        showAlert('AUTO KEYS', data.message, true);
+                    }
+                });
             }
         });
         list.appendChild(el);
@@ -1876,17 +2685,769 @@ menuBar.querySelectorAll('.item').forEach(function(item) {
 document.querySelectorAll('.child-menu li').forEach(function(li) {
     li.addEventListener('click', function(e) {
         e.stopPropagation();
-        playSound('snd-click');
         var action = this.getAttribute('data-action');
+        if (!action) return;
+        playSound('snd-click');
         if (action === 'exit') {
             exitApplication();
             return;
         }
-        if (window.pywebview && window.pywebview.api) {
+        if (action && window.pywebview && window.pywebview.api) {
             window.pywebview.api.menu_action(action);
         }
     });
 });
+
+/* ═══ Skill Effects — Slot checkboxes ═══ */
+document.querySelectorAll('#slot-grid .slot-chk').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+        e.stopPropagation();
+        this.classList.toggle('active');
+        playSound('snd-click');
+        _saveWatchedSlots();
+    });
+});
+function _saveWatchedSlots() {
+    var slots = [];
+    document.querySelectorAll('#slot-grid .slot-chk.active').forEach(function(el) {
+        slots.push(parseInt(el.getAttribute('data-slot')));
+    });
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_watched_slots) {
+        window.pywebview.api.set_watched_slots(slots);
+    }
+}
+/* Burst enabled toggle */
+document.getElementById('burst-enabled').addEventListener('change', function(e) {
+    e.stopPropagation();
+    playSound('snd-click');
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_burst_enabled) {
+        window.pywebview.api.set_burst_enabled(this.checked);
+    }
+});
+
+/* ═══ Sound controls ═══ */
+document.getElementById('sound-enabled').addEventListener('change', function(e) {
+    e.stopPropagation();
+    playSound('snd-click');
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_sound_enabled) {
+        window.pywebview.api.set_sound_enabled(this.checked);
+    }
+});
+document.getElementById('sound-volume').addEventListener('input', function(e) {
+    e.stopPropagation();
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_sound_volume) {
+        window.pywebview.api.set_sound_volume(parseInt(this.value));
+    }
+});
+
+/* ═══ Data source panel ═══ */
+document.getElementById('open-data-source-panel').addEventListener('click', function(e) {
+    e.stopPropagation();
+    openSourceDialog();
+});
+document.getElementById('source-close').addEventListener('click', function(e) {
+    e.stopPropagation();
+    closeSourceDialog();
+});
+document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var component = this.getAttribute('data-component');
+        var mode = this.getAttribute('data-mode');
+        if (!component || !mode) return;
+        playSound('snd-click');
+        _dataSourceMap[component] = mode;
+        _syncSourceButtons();
+        _updateSourceSummary();
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_component_source) {
+            window.pywebview.api.set_component_source(component, mode);
+        }
+    });
+});
+
+/* ═══ Restore settings from Python on menu open ═══ */
+var _autoKeyState = null;
+var _autoKeySelectedProfileId = '';
+var _autoKeyDraftProfile = null;
+var _autoKeyDraftDirty = false;
+var _autoKeyTab = 'local';
+
+if (document.querySelector('.menu-hint')) {
+    document.querySelector('.menu-hint').textContent = 'F5 RECOGNITION / F6 AUTO KEY';
+}
+
+function _akParseApiResult(result) {
+    if (!result) return {};
+    if (typeof result === 'string') {
+        try { return JSON.parse(result); } catch (e) { return { ok: false, message: result }; }
+    }
+    return result;
+}
+
+function _akClone(value) {
+    return value ? JSON.parse(JSON.stringify(value)) : null;
+}
+
+function _akNewClientId(prefix) {
+    return (prefix || 'ak') + '_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1000000).toString(36);
+}
+
+function _akProfilesFull() {
+    return (_autoKeyState && Array.isArray(_autoKeyState.profiles_full)) ? _autoKeyState.profiles_full : [];
+}
+
+function _akFindProfile(profileId) {
+    var id = String(profileId || '');
+    if (!id) return null;
+    var profiles = _akProfilesFull();
+    for (var i = 0; i < profiles.length; i++) {
+        if (String(profiles[i].id || '') === id) return profiles[i];
+    }
+    return null;
+}
+
+function _akEnsureSelectedProfile() {
+    var profiles = _akProfilesFull();
+    if (!profiles.length) {
+        _autoKeySelectedProfileId = '';
+        return;
+    }
+    if (_akFindProfile(_autoKeySelectedProfileId)) return;
+    _autoKeySelectedProfileId = String((_autoKeyState && _autoKeyState.active_profile_id) || profiles[0].id || '');
+}
+
+function _akPrepareDraft(profile) {
+    var draft = _akClone(profile);
+    if (!draft) return null;
+    if (!draft.engine) {
+        draft.engine = { tick_ms: 50, require_foreground: true, pause_on_death: true };
+    }
+    if (!Array.isArray(draft.actions)) {
+        draft.actions = [];
+    }
+    draft.actions.forEach(function(action, index) {
+        if (!action.id) action.id = _akNewClientId('action');
+        if (!action.label) action.label = 'Action ' + (index + 1);
+        if (typeof action.enabled !== 'boolean') action.enabled = true;
+        if (!Array.isArray(action.conditions)) action.conditions = [];
+        action._conditions_text = JSON.stringify(action.conditions || [], null, 2);
+    });
+    return draft;
+}
+
+function _akLoadDraftFromState(profileId, force) {
+    _akEnsureSelectedProfile();
+    var chosenId = String(profileId || _autoKeySelectedProfileId || '');
+    var profile = _akFindProfile(chosenId);
+    if (!profile) {
+        _autoKeyDraftProfile = null;
+        return;
+    }
+    _autoKeySelectedProfileId = String(profile.id || '');
+    if (!force && _autoKeyDraftDirty && _autoKeyDraftProfile && String(_autoKeyDraftProfile.id || '') === _autoKeySelectedProfileId) {
+        return;
+    }
+    _autoKeyDraftProfile = _akPrepareDraft(profile);
+    _autoKeyDraftDirty = false;
+}
+
+function _akCallApi(methodName, args, onOk) {
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api[methodName]) {
+        showAlert('AUTO KEYS', 'pywebview API is not available', true);
+        return;
+    }
+    var fn = window.pywebview.api[methodName];
+    var promise = fn.apply(window.pywebview.api, args || []);
+    if (!promise || typeof promise.then !== 'function') return;
+    promise.then(function(result) {
+        var data = _akParseApiResult(result);
+        if (data && data.state) {
+            _syncAutoKeyState(data.state);
+        }
+        if (data && data.ok) {
+            if (onOk) onOk(data);
+            return;
+        }
+        showAlert('AUTO KEYS', (data && data.message) ? data.message : ('Request failed: ' + methodName), true);
+    }).catch(function(err) {
+        showAlert('AUTO KEYS', String(err || 'Unknown error'), true);
+    });
+}
+
+function _akRenderRuntime() {
+    var runtimeEl = document.getElementById('auto-key-runtime');
+    var enabledEl = document.getElementById('auto-key-enabled');
+    if (!runtimeEl || !enabledEl) return;
+    var state = _autoKeyState || {};
+    var runtime = state.runtime || {};
+    enabledEl.checked = !!state.enabled;
+    var bits = [];
+    bits.push('ENGINE ' + (state.enabled ? 'ON' : 'OFF'));
+    bits.push('PROFILE ' + (state.active_profile_name || 'NONE'));
+    bits.push('STATUS ' + ((runtime.last_reason || (runtime.active ? 'RUNNING' : 'IDLE')) || 'IDLE'));
+    if (runtime.last_action_label) {
+        bits.push('LAST ' + runtime.last_action_label);
+    }
+    runtimeEl.innerHTML = bits.map(function(item) {
+        return '<span class="auto-key-pill ' + (state.enabled ? 'active' : '') + '">' + _escHtml(item) + '</span>';
+    }).join(' ');
+}
+
+function _akRenderLocal() {
+    var listEl = document.getElementById('auto-key-profile-list');
+    if (!listEl) return;
+    var profiles = _akProfilesFull();
+    var state = _autoKeyState || {};
+    if (!profiles.length) {
+        listEl.innerHTML = '<div class="auto-key-empty">No local profiles yet.<br>Create one here or import a JSON file.</div>';
+        return;
+    }
+    var summaries = {};
+    ((state.profiles || [])).forEach(function(item) { summaries[String(item.id || '')] = item; });
+    listEl.innerHTML = profiles.map(function(profile) {
+        var id = String(profile.id || '');
+        var summary = summaries[id] || {};
+        var actionCount = Number(summary.action_count || ((profile.actions || []).length || 0));
+        var enabledCount = Number(summary.enabled_action_count || 0);
+        var classes = ['auto-key-profile'];
+        if (String(state.active_profile_id || '') === id) classes.push('active');
+        if (String(_autoKeySelectedProfileId || '') === id) classes.push('selected');
+        return '' +
+            '<div class="' + classes.join(' ') + '">' +
+                '<div class="auto-key-card-head">' +
+                    '<div class="auto-key-card-title">' + _escHtml(profile.profile_name || 'Profile') + '</div>' +
+                    '<div class="auto-key-card-actions">' +
+                        '<button class="auto-key-btn" type="button" onclick="_akSelectProfile(' + JSON.stringify(id) + ', \'editor\'); return false;">EDIT</button>' +
+                        '<button class="auto-key-btn primary" type="button" onclick="_akActivateProfile(' + JSON.stringify(id) + '); return false;">ACTIVATE</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="auto-key-card-meta">' +
+                    '<span class="auto-key-pill ' + (String(state.active_profile_id || '') === id ? 'active' : '') + '">' + _escHtml((profile.profession_name || 'ANY').toUpperCase()) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(String(profile.source || 'local').toUpperCase()) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(actionCount + ' ACTIONS / ' + enabledCount + ' ON') + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(profile.updated_at || '') + '</span>' +
+                '</div>' +
+                '<div class="auto-key-card-meta">' +
+                    '<span>' + _escHtml(profile.description || 'No description') + '</span>' +
+                '</div>' +
+                '<div class="auto-key-card-actions">' +
+                    '<button class="auto-key-btn" type="button" onclick="_akCopyProfile(' + JSON.stringify(id) + '); return false;">COPY</button>' +
+                    '<button class="auto-key-btn" type="button" onclick="_akExportProfile(' + JSON.stringify(id) + '); return false;">EXPORT</button>' +
+                    '<button class="auto-key-btn warn" type="button" onclick="_akDeleteProfile(' + JSON.stringify(id) + '); return false;">DELETE</button>' +
+                '</div>' +
+            '</div>';
+    }).join('');
+}
+
+function _akPopulateEditorFields() {
+    var draft = _autoKeyDraftProfile;
+    var listEl = document.getElementById('auto-key-action-list');
+    if (!draft) {
+        if (listEl) {
+            listEl.innerHTML = '<div class="auto-key-empty">Select a profile from LOCAL or create a new one to start editing.</div>';
+        }
+        ['ak-profile-name', 'ak-profile-profession-name', 'ak-profile-profession-id', 'ak-engine-tick-ms', 'ak-profile-description'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+        if (document.getElementById('ak-engine-require-foreground')) document.getElementById('ak-engine-require-foreground').checked = true;
+        if (document.getElementById('ak-engine-pause-on-death')) document.getElementById('ak-engine-pause-on-death').checked = true;
+        return;
+    }
+    document.getElementById('ak-profile-name').value = draft.profile_name || '';
+    document.getElementById('ak-profile-profession-name').value = draft.profession_name || '';
+    document.getElementById('ak-profile-profession-id').value = draft.profession_id || 0;
+    document.getElementById('ak-engine-tick-ms').value = (draft.engine && draft.engine.tick_ms) || 50;
+    document.getElementById('ak-profile-description').value = draft.description || '';
+    document.getElementById('ak-engine-require-foreground').checked = !(draft.engine && draft.engine.require_foreground === false);
+    document.getElementById('ak-engine-pause-on-death').checked = !(draft.engine && draft.engine.pause_on_death === false);
+    _akRenderActionList();
+}
+
+function _akRenderActionList() {
+    var listEl = document.getElementById('auto-key-action-list');
+    if (!listEl) return;
+    var draft = _autoKeyDraftProfile;
+    if (!draft || !Array.isArray(draft.actions) || !draft.actions.length) {
+        listEl.innerHTML = '<div class="auto-key-empty">No actions yet. Add one and bind it to a skill slot.</div>';
+        return;
+    }
+    listEl.innerHTML = draft.actions.map(function(action, index) {
+        var conditionsText = String(action._conditions_text || JSON.stringify(action.conditions || [], null, 2));
+        return '' +
+            '<div class="auto-key-action-card">' +
+                '<div class="auto-key-card-head">' +
+                    '<div class="auto-key-card-title">ACTION ' + (index + 1) + ': ' + _escHtml(action.label || ('Action ' + (index + 1))) + '</div>' +
+                    '<div class="auto-key-card-actions">' +
+                        '<button class="auto-key-btn" type="button" onclick="_akMoveAction(' + index + ', -1); return false;">UP</button>' +
+                        '<button class="auto-key-btn" type="button" onclick="_akMoveAction(' + index + ', 1); return false;">DOWN</button>' +
+                        '<button class="auto-key-btn" type="button" onclick="_akCloneAction(' + index + '); return false;">COPY</button>' +
+                        '<button class="auto-key-btn warn" type="button" onclick="_akDeleteAction(' + index + '); return false;">DELETE</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="auto-key-toolbar">' +
+                    '<label class="sao-toggle" style="max-width:180px;">' +
+                        '<input type="checkbox" ' + (action.enabled ? 'checked' : '') + ' onchange="_akDraftActionField(' + index + ', \'enabled\', this.checked, \'bool\')" />' +
+                        '<div class="toggle-track"><div class="toggle-thumb"></div></div>' +
+                        '<span>ACTION ENABLED</span>' +
+                    '</label>' +
+                '</div>' +
+                '<div class="auto-key-grid compact">' +
+                    '<div class="auto-key-field"><label>LABEL</label><input type="text" value="' + _escHtml(action.label || '') + '" oninput="_akDraftActionField(' + index + ', \'label\', this.value)" /></div>' +
+                    '<div class="auto-key-field"><label>SLOT</label><input type="number" min="1" max="9" value="' + _escHtml(String(action.slot_index || 1)) + '" oninput="_akDraftActionField(' + index + ', \'slot_index\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>KEY</label><input type="text" value="' + _escHtml(String(action.key || '')) + '" oninput="_akDraftActionField(' + index + ', \'key\', this.value)" /></div>' +
+                    '<div class="auto-key-field"><label>PRESS MODE</label><select onchange="_akDraftActionField(' + index + ', \'press_mode\', this.value)"><option value="tap"' + (action.press_mode === 'tap' ? ' selected' : '') + '>tap</option><option value="hold"' + (action.press_mode === 'hold' ? ' selected' : '') + '>hold</option></select></div>' +
+                    '<div class="auto-key-field"><label>PRESS COUNT</label><input type="number" min="1" max="20" value="' + _escHtml(String(action.press_count || 1)) + '" oninput="_akDraftActionField(' + index + ', \'press_count\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>PRESS INTERVAL MS</label><input type="number" min="0" value="' + _escHtml(String(action.press_interval_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'press_interval_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>HOLD MS</label><input type="number" min="0" value="' + _escHtml(String(action.hold_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'hold_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>READY DELAY MS</label><input type="number" min="0" value="' + _escHtml(String(action.ready_delay_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'ready_delay_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>MIN REARM MS</label><input type="number" min="0" value="' + _escHtml(String(action.min_rearm_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'min_rearm_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>POST DELAY MS</label><input type="number" min="0" value="' + _escHtml(String(action.post_delay_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'post_delay_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field span-3"><label>CONDITIONS JSON</label><textarea class="auto-key-mono" oninput="_akDraftActionConditions(' + index + ', this.value)">' + _escHtml(conditionsText) + '</textarea></div>' +
+                '</div>' +
+                '<div class="auto-key-condition-note">Supported condition types: hp_pct_gte, hp_pct_lte, sta_pct_gte, burst_ready_is, slot_state_is, profession_is, player_name_is.</div>' +
+            '</div>';
+    }).join('');
+}
+
+function _akRenderCloud() {
+    var state = _autoKeyState || {};
+    var search = state.last_remote_search || {};
+    var query = search.query || {};
+    var resultsEl = document.getElementById('auto-key-cloud-results');
+    if (document.getElementById('ak-server-url')) document.getElementById('ak-server-url').value = state.server_url || '';
+    if (document.getElementById('ak-upload-token')) document.getElementById('ak-upload-token').value = state.upload_token || '';
+    if (document.getElementById('ak-search-q')) document.getElementById('ak-search-q').value = query.q || '';
+    if (document.getElementById('ak-search-profile-name')) document.getElementById('ak-search-profile-name').value = query.profile_name || '';
+    if (document.getElementById('ak-search-player-uid')) document.getElementById('ak-search-player-uid').value = query.player_uid || '';
+    if (document.getElementById('ak-search-player-name')) document.getElementById('ak-search-player-name').value = query.player_name || '';
+    if (document.getElementById('ak-search-profession-name')) document.getElementById('ak-search-profession-name').value = query.profession_name || '';
+    if (!resultsEl) return;
+    var results = Array.isArray(search.results) ? search.results : [];
+    if (search.error) {
+        resultsEl.innerHTML = '<div class="auto-key-empty">Cloud search failed.<br>' + _escHtml(search.error) + '</div>';
+        return;
+    }
+    if (!results.length) {
+        resultsEl.innerHTML = '<div class="auto-key-empty">No cloud profiles yet. Enter filters above and start a search.</div>';
+        return;
+    }
+    resultsEl.innerHTML = results.map(function(item) {
+        var remoteId = String(item.id || '');
+        return '' +
+            '<div class="auto-key-cloud-card">' +
+                '<div class="auto-key-card-head">' +
+                    '<div class="auto-key-card-title">' + _escHtml(item.profile_name || ('Remote #' + remoteId)) + '</div>' +
+                    '<div class="auto-key-card-actions">' +
+                        '<button class="auto-key-btn primary" type="button" onclick="_akDownloadRemote(' + JSON.stringify(remoteId) + '); return false;">DOWNLOAD</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="auto-key-card-meta">' +
+                    '<span class="auto-key-pill">' + _escHtml('UID ' + (item.player_uid || '--')) + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(item.player_name || '--') + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(item.profession_name || 'ANY') + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(item.updated_at || item.created_at || '') + '</span>' +
+                '</div>' +
+                '<div class="auto-key-card-meta"><span>' + _escHtml(item.description || 'No description') + '</span></div>' +
+            '</div>';
+    }).join('');
+}
+
+function _akRenderTabState() {
+    document.querySelectorAll('#auto-key-tabs .auto-key-tab').forEach(function(tab) {
+        tab.classList.toggle('active', tab.getAttribute('data-tab') === _autoKeyTab);
+    });
+    document.querySelectorAll('#sub-autoKeys .auto-key-panel').forEach(function(panel) {
+        panel.classList.toggle('show', panel.getAttribute('data-tab') === _autoKeyTab);
+    });
+}
+
+function _renderAutoKeyUI() {
+    _akEnsureSelectedProfile();
+    _akRenderRuntime();
+    _akRenderLocal();
+    _akRenderCloud();
+    _akRenderTabState();
+    if (!_autoKeyDraftProfile || !_autoKeyDraftDirty) {
+        _akLoadDraftFromState(_autoKeySelectedProfileId, !_autoKeyDraftProfile);
+        _akPopulateEditorFields();
+    } else if (_autoKeyTab === 'editor') {
+        _akRenderActionList();
+    }
+}
+
+function _syncAutoKeyState(state) {
+    _autoKeyState = state || null;
+    _akEnsureSelectedProfile();
+    if (!_autoKeyDraftProfile || !_autoKeyDraftDirty || !_akFindProfile(_autoKeySelectedProfileId)) {
+        _akLoadDraftFromState(_autoKeySelectedProfileId, true);
+    }
+    _renderAutoKeyUI();
+}
+
+function _akSelectProfile(profileId, tabName) {
+    _autoKeySelectedProfileId = String(profileId || '');
+    _akLoadDraftFromState(_autoKeySelectedProfileId, true);
+    if (tabName) _autoKeyTab = tabName;
+    _renderAutoKeyUI();
+}
+
+function _akSetTab(tabName) {
+    _autoKeyTab = tabName || 'local';
+    if (_autoKeyTab === 'editor' && !_autoKeyDraftProfile) {
+        _akLoadDraftFromState(_autoKeySelectedProfileId, true);
+        _akPopulateEditorFields();
+    }
+    _renderAutoKeyUI();
+}
+
+function _akDraftField(fieldName, value, kind) {
+    if (!_autoKeyDraftProfile) return;
+    if (kind === 'int') value = parseInt(value || 0, 10) || 0;
+    _autoKeyDraftProfile[fieldName] = value;
+    _autoKeyDraftDirty = true;
+}
+
+function _akDraftEngineField(fieldName, value, kind) {
+    if (!_autoKeyDraftProfile) return;
+    if (!_autoKeyDraftProfile.engine) _autoKeyDraftProfile.engine = {};
+    if (kind === 'int') value = parseInt(value || 0, 10) || 0;
+    if (kind === 'bool') value = !!value;
+    _autoKeyDraftProfile.engine[fieldName] = value;
+    _autoKeyDraftDirty = true;
+}
+
+function _akDraftActionField(index, fieldName, value, kind) {
+    if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions || !_autoKeyDraftProfile.actions[index]) return;
+    if (kind === 'int') value = parseInt(value || 0, 10) || 0;
+    if (kind === 'bool') value = !!value;
+    if (fieldName === 'key') value = String(value || '').toUpperCase();
+    _autoKeyDraftProfile.actions[index][fieldName] = value;
+    _autoKeyDraftDirty = true;
+}
+
+function _akDraftActionConditions(index, text) {
+    if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions || !_autoKeyDraftProfile.actions[index]) return;
+    _autoKeyDraftProfile.actions[index]._conditions_text = String(text || '');
+    _autoKeyDraftDirty = true;
+}
+
+function _akSerializeDraft() {
+    if (!_autoKeyDraftProfile) return null;
+    var draft = _akClone(_autoKeyDraftProfile);
+    draft.updated_at = new Date().toISOString();
+    draft.actions = (draft.actions || []).map(function(action, index) {
+        var out = _akClone(action) || {};
+        try {
+            var parsed = String(action._conditions_text || '[]').trim();
+            parsed = parsed ? JSON.parse(parsed) : [];
+            if (!Array.isArray(parsed)) throw new Error('must be an array');
+            out.conditions = parsed;
+        } catch (e) {
+            throw new Error('Action ' + (index + 1) + ' conditions JSON is invalid: ' + e.message);
+        }
+        delete out._conditions_text;
+        return out;
+    });
+    return draft;
+}
+
+function _akCreateProfile() {
+    _autoKeyDraftDirty = false;
+    _akCallApi('create_auto_key_profile', [], function(data) {
+        _autoKeySelectedProfileId = (data.state && data.state.active_profile_id) || _autoKeySelectedProfileId;
+        _akLoadDraftFromState(_autoKeySelectedProfileId, true);
+        _autoKeyTab = 'editor';
+        _renderAutoKeyUI();
+        showToast('PROFILE CREATED');
+    });
+}
+
+function _akCopyProfile(profileId) {
+    _autoKeyDraftDirty = false;
+    _akCallApi('copy_auto_key_profile', [profileId], function() {
+        showToast('PROFILE COPIED');
+    });
+}
+
+function _akDeleteProfile(profileId) {
+    if (!window.confirm('Delete this auto key profile?')) return;
+    if (String(_autoKeySelectedProfileId || '') === String(profileId || '')) {
+        _autoKeyDraftProfile = null;
+        _autoKeyDraftDirty = false;
+    }
+    _akCallApi('delete_auto_key_profile', [profileId], function() {
+        showToast('PROFILE DELETED');
+    });
+}
+
+function _akActivateProfile(profileId) {
+    _akCallApi('activate_auto_key_profile', [profileId], function() {
+        showToast('PROFILE ACTIVATED');
+    });
+}
+
+function _akExportProfile(profileId) {
+    _akCallApi('export_auto_key_profile', [profileId], function(data) {
+        showAlert('AUTO KEYS', 'Exported to:\n' + (data.path || ''), true);
+    });
+}
+
+function _akRefreshState() {
+    _akCallApi('get_auto_key_state', [], function() {
+        showToast('AUTO KEY REFRESH');
+    });
+}
+
+function _akAddAction() {
+    if (!_autoKeyDraftProfile) return;
+    var nextIndex = (_autoKeyDraftProfile.actions || []).length + 1;
+    _autoKeyDraftProfile.actions.push({
+        id: _akNewClientId('action'),
+        label: 'Action ' + nextIndex,
+        enabled: true,
+        slot_index: Math.min(9, nextIndex),
+        key: String(Math.min(9, nextIndex)),
+        press_mode: 'tap',
+        press_count: 1,
+        press_interval_ms: 40,
+        hold_ms: 80,
+        ready_delay_ms: 0,
+        min_rearm_ms: 800,
+        post_delay_ms: 120,
+        conditions: [],
+        _conditions_text: '[]'
+    });
+    _autoKeyDraftDirty = true;
+    _akRenderActionList();
+}
+
+function _akCloneAction(index) {
+    if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions || !_autoKeyDraftProfile.actions[index]) return;
+    var action = _akClone(_autoKeyDraftProfile.actions[index]);
+    action.id = _akNewClientId('action');
+    action.label = String(action.label || 'Action') + ' Copy';
+    _autoKeyDraftProfile.actions.splice(index + 1, 0, action);
+    _autoKeyDraftDirty = true;
+    _akRenderActionList();
+}
+
+function _akDeleteAction(index) {
+    if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions) return;
+    _autoKeyDraftProfile.actions.splice(index, 1);
+    _autoKeyDraftDirty = true;
+    _akRenderActionList();
+}
+
+function _akMoveAction(index, delta) {
+    if (!_autoKeyDraftProfile || !_autoKeyDraftProfile.actions) return;
+    var target = index + delta;
+    if (target < 0 || target >= _autoKeyDraftProfile.actions.length) return;
+    var item = _autoKeyDraftProfile.actions.splice(index, 1)[0];
+    _autoKeyDraftProfile.actions.splice(target, 0, item);
+    _autoKeyDraftDirty = true;
+    _akRenderActionList();
+}
+
+function _akSaveDraft() {
+    if (!_autoKeyDraftProfile) {
+        showAlert('AUTO KEYS', 'No profile selected', true);
+        return;
+    }
+    try {
+        var payload = _akSerializeDraft();
+        _akCallApi('save_auto_key_profile', [payload], function() {
+            _autoKeyDraftDirty = false;
+            _autoKeySelectedProfileId = String(payload.id || _autoKeySelectedProfileId || '');
+            _akLoadDraftFromState(_autoKeySelectedProfileId, true);
+            _renderAutoKeyUI();
+            showToast('PROFILE SAVED');
+        });
+    } catch (e) {
+        showAlert('AUTO KEYS', e.message || String(e), true);
+    }
+}
+
+function _akActivateDraft() {
+    if (!_autoKeyDraftProfile) return;
+    if (_autoKeyDraftDirty) {
+        showAlert('AUTO KEYS', 'Save this profile before activating it.', true);
+        return;
+    }
+    _akActivateProfile(_autoKeyDraftProfile.id);
+}
+
+function _akExportDraft() {
+    if (!_autoKeyDraftProfile) return;
+    if (_autoKeyDraftDirty) {
+        showAlert('AUTO KEYS', 'Save this profile before exporting it.', true);
+        return;
+    }
+    _akExportProfile(_autoKeyDraftProfile.id);
+}
+
+function _akImportProfile() {
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.start_auto_key_import_picker) return;
+    window.pywebview.api.start_auto_key_import_picker().then(function(result) {
+        var data = _akParseApiResult(result);
+        if (data && data.ok && data.browser) {
+            showFilePicker(data.browser);
+            return;
+        }
+        showAlert('AUTO KEYS', (data && data.message) ? data.message : 'Unable to open import picker', true);
+    });
+}
+
+function _akSaveCloudSettings(afterSave) {
+    if (!window.pywebview || !window.pywebview.api) return;
+    var serverUrl = (document.getElementById('ak-server-url').value || '').trim();
+    var uploadToken = (document.getElementById('ak-upload-token').value || '').trim();
+    Promise.all([
+        window.pywebview.api.set_auto_key_server_url(serverUrl),
+        window.pywebview.api.set_auto_key_upload_token(uploadToken)
+    ]).then(function(results) {
+        var lastState = null;
+        results.forEach(function(item) {
+            var data = _akParseApiResult(item);
+            if (!data.ok) throw new Error(data.message || 'Save settings failed');
+            if (data.state) lastState = data.state;
+        });
+        if (lastState) _syncAutoKeyState(lastState);
+        if (afterSave) {
+            afterSave();
+        } else {
+            showToast('SERVER SETTINGS SAVED');
+        }
+    }).catch(function(err) {
+        showAlert('AUTO KEYS', String(err || 'Unable to save cloud settings'), true);
+    });
+}
+
+function _akSearchRemote() {
+    _akSaveCloudSettings(function() {
+        var query = {
+            q: (document.getElementById('ak-search-q').value || '').trim(),
+            profile_name: (document.getElementById('ak-search-profile-name').value || '').trim(),
+            player_uid: (document.getElementById('ak-search-player-uid').value || '').trim(),
+            player_name: (document.getElementById('ak-search-player-name').value || '').trim(),
+            profession_name: (document.getElementById('ak-search-profession-name').value || '').trim(),
+            page: 1,
+            page_size: 20
+        };
+        _akCallApi('search_remote_profiles', [query], function() {
+            showToast('CLOUD SEARCH COMPLETE');
+        });
+    });
+}
+
+function _akDownloadRemote(remoteId) {
+    _autoKeyDraftDirty = false;
+    _akCallApi('download_remote_profile', [remoteId], function() {
+        showToast('PROFILE DOWNLOADED');
+    });
+}
+
+function _akUploadActive() {
+    var targetId = _autoKeyDraftProfile ? _autoKeyDraftProfile.id : ((_autoKeyState && _autoKeyState.active_profile_id) || '');
+    if (!targetId) {
+        showAlert('AUTO KEYS', 'No profile selected', true);
+        return;
+    }
+    if (_autoKeyDraftDirty) {
+        showAlert('AUTO KEYS', 'Save this profile before uploading it.', true);
+        return;
+    }
+    _akSaveCloudSettings(function() {
+        _akCallApi('upload_auto_key_profile', [targetId], function(data) {
+            showToast('UPLOAD COMPLETE #' + (data.remote_id || ''));
+        });
+    });
+}
+
+document.getElementById('auto-key-enabled').addEventListener('change', function(e) {
+    e.stopPropagation();
+    _akCallApi('set_auto_key_enabled', [this.checked], function() {
+        showToast('AUTO KEY ' + (document.getElementById('auto-key-enabled').checked ? 'ON' : 'OFF'));
+    });
+});
+
+document.querySelectorAll('#auto-key-tabs .auto-key-tab').forEach(function(tab) {
+    tab.addEventListener('click', function(e) {
+        e.stopPropagation();
+        playSound('snd-click');
+        _akSetTab(this.getAttribute('data-tab'));
+    });
+});
+
+['ak-profile-name', 'ak-profile-profession-name', 'ak-profile-description'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', function() {
+        var fieldMap = {
+            'ak-profile-name': 'profile_name',
+            'ak-profile-profession-name': 'profession_name',
+            'ak-profile-description': 'description'
+        };
+        _akDraftField(fieldMap[id], this.value);
+    });
+});
+
+document.getElementById('ak-profile-profession-id').addEventListener('input', function() {
+    _akDraftField('profession_id', this.value, 'int');
+});
+document.getElementById('ak-engine-tick-ms').addEventListener('input', function() {
+    _akDraftEngineField('tick_ms', this.value, 'int');
+});
+document.getElementById('ak-engine-require-foreground').addEventListener('change', function() {
+    _akDraftEngineField('require_foreground', this.checked, 'bool');
+});
+document.getElementById('ak-engine-pause-on-death').addEventListener('change', function() {
+    _akDraftEngineField('pause_on_death', this.checked, 'bool');
+});
+
+function restoreMenuSettings(cfg) {
+    if (!cfg) return;
+    /* Watched slots */
+    if (cfg.watched_slots && Array.isArray(cfg.watched_slots)) {
+        document.querySelectorAll('#slot-grid .slot-chk').forEach(function(el) {
+            var slot = parseInt(el.getAttribute('data-slot'));
+            if (cfg.watched_slots.indexOf(slot) >= 0) {
+                el.classList.add('active');
+            } else {
+                el.classList.remove('active');
+            }
+        });
+    }
+    /* Burst enabled */
+    if (cfg.burst_enabled !== undefined) {
+        document.getElementById('burst-enabled').checked = !!cfg.burst_enabled;
+    }
+    /* Sound */
+    if (cfg.sound_enabled !== undefined) {
+        document.getElementById('sound-enabled').checked = !!cfg.sound_enabled;
+    }
+    if (cfg.sound_volume !== undefined) {
+        document.getElementById('sound-volume').value = cfg.sound_volume;
+    }
+    /* Data source */
+    if (cfg.data_source_map) {
+        Object.keys(_dataSourceMap).forEach(function(key) {
+            if (cfg.data_source_map[key]) {
+                _dataSourceMap[key] = cfg.data_source_map[key];
+            }
+        });
+    } else if (cfg.data_source) {
+        var fallbackMode = cfg.data_source === 'packet' ? 'packet' : 'vision';
+        Object.keys(_dataSourceMap).forEach(function(key) {
+            _dataSourceMap[key] = fallbackMode;
+        });
+    }
+    _syncSourceButtons();
+    _updateSourceSummary();
+    if (cfg.auto_key) {
+        _syncAutoKeyState(cfg.auto_key);
+    }
+}
 
 /* ═══ Alert dialog ═══ */
 function showAlert(title, body, showOk) {
@@ -1952,6 +3513,8 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         if (document.getElementById('lb-dialog').classList.contains('show')) {
             closeLeaderboard();
+        } else if (document.getElementById('source-dialog').classList.contains('show')) {
+            closeSourceDialog();
         } else if (document.getElementById('filepicker-dialog').classList.contains('show')) {
             closeFilePicker();
         } else if (document.getElementById('alert-dialog').classList.contains('show')) {
@@ -2162,7 +3725,20 @@ window.SAO = {
     closeFilePicker: closeFilePicker,
     showLeaderboard: showLeaderboard,
     closeLeaderboard: closeLeaderboard,
+    syncAutoKeyState: _syncAutoKeyState,
+    restoreMenuSettings: restoreMenuSettings,
 };
+
+setTimeout(function() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.get_auto_key_state) {
+        window.pywebview.api.get_auto_key_state().then(function(result) {
+            var data = _akParseApiResult(result);
+            if (data && data.ok && data.state) {
+                _syncAutoKeyState(data.state);
+            }
+        });
+    }
+}, 250);
 </script>
 </body>
 </html>

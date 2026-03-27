@@ -179,8 +179,7 @@ class SettingsManager:
     def __init__(self):
         self.settings = {
             'hotkeys': DEFAULT_HOTKEYS.copy(),
-            'last_file': '', 'speed': 1.0, 'transpose': 0,
-            'chord_mode': False, 'ui_mode': 'sao',
+            'ui_mode': 'sao',
         }
         self.load()
 
@@ -194,6 +193,8 @@ class SettingsManager:
 
     def save(self):
         try:
+            for legacy_key in ('last_file', 'speed', 'transpose', 'chord_mode'):
+                self.settings.pop(legacy_key, None)
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.settings, f, indent=2, ensure_ascii=False)
         except:
@@ -1436,43 +1437,8 @@ class SAOPlayerGUI:
         except Exception:
             pass
 
-        # ── 技能栏格子 (HP 上方, 小方格 + 冷却遮罩) ──
-        try:
-            gs = getattr(self, '_game_state', None)
-            if gs is not None and gs.skill_slots:
-                slots = gs.skill_slots
-                sk_size = 36
-                sk_gap = 4
-                total_w = len(slots) * sk_size + (len(slots) - 1) * sk_gap
-                sk_x0 = ox + (505 - total_w) // 2
-                sk_y = oy - sk_size - 6
-                fn_idx = _get_hp_pil_font(7, 'sao')
-                for i, slot in enumerate(slots):
-                    sx = sk_x0 + i * (sk_size + sk_gap)
-                    cd = slot.get('cooldown_pct', 0.0)
-                    active = slot.get('active', False)
-                    # 格子背景
-                    if active:
-                        bg_c = (212, 156, 23, 60)
-                        border_c = (212, 156, 23, 150)
-                    elif cd > 0.02:
-                        bg_c = (190, 192, 180, 140)
-                        border_c = (180, 182, 170, 100)
-                    else:
-                        bg_c = (207, 208, 197, 180)
-                        border_c = (180, 182, 170, 100)
-                    draw.rectangle((sx, sk_y, sx + sk_size, sk_y + sk_size),
-                                    fill=bg_c, outline=border_c)
-                    # 冷却遮罩 (从底部向上)
-                    if cd > 0.02:
-                        cd_h = int(sk_size * cd)
-                        draw.rectangle((sx + 1, sk_y + sk_size - cd_h, sx + sk_size - 1, sk_y + sk_size - 1),
-                                        fill=(60, 62, 50, 130))
-                    # 序号
-                    draw.text((sx + sk_size - 2, sk_y + sk_size - 1), str(i + 1),
-                              fill=(97, 98, 86, 140), font=fn_idx, anchor='rb')
-        except Exception:
-            pass
+        # ── 技能栏已移至 WebView — 此处禁用渲染 ──
+        # (Burst Mode Ready animation replaces the old skill bar grid)
 
         return shell
 

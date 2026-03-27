@@ -12,6 +12,7 @@ settings.json
 packet_debug.jsonl
 *.log
 *.jsonl
+exports/
 
 # ── Test files ────────────────────────────────────
 test_*.py
@@ -21,11 +22,16 @@ tests/
 # ── Build / dist ──────────────────────────────────
 dist/
 build/
-*.spec
 *.exe
+
+# ── Packaging specs (tracked) ─────────────────────
+# XiaoACTUI.spec and server/AutoKeyServer.spec are tracked
+# build.ps1 is tracked
 
 # ── IDE / OS ──────────────────────────────────────
 .vscode/
 .idea/
 Thumbs.db
 .DS_Store
+../server/data/
+../server/*.db

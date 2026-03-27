@@ -52,26 +52,26 @@ def run_test():
     state_mgr = GameStateManager()
     engine = RecognitionEngine(state_mgr, settings)
 
-    print('\n正在查找游戏窗口...')
-    result = engine.locator.find_game_window()
+    print('\nScanning game window...')
+    result = engine._locator.find_game_window()
     if result is None:
-        print('❌ 未找到游戏窗口')
-        print(f'   搜索关键词: {engine.locator._keywords}')
+        print('Game window not found')
+        print(f'   keywords: {engine._locator._keywords}')
         return
 
     hwnd, title, rect = result
-    print(f'✓ 找到窗口: {title}')
-    print(f'  矩形: {rect}')
-    print(f'  尺寸: {rect[2]-rect[0]}×{rect[3]-rect[1]}')
+    print(f'Window: {title}')
+    print(f'  rect: {rect}')
+    print(f'  size: {rect[2]-rect[0]}x{rect[3]-rect[1]}')
 
-    print('\n正在执行识别...')
+    print('\nRunning single capture...')
     data = engine.single_capture()
     if data:
-        print('\n识别结果:')
+        print('\nCapture result:')
         for k, v in data.items():
             print(f'  {k}: {v}')
     else:
-        print('❌ 识别失败')
+        print('Capture failed')
 
 
 def run_headless():

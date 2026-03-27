@@ -234,7 +234,7 @@ def try_detect_character() -> Optional[Tuple[str, str]]:
     
     # 尝试从本地 uid_mapping.json 读取
     try:
-        mapping_path = os.path.join('E:\\VC\\StarResonanceDamageCounter', 'uid_mapping.json')
+        mapping_path = os.path.join(os.path.dirname(_base_dir), 'uid_mapping.json')
         if os.path.exists(mapping_path):
             with open(mapping_path, 'r', encoding='utf-8') as f:
                 mappings = json.load(f)

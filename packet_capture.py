@@ -228,6 +228,13 @@ class TcpReassembler:
         self._last_t: float = 0
 
         # IP 分片
+        self.stats = {
+            'raw_frames': 0,
+            'tcp_segments': 0,
+            'complete_game_frames': 0,
+            'seq_resets': 0,
+            'cache_overflows': 0,
+        }
         self._frag = _IpFragmentCache()
 
     @property
@@ -245,6 +252,7 @@ class TcpReassembler:
     # ─── 主入口 ───
     def feed_raw_frame(self, raw: bytes):
         """接收一个原始以太网帧"""
+        self.stats['raw_frames'] += 1
         parsed = _parse_eth_ip_tcp(raw)
         if parsed is None:
             return
@@ -328,12 +336,14 @@ class TcpReassembler:
     def _feed_tcp(self, seq: int, data: bytes):
         with self._lock:
             now = time.time()
+            self.stats['tcp_segments'] += 1
             # 超时重置
             if self._last_t > 0 and now - self._last_t > 30:
                 logger.warning('[Capture] TCP 超时，重置流')
                 self._next_seq = -1
                 self._cache.clear()
                 self._buf = b''
+                self.stats['seq_resets'] += 1
 
             # 初始化
             if self._next_seq == -1:
@@ -358,6 +368,7 @@ class TcpReassembler:
                 self._next_seq = -1
                 self._cache.clear()
                 self._buf = b''
+                self.stats['cache_overflows'] += 1
                 return
 
         # 提取完整游戏帧 (在锁外做回调)
@@ -384,6 +395,7 @@ class TcpReassembler:
             # 回调在锁外执行
             try:
                 self._on_pkt(frame)
+                self.stats['complete_game_frames'] += 1
             except Exception as e:
                 logger.error(f'[Capture] 帧处理错误: {e}')
 
@@ -409,6 +421,10 @@ class PacketCapture:
     @property
     def server_identified(self) -> bool:
         return self._reassembler.server_identified
+
+    @property
+    def stats(self) -> Dict[str, int]:
+        return dict(getattr(self._reassembler, 'stats', {}) or {})
 
     def start(self):
         if self._running:

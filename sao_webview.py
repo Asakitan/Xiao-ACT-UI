@@ -24,9 +24,32 @@ import sys
 import time
 import threading
 import json
+import copy
 import ctypes
 import numpy as np
 from typing import Optional
+
+from auto_key_engine import (
+    AutoKeyCloudClient,
+    AutoKeyEngine,
+    DEFAULT_AUTO_KEY_SERVER_URL,
+    build_auto_key_state,
+    clone_profile,
+    delete_profile as delete_auto_key_profile,
+    export_profile_to_default_path,
+    find_profile as find_auto_key_profile,
+    import_profile_from_path,
+    load_auto_key_config,
+    make_default_profile,
+    normalize_profile,
+    save_auto_key_config,
+    snapshot_author_from_state,
+    upsert_profile,
+)
+from config import (
+    DEFAULT_HOTKEYS,
+    get_skill_slot_rects,
+)
 
 # ── 延迟导入 pywebview ──
 webview = None
@@ -69,6 +92,7 @@ def _set_process_app_id(app_id: str):
 # ════════════════════════════════════════════════
 _GWL_EXSTYLE = -20
 _WS_EX_LAYERED = 0x00080000
+_WS_EX_TRANSPARENT = 0x00000020
 _LWA_COLORKEY = 0x00000001
 _LWA_ALPHA = 0x00000002
 _COLORREF_KEY = 0x00010001  # RGB(1,0,1) → COLORREF 0x00BBGGRR
@@ -265,23 +289,340 @@ class SAOWebAPI:
             try:
                 regions = json.loads(regions)
             except Exception:
-                regions = []
-        if not isinstance(regions, list):
-            regions = []
-        self._g._hp_hit_regions = regions
+                regions = {}
+
+        def _sanitize(rects):
+            if not isinstance(rects, list):
+                return []
+            sane = []
+            for rect in rects:
+                if not isinstance(rect, dict):
+                    continue
+                try:
+                    width = int(rect.get('width', 0))
+                    height = int(rect.get('height', 0))
+                except Exception:
+                    continue
+                if width < 8 or height < 8:
+                    continue
+                sane.append(rect)
+            return sane
+
+        if isinstance(regions, dict):
+            display_regions = _sanitize(regions.get('display_regions', []))
+            click_regions = _sanitize(regions.get('click_regions', []))
+        else:
+            display_regions = _sanitize(regions if isinstance(regions, list) else [])
+            click_regions = list(display_regions)
+
+        if display_regions:
+            self._g._hp_display_regions = display_regions
+            self._g._hp_hit_regions = list(display_regions)
+        elif not getattr(self._g, '_hp_display_regions', None):
+            self._g._hp_display_regions = []
+
+        if click_regions:
+            self._g._hp_click_regions = click_regions
+        elif not getattr(self._g, '_hp_click_regions', None):
+            self._g._hp_click_regions = []
+
+        if display_regions or click_regions:
+            self._g._hp_hit_regions_ready = True
+            self._g._hp_last_hit_region_ts = time.time()
+
+        if not display_regions and not click_regions and getattr(self._g, '_hp_hit_regions', None):
+            return
+        if not getattr(self._g, '_hp_hit_regions', None):
+            self._g._hp_hit_regions = []
+        self._g._set_hp_region(expanded=self._g._ctx_menu_active, menu_bounds=self._g._ctx_menu_bounds)
+
+    def notify_hp_hit_regions_ready(self):
+        self._g._hp_js_hit_regions_ready = True
+        self._g._hp_hit_regions_ready = True
+        self._g._hp_last_hit_region_ts = time.time()
         self._g._set_hp_region(expanded=self._g._ctx_menu_active, menu_bounds=self._g._ctx_menu_bounds)
 
     def get_state(self):
         """供 JS 查询当前识别状态 (JSON 格式)"""
         gs = self._g._game_state
+        try:
+            sta_pct = int(round(max(0.0, min(1.0, float(getattr(gs, 'stamina_pct', 0.0) or 0.0))) * 100.0))
+        except Exception:
+            sta_pct = 0
         return json.dumps({
             'recognition_active': self._g._recognition_active,
             'hp': gs.hp_current if gs and hasattr(gs, 'hp_current') else 0,
             'hp_max': gs.hp_max if gs and hasattr(gs, 'hp_max') else 0,
-            'stamina': gs.stamina_current if gs and hasattr(gs, 'stamina_current') else 0,
-            'stamina_max': gs.stamina_max if gs and hasattr(gs, 'stamina_max') else 0,
+            'stamina': sta_pct,
+            'stamina_max': 100,
             'level': gs.level_base if gs and hasattr(gs, 'level_base') else 0,
         })
+
+    # ── Skill Effects settings ──
+    def set_watched_slots(self, slots):
+        """Set which skill slots to watch for Burst Mode Ready."""
+        if isinstance(slots, str):
+            try:
+                slots = json.loads(slots)
+            except Exception:
+                slots = []
+        if not isinstance(slots, list):
+            slots = []
+        slots = [int(x) for x in slots if isinstance(x, (int, float))]
+        self._g._set_setting('watched_skill_slots', slots)
+        self._g._reset_burst_tracking()
+
+    def set_burst_enabled(self, enabled):
+        """Enable/disable Burst Mode Ready alerts."""
+        self._g._set_setting('burst_enabled', bool(enabled))
+
+    def set_auto_key_enabled(self, enabled):
+        try:
+            config = self._g._load_auto_key_config()
+            config['enabled'] = bool(enabled)
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def get_auto_key_state(self):
+        try:
+            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def create_auto_key_profile(self):
+        try:
+            config = self._g._load_auto_key_config()
+            profile = make_default_profile(self._g._auto_key_author_snapshot())
+            upsert_profile(config, profile, activate=True)
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def copy_auto_key_profile(self, profile_id):
+        try:
+            config = self._g._load_auto_key_config()
+            created = clone_profile(config, profile_id, self._g._auto_key_author_snapshot())
+            if not created:
+                raise RuntimeError('Profile not found')
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def save_auto_key_profile(self, profile_payload):
+        try:
+            if isinstance(profile_payload, str):
+                profile_payload = json.loads(profile_payload)
+            config = self._g._load_auto_key_config()
+            profile = normalize_profile(profile_payload, author_snapshot=self._g._auto_key_author_snapshot())
+            existing = find_auto_key_profile(config, profile.get('id'))
+            if existing and existing.get('created_at'):
+                profile['created_at'] = existing.get('created_at')
+            upsert_profile(config, profile, activate=str(config.get('active_profile_id') or '') == str(profile.get('id') or ''))
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def delete_auto_key_profile(self, profile_id):
+        try:
+            config = self._g._load_auto_key_config()
+            delete_auto_key_profile(config, profile_id)
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def activate_auto_key_profile(self, profile_id):
+        try:
+            config = self._g._load_auto_key_config()
+            if not find_auto_key_profile(config, profile_id):
+                raise RuntimeError('Profile not found')
+            config['active_profile_id'] = str(profile_id or '')
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def export_auto_key_profile(self, profile_id=None):
+        try:
+            config = self._g._load_auto_key_config()
+            profile = find_auto_key_profile(config, profile_id) if profile_id else None
+            if profile is None:
+                profile = find_auto_key_profile(config, config.get('active_profile_id'))
+            if profile is None:
+                raise RuntimeError('No active profile')
+            path = export_profile_to_default_path(profile)
+            return json.dumps({'ok': True, 'path': path}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def start_auto_key_import_picker(self, path=None):
+        try:
+            root = str(path or os.path.dirname(os.path.abspath(__file__)))
+            self._g._auto_key_picker_purpose = 'auto_key_import'
+            data = json.loads(self.browse_dir(root))
+            data['mode'] = 'file'
+            return json.dumps({'ok': True, 'browser': data}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def select_file(self, path):
+        try:
+            purpose = getattr(self._g, '_auto_key_picker_purpose', '')
+            if purpose == 'auto_key_import':
+                config = self._g._load_auto_key_config()
+                profile = import_profile_from_path(str(path), self._g._auto_key_author_snapshot())
+                upsert_profile(config, profile, activate=False)
+                self._g._save_auto_key_config(config)
+                self._g._auto_key_picker_purpose = ''
+                self._g._sync_auto_key_menu()
+                return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+            raise RuntimeError('No file picker action pending')
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def select_folder(self, path):
+        return json.dumps({'ok': False, 'message': 'Folder selection not used here'}, ensure_ascii=False)
+
+    def set_auto_key_upload_token(self, token):
+        try:
+            config = self._g._load_auto_key_config()
+            config['upload_token'] = str(token or '').strip()
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def set_auto_key_server_url(self, url):
+        try:
+            config = self._g._load_auto_key_config()
+            config['server_url'] = str(url or '').strip()
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def search_remote_profiles(self, query_payload):
+        try:
+            if isinstance(query_payload, str):
+                query_payload = json.loads(query_payload or '{}')
+            config = self._g._load_auto_key_config()
+            client = AutoKeyCloudClient(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL)
+            query = {
+                'q': str((query_payload or {}).get('q', '') or '').strip(),
+                'profile_name': str((query_payload or {}).get('profile_name', '') or '').strip(),
+                'player_uid': str((query_payload or {}).get('player_uid', '') or '').strip(),
+                'player_name': str((query_payload or {}).get('player_name', '') or '').strip(),
+                'profession_name': str((query_payload or {}).get('profession_name', '') or '').strip(),
+                'page': int((query_payload or {}).get('page', 1) or 1),
+                'page_size': int((query_payload or {}).get('page_size', 20) or 20),
+            }
+            result = client.search_scripts(query)
+            config['last_remote_search'] = {
+                'query': query,
+                'results': result.get('items', []),
+                'error': '',
+                'fetched_at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
+            }
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'results': result.get('items', []), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            config = self._g._load_auto_key_config()
+            last = config.get('last_remote_search', {}) or {}
+            last['error'] = str(e)
+            config['last_remote_search'] = last
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+
+    def download_remote_profile(self, remote_id):
+        try:
+            config = self._g._load_auto_key_config()
+            client = AutoKeyCloudClient(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL)
+            result = client.get_script(remote_id)
+            profile_raw = result.get('profile') or {}
+            profile = normalize_profile(profile_raw, author_snapshot=self._g._auto_key_author_snapshot(), source='downloaded')
+            profile['id'] = profile.get('id') or ''
+            profile['id'] = profile['id'] if profile['id'] not in {item.get('id') for item in config.get('profiles', []) or []} else ''
+            if not profile['id']:
+                profile['id'] = f'profile_{int(time.time())}'
+            profile['remote_id'] = result.get('id')
+            profile['source'] = 'downloaded'
+            profile['updated_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            upsert_profile(config, profile, activate=False)
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def upload_auto_key_profile(self, profile_id=None):
+        try:
+            config = self._g._load_auto_key_config()
+            profile = find_auto_key_profile(config, profile_id) if profile_id else None
+            if profile is None:
+                profile = find_auto_key_profile(config, config.get('active_profile_id'))
+            if profile is None:
+                raise RuntimeError('No active profile')
+            token = str(config.get('upload_token') or '').strip()
+            if not token:
+                raise RuntimeError('Upload token is empty')
+            client = AutoKeyCloudClient(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL)
+            author = self._g._auto_key_author_snapshot()
+            payload = {
+                'profile_name': profile.get('profile_name', ''),
+                'description': profile.get('description', ''),
+                'profession_id': author.get('profession_id') or profile.get('profession_id', 0),
+                'profession_name': author.get('profession_name') or profile.get('profession_name', ''),
+                'player_uid': author.get('player_uid', ''),
+                'player_name': author.get('player_name', ''),
+                'schema_version': 1,
+                'profile': profile,
+            }
+            result = client.upload_script(payload, token)
+            profile['source'] = 'uploaded'
+            profile['remote_id'] = result.get('id')
+            upsert_profile(config, profile, activate=str(config.get('active_profile_id') or '') == str(profile.get('id') or ''))
+            self._g._save_auto_key_config(config)
+            self._g._sync_auto_key_menu()
+            return json.dumps({'ok': True, 'remote_id': result.get('id'), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    # ── Sound settings ──
+    def set_sound_enabled(self, enabled):
+        """Global SFX on/off."""
+        from sao_sound import set_sound_enabled
+        set_sound_enabled(bool(enabled))
+        self._g._set_setting('sound_enabled', bool(enabled))
+
+    def set_sound_volume(self, volume_pct):
+        """Global volume 0-100."""
+        from sao_sound import set_sound_volume
+        set_sound_volume(int(volume_pct))
+        self._g._set_setting('sound_volume', int(volume_pct))
+
+    # ── Data source mode ──
+    def set_data_source(self, mode):
+        """Legacy no-op: stamina and skills are fixed to vision now."""
+        self._g._sync_menu_info()
+
+    def set_component_source(self, component, mode):
+        """Legacy no-op: per-component source switching is no longer exposed."""
+        self._g._sync_menu_info()
 
     def browse_dir(self, path: str) -> str:
         """文件选择器: 返回目录内容 JSON"""
@@ -382,6 +723,11 @@ class SAOWebViewGUI:
         self._recognition_active = False
         self._game_state = None  # GameState dataclass
         self._recognition_engine = None
+        self._recognition_engines = []
+        self._packet_engine = None
+        self._vision_engine = None
+        self._vision_paused_for_death = False
+        self._last_dead_state = False
         self._recog_lock = threading.Lock()  # 保护 _recognition_active 切换
 
         # 菜单
@@ -391,6 +737,7 @@ class SAOWebViewGUI:
         # 窗口
         self.hp_win = None
         self.menu_win = None
+        self.skillfx_win = None
 
         # 热切换目标
         self._pending_switch: Optional[str] = None
@@ -403,6 +750,26 @@ class SAOWebViewGUI:
         self._ctx_menu_active = False
         self._ctx_menu_bounds = None
         self._hp_hit_regions = []
+        self._hp_display_regions = []
+        self._hp_click_regions = []
+        self._hp_hit_regions_ready = False
+        self._hp_js_hit_regions_ready = False
+        self._hp_last_hit_region_ts = 0.0
+        self._hp_click_bootstrap_started = False
+        self._hp_fullscreen = False
+        self._hp_mouse_passthrough_started = False
+        self._hp_mouse_passthrough = None
+        self._skillfx_hwnd = 0
+        self._skillfx_visible = False
+        self._skillfx_slot_count = 9
+        self._skillfx_layout = None
+        self._sta_pixel_detector_enabled = False
+        self._last_ready_slots = {}
+        self._burst_seen_cooling = set()
+        self._last_watched_signature = ()
+        self._last_burst_ready = False
+        self._hp_viewport_offset_x = 0
+        self._hp_viewport_offset_y = 0
         self._fisheye_active = False
         self._fisheye_gen = 0
         self._fisheye_prev_frame = None
@@ -411,9 +778,15 @@ class SAOWebViewGUI:
         self._panel_origins = {}
         self._hp_visible = False
         self._exit_animating = False
+        self._hp_entry_animating = False
+        self._hp_position_lock_until = 0.0
+        self._hp_position_guard_started = False
 
         # 识别相关引用
         self._cfg_settings_ref = None
+        self._auto_key_engine = None
+        self._auto_key_picker_purpose = ''
+        self._auto_key_last_menu_state = None
 
     # ─── 音效 ───
     def _play_sound(self, name: str):
@@ -423,17 +796,281 @@ class SAOWebViewGUI:
             except Exception:
                 pass
 
+    def _set_setting(self, key: str, value):
+        """Persist a setting to cfg_settings and save."""
+        if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
+            self._cfg_settings_ref.set(key, value)
+            try:
+                self._cfg_settings_ref.save()
+            except Exception:
+                pass
+
+    def _get_setting(self, key: str, default=None):
+        """Read a setting."""
+        if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
+            return self._cfg_settings_ref.get(key, default)
+        return default
+
+    def _auto_key_settings_ref(self):
+        return self._cfg_settings_ref or self.settings
+
+    def _auto_key_author_snapshot(self):
+        gs = getattr(self, '_game_state', None)
+        if gs is not None:
+            return snapshot_author_from_state(gs)
+        return {
+            'player_uid': '',
+            'player_name': self._username,
+            'profession_id': 0,
+            'profession_name': self._profession,
+        }
+
+    def _load_auto_key_config(self):
+        ref = self._auto_key_settings_ref()
+        return load_auto_key_config(ref, state_snapshot=self._auto_key_author_snapshot())
+
+    def _save_auto_key_config(self, config):
+        ref = self._auto_key_settings_ref()
+        saved = save_auto_key_config(ref, config)
+        if self._auto_key_engine:
+            self._auto_key_engine.invalidate()
+        return saved
+
+    def _get_auto_key_menu_state(self):
+        config = self._load_auto_key_config()
+        status = self._auto_key_engine.get_status() if self._auto_key_engine else {}
+        return build_auto_key_state(config, engine_status=status)
+
+    def _sync_auto_key_menu(self):
+        try:
+            state = self._get_auto_key_menu_state()
+            if state != getattr(self, '_auto_key_last_menu_state', None):
+                self._auto_key_last_menu_state = copy.deepcopy(state)
+                self._eval_menu(f'SAO.syncAutoKeyState({json.dumps(state, ensure_ascii=False)})')
+        except Exception:
+            pass
+
+    def _toggle_auto_script(self):
+        config = self._load_auto_key_config()
+        config['enabled'] = not bool(config.get('enabled', False))
+        self._save_auto_key_config(config)
+        self._sync_auto_key_menu()
+        self._eval_menu(f'SAO.showToast("AUTO KEY: {"ON" if config["enabled"] else "OFF"}")')
+
+    def _reset_burst_tracking(self):
+        self._last_ready_slots = {}
+        self._burst_seen_cooling = set()
+        self._last_watched_signature = ()
+        self._last_burst_ready = False
+
+    def _save_game_cache(self, quiet: bool = False):
+        try:
+            if hasattr(self, '_state_mgr') and getattr(self, '_state_mgr', None) and \
+               hasattr(self, '_cfg_settings_ref') and getattr(self, '_cfg_settings_ref', None):
+                self._state_mgr.save_cache(self._cfg_settings_ref)
+                if not quiet:
+                    gs = self._state_mgr.state
+                    print(
+                        f"[SAO] 退出前已保存游戏状态缓存: "
+                        f"HP={int(getattr(gs, 'hp_current', 0) or 0)}/"
+                        f"{int(getattr(gs, 'hp_max', 0) or 0)}, "
+                        f"LV={int(getattr(gs, 'level_base', 0) or 0)}"
+                    )
+        except Exception:
+            pass
+
+    def _is_dead_state(self, gs) -> bool:
+        if gs is None:
+            return False
+        try:
+            hp_max = int(getattr(gs, 'hp_max', 0) or 0)
+            hp_current = int(getattr(gs, 'hp_current', 0) or 0)
+            hp_pct = float(getattr(gs, 'hp_pct', 1.0) or 0.0)
+        except Exception:
+            return False
+        return hp_max > 0 and hp_current <= 0 and hp_pct <= 0.001
+
+    def _clear_skillfx_state_for_death(self):
+        self._last_skillfx_sig = None
+        self._reset_burst_tracking()
+        try:
+            self._state_mgr.update(burst_ready=False, skill_slots=[])
+        except Exception:
+            pass
+        payload = {
+            'slots': [],
+            'watched_slots': self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            'burst_enabled': bool(self._get_setting('burst_enabled', True)),
+            'burst_slot': 0,
+            'burst_ready': False,
+            'enabled': bool(self._get_setting('burst_enabled', True)),
+        }
+        layout = self._get_skillfx_layout(getattr(self, '_game_state', None))
+        if layout:
+            self._skillfx_layout = layout
+            payload['viewport'] = dict(layout['viewport'])
+        try:
+            self._eval_skillfx(f'SkillFX.update({json.dumps(payload, ensure_ascii=False)})')
+            self._eval_skillfx('SkillFX.hideBurstReady()')
+        except Exception:
+            pass
+        self._last_burst_ready = False
+
+    def _pause_vision_for_death(self):
+        engine = getattr(self, '_vision_engine', None)
+        if engine is None or getattr(self, '_vision_paused_for_death', False):
+            return
+        try:
+            engine.stop()
+        except Exception:
+            pass
+        self._vision_engine = None
+        self._recognition_engines = [
+            item for item in (getattr(self, '_recognition_engines', []) or [])
+            if item is not engine
+        ]
+        self._vision_paused_for_death = True
+        self._clear_skillfx_state_for_death()
+        print('[SAO] Vision engine paused (death)')
+
+    def _resume_vision_after_revive(self):
+        if not getattr(self, '_vision_paused_for_death', False):
+            return
+        if getattr(self, '_vision_engine', None) is not None:
+            self._vision_paused_for_death = False
+            return
+        if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
+            return
+        from recognition import RecognitionEngine
+        vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
+        vision_engine.start()
+        self._vision_engine = vision_engine
+        self._recognition_engines.append(vision_engine)
+        self._vision_paused_for_death = False
+        print('[SAO] Vision engine resumed (revive)')
+
+    def _sync_vision_lifecycle(self, gs):
+        dead_now = self._is_dead_state(gs)
+        dead_prev = bool(getattr(self, '_last_dead_state', False))
+        if dead_now and not dead_prev:
+            self._pause_vision_for_death()
+        elif (not dead_now) and dead_prev:
+            self._resume_vision_after_revive()
+        self._last_dead_state = dead_now
+
+    def _pick_burst_trigger_slot(self, gs):
+        watched = self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]) or []
+        try:
+            watched = [int(x) for x in watched if int(x) > 0]
+        except Exception:
+            watched = []
+        if not watched:
+            watched = [1]
+        for slot in getattr(gs, 'skill_slots', []) or []:
+            if not isinstance(slot, dict):
+                continue
+            try:
+                idx = int(slot.get('index', 0) or 0)
+            except Exception:
+                continue
+            if idx in watched and bool(slot.get('ready_edge')):
+                return idx
+        for slot in getattr(gs, 'skill_slots', []) or []:
+            if not isinstance(slot, dict):
+                continue
+            try:
+                idx = int(slot.get('index', 0) or 0)
+                state = str(slot.get('state', '') or '').strip().lower()
+            except Exception:
+                continue
+            if idx in watched and (state in ('ready', 'active') or bool(slot.get('active'))):
+                return idx
+        for slot in getattr(gs, 'skill_slots', []) or []:
+            if not isinstance(slot, dict):
+                continue
+            try:
+                idx = int(slot.get('index', 0) or 0)
+                cd = float(slot.get('cooldown_pct', 1.0) or 1.0)
+            except Exception:
+                continue
+            if idx in watched and cd <= 0.02:
+                return idx
+        return 0
+
+    def _stop_recognition_engines(self):
+        if getattr(self, '_auto_key_engine', None):
+            try:
+                self._auto_key_engine.stop()
+            except Exception:
+                pass
+            self._auto_key_engine = None
+        engines = list(getattr(self, '_recognition_engines', []) or [])
+        if not engines and self._recognition_engine:
+            engines = [self._recognition_engine]
+        for engine in engines:
+            try:
+                engine.stop()
+            except Exception:
+                pass
+        self._recognition_engines = []
+        self._recognition_engine = None
+        self._packet_engine = None
+        self._vision_engine = None
+        self._vision_paused_for_death = False
+        self._last_dead_state = False
+
+    def _reconfigure_data_engines(self):
+        """Restart packet/vision engines to match the current per-component source map."""
+        if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
+            return
+
+        self._stop_recognition_engines()
+        try:
+            self._state_mgr.update(burst_ready=False)
+        except Exception:
+            pass
+        self._reset_burst_tracking()
+        with self._state_mgr._lock:
+            self._state_mgr._state.stamina_current = 0
+            self._state_mgr._state.stamina_max = 0
+            self._state_mgr._state.stamina_pct = 0.0
+        self._state_mgr._prev_stamina_current = 0
+        self._sta_pixel_detector_enabled = False
+
+        engines = []
+        from packet_bridge import PacketBridge
+        packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref)
+        packet_engine.start()
+        engines.append(packet_engine)
+        self._packet_engine = packet_engine
+        print('[SAO] Packet bridge started (network capture)')
+
+        from recognition import RecognitionEngine
+        vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
+        vision_engine.start()
+        engines.append(vision_engine)
+        self._vision_engine = vision_engine
+        self._vision_paused_for_death = False
+        self._last_dead_state = False
+        print('[SAO] Recognition engine started (window vision / printwindow)')
+
+        self._recognition_engines = engines
+        self._recognition_engine = engines[0] if engines else None
+        self._recognition_active = bool(engines)
+
     # ════════════════════════════════════════
     #  入口
     # ════════════════════════════════════════
     def run(self):
         # ── Phase 1: LinkStart (tkinter, 阻塞) ──
         self._run_tkinter_link_start()
+        self._lock_hp_position(1.0)
 
         # ── Phase 2: pywebview ──
         web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
         hp_url = os.path.join(web_dir, 'hp.html')
         menu_url = os.path.join(web_dir, 'menu.html')
+        skillfx_url = os.path.join(web_dir, 'skillfx.html')
 
         # HP 固定位置: 左下角覆盖 等级/UID 区域
         try:
@@ -461,12 +1098,18 @@ class SAOWebViewGUI:
         self._hp_target_x = tx0
         self._hp_target_y = ty0
 
-        # HP 悬浮窗 — 初始在屏幕中央, 动画滑到固定位置
-        cx, cy = (_sw - hud_w) // 2, (_sh - 500) // 2
+        # HP 悬浮窗 — 初始放在动画起点, 避免 show() 时先闪到错误位置
+        if self._hp_fullscreen:
+            cx, cy = 0, 0
+        else:
+            cx = max(0, int((_sw - hud_w) / 2))
+            cy = max(0, int((_sh - 500) / 2))
 
+        hp_w = _sw if self._hp_fullscreen else hud_w
+        hp_h = _sh if self._hp_fullscreen else 500
         self.hp_win = webview.create_window(
             'SAO-HP', hp_url,
-            width=hud_w, height=500,
+            width=hp_w, height=hp_h,
             x=cx, y=cy,
             frameless=True,
             easy_drag=False,
@@ -479,8 +1122,23 @@ class SAOWebViewGUI:
         self.menu_win = webview.create_window(
             'SAO Menu', menu_url,
             frameless=True,
+            easy_drag=False,
             transparent=True,
             hidden=True,
+            js_api=self._api,
+        )
+
+        self.skillfx_win = webview.create_window(
+            'SAO SkillFX', skillfx_url,
+            width=max(320, int(_sw * 0.42)),
+            height=max(140, int(_sh * 0.20)),
+            x=max(0, int(_sw * 0.29)),
+            y=max(0, int(_sh * 0.74)),
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
             js_api=self._api,
         )
 
@@ -557,6 +1215,7 @@ class SAOWebViewGUI:
                 pass
 
         _apply_for('SAO-HP', self.hp_win)
+        _apply_for('SAO SkillFX', self.skillfx_win)
         # 菜单窗口只做 Win32 色键, 不设 .NET TransparencyKey
         # (TransparencyKey 会令菜单 HTML 透明区域变成鼠标穿透, 导致按钮无法点击)
         try:
@@ -587,10 +1246,118 @@ class SAOWebViewGUI:
         try:
             self._eval_hp(
                 'if (window.scheduleHitRegionReport) { scheduleHitRegionReport(); }'
+                ' if (window.scheduleHitRegionBootstrap) { scheduleHitRegionBootstrap(); }'
                 ' if (window.startHitRegionBootRetry) { startHitRegionBootRetry(); }'
             )
         except Exception:
             pass
+
+    def _lock_hp_position(self, seconds: float):
+        try:
+            seconds = float(seconds)
+        except Exception:
+            seconds = 0.0
+        until = time.time() + max(0.0, seconds)
+        if until > float(getattr(self, '_hp_position_lock_until', 0.0) or 0.0):
+            self._hp_position_lock_until = until
+
+    def _is_hp_position_locked(self) -> bool:
+        if getattr(self, '_hp_entry_animating', False):
+            return True
+        return time.time() < float(getattr(self, '_hp_position_lock_until', 0.0) or 0.0)
+
+    def _start_hp_position_guard(self):
+        if getattr(self, '_hp_position_guard_started', False):
+            return
+        self._hp_position_guard_started = True
+
+        def _loop():
+            while True:
+                time.sleep(0.12)
+                try:
+                    if self._hp_hwnd and not self._hp_entry_animating and self._is_hp_position_locked():
+                        self._force_hp_to_bottom(force=True, quiet=True)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_loop, daemon=True, name='hp_position_guard').start()
+
+    def _start_hp_click_bootstrap(self, duration: float = 4.5):
+        if getattr(self, '_hp_click_bootstrap_started', False):
+            return
+        self._hp_click_bootstrap_started = True
+
+        def _loop():
+            deadline = time.time() + max(1.0, float(duration or 0.0))
+            while time.time() < deadline:
+                try:
+                    self._setup_click_through()
+                    self._request_hp_hit_regions()
+                    if self._hp_hwnd and getattr(self, '_hp_js_hit_regions_ready', False):
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.16)
+
+            try:
+                self._setup_click_through()
+                self._request_hp_hit_regions()
+            except Exception:
+                pass
+
+        threading.Thread(target=_loop, daemon=True, name='hp_click_bootstrap').start()
+
+    def _default_hp_display_regions(self):
+        """Fallback display regions when JS layout data is not ready yet."""
+        try:
+            win_w = int(getattr(self, '_win_w_phys', 0) or 0)
+            win_h = int(getattr(self, '_win_h_phys', 0) or 0)
+            if win_w <= 0 or win_h <= 0:
+                return []
+            viewport_h = max(1, win_h - int(getattr(self, '_hp_viewport_offset_y', 0) or 0))
+            stage_width = int(win_w * 0.75)
+
+            def _rect(left, top, width, height):
+                return {
+                    'left': int(left),
+                    'top': int(top),
+                    'width': int(max(0, width)),
+                    'height': int(max(0, height)),
+                }
+
+            id_w = int(stage_width * 0.42)
+            id_h = 136
+            id_left = int(stage_width * 0.01)
+            id_top = viewport_h - 146
+
+            hp_w = int(stage_width * 0.34)
+            hp_h = 118
+            hp_left = int(stage_width * 0.48)
+            hp_top = viewport_h - 112
+
+            sta_w = int(stage_width * 0.30)
+            sta_h = 38
+            sta_left = int(stage_width * 0.53)
+            sta_top = viewport_h - 42
+
+            return [
+                _rect(id_left, id_top, id_w, id_h),
+                _rect(hp_left - 44, hp_top - 18, hp_w + 88, hp_h + 36),
+                _rect(hp_left, hp_top, hp_w, hp_h),
+                _rect(sta_left, sta_top, sta_w, sta_h),
+            ]
+        except Exception:
+            return []
+
+    def _default_hp_hot_regions(self):
+        """Fallback clickable regions when JS hit-regions have not registered yet."""
+        try:
+            display_regions = self._default_hp_display_regions()
+            if not display_regions:
+                return []
+            return [display_regions[2]]
+        except Exception:
+            return []
 
     # ─── 任务栏图标 ───
     def _set_window_icon(self, title: str):
@@ -622,28 +1389,158 @@ class SAOWebViewGUI:
             user32 = ctypes.windll.user32
             hwnd = user32.FindWindowW(None, 'SAO-HP')
             if not hwnd:
+                # Retry after a short delay if the window isn't ready yet
+                threading.Timer(0.15, self._setup_click_through).start()
                 return
             self._hp_hwnd = hwnd
+            # Measure actual physical window dimensions early so fallback
+            # regions are accurate on high-DPI displays.
+            try:
+                class _RECT(ctypes.Structure):
+                    _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
+                                 ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+                _rc = _RECT()
+                if user32.GetWindowRect(hwnd, ctypes.byref(_rc)):
+                    _w = _rc.right - _rc.left
+                    _h = _rc.bottom - _rc.top
+                    if _w > 10 and _h > 10:
+                        self._win_w_phys = _w
+                        self._win_h_phys = _h
+            except Exception:
+                pass
             self._set_hp_region(False)
+            if getattr(self, '_hp_fullscreen', False):
+                self._set_hp_mouse_passthrough(True)
+                self._start_hp_mouse_passthrough_poller()
+            else:
+                self._set_hp_mouse_passthrough(False)
         except Exception as e:
             print(f"[SAO] click-through setup failed: {e}")
 
-    def _set_hp_region(self, expanded=False, menu_bounds=None):
+    def _set_hp_mouse_passthrough(self, enabled: bool):
         if not self._hp_hwnd:
             return
-        win_h = getattr(self, '_win_h_phys', 500)
-        win_w = getattr(self, '_win_w_phys', getattr(self, '_hud_w', 540))
-        dpi_s = getattr(self, '_dpi_scale', 1.0)
+        enabled = bool(enabled)
+        if enabled == getattr(self, '_hp_mouse_passthrough', None):
+            return
         try:
-            gdi32 = ctypes.windll.gdi32
             user32 = ctypes.windll.user32
-            hit_rects = []
-            for rect in getattr(self, '_hp_hit_regions', []) or []:
+            ex = user32.GetWindowLongW(self._hp_hwnd, _GWL_EXSTYLE)
+            if enabled:
+                ex |= _WS_EX_TRANSPARENT
+            else:
+                ex &= ~_WS_EX_TRANSPARENT
+            user32.SetWindowLongW(self._hp_hwnd, _GWL_EXSTYLE, ex | _WS_EX_LAYERED)
+            self._hp_mouse_passthrough = enabled
+        except Exception:
+            pass
+
+    def _cursor_over_hp_hot_region(self) -> bool:
+        if not self._hp_hwnd:
+            return False
+        try:
+            class POINT(ctypes.Structure):
+                _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
+
+            class RECT(ctypes.Structure):
+                _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
+                             ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+
+            user32 = ctypes.windll.user32
+            pt = POINT()
+            if not user32.GetCursorPos(ctypes.byref(pt)):
+                return False
+            rc = RECT()
+            if not user32.GetWindowRect(self._hp_hwnd, ctypes.byref(rc)):
+                return False
+            dpi_s = float(getattr(self, '_dpi_scale', 1.0) or 1.0)
+            rel_x = int(pt.x - rc.left - int(getattr(self, '_hp_viewport_offset_x', 0) or 0))
+            rel_y = int(pt.y - rc.top - int(getattr(self, '_hp_viewport_offset_y', 0) or 0))
+            if rel_x < 0 or rel_y < 0 or rel_x > (rc.right - rc.left) or rel_y > (rc.bottom - rc.top):
+                return False
+            regions = getattr(self, '_hp_click_regions', []) or []
+            if not regions:
+                regions = self._default_hp_hot_regions()
+            for rect in regions:
                 if not isinstance(rect, dict):
                     continue
                 try:
                     left = int(float(rect.get('left', 0)) * dpi_s)
                     top = int(float(rect.get('top', 0)) * dpi_s)
+                    width = int(float(rect.get('width', 0)) * dpi_s)
+                    height = int(float(rect.get('height', 0)) * dpi_s)
+                except Exception:
+                    continue
+                if width < 2 or height < 2:
+                    continue
+                if left <= rel_x <= left + width and top <= rel_y <= top + height:
+                    return True
+            if self._ctx_menu_active and isinstance(self._ctx_menu_bounds, dict):
+                try:
+                    left = int(float(self._ctx_menu_bounds.get('left', 0)) * dpi_s)
+                    top = int(float(self._ctx_menu_bounds.get('top', 0)) * dpi_s)
+                    width = int(float(self._ctx_menu_bounds.get('width', 0)) * dpi_s)
+                    height = int(float(self._ctx_menu_bounds.get('height', 0)) * dpi_s)
+                    pad = int(18 * dpi_s)
+                    if (left - pad) <= rel_x <= (left + width + pad) and (top - pad) <= rel_y <= (top + height + pad):
+                        return True
+                except Exception:
+                    pass
+        except Exception:
+            return False
+        return False
+
+    def _start_hp_mouse_passthrough_poller(self):
+        if self._hp_mouse_passthrough_started:
+            return
+        self._hp_mouse_passthrough_started = True
+
+        def _loop():
+            while True:
+                time.sleep(0.02)
+                try:
+                    if not self._hp_hwnd:
+                        continue
+                    self._set_hp_mouse_passthrough(not self._cursor_over_hp_hot_region())
+                except Exception:
+                    pass
+
+        threading.Thread(target=_loop, daemon=True, name='hp_mouse_passthrough').start()
+
+    def _set_hp_region(self, expanded=False, menu_bounds=None):
+        if not self._hp_hwnd:
+            return
+        if getattr(self, '_hp_fullscreen', False):
+            try:
+                user32 = ctypes.windll.user32
+                win_w = getattr(self, '_win_w_phys', user32.GetSystemMetrics(0))
+                win_h = getattr(self, '_win_h_phys', user32.GetSystemMetrics(1))
+            except Exception:
+                win_w = getattr(self, '_win_w_phys', 1920)
+                win_h = getattr(self, '_win_h_phys', 1080)
+        else:
+            win_h = getattr(self, '_win_h_phys', 500)
+            win_w = getattr(self, '_win_w_phys', getattr(self, '_hud_w', 540))
+        dpi_s = getattr(self, '_dpi_scale', 1.0)
+        try:
+            gdi32 = ctypes.windll.gdi32
+            user32 = ctypes.windll.user32
+            if getattr(self, '_hp_fullscreen', False):
+                hrgn = gdi32.CreateRectRgn(0, 0, max(1, win_w), max(1, win_h))
+                user32.SetWindowRgn(self._hp_hwnd, hrgn, True)
+                return
+            hit_rects = []
+            off_x = int(getattr(self, '_hp_viewport_offset_x', 0) or 0)
+            off_y = int(getattr(self, '_hp_viewport_offset_y', 0) or 0)
+            regions = getattr(self, '_hp_display_regions', []) or []
+            if not regions:
+                regions = self._default_hp_display_regions()
+            for rect in regions:
+                if not isinstance(rect, dict):
+                    continue
+                try:
+                    left = int(float(rect.get('left', 0)) * dpi_s) + off_x
+                    top = int(float(rect.get('top', 0)) * dpi_s) + off_y
                     width = int(float(rect.get('width', 0)) * dpi_s)
                     height = int(float(rect.get('height', 0)) * dpi_s)
                 except Exception:
@@ -659,8 +1556,8 @@ class SAOWebViewGUI:
 
             if menu_bounds and isinstance(menu_bounds, dict):
                 try:
-                    left = int(float(menu_bounds.get('left', 0)) * dpi_s)
-                    top = int(float(menu_bounds.get('top', 0)) * dpi_s)
+                    left = int(float(menu_bounds.get('left', 0)) * dpi_s) + off_x
+                    top = int(float(menu_bounds.get('top', 0)) * dpi_s) + off_y
                     width = int(float(menu_bounds.get('width', 0)) * dpi_s)
                     height = int(float(menu_bounds.get('height', 0)) * dpi_s)
                     pad = int(18 * dpi_s)
@@ -681,9 +1578,12 @@ class SAOWebViewGUI:
                     gdi32.CombineRgn(hrgn, hrgn, rect_rgn, RGN_OR)
                     gdi32.DeleteObject(rect_rgn)
             else:
-                visible_phys = int(120 * dpi_s)
-                clip_top = max(0, win_h - visible_phys)
-                hrgn = gdi32.CreateRectRgn(0, clip_top, win_w, win_h)
+                if getattr(self, '_hp_fullscreen', False):
+                    hrgn = gdi32.CreateRectRgn(0, 0, 0, 0)
+                else:
+                    visible_phys = int(120 * dpi_s)
+                    clip_top = max(0, win_h - visible_phys)
+                    hrgn = gdi32.CreateRectRgn(0, clip_top, win_w, win_h)
             user32.SetWindowRgn(self._hp_hwnd, hrgn, True)
         except Exception:
             pass
@@ -701,10 +1601,13 @@ class SAOWebViewGUI:
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
         except Exception:
             pass
+        self._ensure_skillfx_on_top()
 
-    def _force_hp_to_bottom(self):
+    def _force_hp_to_bottom(self, force: bool = False, quiet: bool = False):
         """用 GetWindowRect + SetWindowPos 强制 HP 窗口贴屏幕底部 (物理像素)。"""
         if not self._hp_hwnd:
+            return
+        if not force and self._is_hp_position_locked():
             return
         try:
             user32 = ctypes.windll.user32
@@ -721,13 +1624,28 @@ class SAOWebViewGUI:
             if win_w < 10 or win_h < 10:
                 return
 
-            # 保存实测物理尺寸 (供 _set_hp_region 使用)
+            # 目标: 与 Entity 模式对齐 (x=4%屏宽, 底边贴屏幕底)
+            if getattr(self, '_hp_fullscreen', False):
+                # WebView/WinForms occasionally leaves a small non-client gutter
+                # at the bottom even for frameless transparent windows.
+                # Overscan the fullscreen HUD window slightly so the visible
+                # display area truly reaches the monitor edge.
+                overscan = max(12, int(sh * 0.012))
+                target_x = 0
+                target_y = -overscan
+                win_w = sw
+                win_h = sh + overscan
+                self._hp_viewport_offset_x = 0
+                self._hp_viewport_offset_y = overscan
+            else:
+                target_x, _ = self._calc_hud_target(sw, sh)
+                target_y = sh - win_h
+                self._hp_viewport_offset_x = 0
+                self._hp_viewport_offset_y = 0
+
+            # 保存实测/目标物理尺寸 (供 _set_hp_region 使用)
             self._win_w_phys = win_w
             self._win_h_phys = win_h
-
-            # 目标: 与 Entity 模式对齐 (x=4%屏宽, 底边贴屏幕底)
-            target_x, _ = self._calc_hud_target(sw, sh)
-            target_y = sh - win_h
 
             HWND_TOPMOST = ctypes.c_void_p(-1)
             SWP_NOACTIVATE = 0x0010
@@ -738,9 +1656,17 @@ class SAOWebViewGUI:
 
             # 用实测尺寸重新设置裁剪区域
             self._set_hp_region(False)
-            print(f'[SAO] force position: screen_h={sh}, win={win_w}x{win_h}, y={target_y}')
+            self._request_hp_hit_regions()
+            threading.Timer(0.12, self._request_hp_hit_regions).start()
+            threading.Timer(0.32, self._request_hp_hit_regions).start()
+            # Extra delayed retries to handle startup race condition
+            threading.Timer(0.6, self._request_hp_hit_regions).start()
+            threading.Timer(1.2, self._request_hp_hit_regions).start()
+            if not quiet:
+                print(f'[SAO] force position: screen_h={sh}, win={win_w}x{win_h}, y={target_y}')
         except Exception as e:
-            print(f'[SAO] force position error: {e}')
+            if not quiet:
+                print(f'[SAO] force position error: {e}')
 
     def _set_window_alpha(self, title, alpha):
         """Win32 LWA_ALPHA — 设置窗口整体透明度 (0.0~1.0), 保留色键透明."""
@@ -772,8 +1698,19 @@ class SAOWebViewGUI:
     # ─── HP 入场动画: 从屏幕中央滑到固定位置 ───
     def _animate_hp_entry(self):
         def _slide():
+            # Wait for hwnd if not yet available (retry up to 2s)
+            for _wait_i in range(20):
+                if self._hp_hwnd:
+                    break
+                time.sleep(0.1)
             if not self._hp_hwnd:
+                # hwnd never appeared — force setup and bail
+                self._setup_click_through()
+                time.sleep(0.3)
+                if self._hp_hwnd:
+                    self._force_hp_to_bottom(force=True, quiet=True)
                 return
+            self._hp_entry_animating = True
             try:
                 user32 = ctypes.windll.user32
                 sw = user32.GetSystemMetrics(0)
@@ -787,24 +1724,35 @@ class SAOWebViewGUI:
                 win_w = rc.right - rc.left
                 win_h = rc.bottom - rc.top
                 if win_w < 10 or win_h < 10:
-                    self._force_hp_to_bottom()
+                    self._force_hp_to_bottom(force=True, quiet=True)
                     return
 
                 HWND_TOPMOST = ctypes.c_void_p(-1)
                 SWP_NOACTIVATE = 0x0010
                 SWP_NOSIZE = 0x0001
 
-                # 起点: 强制移到屏幕中央 (无论当前在哪)
-                sx = (sw - win_w) // 2
-                sy = (sh - win_h) // 2
-                user32.SetWindowPos(
-                    self._hp_hwnd, HWND_TOPMOST,
-                    sx, sy, 0, 0,
-                    SWP_NOACTIVATE | SWP_NOSIZE)
-                time.sleep(0.02)
+                if getattr(self, '_hp_fullscreen', False):
+                    overscan = max(12, int(sh * 0.012))
+                    tx, ty = 0, -overscan
+                    sx, sy = 0, sh
+                    user32.SetWindowPos(
+                        self._hp_hwnd, HWND_TOPMOST,
+                        sx, sy, sw, sh + overscan,
+                        SWP_NOACTIVATE)
+                    time.sleep(0.02)
+                else:
+                    # 起点: 强制移到屏幕中央 (无论当前在哪)
+                    sx = (sw - win_w) // 2
+                    sy = (sh - win_h) // 2
+                    user32.SetWindowPos(
+                        self._hp_hwnd, HWND_TOPMOST,
+                        sx, sy, 0, 0,
+                        SWP_NOACTIVATE | SWP_NOSIZE)
+                    time.sleep(0.02)
 
-                # 终点: 窗口底边贴屏幕底边
-                tx, ty = 0, sh - win_h
+                    # 终点: 窗口底边贴屏幕底边
+                    tx = int(getattr(self, '_hp_target_x', self._calc_hud_target(sw, sh)[0]) or 0)
+                    ty = int(getattr(self, '_hp_target_y', sh - win_h) or (sh - win_h))
 
                 HWND_TOPMOST = ctypes.c_void_p(-1)
                 SWP_NOACTIVATE = 0x0010
@@ -819,24 +1767,37 @@ class SAOWebViewGUI:
                     nx = int(sx + (tx - sx) * ease)
                     ny = int(sy + (ty - sy) * ease)
                     try:
-                        user32.SetWindowPos(
-                            self._hp_hwnd, HWND_TOPMOST,
-                            nx, ny, 0, 0,
-                            SWP_NOACTIVATE | SWP_NOSIZE)
+                        if getattr(self, '_hp_fullscreen', False):
+                            user32.SetWindowPos(
+                                self._hp_hwnd, HWND_TOPMOST,
+                                nx, ny, sw, sh + overscan,
+                                SWP_NOACTIVATE)
+                        else:
+                            user32.SetWindowPos(
+                                self._hp_hwnd, HWND_TOPMOST,
+                                nx, ny, 0, 0,
+                                SWP_NOACTIVATE | SWP_NOSIZE)
                     except Exception:
                         break
                     time.sleep(dt)
 
                 # 最终精确定位
-                self._force_hp_to_bottom()
+                self._force_hp_to_bottom(force=True, quiet=True)
             except Exception:
-                self._force_hp_to_bottom()
+                self._force_hp_to_bottom(force=True, quiet=True)
+            finally:
+                self._hp_entry_animating = False
+                self._lock_hp_position(1.0)
         threading.Thread(target=_slide, daemon=True).start()
 
     # ─── WebView 就绪 ───
     def _on_webview_started(self):
         def _init():
             from character_profile import calc_level
+            self._lock_hp_position(2.0)
+            self._hp_hit_regions_ready = False
+            self._hp_js_hit_regions_ready = False
+            self._hp_last_hit_region_ts = 0.0
             # ── 先应用透明, 再显示窗口 (防止白底闪现) ──
             self._apply_webview2_transparency()
             time.sleep(0.15)
@@ -847,6 +1808,12 @@ class SAOWebViewGUI:
                     self._hp_visible = True
             except Exception:
                 pass
+            try:
+                if self.skillfx_win and not self._skillfx_visible:
+                    self.skillfx_win.show()
+                    self._skillfx_visible = True
+            except Exception:
+                pass
             time.sleep(0.18)
             self._eval_hp(f'setUsername("{self._safe_js(self._username)}")')
             lv, cur_xp, need_xp = calc_level(self._xp)
@@ -855,16 +1822,27 @@ class SAOWebViewGUI:
             # 设置 click-through (延迟确保窗口已完全创建)
             time.sleep(0.3)
             self._setup_click_through()
-            self._force_hp_to_bottom()
+            self._update_skillfx_layout()
             self._request_hp_hit_regions()
+            self._start_hp_position_guard()
+            self._start_hp_click_bootstrap(5.5)
             # WebView2 透明背景 — 持续重试
             self._apply_webview2_transparency()
             self._reassert_hp_transparency(1.0, retries=15, delay=0.35)
+            # Safety: re-run _force_hp_to_bottom after a delay in case hwnd
+            # was not available during the first attempt.
+            def _safety_force():
+                if self._hp_hwnd and not getattr(self, '_win_h_phys', 0):
+                    self._force_hp_to_bottom()
+            threading.Timer(1.5, _safety_force).start()
+            threading.Timer(3.0, _safety_force).start()
             # 任务栏图标
             self._set_window_icon('SAO-HP')
             self._set_window_icon('SAO Menu')
+            self._set_window_icon('SAO SkillFX')
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
+            self._set_window_alpha('SAO SkillFX', 1.0)
             # 重新触发 HP 入场动态模糊 (避免页面预加载时动画已经跑完)
             self._eval_hp('if (window.HP && HP.retriggerEntryBlur) HP.retriggerEntryBlur()')
             # HP 窗口入场动画: 从中央滑到固定位置
@@ -879,7 +1857,7 @@ class SAOWebViewGUI:
 
     # ─── 识别引擎 ───
     def _start_recognition(self):
-        """启动游戏数据引擎 (OCR 或 抓包)"""
+        """启动游戏数据引擎 (抓包 + 纯识图)"""
         try:
             from game_state import GameStateManager
             from config import SettingsManager as CfgSettings
@@ -890,16 +1868,20 @@ class SAOWebViewGUI:
             # 加载上次缓存的游戏状态 (立即显示)
             self._state_mgr.load_cache(cfg_settings)
             self._cfg_settings_ref = cfg_settings  # 保留引用用于定时保存
-            data_source = cfg_settings.get('data_source', 'ocr')
-            if data_source == 'packet':
-                # Packet mode should not render stale STA before the first
-                # valid packet arrives, but keeping the cached extra level
-                # avoids a long blank "(+XX)" period after login.
-                with self._state_mgr._lock:
-                    self._state_mgr._state.stamina_current = 0
-                    self._state_mgr._state.stamina_max = 0
-                    self._state_mgr._state.stamina_pct = 0.0
-                self._state_mgr._prev_stamina_current = 0
+            try:
+                self._update_skillfx_layout()
+            except Exception:
+                pass
+
+            # Restore sound settings
+            try:
+                from sao_sound import set_sound_enabled, set_sound_volume
+                _snd_on = cfg_settings.get('sound_enabled', True)
+                _snd_vol = cfg_settings.get('sound_volume', 70)
+                set_sound_enabled(bool(_snd_on) if _snd_on is not None else True)
+                set_sound_volume(int(_snd_vol) if _snd_vol is not None else 70)
+            except Exception:
+                pass
 
             # 用缓存名替换默认 "Player"
             cached_name = self._state_mgr.state.player_name
@@ -908,8 +1890,16 @@ class SAOWebViewGUI:
                 self._eval_hp(f'setUsername("{self._safe_js(cached_name)}")')
                 print(f'[SAO] 从缓存加载角色名: {cached_name}')
             cached_lv = self._state_mgr.state.level_base
+            cached_lv_extra = self._state_mgr.state.level_extra
             if cached_lv > 0:
                 self._level = cached_lv
+                cached_hp = max(0, int(self._state_mgr.state.hp_current or 0))
+                cached_hp_max = max(1, int(self._state_mgr.state.hp_max or 1))
+                if cached_lv_extra > 0:
+                    cached_level_str = f'{cached_lv}(+{cached_lv_extra})'
+                else:
+                    cached_level_str = str(cached_lv)
+                self._eval_hp(f'updateHP({cached_hp}, {cached_hp_max}, "{cached_level_str}")')
             # 同步缓存的职业/UID到 id-plate
             cached_prof = self._state_mgr.state.profession_name
             cached_uid = self._state_mgr.state.player_id
@@ -923,19 +1913,14 @@ class SAOWebViewGUI:
                 self._eval_hp(f'setPlayerInfo({_j.dumps(info, ensure_ascii=False)})')
                 print(f'[SAO] 从缓存加载: 职业={cached_prof}, UID={cached_uid}')
 
-            if data_source == 'packet':
-                from packet_bridge import PacketBridge
-                self._recognition_engine = PacketBridge(self._state_mgr, cfg_settings)
-                self._recognition_engine.start()
-                self._recognition_active = True
-                print('[SAO] Packet bridge started (网络抓包模式)')
-            else:
-                from recognition import RecognitionEngine
-                from config import GAME_WINDOW_KEYWORDS, GAME_PROCESS_NAMES
-                self._recognition_engine = RecognitionEngine(self._state_mgr, cfg_settings)
-                self._recognition_engine.start()
-                self._recognition_active = True
-                print(f"[SAO] Recognition engine started (keywords={GAME_WINDOW_KEYWORDS}, exe={GAME_PROCESS_NAMES})")
+            self._reconfigure_data_engines()
+            self._auto_key_engine = AutoKeyEngine(
+                self._state_mgr,
+                self._cfg_settings_ref,
+                extra_gate=lambda: bool(getattr(self, '_recognition_active', False)),
+            )
+            self._auto_key_engine.start()
+            self._sync_auto_key_menu()
 
             # 启动定时缓存保存 (每30秒)
             import threading as _thr
@@ -955,238 +1940,9 @@ class SAOWebViewGUI:
             self._recognition_active = False
 
     def _start_sta_pixel_detector(self, cfg_settings):
-        """启动 STA OCR+色彩梯度检测线程.
-
-        流程:
-          1. 扫描游戏窗口底部 18% 区域, 找金色条带 → bar_bbox + num_bbox
-          2. OCR num_bbox → 解析 cur/max 整数
-          3. 分析 bar_bbox 亮度/饱和度梯度 → 填充百分比
-          4. EMA 平滑后推送 GameState
-        """
-        if self._sta_detector_started:
-            return
-        self._sta_detector_started = True
-        packet_mode = (cfg_settings.get('data_source', 'ocr') == 'packet')
-
-        def _find_sta_bar(img_bottom, wl, wt_offset):
-            """在底部截图中定位金色 STA 条.
-
-            返回 (bar_bbox, num_bbox) 绝对像素坐标, 未找到返回 (None, None).
-            金色: HSV H∈[20,45], S>60, V>80.
-            """
-            import cv2, numpy as _np
-            hsv = cv2.cvtColor(img_bottom, cv2.COLOR_BGR2HSV)
-            mask = cv2.inRange(hsv,
-                               _np.array([20, 60, 80], dtype=_np.uint8),
-                               _np.array([45, 255, 255], dtype=_np.uint8))
-            kernel = _np.ones((3, 15), _np.uint8)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not contours:
-                return None, None
-            c = max(contours, key=cv2.contourArea)
-            x, y, w, h = cv2.boundingRect(c)
-            if w < 40 or h < 4:
-                return None, None
-            bar_bbox = (wl + x, wt_offset + y, wl + x + w, wt_offset + y + h)
-            num_w = max(60, w // 4)
-            num_h = max(18, h * 3)
-            num_x = x
-            num_y = max(0, y - h)
-            num_bbox = (wl + num_x, wt_offset + num_y,
-                        wl + num_x + num_w, wt_offset + num_y + num_h)
-            return bar_bbox, num_bbox
-
-        def _analyze_bar_fill(img):
-            """通过亮度*饱和度梯度计算条带填充比例 [0, 1].
-
-            金色区列得分高, 暗/灰区得分低.
-            红色闪烁 (危险) 检测 → 返回近零值.
-            """
-            import cv2, numpy as _np
-            if img is None or img.size == 0:
-                return 0.0
-            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(_np.float32)
-            h_ch = hsv[:, :, 0]
-            s_ch = hsv[:, :, 1] / 255.0
-            v_ch = hsv[:, :, 2] / 255.0
-            red_mask = (((h_ch < 12) | (h_ch > 168)) & (s_ch > 0.8) & (v_ch > 0.8))
-            if red_mask.mean() > 0.25:
-                return 0.02
-            col_score = (s_ch * 0.65 + v_ch * 0.35).mean(axis=0)
-            kernel_size = max(3, len(col_score) // 20) | 1
-            col_smooth = _np.convolve(col_score,
-                                      _np.ones(kernel_size) / kernel_size, mode='same')
-            norm = col_smooth / (col_smooth.max() + 1e-6)
-            filled_cols = _np.where(norm > 0.38)[0]
-            if len(filled_cols) == 0:
-                return 0.0
-            return float(filled_cols[-1] + 1) / len(norm)
-
-        def _sta_loop():
-            try:
-                from window_locator import WindowLocator
-                from recognition import (
-                    _grab_region, _ocr_numbers, _ocr_image, _detect_bar_pct,
-                    _parse_stamina_text, _parse_level_text, _init_ocr
-                )
-                from config import BAR_COLORS
-                import cv2
-            except ImportError as e:
-                self._sta_detector_started = False
-                print(f'[SAO] STA 检测依赖缺失: {e}')
-                return
-            _init_ocr()
-            locator = WindowLocator()
-            ema_pct = None
-            ema_alpha = 0.30
-            loop_count = 0
-            max_cached = 0
-            level_ocr_every = 12
-            print('[SAO] STA OCR+梯度检测线程已启动')
-
-            while self._recognition_active:
-                time.sleep(0.1)
-                loop_count += 1
-                try:
-                    result = locator.find_game_window()
-                    if result is None:
-                        continue
-                    hwnd, title, rect = result
-                    wl, wt, wr, wb = rect
-                    ww, wh = wr - wl, wb - wt
-                    if ww < 100 or wh < 100:
-                        continue
-
-                    # ── 固定 ROI: 体力数字 cur/max ──
-                    ocr_cur, ocr_max = 0, 0
-                    st_txt_roi = cfg_settings.get_roi('stamina_text')
-                    st_txt_bbox = None
-                    if st_txt_roi:
-                        st_txt_bbox = (
-                            wl + int(st_txt_roi.get('x', 0.0) * ww),
-                            wt + int(st_txt_roi.get('y', 0.0) * wh),
-                            wl + int((st_txt_roi.get('x', 0.0) + st_txt_roi.get('w', 0.0)) * ww),
-                            wt + int((st_txt_roi.get('y', 0.0) + st_txt_roi.get('h', 0.0)) * wh),
-                        )
-                    if st_txt_bbox is not None:
-                        img_num = _grab_region(st_txt_bbox)
-                        if img_num is not None and img_num.size > 0:
-                            raw_text = _ocr_numbers(img_num)
-                            ocr_cur, ocr_max = _parse_stamina_text(raw_text)
-                            if ocr_max > 0:
-                                max_cached = ocr_max
-
-                    # ── 固定 ROI: 体力条像素百分比 ──
-                    pixel_pct = 0.0
-                    st_bar_roi = cfg_settings.get_roi('stamina_bar')
-                    if st_bar_roi:
-                        st_bar_bbox = (
-                            wl + int(st_bar_roi.get('x', 0.0) * ww),
-                            wt + int(st_bar_roi.get('y', 0.0) * wh),
-                            wl + int((st_bar_roi.get('x', 0.0) + st_bar_roi.get('w', 0.0)) * ww),
-                            wt + int((st_bar_roi.get('y', 0.0) + st_bar_roi.get('h', 0.0)) * wh),
-                        )
-                        img_bar = _grab_region(st_bar_bbox)
-                        if img_bar is not None and img_bar.size > 0:
-                            try:
-                                pixel_pct = _detect_bar_pct(img_bar, BAR_COLORS['stamina'])
-                            except Exception:
-                                pixel_pct = _analyze_bar_fill(img_bar)
-
-                    # ── 融合: OCR 优先 ──
-                    if ocr_max > 0 and ocr_cur >= 0:
-                        raw_pct = ocr_cur / ocr_max
-                    elif max_cached > 0:
-                        raw_pct = pixel_pct
-                    else:
-                        raw_pct = pixel_pct
-                    raw_pct = max(0.0, min(1.0, raw_pct))
-
-                    if ema_pct is None:
-                        ema_pct = raw_pct
-                    else:
-                        ema_pct = ema_alpha * raw_pct + (1 - ema_alpha) * ema_pct
-                    pct = max(0.0, min(1.0, ema_pct))
-
-                    # ── 推送 GameState ──
-                    upd: dict = {'stamina_pct': pct}
-                    if max_cached > 0:
-                        upd['stamina_current'] = max(0, int(max_cached * pct))
-                        upd['stamina_max'] = max_cached
-                    if packet_mode:
-                        gs = self._state_mgr.state
-                        if 'stamina_current' not in upd and gs.stamina_max > 0 and pct > 0.05:
-                            upd['stamina_max'] = gs.stamina_max
-                            upd['stamina_current'] = max(1, int(gs.stamina_max * pct))
-
-                        if loop_count % level_ocr_every == 0:
-                            try:
-                                lv_roi = cfg_settings.get_roi('level')
-                                if lv_roi:
-                                    lv_bbox = (
-                                        wl + int(lv_roi.get('x', 0.0) * ww),
-                                        wt + int(lv_roi.get('y', 0.0) * wh),
-                                        wl + int((lv_roi.get('x', 0.0) + lv_roi.get('w', 0.0)) * ww),
-                                        wt + int((lv_roi.get('y', 0.0) + lv_roi.get('h', 0.0)) * wh),
-                                    )
-                                    lv_img = _grab_region(lv_bbox)
-                                    if lv_img is not None and lv_img.size > 0:
-                                        try:
-                                            h_lv, w_lv = lv_img.shape[:2]
-                                            lv_big = cv2.resize(
-                                                lv_img,
-                                                (max(1, w_lv * 3), max(1, h_lv * 3)),
-                                                interpolation=cv2.INTER_CUBIC
-                                            )
-                                            gray = cv2.cvtColor(lv_big, cv2.COLOR_BGR2GRAY)
-                                            thresh = cv2.adaptiveThreshold(
-                                                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                                cv2.THRESH_BINARY, 11, 2
-                                            )
-                                            lv_proc = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-                                        except Exception:
-                                            lv_proc = lv_img
-                                        lv_txt = _ocr_image(lv_proc)
-                                        lv_base, lv_extra = _parse_level_text(lv_txt)
-                                        if lv_base > 0 and (gs.level_base <= 0 or lv_base == gs.level_base):
-                                            upd['level_base'] = lv_base
-                                            if lv_extra > gs.level_extra:
-                                                upd['level_extra'] = lv_extra
-                            except Exception:
-                                pass
-                        packet_invalid = (
-                            gs.stamina_max <= 0 or
-                            (gs.stamina_max >= 100 and gs.stamina_current <= 1)
-                        )
-                        detector_has_value = (
-                            ('stamina_current' in upd and upd['stamina_current'] > 1) or
-                            pct > 0.05
-                        )
-                        stamina_changed = (
-                            'stamina_current' in upd and
-                            (
-                                gs.stamina_max <= 0 or
-                                upd.get('stamina_max', gs.stamina_max) != gs.stamina_max or
-                                abs(upd['stamina_current'] - gs.stamina_current) >= max(8, int(max(1, gs.stamina_max) * 0.02))
-                            )
-                        )
-                        level_has_value = (
-                            ('level_extra' in upd and upd['level_extra'] > gs.level_extra) or
-                            ('level_base' in upd and gs.level_base <= 0 and upd['level_base'] > 0)
-                        )
-                        if (detector_has_value and (packet_invalid or stamina_changed)) or level_has_value:
-                            self._state_mgr.update(**upd)
-                    else:
-                        self._state_mgr.update(**upd)
-
-                except Exception as e:
-                    print(f'[SAO] STA 检测异常: {e}')
-
-            self._sta_detector_started = False
-            print('[SAO] STA OCR+梯度检测线程已退出')
-
-        threading.Thread(target=_sta_loop, daemon=True, name='sta_pixel').start()
+        """Removed: stamina now updates through the main vision engine only."""
+        self._sta_detector_started = False
+        return
 
     def _toggle_recognition(self):
         """切换识别开关 — 线程安全"""
@@ -1206,6 +1962,7 @@ class SAOWebViewGUI:
     def _setup_hotkeys(self):
         self._hk_actions = {
             'toggle_recognition': self._toggle_recognition,
+            'toggle_auto_script': self._toggle_auto_script,
             'toggle_topmost': lambda: None,
             'hide_panels': lambda: None,
         }
@@ -1220,7 +1977,7 @@ class SAOWebViewGUI:
             self._hk_listener.daemon = True
             self._hk_listener.start()
             self._hotkeys_ok = True
-            print('[SAO WebView] Hotkeys (pynput): F5=toggle_recognition')
+            print('[SAO WebView] Hotkeys (pynput): F5=toggle_recognition, F6=toggle_auto_script')
         except Exception as e:
             self._hotkeys_ok = False
             print(f'[SAO WebView] Hotkeys unavailable: {e}')
@@ -1245,10 +2002,20 @@ class SAOWebViewGUI:
             pass
 
     def _hk_check(self):
-        # F5 = toggle recognition
-        if 116 in self._hk_pressed:
-            threading.Thread(target=self._toggle_recognition, daemon=True).start()
-            self._hk_pressed.clear()
+        saved = getattr(self, '_cfg_settings_ref', None)
+        hotkeys = DEFAULT_HOTKEYS if saved is None else saved.get('hotkeys', DEFAULT_HOTKEYS)
+        for action, info in (hotkeys or {}).items():
+            vk = None
+            if isinstance(info, dict):
+                vk = info.get('vk')
+            elif isinstance(info, str) and info:
+                vk = self._FKEY_VK.get(info.upper())
+            if vk and vk in self._hk_pressed:
+                cb = self._hk_actions.get(action)
+                if cb:
+                    threading.Thread(target=cb, daemon=True).start()
+                    self._hk_pressed.clear()
+                    return
 
     # ════════════════════════════════════════
     #  JS 辅助
@@ -1265,11 +2032,193 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
+    def _eval_skillfx(self, js):
+        try:
+            if self.skillfx_win:
+                self.skillfx_win.evaluate_js(js)
+        except Exception:
+            pass
+
     @staticmethod
     def _safe_js(s: str) -> str:
         if not s:
             return ''
         return s.replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'").replace('\n', '\\n')
+
+    def _ensure_skillfx_on_top(self):
+        try:
+            if not self._skillfx_hwnd:
+                self._skillfx_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO SkillFX')
+            if not self._skillfx_hwnd:
+                return
+            HWND_TOPMOST = ctypes.c_void_p(-1)
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            ctypes.windll.user32.SetWindowPos(
+                self._skillfx_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        except Exception:
+            pass
+
+    def _setup_skillfx_click_through(self):
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, 'SAO SkillFX')
+            if not hwnd:
+                return
+            self._skillfx_hwnd = hwnd
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            ex |= (_WS_EX_TRANSPARENT | _WS_EX_LAYERED)
+            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex)
+            self._ensure_skillfx_on_top()
+        except Exception:
+            pass
+
+    def _get_skillfx_layout(self, gs=None):
+        if gs is None and hasattr(self, '_state_mgr'):
+            gs = self._state_mgr.state
+
+        client_rect = getattr(gs, 'window_rect', None) if gs else None
+        if not client_rect:
+            try:
+                from window_locator import WindowLocator
+                client_rect = WindowLocator().get_rect()
+            except Exception:
+                client_rect = None
+        if not client_rect:
+            return None
+
+        client_left, client_top, client_right, client_bottom = client_rect
+        client_w = max(1, int(client_right - client_left))
+        client_h = max(1, int(client_bottom - client_top))
+
+        slots = []
+        for slot in list(getattr(gs, 'skill_slots', []) or []) if gs else []:
+            if not isinstance(slot, dict):
+                continue
+            rect = slot.get('rect') or {}
+            try:
+                sx = int(rect.get('x', 0))
+                sy = int(rect.get('y', 0))
+                sw = int(rect.get('w', 0))
+                sh = int(rect.get('h', 0))
+                idx = int(slot.get('index', 0) or 0)
+            except Exception:
+                continue
+            if idx <= 0 or sw <= 0 or sh <= 0:
+                continue
+            slots.append({
+                'index': idx,
+                'screen_rect': {'x': client_left + sx, 'y': client_top + sy, 'w': sw, 'h': sh},
+                'client_rect': {'x': sx, 'y': sy, 'w': sw, 'h': sh},
+            })
+
+        if not slots:
+            for item in get_skill_slot_rects(client_rect):
+                left, top, right, bottom = item['bbox']
+                slots.append({
+                    'index': int(item['index']),
+                    'screen_rect': {'x': left, 'y': top, 'w': right - left, 'h': bottom - top},
+                    'client_rect': {'x': left - client_left, 'y': top - client_top, 'w': right - left, 'h': bottom - top},
+                })
+
+        if not slots:
+            return None
+
+        min_x = min(item['screen_rect']['x'] for item in slots)
+        max_x = max(item['screen_rect']['x'] + item['screen_rect']['w'] for item in slots)
+        max_y = max(item['screen_rect']['y'] + item['screen_rect']['h'] for item in slots)
+        pad_x = max(18, int(round(client_w * 0.012)))
+        pad_y = max(18, int(round(client_h * 0.016)))
+        win_x = max(0, min_x - pad_x)
+        win_y = max(0, client_top)
+        width = max(420, int(client_right - win_x))
+        height = max(220, int((max_y - win_y) + pad_y))
+        callout_w = max(440, int(round(client_w * 0.29)))
+        callout_h = max(128, int(round(client_h * 0.115)))
+        callout_margin_x = max(28, int(round(client_w * 0.022)))
+        callout_margin_y = max(24, int(round(client_h * 0.040)))
+        callout_x = max(callout_margin_x, width - callout_w - callout_margin_x)
+        callout_y = callout_margin_y
+
+        payload_slots = []
+        for item in slots:
+            rect = item['screen_rect']
+            payload_slots.append({
+                'index': item['index'],
+                'rect': {'x': rect['x'] - win_x, 'y': rect['y'] - win_y, 'w': rect['w'], 'h': rect['h']},
+                'client_rect': dict(item['client_rect']),
+            })
+        payload_slots.sort(key=lambda item: item['index'])
+
+        return {
+            'window': {'x': int(win_x), 'y': int(win_y), 'w': int(width), 'h': int(height)},
+            'viewport': {
+                'width': int(width),
+                'height': int(height),
+                'padding_x': int(pad_x),
+                'padding_y': int(pad_y),
+                'callout': {
+                    'x': int(callout_x),
+                    'y': int(callout_y),
+                    'w': int(callout_w),
+                    'h': int(callout_h),
+                },
+            },
+            'slots': payload_slots,
+            'client_rect': tuple(client_rect),
+        }
+
+    def _build_skillfx_payload(self, gs):
+        layout = self._get_skillfx_layout(gs)
+        if not layout:
+            return None
+        self._skillfx_layout = layout
+        slot_map = {}
+        for slot in getattr(gs, 'skill_slots', []) or []:
+            if isinstance(slot, dict):
+                try:
+                    slot_map[int(slot.get('index', 0) or 0)] = slot
+                except Exception:
+                    pass
+        payload_slots = []
+        for slot_layout in layout['slots']:
+            slot = slot_map.get(slot_layout['index'], {})
+            payload_slots.append({
+                'index': slot_layout['index'],
+                'rect': dict(slot_layout['rect']),
+                'state': str(slot.get('state', 'unknown') or 'unknown'),
+                'cooldown_ratio': float(slot.get('cooldown_ratio', slot.get('cooldown_pct', 0.0)) or 0.0),
+                'insufficient_energy': bool(slot.get('insufficient_energy')),
+                'ready_edge': bool(slot.get('ready_edge')),
+                'active': bool(slot.get('active')),
+            })
+        return {
+            'viewport': dict(layout['viewport']),
+            'slots': payload_slots,
+            'watched_slots': self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            'burst_enabled': bool(self._get_setting('burst_enabled', True)),
+        }
+
+    def _update_skillfx_layout(self):
+        if not self.skillfx_win:
+            return
+        layout = self._get_skillfx_layout(getattr(self, '_game_state', None))
+        if not layout:
+            return
+        self._skillfx_layout = layout
+        window = layout['window']
+        try:
+            self.skillfx_win.resize(int(window['w']), int(window['h']))
+        except Exception:
+            pass
+        try:
+            self.skillfx_win.move(int(window['x']), int(window['y']))
+        except Exception:
+            pass
+        self._eval_skillfx(f'SkillFX.setViewport({json.dumps(layout["viewport"], ensure_ascii=False)})')
+        self._setup_skillfx_click_through()
 
     # ════════════════════════════════════════
     #  菜单
@@ -1406,19 +2355,10 @@ class SAOWebViewGUI:
         if next_ui:
             self._pending_switch = next_ui
         self._recognition_active = False
-        if self._recognition_engine:
-            try:
-                self._recognition_engine.stop()
-            except Exception:
-                pass
+        self._stop_recognition_engines()
 
         # 退出前保存缓存
-        try:
-            if hasattr(self, '_state_mgr') and hasattr(self, '_cfg_settings_ref'):
-                self._state_mgr.save_cache(self._cfg_settings_ref)
-                print('[SAO] 退出前已保存游戏状态缓存')
-        except Exception:
-            pass
+        self._save_game_cache(quiet=False)
 
         # preExit CSS 已由 JS exitApplication() 触发, 此处不再重复调用
 
@@ -1437,6 +2377,10 @@ class SAOWebViewGUI:
             self._native_fade_window('SAO-HP', duration_ms=240, steps=12)
         except Exception:
             pass
+        try:
+            self._native_fade_window('SAO SkillFX', duration_ms=180, steps=10)
+        except Exception:
+            pass
 
         try:
             self._destroy_all_panels()
@@ -1451,6 +2395,16 @@ class SAOWebViewGUI:
             pass
         try:
             self.menu_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.skillfx_win:
+                self.skillfx_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.skillfx_win:
+                self.skillfx_win.destroy()
         except Exception:
             pass
 
@@ -1576,7 +2530,10 @@ class SAOWebViewGUI:
         w, h = sizes.get(panel_type, (280, 200))
 
         try:
-            hx, hy = self.hp_win.x or 100, self.hp_win.y or 100
+            if getattr(self, '_hp_fullscreen', False):
+                hx, hy = self._calc_hud_target()
+            else:
+                hx, hy = self.hp_win.x or 100, self.hp_win.y or 100
         except Exception:
             hx, hy = 100, 100
 
@@ -1615,7 +2572,7 @@ class SAOWebViewGUI:
                 pass
             self._set_window_icon(title)
             self._set_window_alpha(title, 0.95)
-            time.sleep(0.5)
+            time.sleep(0.1)
             try:
                 gui_obj2 = getattr(win, 'gui', None)
                 form2 = getattr(gui_obj2, 'BrowserForm', None) if gui_obj2 else None
@@ -1668,15 +2625,15 @@ class SAOWebViewGUI:
     # ─── 同步信息 ───
     def _sync_menu_info(self):
         gs = self._game_state
-        gs_desc = '识别运行中' if self._recognition_active else 'SAO Auto — 待机'
-        hp_str = '—'
-        sta_str = '—'
-        if gs and self._recognition_active and hasattr(gs, 'hp_current'):
-            gs_desc = f'HP: {gs.hp_current}/{gs.hp_max}  STA: {gs.stamina_current}/{gs.stamina_max}'
+        gs_desc = 'VISION ACTIVE' if self._recognition_active else 'SAO Auto Idle'
+        hp_str = '--'
+        sta_str = '--'
+        if gs and hasattr(gs, 'hp_current'):
             if gs.hp_max > 0:
                 hp_str = f'{gs.hp_current}/{gs.hp_max}'
-            if gs.stamina_max > 0:
-                sta_str = f'{gs.stamina_current}/{gs.stamina_max}'
+            sta_pct = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
+            sta_str = f'{sta_pct}%'
+            gs_desc = f'HP: {hp_str}  STA: {sta_str}'
         info = {
             'username': self._username, 'level': self._level,
             'xp_pct': round(self._xp_pct, 1), 'profession': self._profession,
@@ -1685,7 +2642,24 @@ class SAOWebViewGUI:
             'file': '',
         }
         self._eval_menu(f'SAO.updateInfo({json.dumps(info, ensure_ascii=False)})')
+        # Sync menu settings (watched slots, sound, mode, etc.)
+        self._sync_menu_settings()
         self._sync_all_panels()
+
+    def _sync_menu_settings(self):
+        """Push current settings to menu so UI toggles reflect saved state."""
+        try:
+            from sao_sound import get_sound_enabled, get_sound_volume
+            cfg = {
+                'watched_slots': self._get_setting('watched_skill_slots', [1,2,3,4,5,6,7,8,9]),
+                'burst_enabled': self._get_setting('burst_enabled', True),
+                'sound_enabled': get_sound_enabled(),
+                'sound_volume': get_sound_volume(),
+            }
+            cfg['auto_key'] = self._get_auto_key_menu_state()
+            self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
+        except Exception:
+            pass
 
     # ════════════════════════════════════════
     #  动作分发
@@ -1703,6 +2677,7 @@ class SAOWebViewGUI:
     def _menu_action(self, action: str):
         _map = {
             'toggle_recognition': self._toggle_recognition,
+            'toggle_auto_script': self._toggle_auto_script,
             'exit': self._exit_with_animation,
         }
         fn = _map.get(action)
@@ -1716,30 +2691,33 @@ class SAOWebViewGUI:
         """后台识别循环 — 从 GameStateManager 读取状态, 推送到 HP 条 + 体力覆盖板"""
         _panel_tick = 0
         while True:
-            time.sleep(0.5)
+            time.sleep(0.1)
             try:
                 if self.hp_win is None:
                     return
                 _ = self.hp_win.x
             except Exception:
                 return
-            if self._recognition_active and hasattr(self, '_state_mgr'):
+            gs = None
+            if hasattr(self, '_state_mgr'):
                 try:
                     gs = self._state_mgr.state
+                    self._sync_vision_lifecycle(gs)
+                except Exception as e:
+                    print(f'[SAO-WV] vision lifecycle sync error: {e}')
+                    gs = None
+            if self._recognition_active and gs is not None:
+                try:
                     if gs.recognition_ok:
-                        # OCR 优先, 像素条检测 (hp_pct) 兜底
+                        # HP/等级走共享状态，STA 百分比走纯识图
                         if gs.hp_max > 0:
                             hp, hp_max = gs.hp_current, gs.hp_max
                         elif gs.hp_pct > 0:
                             hp, hp_max = int(gs.hp_pct * 100), 100
                         else:
                             hp, hp_max = 0, 1
-                        if gs.stamina_max > 0:
-                            sta, sta_max = gs.stamina_current, gs.stamina_max
-                        elif gs.stamina_pct > 0:
-                            sta, sta_max = int(gs.stamina_pct * 100), 100
-                        else:
-                            sta, sta_max = -1, -1  # 没数据时不推送
+                        sta = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
+                        sta_max = 100
                         level_base = gs.level_base if gs.level_base else self._level
                         if gs.level_extra > 0 and level_base > 0:
                             level_str = f'{level_base}(+{gs.level_extra})'
@@ -1749,13 +2727,54 @@ class SAOWebViewGUI:
                             level_str = str(self._level)
                         self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
                         self._eval_hp('setPlayState("playing")')
-                        # 更新体力条 (已合并到 HP 窗口) — 仅在有数据时推送
-                        if sta >= 0 and sta_max > 0:
-                            self._eval_hp(f'updateSTA({sta}, {sta_max})')
-                        # 更新技能栏
-                        if gs.skill_slots:
-                            import json as _json
-                            self._eval_hp(f'updateSkillBar({_json.dumps(gs.skill_slots)})')
+                        self._eval_hp(f'updateSTA({sta}, {sta_max})')
+                        # ── Burst Mode Ready 检测 ──
+                        _burst_enabled = self._get_setting('burst_enabled', True)
+                        _burst_now = getattr(gs, 'burst_ready', False)
+                        _burst_prev = getattr(self, '_last_burst_ready', False)
+                        _burst_slot = self._pick_burst_trigger_slot(gs) if _burst_enabled else 0
+                        _prev_layout = getattr(self, '_skillfx_layout', None)
+                        _skillfx_payload = self._build_skillfx_payload(gs) or {}
+                        _next_layout = getattr(self, '_skillfx_layout', None)
+                        if _prev_layout != _next_layout:
+                            self._update_skillfx_layout()
+                        _skillfx_payload['burst_slot'] = int(_burst_slot or 0)
+                        _skillfx_payload['burst_ready'] = bool(_burst_now)
+                        _skillfx_payload['enabled'] = bool(_burst_enabled)
+                        _skillfx_sig = (
+                            int(_skillfx_payload.get('burst_slot', 0) or 0),
+                            bool(_skillfx_payload.get('burst_ready')),
+                            tuple(
+                                (
+                                    int(item.get('index', 0) or 0),
+                                    str(item.get('state', 'unknown') or 'unknown')
+                                )
+                                for item in (_skillfx_payload.get('slots', []) or [])
+                                if isinstance(item, dict)
+                            )
+                        )
+                        if getattr(self, '_last_skillfx_sig', None) != _skillfx_sig:
+                            self._last_skillfx_sig = _skillfx_sig
+                            _watched_dbg = self._get_setting('watched_skill_slots', [1,2,3,4,5,6,7,8,9]) or []
+                            _state_dbg = []
+                            for item in (_skillfx_payload.get('slots', []) or []):
+                                if not isinstance(item, dict):
+                                    continue
+                                try:
+                                    _idx_dbg = int(item.get('index', 0) or 0)
+                                except Exception:
+                                    _idx_dbg = 0
+                                _state_dbg.append(f"{_idx_dbg}:{str(item.get('state', 'unknown') or 'unknown')}")
+                            print(
+                                f"[SAO-WV] SkillFX sync: watched={list(_watched_dbg)} "
+                                f"burst_slot={_skillfx_payload['burst_slot']} "
+                                f"burst_ready={_skillfx_payload['burst_ready']} "
+                                f"states={_state_dbg}"
+                            )
+                        self._eval_skillfx(f'SkillFX.update({json.dumps(_skillfx_payload, ensure_ascii=False)})')
+                        if (not _burst_now) and _burst_prev:
+                            self._eval_skillfx('SkillFX.hideBurstReady()')
+                        self._last_burst_ready = _burst_now
                         # 缓存到 _game_state 供菜单使用
                         self._game_state = gs
                         # ── 同步玩家名到 WebView ──
@@ -1818,8 +2837,7 @@ class SAOWebViewGUI:
                     print(f'[SAO-WV] recognition loop error: {e}')
             else:
                 # 识别未激活时, 仍保留最后已知数据 (如有)
-                if hasattr(self, '_state_mgr'):
-                    gs = self._state_mgr.state
+                if gs is not None:
                     if gs.hp_max > 0 or gs.level_base > 0:
                         hp = gs.hp_current if gs.hp_max > 0 else 0
                         hp_max = gs.hp_max if gs.hp_max > 0 else 1
@@ -1844,7 +2862,9 @@ class SAOWebViewGUI:
                     self._eval_hp('setPlayState("idle")')
 
             _panel_tick += 1
-            if _panel_tick >= 6 and self._panel_wins:
+            if _panel_tick % 5 == 0:
+                self._sync_auto_key_menu()
+            if _panel_tick >= 10 and self._panel_wins:
                 _panel_tick = 0
                 self._sync_all_panels()
 
@@ -1877,17 +2897,9 @@ class SAOWebViewGUI:
             return
         self._exit_animating = True
         self._recognition_active = False
-        if self._recognition_engine:
-            try:
-                self._recognition_engine.stop()
-            except Exception:
-                pass
+        self._stop_recognition_engines()
         # 退出前保存缓存
-        try:
-            if hasattr(self, '_state_mgr') and hasattr(self, '_cfg_settings_ref'):
-                self._state_mgr.save_cache(self._cfg_settings_ref)
-        except Exception:
-            pass
+        self._save_game_cache(quiet=False)
         self._destroy_all_panels()
         try:
             self.hp_win.destroy()

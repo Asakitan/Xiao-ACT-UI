@@ -16,6 +16,7 @@ import math
 import time
 import random
 import os
+import sys
 import ctypes
 import struct
 from PIL import Image, ImageDraw, ImageFilter, ImageTk, ImageEnhance, ImageChops, ImageFont
@@ -2295,7 +2296,7 @@ void main() {
                 _ps(name, volume=0.8)
             except Exception:
                 try:
-                    _base = os.path.dirname(os.path.abspath(__file__))
+                    _base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
                     from sao_sound import SAO_SOUNDS
                     fname = SAO_SOUNDS.get(name, '')
                     if fname and os.path.isfile(fname):
@@ -3649,7 +3650,7 @@ void main() {
         if key in self._ls_font_cache:
             return self._ls_font_cache[key]
 
-        base = os.path.dirname(os.path.abspath(__file__))
+        base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
         font_file = 'SAOUI.ttf' if family == 'sao' else 'ZhuZiAYuanJWD.ttf'
         font_path = os.path.join(base, 'assets', 'fonts', font_file)
         try:
@@ -4820,7 +4821,7 @@ class SAOTitleBar(tk.Frame):
     """SAO 风格标题栏"""
 
     def __init__(self, parent, root, title="咲 ACT UI",
-                 version="v1.0.1", on_close=None, **kw):
+                 version="v1.1.0", on_close=None, **kw):
         super().__init__(parent, bg='#080c12', height=36, **kw)
         self.root = root
         self.on_close = on_close

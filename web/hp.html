@@ -65,9 +65,21 @@ html::-webkit-scrollbar, body::-webkit-scrollbar {
 }
 
 body {
-    padding: 0 10px 0 10px;
+    padding: 0;
+    width: 100vw;
     height: 100vh;
     position: relative;
+    overflow: hidden;
+}
+
+.hud-stage {
+    position: fixed;
+    left: 4vw;
+    bottom: 0;
+    width: 75vw;
+    height: 520px;
+    pointer-events: none;
+    overflow: visible;
 }
 
 /* ═══════════════════════════════════════
@@ -102,8 +114,8 @@ body {
     --hover: rgba(220, 222, 212, 1.0);
     position: absolute;
     bottom: 22px;
-    left: 46%;
-    width: 505px;
+    left: calc(47% + 25px);
+    width: 518px;
     height: 48px;
     display: flex;
     filter: blur(0px) drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.28));
@@ -272,9 +284,9 @@ body {
 .hp-bg-cover {
     position: absolute;
     bottom: 0;
-    left: 44%;
-    width: 545px;
-    height: 80px;
+    left: calc(45.2% + 25px);
+    width: 586px;
+    height: 74px;
     background: linear-gradient(
         175deg,
         rgba(188, 190, 178, 1.0) 0%,
@@ -328,6 +340,11 @@ body {
     border-radius: 3px 0 0 0;
 }
 /* Gold corner (bottom-right) via box-shadow trick */
+
+#hp,
+#ctx-menu {
+    pointer-events: auto;
+}
 
 /* HUD lane float keyframes removed — fixed positions */
 
@@ -480,58 +497,153 @@ body {
 .cm-icon.mi-exit::after { transform: rotate(-45deg); }
 .cm-icon.mi-menu::before { left: 4px; top: 3px; width: 14px; height: 2px; background: currentColor; box-shadow: 0 4px 0 currentColor, 0 8px 0 currentColor; }
 
-/* ═══ Skill Bar — SAO frosted-glass skill slots ═══ */
-.skill-bar {
-    position: absolute;
-    bottom: 86px;
-    left: 44%;
-    display: flex;
-    gap: 4px;
-    align-items: flex-end;
+/* ═══ Burst Mode Ready — SAO scan effect + diagonal line + text ═══ */
+#burst-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
     pointer-events: none;
-    font-family: var(--font-ui);
-    z-index: 2;
-    opacity: 0;
-    transition: opacity 0.4s ease;
+    z-index: 12;
+    overflow: visible;
 }
-.skill-bar.visible { opacity: 1; }
-.skill-slot {
-    position: relative;
-    width: 36px;
-    height: 36px;
-    background: rgba(207, 208, 197, 0.65);
-    border: 1px solid rgba(180, 182, 170, 0.5);
-    border-radius: 2px;
-    overflow: hidden;
-    box-shadow: inset 0 0 6px rgba(0,0,0,0.08);
+#burst-overlay.show {
+    display: block;
 }
-.skill-slot .sk-cd {
+/* SAO scan line sweeping from left to right */
+@keyframes burst-scan {
+    0%   { left: -30%; opacity: 0; }
+    10%  { opacity: 1; }
+    90%  { opacity: 1; }
+    100% { left: 110%; opacity: 0; }
+}
+.burst-scan-line {
     position: absolute;
-    bottom: 0;
+    top: 0;
+    left: -30%;
+    width: 2px;
+    height: 100%;
+    background: linear-gradient(180deg, rgba(104,228,255,0) 0%, rgba(104,228,255,0.9) 50%, rgba(104,228,255,0) 100%);
+    box-shadow: 0 0 12px rgba(104,228,255,0.6), 0 0 32px rgba(104,228,255,0.3);
+    animation: burst-scan 1.2s cubic-bezier(0.4,0,0.2,1) forwards;
+}
+/* Diagonal line from bottom-left to upper-right */
+@keyframes burst-diag-in {
+    0%   { opacity: 0; filter: blur(4px); }
+    32%  { opacity: 1; filter: blur(0); }
+    100% { opacity: 0.84; filter: blur(0); }
+}
+.burst-diag {
+    position: absolute;
+    bottom: 8px;
     left: 0;
-    width: 100%;
-    height: 0%;
-    background: rgba(60, 62, 50, 0.55);
-    transition: height 0.3s ease;
+    width: 260px;
+    height: 1.5px;
+    background: linear-gradient(90deg, rgba(104,228,255,0.8), rgba(243,175,18,0.6));
+    transform-origin: left center;
+    transform: rotate(-12deg) scaleX(0);
+    animation: burst-diag-in 0.6s 0.3s cubic-bezier(0.22,1,0.36,1) forwards;
+    box-shadow: 0 0 8px rgba(104,228,255,0.4);
 }
-.skill-slot .sk-idx {
+/* Text label */
+@keyframes burst-text-in {
+    0%   { opacity: 0; transform: translateX(-26px); filter: blur(9px); }
+    55%  { opacity: 1; transform: translateX(6px); filter: blur(0); }
+    100% { opacity: 1; transform: translateX(0); filter: blur(0); }
+}
+@keyframes burst-text-glow {
+    0%, 100% { text-shadow: 0 0 10px rgba(104,228,255,0.45), 0 0 28px rgba(104,228,255,0.18); }
+    50%      { text-shadow: 0 0 18px rgba(104,228,255,0.72), 0 0 42px rgba(104,228,255,0.28); }
+}
+@keyframes burst-fadeout {
+    0%   { opacity: 1; }
+    100% { opacity: 0; }
+}
+.burst-text {
     position: absolute;
-    bottom: 1px;
-    right: 2px;
-    font-size: 8px;
-    color: rgba(97, 98, 86, 0.6);
-    letter-spacing: 0;
-    line-height: 1;
+    top: 6px;
+    left: 16px;
+    font-family: var(--font-sao);
+    font-size: 18px;
+    letter-spacing: 3px;
+    color: rgba(104, 228, 255, 0.95);
+    white-space: nowrap;
+    opacity: 0;
+    animation: burst-text-in 0.5s 0.5s cubic-bezier(0.22,1,0.36,1) forwards,
+               burst-text-glow 2s 1s ease-in-out infinite;
 }
-.skill-slot.active {
-    border-color: rgba(212, 156, 23, 0.7);
-    box-shadow: 0 0 8px rgba(212, 156, 23, 0.35), inset 0 0 6px rgba(212, 156, 23, 0.15);
+#burst-overlay.fadeout {
+    animation: burst-fadeout 0.5s ease forwards;
 }
-.skill-slot.ready {
-    background: rgba(207, 208, 197, 0.75);
+
+@keyframes burst-ring-pulse {
+    0%   { opacity: 0; transform: scale(0.76); }
+    18%  { opacity: 1; transform: scale(1.00); }
+    70%  { opacity: 1; transform: scale(1.12); }
+    100% { opacity: 0; transform: scale(1.24); }
 }
-.skill-slot.cooling {
-    background: rgba(190, 192, 180, 0.55);
+@keyframes burst-ring-inner {
+    0%   { opacity: 0; transform: scale(0.68); }
+    22%  { opacity: 1; transform: scale(0.94); }
+    100% { opacity: 0; transform: scale(1.08); }
+}
+@keyframes burst-target-scan {
+    0%   { opacity: 0; transform: translateX(-44px); }
+    14%  { opacity: 1; }
+    100% { opacity: 0; transform: translateX(44px); }
+}
+.burst-target {
+    position: fixed;
+    width: 96px;
+    height: 96px;
+    transform: translate(-50%, -50%);
+}
+.burst-target-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+}
+.burst-target-ring.outer {
+    border: 2px solid rgba(104, 228, 255, 0.95);
+    box-shadow: 0 0 10px rgba(104,228,255,0.55), 0 0 28px rgba(104,228,255,0.24);
+    animation: burst-ring-pulse 1.35s cubic-bezier(0.22,1,0.36,1) forwards;
+}
+.burst-target-ring.inner {
+    inset: 10px;
+    border: 1px solid rgba(243, 175, 18, 0.92);
+    box-shadow: 0 0 8px rgba(243,175,18,0.34);
+    animation: burst-ring-inner 1.1s 0.08s cubic-bezier(0.22,1,0.36,1) forwards;
+}
+.burst-target-scan {
+    position: absolute;
+    left: 50%;
+    top: 10px;
+    width: 2px;
+    height: calc(100% - 20px);
+    background: linear-gradient(180deg, rgba(104,228,255,0), rgba(104,228,255,0.95), rgba(104,228,255,0));
+    transform: translateX(-50%);
+    box-shadow: 0 0 14px rgba(104,228,255,0.55);
+    animation: burst-target-scan 0.95s 0.08s ease-out forwards;
+}
+.burst-diag {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 180px;
+    height: 2px;
+    background: linear-gradient(90deg, rgba(104,228,255,0.92), rgba(243,175,18,0.72));
+    transform-origin: left center;
+    box-shadow: 0 0 10px rgba(104,228,255,0.34);
+    animation: burst-diag-in 0.7s 0.18s cubic-bezier(0.22,1,0.36,1) forwards;
+}
+.burst-text {
+    position: fixed;
+    left: 0;
+    top: 0;
+    font-size: 24px;
+    letter-spacing: 4px;
+    color: rgba(104, 228, 255, 0.96);
+    animation: burst-text-in 0.45s 0.32s cubic-bezier(0.22,1,0.36,1) forwards,
+               burst-text-glow 1.9s 0.72s ease-in-out infinite;
 }
 
 /* ═══ Level Up Overlay ═══ */
@@ -609,19 +721,19 @@ body {
 .id-plate {
     position: absolute;
     bottom: 2px;
-    left: 4%;
-    width: 37%;
-    height: 108px;
+    left: calc(3.2% - 25px);
+    width: calc(39.6% + 55px);
+    height: 74px;
     background: linear-gradient(
         175deg,
         rgba(188, 190, 178, 1.0) 0%,
         rgba(178, 180, 168, 1.0) 45%,
         rgba(172, 174, 162, 1.0) 100%);
-    clip-path: polygon(0 0, 86% 0, 100% 22%, 100% 100%, 0 100%);
+    clip-path: none;
     display: flex;
     flex-direction: column;
     justify-content: center;
-    padding: 8px 28px 8px 22px;
+    padding: 9px 32px 8px 24px;
     font-family: var(--font-ui);
     color: rgba(97, 98, 86, 1);
     letter-spacing: 1.5px;
@@ -635,7 +747,7 @@ body {
         inset 0 1px 0 rgba(255, 255, 255, 0.25);
     border: 1px solid rgba(160, 162, 150, 0.50);
     z-index: 1;
-    border-radius: 6px 0 2px 6px;
+    border-radius: 6px;
     overflow: hidden;
 }
 /* Scan-line overlay — matches hp-bg-cover texture */
@@ -702,9 +814,9 @@ body {
 .id-plate .id-cut-border {
     position: absolute;
     inset: 0;
-    clip-path: polygon(0 0, 86% 0, 100% 22%, 100% 100%, 0 100%);
+    clip-path: none;
     border: 1.5px solid rgba(140, 142, 130, 0.55);
-    border-radius: 6px 0 2px 6px;
+    border-radius: 6px;
     pointer-events: none;
     z-index: 8;
 }
@@ -747,7 +859,7 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 90%;
+    max-width: calc(100% - 190px);
     z-index: 2;
     position: relative;
 }
@@ -755,10 +867,14 @@ body {
 .id-plate .id-info-row {
     display: flex;
     align-items: baseline;
-    gap: 12px;
-    margin-top: 3px;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 0;
     z-index: 2;
-    position: relative;
+    position: absolute;
+    right: 18px;
+    top: 34px;
+    max-width: 170px;
 }
 .id-plate .id-lv {
     font-size: 16px;
@@ -774,13 +890,19 @@ body {
 }
 /* Bottom link */
 .id-plate .id-link {
+    position: absolute;
+    right: 18px;
+    bottom: 10px;
+    max-width: 155px;
+    text-align: right;
     font-size: 9px;
     font-family: var(--font-sao);
     color: rgba(88, 152, 190, 0.85);
     letter-spacing: 1.5px;
-    margin-top: 2px;
     z-index: 2;
-    position: relative;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     animation: id-pulse 4s ease-in-out infinite 0.5s;
 }
 
@@ -788,8 +910,8 @@ body {
 .sta-row {
     position: absolute;
     bottom: 2px;
-    left: 46%;
-    width: 480px;
+    left: calc(47% + 25px);
+    width: 500px;
     height: 16px;
     display: flex;
     align-items: center;
@@ -840,6 +962,7 @@ body {
 </style>
 </head>
 <body>
+<div class="hud-stage" id="hud-stage">
 
 <!-- Opaque background cover — hides native HP & STA bars -->
 <div class="hp-bg-cover">
@@ -892,8 +1015,18 @@ body {
     <span class="sta-text" id="sta-text">0/0</span>
 </div>
 
-<!-- Skill Bar — SAO frosted-glass skill slots -->
-<div class="skill-bar" id="skill-bar"></div>
+</div>
+
+<!-- Burst Mode Ready Overlay -->
+<div id="burst-overlay">
+    <div class="burst-target" id="burst-target">
+        <div class="burst-target-ring outer"></div>
+        <div class="burst-target-ring inner"></div>
+        <div class="burst-target-scan"></div>
+    </div>
+    <div class="burst-diag"></div>
+    <div class="burst-text" id="burst-text">BURST MODE READY</div>
+</div>
 
 <!-- Level Up Overlay -->
 <div id="lv-overlay">
@@ -933,11 +1066,13 @@ function updateHP(current, total, level) {
     if (pct < 25) fill.classList.add('xt_in_red');
     else if (pct < 60) fill.classList.add('xt_in_yellow');
     else fill.classList.add('xt_in_green');
+    scheduleHitRegionReport();
 }
 
 function setUsername(name) {
     document.getElementById('username').textContent = name;
     document.getElementById('id-name').textContent = name;
+    scheduleHitRegionReport();
 }
 
 /* ═══ Player Info API (profession, UID) ═══ */
@@ -952,49 +1087,110 @@ function setPlayerInfo(info) {
         document.getElementById('username').textContent = info.name;
         document.getElementById('id-name').textContent = info.name;
     }
+    scheduleHitRegionReport();
 }
 
 /* ═══ STA Bar API ═══ */
 function updateSTA(current, total) {
     var pct = total > 0 ? Math.round(current / total * 100) : 100;
     document.getElementById('sta-fill').style.width = pct + '%';
-    document.getElementById('sta-text').textContent = Math.floor(current) + '/' + Math.floor(total);
+    // 视觉识图路径会传入 0-100 百分比，而不是 current/max 数值。
+    if (total === 100 && current >= 0 && current <= 100) {
+        document.getElementById('sta-text').textContent = current + '%';
+    } else {
+        document.getElementById('sta-text').textContent = Math.floor(current) + '/' + Math.floor(total);
+    }
     scheduleHitRegionReport();
 }
 
-/* ═══ Skill Bar API ═══ */
-function updateSkillBar(slots) {
-    /* slots = [{index, cooldown_pct, active, name}, ...] */
-    var bar = document.getElementById('skill-bar');
-    if (!slots || slots.length === 0) {
-        bar.classList.remove('visible');
-        scheduleHitRegionReport();
-        return;
-    }
-    bar.classList.add('visible');
+/* ═══ Burst Mode Ready API ═══ */
+var _burstVisible = false;
+var _burstTimer = null;
+var _burstSkillLayout = { x: 0.335, y: 0.820, w: 0.328, h: 0.128 };
+var _burstSlotFractions = [0.085, 0.168, 0.251, 0.334, 0.417, 0.500, 0.625, 0.760, 0.892];
 
-    /* rebuild if slot count changed */
-    if (bar.childElementCount !== slots.length) {
-        bar.innerHTML = '';
-        for (var i = 0; i < slots.length; i++) {
-            var d = document.createElement('div');
-            d.className = 'skill-slot ready';
-            d.innerHTML = '<div class="sk-cd"></div><span class="sk-idx">' + (i + 1) + '</span>';
-            bar.appendChild(d);
+function setBurstSkillLayout(layout) {
+    if (!layout || typeof layout !== 'object') return;
+    ['x', 'y', 'w', 'h'].forEach(function(key) {
+        if (typeof layout[key] === 'number' && isFinite(layout[key])) {
+            _burstSkillLayout[key] = layout[key];
         }
-    }
-    /* update each slot */
-    var children = bar.children;
-    for (var i = 0; i < slots.length && i < children.length; i++) {
-        var el = children[i];
-        var cd = slots[i].cooldown_pct || 0;
-        var active = slots[i].active || false;
-        el.querySelector('.sk-cd').style.height = Math.round(cd * 100) + '%';
-        el.classList.toggle('active', active);
-        el.classList.toggle('cooling', cd > 0.02);
-        el.classList.toggle('ready', cd <= 0.02 && !active);
-    }
-    scheduleHitRegionReport();
+    });
+}
+
+function _getBurstSkillAnchor(slotIndex) {
+    var idx = Math.max(1, Math.min(9, parseInt(slotIndex || 1, 10) || 1)) - 1;
+    var x = (_burstSkillLayout.x + _burstSkillLayout.w * _burstSlotFractions[idx]) * window.innerWidth;
+    var y = (_burstSkillLayout.y + _burstSkillLayout.h * 0.52) * window.innerHeight;
+    var radius = idx >= 6 ? 46 : 34;
+    return { x: x, y: y, radius: radius };
+}
+
+function _positionBurstReady(slotIndex) {
+    var anchor = _getBurstSkillAnchor(slotIndex);
+    var target = document.getElementById('burst-target');
+    var diag = document.querySelector('.burst-diag');
+    var text = document.getElementById('burst-text');
+    var labelX = Math.min(window.innerWidth - 360, anchor.x + 230);
+    var labelY = Math.max(24, anchor.y - 188);
+    var lineStartX = anchor.x + anchor.radius * 0.58;
+    var lineStartY = anchor.y - anchor.radius * 0.52;
+    var lineEndX = labelX - 24;
+    var lineEndY = labelY + 18;
+    var dx = lineEndX - lineStartX;
+    var dy = lineEndY - lineStartY;
+    var len = Math.max(90, Math.sqrt(dx * dx + dy * dy));
+    var ang = Math.atan2(dy, dx);
+
+    target.style.left = anchor.x + 'px';
+    target.style.top = anchor.y + 'px';
+    target.style.width = (anchor.radius * 2) + 'px';
+    target.style.height = (anchor.radius * 2) + 'px';
+
+    diag.style.left = lineStartX + 'px';
+    diag.style.top = lineStartY + 'px';
+    diag.style.width = len + 'px';
+    diag.style.transform = 'rotate(' + ang + 'rad)';
+
+    text.style.left = labelX + 'px';
+    text.style.top = labelY + 'px';
+}
+
+function _resetBurstAnimations(overlay) {
+    ['.burst-target-ring.outer', '.burst-target-ring.inner', '.burst-target-scan', '.burst-diag', '.burst-text']
+        .forEach(function(sel) {
+            var el = overlay.querySelector(sel);
+            if (!el) return;
+            el.style.animation = 'none';
+            void el.offsetWidth;
+            el.style.animation = '';
+        });
+}
+
+function showBurstReady(slotIndex) {
+    _burstVisible = true;
+    var ov = document.getElementById('burst-overlay');
+    _positionBurstReady(slotIndex || 1);
+    ov.classList.remove('fadeout');
+    ov.classList.remove('show');
+    _resetBurstAnimations(ov);
+    void ov.offsetWidth;
+    ov.classList.add('show');
+    snd('burst_ready');
+    if (_burstTimer) clearTimeout(_burstTimer);
+    _burstTimer = setTimeout(function() { hideBurstReady(); }, 2600);
+}
+
+function hideBurstReady() {
+    if (_burstTimer) { clearTimeout(_burstTimer); _burstTimer = null; }
+    if (!_burstVisible) return;
+    _burstVisible = false;
+    var ov = document.getElementById('burst-overlay');
+    ov.classList.add('fadeout');
+    setTimeout(function() {
+        ov.classList.remove('show');
+        ov.classList.remove('fadeout');
+    }, 350);
 }
 
 function setPlayState(state) {
@@ -1019,10 +1215,10 @@ var _exitPending = false;
 var _hitRegionTimer = null;
 var _hitRegionBootTimer = null;
 var _hitRegionBootTries = 0;
+var _hitRegionAcked = false;
 
 function _isVisibleForHit(el) {
     if (!el) return false;
-    if (el.id === 'skill-bar' && !el.classList.contains('visible')) return false;
     if (el.id === 'ctx-menu' && !el.classList.contains('show')) return false;
     var style = window.getComputedStyle(el);
     if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
@@ -1030,15 +1226,7 @@ function _isVisibleForHit(el) {
     return rect.width >= 2 && rect.height >= 2;
 }
 
-function collectHitRegions() {
-    var selectors = [
-        '.hp-bg-cover',
-        '.id-plate',
-        '#hp',
-        '#sta-row',
-        '#skill-bar',
-        '#ctx-menu'
-    ];
+function _collectRegions(selectors) {
     var regions = [];
     selectors.forEach(function(sel) {
         var el = document.querySelector(sel);
@@ -1054,11 +1242,41 @@ function collectHitRegions() {
     return regions;
 }
 
+function collectHitRegions() {
+    return {
+        display_regions: _collectRegions([
+            '.id-plate',
+            '.hp-bg-cover',
+            '#hp',
+            '#sta-row',
+            '#ctx-menu'
+        ]),
+        click_regions: _collectRegions([
+            '#hp',
+            '#ctx-menu'
+        ])
+    };
+}
+
 function reportHitRegions() {
     _hitRegionTimer = null;
     try {
         if (window.pywebview && window.pywebview.api && window.pywebview.api.set_hit_regions) {
-            window.pywebview.api.set_hit_regions(collectHitRegions());
+            var result = window.pywebview.api.set_hit_regions(collectHitRegions());
+            var ack = function() {
+                if (_hitRegionAcked) return;
+                _hitRegionAcked = true;
+                try {
+                    if (window.pywebview && window.pywebview.api && window.pywebview.api.notify_hp_hit_regions_ready) {
+                        window.pywebview.api.notify_hp_hit_regions_ready();
+                    }
+                } catch (e) {}
+            };
+            if (result && typeof result.then === 'function') {
+                result.then(ack).catch(function() {});
+            } else {
+                ack();
+            }
         } else {
             scheduleHitRegionReport();
         }
@@ -1070,17 +1288,34 @@ function scheduleHitRegionReport() {
     _hitRegionTimer = setTimeout(reportHitRegions, 30);
 }
 
+function scheduleHitRegionBootstrap() {
+    scheduleHitRegionReport();
+    setTimeout(scheduleHitRegionReport, 0);
+    setTimeout(scheduleHitRegionReport, 60);
+    setTimeout(scheduleHitRegionReport, 180);
+    if (window.requestAnimationFrame) {
+        window.requestAnimationFrame(function() {
+            scheduleHitRegionReport();
+        });
+    }
+    if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function') {
+        document.fonts.ready.then(function() {
+            scheduleHitRegionReport();
+        }).catch(function() {});
+    }
+}
+
 function startHitRegionBootRetry() {
     if (_hitRegionBootTimer) clearInterval(_hitRegionBootTimer);
     _hitRegionBootTries = 0;
     _hitRegionBootTimer = setInterval(function() {
         _hitRegionBootTries += 1;
-        scheduleHitRegionReport();
-        if (_hitRegionBootTries >= 20) {
+        scheduleHitRegionBootstrap();
+        if (_hitRegionBootTries >= 40) {
             clearInterval(_hitRegionBootTimer);
             _hitRegionBootTimer = null;
         }
-    }, 250);
+    }, 200);
 }
 
 function retriggerEntryBlur() {
@@ -1150,28 +1385,40 @@ function hideCtxMenu() {
 }
 
 /* ═══ Click (NO drag — fixed position) ═══ */
-(function() {
+function _registerHpClickHandlers() {
     var hp = document.getElementById('hp');
+    if (!hp) {
+        /* Element not yet in DOM — retry shortly */
+        setTimeout(_registerHpClickHandlers, 50);
+        return;
+    }
+    if (hp._saoClickBound) return; /* prevent double-bind */
+    hp._saoClickBound = true;
+
     hp.addEventListener('click', function(e) {
-        if (ctxMenu.contains(e.target)) return;
+        if (ctxMenu && ctxMenu.contains(e.target)) return;
         snd('click');
         if (window.pywebview && window.pywebview.api) {
             window.pywebview.api.toggle_menu();
         }
     });
-})();
 
-/* ═══ Right-click → context menu ═══ */
-document.getElementById('hp').addEventListener('contextmenu', function(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    snd('click');
-    showCtxMenu(e.clientX + 4, e.clientY - 26);
-});
+    hp.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        snd('click');
+        showCtxMenu(e.clientX + 4, e.clientY - 26);
+    });
+}
+_registerHpClickHandlers();
+/* Also retry on DOMContentLoaded in case inline execution was too early */
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _registerHpClickHandlers);
+}
 
 /* ═══ Click outside → hide menu ═══ */
 document.addEventListener('click', function(e) {
-    if (!ctxMenu.contains(e.target) && ctxMenu.classList.contains('show')) {
+    if (ctxMenu && !ctxMenu.contains(e.target) && ctxMenu.classList.contains('show')) {
         hideCtxMenu();
     }
 });
@@ -1193,16 +1440,26 @@ ctxMenu.querySelectorAll('.cm-item').forEach(function(item) {
     });
 });
 
-window.addEventListener('resize', scheduleHitRegionReport);
+window.addEventListener('resize', scheduleHitRegionBootstrap);
 window.addEventListener('pywebviewready', function() {
-    scheduleHitRegionReport();
+    scheduleHitRegionBootstrap();
     startHitRegionBootRetry();
 });
 window.addEventListener('load', function() {
-    scheduleHitRegionReport();
+    scheduleHitRegionBootstrap();
     setTimeout(scheduleHitRegionReport, 120);
     startHitRegionBootRetry();
 });
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', scheduleHitRegionBootstrap);
+} else {
+    scheduleHitRegionBootstrap();
+}
+var _hpBootstrapTarget = document.getElementById('hp');
+if (_hpBootstrapTarget) {
+    _hpBootstrapTarget.addEventListener('animationend', scheduleHitRegionBootstrap);
+    _hpBootstrapTarget.addEventListener('transitionend', scheduleHitRegionBootstrap);
+}
 
 /* ═══ Level Up Animation ═══ */
 var _lvTimer = null;
