@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+@font-face {
+    font-family: 'sao';
+    src: url('fonts/SAOUI.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'saoLatin';
+    src: url('fonts/SAOUI.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+    unicode-range: U+0000-00FF, U+0100-024F, U+1E00-1EFF, U+2000-206F, U+20A0-20CF;
+}
+
+@font-face {
+    font-family: 'yuanJWD';
+    src: url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+}
+
+@font-face {
+    font-family: 'yuanJWDCJK';
+    src: url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+    unicode-range: U+2E80-2EFF, U+3000-303F, U+31C0-31EF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF;
+}
+
+:root {
+    --font-ui: 'saoLatin', 'sao', 'yuanJWDCJK', 'yuanJWD', 'Segoe UI', sans-serif;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.alert-shell {
+    width: 392px;
+    opacity: 0;
+    transform: scale(0.78);
+    filter: blur(16px);
+    transform-origin: center center;
+}
+
+body.show .alert-shell {
+    animation: system-alert-open 0.46s ease forwards;
+}
+
+body.closing .alert-shell {
+    animation: system-alert-close 0.40s ease forwards;
+}
+
+.alert-box {
+    overflow: hidden;
+    border-radius: 2px;
+    box-shadow: 0 0 32px 4px rgba(0, 0, 0, 0.30);
+}
+
+.alert-title {
+    height: 68px;
+    background: rgba(255, 255, 255, 0.82);
+    box-shadow: rgba(0, 0, 0, .3) 0 13px 12px 0, rgba(0, 0, 0, .1) 0 13px 15px 15px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.alert-title span {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-ui);
+    font-weight: 800;
+    font-size: 18px;
+    letter-spacing: 1px;
+    color: rgb(100, 99, 100);
+}
+
+.alert-body {
+    min-height: 106px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px 22px;
+    background: rgba(234, 233, 233, 0.76);
+    color: rgb(100, 96, 96);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.7;
+    text-align: center;
+    white-space: pre-line;
+}
+
+.alert-footer {
+    height: 20px;
+    position: relative;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.80);
+    box-shadow: rgba(0, 0, 0, .07) 0 -10px 12px 0, rgba(0, 0, 0, .08) 0 -2px 12px 0;
+}
+
+.alert-footer::before {
+    content: '';
+    position: absolute;
+    left: 18px;
+    right: 18px;
+    top: 9px;
+    height: 1px;
+    background: linear-gradient(
+        90deg,
+        rgba(104, 228, 255, 0),
+        rgba(104, 228, 255, 0.92),
+        rgba(243, 175, 18, 0.82),
+        rgba(243, 175, 18, 0)
+    );
+}
+
+@keyframes system-alert-open {
+    0% {
+        opacity: 0;
+        transform: scale(0.78);
+        filter: blur(16px);
+    }
+    55% {
+        opacity: 1;
+        transform: scale(1.02);
+        filter: blur(0);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+        filter: blur(0);
+    }
+}
+
+@keyframes system-alert-close {
+    0% {
+        opacity: 1;
+        transform: scale(1);
+        filter: blur(0);
+    }
+    100% {
+        opacity: 0;
+        transform: scale(0.90) translateY(-8px);
+        filter: blur(14px);
+    }
+}
+</style>
+</head>
+<body>
+    <div class="alert-shell">
+        <div class="alert-box">
+            <div class="alert-title"><span id="alert-title">提示</span></div>
+            <div class="alert-body" id="alert-body">内容</div>
+            <div class="alert-footer"></div>
+        </div>
+    </div>
+
+<script>
+function showAlert(title, body) {
+    document.getElementById('alert-title').textContent = title || '提示';
+    document.getElementById('alert-body').textContent = body || '';
+    document.body.classList.remove('closing');
+    document.body.classList.remove('show');
+    void document.body.offsetWidth;
+    document.body.classList.add('show');
+}
+
+function beginClose() {
+    if (!document.body.classList.contains('show')) return;
+    document.body.classList.add('closing');
+}
+
+window.AlertPanel = {
+    showAlert: showAlert,
+    beginClose: beginClose
+};
+</script>
+</body>
+</html>

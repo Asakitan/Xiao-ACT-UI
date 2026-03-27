@@ -26,7 +26,10 @@ import sys
 from game_state import GameStateManager, compute_burst_ready
 from packet_parser import (PacketParser, PlayerData,
                            PROFESSION_NORMAL_ATTACK, PROFESSION_SKILL,
-                           PROFESSION_ULTIMATE)
+                           PROFESSION_ULTIMATE, PROFESSION_NAMES,
+                           PROFESSION_SKILL_VARIANTS, SUB_PROFESSION_NAMES,
+                           _SKILL_TO_PROFESSION,
+                           _PROFESSION_PREFIX, _ALL_PROFESSION_PREFIXES)
 from packet_capture import PacketCapture, list_devices, auto_select_device
 
 logger = logging.getLogger('sao_auto.bridge')
@@ -251,20 +254,52 @@ def _infer_slot_map_from_cds(player: PlayerData) -> dict:
         # If we only have zero-duration CDs (normal attacks), nothing to show
         return {}
 
-    # Deduplicate by base skill_id (different levels map to same skill)
-    seen_base = {}
-    deduped = []
+    # Deduplicate by base skill_id (different levels map to same skill).
+    # Prefer the variant with the highest level that has data in cd_map,
+    # so _build_packet_skill_slots can find its cooldown info.
+    seen_base: dict = {}   # base → best skill_level_id
     for slid in meaningful:
         base = slid // 100 if slid >= 100 else slid
-        if base not in seen_base:
+        prev = seen_base.get(base)
+        if prev is None:
             seen_base[base] = slid
-            deduped.append(slid)
+        else:
+            # Prefer variant in cd_map over one only in last_use;
+            # among equals, prefer higher level variant (= larger id)
+            prev_in_cd = prev in cd_map
+            slid_in_cd = slid in cd_map
+            if (slid_in_cd and not prev_in_cd) or (slid_in_cd == prev_in_cd and slid > prev):
+                seen_base[base] = slid
+    deduped = sorted(seen_base.values())
 
     # ── Profession-based anchoring ──
     # 固定三个槽位: 普攻→1, 职业技能→2, 大招→7
     profession_id = int(getattr(player, 'profession_id', 0) or 0)
+
+    # Auto-detect profession from observed skill IDs when SyncContainerData missed
+    if profession_id == 0:
+        vote_count: dict = {}
+        for slid in all_skill_ids:
+            base = slid // 100 if slid >= 100 else slid
+            pid = _SKILL_TO_PROFESSION.get(base, 0)
+            if pid > 0:
+                vote_count[pid] = vote_count.get(pid, 0) + 1
+        if vote_count:
+            profession_id = max(vote_count, key=vote_count.get)
+            player.profession_id = profession_id
+            player.profession = PROFESSION_NAMES.get(profession_id, '')
+            logger.info(
+                f'[Bridge] auto-detected profession={profession_id} '
+                f'({player.profession}) from skill votes: {vote_count}'
+            )
+
     normal_attack_base = PROFESSION_NORMAL_ATTACK.get(profession_id, 0)
-    prof_skill_base = PROFESSION_SKILL.get(profession_id, 0)
+    prof_skill_bases = set()
+    for variant in PROFESSION_SKILL_VARIANTS.get(profession_id, ()):
+        prof_skill_bases.add(variant)
+    primary_prof_skill = PROFESSION_SKILL.get(profession_id, 0)
+    if primary_prof_skill > 0:
+        prof_skill_bases.add(primary_prof_skill)
     ultimate_base = PROFESSION_ULTIMATE.get(profession_id, 0)
 
     pinned_normal = None
@@ -275,12 +310,35 @@ def _infer_slot_map_from_cds(player: PlayerData) -> dict:
         base = slid // 100 if slid >= 100 else slid
         if normal_attack_base > 0 and base == normal_attack_base and pinned_normal is None:
             pinned_normal = slid
-        elif prof_skill_base > 0 and base == prof_skill_base and pinned_skill is None:
+        elif prof_skill_bases and base in prof_skill_bases and pinned_skill is None:
             pinned_skill = slid
+            # Detect sub-profession branch from the pinned slot 2 skill
+            sub = SUB_PROFESSION_NAMES.get(base, '')
+            if sub and sub != getattr(player, 'sub_profession', ''):
+                player.sub_profession = sub
+                logger.info(
+                    f'[Bridge] detected sub_profession={sub!r} '
+                    f'from slot-2 skill base={base}'
+                )
         elif ultimate_base > 0 and base == ultimate_base and pinned_ultimate is None:
             pinned_ultimate = slid
         else:
             rest.append(slid)
+
+    # Filter rest: keep only skills from the current profession or shared/environment
+    # skills. Each profession has a unique 2-digit prefix (base // 100); any skill
+    # whose prefix matches a DIFFERENT profession is excluded.
+    if profession_id > 0:
+        current_prefix = _PROFESSION_PREFIX.get(profession_id, 0)
+        filtered_rest = []
+        for slid in rest:
+            base = slid // 100 if slid >= 100 else slid
+            skill_prefix = base // 100
+            if skill_prefix == current_prefix:
+                filtered_rest.append(slid)           # Same profession
+            elif skill_prefix not in _ALL_PROFESSION_PREFIXES:
+                filtered_rest.append(slid)           # Shared / environment skill
+        rest = filtered_rest
 
     # Sort remaining by most recently used, then by id
     rest.sort(key=lambda slid: (-last_use.get(slid, 0.0), slid))
@@ -361,7 +419,11 @@ _SLOT_DISPLAY_ORDER: dict = {
 
 def _remap_slot_index(internal_slot: int) -> int:
     """Map internal ProfessionList slot number to HUD display position."""
-    return _SLOT_DISPLAY_ORDER.get(internal_slot, internal_slot)
+    try:
+        idx = int(internal_slot or 0)
+    except Exception:
+        return 0
+    return _SLOT_DISPLAY_ORDER.get(idx, idx)
 
 
 def _build_packet_skill_slots(player: PlayerData):
@@ -424,38 +486,71 @@ def _build_packet_skill_slots(player: PlayerData):
         source_confidence = 0.0
         cd_info = cd_map.get(skill_level_id)
         if cd_info:
-            # 'duration' is the total CD length; 'valid_cd_time' is elapsed time
+            # 'duration' is the BASE CD length; 'valid_cd_time' is elapsed time
             total_ms = int(cd_info.get('duration') or 0)
             elapsed_ms = int(cd_info.get('valid_cd_time') or 0)
             charge_count = max(0, int(cd_info.get('charge_count') or 0))
             skill_cd_type = max(0, int(cd_info.get('skill_cd_type') or 0))
 
+            # CD acceleration fields from SkillCDInfo (fields 9/10/11)
+            # sub_cd_ratio: passive CD reduction ratio (万分比, e.g. 光盾被动)
+            # sub_cd_fixed: passive CD reduction fixed ms
+            # accelerate_cd_ratio: external CD speed multiplier (万分比, e.g. 奥义！时间法令)
+            sub_cd_ratio = max(0, int(cd_info.get('sub_cd_ratio') or 0))
+            sub_cd_fixed = max(0, int(cd_info.get('sub_cd_fixed') or 0))
+            accel_cd_ratio = max(0, int(cd_info.get('accelerate_cd_ratio') or 0))
+
+            # Compute effective total CD with passive reduction
+            # effective = (base - fixed) * (1 - sub_ratio/10000)
+            effective_ms = total_ms
+            if sub_cd_fixed > 0 or sub_cd_ratio > 0:
+                effective_ms = max(0, total_ms - sub_cd_fixed)
+                if sub_cd_ratio > 0:
+                    effective_ms = int(effective_ms * max(0, 10000 - sub_cd_ratio) / 10000)
+
             # Filter out impossible values (wrapped int64 from charge entries)
             if total_ms > 600_000 or total_ms < 0:
                 total_ms = 0
+                effective_ms = 0
             if elapsed_ms > 600_000 or elapsed_ms < 0:
                 elapsed_ms = 0
 
             if total_ms > 0:
                 begin_ms = int(cd_info.get('begin_time') or 0)
+
+                # CD acceleration: when AccelerateCDRatio > 0, time passes faster
+                # speed_mult = 10000 / (10000 - accel_ratio), e.g. 2000 → 1.25x speed
+                speed_mult = 1.0
+                if accel_cd_ratio > 0 and accel_cd_ratio < 10000:
+                    speed_mult = 10000.0 / max(1.0, 10000.0 - accel_cd_ratio)
+
                 if now_server_ms > 0 and begin_ms > 0:
                     # Best path: compute remaining from server clock
-                    remaining_ms = max(0, begin_ms + total_ms - now_server_ms)
+                    # With acceleration, real time passes faster
+                    raw_elapsed_ms = now_server_ms - begin_ms
+                    accel_elapsed_ms = raw_elapsed_ms * speed_mult
+                    remaining_ms = max(0, int(effective_ms - accel_elapsed_ms))
                     source_confidence = 1.0
                 elif 0 < elapsed_ms <= total_ms:
-                    # valid_cd_time is elapsed: remaining = total - elapsed
-                    remaining_ms = max(0, total_ms - elapsed_ms)
-                    source_confidence = 0.8
+                    # valid_cd_time is elapsed (server-side, already accounts for
+                    # base CD). Apply local extrapolation with acceleration.
+                    observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
+                    local_extra = max(0, now_local_ms - observed_at_ms) * speed_mult
+                    remaining_ms = max(0, int(effective_ms - elapsed_ms - local_extra))
+                    source_confidence = 0.85
                 else:
                     # Fallback: use local observation timestamp
                     observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
-                    local_elapsed = max(0, now_local_ms - observed_at_ms)
-                    remaining_ms = max(0, total_ms - local_elapsed)
+                    local_elapsed = max(0, now_local_ms - observed_at_ms) * speed_mult
+                    remaining_ms = max(0, int(effective_ms - local_elapsed))
                     source_confidence = 0.55
+
+                # Use effective_ms for percentage to reflect actual visible CD bar
+                display_total = effective_ms if effective_ms > 0 else total_ms
                 if charge_count > 0:
                     cooldown_pct = 0.0
                 else:
-                    cooldown_pct = max(0.0, min(1.0, remaining_ms / total_ms))
+                    cooldown_pct = max(0.0, min(1.0, remaining_ms / display_total))
                 active = remaining_ms > 0 and (now_t - float(last_use_map.get(skill_level_id, 0.0))) <= 0.45
         skill_id = _get_skill_id_for_level(player, skill_level_id)
         skill_name = _get_skill_name(skill_id) or _get_skill_name(skill_level_id)
@@ -522,6 +617,14 @@ class PacketBridge:
         self._pending_sta_current = None
         self._pending_sta_hits: int = 0
         self._last_player = None
+        self._identity_warn_logged: bool = False  # log once about missing name/level
+        state = self._state_mgr.state
+        self._identity_cache_available: bool = bool(
+            str(getattr(state, 'player_name', '') or '').strip()
+            or int(getattr(state, 'level_base', 0) or 0) > 0
+            or str(getattr(state, 'profession_name', '') or '').strip()
+        )
+        self._identity_alert_sent: bool = False
 
         # 检查 Npcap 可用性
         self._npcap_ok = False
@@ -576,6 +679,24 @@ class PacketBridge:
 
     def _run(self):
         """主运行流程"""
+        try:
+            self._run_inner()
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            logger.error(f'[Bridge] 数据桥线程崩溃: {e}\n{tb}')
+            print(f'[Bridge] FATAL: 数据桥线程崩溃: {e}', flush=True)
+            print(tb, flush=True)
+            try:
+                self._state_mgr.update(
+                    recognition_ok=False,
+                    error_msg=f'数据桥崩溃: {e}',
+                )
+            except Exception:
+                pass
+
+    def _run_inner(self):
+        """主运行流程 (实际逻辑)"""
         logger.info('[Bridge] 启动网络抓包数据桥...')
 
         # ── Npcap 自动安装 ──
@@ -676,6 +797,10 @@ class PacketBridge:
                 continue
             next_status_check = now + 1.0
             if self._capture.server_identified:
+                # 首次发现服务器时打印
+                if not getattr(self, '_server_found_printed', False):
+                    self._server_found_printed = True
+                    print('[Bridge] 已识别游戏服务器', flush=True)
                 # 检查数据超时
                 with self._lock:
                     if self._last_update_t > 0:
@@ -691,6 +816,27 @@ class PacketBridge:
             else:
                 self._state_mgr.update(recognition_ok=False,
                                        error_msg='搜索游戏服务器中...')
+            # 每 5 秒打印一次诊断统计
+            if self._parser and int(now) % 5 == 0:
+                ps = self._parser.stats
+                cap = self._capture
+                srv = cap.server_identified if cap else False
+                # 抓包层统计
+                cap_stats = cap.stats if cap else {}
+                cap_raw = cap_stats.get('raw_frames', '?')
+                cap_tcp = cap_stats.get('tcp_segments', '?')
+                cap_game = cap_stats.get('complete_game_frames', '?')
+                thr_alive = cap._thread.is_alive() if cap and cap._thread else '?'
+                print(
+                    f'[Bridge] 诊断: thread_alive={thr_alive} server={srv} '
+                    f'cap_raw={cap_raw} cap_tcp={cap_tcp} cap_game={cap_game} | '
+                    f'parser_raw={ps["raw_frames"]} parser_game={ps["game_frames"]} '
+                    f'unknown_msg={ps["unknown_message_types"]} '
+                    f'unknown_notify={ps["unknown_notify_methods"]} '
+                    f'zstd_fail={ps["zstd_failures"]} '
+                    f'last_update={"yes" if self._last_update_t > 0 else "no"}',
+                    flush=True,
+                )
 
         logger.info('[Bridge] 数据桥已停止')
 
@@ -698,6 +844,13 @@ class PacketBridge:
         """解析器回调: 当前玩家数据变更 (节流: 跳过高频重复推送)"""
         now = time.time()
         with self._lock:
+            if self._last_update_t == 0:
+                print(
+                    f'[Bridge] 首次收到玩家数据: name={player.name!r} lv={player.level} '
+                    f'hp={player.hp}/{player.max_hp} uid={player.uid} '
+                    f'profession={player.profession!r} slots={len(player.skill_slot_map)}',
+                    flush=True,
+                )
             self._last_update_t = now
             self._last_player = player
             # 节流: 距离上次非 tick 推送不足 _PUBLISH_MIN_INTERVAL 则跳过,
@@ -719,6 +872,30 @@ class PacketBridge:
             updates['player_id'] = str(player.uid)
         if player.level > 0 and self._use_packet_source('level'):
             updates['level_base'] = player.level
+
+        # Log once when name/level are missing (tool started after login)
+        if not self._identity_warn_logged and player.uid:
+            if not player.name or player.level <= 0:
+                self._identity_warn_logged = True
+                logger.warning(
+                    '[Bridge] 角色名/等级尚未获取 — 角色名和等级仅在登录或切换地图时发送。'
+                    '请切换一次地图或重新登录游戏以获取。'
+                    f' (name={player.name!r}, level={player.level})'
+                )
+        if (
+            not self._identity_alert_sent
+            and not self._identity_cache_available
+            and player.uid
+            and (not player.name or player.level <= 0)
+        ):
+            self._identity_alert_sent = True
+            updates['identity_alert_serial'] = int(time.time() * 1000)
+            updates['identity_alert_title'] = '角色信息缺失'
+            updates['identity_alert_message'] = (
+                '当前没有获取到角色名和等级，也没有可用缓存。\n'
+                '角色名和等级通常只会在登录或切换地图时发送。\n'
+                '请切换一次地图或重新登录游戏。'
+            )
         # Do not treat rank_level as level_extra.
         # Keep the larger recognized extra level to avoid stale packet values
         # overwriting OCR's newer result.
@@ -735,6 +912,9 @@ class PacketBridge:
             updates['profession_id'] = player.profession_id
             if player.profession:
                 updates['profession_name'] = player.profession
+            sub_prof = getattr(player, 'sub_profession', '') or ''
+            if sub_prof:
+                updates['sub_profession'] = sub_prof
         if self._use_packet_source('hp') and player.max_hp > 0 and player.hp > 0:
             updates['hp_current'] = int(player.hp)
             updates['hp_max'] = int(player.max_hp)

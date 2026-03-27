@@ -56,6 +56,8 @@ body {
 #burst-overlay {
     display: none;
     overflow: visible;
+    filter: blur(0);
+    will-change: opacity, filter;
 }
 #burst-overlay.show {
     display: block;
@@ -353,8 +355,8 @@ body {
     100% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(0deg); }
 }
 @keyframes target-out {
-    0% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.20); }
+    0% { opacity: 1; transform: translate(-50%, -50%) scale(1); filter: drop-shadow(0 0 18px rgba(90, 229, 255, 0.34)) blur(0); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.20); filter: drop-shadow(0 0 26px rgba(90, 229, 255, 0.18)) blur(12px); }
 }
 @keyframes halo-breathe {
     0% { opacity: 0.52; transform: scale(0.98); }
@@ -387,8 +389,8 @@ body {
     100% { opacity: 1; filter: blur(0); transform: scaleX(1) scaleY(1); }
 }
 @keyframes beam-out {
-    0% { opacity: 1; transform: scaleX(1) scaleY(1); }
-    100% { opacity: 0; transform: scaleX(0.64) scaleY(0.82); }
+    0% { opacity: 1; transform: scaleX(1) scaleY(1); filter: blur(0); }
+    100% { opacity: 0; transform: scaleX(0.64) scaleY(0.82); filter: blur(10px); }
 }
 @keyframes beam-tail {
     0% { left: -10%; opacity: 0; }
@@ -405,8 +407,8 @@ body {
     100% { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
 }
 @keyframes caption-out {
-    0% { opacity: 1; transform: translate3d(0, 0, 0); }
-    100% { opacity: 0; transform: translate3d(50px, -12px, 0); }
+    0% { opacity: 1; transform: translate3d(0, 0, 0); filter: blur(0); }
+    100% { opacity: 0; transform: translate3d(50px, -12px, 0); filter: blur(16px); }
 }
 @keyframes caption-float {
     0% { transform: translate3d(0, 0, 0); }
@@ -430,8 +432,8 @@ body {
     }
 }
 @keyframes overlay-out {
-    0% { opacity: 1; }
-    100% { opacity: 0; }
+    0% { opacity: 1; filter: blur(0); }
+    100% { opacity: 0; filter: blur(14px); }
 }
 </style>
 </head>
@@ -481,6 +483,8 @@ var _burstVisible = false;
 var _burstTimer = null;
 var _fadeTimer = null;
 var _currentBurstSlot = 0;
+var _burstLatchReady = false;
+var _burstLatchSlot = 0;
 var _glfx = {
     canvas: null,
     gl: null,
@@ -884,12 +888,16 @@ function update(payload) {
     var burstReady = !!payload.burst_ready;
     var burstSlot = parseInt(payload.burst_slot || 0, 10) || 0;
     if (enabled && burstReady && burstSlot > 0) {
-        if (!_burstVisible || _currentBurstSlot !== burstSlot) {
+        if (!_burstLatchReady || _burstLatchSlot !== burstSlot) {
+            _burstLatchReady = true;
+            _burstLatchSlot = burstSlot;
             showBurstReady(burstSlot);
-        } else {
+        } else if (_burstVisible && _currentBurstSlot === burstSlot) {
             _positionBurstReady(burstSlot, false);
         }
     } else {
+        _burstLatchReady = false;
+        _burstLatchSlot = 0;
         hideBurstReady();
     }
 }

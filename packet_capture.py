@@ -95,20 +95,52 @@ def list_devices() -> List[Dict[str, str]]:
 
 
 def auto_select_device() -> Optional[Dict[str, str]]:
-    """自动选择默认网络设备（排除虚拟适配器）"""
+    """自动选择默认网络设备（排除虚拟适配器，优选真实网卡）"""
     devs = list_devices()
     if not devs:
         return None
-    # 排除虚拟适配器
-    virtual_keywords = ['vmware', 'virtualbox', 'hyper-v', 'zerotier',
-                        'docker', 'wsl', 'vethernet', 'loopback',
-                        'npcap loopback', 'bluetooth']
+
+    # 打印所有设备供诊断
+    print(f'[Capture] 发现 {len(devs)} 个 NPF 设备:', flush=True)
+    for i, d in enumerate(devs):
+        print(f'  [{i}] {d["description"]}  ({d["name"]})', flush=True)
+
+    # 排除虚拟 / 不会有实际流量的适配器
+    virtual_keywords = [
+        'vmware', 'virtualbox', 'hyper-v', 'zerotier',
+        'docker', 'wsl', 'vethernet', 'loopback',
+        'npcap loopback', 'bluetooth',
+        'wan miniport', 'network monitor', 'miniport',
+        'microsoft kernel debug', 'teredo', 'isatap', '6to4',
+        'pptp', 'l2tp', 'sstp', 'pppoe', 'ikev2',
+        'tunnel', 'tap-windows', 'wireguard', 'vpn',
+        'pseudo', 'microsoft wi-fi direct',
+    ]
     real_devs = []
     for d in devs:
         desc_low = d['description'].lower()
         if not any(kw in desc_low for kw in virtual_keywords):
             real_devs.append(d)
-    return real_devs[0] if real_devs else devs[0]
+
+    candidates = real_devs if real_devs else devs
+
+    # 优选真实物理网卡（关键词打分）
+    nic_keywords = [
+        'ethernet', 'wi-fi', 'wifi', 'wireless', '802.11',
+        'realtek', 'intel', 'broadcom', 'qualcomm', 'killer',
+        'mediatek', 'marvell', 'aquantia', 'nvidia',
+        'gigabit', 'gaming',
+    ]
+
+    def _score(d: Dict[str, str]) -> int:
+        desc_low = d['description'].lower()
+        return sum(1 for kw in nic_keywords if kw in desc_low)
+
+    candidates.sort(key=_score, reverse=True)
+
+    chosen = candidates[0]
+    print(f'[Capture] 自动选择: {chosen["description"]}', flush=True)
+    return chosen
 
 
 # ═══════════════════════════════════════════════
@@ -397,7 +429,8 @@ class TcpReassembler:
                 self._on_pkt(frame)
                 self.stats['complete_game_frames'] += 1
             except Exception as e:
-                logger.error(f'[Capture] 帧处理错误: {e}')
+                import traceback
+                logger.error(f'[Capture] 帧处理错误: {e}\n{traceback.format_exc()}')
 
 
 # ═══════════════════════════════════════════════
@@ -441,18 +474,22 @@ class PacketCapture:
             self._thread = None
 
     def _loop(self):
+        print(f'[Capture] _loop 线程已启动', flush=True)
         try:
             dll = _load_wpcap()
         except RuntimeError as e:
+            print(f'[Capture] wpcap.dll 加载失败: {e}', flush=True)
             logger.error(str(e))
             return
 
         # 设备选择
         dev = self._device or auto_select_device()
         if not dev:
+            print('[Capture] 没有可用网络设备!', flush=True)
             logger.error('[Capture] 没有可用网络设备')
             return
 
+        print(f'[Capture] 设备: {dev["description"]}  name={dev["name"]}', flush=True)
         logger.info(f'[Capture] 使用设备: {dev["description"]}')
 
         # pcap_open_live
@@ -475,10 +512,12 @@ class PacketCapture:
         errbuf = ctypes.create_string_buffer(256)
         handle = pcap_open(dev['name'].encode(), 65535, 1, 100, errbuf)
         if not handle:
-            logger.error(f'[Capture] pcap_open_live 失败: '
-                         f'{errbuf.value.decode("utf-8", "ignore")}')
+            err_msg = errbuf.value.decode('utf-8', 'ignore')
+            print(f'[Capture] pcap_open_live 失败: {err_msg}', flush=True)
+            logger.error(f'[Capture] pcap_open_live 失败: {err_msg}')
             return
 
+        print('[Capture] pcap_open_live 成功, 抓包已启动', flush=True)
         logger.info('[Capture] 抓包已启动')
         pkt_count = 0
         try:
@@ -492,14 +531,22 @@ class PacketCapture:
                     self._reassembler.feed_raw_frame(raw)
                     pkt_count += 1
                     if pkt_count == 1:
+                        print(f'[Capture] 首个网络包! caplen={caplen}', flush=True)
                         logger.info('[Capture] 收到首个网络包')
+                    if pkt_count <= 3 or pkt_count % 5000 == 0:
+                        print(f'[Capture] pkt#{pkt_count} caplen={caplen} reassembler_raw={self._reassembler.stats["raw_frames"]}', flush=True)
                 elif res == 0:
                     continue  # 超时
                 elif res == -1:
+                    print('[Capture] pcap_next_ex 返回 -1 (错误)', flush=True)
                     logger.error('[Capture] pcap_next_ex 错误')
                     break
+        except Exception as exc:
+            import traceback
+            print(f'[Capture] _loop 异常: {exc}\n{traceback.format_exc()}', flush=True)
         finally:
             pcap_close(handle)
+            print(f'[Capture] 抓包已停止 (共 {pkt_count} 个包)', flush=True)
             logger.info(f'[Capture] 抓包已停止 (共 {pkt_count} 个包)')
 
 

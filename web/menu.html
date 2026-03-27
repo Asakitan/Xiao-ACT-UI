@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
@@ -119,6 +119,13 @@ html, body {
     overflow: hidden;
     z-index: 1;
     mix-blend-mode: screen;
+}
+.menu-bg-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
 }
 .menu-hud-lane {
     position: absolute;
@@ -760,18 +767,23 @@ html, body {
     border-bottom: none;
 }
 .child-menu.auto-key-menu {
-    min-width: 688px;
+    min-width: 860px;
+    top: -44px;
 }
 .child-menu.auto-key-menu li {
-    width: 688px;
+    width: 860px;
 }
 .auto-key-shell-row {
     align-items: flex-start;
 }
+.auto-key-shell {
+    width: 100%;
+    min-height: 560px;
+}
 .auto-key-runtime {
     width: 100%;
     margin-top: 10px;
-    padding: 9px 11px;
+    padding: 11px 14px;
     border: 1px solid rgba(180, 182, 170, 0.38);
     border-radius: 9px;
     background: linear-gradient(180deg, rgba(255,255,255,0.76), rgba(226,228,220,0.46));
@@ -779,6 +791,8 @@ html, body {
     font-size: 10px;
     letter-spacing: 0.6px;
     line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
 }
 .auto-key-tabs {
     display: flex;
@@ -809,9 +823,6 @@ html, body {
     border-color: rgba(104, 228, 255, 0.6);
     color: rgba(60, 62, 50, 0.95);
     box-shadow: 0 0 14px rgba(104, 228, 255, 0.16), inset 0 1px 0 rgba(255,255,255,0.3);
-}
-.auto-key-shell {
-    width: 100%;
 }
 .auto-key-panel {
     display: none;
@@ -858,7 +869,7 @@ html, body {
     flex-direction: column;
     gap: 10px;
     width: 100%;
-    max-height: 360px;
+    max-height: 430px;
     overflow-y: auto;
     padding-right: 4px;
 }
@@ -866,7 +877,7 @@ html, body {
 .auto-key-cloud-card,
 .auto-key-action-card {
     width: 100%;
-    padding: 12px 14px;
+    padding: 14px 16px;
     border: 1px solid rgba(180, 182, 170, 0.38);
     border-radius: 12px;
     background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(237,239,232,0.74));
@@ -889,9 +900,11 @@ html, body {
 .auto-key-card-title {
     min-width: 0;
     font-family: var(--font-ui);
-    font-size: 13px;
+    font-size: 14px;
     color: rgba(44, 52, 59, 0.96);
     letter-spacing: 0.6px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
 }
 .auto-key-card-meta {
     display: flex;
@@ -899,7 +912,7 @@ html, body {
     gap: 6px 8px;
     margin-bottom: 10px;
     color: rgba(78, 87, 93, 0.84);
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.45;
 }
 .auto-key-pill {
@@ -909,7 +922,7 @@ html, body {
     border-radius: 999px;
     border: 1px solid rgba(180, 182, 170, 0.38);
     background: rgba(255,255,255,0.72);
-    font-size: 9px;
+    font-size: 10px;
     letter-spacing: 0.7px;
 }
 .auto-key-pill.active {
@@ -928,7 +941,7 @@ html, body {
 .auto-key-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px 12px;
+    gap: 12px 14px;
     width: 100%;
     margin-bottom: 12px;
 }
@@ -948,9 +961,11 @@ html, body {
     grid-column: span 3;
 }
 .auto-key-field label {
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.8px;
     color: rgba(74, 92, 104, 0.88);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
 }
 .auto-key-field input,
 .auto-key-field select,
@@ -960,13 +975,15 @@ html, body {
     border-radius: 9px;
     background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(231,233,226,0.58));
     color: rgba(49, 55, 60, 0.92);
-    padding: 9px 10px;
+    padding: 10px 12px;
     font-family: var(--font-ui);
-    font-size: 11px;
+    font-size: 12px;
     outline: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: geometricPrecision;
 }
 .auto-key-field textarea {
-    min-height: 84px;
+    min-height: 108px;
     resize: vertical;
     line-height: 1.5;
 }
@@ -981,13 +998,13 @@ html, body {
     padding: 20px 12px;
     text-align: center;
     color: rgba(95, 101, 108, 0.78);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.6;
 }
 .auto-key-condition-note {
     margin-top: 8px;
     color: rgba(91, 96, 103, 0.82);
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.5;
 }
 .auto-key-mono {
@@ -996,10 +1013,11 @@ html, body {
 }
 @media (max-width: 1200px) {
     .child-menu.auto-key-menu {
-        min-width: 580px;
+        min-width: 700px;
+        top: -28px;
     }
     .child-menu.auto-key-menu li {
-        width: 580px;
+        width: 700px;
     }
     .auto-key-grid.compact {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1859,6 +1877,8 @@ html, body {
 <!-- ═══ Fullscreen overlay ═══ -->
 <div class="info" id="popup-overlay">
 
+    <div class="menu-bg-layer" id="menu-bg-layer" aria-hidden="true"></div>
+
     <div class="menu-hud" aria-hidden="true">
         <div class="menu-hud-lane menu-hud-left-far"><span class="menu-hud-label">SYS CORE</span></div>
         <div class="menu-hud-lane gold menu-hud-left-near"><span class="menu-hud-label">GAIN ROUTE</span></div>
@@ -1956,106 +1976,105 @@ html, body {
             <!-- Auto Keys sub-menu -->
             <ul class="child-menu auto-key-menu" id="sub-autoKeys" data-group="autoKeys">
                 <li class="widget-row">
-                    <div class="widget-label">AUTO KEY ENGINE</div>
+                    <div class="widget-label">自动按键 Auto Key Engine</div>
                     <label class="sao-toggle">
                         <input type="checkbox" id="auto-key-enabled" />
                         <div class="toggle-track"><div class="toggle-thumb"></div></div>
-                        <span>AUTO SCRIPT ACTIVE</span>
+                        <span>自动脚本启用 Auto Script Active</span>
                     </label>
-                    <div class="auto-key-runtime" id="auto-key-runtime">AUTO KEY RUNTIME: IDLE</div>
-                    <div class="widget-note">F6 can toggle the engine instantly. Actions use packet skill state, HP, STA, burst state, foreground checks, and death pause rules.</div>
+                    <div class="auto-key-runtime" id="auto-key-runtime">自动按键运行状态 Auto Key Runtime: Idle</div>
+                    <div class="widget-note">F6 可以快速切换自动按键。动作会使用 packet 技能状态、HP、STA、Burst 状态、前台检测和死亡暂停规则。 F6 toggles the engine instantly using packet skill state, HP, STA, burst state, foreground checks, and death pause rules.</div>
                 </li>
                 <li class="widget-row auto-key-shell-row">
                     <div class="auto-key-tabs" id="auto-key-tabs">
-                        <button class="auto-key-tab active" data-tab="local" type="button">LOCAL</button>
-                        <button class="auto-key-tab" data-tab="editor" type="button">EDITOR</button>
-                        <button class="auto-key-tab" data-tab="cloud" type="button">CLOUD</button>
+                        <button class="auto-key-tab active" data-tab="local" type="button">本地 Local</button>
+                        <button class="auto-key-tab" data-tab="editor" type="button">编辑 Editor</button>
+                        <button class="auto-key-tab" data-tab="cloud" type="button">云端 Cloud</button>
                     </div>
                     <div class="auto-key-shell">
                         <div class="auto-key-panel show" data-tab="local">
                             <div class="auto-key-toolbar">
-                                <button class="auto-key-btn primary" type="button" onclick="_akCreateProfile(); return false;">NEW PROFILE</button>
-                                <button class="auto-key-btn" type="button" onclick="_akImportProfile(); return false;">IMPORT JSON</button>
-                                <button class="auto-key-btn" type="button" onclick="_akRefreshState(); return false;">REFRESH</button>
+                                <button class="auto-key-btn primary" type="button" onclick="_akCreateProfile(); return false;">新建配置 New Profile</button>
+                                <button class="auto-key-btn" type="button" onclick="_akImportProfile(); return false;">导入 JSON Import JSON</button>
+                                <button class="auto-key-btn" type="button" onclick="_akRefreshState(); return false;">刷新 Refresh</button>
                             </div>
                             <div class="auto-key-list" id="auto-key-profile-list"></div>
                         </div>
                         <div class="auto-key-panel" data-tab="editor">
                             <div class="auto-key-grid">
                                 <div class="auto-key-field">
-                                    <label for="ak-profile-name">PROFILE NAME</label>
-                                    <input id="ak-profile-name" type="text" placeholder="Profile name" />
+                                    <label for="ak-profile-name">配置名称 Profile Name</label>
+                                    <input id="ak-profile-name" type="text" placeholder="输入配置名称 / Profile name" />
                                 </div>
                                 <div class="auto-key-field">
-                                    <label for="ak-profile-profession-name">PROFESSION NAME</label>
-                                    <input id="ak-profile-profession-name" type="text" placeholder="Profession name" />
+                                    <label for="ak-profile-profession-name">职业名称 Profession Name</label>
+                                    <input id="ak-profile-profession-name" type="text" placeholder="输入职业名称 / Profession name" />
                                 </div>
                                 <div class="auto-key-field">
-                                    <label for="ak-profile-profession-id">PROFESSION ID</label>
+                                    <label for="ak-profile-profession-id">职业 ID Profession ID</label>
                                     <input id="ak-profile-profession-id" type="number" min="0" step="1" />
                                 </div>
                                 <div class="auto-key-field">
-                                    <label for="ak-engine-tick-ms">TICK MS</label>
+                                    <label for="ak-engine-tick-ms">轮询毫秒 Tick MS</label>
                                     <input id="ak-engine-tick-ms" type="number" min="10" step="10" />
                                 </div>
                                 <div class="auto-key-field span-2">
-                                    <label for="ak-profile-description">DESCRIPTION</label>
-                                    <textarea id="ak-profile-description" placeholder="What this script does and when to use it"></textarea>
+                                    <label for="ak-profile-description">说明 Description</label>
+                                    <textarea id="ak-profile-description" placeholder="写这个配置的用途和使用时机 / What this script does and when to use it"></textarea>
                                 </div>
                             </div>
                             <div class="auto-key-toolbar">
                                 <label class="sao-toggle" style="max-width:220px;">
                                     <input type="checkbox" id="ak-engine-require-foreground" />
                                     <div class="toggle-track"><div class="toggle-thumb"></div></div>
-                                    <span>REQUIRE FOREGROUND</span>
+                                    <span>需要前台 Require Foreground</span>
                                 </label>
                                 <label class="sao-toggle" style="max-width:220px;">
                                     <input type="checkbox" id="ak-engine-pause-on-death" />
                                     <div class="toggle-track"><div class="toggle-thumb"></div></div>
-                                    <span>PAUSE ON DEATH</span>
+                                    <span>死亡暂停 Pause On Death</span>
                                 </label>
-                                <button class="auto-key-btn primary" type="button" onclick="_akSaveDraft(); return false;">SAVE PROFILE</button>
-                                <button class="auto-key-btn" type="button" onclick="_akAddAction(); return false;">ADD ACTION</button>
-                                <button class="auto-key-btn" type="button" onclick="_akActivateDraft(); return false;">ACTIVATE</button>
-                                <button class="auto-key-btn" type="button" onclick="_akExportDraft(); return false;">EXPORT</button>
+                                <button class="auto-key-btn primary" type="button" onclick="_akSaveDraft(); return false;">保存配置 Save Profile</button>
+                                <button class="auto-key-btn" type="button" onclick="_akAddAction(); return false;">新增动作 Add Action</button>
+                                <button class="auto-key-btn" type="button" onclick="_akActivateDraft(); return false;">启用 Activate</button>
+                                <button class="auto-key-btn" type="button" onclick="_akExportDraft(); return false;">导出 Export</button>
                             </div>
                             <div class="auto-key-action-list" id="auto-key-action-list"></div>
                         </div>
                         <div class="auto-key-panel" data-tab="cloud">
                             <div class="auto-key-grid compact">
                                 <div class="auto-key-field span-3">
-                                    <label for="ak-server-url">SERVER URL</label>
-                                    <input id="ak-server-url" type="text" placeholder="http://47.82.157.220:8000" />
+                                    <label for="ak-server-url">欢迎使用咲ACTUI！</label>
                                 </div>
                                 <div class="auto-key-field span-3">
-                                    <label for="ak-upload-token">UPLOAD TOKEN</label>
-                                    <input id="ak-upload-token" type="password" placeholder="Upload token" />
+                                    <label for="ak-upload-token">上传令牌 Upload Token</label>
+                                    <input id="ak-upload-token" type="password" placeholder="输入上传令牌 / Upload token" />
                                 </div>
                                 <div class="auto-key-field">
-                                    <label for="ak-search-q">KEYWORD</label>
-                                    <input id="ak-search-q" type="text" placeholder="Profile / player / profession" />
+                                    <label for="ak-search-q">关键字 Keyword</label>
+                                    <input id="ak-search-q" type="text" placeholder="配置 / 玩家 / 职业 / Profile / Player / Profession" />
                                 </div>
                                 <div class="auto-key-field">
-                                    <label for="ak-search-profile-name">PROFILE NAME</label>
-                                    <input id="ak-search-profile-name" type="text" placeholder="Profile name" />
+                                    <label for="ak-search-profile-name">配置名称 Profile Name</label>
+                                    <input id="ak-search-profile-name" type="text" placeholder="配置名称 / Profile name" />
                                 </div>
                                 <div class="auto-key-field">
-                                    <label for="ak-search-player-uid">PLAYER UID</label>
-                                    <input id="ak-search-player-uid" type="text" placeholder="UID" />
+                                    <label for="ak-search-player-uid">玩家 UID Player UID</label>
+                                    <input id="ak-search-player-uid" type="text" placeholder="玩家 UID / UID" />
                                 </div>
                                 <div class="auto-key-field">
-                                    <label for="ak-search-player-name">PLAYER NAME</label>
-                                    <input id="ak-search-player-name" type="text" placeholder="Player name" />
+                                    <label for="ak-search-player-name">玩家名称 Player Name</label>
+                                    <input id="ak-search-player-name" type="text" placeholder="玩家名称 / Player name" />
                                 </div>
                                 <div class="auto-key-field">
-                                    <label for="ak-search-profession-name">PROFESSION</label>
-                                    <input id="ak-search-profession-name" type="text" placeholder="Profession" />
+                                    <label for="ak-search-profession-name">职业 Profession</label>
+                                    <input id="ak-search-profession-name" type="text" placeholder="职业 / Profession" />
                                 </div>
                             </div>
                             <div class="auto-key-toolbar">
-                                <button class="auto-key-btn" type="button" onclick="_akSaveCloudSettings(); return false;">SAVE SERVER</button>
-                                <button class="auto-key-btn primary" type="button" onclick="_akSearchRemote(); return false;">SEARCH</button>
-                                <button class="auto-key-btn" type="button" onclick="_akUploadActive(); return false;">UPLOAD ACTIVE</button>
+                                <button class="auto-key-btn" type="button" onclick="_akSaveCloudSettings(); return false;">保存服务器 Save Server</button>
+                                <button class="auto-key-btn primary" type="button" onclick="_akSearchRemote(); return false;">搜索 Search</button>
+                                <button class="auto-key-btn" type="button" onclick="_akUploadActive(); return false;">上传当前配置 Upload Active</button>
                             </div>
                             <div class="auto-key-cloud-results" id="auto-key-cloud-results"></div>
                         </div>
@@ -2065,7 +2084,7 @@ html, body {
 
             <!-- Panels & Actions sub-menu -->
             <ul class="child-menu" id="sub-panels" data-group="panels">
-                <li data-action="toggle_auto_script"><i class="menu-glyph mi-play"></i><span>AUTO KEY ENGINE</span><small class="shortcut">F6</small></li>
+                <li data-action="toggle_auto_script"><i class="menu-glyph mi-play"></i><span>自动按键 Auto Key Engine</span><small class="shortcut">F6</small></li>
                 <li data-action="toggle_recognition"><i class="menu-glyph mi-play"></i><span>识别 开/关</span><small class="shortcut">F5</small></li>
                 <li class="sep"></li>
                 <li class="widget-row">
@@ -2292,10 +2311,11 @@ var _feStrLoc, _feTimLoc;
 
 function _initFisheyeGL() {
     if (_feGl) return true;
+    var bgHost = document.getElementById('menu-bg-layer') || document.getElementById('popup-overlay');
     _feCanvas = document.createElement('canvas');
     _feCanvas.style.cssText = 'position:fixed;inset:-3%;width:106%;height:106%;z-index:-1;' +
-        'pointer-events:none;opacity:0;filter:blur(14px);transition:opacity 0.5s ease,filter 0.42s ease;';
-    document.getElementById('popup-overlay').prepend(_feCanvas);
+        'pointer-events:none;opacity:0;filter:blur(10px);transition:opacity 0.5s ease,filter 0.42s ease;';
+    bgHost.prepend(_feCanvas);
 
     var gl = _feCanvas.getContext('webgl', {alpha:true, antialias:false, premultipliedAlpha:false});
     if (!gl) { gl = _feCanvas.getContext('experimental-webgl'); }
@@ -2345,7 +2365,7 @@ function _initFisheyeGL() {
 
     _feStrLoc = gl.getUniformLocation(_feProg, 'str');
     _feTimLoc = gl.getUniformLocation(_feProg, 't');
-    gl.uniform1f(_feStrLoc, 0.35);
+    gl.uniform1f(_feStrLoc, 0.24);
 
     /* Fullscreen quad */
     var buf = gl.createBuffer();
@@ -2380,16 +2400,17 @@ function setFisheyeBg(dataUrl) {
     if (!_initFisheyeGL()) {
         /* WebGL fallback — plain CSS */
         var el = document.getElementById('fisheye-bg-fallback');
+        var bgHost = document.getElementById('menu-bg-layer') || document.getElementById('popup-overlay');
         if (!el) {
             el = document.createElement('div');
             el.id = 'fisheye-bg-fallback';
             el.style.cssText = 'position:fixed;inset:-3%;width:106%;height:106%;z-index:-1;' +
                 'background-size:cover;background-position:center;opacity:0;' +
-                'transition:opacity 0.5s,filter 0.42s;pointer-events:none;filter:blur(14px);';
-            document.getElementById('popup-overlay').prepend(el);
+                'transition:opacity 0.5s,filter 0.42s;pointer-events:none;filter:blur(10px);';
+            bgHost.prepend(el);
         }
         el.style.backgroundImage = 'url(' + dataUrl + ')';
-        setTimeout(function(){ el.style.opacity = '0.78'; el.style.filter = 'blur(1.2px)'; }, 50);
+        setTimeout(function(){ el.style.opacity = '0.54'; el.style.filter = 'blur(0.45px)'; }, 50);
         return;
     }
 
@@ -2402,9 +2423,10 @@ function setFisheyeBg(dataUrl) {
         if (!_feRunning) {
             _feRunning = true;
             requestAnimationFrame(_fisheyeFrame);
-            setTimeout(function(){ _feCanvas.style.opacity = '0.82'; _feCanvas.style.filter = 'blur(1.1px)'; }, 50);
+            setTimeout(function(){ _feCanvas.style.opacity = '0.50'; _feCanvas.style.filter = 'blur(0.4px)'; }, 50);
         } else {
-            _feCanvas.style.filter = 'blur(1.1px)';
+            _feCanvas.style.opacity = '0.50';
+            _feCanvas.style.filter = 'blur(0.4px)';
         }
     };
     img.src = dataUrl;
@@ -2414,12 +2436,12 @@ function stopFisheyeBg() {
     _feRunning = false;
     if (_feCanvas) {
         _feCanvas.style.opacity = '0';
-        _feCanvas.style.filter = 'blur(14px)';
+        _feCanvas.style.filter = 'blur(10px)';
     }
     var fb = document.getElementById('fisheye-bg-fallback');
     if (fb) {
         fb.style.opacity = '0';
-        fb.style.filter = 'blur(14px)';
+        fb.style.filter = 'blur(10px)';
     }
 }
 
@@ -2773,7 +2795,7 @@ var _autoKeyDraftDirty = false;
 var _autoKeyTab = 'local';
 
 if (document.querySelector('.menu-hint')) {
-    document.querySelector('.menu-hint').textContent = 'F5 RECOGNITION / F6 AUTO KEY';
+    document.querySelector('.menu-hint').textContent = 'F5 识别 RECOGNITION / F6 自动按键 AUTO KEY';
 }
 
 function _akParseApiResult(result) {
@@ -2853,7 +2875,7 @@ function _akLoadDraftFromState(profileId, force) {
 
 function _akCallApi(methodName, args, onOk) {
     if (!window.pywebview || !window.pywebview.api || !window.pywebview.api[methodName]) {
-        showAlert('AUTO KEYS', 'pywebview API is not available', true);
+        showAlert('AUTO KEYS', 'pywebview API 不可用 / pywebview API is not available', true);
         return;
     }
     var fn = window.pywebview.api[methodName];
@@ -2868,9 +2890,9 @@ function _akCallApi(methodName, args, onOk) {
             if (onOk) onOk(data);
             return;
         }
-        showAlert('AUTO KEYS', (data && data.message) ? data.message : ('Request failed: ' + methodName), true);
+        showAlert('AUTO KEYS', (data && data.message) ? data.message : ('请求失败 / Request failed: ' + methodName), true);
     }).catch(function(err) {
-        showAlert('AUTO KEYS', String(err || 'Unknown error'), true);
+        showAlert('AUTO KEYS', String(err || '未知错误 / Unknown error'), true);
     });
 }
 
@@ -2882,11 +2904,11 @@ function _akRenderRuntime() {
     var runtime = state.runtime || {};
     enabledEl.checked = !!state.enabled;
     var bits = [];
-    bits.push('ENGINE ' + (state.enabled ? 'ON' : 'OFF'));
-    bits.push('PROFILE ' + (state.active_profile_name || 'NONE'));
-    bits.push('STATUS ' + ((runtime.last_reason || (runtime.active ? 'RUNNING' : 'IDLE')) || 'IDLE'));
+    bits.push('引擎 Engine ' + (state.enabled ? '开启 ON' : '关闭 OFF'));
+    bits.push('配置 Profile ' + (state.active_profile_name || '无 None'));
+    bits.push('状态 Status ' + ((runtime.last_reason || (runtime.active ? 'RUNNING' : 'IDLE')) || 'IDLE'));
     if (runtime.last_action_label) {
-        bits.push('LAST ' + runtime.last_action_label);
+        bits.push('上次 Last ' + runtime.last_action_label);
     }
     runtimeEl.innerHTML = bits.map(function(item) {
         return '<span class="auto-key-pill ' + (state.enabled ? 'active' : '') + '">' + _escHtml(item) + '</span>';
@@ -2899,7 +2921,7 @@ function _akRenderLocal() {
     var profiles = _akProfilesFull();
     var state = _autoKeyState || {};
     if (!profiles.length) {
-        listEl.innerHTML = '<div class="auto-key-empty">No local profiles yet.<br>Create one here or import a JSON file.</div>';
+        listEl.innerHTML = '<div class="auto-key-empty">还没有本地配置。<br>No local profiles yet. Create one here or import a JSON file.</div>';
         return;
     }
     var summaries = {};
@@ -2915,25 +2937,25 @@ function _akRenderLocal() {
         return '' +
             '<div class="' + classes.join(' ') + '">' +
                 '<div class="auto-key-card-head">' +
-                    '<div class="auto-key-card-title">' + _escHtml(profile.profile_name || 'Profile') + '</div>' +
+                    '<div class="auto-key-card-title">' + _escHtml(profile.profile_name || '配置 Profile') + '</div>' +
                     '<div class="auto-key-card-actions">' +
-                        '<button class="auto-key-btn" type="button" onclick="_akSelectProfile(' + JSON.stringify(id) + ', \'editor\'); return false;">EDIT</button>' +
-                        '<button class="auto-key-btn primary" type="button" onclick="_akActivateProfile(' + JSON.stringify(id) + '); return false;">ACTIVATE</button>' +
+                        '<button class="auto-key-btn" type="button" onclick="_akSelectProfile(' + JSON.stringify(id) + ', \'editor\'); return false;">编辑 Edit</button>' +
+                        '<button class="auto-key-btn primary" type="button" onclick="_akActivateProfile(' + JSON.stringify(id) + '); return false;">启用 Activate</button>' +
                     '</div>' +
                 '</div>' +
                 '<div class="auto-key-card-meta">' +
-                    '<span class="auto-key-pill ' + (String(state.active_profile_id || '') === id ? 'active' : '') + '">' + _escHtml((profile.profession_name || 'ANY').toUpperCase()) + '</span>' +
+                    '<span class="auto-key-pill ' + (String(state.active_profile_id || '') === id ? 'active' : '') + '">' + _escHtml((profile.profession_name || '任意 Any').toUpperCase()) + '</span>' +
                     '<span class="auto-key-pill">' + _escHtml(String(profile.source || 'local').toUpperCase()) + '</span>' +
-                    '<span class="auto-key-pill">' + _escHtml(actionCount + ' ACTIONS / ' + enabledCount + ' ON') + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(actionCount + ' 动作 Actions / ' + enabledCount + ' 已启用 On') + '</span>' +
                     '<span class="auto-key-pill">' + _escHtml(profile.updated_at || '') + '</span>' +
                 '</div>' +
                 '<div class="auto-key-card-meta">' +
-                    '<span>' + _escHtml(profile.description || 'No description') + '</span>' +
+                    '<span>' + _escHtml(profile.description || '暂无说明 / No description') + '</span>' +
                 '</div>' +
                 '<div class="auto-key-card-actions">' +
-                    '<button class="auto-key-btn" type="button" onclick="_akCopyProfile(' + JSON.stringify(id) + '); return false;">COPY</button>' +
-                    '<button class="auto-key-btn" type="button" onclick="_akExportProfile(' + JSON.stringify(id) + '); return false;">EXPORT</button>' +
-                    '<button class="auto-key-btn warn" type="button" onclick="_akDeleteProfile(' + JSON.stringify(id) + '); return false;">DELETE</button>' +
+                    '<button class="auto-key-btn" type="button" onclick="_akCopyProfile(' + JSON.stringify(id) + '); return false;">复制 Copy</button>' +
+                    '<button class="auto-key-btn" type="button" onclick="_akExportProfile(' + JSON.stringify(id) + '); return false;">导出 Export</button>' +
+                    '<button class="auto-key-btn warn" type="button" onclick="_akDeleteProfile(' + JSON.stringify(id) + '); return false;">删除 Delete</button>' +
                 '</div>' +
             '</div>';
     }).join('');
@@ -2944,7 +2966,7 @@ function _akPopulateEditorFields() {
     var listEl = document.getElementById('auto-key-action-list');
     if (!draft) {
         if (listEl) {
-            listEl.innerHTML = '<div class="auto-key-empty">Select a profile from LOCAL or create a new one to start editing.</div>';
+            listEl.innerHTML = '<div class="auto-key-empty">先从本地列表选择一个配置，或新建一个配置再开始编辑。<br>Select a profile from Local or create a new one to start editing.</div>';
         }
         ['ak-profile-name', 'ak-profile-profession-name', 'ak-profile-profession-id', 'ak-engine-tick-ms', 'ak-profile-description'].forEach(function(id) {
             var el = document.getElementById(id);
@@ -2969,7 +2991,7 @@ function _akRenderActionList() {
     if (!listEl) return;
     var draft = _autoKeyDraftProfile;
     if (!draft || !Array.isArray(draft.actions) || !draft.actions.length) {
-        listEl.innerHTML = '<div class="auto-key-empty">No actions yet. Add one and bind it to a skill slot.</div>';
+        listEl.innerHTML = '<div class="auto-key-empty">还没有动作。先新增一个动作并绑定到技能槽。<br>No actions yet. Add one and bind it to a skill slot.</div>';
         return;
     }
     listEl.innerHTML = draft.actions.map(function(action, index) {
@@ -2977,35 +2999,35 @@ function _akRenderActionList() {
         return '' +
             '<div class="auto-key-action-card">' +
                 '<div class="auto-key-card-head">' +
-                    '<div class="auto-key-card-title">ACTION ' + (index + 1) + ': ' + _escHtml(action.label || ('Action ' + (index + 1))) + '</div>' +
+                    '<div class="auto-key-card-title">动作 Action ' + (index + 1) + ': ' + _escHtml(action.label || ('动作 Action ' + (index + 1))) + '</div>' +
                     '<div class="auto-key-card-actions">' +
-                        '<button class="auto-key-btn" type="button" onclick="_akMoveAction(' + index + ', -1); return false;">UP</button>' +
-                        '<button class="auto-key-btn" type="button" onclick="_akMoveAction(' + index + ', 1); return false;">DOWN</button>' +
-                        '<button class="auto-key-btn" type="button" onclick="_akCloneAction(' + index + '); return false;">COPY</button>' +
-                        '<button class="auto-key-btn warn" type="button" onclick="_akDeleteAction(' + index + '); return false;">DELETE</button>' +
+                        '<button class="auto-key-btn" type="button" onclick="_akMoveAction(' + index + ', -1); return false;">上移 Up</button>' +
+                        '<button class="auto-key-btn" type="button" onclick="_akMoveAction(' + index + ', 1); return false;">下移 Down</button>' +
+                        '<button class="auto-key-btn" type="button" onclick="_akCloneAction(' + index + '); return false;">复制 Copy</button>' +
+                        '<button class="auto-key-btn warn" type="button" onclick="_akDeleteAction(' + index + '); return false;">删除 Delete</button>' +
                     '</div>' +
                 '</div>' +
                 '<div class="auto-key-toolbar">' +
                     '<label class="sao-toggle" style="max-width:180px;">' +
                         '<input type="checkbox" ' + (action.enabled ? 'checked' : '') + ' onchange="_akDraftActionField(' + index + ', \'enabled\', this.checked, \'bool\')" />' +
                         '<div class="toggle-track"><div class="toggle-thumb"></div></div>' +
-                        '<span>ACTION ENABLED</span>' +
+                        '<span>动作启用 Action Enabled</span>' +
                     '</label>' +
                 '</div>' +
                 '<div class="auto-key-grid compact">' +
-                    '<div class="auto-key-field"><label>LABEL</label><input type="text" value="' + _escHtml(action.label || '') + '" oninput="_akDraftActionField(' + index + ', \'label\', this.value)" /></div>' +
-                    '<div class="auto-key-field"><label>SLOT</label><input type="number" min="1" max="9" value="' + _escHtml(String(action.slot_index || 1)) + '" oninput="_akDraftActionField(' + index + ', \'slot_index\', this.value, \'int\')" /></div>' +
-                    '<div class="auto-key-field"><label>KEY</label><input type="text" value="' + _escHtml(String(action.key || '')) + '" oninput="_akDraftActionField(' + index + ', \'key\', this.value)" /></div>' +
-                    '<div class="auto-key-field"><label>PRESS MODE</label><select onchange="_akDraftActionField(' + index + ', \'press_mode\', this.value)"><option value="tap"' + (action.press_mode === 'tap' ? ' selected' : '') + '>tap</option><option value="hold"' + (action.press_mode === 'hold' ? ' selected' : '') + '>hold</option></select></div>' +
-                    '<div class="auto-key-field"><label>PRESS COUNT</label><input type="number" min="1" max="20" value="' + _escHtml(String(action.press_count || 1)) + '" oninput="_akDraftActionField(' + index + ', \'press_count\', this.value, \'int\')" /></div>' +
-                    '<div class="auto-key-field"><label>PRESS INTERVAL MS</label><input type="number" min="0" value="' + _escHtml(String(action.press_interval_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'press_interval_ms\', this.value, \'int\')" /></div>' +
-                    '<div class="auto-key-field"><label>HOLD MS</label><input type="number" min="0" value="' + _escHtml(String(action.hold_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'hold_ms\', this.value, \'int\')" /></div>' +
-                    '<div class="auto-key-field"><label>READY DELAY MS</label><input type="number" min="0" value="' + _escHtml(String(action.ready_delay_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'ready_delay_ms\', this.value, \'int\')" /></div>' +
-                    '<div class="auto-key-field"><label>MIN REARM MS</label><input type="number" min="0" value="' + _escHtml(String(action.min_rearm_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'min_rearm_ms\', this.value, \'int\')" /></div>' +
-                    '<div class="auto-key-field"><label>POST DELAY MS</label><input type="number" min="0" value="' + _escHtml(String(action.post_delay_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'post_delay_ms\', this.value, \'int\')" /></div>' +
-                    '<div class="auto-key-field span-3"><label>CONDITIONS JSON</label><textarea class="auto-key-mono" oninput="_akDraftActionConditions(' + index + ', this.value)">' + _escHtml(conditionsText) + '</textarea></div>' +
+                    '<div class="auto-key-field"><label>名称 Label</label><input type="text" value="' + _escHtml(action.label || '') + '" oninput="_akDraftActionField(' + index + ', \'label\', this.value)" /></div>' +
+                    '<div class="auto-key-field"><label>槽位 Slot</label><input type="number" min="1" max="9" value="' + _escHtml(String(action.slot_index || 1)) + '" oninput="_akDraftActionField(' + index + ', \'slot_index\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>按键 Key</label><input type="text" value="' + _escHtml(String(action.key || '')) + '" oninput="_akDraftActionField(' + index + ', \'key\', this.value)" /></div>' +
+                    '<div class="auto-key-field"><label>按下模式 Press Mode</label><select onchange="_akDraftActionField(' + index + ', \'press_mode\', this.value)"><option value="tap"' + (action.press_mode === 'tap' ? ' selected' : '') + '>点击 Tap</option><option value="hold"' + (action.press_mode === 'hold' ? ' selected' : '') + '>按住 Hold</option></select></div>' +
+                    '<div class="auto-key-field"><label>次数 Press Count</label><input type="number" min="1" max="20" value="' + _escHtml(String(action.press_count || 1)) + '" oninput="_akDraftActionField(' + index + ', \'press_count\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>间隔毫秒 Press Interval MS</label><input type="number" min="0" value="' + _escHtml(String(action.press_interval_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'press_interval_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>按住毫秒 Hold MS</label><input type="number" min="0" value="' + _escHtml(String(action.hold_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'hold_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>就绪延迟 Ready Delay MS</label><input type="number" min="0" value="' + _escHtml(String(action.ready_delay_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'ready_delay_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>最小复位 Min Rearm MS</label><input type="number" min="0" value="' + _escHtml(String(action.min_rearm_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'min_rearm_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field"><label>后置延迟 Post Delay MS</label><input type="number" min="0" value="' + _escHtml(String(action.post_delay_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'post_delay_ms\', this.value, \'int\')" /></div>' +
+                    '<div class="auto-key-field span-3"><label>条件 JSON Conditions JSON</label><textarea class="auto-key-mono" oninput="_akDraftActionConditions(' + index + ', this.value)">' + _escHtml(conditionsText) + '</textarea></div>' +
                 '</div>' +
-                '<div class="auto-key-condition-note">Supported condition types: hp_pct_gte, hp_pct_lte, sta_pct_gte, burst_ready_is, slot_state_is, profession_is, player_name_is.</div>' +
+                '<div class="auto-key-condition-note">支持的条件类型 Supported condition types: hp_pct_gte, hp_pct_lte, sta_pct_gte, burst_ready_is, slot_state_is, profession_is, player_name_is.</div>' +
             '</div>';
     }).join('');
 }
@@ -3025,11 +3047,11 @@ function _akRenderCloud() {
     if (!resultsEl) return;
     var results = Array.isArray(search.results) ? search.results : [];
     if (search.error) {
-        resultsEl.innerHTML = '<div class="auto-key-empty">Cloud search failed.<br>' + _escHtml(search.error) + '</div>';
+        resultsEl.innerHTML = '<div class="auto-key-empty">云端搜索失败 Cloud search failed.<br>' + _escHtml(search.error) + '</div>';
         return;
     }
     if (!results.length) {
-        resultsEl.innerHTML = '<div class="auto-key-empty">No cloud profiles yet. Enter filters above and start a search.</div>';
+        resultsEl.innerHTML = '<div class="auto-key-empty">还没有云端配置。先填写上面的筛选条件再搜索。<br>No cloud profiles yet. Enter filters above and start a search.</div>';
         return;
     }
     resultsEl.innerHTML = results.map(function(item) {
@@ -3039,16 +3061,16 @@ function _akRenderCloud() {
                 '<div class="auto-key-card-head">' +
                     '<div class="auto-key-card-title">' + _escHtml(item.profile_name || ('Remote #' + remoteId)) + '</div>' +
                     '<div class="auto-key-card-actions">' +
-                        '<button class="auto-key-btn primary" type="button" onclick="_akDownloadRemote(' + JSON.stringify(remoteId) + '); return false;">DOWNLOAD</button>' +
+                        '<button class="auto-key-btn primary" type="button" onclick="_akDownloadRemote(' + JSON.stringify(remoteId) + '); return false;">下载 Download</button>' +
                     '</div>' +
                 '</div>' +
                 '<div class="auto-key-card-meta">' +
                     '<span class="auto-key-pill">' + _escHtml('UID ' + (item.player_uid || '--')) + '</span>' +
                     '<span class="auto-key-pill">' + _escHtml(item.player_name || '--') + '</span>' +
-                    '<span class="auto-key-pill">' + _escHtml(item.profession_name || 'ANY') + '</span>' +
+                    '<span class="auto-key-pill">' + _escHtml(item.profession_name || '任意 Any') + '</span>' +
                     '<span class="auto-key-pill">' + _escHtml(item.updated_at || item.created_at || '') + '</span>' +
                 '</div>' +
-                '<div class="auto-key-card-meta"><span>' + _escHtml(item.description || 'No description') + '</span></div>' +
+                '<div class="auto-key-card-meta"><span>' + _escHtml(item.description || '暂无说明 / No description') + '</span></div>' +
             '</div>';
     }).join('');
 }
@@ -3189,13 +3211,13 @@ function _akActivateProfile(profileId) {
 
 function _akExportProfile(profileId) {
     _akCallApi('export_auto_key_profile', [profileId], function(data) {
-        showAlert('AUTO KEYS', 'Exported to:\n' + (data.path || ''), true);
+        showAlert('AUTO KEYS', '已导出到 / Exported to:\n' + (data.path || ''), true);
     });
 }
 
 function _akRefreshState() {
     _akCallApi('get_auto_key_state', [], function() {
-        showToast('AUTO KEY REFRESH');
+        showToast('自动按键已刷新 AUTO KEY REFRESH');
     });
 }
 
@@ -3251,7 +3273,7 @@ function _akMoveAction(index, delta) {
 
 function _akSaveDraft() {
     if (!_autoKeyDraftProfile) {
-        showAlert('AUTO KEYS', 'No profile selected', true);
+        showAlert('AUTO KEYS', '未选择配置 / No profile selected', true);
         return;
     }
     try {
@@ -3271,7 +3293,7 @@ function _akSaveDraft() {
 function _akActivateDraft() {
     if (!_autoKeyDraftProfile) return;
     if (_autoKeyDraftDirty) {
-        showAlert('AUTO KEYS', 'Save this profile before activating it.', true);
+        showAlert('AUTO KEYS', '请先保存这个配置再启用。 / Save this profile before activating it.', true);
         return;
     }
     _akActivateProfile(_autoKeyDraftProfile.id);
@@ -3280,7 +3302,7 @@ function _akActivateDraft() {
 function _akExportDraft() {
     if (!_autoKeyDraftProfile) return;
     if (_autoKeyDraftDirty) {
-        showAlert('AUTO KEYS', 'Save this profile before exporting it.', true);
+        showAlert('AUTO KEYS', '请先保存这个配置再导出。 / Save this profile before exporting it.', true);
         return;
     }
     _akExportProfile(_autoKeyDraftProfile.id);
@@ -3294,7 +3316,7 @@ function _akImportProfile() {
             showFilePicker(data.browser);
             return;
         }
-        showAlert('AUTO KEYS', (data && data.message) ? data.message : 'Unable to open import picker', true);
+        showAlert('AUTO KEYS', (data && data.message) ? data.message : '无法打开导入选择器 / Unable to open import picker', true);
     });
 }
 
@@ -3319,7 +3341,7 @@ function _akSaveCloudSettings(afterSave) {
             showToast('SERVER SETTINGS SAVED');
         }
     }).catch(function(err) {
-        showAlert('AUTO KEYS', String(err || 'Unable to save cloud settings'), true);
+        showAlert('AUTO KEYS', String(err || '无法保存云端设置 / Unable to save cloud settings'), true);
     });
 }
 
@@ -3350,11 +3372,11 @@ function _akDownloadRemote(remoteId) {
 function _akUploadActive() {
     var targetId = _autoKeyDraftProfile ? _autoKeyDraftProfile.id : ((_autoKeyState && _autoKeyState.active_profile_id) || '');
     if (!targetId) {
-        showAlert('AUTO KEYS', 'No profile selected', true);
+        showAlert('AUTO KEYS', '未选择配置 / No profile selected', true);
         return;
     }
     if (_autoKeyDraftDirty) {
-        showAlert('AUTO KEYS', 'Save this profile before uploading it.', true);
+        showAlert('AUTO KEYS', '请先保存这个配置再上传。 / Save this profile before uploading it.', true);
         return;
     }
     _akSaveCloudSettings(function() {
@@ -3367,7 +3389,7 @@ function _akUploadActive() {
 document.getElementById('auto-key-enabled').addEventListener('change', function(e) {
     e.stopPropagation();
     _akCallApi('set_auto_key_enabled', [this.checked], function() {
-        showToast('AUTO KEY ' + (document.getElementById('auto-key-enabled').checked ? 'ON' : 'OFF'));
+        showToast('自动按键 AUTO KEY ' + (document.getElementById('auto-key-enabled').checked ? '开启 ON' : '关闭 OFF'));
     });
 });
 

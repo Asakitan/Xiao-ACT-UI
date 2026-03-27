@@ -738,6 +738,7 @@ class SAOWebViewGUI:
         self.hp_win = None
         self.menu_win = None
         self.skillfx_win = None
+        self.alert_win = None
 
         # 热切换目标
         self._pending_switch: Optional[str] = None
@@ -760,6 +761,7 @@ class SAOWebViewGUI:
         self._hp_mouse_passthrough_started = False
         self._hp_mouse_passthrough = None
         self._skillfx_hwnd = 0
+        self._alert_hwnd = 0
         self._skillfx_visible = False
         self._skillfx_slot_count = 9
         self._skillfx_layout = None
@@ -787,6 +789,9 @@ class SAOWebViewGUI:
         self._auto_key_engine = None
         self._auto_key_picker_purpose = ''
         self._auto_key_last_menu_state = None
+        self._last_identity_alert_serial = 0
+        self._identity_alert_visible = False
+        self._identity_alert_nonce = 0
 
     # ─── 音效 ───
     def _play_sound(self, name: str):
@@ -878,6 +883,28 @@ class SAOWebViewGUI:
                     )
         except Exception:
             pass
+
+    def _sync_identity_alert(self, gs):
+        if gs is None:
+            return
+        try:
+            alert_serial = int(getattr(gs, 'identity_alert_serial', 0) or 0)
+        except Exception:
+            alert_serial = 0
+        alert_title = str(getattr(gs, 'identity_alert_title', '') or '')
+        alert_message = str(getattr(gs, 'identity_alert_message', '') or '')
+
+        if alert_serial > 0 and alert_serial != getattr(self, '_last_identity_alert_serial', 0):
+            self._last_identity_alert_serial = alert_serial
+            self._show_identity_alert_window(alert_title, alert_message, 9000)
+            return
+
+        has_identity = bool(
+            str(getattr(gs, 'player_name', '') or '').strip()
+            and int(getattr(gs, 'level_base', 0) or 0) > 0
+        )
+        if has_identity and getattr(self, '_identity_alert_visible', False):
+            self._hide_identity_alert_window()
 
     def _is_dead_state(self, gs) -> bool:
         if gs is None:
@@ -983,7 +1010,7 @@ class SAOWebViewGUI:
                 state = str(slot.get('state', '') or '').strip().lower()
             except Exception:
                 continue
-            if idx in watched and (state in ('ready', 'active') or bool(slot.get('active'))):
+            if idx in watched and state == 'ready':
                 return idx
         for slot in getattr(gs, 'skill_slots', []) or []:
             if not isinstance(slot, dict):
@@ -1038,21 +1065,33 @@ class SAOWebViewGUI:
         self._sta_pixel_detector_enabled = False
 
         engines = []
-        from packet_bridge import PacketBridge
-        packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref)
-        packet_engine.start()
-        engines.append(packet_engine)
-        self._packet_engine = packet_engine
-        print('[SAO] Packet bridge started (network capture)')
+        try:
+            from packet_bridge import PacketBridge
+            packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref)
+            packet_engine.start()
+            engines.append(packet_engine)
+            self._packet_engine = packet_engine
+            print('[SAO] Packet bridge started (network capture)')
+        except Exception as e:
+            import traceback
+            print(f'[SAO] Packet bridge FAILED to start: {e}', flush=True)
+            traceback.print_exc()
+            self._packet_engine = None
 
-        from recognition import RecognitionEngine
-        vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
-        vision_engine.start()
-        engines.append(vision_engine)
-        self._vision_engine = vision_engine
-        self._vision_paused_for_death = False
-        self._last_dead_state = False
-        print('[SAO] Recognition engine started (window vision / printwindow)')
+        try:
+            from recognition import RecognitionEngine
+            vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
+            vision_engine.start()
+            engines.append(vision_engine)
+            self._vision_engine = vision_engine
+            self._vision_paused_for_death = False
+            self._last_dead_state = False
+            print('[SAO] Recognition engine started (window vision / printwindow)')
+        except Exception as e:
+            import traceback
+            print(f'[SAO] Recognition engine FAILED to start: {e}', flush=True)
+            traceback.print_exc()
+            self._vision_engine = None
 
         self._recognition_engines = engines
         self._recognition_engine = engines[0] if engines else None
@@ -1071,6 +1110,7 @@ class SAOWebViewGUI:
         hp_url = os.path.join(web_dir, 'hp.html')
         menu_url = os.path.join(web_dir, 'menu.html')
         skillfx_url = os.path.join(web_dir, 'skillfx.html')
+        alert_url = os.path.join(web_dir, 'alert.html')
 
         # HP 固定位置: 左下角覆盖 等级/UID 区域
         try:
@@ -1134,6 +1174,20 @@ class SAOWebViewGUI:
             height=max(140, int(_sh * 0.20)),
             x=max(0, int(_sw * 0.29)),
             y=max(0, int(_sh * 0.74)),
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
+        alert_w, alert_h = 416, 226
+        self.alert_win = webview.create_window(
+            'SAO Alert', alert_url,
+            width=alert_w, height=alert_h,
+            x=max(0, int((_sw - alert_w) / 2)),
+            y=max(32, int(_sh * 0.16)),
             frameless=True,
             easy_drag=False,
             transparent=True,
@@ -1216,6 +1270,7 @@ class SAOWebViewGUI:
 
         _apply_for('SAO-HP', self.hp_win)
         _apply_for('SAO SkillFX', self.skillfx_win)
+        _apply_for('SAO Alert', self.alert_win)
         # 菜单窗口只做 Win32 色键, 不设 .NET TransparencyKey
         # (TransparencyKey 会令菜单 HTML 透明区域变成鼠标穿透, 导致按钮无法点击)
         try:
@@ -1840,9 +1895,11 @@ class SAOWebViewGUI:
             self._set_window_icon('SAO-HP')
             self._set_window_icon('SAO Menu')
             self._set_window_icon('SAO SkillFX')
+            self._set_window_icon('SAO Alert')
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
             self._set_window_alpha('SAO SkillFX', 1.0)
+            self._set_window_alpha('SAO Alert', 1.0)
             # 重新触发 HP 入场动态模糊 (避免页面预加载时动画已经跑完)
             self._eval_hp('if (window.HP && HP.retriggerEntryBlur) HP.retriggerEntryBlur()')
             # HP 窗口入场动画: 从中央滑到固定位置
@@ -2039,6 +2096,13 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
+    def _eval_alert(self, js):
+        try:
+            if self.alert_win:
+                self.alert_win.evaluate_js(js)
+        except Exception:
+            pass
+
     @staticmethod
     def _safe_js(s: str) -> str:
         if not s:
@@ -2060,6 +2124,163 @@ class SAOWebViewGUI:
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
         except Exception:
             pass
+
+    def _ensure_alert_on_top(self):
+        try:
+            if not self._alert_hwnd:
+                self._alert_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO Alert')
+            if not self._alert_hwnd:
+                return
+            HWND_TOPMOST = ctypes.c_void_p(-1)
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            ctypes.windll.user32.SetWindowPos(
+                self._alert_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        except Exception:
+            pass
+
+    def _get_window_monitor_work_area(self, title: str):
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, title)
+            if not hwnd:
+                raise RuntimeError('window not ready')
+            monitor = user32.MonitorFromWindow(hwnd, 2)
+            if not monitor:
+                raise RuntimeError('monitor not found')
+
+            class _RECT(ctypes.Structure):
+                _fields_ = [
+                    ('left', ctypes.c_long),
+                    ('top', ctypes.c_long),
+                    ('right', ctypes.c_long),
+                    ('bottom', ctypes.c_long),
+                ]
+
+            class _MONITORINFO(ctypes.Structure):
+                _fields_ = [
+                    ('cbSize', ctypes.c_uint32),
+                    ('rcMonitor', _RECT),
+                    ('rcWork', _RECT),
+                    ('dwFlags', ctypes.c_uint32),
+                ]
+
+            info = _MONITORINFO()
+            info.cbSize = ctypes.sizeof(_MONITORINFO)
+            if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                raise RuntimeError('GetMonitorInfoW failed')
+            return (
+                int(info.rcWork.left),
+                int(info.rcWork.top),
+                int(info.rcWork.right),
+                int(info.rcWork.bottom),
+            )
+        except Exception:
+            try:
+                sw = ctypes.windll.user32.GetSystemMetrics(0)
+                sh = ctypes.windll.user32.GetSystemMetrics(1)
+            except Exception:
+                sw, sh = 1920, 1080
+            return (0, 0, int(sw), int(sh))
+
+    def _calc_alert_window_rect(self, width: int = 416, height: int = 226):
+        left, top, right, bottom = self._get_window_monitor_work_area('SAO-HP')
+        work_w = max(width, right - left)
+        work_h = max(height, bottom - top)
+        x = left + max(0, int((work_w - width) / 2))
+        y = top + max(28, int(work_h * 0.16))
+        max_y = bottom - height - 28
+        if max_y >= top:
+            y = min(y, max_y)
+        return int(x), int(y), int(width), int(height)
+
+    def _position_alert_window(self):
+        if not self.alert_win:
+            return
+        x, y, width, height = self._calc_alert_window_rect()
+        try:
+            self.alert_win.resize(width, height)
+        except Exception:
+            pass
+        try:
+            self.alert_win.move(x, y)
+        except Exception:
+            pass
+
+    def _show_identity_alert_window(self, title: str, message: str, duration_ms: int = 9000):
+        if not self.alert_win:
+            return
+        self._identity_alert_visible = True
+        self._identity_alert_nonce = int(getattr(self, '_identity_alert_nonce', 0) or 0) + 1
+        nonce = self._identity_alert_nonce
+        stay_ms = int(duration_ms or 9000)
+        if stay_ms <= 0:
+            stay_ms = 9000
+
+        self._position_alert_window()
+        try:
+            self.alert_win.show()
+        except Exception:
+            pass
+        try:
+            self._apply_webview2_transparency()
+        except Exception:
+            pass
+        self._set_window_alpha('SAO Alert', 1.0)
+        self._ensure_alert_on_top()
+        self._play_sound('alert')
+
+        safe_title = self._safe_js(title or '提示')
+        safe_message = self._safe_js(message or '')
+
+        def _push():
+            if nonce != int(getattr(self, '_identity_alert_nonce', 0) or 0):
+                return
+            self._eval_alert(
+                f'if (window.AlertPanel && AlertPanel.showAlert) '
+                f'AlertPanel.showAlert("{safe_title}", "{safe_message}")'
+            )
+            self._ensure_alert_on_top()
+
+        _push()
+        threading.Timer(0.12, _push).start()
+        threading.Timer(0.32, _push).start()
+        threading.Timer(0.72, _push).start()
+        threading.Timer(stay_ms / 1000.0, lambda: self._hide_identity_alert_window(expected_nonce=nonce)).start()
+
+    def _hide_identity_alert_window(self, expected_nonce: int = None):
+        if not self.alert_win:
+            return
+        current_nonce = int(getattr(self, '_identity_alert_nonce', 0) or 0)
+        if expected_nonce is not None and expected_nonce != current_nonce:
+            return
+
+        was_visible = bool(getattr(self, '_identity_alert_visible', False))
+        self._identity_alert_visible = False
+        self._identity_alert_nonce = current_nonce + 1
+        closing_nonce = self._identity_alert_nonce
+
+        if not was_visible:
+            try:
+                self.alert_win.hide()
+            except Exception:
+                pass
+            return
+
+        self._play_sound('alert_close')
+        self._eval_alert('if (window.AlertPanel && AlertPanel.beginClose) AlertPanel.beginClose()')
+
+        def _finish_hide():
+            if closing_nonce != int(getattr(self, '_identity_alert_nonce', 0) or 0):
+                return
+            try:
+                self.alert_win.hide()
+            except Exception:
+                pass
+
+        threading.Timer(0.52, _finish_hide).start()
 
     def _setup_skillfx_click_through(self):
         try:
@@ -2131,9 +2352,11 @@ class SAOWebViewGUI:
         max_y = max(item['screen_rect']['y'] + item['screen_rect']['h'] for item in slots)
         pad_x = max(18, int(round(client_w * 0.012)))
         pad_y = max(18, int(round(client_h * 0.016)))
-        win_x = max(0, min_x - pad_x)
+        pad_left = max(96, int(round(client_w * 0.055)))
+        pad_right = max(84, int(round(client_w * 0.044)))
+        win_x = max(0, min_x - pad_left)
         win_y = max(0, client_top)
-        width = max(420, int(client_right - win_x))
+        width = max(420, int((client_right - win_x) + pad_right))
         height = max(220, int((max_y - win_y) + pad_y))
         callout_w = max(440, int(round(client_w * 0.29)))
         callout_h = max(128, int(round(client_h * 0.115)))
@@ -2157,7 +2380,7 @@ class SAOWebViewGUI:
             'viewport': {
                 'width': int(width),
                 'height': int(height),
-                'padding_x': int(pad_x),
+                'padding_x': int(max(pad_x, pad_left, pad_right)),
                 'padding_y': int(pad_y),
                 'callout': {
                     'x': int(callout_x),
@@ -2381,6 +2604,10 @@ class SAOWebViewGUI:
             self._native_fade_window('SAO SkillFX', duration_ms=180, steps=10)
         except Exception:
             pass
+        try:
+            self._native_fade_window('SAO Alert', duration_ms=180, steps=10)
+        except Exception:
+            pass
 
         try:
             self._destroy_all_panels()
@@ -2398,8 +2625,8 @@ class SAOWebViewGUI:
         except Exception:
             pass
         try:
-            if self.skillfx_win:
-                self.skillfx_win.destroy()
+            if self.alert_win:
+                self.alert_win.destroy()
         except Exception:
             pass
         try:
@@ -2708,6 +2935,7 @@ class SAOWebViewGUI:
                     gs = None
             if self._recognition_active and gs is not None:
                 try:
+                    self._sync_identity_alert(gs)
                     if gs.recognition_ok:
                         # HP/等级走共享状态，STA 百分比走纯识图
                         if gs.hp_max > 0:
@@ -2838,6 +3066,10 @@ class SAOWebViewGUI:
             else:
                 # 识别未激活时, 仍保留最后已知数据 (如有)
                 if gs is not None:
+                    try:
+                        self._sync_identity_alert(gs)
+                    except Exception:
+                        pass
                     if gs.hp_max > 0 or gs.level_base > 0:
                         hp = gs.hp_current if gs.hp_max > 0 else 0
                         hp_max = gs.hp_max if gs.hp_max > 0 else 1
@@ -2907,5 +3139,15 @@ class SAOWebViewGUI:
             pass
         try:
             self.menu_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.alert_win:
+                self.alert_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.skillfx_win:
+                self.skillfx_win.destroy()
         except Exception:
             pass

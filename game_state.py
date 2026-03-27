@@ -18,6 +18,12 @@ _CACHE_FIELDS = (
     'profession_id', 'profession_name',
 )
 
+# 身份类字段: 仅当新值有效 (非零/非空) 时才覆写缓存
+_CACHE_IDENTITY_FIELDS = frozenset((
+    'player_name', 'level_base', 'level_extra', 'player_id',
+    'profession_id', 'profession_name',
+))
+
 
 def compute_burst_ready(skill_slots, watched_slots) -> bool:
     """Return True when every watched slot is ready and at least one matched."""
@@ -122,6 +128,9 @@ class GameState:
     capture_timestamp: float = 0.0
     recognition_ok: bool = False
     error_msg: str = ''
+    identity_alert_serial: int = 0
+    identity_alert_title: str = ''
+    identity_alert_message: str = ''
 
     @property
     def level_text(self) -> str:
@@ -159,6 +168,9 @@ class GameState:
             'stamina_text': self.stamina_text,
             'recognition_ok': self.recognition_ok,
             'capture_ts': self.capture_timestamp,
+            'identity_alert_serial': self.identity_alert_serial,
+            'identity_alert_title': self.identity_alert_title,
+            'identity_alert_message': self.identity_alert_message,
         }
 
 
@@ -230,6 +242,15 @@ class GameStateManager:
                 elif k == 'player_id':
                     if not isinstance(v, str) or len(v) > 30:
                         continue
+                elif k == 'identity_alert_serial':
+                    if not isinstance(v, int) or v < 0:
+                        continue
+                elif k == 'identity_alert_title':
+                    if not isinstance(v, str) or len(v) > 80:
+                        continue
+                elif k == 'identity_alert_message':
+                    if not isinstance(v, str) or len(v) > 600:
+                        continue
                 setattr(self._state, k, v)
 
             # ── 更新 prev 追踪值 (仅当值有效时) ──
@@ -288,12 +309,24 @@ class GameStateManager:
                   f'LV={self._state.level_base}')
 
     def save_cache(self, settings):
-        """将当前状态持久化到 settings (定期调用)"""
+        """将当前状态持久化到 settings (定期调用)
+
+        身份类字段 (name/level/profession) 仅在收到有效值时才覆写缓存,
+        避免工具中途启动时用默认 0/空字符串覆盖上次缓存的值。
+        """
         with self._lock:
-            cache = {}
+            # 以现有缓存为基底, 避免丢失上次保存的身份数据
+            cache = dict(settings.get('game_cache', {}) or {})
             for k in _CACHE_FIELDS:
                 v = getattr(self._state, k, None)
-                if v is not None:
-                    cache[k] = v
+                if v is None:
+                    continue
+                # 身份类字段: 仅当值非零/非空时覆写
+                if k in _CACHE_IDENTITY_FIELDS:
+                    if isinstance(v, str) and not v.strip():
+                        continue
+                    if isinstance(v, (int, float)) and v <= 0:
+                        continue
+                cache[k] = v
         settings.set('game_cache', cache)
         settings.save()
