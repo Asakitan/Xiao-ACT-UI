@@ -468,7 +468,7 @@ class SAOWebAPI:
 
     def start_auto_key_import_picker(self, path=None):
         try:
-            root = str(path or os.path.dirname(os.path.abspath(__file__)))
+            root = str(path or (os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))))
             self._g._auto_key_picker_purpose = 'auto_key_import'
             data = json.loads(self.browse_dir(root))
             data['mode'] = 'file'
@@ -1067,7 +1067,7 @@ class SAOWebViewGUI:
         self._lock_hp_position(1.0)
 
         # ── Phase 2: pywebview ──
-        web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
+        web_dir = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'web')
         hp_url = os.path.join(web_dir, 'hp.html')
         menu_url = os.path.join(web_dir, 'menu.html')
         skillfx_url = os.path.join(web_dir, 'skillfx.html')
@@ -2518,7 +2518,7 @@ class SAOWebViewGUI:
         self._create_panel_window(panel_type)
 
     def _create_panel_window(self, panel_type):
-        web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
+        web_dir = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'web')
         url = os.path.join(web_dir, 'panel.html')
 
         sizes = {

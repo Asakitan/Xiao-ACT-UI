@@ -7,14 +7,19 @@ import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 if getattr(sys, "frozen", False):
+    # onefile: 资源在 _MEIPASS 临时目录, 用户数据在 exe 旁
+    BUNDLE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
     BASE_DIR = os.path.dirname(sys.executable)
 else:
+    BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+# 只读资源 (打包进 exe 内部)
+ASSETS_DIR = os.path.join(BUNDLE_DIR, "assets")
 SOUNDS_DIR = os.path.join(ASSETS_DIR, "sounds")
 FONTS_DIR = os.path.join(ASSETS_DIR, "fonts")
-WEB_DIR = os.path.join(BASE_DIR, "web")
+WEB_DIR = os.path.join(BUNDLE_DIR, "web")
+# 可写数据 (exe 旁边)
 TEMP_DIR = os.path.join(BASE_DIR, "temp")
 SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
