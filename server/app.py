@@ -4,14 +4,14 @@
 import json
 import os
 import sqlite3
+import sys
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-import sys
 
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -21,7 +21,13 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "scripts.db")
 
 
-app = FastAPI(title="SAO Auto Key Repository", version="1.0.0")
+@asynccontextmanager
+async def _lifespan(app_: FastAPI):
+    _ensure_db()
+    yield
+
+
+app = FastAPI(title="SAO Auto Key Repository", version="1.0.0", lifespan=_lifespan)
 
 
 class UploadScriptPayload(BaseModel):
@@ -95,11 +101,6 @@ def _row_to_detail(row: sqlite3.Row) -> Dict[str, Any]:
     except Exception:
         summary["profile"] = {}
     return summary
-
-
-@app.on_event("startup")
-def _on_startup():
-    _ensure_db()
 
 
 @app.get("/health")
@@ -220,4 +221,5 @@ def upload_script(payload: UploadScriptPayload, x_sao_upload_token: Optional[str
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app:app", host="0.0.0.0", port=9320, reload=False)
+    # 直接传 app 对象，避免冻结环境下按模块名导入失败
+    uvicorn.run(app, host="0.0.0.0", port=9320, reload=False)
