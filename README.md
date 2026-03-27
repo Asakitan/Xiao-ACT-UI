@@ -7,7 +7,6 @@
 - WebView HUD
 - 抓包驱动的 HP / 等级 / 技能状态同步
 - 纯识图驱动的 STA 百分比识别
-- Burst Ready 特效
 - 内置自动按键脚本与云端参数库
 
 ## 重要说明
@@ -91,8 +90,6 @@ sao_auto/
 - 本仓库 `sao_auto` 目录下未特别注明的原创部分，按 MIT License 发布。
 
 ## License
-
-本目录新增 [LICENSE](./LICENSE)。
 
 - `sao_auto` 目录下未特别注明的原创代码：`MIT`
 - 第三方项目、第三方资源、第三方生成产物：以各自原始许可证为准
