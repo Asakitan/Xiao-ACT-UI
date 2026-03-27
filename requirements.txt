@@ -11,12 +11,8 @@ pythonnet>=3.0                  # .NET WinForms 透明 (clr, System.Drawing)
 # ═══ 特效 ═══
 moderngl>=5.8                   # LinkStart 3D 粒子隧道 (OpenGL)
 
-# ═══ 识别 ═══
-opencv-python>=4.5              # 颜色过滤、条形检测
-# OCR 引擎 (三选一, 按优先级):
-paddleocr>=2.6                  # 推荐: PaddleOCR (中文最准)
-# easyocr>=1.6                  # 备选: EasyOCR
-# pytesseract>=0.3              # 备选: Tesseract (需系统安装 tesseract-ocr)
+# ═══ 识图 ═══
+opencv-python>=4.5              # 颜色过滤、固定 ROI 条形/技能状态检测
 
 # ═══ 热键 ═══
 pynput>=1.7                     # 全局热键监听

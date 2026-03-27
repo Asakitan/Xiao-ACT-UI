@@ -1,163 +1,264 @@
 # -*- coding: utf-8 -*-
-"""
-SAO Auto — 配置与设置管理
+"""Shared configuration and settings helpers for SAO Auto."""
 
-包含:
-  - 识别 ROI 配置 (供 recognition.py 使用)
-  - Settings 持久化
-"""
-
+import json
 import os
 import sys
-import json
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-# ═══════════════════════════════════════════════
-#  路径
-# ═══════════════════════════════════════════════
-if getattr(sys, 'frozen', False):
+if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-ASSETS_DIR = os.path.join(BASE_DIR, 'assets')
-SOUNDS_DIR = os.path.join(ASSETS_DIR, 'sounds')
-FONTS_DIR  = os.path.join(ASSETS_DIR, 'fonts')
-WEB_DIR    = os.path.join(BASE_DIR, 'web')
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+SOUNDS_DIR = os.path.join(ASSETS_DIR, "sounds")
+FONTS_DIR = os.path.join(ASSETS_DIR, "fonts")
+WEB_DIR = os.path.join(BASE_DIR, "web")
+TEMP_DIR = os.path.join(BASE_DIR, "temp")
+SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
-# GUI 设置
-WINDOW_TITLE = "SAO Auto — 游戏辅助 UI"
+WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
 
-# ═══════════════════════════════════════════════
-#  默认 ROI (基于 16:9 参考分辨率 1920×1080)
-#  所有值都是相对窗口尺寸的百分比 (0.0 ~ 1.0)
-# ═══════════════════════════════════════════════
+BASE_CLIENT_WIDTH = 1919.0
+BASE_CLIENT_HEIGHT = 1079.0
+
+VISUAL_RECT_SPECS: Dict[str, Dict[str, int]] = {
+    "stamina_bar_visual": {"right": 1213, "bottom": 1049, "width": 250, "height": 10},
+    "skill_slot_1": {"right": 720, "bottom": 1003, "width": 52, "height": 85},
+    "skill_slot_2": {"right": 767, "bottom": 1002, "width": 47, "height": 83},
+    "skill_slot_3": {"right": 816, "bottom": 1003, "width": 49, "height": 85},
+    "skill_slot_4": {"right": 864, "bottom": 1003, "width": 49, "height": 90},
+    "skill_slot_5": {"right": 911, "bottom": 1002, "width": 45, "height": 87},
+    "skill_slot_6": {"right": 960, "bottom": 1003, "width": 49, "height": 89},
+    "skill_slot_7": {"right": 1032, "bottom": 1009, "width": 72, "height": 119},
+    "skill_slot_8": {"right": 1104, "bottom": 1012, "width": 73, "height": 124},
+    "skill_slot_9": {"right": 1177, "bottom": 1007, "width": 74, "height": 119},
+}
+
+# Packet / watched slot numbers keep the original logical order, but the last
+# three on-screen boxes are laid out as 9, 7, 8 from left to right.
+SKILL_SLOT_VISUAL_INDEX = {
+    1: 1,
+    2: 2,
+    3: 3,
+    4: 4,
+    5: 5,
+    6: 6,
+    7: 8,
+    8: 9,
+    9: 7,
+}
+
+
+def get_visual_rect_spec(name: str) -> Dict[str, int]:
+    return dict(VISUAL_RECT_SPECS.get(name, {}))
+
+
+def get_skill_slot_visual_index(slot_index: int) -> int:
+    try:
+        slot_index = int(slot_index or 0)
+    except Exception:
+        return 0
+    return int(SKILL_SLOT_VISUAL_INDEX.get(slot_index, slot_index))
+
+
+def _spec_to_base_box(spec: Dict[str, int]) -> Tuple[float, float, float, float]:
+    right = float(spec["right"])
+    bottom = float(spec["bottom"])
+    width = float(spec["width"])
+    height = float(spec["height"])
+    return (right - width, bottom - height, right, bottom)
+
+
+def _union_base_boxes(spec_names: List[str]) -> Dict[str, float]:
+    boxes = [_spec_to_base_box(VISUAL_RECT_SPECS[name]) for name in spec_names if name in VISUAL_RECT_SPECS]
+    if not boxes:
+        return {"x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0}
+    left = min(box[0] for box in boxes)
+    top = min(box[1] for box in boxes)
+    right = max(box[2] for box in boxes)
+    bottom = max(box[3] for box in boxes)
+    return {
+        "x": left / BASE_CLIENT_WIDTH,
+        "y": top / BASE_CLIENT_HEIGHT,
+        "w": (right - left) / BASE_CLIENT_WIDTH,
+        "h": (bottom - top) / BASE_CLIENT_HEIGHT,
+    }
+
+
+_SKILL_SLOT_NAMES = [f"skill_slot_{idx}" for idx in range(1, 10)]
+_SKILL_BAR_ROI = _union_base_boxes(_SKILL_SLOT_NAMES)
+
 DEFAULT_ROI = {
-    # 左下角 — 人物名字/等级/ID 区域
-    'identity': {
-        'x': 0.010,   # 左侧起始
-        'y': 0.910,   # 底部偏上
-        'w': 0.200,   # 宽度占屏幕 20%
-        'h': 0.060,   # 高度占屏幕 6%
-    },
-    # 等级数字区域 (更精确的子区域)
-    'level': {
-        'x': 0.010,
-        'y': 0.925,
-        'w': 0.100,    # 加宽以捕获完整 "LV6" 或 "等级60(+12)"
-        'h': 0.040,    # 加高容错
-    },
-    # 人物名字区域
-    'name': {
-        'x': 0.085,
-        'y': 0.930,
-        'w': 0.120,
-        'h': 0.030,
-    },
-    # 中央下方 — HP 数值条 (生命值/406569/406569)
-    'hp_bar': {
-        'x': 0.330,
-        'y': 0.932,
-        'w': 0.340,
-        'h': 0.036,
-    },
-    # HP 数字文本区域
-    'hp_text': {
-        'x': 0.380,
-        'y': 0.940,
-        'w': 0.240,
-        'h': 0.028,
-    },
-    # 体力值条
-    'stamina_bar': {
-        'x': 0.330,
-        'y': 0.957,    # 略微上移以捕获完整条
-        'w': 0.340,
-        'h': 0.036,    # 加高容错
-    },
-    # 体力数字文本
-    'stamina_text': {
-        'x': 0.530,
-        'y': 0.968,
-        'w': 0.130,
-        'h': 0.018,
-    },
-    # 玩家编号区域 (底部状态栏)
-    'player_id': {
-        'x': 0.230,
-        'y': 0.968,
-        'w': 0.100,
-        'h': 0.020,
-    },
-    # 技能栏区域 (底部中央, 通常 8~10 个技能格)
-    'skill_bar': {
-        'x': 0.300,
-        'y': 0.900,
-        'w': 0.400,
-        'h': 0.070,
-    },
+    "identity": {"x": 0.010, "y": 0.910, "w": 0.200, "h": 0.060},
+    "level": {"x": 0.010, "y": 0.925, "w": 0.100, "h": 0.040},
+    "name": {"x": 0.085, "y": 0.930, "w": 0.120, "h": 0.030},
+    "hp_bar": {"x": 0.330, "y": 0.932, "w": 0.340, "h": 0.036},
+    "hp_text": {"x": 0.380, "y": 0.940, "w": 0.240, "h": 0.028},
+    "stamina_bar": {"x": 0.330, "y": 0.957, "w": 0.340, "h": 0.036},
+    "stamina_text": {"x": 0.530, "y": 0.968, "w": 0.130, "h": 0.018},
+    "player_id": {"x": 0.230, "y": 0.968, "w": 0.100, "h": 0.020},
+    "skill_bar": dict(_SKILL_BAR_ROI),
 }
 
-# HP / 体力条颜色范围 (HSV)
-# 游戏中 HP 条为绿色，体力条为橙黄色
 BAR_COLORS = {
-    'hp': {
-        'h_min': 45, 'h_max': 160,    # 绿色色相范围 (宽容)
-        's_min': 25, 's_max': 255,
-        'v_min': 60, 'v_max': 255,
-    },
-    'stamina': {
-        'h_min': 8, 'h_max': 50,      # 橙黄色色相范围 (加宽容错)
-        's_min': 50, 's_max': 255,     # 降低饱和度阈值
-        'v_min': 80, 'v_max': 255,     # 降低亮度阈值
-    },
-    'skill_cooldown': {
-        # 冷却遮罩通常是半透明深色覆盖 (低饱和度 + 低亮度)
-        'v_max_dark': 80,              # 暗于此值 → 视为冷却中
-        's_max_gray': 40,              # 饱和度低 → 灰色遮罩
-    },
+    "hp": {"h_min": 45, "h_max": 160, "s_min": 25, "s_max": 255, "v_min": 60, "v_max": 255},
+    "stamina": {"h_min": 8, "h_max": 50, "s_min": 50, "s_max": 255, "v_min": 80, "v_max": 255},
+    "skill_cooldown": {"v_max_dark": 80, "s_max_gray": 40},
 }
 
-# 默认全局快捷键
+DATA_SOURCE_COMPONENTS = ("hp", "level", "stamina", "skills", "identity")
+
+DEFAULT_DATA_SOURCE_MAP = {
+    "hp": "packet",
+    "level": "packet",
+    "stamina": "vision",
+    "skills": "packet",
+    "identity": "packet",
+}
+
+
+def normalize_source_mode(mode: Any, default: str = "packet") -> str:
+    text = str(mode or "").strip().lower()
+    if text in ("ocr", "vision", "screen", "screen_vision"):
+        return "vision"
+    if text in ("packet", "network", "network_capture"):
+        return "packet"
+    return default
+
+
+def normalize_source_map(raw_map: Any, legacy_mode: Any = None) -> dict:
+    legacy = normalize_source_mode(legacy_mode, "packet")
+    normalized = {key: legacy for key in DATA_SOURCE_COMPONENTS}
+    normalized.update(DEFAULT_DATA_SOURCE_MAP)
+    if isinstance(raw_map, dict):
+        for key, value in raw_map.items():
+            if key == "stamina":
+                normalized[key] = "vision"
+            elif key == "skills":
+                normalized[key] = "packet"
+            elif key in normalized:
+                normalized[key] = normalize_source_mode(value, normalized[key])
+    normalized["stamina"] = "vision"
+    normalized["skills"] = "packet"
+    return normalized
+
+
+def anchored_rect_spec_to_pixels(
+    spec: Dict[str, int], client_rect: Tuple[int, int, int, int]
+) -> Optional[Tuple[int, int, int, int]]:
+    if not spec or not client_rect:
+        return None
+    left, top, right, bottom = client_rect
+    client_w = max(1, int(right - left))
+    client_h = max(1, int(bottom - top))
+    x2 = left + int(round(client_w * (float(spec["right"]) / BASE_CLIENT_WIDTH)))
+    y2 = top + int(round(client_h * (float(spec["bottom"]) / BASE_CLIENT_HEIGHT)))
+    width = max(1, int(round(client_w * (float(spec["width"]) / BASE_CLIENT_WIDTH))))
+    height = max(1, int(round(client_h * (float(spec["height"]) / BASE_CLIENT_HEIGHT))))
+    x1 = x2 - width
+    y1 = y2 - height
+    return (x1, y1, x2, y2)
+
+
+def anchored_rect_spec_to_client_rect(
+    spec: Dict[str, int], client_w: int, client_h: int
+) -> Optional[Dict[str, int]]:
+    if not spec or client_w <= 0 or client_h <= 0:
+        return None
+    x2 = int(round(client_w * (float(spec["right"]) / BASE_CLIENT_WIDTH)))
+    y2 = int(round(client_h * (float(spec["bottom"]) / BASE_CLIENT_HEIGHT)))
+    width = max(1, int(round(client_w * (float(spec["width"]) / BASE_CLIENT_WIDTH))))
+    height = max(1, int(round(client_h * (float(spec["height"]) / BASE_CLIENT_HEIGHT))))
+    return {"x": x2 - width, "y": y2 - height, "w": width, "h": height}
+
+
+def get_visual_rect_bbox(name: str, client_rect: Tuple[int, int, int, int]):
+    return anchored_rect_spec_to_pixels(VISUAL_RECT_SPECS.get(name, {}), client_rect)
+
+
+def get_visual_rect_client_rect(name: str, client_w: int, client_h: int):
+    return anchored_rect_spec_to_client_rect(VISUAL_RECT_SPECS.get(name, {}), client_w, client_h)
+
+
+def get_skill_slot_rects(client_rect: Tuple[int, int, int, int]) -> List[Dict[str, Any]]:
+    if not client_rect:
+        return []
+    rects: List[Dict[str, Any]] = []
+    for idx in range(1, 10):
+        visual_idx = get_skill_slot_visual_index(idx)
+        name = f"skill_slot_{visual_idx}"
+        bbox = get_visual_rect_bbox(name, client_rect)
+        if not bbox:
+            continue
+        rects.append({
+            "index": idx,
+            "visual_index": visual_idx,
+            "bbox": bbox,
+            "spec": get_visual_rect_spec(name),
+        })
+    return rects
+
+
+def get_skill_slot_client_rects(client_w: int, client_h: int) -> List[Dict[str, Any]]:
+    rects: List[Dict[str, Any]] = []
+    for idx in range(1, 10):
+        visual_idx = get_skill_slot_visual_index(idx)
+        name = f"skill_slot_{visual_idx}"
+        rect = get_visual_rect_client_rect(name, client_w, client_h)
+        if not rect:
+            continue
+        rects.append({
+            "index": idx,
+            "visual_index": visual_idx,
+            "rect": rect,
+            "spec": get_visual_rect_spec(name),
+        })
+    return rects
+
+
+def get_skill_bar_roi() -> Dict[str, float]:
+    return dict(_SKILL_BAR_ROI)
+
+
 DEFAULT_HOTKEYS = {
-    'toggle_recognition': 'F5',
-    'toggle_topmost': 'F9',
-    'hide_panels': 'F10',
+    "toggle_recognition": "F5",
+    "toggle_auto_script": "F6",
+    "toggle_topmost": "F9",
+    "hide_panels": "F10",
 }
 
-# 配置文件路径
+
 def _get_config_dir():
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(__file__)
 
-CONFIG_FILE = os.path.join(_get_config_dir(), 'settings.json')
 
-# 游戏窗口匹配
-GAME_WINDOW_KEYWORDS = ['Star', '星痕共鸣']   # 标题关键词 (不区分大小写)
-GAME_PROCESS_NAMES  = ['star.exe']              # 进程名匹配 (不区分大小写)
+CONFIG_FILE = os.path.join(_get_config_dir(), "settings.json")
 
-# 采集帧率
-CAPTURE_FPS = 5            # 普通采集 5 fps
-CAPTURE_FPS_FAST = 10      # 快速采集 10 fps
+GAME_WINDOW_KEYWORDS = ["Star", "星痕共鸣"]
+GAME_PROCESS_NAMES = ["star.exe"]
 
-# ═══════════════════════════════════════════════
-#  Settings 持久化
-# ═══════════════════════════════════════════════
+CAPTURE_FPS = 5
+CAPTURE_FPS_FAST = 10
+
+
 class SettingsManager:
-    """JSON 配置文件读写"""
+    _LEGACY_KEYS = ("last_file", "speed", "transpose", "chord_mode")
 
     def __init__(self, path: Optional[str] = None):
-        self._path = path or os.path.join(BASE_DIR, 'settings.json')
+        self._path = path or os.path.join(BASE_DIR, "settings.json")
         self._data: dict = {}
         self._load()
 
     def _load(self):
         try:
             if os.path.exists(self._path):
-                with open(self._path, 'r', encoding='utf-8') as f:
-                    self._data = json.load(f)
+                with open(self._path, "r", encoding="utf-8") as handle:
+                    self._data = json.load(handle)
         except Exception:
             self._data = {}
 
@@ -169,19 +270,56 @@ class SettingsManager:
 
     def save(self):
         try:
-            with open(self._path, 'w', encoding='utf-8') as f:
-                json.dump(self._data, f, indent=2, ensure_ascii=False)
+            for legacy_key in self._LEGACY_KEYS:
+                self._data.pop(legacy_key, None)
+            with open(self._path, "w", encoding="utf-8") as handle:
+                json.dump(self._data, handle, indent=2, ensure_ascii=False)
         except Exception:
             pass
 
+    def get_data_source_map(self) -> dict:
+        raw_map = self._data.get("data_source_map", {})
+        legacy_mode = self._data.get("data_source", "packet")
+        normalized = normalize_source_map(raw_map, legacy_mode)
+        self._data["data_source_map"] = dict(normalized)
+        self._data["data_source"] = "mixed"
+        return dict(normalized)
+
+    def get_component_source(self, component: str, default: Optional[str] = None) -> str:
+        fallback = normalize_source_mode(default, DEFAULT_DATA_SOURCE_MAP.get(component, "packet"))
+        return self.get_data_source_map().get(component, fallback)
+
+    def set_component_source(self, component: str, mode: str):
+        if component not in DATA_SOURCE_COMPONENTS:
+            return
+        source_map = self.get_data_source_map()
+        if component == "stamina":
+            source_map[component] = "vision"
+        elif component == "skills":
+            source_map[component] = "packet"
+        else:
+            source_map[component] = normalize_source_mode(mode, source_map.get(component, "packet"))
+        self._data["data_source_map"] = source_map
+        self._data["data_source"] = "mixed"
+
+    def set_all_component_sources(self, mode: str):
+        normalized = normalize_source_mode(mode, "packet")
+        source_map = {
+            key: ("vision" if key == "stamina" else ("packet" if key == "skills" else normalized))
+            for key in DATA_SOURCE_COMPONENTS
+        }
+        self._data["data_source_map"] = source_map
+        self._data["data_source"] = "mixed"
+
     def get_roi(self, name: str) -> dict:
-        """获取 ROI 配置，优先用户自定义，回退默认"""
-        custom = self._data.get('roi', {}).get(name)
+        custom = self._data.get("roi", {}).get(name)
         if custom:
             return custom
-        return DEFAULT_ROI.get(name, {})
+        if name == "skill_bar":
+            return get_skill_bar_roi()
+        return dict(DEFAULT_ROI.get(name, {}))
 
     def set_roi(self, name: str, roi: dict):
-        if 'roi' not in self._data:
-            self._data['roi'] = {}
-        self._data['roi'][name] = roi
+        if "roi" not in self._data:
+            self._data["roi"] = {}
+        self._data["roi"][name] = roi

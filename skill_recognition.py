@@ -1,264 +1,400 @@
 # -*- coding: utf-8 -*-
-"""
-SAO Auto — 技能栏识别模块
+"""Fixed-ROI visual skill recognition for 16:9 game client windows."""
 
-检测游戏界面底部技能栏的冷却状态。
-采用 OCR-fallback 方案：抓包只能获取 profession_id，技能冷却来自屏幕采集。
+from __future__ import annotations
 
-策略:
-  1. 首次运行: 在 skill_bar ROI 内自动检测技能格 (等间距矩形图标)
-  2. 每帧: 对每个格子检测冷却遮罩 (低亮度 + 低饱和度的半透明覆盖)
-  3. 冷却比例 = 暗像素占比 (从底部扫描到顶部)
-"""
+import os
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-import time
-import logging
 
-log = logging.getLogger('sao_auto.skill')
+from config import (
+    BAR_COLORS,
+    SKILL_BASELINE_DIR,
+    get_skill_slot_client_rects,
+    get_skill_slot_rects,
+)
+from vision_accel import cvt_color, gaussian_blur
 
-# ── 技能格检测参数 ──
-MIN_SLOT_SIZE = 28          # 最小技能格像素宽度
-MAX_SLOT_SIZE = 80          # 最大技能格像素宽度
-MIN_SLOTS = 4               # 最少技能格数
-MAX_SLOTS = 12              # 最多技能格数
-EDGE_THRESH_LOW = 50
-EDGE_THRESH_HIGH = 150
+_DEFAULT_BASELINE = {
+    "inner_v_mean": 150.0,
+    "inner_s_mean": 150.0,
+    "ring_ratio": 0.16,
+    "bright_ratio": 0.20,
+    "icon_v_mean": 165.0,
+    "icon_s_mean": 95.0,
+}
 
 
-def detect_skill_slots(img_bgr):
-    """
-    在技能栏 ROI 图像中检测等间距的方形技能格。
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
 
-    Parameters
-    ----------
-    img_bgr : np.ndarray
-        技能栏区域截图 (BGR)
 
-    Returns
-    -------
-    list[dict]
-        每个元素 = {'x': int, 'y': int, 'w': int, 'h': int, 'index': int}
-        坐标相对于输入图像左上角
-    """
+def _slot_masks(h: int, w: int) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    if h < 8 or w < 8:
+        return None
+    cx = w / 2.0
+    cy = h * 0.46
+    radius_outer = max(6.0, min(w, h) * 0.47)
+    radius_inner = max(4.0, min(w, h) * 0.30)
+    yy, xx = np.ogrid[:h, :w]
+    dist2 = (xx - cx) ** 2 + (yy - cy) ** 2
+    icon_mask = dist2 <= radius_outer * radius_outer
+    inner_mask = dist2 <= radius_inner * radius_inner
+    ring_mask = icon_mask & (~inner_mask)
+    if not np.any(icon_mask) or not np.any(inner_mask) or not np.any(ring_mask):
+        return None
+    return icon_mask, inner_mask, ring_mask
+
+
+def _prepare_hsv(img_bgr: Optional[np.ndarray]) -> Optional[np.ndarray]:
     if img_bgr is None or img_bgr.size == 0:
-        return []
+        return None
+    return cvt_color(gaussian_blur(img_bgr, (3, 3), 0), cv2.COLOR_BGR2HSV)
+
+
+def _measure_slot(img_bgr: Optional[np.ndarray]) -> Optional[Dict[str, float]]:
+    hsv = _prepare_hsv(img_bgr)
+    if hsv is None:
+        return None
+    h, w = hsv.shape[:2]
+    masks = _slot_masks(h, w)
+    if masks is None:
+        return None
+    icon_mask, inner_mask, ring_mask = masks
+
+    hue = hsv[:, :, 0]
+    sat = hsv[:, :, 1]
+    val = hsv[:, :, 2]
+
+    icon_total = max(1, int(np.count_nonzero(icon_mask)))
+    inner_total = max(1, int(np.count_nonzero(inner_mask)))
+    ring_total = max(1, int(np.count_nonzero(ring_mask)))
+
+    warm_mask = (hue >= 5) & (hue <= 35) & (sat >= 55) & (val >= 30)
+    cyan_ring_mask = (hue >= 72) & (hue <= 126) & (sat >= 30) & (val >= 100)
+    dark_mask = val <= BAR_COLORS["skill_cooldown"]["v_max_dark"]
+    gray_dark_mask = dark_mask & (sat <= BAR_COLORS["skill_cooldown"]["s_max_gray"])
+    dim_mask = val <= 120
+    bright_mask = val >= 175
+
+    inner_v_mean = float(val[inner_mask].mean())
+    inner_s_mean = float(sat[inner_mask].mean())
+    icon_v_mean = float(val[icon_mask].mean())
+    icon_s_mean = float(sat[icon_mask].mean())
+    ring_ratio = float(np.count_nonzero(cyan_ring_mask & ring_mask)) / ring_total
+    bright_ratio = float(np.count_nonzero(bright_mask & inner_mask)) / inner_total
+    dark_ratio = float(np.count_nonzero(dark_mask & inner_mask)) / inner_total
+    gray_dark_ratio = float(np.count_nonzero(gray_dark_mask & inner_mask)) / inner_total
+    dim_ratio = float(np.count_nonzero(dim_mask & inner_mask)) / inner_total
+    warm_ratio = float(np.count_nonzero(warm_mask & inner_mask)) / inner_total
+    shadow_ratio = float(np.count_nonzero(dark_mask & icon_mask)) / icon_total
+    icon_score = (0.74 * (icon_v_mean / 255.0)) + (0.26 * (icon_s_mean / 255.0))
+
+    ready_score = (
+        (inner_v_mean / 255.0) * 0.38
+        + ring_ratio * 0.28
+        + bright_ratio * 0.16
+        + (icon_v_mean / 255.0) * 0.12
+        + max(0.0, 1.0 - dark_ratio) * 0.06
+    )
+
+    return {
+        "inner_v_mean": inner_v_mean,
+        "inner_s_mean": inner_s_mean,
+        "icon_v_mean": icon_v_mean,
+        "icon_s_mean": icon_s_mean,
+        "ring_ratio": ring_ratio,
+        "bright_ratio": bright_ratio,
+        "dark_ratio": dark_ratio,
+        "gray_dark_ratio": gray_dark_ratio,
+        "dim_ratio": dim_ratio,
+        "warm_ratio": warm_ratio,
+        "shadow_ratio": shadow_ratio,
+        "icon_score": icon_score,
+        "ready_score": ready_score,
+    }
+
+
+def _compare_to_baseline(
+    img_bgr: Optional[np.ndarray],
+    baseline_bgr: Optional[np.ndarray],
+) -> Optional[Dict[str, float]]:
+    if img_bgr is None or baseline_bgr is None or img_bgr.size == 0 or baseline_bgr.size == 0:
+        return None
 
     h, w = img_bgr.shape[:2]
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    if baseline_bgr.shape[:2] != (h, w):
+        baseline_bgr = cv2.resize(baseline_bgr, (w, h), interpolation=cv2.INTER_AREA)
 
-    # 使用 Canny 边缘检测找矩形轮廓
-    edges = cv2.Canny(gray, EDGE_THRESH_LOW, EDGE_THRESH_HIGH)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    edges = cv2.dilate(edges, kernel, iterations=1)
+    hsv = _prepare_hsv(img_bgr)
+    base_hsv = _prepare_hsv(baseline_bgr)
+    if hsv is None or base_hsv is None:
+        return None
 
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    masks = _slot_masks(h, w)
+    if masks is None:
+        return None
+    icon_mask, inner_mask, _ring_mask = masks
 
-    candidates = []
-    for cnt in contours:
-        x, y, cw, ch = cv2.boundingRect(cnt)
-        # 技能格应当接近正方形、大小合理
-        aspect = cw / max(1, ch)
-        if 0.7 < aspect < 1.4 and MIN_SLOT_SIZE <= cw <= MAX_SLOT_SIZE and MIN_SLOT_SIZE <= ch <= MAX_SLOT_SIZE:
-            candidates.append({'x': x, 'y': y, 'w': cw, 'h': ch})
+    cur_v = hsv[:, :, 2].astype(np.float32)
+    cur_s = hsv[:, :, 1].astype(np.float32)
+    base_v = base_hsv[:, :, 2].astype(np.float32)
+    base_s = base_hsv[:, :, 1].astype(np.float32)
 
-    if len(candidates) < MIN_SLOTS:
-        # 退化方案: 假设技能栏均匀分布在 ROI 底部
-        return _fallback_uniform_slots(w, h)
+    cur_icon_v = cur_v[icon_mask]
+    cur_icon_s = cur_s[icon_mask]
+    base_icon_v = base_v[icon_mask]
+    base_icon_s = base_s[icon_mask]
+    cur_inner_v = cur_v[inner_mask]
+    base_inner_v = base_v[inner_mask]
 
-    # 按 x 坐标排序, 去除重叠
-    candidates.sort(key=lambda s: s['x'])
-    merged = _merge_overlapping(candidates)
+    base_icon_v_mean = max(1.0, float(base_icon_v.mean()))
+    base_icon_s_mean = max(1.0, float(base_icon_s.mean()))
+    cur_icon_v_mean = float(cur_icon_v.mean())
+    cur_icon_s_mean = float(cur_icon_s.mean())
+    base_score = (0.74 * (base_icon_v_mean / 255.0)) + (0.26 * (base_icon_s_mean / 255.0))
+    cur_score = (0.74 * (cur_icon_v_mean / 255.0)) + (0.26 * (cur_icon_s_mean / 255.0))
 
-    if len(merged) < MIN_SLOTS:
-        return _fallback_uniform_slots(w, h)
+    darkened_ratio = float(np.mean(cur_inner_v + 14.0 < base_inner_v))
+    restored_ratio = float(np.mean(np.abs(cur_inner_v - base_inner_v) <= 16.0))
 
-    # 限制数量
-    merged = merged[:MAX_SLOTS]
-    for i, s in enumerate(merged):
-        s['index'] = i
-
-    return merged
-
-
-def _fallback_uniform_slots(roi_w, roi_h, n=8):
-    """退化方案: 平均分割 ROI 为 n 个等宽格子。"""
-    slot_w = min(roi_h, roi_w // n)
-    slot_h = slot_w
-    y = roi_h - slot_h - 2
-    gap = (roi_w - slot_w * n) // (n + 1)
-    slots = []
-    for i in range(n):
-        x = gap + i * (slot_w + gap)
-        slots.append({'x': x, 'y': y, 'w': slot_w, 'h': slot_h, 'index': i})
-    return slots
+    return {
+        "icon_v_ratio": cur_icon_v_mean / base_icon_v_mean,
+        "icon_s_ratio": cur_icon_s_mean / base_icon_s_mean,
+        "score_ratio": cur_score / max(0.05, base_score),
+        "darkened_ratio": darkened_ratio,
+        "restored_ratio": restored_ratio,
+        "avg_delta_v": float(cur_inner_v.mean() - base_inner_v.mean()),
+    }
 
 
-def _merge_overlapping(slots, iou_thresh=0.3):
-    """合并重叠检测框。"""
-    if not slots:
-        return []
-    merged = [slots[0]]
-    for s in slots[1:]:
-        last = merged[-1]
-        overlap_x = max(0, min(last['x'] + last['w'], s['x'] + s['w']) - max(last['x'], s['x']))
-        overlap_y = max(0, min(last['y'] + last['h'], s['y'] + s['h']) - max(last['y'], s['y']))
-        overlap_area = overlap_x * overlap_y
-        area_a = last['w'] * last['h']
-        area_b = s['w'] * s['h']
-        iou = overlap_area / max(1, area_a + area_b - overlap_area)
-        if iou < iou_thresh:
-            merged.append(s)
-    return merged
+def _guess_baseline_state(metrics: Dict[str, float]) -> str:
+    if metrics["warm_ratio"] >= 0.45 and metrics["ring_ratio"] <= 0.08:
+        return "insufficient_energy"
+    if metrics["icon_v_mean"] <= 125.0 or metrics["shadow_ratio"] >= 0.30:
+        return "cooldown"
+    if metrics["ready_score"] >= 0.34 and metrics["ring_ratio"] >= 0.08:
+        return "ready"
+    return "unknown"
 
 
-def detect_cooldowns(img_bgr, slots, cfg=None):
-    """
-    检测每个技能格的冷却比例。
+def _classify_state(
+    metrics: Dict[str, float],
+    baseline: Dict[str, float],
+    baseline_cmp: Optional[Dict[str, float]] = None,
+    baseline_state: str = "unknown",
+) -> Tuple[str, float]:
+    ref_v = max(1.0, float(baseline.get("inner_v_mean", _DEFAULT_BASELINE["inner_v_mean"])))
+    ref_ring = max(0.06, float(baseline.get("ring_ratio", _DEFAULT_BASELINE["ring_ratio"])))
+    ref_icon_v = max(1.0, float(baseline.get("icon_v_mean", _DEFAULT_BASELINE["icon_v_mean"])))
 
-    Parameters
-    ----------
-    img_bgr : np.ndarray
-        技能栏 ROI 截图 (BGR)
-    slots : list[dict]
-        由 detect_skill_slots 返回的格子列表
-    cfg : dict, optional
-        BAR_COLORS['skill_cooldown'] 配置
+    v_ratio = min(1.5, metrics["inner_v_mean"] / ref_v)
+    ring_rel = min(2.0, metrics["ring_ratio"] / ref_ring)
+    icon_v_ratio = min(1.5, metrics["icon_v_mean"] / ref_icon_v)
 
-    Returns
-    -------
-    list[dict]
-        更新后的 slots，每个增加:
-          'cooldown_pct': float (0.0=就绪, ~1.0=完全冷却)
-          'active': bool
-    """
-    if cfg is None:
-        cfg = {'v_max_dark': 80, 's_max_gray': 40}
+    insufficient_like = (
+        metrics["warm_ratio"] >= 0.42
+        and metrics["ring_ratio"] <= 0.09
+        and metrics["dim_ratio"] >= 0.38
+    )
+    ready_absolute = (
+        metrics["ring_ratio"] >= 0.10
+        and metrics["icon_v_mean"] >= 128.0
+        and metrics["gray_dark_ratio"] <= 0.20
+        and metrics["shadow_ratio"] <= 0.20
+    )
 
-    v_max_dark = cfg.get('v_max_dark', 80)
-    s_max_gray = cfg.get('s_max_gray', 40)
+    if insufficient_like:
+        return "insufficient_energy", _clamp01(max(0.12, 1.0 - metrics["icon_score"]))
 
-    if img_bgr is None or img_bgr.size == 0:
-        for s in slots:
-            s['cooldown_pct'] = 0.0
-            s['active'] = False
-        return slots
+    if baseline_cmp:
+        if baseline_state == "cooldown":
+            if ready_absolute and baseline_cmp["score_ratio"] >= 1.06:
+                return "ready", 0.0
+            cooldown_ratio = _clamp01(
+                max(
+                    0.12,
+                    (1.0 - min(1.0, baseline_cmp["score_ratio"])) * 0.50
+                    + metrics["shadow_ratio"] * 0.30
+                    + metrics["gray_dark_ratio"] * 0.20,
+                )
+            )
+            return "cooldown", cooldown_ratio
 
-    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-    h_img, w_img = hsv.shape[:2]
+        if (
+            baseline_cmp["score_ratio"] <= 0.90
+            and baseline_cmp["darkened_ratio"] >= 0.14
+        ) or (
+            baseline_cmp["icon_v_ratio"] <= 0.90
+            and baseline_cmp["darkened_ratio"] >= 0.18
+        ):
+            cooldown_ratio = _clamp01(
+                (1.0 - min(1.0, baseline_cmp["score_ratio"])) * 0.56
+                + baseline_cmp["darkened_ratio"] * 0.28
+                + metrics["shadow_ratio"] * 0.16
+            )
+            return "cooldown", max(0.05, cooldown_ratio)
 
-    for s in slots:
-        sx, sy, sw, sh = s['x'], s['y'], s['w'], s['h']
-        # 裁剪格子区域 (带边界检查)
-        x1 = max(0, sx + 2)
-        y1 = max(0, sy + 2)
-        x2 = min(w_img, sx + sw - 2)
-        y2 = min(h_img, sy + sh - 2)
-        if x2 <= x1 or y2 <= y1:
-            s['cooldown_pct'] = 0.0
-            s['active'] = False
-            continue
+        if ready_absolute or (
+            baseline_cmp["restored_ratio"] >= 0.48
+            and baseline_cmp["score_ratio"] >= 0.93
+            and metrics["shadow_ratio"] <= 0.24
+        ):
+            return "ready", 0.0
 
-        roi = hsv[y1:y2, x1:x2]
-        # 冷却遮罩 = 低亮度 + 低饱和度
-        dark_mask = (roi[:, :, 2] < v_max_dark) & (roi[:, :, 1] < s_max_gray)
-        total_px = roi.shape[0] * roi.shape[1]
-        dark_px = np.count_nonzero(dark_mask)
+    if ready_absolute or (
+        metrics["ready_score"] >= 0.34
+        and v_ratio >= 0.78
+        and ring_rel >= 0.72
+        and icon_v_ratio >= 0.78
+        and metrics["gray_dark_ratio"] <= 0.28
+    ):
+        return "ready", 0.0
 
-        # 从下到上扫描: 冷却遮罩通常从底部向上收缩
-        cd_pct = dark_px / max(1, total_px)
-
-        # 进一步计算: 分行扫描确定精确冷却高度
-        if cd_pct > 0.05:
-            cd_pct = _scan_cooldown_height(dark_mask)
-
-        # 判断是否正在释放 (高亮 / 边框发光)
-        bright_mask = roi[:, :, 2] > 200
-        bright_ratio = np.count_nonzero(bright_mask) / max(1, total_px)
-        active = bright_ratio > 0.3
-
-        s['cooldown_pct'] = round(min(1.0, max(0.0, cd_pct)), 3)
-        s['active'] = active
-
-    return slots
-
-
-def _scan_cooldown_height(dark_mask):
-    """从底部向上逐行扫描, 找到冷却遮罩的上边界。"""
-    h, w = dark_mask.shape
-    # 从底部向上扫描
-    threshold = 0.5  # 一行中超过 50% 为暗色 → 视为冷却行
-    cd_rows = 0
-    for row in range(h - 1, -1, -1):
-        row_dark = np.count_nonzero(dark_mask[row, :])
-        if row_dark / max(1, w) > threshold:
-            cd_rows += 1
-        else:
-            break
-    return cd_rows / max(1, h)
+    cooldown_ratio = _clamp01(
+        (1.0 - min(1.0, icon_v_ratio)) * 0.42
+        + metrics["shadow_ratio"] * 0.30
+        + metrics["gray_dark_ratio"] * 0.18
+        + (1.0 - min(1.0, ring_rel)) * 0.10
+    )
+    if cooldown_ratio >= 0.08:
+        return "cooldown", max(0.05, cooldown_ratio)
+    return "unknown", cooldown_ratio
 
 
-class SkillBarTracker:
-    """
-    技能栏持续跟踪器。
+class SkillVisualTracker:
+    """Track fixed visual skill slots using client-rect anchored ROIs."""
 
-    由 RecognitionEngine 在每帧调用，维护技能格位置缓存。
-    """
-
-    def __init__(self, state_mgr, settings):
-        self._state = state_mgr
-        self._settings = settings
-        self._slots = []
-        self._last_detect_time = 0
-        self._detect_interval = 5.0     # 每 5s 重新检测格子位置
-        self._enabled = True
-
-    @property
-    def slots(self):
-        return self._slots
-
-    def tick(self, img_bgr):
-        """
-        每帧调用: 更新技能冷却状态并推送到 GameState。
-
-        Parameters
-        ----------
-        img_bgr : np.ndarray
-            技能栏 ROI 截图 (BGR)
-        """
-        if not self._enabled or img_bgr is None or img_bgr.size == 0:
-            return
-
-        now = time.time()
-
-        # 周期性重新检测格子位置
-        if not self._slots or now - self._last_detect_time > self._detect_interval:
-            self._slots = detect_skill_slots(img_bgr)
-            self._last_detect_time = now
-            if self._slots:
-                log.debug(f'Detected {len(self._slots)} skill slots')
-
-        if not self._slots:
-            return
-
-        # 检测冷却
-        from config import BAR_COLORS
-        cd_cfg = BAR_COLORS.get('skill_cooldown', {})
-        detect_cooldowns(img_bgr, self._slots, cd_cfg)
-
-        # 推送到 GameState
-        skill_data = []
-        for s in self._slots:
-            skill_data.append({
-                'index': s.get('index', 0),
-                'cooldown_pct': s.get('cooldown_pct', 0.0),
-                'active': s.get('active', False),
-                'name': '',
-            })
-        self._state.update(skill_slots=skill_data)
+    def __init__(self, confirm_frames: int = 2):
+        self._confirm_frames = max(1, int(confirm_frames))
+        self._slot_cache: Dict[int, Dict[str, Any]] = {}
+        self._baseline_dir = SKILL_BASELINE_DIR
+        try:
+            os.makedirs(self._baseline_dir, exist_ok=True)
+        except Exception:
+            pass
 
     def reset(self):
-        """重置格子缓存 (窗口大小变化时调用)。"""
-        self._slots = []
-        self._last_detect_time = 0
+        self._slot_cache.clear()
+
+    def _ensure_slot_state(self, idx: int) -> Dict[str, Any]:
+        if idx not in self._slot_cache:
+            self._slot_cache[idx] = {
+                "baseline": dict(_DEFAULT_BASELINE),
+                "baseline_img": None,
+                "baseline_state": "unknown",
+                "stable_state": "unknown",
+                "pending_state": None,
+                "pending_count": 0,
+            }
+        return self._slot_cache[idx]
+
+    def _save_baseline(self, idx: int, img: np.ndarray):
+        try:
+            os.makedirs(self._baseline_dir, exist_ok=True)
+            cv2.imwrite(os.path.join(self._baseline_dir, f"skill_slot_{idx}.png"), img)
+        except Exception:
+            pass
+
+    def analyze(self, client_rect, capture_region) -> List[Dict[str, Any]]:
+        if not client_rect:
+            return []
+
+        client_left, client_top, client_right, client_bottom = client_rect
+        client_w = max(1, int(client_right - client_left))
+        client_h = max(1, int(client_bottom - client_top))
+        client_local_map = {
+            item["index"]: item["rect"] for item in get_skill_slot_client_rects(client_w, client_h)
+        }
+
+        slots: List[Dict[str, Any]] = []
+        for item in get_skill_slot_rects(client_rect):
+            idx = int(item["index"])
+            bbox = item["bbox"]
+            img = capture_region(bbox)
+            metrics = _measure_slot(img)
+            state_store = self._ensure_slot_state(idx)
+            ready_edge = False
+
+            if metrics is not None and state_store.get("baseline_img") is None and img is not None:
+                state_store["baseline_img"] = img.copy()
+                state_store["baseline"] = dict(metrics)
+                state_store["baseline_state"] = _guess_baseline_state(metrics)
+                self._save_baseline(idx, img)
+
+            baseline_cmp = None
+            if img is not None and state_store.get("baseline_img") is not None:
+                baseline_cmp = _compare_to_baseline(img, state_store.get("baseline_img"))
+
+            if metrics is None:
+                raw_state = "unknown"
+                cooldown_ratio = 0.0
+            else:
+                raw_state, cooldown_ratio = _classify_state(
+                    metrics,
+                    state_store["baseline"],
+                    baseline_cmp,
+                    str(state_store.get("baseline_state", "unknown") or "unknown"),
+                )
+
+            if raw_state == state_store.get("pending_state"):
+                state_store["pending_count"] += 1
+            else:
+                state_store["pending_state"] = raw_state
+                state_store["pending_count"] = 1
+
+            stable_state = str(state_store.get("stable_state", "unknown") or "unknown")
+            if state_store["pending_count"] >= self._confirm_frames:
+                previous = stable_state
+                stable_state = raw_state
+                state_store["stable_state"] = stable_state
+                if previous != "ready" and stable_state == "ready":
+                    ready_edge = True
+
+            if metrics is not None and stable_state == "ready":
+                baseline = state_store["baseline"]
+                for key in ("inner_v_mean", "inner_s_mean", "icon_v_mean", "icon_s_mean"):
+                    baseline[key] = baseline.get(key, metrics[key]) * 0.88 + metrics[key] * 0.12
+                for key in ("ring_ratio", "bright_ratio"):
+                    baseline[key] = max(
+                        baseline.get(key, metrics[key]) * 0.86 + metrics[key] * 0.14,
+                        metrics[key] * 0.94,
+                    )
+
+            rect = client_local_map.get(idx)
+            if not rect:
+                left, top, right, bottom = bbox
+                rect = {
+                    "x": left - client_left,
+                    "y": top - client_top,
+                    "w": right - left,
+                    "h": bottom - top,
+                }
+
+            if stable_state == "ready":
+                cooldown_ratio = 0.0
+            elif stable_state == "insufficient_energy":
+                cooldown_ratio = max(cooldown_ratio, 0.0)
+
+            slots.append(
+                {
+                    "index": idx,
+                    "rect": {
+                        "x": int(rect["x"]),
+                        "y": int(rect["y"]),
+                        "w": int(rect["w"]),
+                        "h": int(rect["h"]),
+                    },
+                    "state": stable_state,
+                    "cooldown_ratio": round(_clamp01(cooldown_ratio), 3),
+                    "cooldown_pct": round(_clamp01(cooldown_ratio), 3),
+                    "insufficient_energy": stable_state == "insufficient_energy",
+                    "active": stable_state == "ready",
+                    "ready_edge": bool(ready_edge),
+                }
+            )
+
+        slots.sort(key=lambda item: item.get("index", 0))
+        return slots

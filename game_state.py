@@ -19,6 +19,61 @@ _CACHE_FIELDS = (
 )
 
 
+def compute_burst_ready(skill_slots, watched_slots) -> bool:
+    """Return True when every watched slot is ready and at least one matched."""
+    if not skill_slots or not watched_slots:
+        return False
+    try:
+        watched = {int(x) for x in watched_slots if int(x) > 0}
+    except Exception:
+        watched = set()
+    if not watched:
+        return False
+
+    matched = []
+    for slot in skill_slots:
+        if not isinstance(slot, dict):
+            continue
+        try:
+            idx = int(slot.get('index', 0) or 0)
+        except Exception:
+            idx = 0
+        if idx in watched:
+            matched.append(slot)
+    if not matched:
+        return False
+
+    def _slot_ready(slot):
+        state = str(slot.get('state', '') or '').strip().lower()
+        if state:
+            if state in ('ready', 'active'):
+                return True
+        try:
+            if bool(slot.get('active')):
+                return True
+        except Exception:
+            pass
+        try:
+            charge_count = int(slot.get('charge_count', 0) or 0)
+        except Exception:
+            charge_count = 0
+        if charge_count > 0:
+            return True
+        try:
+            remaining_ms = int(slot.get('remaining_ms', 0) or 0)
+            if remaining_ms <= 120:
+                return True
+        except Exception:
+            pass
+        value = slot.get('cooldown_pct', 1.0)
+        try:
+            return float(value) <= 0.02
+        except Exception:
+            return False
+
+    return all(_slot_ready(slot) for slot in matched)
+
+
 @dataclass
 class GameState:
     """游戏状态快照 — 所有字段由识别层写入，UI 层只读。"""
@@ -41,8 +96,20 @@ class GameState:
 
     # ── 技能栏 ──
     skill_slots: List = field(default_factory=list)
-    # 每个元素: {'index': int, 'cooldown_pct': float (0.0=就绪, 1.0=完全冷却),
-    #            'active': bool (是否正在释放), 'name': str}
+    # 每个元素:
+    # {
+    #   'index': int,
+    #   'rect': {'x': int, 'y': int, 'w': int, 'h': int},
+    #   'state': 'ready' | 'cooldown' | 'insufficient_energy' | 'unknown',
+    #   'cooldown_pct': float,
+    #   'insufficient_energy': bool,
+    #   'active': bool,
+    #   'ready_edge': bool,
+    # }
+
+    # ── Burst Mode Ready (CD 提醒) ──
+    burst_ready: bool = False          # 所有监视技能 CD 就绪时为 True
+
     profession_id: int = 0             # 职业 ID (来自抓包)
     profession_name: str = ''          # 职业名称
 
@@ -69,7 +136,7 @@ class GameState:
 
     @property
     def stamina_text(self) -> str:
-        return f'{self.stamina_current}/{self.stamina_max}'
+        return f'{int(round(max(0.0, min(1.0, self.stamina_pct)) * 100.0))}%'
 
     def to_dict(self) -> dict:
         return {
@@ -84,6 +151,10 @@ class GameState:
             'stamina_current': self.stamina_current,
             'stamina_max': self.stamina_max,
             'stamina_pct': round(self.stamina_pct, 4),
+            'skill_slots': list(self.skill_slots),
+            'burst_ready': bool(self.burst_ready),
+            'profession_id': self.profession_id,
+            'profession_name': self.profession_name,
             'hp_text': self.hp_text,
             'stamina_text': self.stamina_text,
             'recognition_ok': self.recognition_ok,
@@ -108,8 +179,14 @@ class GameStateManager:
         """部分更新状态字段并通知所有监听器 (含范围校验)"""
         with self._lock:
             # ── 预过滤: 拦截 HP/LV/STA 的 0 值, 在 setattr 之前保护 ──
+            allow_zero_hp = False
+            if 'hp_pct' in kwargs:
+                try:
+                    allow_zero_hp = float(kwargs['hp_pct']) <= 0.001
+                except Exception:
+                    allow_zero_hp = False
             if 'hp_current' in kwargs and kwargs['hp_current'] == 0:
-                if self._state.hp_max > 0:
+                if self._state.hp_max > 0 and not allow_zero_hp:
                     prev = getattr(self, '_prev_hp_current', self._state.hp_current)
                     if prev > 0:
                         kwargs['hp_current'] = prev
@@ -124,9 +201,11 @@ class GameStateManager:
                 if prev_lv_extra > 0:
                     kwargs['level_extra'] = prev_lv_extra
             if 'stamina_current' in kwargs and kwargs['stamina_current'] == 0:
-                prev_sta = getattr(self, '_prev_stamina_current', self._state.stamina_current)
-                if prev_sta > 0:
-                    kwargs['stamina_current'] = prev_sta
+                next_sta_max = kwargs.get('stamina_max', self._state.stamina_max)
+                if 'stamina_pct' not in kwargs and int(next_sta_max or 0) <= 0:
+                    prev_sta = getattr(self, '_prev_stamina_current', self._state.stamina_current)
+                    if prev_sta > 0:
+                        kwargs['stamina_current'] = prev_sta
 
             for k, v in kwargs.items():
                 if not hasattr(self._state, k):
@@ -205,15 +284,6 @@ class GameStateManager:
                         setattr(self._state, k, expected_type(v))
                     except (ValueError, TypeError):
                         pass
-            # 初始化 prev 追踪值, 防止缓存数据被后续 0 值覆盖
-            if self._state.hp_current > 0:
-                self._prev_hp_current = self._state.hp_current
-            if self._state.level_base > 0:
-                self._prev_level_base = self._state.level_base
-            if self._state.level_extra > 0:
-                self._prev_level_extra = self._state.level_extra
-            if self._state.stamina_current > 0:
-                self._prev_stamina_current = self._state.stamina_current
             print(f'[GameState] 从缓存加载: HP={self._state.hp_current}/{self._state.hp_max}, '
                   f'LV={self._state.level_base}')
 

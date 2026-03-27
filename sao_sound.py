@@ -9,10 +9,20 @@ import os
 import threading
 import math
 import time
+import tempfile
+import subprocess
+import base64
+import wave
+from array import array
+import sys
 import tkinter as tk
 from typing import Optional
 
-_ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets')
+if getattr(sys, 'frozen', False):
+    _BASE = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
+else:
+    _BASE = os.path.dirname(os.path.abspath(__file__))
+_ASSETS = os.path.join(_BASE, 'assets')
 _SOUNDS = os.path.join(_ASSETS, 'sounds')
 _FONTS = os.path.join(_ASSETS, 'fonts')
 
@@ -33,11 +43,24 @@ SAO_SOUNDS = {
     'alo_welcome': os.path.join(_SOUNDS, 'Popup.ALO.Welcome.mp3'),
     'link_start':  os.path.join(_SOUNDS, 'LinkStart.SAO.Kirito.mp3'),
     'nervegear':   os.path.join(_SOUNDS, 'Startup.SAO.NerveGear.mp3'),
+    'burst_ready': os.path.join(_SOUNDS, 'Popup.SAO.Alert.mp3'),  # Burst Mode Ready SFX
 }
+
+# ═══ Global sound settings ═══
+_sound_enabled = True
+_sound_volume = 0.7   # 0.0 ~ 1.0
 
 # 缓存 pygame 状态
 _pygame_inited = False
 _has_pygame = None
+_burst_tts_lock = threading.Lock()
+_burst_tts_ready = None
+_burst_tts_fail = False
+
+_BURST_TTS_TEXT = 'Burst Mode Ready'
+_BURST_TTS_DIR = os.path.join(tempfile.gettempdir(), 'sao_auto_tts')
+_BURST_TTS_RAW = os.path.join(_BURST_TTS_DIR, 'burst_ready_raw.wav')
+_BURST_TTS_PROC = os.path.join(_BURST_TTS_DIR, 'burst_ready_scifi.wav')
 
 
 def _init_pygame():
@@ -55,33 +78,170 @@ def _init_pygame():
     return _has_pygame
 
 
+def set_sound_enabled(enabled: bool):
+    """Set global sound enabled/disabled."""
+    global _sound_enabled
+    _sound_enabled = bool(enabled)
+
+
+def set_sound_volume(volume_pct: int):
+    """Set global volume (0-100)."""
+    global _sound_volume
+    _sound_volume = max(0.0, min(1.0, volume_pct / 100.0))
+
+
+def get_sound_enabled() -> bool:
+    return _sound_enabled
+
+
+def get_sound_volume() -> int:
+    return int(round(_sound_volume * 100))
+
+
+def _build_powershell_encoded(script: str) -> str:
+    return base64.b64encode(script.encode('utf-16le')).decode('ascii')
+
+
+def _synthesize_tts_to_wav(text: str, output_path: str) -> bool:
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    safe_output = output_path.replace("'", "''")
+    safe_text = text.replace("'", "''")
+    script = (
+        "Add-Type -AssemblyName System.Speech;"
+        "$culture=[System.Globalization.CultureInfo]::GetCultureInfo('en-US');"
+        "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+        "try{$s.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::Female,"
+        "[System.Speech.Synthesis.VoiceAge]::Adult,0,$culture)}catch{};"
+        "$s.Rate=-2;"
+        "$s.Volume=100;"
+        f"$s.SetOutputToWaveFile('{safe_output}');"
+        "$p=New-Object System.Speech.Synthesis.PromptBuilder($culture);"
+        f"$p.AppendText('{safe_text}');"
+        "$s.Speak($p);"
+        "$s.Dispose();"
+    )
+    try:
+        encoded = _build_powershell_encoded(script)
+        completed = subprocess.run(
+            [
+                'powershell',
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-EncodedCommand', encoded,
+            ],
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+        return completed.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1024
+    except Exception:
+        return False
+
+
+def _electrify_wave(input_path: str, output_path: str) -> bool:
+    try:
+        with wave.open(input_path, 'rb') as src:
+            channels = src.getnchannels()
+            sample_width = src.getsampwidth()
+            frame_rate = src.getframerate()
+            frame_count = src.getnframes()
+            raw = src.readframes(frame_count)
+
+        if sample_width != 2 or frame_count <= 0:
+            return False
+
+        samples = array('h')
+        samples.frombytes(raw)
+        total = len(samples)
+        if total <= 0:
+            return False
+
+        bitcrush_step = 96
+        downsample = 3
+        echo_a = int(frame_rate * 0.045) * max(1, channels)
+        echo_b = int(frame_rate * 0.095) * max(1, channels)
+        out = array('h', [0]) * total
+
+        for idx in range(total):
+            base_idx = idx - (idx % downsample)
+            crushed = int(round(samples[base_idx] / bitcrush_step)) * bitcrush_step
+            t = (idx // max(1, channels)) / float(max(1, frame_rate))
+            mod = 0.62 + 0.38 * math.sin(2.0 * math.pi * 27.0 * t)
+            value = crushed * mod
+            if idx >= echo_a:
+                value += out[idx - echo_a] * 0.28
+            if idx >= echo_b:
+                value += out[idx - echo_b] * 0.18
+            value = samples[idx] * 0.20 + value * 0.86
+            out[idx] = max(-32768, min(32767, int(value)))
+
+        with wave.open(output_path, 'wb') as dst:
+            dst.setnchannels(channels)
+            dst.setsampwidth(sample_width)
+            dst.setframerate(frame_rate)
+            dst.writeframes(out.tobytes())
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_burst_ready_tts() -> Optional[str]:
+    global _burst_tts_ready, _burst_tts_fail
+    if _burst_tts_ready and os.path.exists(_burst_tts_ready):
+        return _burst_tts_ready
+    if _burst_tts_fail:
+        return None
+
+    with _burst_tts_lock:
+        if _burst_tts_ready and os.path.exists(_burst_tts_ready):
+            return _burst_tts_ready
+        os.makedirs(_BURST_TTS_DIR, exist_ok=True)
+        if os.path.exists(_BURST_TTS_PROC) and os.path.getsize(_BURST_TTS_PROC) > 1024:
+            _burst_tts_ready = _BURST_TTS_PROC
+            return _burst_tts_ready
+        ok = _synthesize_tts_to_wav(_BURST_TTS_TEXT, _BURST_TTS_RAW)
+        if ok:
+            ok = _electrify_wave(_BURST_TTS_RAW, _BURST_TTS_PROC)
+        if ok and os.path.exists(_BURST_TTS_PROC):
+            _burst_tts_ready = _BURST_TTS_PROC
+            return _burst_tts_ready
+        _burst_tts_fail = True
+        return None
+
+
 def play_sound(name: str, volume: float = 0.7):
     """
     播放 SAO 音效 (非阻塞)
     
     Args:
         name: 音效名 (见 SAO_SOUNDS)
-        volume: 0.0~1.0 音量
+        volume: 0.0~1.0 音量 (会被全局音量和开关覆盖)
     """
+    if not _sound_enabled:
+        return
     path = SAO_SOUNDS.get(name, '')
+    if name == 'burst_ready':
+        path = _ensure_burst_ready_tts() or path
     if not path or not os.path.exists(path):
         return
+    # Apply global volume
+    effective_volume = min(volume, _sound_volume)
 
     def _play():
         try:
             if _init_pygame():
                 import pygame
                 snd = pygame.mixer.Sound(path)
-                snd.set_volume(volume)
+                snd.set_volume(effective_volume)
                 snd.play()
                 return
         except Exception:
             pass
         # 回退: winsound (仅支持 .wav, mp3 不支持)
-        # 尝试用 Windows Media API
         try:
             import winsound
-            # winsound 不支持 mp3, 跳过
+            if path.lower().endswith('.wav'):
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
         except Exception:
             pass
 
