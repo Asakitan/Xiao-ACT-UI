@@ -87,7 +87,6 @@ a = Analysis(
         'pandas',
         'torch',
         'tensorflow',
-        'tkinter',
         'test',
         'unittest',
         'xmlrpc',
