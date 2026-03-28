@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from config import BASE_DIR
 
 BOSS_RAID_SCHEMA_VERSION = 1
-DEFAULT_BOSS_RAID_SERVER_URL = "http://47.82.157.220:9320"
+DEFAULT_BOSS_RAID_SERVER_URL = ""
 BOSS_RAID_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "boss_raids")
 
 # ═══════════════════════════════════════════════
