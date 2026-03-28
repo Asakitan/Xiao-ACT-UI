@@ -180,7 +180,6 @@ sao_auto/
 
 - [`StarResonanceDamageCounter`](../StarResonanceDamageCounter/README.md)
 - [`StarResonanceDps`](../StarResonanceDps/README.md)
-- [`ok-star-resonance`](../ok-star-resonance/README.md)
 
 补充说明：
 
