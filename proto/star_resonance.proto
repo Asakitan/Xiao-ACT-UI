@@ -1,4 +1,3 @@
-// Generated from SRDC "BlueProtobuf_pb.js" and "blueprotobuf.js".
 // DO NOT EDIT BY HAND. Re-run generate_star_resonance_proto.py.
 
 syntax = "proto3";
