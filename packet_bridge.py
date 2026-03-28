@@ -24,7 +24,8 @@ import os
 import sys
 
 from game_state import GameStateManager, compute_burst_ready
-from packet_parser import (PacketParser, PlayerData,
+from packet_parser import (PacketParser, PlayerData, MonsterData,
+                           BuffEventType, DamageType,
                            PROFESSION_NORMAL_ATTACK, PROFESSION_SKILL,
                            PROFESSION_ULTIMATE, PROFESSION_NAMES,
                            PROFESSION_SKILL_VARIANTS, SUB_PROFESSION_NAMES,
@@ -469,9 +470,10 @@ def _build_packet_skill_slots(player: PlayerData):
                 # Fallback: try compose with level 1
                 skill_level_id = bar_skill_id * 100 + 1
             slot_map[bar_slot_id] = skill_level_id
-    server_offset_ms = float(getattr(player, 'server_time_offset_ms', 0.0) or 0.0)
+    _raw_offset = getattr(player, 'server_time_offset_ms', None)
+    server_offset_ms = float(_raw_offset) if _raw_offset is not None else None
     now_local_ms = int(time.time() * 1000)
-    now_server_ms = int(now_local_ms + server_offset_ms) if server_offset_ms else 0
+    now_server_ms = int(now_local_ms + server_offset_ms) if server_offset_ms is not None else 0
     now_t = time.time()
 
     slots = []
@@ -531,9 +533,9 @@ def _build_packet_skill_slots(player: PlayerData):
                     accel_elapsed_ms = raw_elapsed_ms * speed_mult
                     remaining_ms = max(0, int(effective_ms - accel_elapsed_ms))
                     source_confidence = 1.0
-                elif 0 < elapsed_ms <= total_ms:
-                    # valid_cd_time is elapsed (server-side, already accounts for
-                    # base CD). Apply local extrapolation with acceleration.
+                elif 0 < elapsed_ms <= max(total_ms, effective_ms):
+                    # valid_cd_time is elapsed (server-side, uses base CD scale).
+                    # Compare against effective_ms (after CD reduction) for remaining.
                     observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
                     local_extra = max(0, now_local_ms - observed_at_ms) * speed_mult
                     remaining_ms = max(0, int(effective_ms - elapsed_ms - local_extra))
@@ -599,9 +601,13 @@ class PacketBridge:
     _PUBLISH_MIN_INTERVAL = 0.08     # 非 tick 推送最小间隔 (秒), 约 12fps
     _SAVE_CACHE_INTERVAL = 5.0       # settings 写盘最小间隔 (秒)
 
-    def __init__(self, state_mgr: GameStateManager, settings=None):
+    def __init__(self, state_mgr: GameStateManager, settings=None, on_damage=None,
+                 on_monster_update=None, on_boss_event=None):
         self._state_mgr = state_mgr
         self._settings = settings
+        self._on_damage = on_damage
+        self._on_monster_update = on_monster_update
+        self._on_boss_event = on_boss_event
         self._running = False
 
         # 抓包层
@@ -675,6 +681,18 @@ class PacketBridge:
         """返回当前快照 (兼容 RecognitionEngine 接口)"""
         return self._state_mgr.state.to_dict()
 
+    def get_alive_monsters(self) -> list:
+        """Return list of alive monster dicts from the parser."""
+        if self._parser:
+            return self._parser.get_alive_monsters()
+        return []
+
+    def get_monster(self, uuid: int):
+        """Return a single MonsterData by uuid, or None."""
+        if self._parser:
+            return self._parser.get_monsters().get(uuid)
+        return None
+
     # ─── 内部 ───
 
     def _run(self):
@@ -747,6 +765,9 @@ class PacketBridge:
         self._parser = PacketParser(
             on_self_update=self._on_player_update,
             preferred_uid=preferred_uid,
+            on_damage=self._on_damage,
+            on_monster_update=self._on_monster_update,
+            on_boss_event=self._on_boss_event,
         )
 
         # ── 从 settings 恢复缓存的职业技能映射 ──

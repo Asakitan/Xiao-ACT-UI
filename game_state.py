@@ -124,6 +124,25 @@ class GameState:
     window_width: int = 0
     window_height: int = 0
 
+    # ── Boss Raid ──
+    boss_raid_active: bool = False
+    boss_raid_phase: int = 0
+    boss_raid_phase_name: str = ''
+    boss_enrage_remaining: float = 0.0     # seconds till enrage (0=inactive)
+    boss_timer_text: str = ''              # formatted text for ID plate
+    boss_total_damage: int = 0
+    boss_dps: int = 0
+    boss_hp_est_pct: float = 1.0           # estimated boss HP% (1.0=full)
+    boss_current_hp: int = 0               # real HP from packets
+    boss_total_hp: int = 0                 # real MaxHP from packets (or profile)
+    boss_hp_source: str = 'none'           # 'packet' | 'estimate' | 'none'
+    boss_shield_active: bool = False
+    boss_shield_pct: float = 0.0
+    boss_breaking_stage: int = 0
+    boss_extinction_pct: float = 0.0
+    boss_in_overdrive: bool = False
+    boss_invincible: bool = False
+
     # ── 采集元信息 ──
     capture_timestamp: float = 0.0
     recognition_ok: bool = False
@@ -168,6 +187,23 @@ class GameState:
             'stamina_text': self.stamina_text,
             'recognition_ok': self.recognition_ok,
             'capture_ts': self.capture_timestamp,
+            'boss_raid_active': self.boss_raid_active,
+            'boss_raid_phase': self.boss_raid_phase,
+            'boss_raid_phase_name': self.boss_raid_phase_name,
+            'boss_enrage_remaining': round(self.boss_enrage_remaining, 1),
+            'boss_timer_text': self.boss_timer_text,
+            'boss_total_damage': self.boss_total_damage,
+            'boss_dps': self.boss_dps,
+            'boss_hp_est_pct': round(self.boss_hp_est_pct, 4),
+            'boss_current_hp': self.boss_current_hp,
+            'boss_total_hp': self.boss_total_hp,
+            'boss_hp_source': self.boss_hp_source,
+            'boss_shield_active': self.boss_shield_active,
+            'boss_shield_pct': round(self.boss_shield_pct, 4),
+            'boss_breaking_stage': self.boss_breaking_stage,
+            'boss_extinction_pct': round(self.boss_extinction_pct, 4),
+            'boss_in_overdrive': self.boss_in_overdrive,
+            'boss_invincible': self.boss_invincible,
             'identity_alert_serial': self.identity_alert_serial,
             'identity_alert_title': self.identity_alert_title,
             'identity_alert_message': self.identity_alert_message,
@@ -251,6 +287,23 @@ class GameStateManager:
                 elif k == 'identity_alert_message':
                     if not isinstance(v, str) or len(v) > 600:
                         continue
+                elif k == 'boss_raid_phase_name':
+                    if not isinstance(v, str) or len(v) > 60:
+                        continue
+                elif k == 'boss_enrage_remaining':
+                    if not isinstance(v, (int, float)) or v < 0:
+                        continue
+                    v = float(v)
+                elif k == 'boss_timer_text':
+                    if not isinstance(v, str) or len(v) > 40:
+                        continue
+                elif k in ('boss_total_damage', 'boss_dps'):
+                    if not isinstance(v, int) or v < 0:
+                        continue
+                elif k == 'boss_hp_est_pct':
+                    if not isinstance(v, (int, float)):
+                        continue
+                    v = max(0.0, min(1.0, float(v)))
                 setattr(self._state, k, v)
 
             # ── 更新 prev 追踪值 (仅当值有效时) ──

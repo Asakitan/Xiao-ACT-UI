@@ -34,7 +34,9 @@ from auto_key_engine import (
     AutoKeyEngine,
     DEFAULT_AUTO_KEY_SERVER_URL,
     build_auto_key_state,
+    build_identity_state,
     clone_profile,
+    default_upload_auth_state,
     delete_profile as delete_auto_key_profile,
     export_profile_to_default_path,
     find_profile as find_auto_key_profile,
@@ -46,6 +48,32 @@ from auto_key_engine import (
     snapshot_author_from_state,
     upsert_profile,
 )
+from boss_raid_engine import (
+    BossRaidCloudClient,
+    BossRaidEngine,
+    DEFAULT_BOSS_RAID_SERVER_URL,
+    build_boss_raid_state,
+    clone_profile as clone_br_profile,
+    delete_profile as delete_br_profile,
+    export_profile_to_default_path as export_br_profile_path,
+    find_profile as find_br_profile,
+    import_profile_from_path as import_br_profile_path,
+    load_boss_raid_config,
+    make_default_profile as make_default_br_profile,
+    normalize_profile as normalize_br_profile,
+    save_boss_raid_config,
+    upsert_profile as upsert_br_profile,
+)
+from boss_autokey_linkage import (
+    BossAutoKeyLinkage,
+    build_linkage_state,
+    default_linkage_config,
+    load_linkage_config,
+    make_default_mapping,
+    normalize_linkage_config,
+    save_linkage_config,
+)
+from dps_tracker import DpsTracker
 from config import (
     DEFAULT_HOTKEYS,
     get_skill_slot_rects,
@@ -273,6 +301,10 @@ class SAOWebAPI:
     def exit_app(self):
         threading.Thread(target=self._g._exit_with_animation, daemon=True).start()
 
+    def switch_to_entity(self):
+        """切换到 Entity (tkinter) UI 模式."""
+        threading.Thread(target=lambda: self._g._transition_with_animation('entity'), daemon=True).start()
+
     def window_drag(self, dx, dy):
         """HP 窗口固定, 不允许拖拽 — 此方法保留但不执行."""
         pass
@@ -487,6 +519,15 @@ class SAOWebAPI:
                 self._g._auto_key_picker_purpose = ''
                 self._g._sync_auto_key_menu()
                 return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+            purpose_br = getattr(self._g, '_boss_raid_picker_purpose', '')
+            if purpose_br == 'boss_raid_import':
+                config = self._g._load_boss_raid_config()
+                profile = import_br_profile_path(str(path), self._g._boss_raid_author_snapshot())
+                upsert_br_profile(config, profile, activate=False)
+                self._g._save_boss_raid_config(config)
+                self._g._boss_raid_picker_purpose = ''
+                self._g._sync_boss_raid_menu()
+                return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
             raise RuntimeError('No file picker action pending')
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
@@ -496,9 +537,16 @@ class SAOWebAPI:
 
     def set_auto_key_upload_token(self, token):
         try:
+            identity_state = self._g._auto_key_identity_state()
             config = self._g._load_auto_key_config()
-            config['upload_token'] = str(token or '').strip()
-            self._g._save_auto_key_config(config)
+            self._g._set_auto_key_upload_auth(
+                token=str(token or '').strip(),
+                expires_at='',
+                error='',
+                mode='manual',
+                identity=identity_state,
+                server_url=str(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL),
+            )
             self._g._sync_auto_key_menu()
             return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
         except Exception as e:
@@ -509,10 +557,36 @@ class SAOWebAPI:
             config = self._g._load_auto_key_config()
             config['server_url'] = str(url or '').strip()
             self._g._save_auto_key_config(config)
+            self._g._set_auto_key_upload_auth(
+                token='',
+                expires_at='',
+                error='',
+                mode='',
+                identity=self._g._auto_key_identity_state(),
+                server_url=str(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL),
+            )
             self._g._sync_auto_key_menu()
             return json.dumps({'ok': True, 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def refresh_auto_key_upload_auth(self, force=False):
+        try:
+            auth = self._g._refresh_auto_key_upload_auth(force=bool(force))
+            self._g._sync_auto_key_menu()
+            message = str((auth or {}).get('error') or '').strip()
+            if not message and not bool((auth or {}).get('ready')):
+                identity = (auth or {}).get('identity') or {}
+                missing = ', '.join(identity.get('missing') or [])
+                message = f'Upload auth is not ready{": " + missing if missing else ""}'
+            return json.dumps({
+                'ok': bool(auth.get('ready')),
+                'message': message,
+                'upload_auth': auth,
+                'state': self._g._get_auto_key_menu_state(),
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
 
     def search_remote_profiles(self, query_payload):
         try:
@@ -577,9 +651,10 @@ class SAOWebAPI:
                 profile = find_auto_key_profile(config, config.get('active_profile_id'))
             if profile is None:
                 raise RuntimeError('No active profile')
-            token = str(config.get('upload_token') or '').strip()
+            auth = self._g._refresh_auto_key_upload_auth(force=False)
+            token = str((auth or {}).get('token') or '').strip()
             if not token:
-                raise RuntimeError('Upload token is empty')
+                raise RuntimeError(str((auth or {}).get('error') or 'Upload token is empty'))
             client = AutoKeyCloudClient(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL)
             author = self._g._auto_key_author_snapshot()
             payload = {
@@ -600,6 +675,311 @@ class SAOWebAPI:
             self._g._sync_auto_key_menu()
             return json.dumps({'ok': True, 'remote_id': result.get('id'), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
         except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_auto_key_menu_state()}, ensure_ascii=False)
+
+    # ── Boss Raid API ──
+
+    def get_boss_raid_state(self):
+        try:
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def set_boss_raid_enabled(self, enabled):
+        try:
+            config = self._g._load_boss_raid_config()
+            config['enabled'] = bool(enabled)
+            self._g._save_boss_raid_config(config)
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def set_boss_raid_server_url(self, url):
+        try:
+            config = self._g._load_boss_raid_config()
+            config['server_url'] = str(url or '').strip()
+            self._g._set_boss_raid_upload_auth(
+                token='',
+                expires_at='',
+                error='',
+                mode='',
+                identity=self._g._boss_raid_identity_state(),
+                server_url=str(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL),
+            )
+            self._g._save_boss_raid_config(config)
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def activate_boss_raid_profile(self, profile_id):
+        try:
+            config = self._g._load_boss_raid_config()
+            if not find_br_profile(config, profile_id):
+                raise RuntimeError('Profile not found')
+            config['active_profile_id'] = str(profile_id or '')
+            self._g._save_boss_raid_config(config)
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def create_boss_raid_profile(self):
+        try:
+            config = self._g._load_boss_raid_config()
+            profile = make_default_br_profile(self._g._boss_raid_author_snapshot())
+            upsert_br_profile(config, profile, activate=True)
+            self._g._save_boss_raid_config(config)
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def save_boss_raid_profile(self, profile_payload):
+        try:
+            if isinstance(profile_payload, str):
+                profile_payload = json.loads(profile_payload)
+            config = self._g._load_boss_raid_config()
+            profile = normalize_br_profile(profile_payload, author_snapshot=self._g._boss_raid_author_snapshot())
+            existing = find_br_profile(config, profile.get('id'))
+            if existing and existing.get('created_at'):
+                profile['created_at'] = existing.get('created_at')
+            upsert_br_profile(config, profile,
+                              activate=str(config.get('active_profile_id') or '') == str(profile.get('id') or ''))
+            self._g._save_boss_raid_config(config)
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def delete_boss_raid_profile(self, profile_id):
+        try:
+            config = self._g._load_boss_raid_config()
+            delete_br_profile(config, profile_id)
+            self._g._save_boss_raid_config(config)
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def export_boss_raid_profile(self, profile_id=None):
+        try:
+            config = self._g._load_boss_raid_config()
+            profile = find_br_profile(config, profile_id) if profile_id else None
+            if profile is None:
+                profile = find_br_profile(config, config.get('active_profile_id'))
+            if profile is None:
+                raise RuntimeError('No active profile')
+            path = export_br_profile_path(profile)
+            return json.dumps({'ok': True, 'path': path}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def start_boss_raid_import_picker(self, path=None):
+        try:
+            root = str(path or (os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))))
+            self._g._boss_raid_picker_purpose = 'boss_raid_import'
+            data = json.loads(self.browse_dir(root))
+            data['mode'] = 'file'
+            return json.dumps({'ok': True, 'browser': data}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def boss_raid_start(self):
+        """Start boss raid from active profile via JS."""
+        try:
+            self._g._toggle_boss_raid()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def boss_raid_stop(self):
+        """Stop boss raid."""
+        try:
+            if self._g._boss_raid_engine:
+                self._g._boss_raid_engine.stop()
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def boss_raid_next_phase(self):
+        """Advance boss raid to next phase via JS."""
+        try:
+            self._g._boss_raid_next_phase()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def boss_raid_reset(self):
+        """Reset boss raid to idle."""
+        try:
+            if self._g._boss_raid_engine:
+                self._g._boss_raid_engine.reset()
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def search_boss_raid_remote(self, query_payload):
+        try:
+            if isinstance(query_payload, str):
+                query_payload = json.loads(query_payload or '{}')
+            config = self._g._load_boss_raid_config()
+            client = BossRaidCloudClient(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL)
+            query = {
+                'q': str((query_payload or {}).get('q', '') or '').strip(),
+                'profile_name': str((query_payload or {}).get('profile_name', '') or '').strip(),
+                'player_uid': str((query_payload or {}).get('player_uid', '') or '').strip(),
+                'player_name': str((query_payload or {}).get('player_name', '') or '').strip(),
+                'page': int((query_payload or {}).get('page', 1) or 1),
+                'page_size': int((query_payload or {}).get('page_size', 20) or 20),
+            }
+            result = client.search(query)
+            config['last_remote_search'] = {
+                'query': query,
+                'results': result.get('items', []),
+                'error': '',
+                'fetched_at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
+            }
+            self._g._save_boss_raid_config(config)
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'results': result.get('items', []), 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            config = self._g._load_boss_raid_config()
+            last = config.get('last_remote_search', {}) or {}
+            last['error'] = str(e)
+            config['last_remote_search'] = last
+            self._g._save_boss_raid_config(config)
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+
+    def download_boss_raid_remote(self, remote_id):
+        try:
+            config = self._g._load_boss_raid_config()
+            client = BossRaidCloudClient(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL)
+            result = client.get(remote_id)
+            profile_raw = result.get('profile') or {}
+            profile = normalize_br_profile(profile_raw, author_snapshot=self._g._boss_raid_author_snapshot(), source='downloaded')
+            profile['id'] = profile.get('id') or ''
+            profile['id'] = profile['id'] if profile['id'] not in {item.get('id') for item in config.get('profiles', []) or []} else ''
+            if not profile['id']:
+                import uuid as _uuid
+                profile['id'] = f'boss_{_uuid.uuid4().hex[:12]}'
+            profile['remote_id'] = result.get('id')
+            profile['source'] = 'downloaded'
+            profile['updated_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            upsert_br_profile(config, profile, activate=False)
+            self._g._save_boss_raid_config(config)
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def upload_boss_raid_profile(self, profile_id=None):
+        try:
+            config = self._g._load_boss_raid_config()
+            profile = find_br_profile(config, profile_id) if profile_id else None
+            if profile is None:
+                profile = find_br_profile(config, config.get('active_profile_id'))
+            if profile is None:
+                raise RuntimeError('No active profile')
+            auth = self._g._refresh_boss_raid_upload_auth(force=False)
+            token = str((auth or {}).get('token') or '').strip()
+            if not token:
+                raise RuntimeError(str((auth or {}).get('error') or 'Upload token is empty'))
+            client = BossRaidCloudClient(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL)
+            author = self._g._boss_raid_author_snapshot()
+            payload = {
+                'profile_name': profile.get('profile_name', ''),
+                'description': profile.get('description', ''),
+                'boss_total_hp': int(profile.get('boss_total_hp') or 0),
+                'enrage_time_s': int(profile.get('enrage_time_s') or 0),
+                'player_uid': author.get('player_uid', ''),
+                'player_name': author.get('player_name', ''),
+                'schema_version': 1,
+                'profile': profile,
+            }
+            result = client.upload(payload, token)
+            profile['source'] = 'uploaded'
+            profile['remote_id'] = result.get('id')
+            upsert_br_profile(config, profile,
+                              activate=str(config.get('active_profile_id') or '') == str(profile.get('id') or ''))
+            self._g._save_boss_raid_config(config)
+            self._g._sync_boss_raid_menu()
+            return json.dumps({'ok': True, 'remote_id': result.get('id'), 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+
+    def refresh_boss_raid_upload_auth(self, force=False):
+        try:
+            auth = self._g._refresh_boss_raid_upload_auth(force=bool(force))
+            self._g._sync_boss_raid_menu()
+            return json.dumps({
+                'ok': bool(auth.get('ready')),
+                'message': str(auth.get('error') or ''),
+                'upload_auth': auth,
+                'state': self._g._get_boss_raid_menu_state(),
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e), 'state': self._g._get_boss_raid_menu_state()}, ensure_ascii=False)
+
+    # ── Boss ↔ AutoKey Linkage API ──
+
+    def get_linkage_state(self):
+        try:
+            config = load_linkage_config(self._g._cfg_settings_ref)
+            linkage = getattr(self._g, '_boss_autokey_linkage', None)
+            status = linkage.get_status() if linkage else {}
+            return json.dumps({'ok': True, 'state': build_linkage_state(config, status)}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def set_linkage_enabled(self, enabled):
+        try:
+            config = load_linkage_config(self._g._cfg_settings_ref)
+            config['enabled'] = bool(enabled)
+            save_linkage_config(self._g._cfg_settings_ref, config)
+            return json.dumps({'ok': True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def set_linkage_debug(self, enabled):
+        try:
+            config = load_linkage_config(self._g._cfg_settings_ref)
+            config['debug_log'] = bool(enabled)
+            save_linkage_config(self._g._cfg_settings_ref, config)
+            return json.dumps({'ok': True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def set_linkage_global_cooldown(self, seconds):
+        try:
+            config = load_linkage_config(self._g._cfg_settings_ref)
+            config['global_cooldown_s'] = max(0.0, min(60.0, float(seconds)))
+            save_linkage_config(self._g._cfg_settings_ref, config)
+            return json.dumps({'ok': True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def save_linkage_mappings(self, mappings_json):
+        try:
+            mappings = json.loads(mappings_json) if isinstance(mappings_json, str) else mappings_json
+            config = load_linkage_config(self._g._cfg_settings_ref)
+            config['mappings'] = list(mappings) if isinstance(mappings, list) else []
+            save_linkage_config(self._g._cfg_settings_ref, config)
+            return json.dumps({'ok': True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def reset_linkage(self):
+        try:
+            linkage = getattr(self._g, '_boss_autokey_linkage', None)
+            if linkage:
+                linkage.reset()
+            return json.dumps({'ok': True}, ensure_ascii=False)
+        except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
     # ── Sound settings ──
@@ -614,6 +994,58 @@ class SAOWebAPI:
         from sao_sound import set_sound_volume
         set_sound_volume(int(volume_pct))
         self._g._set_setting('sound_volume', int(volume_pct))
+
+    # ── Boss bar mode ──
+    def set_boss_bar_mode(self, mode):
+        """Set boss bar display mode: 'always' | 'boss_raid' | 'off'."""
+        mode = str(mode or 'boss_raid').strip()
+        if mode not in ('always', 'boss_raid', 'off'):
+            mode = 'boss_raid'
+        self._g._set_setting('boss_bar_mode', mode)
+
+    def get_boss_bar_mode(self):
+        """Return current boss bar display mode."""
+        return self._g._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
+
+    def set_dps_enabled(self, enabled):
+        on = bool(enabled)
+        self._g._set_setting('dps_enabled', on)
+        if not on:
+            self._g._hide_dps_window()
+        else:
+            tracker = getattr(self._g, '_dps_tracker', None)
+            try:
+                if tracker and tracker.has_recent_damage(self._g._combat_damage_timeout_s()):
+                    self._g._show_dps_live_snapshot(tracker.get_snapshot())
+            except Exception:
+                pass
+        self._g._sync_menu_settings()
+        return json.dumps({'ok': True, 'enabled': on}, ensure_ascii=False)
+
+    def set_dps_fade_timeout(self, seconds):
+        val = max(0, int(seconds or 0))
+        self._g._set_setting('dps_fade_timeout_s', val)
+        self._g._sync_menu_settings()
+        return json.dumps({'ok': True, 'timeout': val}, ensure_ascii=False)
+
+    def get_dps_enabled(self):
+        return bool(self._g._get_setting('dps_enabled', True))
+
+    def show_last_dps_report(self):
+        try:
+            if self._g._show_dps_last_report():
+                self._g._sync_dps_report_availability()
+                return json.dumps({'ok': True}, ensure_ascii=False)
+            return json.dumps({
+                'ok': False,
+                'message': 'No last combat report yet.',
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def boss_hp_hit_regions(self, regions):
+        """Receive display regions from boss_hp.html for pass-through."""
+        pass  # Boss HP is always fully click-through
 
     # ── Data source mode ──
     def set_data_source(self, mode):
@@ -673,6 +1105,119 @@ class PanelAPI:
         threading.Thread(target=self._g._menu_action, args=(action,), daemon=True).start()
 
     def play_sound(self, name):
+        threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
+
+    # ── DPS Meter settings ──
+    def set_dps_enabled(self, enabled):
+        """Toggle DPS meter visibility."""
+        on = bool(enabled)
+        self._g._set_setting('dps_enabled', on)
+        if not on:
+            self._g._hide_dps_window()
+        else:
+            tracker = getattr(self._g, '_dps_tracker', None)
+            try:
+                if tracker and tracker.has_recent_damage(self._g._combat_damage_timeout_s()):
+                    self._g._show_dps_live_snapshot(tracker.get_snapshot())
+            except Exception:
+                pass
+        self._g._sync_menu_settings()
+
+    def set_dps_fade_timeout(self, seconds):
+        """Set DPS fade-out idle timeout in seconds (0 = never fade)."""
+        val = max(0, int(seconds or 0))
+        self._g._set_setting('dps_fade_timeout_s', val)
+        self._g._sync_menu_settings()
+
+    def get_dps_enabled(self):
+        return bool(self._g._get_setting('dps_enabled', True))
+
+
+class DpsWindowAPI:
+    """pywebview js_api for the DPS meter window — supports dragging and data queries."""
+
+    def __init__(self, gui: 'SAOWebViewGUI'):
+        self._g = gui
+
+    def window_drag(self, dx, dy):
+        """Move DPS window by delta pixels."""
+        try:
+            win = self._g.dps_win
+            if win:
+                win.move(win.x + int(dx), win.y + int(dy))
+        except Exception:
+            pass
+
+    def reset_dps(self):
+        """Reset the DPS tracker encounter."""
+        try:
+            tracker = getattr(self._g, '_dps_tracker', None)
+            if tracker:
+                tracker.reset()
+                self._g._sync_dps_report_availability()
+                if getattr(self._g, '_dps_mode', 'hidden') != 'report':
+                    self._g._eval_dps(
+                        f'DpsMeter.showLive({json.dumps(tracker.get_snapshot(), ensure_ascii=False)})'
+                    )
+        except Exception:
+            pass
+
+    def request_live_snapshot(self):
+        def _push():
+            try:
+                tracker = getattr(self._g, '_dps_tracker', None)
+                snapshot = tracker.get_snapshot() if tracker else None
+                if snapshot is None:
+                    snapshot = {
+                        'encounter_active': False,
+                        'elapsed_s': 0.0,
+                        'total_damage': 0,
+                        'total_heal': 0,
+                        'total_dps': 0,
+                        'total_hps': 0,
+                        'entities': [],
+                    }
+                self._g._dps_mode = 'live'
+                self._g._eval_dps(
+                    f'DpsMeter.showLive({json.dumps(snapshot, ensure_ascii=False)})'
+                )
+            except Exception:
+                pass
+        threading.Thread(target=_push, daemon=True).start()
+
+    def show_last_report(self):
+        try:
+            tracker = getattr(self._g, '_dps_tracker', None)
+            report = tracker.get_last_report() if tracker else None
+            if not report:
+                return json.dumps({
+                    'ok': False,
+                    'message': 'No last combat report yet.',
+                }, ensure_ascii=False)
+            self._g._dps_mode = 'report'
+            self._g._eval_dps(
+                f'DpsMeter.showLastReport({json.dumps(report, ensure_ascii=False)})'
+            )
+            return json.dumps({'ok': True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def get_entity_detail(self, uid):
+        """Fetch detailed entity stats (with skill breakdown) and push to JS."""
+        def _fetch():
+            try:
+                tracker = getattr(self._g, '_dps_tracker', None)
+                if tracker:
+                    detail = tracker.get_entity_detail(int(uid))
+                    if detail:
+                        self._g._eval_dps(
+                            f'DpsMeter.updateDetail({json.dumps(detail, ensure_ascii=False)})'
+                        )
+            except Exception:
+                pass
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def play_sound(self, name: str):
         threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
 
 
@@ -739,6 +1284,25 @@ class SAOWebViewGUI:
         self.menu_win = None
         self.skillfx_win = None
         self.alert_win = None
+        self.boss_hp_win = None
+        self._boss_hp_hwnd = 0
+        self._boss_hp_visible = False
+        self._boss_hp_bar_shown = False  # JS-level visibility
+        self._boss_hp_geometry = None
+        self._bb_last_target_uuid = 0     # UUID of last monster damaged by self
+        self._bb_last_damage_ts = 0.0     # timestamp of last self→monster damage
+        self._bb_damage_timeout = 5.0     # seconds before boss bar fades out
+
+        # DPS Meter
+        self.dps_win = None
+        self._dps_hwnd = 0
+        self._dps_visible = False
+        self._dps_faded = False
+        self._dps_fade_seq = 0
+        self._dps_mode = 'hidden'
+        self._dps_tracker = None
+        self._dps_api = None
+        self._dps_last_report_available = False
 
         # 热切换目标
         self._pending_switch: Optional[str] = None
@@ -770,6 +1334,7 @@ class SAOWebViewGUI:
         self._burst_seen_cooling = set()
         self._last_watched_signature = ()
         self._last_burst_ready = False
+        self._last_burst_slot = 0
         self._hp_viewport_offset_x = 0
         self._hp_viewport_offset_y = 0
         self._fisheye_active = False
@@ -789,9 +1354,21 @@ class SAOWebViewGUI:
         self._auto_key_engine = None
         self._auto_key_picker_purpose = ''
         self._auto_key_last_menu_state = None
+        self._auto_key_upload_auth = default_upload_auth_state()
         self._last_identity_alert_serial = 0
         self._identity_alert_visible = False
         self._identity_alert_nonce = 0
+
+        # Boss Raid 相关引用
+        self._boss_raid_engine = None
+        self._boss_raid_last_menu_state = None
+        self._boss_raid_upload_auth = default_upload_auth_state()
+        self._boss_raid_picker_purpose = ''
+        self._last_boss_timer_text = ''
+        self._last_boss_timer_urgency = ''
+
+        # Boss ↔ AutoKey 联动
+        self._boss_autokey_linkage = None
 
     # ─── 音效 ───
     def _play_sound(self, name: str):
@@ -800,6 +1377,35 @@ class SAOWebViewGUI:
                 self._sao_sound.play_sound(name)
             except Exception:
                 pass
+
+    def _send_linked_key(self, key: str, press_mode: str = "tap",
+                         hold_ms: int = 80, press_count: int = 1):
+        """Send a keystroke for boss→autokey linkage, reusing AutoKeyEngine's VK map."""
+        try:
+            from auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
+            import ctypes
+            key = (key or "").strip().upper()
+            vk = VK_NAME_MAP.get(key)
+            if vk is None and len(key) == 1 and key.isalpha():
+                vk = ord(key)
+            if vk is None:
+                return
+            hold_s = max(0.015, hold_ms / 1000.0) if press_mode == "hold" else 0.015
+            extra = ctypes.c_ulong(0)
+            for _ in range(max(1, press_count)):
+                ki = KEYBDINPUT(wVk=int(vk), wScan=0, dwFlags=0, time=0,
+                                dwExtraInfo=ctypes.pointer(extra))
+                ev = INPUT(type=INPUT_KEYBOARD, ki=ki)
+                ctypes.windll.user32.SendInput(1, ctypes.byref(ev), ctypes.sizeof(INPUT))
+                time.sleep(hold_s)
+                ki2 = KEYBDINPUT(wVk=int(vk), wScan=0, dwFlags=KEYEVENTF_KEYUP, time=0,
+                                 dwExtraInfo=ctypes.pointer(extra))
+                ev2 = INPUT(type=INPUT_KEYBOARD, ki=ki2)
+                ctypes.windll.user32.SendInput(1, ctypes.byref(ev2), ctypes.sizeof(INPUT))
+                if press_count > 1:
+                    time.sleep(0.04)
+        except Exception as e:
+            print(f"[Linkage] send_key error: {e}")
 
     def _set_setting(self, key: str, value):
         """Persist a setting to cfg_settings and save."""
@@ -830,6 +1436,109 @@ class SAOWebViewGUI:
             'profession_name': self._profession,
         }
 
+    def _auto_key_identity_state(self):
+        source = 'packet' if getattr(self, '_game_state', None) is not None else 'profile'
+        return build_identity_state(self._auto_key_author_snapshot(), source=source)
+
+    def _set_auto_key_upload_auth(self, token: str = '', expires_at: str = '', error: str = '',
+                                  mode: str = '', identity: Optional[dict] = None,
+                                  server_url: str = ''):
+        identity_state = identity or self._auto_key_identity_state()
+        self._auto_key_upload_auth = {
+            'token': str(token or '').strip(),
+            'ready': bool(str(token or '').strip()),
+            'token_masked': '',
+            'expires_at': str(expires_at or '').strip(),
+            'error': str(error or '').strip(),
+            'mode': str(mode or '').strip(),
+            'identity': identity_state,
+            'server_url': str(server_url or '').strip(),
+        }
+        return self._auto_key_upload_auth
+
+    def _auto_key_upload_auth_matches(self, identity_state, config):
+        auth = getattr(self, '_auto_key_upload_auth', None) or {}
+        cached_identity = auth.get('identity') or {}
+        if str(auth.get('server_url') or '') != str((config or {}).get('server_url') or ''):
+            return False
+        return (
+            str(cached_identity.get('player_uid') or '') == str(identity_state.get('player_uid') or '') and
+            str(cached_identity.get('player_name') or '') == str(identity_state.get('player_name') or '') and
+            int(cached_identity.get('profession_id') or 0) == int(identity_state.get('profession_id') or 0)
+        )
+
+    def _auto_key_upload_auth_valid(self, identity_state=None, config=None):
+        auth = getattr(self, '_auto_key_upload_auth', None) or {}
+        if not auth.get('ready') or not str(auth.get('token') or '').strip():
+            return False
+        identity_state = identity_state or self._auto_key_identity_state()
+        config = config or self._load_auto_key_config()
+        if not self._auto_key_upload_auth_matches(identity_state, config):
+            return False
+        expires_at = str(auth.get('expires_at') or '').strip()
+        if expires_at and expires_at <= time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + 5)):
+            return False
+        return True
+
+    def _auto_key_upload_auth_state(self, config=None, identity_state=None):
+        config = config or self._load_auto_key_config()
+        identity_state = identity_state or self._auto_key_identity_state()
+        auth = getattr(self, '_auto_key_upload_auth', None) or default_upload_auth_state()
+        if self._auto_key_upload_auth_valid(identity_state, config):
+            return auth
+        error = str(auth.get('error') or '').strip()
+        return self._set_auto_key_upload_auth(
+            token='',
+            expires_at='',
+            error=error,
+            mode=str(auth.get('mode') or ''),
+            identity=identity_state,
+            server_url=str(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL),
+        )
+
+    def _refresh_auto_key_upload_auth(self, force: bool = False):
+        config = self._load_auto_key_config()
+        identity_state = self._auto_key_identity_state()
+        server_url = str(config.get('server_url') or DEFAULT_AUTO_KEY_SERVER_URL)
+        if not identity_state.get('ready'):
+            missing = ', '.join(identity_state.get('missing') or [])
+            return self._set_auto_key_upload_auth(
+                token='',
+                expires_at='',
+                error=f'Identity is incomplete: {missing}',
+                mode='',
+                identity=identity_state,
+                server_url=server_url,
+            )
+        if not force and self._auto_key_upload_auth_valid(identity_state, config):
+            return getattr(self, '_auto_key_upload_auth', None) or default_upload_auth_state()
+        try:
+            client = AutoKeyCloudClient(server_url)
+            result = client.issue_upload_token({
+                'player_uid': identity_state.get('player_uid', ''),
+                'player_name': identity_state.get('player_name', ''),
+                'profession_id': int(identity_state.get('profession_id') or 0),
+                'profession_name': identity_state.get('profession_name', ''),
+            })
+            issued_identity = build_identity_state(result.get('identity') or identity_state, source=identity_state.get('source') or 'packet')
+            return self._set_auto_key_upload_auth(
+                token=str(result.get('token') or '').strip(),
+                expires_at=str(result.get('expires_at') or '').strip(),
+                error='',
+                mode=str(result.get('mode') or '').strip(),
+                identity=issued_identity,
+                server_url=server_url,
+            )
+        except Exception as e:
+            return self._set_auto_key_upload_auth(
+                token='',
+                expires_at='',
+                error=str(e),
+                mode='',
+                identity=identity_state,
+                server_url=server_url,
+            )
+
     def _load_auto_key_config(self):
         ref = self._auto_key_settings_ref()
         return load_auto_key_config(ref, state_snapshot=self._auto_key_author_snapshot())
@@ -844,7 +1553,14 @@ class SAOWebViewGUI:
     def _get_auto_key_menu_state(self):
         config = self._load_auto_key_config()
         status = self._auto_key_engine.get_status() if self._auto_key_engine else {}
-        return build_auto_key_state(config, engine_status=status)
+        identity_state = self._auto_key_identity_state()
+        upload_auth = self._auto_key_upload_auth_state(config=config, identity_state=identity_state)
+        return build_auto_key_state(
+            config,
+            engine_status=status,
+            identity_snapshot=identity_state,
+            upload_auth=upload_auth,
+        )
 
     def _sync_auto_key_menu(self):
         try:
@@ -854,6 +1570,242 @@ class SAOWebViewGUI:
                 self._eval_menu(f'SAO.syncAutoKeyState({json.dumps(state, ensure_ascii=False)})')
         except Exception:
             pass
+
+    # ─── Boss Raid helpers ───
+
+    def _boss_raid_settings_ref(self):
+        return self._cfg_settings_ref or self.settings
+
+    def _boss_raid_author_snapshot(self):
+        gs = getattr(self, '_game_state', None)
+        if gs is not None:
+            return snapshot_author_from_state(gs)
+        return {
+            'player_uid': '',
+            'player_name': self._username,
+            'profession_id': 0,
+            'profession_name': self._profession,
+        }
+
+    def _boss_raid_identity_state(self):
+        source = 'packet' if getattr(self, '_game_state', None) is not None else 'profile'
+        return build_identity_state(self._boss_raid_author_snapshot(), source=source)
+
+    def _set_boss_raid_upload_auth(self, token: str = '', expires_at: str = '', error: str = '',
+                                   mode: str = '', identity: Optional[dict] = None,
+                                   server_url: str = ''):
+        identity_state = identity or self._boss_raid_identity_state()
+        self._boss_raid_upload_auth = {
+            'token': str(token or '').strip(),
+            'ready': bool(str(token or '').strip()),
+            'token_masked': '',
+            'expires_at': str(expires_at or '').strip(),
+            'error': str(error or '').strip(),
+            'mode': str(mode or '').strip(),
+            'identity': identity_state,
+            'server_url': str(server_url or '').strip(),
+        }
+        return self._boss_raid_upload_auth
+
+    def _boss_raid_upload_auth_matches(self, identity_state, config):
+        auth = getattr(self, '_boss_raid_upload_auth', None) or {}
+        cached_identity = auth.get('identity') or {}
+        if str(auth.get('server_url') or '') != str((config or {}).get('server_url') or ''):
+            return False
+        return (
+            str(cached_identity.get('player_uid') or '') == str(identity_state.get('player_uid') or '') and
+            str(cached_identity.get('player_name') or '') == str(identity_state.get('player_name') or '') and
+            int(cached_identity.get('profession_id') or 0) == int(identity_state.get('profession_id') or 0)
+        )
+
+    def _boss_raid_upload_auth_valid(self, identity_state=None, config=None):
+        auth = getattr(self, '_boss_raid_upload_auth', None) or {}
+        if not auth.get('ready') or not str(auth.get('token') or '').strip():
+            return False
+        identity_state = identity_state or self._boss_raid_identity_state()
+        config = config or self._load_boss_raid_config()
+        if not self._boss_raid_upload_auth_matches(identity_state, config):
+            return False
+        expires_at = str(auth.get('expires_at') or '').strip()
+        if expires_at and expires_at <= time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + 5)):
+            return False
+        return True
+
+    def _boss_raid_upload_auth_state(self, config=None, identity_state=None):
+        config = config or self._load_boss_raid_config()
+        identity_state = identity_state or self._boss_raid_identity_state()
+        auth = getattr(self, '_boss_raid_upload_auth', None) or default_upload_auth_state()
+        if self._boss_raid_upload_auth_valid(identity_state, config):
+            return auth
+        error = str(auth.get('error') or '').strip()
+        return self._set_boss_raid_upload_auth(
+            token='',
+            expires_at='',
+            error=error,
+            mode=str(auth.get('mode') or ''),
+            identity=identity_state,
+            server_url=str(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL),
+        )
+
+    def _load_boss_raid_config(self):
+        ref = self._boss_raid_settings_ref()
+        return load_boss_raid_config(ref, state_snapshot=self._boss_raid_author_snapshot())
+
+    def _save_boss_raid_config(self, config):
+        ref = self._boss_raid_settings_ref()
+        saved = save_boss_raid_config(ref, config)
+        return saved
+
+    def _get_boss_raid_menu_state(self):
+        config = self._load_boss_raid_config()
+        status = self._boss_raid_engine.get_status() if self._boss_raid_engine else {}
+        identity_state = self._boss_raid_identity_state()
+        upload_auth = self._boss_raid_upload_auth_state(config=config, identity_state=identity_state)
+        state = build_boss_raid_state(
+            config,
+            engine_status=status,
+            upload_auth=upload_auth,
+        )
+        state['identity'] = identity_state
+        return state
+
+    def _sync_boss_raid_menu(self):
+        try:
+            state = self._get_boss_raid_menu_state()
+            if state != getattr(self, '_boss_raid_last_menu_state', None):
+                self._boss_raid_last_menu_state = copy.deepcopy(state)
+                self._eval_menu(f'SAO.syncBossRaidState({json.dumps(state, ensure_ascii=False)})')
+        except Exception:
+            pass
+
+    def _toggle_boss_raid(self):
+        """Hotkey F7: toggle boss raid start/stop."""
+        if not self._boss_raid_engine:
+            return
+        config = self._load_boss_raid_config()
+        if not config.get('enabled'):
+            config['enabled'] = True
+            self._save_boss_raid_config(config)
+        status = self._boss_raid_engine.get_status()
+        if status.get('state') == 'running':
+            self._boss_raid_engine.stop()
+            self._eval_menu('SAO.showToast("BOSS RAID: STOPPED")')
+        else:
+            from boss_raid_engine import active_profile as br_active_profile
+            profile = br_active_profile(config)
+            if profile:
+                self._boss_raid_engine.start(profile)
+                self._eval_menu('SAO.showToast("BOSS RAID: START")')
+            else:
+                self._eval_menu('SAO.showToast("BOSS RAID: No active profile")')
+        self._sync_boss_raid_menu()
+
+    def _boss_raid_next_phase(self):
+        """Hotkey F8: advance to next phase."""
+        if not self._boss_raid_engine:
+            return
+        self._boss_raid_engine.next_phase()
+        self._sync_boss_raid_menu()
+
+    def _on_packet_damage(self, event):
+        """Damage event callback from packet_parser → boss raid engine + DPS tracker."""
+        # Track last self→monster damage for boss bar target
+        if event.get('attacker_is_self') and event.get('target_is_monster'):
+            target_uuid = event.get('target_uuid', 0)
+            if target_uuid:
+                self._bb_last_target_uuid = target_uuid
+                self._bb_last_damage_ts = time.time()
+        if self._boss_raid_engine:
+            try:
+                self._boss_raid_engine.on_damage_event(event)
+            except Exception:
+                pass
+        if self._dps_tracker:
+            try:
+                self._dps_tracker.on_damage_event(event)
+            except Exception:
+                pass
+
+    def _on_monster_update(self, monster_data):
+        """Monster update callback from packet_parser → boss raid engine."""
+        if self._boss_raid_engine:
+            try:
+                self._boss_raid_engine.on_monster_update(monster_data)
+            except Exception:
+                pass
+
+    def _on_boss_event(self, event):
+        """Boss buff event callback from packet_parser → boss raid engine + boss bar effects."""
+        if self._boss_raid_engine:
+            try:
+                self._boss_raid_engine.on_boss_event(event)
+            except Exception:
+                pass
+
+        # Forward break/shield events to boss HP overlay for visual effects
+        try:
+            evt_type = event.get('event_type', 0)
+            host_uuid = event.get('host_uuid', 0)
+            # Match against the monster currently shown on the boss bar
+            _target = self._bb_last_target_uuid
+            # Also check boss_raid_engine's tracked boss
+            if not _target and self._boss_raid_engine:
+                _target = getattr(self._boss_raid_engine, '_boss_uuid', 0)
+            if not _target or host_uuid != _target:
+                return
+            # Map BuffEventType → JS triggerBreakEffect type
+            _EVT_MAP = {58: 'enter_breaking', 47: 'shield_broken', 51: 'super_armor_broken'}
+            js_type = _EVT_MAP.get(evt_type)
+            if js_type:
+                self._eval_boss_hp(f'triggerBreakEffect("{js_type}")')
+        except Exception:
+            pass
+
+    def _refresh_boss_raid_upload_auth(self, force: bool = False):
+        config = self._load_boss_raid_config()
+        identity_state = self._boss_raid_identity_state()
+        server_url = str(config.get('server_url') or DEFAULT_BOSS_RAID_SERVER_URL)
+        if not identity_state.get('ready'):
+            missing = ', '.join(identity_state.get('missing') or [])
+            return self._set_boss_raid_upload_auth(
+                token='',
+                expires_at='',
+                error=f'Identity is incomplete: {missing}',
+                mode='',
+                identity=identity_state,
+                server_url=server_url,
+            )
+        if not force and self._boss_raid_upload_auth_valid(identity_state, config):
+            return getattr(self, '_boss_raid_upload_auth', None) or default_upload_auth_state()
+        try:
+            client = BossRaidCloudClient(server_url)
+            result = client.issue_upload_token({
+                'player_uid': identity_state.get('player_uid', ''),
+                'player_name': identity_state.get('player_name', ''),
+                'profession_id': int(identity_state.get('profession_id') or 0),
+                'profession_name': identity_state.get('profession_name', ''),
+            })
+            issued_identity = build_identity_state(
+                result.get('identity') or identity_state,
+                source=identity_state.get('source') or 'packet',
+            )
+            return self._set_boss_raid_upload_auth(
+                token=str(result.get('token') or '').strip(),
+                expires_at=str(result.get('expires_at') or '').strip(),
+                error='',
+                mode=str(result.get('mode') or '').strip(),
+                identity=issued_identity,
+                server_url=server_url,
+            )
+        except Exception as e:
+            return self._set_boss_raid_upload_auth(
+                token='',
+                expires_at='',
+                error=str(e),
+                mode='',
+                identity=identity_state,
+                server_url=server_url,
+            )
 
     def _toggle_auto_script(self):
         config = self._load_auto_key_config()
@@ -867,6 +1819,7 @@ class SAOWebViewGUI:
         self._burst_seen_cooling = set()
         self._last_watched_signature = ()
         self._last_burst_ready = False
+        self._last_burst_slot = 0
 
     def _save_game_cache(self, quiet: bool = False):
         try:
@@ -986,6 +1939,13 @@ class SAOWebViewGUI:
         self._last_dead_state = dead_now
 
     def _pick_burst_trigger_slot(self, gs):
+        """Pick the slot index to anchor the Burst Ready visual.
+
+        Stable selection: prefer the slot picked last time as long as it is
+        still usable (state in ready/active, or cooldown_pct ≤ 0.02).
+        A new ``ready_edge`` always wins — that's the slot whose CD just
+        expired, and is the most relevant for the alert.
+        """
         watched = self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]) or []
         try:
             watched = [int(x) for x in watched if int(x) > 0]
@@ -993,36 +1953,57 @@ class SAOWebViewGUI:
             watched = []
         if not watched:
             watched = [1]
-        for slot in getattr(gs, 'skill_slots', []) or []:
+
+        slots = getattr(gs, 'skill_slots', []) or []
+        edge_slot = 0
+        first_ready = 0
+        first_active = 0
+        first_low_cd = 0
+        prev_slot = getattr(self, '_last_burst_slot', 0)
+        prev_still_ok = False
+
+        for slot in slots:
             if not isinstance(slot, dict):
                 continue
             try:
                 idx = int(slot.get('index', 0) or 0)
             except Exception:
                 continue
-            if idx in watched and bool(slot.get('ready_edge')):
-                return idx
-        for slot in getattr(gs, 'skill_slots', []) or []:
-            if not isinstance(slot, dict):
+            if idx not in watched:
                 continue
+            state = str(slot.get('state', '') or '').strip().lower()
             try:
-                idx = int(slot.get('index', 0) or 0)
-                state = str(slot.get('state', '') or '').strip().lower()
-            except Exception:
-                continue
-            if idx in watched and state == 'ready':
-                return idx
-        for slot in getattr(gs, 'skill_slots', []) or []:
-            if not isinstance(slot, dict):
-                continue
-            try:
-                idx = int(slot.get('index', 0) or 0)
                 cd = float(slot.get('cooldown_pct', 1.0) or 1.0)
             except Exception:
-                continue
-            if idx in watched and cd <= 0.02:
-                return idx
-        return 0
+                cd = 1.0
+            is_ready = state in ('ready', 'active') or cd <= 0.02
+            if bool(slot.get('ready_edge')) and not edge_slot:
+                edge_slot = idx
+            if state == 'ready' and not first_ready:
+                first_ready = idx
+            if state == 'active' and not first_active:
+                first_active = idx
+            if cd <= 0.02 and not first_low_cd:
+                first_low_cd = idx
+            if idx == prev_slot and is_ready:
+                prev_still_ok = True
+
+        # Priority: ready_edge > sticky previous > first ready > first active > low cd
+        if edge_slot:
+            chosen = edge_slot
+        elif prev_still_ok and prev_slot:
+            chosen = prev_slot
+        elif first_ready:
+            chosen = first_ready
+        elif first_active:
+            chosen = first_active
+        elif first_low_cd:
+            chosen = first_low_cd
+        else:
+            chosen = 0
+
+        self._last_burst_slot = chosen
+        return chosen
 
     def _stop_recognition_engines(self):
         if getattr(self, '_auto_key_engine', None):
@@ -1031,6 +2012,12 @@ class SAOWebViewGUI:
             except Exception:
                 pass
             self._auto_key_engine = None
+        if getattr(self, '_boss_raid_engine', None):
+            try:
+                self._boss_raid_engine.stop()
+            except Exception:
+                pass
+            self._boss_raid_engine = None
         engines = list(getattr(self, '_recognition_engines', []) or [])
         if not engines and self._recognition_engine:
             engines = [self._recognition_engine]
@@ -1067,7 +2054,10 @@ class SAOWebViewGUI:
         engines = []
         try:
             from packet_bridge import PacketBridge
-            packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref)
+            packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref,
+                                         on_damage=self._on_packet_damage,
+                                         on_monster_update=self._on_monster_update,
+                                         on_boss_event=self._on_boss_event)
             packet_engine.start()
             engines.append(packet_engine)
             self._packet_engine = packet_engine
@@ -1077,6 +2067,14 @@ class SAOWebViewGUI:
             print(f'[SAO] Packet bridge FAILED to start: {e}', flush=True)
             traceback.print_exc()
             self._packet_engine = None
+
+        # DPS Tracker
+        try:
+            self._dps_tracker = DpsTracker()
+            print('[SAO] DPS tracker initialized')
+        except Exception as e:
+            print(f'[SAO] DPS tracker init failed: {e}')
+            self._dps_tracker = None
 
         try:
             from recognition import RecognitionEngine
@@ -1196,6 +2194,42 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # Boss HP overlay — covers native boss bar
+        # Reference 1080p: bar 466×61 at (740, 15)-(1206, 76), anchor (1206, 76)
+        boss_hp_url = os.path.join(web_dir, 'boss_hp.html')
+        _bhp_geom = self._calc_boss_hp_geometry()
+        self._boss_hp_geometry = dict(_bhp_geom)
+        self.boss_hp_win = webview.create_window(
+            'SAO-BossHP', boss_hp_url,
+            width=int(_bhp_geom['width']), height=int(_bhp_geom['height']),
+            x=int(_bhp_geom['x']), y=int(_bhp_geom['y']),
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
+        # DPS meter — right side, vertically centered
+        dps_url = os.path.join(web_dir, 'dps.html')
+        _dps_w = max(320, int(min(_sw, 1920) * 0.19))
+        _dps_h = max(420, int(min(_sh, 1080) * 0.48))
+        _dps_x = max(0, _sw - _dps_w - max(16, int(_sw * 0.012)))
+        _dps_y = max(0, int(_sh * 0.18))
+        self._dps_api = DpsWindowAPI(self)
+        self.dps_win = webview.create_window(
+            'SAO-DPS', dps_url,
+            width=_dps_w, height=_dps_h,
+            x=_dps_x, y=_dps_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._dps_api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -1271,6 +2305,15 @@ class SAOWebViewGUI:
         _apply_for('SAO-HP', self.hp_win)
         _apply_for('SAO SkillFX', self.skillfx_win)
         _apply_for('SAO Alert', self.alert_win)
+        _apply_for('SAO-BossHP', self.boss_hp_win)
+        # DPS 窗口只做 Win32 色键, 不设 .NET TransparencyKey
+        # (TransparencyKey 会令 HTML 透明区域变成鼠标穿透, 导致按钮/行无法点击)
+        try:
+            dps_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-DPS')
+            if dps_hwnd:
+                _make_transparent_ctypes(dps_hwnd)
+        except Exception:
+            pass
         # 菜单窗口只做 Win32 色键, 不设 .NET TransparencyKey
         # (TransparencyKey 会令菜单 HTML 透明区域变成鼠标穿透, 导致按钮无法点击)
         try:
@@ -1327,17 +2370,29 @@ class SAOWebViewGUI:
         self._hp_position_guard_started = True
 
         def _loop():
+            _tick = 0
             while True:
                 time.sleep(0.12)
+                _tick += 1
                 try:
                     if self._hp_hwnd and not self._hp_entry_animating and self._is_hp_position_locked():
                         self._force_hp_to_bottom(force=True, quiet=True)
                 except Exception:
                     pass
+                # 每 ~0.5s 检查一次点击穿透健康状态
+                if _tick % 4 == 0 and self._hp_hwnd:
+                    try:
+                        self._ensure_hp_clickable()
+                    except Exception:
+                        pass
+                    try:
+                        self._ensure_dps_clickable()
+                    except Exception:
+                        pass
 
         threading.Thread(target=_loop, daemon=True, name='hp_position_guard').start()
 
-    def _start_hp_click_bootstrap(self, duration: float = 4.5):
+    def _start_hp_click_bootstrap(self, duration: float = 8.0):
         if getattr(self, '_hp_click_bootstrap_started', False):
             return
         self._hp_click_bootstrap_started = True
@@ -1347,6 +2402,7 @@ class SAOWebViewGUI:
             while time.time() < deadline:
                 try:
                     self._setup_click_through()
+                    self._ensure_hp_clickable()
                     self._request_hp_hit_regions()
                     if self._hp_hwnd and getattr(self, '_hp_js_hit_regions_ready', False):
                         break
@@ -1354,8 +2410,10 @@ class SAOWebViewGUI:
                     pass
                 time.sleep(0.16)
 
+            # 最终确认
             try:
                 self._setup_click_through()
+                self._ensure_hp_clickable()
                 self._request_hp_hit_regions()
             except Exception:
                 pass
@@ -1469,8 +2527,51 @@ class SAOWebViewGUI:
                 self._start_hp_mouse_passthrough_poller()
             else:
                 self._set_hp_mouse_passthrough(False)
+            # 安全网: 始终确认 WS_EX_TRANSPARENT 未被意外设置
+            self._ensure_hp_clickable()
         except Exception as e:
             print(f"[SAO] click-through setup failed: {e}")
+
+    def _ensure_hp_clickable(self):
+        """安全检查: 确保 HP 窗口未被意外设为鼠标穿透.
+
+        移除 WS_EX_TRANSPARENT (如果存在), 保留 WS_EX_LAYERED.
+        非 fullscreen 模式下, 鼠标穿透完全由 LWA_COLORKEY 处理, 不需要 WS_EX_TRANSPARENT.
+        """
+        if not self._hp_hwnd or getattr(self, '_hp_fullscreen', False):
+            return
+        try:
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(self._hp_hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    self._hp_hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _ensure_dps_clickable(self):
+        """安全检查: 确保 DPS 窗口未被意外设为鼠标穿透.
+
+        与 _ensure_hp_clickable 相同逻辑: 移除 WS_EX_TRANSPARENT, 保留 WS_EX_LAYERED.
+        DPS 面板需要接收点击 (行点击 / 拖拽 / Reset 按钮), 鼠标穿透由 LWA_COLORKEY 处理.
+        """
+        try:
+            dps_hwnd = getattr(self, '_dps_hwnd', 0)
+            if not dps_hwnd:
+                dps_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-DPS')
+                if dps_hwnd:
+                    self._dps_hwnd = dps_hwnd
+            if not dps_hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(dps_hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    dps_hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
 
     def _set_hp_mouse_passthrough(self, enabled: bool):
         if not self._hp_hwnd:
@@ -1584,6 +2685,17 @@ class SAOWebViewGUI:
                 hrgn = gdi32.CreateRectRgn(0, 0, max(1, win_w), max(1, win_h))
                 user32.SetWindowRgn(self._hp_hwnd, hrgn, True)
                 return
+
+            # ── 在 JS 上报实际 hit regions 之前, 不限制窗口区域 ──
+            # 依赖 WS_EX_LAYERED + LWA_COLORKEY 让 key-color 像素自动穿透,
+            # 避免 fallback 坐标不准导致整个面板无法点击.
+            js_ready = getattr(self, '_hp_hit_regions_ready', False)
+            has_display = bool(getattr(self, '_hp_display_regions', None))
+            if not js_ready and not has_display and not expanded:
+                # 移除限制: 让整个窗口矩形有效, COLORKEY 处理穿透
+                user32.SetWindowRgn(self._hp_hwnd, 0, True)
+                return
+
             hit_rects = []
             off_x = int(getattr(self, '_hp_viewport_offset_x', 0) or 0)
             off_y = int(getattr(self, '_hp_viewport_offset_y', 0) or 0)
@@ -1633,12 +2745,9 @@ class SAOWebViewGUI:
                     gdi32.CombineRgn(hrgn, hrgn, rect_rgn, RGN_OR)
                     gdi32.DeleteObject(rect_rgn)
             else:
-                if getattr(self, '_hp_fullscreen', False):
-                    hrgn = gdi32.CreateRectRgn(0, 0, 0, 0)
-                else:
-                    visible_phys = int(120 * dpi_s)
-                    clip_top = max(0, win_h - visible_phys)
-                    hrgn = gdi32.CreateRectRgn(0, clip_top, win_w, win_h)
+                # 无精确区域 — 全窗口有效, 依赖 COLORKEY 穿透
+                user32.SetWindowRgn(self._hp_hwnd, 0, True)
+                return
             user32.SetWindowRgn(self._hp_hwnd, hrgn, True)
         except Exception:
             pass
@@ -1740,6 +2849,27 @@ class SAOWebViewGUI:
                                               _LWA_ALPHA | _LWA_COLORKEY)
         except Exception:
             pass
+
+    def _animate_window_alpha(self, title, start, end, duration_ms=220, steps=8, on_done=None):
+        def _run():
+            try:
+                total_steps = max(1, int(steps))
+                sleep_s = max(0.0, float(duration_ms) / 1000.0 / total_steps)
+                for i in range(total_steps + 1):
+                    t = i / total_steps
+                    alpha = start + (end - start) * t
+                    self._set_window_alpha(title, alpha)
+                    if i < total_steps and sleep_s > 0:
+                        time.sleep(sleep_s)
+            except Exception:
+                pass
+            if on_done:
+                try:
+                    on_done()
+                except Exception:
+                    pass
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _reassert_menu_transparency(self, alpha: float = None):
         try:
@@ -1880,7 +3010,7 @@ class SAOWebViewGUI:
             self._update_skillfx_layout()
             self._request_hp_hit_regions()
             self._start_hp_position_guard()
-            self._start_hp_click_bootstrap(5.5)
+            self._start_hp_click_bootstrap(8.0)
             # WebView2 透明背景 — 持续重试
             self._apply_webview2_transparency()
             self._reassert_hp_transparency(1.0, retries=15, delay=0.35)
@@ -1896,10 +3026,31 @@ class SAOWebViewGUI:
             self._set_window_icon('SAO Menu')
             self._set_window_icon('SAO SkillFX')
             self._set_window_icon('SAO Alert')
+            self._set_window_icon('SAO-BossHP')
+            self._set_window_icon('SAO-DPS')
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
             self._set_window_alpha('SAO SkillFX', 1.0)
             self._set_window_alpha('SAO Alert', 1.0)
+            # Boss HP overlay: transparency + click-through + show (hidden by default)
+            self._setup_boss_hp_click_through()
+            self._set_window_alpha('SAO-BossHP', 1.0)
+            try:
+                if self.boss_hp_win:
+                    self.boss_hp_win.show()
+                    self._boss_hp_visible = True
+            except Exception:
+                pass
+            # DPS meter: hidden until combat starts or a report is opened
+            try:
+                self._dps_visible = False
+                self._dps_mode = 'hidden'
+                if self.dps_win:
+                    self._apply_webview2_transparency()
+                    self._set_window_alpha('SAO-DPS', 1.0)
+                self._sync_dps_report_availability()
+            except Exception:
+                pass
             # 重新触发 HP 入场动态模糊 (避免页面预加载时动画已经跑完)
             self._eval_hp('if (window.HP && HP.retriggerEntryBlur) HP.retriggerEntryBlur()')
             # HP 窗口入场动画: 从中央滑到固定位置
@@ -1979,6 +3130,29 @@ class SAOWebViewGUI:
             self._auto_key_engine.start()
             self._sync_auto_key_menu()
 
+            # Boss Raid Engine + Autokey Linkage
+            self._boss_autokey_linkage = BossAutoKeyLinkage(
+                self._cfg_settings_ref,
+                send_key=self._send_linked_key,
+                on_log=lambda msg: print(msg),
+            )
+
+            def _on_boss_alert_with_linkage(title, message):
+                self._show_identity_alert_window(title, message)
+                if self._boss_autokey_linkage:
+                    try:
+                        self._boss_autokey_linkage.on_boss_raid_alert(title, message)
+                    except Exception:
+                        pass
+
+            self._boss_raid_engine = BossRaidEngine(
+                self._state_mgr,
+                self._cfg_settings_ref,
+                on_alert=_on_boss_alert_with_linkage,
+                on_sound=self._play_sound,
+            )
+            self._sync_boss_raid_menu()
+
             # 启动定时缓存保存 (每30秒)
             import threading as _thr
             def _cache_loop():
@@ -2022,6 +3196,8 @@ class SAOWebViewGUI:
             'toggle_auto_script': self._toggle_auto_script,
             'toggle_topmost': lambda: None,
             'hide_panels': lambda: None,
+            'boss_raid_start': self._toggle_boss_raid,
+            'boss_raid_next_phase': self._boss_raid_next_phase,
         }
         self._hk_pressed = set()
         self._hk_listener = None
@@ -2102,6 +3278,149 @@ class SAOWebViewGUI:
                 self.alert_win.evaluate_js(js)
         except Exception:
             pass
+
+    def _eval_boss_hp(self, js):
+        try:
+            if self.boss_hp_win:
+                self.boss_hp_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _calc_boss_hp_geometry(self):
+        try:
+            sw = ctypes.windll.user32.GetSystemMetrics(0)
+            sh = ctypes.windll.user32.GetSystemMetrics(1)
+        except Exception:
+            sw, sh = 1920, 1080
+        pad = max(8, int(min(sw, sh) * 0.008))
+        bar_w = max(556, int(sw * 0.28960))
+        bar_h = max(88, int(sh * 0.08150))
+        right = int(sw * 0.62813)
+        return {
+            'width': bar_w + pad * 2 + 20,
+            'height': bar_h + pad * 2,
+            'x': max(0, right - bar_w - pad),
+            'y': max(0, int(sh * 0.0046)),
+        }
+
+    def _refresh_boss_hp_geometry(self, force: bool = False):
+        geom = self._calc_boss_hp_geometry()
+        prev = getattr(self, '_boss_hp_geometry', None)
+        if (not force) and prev == geom:
+            return
+        self._boss_hp_geometry = geom
+        try:
+            if self.boss_hp_win:
+                self.boss_hp_win.resize(int(geom['width']), int(geom['height']))
+                self.boss_hp_win.move(int(geom['x']), int(geom['y']))
+        except Exception:
+            pass
+
+    def _eval_dps(self, js):
+        try:
+            if self.dps_win:
+                self.dps_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _combat_damage_timeout_s(self) -> float:
+        return 5.0
+
+    def _get_dps_last_report_available(self) -> bool:
+        tracker = getattr(self, '_dps_tracker', None)
+        if not tracker:
+            return False
+        try:
+            return bool(tracker.has_last_report())
+        except Exception:
+            return False
+
+    def _sync_dps_report_availability(self):
+        available = self._get_dps_last_report_available()
+        if available == getattr(self, '_dps_last_report_available', False):
+            return
+        self._dps_last_report_available = available
+        self._sync_menu_settings()
+
+    def _show_dps_window(self):
+        try:
+            if self.dps_win and not self._dps_visible:
+                self._dps_fade_seq += 1
+                self._apply_webview2_transparency()
+                self._set_window_alpha('SAO-DPS', 0.0)
+                self.dps_win.show()
+                self._eval_dps('if (window.DpsMeter && DpsMeter.fadeIn) DpsMeter.fadeIn()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-DPS', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._dps_visible = True
+                self._ensure_dps_clickable()
+                threading.Timer(0.5, self._ensure_dps_clickable).start()
+                threading.Timer(1.5, self._ensure_dps_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_dps_window(self):
+        self._dps_fade_seq += 1
+        _fade_seq = self._dps_fade_seq
+        try:
+            if self.dps_win and self._dps_visible:
+                self._eval_dps('if (window.DpsMeter && DpsMeter.fadeOut) DpsMeter.fadeOut()')
+                self._set_window_alpha('SAO-DPS', 1.0)
+                threading.Timer(
+                    0.26,
+                    lambda: self._finish_hide_dps_window(_fade_seq),
+                ).start()
+        except Exception:
+            pass
+        self._dps_visible = False
+        self._dps_faded = False
+        self._dps_mode = 'hidden'
+
+    def _finish_hide_dps_window(self, fade_seq: int):
+        try:
+            if fade_seq != self._dps_fade_seq or self._dps_visible:
+                return
+            if self.dps_win:
+                self.dps_win.hide()
+        except Exception:
+            pass
+
+    def _show_dps_live_snapshot(self, snapshot=None):
+        tracker = getattr(self, '_dps_tracker', None)
+        if snapshot is None and tracker:
+            try:
+                snapshot = tracker.get_snapshot()
+            except Exception:
+                snapshot = None
+        if snapshot is None:
+            snapshot = {
+                'encounter_active': False,
+                'elapsed_s': 0.0,
+                'total_damage': 0,
+                'total_heal': 0,
+                'total_dps': 0,
+                'total_hps': 0,
+                'entities': [],
+            }
+        self._show_dps_window()
+        self._dps_mode = 'live'
+        self._eval_dps(f'DpsMeter.showLive({json.dumps(snapshot, ensure_ascii=False)})')
+
+    def _show_dps_last_report(self, report=None) -> bool:
+        tracker = getattr(self, '_dps_tracker', None)
+        if report is None and tracker:
+            try:
+                report = tracker.get_last_report()
+            except Exception:
+                report = None
+        if not report:
+            return False
+        self._show_dps_window()
+        self._dps_mode = 'report'
+        self._eval_dps(f'DpsMeter.showLastReport({json.dumps(report, ensure_ascii=False)})')
+        return True
 
     @staticmethod
     def _safe_js(s: str) -> str:
@@ -2296,6 +3615,38 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
+    def _setup_boss_hp_click_through(self):
+        """Make Boss HP overlay fully click-through (like SkillFX)."""
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, 'SAO-BossHP')
+            if not hwnd:
+                threading.Timer(0.3, self._setup_boss_hp_click_through).start()
+                return
+            self._boss_hp_hwnd = hwnd
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            ex |= (_WS_EX_TRANSPARENT | _WS_EX_LAYERED)
+            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex)
+            self._ensure_boss_hp_on_top()
+        except Exception:
+            pass
+
+    def _ensure_boss_hp_on_top(self):
+        try:
+            if not self._boss_hp_hwnd:
+                self._boss_hp_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-BossHP')
+            if not self._boss_hp_hwnd:
+                return
+            HWND_TOPMOST = ctypes.c_void_p(-1)
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            ctypes.windll.user32.SetWindowPos(
+                self._boss_hp_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        except Exception:
+            pass
+
     def _get_skillfx_layout(self, gs=None):
         if gs is None and hasattr(self, '_state_mgr'):
             gs = self._state_mgr.state
@@ -2485,16 +3836,15 @@ class SAOWebViewGUI:
         self._ensure_hp_on_top()
 
         self._push_fisheye_background()
-
         self._fisheye_active = True
         self._fisheye_gen += 1
-        gen = self._fisheye_gen
-        threading.Thread(target=self._fisheye_loop, args=(gen,), daemon=True).start()
+        _gen = self._fisheye_gen
+        threading.Thread(target=self._fisheye_loop, args=(_gen,), daemon=True).start()
 
         def _init_menu():
             self._reassert_menu_transparency(0.0)
             time.sleep(0.12)
-            self._eval_menu('SAO.openMenu(500, 300)')
+            self._eval_menu('SAO.openMenu()')
             time.sleep(0.04)
             try:
                 hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO Menu')
@@ -2608,6 +3958,10 @@ class SAOWebViewGUI:
             self._native_fade_window('SAO Alert', duration_ms=180, steps=10)
         except Exception:
             pass
+        try:
+            self._native_fade_window('SAO-BossHP', duration_ms=180, steps=10)
+        except Exception:
+            pass
 
         try:
             self._destroy_all_panels()
@@ -2632,6 +3986,16 @@ class SAOWebViewGUI:
         try:
             if self.skillfx_win:
                 self.skillfx_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.boss_hp_win:
+                self.boss_hp_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.dps_win:
+                self.dps_win.destroy()
         except Exception:
             pass
 
@@ -2884,6 +4248,10 @@ class SAOWebViewGUI:
                 'sound_volume': get_sound_volume(),
             }
             cfg['auto_key'] = self._get_auto_key_menu_state()
+            cfg['boss_bar_mode'] = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
+            cfg['dps_enabled'] = bool(self._get_setting('dps_enabled', True))
+            cfg['dps_fade_timeout_s'] = int(self._get_setting('dps_fade_timeout_s', 8))
+            cfg['dps_last_report_available'] = self._get_dps_last_report_available()
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
         except Exception:
             pass
@@ -2895,6 +4263,7 @@ class SAOWebViewGUI:
         _map = {
             'menu': self._toggle_menu,
             'toggle_recognition': self._toggle_recognition,
+            'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
         }
         fn = _map.get(action)
@@ -2905,6 +4274,7 @@ class SAOWebViewGUI:
         _map = {
             'toggle_recognition': self._toggle_recognition,
             'toggle_auto_script': self._toggle_auto_script,
+            'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
         }
         fn = _map.get(action)
@@ -2936,131 +4306,285 @@ class SAOWebViewGUI:
             if self._recognition_active and gs is not None:
                 try:
                     self._sync_identity_alert(gs)
-                    if gs.recognition_ok:
-                        # HP/等级走共享状态，STA 百分比走纯识图
-                        if gs.hp_max > 0:
-                            hp, hp_max = gs.hp_current, gs.hp_max
-                        elif gs.hp_pct > 0:
-                            hp, hp_max = int(gs.hp_pct * 100), 100
-                        else:
-                            hp, hp_max = 0, 1
-                        sta = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
-                        sta_max = 100
-                        level_base = gs.level_base if gs.level_base else self._level
-                        if gs.level_extra > 0 and level_base > 0:
-                            level_str = f'{level_base}(+{gs.level_extra})'
-                        elif level_base > 0:
-                            level_str = str(level_base)
-                        else:
-                            level_str = str(self._level)
+                    # ── HP / Level / STA display ──
+                    # HP and Level come from packets and are always available.
+                    # STA comes from vision and only updates when recognition_ok.
+                    if gs.hp_max > 0:
+                        hp, hp_max = gs.hp_current, gs.hp_max
+                    elif gs.hp_pct > 0:
+                        hp, hp_max = int(gs.hp_pct * 100), 100
+                    elif gs.level_base > 0:
+                        hp, hp_max = 0, 1
+                    else:
+                        hp, hp_max = 0, 1
+                    level_base = gs.level_base if gs.level_base else self._level
+                    if gs.level_extra > 0 and level_base > 0:
+                        level_str = f'{level_base}(+{gs.level_extra})'
+                    elif level_base > 0:
+                        level_str = str(level_base)
+                    else:
+                        level_str = str(self._level)
+                    # Use packet HP data if available, else XP-based fallback
+                    if gs.hp_max > 0 or gs.level_base > 0:
                         self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
+                    else:
+                        from character_profile import calc_level
+                        lv, cur_xp, need_xp = calc_level(self._xp)
+                        self._eval_hp(f'updateHP({cur_xp}, {need_xp}, {lv})')
+                    if gs.recognition_ok:
+                        sta = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
+                        self._eval_hp(f'updateSTA({sta}, 100)')
                         self._eval_hp('setPlayState("playing")')
-                        self._eval_hp(f'updateSTA({sta}, {sta_max})')
-                        # ── Burst Mode Ready 检测 ──
-                        _burst_enabled = self._get_setting('burst_enabled', True)
-                        _burst_now = getattr(gs, 'burst_ready', False)
-                        _burst_prev = getattr(self, '_last_burst_ready', False)
-                        _burst_slot = self._pick_burst_trigger_slot(gs) if _burst_enabled else 0
-                        _prev_layout = getattr(self, '_skillfx_layout', None)
-                        _skillfx_payload = self._build_skillfx_payload(gs) or {}
-                        _next_layout = getattr(self, '_skillfx_layout', None)
-                        if _prev_layout != _next_layout:
-                            self._update_skillfx_layout()
-                        _skillfx_payload['burst_slot'] = int(_burst_slot or 0)
-                        _skillfx_payload['burst_ready'] = bool(_burst_now)
-                        _skillfx_payload['enabled'] = bool(_burst_enabled)
-                        _skillfx_sig = (
-                            int(_skillfx_payload.get('burst_slot', 0) or 0),
-                            bool(_skillfx_payload.get('burst_ready')),
-                            tuple(
-                                (
-                                    int(item.get('index', 0) or 0),
-                                    str(item.get('state', 'unknown') or 'unknown')
-                                )
-                                for item in (_skillfx_payload.get('slots', []) or [])
-                                if isinstance(item, dict)
-                            )
-                        )
-                        if getattr(self, '_last_skillfx_sig', None) != _skillfx_sig:
-                            self._last_skillfx_sig = _skillfx_sig
-                            _watched_dbg = self._get_setting('watched_skill_slots', [1,2,3,4,5,6,7,8,9]) or []
-                            _state_dbg = []
-                            for item in (_skillfx_payload.get('slots', []) or []):
-                                if not isinstance(item, dict):
-                                    continue
-                                try:
-                                    _idx_dbg = int(item.get('index', 0) or 0)
-                                except Exception:
-                                    _idx_dbg = 0
-                                _state_dbg.append(f"{_idx_dbg}:{str(item.get('state', 'unknown') or 'unknown')}")
-                            print(
-                                f"[SAO-WV] SkillFX sync: watched={list(_watched_dbg)} "
-                                f"burst_slot={_skillfx_payload['burst_slot']} "
-                                f"burst_ready={_skillfx_payload['burst_ready']} "
-                                f"states={_state_dbg}"
-                            )
-                        self._eval_skillfx(f'SkillFX.update({json.dumps(_skillfx_payload, ensure_ascii=False)})')
-                        if (not _burst_now) and _burst_prev:
-                            self._eval_skillfx('SkillFX.hideBurstReady()')
-                        self._last_burst_ready = _burst_now
-                        # 缓存到 _game_state 供菜单使用
-                        self._game_state = gs
-                        # ── 同步玩家名到 WebView ──
-                        if gs.player_name and gs.player_name != getattr(self, '_last_gs_name', ''):
-                            self._last_gs_name = gs.player_name
-                            self._username = gs.player_name
-                            self._eval_hp(f'setUsername("{self._safe_js(gs.player_name)}")')
-                        # ── 同步职业/UID 到 id-plate ──
-                        _prof = gs.profession_name or ''
-                        _uid = gs.player_id or ''
-                        if (_prof and _prof != getattr(self, '_last_gs_prof', '')) or \
-                           (_uid and _uid != getattr(self, '_last_gs_uid', '')):
-                            self._last_gs_prof = _prof
-                            self._last_gs_uid = _uid
-                            import json as _json2
-                            info = {}
-                            if _prof:
-                                info['profession'] = _prof
-                            if _uid:
-                                info['uid'] = _uid
-                            self._eval_hp(f'setPlayerInfo({_json2.dumps(info, ensure_ascii=False)})')
-                        # ── 首次获取完整角色数据时自动保存 ──
-                        if not getattr(self, '_profile_auto_saved', False) and gs.player_name:
-                            self._profile_auto_saved = True
+                    else:
+                        self._eval_hp('setPlayState("idle")')
+                    # ── Boss Timer push (packet-driven, always runs) ──
+                    _boss_text = getattr(gs, 'boss_timer_text', '') or ''
+                    _boss_active = getattr(gs, 'boss_raid_active', False)
+                    _boss_enrage = float(getattr(gs, 'boss_enrage_remaining', 0) or 0)
+                    if _boss_active and _boss_text:
+                        _boss_urgency = 'urgent' if 0 < _boss_enrage < 60 else 'normal'
+                    else:
+                        _boss_text = ''
+                        _boss_urgency = ''
+                    if _boss_text != getattr(self, '_last_boss_timer_text', '') or \
+                       _boss_urgency != getattr(self, '_last_boss_timer_urgency', ''):
+                        self._last_boss_timer_text = _boss_text
+                        self._last_boss_timer_urgency = _boss_urgency
+                        if _boss_text:
+                            self._eval_hp(f'setBossTimer("{self._safe_js(_boss_text)}", "{_boss_urgency}")')
+                        else:
+                            self._eval_hp('setBossTimer("", "")')
+                    # ── Boss Bar (packet-driven, always runs) ──
+                    _bb_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
+                    _bb_raid_active = getattr(gs, 'boss_raid_active', False)
+                    _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
+
+                    # ── Target-based boss bar: show HP of the monster we're attacking ──
+                    _bb_direct_hp = 0
+                    _bb_direct_max = 0
+                    _bb_direct_data = None
+                    _now = time.time()
+                    _has_recent_self_damage = (_now - self._bb_last_damage_ts) < self._bb_damage_timeout
+
+                    if not _bb_raid_active:
+                        # Try to get the specific monster we last damaged
+                        _target_uuid = self._bb_last_target_uuid
+                        if _target_uuid and _has_recent_self_damage:
                             try:
-                                from character_profile import save_profile
-                                lv = gs.level_extra if gs.level_extra > 0 else gs.level_base
-                                save_profile(
-                                    username=gs.player_name,
-                                    profession=gs.profession_name or '',
-                                    level=lv if lv > 0 else 1,
-                                    uid=gs.player_id or '',
-                                )
-                                print(f'[SAO-WV] 自动保存角色: {gs.player_name}, '
-                                      f'职业={gs.profession_name}, LV={lv}, UID={gs.player_id}')
+                                _bridge = getattr(self, '_packet_engine', None)
+                                _m = _bridge.get_monster(_target_uuid) if _bridge else None
+                                if _m and not _m.is_dead and _m.max_hp > 0:
+                                    _bb_direct_max = int(_m.max_hp)
+                                    _bb_direct_hp = max(0, int(_m.hp))
+                                    _bb_direct_data = _m.to_dict()
+                                    _bb_src = 'packet'
                             except Exception:
                                 pass
+
+                    # Determine if bar should be visible:
+                    # - 'off' mode: never show
+                    # - 'boss_raid' mode: show when raid engine active OR we have recent self-damage
+                    # - 'always' mode: show when we have recent self-damage to any monster
+                    if _bb_mode == 'off':
+                        _bb_show = False
+                    elif _bb_raid_active:
+                        _bb_show = True
                     else:
-                        # recognition_ok=False, 但如果 game_state 有缓存数据, 继续显示
-                        if gs.hp_max > 0 or gs.level_base > 0:
-                            # 有历史数据: 保持显示最后已知状态, 不切换到 calc_level
-                            hp = gs.hp_current if gs.hp_max > 0 else 0
-                            hp_max = gs.hp_max if gs.hp_max > 0 else 1
-                            level_base = gs.level_base if gs.level_base else self._level
-                            if gs.level_extra > 0 and level_base > 0:
-                                level_str = f'{level_base}(+{gs.level_extra})'
-                            elif level_base > 0:
-                                level_str = str(level_base)
-                            else:
-                                level_str = str(self._level)
-                            self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
-                            self._eval_hp('setPlayState("idle")')
-                        else:
-                            # 从未收到过任何游戏数据, 用 calc_level 显示
-                            from character_profile import calc_level
-                            lv, cur_xp, need_xp = calc_level(self._xp)
-                            self._eval_hp(f'updateHP({cur_xp}, {need_xp}, {lv})')
-                            self._eval_hp('setPlayState("idle")')
+                        # Show only when we have dealt damage recently
+                        _bb_show = _has_recent_self_damage and (_bb_src != 'none' or _bb_direct_data is not None)
+
+                    # Build data: prefer direct monster data; fall back to GameState
+                    if _bb_direct_data and not _bb_raid_active:
+                        _bb_hp_pct = _bb_direct_hp / _bb_direct_max if _bb_direct_max > 0 else 1.0
+                        _bb_cur_hp = _bb_direct_hp
+                        _bb_total_hp = _bb_direct_max
+                        _bb_shield_active = bool(_bb_direct_data.get('shield_active'))
+                        _bb_shield_pct = float(_bb_direct_data.get('shield_pct') or 0.0)
+                        _bb_breaking = int(_bb_direct_data.get('breaking_stage') or 0)
+                        _bb_extinction = float(_bb_direct_data.get('extinction_pct') or 0.0)
+                        _bb_stop_ticking = bool(_bb_direct_data.get('stop_breaking_ticking'))
+                        _bb_overdrive = bool(_bb_direct_data.get('in_overdrive'))
+                        _bb_invincible = False
+                    else:
+                        _bb_hp_pct = round(getattr(gs, 'boss_hp_est_pct', 1.0), 3)
+                        _bb_cur_hp = getattr(gs, 'boss_current_hp', 0)
+                        _bb_total_hp = getattr(gs, 'boss_total_hp', 0)
+                        _bb_shield_active = getattr(gs, 'boss_shield_active', False)
+                        _bb_shield_pct = round(getattr(gs, 'boss_shield_pct', 0.0), 3)
+                        _bb_breaking = getattr(gs, 'boss_breaking_stage', 0)
+                        _bb_extinction = round(getattr(gs, 'boss_extinction_pct', 0.0), 3)
+                        _bb_stop_ticking = False
+                        _bb_overdrive = getattr(gs, 'boss_in_overdrive', False)
+                        _bb_invincible = getattr(gs, 'boss_invincible', False)
+
+                    _bb_sig = (
+                        _bb_show,
+                        round(float(_bb_hp_pct), 3),
+                        _bb_src,
+                        int(_bb_cur_hp),
+                        int(_bb_total_hp),
+                        bool(_bb_shield_active),
+                        round(float(_bb_shield_pct), 3),
+                        int(_bb_breaking),
+                        round(float(_bb_extinction), 3),
+                        bool(_bb_stop_ticking),
+                        bool(_bb_overdrive),
+                        bool(_bb_invincible),
+                    )
+                    if _bb_sig != getattr(self, '_last_boss_bar_sig', None):
+                        self._last_boss_bar_sig = _bb_sig
+                        _bb_data = {
+                            'active': _bb_show,
+                            'hp_pct': _bb_sig[1],
+                            'hp_source': _bb_src,
+                            'current_hp': _bb_sig[3],
+                            'total_hp': _bb_sig[4],
+                            'shield_active': _bb_sig[5],
+                            'shield_pct': _bb_sig[6],
+                            'breaking_stage': _bb_sig[7],
+                            'extinction_pct': _bb_sig[8],
+                            'stop_breaking_ticking': _bb_sig[9],
+                            'in_overdrive': _bb_sig[10],
+                            'invincible': _bb_sig[11],
+                            'boss_name': (_bb_direct_data or {}).get('name', '') or '',
+                        }
+                        self._eval_boss_hp(f'updateBossBar({json.dumps(_bb_data)})')
+                    # ── DPS Meter push (packet-driven, always runs) ──
+                    if self._dps_tracker:
+                        try:
+                            if gs.player_id:
+                                _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
+                                if _p_uid:
+                                    self._dps_tracker.set_self_uid(_p_uid)
+                                    self._dps_tracker.update_player_info(
+                                        _p_uid,
+                                        gs.player_name or '',
+                                        gs.profession_name or '',
+                                    )
+
+                            _dps_enabled = bool(self._get_setting('dps_enabled', True))
+                            _dps_idle_timeout = self._combat_damage_timeout_s()
+                            if self._dps_tracker.finalize_if_idle(_dps_idle_timeout, 'idle_timeout'):
+                                self._sync_dps_report_availability()
+                                if self._dps_mode == 'live':
+                                    self._hide_dps_window()
+
+                            if self._dps_tracker.is_dirty():
+                                _dps_snap = self._dps_tracker.get_snapshot()
+                                # Update player info from game state
+                                if gs.player_id:
+                                    _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
+                                    if _p_uid:
+                                        self._dps_tracker.set_self_uid(_p_uid)
+                                        self._dps_tracker.update_player_info(
+                                            _p_uid,
+                                            gs.player_name or '',
+                                            gs.profession_name or '',
+                                        )
+                                _dps_has_live = bool(
+                                    int(_dps_snap.get('total_damage') or 0) > 0
+                                    and self._dps_tracker.has_recent_damage(_dps_idle_timeout)
+                                )
+                                if _dps_enabled and _dps_has_live:
+                                    self._show_dps_live_snapshot(_dps_snap)
+                                elif self._dps_visible and self._dps_mode == 'live':
+                                    self._eval_dps(
+                                        f'DpsMeter.updateDps({json.dumps(_dps_snap, ensure_ascii=False)})'
+                                    )
+                            # ── DPS fade-out on idle ──
+                            if self._dps_visible and self._dps_mode == 'live':
+                                try:
+                                    if not self._dps_tracker.has_recent_damage(_dps_idle_timeout):
+                                        self._hide_dps_window()
+                                except Exception:
+                                    pass
+                            self._sync_dps_report_availability()
+                        except Exception:
+                            pass
+                    # ── Burst Mode Ready 检测 (packet-driven, always runs) ──
+                    _burst_enabled = self._get_setting('burst_enabled', True)
+                    _burst_now = getattr(gs, 'burst_ready', False)
+                    _burst_prev = getattr(self, '_last_burst_ready', False)
+                    _burst_slot = self._pick_burst_trigger_slot(gs) if _burst_enabled else 0
+                    _prev_layout = getattr(self, '_skillfx_layout', None)
+                    _skillfx_payload = self._build_skillfx_payload(gs) or {}
+                    _next_layout = getattr(self, '_skillfx_layout', None)
+                    if _prev_layout != _next_layout:
+                        self._update_skillfx_layout()
+                    _skillfx_payload['burst_slot'] = int(_burst_slot or 0)
+                    _skillfx_payload['burst_ready'] = bool(_burst_now)
+                    _skillfx_payload['enabled'] = bool(_burst_enabled)
+                    _skillfx_sig = (
+                        int(_skillfx_payload.get('burst_slot', 0) or 0),
+                        bool(_skillfx_payload.get('burst_ready')),
+                        tuple(
+                            (
+                                int(item.get('index', 0) or 0),
+                                str(item.get('state', 'unknown') or 'unknown')
+                            )
+                            for item in (_skillfx_payload.get('slots', []) or [])
+                            if isinstance(item, dict)
+                        )
+                    )
+                    if getattr(self, '_last_skillfx_sig', None) != _skillfx_sig:
+                        self._last_skillfx_sig = _skillfx_sig
+                        _watched_dbg = self._get_setting('watched_skill_slots', [1,2,3,4,5,6,7,8,9]) or []
+                        _state_dbg = []
+                        for item in (_skillfx_payload.get('slots', []) or []):
+                            if not isinstance(item, dict):
+                                continue
+                            try:
+                                _idx_dbg = int(item.get('index', 0) or 0)
+                            except Exception:
+                                _idx_dbg = 0
+                            _state_dbg.append(f"{_idx_dbg}:{str(item.get('state', 'unknown') or 'unknown')}")
+                        print(
+                            f"[SAO-WV] SkillFX sync: watched={list(_watched_dbg)} "
+                            f"burst_slot={_skillfx_payload['burst_slot']} "
+                            f"burst_ready={_skillfx_payload['burst_ready']} "
+                            f"states={_state_dbg}"
+                        )
+                    self._eval_skillfx(f'SkillFX.update({json.dumps(_skillfx_payload, ensure_ascii=False)})')
+                    if (not _burst_now) and _burst_prev:
+                        self._eval_skillfx('SkillFX.hideBurstReady()')
+                    self._last_burst_ready = _burst_now
+                    # 缓存到 _game_state 供菜单使用
+                    self._game_state = gs
+                    # ── 同步玩家名到 WebView ──
+                    if gs.player_name and gs.player_name != getattr(self, '_last_gs_name', ''):
+                        self._last_gs_name = gs.player_name
+                        self._username = gs.player_name
+                        self._eval_hp(f'setUsername("{self._safe_js(gs.player_name)}")')
+                    # ── 同步职业/UID 到 id-plate ──
+                    _prof = gs.profession_name or ''
+                    _uid = gs.player_id or ''
+                    if (_prof and _prof != getattr(self, '_last_gs_prof', '')) or \
+                       (_uid and _uid != getattr(self, '_last_gs_uid', '')):
+                        self._last_gs_prof = _prof
+                        self._last_gs_uid = _uid
+                        import json as _json2
+                        info = {}
+                        if _prof:
+                            info['profession'] = _prof
+                        if _uid:
+                            info['uid'] = _uid
+                        self._eval_hp(f'setPlayerInfo({_json2.dumps(info, ensure_ascii=False)})')
+                    # ── 首次获取完整角色数据时自动保存 ──
+                    if not getattr(self, '_profile_auto_saved', False) and gs.player_name:
+                        self._profile_auto_saved = True
+                        try:
+                            from character_profile import save_profile
+                            lv = gs.level_base if gs.level_base > 0 else 1
+                            save_profile(
+                                username=gs.player_name,
+                                profession=gs.profession_name or '',
+                                level=lv,
+                                uid=gs.player_id or '',
+                            )
+                            print(f'[SAO-WV] 自动保存角色: {gs.player_name}, '
+                                  f'职业={gs.profession_name}, LV={lv}, UID={gs.player_id}')
+                        except Exception:
+                            pass
                 except Exception as e:
                     print(f'[SAO-WV] recognition loop error: {e}')
             else:
@@ -3095,7 +4619,9 @@ class SAOWebViewGUI:
 
             _panel_tick += 1
             if _panel_tick % 5 == 0:
+                self._refresh_boss_hp_geometry()
                 self._sync_auto_key_menu()
+                self._sync_boss_raid_menu()
             if _panel_tick >= 10 and self._panel_wins:
                 _panel_tick = 0
                 self._sync_all_panels()
@@ -3122,7 +4648,24 @@ class SAOWebViewGUI:
     #  退出
     # ════════════════════════════════════════
     def _do_hot_switch(self, target: str):
-        pass  # Entity 模式已移除
+        """热切换到目标 UI 模式 (entity)."""
+        if target != 'entity':
+            print(f'[SAO WebView] Unknown switch target: {target}')
+            return
+        try:
+            self.settings.set('ui_mode', 'entity')
+            self.settings.save()
+        except Exception:
+            pass
+        import gc; gc.collect()
+        import time as _t; _t.sleep(0.3)
+        try:
+            from sao_gui import SAOPlayerGUI
+            app = SAOPlayerGUI()
+            app.run()
+        except Exception as e:
+            print(f"[SAO] Hot switch to Entity failed: {e}")
+            import traceback; traceback.print_exc()
 
     def _exit(self):
         if self._exit_animating:

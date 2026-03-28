@@ -212,6 +212,10 @@ def _capture_hwnd_client(
     img = _capture_hwnd_client_printwindow(hwnd, client_rect)
     if not _capture_looks_blank(img):
         return img, "printwindow"
+    # PrintWindow failed (blank/black frame) — try BitBlt as fallback
+    img = _capture_hwnd_client_bitblt(hwnd, client_rect)
+    if not _capture_looks_blank(img):
+        return img, "bitblt"
     return None, "failed"
 
 
@@ -527,6 +531,7 @@ class RecognitionEngine:
         self._sta_drop_lock_until: float = 0.0
         self._capture_error_logged = False
         self._capture_backend = ""
+        self._capture_fail_count = 0
         self._last_sta_logged: Optional[int] = None
 
     def set_debug_callback(self, cb):
@@ -648,20 +653,28 @@ class RecognitionEngine:
         need_vision = self._use_vision_source("stamina")
         client_frame = None
         if need_vision:
+            # Backoff: after 5 consecutive failures, only retry every 20 ticks (~2s)
+            if self._capture_fail_count >= 5:
+                self._capture_fail_count += 1
+                if self._capture_fail_count % 20 != 0:
+                    # Skip vision this tick but still push window rect as OK
+                    # so packet-driven UI (boss bar, DPS, etc.) continues working
+                    self._state_mgr.update(**updates)
+                    return
             client_frame, backend = _capture_hwnd_client(hwnd, rect)
             if client_frame is None or client_frame.size == 0:
                 _set_capture_target(hwnd, rect)
+                self._capture_fail_count += 1
                 if not self._capture_error_logged:
                     self._capture_error_logged = True
-                    print("[Vision] direct window capture failed (printwindow)")
-                self._state_mgr.update(
-                    window_rect=rect,
-                    window_width=client_w,
-                    window_height=client_h,
-                    recognition_ok=False,
-                    error_msg="direct window capture failed",
-                )
+                    print("[Vision] direct window capture failed (printwindow+bitblt)")
+                # Still push window rect + recognition_ok=True so packet-driven
+                # features (boss bar, DPS, skills) are not blocked by vision failure.
+                # Only stamina (vision-dependent) will be missing.
+                updates["error_msg"] = "vision capture failed"
+                self._state_mgr.update(**updates)
                 return
+            self._capture_fail_count = 0
             self._capture_error_logged = False
             if backend != self._capture_backend:
                 self._capture_backend = backend

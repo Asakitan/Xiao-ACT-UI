@@ -22,6 +22,7 @@ import struct
 from PIL import Image, ImageDraw, ImageFilter, ImageTk, ImageEnhance, ImageChops, ImageFont
 from typing import Optional, Callable, List, Dict, Tuple
 import numpy as np
+from config import APP_VERSION_LABEL
 from sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font
 
 try:
@@ -714,7 +715,7 @@ class SAOChildBar(tk.Frame):
         content.pack(anchor='nw')
 
         # 连接线 (带微弱辉光)
-        line_h = len(items) * 43 - 3
+        line_h = len(items) * 47 - 3
         line_cv = tk.Canvas(content, width=10, height=max(1, line_h),
                             bg=self.cget('bg'), highlightthickness=0)
         # 辉光层
@@ -754,12 +755,12 @@ class SAOChildBar(tk.Frame):
         outer.pack(fill=tk.X, pady=(0, 3))
 
         row = tk.Frame(outer, bg='#ffffff', highlightthickness=0,
-                       width=220, height=40)
+                       width=240, height=44)
         row.pack(fill=tk.X)
         row.pack_propagate(False)
 
         # 左侧激活指示条 (2px, 初始透明)
-        indicator = tk.Frame(row, bg='#ffffff', width=2, height=40)
+        indicator = tk.Frame(row, bg='#ffffff', width=2, height=44)
         indicator.pack(side=tk.LEFT, fill=tk.Y)
         indicator.pack_propagate(False)
 
@@ -808,7 +809,7 @@ class SAOChildBar(tk.Frame):
             start = hs['t']
             a.animate('hover', 200, lambda t: _update_hover(lerp(start, 0, t)))
 
-        for widget in [row, icon_lbl, text_lbl, indicator, arrow_lbl]:
+        for widget in [outer, row, icon_lbl, text_lbl, indicator, arrow_lbl]:
             widget.bind('<Enter>', enter)
             widget.bind('<Leave>', leave)
             cmd = item.get('command')
@@ -830,7 +831,7 @@ class SAOChildBar(tk.Frame):
             a = Animator(r)
 
             def grow(t, r2=r):
-                w = max(1, int(220 * ease_out(t)))
+                w = max(1, int(240 * ease_out(t)))
                 r2.configure(width=w)
 
             a.animate('slide', 250, grow)
@@ -4821,7 +4822,7 @@ class SAOTitleBar(tk.Frame):
     """SAO 风格标题栏"""
 
     def __init__(self, parent, root, title="咲 ACT UI",
-                 version="v1.1.0", on_close=None, **kw):
+                 version=APP_VERSION_LABEL, on_close=None, **kw):
         super().__init__(parent, bg='#080c12', height=36, **kw)
         self.root = root
         self.on_close = on_close

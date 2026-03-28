@@ -88,23 +88,23 @@ body {
    ═══════════════════════════════════════ */
 /* ═══ Entry Animation ═══ */
 @keyframes hp-slide-in {
-    0%   { opacity: 0; transform: scale(0.72); filter: blur(16px) drop-shadow(0 0 0 rgba(50, 50, 0, 0)); }
-    60%  { opacity: 1; transform: scale(1.03); filter: blur(1.2px) drop-shadow(3px 6px 12px rgba(50, 50, 0, 0.32)); }
-    100% { opacity: 1; transform: scale(1); filter: blur(0px) drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
+    0%   { opacity: 0; transform: scale(0.82); filter: drop-shadow(0 0 0 rgba(50, 50, 0, 0)); }
+    60%  { opacity: 1; transform: scale(1.02); filter: drop-shadow(3px 6px 12px rgba(50, 50, 0, 0.32)); }
+    100% { opacity: 1; transform: scale(1); filter: drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
 }
 
 @keyframes hp-live-blur {
-    0%   { filter: blur(0px) drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
-    25%  { filter: blur(0.2px) drop-shadow(1px 6px 8px rgba(50, 50, 0, 0.38)); }
-    50%  { filter: blur(0.08px) drop-shadow(2px 4px 4px rgba(50, 50, 0, 0.46)); }
-    75%  { filter: blur(0.22px) drop-shadow(3px 5px 8px rgba(50, 50, 0, 0.36)); }
-    100% { filter: blur(0px) drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
+    0%   { filter: drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
+    25%  { filter: drop-shadow(1px 6px 8px rgba(50, 50, 0, 0.38)); }
+    50%  { filter: drop-shadow(2px 4px 4px rgba(50, 50, 0, 0.46)); }
+    75%  { filter: drop-shadow(3px 5px 8px rgba(50, 50, 0, 0.36)); }
+    100% { filter: drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
 }
 
 @keyframes hp-exit-blur {
-    0%   { opacity: 1; transform: scale(1); filter: blur(0px) drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
-    55%  { opacity: 0.88; transform: scale(1.04) translate(10px, -4px); filter: blur(3px) drop-shadow(4px 8px 14px rgba(50, 50, 0, 0.34)); }
-    100% { opacity: 0; transform: scale(0.82) translate(28px, -10px); filter: blur(18px) drop-shadow(0 0 0 rgba(50, 50, 0, 0)); }
+    0%   { opacity: 1; transform: scale(1); filter: drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
+    55%  { opacity: 0.88; transform: scale(1.02) translate(10px, -4px); filter: drop-shadow(4px 8px 14px rgba(50, 50, 0, 0.34)); }
+    100% { opacity: 0; transform: scale(0.9) translate(22px, -8px); filter: drop-shadow(0 0 0 rgba(50, 50, 0, 0)); }
 }
 /* ═══ Idle Float REMOVED — fixed position ═══ */
 
@@ -118,7 +118,7 @@ body {
     width: 518px;
     height: 48px;
     display: flex;
-    filter: blur(0px) drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.28));
+    filter: drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.28));
     font-family: var(--font-ui);
     letter-spacing: 1px;
     color: rgba(60, 62, 50, 1);
@@ -407,8 +407,8 @@ body {
     display: none;
     position: fixed;
     background: rgba(207, 208, 197, 0.88);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
     border: 1px solid rgba(104, 228, 255, 0.25);
     border-radius: 2px;
     box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.18),
@@ -528,9 +528,9 @@ body {
 }
 /* Diagonal line from bottom-left to upper-right */
 @keyframes burst-diag-in {
-    0%   { opacity: 0; filter: blur(4px); }
-    32%  { opacity: 1; filter: blur(0); }
-    100% { opacity: 0.84; filter: blur(0); }
+    0%   { opacity: 0; }
+    32%  { opacity: 1; }
+    100% { opacity: 0.84; }
 }
 .burst-diag {
     position: absolute;
@@ -546,9 +546,9 @@ body {
 }
 /* Text label */
 @keyframes burst-text-in {
-    0%   { opacity: 0; transform: translateX(-26px); filter: blur(9px); }
-    55%  { opacity: 1; transform: translateX(6px); filter: blur(0); }
-    100% { opacity: 1; transform: translateX(0); filter: blur(0); }
+    0%   { opacity: 0; transform: translateX(-26px); }
+    55%  { opacity: 1; transform: translateX(6px); }
+    100% { opacity: 1; transform: translateX(0); }
 }
 @keyframes burst-text-glow {
     0%, 100% { text-shadow: 0 0 10px rgba(104,228,255,0.45), 0 0 28px rgba(104,228,255,0.18); }
@@ -905,6 +905,34 @@ body {
     text-overflow: ellipsis;
     animation: id-pulse 4s ease-in-out infinite 0.5s;
 }
+/* ── Boss Raid Timer — replaces id-link when active ── */
+.id-plate .id-boss-timer {
+    position: absolute;
+    right: 18px;
+    bottom: 8px;
+    text-align: right;
+    font-size: 14px;
+    font-family: var(--font-sao);
+    color: rgba(104, 228, 255, 0.95);
+    letter-spacing: 2px;
+    z-index: 3;
+    white-space: nowrap;
+    display: none;
+    text-shadow: 0 0 8px rgba(104, 228, 255, 0.4);
+}
+.id-plate .id-boss-timer.active {
+    display: block;
+}
+.id-plate .id-boss-timer.urgent {
+    color: rgba(255, 90, 60, 0.95);
+    text-shadow: 0 0 10px rgba(255, 60, 40, 0.5);
+    animation: boss-timer-pulse 0.8s ease-in-out infinite;
+}
+@keyframes boss-timer-pulse {
+    0%, 100% { opacity: 1.0; }
+    50% { opacity: 0.55; }
+}
+
 
 /* ═══ STA bar row — gold SAO style below HP ═══ */
 .sta-row {
@@ -983,6 +1011,7 @@ body {
         <div class="id-uid" id="id-uid"></div>
     </div>
     <div class="id-link" id="id-link">NErVGear ─ LINK OK</div>
+    <div class="id-boss-timer" id="id-boss-timer"></div>
 </div>
 
 <!-- HP Component -->
@@ -1015,6 +1044,7 @@ body {
     <span class="sta-text" id="sta-text">0/0</span>
 </div>
 
+
 </div>
 
 <!-- Burst Mode Ready Overlay -->
@@ -1041,6 +1071,8 @@ body {
     <div class="cm-item" data-action="menu"><span class="cm-icon mi-menu"></span>SAO 菜单</div>
     <div class="cm-sep"></div>
     <div class="cm-item" data-action="toggle_recognition"><span class="cm-icon mi-play"></span>识别 开/关</div>
+    <div class="cm-sep"></div>
+    <div class="cm-item" data-action="switch_to_entity"><span class="cm-icon mi-ent"></span>切换到 Entity UI</div>
     <div class="cm-sep"></div>
     <div class="cm-item" data-action="exit"><span class="cm-icon mi-exit"></span>退出</div>
 </div>
@@ -1089,6 +1121,27 @@ function setPlayerInfo(info) {
     }
     scheduleHitRegionReport();
 }
+
+/* ═══ Boss Raid Timer API ═══ */
+var _bossTimerActive = false;
+function setBossTimer(text, urgency) {
+    // text = '' → hide; urgency = 'normal' | 'urgent'
+    var el = document.getElementById('id-boss-timer');
+    var link = document.getElementById('id-link');
+    if (!text) {
+        el.classList.remove('active', 'urgent');
+        el.textContent = '';
+        if (link) link.style.display = '';
+        _bossTimerActive = false;
+        return;
+    }
+    el.textContent = text;
+    el.classList.add('active');
+    el.classList.toggle('urgent', urgency === 'urgent');
+    if (link) link.style.display = 'none';
+    _bossTimerActive = true;
+}
+
 
 /* ═══ STA Bar API ═══ */
 function updateSTA(current, total) {

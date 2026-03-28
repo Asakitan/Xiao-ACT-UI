@@ -25,6 +25,8 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
+APP_VERSION = "1.1.8"
+APP_VERSION_LABEL = f"v{APP_VERSION}"
 
 BASE_CLIENT_WIDTH = 1919.0
 BASE_CLIENT_HEIGHT = 1079.0
@@ -230,6 +232,8 @@ def get_skill_bar_roi() -> Dict[str, float]:
 DEFAULT_HOTKEYS = {
     "toggle_recognition": "F5",
     "toggle_auto_script": "F6",
+    "boss_raid_start": "F7",
+    "boss_raid_next_phase": "F8",
     "toggle_topmost": "F9",
     "hide_panels": "F10",
 }

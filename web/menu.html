@@ -550,6 +550,29 @@ html, body {
     box-shadow: 6px 0 0 currentColor, 12px 0 0 currentColor;
 }
 
+/* ═══ Icon: Boss (sword / raid) ═══ */
+.sao-icon-boss {
+    width: 22px;
+    height: 22px;
+}
+.sao-icon-boss::before {
+    left: 9px;
+    top: 1px;
+    width: 4px;
+    height: 14px;
+    background: currentColor;
+    border-radius: 1px 1px 0 0;
+}
+.sao-icon-boss::after {
+    left: 3px;
+    top: 14px;
+    width: 16px;
+    height: 3px;
+    background: currentColor;
+    border-radius: 1px;
+    box-shadow: 4px 4px 0 -1px currentColor;
+}
+
 /* ═══ Icon: Skill (lightning bolt) ═══ */
 .sao-icon-skill {
     width: 20px;
@@ -854,6 +877,13 @@ html, body {
     border-color: rgba(243, 175, 18, 0.5);
     transform: translateY(-1px);
 }
+.auto-key-btn:disabled {
+    opacity: 0.46;
+    cursor: not-allowed;
+    transform: none;
+    border-color: rgba(180, 182, 170, 0.32);
+    box-shadow: none;
+}
 .auto-key-btn.primary {
     background: linear-gradient(180deg, rgba(175,247,255,0.42), rgba(104,228,255,0.20));
     border-color: rgba(104, 228, 255, 0.58);
@@ -1011,19 +1041,283 @@ html, body {
     font-family: Consolas, 'Courier New', monospace;
     letter-spacing: 0;
 }
+.item_box,
+.cb_position,
+.leftInfo {
+    transition: transform 0.34s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.28s ease;
+}
+.position.auto-key-layout .item_box {
+    transform: translateX(-156px);
+}
+.position.auto-key-layout .cb_position {
+    transform: translateX(-128px);
+}
+.position.auto-key-layout .leftInfo {
+    transform: translateX(-108px);
+}
+.child-menu.auto-key-menu {
+    width: min(76vw, 1180px);
+    min-width: min(76vw, 1180px);
+    max-width: calc(100vw - 220px);
+    top: clamp(-44px, -2vh, -18px);
+}
+.child-menu.auto-key-menu li {
+    width: 100%;
+}
+.child-menu.auto-key-menu .widget-row {
+    width: 100%;
+}
+.auto-key-shell {
+    min-height: min(calc(100vh - 190px), 760px);
+    display: flex;
+    flex-direction: column;
+}
+.auto-key-panel.show {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+.auto-key-list,
+.auto-key-cloud-results,
+.auto-key-action-list {
+    max-height: none;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+.auto-key-editor-layout,
+.auto-key-cloud-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+.auto-key-actions-section,
+.auto-key-cloud-results-section {
+    min-height: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+}
+.auto-key-section {
+    width: 100%;
+    padding: 14px 16px;
+    border: 1px solid rgba(180, 182, 170, 0.38);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(235,237,231,0.76));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.44);
+}
+.auto-key-section-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.auto-key-section-title {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    color: rgba(44, 52, 59, 0.96);
+    letter-spacing: 0.6px;
+}
+.auto-key-section-note {
+    max-width: 520px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: rgba(86, 92, 98, 0.78);
+    text-align: right;
+}
+.auto-key-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    width: 100%;
+}
+.auto-key-summary-item {
+    min-width: 0;
+    padding: 11px 12px;
+    border: 1px solid rgba(180, 182, 170, 0.34);
+    border-radius: 11px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(229,231,224,0.54));
+}
+.auto-key-summary-label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 10px;
+    letter-spacing: 0.7px;
+    color: rgba(97, 98, 86, 0.72);
+}
+.auto-key-summary-value {
+    display: block;
+    font-size: 13px;
+    line-height: 1.4;
+    color: rgba(44, 52, 59, 0.94);
+    word-break: break-word;
+}
+.auto-key-summary-value.muted {
+    color: rgba(95, 101, 108, 0.72);
+}
+.auto-key-details {
+    width: 100%;
+    margin-top: 12px;
+    border: 1px solid rgba(180, 182, 170, 0.34);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.52);
+    overflow: hidden;
+}
+.auto-key-details summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 11px 14px;
+    font-size: 12px;
+    color: rgba(74, 92, 104, 0.88);
+    user-select: none;
+}
+.auto-key-details summary::-webkit-details-marker {
+    display: none;
+}
+.auto-key-details[open] summary {
+    border-bottom: 1px solid rgba(180, 182, 170, 0.26);
+}
+.auto-key-details-body {
+    padding: 12px 14px 14px;
+}
+.auto-key-cloud-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+.auto-key-cloud-meta .auto-key-pill {
+    min-height: 24px;
+}
+.auto-key-status-good {
+    border-color: rgba(104, 228, 255, 0.58);
+    color: rgba(48, 86, 92, 0.96);
+}
+.auto-key-status-warn {
+    border-color: rgba(243, 175, 18, 0.5);
+    color: rgba(126, 84, 14, 0.96);
+}
+.auto-key-status-error {
+    border-color: rgba(210, 88, 88, 0.45);
+    color: rgba(147, 45, 45, 0.92);
+}
+.auto-key-condition-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+}
+.auto-key-condition-card {
+    padding: 12px;
+    border: 1px solid rgba(180, 182, 170, 0.34);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.86), rgba(231,233,226,0.58));
+}
+.auto-key-condition-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.auto-key-condition-title {
+    font-size: 12px;
+    color: rgba(60, 62, 50, 0.84);
+    letter-spacing: 0.5px;
+}
+.auto-key-condition-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 12px;
+}
+.auto-key-json-status {
+    margin-top: 8px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: rgba(91, 96, 103, 0.82);
+}
+.auto-key-empty.compact {
+    padding: 14px 12px;
+    border: 1px dashed rgba(180, 182, 170, 0.45);
+    border-radius: 11px;
+    background: rgba(255,255,255,0.52);
+}
 @media (max-width: 1200px) {
     .child-menu.auto-key-menu {
-        min-width: 700px;
-        top: -28px;
+        width: min(88vw, 940px);
+        min-width: min(88vw, 940px);
+        max-width: calc(100vw - 120px);
+        top: -18px;
+    }
+    .child-menu.boss-raid-menu {
+        width: min(88vw, 1040px);
+        min-width: min(88vw, 1040px);
+        max-width: calc(100vw - 120px);
+        top: -18px;
     }
     .child-menu.auto-key-menu li {
-        width: 700px;
+        width: 100%;
     }
+    .child-menu.boss-raid-menu li {
+        width: 100%;
+    }
+    .position.auto-key-layout .item_box,
+    .position.auto-key-layout .cb_position,
+    .position.auto-key-layout .leftInfo {
+        transform: translateX(-72px);
+    }
+    .boss-raid-summary-grid,
+    .auto-key-summary-grid,
+    .auto-key-condition-grid,
+    .boss-raid-grid.compact,
     .auto-key-grid.compact {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+}
+@media (max-width: 920px) {
+    .child-menu.auto-key-menu {
+        width: min(92vw, 760px);
+        min-width: min(92vw, 760px);
+        max-width: calc(100vw - 48px);
+    }
+    .child-menu.boss-raid-menu {
+        width: min(92vw, 760px);
+        min-width: min(92vw, 760px);
+        max-width: calc(100vw - 48px);
+    }
+    .position.auto-key-layout .item_box,
+    .position.auto-key-layout .cb_position,
+    .position.auto-key-layout .leftInfo {
+        transform: none;
+    }
+    .boss-raid-summary-grid,
+    .auto-key-summary-grid,
+    .boss-raid-grid,
+    .auto-key-grid.compact {
+        grid-template-columns: 1fr;
+    }
+    .boss-raid-field.span-2 {
+        grid-column: span 1;
+    }
     .auto-key-field.span-3 {
-        grid-column: span 2;
+        grid-column: span 1;
+    }
+    .auto-key-field.span-2 {
+        grid-column: span 1;
+    }
+    .boss-raid-section-head,
+    .auto-key-section-head {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .boss-raid-section-note,
+    .auto-key-section-note {
+        max-width: none;
+        text-align: left;
     }
 }
 .source-name {
@@ -1869,6 +2163,585 @@ html, body {
 #tv-off-overlay.active {
     animation: tv-off-anim 0.55s cubic-bezier(0.3, 0, 0.9, 1) forwards;
 }
+
+/* ═══════════════════════════════════════
+   Boss Raid Panel — mirrors Auto-Key styles
+   ═══════════════════════════════════════ */
+.child-menu.boss-raid-menu {
+    width: min(76vw, 1180px);
+    min-width: min(76vw, 1180px);
+    max-width: calc(100vw - 220px);
+    top: clamp(-44px, -2vh, -18px);
+}
+.child-menu.boss-raid-menu li { width: 100%; }
+.child-menu.boss-raid-menu .widget-row { width: 100%; }
+.boss-raid-runtime {
+    font-size: 12px;
+    font-family: var(--font-sao);
+    color: rgba(88, 152, 190, 0.90);
+    margin: 4px 0 2px;
+    letter-spacing: 1px;
+}
+.boss-raid-controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    width: 100%;
+    margin: 8px 0 0;
+}
+.boss-raid-shell-row {
+    align-items: flex-start;
+}
+.boss-raid-shell {
+    width: 100%;
+    min-height: min(calc(100vh - 190px), 660px);
+    display: flex; flex-direction: column;
+}
+.boss-raid-panel { display: none; }
+.boss-raid-panel.show {
+    display: flex; flex-direction: column; gap: 12px;
+    min-height: 0; flex: 1 1 auto; width: 100%;
+}
+.boss-raid-editor-layout,
+.boss-raid-cloud-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    flex: 1 1 auto;
+    width: 100%;
+}
+.boss-raid-cloud-results-section {
+    min-height: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+}
+.boss-raid-tabs {
+    display: flex; gap: 6px; margin-bottom: 10px;
+}
+.boss-raid-tab {
+    flex: 0 0 auto;
+    padding: 4px 14px;
+    border: 1px solid rgba(180, 182, 170, 0.45);
+    border-radius: 8px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(235,237,231,0.72));
+    font-family: var(--font-ui); font-size: 12px; letter-spacing: 0.8px;
+    color: rgba(54, 60, 66, 0.88); cursor: pointer; transition: 0.15s;
+}
+.boss-raid-tab.active, .boss-raid-tab:hover {
+    background: linear-gradient(180deg, rgba(151,206,233,0.5), rgba(104,186,220,0.38));
+    border-color: rgba(104,186,220,0.5);
+    color: rgba(24, 54, 76, 0.95);
+}
+/* Boss bar mode selector */
+.boss-bar-mode-group {
+    display: flex; gap: 4px; margin: 4px 0; flex-wrap: wrap;
+}
+.boss-bar-mode-btn {
+    flex: 1 1 0; min-width: 0;
+    padding: 3px 6px;
+    border: 1px solid rgba(180, 182, 170, 0.45);
+    border-radius: 6px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(235,237,231,0.72));
+    font-family: var(--font-ui); font-size: 10px; letter-spacing: 0.4px;
+    color: rgba(54, 60, 66, 0.88); cursor: pointer; transition: 0.15s;
+    text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.boss-bar-mode-btn.active, .boss-bar-mode-btn:hover {
+    background: linear-gradient(180deg, rgba(151,206,233,0.5), rgba(104,186,220,0.38));
+    border-color: rgba(104,186,220,0.5);
+    color: rgba(24, 54, 76, 0.95);
+}
+.boss-raid-toolbar {
+    display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0;
+}
+.boss-raid-btn {
+    padding: 5px 14px;
+    border: 1px solid rgba(180, 182, 170, 0.45);
+    border-radius: 8px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(235,237,231,0.72));
+    font-family: var(--font-ui); font-size: 12px; letter-spacing: 0.6px;
+    cursor: pointer; color: rgba(54,60,66,0.88); transition: 0.15s;
+}
+.boss-raid-btn:hover {
+    background: linear-gradient(180deg, rgba(151,206,233,0.5), rgba(104,186,220,0.38));
+    border-color: rgba(104,186,220,0.5);
+}
+.boss-raid-btn.primary {
+    background: linear-gradient(180deg, rgba(104,186,220,0.38), rgba(80,164,200,0.32));
+    border-color: rgba(104,186,220,0.5);
+    color: rgba(24,54,76,0.95);
+}
+.boss-raid-btn.danger {
+    color: rgba(180,40,40,0.88);
+    border-color: rgba(180,40,40,0.32);
+}
+.boss-raid-section {
+    width: 100%; padding: 14px 16px;
+    border: 1px solid rgba(180,182,170,0.38); border-radius: 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(235,237,231,0.76));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.44);
+}
+.boss-raid-section-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px;
+}
+.boss-raid-section-title {
+    font-family: var(--font-ui); font-size: 14px;
+    color: rgba(44,52,59,0.96); letter-spacing: 0.6px;
+}
+.boss-raid-section-note {
+    max-width: 520px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: rgba(86, 92, 98, 0.78);
+    text-align: right;
+}
+.boss-raid-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px;
+}
+.boss-raid-grid.compact { gap: 6px 10px; }
+.boss-raid-field { display: flex; flex-direction: column; gap: 2px; }
+.boss-raid-field.span-2 { grid-column: span 2; }
+.boss-raid-field label {
+    font-size: 11px; color: rgba(86,92,98,0.78); letter-spacing: 0.4px;
+}
+.boss-raid-field input,
+.boss-raid-field textarea,
+.boss-raid-field select {
+    width: 100%;
+    padding: 5px 10px;
+    border: 1px solid rgba(180,182,170,0.45); border-radius: 8px;
+    font-family: var(--font-ui); font-size: 12px;
+    background: rgba(255,255,255,0.7);
+}
+.boss-raid-field textarea { min-height: 44px; resize: vertical; }
+.boss-raid-list, .boss-raid-cloud-results {
+    max-height: none; min-height: 0; flex: 1 1 auto; overflow: auto;
+}
+.boss-raid-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    width: 100%;
+    margin-top: 12px;
+}
+.boss-raid-summary-item {
+    min-width: 0;
+    padding: 11px 12px;
+    border: 1px solid rgba(180, 182, 170, 0.34);
+    border-radius: 11px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.78), rgba(229,231,224,0.54));
+}
+.boss-raid-summary-label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 10px;
+    letter-spacing: 0.7px;
+    color: rgba(97, 98, 86, 0.72);
+}
+.boss-raid-summary-value {
+    display: block;
+    font-size: 13px;
+    line-height: 1.4;
+    color: rgba(44, 52, 59, 0.94);
+    word-break: break-word;
+}
+.boss-raid-summary-value.muted {
+    color: rgba(95, 101, 108, 0.72);
+}
+.boss-raid-cloud-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+.boss-raid-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(243,175,18,0.08);
+    border: 1px solid rgba(201,198,198,0.45);
+    color: rgb(100,99,100);
+    font-size: 11px;
+    line-height: 1.3;
+}
+.boss-raid-empty {
+    padding: 14px 12px;
+    border: 1px dashed rgba(180, 182, 170, 0.45);
+    border-radius: 11px;
+    background: rgba(255,255,255,0.52);
+    color: rgba(91, 96, 103, 0.82);
+    font-size: 11px;
+    line-height: 1.6;
+}
+.boss-raid-empty.compact {
+    padding: 10px 12px;
+}
+/* Profile card in local list */
+.boss-raid-card {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-radius: 10px; margin-bottom: 6px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.94), rgba(240,242,236,0.88));
+    border: 1px solid rgba(180,182,170,0.35); cursor: pointer;
+    transition: 0.15s;
+}
+.boss-raid-card:hover, .boss-raid-card.selected {
+    border-color: rgba(104,186,220,0.5);
+    background: linear-gradient(135deg, rgba(220,240,255,0.7), rgba(200,228,244,0.5));
+}
+.boss-raid-card.active-profile {
+    border-left: 3px solid rgba(104,228,255,0.85);
+}
+.boss-raid-card-info { flex: 1; min-width: 0; }
+.boss-raid-card-name {
+    font-size: 13px; font-weight: 600; color: rgba(44,52,59,0.96);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.boss-raid-card-meta {
+    font-size: 10px; color: rgba(86,92,98,0.68); margin-top: 2px;
+}
+.boss-raid-card-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+/* Phase card in editor */
+.br-phase-card {
+    padding: 10px 14px; border-radius: 10px; margin-bottom: 8px;
+    background: rgba(255,255,255,0.7);
+    border: 1px solid rgba(180,182,170,0.30);
+    width: 100%;
+}
+.br-phase-head {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;
+}
+.br-phase-name { font-size: 13px; font-weight: 600; color: rgba(44,52,59,0.9); }
+.br-phase-tl-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; width: 100%; }
+.br-tl-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 8px; border-radius: 6px;
+    background: rgba(245,247,243,0.7);
+    flex-wrap: wrap;
+}
+.br-tl-row input, .br-tl-row select {
+    padding: 3px 6px; border: 1px solid rgba(180,182,170,0.4); border-radius: 6px;
+    font-size: 11px; font-family: var(--font-ui);
+    background: rgba(255,255,255,0.7);
+}
+.br-tl-row input[type="number"] { width: 60px; }
+.br-tl-row input[type="text"] { flex: 1; min-width: 80px; }
+#br-phases-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+}
+.boss-raid-btn:disabled {
+    opacity: 0.38;
+    color: rgb(185,183,183);
+    cursor: not-allowed;
+}
+
+/* ═══════════════════════════════════════
+   SAO Light Theme — Boss Raid & Auto Key & Panels
+   ═══════════════════════════════════════ */
+.boss-raid-runtime,
+.auto-key-runtime {
+    background: rgba(229,227,227,0.80);
+    border: 1px solid rgba(201,198,198,0.60);
+    color: rgb(100,99,100);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 11px;
+}
+.boss-raid-tab, .auto-key-tab {
+    background: rgba(255,255,255,0.60);
+    border: 1px solid rgba(201,198,198,0.50);
+    color: rgb(100,99,100);
+}
+.boss-raid-tab.active, .boss-raid-tab:hover,
+.auto-key-tab.active, .auto-key-tab:hover {
+    background: rgba(243,175,18,0.18);
+    border-color: rgba(243,175,18,0.55);
+    color: rgb(80,78,80);
+    box-shadow: 0 1px 4px rgba(50,50,0,0.10);
+}
+.boss-raid-btn, .auto-key-btn {
+    background: rgba(255,255,255,0.70);
+    border: 1px solid rgba(201,198,198,0.50);
+    color: rgb(100,99,100);
+}
+.boss-raid-btn:hover, .auto-key-btn:hover {
+    background: rgba(243,175,18,0.16);
+    border-color: rgba(222,166,32,0.50);
+    color: rgb(80,78,80);
+}
+.boss-raid-btn.primary, .auto-key-btn.primary {
+    background: rgba(243,175,18,0.22);
+    border-color: rgba(222,166,32,0.55);
+    color: rgb(80,78,80);
+}
+.boss-raid-btn.danger {
+    color: rgba(210,60,60,0.90);
+    border-color: rgba(210,60,60,0.35);
+}
+.auto-key-btn.warn {
+    background: rgba(243,175,18,0.12);
+    border-color: rgba(222,166,32,0.40);
+    color: rgb(180,130,20);
+}
+.boss-raid-section,
+.auto-key-profile, .auto-key-cloud-card, .auto-key-action-card {
+    background: rgba(255,255,255,0.75);
+    border: 1px solid rgba(201,198,198,0.50);
+    box-shadow: 0 1px 3px rgba(50,50,0,0.06);
+}
+.auto-key-profile.active, .boss-raid-card.active-profile {
+    border-color: rgba(222,166,32,0.60);
+    box-shadow: 0 0 10px rgba(243,175,18,0.12), 0 1px 3px rgba(50,50,0,0.06);
+}
+.boss-raid-card {
+    background: rgba(255,255,255,0.70);
+    border: 1px solid rgba(201,198,198,0.45);
+}
+.boss-raid-card:hover, .boss-raid-card.selected,
+.auto-key-profile.selected {
+    border-color: rgba(222,166,32,0.55);
+    background: rgba(243,175,18,0.08);
+}
+.boss-raid-section-title,
+.auto-key-card-title {
+    color: rgb(80,78,80);
+}
+.boss-raid-card-name {
+    color: rgb(80,78,80);
+}
+.boss-raid-field label,
+.auto-key-card-meta,
+.auto-key-field label {
+    color: rgb(140,138,140);
+}
+.boss-raid-card-meta {
+    color: rgb(140,138,140);
+}
+.boss-raid-field input, .boss-raid-field textarea, .boss-raid-field select,
+.auto-key-field input, .auto-key-field textarea, .auto-key-field select {
+    background: rgba(255,255,255,0.90);
+    border: 1px solid rgba(201,198,198,0.55);
+    color: rgb(80,78,80);
+}
+.auto-key-pill {
+    background: rgba(243,175,18,0.08);
+    border: 1px solid rgba(201,198,198,0.45);
+    color: rgb(100,99,100);
+}
+.auto-key-pill.active {
+    border-color: rgba(222,166,32,0.60);
+    color: rgb(180,130,20);
+    background: rgba(243,175,18,0.15);
+}
+.auto-key-pill.warn {
+    border-color: rgba(210,60,60,0.35);
+    color: rgba(210,60,60,0.88);
+}
+.boss-bar-mode-btn {
+    background: rgba(255,255,255,0.65);
+    border: 1px solid rgba(201,198,198,0.50);
+    color: rgb(100,99,100);
+}
+.boss-bar-mode-btn.active, .boss-bar-mode-btn:hover {
+    background: rgba(243,175,18,0.22);
+    border-color: rgba(222,166,32,0.55);
+    color: rgb(80,78,80);
+}
+.boss-raid-section-note,
+.auto-key-section-note {
+    color: rgb(160,158,160);
+}
+.boss-raid-section-head,
+.auto-key-section-head {
+    border-bottom-color: rgba(201,198,198,0.40);
+}
+.br-phase-name {
+    color: rgb(80,78,80);
+}
+.br-tl-row {
+    background: rgba(245,243,240,0.80);
+}
+.br-tl-row input, .br-tl-row select {
+    background: rgba(255,255,255,0.90);
+    border: 1px solid rgba(201,198,198,0.55);
+    color: rgb(80,78,80);
+}
+/* Widget notes inside boss-raid / auto-key */
+.child-menu.boss-raid-menu .widget-note,
+.child-menu.auto-key-menu .widget-note {
+    color: rgb(160,158,160);
+}
+.child-menu.boss-raid-menu .widget-label,
+.child-menu.auto-key-menu .widget-label {
+    color: rgb(80,78,80);
+}
+/* Summary grids (identity / upload auth) */
+.auto-key-summary-item,
+.boss-raid-summary-item {
+    background: rgba(255,255,255,0.70);
+    border: 1px solid rgba(201,198,198,0.45);
+}
+.auto-key-summary-label,
+.boss-raid-summary-label {
+    color: rgb(140,138,140);
+}
+.auto-key-summary-value,
+.boss-raid-summary-value {
+    color: rgb(80,78,80);
+}
+.auto-key-summary-value.muted {
+    color: rgb(185,183,183);
+}
+.auto-key-details {
+    border: 1px solid rgba(201,198,198,0.45);
+    background: rgba(255,255,255,0.70);
+    color: rgb(100,99,100);
+}
+/* Phase cards & misc light overrides */
+.br-phase-card {
+    background: rgba(255,255,255,0.75);
+    border: 1px solid rgba(201,198,198,0.50);
+}
+.br-phase-head .boss-raid-btn {
+    background: rgba(255,255,255,0.60);
+}
+.auto-key-empty,
+.auto-key-condition-note {
+    color: rgb(160,158,160);
+}
+.auto-key-btn.primary {
+    background: rgba(243,175,18,0.22);
+    border-color: rgba(222,166,32,0.55);
+    color: rgb(80,78,80);
+}
+.auto-key-btn:disabled {
+    opacity: 0.38;
+    color: rgb(185,183,183);
+}
+.auto-key-field label {
+    color: rgb(140,138,140);
+}
+.auto-key-card-meta {
+    color: rgb(140,138,140);
+}
+.boss-raid-section-note,
+.auto-key-section-note {
+    color: rgb(160,158,160);
+}
+/* ─── Motion blur fix + dropdown stacking: skip blur/transform on large panels ─── */
+.child-menu.boss-raid-menu,
+.child-menu.auto-key-menu {
+    filter: none;
+    transform: none;
+    transition: opacity 0.22s ease;
+}
+.child-menu.boss-raid-menu.show,
+.child-menu.auto-key-menu.show {
+    filter: none;
+    transform: none;
+}
+/* ─── Text clarity: disable blur / motion-heavy transitions on the menu shell ─── */
+.info,
+.info.visible,
+.info.entering,
+.info.closing {
+    backdrop-filter: none !important;
+    transition: opacity 0.22s ease !important;
+}
+.menu-hud-left-far,
+.menu-hud-left-near,
+.menu-hud-right-far,
+.menu-hud-right-near {
+    animation: none !important;
+    transform: none !important;
+}
+.position,
+.position.menu-focus-in,
+.position.menu-focus-out,
+.info.entering .position,
+.info.closing .position {
+    animation: none !important;
+    transform: none !important;
+    transition: opacity 0.22s ease !important;
+    will-change: opacity;
+}
+.position::before,
+.position::after,
+.position.menu-focus-in::before,
+.position.menu-focus-in::after,
+.position.menu-focus-out::before,
+.position.menu-focus-out::after {
+    animation: none !important;
+    transform: none !important;
+    transition: opacity 0.22s ease !important;
+}
+.item {
+    animation: itemFadeIn 0.2s ease forwards !important;
+    filter: none !important;
+    transform: none !important;
+    backdrop-filter: none !important;
+}
+.closing .item {
+    animation: itemFadeOut 0.16s ease forwards !important;
+}
+@keyframes itemFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+@keyframes itemFadeOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
+.child-menu,
+.child-menu.show {
+    filter: none !important;
+    transform: none !important;
+    transition: opacity 0.18s ease !important;
+}
+.child-menu li {
+    backdrop-filter: none !important;
+}
+.child-menu li:hover {
+    transform: none;
+}
+/* ─── Panels sub-menu: SAO light widget rows ─── */
+#sub-panels li.widget-row {
+    background: rgba(255,255,255,0.75);
+    border: 1px solid rgba(201,198,198,0.40);
+}
+#sub-panels li.widget-row:hover {
+    background: rgba(255,255,255,0.85);
+}
+#sub-panels .widget-label {
+    color: rgb(80,78,80);
+}
+#sub-panels .widget-note {
+    color: rgb(160,158,160);
+}
+#sub-panels .sao-toggle {
+    color: rgb(100,99,100);
+}
+#sub-panels .sao-toggle .toggle-track {
+    background: rgba(201,198,198,0.30);
+    border-color: rgba(201,198,198,0.50);
+}
+#sub-panels .sao-toggle input:checked + .toggle-track {
+    background: rgba(243,175,18,0.35);
+    border-color: rgba(222,166,32,0.60);
+}
+#sub-panels .sao-slider {
+    background: rgba(201,198,198,0.30);
+}
+#sub-panels .source-summary {
+    color: rgb(160,158,160);
+}
+
 </style>
 </head>
 <body>
@@ -1934,7 +2807,10 @@ html, body {
             <li class="item" data-name="autoKeys" data-idx="2">
                 <div class="in-circle"><span class="sao-icon sao-icon-keys"></span></div>
             </li>
-            <li class="item" data-name="panels" data-idx="3">
+            <li class="item" data-name="bossRaid" data-idx="3">
+                <div class="in-circle"><span class="sao-icon sao-icon-boss"></span></div>
+            </li>
+            <li class="item" data-name="panels" data-idx="4">
                 <div class="in-circle"><span class="sao-icon sao-icon-settings"></span></div>
             </li>
         </ul>
@@ -2001,82 +2877,303 @@ html, body {
                             <div class="auto-key-list" id="auto-key-profile-list"></div>
                         </div>
                         <div class="auto-key-panel" data-tab="editor">
-                            <div class="auto-key-grid">
-                                <div class="auto-key-field">
-                                    <label for="ak-profile-name">配置名称 Profile Name</label>
-                                    <input id="ak-profile-name" type="text" placeholder="输入配置名称 / Profile name" />
-                                </div>
-                                <div class="auto-key-field">
-                                    <label for="ak-profile-profession-name">职业名称 Profession Name</label>
-                                    <input id="ak-profile-profession-name" type="text" placeholder="输入职业名称 / Profession name" />
-                                </div>
-                                <div class="auto-key-field">
-                                    <label for="ak-profile-profession-id">职业 ID Profession ID</label>
-                                    <input id="ak-profile-profession-id" type="number" min="0" step="1" />
-                                </div>
-                                <div class="auto-key-field">
-                                    <label for="ak-engine-tick-ms">轮询毫秒 Tick MS</label>
-                                    <input id="ak-engine-tick-ms" type="number" min="10" step="10" />
-                                </div>
-                                <div class="auto-key-field span-2">
-                                    <label for="ak-profile-description">说明 Description</label>
-                                    <textarea id="ak-profile-description" placeholder="写这个配置的用途和使用时机 / What this script does and when to use it"></textarea>
-                                </div>
+                            <div class="auto-key-editor-layout">
+                                <section class="auto-key-section">
+                                    <div class="auto-key-section-head">
+                                        <div class="auto-key-section-title">基本信息 Basic Info</div>
+                                        <div class="auto-key-section-note">先写配置名和用途。当前角色的 UID、名字、职业信息会自动读取并作为上传身份使用。</div>
+                                    </div>
+                                    <div class="auto-key-grid">
+                                        <div class="auto-key-field">
+                                            <label for="ak-profile-name">配置名称 Profile Name</label>
+                                            <input id="ak-profile-name" type="text" placeholder="例如：副本连招 / Example: Dungeon Rotation" />
+                                        </div>
+                                        <div class="auto-key-field">
+                                            <label for="ak-engine-tick-ms">轮询毫秒 Tick MS</label>
+                                            <input id="ak-engine-tick-ms" type="number" min="10" step="10" />
+                                        </div>
+                                        <div class="auto-key-field span-2">
+                                            <label for="ak-profile-description">用途说明 Description</label>
+                                            <textarea id="ak-profile-description" placeholder="写清楚这套脚本什么时候用、适合什么场景 / Explain what this profile does and when to use it"></textarea>
+                                        </div>
+                                    </div>
+                                    <div class="auto-key-summary-grid" id="ak-editor-identity-summary"></div>
+                                    <details class="auto-key-details">
+                                        <summary>高级角色限制 Advanced Role Filter</summary>
+                                        <div class="auto-key-details-body">
+                                            <div class="auto-key-grid compact">
+                                                <div class="auto-key-field">
+                                                    <label for="ak-profile-profession-name">职业名称 Profession Name</label>
+                                                    <input id="ak-profile-profession-name" type="text" placeholder="留空则不限制职业 / Leave empty for any profession" />
+                                                </div>
+                                                <div class="auto-key-field">
+                                                    <label for="ak-profile-profession-id">职业 ID Profession ID</label>
+                                                    <input id="ak-profile-profession-id" type="number" min="0" step="1" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </details>
+                                </section>
+                                <section class="auto-key-section">
+                                    <div class="auto-key-section-head">
+                                        <div class="auto-key-section-title">运行规则 Runtime</div>
+                                        <div class="auto-key-section-note">这里控制脚本是否必须前台、死亡是否暂停，以及保存/启用操作。</div>
+                                    </div>
+                                    <div class="auto-key-toolbar">
+                                        <label class="sao-toggle" style="max-width:220px;">
+                                            <input type="checkbox" id="ak-engine-require-foreground" />
+                                            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                                            <span>需要前台 Require Foreground</span>
+                                        </label>
+                                        <label class="sao-toggle" style="max-width:220px;">
+                                            <input type="checkbox" id="ak-engine-pause-on-death" />
+                                            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                                            <span>死亡暂停 Pause On Death</span>
+                                        </label>
+                                        <button class="auto-key-btn primary" type="button" onclick="_akSaveDraft(); return false;">保存配置 Save Profile</button>
+                                        <button class="auto-key-btn" type="button" onclick="_akActivateDraft(); return false;">启用 Activate</button>
+                                        <button class="auto-key-btn" type="button" onclick="_akExportDraft(); return false;">导出 Export</button>
+                                    </div>
+                                </section>
+                                <section class="auto-key-section auto-key-actions-section">
+                                    <div class="auto-key-section-head">
+                                        <div class="auto-key-section-title">动作编辑 Action Builder</div>
+                                        <div class="auto-key-section-note">每个动作对应一个技能槽。先填按键，再用条件卡片决定什么时候触发。</div>
+                                    </div>
+                                    <div class="auto-key-toolbar">
+                                        <button class="auto-key-btn primary" type="button" onclick="_akAddAction(); return false;">新增动作 Add Action</button>
+                                    </div>
+                                    <div class="auto-key-action-list" id="auto-key-action-list"></div>
+                                </section>
                             </div>
-                            <div class="auto-key-toolbar">
-                                <label class="sao-toggle" style="max-width:220px;">
-                                    <input type="checkbox" id="ak-engine-require-foreground" />
-                                    <div class="toggle-track"><div class="toggle-thumb"></div></div>
-                                    <span>需要前台 Require Foreground</span>
-                                </label>
-                                <label class="sao-toggle" style="max-width:220px;">
-                                    <input type="checkbox" id="ak-engine-pause-on-death" />
-                                    <div class="toggle-track"><div class="toggle-thumb"></div></div>
-                                    <span>死亡暂停 Pause On Death</span>
-                                </label>
-                                <button class="auto-key-btn primary" type="button" onclick="_akSaveDraft(); return false;">保存配置 Save Profile</button>
-                                <button class="auto-key-btn" type="button" onclick="_akAddAction(); return false;">新增动作 Add Action</button>
-                                <button class="auto-key-btn" type="button" onclick="_akActivateDraft(); return false;">启用 Activate</button>
-                                <button class="auto-key-btn" type="button" onclick="_akExportDraft(); return false;">导出 Export</button>
-                            </div>
-                            <div class="auto-key-action-list" id="auto-key-action-list"></div>
                         </div>
                         <div class="auto-key-panel" data-tab="cloud">
-                            <div class="auto-key-grid compact">
-                                <div class="auto-key-field span-3">
-                                    <label for="ak-server-url">欢迎使用咲ACTUI！</label>
-                                </div>
-                                <div class="auto-key-field span-3">
-                                    <label for="ak-upload-token">上传令牌 Upload Token</label>
-                                    <input id="ak-upload-token" type="password" placeholder="输入上传令牌 / Upload token" />
-                                </div>
-                                <div class="auto-key-field">
-                                    <label for="ak-search-q">关键字 Keyword</label>
-                                    <input id="ak-search-q" type="text" placeholder="配置 / 玩家 / 职业 / Profile / Player / Profession" />
-                                </div>
-                                <div class="auto-key-field">
-                                    <label for="ak-search-profile-name">配置名称 Profile Name</label>
-                                    <input id="ak-search-profile-name" type="text" placeholder="配置名称 / Profile name" />
-                                </div>
-                                <div class="auto-key-field">
-                                    <label for="ak-search-player-uid">玩家 UID Player UID</label>
-                                    <input id="ak-search-player-uid" type="text" placeholder="玩家 UID / UID" />
-                                </div>
-                                <div class="auto-key-field">
-                                    <label for="ak-search-player-name">玩家名称 Player Name</label>
-                                    <input id="ak-search-player-name" type="text" placeholder="玩家名称 / Player name" />
-                                </div>
-                                <div class="auto-key-field">
-                                    <label for="ak-search-profession-name">职业 Profession</label>
-                                    <input id="ak-search-profession-name" type="text" placeholder="职业 / Profession" />
-                                </div>
+                            <div class="auto-key-cloud-layout">
+                                <section class="auto-key-section">
+                                    <div class="auto-key-section-head">
+                                        <div class="auto-key-section-title">当前角色 / 上传凭证 Identity & Upload Auth</div>
+                                        <div class="auto-key-section-note">系统会用当前识别到的 UID、角色名、职业 ID 自动申请短时凭证。</div>
+                                    </div>
+                                    <div class="auto-key-grid">
+                                        <div class="auto-key-field span-2">
+                                            <label for="ak-server-url">欢迎使用咲ACT！</label>
+                                        </div>
+                                    </div>
+                                    <div class="auto-key-summary-grid">
+                                        <div class="auto-key-summary-item"><span class="auto-key-summary-label">UID</span><span class="auto-key-summary-value" id="ak-identity-uid">--</span></div>
+                                        <div class="auto-key-summary-item"><span class="auto-key-summary-label">玩家名 Player</span><span class="auto-key-summary-value" id="ak-identity-name">--</span></div>
+                                        <div class="auto-key-summary-item"><span class="auto-key-summary-label">职业 ID</span><span class="auto-key-summary-value" id="ak-identity-profession-id">--</span></div>
+                                        <div class="auto-key-summary-item"><span class="auto-key-summary-label">职业名 Profession</span><span class="auto-key-summary-value" id="ak-identity-profession-name">--</span></div>
+                                    </div>
+                                    <div class="auto-key-cloud-meta" id="ak-upload-auth-meta"></div>
+                                    <div class="auto-key-toolbar">
+                                        <button class="auto-key-btn" type="button" onclick="_akSaveCloudSettings(); return false;">保存服务器 Save Server</button>
+                                        <button class="auto-key-btn" type="button" onclick="_akRefreshUploadAuth(true); return false;">刷新凭证 Refresh Auth</button>
+                                        <button class="auto-key-btn primary" id="ak-upload-active-btn" type="button" onclick="_akUploadActive(); return false;">上传当前配置 Upload Active</button>
+                                    </div>
+                                </section>
+                                <section class="auto-key-section auto-key-cloud-results-section">
+                                    <div class="auto-key-section-head">
+                                        <div class="auto-key-section-title">云端搜索 Cloud Search</div>
+                                        <div class="auto-key-section-note">按配置名、作者 UID、角色名或职业搜索并下载别人的脚本配置。</div>
+                                    </div>
+                                    <div class="auto-key-grid compact">
+                                        <div class="auto-key-field">
+                                            <label for="ak-search-q">关键字 Keyword</label>
+                                            <input id="ak-search-q" type="text" placeholder="配置 / 玩家 / 职业 / Profile / Player / Profession" />
+                                        </div>
+                                        <div class="auto-key-field">
+                                            <label for="ak-search-profile-name">配置名称 Profile Name</label>
+                                            <input id="ak-search-profile-name" type="text" placeholder="配置名称 / Profile name" />
+                                        </div>
+                                        <div class="auto-key-field">
+                                            <label for="ak-search-player-uid">玩家 UID Player UID</label>
+                                            <input id="ak-search-player-uid" type="text" placeholder="玩家 UID / UID" />
+                                        </div>
+                                        <div class="auto-key-field">
+                                            <label for="ak-search-player-name">玩家名称 Player Name</label>
+                                            <input id="ak-search-player-name" type="text" placeholder="玩家名称 / Player name" />
+                                        </div>
+                                        <div class="auto-key-field">
+                                            <label for="ak-search-profession-name">职业 Profession</label>
+                                            <input id="ak-search-profession-name" type="text" placeholder="职业 / Profession" />
+                                        </div>
+                                    </div>
+                                    <div class="auto-key-toolbar">
+                                        <button class="auto-key-btn primary" type="button" onclick="_akSearchRemote(); return false;">搜索 Search</button>
+                                    </div>
+                                    <div class="auto-key-cloud-results" id="auto-key-cloud-results"></div>
+                                </section>
                             </div>
-                            <div class="auto-key-toolbar">
-                                <button class="auto-key-btn" type="button" onclick="_akSaveCloudSettings(); return false;">保存服务器 Save Server</button>
-                                <button class="auto-key-btn primary" type="button" onclick="_akSearchRemote(); return false;">搜索 Search</button>
-                                <button class="auto-key-btn" type="button" onclick="_akUploadActive(); return false;">上传当前配置 Upload Active</button>
+                        </div>
+                    </div>
+                </li>
+                <li class="sep"></li>
+                <li class="widget-row">
+                    <div class="widget-label">BOSS ↔ AUTOKEY LINKAGE</div>
+                    <label class="sao-toggle" style="margin-bottom:6px;">
+                        <input type="checkbox" id="linkage-enabled" />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>联动 Linkage ON/OFF</span>
+                    </label>
+                    <div class="widget-note" style="margin-bottom:8px;">Boss Raid 阶段/时间轴事件触发自动按键。 Boss raid phase/timeline events trigger auto key presses.</div>
+                    <label class="sao-toggle" style="margin-bottom:6px;">
+                        <input type="checkbox" id="linkage-debug" />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>Debug Log</span>
+                    </label>
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                        <label style="font-size:10px;color:rgb(140,138,140);white-space:nowrap;">Global CD (s):</label>
+                        <input type="number" id="linkage-global-cd" min="0" max="60" step="0.5" value="1.0"
+                               style="width:60px;padding:2px 4px;font-size:10px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);"
+                               onchange="_setLinkageGlobalCD(this.value)" />
+                    </div>
+                    <div id="linkage-mappings" style="display:flex;flex-direction:column;gap:6px;"></div>
+                    <button class="boss-bar-mode-btn" type="button" onclick="_addLinkageMapping()" style="margin-top:6px;flex:0 0 auto;min-width:auto;">+ Add Mapping</button>
+                </li>
+            </ul>
+
+            <!-- Boss Raid sub-menu -->
+            <ul class="child-menu boss-raid-menu" id="sub-bossRaid" data-group="bossRaid">
+                <li class="widget-row">
+                    <div class="widget-label">Boss Raid 时间轴</div>
+                    <label class="sao-toggle">
+                        <input type="checkbox" id="boss-raid-enabled" />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>Boss Raid 启用 Enable</span>
+                    </label>
+                    <div class="boss-raid-runtime" id="boss-raid-runtime">Boss Raid: Idle</div>
+                    <div class="boss-raid-controls" id="boss-raid-controls" style="display:flex;gap:6px;margin:6px 0;">
+                        <button class="boss-raid-btn primary" type="button" id="br-btn-start" onclick="_brStartStop(); return false;">▶ 开始 Start</button>
+                        <button class="boss-raid-btn" type="button" onclick="_brNextPhase(); return false;">⏭ 下一阶段 Next</button>
+                        <button class="boss-raid-btn danger" type="button" onclick="_brReset(); return false;">↺ 重置 Reset</button>
+                    </div>
+                    <div class="widget-note">F7 开始/停止，F8 切换阶段。配置 Boss 血量与狂暴计时器，时间轴触发点会弹出提醒和音效。 F7 start/stop, F8 next phase. Set boss HP, enrage timer, and timeline alerts.</div>
+                </li>
+                <li class="widget-row boss-raid-shell-row">
+                    <div class="boss-raid-tabs" id="boss-raid-tabs">
+                        <button class="boss-raid-tab active" data-tab="local" type="button">本地 Local</button>
+                        <button class="boss-raid-tab" data-tab="editor" type="button">编辑 Editor</button>
+                        <button class="boss-raid-tab" data-tab="cloud" type="button">云端 Cloud</button>
+                    </div>
+                    <div class="boss-raid-shell">
+                        <!-- Local tab -->
+                        <div class="boss-raid-panel show" data-tab="local">
+                            <div class="boss-raid-toolbar">
+                                <button class="boss-raid-btn primary" type="button" onclick="_brCreateProfile(); return false;">新建配置 New</button>
+                                <button class="boss-raid-btn" type="button" onclick="_brImportProfile(); return false;">导入 Import</button>
+                                <button class="boss-raid-btn" type="button" onclick="_brRefreshState(); return false;">刷新 Refresh</button>
                             </div>
-                            <div class="auto-key-cloud-results" id="auto-key-cloud-results"></div>
+                            <div class="boss-raid-list" id="boss-raid-profile-list"></div>
+                        </div>
+                        <!-- Editor tab -->
+                        <div class="boss-raid-panel" data-tab="editor">
+                            <div class="boss-raid-editor-layout">
+                                <section class="boss-raid-section">
+                                    <div class="boss-raid-section-head">
+                                        <div class="boss-raid-section-title">基本信息 Basic Info</div>
+                                        <div class="boss-raid-section-note">从本地列表选择一个配置后即可编辑。Boss 名、总血量、目标匹配和阶段时间轴都会保存在当前 profile。</div>
+                                    </div>
+                                    <div class="boss-raid-grid">
+                                        <div class="boss-raid-field">
+                                            <label for="br-profile-name">配置名称 Name</label>
+                                            <input id="br-profile-name" type="text" placeholder="Boss 名称" oninput="_brDraftField('profile_name', this.value)" />
+                                        </div>
+                                        <div class="boss-raid-field">
+                                            <label for="br-boss-hp">Boss 总血量 Total HP</label>
+                                            <input id="br-boss-hp" type="number" min="0" step="100000" value="0" oninput="_brDraftField('boss_total_hp', this.value, 'int')" />
+                                        </div>
+                                        <div class="boss-raid-field">
+                                            <label for="br-enrage-time">狂暴时间(秒) Enrage(s)</label>
+                                            <input id="br-enrage-time" type="number" min="0" step="10" value="600" oninput="_brDraftField('enrage_time_s', this.value, 'int')" />
+                                        </div>
+                                        <div class="boss-raid-field span-2">
+                                            <label for="br-description">说明 Description</label>
+                                            <textarea id="br-description" placeholder="说明" oninput="_brDraftField('description', this.value)"></textarea>
+                                        </div>
+                                        <div class="boss-raid-field span-2">
+                                            <label for="br-target-pattern">目标匹配 Target Pattern (正则)</label>
+                                            <input id="br-target-pattern" type="text" placeholder="例: 冰龙|Ice Dragon" oninput="_brDraftField('target_name_pattern', this.value)" />
+                                        </div>
+                                    </div>
+                                    <div class="boss-raid-summary-grid" id="br-editor-summary"></div>
+                                    <label class="sao-toggle" style="margin-top:6px;">
+                                        <input type="checkbox" id="br-simple-mode" checked onchange="_brDraftField('simple_mode', this.checked, 'bool')" />
+                                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                                        <span>简易模式 Simple Mode (只看计时器和 DPS)</span>
+                                    </label>
+                                </section>
+                                <section class="boss-raid-section" id="br-phases-section">
+                                    <div class="boss-raid-section-head">
+                                        <div class="boss-raid-section-title">阶段 Phases</div>
+                                        <button class="boss-raid-btn" type="button" onclick="_brAddPhase(); return false;">+ 新增阶段</button>
+                                    </div>
+                                    <div id="br-phases-container"></div>
+                                </section>
+                                <section class="boss-raid-section">
+                                    <div class="boss-raid-toolbar">
+                                        <button class="boss-raid-btn primary" type="button" onclick="_brSaveProfile(); return false;">保存 Save</button>
+                                        <button class="boss-raid-btn" type="button" onclick="_brExportProfile(); return false;">导出 Export</button>
+                                        <button class="boss-raid-btn danger" type="button" onclick="_brDeleteProfile(); return false;">删除 Delete</button>
+                                    </div>
+                                </section>
+                            </div>
+                        </div>
+                        <!-- Cloud tab -->
+                        <div class="boss-raid-panel" data-tab="cloud">
+                            <div class="boss-raid-cloud-layout">
+                                <section class="boss-raid-section">
+                                    <div class="boss-raid-section-head">
+                                        <div class="boss-raid-section-title">当前角色 / 上传凭证 Identity & Upload Auth</div>
+                                        <div class="boss-raid-section-note">上传会使用当前识别到的 UID、角色名和职业信息申请短时凭证。</div>
+                                    </div>
+                                    <div class="boss-raid-grid">
+                                        <div class="boss-raid-field span-2">
+                                            <label for="br-server-url">欢迎使用咲ACT！</label>
+                                        </div>
+                                    </div>
+                                    <div class="boss-raid-summary-grid">
+                                        <div class="boss-raid-summary-item"><span class="boss-raid-summary-label">UID</span><span class="boss-raid-summary-value" id="br-identity-uid">--</span></div>
+                                        <div class="boss-raid-summary-item"><span class="boss-raid-summary-label">玩家名 Player</span><span class="boss-raid-summary-value" id="br-identity-name">--</span></div>
+                                        <div class="boss-raid-summary-item"><span class="boss-raid-summary-label">职业 ID</span><span class="boss-raid-summary-value" id="br-identity-profession-id">--</span></div>
+                                        <div class="boss-raid-summary-item"><span class="boss-raid-summary-label">职业名 Profession</span><span class="boss-raid-summary-value" id="br-identity-profession-name">--</span></div>
+                                    </div>
+                                    <div class="boss-raid-cloud-meta" id="br-upload-auth-meta"></div>
+                                    <div class="boss-raid-toolbar">
+                                        <button class="boss-raid-btn" type="button" onclick="_brSaveCloudSettings(); return false;">保存服务器 Save Server</button>
+                                        <button class="boss-raid-btn" type="button" onclick="_brIssueToken(); return false;">刷新凭证 Refresh Auth</button>
+                                        <button class="boss-raid-btn primary" id="br-upload-active-btn" type="button" onclick="_brUploadActive(); return false;">上传当前 Upload Active</button>
+                                    </div>
+                                </section>
+                                <section class="boss-raid-section boss-raid-cloud-results-section">
+                                    <div class="boss-raid-section-head">
+                                        <div class="boss-raid-section-title">云端搜索 Cloud Search</div>
+                                        <div class="boss-raid-section-note">按配置名、玩家 UID、角色名搜索并下载 Boss Raid 时间轴配置。</div>
+                                    </div>
+                                    <div class="boss-raid-grid compact">
+                                        <div class="boss-raid-field">
+                                            <label for="br-search-q">关键字 Keyword</label>
+                                            <input id="br-search-q" type="text" placeholder="Boss / 玩家 / 关键字" />
+                                        </div>
+                                        <div class="boss-raid-field">
+                                            <label for="br-search-profile-name">配置名 Profile Name</label>
+                                            <input id="br-search-profile-name" type="text" placeholder="配置名称" />
+                                        </div>
+                                        <div class="boss-raid-field">
+                                            <label for="br-search-player-uid">玩家 UID Player UID</label>
+                                            <input id="br-search-player-uid" type="text" placeholder="玩家 UID" />
+                                        </div>
+                                        <div class="boss-raid-field">
+                                            <label for="br-search-player-name">玩家名称 Player Name</label>
+                                            <input id="br-search-player-name" type="text" placeholder="玩家名称" />
+                                        </div>
+                                    </div>
+                                    <div class="boss-raid-toolbar">
+                                        <button class="boss-raid-btn primary" type="button" onclick="_brSearchRemote(); return false;">搜索 Search</button>
+                                    </div>
+                                    <div class="boss-raid-cloud-results" id="boss-raid-cloud-results"></div>
+                                </section>
+                            </div>
                         </div>
                     </div>
                 </li>
@@ -2099,6 +3196,33 @@ html, body {
                 </li>
                 <li class="sep"></li>
                 <li class="widget-row">
+                    <div class="widget-label">渲染血条 Boss HP Bar</div>
+                    <div class="boss-bar-mode-group" id="boss-bar-mode-group">
+                        <button class="boss-bar-mode-btn" data-mode="always" type="button">有敌人就显示 Always</button>
+                        <button class="boss-bar-mode-btn active" data-mode="boss_raid" type="button">仅 Boss Raid Only</button>
+                        <button class="boss-bar-mode-btn" data-mode="off" type="button">关闭 Off</button>
+                    </div>
+                    <div class="widget-note">控制独立 Boss 血条窗口何时显示。「有敌人就显示」= 收到怪物数据即显示；「仅 Boss Raid」= 只在 Boss Raid 运行时显示。</div>
+                </li>
+                <li class="sep"></li>
+                <li class="widget-row">
+                    <div class="widget-label">DPS METER</div>
+                    <label class="sao-toggle">
+                        <input type="checkbox" id="dps-enabled" checked />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>DPS 计算器 DPS Calculator</span>
+                    </label>
+                    <div class="widget-note">待机时保持隐藏，进入战斗后自动弹出，空闲后自动隐藏。点击角色可查看技能明细，并可随时打开上一场报告。 Hidden while idle, auto-shows on combat, auto-hides after combat, and keeps the last report available.</div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                        <span style="font-size:11px;color:rgb(140,138,140);">空闲隐藏/结算 Idle timeout (s)</span>
+                        <input type="number" id="dps-fade-timeout" min="0" max="120" step="1" value="8" style="width:52px;font-size:11px;padding:2px 4px;border:1px solid rgba(201,198,198,0.60);border-radius:3px;background:rgba(255,255,255,0.85);color:rgb(100,99,100);" onchange="_setDpsFadeTimeout(this.value)" />
+                    </div>
+                    <div class="mode-group" style="margin-top:8px;">
+                        <div class="mode-btn disabled" id="dps-last-report-btn" onclick="_showLastDpsReport()">查看上一场报告 LAST REPORT</div>
+                    </div>
+                </li>
+                <li class="sep"></li>
+                <li class="widget-row">
                     <div class="widget-label">VISION PIPELINE</div>
                     <div class="widget-note">目前内存注入安全性仍在确认，暂时使用packet捕捉与识图，不提供切换。</div>
                     <div class="source-summary" id="data-source-summary" style="display:none">
@@ -2108,6 +3232,8 @@ html, body {
                         <div class="mode-btn active" id="open-data-source-panel">CONFIGURE</div>
                     </div>
                 </li>
+                <li class="sep"></li>
+                <li data-action="switch_to_entity"><i class="menu-glyph mi-ent"></i><span>切换到 Entity UI</span></li>
                 <li class="sep"></li>
                 <li data-action="exit"><i class="menu-glyph mi-exit"></i><span>退出</span></li>
             </ul>
@@ -2452,8 +3578,13 @@ function openMenu(x, y) {
     playSound('snd-popup');
 
     var pos = document.getElementById('menu-position');
-    pos.style.left = Math.max(300, Math.min(x || 500, window.innerWidth - 150)) + 'px';
-    pos.style.top  = Math.max(100, Math.min(y || 300, window.innerHeight - 400)) + 'px';
+    var defaultLeft = Math.round(window.innerWidth * 0.18);
+    var defaultTop = Math.round(window.innerHeight * 0.16);
+    var targetLeft = Math.max(240, Math.min(x || defaultLeft, window.innerWidth - 220));
+    var targetTop = Math.max(84, Math.min(y || defaultTop, Math.max(96, window.innerHeight - 420)));
+    pos.style.left = targetLeft + 'px';
+    pos.style.top  = targetTop + 'px';
+    pos.classList.remove('auto-key-layout');
     pos.classList.remove('menu-focus-out');
     pos.classList.remove('menu-focus-in');
     void pos.offsetWidth;
@@ -2469,9 +3600,11 @@ function openMenu(x, y) {
         el.style.animation = 'none';
         el.offsetHeight; /* reflow */
         el.style.animation = '';
+        el.classList.remove('active');
     });
 
     /* Show userInfo by default */
+    currentActive = null;
     activateCircle('userInfo');
 }
 
@@ -2481,6 +3614,7 @@ function closeMenu() {
     playSound('snd-dismiss');
     stopFisheyeBg();
     var pos = document.getElementById('menu-position');
+    pos.classList.remove('auto-key-layout');
     pos.classList.remove('menu-focus-in');
     pos.classList.remove('menu-focus-out');
     void pos.offsetWidth;
@@ -2530,6 +3664,7 @@ overlay.addEventListener('click', function(e) {
 /* ═══ Circle activation ═══ */
 function activateCircle(name) {
     playSound('snd-click');
+    var pos = document.getElementById('menu-position');
 
     /* Toggle if same circle */
     if (currentActive === name) {
@@ -2541,6 +3676,7 @@ function activateCircle(name) {
             infoBox.classList.remove('show');
             cbLine.classList.remove('show');
             cbArrow.classList.remove('show');
+            pos.classList.remove('auto-key-layout');
             currentActive = null;
         }
         return;
@@ -2566,6 +3702,7 @@ function activateCircle(name) {
 
     /* Show appropriate content */
     hideAllSubMenus();
+    pos.classList.toggle('auto-key-layout', name === 'autoKeys' || name === 'bossRaid');
 
     if (name === 'userInfo') {
         infoBox.classList.add('show');
@@ -2591,10 +3728,12 @@ function hideAllSubMenus() {
     document.querySelectorAll('.child-menu').forEach(function(el) {
         el.classList.remove('show');
     });
+    document.getElementById('menu-position').classList.remove('auto-key-layout');
 }
 
 /* ═══ File Picker ═══ */
 var _pickerMode = 'file';
+var _pickerConsumer = '';
 var _pickerCurrentDir = '';
 
 function showFilePicker(dataJson) {
@@ -2637,18 +3776,23 @@ function showFilePicker(dataJson) {
         var infoStr = f.size ? '<span class="item-info">' + _fmtSize(f.size) + '</span>' : '';
         el.innerHTML = '<i class="menu-glyph mi-mid"></i><span class="item-name">' + _escHtml(f.name) + '</span>' + infoStr;
         el.addEventListener('click', function() {
+            var consumer = _pickerConsumer || 'auto_key';
             playSound('snd-click');
             closeFilePicker();
             if (window.pywebview && window.pywebview.api) {
                 window.pywebview.api.select_file(f.path).then(function(result) {
                     var data = _akParseApiResult(result);
                     if (data && data.state) {
-                        _syncAutoKeyState(data.state);
+                        if (consumer === 'boss_raid') {
+                            _syncBossRaidState(data.state);
+                        } else {
+                            _syncAutoKeyState(data.state);
+                        }
                     }
                     if (data && data.ok) {
-                        showToast('IMPORT COMPLETE');
+                        showToast(consumer === 'boss_raid' ? 'BOSS RAID IMPORTED' : 'IMPORT COMPLETE');
                     } else if (data && data.message) {
-                        showAlert('AUTO KEYS', data.message, true);
+                        showAlert(consumer === 'boss_raid' ? 'BOSS RAID' : 'AUTO KEYS', data.message, true);
                     }
                 });
             }
@@ -2666,6 +3810,7 @@ function showFilePicker(dataJson) {
 
 function closeFilePicker() {
     document.getElementById('filepicker-dialog').classList.remove('show');
+    _pickerConsumer = '';
 }
 
 function _pickerBrowse(path) {
@@ -2853,6 +3998,7 @@ function _akPrepareDraft(profile) {
         if (typeof action.enabled !== 'boolean') action.enabled = true;
         if (!Array.isArray(action.conditions)) action.conditions = [];
         action._conditions_text = JSON.stringify(action.conditions || [], null, 2);
+        action._conditions_error = '';
     });
     return draft;
 }
@@ -2893,6 +4039,13 @@ function _akCallApi(methodName, args, onOk) {
         showAlert('AUTO KEYS', (data && data.message) ? data.message : ('请求失败 / Request failed: ' + methodName), true);
     }).catch(function(err) {
         showAlert('AUTO KEYS', String(err || '未知错误 / Unknown error'), true);
+    });
+}
+
+function _akRefreshUploadAuth(force, onOk) {
+    _akCallApi('refresh_auto_key_upload_auth', [!!force], function(data) {
+        if (onOk) onOk(data);
+        else showToast((data && data.ok) ? 'UPLOAD AUTH READY' : 'UPLOAD AUTH UPDATED');
     });
 }
 
@@ -2961,6 +4114,162 @@ function _akRenderLocal() {
     }).join('');
 }
 
+function _akSummaryItem(label, value, muted) {
+    return '' +
+        '<div class="auto-key-summary-item">' +
+            '<span class="auto-key-summary-label">' + _escHtml(label || '') + '</span>' +
+            '<span class="auto-key-summary-value' + (muted ? ' muted' : '') + '">' + _escHtml(value || '--') + '</span>' +
+        '</div>';
+}
+
+function _akRenderEditorIdentitySummary(draft) {
+    var summaryEl = document.getElementById('ak-editor-identity-summary');
+    if (!summaryEl) return;
+    var state = _autoKeyState || {};
+    var identity = state.identity || {};
+    var profileProfession = (draft && draft.profession_name) ? draft.profession_name : '任意 Any';
+    var profileProfessionId = (draft && Number(draft.profession_id || 0) > 0) ? String(draft.profession_id) : '不限制 Any';
+    summaryEl.innerHTML = [
+        _akSummaryItem('当前 UID Current UID', identity.player_uid || '--', !identity.player_uid),
+        _akSummaryItem('当前玩家 Current Player', identity.player_name || '--', !identity.player_name),
+        _akSummaryItem('当前职业 ID Current Profession ID', Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--', !(Number(identity.profession_id || 0) > 0)),
+        _akSummaryItem('脚本职业限制 Profile Filter', profileProfession + ' / ' + profileProfessionId, false)
+    ].join('');
+}
+
+function _akDefaultCondition(conditionType) {
+    var type = String(conditionType || 'hp_pct_gte');
+    if (type === 'burst_ready_is') return { type: type, value: true };
+    if (type === 'slot_state_is') return { type: type, slot_index: 1, state: 'ready' };
+    if (type === 'profession_is' || type === 'player_name_is') return { type: type, value: '' };
+    return { type: type, value: 0.5 };
+}
+
+function _akGetDraftAction(index) {
+    if (!_autoKeyDraftProfile || !Array.isArray(_autoKeyDraftProfile.actions)) return null;
+    return _autoKeyDraftProfile.actions[index] || null;
+}
+
+function _akGetActionConditions(index) {
+    var action = _akGetDraftAction(index);
+    if (!action) return [];
+    var items = Array.isArray(action.conditions) ? _akClone(action.conditions) : [];
+    return items.map(function(condition) {
+        var merged = _akDefaultCondition(condition && condition.type);
+        Object.keys(condition || {}).forEach(function(key) { merged[key] = condition[key]; });
+        return merged;
+    });
+}
+
+function _akSetActionConditions(index, conditions, rerender) {
+    var action = _akGetDraftAction(index);
+    if (!action) return;
+    action.conditions = _akClone(Array.isArray(conditions) ? conditions : []);
+    action._conditions_text = JSON.stringify(action.conditions || [], null, 2);
+    action._conditions_error = '';
+    _autoKeyDraftDirty = true;
+    if (rerender !== false) _akRenderActionList();
+}
+
+function _akConditionTypeOptions(selected) {
+    return [
+        ['hp_pct_gte', 'HP 至少 >='],
+        ['hp_pct_lte', 'HP 不高于 <='],
+        ['sta_pct_gte', 'STA 至少 >='],
+        ['burst_ready_is', 'Burst 状态'],
+        ['slot_state_is', '槽位状态'],
+        ['profession_is', '职业名称匹配'],
+        ['player_name_is', '玩家名称匹配']
+    ].map(function(item) {
+        return '<option value="' + _escHtml(item[0]) + '"' + (selected === item[0] ? ' selected' : '') + '>' + _escHtml(item[1]) + '</option>';
+    }).join('');
+}
+
+function _akSlotStateOptions(selected) {
+    return [
+        ['ready', '就绪 Ready'],
+        ['cooldown', '冷却中 Cooldown'],
+        ['active', '施放中 Active'],
+        ['insufficient_energy', '能量不足 No Energy'],
+        ['unknown', '未知 Unknown']
+    ].map(function(item) {
+        return '<option value="' + _escHtml(item[0]) + '"' + (selected === item[0] ? ' selected' : '') + '>' + _escHtml(item[1]) + '</option>';
+    }).join('');
+}
+
+function _akRenderConditionFields(index, condIndex, condition) {
+    var type = String(condition.type || 'hp_pct_gte');
+    if (type === 'slot_state_is') {
+        return '' +
+            '<div class="auto-key-field"><label>槽位 Slot</label><input type="number" min="1" max="9" value="' + _escHtml(String(condition.slot_index || 1)) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'slot_index\', this.value, \'int\')" /></div>' +
+            '<div class="auto-key-field"><label>状态 State</label><select onchange="_akDraftConditionField(' + index + ', ' + condIndex + ', \'state\', this.value)">' + _akSlotStateOptions(String(condition.state || 'ready')) + '</select></div>';
+    }
+    if (type === 'burst_ready_is') {
+        return '' +
+            '<div class="auto-key-field"><label>目标值 Value</label><select onchange="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value, \'bool\')">' +
+                '<option value="true"' + (condition.value ? ' selected' : '') + '>已准备 Ready</option>' +
+                '<option value="false"' + (!condition.value ? ' selected' : '') + '>未准备 Not Ready</option>' +
+            '</select></div>';
+    }
+    if (type === 'profession_is' || type === 'player_name_is') {
+        return '' +
+            '<div class="auto-key-field span-2"><label>匹配值 Match Value</label><input type="text" value="' + _escHtml(String(condition.value || '')) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value)" /></div>';
+    }
+    return '' +
+        '<div class="auto-key-field"><label>阈值 Threshold (%)</label><input type="number" min="0" max="100" value="' + _escHtml(String(Math.round(Number(condition.value || 0) * 100))) + '" oninput="_akDraftConditionField(' + index + ', ' + condIndex + ', \'value\', this.value, \'pct\')" /></div>';
+}
+
+function _akRenderConditionCard(index, condition, condIndex) {
+    return '' +
+        '<div class="auto-key-condition-card">' +
+            '<div class="auto-key-condition-head">' +
+                '<div class="auto-key-condition-title">条件 Condition ' + (condIndex + 1) + '</div>' +
+                '<div class="auto-key-card-actions">' +
+                    '<button class="auto-key-btn warn" type="button" onclick="_akDeleteCondition(' + index + ', ' + condIndex + '); return false;">删除 Delete</button>' +
+                '</div>' +
+            '</div>' +
+            '<div class="auto-key-condition-grid">' +
+                '<div class="auto-key-field"><label>条件类型 Type</label><select onchange="_akSetConditionType(' + index + ', ' + condIndex + ', this.value)">' + _akConditionTypeOptions(String(condition.type || 'hp_pct_gte')) + '</select></div>' +
+                _akRenderConditionFields(index, condIndex, condition) +
+            '</div>' +
+        '</div>';
+}
+
+function _akAddCondition(index, conditionType) {
+    var conditions = _akGetActionConditions(index);
+    conditions.push(_akDefaultCondition(conditionType || 'hp_pct_gte'));
+    _akSetActionConditions(index, conditions, true);
+}
+
+function _akDeleteCondition(index, condIndex) {
+    var conditions = _akGetActionConditions(index);
+    conditions.splice(condIndex, 1);
+    _akSetActionConditions(index, conditions, true);
+}
+
+function _akSetConditionType(index, condIndex, conditionType) {
+    var conditions = _akGetActionConditions(index);
+    if (!conditions[condIndex]) return;
+    conditions[condIndex] = _akDefaultCondition(conditionType || 'hp_pct_gte');
+    _akSetActionConditions(index, conditions, true);
+}
+
+function _akDraftConditionField(index, condIndex, fieldName, value, kind) {
+    var conditions = _akGetActionConditions(index);
+    var condition = conditions[condIndex];
+    if (!condition) return;
+    if (kind === 'int') value = parseInt(value || 0, 10) || 0;
+    if (kind === 'bool') value = String(value) === 'true';
+    if (kind === 'pct') {
+        var pct = parseFloat(value || 0);
+        if (!isFinite(pct)) pct = 0;
+        pct = Math.max(0, Math.min(100, pct));
+        value = pct / 100;
+    }
+    condition[fieldName] = value;
+    _akSetActionConditions(index, conditions, false);
+}
+
 function _akPopulateEditorFields() {
     var draft = _autoKeyDraftProfile;
     var listEl = document.getElementById('auto-key-action-list');
@@ -2974,6 +4283,7 @@ function _akPopulateEditorFields() {
         });
         if (document.getElementById('ak-engine-require-foreground')) document.getElementById('ak-engine-require-foreground').checked = true;
         if (document.getElementById('ak-engine-pause-on-death')) document.getElementById('ak-engine-pause-on-death').checked = true;
+        _akRenderEditorIdentitySummary(null);
         return;
     }
     document.getElementById('ak-profile-name').value = draft.profile_name || '';
@@ -2983,6 +4293,7 @@ function _akPopulateEditorFields() {
     document.getElementById('ak-profile-description').value = draft.description || '';
     document.getElementById('ak-engine-require-foreground').checked = !(draft.engine && draft.engine.require_foreground === false);
     document.getElementById('ak-engine-pause-on-death').checked = !(draft.engine && draft.engine.pause_on_death === false);
+    _akRenderEditorIdentitySummary(draft);
     _akRenderActionList();
 }
 
@@ -2995,7 +4306,11 @@ function _akRenderActionList() {
         return;
     }
     listEl.innerHTML = draft.actions.map(function(action, index) {
-        var conditionsText = String(action._conditions_text || JSON.stringify(action.conditions || [], null, 2));
+        var conditions = _akGetActionConditions(index);
+        var jsonText = String(action._conditions_text || JSON.stringify(action.conditions || [], null, 2));
+        var jsonStatus = action._conditions_error ?
+            '<div class="auto-key-json-status auto-key-status-error">JSON 未应用 / JSON not applied: ' + _escHtml(action._conditions_error) + '</div>' :
+            '<div class="auto-key-json-status">条件卡片会自动同步到高级 JSON。修改高级 JSON 后，离开输入框时会尝试应用。</div>';
         return '' +
             '<div class="auto-key-action-card">' +
                 '<div class="auto-key-card-head">' +
@@ -3013,6 +4328,7 @@ function _akRenderActionList() {
                         '<div class="toggle-track"><div class="toggle-thumb"></div></div>' +
                         '<span>动作启用 Action Enabled</span>' +
                     '</label>' +
+                    '<button class="auto-key-btn" type="button" onclick="_akAddCondition(' + index + '); return false;">新增条件 Add Condition</button>' +
                 '</div>' +
                 '<div class="auto-key-grid compact">' +
                     '<div class="auto-key-field"><label>名称 Label</label><input type="text" value="' + _escHtml(action.label || '') + '" oninput="_akDraftActionField(' + index + ', \'label\', this.value)" /></div>' +
@@ -3025,25 +4341,65 @@ function _akRenderActionList() {
                     '<div class="auto-key-field"><label>就绪延迟 Ready Delay MS</label><input type="number" min="0" value="' + _escHtml(String(action.ready_delay_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'ready_delay_ms\', this.value, \'int\')" /></div>' +
                     '<div class="auto-key-field"><label>最小复位 Min Rearm MS</label><input type="number" min="0" value="' + _escHtml(String(action.min_rearm_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'min_rearm_ms\', this.value, \'int\')" /></div>' +
                     '<div class="auto-key-field"><label>后置延迟 Post Delay MS</label><input type="number" min="0" value="' + _escHtml(String(action.post_delay_ms || 0)) + '" oninput="_akDraftActionField(' + index + ', \'post_delay_ms\', this.value, \'int\')" /></div>' +
-                    '<div class="auto-key-field span-3"><label>条件 JSON Conditions JSON</label><textarea class="auto-key-mono" oninput="_akDraftActionConditions(' + index + ', this.value)">' + _escHtml(conditionsText) + '</textarea></div>' +
                 '</div>' +
-                '<div class="auto-key-condition-note">支持的条件类型 Supported condition types: hp_pct_gte, hp_pct_lte, sta_pct_gte, burst_ready_is, slot_state_is, profession_is, player_name_is.</div>' +
+                '<div class="auto-key-condition-list">' +
+                    (conditions.length ? conditions.map(function(condition, condIndex) {
+                        return _akRenderConditionCard(index, condition, condIndex);
+                    }).join('') : '<div class="auto-key-empty compact">这个动作还没有触发条件，表示只要技能槽就绪就会尝试按键。<br>No conditions yet. It will fire whenever the slot is ready.</div>') +
+                '</div>' +
+                '<details class="auto-key-details">' +
+                    '<summary>高级 JSON Conditions JSON</summary>' +
+                    '<div class="auto-key-details-body">' +
+                        '<div class="auto-key-field"><label>Conditions JSON</label><textarea class="auto-key-mono" oninput="_akDraftActionConditions(' + index + ', this.value)" onchange="_akApplyActionConditionsJson(' + index + ', this.value)">' + _escHtml(jsonText) + '</textarea></div>' +
+                        jsonStatus +
+                    '</div>' +
+                '</details>' +
+                '<div class="auto-key-condition-note">支持的条件类型 Supported types: hp_pct_gte, hp_pct_lte, sta_pct_gte, burst_ready_is, slot_state_is, profession_is, player_name_is.</div>' +
             '</div>';
     }).join('');
 }
 
 function _akRenderCloud() {
     var state = _autoKeyState || {};
+    var identity = state.identity || {};
+    var auth = state.upload_auth || {};
     var search = state.last_remote_search || {};
     var query = search.query || {};
     var resultsEl = document.getElementById('auto-key-cloud-results');
+    var uploadMetaEl = document.getElementById('ak-upload-auth-meta');
+    var uploadBtn = document.getElementById('ak-upload-active-btn');
     if (document.getElementById('ak-server-url')) document.getElementById('ak-server-url').value = state.server_url || '';
-    if (document.getElementById('ak-upload-token')) document.getElementById('ak-upload-token').value = state.upload_token || '';
     if (document.getElementById('ak-search-q')) document.getElementById('ak-search-q').value = query.q || '';
     if (document.getElementById('ak-search-profile-name')) document.getElementById('ak-search-profile-name').value = query.profile_name || '';
     if (document.getElementById('ak-search-player-uid')) document.getElementById('ak-search-player-uid').value = query.player_uid || '';
     if (document.getElementById('ak-search-player-name')) document.getElementById('ak-search-player-name').value = query.player_name || '';
     if (document.getElementById('ak-search-profession-name')) document.getElementById('ak-search-profession-name').value = query.profession_name || '';
+    if (document.getElementById('ak-identity-uid')) document.getElementById('ak-identity-uid').textContent = identity.player_uid || '--';
+    if (document.getElementById('ak-identity-name')) document.getElementById('ak-identity-name').textContent = identity.player_name || '--';
+    if (document.getElementById('ak-identity-profession-id')) document.getElementById('ak-identity-profession-id').textContent = Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--';
+    if (document.getElementById('ak-identity-profession-name')) document.getElementById('ak-identity-profession-name').textContent = identity.profession_name || '--';
+    if (uploadMetaEl) {
+        var bits = [];
+        if (identity.ready) {
+            bits.push('<span class="auto-key-pill auto-key-status-good">身份完整 Identity Ready</span>');
+        } else {
+            bits.push('<span class="auto-key-pill auto-key-status-warn">缺少 ' + _escHtml((identity.missing || []).join(', ') || 'identity') + '</span>');
+        }
+        if (auth.ready) {
+            bits.push('<span class="auto-key-pill auto-key-status-good">凭证已就绪 Auth Ready</span>');
+        } else if (auth.error) {
+            bits.push('<span class="auto-key-pill auto-key-status-error">' + _escHtml(auth.error) + '</span>');
+        } else {
+            bits.push('<span class="auto-key-pill auto-key-status-warn">凭证未获取 Auth Pending</span>');
+        }
+        if (auth.token_masked) bits.push('<span class="auto-key-pill">Token ' + _escHtml(auth.token_masked) + '</span>');
+        if (auth.expires_at) bits.push('<span class="auto-key-pill">Expires ' + _escHtml(auth.expires_at) + '</span>');
+        if (auth.mode) bits.push('<span class="auto-key-pill">' + _escHtml(String(auth.mode || '').toUpperCase()) + '</span>');
+        uploadMetaEl.innerHTML = bits.join('');
+    }
+    if (uploadBtn) {
+        uploadBtn.disabled = !identity.ready;
+    }
     if (!resultsEl) return;
     var results = Array.isArray(search.results) ? search.results : [];
     if (search.error) {
@@ -3094,6 +4450,7 @@ function _renderAutoKeyUI() {
         _akLoadDraftFromState(_autoKeySelectedProfileId, !_autoKeyDraftProfile);
         _akPopulateEditorFields();
     } else if (_autoKeyTab === 'editor') {
+        _akRenderEditorIdentitySummary(_autoKeyDraftProfile);
         _akRenderActionList();
     }
 }
@@ -3121,6 +4478,14 @@ function _akSetTab(tabName) {
         _akPopulateEditorFields();
     }
     _renderAutoKeyUI();
+    if (_autoKeyTab === 'cloud') {
+        var state = _autoKeyState || {};
+        var identity = state.identity || {};
+        var auth = state.upload_auth || {};
+        if (identity.ready && !auth.ready && !auth.error) {
+            _akRefreshUploadAuth(false);
+        }
+    }
 }
 
 function _akDraftField(fieldName, value, kind) {
@@ -3154,21 +4519,36 @@ function _akDraftActionConditions(index, text) {
     _autoKeyDraftDirty = true;
 }
 
+function _akApplyActionConditionsJson(index, text) {
+    var action = _akGetDraftAction(index);
+    if (!action) return;
+    try {
+        var parsed = String(text || '').trim();
+        parsed = parsed ? JSON.parse(parsed) : [];
+        if (!Array.isArray(parsed)) throw new Error('must be an array');
+        action.conditions = _akClone(parsed);
+        action._conditions_text = JSON.stringify(action.conditions || [], null, 2);
+        action._conditions_error = '';
+        _autoKeyDraftDirty = true;
+        _akRenderActionList();
+    } catch (e) {
+        action._conditions_text = String(text || '');
+        action._conditions_error = e.message || String(e);
+        _autoKeyDraftDirty = true;
+        _akRenderActionList();
+        showAlert('AUTO KEYS', 'Action ' + (index + 1) + ' conditions JSON is invalid: ' + (e.message || String(e)), true);
+    }
+}
+
 function _akSerializeDraft() {
     if (!_autoKeyDraftProfile) return null;
     var draft = _akClone(_autoKeyDraftProfile);
     draft.updated_at = new Date().toISOString();
-    draft.actions = (draft.actions || []).map(function(action, index) {
+    draft.actions = (draft.actions || []).map(function(action) {
         var out = _akClone(action) || {};
-        try {
-            var parsed = String(action._conditions_text || '[]').trim();
-            parsed = parsed ? JSON.parse(parsed) : [];
-            if (!Array.isArray(parsed)) throw new Error('must be an array');
-            out.conditions = parsed;
-        } catch (e) {
-            throw new Error('Action ' + (index + 1) + ' conditions JSON is invalid: ' + e.message);
-        }
+        out.conditions = Array.isArray(action.conditions) ? _akClone(action.conditions) : [];
         delete out._conditions_text;
+        delete out._conditions_error;
         return out;
     });
     return draft;
@@ -3238,7 +4618,8 @@ function _akAddAction() {
         min_rearm_ms: 800,
         post_delay_ms: 120,
         conditions: [],
-        _conditions_text: '[]'
+        _conditions_text: '[]',
+        _conditions_error: ''
     });
     _autoKeyDraftDirty = true;
     _akRenderActionList();
@@ -3310,6 +4691,7 @@ function _akExportDraft() {
 
 function _akImportProfile() {
     if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.start_auto_key_import_picker) return;
+    _pickerConsumer = 'auto_key';
     window.pywebview.api.start_auto_key_import_picker().then(function(result) {
         var data = _akParseApiResult(result);
         if (data && data.ok && data.browser) {
@@ -3323,10 +4705,8 @@ function _akImportProfile() {
 function _akSaveCloudSettings(afterSave) {
     if (!window.pywebview || !window.pywebview.api) return;
     var serverUrl = (document.getElementById('ak-server-url').value || '').trim();
-    var uploadToken = (document.getElementById('ak-upload-token').value || '').trim();
     Promise.all([
-        window.pywebview.api.set_auto_key_server_url(serverUrl),
-        window.pywebview.api.set_auto_key_upload_token(uploadToken)
+        window.pywebview.api.set_auto_key_server_url(serverUrl)
     ]).then(function(results) {
         var lastState = null;
         results.forEach(function(item) {
@@ -3371,8 +4751,13 @@ function _akDownloadRemote(remoteId) {
 
 function _akUploadActive() {
     var targetId = _autoKeyDraftProfile ? _autoKeyDraftProfile.id : ((_autoKeyState && _autoKeyState.active_profile_id) || '');
+    var identity = (_autoKeyState && _autoKeyState.identity) || {};
     if (!targetId) {
         showAlert('AUTO KEYS', '未选择配置 / No profile selected', true);
+        return;
+    }
+    if (!identity.ready) {
+        showAlert('AUTO KEYS', '当前角色信息不完整，无法上传。缺少: ' + ((identity.missing || []).join(', ') || 'identity'), true);
         return;
     }
     if (_autoKeyDraftDirty) {
@@ -3380,8 +4765,10 @@ function _akUploadActive() {
         return;
     }
     _akSaveCloudSettings(function() {
-        _akCallApi('upload_auto_key_profile', [targetId], function(data) {
-            showToast('UPLOAD COMPLETE #' + (data.remote_id || ''));
+        _akRefreshUploadAuth(false, function() {
+            _akCallApi('upload_auto_key_profile', [targetId], function(data) {
+                showToast('UPLOAD COMPLETE #' + (data.remote_id || ''));
+            });
         });
     });
 }
@@ -3468,6 +4855,23 @@ function restoreMenuSettings(cfg) {
     _updateSourceSummary();
     if (cfg.auto_key) {
         _syncAutoKeyState(cfg.auto_key);
+    }
+    /* Boss bar mode */
+    if (cfg.boss_bar_mode) {
+        _setBossBarModeUI(cfg.boss_bar_mode);
+    }
+    /* DPS meter toggle */
+    if (cfg.dps_enabled !== undefined) {
+        var dpsEl = document.getElementById('dps-enabled');
+        if (dpsEl) dpsEl.checked = !!cfg.dps_enabled;
+    }
+    /* DPS fade timeout */
+    if (cfg.dps_fade_timeout_s !== undefined) {
+        var fadeEl = document.getElementById('dps-fade-timeout');
+        if (fadeEl) fadeEl.value = cfg.dps_fade_timeout_s;
+    }
+    if (cfg.dps_last_report_available !== undefined) {
+        _setDpsLastReportAvailable(!!cfg.dps_last_report_available);
     }
 }
 
@@ -3731,6 +5135,824 @@ document.getElementById('lb-tabs').querySelectorAll('.lb-tab').forEach(function(
     });
 });
 
+/* ═══════════════════════════════════════════════
+   Boss Raid — state / tabs / profile CRUD UI
+   ═══════════════════════════════════════════════ */
+var _bossRaidState = null;
+var _brSelectedProfileId = '';
+var _brDraftProfile = null;
+var _brDraftDirty = false;
+var _brTab = 'local';
+
+function _syncBossRaidState(state) {
+    _bossRaidState = state || {};
+    var el = document.getElementById('boss-raid-enabled');
+    if (el) el.checked = !!state.enabled;
+    _brEnsureSelected();
+    if (!_brDraftProfile || !_brDraftDirty || !_brFindProfile(_brSelectedProfileId)) {
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+    }
+    _brRenderLocal();
+    _brRenderEditor();
+    _brRenderCloud();
+    _brRenderRuntime();
+    _brSetTab(_brTab || 'local');
+}
+
+function _brCallApi(method, args, onOk) {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api[method]) {
+        showAlert('BOSS RAID', 'pywebview API 不可用 / API unavailable: ' + method, true);
+        return;
+    }
+    api[method].apply(api, args || []).then(function(result) {
+        var data = (typeof result === 'string') ? JSON.parse(result) : result;
+        if (data && data.ok !== false) {
+            if (data.state) _syncBossRaidState(data.state);
+            if (onOk) onOk(data);
+        } else {
+            showAlert('BOSS RAID', (data && (data.message || data.error || data.detail)) || 'API error', true);
+        }
+    }).catch(function(err) {
+        showAlert('BOSS RAID', String(err), true);
+    });
+}
+
+function _brEnsureSelected() {
+    var profiles = (_bossRaidState && Array.isArray(_bossRaidState.profiles_full)) ? _bossRaidState.profiles_full : [];
+    if (!profiles.length) { _brSelectedProfileId = ''; return; }
+    var found = profiles.find(function(p) { return p.id === _brSelectedProfileId; });
+    if (found) return;
+    _brSelectedProfileId = String((_bossRaidState && _bossRaidState.active_profile_id) || profiles[0].id || '');
+}
+
+function _brFindProfile(id) {
+    var profiles = (_bossRaidState && Array.isArray(_bossRaidState.profiles_full)) ? _bossRaidState.profiles_full : [];
+    return profiles.find(function(p) { return String(p.id) === String(id); }) || null;
+}
+
+function _brLoadDraftFromState(profileId, force) {
+    var targetId = String(profileId || _brSelectedProfileId || ((_bossRaidState && _bossRaidState.active_profile_id) || ''));
+    var profile = _brFindProfile(targetId);
+    if (!profile) {
+        if (force) _brDraftProfile = null;
+        return;
+    }
+    if (!force && _brDraftProfile && String(_brDraftProfile.id || '') === String(profile.id || '')) {
+        return;
+    }
+    _brDraftProfile = JSON.parse(JSON.stringify(profile));
+    _brDraftDirty = false;
+}
+
+function _brSetTab(tab) {
+    _brTab = tab || 'local';
+    document.querySelectorAll('#boss-raid-tabs .boss-raid-tab').forEach(function(t) { t.classList.remove('active'); });
+    var active = document.querySelector('#boss-raid-tabs .boss-raid-tab[data-tab="' + _brTab + '"]');
+    if (active) active.classList.add('active');
+    document.querySelectorAll('#sub-bossRaid .boss-raid-panel').forEach(function(p) { p.classList.remove('show'); });
+    var panel = document.querySelector('#sub-bossRaid .boss-raid-panel[data-tab="' + _brTab + '"]');
+    if (panel) panel.classList.add('show');
+    if (_brTab === 'editor' && !_brDraftProfile) {
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+    }
+    if (_brTab === 'editor') {
+        _brRenderEditor();
+    }
+    if (_brTab === 'cloud') {
+        var state = _bossRaidState || {};
+        var identity = state.identity || {};
+        var auth = state.upload_auth || {};
+        if (identity.ready && !auth.ready && !auth.error) {
+            _brRefreshUploadAuth(false);
+        }
+    }
+}
+
+function _brRenderLocal() {
+    var list = document.getElementById('boss-raid-profile-list');
+    if (!list) return;
+    var profiles = (_bossRaidState && Array.isArray(_bossRaidState.profiles)) ? _bossRaidState.profiles : [];
+    var activeId = (_bossRaidState && _bossRaidState.active_profile_id) || '';
+    if (!profiles.length) {
+        list.innerHTML = '<div style="padding:12px;color:rgba(86,92,98,0.68);font-size:12px;">暂无配置 No profiles yet</div>';
+        return;
+    }
+    list.innerHTML = profiles.map(function(p) {
+        var isActive = (p.id === activeId);
+        var isSelected = (p.id === _brSelectedProfileId);
+        return '<div class="boss-raid-card' + (isActive ? ' active-profile' : '') + (isSelected ? ' selected' : '') +
+            '" onclick="_brSelectProfile(\'' + p.id + '\')">' +
+            '<div class="boss-raid-card-info">' +
+                '<div class="boss-raid-card-name">' + _escHtml(p.profile_name || 'Boss Raid') + '</div>' +
+                '<div class="boss-raid-card-meta">HP: ' + (p.boss_total_hp || '?') + ' · Enrage: ' + (p.enrage_time_s || 0) + 's · P' + (p.phase_count || 0) + ' · TL' + (p.timeline_count || 0) + '</div>' +
+            '</div>' +
+            '<div class="boss-raid-card-actions">' +
+                '<button class="boss-raid-btn" type="button" onclick="event.stopPropagation(); _brActivateProfile(\'' + p.id + '\');">激活 Activate</button>' +
+                '<button class="boss-raid-btn" type="button" onclick="event.stopPropagation(); _brEditProfile(\'' + p.id + '\');">编辑 Edit</button>' +
+            '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function _brSelectProfile(id) {
+    _brSelectedProfileId = String(id || '');
+    if (_brTab === 'editor' && !_brDraftDirty) {
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+    }
+    _brRenderLocal();
+    if (_brTab === 'editor') _brRenderEditor();
+}
+
+function _brActivateProfile(id) {
+    _brSelectedProfileId = String(id || '');
+    _brCallApi('activate_boss_raid_profile', [id], function() {
+        showToast('BOSS RAID ACTIVATED');
+    });
+}
+
+function _brEditProfile(id) {
+    _brSelectedProfileId = String(id || '');
+    _brLoadDraftFromState(_brSelectedProfileId, true);
+    _brSetTab('editor');
+}
+
+function _brRenderEditor() {
+    _brRenderEditorFields();
+}
+
+function _brRenderEditorSummary(profile) {
+    var el = document.getElementById('br-editor-summary');
+    if (!el) return;
+    if (!profile) {
+        el.innerHTML = '' +
+            '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">状态 State</span><span class="boss-raid-summary-value muted">未选择配置</span></div>' +
+            '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">来源 Source</span><span class="boss-raid-summary-value muted">--</span></div>' +
+            '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">远端 ID Remote</span><span class="boss-raid-summary-value muted">--</span></div>' +
+            '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">更新时间 Updated</span><span class="boss-raid-summary-value muted">--</span></div>';
+        return;
+    }
+    el.innerHTML = '' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">配置 ID</span><span class="boss-raid-summary-value">' + _escHtml(profile.id || '--') + '</span></div>' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">来源 Source</span><span class="boss-raid-summary-value">' + _escHtml(profile.source || 'local') + '</span></div>' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">远端 ID Remote</span><span class="boss-raid-summary-value">' + _escHtml(profile.remote_id || '--') + '</span></div>' +
+        '<div class="boss-raid-summary-item"><span class="boss-raid-summary-label">更新时间 Updated</span><span class="boss-raid-summary-value">' + _escHtml(profile.updated_at || '--') + '</span></div>';
+}
+
+function _brRenderEditorFields() {
+    var p = _brDraftProfile;
+    var nameEl = document.getElementById('br-profile-name');
+    var hpEl = document.getElementById('br-boss-hp');
+    var enrageEl = document.getElementById('br-enrage-time');
+    var descEl = document.getElementById('br-description');
+    var simpleEl = document.getElementById('br-simple-mode');
+    var targetEl = document.getElementById('br-target-pattern');
+    var phasesEl = document.getElementById('br-phases-container');
+    if (!p) {
+        if (nameEl) nameEl.value = '';
+        if (hpEl) hpEl.value = 0;
+        if (enrageEl) enrageEl.value = 600;
+        if (descEl) descEl.value = '';
+        if (simpleEl) simpleEl.checked = true;
+        if (targetEl) targetEl.value = '';
+        if (phasesEl) {
+            phasesEl.innerHTML = '<div class="boss-raid-empty">先到本地页选择一个配置，或者新建一个配置，再开始编辑。<br>Select a profile from Local or create a new one to start editing.</div>';
+        }
+        _brRenderEditorSummary(null);
+        return;
+    }
+    if (nameEl) nameEl.value = p.profile_name || '';
+    if (hpEl) hpEl.value = p.boss_total_hp || 0;
+    if (enrageEl) enrageEl.value = p.enrage_time_s || 600;
+    if (descEl) descEl.value = p.description || '';
+    if (simpleEl) simpleEl.checked = p.simple_mode !== false;
+    if (targetEl) targetEl.value = p.target_name_pattern || '';
+    _brRenderEditorSummary(p);
+    _brRenderPhases();
+}
+
+function _brRenderPhases() {
+    var container = document.getElementById('br-phases-container');
+    if (!container || !_brDraftProfile) return;
+    var phases = _brDraftProfile.phases || [];
+    var noValueTriggers = { manual: 1, breaking: 1, overdrive: 1, shield_broken: 1 };
+    if (!phases.length) {
+        container.innerHTML = '<div class="boss-raid-empty compact">还没有阶段。点击上面的“新增阶段”开始配置。<br>No phases yet. Click "Add Phase" to start building the timeline.</div>';
+        return;
+    }
+    container.innerHTML = phases.map(function(phase, pi) {
+        var trigger = phase.trigger || {};
+        var timelines = phase.timelines || [];
+        return '<div class="br-phase-card">' +
+            '<div class="br-phase-head">' +
+                '<span class="br-phase-name">' + _escHtml(phase.name || 'P' + (pi+1)) + '</span>' +
+                '<div style="display:flex;gap:4px;">' +
+                    '<button class="boss-raid-btn" type="button" onclick="_brAddTimeline(' + pi + '); return false;">+ 时间点</button>' +
+                    (phases.length > 1 ? '<button class="boss-raid-btn danger" type="button" onclick="_brRemovePhase(' + pi + '); return false;">删除</button>' : '') +
+                '</div>' +
+            '</div>' +
+            '<div class="boss-raid-grid compact">' +
+                '<div class="boss-raid-field"><label>阶段名 Name</label><input type="text" value="' + _escHtml(phase.name || '') + '" oninput="_brDraftPhaseField(' + pi + ', \'name\', this.value)" /></div>' +
+                '<div class="boss-raid-field"><label>触发 Trigger</label><select onchange="_brDraftTriggerType(' + pi + ', this.value)">' +
+                    '<option value="manual"' + (trigger.type === 'manual' ? ' selected' : '') + '>手动 Manual</option>' +
+                    '<option value="time"' + (trigger.type === 'time' ? ' selected' : '') + '>时间(秒) Time</option>' +
+                    '<option value="dps_total"' + (trigger.type === 'dps_total' ? ' selected' : '') + '>总伤害 DPS Total</option>' +
+                    '<option value="hp_pct"' + (trigger.type === 'hp_pct' ? ' selected' : '') + '>血量% HP%</option>' +
+                    '<option value="breaking"' + (trigger.type === 'breaking' ? ' selected' : '') + '>进入破防 Breaking</option>' +
+                    '<option value="buff_event"' + (trigger.type === 'buff_event' ? ' selected' : '') + '>Buff事件 Buff Event</option>' +
+                    '<option value="shield_broken"' + (trigger.type === 'shield_broken' ? ' selected' : '') + '>盾破 Shield Broken</option>' +
+                    '<option value="overdrive"' + (trigger.type === 'overdrive' ? ' selected' : '') + '>暴走 Overdrive</option>' +
+                    '<option value="extinction_pct"' + (trigger.type === 'extinction_pct' ? ' selected' : '') + '>破灭条% Extinction%</option>' +
+                    '<option value="breaking_stage"' + (trigger.type === 'breaking_stage' ? ' selected' : '') + '>破防阶段 Break Stage</option>' +
+                '</select></div>' +
+                (!(trigger.type in noValueTriggers) ? '<div class="boss-raid-field"><label>触发值 Value</label><input type="number" min="0" value="' + (trigger.value || 0) + '" oninput="_brDraftTriggerValue(' + pi + ', this.value)" /></div>' : '') +
+            '</div>' +
+            '<div class="br-phase-tl-list">' +
+                (timelines.length ? timelines.map(function(tl, ti) {
+                    var cond = tl.condition || {};
+                    return '<div class="br-tl-row">' +
+                        '<input type="number" min="0" step="1" value="' + (tl.time_s || 0) + '" title="秒 Seconds" placeholder="秒" style="width:48px;" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'time_s\',this.value,\'float\')" />' +
+                        '<input type="text" value="' + _escHtml(tl.label || '') + '" placeholder="标签 Label" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'label\',this.value)" />' +
+                        '<select onchange="_brDraftTlField(' + pi + ',' + ti + ',\'alert_type\',this.value)">' +
+                            '<option value="both"' + (tl.alert_type === 'both' ? ' selected' : '') + '>声+视</option>' +
+                            '<option value="sound"' + (tl.alert_type === 'sound' ? ' selected' : '') + '>声</option>' +
+                            '<option value="visual"' + (tl.alert_type === 'visual' ? ' selected' : '') + '>视</option>' +
+                        '</select>' +
+                        '<input type="number" min="0" step="1" value="' + (tl.repeat_interval_s || 0) + '" title="重复间隔(秒) Repeat" placeholder="重复" style="width:48px;" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'repeat_interval_s\',this.value,\'float\')" />' +
+                        '<input type="number" min="0" step="1" value="' + (tl.pre_warn_s || 0) + '" title="预警(秒) Pre-warn" placeholder="预警" style="width:48px;" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'pre_warn_s\',this.value,\'float\')" />' +
+                        '<input type="number" min="0" step="1" value="' + (tl.duration_s || 0) + '" title="持续(秒) Duration" placeholder="持续" style="width:48px;" oninput="_brDraftTlField(' + pi + ',' + ti + ',\'duration_s\',this.value,\'float\')" />' +
+                        '<select title="条件 Condition" onchange="_brDraftTlCondType(' + pi + ',' + ti + ',this.value)">' +
+                            '<option value="always"' + ((cond.type || 'always') === 'always' ? ' selected' : '') + '>总是 Always</option>' +
+                            '<option value="hp_pct"' + (cond.type === 'hp_pct' ? ' selected' : '') + '>血量% HP%</option>' +
+                            '<option value="shield_active"' + (cond.type === 'shield_active' ? ' selected' : '') + '>盾存在 Shield</option>' +
+                            '<option value="breaking"' + (cond.type === 'breaking' ? ' selected' : '') + '>破防中 Break</option>' +
+                        '</select>' +
+                        (cond.type === 'hp_pct' ? '<input type="number" min="0" max="100" value="' + (cond.value || 0) + '" title="条件值" placeholder="%" style="width:42px;" oninput="_brDraftTlCondValue(' + pi + ',' + ti + ',this.value)" />' : '') +
+                        '<button class="boss-raid-btn danger" type="button" onclick="_brRemoveTimeline(' + pi + ',' + ti + '); return false;" style="padding:2px 6px;font-size:11px;">×</button>' +
+                    '</div>';
+                }).join('') : '<div style="padding:4px 0;color:rgba(86,92,98,0.5);font-size:11px;">暂无时间点 No timelines</div>') +
+            '</div>' +
+            '</div>';
+    }).join('');
+}
+
+function _brDraftField(fieldName, value, kind) {
+    if (!_brDraftProfile) return;
+    if (kind === 'int') value = parseInt(value || 0, 10) || 0;
+    if (kind === 'bool') value = !!value;
+    _brDraftProfile[fieldName] = value;
+    _brDraftDirty = true;
+    if (fieldName === 'profile_name') _brRenderEditorSummary(_brDraftProfile);
+}
+
+function _brDraftPhaseField(pi, field, val) {
+    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
+    _brDraftProfile.phases[pi][field] = val;
+    _brDraftDirty = true;
+}
+function _brDraftTriggerType(pi, val) {
+    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
+    _brDraftProfile.phases[pi].trigger = _brDraftProfile.phases[pi].trigger || {};
+    _brDraftProfile.phases[pi].trigger.type = val;
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brDraftTriggerValue(pi, val) {
+    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
+    _brDraftProfile.phases[pi].trigger = _brDraftProfile.phases[pi].trigger || {};
+    _brDraftProfile.phases[pi].trigger.value = parseFloat(val) || 0;
+    _brDraftDirty = true;
+}
+function _brDraftTlField(pi, ti, field, val, type) {
+    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
+    var tls = _brDraftProfile.phases[pi].timelines || [];
+    if (!tls[ti]) return;
+    if (type === 'float') val = parseFloat(val) || 0;
+    tls[ti][field] = val;
+    _brDraftDirty = true;
+}
+
+function _brAddPhase() {
+    if (!_brDraftProfile) return;
+    _brDraftProfile.phases = _brDraftProfile.phases || [];
+    var idx = _brDraftProfile.phases.length + 1;
+    _brDraftProfile.phases.push({ id: 'phase_new_' + Date.now(), name: 'P' + idx, trigger: { type: 'manual', value: 0 }, timelines: [] });
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brRemovePhase(pi) {
+    if (!_brDraftProfile || !_brDraftProfile.phases) return;
+    _brDraftProfile.phases.splice(pi, 1);
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brAddTimeline(pi) {
+    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
+    _brDraftProfile.phases[pi].timelines = _brDraftProfile.phases[pi].timelines || [];
+    _brDraftProfile.phases[pi].timelines.push({ id: 'tl_new_' + Date.now(), time_s: 30, label: 'Alert', alert_type: 'both', repeat_interval_s: 0, pre_warn_s: 0, duration_s: 0, condition: { type: 'always' } });
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brRemoveTimeline(pi, ti) {
+    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
+    _brDraftProfile.phases[pi].timelines.splice(ti, 1);
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brDraftTlCondType(pi, ti, val) {
+    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
+    var tls = _brDraftProfile.phases[pi].timelines || [];
+    if (!tls[ti]) return;
+    tls[ti].condition = tls[ti].condition || {};
+    tls[ti].condition.type = val;
+    if (val === 'hp_pct' && !tls[ti].condition.value) tls[ti].condition.value = 50;
+    _brDraftDirty = true;
+    _brRenderPhases();
+}
+function _brDraftTlCondValue(pi, ti, val) {
+    if (!_brDraftProfile || !_brDraftProfile.phases[pi]) return;
+    var tls = _brDraftProfile.phases[pi].timelines || [];
+    if (!tls[ti]) return;
+    tls[ti].condition = tls[ti].condition || {};
+    tls[ti].condition.value = parseFloat(val) || 0;
+    _brDraftDirty = true;
+}
+
+function _brSerializeDraft() {
+    if (!_brDraftProfile) return null;
+    var draft = JSON.parse(JSON.stringify(_brDraftProfile));
+    draft.updated_at = new Date().toISOString();
+    return draft;
+}
+
+function _brRenderRuntime() {
+    var el = document.getElementById('boss-raid-runtime');
+    if (!el) return;
+    var rt = (_bossRaidState && _bossRaidState.runtime) || {};
+    var state = rt.state || 'idle';
+    var text = 'Boss Raid: ' + state.toUpperCase();
+    if (state === 'running') {
+        text += ' | ' + (rt.phase_name || 'P?');
+        text += ' | ' + Math.floor(rt.elapsed_s || 0) + 's';
+        text += ' | DPS: ' + (rt.dps || 0);
+        text += ' | DMG: ' + (rt.total_damage || 0);
+        if ((rt.boss_hp_est_pct || 0) > 0) {
+            text += ' | HP: ' + Math.max(0, Math.min(100, Math.round((rt.boss_hp_est_pct || 0) * 1000) / 10)) + '%';
+        }
+        if (rt.enrage_remaining_s > 0) text += ' | Enrage: ' + Math.floor(rt.enrage_remaining_s) + 's';
+    } else if (state === 'completed') {
+        text += ' | ✓ COMPLETED';
+    }
+    el.textContent = text;
+    // Update start/stop button label
+    var btnStart = document.getElementById('br-btn-start');
+    if (btnStart) {
+        if (state === 'running') {
+            btnStart.textContent = '■ 停止 Stop';
+            btnStart.className = 'boss-raid-btn danger';
+        } else {
+            btnStart.textContent = '▶ 开始 Start';
+            btnStart.className = 'boss-raid-btn primary';
+        }
+    }
+}
+
+function _brStartStop() {
+    var rt = (_bossRaidState && _bossRaidState.runtime) || {};
+    var state = rt.state || 'idle';
+    if (state === 'running') {
+        _brCallApi('boss_raid_stop', [], function() { showToast('BOSS RAID STOPPED'); });
+    } else {
+        _brCallApi('boss_raid_start', [], function() { showToast('BOSS RAID STARTED'); });
+    }
+}
+function _brNextPhase() {
+    _brCallApi('boss_raid_next_phase', [], function() { showToast('NEXT PHASE'); });
+}
+function _brReset() {
+    _brCallApi('boss_raid_reset', [], function() { showToast('BOSS RAID RESET'); });
+}
+
+function _brRenderCloud() {
+    var state = _bossRaidState || {};
+    var identity = state.identity || {};
+    var auth = state.upload_auth || {};
+    var search = state.last_remote_search || {};
+    var query = search.query || {};
+    var resultsEl = document.getElementById('boss-raid-cloud-results');
+    var uploadMetaEl = document.getElementById('br-upload-auth-meta');
+    var uploadBtn = document.getElementById('br-upload-active-btn');
+    if (document.getElementById('br-server-url')) document.getElementById('br-server-url').value = state.server_url || '';
+    if (document.getElementById('br-search-q')) document.getElementById('br-search-q').value = query.q || '';
+    if (document.getElementById('br-search-profile-name')) document.getElementById('br-search-profile-name').value = query.profile_name || '';
+    if (document.getElementById('br-search-player-uid')) document.getElementById('br-search-player-uid').value = query.player_uid || '';
+    if (document.getElementById('br-search-player-name')) document.getElementById('br-search-player-name').value = query.player_name || '';
+    if (document.getElementById('br-identity-uid')) document.getElementById('br-identity-uid').textContent = identity.player_uid || '--';
+    if (document.getElementById('br-identity-name')) document.getElementById('br-identity-name').textContent = identity.player_name || '--';
+    if (document.getElementById('br-identity-profession-id')) document.getElementById('br-identity-profession-id').textContent = Number(identity.profession_id || 0) > 0 ? String(identity.profession_id) : '--';
+    if (document.getElementById('br-identity-profession-name')) document.getElementById('br-identity-profession-name').textContent = identity.profession_name || '--';
+    if (uploadMetaEl) {
+        var bits = [];
+        if (identity.ready) {
+            bits.push('<span class="boss-raid-pill auto-key-status-good">身份完整 Identity Ready</span>');
+        } else {
+            bits.push('<span class="boss-raid-pill auto-key-status-warn">缺少 ' + _escHtml((identity.missing || []).join(', ') || 'identity') + '</span>');
+        }
+        if (auth.ready) {
+            bits.push('<span class="boss-raid-pill auto-key-status-good">凭证已就绪 Auth Ready</span>');
+        } else if (auth.error) {
+            bits.push('<span class="boss-raid-pill auto-key-status-error">' + _escHtml(auth.error) + '</span>');
+        } else {
+            bits.push('<span class="boss-raid-pill auto-key-status-warn">凭证未获取 Auth Pending</span>');
+        }
+        if (auth.token_masked) bits.push('<span class="boss-raid-pill">Token ' + _escHtml(auth.token_masked) + '</span>');
+        if (auth.expires_at) bits.push('<span class="boss-raid-pill">Expires ' + _escHtml(auth.expires_at) + '</span>');
+        if (auth.mode) bits.push('<span class="boss-raid-pill">' + _escHtml(String(auth.mode || '').toUpperCase()) + '</span>');
+        uploadMetaEl.innerHTML = bits.join('');
+    }
+    if (uploadBtn) {
+        uploadBtn.disabled = !identity.ready || !state.local_profile_count;
+    }
+    if (!resultsEl) return;
+    var items = Array.isArray(search.results) ? search.results : [];
+    if (search.error) {
+        resultsEl.innerHTML = '<div class="boss-raid-empty">云端搜索失败 Cloud search failed.<br>' + _escHtml(search.error) + '</div>';
+        return;
+    }
+    if (!items.length) {
+        resultsEl.innerHTML = '<div class="boss-raid-empty">还没有云端结果。先填写上面的搜索条件，再发起搜索。<br>No cloud profiles yet. Fill in filters above and start a search.</div>';
+        return;
+    }
+    resultsEl.innerHTML = items.map(function(item) {
+        var remoteId = String(item.id || '');
+        return '<div class="boss-raid-card" onclick="_brDownloadRemote(' + JSON.stringify(remoteId) + ')">' +
+            '<div class="boss-raid-card-info">' +
+                '<div class="boss-raid-card-name">' + _escHtml(item.profile_name || 'Boss') + '</div>' +
+                '<div class="boss-raid-card-meta">by ' + _escHtml(item.player_name || '?') + ' · UID: ' + _escHtml(item.player_uid || '--') + ' · HP: ' + (item.boss_total_hp || '?') + ' · ' + _escHtml(item.updated_at || item.created_at || '') + '</div>' +
+            '</div>' +
+            '<div class="boss-raid-card-actions">' +
+                '<button class="boss-raid-btn primary" type="button" onclick="event.stopPropagation(); _brDownloadRemote(' + JSON.stringify(remoteId) + '); return false;">下载 Download</button>' +
+            '</div></div>';
+    }).join('');
+}
+
+function _brCreateProfile() {
+    _brDraftDirty = false;
+    _brCallApi('create_boss_raid_profile', [], function(data) {
+        showToast('BOSS RAID CREATED');
+        _brSelectedProfileId = String((_bossRaidState && _bossRaidState.active_profile_id) || '');
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+        _brSetTab('editor');
+    });
+}
+function _brImportProfile() {
+    _pickerConsumer = 'boss_raid';
+    _brCallApi('start_boss_raid_import_picker', [], function(data) {
+        if (data && data.browser) {
+            showFilePicker(data.browser);
+            return;
+        }
+        showAlert('BOSS RAID', '无法打开导入选择器 / Unable to open import picker', true);
+    });
+}
+function _brRefreshState() {
+    _brCallApi('get_boss_raid_state', [], function() {
+        showToast('BOSS RAID REFRESHED');
+    });
+}
+function _brSaveProfile() {
+    if (!_brDraftProfile) {
+        showAlert('BOSS RAID', '未选择配置 / No profile selected', true);
+        return;
+    }
+    var payload = _brSerializeDraft();
+    _brCallApi('save_boss_raid_profile', [payload], function() {
+        _brDraftDirty = false;
+        _brSelectedProfileId = String(payload.id || _brSelectedProfileId || '');
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+        showToast('BOSS RAID SAVED');
+    });
+}
+function _brExportProfile() {
+    if (!_brDraftProfile) return;
+    if (_brDraftDirty) {
+        showAlert('BOSS RAID', '请先保存这个配置再导出。 / Save this profile before exporting it.', true);
+        return;
+    }
+    _brCallApi('export_boss_raid_profile', [_brDraftProfile.id], function(data) {
+        showAlert('BOSS RAID', '已导出到 / Exported to:\n' + (data.path || ''), true);
+    });
+}
+function _brDeleteProfile() {
+    if (!_brDraftProfile) return;
+    if (!window.confirm('Delete this boss raid profile?')) return;
+    _brCallApi('delete_boss_raid_profile', [_brDraftProfile.id], function() {
+        _brSelectedProfileId = String((_bossRaidState && _bossRaidState.active_profile_id) || '');
+        _brLoadDraftFromState(_brSelectedProfileId, true);
+        _brSetTab('local');
+        showToast('BOSS RAID DELETED');
+    });
+}
+
+function _brSaveCloudSettings(afterSave) {
+    if (!window.pywebview || !window.pywebview.api) return;
+    var serverUrl = (document.getElementById('br-server-url').value || '').trim();
+    Promise.all([
+        window.pywebview.api.set_boss_raid_server_url(serverUrl)
+    ]).then(function(results) {
+        var lastState = null;
+        results.forEach(function(item) {
+            var data = (typeof item === 'string') ? JSON.parse(item) : item;
+            if (!data || data.ok === false) throw new Error((data && (data.message || data.error)) || 'Save settings failed');
+            if (data.state) lastState = data.state;
+        });
+        if (lastState) _syncBossRaidState(lastState);
+        if (afterSave) {
+            afterSave();
+        } else {
+            showToast('SERVER SETTINGS SAVED');
+        }
+    }).catch(function(err) {
+        showAlert('BOSS RAID', String(err || '无法保存云端设置 / Unable to save cloud settings'), true);
+    });
+}
+
+function _brRefreshUploadAuth(force, afterReady) {
+    _brCallApi('refresh_boss_raid_upload_auth', [!!force], function() {
+        if (afterReady) afterReady();
+        if (force) showToast('AUTH REFRESHED');
+    });
+}
+
+function _brIssueToken() {
+    _brSaveCloudSettings(function() {
+        _brRefreshUploadAuth(true);
+    });
+}
+function _brUploadActive() {
+    var targetId = _brDraftProfile ? _brDraftProfile.id : ((_bossRaidState && _bossRaidState.active_profile_id) || '');
+    var identity = (_bossRaidState && _bossRaidState.identity) || {};
+    if (!targetId) {
+        showAlert('BOSS RAID', '未选择配置 / No profile selected', true);
+        return;
+    }
+    if (!identity.ready) {
+        showAlert('BOSS RAID', '当前角色信息不完整，无法上传。缺少: ' + ((identity.missing || []).join(', ') || 'identity'), true);
+        return;
+    }
+    if (_brDraftDirty) {
+        showAlert('BOSS RAID', '请先保存这个配置再上传。 / Save this profile before uploading it.', true);
+        return;
+    }
+    _brSaveCloudSettings(function() {
+        _brRefreshUploadAuth(false, function() {
+            _brCallApi('upload_boss_raid_profile', [targetId], function(data) {
+                showToast('BOSS RAID UPLOADED #' + (data.remote_id || ''));
+            });
+        });
+    });
+}
+function _brSearchRemote() {
+    _brSaveCloudSettings(function() {
+        var query = {
+            q: ((document.getElementById('br-search-q') || {}).value || '').trim(),
+            profile_name: ((document.getElementById('br-search-profile-name') || {}).value || '').trim(),
+            player_uid: ((document.getElementById('br-search-player-uid') || {}).value || '').trim(),
+            player_name: ((document.getElementById('br-search-player-name') || {}).value || '').trim(),
+            page: 1,
+            page_size: 20
+        };
+        _brCallApi('search_boss_raid_remote', [query], function() {
+            showToast('BOSS RAID SEARCH COMPLETE');
+        });
+    });
+}
+function _brDownloadRemote(remoteId) {
+    _brCallApi('download_boss_raid_remote', [remoteId], function() {
+        _brSetTab('local');
+        showToast('BOSS RAID DOWNLOADED');
+    });
+}
+
+/* Boss Raid tab switching */
+document.getElementById('boss-raid-enabled').addEventListener('change', function(e) {
+    e.stopPropagation();
+    _brCallApi('set_boss_raid_enabled', [this.checked], function() {
+        showToast('BOSS RAID ' + (document.getElementById('boss-raid-enabled').checked ? 'ON' : 'OFF'));
+    });
+});
+document.querySelectorAll('#boss-raid-tabs .boss-raid-tab').forEach(function(tab) {
+    tab.addEventListener('click', function(e) {
+        e.stopPropagation();
+        playSound('snd-click');
+        _brSetTab(this.getAttribute('data-tab'));
+    });
+});
+
+/* Boss bar mode selector */
+function _setBossBarModeUI(mode) {
+    document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);
+    });
+}
+document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        playSound('snd-click');
+        var mode = this.getAttribute('data-mode');
+        _setBossBarModeUI(mode);
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_boss_bar_mode) {
+            window.pywebview.api.set_boss_bar_mode(mode);
+        }
+        var labels = { always: '有敌人就显示', boss_raid: '仅 Boss Raid', off: '关闭' };
+        showToast('BOSS HP BAR: ' + (labels[mode] || mode));
+    });
+});
+
+/* DPS meter toggle */
+(function() {
+    var el = document.getElementById('dps-enabled');
+    if (el) {
+        el.addEventListener('change', function(e) {
+            e.stopPropagation();
+            playSound('snd-click');
+            var on = this.checked;
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.set_dps_enabled) {
+                window.pywebview.api.set_dps_enabled(on);
+            }
+            showToast('DPS METER: ' + (on ? 'ON' : 'OFF'));
+        });
+    }
+})();
+
+function _setDpsFadeTimeout(val) {
+    var v = parseInt(val) || 0;
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_dps_fade_timeout) {
+        window.pywebview.api.set_dps_fade_timeout(v);
+    }
+}
+
+function _setDpsLastReportAvailable(available) {
+    var btn = document.getElementById('dps-last-report-btn');
+    if (!btn) return;
+    btn.classList.toggle('disabled', !available);
+    btn.setAttribute('data-available', available ? '1' : '0');
+}
+
+function _showLastDpsReport() {
+    var btn = document.getElementById('dps-last-report-btn');
+    if (btn && btn.classList.contains('disabled')) {
+        showAlert('DPS METER', '暂无上一场战斗报告 / No last combat report yet.', true);
+        return;
+    }
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.show_last_dps_report) {
+        showAlert('DPS METER', 'pywebview API 不可用 / pywebview API is not available', true);
+        return;
+    }
+    window.pywebview.api.show_last_dps_report().then(function(result) {
+        var data = (typeof result === 'string') ? JSON.parse(result) : result;
+        if (!data || data.ok === false) {
+            showAlert('DPS METER', (data && data.message) ? data.message : '无法打开上一场战斗报告 / Unable to open last combat report', true);
+            return;
+        }
+        showToast('DPS REPORT: LAST REPORT');
+    }).catch(function(err) {
+        showAlert('DPS METER', String(err || '无法打开上一场战斗报告 / Unable to open last combat report'), true);
+    });
+}
+
+/* ═══ Boss ↔ AutoKey Linkage ═══ */
+var _linkageMappings = [];
+
+function _initLinkageUI() {
+    var api = window.pywebview && window.pywebview.api;
+    if (!api || !api.get_linkage_state) return;
+    api.get_linkage_state().then(function(raw) {
+        var resp = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (!resp.ok) return;
+        var s = resp.state;
+        document.getElementById('linkage-enabled').checked = s.enabled;
+        document.getElementById('linkage-debug').checked = s.debug_log;
+        document.getElementById('linkage-global-cd').value = s.global_cooldown_s || 1.0;
+        _linkageMappings = s.mappings || [];
+        _renderLinkageMappings();
+    });
+}
+
+function _renderLinkageMappings() {
+    var container = document.getElementById('linkage-mappings');
+    if (!container) return;
+    if (_linkageMappings.length === 0) {
+        container.innerHTML = '<div style="font-size:10px;color:rgb(160,158,160);">No mappings. Click + to add.</div>';
+        return;
+    }
+    var triggerLabels = {
+        phase_enter: 'Phase Enter',
+        timeline_alert: 'Timeline Alert',
+        breaking: 'Breaking',
+        enrage: 'Enrage',
+    };
+    var html = '';
+    for (var i = 0; i < _linkageMappings.length; i++) {
+        var m = _linkageMappings[i];
+        html += '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;padding:4px 6px;background:rgba(245,243,240,0.80);border:1px solid rgba(201,198,198,0.45);border-radius:6px;">';
+        html += '<select data-idx="' + i + '" data-field="trigger_type" onchange="_updateMapping(this)" '
+             + 'style="font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);">';
+        ['phase_enter','timeline_alert','breaking','enrage'].forEach(function(t) {
+            html += '<option value="' + t + '"' + (m.trigger_type === t ? ' selected' : '') + '>' + (triggerLabels[t] || t) + '</option>';
+        });
+        html += '</select>';
+        html += '<input type="text" data-idx="' + i + '" data-field="trigger_match" value="' + _escAttr(m.trigger_match || '') + '" '
+             + 'placeholder="match..." onchange="_updateMapping(this)" '
+             + 'style="width:60px;font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);" />';
+        html += '<span style="font-size:9px;color:rgb(160,158,160);">→</span>';
+        html += '<input type="text" data-idx="' + i + '" data-field="action_key" value="' + _escAttr(m.action_key || '') + '" '
+             + 'placeholder="Key" onchange="_updateMapping(this)" '
+             + 'style="width:36px;font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);text-transform:uppercase;" />';
+        html += '<input type="text" data-idx="' + i + '" data-field="action_label" value="' + _escAttr(m.action_label || '') + '" '
+             + 'placeholder="Label" onchange="_updateMapping(this)" '
+             + 'style="width:50px;font-size:10px;padding:1px 3px;background:rgba(255,255,255,0.90);border:1px solid rgba(201,198,198,0.55);border-radius:4px;color:rgb(80,78,80);" />';
+        html += '<span style="font-size:8px;color:rgb(185,183,183);cursor:pointer;" onclick="_removeLinkageMapping(' + i + ')">✕</span>';
+        html += '</div>';
+    }
+    container.innerHTML = html;
+}
+
+function _escAttr(s) { return (s || '').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+function _updateMapping(el) {
+    var idx = parseInt(el.getAttribute('data-idx'));
+    var field = el.getAttribute('data-field');
+    if (idx >= 0 && idx < _linkageMappings.length && field) {
+        _linkageMappings[idx][field] = el.value;
+        _saveLinkageMappings();
+    }
+}
+
+function _addLinkageMapping() {
+    _linkageMappings.push({
+        id: 'lnk_' + Math.random().toString(36).substring(2, 14),
+        enabled: true,
+        trigger_type: 'phase_enter',
+        trigger_match: '',
+        action_key: '',
+        action_label: '',
+        press_mode: 'tap',
+        hold_ms: 80,
+        press_count: 1,
+        cooldown_s: 3.0,
+    });
+    _renderLinkageMappings();
+    _saveLinkageMappings();
+}
+
+function _removeLinkageMapping(idx) {
+    _linkageMappings.splice(idx, 1);
+    _renderLinkageMappings();
+    _saveLinkageMappings();
+}
+
+function _saveLinkageMappings() {
+    var api = window.pywebview && window.pywebview.api;
+    if (api && api.save_linkage_mappings) {
+        api.save_linkage_mappings(JSON.stringify(_linkageMappings));
+    }
+}
+
+function _setLinkageGlobalCD(val) {
+    var api = window.pywebview && window.pywebview.api;
+    if (api && api.set_linkage_global_cooldown) {
+        api.set_linkage_global_cooldown(parseFloat(val) || 1.0);
+    }
+}
+
+(function() {
+    var elEnabled = document.getElementById('linkage-enabled');
+    if (elEnabled) {
+        elEnabled.addEventListener('change', function(e) {
+            e.stopPropagation();
+            playSound('snd-click');
+            var api = window.pywebview && window.pywebview.api;
+            if (api && api.set_linkage_enabled) api.set_linkage_enabled(this.checked);
+            showToast('LINKAGE: ' + (this.checked ? 'ON' : 'OFF'));
+        });
+    }
+    var elDebug = document.getElementById('linkage-debug');
+    if (elDebug) {
+        elDebug.addEventListener('change', function(e) {
+            e.stopPropagation();
+            var api = window.pywebview && window.pywebview.api;
+            if (api && api.set_linkage_debug) api.set_linkage_debug(this.checked);
+        });
+    }
+    // Init on pywebview ready
+    if (window.pywebview && window.pywebview.api) {
+        _initLinkageUI();
+    } else {
+        window.addEventListener('pywebviewready', _initLinkageUI);
+    }
+})();
+
 /* ═══ Python bridge: expose JS functions ═══ */
 window.SAO = {
     openMenu: openMenu,
@@ -3748,6 +5970,7 @@ window.SAO = {
     showLeaderboard: showLeaderboard,
     closeLeaderboard: closeLeaderboard,
     syncAutoKeyState: _syncAutoKeyState,
+    syncBossRaidState: _syncBossRaidState,
     restoreMenuSettings: restoreMenuSettings,
 };
 
@@ -3757,6 +5980,14 @@ setTimeout(function() {
             var data = _akParseApiResult(result);
             if (data && data.ok && data.state) {
                 _syncAutoKeyState(data.state);
+            }
+        });
+    }
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.get_boss_raid_state) {
+        window.pywebview.api.get_boss_raid_state().then(function(result) {
+            var data = (typeof result === 'string') ? JSON.parse(result) : result;
+            if (data && data.ok !== false && data.state) {
+                _syncBossRaidState(data.state);
             }
         });
     }

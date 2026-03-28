@@ -44,6 +44,8 @@ SAO_SOUNDS = {
     'link_start':  os.path.join(_SOUNDS, 'LinkStart.SAO.Kirito.mp3'),
     'nervegear':   os.path.join(_SOUNDS, 'Startup.SAO.NerveGear.mp3'),
     'burst_ready': os.path.join(_SOUNDS, 'Popup.SAO.Alert.mp3'),  # Burst Mode Ready SFX
+    'boss_alert':  os.path.join(_SOUNDS, 'Popup.SAO.Alert.mp3'),  # Boss timeline alert
+    'boss_phase':  os.path.join(_SOUNDS, 'Popup.SAO.Panel.mp3'),  # Boss phase transition
 }
 
 # ═══ Global sound settings ═══

@@ -20,8 +20,9 @@ from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont
 import numpy as np
 
 from config import (
-    WINDOW_TITLE, WINDOW_SIZE,
+    APP_VERSION_LABEL, WINDOW_TITLE, WINDOW_SIZE,
     DEFAULT_HOTKEYS,
+    get_skill_slot_rects,
 )
 from sao_theme import (
     SAOColors, SAOButton, SAOProgressBar, SAOTitleBar, SAODialog,
@@ -36,53 +37,33 @@ from character_profile import (
     calc_level, add_song_xp
 )
 from sao_sound import play_sound, LevelUpEffect, load_sao_fonts, get_sao_font, get_cjk_font
+from auto_key_engine import (
+    AutoKeyEngine,
+    build_auto_key_state,
+    build_identity_state,
+    default_upload_auth_state,
+    load_auto_key_config,
+    save_auto_key_config,
+    snapshot_author_from_state,
+)
+from boss_raid_engine import (
+    BossRaidEngine,
+    build_boss_raid_state,
+    load_boss_raid_config,
+    save_boss_raid_config,
+)
+from boss_autokey_linkage import (
+    BossAutoKeyLinkage,
+    load_linkage_config,
+    save_linkage_config,
+)
+from dps_tracker import DpsTracker
+from sao_gui_dps import DpsOverlay
+from sao_gui_bosshp import BossHpOverlay
+from sao_gui_alert import AlertOverlay
+from sao_gui_autokey import AutoKeyPanel
+from sao_gui_bossraid import BossRaidPanel
 
-
-# ══ Inline stubs for removed modules (SAO Auto) ══
-class MidiPlayer:
-    """No-op stub — MIDI disabled in sao_auto"""
-    def __init__(self, *a, **kw): pass
-    def play(self, *a, **kw): pass
-    def stop(self, *a, **kw): pass
-    def pause(self, *a, **kw): pass
-    def resume(self, *a, **kw): pass
-    def set_speed(self, *a, **kw): pass
-    def set_transpose(self, *a, **kw): pass
-    def set_mode_system(self, *a, **kw): pass
-    def set_direct_c_mode(self, *a, **kw): pass
-    def set_part_filter(self, *a, **kw): pass
-    def set_bass_density(self, *a, **kw): pass
-    def set_proficiency_enabled(self, *a, **kw): pass
-    def load_midi(self, *a, **kw): return False
-    def is_playing(self): return False
-    def is_paused(self): return False
-    def get_progress(self): return 0.0
-    def get_speed(self): return 1.0
-    def get_transpose(self): return 0
-    @property
-    def on_note_play(self): return None
-    @on_note_play.setter
-    def on_note_play(self, v): pass
-    @property
-    def on_playback_end(self): return None
-    @on_playback_end.setter
-    def on_playback_end(self, v): pass
-    @property
-    def on_progress(self): return None
-    @on_progress.setter
-    def on_progress(self, v): pass
-    @property
-    def on_sustain_change(self): return None
-    @on_sustain_change.setter
-    def on_sustain_change(self, v): pass
-    @property
-    def on_shift_change(self): return None
-    @on_shift_change.setter
-    def on_shift_change(self, v): pass
-
-class NoteEvent:
-    def __init__(self, **kw):
-        for k, v in kw.items(): setattr(self, k, v)
 
 class ModernColors:
     BG_DARK = '#1C1C1E'; BG_CARD = '#2C2C2E'; BG_HOVER = '#3A3A3C'
@@ -989,9 +970,6 @@ class SAOPlayerGUI:
         # 记录当前 UI 模式 — 下次启动时使用
         self.settings.set('ui_mode', 'sao')
         self.settings.save()
-        self.player = MidiPlayer()
-        saved_mode = self.settings.get('mode_system', 'classic')
-        self.player.set_mode_system(saved_mode)
 
         # ── 角色配置 ──
         profile = load_profile()
@@ -1006,23 +984,6 @@ class SAOPlayerGUI:
         load_sao_fonts()
 
         self._current_file = None
-        self._playing = False
-        self._paused = False
-        self._time_current = 0
-        self._time_total = 0
-        self._folder_loop_active = False
-        self._folder_loop_files = []
-        self._folder_loop_index = 0
-        self._speed = self.settings.get('speed', 1.0)
-        self._transpose = self.settings.get('transpose', 0)
-        self._melody_on = True
-        self._bass_on = True
-        self._bass_density = 0.6
-        self._glissando = False
-        self._direct_c = False
-        self._sustain_active = False
-        self._shift_mode = 'normal'     # 当前演奏模式: normal/shift/ctrl/lt/gt
-        self._proficiency_enabled = False
         self._panels_hidden = False  # 一键隐藏所有面板
         self._hidden_panels_snapshot = []  # 隐藏前记录哪些面板是开的
         self._player_panel = None  # 当 SAO 菜单打开时设置
@@ -1064,14 +1025,46 @@ class SAOPlayerGUI:
         # ── 识别引擎 ──
         self._recognition_active = False
         self._recognition_engine = None
+        self._recognition_engines = []
+        self._packet_engine = None
+        self._vision_engine = None
+        self._vision_paused_for_death = False
+        self._last_dead_state = False
         self._state_mgr = None
         self._game_state = None
+        self._cfg_settings_ref = None
         self._recog_lock = threading.Lock()
+
+        # ── AutoKey / BossRaid / DPS 引擎 ──
+        self._auto_key_engine = None
+        self._boss_raid_engine = None
+        self._boss_autokey_linkage = None
+        self._dps_tracker = None
+        self._dps_visible = True
+        self._dps_faded = False
+        self._last_burst_ready = False
+        self._last_burst_slot = 0
+        self._last_boss_timer_text = ''
+        self._last_boss_timer_urgency = ''
+        self._last_boss_bar_sig = None
+        self._last_skillfx_sig = None
+        self._profile_auto_saved = False
+        self._last_gs_name = ''
+        self._last_gs_prof = ''
+        self._last_gs_uid = ''
+
+        # ── ULW 覆盖层引用 ──
+        self._dps_overlay = None
+        self._boss_hp_overlay = None
+        self._alert_overlay = None
+
+        # ── 配置面板实例 ──
+        self._autokey_panel = None    # AutoKeyPanel
+        self._bossraid_panel = None   # BossRaidPanel
 
         self._set_icon()
         self._create_floating_widget()
         self._setup_sao_menu()
-        self._bind_callbacks()
         self._setup_hotkeys()
 
         # LINK START 入场
@@ -1643,7 +1636,8 @@ class SAOPlayerGUI:
         self._float_ctx.add_command(label='◆ 打开 SAO 菜单', command=self._toggle_sao_menu)
         self._float_ctx.add_separator()
         self._float_ctx.add_command(label='◉ 状态面板', command=self._toggle_status_panel)
-        self._float_ctx.add_command(label='⚙ 控制面板', command=self._toggle_control_panel)
+        self._float_ctx.add_command(label='⚡ AutoKey 配置', command=self._toggle_autokey_panel)
+        self._float_ctx.add_command(label='⚔ BossRaid 配置', command=self._toggle_bossraid_panel)
         self._float_ctx.add_separator()
         self._float_ctx.add_command(label='◈ 隐藏/显示面板', command=self._toggle_hide_all_panels)
         self._float_ctx.add_command(label='◇ WebView UI', command=self._switch_to_webview_ui)
@@ -1871,8 +1865,127 @@ class SAOPlayerGUI:
     # ══════════════════════════════════════════════
     #  识别引擎
     # ══════════════════════════════════════════════
+    def _stop_recognition_engines(self):
+        """停止所有识别/数据引擎."""
+        if getattr(self, '_auto_key_engine', None):
+            try: self._auto_key_engine.stop()
+            except Exception: pass
+            self._auto_key_engine = None
+        if getattr(self, '_boss_raid_engine', None):
+            try: self._boss_raid_engine.stop()
+            except Exception: pass
+            self._boss_raid_engine = None
+        engines = list(getattr(self, '_recognition_engines', []) or [])
+        if not engines and self._recognition_engine:
+            engines = [self._recognition_engine]
+        for engine in engines:
+            try: engine.stop()
+            except Exception: pass
+        self._recognition_engines = []
+        self._recognition_engine = None
+        self._packet_engine = None
+        self._vision_engine = None
+
+    def _reconfigure_data_engines(self):
+        """重启 packet/vision 引擎以匹配当前数据源配置."""
+        if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
+            return
+        self._stop_recognition_engines()
+
+        engines = []
+        try:
+            from packet_bridge import PacketBridge
+            packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref,
+                                         on_damage=self._on_packet_damage,
+                                         on_monster_update=self._on_monster_update,
+                                         on_boss_event=self._on_boss_event)
+            packet_engine.start()
+            engines.append(packet_engine)
+            self._packet_engine = packet_engine
+            print('[SAO Entity] Packet bridge started (network capture)')
+        except Exception as e:
+            import traceback
+            print(f'[SAO Entity] Packet bridge FAILED: {e}')
+            traceback.print_exc()
+            self._packet_engine = None
+
+        # DPS Tracker
+        try:
+            self._dps_tracker = DpsTracker()
+            print('[SAO Entity] DPS tracker initialized')
+        except Exception as e:
+            print(f'[SAO Entity] DPS tracker init failed: {e}')
+            self._dps_tracker = None
+
+        try:
+            from recognition import RecognitionEngine
+            vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
+            vision_engine.start()
+            engines.append(vision_engine)
+            self._vision_engine = vision_engine
+            print('[SAO Entity] Recognition engine started (window vision)')
+        except Exception as e:
+            import traceback
+            print(f'[SAO Entity] Recognition engine FAILED: {e}')
+            traceback.print_exc()
+            self._vision_engine = None
+
+        self._recognition_engines = engines
+        self._recognition_engine = engines[0] if engines else None
+        self._recognition_active = bool(engines)
+
+    def _send_linked_key(self, key: str, press_mode: str = "tap",
+                         hold_ms: int = 80, press_count: int = 1):
+        """发送联动按键 (Boss→AutoKey linkage)."""
+        try:
+            from auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
+            import ctypes as _ct
+            key = (key or "").strip().upper()
+            vk = VK_NAME_MAP.get(key)
+            if vk is None and len(key) == 1 and key.isalpha():
+                vk = ord(key)
+            if vk is None:
+                return
+            hold_s = max(0.015, hold_ms / 1000.0) if press_mode == "hold" else 0.015
+            extra = _ct.c_ulong(0)
+            for _ in range(max(1, press_count)):
+                ki = KEYBDINPUT(wVk=int(vk), wScan=0, dwFlags=0, time=0,
+                                dwExtraInfo=_ct.pointer(extra))
+                ev = INPUT(type=INPUT_KEYBOARD, ki=ki)
+                _ct.windll.user32.SendInput(1, _ct.byref(ev), _ct.sizeof(INPUT))
+                time.sleep(hold_s)
+                ki2 = KEYBDINPUT(wVk=int(vk), wScan=0, dwFlags=KEYEVENTF_KEYUP, time=0,
+                                 dwExtraInfo=_ct.pointer(extra))
+                ev2 = INPUT(type=INPUT_KEYBOARD, ki=ki2)
+                _ct.windll.user32.SendInput(1, _ct.byref(ev2), _ct.sizeof(INPUT))
+                if press_count > 1:
+                    time.sleep(0.04)
+        except Exception as e:
+            print(f"[Linkage] send_key error: {e}")
+
+    def _on_packet_damage(self, event):
+        """Damage event callback from packet_parser → boss raid engine + DPS tracker."""
+        if self._boss_raid_engine:
+            try: self._boss_raid_engine.on_damage_event(event)
+            except Exception: pass
+        if self._dps_tracker:
+            try: self._dps_tracker.on_damage_event(event)
+            except Exception: pass
+
+    def _on_monster_update(self, monster_data):
+        """Monster update from packet_parser → boss raid engine."""
+        if self._boss_raid_engine:
+            try: self._boss_raid_engine.on_monster_update(monster_data)
+            except Exception: pass
+
+    def _on_boss_event(self, event):
+        """Boss buff/event callback from packet_parser → boss raid engine."""
+        if self._boss_raid_engine:
+            try: self._boss_raid_engine.on_boss_event(event)
+            except Exception: pass
+
     def _start_recognition(self):
-        """启动游戏数据引擎 (OCR 或 抓包)."""
+        """启动游戏数据引擎 (抓包 + 纯识图 + AutoKey + BossRaid)."""
         try:
             from game_state import GameStateManager
             from config import SettingsManager as CfgSettings
@@ -1884,19 +1997,85 @@ class SAOPlayerGUI:
             self._state_mgr.load_cache(cfg_settings)
             self._cfg_settings_ref = cfg_settings
 
-            data_source = cfg_settings.get('data_source', 'ocr')
-            if data_source == 'packet':
-                from packet_bridge import PacketBridge
-                self._recognition_engine = PacketBridge(self._state_mgr, cfg_settings)
-                self._recognition_engine.start()
-                self._recognition_active = True
-                print('[SAO Entity] Packet bridge started (网络抓包模式)')
-            else:
-                from recognition import RecognitionEngine
-                self._recognition_engine = RecognitionEngine(self._state_mgr, cfg_settings)
-                self._recognition_engine.start()
-                self._recognition_active = True
-                print('[SAO Entity] Recognition engine started (OCR 模式)')
+            # Restore sound settings
+            try:
+                from sao_sound import set_sound_enabled, set_sound_volume
+                _snd_on = cfg_settings.get('sound_enabled', True)
+                _snd_vol = cfg_settings.get('sound_volume', 70)
+                set_sound_enabled(bool(_snd_on) if _snd_on is not None else True)
+                set_sound_volume(int(_snd_vol) if _snd_vol is not None else 70)
+            except Exception:
+                pass
+
+            # 用缓存名替换默认 "Player"
+            cached_name = self._state_mgr.state.player_name
+            if cached_name:
+                self._username = cached_name
+                disp = cached_name
+                if len(disp) > 10:
+                    disp = disp[:9] + '…'
+                self._hp_display_name = disp
+                print(f'[SAO Entity] 从缓存加载角色名: {cached_name}')
+
+            self._reconfigure_data_engines()
+
+            # AutoKey Engine
+            self._auto_key_engine = AutoKeyEngine(
+                self._state_mgr,
+                self._cfg_settings_ref,
+                extra_gate=lambda: bool(getattr(self, '_recognition_active', False)),
+            )
+            self._auto_key_engine.start()
+
+            # Boss Raid Engine + AutoKey Linkage
+            self._boss_autokey_linkage = BossAutoKeyLinkage(
+                self._cfg_settings_ref,
+                send_key=self._send_linked_key,
+                on_log=lambda msg: print(msg),
+            )
+
+            def _on_boss_alert_with_linkage(title, message):
+                print(f'[SAO Entity] Boss Alert: {title} — {message}')
+                if self._alert_overlay:
+                    try: self._alert_overlay.show_alert(title, message)
+                    except Exception: pass
+                if self._boss_autokey_linkage:
+                    try:
+                        self._boss_autokey_linkage.on_boss_raid_alert(title, message)
+                    except Exception:
+                        pass
+
+            self._boss_raid_engine = BossRaidEngine(
+                self._state_mgr,
+                self._cfg_settings_ref,
+                on_alert=_on_boss_alert_with_linkage,
+                on_sound=lambda name: play_sound(name),
+            )
+
+            # ── 初始化 ULW 覆盖层 ──
+            self._dps_visible = bool(self._get_setting('dps_enabled', True))
+            try:
+                self._dps_overlay = DpsOverlay(self.root, self._cfg_settings_ref)
+                if self._dps_visible:
+                    self._dps_overlay.show()
+                print('[SAO Entity] DPS overlay initialized')
+            except Exception as e:
+                print(f'[SAO Entity] DPS overlay init failed: {e}')
+                self._dps_overlay = None
+
+            try:
+                self._boss_hp_overlay = BossHpOverlay(self.root, self._cfg_settings_ref)
+                print('[SAO Entity] Boss HP overlay initialized')
+            except Exception as e:
+                print(f'[SAO Entity] Boss HP overlay init failed: {e}')
+                self._boss_hp_overlay = None
+
+            try:
+                self._alert_overlay = AlertOverlay(self.root, self._cfg_settings_ref)
+                print('[SAO Entity] Alert overlay initialized')
+            except Exception as e:
+                print(f'[SAO Entity] Alert overlay init failed: {e}')
+                self._alert_overlay = None
 
             # 启动定时缓存保存 (每30秒)
             import threading as _thr
@@ -1916,14 +2095,14 @@ class SAOPlayerGUI:
             self._recognition_active = False
 
     def _recognition_loop(self):
-        """后台识别循环 — 读取 GameStateManager 并更新 HP 条 + 体力覆盖板."""
+        """后台识别循环 — 读取 GameStateManager 并更新 HP 条 + 体力覆盖板 + DPS + Boss."""
         if self._destroyed:
             return
         if self._recognition_active and self._state_mgr:
             try:
                 gs = self._state_mgr.state
                 if gs.recognition_ok:
-                    # OCR 优先, 像素条检测 (hp_pct) 兜底
+                    # HP data
                     if gs.hp_max > 0:
                         hp, hp_max = gs.hp_current, gs.hp_max
                     elif gs.hp_pct > 0:
@@ -1941,8 +2120,72 @@ class SAOPlayerGUI:
                     self._sta_hp = (hp, hp_max)
                     self._sta_sta = (sta, sta_max)
                     self._game_state = gs
+
+                    # ── DPS tracker: 更新玩家信息 ──
+                    if self._dps_tracker and gs.player_id:
+                        try:
+                            _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
+                            if _p_uid:
+                                self._dps_tracker.set_self_uid(_p_uid)
+                                self._dps_tracker.update_player_info(
+                                    _p_uid,
+                                    gs.player_name or '',
+                                    gs.profession_name or '',
+                                )
+                        except Exception:
+                            pass
+
+                    # ── DPS Overlay push ──
+                    if self._dps_tracker and self._dps_overlay and self._dps_visible:
+                        try:
+                            if self._dps_tracker.is_dirty():
+                                _dps_snap = self._dps_tracker.get_snapshot()
+                                self._dps_overlay.update(_dps_snap)
+                            # DPS fade-out on idle
+                            _dps_idle = self._dps_tracker.idle_seconds
+                            _dps_fade_timeout = float(self._get_setting('dps_fade_timeout_s', 8.0) or 8.0)
+                            if _dps_fade_timeout > 0 and _dps_idle >= _dps_fade_timeout and not self._dps_faded:
+                                self._dps_overlay.fade_out()
+                                self._dps_faded = True
+                            elif self._dps_faded and _dps_idle < _dps_fade_timeout:
+                                self._dps_overlay.fade_in()
+                                self._dps_faded = False
+                        except Exception:
+                            pass
+
+                    # ── Boss HP Overlay push ──
+                    if self._boss_hp_overlay:
+                        try:
+                            _bb_raid_active = getattr(gs, 'boss_raid_active', False)
+                            _bb_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
+                            _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
+                            # Determine visibility
+                            if _bb_mode == 'off':
+                                _bb_show = False
+                            elif _bb_mode == 'always':
+                                _bb_show = (_bb_src != 'none') or _bb_raid_active
+                            else:
+                                _bb_show = _bb_raid_active
+                            _bb_data = {
+                                'active': _bb_show,
+                                'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
+                                'hp_source': _bb_src,
+                                'current_hp': getattr(gs, 'boss_current_hp', 0),
+                                'total_hp': getattr(gs, 'boss_total_hp', 0),
+                                'shield_active': getattr(gs, 'boss_shield_active', False),
+                                'shield_pct': round(getattr(gs, 'boss_shield_pct', 0.0), 3),
+                                'breaking_stage': getattr(gs, 'boss_breaking_stage', 0),
+                                'extinction_pct': round(getattr(gs, 'boss_extinction_pct', 0.0), 3),
+                                'in_overdrive': getattr(gs, 'boss_in_overdrive', False),
+                                'invincible': getattr(gs, 'boss_invincible', False),
+                                'boss_name': '',
+                            }
+                            self._boss_hp_overlay.update(_bb_data)
+                        except Exception:
+                            pass
+
                     # ── 同步玩家信息到显示变量 ──
-                    if gs.player_name and gs.player_name != getattr(self, '_last_gs_name', ''):
+                    if gs.player_name and gs.player_name != self._last_gs_name:
                         self._last_gs_name = gs.player_name
                         disp = gs.player_name
                         if len(disp) > 10:
@@ -1950,7 +2193,7 @@ class SAOPlayerGUI:
                         self._hp_display_name = disp
                         self._username = gs.player_name
                     # ── 首次获取完整角色数据时自动保存 ──
-                    if not getattr(self, '_profile_auto_saved', False) and gs.player_name:
+                    if not self._profile_auto_saved and gs.player_name:
                         self._profile_auto_saved = True
                         try:
                             from character_profile import save_profile
@@ -1969,7 +2212,7 @@ class SAOPlayerGUI:
                 print(f'[SAO-UI] recognition loop error: {e}')
         if not self._destroyed:
             try:
-                self.root.after(500, self._recognition_loop)
+                self.root.after(200, self._recognition_loop)
             except Exception:
                 pass
 
@@ -2176,7 +2419,7 @@ class SAOPlayerGUI:
         return panel
 
     def _build_menu_children(self):
-        """动态构建子菜单 (支持状态反映) — SAO Auto"""
+        """动态构建子菜单 (支持状态反映) — SAO Auto (5 categories)"""
         # 读取快捷键配置
         hk = self.settings.get('hotkeys', DEFAULT_HOTKEYS)
         def _k(key_id):
@@ -2186,16 +2429,49 @@ class SAOPlayerGUI:
         recog_label = '识别: ON' if getattr(self, '_recognition_active', False) else '识别: OFF'
         topmost_label = '置顶: ON' if self._float.attributes('-topmost') else '置顶: OFF'
 
+        # AutoKey 状态
+        ak_config = self._load_auto_key_config() if self._cfg_settings_ref else {}
+        ak_on = bool(ak_config.get('enabled', False))
+        ak_label = f'AutoKey: {"ON" if ak_on else "OFF"}' + _k('toggle_auto_script')
+
+        # BossRaid 状态
+        br_config = self._load_boss_raid_config() if self._cfg_settings_ref else {}
+        br_on = bool(br_config.get('enabled', False))
+        br_label = f'BossRaid: {"ON" if br_on else "OFF"}' + _k('boss_raid_start')
+
+        # Sound / Display 状态
+        _snd_on = bool(self._get_setting('sound_enabled', True))
+        _dps_on = bool(self._get_setting('dps_enabled', True))
+        _burst_on = bool(self._get_setting('burst_enabled', True))
+        _bbm = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
+        _bbm_labels = {'always': '常显', 'boss_raid': 'Boss战', 'off': '关闭'}
+        _bbm_disp = _bbm_labels.get(_bbm, _bbm)
+
         return {
             '控制': [
                 {'icon': '⚙', 'label': recog_label + _k('toggle_recognition'), 'command': self._toggle_recognition_menu},
                 {'icon': '⬆', 'label': topmost_label + _k('toggle_topmost'), 'command': self._toggle_topmost},
                 {'icon': '✓', 'label': '保存设置', 'command': lambda: self.settings.save()},
             ],
+            '自动': [
+                {'icon': '⚡', 'label': ak_label, 'command': self._toggle_auto_script},
+                {'icon': '◆', 'label': 'AutoKey 配置', 'command': self._toggle_autokey_panel},
+            ],
+            'Boss': [
+                {'icon': '⚔', 'label': br_label, 'command': self._toggle_boss_raid},
+                {'icon': '▸', 'label': '下一阶段' + _k('boss_raid_next_phase'), 'command': self._boss_raid_next_phase},
+                {'icon': '◆', 'label': 'BossRaid 配置', 'command': self._toggle_bossraid_panel},
+            ],
             '面板': [
                 {'icon': '◉', 'label': '状态面板', 'command': self._toggle_status_panel},
-                {'icon': '⚙', 'label': '控制面板', 'command': self._toggle_control_panel},
                 {'icon': '◈', 'label': '一键隐藏面板' + (' ✓' if self._panels_hidden else ''), 'command': self._toggle_hide_all_panels},
+                {'icon': '─', 'label': '──────────'},  # separator
+                {'icon': '♪', 'label': f'音效: {"ON" if _snd_on else "OFF"}', 'command': self._toggle_sound_enabled},
+                {'icon': '♪', 'label': '音量+', 'command': lambda: self._adj_sound_volume(10)},
+                {'icon': '♪', 'label': '音量-', 'command': lambda: self._adj_sound_volume(-10)},
+                {'icon': '◆', 'label': f'DPS面板: {"ON" if _dps_on else "OFF"}', 'command': self._toggle_dps_enabled},
+                {'icon': '◆', 'label': f'爆发提示: {"ON" if _burst_on else "OFF"}', 'command': self._toggle_burst_enabled},
+                {'icon': '◇', 'label': f'Boss血条: {_bbm_disp}', 'command': self._cycle_boss_bar_mode},
             ],
             '关于': [
                 {'icon': '◇', 'label': '关于本程序', 'command': self._show_about},
@@ -2205,10 +2481,42 @@ class SAOPlayerGUI:
             ],
         }
 
+    def _toggle_autokey_panel(self):
+        """打开/关闭 AutoKey 配置面板 (tkinter)."""
+        if not self._autokey_panel:
+            self._autokey_panel = AutoKeyPanel(
+                master=self.root,
+                load_fn=self._load_auto_key_config,
+                save_fn=self._save_auto_key_config,
+                engine_ref=lambda: self._auto_key_engine,
+                on_toggle=self._toggle_auto_script,
+                author_fn=getattr(self, '_auto_key_author_snapshot', None),
+            )
+        self._autokey_panel.toggle()
+
+    def _toggle_bossraid_panel(self):
+        """打开/关闭 BossRaid 配置面板 (tkinter)."""
+        if not self._bossraid_panel:
+            self._bossraid_panel = BossRaidPanel(
+                master=self.root,
+                load_fn=self._load_boss_raid_config,
+                save_fn=self._save_boss_raid_config,
+                engine_ref=lambda: self._boss_raid_engine,
+                on_toggle=self._toggle_boss_raid,
+                on_start=self._toggle_boss_raid,
+                on_next=self._boss_raid_next_phase,
+                on_reset=lambda: (
+                    self._boss_raid_engine.reset() if self._boss_raid_engine else None
+                ),
+            )
+        self._bossraid_panel.toggle()
+
     def _setup_sao_menu(self):
-        """构建 SAO PopUpMenu 菜单 = 主界面"""
+        """构建 SAO PopUpMenu 菜单 = 主界面 (5 categories)"""
         self._menu_icons = [
             {'name': '控制', 'icon': '⚙', 'can_active': True},
+            {'name': '自动', 'icon': '⚡', 'can_active': True},
+            {'name': 'Boss', 'icon': '⚔', 'can_active': True},
             {'name': '面板', 'icon': '◆', 'can_active': True},
             {'name': '关于', 'icon': 'ℹ', 'can_active': True},
         ]
@@ -2366,8 +2674,7 @@ class SAOPlayerGUI:
         self._player_panel = None
         self._maybe_stop_fisheye()
         if not self._destroyed:
-            self._restore_focus()
-            # 呼吸动画已禁用 (固定位置)
+            pass  # 呼吸动画已禁用 (固定位置)
 
     def _refresh_menu_if_open(self):
         """如果菜单打开, 刷新子菜单和面板"""
@@ -2376,7 +2683,6 @@ class SAOPlayerGUI:
             for name, items in children.items():
                 self._sao_menu.refresh_child_menu(name, items)
         self._update_float_status()
-        self._update_control_panel()
 
     # ══════════════════════════════════════════════
     #  浮动面板: 钢琴 / 可视化
@@ -2385,14 +2691,14 @@ class SAOPlayerGUI:
         """钢琴面板已禁用 (SAO Auto)"""
         pass
     def _toggle_status_panel(self):
-        """浮动状态面板 — 显示延音踏板状态 + 模式"""
+        """浮动状态面板 — 显示识别状态 + 引擎信息"""
         if self._status_panel and self._status_panel.winfo_exists():
             self._fade_panel_out(self._status_panel, '_status_panel', 'show_status')
             return
 
         try: play_sound('panel')
         except: pass
-        sw, sh = 220, 148
+        sw, sh = 220, 130
         saved_sx = self.settings.get('status_x', None)
         saved_sy = self.settings.get('status_y', None)
         if saved_sx is not None:
@@ -2422,33 +2728,20 @@ class SAOPlayerGUI:
         body_pad = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         body_pad.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
 
-        # 模式行
-        self._status_mode_lbl = _sao_row(body_pad, '模式', self._get_mode_text(),
-                                          value_fg=_SAO_PANEL_GOLD,
-                                          value_font=get_cjk_font(9, True))
+        # 识别状态行
+        recog_text = 'ON' if getattr(self, '_recognition_active', False) else 'OFF'
+        recog_fg = '#3ad86c' if recog_text == 'ON' else '#556677'
+        self._status_recog_lbl = _sao_row(body_pad, '识别', recog_text,
+                                           value_fg=recog_fg,
+                                           value_font=get_cjk_font(9, True))
 
-        # 键位模式行
-        _sm_labels = {'normal': '普通模式', 'shift': 'SHIFT 高音',
-                      'ctrl': 'CTRL 低音', 'lt': 'LT 极低', 'gt': 'GT 极高'}
-        _sm_text = _sm_labels.get(self._shift_mode, self._shift_mode)
-        self._status_shift_lbl = _sao_row(body_pad, '键位切换', _sm_text,
-                                           value_fg='#2196f3')
-
-        # 分隔线
-        tk.Frame(body_pad, bg=_SAO_PANEL_SEP, height=1).pack(fill=tk.X, pady=3)
-
-        # 延音行
-        sus_row = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
-        sus_row.pack(fill=tk.X, pady=2)
-        tk.Label(sus_row, text='延音踏板', bg=_SAO_PANEL_BODY_BG,
-                 fg=_SAO_PANEL_LABEL_FG, font=get_sao_font(8)).pack(side=tk.LEFT)
-        self._status_sus_dot = tk.Canvas(sus_row, width=12, height=12,
-                                          bg=_SAO_PANEL_BODY_BG, highlightthickness=0)
-        self._status_sus_dot.pack(side=tk.RIGHT, padx=(4, 0))
-        self._status_sus_lbl = tk.Label(sus_row, text='OFF',
-                                         bg=_SAO_PANEL_BODY_BG, fg='#556677',
-                                         font=get_sao_font(8, True))
-        self._status_sus_lbl.pack(side=tk.RIGHT)
+        # 数据源行
+        src_text = 'Packet'
+        if getattr(self, '_cfg_settings_ref', None):
+            src = self._cfg_settings_ref.get('data_source', 'packet')
+            src_text = 'Packet' if src == 'packet' else 'OCR'
+        self._status_source_lbl = _sao_row(body_pad, '数据源', src_text,
+                                            value_fg=_SAO_PANEL_GOLD)
 
         # 底部 HUD 装饰
         hud_cv = _sao_panel_hud_canvas(body)
@@ -2474,255 +2767,22 @@ class SAOPlayerGUI:
         self.settings.set('show_status', True)
         self.settings.save()
 
-    def _get_mode_text(self):
-        mode = self.settings.get('mode_system', 'classic')
-        return '经典 60 键' if mode == 'classic' else '扩展 88 键'
-
     def _update_status_panel(self):
-        """刷新状态面板内容 (sustain / speed / bpm)"""
+        """刷新状态面板内容"""
         if not (self._status_panel and self._status_panel.winfo_exists()):
             return
-        # 延音
-        if self._sustain_active:
-            self._status_sus_lbl.configure(text='ON', fg='#3ad86c')
-            self._status_sus_dot.delete('all')
-            self._status_sus_dot.create_oval(1, 1, 11, 11, fill='#3ad86c', outline='')
-        else:
-            self._status_sus_lbl.configure(text='OFF', fg='#556677')
-            self._status_sus_dot.delete('all')
-            self._status_sus_dot.create_oval(1, 1, 11, 11, fill='#2a3545', outline='#3a4a5a')
-        # 模式
-        if hasattr(self, '_status_mode_lbl'):
-            self._status_mode_lbl.configure(text=self._get_mode_text())
-        # 键位切换
-        if hasattr(self, '_status_shift_lbl'):
-            _sm_labels = {'normal': '普通模式', 'shift': 'SHIFT 高音',
-                          'ctrl': 'CTRL 低音', 'lt': 'LT 极低', 'gt': 'GT 极高'}
-            _sm_text = _sm_labels.get(self._shift_mode, self._shift_mode)
-            _sm_color = '#2196f3' if self._shift_mode == 'normal' else ('#1565c0' if self._shift_mode == 'shift' else '#e65100')
-            self._status_shift_lbl.configure(text=_sm_text, fg=_sm_color)
+        # 识别状态
+        if hasattr(self, '_status_recog_lbl'):
+            recog_text = 'ON' if getattr(self, '_recognition_active', False) else 'OFF'
+            recog_fg = '#3ad86c' if recog_text == 'ON' else '#556677'
+            self._status_recog_lbl.configure(text=recog_text, fg=recog_fg)
 
     def _toggle_viz_panel(self):
         """可视化面板已禁用 (SAO Auto)"""
         pass
     def _toggle_control_panel(self):
-        """浮动控制面板 — 音部/速度/移调/选项全览"""
-        if self._control_panel and self._control_panel.winfo_exists():
-            self._fade_panel_out(self._control_panel, '_control_panel', 'show_control')
-            return
-
-        try: play_sound('panel')
-        except: pass
-        PW, PH = 295, 305
-        _dfx = self._float.winfo_x() - PW - 10
-        _dfy = self._float.winfo_y()
-        fx = int(self.settings.get('ctrl_x', _dfx))
-        fy = int(self.settings.get('ctrl_y', _dfy))
-        sw2, sh2 = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        fx = max(0, min(fx, sw2 - PW))
-        fy = max(0, min(fy, sh2 - PH))
-
-        self._control_panel = tk.Toplevel(self.root)
-        self._control_panel.overrideredirect(True)
-        self._control_panel.attributes('-topmost', True)
-        self._control_panel.attributes('-alpha', 0.0)
-        self._control_panel.geometry(f'{PW}x{PH}+{fx}+{fy}')
-        self._control_panel.configure(bg=_SAO_PANEL_HEADER_BG)
-        _apply_panel_style(self._control_panel)
-
-        border = tk.Frame(self._control_panel, bg=_SAO_PANEL_BORDER, padx=1, pady=1)
-        border.pack(fill=tk.BOTH, expand=True)
-        inner = tk.Frame(border, bg=_SAO_PANEL_BODY_BG)
-        inner.pack(fill=tk.BOTH, expand=True)
-
-        # SAO 标题栏
-        hdr, close_lbl = _sao_panel_header(inner, '⚙', 'CONTROL', self._toggle_control_panel)
-        _cd = {'x': 0, 'y': 0}
-        def cdstart(e): _cd['x'], _cd['y'] = e.x_root, e.y_root
-        def cdmove(e):
-            dx, dy = e.x_root - _cd['x'], e.y_root - _cd['y']
-            nx, ny = self._control_panel.winfo_x()+dx, self._control_panel.winfo_y()+dy
-            self._control_panel.geometry(f'+{nx}+{ny}')
-            _cd['x'], _cd['y'] = e.x_root, e.y_root
-            self.settings.set('ctrl_x', nx); self.settings.set('ctrl_y', ny)
-        _bind_panel_drag(hdr, close_lbl, cdstart, cdmove)
-
-        body = _sao_panel_body(inner)
-        body_pad = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        body_pad.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
-
-        # ── pill 切换按钮辅助 (使用 SAO 风格) ──
-        pill = _sao_pill
-
-        # ── 键位模式 ──
-        row_mode = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
-        row_mode.pack(fill=tk.X, pady=(2, 3))
-        tk.Label(row_mode, text='键位', bg=_SAO_PANEL_BODY_BG,
-                 fg=_SAO_PANEL_LABEL_FG,
-                 font=get_sao_font(8), width=5, anchor='w').pack(side=tk.LEFT)
-        cur_mode = self.settings.get('mode_system', 'classic')
-        p60 = pill(row_mode, '60键 CTRL/SHIFT', cur_mode == 'classic',  lambda: self._set_mode('classic'))
-        p60.pack(side=tk.LEFT, padx=(0, 4))
-        p88 = pill(row_mode, '88键 </>',        cur_mode == 'extended', lambda: self._set_mode('extended'))
-        p88.pack(side=tk.LEFT)
-        self._control_panel._mode_pills = (p60, p88)
-
-        tk.Frame(body_pad, bg=_SAO_PANEL_SEP, height=1).pack(fill=tk.X, pady=4)
-
-        # ── 音部控制 ──
-        row_part = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
-        row_part.pack(fill=tk.X, pady=2)
-        tk.Label(row_part, text='音部', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                 font=get_sao_font(8), width=5, anchor='w').pack(side=tk.LEFT)
-        pm = pill(row_part, '✓ 主旋律' if self._melody_on else '✗ 主旋律', self._melody_on, self._toggle_melody)
-        pm.pack(side=tk.LEFT, padx=(0, 4))
-        pb = pill(row_part, '✓ 低音部' if self._bass_on else '✗ 低音部', self._bass_on, self._toggle_bass)
-        pb.pack(side=tk.LEFT)
-        self._control_panel._part_pills = (pm, pb)
-
-        # ── 伴奏密度 ──
-        row_dens = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
-        row_dens.pack(fill=tk.X, pady=2)
-        tk.Label(row_dens, text='伴奏密度', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                 font=get_sao_font(8), anchor='w').pack(side=tk.LEFT)
-        dens_var = tk.DoubleVar(value=self._bass_density)
-        dens_scale = tk.Scale(row_dens, from_=0.2, to=1.0, resolution=0.1,
-                              orient=tk.HORIZONTAL, variable=dens_var,
-                              bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                              troughcolor='#1a2a3a',
-                              highlightthickness=0, bd=0, length=100, sliderlength=14,
-                              width=10, showvalue=False,
-                              command=lambda v: self._set_bass_density_direct(float(v)))
-        dens_scale.pack(side=tk.LEFT, padx=(6, 2))
-        dens_lbl = tk.Label(row_dens, text=f'{self._bass_density:.0%}', bg=_SAO_PANEL_BODY_BG,
-                             fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(8, True), width=4)
-        dens_lbl.pack(side=tk.LEFT)
-        self._control_panel._dens_var = dens_var
-        self._control_panel._dens_lbl = dens_lbl
-
-        tk.Frame(body_pad, bg=_SAO_PANEL_SEP, height=1).pack(fill=tk.X, pady=4)
-
-        # ── 速度 ──
-        row_spd = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
-        row_spd.pack(fill=tk.X, pady=2)
-        tk.Label(row_spd, text='速度', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                 font=get_sao_font(8), width=5, anchor='w').pack(side=tk.LEFT)
-        btn_sm = tk.Label(row_spd, text='−', bg='#1a2030', fg=_SAO_PANEL_LABEL_FG,
-                          font=get_sao_font(10, True), padx=7, pady=1, cursor='hand2')
-        btn_sm.pack(side=tk.LEFT)
-        btn_sm.bind('<Button-1>', lambda e: self._speed_down())
-        spd_lbl = tk.Label(row_spd, text=f'{self._speed:.2f}×', bg=_SAO_PANEL_BODY_BG,
-                            fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(9, True), width=6)
-        spd_lbl.pack(side=tk.LEFT, padx=4)
-        btn_sp = tk.Label(row_spd, text='+', bg='#1a2030', fg=_SAO_PANEL_LABEL_FG,
-                          font=get_sao_font(10, True), padx=7, pady=1, cursor='hand2')
-        btn_sp.pack(side=tk.LEFT)
-        btn_sp.bind('<Button-1>', lambda e: self._speed_up())
-        self._control_panel._spd_lbl = spd_lbl
-
-        # ── 移调 ──
-        row_tr = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
-        row_tr.pack(fill=tk.X, pady=2)
-        tk.Label(row_tr, text='移调', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
-                 font=get_sao_font(8), width=5, anchor='w').pack(side=tk.LEFT)
-        btn_tm = tk.Label(row_tr, text='−', bg='#1a2030', fg=_SAO_PANEL_LABEL_FG,
-                          font=get_sao_font(10, True), padx=7, pady=1, cursor='hand2')
-        btn_tm.pack(side=tk.LEFT)
-        btn_tm.bind('<Button-1>', lambda e: self._transpose_down())
-        tr_lbl = tk.Label(row_tr, text=f'{self._transpose:+d} 半音', bg=_SAO_PANEL_BODY_BG,
-                           fg=_SAO_PANEL_VALUE_FG, font=get_sao_font(9, True), width=7)
-        tr_lbl.pack(side=tk.LEFT, padx=4)
-        btn_tp = tk.Label(row_tr, text='+', bg='#1a2030', fg=_SAO_PANEL_LABEL_FG,
-                          font=get_sao_font(10, True), padx=7, pady=1, cursor='hand2')
-        btn_tp.pack(side=tk.LEFT)
-        btn_tp.bind('<Button-1>', lambda e: self._transpose_up())
-        btn_rst = tk.Label(row_tr, text='重置', bg='#1a2030', fg=_SAO_PANEL_LABEL_FG,
-                           font=get_sao_font(8), padx=6, pady=2, cursor='hand2')
-        btn_rst.pack(side=tk.LEFT, padx=(6, 0))
-        btn_rst.bind('<Button-1>', lambda e: self._auto_transpose())
-        self._control_panel._tr_lbl = tr_lbl
-
-        tk.Frame(body_pad, bg=_SAO_PANEL_SEP, height=1).pack(fill=tk.X, pady=4)
-
-        # ── 选项行 1 ──
-        row_opt1 = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
-        row_opt1.pack(fill=tk.X, pady=2)
-        dc_lbl = pill(row_opt1, 'C调直转 ✓' if self._direct_c else 'C调直转',
-                      self._direct_c, self._toggle_direct_c)
-        dc_lbl.pack(side=tk.LEFT, padx=(0, 6))
-        pf_lbl = pill(row_opt1, '熟练度 ✓' if self._proficiency_enabled else '熟练度',
-                      self._proficiency_enabled, self._toggle_proficiency)
-        pf_lbl.pack(side=tk.LEFT)
-        self._control_panel._dc_lbl = dc_lbl
-        self._control_panel._pf_lbl = pf_lbl
-
-        # ── 选项行 2 ──
-        row_opt2 = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
-        row_opt2.pack(fill=tk.X, pady=2)
-        gl_lbl = pill(row_opt2, '结尾滑奏 ✓' if self._glissando else '结尾滑奏',
-                      self._glissando, self._toggle_glissando)
-        gl_lbl.pack(side=tk.LEFT, padx=(0, 6))
-        # (MIDI通道 已移除)
-        self._control_panel._gl_lbl = gl_lbl
-
-        self._fade_panel_in(self._control_panel, target=0.95)
-        self._attach_sao_panel_fx(self._control_panel, hdr, inner)
-        self._attach_panel_float(self._control_panel, phase=3.0)
-        self.settings.set('show_control', True)
-        self.settings.save()
-
-    def _update_control_panel(self):
-        """刷新控制面板所有动态显示"""
-        p = self._control_panel
-        if p is None or not p.winfo_exists():
-            return
-        if hasattr(p, '_spd_lbl'):
-            p._spd_lbl.configure(text=f'{self._speed:.2f}×')
-        if hasattr(p, '_tr_lbl'):
-            p._tr_lbl.configure(text=f'{self._transpose:+d} 半音')
-        if hasattr(p, '_dens_lbl'):
-            p._dens_lbl.configure(text=f'{self._bass_density:.0%}')
-        if hasattr(p, '_dens_var'):
-            p._dens_var.set(self._bass_density)
-        if hasattr(p, '_part_pills'):
-            pm, pb = p._part_pills
-            pm.configure(bg='#f3af12' if self._melody_on else '#1a2030',
-                         fg='#ffffff' if self._melody_on else '#8a9aaa',
-                         text='✓ 主旋律' if self._melody_on else '✗ 主旋律')
-            pb.configure(bg='#f3af12' if self._bass_on else '#1a2030',
-                         fg='#ffffff' if self._bass_on else '#8a9aaa',
-                         text='✓ 低音部' if self._bass_on else '✗ 低音部')
-        if hasattr(p, '_mode_pills'):
-            p60, p88 = p._mode_pills
-            cur = self.settings.get('mode_system', 'classic')
-            p60.configure(bg='#f3af12' if cur == 'classic' else '#1a2030',
-                          fg='#ffffff' if cur == 'classic' else '#8a9aaa')
-            p88.configure(bg='#f3af12' if cur == 'extended' else '#1a2030',
-                          fg='#ffffff' if cur == 'extended' else '#8a9aaa')
-        if hasattr(p, '_dc_lbl'):
-            p._dc_lbl.configure(
-                text='C调直转 ✓' if self._direct_c else 'C调直转',
-                bg='#f3af12' if self._direct_c else '#1a2030',
-                fg='#ffffff' if self._direct_c else '#8a9aaa')
-        if hasattr(p, '_pf_lbl'):
-            p._pf_lbl.configure(
-                text='熟练度 ✓' if self._proficiency_enabled else '熟练度',
-                bg='#f3af12' if self._proficiency_enabled else '#1a2030',
-                fg='#ffffff' if self._proficiency_enabled else '#8a9aaa')
-        if hasattr(p, '_gl_lbl'):
-            p._gl_lbl.configure(
-                text='结尾滑奏 ✓' if self._glissando else '结尾滑奏',
-                bg='#f3af12' if self._glissando else '#1a2030',
-                fg='#ffffff' if self._glissando else '#8a9aaa')
-
-    def _set_bass_density_direct(self, val: float):
-        """直接设置伴奏密度 (由控制面板滑块调用)"""
-        self._bass_density = round(val, 1)
-        self.player.set_bass_density(self._bass_density)
-        if self._control_panel and self._control_panel.winfo_exists():
-            if hasattr(self._control_panel, '_dens_lbl'):
-                self._control_panel._dens_lbl.configure(text=f'{self._bass_density:.0%}')
-        self._refresh_menu_if_open()
+        """控制面板已禁用 (SAO Auto — MIDI已移除)"""
+        pass
 
     def _toggle_hide_all_panels(self):
         """一键隐藏/显示所有浮动面板 (不销毁, 只是 withdraw/deiconify)"""
@@ -3487,153 +3547,153 @@ class SAOPlayerGUI:
             pass
 
     # ══════════════════════════════════════════════
-    #  文件操作
-    # ══════════════════════════════════════════════
-    def _open_file(self, *a, **kw):
-        """文件选择已禁用 (SAO Auto)"""
-        pass
-    def _on_file_selected(self, *a, **kw):
-        """文件选择已禁用 (SAO Auto)"""
-        pass
-    def _toggle_play(self):
-        """播放控制已禁用 (SAO Auto)"""
-        pass
-
-    def _update_float_status(self):
-        """状态更新 — 不再依赖播放"""
-        pass
-    def _stop(self):
-        """停止已禁用 (SAO Auto)"""
-        pass
-    def _speed_up(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _speed_down(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _transpose_up(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _transpose_down(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _auto_transpose(self):
-        """调性分析已禁用 (SAO Auto)"""
-        pass
-
-    def _toggle_direct_c(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _toggle_melody(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _toggle_bass(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _toggle_glissando(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _cycle_bass_density(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _toggle_proficiency(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _set_mode(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _show_channel_settings(self):
-        if self._sao_menu.visible:
-            self._sao_menu.close()
-        self.root.after(600, self._do_show_channel_settings)
-
-    def _do_show_channel_settings(self):
-        """MIDI 控制器已禁用 (SAO Auto)"""
-        pass
-
-    def _toggle_folder_loop(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _do_open_folder_picker(self):
-        """打开文件夹选择器 (SAOFilePicker dir 模式)"""
-        last_folder = self.settings.get('last_folder', '')
-        if self._current_file:
-            init_dir = os.path.dirname(self._current_file)
-        elif last_folder and os.path.isdir(last_folder):
-            init_dir = last_folder
-        else:
-            init_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Midi')
-        if not os.path.isdir(init_dir):
-            init_dir = os.path.dirname(os.path.abspath(__file__))
-
-        self._picker = SAOFilePicker(
-            self._float,
-            title='选择循环播放的文件夹',
-            initial_dir=init_dir,
-            mode='dir',
-            callback=self._on_folder_selected,
-        )
-
-    def _on_folder_selected(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _play_next_folder_song(self, *a, **kw):
-        """已禁用 (SAO Auto)"""
-        pass
-    def _bind_callbacks(self):
-        """回调绑定 — MIDI 回调已移除 (SAO Auto)"""
-        pass
-    def _update_progress(self, current, total):
-        # 更新悬浮进度条
-        self._time_current = current
-        self._time_total = total
-        if total > 0:
-            self._float_progress_pct = current / total
-        else:
-            self._float_progress_pct = 0.0
-        try:
-            self._update_float_display()
-            # HP 数值已通过 _render_hp_dynamic 统一渲染
-        except Exception:
-            pass
-        # 更新 SAO 菜单左面板
-        if self._player_panel:
-            try:
-                self._player_panel.update_progress(current, total)
-            except:
-                pass
-
-    def _on_playback_end(self):
-        """播放结束 — 已禁用 (SAO Auto)"""
-        pass
-    def _restore_focus(self):
-        try:
-            if hasattr(self, 'player') and self.player:
-                self.player.simulator.release_all()
-        except:
-            pass
-
-    # ══════════════════════════════════════════════
     #  快捷键
     # ══════════════════════════════════════════════
     def _setup_hotkeys(self):
         self._hotkey_mgr = SAOHotkeyManager(self.settings, {
             'toggle_recognition': lambda: self.root.after(0, self._toggle_recognition_menu),
             'toggle_topmost': lambda: self.root.after(0, self._toggle_topmost),
+            'toggle_auto_script': lambda: self.root.after(0, self._toggle_auto_script),
             'hide_panels': lambda: self.root.after(0, self._toggle_hide_all_panels),
+            'boss_raid_start': lambda: self.root.after(0, self._toggle_boss_raid),
+            'boss_raid_next_phase': lambda: self.root.after(0, self._boss_raid_next_phase),
         })
 
     def _toggle_recognition_menu(self):
         """切换识别开关 — SAO Entity UI."""
         with self._recog_lock:
             if not self._recognition_active:
-                if not self._recognition_engine:
+                if not self._recognition_engine and not self._recognition_engines:
                     self._start_recognition()
                 else:
                     self._recognition_active = True
             else:
                 self._recognition_active = False
         self._refresh_menu_if_open()
+
+    def _toggle_auto_script(self, force_enabled=None):
+        """切换 AutoKey 脚本开关."""
+        config = self._load_auto_key_config()
+        if force_enabled is not None:
+            config['enabled'] = bool(force_enabled)
+        else:
+            config['enabled'] = not bool(config.get('enabled', False))
+        self._save_auto_key_config(config)
+        state_text = 'ON' if config['enabled'] else 'OFF'
+        print(f'[SAO Entity] AUTO KEY: {state_text}')
+        self._refresh_menu_if_open()
+
+    def _toggle_boss_raid(self, force_enabled=None):
+        """切换 Boss Raid 引擎开关."""
+        if not self._boss_raid_engine:
+            return
+        config = self._load_boss_raid_config()
+        if force_enabled is not None:
+            config['enabled'] = bool(force_enabled)
+        else:
+            config['enabled'] = not bool(config.get('enabled', False))
+        self._save_boss_raid_config(config)
+        state_text = 'ON' if config['enabled'] else 'OFF'
+        print(f'[SAO Entity] BOSS RAID: {state_text}')
+        self._refresh_menu_if_open()
+
+    def _boss_raid_next_phase(self):
+        """Boss Raid 下一阶段."""
+        if not self._boss_raid_engine:
+            return
+        self._boss_raid_engine.next_phase()
+
+    # ── AutoKey config helpers ──
+    def _auto_key_settings_ref(self):
+        return self._cfg_settings_ref or self.settings
+
+    def _auto_key_author_snapshot(self):
+        gs = getattr(self, '_game_state', None)
+        if gs is not None:
+            return snapshot_author_from_state(gs)
+        return {'player_uid': '', 'player_name': self._username,
+                'profession_id': 0, 'profession_name': self._profession}
+
+    def _load_auto_key_config(self):
+        ref = self._auto_key_settings_ref()
+        return load_auto_key_config(ref, state_snapshot=self._auto_key_author_snapshot())
+
+    def _save_auto_key_config(self, config):
+        ref = self._auto_key_settings_ref()
+        saved = save_auto_key_config(ref, config)
+        if self._auto_key_engine:
+            self._auto_key_engine.invalidate()
+        return saved
+
+    # ── BossRaid config helpers ──
+    def _boss_raid_settings_ref(self):
+        return self._cfg_settings_ref or self.settings
+
+    def _boss_raid_author_snapshot(self):
+        gs = getattr(self, '_game_state', None)
+        if gs is not None:
+            return snapshot_author_from_state(gs)
+        return {'player_uid': '', 'player_name': self._username,
+                'profession_id': 0, 'profession_name': self._profession}
+
+    def _load_boss_raid_config(self):
+        ref = self._boss_raid_settings_ref()
+        return load_boss_raid_config(ref)
+
+    def _save_boss_raid_config(self, config):
+        ref = self._boss_raid_settings_ref()
+        return save_boss_raid_config(ref, config)
+
+    # ── Settings helper ──
+    def _set_setting(self, key: str, value):
+        """Persist a setting to cfg_settings and save."""
+        if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
+            self._cfg_settings_ref.set(key, value)
+            try: self._cfg_settings_ref.save()
+            except Exception: pass
+
+    def _get_setting(self, key: str, default=None):
+        """Read a setting."""
+        if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
+            return self._cfg_settings_ref.get(key, default)
+        return default
+
+    # ── Sound / Display 开关 ──
+
+    def _toggle_sound_enabled(self):
+        from sao_sound import set_sound_enabled, get_sound_enabled
+        new = not get_sound_enabled()
+        set_sound_enabled(new)
+        self._set_setting('sound_enabled', new)
+
+    def _adj_sound_volume(self, delta: int):
+        from sao_sound import set_sound_volume, get_sound_volume
+        cur = get_sound_volume()
+        nv = max(0, min(100, cur + delta))
+        set_sound_volume(nv)
+        self._set_setting('sound_volume', nv)
+
+    def _toggle_dps_enabled(self):
+        cur = bool(self._get_setting('dps_enabled', True))
+        new = not cur
+        self._set_setting('dps_enabled', new)
+        self._dps_visible = new
+        if self._dps_overlay:
+            if new:
+                self._dps_overlay.show()
+            else:
+                self._dps_overlay.hide()
+
+    def _toggle_burst_enabled(self):
+        cur = bool(self._get_setting('burst_enabled', True))
+        self._set_setting('burst_enabled', not cur)
+
+    def _cycle_boss_bar_mode(self):
+        modes = ['boss_raid', 'always', 'off']
+        cur = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
+        idx = modes.index(cur) if cur in modes else 0
+        nxt = modes[(idx + 1) % len(modes)]
+        self._set_setting('boss_bar_mode', nxt)
 
     # ══════════════════════════════════════════════
     #  其他功能
@@ -3684,7 +3744,7 @@ class SAOPlayerGUI:
             self._sao_menu.close()
         self.root.after(600, lambda: SAODialog.showinfo(
             self._float, "关于",
-            "SAO Auto — 游戏辅助 UI\nv3.5.1\n\n"
+            f"SAO Auto — 游戏辅助 UI\n{APP_VERSION_LABEL}\n\n"
             "Alt+A 打开 SAO 菜单\n"
             "右键悬浮按钮查看更多选项"))
 
@@ -4600,14 +4660,13 @@ void main() {
                 self._sao_menu.close()
         except Exception:
             pass
-        self.player.stop()
         # 停止识别引擎
         self._recognition_active = False
-        if self._recognition_engine:
-            try:
-                self._recognition_engine.stop()
-            except Exception:
-                pass
+        self._stop_recognition_engines()
+        # 保存缓存
+        if self._state_mgr and self._cfg_settings_ref:
+            try: self._state_mgr.save_cache(self._cfg_settings_ref)
+            except Exception: pass
         # 销毁所有浮动面板
         for panel in [self._piano_panel, self._viz_panel, self._status_panel, self._control_panel]:
             try:
@@ -4615,6 +4674,24 @@ void main() {
                     panel.destroy()
             except Exception:
                 pass
+        # 销毁 ULW 覆盖层 + 配置面板
+        for ov in [self._dps_overlay, self._boss_hp_overlay, self._alert_overlay]:
+            try:
+                if ov:
+                    ov.destroy()
+            except Exception:
+                pass
+        for pnl in [self._autokey_panel, self._bossraid_panel]:
+            try:
+                if pnl:
+                    pnl.destroy()
+            except Exception:
+                pass
+        self._dps_overlay = None
+        self._boss_hp_overlay = None
+        self._alert_overlay = None
+        self._autokey_panel = None
+        self._bossraid_panel = None
         self._destroy_hp_alpha_strip_windows()
         try:
             if self._float and self._float.winfo_exists():

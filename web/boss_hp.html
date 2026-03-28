@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>SAO-BossHP</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+@font-face{font-family:'sao';src:url('fonts/SAOUI.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+@font-face{font-family:'saoLatin';src:url('fonts/SAOUI.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block;unicode-range:U+0000-00FF,U+0100-024F,U+1E00-1EFF,U+2000-206F}
+@font-face{font-family:'yuanJWD';src:url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+@font-face{font-family:'yuanJWDCJK';src:url('fonts/ZhuZiAYuanJWD.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block;unicode-range:U+2E80-2EFF,U+3000-303F,U+31C0-31EF,U+3400-4DBF,U+4E00-9FFF,U+F900-FAFF}
+:root{
+    --font-sao:'saoLatin','sao','Segoe UI',sans-serif;
+    --font-ui:'saoLatin','sao','yuanJWDCJK','yuanJWD','Segoe UI',sans-serif;
+    --cover-a:rgba(188,190,178,1);
+    --cover-b:rgba(172,174,162,1);
+    --cover-edge:rgba(160,162,150,0.52);
+    --line:rgb(218,215,215);
+    --text-main:rgb(67,68,58);
+    --text-muted:rgba(97,98,86,0.78);
+    --cyan:rgba(104,228,255,0.62);
+    --gold:rgba(212,156,23,0.74);
+    --gold-strong:rgb(222,166,32);
+    --red:rgb(239,104,78);
+    --shadow:rgba(20,24,10,0.26);
+}
+html,body{
+    width:100%;
+    height:100%;
+    overflow:hidden;
+    background:transparent;
+    user-select:none;
+    -webkit-user-select:none;
+}
+.stage{
+    position:fixed;
+    inset:0;
+    padding:6px 16px 6px 8px;
+    pointer-events:none;
+}
+.boss-root{
+    position:relative;
+    width:560px;
+    height:88px;
+    display:none;
+    opacity:0;
+    transform:translateY(-8px) scale(0.985);
+    will-change:opacity,transform;
+}
+.boss-root.visible{
+    display:block;
+    animation:boss-enter 320ms cubic-bezier(.22,1,.36,1) forwards;
+}
+.boss-root.exiting{
+    animation:boss-exit 260ms ease forwards;
+}
+@keyframes boss-enter{
+    from{opacity:0;transform:translateY(-10px) scale(0.98)}
+    to{opacity:1;transform:translateY(0) scale(1)}
+}
+@keyframes boss-exit{
+    from{opacity:1;transform:translateY(0) scale(1)}
+    to{opacity:0;transform:translateY(-10px) scale(0.98)}
+}
+.boss-cover{
+    position:absolute;
+    left:0;
+    top:0;
+    width:560px;
+    height:88px;
+    background:linear-gradient(175deg,var(--cover-a) 0%,rgba(180,182,170,1) 48%,var(--cover-b) 100%);
+    border:1px solid var(--cover-edge);
+    border-radius:10px;
+    overflow:hidden;
+    box-shadow:
+        2px 4px 18px var(--shadow),
+        inset 0 0 22px rgba(255,255,255,0.10),
+        inset 0 1px 0 rgba(255,255,255,0.22);
+}
+.boss-cover::before{
+    content:'';
+    position:absolute;
+    inset:0;
+    background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(255,255,255,0.04) 2px 3px);
+}
+.boss-cover::after{
+    content:'';
+    position:absolute;
+    top:2px;
+    left:2px;
+    width:16px;
+    height:16px;
+    border-top:1.5px solid var(--cyan);
+    border-left:1.5px solid var(--cyan);
+    border-radius:3px 0 0 0;
+}
+.cover-corner{
+    position:absolute;
+    right:2px;
+    bottom:2px;
+    width:16px;
+    height:16px;
+    border-right:1.5px solid rgba(212,156,23,0.54);
+    border-bottom:1.5px solid rgba(212,156,23,0.54);
+}
+.boss-box{
+    --bgColor:rgba(207,208,197,1);
+    --hover:rgba(220,222,212,1);
+    position:absolute;
+    left:16px;
+    top:12px;
+    width:492px;
+    height:45px;
+    display:flex;
+    font-family:var(--font-ui);
+    color:var(--text-main);
+    letter-spacing:1px;
+    filter:drop-shadow(2px 4px 3px rgba(50,50,0,0.22));
+}
+.xt_left,.xt_right,.number_xt{height:100%}
+.xt_left{
+    width:26px;
+    margin-right:3px;
+    background:var(--bgColor);
+    clip-path:polygon(0% 25%,50% 25%,50% 75%,0% 75%,0% 100%,100% 100%,100% 0%,0% 0%);
+}
+.xt_right{
+    flex:1;
+    display:flex;
+    align-items:center;
+    background:linear-gradient(to right,var(--bgColor) 50%,rgba(207,208,197,0));
+    clip-path:polygon(85px 22%,100% 22%,100% 0%,0% 0%,0 100%,228px 100%,234px 77%,100% 77%,100% 60%,233px 60%,228px 77%,85px 77%);
+}
+.xt_right>span{
+    min-width:80px;
+    max-width:85px;
+    padding-left:10px;
+    text-align:center;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.number_xt{
+    position:absolute;
+    top:82%;
+    left:58%;
+    width:210px;
+    height:19px;
+    display:flex;
+    overflow:hidden;
+    clip-path:polygon(14px 0,100% 0,100% 100%,0 100%,0 58%);
+}
+.number_xt>div{
+    background:var(--bgColor);
+    padding-right:5px;
+    text-align:right;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    box-shadow:-4px 3px 27px 3px rgba(0,0,0,0.08);
+}
+.number_xt div:nth-child(1){width:100%}
+.number_xt div:nth-child(2){display:none}
+.svg_border{
+    position:absolute;
+    left:108px;
+    top:9px;
+}
+.xt_border{
+    position:absolute;
+    left:108px;
+    top:9px;
+    width:342px;
+    height:25px;
+    clip-path:polygon(0 0,100% 0,calc(100% - 5px) 19px,145px 19px,141px 100%,0 100%);
+    overflow:hidden;
+    border-radius:0 6px 0 0;
+}
+.xt_border_left{
+    position:absolute;
+    left:0;
+    top:0;
+    width:1.5px;
+    height:100%;
+    background:var(--line);
+    z-index:4;
+}
+.xt_border_right{
+    position:absolute;
+    inset:0;
+}
+.tb_line{
+    width:100%;
+    height:1px;
+    background:var(--line);
+    position:relative;
+    z-index:4;
+}
+.boss-fill-wrap{
+    position:relative;
+    height:23px;
+    overflow:hidden;
+    background:rgba(162,165,148,0.18);
+    border-radius:0 5px 0 0;
+}
+.hp-trail,.xt_in,.shield-fill,.flash-overlay{
+    position:absolute;
+    left:0;
+    top:0;
+    height:23px;
+}
+.hp-trail{
+    width:100%;
+    background:rgba(255,255,255,0.26);
+    transition:width 820ms ease;
+    z-index:1;
+}
+.xt_in{
+    width:100%;
+    transition:width 320ms ease,background 260ms ease;
+    z-index:2;
+}
+.xt_in::after,.shield-fill::after{
+    content:'';
+    position:absolute;
+    top:0;
+    right:-11px;
+    width:18px;
+    height:100%;
+    background:inherit;
+    transform:skewX(-14deg);
+}
+.xt_in.is-empty::after,.shield-fill.is-empty::after{display:none}
+.xt_in.is-full,.shield-fill.is-full{width:calc(100% + 6px)!important}
+.xt_in_green{background:linear-gradient(to right,rgb(211,234,124),rgb(154,211,52))}
+.xt_in_yellow{background:linear-gradient(to right,rgb(235,238,112),rgb(244,250,73))}
+.xt_in_red{background:linear-gradient(to right,rgb(248,140,122),rgb(239,104,78))}
+.shield-fill{
+    width:0;
+    background:linear-gradient(to right,rgba(104,200,255,0.56),rgba(73,148,230,0.42));
+    transition:width 280ms ease,opacity 220ms ease;
+    opacity:0;
+    z-index:3;
+}
+.shield-fill.active{
+    opacity:1;
+    box-shadow:
+        0 0 10px rgba(118,222,255,0.26),
+        0 0 18px rgba(70,158,255,0.16);
+}
+.shield-fill.restoring{
+    animation:shield-restore-fill 900ms cubic-bezier(.16,.84,.24,1) forwards;
+}
+.shield-fill.active::before{
+    content:'';
+    position:absolute;
+    inset:0;
+    background:linear-gradient(110deg,rgba(255,255,255,0.0) 0%,rgba(255,255,255,0.42) 45%,rgba(255,255,255,0.0) 100%);
+    transform:translateX(-130%);
+    animation:shield-scan 2.4s linear infinite;
+}
+@keyframes shield-scan{
+    from{transform:translateX(-130%)}
+    to{transform:translateX(180%)}
+}
+@keyframes shield-restore-fill{
+    0%{filter:brightness(1.42) blur(0.9px);opacity:1}
+    28%{filter:brightness(1.16) blur(0.18px);opacity:1}
+    100%{filter:brightness(1) blur(0);opacity:1}
+}
+.flash-overlay{
+    inset:0;
+    width:100%;
+    pointer-events:none;
+    opacity:0;
+    z-index:5;
+}
+.flash-overlay.shield-break{animation:shield-break 820ms cubic-bezier(.16,.84,.24,1) forwards}
+.flash-overlay.shield-restore{animation:shield-restore 920ms cubic-bezier(.16,.84,.24,1) forwards}
+.flash-overlay.phase-break{animation:phase-break 840ms cubic-bezier(.16,.84,.24,1) forwards}
+.flash-overlay.break-burst{animation:break-burst 1080ms cubic-bezier(.16,.84,.24,1) forwards}
+.flash-overlay.break-restore{animation:break-restore 920ms cubic-bezier(.16,.84,.24,1) forwards}
+@keyframes shield-break{
+    0%{opacity:0;filter:brightness(1) blur(0);background:linear-gradient(90deg,rgba(138,232,255,0.00) 0%,rgba(138,232,255,0.00) 100%)}
+    12%{opacity:1;filter:brightness(1.45) blur(0);background:
+        linear-gradient(90deg,rgba(138,232,255,0.00) 0%,rgba(138,232,255,0.46) 16%,rgba(255,255,255,0.96) 50%,rgba(78,164,255,0.40) 84%,rgba(78,164,255,0.00) 100%),
+        radial-gradient(circle at 50% 50%,rgba(255,255,255,0.96) 0%,rgba(148,236,255,0.82) 20%,rgba(78,164,255,0.32) 56%,rgba(78,164,255,0.00) 100%)}
+    36%{opacity:0.88;filter:brightness(1.18) blur(1.1px)}
+    100%{opacity:0;filter:brightness(1) blur(5px)}
+}
+@keyframes shield-restore{
+    0%{opacity:0;filter:brightness(1.0) blur(3px)}
+    16%{opacity:1;filter:brightness(1.38) blur(0.2px);background:
+        linear-gradient(108deg,rgba(255,255,255,0.00) 0%,rgba(182,245,255,0.18) 20%,rgba(255,255,255,0.94) 48%,rgba(118,224,255,0.42) 70%,rgba(118,224,255,0.00) 100%),
+        radial-gradient(circle at 52% 50%,rgba(255,255,255,0.84) 0%,rgba(118,224,255,0.46) 28%,rgba(118,224,255,0.00) 68%)}
+    46%{opacity:0.72;filter:brightness(1.14) blur(1.0px)}
+    100%{opacity:0;filter:brightness(1) blur(4px)}
+}
+@keyframes phase-break{
+    0%{opacity:0;filter:brightness(1) blur(0)}
+    14%{opacity:1;filter:brightness(1.38) blur(0.1px);background:
+        linear-gradient(90deg,rgba(255,214,120,0.00) 0%,rgba(255,244,206,0.92) 50%,rgba(255,214,120,0.00) 100%),
+        radial-gradient(circle at 50% 50%,rgba(255,248,196,0.92) 0%,rgba(255,214,120,0.68) 26%,rgba(255,180,66,0.24) 58%,rgba(255,180,66,0.00) 100%)}
+    40%{opacity:0.82;filter:brightness(1.14) blur(1.2px)}
+    100%{opacity:0;filter:brightness(1) blur(6px)}
+}
+@keyframes break-burst{
+    0%{opacity:0;filter:brightness(1) blur(0);background:radial-gradient(circle at 50% 52%,rgba(255,248,184,0.00) 0%,rgba(255,220,108,0.00) 30%,rgba(255,189,78,0.00) 68%,rgba(255,189,78,0.00) 100%)}
+    16%{opacity:1;filter:brightness(1.48) blur(0.1px);background:
+        linear-gradient(90deg,rgba(255,220,120,0.00) 0%,rgba(255,246,204,0.90) 26%,rgba(255,194,78,0.76) 50%,rgba(255,246,204,0.90) 74%,rgba(255,220,120,0.00) 100%),
+        radial-gradient(circle at 50% 52%,rgba(255,252,218,0.98) 0%,rgba(255,228,124,0.86) 22%,rgba(255,180,60,0.52) 58%,rgba(255,180,60,0.00) 100%)}
+    42%{opacity:0.90;filter:brightness(1.18) blur(1.4px)}
+    100%{opacity:0;filter:brightness(1) blur(7px)}
+}
+@keyframes break-restore{
+    0%{opacity:0;filter:brightness(1.0) blur(3px)}
+    14%{opacity:1;filter:brightness(1.34) blur(0.15px);background:
+        linear-gradient(90deg,rgba(255,220,120,0.00) 0%,rgba(255,248,220,0.90) 34%,rgba(255,255,255,0.96) 50%,rgba(104,228,255,0.36) 72%,rgba(104,228,255,0.00) 100%),
+        radial-gradient(circle at 50% 52%,rgba(255,248,196,0.84) 0%,rgba(255,224,118,0.48) 28%,rgba(104,228,255,0.16) 56%,rgba(104,228,255,0.00) 100%)}
+    42%{opacity:0.76;filter:brightness(1.12) blur(1.0px)}
+    100%{opacity:0;filter:brightness(1) blur(4px)}
+}
+.break-burst-layer{
+    position:absolute;
+    inset:6px 8px 8px 8px;
+    pointer-events:none;
+    opacity:0;
+    z-index:7;
+    mix-blend-mode:screen;
+}
+.break-burst-layer.active{animation:break-layer-burst 1080ms cubic-bezier(.16,.84,.24,1) forwards}
+.break-burst-layer::before,
+.break-burst-layer::after{
+    content:'';
+    position:absolute;
+    left:50%;
+    top:50%;
+    transform:translate(-50%,-50%);
+    pointer-events:none;
+}
+.break-burst-layer::before{
+    width:78%;
+    height:52px;
+    background:linear-gradient(90deg,rgba(255,220,120,0.00) 0%,rgba(255,236,172,0.92) 18%,rgba(255,191,77,0.78) 50%,rgba(255,236,172,0.92) 82%,rgba(255,220,120,0.00) 100%);
+    filter:blur(5px);
+    clip-path:polygon(0 50%,8% 38%,22% 44%,36% 28%,50% 50%,64% 28%,78% 44%,92% 38%,100% 50%,92% 62%,78% 56%,64% 72%,50% 50%,36% 72%,22% 56%,8% 62%);
+}
+.break-burst-layer::after{
+    width:88%;
+    height:3px;
+    background:linear-gradient(90deg,rgba(255,210,112,0.00) 0%,rgba(255,248,210,0.95) 50%,rgba(255,210,112,0.00) 100%);
+    box-shadow:0 0 12px rgba(255,223,120,0.82),0 0 26px rgba(255,182,65,0.54);
+}
+@keyframes break-layer-burst{
+    0%{opacity:0;transform:scale(0.86)}
+    14%{opacity:1;transform:scale(1.04)}
+    40%{opacity:0.88;transform:scale(1.08)}
+    100%{opacity:0;transform:scale(1.16)}
+}
+.shield-vfx-layer{
+    position:absolute;
+    inset:-5px -12px -5px -4px;
+    pointer-events:none;
+    opacity:0;
+    z-index:7;
+    mix-blend-mode:screen;
+}
+.shield-vfx-layer.breaking{animation:shield-vfx-break 980ms cubic-bezier(.16,.84,.24,1) forwards}
+.shield-vfx-layer.restoring{animation:shield-vfx-restore 1040ms cubic-bezier(.16,.84,.24,1) forwards}
+.shield-vfx-layer::before,
+.shield-vfx-layer::after{
+    content:'';
+    position:absolute;
+    left:50%;
+    top:50%;
+    transform:translate(-50%,-50%);
+    pointer-events:none;
+}
+.shield-vfx-layer::before{
+    width:96%;
+    height:26px;
+    background:linear-gradient(90deg,rgba(102,226,255,0.00) 0%,rgba(188,246,255,0.92) 22%,rgba(255,255,255,0.96) 50%,rgba(102,180,255,0.74) 78%,rgba(102,180,255,0.00) 100%);
+    filter:blur(4px);
+    clip-path:polygon(0 50%,10% 30%,18% 50%,28% 18%,40% 56%,52% 20%,64% 58%,76% 24%,86% 52%,100% 50%,90% 70%,78% 48%,66% 78%,52% 42%,40% 76%,28% 38%,18% 70%,10% 48%);
+}
+.shield-vfx-layer::after{
+    width:100%;
+    height:3px;
+    background:linear-gradient(90deg,rgba(110,226,255,0.00) 0%,rgba(255,255,255,0.96) 50%,rgba(110,226,255,0.00) 100%);
+    box-shadow:0 0 10px rgba(160,240,255,0.74),0 0 20px rgba(98,182,255,0.42);
+}
+@keyframes shield-vfx-break{
+    0%{opacity:0;transform:scale(0.92)}
+    16%{opacity:1;transform:scale(1.06)}
+    42%{opacity:0.84;transform:scale(1.10)}
+    100%{opacity:0;transform:scale(1.18)}
+}
+@keyframes shield-vfx-restore{
+    0%{opacity:0;transform:translateX(-10%) scaleX(0.72)}
+    18%{opacity:1;transform:translateX(0) scaleX(1.02)}
+    48%{opacity:0.80;transform:translateX(6%) scaleX(1.04)}
+    100%{opacity:0;transform:translateX(14%) scaleX(1.08)}
+}
+.source-tag{
+    position:absolute;
+    left:8px;
+    top:50%;
+    transform:translateY(-50%);
+    z-index:6;
+    font-size:8px;
+    letter-spacing:1px;
+    color:var(--text-muted);
+    text-transform:uppercase;
+}
+.boss-root.invincible .boss-cover{
+    box-shadow:
+        2px 4px 18px var(--shadow),
+        inset 0 0 22px rgba(255,255,255,0.10),
+        inset 0 0 18px rgba(255,80,60,0.24);
+}
+.boss-root.overdrive .boss-cover{
+    box-shadow:
+        2px 4px 18px var(--shadow),
+        inset 0 0 22px rgba(255,255,255,0.10),
+        inset 0 0 18px rgba(255,180,54,0.22);
+}
+.break-row{
+    position:absolute;
+    left:22px;
+    top:64px;
+    width:512px;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    height:10px;
+    font-family:var(--font-ui);
+}
+.break-label{
+    font-size:9px;
+    color:rgba(212,156,23,0.82);
+    letter-spacing:1.8px;
+    text-transform:uppercase;
+}
+.break-track{
+    flex:1;
+    height:6px;
+    border:1px solid rgba(212,156,23,0.26);
+    background:rgba(207,208,197,0.92);
+    border-radius:1px;
+    overflow:hidden;
+    box-shadow:inset 0 0 6px rgba(0,0,0,0.10);
+}
+.break-fill{
+    height:100%;
+    width:0;
+    background:linear-gradient(to right,rgb(212,170,50),rgb(243,195,72));
+    transition:width 240ms ease;
+    box-shadow:0 0 6px rgba(243,175,18,0.20);
+    position:relative;
+    overflow:hidden;
+}
+.break-fill.full{
+    background:linear-gradient(to right,rgb(255,215,98),rgb(255,240,132));
+    box-shadow:0 0 10px rgba(255,224,102,0.38);
+}
+.break-vfx-layer{
+    position:absolute;
+    left:56px;
+    right:72px;
+    top:58px;
+    height:20px;
+    pointer-events:none;
+    opacity:0;
+    z-index:6;
+    mix-blend-mode:screen;
+}
+.break-vfx-layer.breaking{animation:break-vfx-breaking 980ms cubic-bezier(.16,.84,.24,1) forwards}
+.break-vfx-layer.recovering{animation:break-vfx-recovering 1320ms cubic-bezier(.16,.84,.24,1) forwards}
+.break-vfx-layer.restored{animation:break-vfx-restored 980ms cubic-bezier(.16,.84,.24,1) forwards}
+.break-vfx-layer::before,
+.break-vfx-layer::after{
+    content:'';
+    position:absolute;
+    left:50%;
+    top:50%;
+    transform:translate(-50%,-50%);
+    pointer-events:none;
+}
+.break-vfx-layer::before{
+    width:94%;
+    height:18px;
+    background:linear-gradient(90deg,rgba(255,208,114,0.00) 0%,rgba(255,244,210,0.90) 26%,rgba(255,196,82,0.82) 50%,rgba(104,228,255,0.54) 76%,rgba(104,228,255,0.00) 100%);
+    filter:blur(4px);
+}
+.break-vfx-layer::after{
+    width:100%;
+    height:2px;
+    background:linear-gradient(90deg,rgba(255,220,118,0.00) 0%,rgba(255,255,255,0.96) 50%,rgba(104,228,255,0.00) 100%);
+    box-shadow:0 0 8px rgba(255,220,118,0.82),0 0 16px rgba(104,228,255,0.42);
+}
+@keyframes break-vfx-breaking{
+    0%{opacity:0;transform:scaleX(0.82)}
+    16%{opacity:1;transform:scaleX(1.04)}
+    44%{opacity:0.84;transform:scaleX(1.08)}
+    100%{opacity:0;transform:scaleX(1.16)}
+}
+@keyframes break-vfx-recovering{
+    0%{opacity:0;transform:translateX(-10%) scaleX(0.76)}
+    18%{opacity:1;transform:translateX(0) scaleX(1.02)}
+    52%{opacity:0.82;transform:translateX(6%) scaleX(1.06)}
+    100%{opacity:0;transform:translateX(14%) scaleX(1.10)}
+}
+@keyframes break-vfx-restored{
+    0%{opacity:0;transform:scaleX(0.90)}
+    16%{opacity:1;transform:scaleX(1.04)}
+    40%{opacity:0.88;transform:scaleX(1.08)}
+    100%{opacity:0;transform:scaleX(1.16)}
+}
+/* ── Break recovery: pulsing glow + scanning shimmer ── */
+.break-fill.recovering{
+    background:linear-gradient(90deg,rgb(178,138,40) 0%,rgb(222,172,58) 52%,rgb(255,232,126) 100%);
+    transition:width 420ms cubic-bezier(.22,.68,.36,1);
+    animation:break-recover-pulse 0.82s ease-in-out infinite;
+    box-shadow:0 0 12px rgba(243,175,18,0.48),0 0 22px rgba(104,228,255,0.18);
+}
+.break-fill.recovering::before{
+    content:'';
+    position:absolute;
+    inset:0;
+    background:linear-gradient(110deg,
+        rgba(255,255,255,0.00) 0%,
+        rgba(255,236,172,0.52) 40%,
+        rgba(255,255,255,0.62) 50%,
+        rgba(255,236,172,0.52) 60%,
+        rgba(255,255,255,0.00) 100%);
+    transform:translateX(-120%);
+    animation:break-recover-scan 1.05s cubic-bezier(.16,.84,.24,1) infinite;
+}
+.break-fill.recovering.full{
+    animation:break-recover-complete 760ms cubic-bezier(.16,.84,.24,1) forwards;
+}
+@keyframes break-recover-pulse{
+    0%,100%{opacity:0.76;filter:brightness(0.90)}
+    50%{opacity:1;filter:brightness(1.28)}
+}
+@keyframes break-recover-scan{
+    0%{transform:translateX(-120%)}
+    100%{transform:translateX(220%)}
+}
+@keyframes break-recover-complete{
+    0%{filter:brightness(1.0) blur(0);box-shadow:0 0 10px rgba(243,175,18,0.42)}
+    26%{filter:brightness(1.52) blur(0.3px);box-shadow:0 0 22px rgba(255,224,102,0.82),0 0 32px rgba(104,228,255,0.22)}
+    100%{filter:brightness(1.04) blur(0);box-shadow:0 0 12px rgba(255,224,102,0.44)}
+}
+.break-track.broken{
+    border-color:rgba(255,178,72,0.68);
+    box-shadow:inset 0 0 12px rgba(255,140,40,0.30),0 0 10px rgba(255,198,92,0.20);
+}
+.break-track.recovering{
+    border-color:rgba(255,204,98,0.72);
+    box-shadow:inset 0 0 12px rgba(255,192,74,0.24),0 0 12px rgba(104,228,255,0.16);
+}
+.break-text{
+    min-width:68px;
+    text-align:right;
+    font-size:9px;
+    color:var(--text-muted);
+    letter-spacing:1px;
+    text-transform:uppercase;
+}
+.boss-root.shield-hit-break .boss-cover{animation:root-shield-break 760ms cubic-bezier(.16,.84,.24,1) forwards}
+.boss-root.shield-hit-restore .boss-cover{animation:root-shield-restore 860ms cubic-bezier(.16,.84,.24,1) forwards}
+.boss-root.break-hit .boss-cover{animation:root-break-hit 860ms cubic-bezier(.16,.84,.24,1) forwards}
+.boss-root.break-recover-hit .boss-cover{animation:root-break-recover 960ms cubic-bezier(.16,.84,.24,1) forwards}
+@keyframes root-shield-break{
+    0%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
+    20%{box-shadow:0 0 18px rgba(118,232,255,0.42),2px 4px 18px var(--shadow),inset 0 0 28px rgba(118,232,255,0.22),inset 0 0 22px rgba(255,255,255,0.16),inset 0 1px 0 rgba(255,255,255,0.28)}
+    100%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
+}
+@keyframes root-shield-restore{
+    0%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
+    18%{box-shadow:0 0 18px rgba(118,232,255,0.30),0 0 28px rgba(118,232,255,0.18),2px 4px 18px var(--shadow),inset 0 0 30px rgba(174,244,255,0.22),inset 0 1px 0 rgba(255,255,255,0.32)}
+    100%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
+}
+@keyframes root-break-hit{
+    0%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
+    18%{box-shadow:0 0 18px rgba(255,214,102,0.36),0 0 28px rgba(255,184,72,0.24),2px 4px 18px var(--shadow),inset 0 0 30px rgba(255,214,102,0.22),inset 0 1px 0 rgba(255,255,255,0.30)}
+    100%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
+}
+@keyframes root-break-recover{
+    0%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
+    18%{box-shadow:0 0 18px rgba(255,214,102,0.24),0 0 26px rgba(104,228,255,0.18),2px 4px 18px var(--shadow),inset 0 0 32px rgba(255,232,146,0.18),inset 0 1px 0 rgba(255,255,255,0.30)}
+    100%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
+}
+</style>
+</head>
+<body>
+<div class="stage">
+    <div class="boss-root" id="boss-root">
+        <div class="boss-cover">
+            <span class="cover-corner"></span>
+        </div>
+        <div class="break-burst-layer" id="break-burst-layer"></div>
+        <div class="break-vfx-layer" id="break-vfx-layer"></div>
+
+        <div class="boss-box">
+            <div class="xt_left"></div>
+            <div class="xt_right"><span>Enemy</span></div>
+            <div class="number_xt">
+                <div id="hp-text">100%</div>
+                <div id="stage-text">P1</div>
+            </div>
+            <div class="xt_border">
+                <div class="xt_border_left"></div>
+                <div class="xt_border_right">
+                    <div class="tb_line"></div>
+                    <div class="boss-fill-wrap">
+                        <div class="hp-trail" id="hp-trail"></div>
+                        <div class="xt_in xt_in_green" id="hp-fill"></div>
+                        <div class="shield-fill" id="shield-fill"></div>
+                        <div class="shield-vfx-layer" id="shield-vfx-layer"></div>
+                        <div class="flash-overlay" id="flash-overlay"></div>
+                        <div class="source-tag" id="hp-source"></div>
+                    </div>
+                    <div class="tb_line"></div>
+                </div>
+            </div>
+            <svg height="27px" width="350px" class="svg_border">
+                <polygon points="0,0 350,0 345,19 145,19 141,27 0,27" style="fill:none;stroke:rgb(218,215,215);stroke-width:1;" />
+            </svg>
+        </div>
+
+        <div class="break-row">
+            <span class="break-label">BRK</span>
+            <div class="break-track"><div class="break-fill" id="break-fill"></div></div>
+            <span class="break-text" id="break-text">0%</span>
+        </div>
+    </div>
+</div>
+
+<script>
+var _visible = false;
+var _hideTimer = null;
+var _flashTimer = null;
+var _burstTimer = null;
+var _fxTimers = Object.create(null);
+var _lastShieldActive = false;
+var _lastShieldPct = 0;
+var _lastBreakingStage = -1;
+var _lastBreakPct = 1;
+var _lastHpPct = 1;
+var _lastStopTicking = false;
+
+/*
+ * Break state machine:
+ *   'normal'     → break gauge depleting as usual
+ *   'broken'     → break just occurred, burst VFX playing
+ *   'recovering' → gauge refilling with shimmer animation
+ *   'refilled'   → gauge full, completion flash
+ *
+ * Transitions (packet-driven):
+ *   normal → broken: BuffEventEnterBreaking OR breaking_stage→0
+ *                     OR stop_breaking_ticking true->false→true
+ *                     OR (fallback) extinction ≤5% stale for 500ms
+ *   broken → recovering: extinction starts rising (>lastBreakPct)
+ *   recovering → refilled: extinction ≥95% OR breaking_stage→1 (BreakEnd)
+ *   refilled → normal: after completion animation (520ms)
+ */
+var _breakState = 'normal';   // 'normal' | 'broken' | 'recovering' | 'refilled'
+var _breakStaleTimer = null;  // fallback: stale-detection timer
+var _recoverEndTimer = null;
+var _breakEnteredTs = 0;      // timestamp when entered broken state
+
+function _clearClassList(el, classes) {
+    if (!el || !classes || !classes.length) return;
+    classes.forEach(function(name) { el.classList.remove(name); });
+}
+
+function _restartFxClass(el, classes, activeClass, timerKey, durationMs) {
+    if (!el) return;
+    _clearClassList(el, classes);
+    void el.offsetWidth;
+    el.classList.add(activeClass);
+    if (_fxTimers[timerKey]) clearTimeout(_fxTimers[timerKey]);
+    _fxTimers[timerKey] = setTimeout(function() {
+        _clearClassList(el, classes);
+        _fxTimers[timerKey] = null;
+    }, durationMs);
+}
+
+function _pulseRoot(className, durationMs) {
+    var root = document.getElementById('boss-root');
+    var classes = ['shield-hit-break', 'shield-hit-restore', 'break-hit', 'break-recover-hit'];
+    if (!root) return;
+    _clearClassList(root, classes);
+    void root.offsetWidth;
+    root.classList.add(className);
+    if (_fxTimers.rootPulse) clearTimeout(_fxTimers.rootPulse);
+    _fxTimers.rootPulse = setTimeout(function() {
+        _clearClassList(root, classes);
+        _fxTimers.rootPulse = null;
+    }, durationMs);
+}
+
+function _triggerShieldFx(mode) {
+    var layer = document.getElementById('shield-vfx-layer');
+    var isBreak = mode === 'breaking';
+    _restartFxClass(layer, ['breaking', 'restoring'], isBreak ? 'breaking' : 'restoring', 'shieldLayer', isBreak ? 1000 : 1080);
+    _pulseRoot(isBreak ? 'shield-hit-break' : 'shield-hit-restore', isBreak ? 800 : 880);
+    _triggerFlash(isBreak ? 'shield-break' : 'shield-restore');
+}
+
+function _triggerBreakRecovery(mode) {
+    var layer = document.getElementById('break-vfx-layer');
+    var cls = mode === 'restored' ? 'restored' : 'recovering';
+    _restartFxClass(layer, ['breaking', 'recovering', 'restored'], cls, 'breakRecover', mode === 'restored' ? 1000 : 1360);
+    _pulseRoot('break-recover-hit', mode === 'restored' ? 960 : 840);
+    _triggerFlash(mode === 'restored' ? 'break-restore' : 'phase-break');
+}
+
+function _pctWidth(pct) {
+    var value = Math.max(0, Math.min(1, Number(pct || 0)));
+    if (value <= 0) return '0%';
+    if (value >= 0.997) return '100%';
+    return 'calc(' + Math.round(value * 100) + '% + 8px)';
+}
+
+function _fmtHp(val) {
+    val = Number(val || 0);
+    if (val >= 1000000) return (val / 1000000).toFixed(val >= 10000000 ? 0 : 1) + 'M';
+    if (val >= 1000) return (val / 1000).toFixed(val >= 100000 ? 0 : 1) + 'K';
+    return Math.round(val).toLocaleString();
+}
+
+function _setFillClass(fill, pct) {
+    fill.classList.remove('xt_in_green', 'xt_in_yellow', 'xt_in_red', 'is-empty', 'is-full');
+    if (pct <= 0) fill.classList.add('is-empty');
+    if (pct >= 0.997) fill.classList.add('is-full');
+    if (pct < 0.25) fill.classList.add('xt_in_red');
+    else if (pct < 0.60) fill.classList.add('xt_in_yellow');
+    else fill.classList.add('xt_in_green');
+}
+
+function _showBossBar() {
+    if (_hideTimer) {
+        clearTimeout(_hideTimer);
+        _hideTimer = null;
+    }
+    var root = document.getElementById('boss-root');
+    root.classList.remove('exiting');
+    root.classList.add('visible');
+    _visible = true;
+    _reportRegions();
+}
+
+function _hideBossBar() {
+    if (!_visible) return;
+    var root = document.getElementById('boss-root');
+    root.classList.add('exiting');
+    _hideTimer = setTimeout(function() {
+        root.classList.remove('visible', 'exiting', 'invincible', 'overdrive');
+        _visible = false;
+        _lastShieldActive = false;
+        _lastShieldPct = 0;
+        _lastBreakingStage = -1;
+        _lastBreakPct = 1;
+        _lastHpPct = 1;
+        _lastStopTicking = false;
+        _breakState = 'normal';
+        if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
+        if (_recoverEndTimer) { clearTimeout(_recoverEndTimer); _recoverEndTimer = null; }
+        _clearClassList(root, ['shield-hit-break', 'shield-hit-restore', 'break-hit', 'break-recover-hit']);
+        _clearClassList(document.getElementById('shield-vfx-layer'), ['breaking', 'restoring']);
+        _clearClassList(document.getElementById('break-vfx-layer'), ['breaking', 'recovering', 'restored']);
+        _clearClassList(document.getElementById('shield-fill'), ['restoring']);
+        _clearClassList(document.getElementById('flash-overlay'), ['shield-break', 'shield-restore', 'phase-break', 'break-burst', 'break-restore']);
+        _clearClassList(document.getElementById('break-fill'), ['recovering', 'full']);
+        _clearClassList(document.querySelector('.break-track'), ['broken', 'recovering']);
+        Object.keys(_fxTimers).forEach(function(key) {
+            if (_fxTimers[key]) clearTimeout(_fxTimers[key]);
+            _fxTimers[key] = null;
+        });
+        _reportRegions();
+    }, 280);
+}
+
+function _triggerFlash(type) {
+    var flash = document.getElementById('flash-overlay');
+    flash.classList.remove('shield-break', 'shield-restore', 'phase-break', 'break-burst', 'break-restore');
+    void flash.offsetWidth;
+    flash.classList.add(type);
+    if (_flashTimer) clearTimeout(_flashTimer);
+    _flashTimer = setTimeout(function() {
+        flash.classList.remove('shield-break', 'shield-restore', 'phase-break', 'break-burst', 'break-restore');
+    }, 1200);
+}
+
+function _triggerBreakBurst() {
+    var burst = document.getElementById('break-burst-layer');
+    if (burst) {
+        burst.classList.remove('active');
+        void burst.offsetWidth;
+        burst.classList.add('active');
+        if (_burstTimer) clearTimeout(_burstTimer);
+        _burstTimer = setTimeout(function() {
+            burst.classList.remove('active');
+        }, 1120);
+    }
+    _restartFxClass(document.getElementById('break-vfx-layer'), ['breaking', 'recovering', 'restored'], 'breaking', 'breakBurst', 980);
+    _pulseRoot('break-hit', 860);
+    _triggerFlash('break-burst');
+}
+
+function updateBossBar(data) {
+    var root = document.getElementById('boss-root');
+    if (!data || !data.active) {
+        _hideBossBar();
+        return;
+    }
+
+    if (!_visible) _showBossBar();
+
+    var pct = Math.max(0, Math.min(1, Number(data.hp_pct || 0)));
+    var hpFill = document.getElementById('hp-fill');
+    var hpTrail = document.getElementById('hp-trail');
+    var shieldFill = document.getElementById('shield-fill');
+
+    hpFill.style.width = _pctWidth(pct);
+    _setFillClass(hpFill, pct);
+    if (pct < _lastHpPct) {
+        setTimeout(function() {
+            hpTrail.style.width = _pctWidth(pct);
+        }, 280);
+    } else {
+        hpTrail.style.width = _pctWidth(pct);
+    }
+    _lastHpPct = pct;
+
+    var hpText = document.getElementById('hp-text');
+    if (String(data.hp_source || '') === 'packet' && Number(data.total_hp || 0) > 0) {
+        hpText.textContent = _fmtHp(data.current_hp) + '/' + _fmtHp(data.total_hp);
+    } else {
+        hpText.textContent = Math.round(pct * 100) + '%';
+    }
+
+    var src = document.getElementById('hp-source');
+    if (String(data.hp_source || '') === 'packet') src.textContent = 'PKT';
+    else if (String(data.hp_source || '') === 'estimate') src.textContent = 'EST';
+    else src.textContent = '';
+
+    var shieldPct = Math.max(0, Math.min(pct, Number(data.shield_pct || 0)));
+    if (data.shield_active && shieldPct > 0) {
+        shieldFill.style.width = _pctWidth(shieldPct);
+        shieldFill.classList.add('active');
+        if (!_lastShieldActive || (_lastShieldPct <= 0.01 && shieldPct > 0.03)) {
+            _restartFxClass(shieldFill, ['restoring'], 'restoring', 'shieldFillRestore', 920);
+            _triggerShieldFx('restoring');
+        }
+        shieldFill.classList.toggle('is-full', shieldPct >= 0.997);
+        shieldFill.classList.toggle('is-empty', shieldPct <= 0);
+        if (!_lastShieldActive) _lastShieldActive = true;
+    } else {
+        if (_lastShieldActive) {
+            _triggerShieldFx('breaking');
+        }
+        shieldFill.classList.remove('active', 'is-full', 'restoring');
+        shieldFill.classList.add('is-empty');
+        shieldFill.style.width = '0%';
+        _lastShieldActive = false;
+    }
+    _lastShieldPct = shieldPct;
+
+    var breakPct = Math.max(0, Math.min(1, Number(data.extinction_pct || 0)));
+    var breakFill = document.getElementById('break-fill');
+    var breakTrack = breakFill.parentElement;
+    breakFill.style.width = Math.round(breakPct * 100) + '%';
+    breakFill.classList.toggle('full', breakPct >= 0.95);
+
+    // breaking_stage: 0 = Breaking (broken), 1 = BreakEnd (normal)
+    var stage = (data.breaking_stage != null) ? parseInt(data.breaking_stage, 10) : -1;
+    if (stage >= 0) {
+        document.getElementById('stage-text').textContent = 'P' + Math.max(1, stage);
+    }
+    document.getElementById('break-text').textContent = Math.round(breakPct * 100) + '%';
+
+    var stopTicking = !!data.stop_breaking_ticking;
+
+    // ── Break state machine ──
+    _updateBreakState(breakPct, stage, stopTicking, breakFill, breakTrack);
+
+    _lastBreakingStage = stage;
+    _lastBreakPct = breakPct;
+    _lastStopTicking = stopTicking;
+
+    root.classList.toggle('invincible', !!data.invincible);
+    root.classList.toggle('overdrive', !!data.in_overdrive && !data.invincible);
+}
+
+function _reportRegions() {
+    try {
+        if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.boss_hp_hit_regions) return;
+        var root = document.getElementById('boss-root');
+        var regions = [];
+        if (_visible && root) {
+            var rect = root.getBoundingClientRect();
+            if (rect.width > 2 && rect.height > 2) {
+                regions.push({
+                    left: Math.round(rect.left),
+                    top: Math.round(rect.top),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height)
+                });
+            }
+        }
+        window.pywebview.api.boss_hp_hit_regions(regions);
+    } catch (e) {}
+}
+
+window.addEventListener('pywebviewready', function() {
+    setTimeout(_reportRegions, 100);
+});
+window.addEventListener('resize', function() {
+    setTimeout(_reportRegions, 50);
+});
+
+/* ── Break state machine ── */
+function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
+    switch (_breakState) {
+    case 'normal':
+        // Packet signal: breaking_stage transitions to 0
+        if (_lastBreakingStage >= 0 && stage !== _lastBreakingStage && stage === 0) {
+            _enterBroken(fill, track);
+            return;
+        }
+        // Packet signal: stop_breaking_ticking just turned on
+        if (stopTicking && !_lastStopTicking && breakPct <= 0.05) {
+            _enterBroken(fill, track);
+            return;
+        }
+        // Fallback: gauge stuck at ≤5% — start stale timer
+        if (breakPct <= 0.05 && _lastBreakPct <= 0.05 && _lastBreakPct > -1) {
+            if (!_breakStaleTimer) {
+                _breakStaleTimer = setTimeout(function() {
+                    _breakStaleTimer = null;
+                    if (_breakState === 'normal') {
+                        var bf = document.getElementById('break-fill');
+                        _enterBroken(bf, bf.parentElement);
+                    }
+                }, 500);
+            }
+        } else {
+            // Gauge moving or above threshold — cancel stale timer
+            if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
+        }
+        break;
+
+    case 'broken':
+        // Wait for gauge to start rising → transition to recovering
+        if (breakPct > _lastBreakPct && breakPct > 0.02) {
+            _breakState = 'recovering';
+            fill.classList.add('recovering');
+            track.classList.add('broken');
+            track.classList.add('recovering');
+            _triggerBreakRecovery('recovering');
+        }
+        // Also catch: breaking_stage went back to 1 (BreakEnd) — immediate recovery
+        if (_lastBreakingStage >= 0 && stage === 1 && _lastBreakingStage === 0) {
+            _breakState = 'recovering';
+            fill.classList.add('recovering');
+            track.classList.add('broken');
+            track.classList.add('recovering');
+            _triggerBreakRecovery('recovering');
+        }
+        break;
+
+    case 'recovering':
+        // Gauge refilled ≥95% OR breaking_stage turned to BreakEnd(1) while gauge high
+        if (breakPct >= 0.95 || (stage === 1 && _lastBreakingStage === 0 && breakPct > 0.5)) {
+            _enterRefilled(fill, track);
+        }
+        // Guard: gauge dropped again (boss broken again mid-recovery)
+        if (breakPct < _lastBreakPct && breakPct <= 0.05) {
+            fill.classList.remove('recovering');
+            track.classList.remove('broken', 'recovering');
+            _enterBroken(fill, track);
+        }
+        break;
+
+    case 'refilled':
+        // Handled by timer in _enterRefilled — no action needed
+        break;
+    }
+}
+
+function _enterBroken(fill, track) {
+    _breakState = 'broken';
+    _breakEnteredTs = Date.now();
+    if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
+    if (_recoverEndTimer) { clearTimeout(_recoverEndTimer); _recoverEndTimer = null; }
+    fill.classList.remove('recovering', 'full');
+    track.classList.remove('recovering');
+    track.classList.add('broken');
+    _triggerBreakBurst();
+}
+
+function _enterRefilled(fill, track) {
+    _breakState = 'refilled';
+    fill.classList.add('full');  // triggers break-recover-complete animation
+    track.classList.add('recovering');
+    _triggerBreakRecovery('restored');
+    if (_recoverEndTimer) clearTimeout(_recoverEndTimer);
+    _recoverEndTimer = setTimeout(function() {
+        fill.classList.remove('recovering');
+        track.classList.remove('broken', 'recovering');
+        _breakState = 'normal';
+        _recoverEndTimer = null;
+    }, 520);
+}
+
+function triggerBreakEffect(type) {
+    if (!_visible) return;
+    if (type === 'enter_breaking') {
+        var bf = document.getElementById('break-fill');
+        var bt = bf.parentElement;
+        if (_breakState === 'normal') {
+            _enterBroken(bf, bt);
+        }
+    } else if (type === 'shield_broken') {
+        // Force shield state for visual effect
+        _lastShieldActive = true;
+        _triggerShieldFx('breaking');
+    } else if (type === 'super_armor_broken') {
+        _triggerBreakBurst();
+    }
+}
+
+window.BossHP = {
+    update: updateBossBar,
+    show: _showBossBar,
+    hide: _hideBossBar,
+    triggerBreakEffect: triggerBreakEffect
+};
+</script>
+</body>
+</html>

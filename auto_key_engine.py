@@ -18,7 +18,7 @@ from config import BASE_DIR, GAME_PROCESS_NAMES
 from window_locator import WindowLocator, _get_process_name
 
 AUTO_KEY_SCHEMA_VERSION = 1
-DEFAULT_AUTO_KEY_SERVER_URL = ""
+DEFAULT_AUTO_KEY_SERVER_URL = "http://47.82.157.220:9320"
 AUTO_KEY_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "auto_keys")
 AUTO_KEY_IMPORT_DIR = BASE_DIR
 
@@ -131,6 +131,15 @@ def _string(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _mask_token(token: str) -> str:
+    token = _string(token)
+    if not token:
+        return ""
+    if len(token) <= 8:
+        return "*" * len(token)
+    return f"{token[:4]}...{token[-4:]}"
+
+
 def normalize_author_snapshot(author: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "player_uid": _string(author.get("player_uid") or author.get("uid")),
@@ -147,6 +156,53 @@ def snapshot_author_from_state(gs) -> Dict[str, Any]:
         "profession_id": getattr(gs, "profession_id", 0),
         "profession_name": getattr(gs, "profession_name", ""),
     })
+
+
+def build_identity_state(author_snapshot: Optional[Dict[str, Any]] = None, source: str = "unknown") -> Dict[str, Any]:
+    author = normalize_author_snapshot(author_snapshot or {})
+    missing = []
+    if not author["player_uid"]:
+        missing.append("player_uid")
+    if not author["player_name"]:
+        missing.append("player_name")
+    if int(author["profession_id"] or 0) <= 0:
+        missing.append("profession_id")
+    return {
+        "player_uid": author["player_uid"],
+        "player_name": author["player_name"],
+        "profession_id": int(author["profession_id"] or 0),
+        "profession_name": author["profession_name"],
+        "source": _string(source) or "unknown",
+        "ready": not missing,
+        "missing": missing,
+    }
+
+
+def default_upload_auth_state() -> Dict[str, Any]:
+    return {
+        "token": "",
+        "ready": False,
+        "token_masked": "",
+        "expires_at": "",
+        "error": "",
+        "mode": "",
+        "identity": build_identity_state({}, source="unknown"),
+    }
+
+
+def normalize_upload_auth_state(raw: Any, identity_state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    src = raw if isinstance(raw, dict) else {}
+    token = _string(src.get("token"))
+    identity = src.get("identity") or identity_state or {}
+    identity_source = _string((src.get("identity") or {}).get("source")) or _string((identity_state or {}).get("source")) or "unknown"
+    return {
+        "ready": bool(src.get("ready")) and bool(token),
+        "token_masked": _string(src.get("token_masked")) or _mask_token(token),
+        "expires_at": _string(src.get("expires_at")),
+        "error": _string(src.get("error")),
+        "mode": _string(src.get("mode")),
+        "identity": build_identity_state(identity, source=identity_source),
+    }
 
 
 def make_default_action(slot_index: int = 1) -> Dict[str, Any]:
@@ -282,7 +338,6 @@ def default_auto_key_config() -> Dict[str, Any]:
     return {
         "enabled": False,
         "active_profile_id": "",
-        "upload_token": "",
         "server_url": DEFAULT_AUTO_KEY_SERVER_URL,
         "profiles": [],
         "last_remote_search": {
@@ -308,7 +363,6 @@ def normalize_auto_key_config(raw: Any, state_snapshot: Optional[Dict[str, Any]]
     result = default_auto_key_config()
     result["enabled"] = _coerce_bool(src.get("enabled"), False)
     result["active_profile_id"] = _string(src.get("active_profile_id"))
-    result["upload_token"] = _string(src.get("upload_token"))
     result["server_url"] = _string(src.get("server_url")) or DEFAULT_AUTO_KEY_SERVER_URL
     profiles = []
     for item in src.get("profiles", []) if isinstance(src.get("profiles"), list) else []:
@@ -422,8 +476,14 @@ def summarize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def build_auto_key_state(config: Dict[str, Any], engine_status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def build_auto_key_state(config: Dict[str, Any], engine_status: Optional[Dict[str, Any]] = None,
+                         identity_snapshot: Optional[Dict[str, Any]] = None,
+                         upload_auth: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     active = active_profile(config)
+    identity_state = build_identity_state(
+        identity_snapshot or {},
+        source=_string((identity_snapshot or {}).get("source")) or "unknown",
+    )
     return {
         "enabled": _coerce_bool(config.get("enabled"), False),
         "active_profile_id": _string(config.get("active_profile_id")),
@@ -432,9 +492,9 @@ def build_auto_key_state(config: Dict[str, Any], engine_status: Optional[Dict[st
         "profiles_full": copy.deepcopy(list(config.get("profiles", []) or [])),
         "active_profile": copy.deepcopy(active) if active else None,
         "local_profile_count": len(list(config.get("profiles", []) or [])),
-        "upload_token": _string(config.get("upload_token")),
-        "upload_token_set": bool(_string(config.get("upload_token"))),
         "server_url": _string(config.get("server_url")) or DEFAULT_AUTO_KEY_SERVER_URL,
+        "identity": identity_state,
+        "upload_auth": normalize_upload_auth_state(upload_auth or {}, identity_state=identity_state),
         "last_remote_search": copy.deepcopy(config.get("last_remote_search") or {}),
         "runtime": copy.deepcopy(engine_status or {}),
     }
@@ -516,6 +576,9 @@ class AutoKeyCloudClient:
 
     def get_script(self, script_id: Any) -> Dict[str, Any]:
         return self._request("GET", f"/api/scripts/{script_id}")
+
+    def issue_upload_token(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request("POST", "/api/upload-token/issue", body=payload)
 
     def upload_script(self, payload: Dict[str, Any], upload_token: str) -> Dict[str, Any]:
         headers = {"X-SAO-Upload-Token": upload_token or ""}
@@ -769,8 +832,10 @@ __all__ = [
     "AutoKeyEngine",
     "active_profile",
     "build_auto_key_state",
+    "build_identity_state",
     "clone_profile",
     "default_auto_key_config",
+    "default_upload_auth_state",
     "delete_profile",
     "ensure_export_dir",
     "export_profile_to_default_path",
@@ -782,6 +847,7 @@ __all__ = [
     "normalize_action",
     "normalize_auto_key_config",
     "normalize_profile",
+    "normalize_upload_auth_state",
     "save_auto_key_config",
     "snapshot_author_from_state",
     "upsert_profile",
