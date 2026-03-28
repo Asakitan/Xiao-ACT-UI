@@ -18,7 +18,7 @@ from config import BASE_DIR, GAME_PROCESS_NAMES
 from window_locator import WindowLocator, _get_process_name
 
 AUTO_KEY_SCHEMA_VERSION = 1
-DEFAULT_AUTO_KEY_SERVER_URL = "http://47.82.157.220:9320"
+DEFAULT_AUTO_KEY_SERVER_URL = ""
 AUTO_KEY_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "auto_keys")
 AUTO_KEY_IMPORT_DIR = BASE_DIR
 
