@@ -73,16 +73,16 @@ body:not(.opening):not(.closing) .panel {
 @keyframes panel-enter-blur {
     0% {
         opacity: 0;
-        filter: blur(16px);
+        transform: scale(0.96);
         box-shadow: 0 0 40px rgba(243, 175, 18, 0.22), 0 10px 38px rgba(0,0,0,0.28);
     }
     65% {
         opacity: 1;
-        filter: blur(1.2px);
+        transform: scale(1.01);
     }
     100% {
         opacity: 1;
-        filter: blur(0px);
+        transform: scale(1);
         box-shadow: 0 2px 16px rgba(0,0,0,0.18);
     }
 }
@@ -90,34 +90,29 @@ body:not(.opening):not(.closing) .panel {
 @keyframes panel-exit-blur {
     0% {
         opacity: 1;
-        filter: blur(0px);
+        transform: scale(1);
     }
     100% {
         opacity: 0;
-        filter: blur(14px);
+        transform: scale(0.97);
         box-shadow: 0 0 34px rgba(243, 175, 18, 0.16), 0 8px 30px rgba(0,0,0,0.18);
     }
 }
 
 @keyframes panel-live-blur {
     0% {
-        filter: blur(0px);
         box-shadow: 0 2px 16px rgba(0,0,0,0.18);
     }
     25% {
-        filter: blur(0.18px);
         box-shadow: -2px 5px 22px rgba(0,0,0,0.16), 0 0 18px rgba(243, 175, 18, 0.05);
     }
     50% {
-        filter: blur(0.08px);
         box-shadow: 0 3px 18px rgba(0,0,0,0.2), 0 0 14px rgba(66, 140, 230, 0.05);
     }
     75% {
-        filter: blur(0.2px);
         box-shadow: 2px 5px 22px rgba(0,0,0,0.17), 0 0 18px rgba(243, 175, 18, 0.05);
     }
     100% {
-        filter: blur(0px);
         box-shadow: 0 2px 16px rgba(0,0,0,0.18);
     }
 }
@@ -144,8 +139,7 @@ body:not(.opening):not(.closing) .panel {
     font-family: var(--font-ui);
     font-size: 12px;
     color: #555;
-    filter: blur(0px);
-    will-change: filter, box-shadow, opacity;
+    will-change: box-shadow, opacity, transform;
     position: relative;
 }
 

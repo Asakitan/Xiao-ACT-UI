@@ -48,10 +48,15 @@ body {
     height: 100%;
     opacity: 0;
     mix-blend-mode: screen;
-    transition: opacity 360ms ease;
+    will-change: opacity;
+    transition: opacity 320ms ease;
 }
 #gl-fx.active {
     opacity: 1;
+}
+#gl-fx.active.fading {
+    opacity: 0;
+    transition-duration: 0.98s;
 }
 #burst-overlay {
     display: none;
@@ -63,7 +68,7 @@ body {
     display: block;
 }
 #burst-overlay.exiting {
-    animation: overlay-out 0.95s ease forwards;
+    animation: overlay-out 0.98s ease forwards;
 }
 #burst-target {
     position: absolute;
@@ -157,7 +162,7 @@ body {
     border-bottom-color: rgba(255, 188, 66, 0.92);
 }
 #burst-overlay.exiting #burst-target {
-    animation: target-out 0.86s cubic-bezier(0.4, 0.0, 0.2, 1) forwards;
+    animation: target-out 0.98s cubic-bezier(0.4, 0.0, 0.2, 1) forwards;
 }
 #burst-beam {
     position: absolute;
@@ -212,7 +217,7 @@ body {
     animation: beam-pulse 2.45s 0.9s ease-in-out infinite;
 }
 #burst-overlay.exiting #burst-beam {
-    animation: beam-out 0.82s ease forwards;
+    animation: beam-out 0.98s ease forwards;
 }
 #burst-caption {
     position: absolute;
@@ -261,7 +266,7 @@ body {
     background: linear-gradient(90deg, rgba(96, 229, 255, 0.94), rgba(255, 188, 66, 0));
 }
 #burst-overlay.exiting #burst-caption {
-    animation: caption-out 0.96s cubic-bezier(0.4, 0.0, 0.2, 1) forwards;
+    animation: caption-out 0.98s cubic-bezier(0.4, 0.0, 0.2, 1) forwards;
 }
 .caption-tag {
     font-family: var(--font-sao);
@@ -485,6 +490,8 @@ var _fadeTimer = null;
 var _currentBurstSlot = 0;
 var _burstLatchReady = false;
 var _burstLatchSlot = 0;
+var BURST_EXIT_MS = 980;
+var _exitingLock = false;  /* true while fade-out is playing — blocks re-show */
 var _glfx = {
     canvas: null,
     gl: null,
@@ -671,7 +678,7 @@ function _renderGL(ts) {
     var elapsed = (ts - _glfx.shownAt) / 1000.0;
     var fade = 1.0;
     if (_glfx.hiddenAt > 0) {
-        fade = Math.max(0.0, 1.0 - ((ts - _glfx.hiddenAt) / 860.0));
+        fade = Math.max(0.0, 1.0 - ((ts - _glfx.hiddenAt) / BURST_EXIT_MS));
     }
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(_glfx.program);
@@ -688,6 +695,7 @@ function _renderGL(ts) {
 
 function _beginGL(anchor, label, panelSize) {
     if (!_initGL()) return;
+    var canvas = document.getElementById('gl-fx');
     _glfx.anchor = { x: anchor.x, y: anchor.y };
     _glfx.label = { x: label.x, y: label.y };
     _glfx.targetAnchor = { x: anchor.x, y: anchor.y };
@@ -698,7 +706,10 @@ function _beginGL(anchor, label, panelSize) {
     _glfx.shownAt = performance.now();
     _glfx.hiddenAt = 0;
     _glfx.active = true;
-    document.getElementById('gl-fx').classList.add('active');
+    if (canvas) {
+        canvas.classList.remove('fading');
+        canvas.classList.add('active');
+    }
     if (_glfx.frame) window.cancelAnimationFrame(_glfx.frame);
     _glfx.frame = window.requestAnimationFrame(_renderGL);
 }
@@ -712,6 +723,10 @@ function _updateGLTarget(anchor, label, panelSize) {
 function _fadeOutGL() {
     if (!_glfx.active) return;
     _glfx.hiddenAt = performance.now();
+    var canvas = document.getElementById('gl-fx');
+    if (canvas) {
+        canvas.classList.add('fading');
+    }
 }
 
 function _stopGL() {
@@ -725,7 +740,10 @@ function _stopGL() {
         _glfx.gl.clear(_glfx.gl.COLOR_BUFFER_BIT);
     }
     var canvas = document.getElementById('gl-fx');
-    if (canvas) canvas.classList.remove('active');
+    if (canvas) {
+        canvas.classList.remove('active');
+        canvas.classList.remove('fading');
+    }
 }
 
 function _slotAnchor(slotIndex) {
@@ -818,6 +836,7 @@ function _positionBurstReady(slotIndex, restartGL) {
 }
 
 function showBurstReady(slotIndex) {
+    if (_exitingLock) return;          /* fade-out in progress — ignore */
     _burstVisible = true;
     _currentBurstSlot = parseInt(slotIndex || 0, 10) || 1;
     var overlay = document.getElementById('burst-overlay');
@@ -847,6 +866,7 @@ function hideBurstReady() {
     if (!_burstVisible) return;
     _burstVisible = false;
     _currentBurstSlot = 0;
+    _exitingLock = true;               /* lock re-show during fade */
     var overlay = document.getElementById('burst-overlay');
     overlay.classList.add('exiting');
     _fadeOutGL();
@@ -855,7 +875,8 @@ function hideBurstReady() {
         overlay.classList.remove('exiting');
         _stopGL();
         _fadeTimer = null;
-    }, 920);
+        _exitingLock = false;          /* unlock after fade completes */
+    }, BURST_EXIT_MS);
 }
 
 function setViewport(payload) {

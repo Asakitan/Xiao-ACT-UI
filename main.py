@@ -110,7 +110,28 @@ def run_headless():
 
 
 def run_ui():
-    """启动 WebView UI."""
+    """根据 settings.json 中的 ui_mode 启动对应 UI."""
+    # 读取 ui_mode 设置
+    ui_mode = 'webview'  # default
+    try:
+        from config import SettingsManager
+        _s = SettingsManager()
+        ui_mode = _s.get('ui_mode', 'webview') or 'webview'
+    except Exception:
+        pass
+
+    if ui_mode == 'entity':
+        print('[SAO Auto] UI mode: entity (tkinter)')
+        try:
+            from sao_gui import SAOPlayerGUI
+            app = SAOPlayerGUI()
+            app.run()
+            return
+        except Exception as e:
+            print(f'[SAO Auto] Entity UI 启动失败: {e}')
+            import traceback; traceback.print_exc()
+            # fall through to webview
+
     print('[SAO Auto] UI mode: webview')
     try:
         from sao_webview import SAOWebViewGUI, is_webview_available
@@ -119,9 +140,19 @@ def run_ui():
             app.run()
             return
         else:
-            print('[SAO Auto] pywebview 不可用')
+            print('[SAO Auto] pywebview 不可用, 尝试 entity 模式')
     except Exception as e:
         print(f'[SAO Auto] WebView UI 启动失败: {e}')
+
+    # Final fallback: entity mode
+    if ui_mode != 'entity':
+        try:
+            from sao_gui import SAOPlayerGUI
+            app = SAOPlayerGUI()
+            app.run()
+            return
+        except Exception as e2:
+            print(f'[SAO Auto] Entity UI 也启动失败: {e2}')
 
     print('[SAO Auto] 回退到 headless 模式')
     run_headless()

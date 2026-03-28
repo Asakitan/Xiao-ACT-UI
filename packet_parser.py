@@ -23,7 +23,7 @@ import time
 from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger('sao_auto.parser')
-_PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
+_PACKET_DEBUG_ENABLED = True  # Enable to log raw packet snapshots for field confirmation
 
 
 
@@ -260,9 +260,57 @@ class AttrType:
     STA_RATIO_SET = (11850, 11851, 11852)
     SEASON_LEVEL = 10070       # AttrSeasonLevel (authoritative, from StarResonanceDps)
     SEASON_LV = 196             # AttrSeasonLv (alternate attr)
+    # ── Boss / Monster mechanic attrs (from SRDPS enum_e_attr_type.proto) ──
+    MAX_EXTINCTION = 440        # Breaking bar max (extinction gauge)
+    EXTINCTION = 441            # Breaking bar current
+    MAX_STUNNED = 442           # Stun gauge max
+    STUNNED = 443               # Stun gauge current
+    IN_OVERDRIVE = 444          # Boss overdrive (enraged) flag
+    IS_LOCK_STUNNED = 445       # Locked-stun flag
+    STOP_BREAKING_TICKING = 453 # AttrStopBreakingBarTickingFlag
+    BREAKING_STAGE = 455        # Breaking phase stage (0/1/2...)
+    SHIELD_LIST = 60050         # AttrShieldList — repeated ShieldInfo message
+    STUNNED_DAMAGE_PCT = 11830  # Bonus damage % during stun
 
 
 SERVICE_UUID_C3SB = 0x0000000063335342
+
+# ── Boss-relevant EBuffEventType values (from SRDPS enum_e_buff_event_type.proto) ──
+class BuffEventType:
+    HOST_DEATH = 12
+    BODY_PART_DEAD = 15
+    BODY_PART_STATE_CHANGE = 17
+    SHIELD_BROKEN = 47
+    SUPER_ARMOR_BROKEN = 51
+    ENTER_BREAKING = 58
+    INTO_FRACTURE_STATE = 88
+
+# Which BuffEventType values we want to emit as boss events
+_BOSS_BUFF_EVENTS = frozenset({
+    BuffEventType.HOST_DEATH,
+    BuffEventType.BODY_PART_DEAD,
+    BuffEventType.BODY_PART_STATE_CHANGE,
+    BuffEventType.SHIELD_BROKEN,
+    BuffEventType.SUPER_ARMOR_BROKEN,
+    BuffEventType.ENTER_BREAKING,
+    BuffEventType.INTO_FRACTURE_STATE,
+})
+
+# EDamageType enum (from SRDPS enum_e_damage_type.proto)
+class DamageType:
+    NORMAL = 0
+    MISS = 1
+    HEAL = 2
+    IMMUNE = 3
+    FALL = 4
+    ABSORBED = 5
+
+# Entity types in SyncNearEntities.Appear
+class EntityType:
+    CHAR = 1       # Player character
+    MONSTER = 3    # Monster entity
+    NPC = 5        # NPC
+    COLLECT = 7    # Collectible
 
 PROFESSION_NAMES = {
     1:  '雷影剑士',
@@ -379,6 +427,11 @@ def _is_player(uuid: int) -> bool:
     return (uuid & 0xFFFF) == 640
 
 
+def _is_monster(uuid: int) -> bool:
+    low = uuid & 0xFFFF
+    return low == 64 or low == 32832  # 0x0040 or 0x8040
+
+
 def _uuid_to_uid(uuid: int) -> int:
     return uuid >> 16
 
@@ -404,6 +457,69 @@ _PROFESSION_PREFIX: Dict[int, int] = {}   # profession_id → prefix
 for _pid, _sid in PROFESSION_NORMAL_ATTACK.items():
     _PROFESSION_PREFIX[_pid] = _sid // 100
 _ALL_PROFESSION_PREFIXES: frozenset = frozenset(_PROFESSION_PREFIX.values())
+
+
+class MonsterData:
+    """Tracks one monster entity's parsed state."""
+    __slots__ = ('uuid', 'uid', 'name', 'template_id',
+                 'hp', 'max_hp',
+                 'breaking_stage', 'extinction', 'max_extinction',
+                 'stunned', 'max_stunned', 'in_overdrive',
+                 'is_lock_stunned', 'stop_breaking_ticking',
+                 'shield_active', 'shield_total', 'shield_max_total',
+                 'is_dead', 'last_update')
+
+    def __init__(self, uuid: int, uid: int = 0):
+        self.uuid = uuid
+        self.uid = uid or _uuid_to_uid(uuid)
+        self.name: str = ''
+        self.template_id: int = 0
+        self.hp: int = 0
+        self.max_hp: int = 0
+        self.breaking_stage: int = 0
+        self.extinction: int = 0
+        self.max_extinction: int = 0
+        self.stunned: int = 0
+        self.max_stunned: int = 0
+        self.in_overdrive: bool = False
+        self.is_lock_stunned: bool = False
+        self.stop_breaking_ticking: bool = False
+        self.shield_active: bool = False
+        self.shield_total: int = 0
+        self.shield_max_total: int = 0
+        self.is_dead: bool = False
+        self.last_update: float = 0.0
+
+    def to_dict(self) -> dict:
+        # Break gauge: prefer extinction data; fall back to stunned data
+        if self.max_extinction > 0:
+            _ext_pct = self.extinction / self.max_extinction
+        elif self.max_stunned > 0:
+            _ext_pct = self.stunned / self.max_stunned
+        else:
+            _ext_pct = 0.0
+        return {
+            'uuid': self.uuid,
+            'uid': self.uid,
+            'name': self.name,
+            'template_id': self.template_id,
+            'hp': self.hp,
+            'max_hp': self.max_hp,
+            'hp_pct': (self.hp / self.max_hp) if self.max_hp > 0 else 0.0,
+            'breaking_stage': self.breaking_stage,
+            'extinction': self.extinction,
+            'max_extinction': self.max_extinction,
+            'extinction_pct': _ext_pct,
+            'stunned': self.stunned,
+            'max_stunned': self.max_stunned,
+            'in_overdrive': self.in_overdrive,
+            'stop_breaking_ticking': self.stop_breaking_ticking,
+            'shield_active': self.shield_active,
+            'shield_total': self.shield_total,
+            'shield_max_total': self.shield_max_total,
+            'shield_pct': (self.shield_total / self.shield_max_total) if self.shield_max_total > 0 else 0.0,
+            'is_dead': self.is_dead,
+        }
 
 
 class PlayerData:
@@ -465,7 +581,7 @@ class PlayerData:
         self.skill_cd_map: Dict[int, Dict[str, Any]] = {}
         self.skill_last_use_at: Dict[int, float] = {}
         self.skill_seen_ids = []
-        self.server_time_offset_ms: float = 0.0
+        self.server_time_offset_ms: Optional[float] = None
 
 
 def _decode_energy_item(data: bytes) -> Dict[str, Any]:
@@ -584,11 +700,14 @@ def _decode_monster_hunt_level(data: bytes) -> int:
 
 
 def _normalize_season_medal_level(raw_level: int) -> int:
-    """Normalize raw SeasonMedal level values to the UI-visible seasonal level."""
+    """Normalize raw SeasonMedal level values to the UI-visible seasonal level.
+    SeasonMedalInfo hole_level values >= 100 that are multiples of 10 encode
+    as ``raw_level // 10`` (previously had an off-by-one ``-1``).
+    """
     if raw_level <= 0:
         return 0
     if raw_level >= 100 and raw_level % 10 == 0:
-        return max(0, (raw_level // 10) - 1)
+        return max(0, raw_level // 10)
     return raw_level
 
 
@@ -1063,20 +1182,31 @@ def _refresh_stamina_resource(player: PlayerData) -> bool:
 class PacketParser:
     """Parse game packets and notify the callback when self data changes."""
 
-    def __init__(self, on_self_update: Callable[[PlayerData], None], preferred_uid: int = 0):
+    def __init__(self, on_self_update: Callable[[PlayerData], None],
+                 on_damage: Optional[Callable[[dict], None]] = None,
+                 on_monster_update: Optional[Callable[[dict], None]] = None,
+                 on_boss_event: Optional[Callable[[dict], None]] = None,
+                 preferred_uid: int = 0):
         self._on_update = on_self_update
+        self._on_damage = on_damage   # callback(DamageEvent dict)
+        self._on_monster_update = on_monster_update  # callback(MonsterData.to_dict())
+        self._on_boss_event = on_boss_event          # callback({event_type, host_uuid, ...})
         self._current_uuid: int = 0   # Current player UUID
         self._current_uid: int = max(0, int(preferred_uid))    # Current player UID (uuid >> 16)
         self._players: Dict[int, PlayerData] = {}  # uid -> PlayerData
+        self._monsters: Dict[int, MonsterData] = {}  # uuid -> MonsterData
         self._profession_skill_cache: Dict[int, Dict[int, int]] = {}  # profession_id -> slot map
         self._zstd = None
-        self._server_time_offset_ms: float = 0.0
+        self._server_time_offset_ms: Optional[float] = None
         self.stats = {
             'raw_frames': 0,
             'game_frames': 0,
             'unknown_message_types': 0,
             'unknown_notify_methods': 0,
             'zstd_failures': 0,
+            'damage_events': 0,
+            'monster_updates': 0,
+            'boss_events': 0,
         }
         if self._current_uid > 0:
             logger.info(f'[Parser] bootstrap self UID from cache: {self._current_uid}')
@@ -1091,6 +1221,47 @@ class PacketParser:
         if uid not in self._players:
             self._players[uid] = PlayerData(uid)
         return self._players[uid]
+
+    def _get_monster(self, uuid: int) -> MonsterData:
+        if uuid not in self._monsters:
+            self._monsters[uuid] = MonsterData(uuid)
+        return self._monsters[uuid]
+
+    def get_monsters(self) -> Dict[int, MonsterData]:
+        """Return the current monster tracking dict (uuid → MonsterData)."""
+        return self._monsters
+
+    def get_alive_monsters(self) -> list:
+        """Return list of alive monster dicts (for UI consumption)."""
+        return [m.to_dict() for m in self._monsters.values()
+                if not m.is_dead and m.max_hp > 0]
+
+    def _notify_monster(self, monster: MonsterData):
+        """Fire on_monster_update callback if registered."""
+        if self._on_monster_update:
+            self.stats['monster_updates'] += 1
+            try:
+                self._on_monster_update(monster.to_dict())
+            except Exception as e:
+                logger.debug(f'[Parser] monster update callback error: {e}')
+
+    def _notify_boss_event(self, event_type: int, host_uuid: int,
+                           buff_uuid: int = 0, extra: Optional[dict] = None):
+        """Fire on_boss_event callback for boss-relevant buff events."""
+        if self._on_boss_event:
+            self.stats['boss_events'] += 1
+            event = {
+                'event_type': event_type,
+                'host_uuid': host_uuid,
+                'buff_uuid': buff_uuid,
+                'timestamp': time.time(),
+            }
+            if extra:
+                event.update(extra)
+            try:
+                self._on_boss_event(event)
+            except Exception as e:
+                logger.debug(f'[Parser] boss event callback error: {e}')
 
     def _notify_self(self):
         """Notify callback for current player if available."""
@@ -1965,9 +2136,34 @@ class PacketParser:
 
     def _on_sync_near_entities(self, data: bytes):
         outer = _decode_fields(data)
-        # Appear (field 1, repeated)
+
+        # ── Disappear (field 2, repeated) ──
+        disappear_list = outer.get(2, [])
+        for entity_raw in disappear_list:
+            if not isinstance(entity_raw, bytes):
+                continue
+            ef = _decode_fields(entity_raw)
+            uuid_raw = ef.get(1, [0])[0]
+            if not isinstance(uuid_raw, int) or uuid_raw == 0:
+                continue
+            uuid = _varint_to_int64(uuid_raw)
+            disappear_type = ef.get(2, [0])[0]  # EDisappearType: 1=Dead, 2=FarAway, ...
+
+            if _is_monster(uuid) and uuid in self._monsters:
+                monster = self._monsters[uuid]
+                if disappear_type == 1:  # EDisappearDead
+                    monster.is_dead = True
+                    monster.hp = 0
+                    monster.last_update = time.time()
+                    logger.info(f'[Parser] Monster DEAD (disappear) uuid={uuid} name={monster.name!r}')
+                    self._notify_monster(monster)
+                else:
+                    logger.debug(f'[Parser] Monster disappeared type={disappear_type} uuid={uuid}')
+
+        # ── Appear (field 1, repeated) ──
         appear_list = outer.get(1, [])
         player_uids_appeared = []
+        monster_uuids_appeared = []
         for entity_raw in appear_list:
             if not isinstance(entity_raw, bytes):
                 continue
@@ -1978,15 +2174,21 @@ class PacketParser:
             uuid = _varint_to_int64(uuid_raw)
             ent_type = ef.get(2, [0])[0]
 
-            if not _is_player(uuid):
-                continue  # Skip non-player entities.
-            uid = _uuid_to_uid(uuid)
-            player_uids_appeared.append(uid)
-
             # AttrCollection (field 3)
             attr_raw = ef.get(3, [None])[0]
-            if isinstance(attr_raw, bytes):
-                self._process_attr_collection(uid, attr_raw)
+
+            if _is_player(uuid):
+                uid = _uuid_to_uid(uuid)
+                player_uids_appeared.append(uid)
+                if isinstance(attr_raw, bytes):
+                    self._process_attr_collection(uid, attr_raw)
+            elif _is_monster(uuid):
+                monster_uuids_appeared.append(uuid)
+                # Reset dead state on re-appear
+                monster = self._get_monster(uuid)
+                monster.is_dead = False
+                if isinstance(attr_raw, bytes):
+                    self._process_monster_attr_collection(uuid, attr_raw)
 
         if player_uids_appeared:
             is_self = self._current_uid in player_uids_appeared
@@ -1994,6 +2196,11 @@ class PacketParser:
                 f'[Parser] SyncNearEntities: {len(player_uids_appeared)} players appeared '
                 f'(self={is_self}, current_uid={self._current_uid}, '
                 f'appeared_uids={player_uids_appeared[:5]})'
+            )
+        if monster_uuids_appeared:
+            logger.info(
+                f'[Parser] SyncNearEntities: {len(monster_uuids_appeared)} monsters appeared '
+                f'(uuids={monster_uuids_appeared[:5]})'
             )
 
 
@@ -2109,17 +2316,311 @@ class PacketParser:
         if not isinstance(uuid_raw, int) or uuid_raw == 0:
             return
         uuid = _varint_to_int64(uuid_raw)
-        if not _is_player(uuid):
-            return
+        target_is_player = _is_player(uuid)
+        target_is_monster = _is_monster(uuid)
         uid = _uuid_to_uid(uuid)
 
-        # Attrs (field 2)
+        # Attrs (field 2) — players and monsters
         attr_raw = df.get(2, [None])[0]
         if isinstance(attr_raw, bytes):
-            self._process_attr_collection(uid, attr_raw)
+            if target_is_player:
+                self._process_attr_collection(uid, attr_raw)
+            elif target_is_monster:
+                self._process_monster_attr_collection(uuid, attr_raw)
+
+        # BuffEffectSync (field 11) — boss buff events
+        buff_effect_raw = df.get(11, [None])[0]
+        if isinstance(buff_effect_raw, bytes) and target_is_monster:
+            self._process_buff_effect_sync(uuid, buff_effect_raw)
+
+        # SkillEffect (field 7) — damage extraction
+        skill_effect_raw = df.get(7, [None])[0]
+        if isinstance(skill_effect_raw, bytes):
+            self._process_skill_effect(uuid, target_is_player, target_is_monster, skill_effect_raw)
+
+    def _process_skill_effect(self, target_uuid: int, target_is_player: bool,
+                              target_is_monster: bool, data: bytes):
+        """Decode SkillEffect (AoiSyncDelta field 7) and emit damage events.
+
+        SkillEffect {
+            int64 Uuid = 1;
+            repeated SyncDamageInfo Damages = 2;
+            int64 TotalDamage = 3;
+        }
+        SyncDamageInfo fields: see star_resonance.proto lines 5107-5132.
+        """
+        se = _decode_fields(data)
+        for dmg_raw in se.get(2, []):
+            if not isinstance(dmg_raw, bytes):
+                continue
+            try:
+                self._decode_sync_damage_info(target_uuid, target_is_player,
+                                              target_is_monster, dmg_raw)
+            except Exception as e:
+                logger.debug(f'[Parser] damage decode error: {e}')
+
+    def _decode_sync_damage_info(self, target_uuid: int, target_is_player: bool,
+                                 target_is_monster: bool, data: bytes):
+        """Decode a single SyncDamageInfo and fire on_damage callback."""
+        df = _decode_fields(data)
+        damage_type = df.get(4, [0])[0]     # EDamageType: 0=Normal, 1=Miss, 2=Heal, 3=Immune, 4=Fall, 5=Absorbed
+        # Miss and Fall are truly irrelevant — skip them.
+        # Immune and Absorbed are now emitted for invincibility detection.
+        if damage_type in (DamageType.MISS, DamageType.FALL):
+            return
+        is_heal = damage_type == DamageType.HEAL
+        is_immune = damage_type == DamageType.IMMUNE
+        is_absorbed = damage_type == DamageType.ABSORBED
+        type_flag = df.get(5, [0])[0]       # bit0=crit, bit2=cause_lucky
+        value = df.get(6, [0])[0]           # Primary damage/heal amount
+        actual_value = df.get(7, [0])[0]
+        lucky_value = df.get(8, [0])[0]     # Non-zero when lucky proc
+        hp_lessen = df.get(9, [0])[0]       # Actual HP reduction on target
+        shield_lessen = df.get(10, [0])[0]  # Shield damage absorbed
+        attacker_raw = df.get(11, [0])[0]   # AttackerUuid
+        skill_id = df.get(12, [0])[0]       # OwnerId = skill ID
+        is_dead = bool(df.get(17, [0])[0])  # Target died
+        element = df.get(18, [0])[0]        # EDamageProperty
+        top_summoner_raw = df.get(21, [0])[0]  # TopSummonerId (real owner if summon)
+
+        # Use signed int64 for UUIDs
+        attacker_uuid = _varint_to_int64(top_summoner_raw) if top_summoner_raw else _varint_to_int64(attacker_raw)
+        damage_amount = value if value else lucky_value
+
+        # For Immune/Absorbed events, allow zero-damage through (they signal invincibility)
+        if not (is_immune or is_absorbed):
+            if damage_amount <= 0 and hp_lessen <= 0:
+                return
+
+        # Determine if this is self-outgoing damage (self attacks monster)
+        attacker_is_self = False
+        if self._current_uuid and attacker_uuid:
+            if attacker_uuid == self._current_uuid:
+                attacker_is_self = True
+            elif _is_player(attacker_uuid) and _uuid_to_uid(attacker_uuid) == self._current_uid:
+                attacker_is_self = True
+        elif self._current_uid and attacker_uuid and _is_player(attacker_uuid):
+            # Fallback: _current_uuid not yet known (SyncToMeDelta not received),
+            # but _current_uid is available from SyncContainerData / cache.
+            if _uuid_to_uid(attacker_uuid) == self._current_uid:
+                attacker_is_self = True
+
+        event = {
+            'target_uuid': target_uuid,
+            'target_is_player': target_is_player,
+            'target_is_monster': target_is_monster,
+            'attacker_uuid': attacker_uuid,
+            'attacker_is_self': attacker_is_self,
+            'skill_id': _varint_to_int32(skill_id) if skill_id else 0,
+            'damage': int(damage_amount),
+            'hp_lessen': int(hp_lessen),
+            'shield_lessen': int(shield_lessen),
+            'damage_type': int(damage_type),
+            'is_heal': is_heal,
+            'is_immune': is_immune,
+            'is_absorbed': is_absorbed,
+            'is_crit': bool(type_flag & 1),
+            'is_dead': is_dead,
+            'element': int(element),
+            'timestamp': time.time(),
+        }
+        self.stats['damage_events'] += 1
+        if self._on_damage:
+            try:
+                self._on_damage(event)
+            except Exception as e:
+                logger.debug(f'[Parser] damage callback error: {e}')
 
 
-    # AttrCollection parsing
+    # AttrCollection parsing — Monster
+
+
+    def _process_monster_attr_collection(self, uuid: int, data: bytes):
+        """Decode AttrCollection from a monster delta and update MonsterData."""
+        ac = _decode_fields(data)
+        attrs_list = ac.get(2, [])
+        if not attrs_list:
+            return
+
+        monster = self._get_monster(uuid)
+        changed = False
+
+        for attr_raw in attrs_list:
+            if not isinstance(attr_raw, bytes):
+                continue
+            af = _decode_fields(attr_raw)
+            attr_id = af.get(1, [0])[0]
+            raw_data = af.get(2, [None])[0]
+            if not isinstance(raw_data, bytes) or not attr_id:
+                continue
+            int_value = _decode_int32_from_raw(raw_data)
+
+            if attr_id == AttrType.NAME:
+                name = _decode_string_from_raw(raw_data)
+                if name and name != monster.name:
+                    monster.name = name
+                    changed = True
+                    logger.info(f'[Parser] Monster NAME={name!r} uuid={uuid}')
+            elif attr_id == AttrType.ID:
+                tid = int_value
+                if tid > 0 and tid != monster.template_id:
+                    monster.template_id = tid
+                    changed = True
+            elif attr_id == AttrType.HP:
+                hp = int_value
+                if hp >= 0 and hp != monster.hp:
+                    monster.hp = hp
+                    if hp == 0 and monster.max_hp > 0:
+                        monster.is_dead = True
+                    changed = True
+            elif attr_id == AttrType.MAX_HP:
+                mhp = int_value
+                if mhp > 0 and mhp != monster.max_hp:
+                    monster.max_hp = mhp
+                    changed = True
+            elif attr_id == AttrType.BREAKING_STAGE:
+                if int_value != monster.breaking_stage:
+                    monster.breaking_stage = int_value
+                    changed = True
+                    logger.info(f'[Parser] Monster BREAKING_STAGE={int_value} uuid={uuid}')
+            elif attr_id == AttrType.EXTINCTION:
+                if int_value != monster.extinction:
+                    monster.extinction = int_value
+                    changed = True
+                    logger.info(f'[Parser] Monster EXTINCTION={int_value} max={monster.max_extinction} uuid={uuid}')
+            elif attr_id == AttrType.MAX_EXTINCTION:
+                if int_value > 0 and int_value != monster.max_extinction:
+                    monster.max_extinction = int_value
+                    changed = True
+                    logger.info(f'[Parser] Monster MAX_EXTINCTION={int_value} uuid={uuid}')
+            elif attr_id == AttrType.STUNNED:
+                if int_value != monster.stunned:
+                    monster.stunned = int_value
+                    changed = True
+                    logger.info(f'[Parser] Monster STUNNED={int_value} max={monster.max_stunned} uuid={uuid}')
+            elif attr_id == AttrType.MAX_STUNNED:
+                if int_value > 0 and int_value != monster.max_stunned:
+                    monster.max_stunned = int_value
+                    changed = True
+                    logger.info(f'[Parser] Monster MAX_STUNNED={int_value} uuid={uuid}')
+            elif attr_id == AttrType.IN_OVERDRIVE:
+                flag = bool(int_value)
+                if flag != monster.in_overdrive:
+                    monster.in_overdrive = flag
+                    changed = True
+                    logger.info(f'[Parser] Monster IN_OVERDRIVE={flag} uuid={uuid}')
+            elif attr_id == AttrType.IS_LOCK_STUNNED:
+                flag = bool(int_value)
+                if flag != monster.is_lock_stunned:
+                    monster.is_lock_stunned = flag
+                    changed = True
+            elif attr_id == AttrType.STOP_BREAKING_TICKING:
+                flag = bool(int_value)
+                if flag != monster.stop_breaking_ticking:
+                    monster.stop_breaking_ticking = flag
+                    changed = True
+            elif attr_id == AttrType.SHIELD_LIST:
+                # AttrShieldList = repeated ShieldInfo {uuid=1, shield_type=2, value=3, initial_value=4, max_value=5}
+                self._decode_shield_list(monster, raw_data)
+                changed = True
+            else:
+                # Log unknown monster attrs at debug level for future analysis
+                logger.debug(f'[Parser] Unknown monster AttrType 0x{attr_id:X} '
+                             f'int={int_value} len={len(raw_data)} uuid={uuid}')
+
+        if changed:
+            monster.last_update = time.time()
+            self._notify_monster(monster)
+
+    def _decode_shield_list(self, monster: MonsterData, raw_data: bytes):
+        """Decode AttrShieldList (60050) — repeated ShieldInfo messages."""
+        # The raw_data for AttrShieldList is a protobuf with repeated ShieldInfo
+        # ShieldInfo: uuid=1(int32), shield_type=2(int32), value=3(int64),
+        #             initial_value=4(int64), max_value=5(int64)
+        try:
+            shields = _decode_fields(raw_data)
+            total_value = 0
+            total_max = 0
+            # ShieldList can be a single message or we treat raw_data as repeated
+            # Try reading as a container of repeated shield entries
+            for shield_raw in shields.get(1, []):
+                if isinstance(shield_raw, bytes):
+                    sf = _decode_fields(shield_raw)
+                    value = sf.get(3, [0])[0]
+                    max_val = sf.get(5, [0])[0]
+                    total_value += max(0, int(value))
+                    total_max += max(0, int(max_val))
+                elif isinstance(shield_raw, int):
+                    # Single shield inline — field 3 = value
+                    value = shields.get(3, [0])[0]
+                    max_val = shields.get(5, [0])[0]
+                    total_value = max(0, int(value))
+                    total_max = max(0, int(max_val))
+                    break
+
+            monster.shield_total = total_value
+            monster.shield_max_total = total_max
+            monster.shield_active = total_value > 0
+            logger.debug(f'[Parser] Monster shield: {total_value}/{total_max} uuid={monster.uuid}')
+        except Exception as e:
+            logger.debug(f'[Parser] shield list decode error: {e}')
+
+
+    # BuffEffectSync parsing
+
+
+    def _process_buff_effect_sync(self, host_uuid: int, data: bytes):
+        """Decode BuffEffectSync (AoiSyncDelta field 11) for boss events.
+
+        BuffEffectSync { int64 Uuid = 1; repeated BuffEffect BuffEffects = 2; }
+        BuffEffect { EBuffEventType Type = 1; int32 BuffUuid = 2;
+                     int64 HostUuid = 3; int64 TriggerTime = 4; ... }
+        """
+        try:
+            sync = _decode_fields(data)
+            for buff_raw in sync.get(2, []):
+                if not isinstance(buff_raw, bytes):
+                    continue
+                bf = _decode_fields(buff_raw)
+                event_type = bf.get(1, [0])[0]
+                if event_type not in _BOSS_BUFF_EVENTS:
+                    continue
+                buff_uuid = bf.get(2, [0])[0]
+                buff_host = bf.get(3, [0])[0]
+                if isinstance(buff_host, int) and buff_host != 0:
+                    buff_host = _varint_to_int64(buff_host)
+                else:
+                    buff_host = host_uuid
+
+                logger.info(f'[Parser] BuffEvent type={event_type} buff={buff_uuid} '
+                            f'host={buff_host} target_uuid={host_uuid}')
+
+                # Update monster state based on event type
+                monster = self._monsters.get(host_uuid)
+                if monster:
+                    if event_type == BuffEventType.ENTER_BREAKING:
+                        logger.info(f'[Parser] Monster ENTER_BREAKING uuid={host_uuid}')
+                        monster.breaking_stage = 0   # EBreakingStage.Breaking
+                        monster.last_update = time.time()
+                        self._notify_monster(monster)
+                    elif event_type == BuffEventType.SHIELD_BROKEN:
+                        monster.shield_active = False
+                        monster.shield_total = 0
+                        monster.last_update = time.time()
+                        self._notify_monster(monster)
+                    elif event_type == BuffEventType.HOST_DEATH:
+                        monster.is_dead = True
+                        monster.hp = 0
+                        monster.last_update = time.time()
+                        self._notify_monster(monster)
+
+                # Fire boss event callback for all matching events
+                self._notify_boss_event(event_type, host_uuid, buff_uuid)
+        except Exception as e:
+            logger.debug(f'[Parser] BuffEffectSync decode error: {e}')
+
+
+    # AttrCollection parsing — Player
 
 
     def _process_attr_collection(self, uid: int, data: bytes):

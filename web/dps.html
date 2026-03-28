@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>SAO DPS</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+@font-face{font-family:'sao';src:url('fonts/SAOUI.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+@font-face{font-family:'saoLatin';src:url('fonts/SAOWelcome.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+:root{
+    --font-sao:'saoLatin','sao','Segoe UI',sans-serif;
+    --panel-bg:rgba(203,205,194,0.90);
+    --panel-bg-2:rgba(216,218,206,0.90);
+    --panel-edge:rgba(160,162,150,0.62);
+    --panel-line:rgba(255,255,255,0.52);
+    --text-main:rgb(83,84,73);
+    --text-muted:rgb(139,139,130);
+    --gold:rgb(222,166,32);
+    --gold-soft:rgba(222,166,32,0.22);
+    --cyan:rgba(104,228,255,0.55);
+    --green-a:rgb(211,234,124);
+    --green-b:rgb(154,211,52);
+    --heal-a:rgb(173,223,93);
+    --heal-b:rgb(117,184,45);
+    --shadow:rgba(31,34,16,0.28);
+    --danger:rgb(239,104,78);
+}
+html,body{
+    width:100%;
+    height:100%;
+    overflow:hidden;
+    background:transparent;
+    color:var(--text-main);
+    font-family:var(--font-sao);
+    user-select:none;
+    -webkit-user-select:none;
+}
+body{padding:10px}
+.dps-shell{
+    position:relative;
+    width:100%;
+    height:100%;
+    background:linear-gradient(180deg,var(--panel-bg) 0%,var(--panel-bg-2) 100%);
+    border:1px solid var(--panel-edge);
+    border-radius:6px;
+    overflow:hidden;
+    box-shadow:
+        2px 4px 18px var(--shadow),
+        inset 0 1px 0 rgba(255,255,255,0.42),
+        inset 0 0 18px rgba(255,255,255,0.10);
+    animation:dps-enter 280ms cubic-bezier(.22,1,.36,1) both;
+    transition:filter 150ms ease, box-shadow 150ms ease;
+    will-change:opacity,transform,filter;
+}
+.dps-shell.mega-hit-blur{
+    filter:blur(0.95px) brightness(1.05);
+    box-shadow:
+        0 0 18px rgba(104,228,255,0.24),
+        0 0 28px rgba(222,166,32,0.18),
+        2px 4px 18px var(--shadow),
+        inset 0 1px 0 rgba(255,255,255,0.48),
+        inset 0 0 18px rgba(255,255,255,0.12);
+}
+.dps-shell.entering{
+    animation:dps-enter 280ms cubic-bezier(.22,1,.36,1) both;
+}
+.dps-shell.exiting{
+    animation:dps-exit 260ms ease both;
+}
+.dps-shell::before{
+    content:'';
+    position:absolute;
+    inset:0;
+    background:repeating-linear-gradient(0deg,transparent 0 3px,rgba(255,255,255,0.055) 3px 4px);
+    pointer-events:none;
+}
+.dps-shell::after{
+    content:'';
+    position:absolute;
+    inset:0;
+    border:1px solid rgba(255,255,255,0.16);
+    border-radius:6px;
+    pointer-events:none;
+}
+.panel-flash-layer{
+    position:absolute;
+    inset:0;
+    z-index:1;
+    opacity:0;
+    pointer-events:none;
+    border-radius:6px;
+    background:
+        radial-gradient(circle at 50% 18%, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.34) 14%, rgba(255,255,255,0.00) 48%),
+        linear-gradient(90deg, rgba(104,228,255,0.00) 0%, rgba(104,228,255,0.28) 24%, rgba(255,255,255,0.52) 50%, rgba(222,166,32,0.34) 78%, rgba(222,166,32,0.00) 100%);
+    mix-blend-mode:screen;
+}
+.panel-flash-layer.flash{
+    animation:dps-panel-hit-flash 720ms cubic-bezier(.22,1,.36,1) both;
+}
+@keyframes dps-enter{
+    from{opacity:0;transform:translateY(10px) scale(0.985)}
+    to{opacity:1;transform:translateY(0) scale(1)}
+}
+@keyframes dps-exit{
+    from{opacity:1;transform:translateY(0) scale(1)}
+    to{opacity:0;transform:translateY(8px) scale(0.985)}
+}
+@keyframes dps-panel-hit-flash{
+    0%{opacity:0}
+    12%{opacity:0.96}
+    34%{opacity:0.38}
+    100%{opacity:0}
+}
+.corner{
+    position:absolute;
+    width:18px;
+    height:18px;
+    pointer-events:none;
+    z-index:3;
+}
+.corner.tl{top:2px;left:2px;border-top:2px solid var(--cyan);border-left:2px solid var(--cyan)}
+.corner.br{right:2px;bottom:2px;border-bottom:2px solid rgba(212,156,23,0.72);border-right:2px solid rgba(212,156,23,0.72)}
+.dps-header{
+    position:relative;
+    z-index:2;
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:10px;
+    padding:12px 14px 10px;
+    border-bottom:1px solid rgba(160,162,150,0.5);
+    cursor:move;
+}
+.header-copy{min-width:0;flex:1}
+.eyebrow{
+    font-size:10px;
+    letter-spacing:2.2px;
+    color:var(--text-muted);
+    text-transform:uppercase;
+}
+.title-row{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-top:4px;
+}
+.title{
+    font-size:18px;
+    letter-spacing:1.6px;
+    white-space:nowrap;
+}
+.mode-badge{
+    display:inline-flex;
+    align-items:center;
+    gap:5px;
+    padding:2px 8px;
+    min-height:22px;
+    border:1px solid rgba(160,162,150,0.64);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+    background:rgba(255,255,255,0.42);
+    color:var(--gold);
+    font-size:10px;
+    letter-spacing:1.1px;
+    text-transform:uppercase;
+}
+.mode-badge.live{color:rgb(82,140,48)}
+.mode-badge.report{color:var(--gold)}
+.summary{
+    margin-top:6px;
+    font-size:10px;
+    letter-spacing:0.85px;
+    color:var(--text-muted);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.header-actions{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    flex-wrap:wrap;
+    justify-content:flex-end;
+}
+.sao-btn{
+    min-width:76px;
+    padding:6px 10px;
+    border:1px solid rgba(160,162,150,0.64);
+    background:rgba(255,255,255,0.44);
+    color:var(--text-main);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+    font-family:var(--font-sao);
+    font-size:10px;
+    letter-spacing:1px;
+    text-transform:uppercase;
+    cursor:pointer;
+    transition:background 140ms ease,color 140ms ease,border-color 140ms ease,transform 140ms ease;
+}
+.sao-btn:hover{
+    background:rgba(222,166,32,0.92);
+    border-color:rgba(222,166,32,0.86);
+    color:rgb(251,245,231);
+    transform:translateY(-1px);
+}
+.sao-btn.active{
+    background:rgba(222,166,32,0.18);
+    border-color:rgba(222,166,32,0.72);
+    color:var(--gold);
+}
+.sao-btn.secondary.active{
+    background:rgba(104,228,255,0.12);
+    border-color:rgba(104,228,255,0.72);
+    color:rgb(68,144,162);
+}
+.sao-btn.danger:hover{
+    background:rgba(239,104,78,0.92);
+    border-color:rgba(239,104,78,0.82);
+}
+.sao-btn.disabled,
+.sao-btn:disabled{
+    opacity:0.42;
+    cursor:default;
+    pointer-events:none;
+}
+.dps-tabs{
+    position:relative;
+    z-index:2;
+    display:flex;
+    gap:8px;
+    padding:10px 14px 8px;
+}
+.dps-tab{
+    flex:1;
+    padding:6px 10px;
+    text-align:center;
+    border:1px solid rgba(160,162,150,0.52);
+    background:rgba(255,255,255,0.26);
+    clip-path:polygon(10px 0,100% 0,100% 100%,0 100%,0 10px);
+    font-size:10px;
+    letter-spacing:1.2px;
+    text-transform:uppercase;
+    cursor:pointer;
+    color:var(--text-muted);
+}
+.dps-tab.active{
+    color:var(--gold);
+    background:rgba(222,166,32,0.13);
+    border-color:rgba(222,166,32,0.66);
+}
+.content{
+    position:relative;
+    z-index:2;
+    height:calc(100% - 152px);
+    padding:0 14px 10px;
+}
+.list-view,.detail-view{
+    width:100%;
+    height:100%;
+    display:none;
+    flex-direction:column;
+}
+.list-view.show,.detail-view.show{display:flex}
+.list-frame,.skill-frame{
+    flex:1;
+    min-height:0;
+    background:rgba(255,255,255,0.18);
+    border:1px solid rgba(160,162,150,0.42);
+    border-radius:4px;
+    overflow:auto;
+}
+.list-frame::-webkit-scrollbar,.skill-frame::-webkit-scrollbar{width:6px}
+.list-frame::-webkit-scrollbar-thumb,.skill-frame::-webkit-scrollbar-thumb{
+    background:rgba(160,162,150,0.42);
+    border-radius:999px;
+}
+.entity-row{
+    position:relative;
+    margin:6px;
+    padding:8px 10px;
+    overflow:hidden;
+    border:1px solid rgba(160,162,150,0.32);
+    background:rgba(255,255,255,0.48);
+    clip-path:polygon(10px 0,100% 0,100% 100%,0 100%,0 10px);
+    cursor:pointer;
+    will-change:filter,box-shadow,background-color,border-color;
+}
+.entity-row.self{border-left:3px solid rgba(222,166,32,0.86)}
+.entity-row:hover{
+    border-color:rgba(222,166,32,0.52);
+    background:rgba(255,247,232,0.84);
+}
+.entity-row.impact-hit{
+    animation:entity-impact-hit 840ms cubic-bezier(.22,1,.36,1) both;
+}
+.entity-row.mega-hit{
+    animation:entity-mega-hit 1050ms cubic-bezier(.22,1,.36,1) both;
+}
+.entity-row.impact-hit .entity-name,
+.entity-row.impact-hit .entity-value-main{
+    color:rgb(57,126,146);
+}
+.entity-row.mega-hit .entity-name,
+.entity-row.mega-hit .entity-value-main{
+    color:rgb(196,135,16);
+}
+@keyframes entity-impact-hit{
+    0%{
+        filter:brightness(1) blur(0);
+        border-color:rgba(160,162,150,0.32);
+        box-shadow:none;
+        background:rgba(255,255,255,0.48);
+    }
+    16%{
+        filter:brightness(1.22) blur(0.85px);
+        border-color:rgba(104,228,255,0.92);
+        box-shadow:0 0 16px rgba(104,228,255,0.34), inset 0 0 24px rgba(104,228,255,0.18);
+        background:rgba(236,251,255,0.92);
+    }
+    42%{
+        filter:brightness(1.08) blur(0.20px);
+        border-color:rgba(104,228,255,0.58);
+        box-shadow:0 0 10px rgba(104,228,255,0.18), inset 0 0 12px rgba(104,228,255,0.10);
+        background:rgba(226,244,248,0.80);
+    }
+    100%{
+        filter:brightness(1) blur(0);
+        border-color:rgba(160,162,150,0.32);
+        box-shadow:none;
+        background:rgba(255,255,255,0.48);
+    }
+}
+@keyframes entity-mega-hit{
+    0%{
+        filter:brightness(1) blur(0);
+        border-color:rgba(160,162,150,0.32);
+        box-shadow:none;
+        background:rgba(255,255,255,0.48);
+    }
+    10%{
+        filter:brightness(1.30) blur(1px);
+        border-color:rgba(222,166,32,0.96);
+        box-shadow:0 0 22px rgba(222,166,32,0.42), inset 0 0 28px rgba(222,166,32,0.22);
+        background:rgba(255,248,224,0.98);
+    }
+    24%{
+        filter:brightness(1.14) blur(0.30px);
+        border-color:rgba(104,228,255,0.72);
+        box-shadow:0 0 18px rgba(104,228,255,0.24), inset 0 0 18px rgba(222,166,32,0.18);
+        background:rgba(255,245,219,0.92);
+    }
+    52%{
+        filter:brightness(1.08) blur(0.08px);
+        border-color:rgba(222,166,32,0.52);
+        box-shadow:0 0 10px rgba(222,166,32,0.16);
+        background:rgba(255,241,210,0.82);
+    }
+    100%{
+        filter:brightness(1) blur(0);
+        border-color:rgba(160,162,150,0.32);
+        box-shadow:none;
+        background:rgba(255,255,255,0.48);
+    }
+}
+.entity-bar{
+    position:absolute;
+    left:0;
+    top:0;
+    bottom:0;
+    width:0;
+    background:linear-gradient(90deg,rgba(222,166,32,0.20),rgba(222,166,32,0.03));
+}
+.entity-row.heal .entity-bar{
+    background:linear-gradient(90deg,rgba(154,211,52,0.24),rgba(154,211,52,0.03));
+}
+.entity-main{
+    position:relative;
+    z-index:1;
+    display:flex;
+    align-items:center;
+    gap:8px;
+}
+.rank{
+    width:20px;
+    flex:0 0 20px;
+    text-align:center;
+    font-size:11px;
+    color:var(--text-muted);
+}
+.rank.r1{color:var(--gold)}
+.rank.r2{color:rgb(130,132,140)}
+.rank.r3{color:rgb(177,132,74)}
+.entity-meta{
+    min-width:0;
+    flex:1;
+}
+.entity-name{
+    font-size:12px;
+    letter-spacing:0.7px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.entity-sub{
+    margin-top:2px;
+    font-size:9px;
+    letter-spacing:0.75px;
+    color:var(--text-muted);
+    text-transform:uppercase;
+}
+.entity-value{
+    text-align:right;
+    white-space:nowrap;
+}
+.entity-value-main{
+    font-size:13px;
+    color:var(--text-main);
+}
+.entity-value-sub{
+    margin-top:2px;
+    font-size:9px;
+    color:var(--text-muted);
+}
+.empty{
+    height:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+    text-align:center;
+    color:var(--text-muted);
+    font-size:11px;
+    letter-spacing:1.2px;
+    text-transform:uppercase;
+}
+.detail-head{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-bottom:8px;
+}
+.back-btn{
+    min-width:44px;
+    padding:6px 0;
+}
+.detail-title{
+    min-width:0;
+    flex:1;
+    font-size:13px;
+    letter-spacing:0.8px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.detail-badge{
+    color:var(--text-muted);
+    font-size:9px;
+    letter-spacing:1px;
+    text-transform:uppercase;
+}
+.detail-grid{
+    display:grid;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:8px;
+    margin-bottom:8px;
+}
+.stat-card{
+    padding:8px 8px 7px;
+    min-height:56px;
+    background:rgba(255,255,255,0.38);
+    border:1px solid rgba(160,162,150,0.34);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+}
+.stat-label{
+    font-size:8px;
+    letter-spacing:1px;
+    color:var(--text-muted);
+    text-transform:uppercase;
+}
+.stat-value{
+    margin-top:6px;
+    font-size:14px;
+    color:var(--text-main);
+}
+.stat-value.gold{color:var(--gold)}
+.stat-value.green{color:rgb(92,150,44)}
+.skill-row{
+    position:relative;
+    margin:6px;
+    padding:8px 10px;
+    overflow:hidden;
+    border:1px solid rgba(160,162,150,0.32);
+    background:rgba(255,255,255,0.46);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+}
+.skill-bar{
+    position:absolute;
+    left:0;
+    top:0;
+    bottom:0;
+    width:0;
+    background:linear-gradient(90deg,rgba(222,166,32,0.18),rgba(222,166,32,0.03));
+}
+.skill-row.heal .skill-bar{
+    background:linear-gradient(90deg,rgba(154,211,52,0.20),rgba(154,211,52,0.03));
+}
+.skill-main{
+    position:relative;
+    z-index:1;
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:10px;
+}
+.skill-name{
+    min-width:0;
+    flex:1;
+    font-size:11px;
+    letter-spacing:0.6px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.skill-info{
+    text-align:right;
+    white-space:nowrap;
+    font-size:10px;
+}
+.skill-extra{
+    margin-top:3px;
+    font-size:8px;
+    color:var(--text-muted);
+    letter-spacing:0.7px;
+    text-transform:uppercase;
+}
+.dps-footer{
+    position:absolute;
+    left:0;
+    right:0;
+    bottom:0;
+    z-index:2;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    padding:8px 14px;
+    min-height:40px;
+    border-top:1px solid rgba(160,162,150,0.42);
+    background:rgba(255,255,255,0.30);
+}
+.footer-line{
+    min-width:0;
+    flex:1;
+    font-size:10px;
+    letter-spacing:0.85px;
+    color:var(--text-muted);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.footer-line.right{text-align:right}
+</style>
+</head>
+<body>
+<div class="dps-shell" id="dps-shell">
+    <div class="panel-flash-layer" id="panel-flash-layer"></div>
+    <span class="corner tl"></span>
+    <span class="corner br"></span>
+
+    <div class="dps-header" id="dps-header">
+        <div class="header-copy">
+            <div class="eyebrow">Tactical Analytics</div>
+            <div class="title-row">
+                <div class="title">DPS / HPS</div>
+                <div class="mode-badge live" id="mode-badge">LIVE</div>
+            </div>
+            <div class="summary" id="summary-text">WAITING FOR COMBAT DATA</div>
+        </div>
+        <div class="header-actions">
+            <button class="sao-btn secondary active" id="btn-live" type="button" onclick="_activateLive()">LIVE</button>
+            <button class="sao-btn" id="btn-report" type="button" onclick="_activateReport()">LAST REPORT</button>
+            <button class="sao-btn danger" id="btn-reset" type="button" onclick="_reset()">RESET</button>
+        </div>
+    </div>
+
+    <div class="dps-tabs" id="dps-tabs">
+        <div class="dps-tab active" data-tab="damage">Damage</div>
+        <div class="dps-tab" data-tab="heal">Healing</div>
+    </div>
+
+    <div class="content">
+        <div class="list-view show" id="list-view">
+            <div class="list-frame" id="list-frame"></div>
+        </div>
+
+        <div class="detail-view" id="detail-view">
+            <div class="detail-head">
+                <button class="sao-btn back-btn" type="button" onclick="_closeDetail()">BACK</button>
+                <div class="detail-title" id="detail-title">Entity</div>
+                <div class="detail-badge" id="detail-badge">LIVE DETAIL</div>
+            </div>
+            <div class="detail-grid" id="detail-grid"></div>
+            <div class="skill-frame" id="detail-skills"></div>
+        </div>
+    </div>
+
+    <div class="dps-footer">
+        <div class="footer-line" id="footer-left">ELAPSED 00:00</div>
+        <div class="footer-line right" id="footer-right">TOTAL 0</div>
+    </div>
+</div>
+
+<script>
+var _currentTab = 'damage';
+var _viewMode = 'live';
+var _liveSnapshot = _emptySnapshot();
+var _lastReport = null;
+var _detailUid = 0;
+var _detailVisible = false;
+var _liveDetailCache = {};
+var _lastHitFxSeq = 0;
+var _pendingHitFx = null;
+var _rowFxTimers = {};
+var _panelFxTimer = null;
+var _panelBlurTimer = null;
+var _hitFxMaxAgeMs = 1800;
+
+function _emptySnapshot() {
+    return {
+        encounter_active: false,
+        elapsed_s: 0,
+        total_damage: 0,
+        total_heal: 0,
+        total_dps: 0,
+        total_hps: 0,
+        entities: [],
+        hit_fx: null
+    };
+}
+
+function _fmtNum(v) {
+    v = Number(v || 0);
+    if (v >= 1000000) return (v / 1000000).toFixed(v >= 10000000 ? 0 : 1) + 'M';
+    if (v >= 1000) return (v / 1000).toFixed(v >= 100000 ? 0 : 1) + 'K';
+    return Math.round(v).toLocaleString();
+}
+
+function _fmtTime(s) {
+    s = Number(s || 0);
+    var mm = Math.floor(s / 60);
+    var ss = Math.floor(s % 60);
+    return (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+}
+
+function _pct(v) {
+    return Math.round(Number(v || 0) * 100) + '%';
+}
+
+function _escHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+}
+
+function _currentData() {
+    if (_viewMode === 'report' && _lastReport) return _lastReport;
+    return _liveSnapshot || _emptySnapshot();
+}
+
+function _hasReport() {
+    return !!(_lastReport && _lastReport.entities && _lastReport.entities.length);
+}
+
+function _flashPanelForMegaHit() {
+    var layer = document.getElementById('panel-flash-layer');
+    var shell = _dpsShell();
+    if (!layer) return;
+    if (_panelFxTimer) clearTimeout(_panelFxTimer);
+    if (_panelBlurTimer) clearTimeout(_panelBlurTimer);
+    if (shell) {
+        shell.classList.remove('mega-hit-blur');
+        void shell.offsetWidth;
+        shell.classList.add('mega-hit-blur');
+    }
+    layer.classList.remove('flash');
+    void layer.offsetWidth;
+    layer.classList.add('flash');
+    _panelFxTimer = setTimeout(function() {
+        layer.classList.remove('flash');
+        _panelFxTimer = null;
+    }, 760);
+    _panelBlurTimer = setTimeout(function() {
+        if (shell) shell.classList.remove('mega-hit-blur');
+        _panelBlurTimer = null;
+    }, 240);
+}
+
+function _clearTransientHitFx() {
+    _pendingHitFx = null;
+    if (_panelFxTimer) {
+        clearTimeout(_panelFxTimer);
+        _panelFxTimer = null;
+    }
+    if (_panelBlurTimer) {
+        clearTimeout(_panelBlurTimer);
+        _panelBlurTimer = null;
+    }
+    var shell = _dpsShell();
+    if (shell) shell.classList.remove('mega-hit-blur');
+    var layer = document.getElementById('panel-flash-layer');
+    if (layer) layer.classList.remove('flash');
+    Object.keys(_rowFxTimers).forEach(function(key) {
+        clearTimeout(_rowFxTimers[key]);
+    });
+    _rowFxTimers = {};
+    document.querySelectorAll('.entity-row.impact-hit, .entity-row.mega-hit').forEach(function(row) {
+        row.classList.remove('impact-hit', 'mega-hit');
+    });
+}
+
+function _captureHitFx(data) {
+    var fx = data && data.hit_fx;
+    if (!fx) return;
+    var seq = Number(fx.seq || 0);
+    if (!seq || seq <= _lastHitFxSeq) return;
+    _lastHitFxSeq = seq;
+    var tsMs = Number(fx.generated_at || 0) * 1000;
+    if (tsMs > 0 && (Date.now() - tsMs) > _hitFxMaxAgeMs) return;
+    if (_viewMode !== 'live') return;
+    _pendingHitFx = fx;
+    if (String(fx.tier || '') === 'mega') {
+        _flashPanelForMegaHit();
+    }
+}
+
+function _applyPendingHitFx() {
+    if (!_pendingHitFx) return;
+    var uid = Number(_pendingHitFx.uid || 0);
+    if (!uid) {
+        _pendingHitFx = null;
+        return;
+    }
+    var row = document.querySelector('.entity-row[data-uid="' + uid + '"]');
+    if (!row) return;
+    var cls = String(_pendingHitFx.tier || '') === 'mega' ? 'mega-hit' : 'impact-hit';
+    if (_rowFxTimers[uid]) clearTimeout(_rowFxTimers[uid]);
+    row.classList.remove('impact-hit', 'mega-hit');
+    void row.offsetWidth;
+    row.classList.add(cls);
+    _rowFxTimers[uid] = setTimeout(function() {
+        row.classList.remove('impact-hit', 'mega-hit');
+        delete _rowFxTimers[uid];
+    }, cls === 'mega-hit' ? 1100 : 900);
+    _pendingHitFx = null;
+}
+
+function _findEntity(data, uid) {
+    var entities = (data && data.entities) || [];
+    for (var i = 0; i < entities.length; i++) {
+        if (Number(entities[i].uid) === Number(uid)) return entities[i];
+    }
+    return null;
+}
+
+function _setMode(mode) {
+    _viewMode = mode === 'report' ? 'report' : 'live';
+    document.getElementById('btn-live').classList.toggle('active', _viewMode === 'live');
+    document.getElementById('btn-report').classList.toggle('active', _viewMode === 'report');
+
+    var badge = document.getElementById('mode-badge');
+    badge.textContent = _viewMode === 'report' ? 'LAST REPORT' : 'LIVE';
+    badge.classList.toggle('live', _viewMode === 'live');
+    badge.classList.toggle('report', _viewMode === 'report');
+}
+
+function _switchListView() {
+    _detailVisible = false;
+    _detailUid = 0;
+    document.getElementById('detail-view').classList.remove('show');
+    document.getElementById('list-view').classList.add('show');
+}
+
+function _switchDetailView() {
+    document.getElementById('list-view').classList.remove('show');
+    document.getElementById('detail-view').classList.add('show');
+}
+
+function _renderHeader() {
+    _setMode(_viewMode);
+    var data = _currentData();
+    var summary = document.getElementById('summary-text');
+    if (_viewMode === 'report') {
+        if (!_hasReport()) {
+            summary.textContent = 'NO LAST REPORT AVAILABLE';
+        } else {
+            summary.textContent = 'LAST REPORT · ' + (_lastReport.completed_local_time || 'COMPLETED');
+        }
+    } else if (data.encounter_active) {
+        summary.textContent = 'LIVE DPS ' + _fmtNum(data.total_dps || 0) + ' · LIVE HPS ' + _fmtNum(data.total_hps || 0);
+    } else {
+        summary.textContent = 'WAITING FOR COMBAT DATA';
+    }
+}
+
+function _renderFooter() {
+    var data = _currentData();
+    var left = document.getElementById('footer-left');
+    var right = document.getElementById('footer-right');
+    if (_viewMode === 'report' && _hasReport()) {
+        left.textContent = 'COMPLETED ' + (_lastReport.completed_local_time || _fmtTime(data.elapsed_s || 0));
+        right.textContent = 'TOTAL ' + _fmtNum(data.total_damage || 0) + ' · HEAL ' + _fmtNum(data.total_heal || 0);
+        return;
+    }
+    left.textContent = 'ELAPSED ' + _fmtTime(data.elapsed_s || 0);
+    right.textContent = 'TOTAL ' + _fmtNum(data.total_damage || 0) + ' · HEAL ' + _fmtNum(data.total_heal || 0);
+}
+
+function _renderList() {
+    if (_detailVisible) return;
+    var data = _currentData();
+    var entities = ((data && data.entities) || []).slice();
+    var frame = document.getElementById('list-frame');
+
+    if (_currentTab === 'heal') {
+        entities.sort(function(a, b) { return Number(b.heal_total || 0) - Number(a.heal_total || 0); });
+    }
+
+    if (!entities.length) {
+        frame.innerHTML = '<div class="empty">' + (_viewMode === 'report' ? 'NO REPORT DATA' : 'NO LIVE COMBAT DATA') + '</div>';
+        return;
+    }
+
+    var maxVal = 0;
+    for (var i = 0; i < entities.length; i++) {
+        var val = _currentTab === 'heal' ? Number(entities[i].heal_total || 0) : Number(entities[i].damage_total || 0);
+        if (val > maxVal) maxVal = val;
+    }
+
+    var html = '';
+    for (var j = 0; j < entities.length; j++) {
+        var entity = entities[j];
+        var amount = _currentTab === 'heal' ? Number(entity.heal_total || 0) : Number(entity.damage_total || 0);
+        var rate = _currentTab === 'heal' ? Number(entity.hps || 0) : Number(entity.dps || 0);
+        var pct = _currentTab === 'heal'
+            ? ((data.total_heal || 0) > 0 ? amount / Math.max(1, Number(data.total_heal || 0)) : 0)
+            : Number(entity.damage_pct || 0);
+        var barPct = maxVal > 0 ? Math.round(amount / maxVal * 100) : 0;
+        var rankCls = j < 3 ? ' r' + (j + 1) : '';
+        html += ''
+            + '<div class="entity-row ' + (_currentTab === 'heal' ? 'heal' : '') + (entity.is_self ? ' self' : '') + '" data-uid="' + Number(entity.uid || 0) + '" onclick="_openDetail(' + Number(entity.uid || 0) + ')">'
+            +   '<div class="entity-bar" style="width:' + barPct + '%"></div>'
+            +   '<div class="entity-main">'
+            +     '<div class="rank' + rankCls + '">' + (j + 1) + '</div>'
+            +     '<div class="entity-meta">'
+            +       '<div class="entity-name">' + _escHtml(entity.name || ('Player_' + entity.uid)) + '</div>'
+            +       '<div class="entity-sub">' + _escHtml(entity.profession || (_viewMode === 'report' ? 'Last report entry' : 'Live combat entry')) + '</div>'
+            +     '</div>'
+            +     '<div class="entity-value">'
+            +       '<div class="entity-value-main">' + _fmtNum(amount) + '</div>'
+            +       '<div class="entity-value-sub">' + _fmtNum(rate) + '/s · ' + _pct(pct) + '</div>'
+            +     '</div>'
+            +   '</div>'
+            + '</div>';
+    }
+    frame.innerHTML = html;
+    _applyPendingHitFx();
+}
+
+function _renderDetailBase(entity) {
+    if (!entity) {
+        document.getElementById('detail-grid').innerHTML = '<div class="empty">NO DETAIL DATA</div>';
+        document.getElementById('detail-skills').innerHTML = '<div class="empty">NO SKILL DATA</div>';
+        return;
+    }
+
+    document.getElementById('detail-title').textContent =
+        (entity.name || ('Player_' + entity.uid)) + (entity.profession ? ' · ' + entity.profession : '');
+    document.getElementById('detail-badge').textContent = _viewMode === 'report' ? 'LAST REPORT DETAIL' : 'LIVE DETAIL';
+
+    var stats = [
+        ['Damage', _fmtNum(entity.damage_total || 0), 'gold'],
+        ['DPS', _fmtNum(entity.dps || 0), ''],
+        ['Healing', _fmtNum(entity.heal_total || 0), 'green'],
+        ['HPS', _fmtNum(entity.hps || 0), ''],
+        ['Crit', _pct(entity.crit_rate || 0), ''],
+        ['Max Hit', _fmtNum(entity.max_hit || 0), 'gold'],
+        ['Hits', String(entity.damage_hits || 0), ''],
+        ['Time', _fmtTime(entity.elapsed_s || 0), '']
+    ];
+    var html = '';
+    for (var i = 0; i < stats.length; i++) {
+        html += ''
+            + '<div class="stat-card">'
+            +   '<div class="stat-label">' + stats[i][0] + '</div>'
+            +   '<div class="stat-value ' + stats[i][2] + '">' + stats[i][1] + '</div>'
+            + '</div>';
+    }
+    document.getElementById('detail-grid').innerHTML = html;
+}
+
+function _renderSkillRows(entity) {
+    var skills = (entity && entity.skills) ? entity.skills.slice() : [];
+    var frame = document.getElementById('detail-skills');
+    if (!skills.length) {
+        frame.innerHTML = '<div class="empty">' + (_viewMode === 'report' ? 'NO SKILL DATA IN LAST REPORT' : 'WAITING FOR LIVE SKILL DETAIL') + '</div>';
+        return;
+    }
+
+    skills.sort(function(a, b) {
+        var av = Math.max(Number(a.total || 0), Number(a.heal_total || 0));
+        var bv = Math.max(Number(b.total || 0), Number(b.heal_total || 0));
+        return bv - av;
+    });
+
+    var maxVal = 0;
+    for (var i = 0; i < skills.length; i++) {
+        var current = Math.max(Number(skills[i].total || 0), Number(skills[i].heal_total || 0));
+        if (current > maxVal) maxVal = current;
+    }
+
+    var html = '';
+    for (var j = 0; j < skills.length; j++) {
+        var sk = skills[j];
+        var dmg = Number(sk.total || 0);
+        var heal = Number(sk.heal_total || 0);
+        var amount = Math.max(dmg, heal);
+        var isHeal = heal > dmg;
+        var hits = isHeal ? Number(sk.heal_hits || 0) : Number(sk.hits || 0);
+        var crit = !isHeal && Number(sk.hits || 0) > 0 ? ' · CRIT ' + _pct(sk.crit_rate || 0) : '';
+        var barPct = maxVal > 0 ? Math.round(amount / maxVal * 100) : 0;
+        html += ''
+            + '<div class="skill-row ' + (isHeal ? 'heal' : '') + '">'
+            +   '<div class="skill-bar" style="width:' + barPct + '%"></div>'
+            +   '<div class="skill-main">'
+            +     '<div>'
+            +       '<div class="skill-name">' + _escHtml(sk.skill_name || sk.skill_id || 'Unknown Skill') + '</div>'
+            +       '<div class="skill-extra">' + (isHeal ? 'HEALING' : 'DAMAGE') + ' · HITS ' + hits + crit + '</div>'
+            +     '</div>'
+            +     '<div class="skill-info">' + _fmtNum(amount) + '</div>'
+            +   '</div>'
+            + '</div>';
+    }
+    frame.innerHTML = html;
+}
+
+function _renderDetail() {
+    if (!_detailVisible) return;
+    var data = _currentData();
+    var base = _findEntity(data, _detailUid);
+    var detail = null;
+    if (_viewMode === 'report') {
+        detail = base;
+    } else {
+        detail = _liveDetailCache[_detailUid] || base;
+    }
+    _renderDetailBase(detail);
+    _renderSkillRows(detail);
+}
+
+function _renderAll() {
+    _renderHeader();
+    _renderFooter();
+    if (_detailVisible) {
+        _switchDetailView();
+        _renderDetail();
+    } else {
+        _switchListView();
+        _renderList();
+    }
+}
+
+function showLive(data) {
+    _liveSnapshot = data || _emptySnapshot();
+    _viewMode = 'live';
+    _captureHitFx(_liveSnapshot);
+    _detailVisible = false;
+    _detailUid = 0;
+    _renderAll();
+}
+
+function updateDps(data) {
+    _liveSnapshot = data || _emptySnapshot();
+    _captureHitFx(_liveSnapshot);
+    if (_viewMode === 'live') {
+        _renderAll();
+    } else {
+        _renderHeader();
+        _renderFooter();
+    }
+}
+
+function showLastReport(report) {
+    _lastReport = report || null;
+    _clearTransientHitFx();
+    _viewMode = 'report';
+    _detailVisible = false;
+    _detailUid = 0;
+    _renderAll();
+}
+
+function updateDetail(data) {
+    if (!data) return;
+    _liveDetailCache[Number(data.uid || 0)] = data;
+    if (_viewMode === 'live' && _detailVisible && Number(_detailUid) === Number(data.uid || 0)) {
+        _renderDetail();
+    }
+}
+
+function _openDetail(uid) {
+    _detailUid = Number(uid || 0);
+    _detailVisible = true;
+    _switchDetailView();
+    _renderDetail();
+    if (_viewMode === 'live' && window.pywebview && window.pywebview.api && window.pywebview.api.get_entity_detail) {
+        window.pywebview.api.get_entity_detail(_detailUid);
+    }
+}
+
+function _closeDetail() {
+    _switchListView();
+    _renderList();
+}
+
+function _activateLive() {
+    _viewMode = 'live';
+    _detailVisible = false;
+    _detailUid = 0;
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.request_live_snapshot) {
+        window.pywebview.api.request_live_snapshot();
+        return;
+    }
+    _renderAll();
+}
+
+function _activateReport() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.show_last_report) {
+        window.pywebview.api.show_last_report().then(function(result) {
+            var data = (typeof result === 'string') ? JSON.parse(result) : result;
+            if (!data || data.ok === false) {
+                _renderHeader();
+                document.getElementById('summary-text').textContent = (data && data.message) ? data.message : 'NO LAST REPORT AVAILABLE';
+            }
+        }).catch(function() {
+            _renderHeader();
+            document.getElementById('summary-text').textContent = 'NO LAST REPORT AVAILABLE';
+        });
+        return;
+    }
+    if (!_hasReport()) {
+        _renderHeader();
+        document.getElementById('summary-text').textContent = 'NO LAST REPORT AVAILABLE';
+        return;
+    }
+    _viewMode = 'report';
+    _detailVisible = false;
+    _detailUid = 0;
+    _renderAll();
+}
+
+function _reset() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.reset_dps) {
+        window.pywebview.api.reset_dps();
+    }
+    _clearTransientHitFx();
+    _viewMode = 'live';
+    _detailVisible = false;
+    _detailUid = 0;
+    _liveSnapshot = _emptySnapshot();
+    _liveDetailCache = {};
+    _renderAll();
+}
+
+document.getElementById('dps-tabs').addEventListener('click', function(e) {
+    var tab = e.target && e.target.getAttribute('data-tab');
+    if (!tab) return;
+    _currentTab = tab;
+    document.querySelectorAll('.dps-tab').forEach(function(el) {
+        el.classList.toggle('active', el.getAttribute('data-tab') === tab);
+    });
+    if (_detailVisible) _renderDetail();
+    else _renderList();
+});
+
+(function() {
+    var header = document.getElementById('dps-header');
+    var mouseDown = false;
+    var dragging = false;
+    var startX = 0;
+    var startY = 0;
+    var lastX = 0;
+    var lastY = 0;
+    var threshold = 5;
+
+    header.addEventListener('mousedown', function(e) {
+        if (e.target.closest('button')) return;
+        mouseDown = true;
+        dragging = false;
+        startX = lastX = e.screenX;
+        startY = lastY = e.screenY;
+    });
+
+    document.addEventListener('mousemove', function(e) {
+        if (!mouseDown) return;
+        if (!dragging) {
+            if (Math.abs(e.screenX - startX) < threshold && Math.abs(e.screenY - startY) < threshold) {
+                return;
+            }
+            dragging = true;
+        }
+        var dx = e.screenX - lastX;
+        var dy = e.screenY - lastY;
+        lastX = e.screenX;
+        lastY = e.screenY;
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.window_drag) {
+            window.pywebview.api.window_drag(dx, dy);
+        }
+    });
+
+    document.addEventListener('mouseup', function() {
+        mouseDown = false;
+        dragging = false;
+    });
+})();
+
+function snd(name) {
+    try {
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.play_sound) {
+            window.pywebview.api.play_sound(name);
+        }
+    } catch (e) {}
+}
+
+var _dpsAnimTimer = null;
+function _dpsShell() {
+    return document.getElementById('dps-shell');
+}
+function _clearDpsAnimState() {
+    var shell = _dpsShell();
+    if (!shell) return;
+    shell.classList.remove('entering', 'exiting');
+}
+function fadeInDps() {
+    var shell = _dpsShell();
+    if (!shell) return;
+    if (_dpsAnimTimer) clearTimeout(_dpsAnimTimer);
+    shell.classList.remove('exiting', 'entering');
+    void shell.offsetWidth;
+    shell.classList.add('entering');
+    _dpsAnimTimer = setTimeout(_clearDpsAnimState, 320);
+}
+function fadeOutDps() {
+    var shell = _dpsShell();
+    if (!shell) return;
+    if (_dpsAnimTimer) clearTimeout(_dpsAnimTimer);
+    shell.classList.remove('entering', 'exiting');
+    void shell.offsetWidth;
+    shell.classList.add('exiting');
+    _dpsAnimTimer = setTimeout(_clearDpsAnimState, 280);
+}
+
+window.addEventListener('beforeunload', function() {
+    _clearDpsAnimState();
+});
+
+window.DpsMeter = {
+    updateDps: updateDps,
+    updateDetail: updateDetail,
+    showLive: showLive,
+    showLastReport: showLastReport,
+    fadeOut: fadeOutDps,
+    fadeIn: fadeInDps
+};
+
+_renderAll();
+</script>
+</body>
+</html>
