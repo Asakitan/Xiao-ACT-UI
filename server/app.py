@@ -34,7 +34,7 @@ async def _lifespan(app_: FastAPI):
     yield
 
 
-app = FastAPI(title="SAO Auto Key Repository", version="1.1.9", lifespan=_lifespan)
+app = FastAPI(title="SAO Auto Key Repository", version="1.1.11", lifespan=_lifespan)
 
 
 class UploadScriptPayload(BaseModel):
