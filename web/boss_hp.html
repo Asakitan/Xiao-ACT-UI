@@ -387,12 +387,13 @@ html,body{
 .flash-overlay.break-restore{animation:break-restore 920ms cubic-bezier(.16,.84,.24,1) forwards}
 @keyframes shield-break{
     0%{opacity:0;filter:brightness(1) blur(0);background:
-        linear-gradient(100deg,rgba(98,212,255,0.00) 0%,rgba(98,212,255,0.00) 100%)}
+        linear-gradient(100deg,rgba(72,196,255,0.00) 0%,rgba(72,196,255,0.00) 100%)}
     10%{opacity:0.88;filter:brightness(1.10) blur(0.1px);background:
-        linear-gradient(100deg,rgba(98,212,255,0.00) 0%,rgba(210,248,255,0.72) 18%,rgba(94,208,255,0.22) 42%,rgba(210,248,255,0.00) 68%)}
-    44%{opacity:0.48;filter:brightness(1.04) blur(0.5px)}
-    76%{opacity:0.16;filter:brightness(1.01) blur(0.8px)}
-    100%{opacity:0;filter:brightness(1) blur(1.4px)}
+        linear-gradient(102deg,rgba(66,186,255,0.00) 0%,rgba(228,252,255,0.88) 14%,rgba(126,232,255,0.74) 28%,rgba(74,190,255,0.34) 44%,rgba(220,248,255,0.00) 70%),
+        radial-gradient(circle at 22% 50%,rgba(156,238,255,0.60) 0%,rgba(88,198,255,0.22) 26%,rgba(88,198,255,0.00) 58%)}
+    36%{opacity:0.68;filter:brightness(1.14) blur(0.45px)}
+    70%{opacity:0.24;filter:brightness(1.04) blur(1.0px)}
+    100%{opacity:0;filter:brightness(1) blur(1.9px)}
 }
 @keyframes shield-restore{
     0%{opacity:0;filter:brightness(1.0) blur(3px)}
@@ -412,12 +413,13 @@ html,body{
 }
 @keyframes break-burst{
     0%{opacity:0;filter:brightness(1) blur(0);background:
-        linear-gradient(90deg,rgba(112,228,255,0.00) 0%,rgba(112,228,255,0.00) 100%)}
+        linear-gradient(90deg,rgba(255,208,92,0.00) 0%,rgba(255,208,92,0.00) 100%)}
     9%{opacity:1;filter:brightness(1.16) blur(0.1px);background:
-        linear-gradient(95deg,rgba(112,228,255,0.00) 0%,rgba(224,252,255,0.78) 22%,rgba(112,228,255,0.24) 44%,rgba(224,252,255,0.00) 70%)}
-    40%{opacity:0.56;filter:brightness(1.06) blur(0.5px)}
-    72%{opacity:0.18;filter:brightness(1.02) blur(1.0px)}
-    100%{opacity:0;filter:brightness(1) blur(1.6px)}
+        linear-gradient(95deg,rgba(255,206,88,0.00) 0%,rgba(255,248,220,0.96) 16%,rgba(255,214,104,0.88) 34%,rgba(255,176,54,0.34) 50%,rgba(255,248,220,0.00) 74%),
+        radial-gradient(circle at 50% 50%,rgba(255,236,170,0.68) 0%,rgba(255,188,78,0.26) 28%,rgba(255,188,78,0.00) 62%)}
+    40%{opacity:0.62;filter:brightness(1.10) blur(0.7px)}
+    72%{opacity:0.20;filter:brightness(1.03) blur(1.2px)}
+    100%{opacity:0;filter:brightness(1) blur(2.0px)}
 }
 @keyframes break-restore{
     0%{opacity:0;filter:brightness(1.0) blur(3px)}
@@ -438,7 +440,7 @@ html,body{
     z-index:8;
     overflow:visible;
     border-radius:12px;
-    filter:drop-shadow(0 0 6px rgba(182,242,255,0.24));
+    filter:drop-shadow(0 0 8px rgba(255,224,124,0.38)) drop-shadow(0 0 20px rgba(255,174,46,0.20));
 }
 /* Phase 1: SAO-style system fracture scan */
 .break-burst-layer.active{
@@ -449,18 +451,19 @@ html,body{
     position:absolute;
     inset:-6px -12px;
     background:
-        linear-gradient(102deg,rgba(74,188,255,0.00) 0%,rgba(214,250,255,0.72) 22%,rgba(92,214,255,0.20) 44%,rgba(214,250,255,0.00) 68%);
+        linear-gradient(102deg,rgba(255,196,76,0.00) 0%,rgba(255,248,220,0.86) 18%,rgba(255,214,104,0.56) 34%,rgba(255,170,42,0.24) 52%,rgba(255,248,220,0.00) 72%),
+        radial-gradient(circle at 50% 50%,rgba(255,236,176,0.38) 0%,rgba(255,182,52,0.16) 42%,rgba(255,182,52,0.00) 74%);
     mix-blend-mode:screen;
-    filter:blur(1px);
+    filter:blur(1.4px);
     animation:break-crack-glow 1050ms cubic-bezier(.16,.84,.24,1) forwards;
 }
 .break-burst-layer.active::after{
     content:'';
     position:absolute;
     inset:-4px -8px;
-    background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='560' height='88'%3E%3Cpath d='M278 44L194 20 170 28 126 12 102 22 54 16 24 30 0 28' stroke='%23d9fbff' stroke-width='1.7' fill='none' opacity='0.94'/%3E%3Cpath d='M282 44L366 20 390 28 434 12 458 22 506 16 536 30 560 28' stroke='%23d9fbff' stroke-width='1.7' fill='none' opacity='0.94'/%3E%3Cpath d='M280 44L238 30 218 46 186 38 164 54 136 48 108 66 78 60 46 76' stroke='%2385e8ff' stroke-width='1.4' fill='none' opacity='0.88'/%3E%3Cpath d='M280 44L322 30 342 46 374 38 396 54 424 48 452 66 482 60 514 76' stroke='%2385e8ff' stroke-width='1.4' fill='none' opacity='0.88'/%3E%3Cpath d='M208 10L218 30L236 44L220 58L226 80' stroke='%23effdff' stroke-width='1.25' fill='none' opacity='0.82'/%3E%3Cpath d='M352 10L342 30L324 44L340 58L334 80' stroke='%23effdff' stroke-width='1.25' fill='none' opacity='0.82'/%3E%3C/svg%3E") no-repeat center center;
+    background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='560' height='88'%3E%3Cpath d='M278 44L194 20 170 28 126 12 102 22 54 16 24 30 0 28' stroke='%23fff6d4' stroke-width='1.8' fill='none' opacity='0.96'/%3E%3Cpath d='M282 44L366 20 390 28 434 12 458 22 506 16 536 30 560 28' stroke='%23fff6d4' stroke-width='1.8' fill='none' opacity='0.96'/%3E%3Cpath d='M280 44L238 30 218 46 186 38 164 54 136 48 108 66 78 60 46 76' stroke='%23ffc95a' stroke-width='1.5' fill='none' opacity='0.92'/%3E%3Cpath d='M280 44L322 30 342 46 374 38 396 54 424 48 452 66 482 60 514 76' stroke='%23ffc95a' stroke-width='1.5' fill='none' opacity='0.92'/%3E%3Cpath d='M208 10L218 30L236 44L220 58L226 80' stroke='%23ffd06a' stroke-width='1.3' fill='none' opacity='0.84'/%3E%3Cpath d='M352 10L342 30L324 44L340 58L334 80' stroke='%23ffd06a' stroke-width='1.3' fill='none' opacity='0.84'/%3E%3C/svg%3E") no-repeat center center;
     background-size:100% 100%;
-    filter:blur(0.5px) drop-shadow(0 0 6px rgba(204,248,255,0.72));
+    filter:blur(0.35px) drop-shadow(0 0 8px rgba(255,228,132,0.92)) drop-shadow(0 0 18px rgba(255,174,42,0.34));
     animation:break-crack-lines 1050ms cubic-bezier(.16,.84,.24,1) forwards;
 }
 @keyframes break-phase1-flash{
@@ -490,9 +493,9 @@ html,body{
     position:absolute;
     inset:-8px -14px;
     background:
-        linear-gradient(98deg,rgba(204,248,255,0.00) 0%,rgba(204,248,255,0.48) 28%,rgba(96,214,255,0.16) 48%,rgba(204,248,255,0.00) 70%);
+        linear-gradient(98deg,rgba(255,228,132,0.00) 0%,rgba(255,248,220,0.56) 24%,rgba(255,202,88,0.28) 44%,rgba(255,162,40,0.12) 56%,rgba(255,248,220,0.00) 72%);
     mix-blend-mode:screen;
-    filter:blur(1.2px);
+    filter:blur(1.5px);
     animation:break-glow-fracture 1200ms cubic-bezier(.22,1,.36,1) forwards;
 }
 .break-burst-layer.shattering::after{display:none}
@@ -518,12 +521,12 @@ html,body{
     transform-origin:center center;
 }
 .break-shard.gold{
-    background:linear-gradient(135deg,rgba(244,254,255,0.92),rgba(132,226,255,0.56) 44%,rgba(88,198,255,0.18));
-    box-shadow:0 0 6px rgba(180,240,255,0.66);
+    background:linear-gradient(135deg,rgba(255,248,220,0.98),rgba(255,214,102,0.82) 38%,rgba(255,166,36,0.36) 76%,rgba(255,148,28,0.14));
+    box-shadow:0 0 8px rgba(255,224,120,0.80),0 0 18px rgba(255,170,40,0.30);
 }
 .break-shard.white{
-    background:linear-gradient(135deg,rgba(255,255,255,0.96),rgba(226,250,255,0.64) 48%,rgba(150,228,255,0.14));
-    box-shadow:0 0 5px rgba(236,253,255,0.60);
+    background:linear-gradient(135deg,rgba(255,255,255,0.98),rgba(255,244,214,0.72) 52%,rgba(255,214,104,0.18));
+    box-shadow:0 0 6px rgba(255,245,214,0.70),0 0 14px rgba(255,204,92,0.22);
 }
 .shield-vfx-layer{
     position:absolute;
@@ -533,7 +536,7 @@ html,body{
     z-index:7;
     overflow:visible;
     border-radius:12px;
-    filter:drop-shadow(0 0 6px rgba(198,246,255,0.20));
+    filter:drop-shadow(0 0 10px rgba(120,224,255,0.34)) drop-shadow(0 0 24px rgba(52,152,255,0.20));
 }
 .shield-vfx-layer.breaking{animation:shield-vfx-break 1400ms cubic-bezier(.16,.84,.24,1) forwards}
 .shield-vfx-layer.restoring{animation:shield-vfx-restore 1040ms cubic-bezier(.16,.84,.24,1) forwards}
@@ -543,9 +546,10 @@ html,body{
     position:absolute;
     inset:-4px -8px;
     background:
-        linear-gradient(100deg,rgba(98,214,255,0.00) 0%,rgba(212,250,255,0.72) 22%,rgba(98,214,255,0.20) 46%,rgba(212,250,255,0.00) 70%);
+        linear-gradient(100deg,rgba(64,178,255,0.00) 0%,rgba(226,252,255,0.94) 14%,rgba(122,232,255,0.76) 28%,rgba(72,182,255,0.36) 48%,rgba(226,252,255,0.00) 72%),
+        radial-gradient(circle at 26% 50%,rgba(150,236,255,0.46) 0%,rgba(68,170,255,0.20) 32%,rgba(68,170,255,0.00) 66%);
     mix-blend-mode:screen;
-    filter:blur(0.8px);
+    filter:blur(1.2px);
 }
 .shield-vfx-layer::after{
     content:'';
@@ -554,10 +558,10 @@ html,body{
     top:50%;
     transform:translate(-50%,-50%);
     pointer-events:none;
-    width:120%;
-    height:2px;
-    background:linear-gradient(90deg,rgba(110,226,255,0.00) 0%,rgba(226,252,255,0.88) 44%,rgba(110,226,255,0.00) 100%);
-    box-shadow:0 0 8px rgba(226,252,255,0.72),0 0 16px rgba(118,202,255,0.28);
+    width:128%;
+    height:3px;
+    background:linear-gradient(90deg,rgba(98,214,255,0.00) 0%,rgba(226,252,255,0.96) 32%,rgba(126,232,255,0.92) 50%,rgba(226,252,255,0.96) 68%,rgba(98,214,255,0.00) 100%);
+    box-shadow:0 0 10px rgba(226,252,255,0.88),0 0 24px rgba(98,198,255,0.44),0 0 38px rgba(74,154,255,0.22);
 }
 @keyframes shield-vfx-break{
     0%{opacity:0;transform:translateX(-3%) scaleX(0.94)}
@@ -581,12 +585,12 @@ html,body{
     transform-origin:center center;
 }
 .shield-shard.cyan{
-    background:linear-gradient(135deg,rgba(236,253,255,0.92),rgba(124,224,255,0.56) 42%,rgba(84,188,255,0.16));
-    box-shadow:0 0 5px rgba(188,246,255,0.66);
+    background:linear-gradient(135deg,rgba(238,253,255,0.98),rgba(142,236,255,0.84) 32%,rgba(72,188,255,0.46) 66%,rgba(58,122,255,0.18));
+    box-shadow:0 0 8px rgba(188,246,255,0.86),0 0 20px rgba(82,182,255,0.30);
 }
 .shield-shard.white{
-    background:linear-gradient(135deg,rgba(255,255,255,0.96),rgba(226,250,255,0.64) 48%,rgba(148,228,255,0.14));
-    box-shadow:0 0 4px rgba(220,250,255,0.54);
+    background:linear-gradient(135deg,rgba(255,255,255,0.98),rgba(226,250,255,0.76) 44%,rgba(116,220,255,0.22));
+    box-shadow:0 0 6px rgba(228,252,255,0.74),0 0 14px rgba(96,198,255,0.18);
 }
 .source-tag{
     position:absolute;
@@ -660,7 +664,7 @@ html,body{
     opacity:0;
     z-index:6;
     mix-blend-mode:screen;
-    filter:drop-shadow(0 0 10px rgba(188,246,255,0.22)) drop-shadow(0 0 24px rgba(96,186,255,0.12));
+    filter:drop-shadow(0 0 12px rgba(255,232,148,0.38)) drop-shadow(0 0 26px rgba(255,170,44,0.20));
 }
 .break-vfx-layer.breaking{animation:break-vfx-breaking 1400ms cubic-bezier(.16,.84,.24,1) forwards}
 .break-vfx-layer.recovering{animation:break-vfx-recovering 1320ms cubic-bezier(.16,.84,.24,1) forwards}
@@ -678,15 +682,15 @@ html,body{
     width:94%;
     height:18px;
     background:
-        linear-gradient(96deg,rgba(104,228,255,0.00) 0%,rgba(226,252,255,0.86) 24%,rgba(104,228,255,0.24) 48%,rgba(226,252,255,0.00) 70%),
-        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 3px,rgba(196,246,255,0.09) 3px 4px,rgba(255,255,255,0.00) 4px 8px);
+        linear-gradient(96deg,rgba(255,210,92,0.00) 0%,rgba(255,248,220,0.92) 20%,rgba(255,216,106,0.66) 40%,rgba(255,170,42,0.28) 56%,rgba(255,248,220,0.00) 76%),
+        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 3px,rgba(255,238,188,0.12) 3px 4px,rgba(255,255,255,0.00) 4px 8px);
     filter:blur(3px);
 }
 .break-vfx-layer::after{
     width:100%;
     height:2px;
-    background:linear-gradient(90deg,rgba(104,228,255,0.00) 0%,rgba(255,255,255,0.94) 48%,rgba(104,228,255,0.00) 100%);
-    box-shadow:0 0 8px rgba(198,248,255,0.52),0 0 16px rgba(104,228,255,0.22);
+    background:linear-gradient(90deg,rgba(255,206,88,0.00) 0%,rgba(255,252,236,0.96) 24%,rgba(255,222,120,0.98) 50%,rgba(255,252,236,0.96) 76%,rgba(255,206,88,0.00) 100%);
+    box-shadow:0 0 10px rgba(255,242,196,0.72),0 0 22px rgba(255,190,62,0.32);
 }
 @keyframes break-vfx-breaking{
     0%{opacity:0;transform:translateX(-3%) scaleX(0.92)}
@@ -1290,6 +1294,7 @@ function _triggerBreakBurst() {
         burst.classList.add('shattering');
         _spawnShards(burst, 'break', 0);
         setTimeout(function() { _spawnShards(burst, 'break', 1); }, 80);
+        setTimeout(function() { _spawnShards(burst, 'break', 2); }, 170);
         setTimeout(function() {
             burst.classList.remove('shattering');
             var shards = burst.querySelectorAll('.break-shard');
@@ -1305,7 +1310,7 @@ function _triggerBreakBurst() {
 function _spawnShards(container, type, wave) {
     var isShield = type === 'shield';
     wave = Number(wave || 0);
-    var count = isShield ? (6 + wave * 3) : (8 + wave * 4);
+    var count = isShield ? (8 + wave * 4) : (12 + wave * 5);
     var w = container.offsetWidth || (isShield ? 560 : 620);
     var h = container.offsetHeight || (isShield ? 60 : 108);
     var cx = w * 0.5, cy = h * 0.5;
@@ -1321,8 +1326,8 @@ function _spawnShards(container, type, wave) {
         var sy = isShield
             ? (h * 0.30 + (Math.random() - 0.5) * h * 0.36)
             : (h * 0.15 + Math.random() * h * 0.70);
-        var sw = isShield ? (10 + Math.random() * 14) : (8 + Math.random() * 12);
-        var sh = isShield ? (3 + Math.random() * 5) : (4 + Math.random() * 8);
+        var sw = isShield ? (11 + Math.random() * 16) : (9 + Math.random() * 14);
+        var sh = isShield ? (3 + Math.random() * 6) : (4 + Math.random() * 9);
         shard.style.cssText = 'left:' + sx + 'px;top:' + sy + 'px;width:' + sw + 'px;height:' + sh + 'px;' +
             'border-radius:1px;' +
             'transform:rotate(' + Math.round((Math.random() - 0.5) * (isShield ? 26 : 42)) + 'deg) scale(' + (1 + Math.random() * 0.24).toFixed(2) + ');' +
@@ -1336,16 +1341,16 @@ function _spawnShards(container, type, wave) {
         var angle = isShield
             ? (-0.10 + (Math.random() - 0.5) * 0.72)
             : Math.atan2(sy - cy, sx - cx) + (Math.random() - 0.5) * 0.42;
-        var dist = isShield ? (48 + Math.random() * 72 + wave * 10) : (56 + Math.random() * 80 + wave * 14);
+        var dist = isShield ? (56 + Math.random() * 92 + wave * 14) : (72 + Math.random() * 110 + wave * 18);
         var tx = Math.cos(angle) * dist + (isShield ? 24 : 0);
-        var ty = Math.sin(angle) * dist * (isShield ? 0.82 : 0.96);
-        var rot = isShield ? ((Math.random() - 0.5) * 60) : ((Math.random() - 0.5) * 90);
-        var dur = isShield ? (680 + Math.random() * 360 + wave * 40) : (620 + Math.random() * 380 + wave * 50);
+        var ty = Math.sin(angle) * dist * (isShield ? 0.88 : 1.00);
+        var rot = isShield ? ((Math.random() - 0.5) * 78) : ((Math.random() - 0.5) * 110);
+        var dur = isShield ? (760 + Math.random() * 420 + wave * 60) : (720 + Math.random() * 440 + wave * 70);
         var delay = isShield ? (30 + Math.random() * 140 + wave * 18) : (10 + Math.random() * 90 + wave * 12);
         shard.animate([
             { transform: 'translate(0,0) rotate(0deg) scale(0.64)', opacity: 0 },
-            { transform: 'translate(0,0) rotate(0deg) scale(1.22)', opacity: 1, offset: 0.10 },
-            { transform: 'translate(' + (tx * 0.62) + 'px,' + (ty * 0.62) + 'px) rotate(' + (rot * 0.48) + 'deg) scale(1.06)', opacity: 0.92, offset: 0.42 },
+            { transform: 'translate(0,0) rotate(0deg) scale(1.28)', opacity: 1, offset: 0.10 },
+            { transform: 'translate(' + (tx * 0.58) + 'px,' + (ty * 0.58) + 'px) rotate(' + (rot * 0.52) + 'deg) scale(1.08)', opacity: 0.96, offset: 0.42 },
             { transform: 'translate(' + tx + 'px,' + ty + 'px) rotate(' + rot + 'deg) scale(0.70)', opacity: 0 }
         ], { duration: dur, delay: delay, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'forwards' });
     }
@@ -1360,6 +1365,7 @@ function _triggerShieldShatter() {
     // Spawn cyan shard particles
     _spawnShards(layer, 'shield', 0);
     setTimeout(function() { _spawnShards(layer, 'shield', 1); }, 90);
+    setTimeout(function() { _spawnShards(layer, 'shield', 2); }, 180);
     setTimeout(function() {
         var shards = layer.querySelectorAll('.shield-shard');
         for (var j = 0; j < shards.length; j++) shards[j].remove();
