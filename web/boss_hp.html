@@ -852,7 +852,7 @@ html,body{
 
         <div class="boss-box">
             <div class="xt_left"></div>
-            <div class="xt_right"><span>Enemy</span></div>
+            <div class="xt_right"><span id="boss-name">Enemy</span></div>
             <div class="number_xt">
                 <div id="hp-text">100%</div>
                 <div id="stage-text">P1</div>
@@ -1228,6 +1228,9 @@ function _hideBossBar() {
         _lastStopTicking = false;
         _breakState = 'normal';
         _breakEverHadGauge = false;
+        // Reset name/text to defaults
+        var _nameEl = document.getElementById('boss-name');
+        if (_nameEl) _nameEl.textContent = 'Enemy';
         _cancelRecoverInterpolation();
         _clearShieldGhost(true);
         if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
@@ -1375,6 +1378,10 @@ function updateBossBar(data) {
     // also check for the exiting class to correctly interrupt an ongoing hide.
     if (!_visible || root.classList.contains('exiting')) _showBossBar();
 
+    // Update boss name
+    var bossNameEl = document.getElementById('boss-name');
+    if (bossNameEl && data.boss_name) bossNameEl.textContent = data.boss_name;
+
     var pct = Math.max(0, Math.min(1, Number(data.hp_pct || 0)));
     var hpFill = document.getElementById('hp-fill');
     var hpTrail = document.getElementById('hp-trail');
@@ -1460,19 +1467,20 @@ function updateBossBar(data) {
     }
     var breakFill = document.getElementById('break-fill');
     var breakTrack = breakFill.parentElement;
-    // During recovery interpolation, the RAF loop drives the visual width.
-    // Only set from raw data when NOT interpolating.
-    if (!_recoverInterpolating) {
+    // During broken/recovering states the state machine owns the visual —
+    // don't let stale server data overwrite the 0% / interpolated width.
+    var _breakVisualLocked = (_breakState === 'broken' || _recoverInterpolating);
+    if (!_breakVisualLocked) {
         breakFill.style.width = Math.round(breakPct * 100) + '%';
     }
-    breakFill.classList.toggle('full', breakPct >= 0.95);
+    breakFill.classList.toggle('full', breakPct >= 0.95 && !_breakVisualLocked);
 
     // breaking_stage: 0 = Breaking (broken), 1 = BreakEnd (normal)
     var stage = (data.breaking_stage != null) ? parseInt(data.breaking_stage, 10) : -1;
     if (stage >= 0) {
         document.getElementById('stage-text').textContent = 'P' + Math.max(1, stage);
     }
-    if (!_recoverInterpolating) {
+    if (!_breakVisualLocked) {
         document.getElementById('break-text').textContent = Math.round(breakPct * 100) + '%';
     }
 
