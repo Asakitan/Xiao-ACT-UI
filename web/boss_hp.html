@@ -389,11 +389,11 @@ html,body{
     0%{opacity:0;filter:brightness(1) blur(0);background:
         linear-gradient(100deg,rgba(72,196,255,0.00) 0%,rgba(72,196,255,0.00) 100%)}
     10%{opacity:0.88;filter:brightness(1.10) blur(0.1px);background:
-        linear-gradient(102deg,rgba(66,186,255,0.00) 0%,rgba(228,252,255,0.88) 14%,rgba(126,232,255,0.74) 28%,rgba(74,190,255,0.34) 44%,rgba(220,248,255,0.00) 70%),
-        radial-gradient(circle at 22% 50%,rgba(156,238,255,0.60) 0%,rgba(88,198,255,0.22) 26%,rgba(88,198,255,0.00) 58%)}
-    36%{opacity:0.68;filter:brightness(1.14) blur(0.45px)}
-    70%{opacity:0.24;filter:brightness(1.04) blur(1.0px)}
-    100%{opacity:0;filter:brightness(1) blur(1.9px)}
+        linear-gradient(102deg,rgba(66,186,255,0.00) 0%,rgba(230,252,255,0.72) 18%,rgba(120,226,255,0.56) 34%,rgba(72,178,255,0.20) 50%,rgba(220,248,255,0.00) 72%),
+        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 3px,rgba(202,246,255,0.08) 3px 4px,rgba(255,255,255,0.00) 4px 8px)}
+    34%{opacity:0.56;filter:brightness(1.10) blur(0.35px)}
+    70%{opacity:0.18;filter:brightness(1.03) blur(0.85px)}
+    100%{opacity:0;filter:brightness(1) blur(1.4px)}
 }
 @keyframes shield-restore{
     0%{opacity:0;filter:brightness(1.0) blur(3px)}
@@ -415,11 +415,11 @@ html,body{
     0%{opacity:0;filter:brightness(1) blur(0);background:
         linear-gradient(90deg,rgba(255,208,92,0.00) 0%,rgba(255,208,92,0.00) 100%)}
     9%{opacity:1;filter:brightness(1.16) blur(0.1px);background:
-        linear-gradient(95deg,rgba(255,206,88,0.00) 0%,rgba(255,248,220,0.96) 16%,rgba(255,214,104,0.88) 34%,rgba(255,176,54,0.34) 50%,rgba(255,248,220,0.00) 74%),
-        radial-gradient(circle at 50% 50%,rgba(255,236,170,0.68) 0%,rgba(255,188,78,0.26) 28%,rgba(255,188,78,0.00) 62%)}
-    40%{opacity:0.62;filter:brightness(1.10) blur(0.7px)}
-    72%{opacity:0.20;filter:brightness(1.03) blur(1.2px)}
-    100%{opacity:0;filter:brightness(1) blur(2.0px)}
+        linear-gradient(95deg,rgba(255,206,88,0.00) 0%,rgba(255,248,224,0.78) 20%,rgba(255,214,104,0.68) 38%,rgba(255,170,42,0.20) 54%,rgba(255,248,220,0.00) 76%),
+        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 3px,rgba(255,238,190,0.09) 3px 4px,rgba(255,255,255,0.00) 4px 8px)}
+    40%{opacity:0.48;filter:brightness(1.07) blur(0.55px)}
+    72%{opacity:0.16;filter:brightness(1.02) blur(0.95px)}
+    100%{opacity:0;filter:brightness(1) blur(1.5px)}
 }
 @keyframes break-restore{
     0%{opacity:0;filter:brightness(1.0) blur(3px)}
@@ -440,7 +440,7 @@ html,body{
     z-index:8;
     overflow:visible;
     border-radius:12px;
-    filter:drop-shadow(0 0 8px rgba(255,224,124,0.38)) drop-shadow(0 0 20px rgba(255,174,46,0.20));
+    filter:drop-shadow(0 0 6px rgba(255,224,124,0.26)) drop-shadow(0 0 14px rgba(255,174,46,0.12));
 }
 /* Phase 1: SAO-style system fracture scan */
 .break-burst-layer.active{
@@ -451,10 +451,10 @@ html,body{
     position:absolute;
     inset:-6px -12px;
     background:
-        linear-gradient(102deg,rgba(255,196,76,0.00) 0%,rgba(255,248,220,0.86) 18%,rgba(255,214,104,0.56) 34%,rgba(255,170,42,0.24) 52%,rgba(255,248,220,0.00) 72%),
-        radial-gradient(circle at 50% 50%,rgba(255,236,176,0.38) 0%,rgba(255,182,52,0.16) 42%,rgba(255,182,52,0.00) 74%);
+        linear-gradient(102deg,rgba(255,196,76,0.00) 0%,rgba(255,248,224,0.72) 22%,rgba(255,214,104,0.40) 38%,rgba(255,170,42,0.16) 56%,rgba(255,248,220,0.00) 74%),
+        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 3px,rgba(255,238,188,0.06) 3px 4px,rgba(255,255,255,0.00) 4px 8px);
     mix-blend-mode:screen;
-    filter:blur(1.4px);
+    filter:blur(1.0px);
     animation:break-crack-glow 1050ms cubic-bezier(.16,.84,.24,1) forwards;
 }
 .break-burst-layer.active::after{
@@ -463,7 +463,7 @@ html,body{
     inset:-4px -8px;
     background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='560' height='88'%3E%3Cpath d='M278 44L194 20 170 28 126 12 102 22 54 16 24 30 0 28' stroke='%23fff6d4' stroke-width='1.8' fill='none' opacity='0.96'/%3E%3Cpath d='M282 44L366 20 390 28 434 12 458 22 506 16 536 30 560 28' stroke='%23fff6d4' stroke-width='1.8' fill='none' opacity='0.96'/%3E%3Cpath d='M280 44L238 30 218 46 186 38 164 54 136 48 108 66 78 60 46 76' stroke='%23ffc95a' stroke-width='1.5' fill='none' opacity='0.92'/%3E%3Cpath d='M280 44L322 30 342 46 374 38 396 54 424 48 452 66 482 60 514 76' stroke='%23ffc95a' stroke-width='1.5' fill='none' opacity='0.92'/%3E%3Cpath d='M208 10L218 30L236 44L220 58L226 80' stroke='%23ffd06a' stroke-width='1.3' fill='none' opacity='0.84'/%3E%3Cpath d='M352 10L342 30L324 44L340 58L334 80' stroke='%23ffd06a' stroke-width='1.3' fill='none' opacity='0.84'/%3E%3C/svg%3E") no-repeat center center;
     background-size:100% 100%;
-    filter:blur(0.35px) drop-shadow(0 0 8px rgba(255,228,132,0.92)) drop-shadow(0 0 18px rgba(255,174,42,0.34));
+    filter:blur(0.2px) drop-shadow(0 0 5px rgba(255,228,132,0.74)) drop-shadow(0 0 10px rgba(255,174,42,0.20));
     animation:break-crack-lines 1050ms cubic-bezier(.16,.84,.24,1) forwards;
 }
 @keyframes break-phase1-flash{
@@ -493,9 +493,9 @@ html,body{
     position:absolute;
     inset:-8px -14px;
     background:
-        linear-gradient(98deg,rgba(255,228,132,0.00) 0%,rgba(255,248,220,0.56) 24%,rgba(255,202,88,0.28) 44%,rgba(255,162,40,0.12) 56%,rgba(255,248,220,0.00) 72%);
+        linear-gradient(98deg,rgba(255,228,132,0.00) 0%,rgba(255,248,220,0.42) 26%,rgba(255,202,88,0.20) 44%,rgba(255,162,40,0.08) 56%,rgba(255,248,220,0.00) 72%);
     mix-blend-mode:screen;
-    filter:blur(1.5px);
+    filter:blur(1.1px);
     animation:break-glow-fracture 1200ms cubic-bezier(.22,1,.36,1) forwards;
 }
 .break-burst-layer.shattering::after{display:none}
@@ -521,12 +521,12 @@ html,body{
     transform-origin:center center;
 }
 .break-shard.gold{
-    background:linear-gradient(135deg,rgba(255,248,220,0.98),rgba(255,214,102,0.82) 38%,rgba(255,166,36,0.36) 76%,rgba(255,148,28,0.14));
-    box-shadow:0 0 8px rgba(255,224,120,0.80),0 0 18px rgba(255,170,40,0.30);
+    background:linear-gradient(135deg,rgba(255,248,224,0.92),rgba(255,216,112,0.64) 40%,rgba(255,172,48,0.22) 78%,rgba(255,148,28,0.10));
+    box-shadow:0 0 6px rgba(255,224,120,0.58),0 0 12px rgba(255,170,40,0.18);
 }
 .break-shard.white{
-    background:linear-gradient(135deg,rgba(255,255,255,0.98),rgba(255,244,214,0.72) 52%,rgba(255,214,104,0.18));
-    box-shadow:0 0 6px rgba(255,245,214,0.70),0 0 14px rgba(255,204,92,0.22);
+    background:linear-gradient(135deg,rgba(255,255,255,0.94),rgba(255,244,214,0.54) 52%,rgba(255,214,104,0.12));
+    box-shadow:0 0 5px rgba(255,245,214,0.52),0 0 10px rgba(255,204,92,0.14);
 }
 .shield-vfx-layer{
     position:absolute;
@@ -536,7 +536,7 @@ html,body{
     z-index:7;
     overflow:visible;
     border-radius:12px;
-    filter:drop-shadow(0 0 10px rgba(120,224,255,0.34)) drop-shadow(0 0 24px rgba(52,152,255,0.20));
+    filter:drop-shadow(0 0 7px rgba(120,224,255,0.28)) drop-shadow(0 0 16px rgba(52,152,255,0.12));
 }
 .shield-vfx-layer.breaking{animation:shield-vfx-break 1400ms cubic-bezier(.16,.84,.24,1) forwards}
 .shield-vfx-layer.restoring{animation:shield-vfx-restore 1040ms cubic-bezier(.16,.84,.24,1) forwards}
@@ -546,10 +546,10 @@ html,body{
     position:absolute;
     inset:-4px -8px;
     background:
-        linear-gradient(100deg,rgba(64,178,255,0.00) 0%,rgba(226,252,255,0.94) 14%,rgba(122,232,255,0.76) 28%,rgba(72,182,255,0.36) 48%,rgba(226,252,255,0.00) 72%),
-        radial-gradient(circle at 26% 50%,rgba(150,236,255,0.46) 0%,rgba(68,170,255,0.20) 32%,rgba(68,170,255,0.00) 66%);
+        linear-gradient(100deg,rgba(64,178,255,0.00) 0%,rgba(226,252,255,0.80) 18%,rgba(122,232,255,0.62) 34%,rgba(72,182,255,0.24) 50%,rgba(226,252,255,0.00) 72%),
+        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 3px,rgba(198,244,255,0.07) 3px 4px,rgba(255,255,255,0.00) 4px 8px);
     mix-blend-mode:screen;
-    filter:blur(1.2px);
+    filter:blur(0.95px);
 }
 .shield-vfx-layer::after{
     content:'';
@@ -558,10 +558,10 @@ html,body{
     top:50%;
     transform:translate(-50%,-50%);
     pointer-events:none;
-    width:128%;
-    height:3px;
-    background:linear-gradient(90deg,rgba(98,214,255,0.00) 0%,rgba(226,252,255,0.96) 32%,rgba(126,232,255,0.92) 50%,rgba(226,252,255,0.96) 68%,rgba(98,214,255,0.00) 100%);
-    box-shadow:0 0 10px rgba(226,252,255,0.88),0 0 24px rgba(98,198,255,0.44),0 0 38px rgba(74,154,255,0.22);
+    width:124%;
+    height:2px;
+    background:linear-gradient(90deg,rgba(98,214,255,0.00) 0%,rgba(226,252,255,0.88) 34%,rgba(126,232,255,0.84) 50%,rgba(226,252,255,0.88) 66%,rgba(98,214,255,0.00) 100%);
+    box-shadow:0 0 8px rgba(226,252,255,0.70),0 0 16px rgba(98,198,255,0.26),0 0 24px rgba(74,154,255,0.10);
 }
 @keyframes shield-vfx-break{
     0%{opacity:0;transform:translateX(-3%) scaleX(0.94)}
@@ -585,12 +585,12 @@ html,body{
     transform-origin:center center;
 }
 .shield-shard.cyan{
-    background:linear-gradient(135deg,rgba(238,253,255,0.98),rgba(142,236,255,0.84) 32%,rgba(72,188,255,0.46) 66%,rgba(58,122,255,0.18));
-    box-shadow:0 0 8px rgba(188,246,255,0.86),0 0 20px rgba(82,182,255,0.30);
+    background:linear-gradient(135deg,rgba(238,253,255,0.92),rgba(142,236,255,0.66) 34%,rgba(72,188,255,0.28) 68%,rgba(58,122,255,0.12));
+    box-shadow:0 0 6px rgba(188,246,255,0.60),0 0 12px rgba(82,182,255,0.16);
 }
 .shield-shard.white{
-    background:linear-gradient(135deg,rgba(255,255,255,0.98),rgba(226,250,255,0.76) 44%,rgba(116,220,255,0.22));
-    box-shadow:0 0 6px rgba(228,252,255,0.74),0 0 14px rgba(96,198,255,0.18);
+    background:linear-gradient(135deg,rgba(255,255,255,0.94),rgba(226,250,255,0.64) 46%,rgba(116,220,255,0.16));
+    box-shadow:0 0 5px rgba(228,252,255,0.58),0 0 10px rgba(96,198,255,0.10);
 }
 .source-tag{
     position:absolute;
@@ -664,7 +664,7 @@ html,body{
     opacity:0;
     z-index:6;
     mix-blend-mode:screen;
-    filter:drop-shadow(0 0 12px rgba(255,232,148,0.38)) drop-shadow(0 0 26px rgba(255,170,44,0.20));
+    filter:drop-shadow(0 0 8px rgba(255,232,148,0.28)) drop-shadow(0 0 16px rgba(255,170,44,0.12));
 }
 .break-vfx-layer.breaking{animation:break-vfx-breaking 1400ms cubic-bezier(.16,.84,.24,1) forwards}
 .break-vfx-layer.recovering{animation:break-vfx-recovering 1320ms cubic-bezier(.16,.84,.24,1) forwards}
@@ -682,15 +682,15 @@ html,body{
     width:94%;
     height:18px;
     background:
-        linear-gradient(96deg,rgba(255,210,92,0.00) 0%,rgba(255,248,220,0.92) 20%,rgba(255,216,106,0.66) 40%,rgba(255,170,42,0.28) 56%,rgba(255,248,220,0.00) 76%),
-        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 3px,rgba(255,238,188,0.12) 3px 4px,rgba(255,255,255,0.00) 4px 8px);
+        linear-gradient(96deg,rgba(255,210,92,0.00) 0%,rgba(255,248,224,0.80) 22%,rgba(255,216,106,0.52) 42%,rgba(255,170,42,0.18) 58%,rgba(255,248,220,0.00) 78%),
+        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 3px,rgba(255,238,188,0.08) 3px 4px,rgba(255,255,255,0.00) 4px 8px);
     filter:blur(3px);
 }
 .break-vfx-layer::after{
     width:100%;
     height:2px;
-    background:linear-gradient(90deg,rgba(255,206,88,0.00) 0%,rgba(255,252,236,0.96) 24%,rgba(255,222,120,0.98) 50%,rgba(255,252,236,0.96) 76%,rgba(255,206,88,0.00) 100%);
-    box-shadow:0 0 10px rgba(255,242,196,0.72),0 0 22px rgba(255,190,62,0.32);
+    background:linear-gradient(90deg,rgba(255,206,88,0.00) 0%,rgba(255,252,236,0.84) 26%,rgba(255,222,120,0.88) 50%,rgba(255,252,236,0.84) 74%,rgba(255,206,88,0.00) 100%);
+    box-shadow:0 0 8px rgba(255,242,196,0.56),0 0 14px rgba(255,190,62,0.18);
 }
 @keyframes break-vfx-breaking{
     0%{opacity:0;transform:translateX(-3%) scaleX(0.92)}
@@ -1293,8 +1293,7 @@ function _triggerBreakBurst() {
         void burst.offsetWidth;
         burst.classList.add('shattering');
         _spawnShards(burst, 'break', 0);
-        setTimeout(function() { _spawnShards(burst, 'break', 1); }, 80);
-        setTimeout(function() { _spawnShards(burst, 'break', 2); }, 170);
+        setTimeout(function() { _spawnShards(burst, 'break', 1); }, 110);
         setTimeout(function() {
             burst.classList.remove('shattering');
             var shards = burst.querySelectorAll('.break-shard');
@@ -1310,7 +1309,7 @@ function _triggerBreakBurst() {
 function _spawnShards(container, type, wave) {
     var isShield = type === 'shield';
     wave = Number(wave || 0);
-    var count = isShield ? (8 + wave * 4) : (12 + wave * 5);
+    var count = isShield ? (6 + wave * 3) : (9 + wave * 4);
     var w = container.offsetWidth || (isShield ? 560 : 620);
     var h = container.offsetHeight || (isShield ? 60 : 108);
     var cx = w * 0.5, cy = h * 0.5;
@@ -1326,8 +1325,8 @@ function _spawnShards(container, type, wave) {
         var sy = isShield
             ? (h * 0.30 + (Math.random() - 0.5) * h * 0.36)
             : (h * 0.15 + Math.random() * h * 0.70);
-        var sw = isShield ? (11 + Math.random() * 16) : (9 + Math.random() * 14);
-        var sh = isShield ? (3 + Math.random() * 6) : (4 + Math.random() * 9);
+        var sw = isShield ? (10 + Math.random() * 12) : (8 + Math.random() * 10);
+        var sh = isShield ? (3 + Math.random() * 4) : (4 + Math.random() * 7);
         shard.style.cssText = 'left:' + sx + 'px;top:' + sy + 'px;width:' + sw + 'px;height:' + sh + 'px;' +
             'border-radius:1px;' +
             'transform:rotate(' + Math.round((Math.random() - 0.5) * (isShield ? 26 : 42)) + 'deg) scale(' + (1 + Math.random() * 0.24).toFixed(2) + ');' +
@@ -1341,16 +1340,16 @@ function _spawnShards(container, type, wave) {
         var angle = isShield
             ? (-0.10 + (Math.random() - 0.5) * 0.72)
             : Math.atan2(sy - cy, sx - cx) + (Math.random() - 0.5) * 0.42;
-        var dist = isShield ? (56 + Math.random() * 92 + wave * 14) : (72 + Math.random() * 110 + wave * 18);
+        var dist = isShield ? (48 + Math.random() * 74 + wave * 12) : (60 + Math.random() * 84 + wave * 14);
         var tx = Math.cos(angle) * dist + (isShield ? 24 : 0);
-        var ty = Math.sin(angle) * dist * (isShield ? 0.88 : 1.00);
-        var rot = isShield ? ((Math.random() - 0.5) * 78) : ((Math.random() - 0.5) * 110);
-        var dur = isShield ? (760 + Math.random() * 420 + wave * 60) : (720 + Math.random() * 440 + wave * 70);
+        var ty = Math.sin(angle) * dist * (isShield ? 0.82 : 0.94);
+        var rot = isShield ? ((Math.random() - 0.5) * 62) : ((Math.random() - 0.5) * 88);
+        var dur = isShield ? (660 + Math.random() * 280 + wave * 40) : (620 + Math.random() * 320 + wave * 50);
         var delay = isShield ? (30 + Math.random() * 140 + wave * 18) : (10 + Math.random() * 90 + wave * 12);
         shard.animate([
             { transform: 'translate(0,0) rotate(0deg) scale(0.64)', opacity: 0 },
-            { transform: 'translate(0,0) rotate(0deg) scale(1.28)', opacity: 1, offset: 0.10 },
-            { transform: 'translate(' + (tx * 0.58) + 'px,' + (ty * 0.58) + 'px) rotate(' + (rot * 0.52) + 'deg) scale(1.08)', opacity: 0.96, offset: 0.42 },
+            { transform: 'translate(0,0) rotate(0deg) scale(1.14)', opacity: 0.92, offset: 0.10 },
+            { transform: 'translate(' + (tx * 0.54) + 'px,' + (ty * 0.54) + 'px) rotate(' + (rot * 0.46) + 'deg) scale(1.02)', opacity: 0.84, offset: 0.42 },
             { transform: 'translate(' + tx + 'px,' + ty + 'px) rotate(' + rot + 'deg) scale(0.70)', opacity: 0 }
         ], { duration: dur, delay: delay, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'forwards' });
     }
@@ -1364,8 +1363,7 @@ function _triggerShieldShatter() {
     for (var i = 0; i < oldShards.length; i++) oldShards[i].remove();
     // Spawn cyan shard particles
     _spawnShards(layer, 'shield', 0);
-    setTimeout(function() { _spawnShards(layer, 'shield', 1); }, 90);
-    setTimeout(function() { _spawnShards(layer, 'shield', 2); }, 180);
+    setTimeout(function() { _spawnShards(layer, 'shield', 1); }, 110);
     setTimeout(function() {
         var shards = layer.querySelectorAll('.shield-shard');
         for (var j = 0; j < shards.length; j++) shards[j].remove();
