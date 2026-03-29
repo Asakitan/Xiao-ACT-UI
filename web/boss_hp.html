@@ -23,6 +23,10 @@
     --gold-strong:rgb(222,166,32);
     --red:rgb(239,104,78);
     --shadow:rgba(20,24,10,0.26);
+    --fx-pad-top:100px;
+    --fx-pad-right:160px;
+    --fx-pad-bottom:160px;
+    --fx-pad-left:160px;
 }
 html,body{
     width:100%;
@@ -31,12 +35,14 @@ html,body{
     background:transparent;
     user-select:none;
     -webkit-user-select:none;
+    pointer-events:none;
 }
 .stage{
     position:fixed;
     inset:0;
-    padding:6px 16px 6px 8px;
+    padding:var(--fx-pad-top) var(--fx-pad-right) var(--fx-pad-bottom) var(--fx-pad-left);
     pointer-events:none;
+    overflow:visible;
 }
 .boss-root{
     position:relative;
@@ -46,6 +52,34 @@ html,body{
     opacity:0;
     transform:translateY(-8px) scale(0.985);
     will-change:opacity,transform;
+    overflow:visible;
+}
+.boss-root::before,
+.boss-root::after{
+    content:'';
+    position:absolute;
+    pointer-events:none;
+    opacity:0;
+    z-index:11;
+}
+.boss-root::before{
+    left:-28px;
+    right:-28px;
+    top:-14px;
+    bottom:-14px;
+    border-radius:16px;
+    background:
+        radial-gradient(circle at 50% 50%,rgba(236,253,255,0.22) 0%,rgba(132,228,255,0.08) 40%,rgba(96,182,255,0.00) 72%);
+    filter:blur(6px);
+}
+.boss-root::after{
+    left:-20px;
+    right:-20px;
+    top:-10px;
+    bottom:-10px;
+    border-radius:12px;
+    border:1px solid rgba(212,248,255,0.12);
+    box-shadow:0 0 8px rgba(176,242,255,0.18),0 0 18px rgba(88,186,255,0.08);
 }
 .boss-root.visible{
     display:block;
@@ -173,7 +207,7 @@ html,body{
     width:342px;
     height:25px;
     clip-path:polygon(0 0,100% 0,calc(100% - 5px) 19px,145px 19px,141px 100%,0 100%);
-    overflow:hidden;
+    overflow:visible;
     border-radius:0 6px 0 0;
 }
 .xt_border_left{
@@ -188,6 +222,7 @@ html,body{
 .xt_border_right{
     position:absolute;
     inset:0;
+    overflow:visible;
 }
 .tb_line{
     width:100%;
@@ -199,7 +234,7 @@ html,body{
 .boss-fill-wrap{
     position:relative;
     height:23px;
-    overflow:hidden;
+    overflow:visible;
     background:rgba(162,165,148,0.18);
     border-radius:0 5px 0 0;
 }
@@ -237,7 +272,7 @@ html,body{
 .xt_in_red{background:linear-gradient(to right,rgb(248,140,122),rgb(239,104,78))}
 .shield-fill{
     width:0;
-    background:linear-gradient(to right,rgba(104,200,255,0.56),rgba(73,148,230,0.42));
+    background:linear-gradient(90deg,rgba(72,156,232,0.42) 0%,rgba(98,208,255,0.52) 54%,rgba(212,248,255,0.24) 100%);
     transition:width 280ms ease,opacity 220ms ease;
     opacity:0;
     z-index:3;
@@ -246,18 +281,70 @@ html,body{
     opacity:1;
     box-shadow:
         0 0 10px rgba(118,222,255,0.26),
-        0 0 18px rgba(70,158,255,0.16);
+        0 0 18px rgba(70,158,255,0.16),
+        inset 0 0 18px rgba(170,240,255,0.12);
 }
 .shield-fill.restoring{
     animation:shield-restore-fill 900ms cubic-bezier(.16,.84,.24,1) forwards;
 }
+/* Directional light source sweep — gives the shield a lit-from-left glow */
 .shield-fill.active::before{
     content:'';
     position:absolute;
     inset:0;
-    background:linear-gradient(110deg,rgba(255,255,255,0.0) 0%,rgba(255,255,255,0.42) 45%,rgba(255,255,255,0.0) 100%);
-    transform:translateX(-130%);
-    animation:shield-scan 2.4s linear infinite;
+    background:
+        linear-gradient(102deg,
+            rgba(174,240,255,0.48) 0%,
+            rgba(255,255,255,0.58) 14%,
+            rgba(124,228,255,0.22) 36%,
+            rgba(255,255,255,0.00) 58%),
+        radial-gradient(ellipse 46% 130% at 14% 50%,rgba(192,244,255,0.38) 0%,rgba(112,205,255,0.16) 40%,transparent 100%),
+        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 2px,rgba(212,248,255,0.10) 2px 3px,rgba(255,255,255,0.00) 3px 8px);
+    animation:shield-light-sweep 3.2s ease-in-out infinite;
+}
+/* Secondary specular highlight */
+.shield-fill.active::after{
+    content:'';
+    position:absolute;
+    top:0; left:0; right:-11px; height:100%;
+    background:inherit; transform:skewX(-14deg);
+}
+.shield-fill.breaking-ghost{
+    opacity:0.96;
+    transition:none;
+    background:
+        linear-gradient(90deg,rgba(28,74,120,0.42) 0%,rgba(72,170,235,0.58) 42%,rgba(214,248,255,0.22) 100%),
+        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 2px,rgba(182,242,255,0.12) 2px 3px,rgba(255,255,255,0.00) 3px 8px);
+    border-right:1px solid rgba(220,250,255,0.46);
+    box-shadow:
+        0 0 12px rgba(98,208,255,0.28),
+        0 0 26px rgba(76,162,255,0.20),
+        inset 0 0 24px rgba(176,244,255,0.10);
+    animation:shield-break-shell 2500ms cubic-bezier(.2,.9,.22,1) forwards;
+}
+.shield-fill.breaking-ghost::before{
+    content:'';
+    position:absolute;
+    inset:0;
+    background:
+        linear-gradient(96deg,rgba(255,255,255,0.00) 0%,rgba(214,248,255,0.72) 22%,rgba(120,220,255,0.18) 44%,rgba(255,255,255,0.00) 64%),
+        repeating-linear-gradient(180deg,rgba(182,242,255,0.00) 0 3px,rgba(182,242,255,0.13) 3px 4px,rgba(182,242,255,0.00) 4px 9px);
+    animation:shield-break-scan 2500ms linear forwards;
+}
+.shield-fill.breaking-ghost::after{
+    content:'';
+    position:absolute;
+    inset:0;
+    background:
+        linear-gradient(90deg,rgba(120,220,255,0.00) 0%,rgba(120,220,255,0.24) 18%,rgba(255,255,255,0.62) 50%,rgba(120,220,255,0.24) 82%,rgba(120,220,255,0.00) 100%);
+    mix-blend-mode:screen;
+    opacity:0.82;
+    animation:shield-break-fracture 2500ms cubic-bezier(.2,.9,.22,1) forwards;
+}
+@keyframes shield-light-sweep{
+    0%,100%{opacity:0.7;filter:brightness(1.0)}
+    35%{opacity:1;filter:brightness(1.15)}
+    65%{opacity:0.85;filter:brightness(1.05)}
 }
 @keyframes shield-scan{
     from{transform:translateX(-130%)}
@@ -268,6 +355,24 @@ html,body{
     28%{filter:brightness(1.16) blur(0.18px);opacity:1}
     100%{filter:brightness(1) blur(0);opacity:1}
 }
+@keyframes shield-break-shell{
+    0%{opacity:0.98;filter:brightness(1.18) saturate(1.08)}
+    32%{opacity:0.96;filter:brightness(1.10) saturate(1.04)}
+    76%{opacity:0.54;filter:brightness(0.98) saturate(0.92)}
+    100%{opacity:0;filter:brightness(0.92) saturate(0.84)}
+}
+@keyframes shield-break-scan{
+    0%{transform:translateX(-120%);opacity:0}
+    18%{transform:translateX(-18%);opacity:1}
+    70%{transform:translateX(42%);opacity:0.84}
+    100%{transform:translateX(118%);opacity:0}
+}
+@keyframes shield-break-fracture{
+    0%{clip-path:inset(0 0 0 0);opacity:0.84}
+    34%{clip-path:polygon(0 0,100% 0,100% 26%,64% 30%,100% 42%,100% 100%,0 100%,0 64%,34% 58%,0 42%);opacity:0.92}
+    70%{clip-path:polygon(0 0,100% 0,100% 16%,58% 20%,100% 36%,100% 100%,0 100%,0 74%,30% 66%,0 54%);opacity:0.40}
+    100%{clip-path:polygon(0 0,100% 0,100% 8%,56% 12%,100% 28%,100% 100%,0 100%,0 84%,26% 76%,0 62%);opacity:0}
+}
 .flash-overlay{
     inset:0;
     width:100%;
@@ -275,18 +380,19 @@ html,body{
     opacity:0;
     z-index:5;
 }
-.flash-overlay.shield-break{animation:shield-break 820ms cubic-bezier(.16,.84,.24,1) forwards}
+.flash-overlay.shield-break{animation:shield-break 1400ms cubic-bezier(.16,.84,.24,1) forwards}
 .flash-overlay.shield-restore{animation:shield-restore 920ms cubic-bezier(.16,.84,.24,1) forwards}
 .flash-overlay.phase-break{animation:phase-break 840ms cubic-bezier(.16,.84,.24,1) forwards}
-.flash-overlay.break-burst{animation:break-burst 1080ms cubic-bezier(.16,.84,.24,1) forwards}
+.flash-overlay.break-burst{animation:break-burst 1400ms cubic-bezier(.16,.84,.24,1) forwards}
 .flash-overlay.break-restore{animation:break-restore 920ms cubic-bezier(.16,.84,.24,1) forwards}
 @keyframes shield-break{
-    0%{opacity:0;filter:brightness(1) blur(0);background:linear-gradient(90deg,rgba(138,232,255,0.00) 0%,rgba(138,232,255,0.00) 100%)}
-    12%{opacity:1;filter:brightness(1.45) blur(0);background:
-        linear-gradient(90deg,rgba(138,232,255,0.00) 0%,rgba(138,232,255,0.46) 16%,rgba(255,255,255,0.96) 50%,rgba(78,164,255,0.40) 84%,rgba(78,164,255,0.00) 100%),
-        radial-gradient(circle at 50% 50%,rgba(255,255,255,0.96) 0%,rgba(148,236,255,0.82) 20%,rgba(78,164,255,0.32) 56%,rgba(78,164,255,0.00) 100%)}
-    36%{opacity:0.88;filter:brightness(1.18) blur(1.1px)}
-    100%{opacity:0;filter:brightness(1) blur(5px)}
+    0%{opacity:0;filter:brightness(1) blur(0);background:
+        linear-gradient(100deg,rgba(98,212,255,0.00) 0%,rgba(98,212,255,0.00) 100%)}
+    10%{opacity:0.88;filter:brightness(1.10) blur(0.1px);background:
+        linear-gradient(100deg,rgba(98,212,255,0.00) 0%,rgba(210,248,255,0.72) 18%,rgba(94,208,255,0.22) 42%,rgba(210,248,255,0.00) 68%)}
+    44%{opacity:0.48;filter:brightness(1.04) blur(0.5px)}
+    76%{opacity:0.16;filter:brightness(1.01) blur(0.8px)}
+    100%{opacity:0;filter:brightness(1) blur(1.4px)}
 }
 @keyframes shield-restore{
     0%{opacity:0;filter:brightness(1.0) blur(3px)}
@@ -305,12 +411,13 @@ html,body{
     100%{opacity:0;filter:brightness(1) blur(6px)}
 }
 @keyframes break-burst{
-    0%{opacity:0;filter:brightness(1) blur(0);background:radial-gradient(circle at 50% 52%,rgba(255,248,184,0.00) 0%,rgba(255,220,108,0.00) 30%,rgba(255,189,78,0.00) 68%,rgba(255,189,78,0.00) 100%)}
-    16%{opacity:1;filter:brightness(1.48) blur(0.1px);background:
-        linear-gradient(90deg,rgba(255,220,120,0.00) 0%,rgba(255,246,204,0.90) 26%,rgba(255,194,78,0.76) 50%,rgba(255,246,204,0.90) 74%,rgba(255,220,120,0.00) 100%),
-        radial-gradient(circle at 50% 52%,rgba(255,252,218,0.98) 0%,rgba(255,228,124,0.86) 22%,rgba(255,180,60,0.52) 58%,rgba(255,180,60,0.00) 100%)}
-    42%{opacity:0.90;filter:brightness(1.18) blur(1.4px)}
-    100%{opacity:0;filter:brightness(1) blur(7px)}
+    0%{opacity:0;filter:brightness(1) blur(0);background:
+        linear-gradient(90deg,rgba(112,228,255,0.00) 0%,rgba(112,228,255,0.00) 100%)}
+    9%{opacity:1;filter:brightness(1.16) blur(0.1px);background:
+        linear-gradient(95deg,rgba(112,228,255,0.00) 0%,rgba(224,252,255,0.78) 22%,rgba(112,228,255,0.24) 44%,rgba(224,252,255,0.00) 70%)}
+    40%{opacity:0.56;filter:brightness(1.06) blur(0.5px)}
+    72%{opacity:0.18;filter:brightness(1.02) blur(1.0px)}
+    100%{opacity:0;filter:brightness(1) blur(1.6px)}
 }
 @keyframes break-restore{
     0%{opacity:0;filter:brightness(1.0) blur(3px)}
@@ -322,52 +429,124 @@ html,body{
 }
 .break-burst-layer{
     position:absolute;
-    inset:6px 8px 8px 8px;
+    left:-30px;
+    top:-10px;
+    width:620px;
+    height:108px;
     pointer-events:none;
     opacity:0;
-    z-index:7;
-    mix-blend-mode:screen;
+    z-index:8;
+    overflow:visible;
+    border-radius:12px;
+    filter:drop-shadow(0 0 6px rgba(182,242,255,0.24));
 }
-.break-burst-layer.active{animation:break-layer-burst 1080ms cubic-bezier(.16,.84,.24,1) forwards}
-.break-burst-layer::before,
-.break-burst-layer::after{
+/* Phase 1: SAO-style system fracture scan */
+.break-burst-layer.active{
+    animation:break-phase1-flash 1050ms cubic-bezier(.16,.84,.24,1) forwards;
+}
+.break-burst-layer.active::before{
     content:'';
     position:absolute;
-    left:50%;
-    top:50%;
-    transform:translate(-50%,-50%);
+    inset:-6px -12px;
+    background:
+        linear-gradient(102deg,rgba(74,188,255,0.00) 0%,rgba(214,250,255,0.72) 22%,rgba(92,214,255,0.20) 44%,rgba(214,250,255,0.00) 68%);
+    mix-blend-mode:screen;
+    filter:blur(1px);
+    animation:break-crack-glow 1050ms cubic-bezier(.16,.84,.24,1) forwards;
+}
+.break-burst-layer.active::after{
+    content:'';
+    position:absolute;
+    inset:-4px -8px;
+    background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='560' height='88'%3E%3Cpath d='M278 44L194 20 170 28 126 12 102 22 54 16 24 30 0 28' stroke='%23d9fbff' stroke-width='1.7' fill='none' opacity='0.94'/%3E%3Cpath d='M282 44L366 20 390 28 434 12 458 22 506 16 536 30 560 28' stroke='%23d9fbff' stroke-width='1.7' fill='none' opacity='0.94'/%3E%3Cpath d='M280 44L238 30 218 46 186 38 164 54 136 48 108 66 78 60 46 76' stroke='%2385e8ff' stroke-width='1.4' fill='none' opacity='0.88'/%3E%3Cpath d='M280 44L322 30 342 46 374 38 396 54 424 48 452 66 482 60 514 76' stroke='%2385e8ff' stroke-width='1.4' fill='none' opacity='0.88'/%3E%3Cpath d='M208 10L218 30L236 44L220 58L226 80' stroke='%23effdff' stroke-width='1.25' fill='none' opacity='0.82'/%3E%3Cpath d='M352 10L342 30L324 44L340 58L334 80' stroke='%23effdff' stroke-width='1.25' fill='none' opacity='0.82'/%3E%3C/svg%3E") no-repeat center center;
+    background-size:100% 100%;
+    filter:blur(0.5px) drop-shadow(0 0 6px rgba(204,248,255,0.72));
+    animation:break-crack-lines 1050ms cubic-bezier(.16,.84,.24,1) forwards;
+}
+@keyframes break-phase1-flash{
+    0%{opacity:0;filter:brightness(1)}
+    12%{opacity:1;filter:brightness(1.22)}
+    52%{opacity:0.92;filter:brightness(1.12)}
+    100%{opacity:0.84;filter:brightness(1.04)}
+}
+@keyframes break-crack-glow{
+    0%{opacity:0;transform:scale(0.96)}
+    16%{opacity:1;transform:scale(1.00)}
+    54%{opacity:0.92;transform:scale(1.03)}
+    100%{opacity:0.68;transform:scale(1.06)}
+}
+@keyframes break-crack-lines{
+    0%{opacity:0;clip-path:inset(0 50% 0 50%)}
+    26%{opacity:1;clip-path:inset(0 8% 0 8%)}
+    70%{opacity:0.92;clip-path:inset(0 0 0 0)}
+    100%{opacity:0.58}
+}
+/* Phase 2: HUD slices detach and dissipate */
+.break-burst-layer.shattering{
+    animation:break-phase2-shatter 1450ms cubic-bezier(.22,1,.36,1) forwards;
+}
+.break-burst-layer.shattering::before{
+    content:'';
+    position:absolute;
+    inset:-8px -14px;
+    background:
+        linear-gradient(98deg,rgba(204,248,255,0.00) 0%,rgba(204,248,255,0.48) 28%,rgba(96,214,255,0.16) 48%,rgba(204,248,255,0.00) 70%);
+    mix-blend-mode:screen;
+    filter:blur(1.2px);
+    animation:break-glow-fracture 1200ms cubic-bezier(.22,1,.36,1) forwards;
+}
+.break-burst-layer.shattering::after{display:none}
+@keyframes break-phase2-shatter{
+    0%{opacity:0.82;filter:brightness(1.12) blur(0)}
+    20%{opacity:0.92;filter:brightness(1.18) blur(0.1px)}
+    52%{opacity:0.44;filter:brightness(1.04) blur(0.6px)}
+    100%{opacity:0;filter:brightness(1) blur(1.8px)}
+}
+@keyframes break-glow-fracture{
+    0%{opacity:0.80}
+    24%{opacity:0.90}
+    56%{opacity:0.32}
+    100%{opacity:0}
+}
+/* Individual shards (generated by JS) */
+.break-shard{
+    position:absolute;
     pointer-events:none;
+    will-change:transform,opacity;
+    border:1px solid rgba(226,252,255,0.82);
+    background-clip:padding-box;
+    transform-origin:center center;
 }
-.break-burst-layer::before{
-    width:78%;
-    height:52px;
-    background:linear-gradient(90deg,rgba(255,220,120,0.00) 0%,rgba(255,236,172,0.92) 18%,rgba(255,191,77,0.78) 50%,rgba(255,236,172,0.92) 82%,rgba(255,220,120,0.00) 100%);
-    filter:blur(5px);
-    clip-path:polygon(0 50%,8% 38%,22% 44%,36% 28%,50% 50%,64% 28%,78% 44%,92% 38%,100% 50%,92% 62%,78% 56%,64% 72%,50% 50%,36% 72%,22% 56%,8% 62%);
+.break-shard.gold{
+    background:linear-gradient(135deg,rgba(244,254,255,0.92),rgba(132,226,255,0.56) 44%,rgba(88,198,255,0.18));
+    box-shadow:0 0 6px rgba(180,240,255,0.66);
 }
-.break-burst-layer::after{
-    width:88%;
-    height:3px;
-    background:linear-gradient(90deg,rgba(255,210,112,0.00) 0%,rgba(255,248,210,0.95) 50%,rgba(255,210,112,0.00) 100%);
-    box-shadow:0 0 12px rgba(255,223,120,0.82),0 0 26px rgba(255,182,65,0.54);
-}
-@keyframes break-layer-burst{
-    0%{opacity:0;transform:scale(0.86)}
-    14%{opacity:1;transform:scale(1.04)}
-    40%{opacity:0.88;transform:scale(1.08)}
-    100%{opacity:0;transform:scale(1.16)}
+.break-shard.white{
+    background:linear-gradient(135deg,rgba(255,255,255,0.96),rgba(226,250,255,0.64) 48%,rgba(150,228,255,0.14));
+    box-shadow:0 0 5px rgba(236,253,255,0.60);
 }
 .shield-vfx-layer{
     position:absolute;
-    inset:-5px -12px -5px -4px;
+    inset:-14px -24px -14px -12px;
     pointer-events:none;
     opacity:0;
     z-index:7;
-    mix-blend-mode:screen;
+    overflow:visible;
+    border-radius:12px;
+    filter:drop-shadow(0 0 6px rgba(198,246,255,0.20));
 }
-.shield-vfx-layer.breaking{animation:shield-vfx-break 980ms cubic-bezier(.16,.84,.24,1) forwards}
+.shield-vfx-layer.breaking{animation:shield-vfx-break 1400ms cubic-bezier(.16,.84,.24,1) forwards}
 .shield-vfx-layer.restoring{animation:shield-vfx-restore 1040ms cubic-bezier(.16,.84,.24,1) forwards}
-.shield-vfx-layer::before,
+/* Blue flash + directional light burst from left on shield break */
+.shield-vfx-layer::before{
+    content:'';
+    position:absolute;
+    inset:-4px -8px;
+    background:
+        linear-gradient(100deg,rgba(98,214,255,0.00) 0%,rgba(212,250,255,0.72) 22%,rgba(98,214,255,0.20) 46%,rgba(212,250,255,0.00) 70%);
+    mix-blend-mode:screen;
+    filter:blur(0.8px);
+}
 .shield-vfx-layer::after{
     content:'';
     position:absolute;
@@ -375,31 +554,39 @@ html,body{
     top:50%;
     transform:translate(-50%,-50%);
     pointer-events:none;
-}
-.shield-vfx-layer::before{
-    width:96%;
-    height:26px;
-    background:linear-gradient(90deg,rgba(102,226,255,0.00) 0%,rgba(188,246,255,0.92) 22%,rgba(255,255,255,0.96) 50%,rgba(102,180,255,0.74) 78%,rgba(102,180,255,0.00) 100%);
-    filter:blur(4px);
-    clip-path:polygon(0 50%,10% 30%,18% 50%,28% 18%,40% 56%,52% 20%,64% 58%,76% 24%,86% 52%,100% 50%,90% 70%,78% 48%,66% 78%,52% 42%,40% 76%,28% 38%,18% 70%,10% 48%);
-}
-.shield-vfx-layer::after{
-    width:100%;
-    height:3px;
-    background:linear-gradient(90deg,rgba(110,226,255,0.00) 0%,rgba(255,255,255,0.96) 50%,rgba(110,226,255,0.00) 100%);
-    box-shadow:0 0 10px rgba(160,240,255,0.74),0 0 20px rgba(98,182,255,0.42);
+    width:120%;
+    height:2px;
+    background:linear-gradient(90deg,rgba(110,226,255,0.00) 0%,rgba(226,252,255,0.88) 44%,rgba(110,226,255,0.00) 100%);
+    box-shadow:0 0 8px rgba(226,252,255,0.72),0 0 16px rgba(118,202,255,0.28);
 }
 @keyframes shield-vfx-break{
-    0%{opacity:0;transform:scale(0.92)}
-    16%{opacity:1;transform:scale(1.06)}
-    42%{opacity:0.84;transform:scale(1.10)}
-    100%{opacity:0;transform:scale(1.18)}
+    0%{opacity:0;transform:translateX(-3%) scaleX(0.94)}
+    12%{opacity:1;transform:translateX(0) scaleX(1.00)}
+    42%{opacity:0.72;transform:translateX(2%) scaleX(1.02)}
+    76%{opacity:0.28;transform:translateX(4%) scaleX(1.04)}
+    100%{opacity:0;transform:translateX(6%) scaleX(1.06)}
 }
 @keyframes shield-vfx-restore{
     0%{opacity:0;transform:translateX(-10%) scaleX(0.72)}
     18%{opacity:1;transform:translateX(0) scaleX(1.02)}
     48%{opacity:0.80;transform:translateX(6%) scaleX(1.04)}
     100%{opacity:0;transform:translateX(14%) scaleX(1.08)}
+}
+/* Shield shard particles (generated by JS) */
+.shield-shard{
+    position:absolute;
+    pointer-events:none;
+    will-change:transform,opacity;
+    border:1px solid rgba(226,252,255,0.78);
+    transform-origin:center center;
+}
+.shield-shard.cyan{
+    background:linear-gradient(135deg,rgba(236,253,255,0.92),rgba(124,224,255,0.56) 42%,rgba(84,188,255,0.16));
+    box-shadow:0 0 5px rgba(188,246,255,0.66);
+}
+.shield-shard.white{
+    background:linear-gradient(135deg,rgba(255,255,255,0.96),rgba(226,250,255,0.64) 48%,rgba(148,228,255,0.14));
+    box-shadow:0 0 4px rgba(220,250,255,0.54);
 }
 .source-tag{
     position:absolute;
@@ -467,14 +654,15 @@ html,body{
     position:absolute;
     left:56px;
     right:72px;
-    top:58px;
-    height:20px;
+    top:54px;
+    height:30px;
     pointer-events:none;
     opacity:0;
     z-index:6;
     mix-blend-mode:screen;
+    filter:drop-shadow(0 0 10px rgba(188,246,255,0.22)) drop-shadow(0 0 24px rgba(96,186,255,0.12));
 }
-.break-vfx-layer.breaking{animation:break-vfx-breaking 980ms cubic-bezier(.16,.84,.24,1) forwards}
+.break-vfx-layer.breaking{animation:break-vfx-breaking 1400ms cubic-bezier(.16,.84,.24,1) forwards}
 .break-vfx-layer.recovering{animation:break-vfx-recovering 1320ms cubic-bezier(.16,.84,.24,1) forwards}
 .break-vfx-layer.restored{animation:break-vfx-restored 980ms cubic-bezier(.16,.84,.24,1) forwards}
 .break-vfx-layer::before,
@@ -489,20 +677,23 @@ html,body{
 .break-vfx-layer::before{
     width:94%;
     height:18px;
-    background:linear-gradient(90deg,rgba(255,208,114,0.00) 0%,rgba(255,244,210,0.90) 26%,rgba(255,196,82,0.82) 50%,rgba(104,228,255,0.54) 76%,rgba(104,228,255,0.00) 100%);
-    filter:blur(4px);
+    background:
+        linear-gradient(96deg,rgba(104,228,255,0.00) 0%,rgba(226,252,255,0.86) 24%,rgba(104,228,255,0.24) 48%,rgba(226,252,255,0.00) 70%),
+        repeating-linear-gradient(180deg,rgba(255,255,255,0.00) 0 3px,rgba(196,246,255,0.09) 3px 4px,rgba(255,255,255,0.00) 4px 8px);
+    filter:blur(3px);
 }
 .break-vfx-layer::after{
     width:100%;
     height:2px;
-    background:linear-gradient(90deg,rgba(255,220,118,0.00) 0%,rgba(255,255,255,0.96) 50%,rgba(104,228,255,0.00) 100%);
-    box-shadow:0 0 8px rgba(255,220,118,0.82),0 0 16px rgba(104,228,255,0.42);
+    background:linear-gradient(90deg,rgba(104,228,255,0.00) 0%,rgba(255,255,255,0.94) 48%,rgba(104,228,255,0.00) 100%);
+    box-shadow:0 0 8px rgba(198,248,255,0.52),0 0 16px rgba(104,228,255,0.22);
 }
 @keyframes break-vfx-breaking{
-    0%{opacity:0;transform:scaleX(0.82)}
-    16%{opacity:1;transform:scaleX(1.04)}
-    44%{opacity:0.84;transform:scaleX(1.08)}
-    100%{opacity:0;transform:scaleX(1.16)}
+    0%{opacity:0;transform:translateX(-3%) scaleX(0.92)}
+    12%{opacity:1;transform:translateX(0) scaleX(1.00)}
+    36%{opacity:0.82;transform:translateX(1%) scaleX(1.02)}
+    64%{opacity:0.32;transform:translateX(3%) scaleX(1.04)}
+    100%{opacity:0;transform:translateX(5%) scaleX(1.06)}
 }
 @keyframes break-vfx-recovering{
     0%{opacity:0;transform:translateX(-10%) scaleX(0.76)}
@@ -552,6 +743,30 @@ html,body{
     26%{filter:brightness(1.52) blur(0.3px);box-shadow:0 0 22px rgba(255,224,102,0.82),0 0 32px rgba(104,228,255,0.22)}
     100%{filter:brightness(1.04) blur(0);box-shadow:0 0 12px rgba(255,224,102,0.44)}
 }
+/* ── Fast-fill: quick snap-to-full on signal ── */
+.break-fill.fast-filling{
+    transition:none !important;
+    animation:break-fast-fill-glow 450ms cubic-bezier(.16,.84,.24,1) forwards !important;
+}
+.break-fill.fast-filling::before{
+    animation:break-fast-fill-sweep 420ms cubic-bezier(.22,.68,.36,1) forwards !important;
+    background:linear-gradient(110deg,
+        rgba(255,255,255,0.00) 0%,
+        rgba(255,240,172,0.72) 35%,
+        rgba(255,255,255,0.82) 50%,
+        rgba(255,240,172,0.72) 65%,
+        rgba(255,255,255,0.00) 100%) !important;
+}
+@keyframes break-fast-fill-glow{
+    0%{filter:brightness(1.0);box-shadow:0 0 8px rgba(243,175,18,0.30)}
+    30%{filter:brightness(1.6);box-shadow:0 0 24px rgba(255,224,102,0.80),0 0 40px rgba(104,228,255,0.30)}
+    100%{filter:brightness(1.1);box-shadow:0 0 12px rgba(255,224,102,0.50)}
+}
+@keyframes break-fast-fill-sweep{
+    0%{transform:translateX(-120%);opacity:0}
+    20%{opacity:1}
+    100%{transform:translateX(220%);opacity:0}
+}
 .break-track.broken{
     border-color:rgba(255,178,72,0.68);
     box-shadow:inset 0 0 12px rgba(255,140,40,0.30),0 0 10px rgba(255,198,92,0.20);
@@ -568,13 +783,19 @@ html,body{
     letter-spacing:1px;
     text-transform:uppercase;
 }
-.boss-root.shield-hit-break .boss-cover{animation:root-shield-break 760ms cubic-bezier(.16,.84,.24,1) forwards}
+.boss-root.shield-hit-break .boss-cover{animation:root-shield-break 2500ms cubic-bezier(.16,.84,.24,1) forwards}
 .boss-root.shield-hit-restore .boss-cover{animation:root-shield-restore 860ms cubic-bezier(.16,.84,.24,1) forwards}
-.boss-root.break-hit .boss-cover{animation:root-break-hit 860ms cubic-bezier(.16,.84,.24,1) forwards}
+.boss-root.break-hit .boss-cover{animation:root-break-hit 2500ms cubic-bezier(.16,.84,.24,1) forwards}
 .boss-root.break-recover-hit .boss-cover{animation:root-break-recover 960ms cubic-bezier(.16,.84,.24,1) forwards}
+.boss-root.shield-hit-break::before{animation:outer-shield-bloom 2500ms cubic-bezier(.16,.84,.24,1) forwards}
+.boss-root.shield-hit-break::after{animation:outer-shield-ring 1180ms cubic-bezier(.22,1,.36,1) forwards}
+.boss-root.break-hit::before{animation:outer-break-bloom 2500ms cubic-bezier(.16,.84,.24,1) forwards}
+.boss-root.break-hit::after{animation:outer-break-ring 1320ms cubic-bezier(.22,1,.36,1) forwards}
 @keyframes root-shield-break{
     0%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
-    20%{box-shadow:0 0 18px rgba(118,232,255,0.42),2px 4px 18px var(--shadow),inset 0 0 28px rgba(118,232,255,0.22),inset 0 0 22px rgba(255,255,255,0.16),inset 0 1px 0 rgba(255,255,255,0.28)}
+    10%{box-shadow:0 0 12px rgba(118,232,255,0.26),2px 4px 18px var(--shadow),inset 0 0 26px rgba(118,232,255,0.16),inset 0 1px 0 rgba(255,255,255,0.26)}
+    42%{box-shadow:0 0 18px rgba(118,232,255,0.34),0 0 30px rgba(118,232,255,0.12),2px 4px 18px var(--shadow),inset 0 0 30px rgba(174,244,255,0.18),inset 0 1px 0 rgba(255,255,255,0.28)}
+    78%{box-shadow:0 0 10px rgba(118,232,255,0.18),2px 4px 18px var(--shadow),inset 0 0 24px rgba(118,232,255,0.10),inset 0 1px 0 rgba(255,255,255,0.24)}
     100%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
 }
 @keyframes root-shield-restore{
@@ -584,13 +805,39 @@ html,body{
 }
 @keyframes root-break-hit{
     0%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
-    18%{box-shadow:0 0 18px rgba(255,214,102,0.36),0 0 28px rgba(255,184,72,0.24),2px 4px 18px var(--shadow),inset 0 0 30px rgba(255,214,102,0.22),inset 0 1px 0 rgba(255,255,255,0.30)}
+    10%{box-shadow:0 0 12px rgba(104,228,255,0.26),2px 4px 18px var(--shadow),inset 0 0 24px rgba(104,228,255,0.14),inset 0 1px 0 rgba(255,255,255,0.26)}
+    40%{box-shadow:0 0 18px rgba(104,228,255,0.30),0 0 28px rgba(104,228,255,0.10),2px 4px 18px var(--shadow),inset 0 0 30px rgba(104,228,255,0.16),inset 0 1px 0 rgba(255,255,255,0.28)}
+    76%{box-shadow:0 0 10px rgba(104,228,255,0.18),2px 4px 18px var(--shadow),inset 0 0 24px rgba(104,228,255,0.08),inset 0 1px 0 rgba(255,255,255,0.24)}
     100%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
 }
 @keyframes root-break-recover{
     0%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
     18%{box-shadow:0 0 18px rgba(255,214,102,0.24),0 0 26px rgba(104,228,255,0.18),2px 4px 18px var(--shadow),inset 0 0 32px rgba(255,232,146,0.18),inset 0 1px 0 rgba(255,255,255,0.30)}
     100%{box-shadow:2px 4px 18px var(--shadow),inset 0 0 22px rgba(255,255,255,0.10),inset 0 1px 0 rgba(255,255,255,0.22)}
+}
+@keyframes outer-shield-bloom{
+    0%{opacity:0;transform:scale(0.92);filter:blur(8px) brightness(1)}
+    12%{opacity:0.82;transform:scale(0.98);filter:blur(6px) brightness(1.14)}
+    48%{opacity:0.40;transform:scale(1.02);filter:blur(8px) brightness(1.04)}
+    100%{opacity:0;transform:scale(1.06);filter:blur(12px) brightness(1)}
+}
+@keyframes outer-shield-ring{
+    0%{opacity:0;transform:scale(0.92)}
+    14%{opacity:0.72;transform:scale(0.98)}
+    52%{opacity:0.30;transform:scale(1.04)}
+    100%{opacity:0;transform:scale(1.08)}
+}
+@keyframes outer-break-bloom{
+    0%{opacity:0;transform:scale(0.90);filter:blur(8px) brightness(1)}
+    10%{opacity:0.86;transform:scale(0.98);filter:blur(6px) brightness(1.18)}
+    42%{opacity:0.38;transform:scale(1.02);filter:blur(8px) brightness(1.06)}
+    100%{opacity:0;transform:scale(1.08);filter:blur(14px) brightness(1)}
+}
+@keyframes outer-break-ring{
+    0%{opacity:0;transform:scale(0.90)}
+    12%{opacity:0.78;transform:scale(0.98)}
+    46%{opacity:0.32;transform:scale(1.04)}
+    100%{opacity:0;transform:scale(1.08)}
 }
 </style>
 </head>
@@ -644,6 +891,7 @@ var _hideTimer = null;
 var _flashTimer = null;
 var _burstTimer = null;
 var _fxTimers = Object.create(null);
+var _shieldGhostTimer = null;
 var _lastShieldActive = false;
 var _lastShieldPct = 0;
 var _lastBreakingStage = -1;
@@ -663,13 +911,205 @@ var _lastStopTicking = false;
  *                     OR stop_breaking_ticking true->false→true
  *                     OR (fallback) extinction ≤5% stale for 500ms
  *   broken → recovering: extinction starts rising (>lastBreakPct)
- *   recovering → refilled: extinction ≥95% OR breaking_stage→1 (BreakEnd)
+ *                         OR shield_active restored (skip hold → fast-fill)
+ *   recovering → refilled: breaking_stage→1 (BreakEnd) → fast-fill 420ms
+ *                           OR shield_active restored → fast-fill 420ms
+ *                           OR raw breakPct≥95% (non-interpolating)
+ *     Recovery phases: filling(0→85%/5s) → capped(hold) → slowtail(85→98%/8s)
+ *     Signal at any phase → fastfill(→100%/420ms) → refilled
  *   refilled → normal: after completion animation (520ms)
  */
 var _breakState = 'normal';   // 'normal' | 'broken' | 'recovering' | 'refilled'
 var _breakStaleTimer = null;  // fallback: stale-detection timer
 var _recoverEndTimer = null;
 var _breakEnteredTs = 0;      // timestamp when entered broken state
+
+/* ── Client-side recovery interpolation ──
+ * The protocol has no dedicated break-recovery-rate attr (IDs 446-449 unassigned).
+ * AttrExtinction (441) MAY jump from 0→max in a single packet when break ends,
+ * so we interpolate the visual fill locally over ~5s for a smooth red recovery bar.
+ */
+var _recoverInterpolating = false;
+var _recoverStartTs = 0;
+var _recoverStartPct = 0;
+var _recoverCurrentPct = 0;
+var _recoverDurationMs = 5500;  // legacy — kept but unused by new phase logic
+var _recoverRafId = 0;
+var _breakHoldTimer = null;
+/* ── Multi-phase recovery (anti-error failsafe) ──
+ * Phase 'filling':   0 → 85% over 5 s (ease-out)
+ * Phase 'capped':    holds at 85%, waits for signal
+ * Phase 'slowtail':  85 → 98% over ~8 s (linear crawl)
+ * Phase 'fastfill':  current → 100% in ~420 ms (on signal)
+ * Signals: shield_active restored, breaking_stage→1 (BreakEnd), raw breakPct≥95%
+ */
+var _recoverPhase = 'idle';          // 'idle'|'filling'|'capped'|'slowtail'|'fastfill'
+var _recoverCapPct = 0.85;           // ceiling during filling phase
+var _recoverPhase1Ms = 5000;         // 5 s to reach cap
+var _recoverFastFillMs = 420;        // fast-fill snap duration
+var _recoverSlowTailPct = 0.98;      // slow crawl target
+var _recoverSlowTailMs = 8000;       // duration for slow crawl
+var _recoverCapTimer = null;         // timer: capped → slowtail
+var _fastFillStartTs = 0;
+var _fastFillStartPct = 0;
+var _slowTailStartTs = 0;
+var _slowTailStartPct = 0;
+var _recoverFill = null;             // element ref held during recovery
+var _recoverRawPeakPct = 0;         // highest raw breakPct seen during recovery
+var _shieldBreakFxMs = 1400;
+var _breakBurstFxMs = 1400;
+var _lastShieldBreakFxTs = 0;
+var _lastBreakBurstTs = 0;
+var _lastHpChangedTs = 0;       // tracks when HP last changed (for under-attack detection)
+
+function _clearShieldGhost(forceHide) {
+    var shieldFill = document.getElementById('shield-fill');
+    if (_shieldGhostTimer) { clearTimeout(_shieldGhostTimer); _shieldGhostTimer = null; }
+    if (!shieldFill) return;
+    shieldFill.classList.remove('breaking-ghost');
+    if (forceHide) {
+        shieldFill.classList.add('is-empty');
+        shieldFill.style.width = '0%';
+    }
+}
+
+function _startShieldGhost(lastPct) {
+    var shieldFill = document.getElementById('shield-fill');
+    if (!shieldFill) return;
+    if (_shieldGhostTimer) clearTimeout(_shieldGhostTimer);
+    var pct = Math.max(0.05, Math.min(1, Number(lastPct || _lastShieldPct || 0.08)));
+    shieldFill.classList.remove('active', 'restoring', 'is-empty', 'is-full');
+    shieldFill.classList.add('breaking-ghost');
+    shieldFill.style.width = _pctWidth(pct);
+    _shieldGhostTimer = setTimeout(function() {
+        _shieldGhostTimer = null;
+        if (_lastShieldActive) return;
+        shieldFill.classList.remove('breaking-ghost');
+        shieldFill.classList.add('is-empty');
+        shieldFill.style.width = '0%';
+    }, _shieldBreakFxMs + 60);
+}
+
+function _cancelRecoverInterpolation() {
+    if (_recoverRafId) { cancelAnimationFrame(_recoverRafId); _recoverRafId = 0; }
+    if (_recoverCapTimer) { clearTimeout(_recoverCapTimer); _recoverCapTimer = null; }
+    _recoverInterpolating = false;
+    _recoverCurrentPct = 0;
+    _recoverPhase = 'idle';
+    _recoverRawPeakPct = 0;
+    if (_recoverFill) {
+        _recoverFill.classList.remove('fast-filling');
+        _recoverFill = null;
+    }
+}
+
+function _startRecoverInterpolation(fill) {
+    _cancelRecoverInterpolation();
+    _recoverFill = fill;
+    _recoverStartTs = Date.now();
+    _recoverStartPct = 0;
+    _recoverCurrentPct = 0;
+    _recoverInterpolating = true;
+    _recoverPhase = 'filling';
+    _recoverRafId = requestAnimationFrame(_recoverFrame);
+}
+
+/* Top-level RAF callback — reads phase from _recoverPhase */
+function _recoverFrame() {
+    if (_breakState !== 'recovering' || !_recoverInterpolating) {
+        _recoverRafId = 0;
+        return;
+    }
+    var fill = _recoverFill || document.getElementById('break-fill');
+    var breakText = document.getElementById('break-text');
+    var pct, elapsed, t, ease;
+
+    switch (_recoverPhase) {
+    case 'filling':
+        elapsed = Date.now() - _recoverStartTs;
+        t = Math.min(1, elapsed / _recoverPhase1Ms);
+        ease = 1 - Math.pow(1 - t, 2);  // ease-out quadratic
+        pct = _recoverStartPct + (_recoverCapPct - _recoverStartPct) * ease;
+        _recoverCurrentPct = pct;
+        fill.style.width = Math.round(pct * 100) + '%';
+        breakText.textContent = Math.round(pct * 100) + '%';
+        if (t >= 1) {
+            // Reached 85% cap — pause and wait for signal or timer
+            _recoverPhase = 'capped';
+            _recoverCurrentPct = _recoverCapPct;
+            _recoverCapTimer = setTimeout(function() {
+                _recoverCapTimer = null;
+                if (_recoverPhase !== 'capped') return;
+                _recoverPhase = 'slowtail';
+                _slowTailStartTs = Date.now();
+                _slowTailStartPct = _recoverCurrentPct;
+                _recoverRafId = requestAnimationFrame(_recoverFrame);
+            }, 300);
+            _recoverRafId = 0;  // pause RAF while capped
+            return;
+        }
+        break;
+
+    case 'slowtail':
+        elapsed = Date.now() - _slowTailStartTs;
+        t = Math.min(1, elapsed / _recoverSlowTailMs);
+        pct = _slowTailStartPct + (_recoverSlowTailPct - _slowTailStartPct) * t;
+        _recoverCurrentPct = pct;
+        fill.style.width = Math.round(pct * 100) + '%';
+        breakText.textContent = Math.round(pct * 100) + '%';
+        if (t >= 1) {
+            _recoverRafId = 0;
+            // Hold at 98% — still wait for signal, don't auto-refill
+            return;
+        }
+        break;
+
+    case 'fastfill':
+        elapsed = Date.now() - _fastFillStartTs;
+        t = Math.min(1, elapsed / _recoverFastFillMs);
+        ease = 1 - Math.pow(1 - t, 3);  // cubic ease-out for snappy feel
+        pct = _fastFillStartPct + (1.0 - _fastFillStartPct) * ease;
+        _recoverCurrentPct = pct;
+        fill.style.width = Math.round(pct * 100) + '%';
+        breakText.textContent = Math.round(pct * 100) + '%';
+        if (t >= 1) {
+            _recoverRafId = 0;
+            _recoverInterpolating = false;
+            _recoverPhase = 'idle';
+            fill.classList.remove('fast-filling');
+            _recoverFill = null;
+            _enterRefilled(fill, fill.parentElement);
+            return;
+        }
+        break;
+
+    default:
+        _recoverRafId = 0;
+        return;
+    }
+    _recoverRafId = requestAnimationFrame(_recoverFrame);
+}
+
+/* Trigger fast snap-to-100% from wherever the bar currently sits */
+function _triggerRecoverFastFill() {
+    if (_recoverPhase === 'fastfill') return;
+    if (_recoverCapTimer) { clearTimeout(_recoverCapTimer); _recoverCapTimer = null; }
+    _fastFillStartTs = Date.now();
+    _fastFillStartPct = _recoverCurrentPct || 0;
+    _recoverPhase = 'fastfill';
+    _recoverInterpolating = true;
+    var fill = _recoverFill || document.getElementById('break-fill');
+    _recoverFill = fill;
+    fill.classList.add('fast-filling');
+    // Ensure recovering class is present for the glow base
+    if (!fill.classList.contains('recovering')) fill.classList.add('recovering');
+    var track = fill.parentElement;
+    if (track && !track.classList.contains('recovering')) track.classList.add('recovering');
+    // If RAF is idle (capped / slowtail ended) kick it
+    if (!_recoverRafId) {
+        _recoverRafId = requestAnimationFrame(_recoverFrame);
+    }
+}
 
 function _clearClassList(el, classes) {
     if (!el || !classes || !classes.length) return;
@@ -705,9 +1145,16 @@ function _pulseRoot(className, durationMs) {
 function _triggerShieldFx(mode) {
     var layer = document.getElementById('shield-vfx-layer');
     var isBreak = mode === 'breaking';
-    _restartFxClass(layer, ['breaking', 'restoring'], isBreak ? 'breaking' : 'restoring', 'shieldLayer', isBreak ? 1000 : 1080);
-    _pulseRoot(isBreak ? 'shield-hit-break' : 'shield-hit-restore', isBreak ? 800 : 880);
+    var now = Date.now();
+    if (isBreak && now - _lastShieldBreakFxTs < 2200) return;
+    if (isBreak) _lastShieldBreakFxTs = now;
+    _restartFxClass(layer, ['breaking', 'restoring'], isBreak ? 'breaking' : 'restoring', 'shieldLayer', isBreak ? _shieldBreakFxMs : 1080);
+    _pulseRoot(isBreak ? 'shield-hit-break' : 'shield-hit-restore', isBreak ? _shieldBreakFxMs : 880);
     _triggerFlash(isBreak ? 'shield-break' : 'shield-restore');
+    // On shield break: spawn cyan HUD slices that detach outward.
+    if (isBreak) {
+        setTimeout(function() { _triggerShieldShatter(); }, 440);
+    }
 }
 
 function _triggerBreakRecovery(mode) {
@@ -747,8 +1194,20 @@ function _showBossBar() {
         _hideTimer = null;
     }
     var root = document.getElementById('boss-root');
+    // Keep element displayed (display:block via .visible) so the reflow is meaningful
+    // and boss-enter animation properly restarts from current state.
+    // Only remove exiting; if visible is absent add it first to enter display:block,
+    // then force reflow, then re-add visible to restart the enter animation.
+    var wasVisible = root.classList.contains('visible');
     root.classList.remove('exiting');
-    root.classList.add('visible');
+    if (!wasVisible) {
+        root.classList.add('visible');
+    } else {
+        root.classList.remove('visible');
+        void root.offsetWidth;  // force reflow – element is briefly display:none but
+        // display:none→display:block always triggers a fresh animation
+        root.classList.add('visible');
+    }
     _visible = true;
     _reportRegions();
 }
@@ -767,15 +1226,24 @@ function _hideBossBar() {
         _lastHpPct = 1;
         _lastStopTicking = false;
         _breakState = 'normal';
+        _cancelRecoverInterpolation();
+        _clearShieldGhost(true);
         if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
         if (_recoverEndTimer) { clearTimeout(_recoverEndTimer); _recoverEndTimer = null; }
+        if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
         _clearClassList(root, ['shield-hit-break', 'shield-hit-restore', 'break-hit', 'break-recover-hit']);
         _clearClassList(document.getElementById('shield-vfx-layer'), ['breaking', 'restoring']);
         _clearClassList(document.getElementById('break-vfx-layer'), ['breaking', 'recovering', 'restored']);
         _clearClassList(document.getElementById('shield-fill'), ['restoring']);
         _clearClassList(document.getElementById('flash-overlay'), ['shield-break', 'shield-restore', 'phase-break', 'break-burst', 'break-restore']);
-        _clearClassList(document.getElementById('break-fill'), ['recovering', 'full']);
+        _clearClassList(document.getElementById('break-fill'), ['recovering', 'full', 'fast-filling']);
         _clearClassList(document.querySelector('.break-track'), ['broken', 'recovering']);
+        // Clean up break/shield shatter layers
+        var _blayer = document.getElementById('break-burst-layer');
+        if (_blayer) { _blayer.classList.remove('active', 'shattering'); var _bs = _blayer.querySelectorAll('.break-shard'); for (var _i=0;_i<_bs.length;_i++) _bs[_i].remove(); }
+        var _slayer = document.getElementById('shield-vfx-layer');
+        if (_slayer) { var _ss = _slayer.querySelectorAll('.shield-shard'); for (var _j=0;_j<_ss.length;_j++) _ss[_j].remove(); }
+        if (_burstTimer) { clearTimeout(_burstTimer); _burstTimer = null; }
         Object.keys(_fxTimers).forEach(function(key) {
             if (_fxTimers[key]) clearTimeout(_fxTimers[key]);
             _fxTimers[key] = null;
@@ -790,25 +1258,107 @@ function _triggerFlash(type) {
     void flash.offsetWidth;
     flash.classList.add(type);
     if (_flashTimer) clearTimeout(_flashTimer);
+    var durationMs = (type === 'shield-break' || type === 'break-burst') ? 1500 : 1200;
     _flashTimer = setTimeout(function() {
         flash.classList.remove('shield-break', 'shield-restore', 'phase-break', 'break-burst', 'break-restore');
-    }, 1200);
+    }, durationMs);
 }
 
 function _triggerBreakBurst() {
     var burst = document.getElementById('break-burst-layer');
-    if (burst) {
+    if (!burst) return;
+    var now = Date.now();
+    if (now - _lastBreakBurstTs < 1200) return;
+    _lastBreakBurstTs = now;
+    // Clean up any previous shards
+    var oldShards = burst.querySelectorAll('.break-shard');
+    for (var i = 0; i < oldShards.length; i++) oldShards[i].remove();
+    // Phase 1: golden crack lines flash across the full panel
+    burst.classList.remove('active', 'shattering');
+    void burst.offsetWidth;
+    burst.classList.add('active');
+    if (_burstTimer) clearTimeout(_burstTimer);
+    // Phase 2: HUD slices detach after the scan/fracture pass.
+    _burstTimer = setTimeout(function() {
         burst.classList.remove('active');
         void burst.offsetWidth;
-        burst.classList.add('active');
-        if (_burstTimer) clearTimeout(_burstTimer);
-        _burstTimer = setTimeout(function() {
-            burst.classList.remove('active');
-        }, 1120);
-    }
-    _restartFxClass(document.getElementById('break-vfx-layer'), ['breaking', 'recovering', 'restored'], 'breaking', 'breakBurst', 980);
-    _pulseRoot('break-hit', 860);
+        burst.classList.add('shattering');
+        _spawnShards(burst, 'break', 0);
+        setTimeout(function() { _spawnShards(burst, 'break', 1); }, 80);
+        setTimeout(function() {
+            burst.classList.remove('shattering');
+            var shards = burst.querySelectorAll('.break-shard');
+            for (var j = 0; j < shards.length; j++) shards[j].remove();
+        }, _breakBurstFxMs - 500);
+    }, 500);
+    _restartFxClass(document.getElementById('break-vfx-layer'), ['breaking', 'recovering', 'restored'], 'breaking', 'breakBurst', _breakBurstFxMs);
+    _pulseRoot('break-hit', _breakBurstFxMs);
     _triggerFlash('break-burst');
+}
+
+/* ── Shard generator for break/shield shatter ── */
+function _spawnShards(container, type, wave) {
+    var isShield = type === 'shield';
+    wave = Number(wave || 0);
+    var count = isShield ? (6 + wave * 3) : (8 + wave * 4);
+    var w = container.offsetWidth || (isShield ? 560 : 620);
+    var h = container.offsetHeight || (isShield ? 60 : 108);
+    var cx = w * 0.5, cy = h * 0.5;
+    for (var i = 0; i < count; i++) {
+        var shard = document.createElement('div');
+        shard.className = (isShield ? 'shield-shard' : 'break-shard') + ' ' +
+            (Math.random() > 0.5 ? (isShield ? 'cyan' : 'gold') : 'white');
+        var lane = i / Math.max(1, count - 1);
+        var gridX = (i % Math.max(3, Math.round(count / 3))) / Math.max(1, Math.max(3, Math.round(count / 3)) - 1);
+        var sx = isShield
+            ? (w * 0.04 + lane * w * 0.90 + (Math.random() - 0.5) * 10)
+            : (w * 0.06 + gridX * w * 0.88 + (Math.random() - 0.5) * 16);
+        var sy = isShield
+            ? (h * 0.30 + (Math.random() - 0.5) * h * 0.36)
+            : (h * 0.15 + Math.random() * h * 0.70);
+        var sw = isShield ? (10 + Math.random() * 14) : (8 + Math.random() * 12);
+        var sh = isShield ? (3 + Math.random() * 5) : (4 + Math.random() * 8);
+        shard.style.cssText = 'left:' + sx + 'px;top:' + sy + 'px;width:' + sw + 'px;height:' + sh + 'px;' +
+            'border-radius:1px;' +
+            'transform:rotate(' + Math.round((Math.random() - 0.5) * (isShield ? 26 : 42)) + 'deg) scale(' + (1 + Math.random() * 0.24).toFixed(2) + ');' +
+            'clip-path:polygon(' +
+                '0 12%,' +
+                (74 + Math.round(Math.random() * 22)) + '% 0,' +
+                '100% 50%,' +
+                (80 + Math.round(Math.random() * 18)) + '% 100%,' +
+                '0 88%);';
+        container.appendChild(shard);
+        var angle = isShield
+            ? (-0.10 + (Math.random() - 0.5) * 0.72)
+            : Math.atan2(sy - cy, sx - cx) + (Math.random() - 0.5) * 0.42;
+        var dist = isShield ? (48 + Math.random() * 72 + wave * 10) : (56 + Math.random() * 80 + wave * 14);
+        var tx = Math.cos(angle) * dist + (isShield ? 24 : 0);
+        var ty = Math.sin(angle) * dist * (isShield ? 0.82 : 0.96);
+        var rot = isShield ? ((Math.random() - 0.5) * 60) : ((Math.random() - 0.5) * 90);
+        var dur = isShield ? (680 + Math.random() * 360 + wave * 40) : (620 + Math.random() * 380 + wave * 50);
+        var delay = isShield ? (30 + Math.random() * 140 + wave * 18) : (10 + Math.random() * 90 + wave * 12);
+        shard.animate([
+            { transform: 'translate(0,0) rotate(0deg) scale(0.64)', opacity: 0 },
+            { transform: 'translate(0,0) rotate(0deg) scale(1.22)', opacity: 1, offset: 0.10 },
+            { transform: 'translate(' + (tx * 0.62) + 'px,' + (ty * 0.62) + 'px) rotate(' + (rot * 0.48) + 'deg) scale(1.06)', opacity: 0.92, offset: 0.42 },
+            { transform: 'translate(' + tx + 'px,' + ty + 'px) rotate(' + rot + 'deg) scale(0.70)', opacity: 0 }
+        ], { duration: dur, delay: delay, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'forwards' });
+    }
+}
+
+function _triggerShieldShatter() {
+    var layer = document.getElementById('shield-vfx-layer');
+    if (!layer) return;
+    // Clean previous shards
+    var oldShards = layer.querySelectorAll('.shield-shard');
+    for (var i = 0; i < oldShards.length; i++) oldShards[i].remove();
+    // Spawn cyan shard particles
+    _spawnShards(layer, 'shield', 0);
+    setTimeout(function() { _spawnShards(layer, 'shield', 1); }, 90);
+    setTimeout(function() {
+        var shards = layer.querySelectorAll('.shield-shard');
+        for (var j = 0; j < shards.length; j++) shards[j].remove();
+    }, _shieldBreakFxMs + 80);
 }
 
 function updateBossBar(data) {
@@ -818,7 +1368,10 @@ function updateBossBar(data) {
         return;
     }
 
-    if (!_visible) _showBossBar();
+    // Show (or cancel pending exit) whenever data is active.
+    // _visible stays true during the 260ms exit-animation window, so we must
+    // also check for the exiting class to correctly interrupt an ongoing hide.
+    if (!_visible || root.classList.contains('exiting')) _showBossBar();
 
     var pct = Math.max(0, Math.min(1, Number(data.hp_pct || 0)));
     var hpFill = document.getElementById('hp-fill');
@@ -827,6 +1380,8 @@ function updateBossBar(data) {
 
     hpFill.style.width = _pctWidth(pct);
     _setFillClass(hpFill, pct);
+    // Track HP changes for under-attack detection
+    if (Math.abs(pct - _lastHpPct) > 0.001) _lastHpChangedTs = Date.now();
     if (pct < _lastHpPct) {
         setTimeout(function() {
             hpTrail.style.width = _pctWidth(pct);
@@ -850,6 +1405,22 @@ function updateBossBar(data) {
 
     var shieldPct = Math.max(0, Math.min(pct, Number(data.shield_pct || 0)));
     if (data.shield_active && shieldPct > 0) {
+        _clearShieldGhost(false);
+        // Shield restored while break bar is recovering/broken → fast-fill
+        if (!_lastShieldActive && (_breakState === 'recovering' || _breakState === 'broken')) {
+            if (_breakState === 'broken') {
+                // Skip hold, jump into recovering then fast-fill
+                var bf = document.getElementById('break-fill');
+                var bt = bf.parentElement;
+                if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
+                _breakState = 'recovering';
+                bf.classList.add('recovering');
+                bt.classList.add('recovering');
+                _triggerBreakRecovery('recovering');
+                _startRecoverInterpolation(bf);
+            }
+            _triggerRecoverFastFill();
+        }
         shieldFill.style.width = _pctWidth(shieldPct);
         shieldFill.classList.add('active');
         if (!_lastShieldActive || (_lastShieldPct <= 0.01 && shieldPct > 0.03)) {
@@ -861,11 +1432,14 @@ function updateBossBar(data) {
         if (!_lastShieldActive) _lastShieldActive = true;
     } else {
         if (_lastShieldActive) {
+            _startShieldGhost(Math.max(_lastShieldPct, shieldPct));
             _triggerShieldFx('breaking');
+        } else if (!_shieldGhostTimer) {
+            shieldFill.classList.remove('breaking-ghost');
+            shieldFill.classList.add('is-empty');
+            shieldFill.style.width = '0%';
         }
         shieldFill.classList.remove('active', 'is-full', 'restoring');
-        shieldFill.classList.add('is-empty');
-        shieldFill.style.width = '0%';
         _lastShieldActive = false;
     }
     _lastShieldPct = shieldPct;
@@ -873,7 +1447,11 @@ function updateBossBar(data) {
     var breakPct = Math.max(0, Math.min(1, Number(data.extinction_pct || 0)));
     var breakFill = document.getElementById('break-fill');
     var breakTrack = breakFill.parentElement;
-    breakFill.style.width = Math.round(breakPct * 100) + '%';
+    // During recovery interpolation, the RAF loop drives the visual width.
+    // Only set from raw data when NOT interpolating.
+    if (!_recoverInterpolating) {
+        breakFill.style.width = Math.round(breakPct * 100) + '%';
+    }
     breakFill.classList.toggle('full', breakPct >= 0.95);
 
     // breaking_stage: 0 = Breaking (broken), 1 = BreakEnd (normal)
@@ -881,7 +1459,9 @@ function updateBossBar(data) {
     if (stage >= 0) {
         document.getElementById('stage-text').textContent = 'P' + Math.max(1, stage);
     }
-    document.getElementById('break-text').textContent = Math.round(breakPct * 100) + '%';
+    if (!_recoverInterpolating) {
+        document.getElementById('break-text').textContent = Math.round(breakPct * 100) + '%';
+    }
 
     var stopTicking = !!data.stop_breaking_ticking;
 
@@ -927,18 +1507,33 @@ window.addEventListener('resize', function() {
 function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
     switch (_breakState) {
     case 'normal':
-        // Packet signal: breaking_stage transitions to 0
+        // If TCP event already triggered this break, skip heuristics for 2.5s
+        if (_tcpBreakTriggered && (Date.now() - _tcpBreakTs) < 2500) break;
+        // Packet signal: breaking_stage transitions to 0 (fallback)
         if (_lastBreakingStage >= 0 && stage !== _lastBreakingStage && stage === 0) {
             _enterBroken(fill, track);
             return;
         }
         // Packet signal: stop_breaking_ticking just turned on
-        if (stopTicking && !_lastStopTicking && breakPct <= 0.05) {
+        if (stopTicking && !_lastStopTicking && breakPct <= 0.08) {
             _enterBroken(fill, track);
             return;
         }
-        // Fallback: gauge stuck at ≤5% — start stale timer
-        if (breakPct <= 0.05 && _lastBreakPct <= 0.05 && _lastBreakPct > -1) {
+        // Under-attack stall: gauge stuck ≤8% while boss HP is dropping
+        var hpDropping = (_lastHpChangedTs > 0 && (Date.now() - _lastHpChangedTs) < 3000);
+        if (hpDropping && breakPct <= 0.08 && breakPct === _lastBreakPct && _lastBreakPct > -1) {
+            if (!_breakStaleTimer) {
+                _breakStaleTimer = setTimeout(function() {
+                    _breakStaleTimer = null;
+                    if (_breakState === 'normal') {
+                        var bf = document.getElementById('break-fill');
+                        _enterBroken(bf, bf.parentElement);
+                    }
+                }, 350);
+            }
+        }
+        // Fallback: gauge stuck at ≤8% — start stale timer
+        if (breakPct <= 0.08 && _lastBreakPct <= 0.08 && _lastBreakPct > -1) {
             if (!_breakStaleTimer) {
                 _breakStaleTimer = setTimeout(function() {
                     _breakStaleTimer = null;
@@ -952,35 +1547,66 @@ function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
             // Gauge moving or above threshold — cancel stale timer
             if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
         }
+        // Also clear under-attack stale timer if gauge is above 8%
+        if (breakPct > 0.08 && _breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
         break;
 
     case 'broken':
-        // Wait for gauge to start rising → transition to recovering
-        if (breakPct > _lastBreakPct && breakPct > 0.02) {
+        // Stale-data guard: ignore high breakPct / stage signals for 3 s after entering broken.
+        // The server often hasn't sent extinction=0 yet, so old 90 %+ data is stale.
+        var _brokenAge = Date.now() - _breakEnteredTs;
+        if (_brokenAge < 3000 && breakPct >= 0.50) break;  // discard stale high readings
+        // Recovery-complete during hold: BreakEnd signal (stage 0→1) or raw pct ≥90%
+        if ((stage === 1 && _lastBreakingStage !== 1) || breakPct >= 0.90) {
+            if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
             _breakState = 'recovering';
             fill.classList.add('recovering');
-            track.classList.add('broken');
             track.classList.add('recovering');
             _triggerBreakRecovery('recovering');
+            _startRecoverInterpolation(fill);
+            _triggerRecoverFastFill();
+            return;
         }
-        // Also catch: breaking_stage went back to 1 (BreakEnd) — immediate recovery
-        if (_lastBreakingStage >= 0 && stage === 1 && _lastBreakingStage === 0) {
+        // Packet-based early recovery: if gauge starts rising, skip the hold.
+        if (breakPct > _lastBreakPct && breakPct > 0.04) {
+            if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
             _breakState = 'recovering';
             fill.classList.add('recovering');
-            track.classList.add('broken');
             track.classList.add('recovering');
             _triggerBreakRecovery('recovering');
+            _startRecoverInterpolation(fill);
         }
         break;
 
     case 'recovering':
-        // Gauge refilled ≥95% OR breaking_stage turned to BreakEnd(1) while gauge high
-        if (breakPct >= 0.95 || (stage === 1 && _lastBreakingStage === 0 && breakPct > 0.5)) {
-            _enterRefilled(fill, track);
+        // Track highest raw breakPct during recovery (for re-break detection)
+        _recoverRawPeakPct = Math.max(_recoverRawPeakPct, breakPct);
+        // BreakEnd packet → fast-fill to 100%
+        if (stage === 1 && _lastBreakingStage !== 1) {
+            _triggerRecoverFastFill();
+            return;
         }
-        // Guard: gauge dropped again (boss broken again mid-recovery)
-        if (breakPct < _lastBreakPct && breakPct <= 0.05) {
-            fill.classList.remove('recovering');
+        // Raw server data jumps to ≥95% → fast-fill (even during interpolation)
+        if (breakPct >= 0.95 && _recoverPhase !== 'fastfill') {
+            _triggerRecoverFastFill();
+            return;
+        }
+        // stop_breaking_ticking turned OFF while recovering → break ended
+        if (!stopTicking && _lastStopTicking && breakPct > 0.5) {
+            _triggerRecoverFastFill();
+            return;
+        }
+        // Safety: auto-refill if stuck recovering for too long (14 s)
+        if (_recoverInterpolating && (Date.now() - _recoverStartTs) > 14000) {
+            _triggerRecoverFastFill();
+            return;
+        }
+        // Guard: genuine re-break — only if raw data actually rose above 15%
+        // then crashed back, indicating server reported partial recovery
+        // before it was interrupted by a new break.
+        if (breakPct <= 0.05 && _recoverRawPeakPct > 0.15) {
+            _cancelRecoverInterpolation();
+            fill.classList.remove('recovering', 'fast-filling');
             track.classList.remove('broken', 'recovering');
             _enterBroken(fill, track);
         }
@@ -993,18 +1619,43 @@ function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
 }
 
 function _enterBroken(fill, track) {
+    // Phase 1 (0–2.5 s): show broken state, play burst VFX.
+    // Phase 2 (2.5–8 s): bar recovers over 5.5 s.
+    // Packet data can still trigger _enterRefilled() early once in 'recovering'.
     _breakState = 'broken';
     _breakEnteredTs = Date.now();
+    _tcpBreakTriggered = false;  // reset for next cycle
+    _cancelRecoverInterpolation();
+    if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
     if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
     if (_recoverEndTimer) { clearTimeout(_recoverEndTimer); _recoverEndTimer = null; }
-    fill.classList.remove('recovering', 'full');
+    fill.classList.remove('recovering', 'full', 'fast-filling');
     track.classList.remove('recovering');
     track.classList.add('broken');
+    // Force bar to 0% visually — break = gauge depleted
+    fill.style.width = '0%';
+    var breakText = document.getElementById('break-text');
+    if (breakText) breakText.textContent = '0%';
+    _lastBreakPct = 0;
     _triggerBreakBurst();
+    // After 2.5 s, start recovery animation
+    _breakHoldTimer = setTimeout(function() {
+        _breakHoldTimer = null;
+        if (_breakState !== 'broken') return;  // already handled (re-break / hide)
+        var bf = document.getElementById('break-fill');
+        var bt = bf.parentElement;
+        _breakState = 'recovering';
+        bf.classList.add('recovering');
+        bt.classList.add('recovering');
+        _triggerBreakRecovery('recovering');
+        _startRecoverInterpolation(bf);
+    }, 2500);
 }
 
 function _enterRefilled(fill, track) {
     _breakState = 'refilled';
+    _cancelRecoverInterpolation();
+    fill.style.width = '100%';  // ensure bar is visually full
     fill.classList.add('full');  // triggers break-recover-complete animation
     track.classList.add('recovering');
     _triggerBreakRecovery('restored');
@@ -1017,18 +1668,33 @@ function _enterRefilled(fill, track) {
     }, 520);
 }
 
+var _tcpBreakTriggered = false;  // TCP event already handled this break cycle
+var _tcpBreakTs = 0;             // timestamp of last TCP break trigger
+
 function triggerBreakEffect(type) {
     if (!_visible) return;
-    if (type === 'enter_breaking') {
+    if (type === 'enter_breaking' || type === 'into_fracture_state') {
+        // TCP is authoritative — force broken state regardless of current state
         var bf = document.getElementById('break-fill');
         var bt = bf.parentElement;
-        if (_breakState === 'normal') {
+        _tcpBreakTriggered = true;
+        _tcpBreakTs = Date.now();
+        if (_breakState === 'normal' || _breakState === 'refilled') {
+            _enterBroken(bf, bt);
+        } else if (_breakState === 'recovering') {
+            // Re-break during recovery
+            _cancelRecoverInterpolation();
+            bf.classList.remove('recovering', 'fast-filling');
+            bt.classList.remove('broken', 'recovering');
             _enterBroken(bf, bt);
         }
+        // If already 'broken', just refresh the VFX timestamp
     } else if (type === 'shield_broken') {
-        // Force shield state for visual effect
+        // TCP shield-broken: force shield break VFX regardless of shield_active state
         _lastShieldActive = true;
         _triggerShieldFx('breaking');
+        _startShieldGhost(_lastShieldPct || 0.08);
+        _lastShieldActive = false;
     } else if (type === 'super_armor_broken') {
         _triggerBreakBurst();
     }
@@ -1038,7 +1704,14 @@ window.BossHP = {
     update: updateBossBar,
     show: _showBossBar,
     hide: _hideBossBar,
-    triggerBreakEffect: triggerBreakEffect
+    triggerBreakEffect: triggerBreakEffect,
+    setFxMargins: function(top, right, bottom, left) {
+        var r = document.documentElement.style;
+        r.setProperty('--fx-pad-top', top + 'px');
+        r.setProperty('--fx-pad-right', right + 'px');
+        r.setProperty('--fx-pad-bottom', bottom + 'px');
+        r.setProperty('--fx-pad-left', left + 'px');
+    }
 };
 </script>
 </body>

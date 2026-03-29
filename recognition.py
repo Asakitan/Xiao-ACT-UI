@@ -373,6 +373,63 @@ def _row_independent_pct(
     return float(np.median(row_pcts))
 
 
+# ── STA bar: exact-color detection ──────────────────────────────────
+# Target #FFAE35 (BGR 53, 174, 255).  The filled portion of the STA bar
+# is a solid flat colour with no gradients or patterns, so a tight
+# Euclidean-distance match in BGR space is the most reliable method.
+
+_STA_BGR = np.array([53, 174, 255], dtype=np.float32)   # #FFAE35 in BGR
+_STA_DIST_THRESHOLD = 42.0      # max Euclidean distance to count as "gold"
+_STA_COL_FILL_THRESHOLD = 0.35  # min fraction of rows matching per column
+
+
+def _detect_stamina_pct(img: np.ndarray) -> Tuple[float, float]:
+    """Detect STA bar fill % by exact BGR colour matching.
+
+    Returns (pct, confidence) where:
+      pct        – 0.0 .. 1.0 fill ratio
+      confidence – 0.0 .. 1.0 (high when bar present, ~0 when absent)
+    """
+    try:
+        h, w = img.shape[:2]
+        if h < 2 or w < 4:
+            return 0.0, 0.0
+
+        pixels = img.astype(np.float32)                       # (H, W, 3)
+        diff = pixels - _STA_BGR[np.newaxis, np.newaxis, :]   # broadcast
+        dist = np.sqrt((diff * diff).sum(axis=2))             # Euclidean per-pixel
+        match = dist <= _STA_DIST_THRESHOLD                   # bool mask
+
+        # Column-wise fill ratio (fraction of rows that match gold)
+        col_fill = match.mean(axis=0)                         # shape (W,)
+
+        # Smooth with a tiny 3-wide kernel to absorb 1 px jitter
+        kernel = np.array([0.25, 0.50, 0.25], dtype=np.float32)
+        col_fill_s = np.convolve(col_fill, kernel, mode="same")
+
+        # Overall confidence: how much of the image is gold
+        overall_match = float(match.mean())
+        confidence = min(1.0, overall_match / 0.20)
+
+        if overall_match < 0.03:
+            # Almost no gold pixels → bar absent
+            return 0.0, 0.0
+
+        # Find rightmost filled column (above threshold)
+        filled_cols = np.where(col_fill_s >= _STA_COL_FILL_THRESHOLD)[0]
+        if len(filled_cols) == 0:
+            return 0.0, confidence * 0.5
+
+        rightmost = int(filled_cols[-1]) + 1
+        pct = max(0.0, min(1.0, rightmost / float(w)))
+        # Near-full clamp: 98-100 % → 100 % to suppress sub-pixel jitter
+        if pct >= 0.98:
+            pct = 1.0
+        return pct, confidence
+    except Exception:
+        return 0.0, 0.0
+
+
 def _detect_bar_pct(img: np.ndarray, color_cfg: dict) -> Tuple[float, float]:
     """Detect bar fill percentage using gradient edge detection + threshold voting.
 
@@ -440,13 +497,53 @@ def _detect_bar_pct(img: np.ndarray, color_cfg: dict) -> Tuple[float, float]:
         smooth_kernel = np.ones((5,), dtype=np.float32) / 5.0
         smooth_score = np.convolve(col_score, smooth_kernel, mode="same")
 
+        # ── Hue presence gate (two-tier) ──
+        # Tier 1: overall hue coverage too low → bar absent.
+        overall_hue_cov = float(hue_coverage.mean())
+        if overall_hue_cov < 0.08:
+            return 0.0, 0.0          # no bar → zero confidence
+        # Tier 2: the leftmost 10% must have strong hue presence when the bar
+        # is visible — even at nearly-zero STA the left edge is still the track
+        # background (gray), NOT a random UI element.  If the left anchor has
+        # wildly different content (main city, menus), its hue_coverage will be
+        # comparable to the rest → no clear "filled vs empty" distinction exists.
+        left_anchor_w = max(4, int(round(eff_w * 0.10)))
+        left_anchor_hue = float(hue_coverage[:left_anchor_w].mean())
+
+        # Smooth hue_coverage the same way as col_score for stable edge finding.
+        smooth_hue = np.convolve(hue_coverage, smooth_kernel, mode="same")
+
         # References and dynamic range
         ref_width = max(6, int(round(eff_w * 0.12)))
         left_ref = float(np.percentile(smooth_score[:ref_width], 84))
         right_ref = float(np.percentile(smooth_score[max(0, eff_w - ref_width):], 62))
         dynamic_range = max(0.0, left_ref - right_ref)
-        if dynamic_range <= 0.055 and float(smooth_score[-ref_width:].mean()) >= (left_ref * 0.96):
+
+        # ── Full-bar shortcut (hue-based) ──
+        # Bar truly 100%: EVERY column should have strong gold hue coverage.
+        # Use the last 5% of columns — if they still have high hue coverage,
+        # the bar is full.
+        tail_w = max(3, int(round(eff_w * 0.05)))
+        tail_hue = float(smooth_hue[-tail_w:].mean())
+        head_hue = float(smooth_hue[:tail_w].mean())
+        if tail_hue >= 0.40 and head_hue >= 0.40 and dynamic_range <= 0.06:
             return 1.0, 1.0
+
+        # ── Near-full precision (hue-edge walk) ──
+        # When the bar is 80-99% full, brightness-based dynamic_range is tiny,
+        # but hue_coverage drops sharply at the fill boundary.  Walk right-to-
+        # left on smooth_hue to find the transition.
+        if left_anchor_hue >= 0.35 and dynamic_range <= 0.12:
+            hue_drop_thr = 0.25        # below this = empty region
+            edge_col = eff_w           # assume full until proven otherwise
+            for i in range(eff_w - 1, max(0, int(eff_w * 0.60)), -1):
+                if smooth_hue[i] < hue_drop_thr:
+                    edge_col = i + 1
+                    break
+            near_pct = min(1.0, edge_col / float(eff_w))
+            if edge_col >= eff_w:
+                return 1.0, min(1.0, dynamic_range / 0.18 + 0.50)
+            return max(0.0, near_pct), min(1.0, max(0.30, dynamic_range / 0.14))
 
         threshold = max(0.20, right_ref + dynamic_range * 0.54, left_ref * 0.71)
 
@@ -496,7 +593,12 @@ def _detect_bar_pct(img: np.ndarray, color_cfg: dict) -> Tuple[float, float]:
             pct = estimates[0] if estimates else 0.0
 
         pct = max(0.0, min(1.0, pct))
-        confidence = max(0.0, min(1.0, confidence))
+        # Scale confidence by hue presence — if hue coverage is low globally
+        # or the left anchor (leftmost 10%) doesn't show gold, the bar is
+        # likely absent and detection is unreliable.
+        hue_scale = min(1.0, overall_hue_cov / 0.30)
+        anchor_scale = min(1.0, left_anchor_hue / 0.30)
+        confidence = max(0.0, min(1.0, confidence * hue_scale * anchor_scale))
         return pct, confidence
     except Exception:
         return _detect_bar_pct_simple(img), 0.0
@@ -533,6 +635,8 @@ class RecognitionEngine:
         self._capture_backend = ""
         self._capture_fail_count = 0
         self._last_sta_logged: Optional[int] = None
+        self._sta_low_conf_count: int = 0       # consecutive low-confidence frames
+        self._sta_offline: bool = False          # True when bar is absent
 
     def set_debug_callback(self, cb):
         self._debug_callback = cb
@@ -611,6 +715,8 @@ class RecognitionEngine:
         self._sta_pending_since = 0.0
         self._sta_drop_lock_until = 0.0
         self._last_sta_logged = None
+        self._sta_low_conf_count = 0
+        self._sta_offline = False
 
     def _run(self):
         while self._running:
@@ -685,15 +791,34 @@ class RecognitionEngine:
             if st_bbox:
                 st_img = _crop_client_capture(client_frame, rect, st_bbox)
                 if st_img is not None and st_img.size > 0:
-                    raw_pct, confidence = _detect_bar_pct(st_img, BAR_COLORS["stamina"])
-                    sta_pct = self._filter_stamina_pct(raw_pct, confidence)
-                    updates["stamina_pct"] = sta_pct
-                    updates["stamina_current"] = 0
-                    updates["stamina_max"] = 0
-                    sta_pct_int = int(round(sta_pct * 100.0))
-                    if self._last_sta_logged is None or abs(sta_pct_int - self._last_sta_logged) >= 3:
-                        self._last_sta_logged = sta_pct_int
-                        print(f"[Vision] STA visual: {sta_pct_int}%")
+                    raw_pct, confidence = _detect_stamina_pct(st_img)
+
+                    # ── OFFLINE tracking ──
+                    _OFFLINE_THRESH = 8          # ~0.5-1 s at typical FPS
+                    if confidence < 0.12:
+                        self._sta_low_conf_count += 1
+                    else:
+                        self._sta_low_conf_count = 0
+
+                    if self._sta_low_conf_count >= _OFFLINE_THRESH:
+                        if not self._sta_offline:
+                            self._sta_offline = True
+                            print("[Vision] STA bar not detected — OFFLINE")
+                        updates["stamina_offline"] = True
+                    else:
+                        if self._sta_offline and confidence >= 0.12:
+                            self._sta_offline = False
+                            print("[Vision] STA bar recovered — ONLINE")
+                        updates["stamina_offline"] = False
+
+                        sta_pct = self._filter_stamina_pct(raw_pct, confidence)
+                        updates["stamina_pct"] = sta_pct
+                        updates["stamina_current"] = 0
+                        updates["stamina_max"] = 0
+                        sta_pct_int = int(round(sta_pct * 100.0))
+                        if self._last_sta_logged is None or abs(sta_pct_int - self._last_sta_logged) >= 3:
+                            self._last_sta_logged = sta_pct_int
+                            print(f"[Vision] STA visual: {sta_pct_int}%")
                     if self._debug_callback:
                         self._debug_callback("stamina_bar_visual", st_img)
 

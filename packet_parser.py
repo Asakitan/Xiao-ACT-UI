@@ -1231,6 +1231,10 @@ class PacketParser:
         """Return the current monster tracking dict (uuid → MonsterData)."""
         return self._monsters
 
+    def get_players(self) -> Dict[int, 'PlayerData']:
+        """Return all tracked players (uid → PlayerData) for info sync."""
+        return self._players
+
     def get_alive_monsters(self) -> list:
         """Return list of alive monster dicts (for UI consumption)."""
         return [m.to_dict() for m in self._monsters.values()
@@ -2601,6 +2605,7 @@ class PacketParser:
                     if event_type == BuffEventType.ENTER_BREAKING:
                         logger.info(f'[Parser] Monster ENTER_BREAKING uuid={host_uuid}')
                         monster.breaking_stage = 0   # EBreakingStage.Breaking
+                        monster.extinction = 0        # bar depleted — force 0%
                         monster.last_update = time.time()
                         self._notify_monster(monster)
                     elif event_type == BuffEventType.SHIELD_BROKEN:
