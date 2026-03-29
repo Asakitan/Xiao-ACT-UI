@@ -1446,7 +1446,18 @@ function updateBossBar(data) {
     }
     _lastShieldPct = shieldPct;
 
-    var breakPct = Math.max(0, Math.min(1, Number(data.extinction_pct || 0)));
+    // Compute break % from raw extinction values if available;
+    // when max_extinction is unknown but extinction > 0, treat as 100% (gauge exists, max pending)
+    var _rawExt = Number(data.extinction || 0);
+    var _rawMaxExt = Number(data.max_extinction || 0);
+    var breakPct;
+    if (_rawMaxExt > 0) {
+        breakPct = Math.max(0, Math.min(1, _rawExt / _rawMaxExt));
+    } else if (_rawExt > 0) {
+        breakPct = 1.0;
+    } else {
+        breakPct = Math.max(0, Math.min(1, Number(data.extinction_pct || 0)));
+    }
     var breakFill = document.getElementById('break-fill');
     var breakTrack = breakFill.parentElement;
     // During recovery interpolation, the RAF loop drives the visual width.

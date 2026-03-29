@@ -4454,8 +4454,8 @@ class SAOWebViewGUI:
                             try:
                                 _bridge = getattr(self, '_packet_engine', None)
                                 _m = _bridge.get_monster(_target_uuid) if _bridge else None
-                                if _m and not _m.is_dead:
-                                    _bb_direct_max = max(1, int(_m.max_hp))
+                                if _m and not _m.is_dead and _m.max_hp > 0:
+                                    _bb_direct_max = int(_m.max_hp)
                                     _bb_direct_hp = max(0, int(_m.hp))
                                     _bb_direct_data = _m.to_dict()
                                     _bb_src = 'packet'
@@ -4483,6 +4483,8 @@ class SAOWebViewGUI:
                         _bb_shield_pct = float(_bb_direct_data.get('shield_pct') or 0.0)
                         _bb_breaking = int(_bb_direct_data.get('breaking_stage') or 0)
                         _bb_extinction = float(_bb_direct_data.get('extinction_pct') or 0.0)
+                        _bb_extinction_raw = int(_bb_direct_data.get('extinction') or 0)
+                        _bb_max_extinction = int(_bb_direct_data.get('max_extinction') or 0)
                         _bb_stop_ticking = bool(_bb_direct_data.get('stop_breaking_ticking'))
                         _bb_overdrive = bool(_bb_direct_data.get('in_overdrive'))
                         _bb_invincible = False
@@ -4494,6 +4496,8 @@ class SAOWebViewGUI:
                         _bb_shield_pct = round(getattr(gs, 'boss_shield_pct', 0.0), 3)
                         _bb_breaking = getattr(gs, 'boss_breaking_stage', 0)
                         _bb_extinction = round(getattr(gs, 'boss_extinction_pct', 0.0), 3)
+                        _bb_extinction_raw = 0
+                        _bb_max_extinction = 0
                         _bb_stop_ticking = False
                         _bb_overdrive = getattr(gs, 'boss_in_overdrive', False)
                         _bb_invincible = getattr(gs, 'boss_invincible', False)
@@ -4508,6 +4512,8 @@ class SAOWebViewGUI:
                         round(float(_bb_shield_pct), 3),
                         int(_bb_breaking),
                         round(float(_bb_extinction), 3),
+                        int(_bb_extinction_raw),
+                        int(_bb_max_extinction),
                         bool(_bb_stop_ticking),
                         bool(_bb_overdrive),
                         bool(_bb_invincible),
@@ -4524,9 +4530,11 @@ class SAOWebViewGUI:
                             'shield_pct': _bb_sig[6],
                             'breaking_stage': _bb_sig[7],
                             'extinction_pct': _bb_sig[8],
-                            'stop_breaking_ticking': _bb_sig[9],
-                            'in_overdrive': _bb_sig[10],
-                            'invincible': _bb_sig[11],
+                            'extinction': _bb_sig[9],
+                            'max_extinction': _bb_sig[10],
+                            'stop_breaking_ticking': _bb_sig[11],
+                            'in_overdrive': _bb_sig[12],
+                            'invincible': _bb_sig[13],
                             'boss_name': (_bb_direct_data or {}).get('name', '') or '',
                         }
                         self._eval_boss_hp(f'updateBossBar({json.dumps(_bb_data)})')
