@@ -637,6 +637,7 @@ class RecognitionEngine:
         self._last_sta_logged: Optional[int] = None
         self._sta_low_conf_count: int = 0       # consecutive low-confidence frames
         self._sta_offline: bool = False          # True when bar is absent
+        self._sta_offline_since: float = 0.0     # first low-confidence timestamp
 
     def set_debug_callback(self, cb):
         self._debug_callback = cb
@@ -793,14 +794,17 @@ class RecognitionEngine:
                 if st_img is not None and st_img.size > 0:
                     raw_pct, confidence = _detect_stamina_pct(st_img)
 
-                    # ── OFFLINE tracking ──
-                    _OFFLINE_THRESH = 8          # ~0.5-1 s at typical FPS
+                    # ── OFFLINE tracking (time-based: 0.2 s of no detection) ──
+                    _now_sta = time.time()
                     if confidence < 0.12:
-                        self._sta_low_conf_count += 1
+                        if self._sta_offline_since == 0.0:
+                            self._sta_offline_since = _now_sta
+                        _offline_elapsed = _now_sta - self._sta_offline_since
                     else:
-                        self._sta_low_conf_count = 0
+                        self._sta_offline_since = 0.0
+                        _offline_elapsed = 0.0
 
-                    if self._sta_low_conf_count >= _OFFLINE_THRESH:
+                    if _offline_elapsed >= 0.20:
                         if not self._sta_offline:
                             self._sta_offline = True
                             print("[Vision] STA bar not detected — OFFLINE")
