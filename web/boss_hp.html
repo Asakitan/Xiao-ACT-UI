@@ -895,9 +895,10 @@ var _shieldGhostTimer = null;
 var _lastShieldActive = false;
 var _lastShieldPct = 0;
 var _lastBreakingStage = -1;
-var _lastBreakPct = 1;
+var _lastBreakPct = -1;
 var _lastHpPct = 1;
 var _lastStopTicking = false;
+var _breakEverHadGauge = false;  // true once break gauge was seen > 50%
 
 /*
  * Break state machine:
@@ -1222,10 +1223,11 @@ function _hideBossBar() {
         _lastShieldActive = false;
         _lastShieldPct = 0;
         _lastBreakingStage = -1;
-        _lastBreakPct = 1;
+        _lastBreakPct = -1;
         _lastHpPct = 1;
         _lastStopTicking = false;
         _breakState = 'normal';
+        _breakEverHadGauge = false;
         _cancelRecoverInterpolation();
         _clearShieldGhost(true);
         if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
@@ -1505,12 +1507,14 @@ window.addEventListener('resize', function() {
 
 /* ── Break state machine ── */
 function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
+    // Track whether we've ever seen a meaningful break gauge
+    if (breakPct > 0.50) _breakEverHadGauge = true;
     switch (_breakState) {
     case 'normal':
         // If TCP event already triggered this break, skip heuristics for 2.5s
         if (_tcpBreakTriggered && (Date.now() - _tcpBreakTs) < 2500) break;
         // Packet signal: breaking_stage transitions to 0 (fallback)
-        if (_lastBreakingStage >= 0 && stage !== _lastBreakingStage && stage === 0) {
+        if (_lastBreakingStage >= 1 && stage !== _lastBreakingStage && stage === 0) {
             _enterBroken(fill, track);
             return;
         }
@@ -1519,9 +1523,11 @@ function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
             _enterBroken(fill, track);
             return;
         }
+        // Guard: never trigger stale-data break if gauge was never seen above 50%
+        if (!_breakEverHadGauge) break;
         // Under-attack stall: gauge stuck ≤8% while boss HP is dropping
         var hpDropping = (_lastHpChangedTs > 0 && (Date.now() - _lastHpChangedTs) < 3000);
-        if (hpDropping && breakPct <= 0.08 && breakPct === _lastBreakPct && _lastBreakPct > -1) {
+        if (hpDropping && breakPct <= 0.08 && breakPct === _lastBreakPct && _lastBreakPct >= 0) {
             if (!_breakStaleTimer) {
                 _breakStaleTimer = setTimeout(function() {
                     _breakStaleTimer = null;
@@ -1533,7 +1539,7 @@ function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
             }
         }
         // Fallback: gauge stuck at ≤8% — start stale timer
-        if (breakPct <= 0.08 && _lastBreakPct <= 0.08 && _lastBreakPct > -1) {
+        if (breakPct <= 0.08 && _lastBreakPct <= 0.08 && _lastBreakPct >= 0) {
             if (!_breakStaleTimer) {
                 _breakStaleTimer = setTimeout(function() {
                     _breakStaleTimer = null;

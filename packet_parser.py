@@ -464,6 +464,7 @@ class MonsterData:
     __slots__ = ('uuid', 'uid', 'name', 'template_id',
                  'hp', 'max_hp',
                  'breaking_stage', 'extinction', 'max_extinction',
+                 'peak_extinction',
                  'stunned', 'max_stunned', 'in_overdrive',
                  'is_lock_stunned', 'stop_breaking_ticking',
                  'shield_active', 'shield_total', 'shield_max_total',
@@ -479,6 +480,7 @@ class MonsterData:
         self.breaking_stage: int = 0
         self.extinction: int = 0
         self.max_extinction: int = 0
+        self.peak_extinction: int = 0     # highest extinction seen (fallback max)
         self.stunned: int = 0
         self.max_stunned: int = 0
         self.in_overdrive: bool = False
@@ -492,8 +494,10 @@ class MonsterData:
 
     def to_dict(self) -> dict:
         # Break gauge: prefer extinction data; fall back to stunned data
-        if self.max_extinction > 0:
-            _ext_pct = self.extinction / self.max_extinction
+        # Use peak_extinction as fallback max if initial sync was missed
+        _eff_max_ext = self.max_extinction or self.peak_extinction
+        if _eff_max_ext > 0:
+            _ext_pct = self.extinction / _eff_max_ext
         elif self.max_stunned > 0:
             _ext_pct = self.stunned / self.max_stunned
         else:
@@ -2492,6 +2496,9 @@ class PacketParser:
                     monster.extinction = int_value
                     changed = True
                     logger.info(f'[Parser] Monster EXTINCTION={int_value} max={monster.max_extinction} uuid={uuid}')
+                # Track peak extinction as fallback max (for missed initial sync)
+                if int_value > monster.peak_extinction:
+                    monster.peak_extinction = int_value
             elif attr_id == AttrType.MAX_EXTINCTION:
                 if int_value > 0 and int_value != monster.max_extinction:
                     monster.max_extinction = int_value

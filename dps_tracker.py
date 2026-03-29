@@ -474,6 +474,11 @@ class DpsTracker:
             e['bar_pct'] = round(
                 e['damage_total'] / max(max_damage, 1), 3
             )
+            # Fill missing fight_point from cache
+            if not e.get('fight_point'):
+                cached = self._player_cache.get(str(e.get('uid', 0)))
+                if cached and cached.get('fight_point'):
+                    e['fight_point'] = int(cached['fight_point'])
 
         snapshot = {
             'encounter_active': bool(self._encounter_start and self._has_meaningful_data_locked()),

@@ -664,7 +664,8 @@ function _escHtml(s) {
 function _fmtFightPoint(fp) {
     fp = Number(fp || 0);
     if (fp <= 0) return '';
-    if (fp >= 10000) return (fp / 10000).toFixed(fp >= 100000 ? 1 : 2) + 'W';
+    if (fp >= 1000000) return (fp / 1000000).toFixed(2) + 'M';
+    if (fp >= 1000) return (fp / 1000).toFixed(fp >= 100000 ? 0 : 1) + 'K';
     return fp.toLocaleString();
 }
 
