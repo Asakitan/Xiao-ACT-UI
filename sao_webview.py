@@ -1754,7 +1754,7 @@ class SAOWebViewGUI:
             if not _target or host_uuid != _target:
                 return
             # Map BuffEventType → JS triggerBreakEffect type
-            _EVT_MAP = {58: 'enter_breaking', 47: 'shield_broken', 51: 'super_armor_broken'}
+            _EVT_MAP = {58: 'enter_breaking', 47: 'shield_broken', 51: 'super_armor_broken', 88: 'into_fracture_state'}
             js_type = _EVT_MAP.get(evt_type)
             if js_type:
                 self._eval_boss_hp(f'triggerBreakEffect("{js_type}")')
@@ -2030,6 +2030,12 @@ class SAOWebViewGUI:
         self._recognition_engine = None
         self._packet_engine = None
         self._vision_engine = None
+        # Flush DPS player cache to disk before teardown
+        if self._dps_tracker:
+            try:
+                self._dps_tracker.save_player_cache()
+            except Exception:
+                pass
         self._vision_paused_for_death = False
         self._last_dead_state = False
 
@@ -2071,6 +2077,20 @@ class SAOWebViewGUI:
         # DPS Tracker
         try:
             self._dps_tracker = DpsTracker()
+            # Load skill name mapping
+            _skill_json = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       'assets', 'skill_names.json')
+            if os.path.isfile(_skill_json):
+                try:
+                    with open(_skill_json, 'r', encoding='utf-8') as _sf:
+                        _raw = json.load(_sf)
+                    if isinstance(_raw, dict):
+                        self._dps_tracker.set_skill_names(
+                            {int(k): v for k, v in _raw.items() if str(k).isdigit()}
+                        )
+                        print(f'[SAO] Loaded {len(_raw)} skill names')
+                except Exception as _se:
+                    print(f'[SAO] Failed to load skill_names.json: {_se}')
             print('[SAO] DPS tracker initialized')
         except Exception as e:
             print(f'[SAO] DPS tracker init failed: {e}')
@@ -2573,6 +2593,28 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
+    def _make_dps_unclickable(self):
+        """隐藏 DPS 面板时设为鼠标穿透, 防止隐藏状态下的误操作.
+
+        设置 WS_EX_TRANSPARENT | WS_EX_LAYERED, 与 _setup_boss_hp_click_through 逻辑相同.
+        重新显示时由 _ensure_dps_clickable 还原.
+        """
+        try:
+            dps_hwnd = getattr(self, '_dps_hwnd', 0)
+            if not dps_hwnd:
+                dps_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-DPS')
+                if dps_hwnd:
+                    self._dps_hwnd = dps_hwnd
+            if not dps_hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(dps_hwnd, _GWL_EXSTYLE)
+            user32.SetWindowLongW(
+                dps_hwnd, _GWL_EXSTYLE,
+                ex | _WS_EX_TRANSPARENT | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
     def _set_hp_mouse_passthrough(self, enabled: bool):
         if not self._hp_hwnd:
             return
@@ -3039,6 +3081,14 @@ class SAOWebViewGUI:
                 if self.boss_hp_win:
                     self.boss_hp_win.show()
                     self._boss_hp_visible = True
+                    # Sync FX overflow margins so CSS padding matches the enlarged window
+                    _g = self._boss_hp_geometry
+                    _fx_lr = _g.get('fx_lr', 200)
+                    _fx_top = _g.get('fx_top', 120)
+                    _fx_bot = _g.get('fx_bot', 160)
+                    self._eval_boss_hp(
+                        f'if(window.BossHP)BossHP.setFxMargins({_fx_top},{_fx_lr},{_fx_bot},{_fx_lr})'
+                    )
             except Exception:
                 pass
             # DPS meter: hidden until combat starts or a report is opened
@@ -3048,6 +3098,8 @@ class SAOWebViewGUI:
                 if self.dps_win:
                     self._apply_webview2_transparency()
                     self._set_window_alpha('SAO-DPS', 1.0)
+                # 启动时 DPS 面板处于隐藏状态, 设为鼠标穿透避免点击穿透到游戏窗口
+                self._make_dps_unclickable()
                 self._sync_dps_report_availability()
             except Exception:
                 pass
@@ -3296,11 +3348,24 @@ class SAOWebViewGUI:
         bar_w = max(556, int(sw * 0.28960))
         bar_h = max(88, int(sh * 0.08150))
         right = int(sw * 0.62813)
+        # Extra margin so CSS VFX (shards, bloom, burst) aren't clipped.
+        # Break shards can fly ~150 px in any direction; add generous room.
+        fx_lr = max(160, int(min(sw, 1920) * 0.088))
+        fx_top = max(100, int(min(sh, 1080) * 0.096))
+        fx_bot = max(160, int(min(sh, 1080) * 0.150))
+        # Bar's intended screen position (must NOT change when FX margins grow).
+        # At 1080p the bar renders at x=642, y=24 — derived from the original
+        # small-margin code where max(0, 4-24)+24 = 24.
+        bar_screen_x = right - bar_w - pad
+        bar_screen_y = max(0, int(sh * 0.0046) - 24) + 24  # preserve legacy offset
         return {
-            'width': bar_w + pad * 2 + 20,
-            'height': bar_h + pad * 2,
-            'x': max(0, right - bar_w - pad),
-            'y': max(0, int(sh * 0.0046)),
+            'width':  bar_w + pad * 2 + 20 + fx_lr * 2,
+            'height': bar_h + pad * 2 + fx_top + fx_bot,
+            'x': bar_screen_x - fx_lr,
+            'y': bar_screen_y - fx_top,
+            'fx_lr':  fx_lr,
+            'fx_top': fx_top,
+            'fx_bot': fx_bot,
         }
 
     def _refresh_boss_hp_geometry(self, force: bool = False):
@@ -3313,6 +3378,12 @@ class SAOWebViewGUI:
             if self.boss_hp_win:
                 self.boss_hp_win.resize(int(geom['width']), int(geom['height']))
                 self.boss_hp_win.move(int(geom['x']), int(geom['y']))
+                _fx_lr = geom.get('fx_lr', 200)
+                _fx_top = geom.get('fx_top', 120)
+                _fx_bot = geom.get('fx_bot', 160)
+                self._eval_boss_hp(
+                    f'if(window.BossHP)BossHP.setFxMargins({_fx_top},{_fx_lr},{_fx_bot},{_fx_lr})'
+                )
         except Exception:
             pass
 
@@ -3364,6 +3435,8 @@ class SAOWebViewGUI:
     def _hide_dps_window(self):
         self._dps_fade_seq += 1
         _fade_seq = self._dps_fade_seq
+        # 立即设为鼠标穿透, 防止面板淡出期间及隐藏状态下接收误操作
+        self._make_dps_unclickable()
         try:
             if self.dps_win and self._dps_visible:
                 self._eval_dps('if (window.DpsMeter && DpsMeter.fadeOut) DpsMeter.fadeOut()')
@@ -4222,8 +4295,11 @@ class SAOWebViewGUI:
         if gs and hasattr(gs, 'hp_current'):
             if gs.hp_max > 0:
                 hp_str = f'{gs.hp_current}/{gs.hp_max}'
-            sta_pct = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
-            sta_str = f'{sta_pct}%'
+            if getattr(gs, 'stamina_offline', False):
+                sta_str = 'OFFLINE'
+            else:
+                sta_pct = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
+                sta_str = f'{sta_pct}%'
             gs_desc = f'HP: {hp_str}  STA: {sta_str}'
         info = {
             'username': self._username, 'level': self._level,
@@ -4332,8 +4408,13 @@ class SAOWebViewGUI:
                         lv, cur_xp, need_xp = calc_level(self._xp)
                         self._eval_hp(f'updateHP({cur_xp}, {need_xp}, {lv})')
                     if gs.recognition_ok:
-                        sta = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
-                        self._eval_hp(f'updateSTA({sta}, 100)')
+                        sta_offline = getattr(gs, 'stamina_offline', False)
+                        if sta_offline:
+                            self._eval_hp('setSTAOffline(true)')
+                        else:
+                            self._eval_hp('setSTAOffline(false)')
+                            sta = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
+                            self._eval_hp(f'updateSTA({sta}, 100)')
                         self._eval_hp('setPlayState("playing")')
                     else:
                         self._eval_hp('setPlayState("idle")')
@@ -4456,11 +4537,34 @@ class SAOWebViewGUI:
                                 _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
                                 if _p_uid:
                                     self._dps_tracker.set_self_uid(_p_uid)
+                                    _self_fp = 0
+                                    _bridge = getattr(self, '_packet_engine', None)
+                                    if _bridge:
+                                        _all_p = _bridge.get_players()
+                                        _sp = _all_p.get(_p_uid)
+                                        if _sp:
+                                            _self_fp = getattr(_sp, 'fight_point', 0) or 0
                                     self._dps_tracker.update_player_info(
                                         _p_uid,
                                         gs.player_name or '',
                                         gs.profession_name or '',
+                                        _self_fp,
                                     )
+
+                            # ── Sync ALL players' info (name, profession, fight_point) ──
+                            _bridge = getattr(self, '_packet_engine', None)
+                            if _bridge:
+                                try:
+                                    for _pu, _pd in _bridge.get_players().items():
+                                        if _pu and _pd.name:
+                                            self._dps_tracker.update_player_info(
+                                                _pu,
+                                                _pd.name or '',
+                                                _pd.profession or '',
+                                                getattr(_pd, 'fight_point', 0) or 0,
+                                            )
+                                except Exception:
+                                    pass
 
                             _dps_enabled = bool(self._get_setting('dps_enabled', True))
                             _dps_idle_timeout = self._combat_damage_timeout_s()
@@ -4471,16 +4575,6 @@ class SAOWebViewGUI:
 
                             if self._dps_tracker.is_dirty():
                                 _dps_snap = self._dps_tracker.get_snapshot()
-                                # Update player info from game state
-                                if gs.player_id:
-                                    _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
-                                    if _p_uid:
-                                        self._dps_tracker.set_self_uid(_p_uid)
-                                        self._dps_tracker.update_player_info(
-                                            _p_uid,
-                                            gs.player_name or '',
-                                            gs.profession_name or '',
-                                        )
                                 _dps_has_live = bool(
                                     int(_dps_snap.get('total_damage') or 0) > 0
                                     and self._dps_tracker.has_recent_damage(_dps_idle_timeout)
