@@ -4454,7 +4454,7 @@ class SAOWebViewGUI:
                             try:
                                 _bridge = getattr(self, '_packet_engine', None)
                                 _m = _bridge.get_monster(_target_uuid) if _bridge else None
-                                if _m and not _m.is_dead and _m.max_hp > 0:
+                                if _m and not _m.is_dead:
                                     _bb_direct_max = int(_m.max_hp)
                                     _bb_direct_hp = max(0, int(_m.hp))
                                     _bb_direct_data = _m.to_dict()
