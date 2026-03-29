@@ -948,6 +948,10 @@ body {
     font-family: var(--font-ui);
     opacity: 1.0;
     z-index: 2;
+    transition: opacity 0.4s ease;
+}
+.sta-row.offline {
+    opacity: 0.35;
 }
 .sta-pip {
     display: inline-block;
@@ -1144,6 +1148,7 @@ function setBossTimer(text, urgency) {
 
 
 /* ═══ STA Bar API ═══ */
+var _staOffline = false;
 function updateSTA(current, total) {
     var pct = total > 0 ? Math.round(current / total * 100) : 100;
     document.getElementById('sta-fill').style.width = pct + '%';
@@ -1154,6 +1159,23 @@ function updateSTA(current, total) {
         document.getElementById('sta-text').textContent = Math.floor(current) + '/' + Math.floor(total);
     }
     scheduleHitRegionReport();
+}
+
+function setSTAOffline(offline) {
+    var row = document.getElementById('sta-row');
+    var text = document.getElementById('sta-text');
+    if (offline) {
+        if (!_staOffline) {
+            _staOffline = true;
+            row.classList.add('offline');
+            text.textContent = 'OFFLINE';
+        }
+    } else {
+        if (_staOffline) {
+            _staOffline = false;
+            row.classList.remove('offline');
+        }
+    }
 }
 
 /* ═══ Burst Mode Ready API ═══ */

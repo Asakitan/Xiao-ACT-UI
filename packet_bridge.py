@@ -693,6 +693,12 @@ class PacketBridge:
             return self._parser.get_monsters().get(uuid)
         return None
 
+    def get_players(self) -> dict:
+        """Return all tracked players {uid → PlayerData} from the parser."""
+        if self._parser:
+            return self._parser.get_players()
+        return {}
+
     # ─── 内部 ───
 
     def _run(self):

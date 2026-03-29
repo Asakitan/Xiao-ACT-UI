@@ -99,6 +99,7 @@ class GameState:
     stamina_current: int = 0
     stamina_max: int = 0
     stamina_pct: float = 1.0
+    stamina_offline: bool = False          # True when STA bar not visible
 
     # ── 技能栏 ──
     skill_slots: List = field(default_factory=list)

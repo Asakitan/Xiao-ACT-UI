@@ -147,6 +147,10 @@ html, body {
     gap: 7px;
     height: 48%;
     z-index: 1;
+    transition: opacity 0.4s ease;
+}
+.bottom-row.offline {
+    opacity: 0.35;
 }
 
 .sta-pip {
@@ -230,6 +234,17 @@ function updateBars(hp, hpMax, sta, staMax) {
     var staPct = staMax > 0 ? Math.round(sta / staMax * 100) : 100;
     document.getElementById('sta-fill').style.width = staPct + '%';
     document.getElementById('sta-text').textContent = Math.floor(sta) + '/' + Math.floor(staMax);
+}
+
+var _staOffline = false;
+function setSTAOffline(offline) {
+    var row = document.querySelector('.bottom-row');
+    var text = document.getElementById('sta-text');
+    if (offline) {
+        if (!_staOffline) { _staOffline = true; row.classList.add('offline'); text.textContent = 'OFFLINE'; }
+    } else {
+        if (_staOffline) { _staOffline = false; row.classList.remove('offline'); }
+    }
 }
 
 function _updateClock() {
