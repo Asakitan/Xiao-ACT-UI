@@ -25,14 +25,14 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "1.1.8"
+APP_VERSION = "1.1.9"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 
 BASE_CLIENT_WIDTH = 1919.0
 BASE_CLIENT_HEIGHT = 1079.0
 
 VISUAL_RECT_SPECS: Dict[str, Dict[str, int]] = {
-    "stamina_bar_visual": {"right": 1213, "bottom": 1049, "width": 250, "height": 10},
+    "stamina_bar_visual": {"right": 1214, "bottom": 1050, "width": 250, "height": 10},
     "skill_slot_1": {"right": 720, "bottom": 1003, "width": 52, "height": 85},
     "skill_slot_2": {"right": 767, "bottom": 1002, "width": 47, "height": 83},
     "skill_slot_3": {"right": 816, "bottom": 1003, "width": 49, "height": 85},

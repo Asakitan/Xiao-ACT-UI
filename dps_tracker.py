@@ -1,11 +1,19 @@
 # -*- coding: utf-8 -*-
 """DPS / HPS tracker — accumulates damage events, computes per-entity and per-skill stats."""
 
+import json
+import os
 import copy
 import threading
 import time
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+
+# ═══════════════════════════════════════════════
+#  Player cache path
+# ═══════════════════════════════════════════════
+_PLAYER_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'player_cache.json')
 
 
 # ═══════════════════════════════════════════════
@@ -77,7 +85,7 @@ class SkillStats:
 # ═══════════════════════════════════════════════
 
 class EntityStats:
-    __slots__ = ('uid', 'name', 'profession', 'is_self',
+    __slots__ = ('uid', 'name', 'profession', 'fight_point', 'is_self',
                  'damage_total', 'damage_hits', 'damage_crit_hits',
                  'heal_total', 'heal_hits',
                  'taken_total', 'taken_hits',
@@ -85,10 +93,11 @@ class EntityStats:
                  'skills', 'max_hit')
 
     def __init__(self, uid: int, name: str = '', profession: str = '',
-                 is_self: bool = False):
+                 is_self: bool = False, fight_point: int = 0):
         self.uid = uid
         self.name = name or f'Player_{uid}'
         self.profession = profession
+        self.fight_point = fight_point
         self.is_self = is_self
         self.damage_total = 0
         self.damage_hits = 0
@@ -156,6 +165,7 @@ class EntityStats:
             'uid': self.uid,
             'name': self.name,
             'profession': self.profession,
+            'fight_point': self.fight_point,
             'is_self': self.is_self,
             'damage_total': self.damage_total,
             'damage_hits': self.damage_hits,
@@ -209,10 +219,86 @@ class DpsTracker:
         self._last_report: Optional[Dict[str, Any]] = None
         self._hit_fx_seq: int = 0
         self._last_hit_fx: Optional[Dict[str, Any]] = None
+        # Player info cache: uid (str) → {name, profession, fight_point}
+        self._player_cache: Dict[str, Dict[str, Any]] = {}
+        self._player_cache_dirty: bool = False
+        self._player_cache_last_save: float = 0.0
+        self._load_player_cache()
 
     def set_self_uid(self, uid: int):
         with self._lock:
             self._self_uid = uid
+
+    # ── Player info cache (persistence) ──
+
+    def _load_player_cache(self):
+        """Load cached player info from disk (called once at init, no lock needed)."""
+        try:
+            if os.path.isfile(_PLAYER_CACHE_PATH):
+                with open(_PLAYER_CACHE_PATH, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._player_cache = data
+        except Exception:
+            self._player_cache = {}
+
+    def _save_player_cache_if_dirty(self):
+        """Flush cache to disk if changed (throttled: max once per 3 s)."""
+        if not self._player_cache_dirty:
+            return
+        now = time.time()
+        if now - self._player_cache_last_save < 3.0:
+            return
+        self._player_cache_last_save = now
+        self._player_cache_dirty = False
+        try:
+            tmp = _PLAYER_CACHE_PATH + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(self._player_cache, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, _PLAYER_CACHE_PATH)
+        except Exception:
+            pass
+
+    def save_player_cache(self):
+        """Public flush — call on shutdown or map change."""
+        with self._lock:
+            if self._player_cache_dirty:
+                self._player_cache_last_save = 0
+                self._save_player_cache_if_dirty()
+
+    def _update_player_cache_locked(self, uid: int, name: str = '',
+                                     profession: str = '', fight_point: int = 0):
+        """Merge new info into the persistent player cache (caller holds _lock)."""
+        key = str(uid)
+        entry = self._player_cache.get(key, {})
+        changed = False
+        if name and entry.get('name') != name:
+            entry['name'] = name
+            changed = True
+        if profession and entry.get('profession') != profession:
+            entry['profession'] = profession
+            changed = True
+        if fight_point > 0 and entry.get('fight_point') != fight_point:
+            entry['fight_point'] = fight_point
+            changed = True
+        if changed:
+            entry['uid'] = uid
+            entry['updated_at'] = time.time()
+            self._player_cache[key] = entry
+            self._player_cache_dirty = True
+            self._save_player_cache_if_dirty()
+
+    def _apply_cache_to_entity(self, entity: 'EntityStats'):
+        """Fill entity fields from cache if missing (caller holds _lock)."""
+        cached = self._player_cache.get(str(entity.uid))
+        if not cached:
+            return
+        if not entity.name or entity.name.startswith('Player_'):
+            entity.name = cached.get('name') or entity.name
+        if not entity.profession:
+            entity.profession = cached.get('profession') or ''
+        if not entity.fight_point:
+            entity.fight_point = int(cached.get('fight_point') or 0)
 
     @property
     def idle_seconds(self) -> float:
@@ -322,20 +408,33 @@ class DpsTracker:
         entity = self._entities.get(uid)
         if not entity:
             entity = EntityStats(uid, is_self=is_self)
+            self._apply_cache_to_entity(entity)
             self._entities[uid] = entity
         if is_self:
             entity.is_self = True
         return entity
 
-    def update_player_info(self, uid: int, name: str = '', profession: str = ''):
-        """Update display name/profession for an entity."""
+    def update_player_info(self, uid: int, name: str = '',
+                           profession: str = '', fight_point: int = 0):
+        """Update display name/profession/fight_point for an entity."""
         with self._lock:
             entity = self._entities.get(uid)
             if entity:
-                if name:
+                changed = False
+                if name and entity.name != name:
                     entity.name = name
-                if profession:
+                    changed = True
+                if profession and entity.profession != profession:
                     entity.profession = profession
+                    changed = True
+                if fight_point > 0 and entity.fight_point != fight_point:
+                    entity.fight_point = fight_point
+                    changed = True
+                if changed:
+                    self._dirty = True
+            # Persist to player cache (regardless of entity existing yet)
+            if uid and (name or profession or fight_point > 0):
+                self._update_player_cache_locked(uid, name, profession, fight_point)
 
     def reset(self):
         with self._lock:
