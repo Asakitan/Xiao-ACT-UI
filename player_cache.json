@@ -3,8 +3,9 @@
   "name": "咲",
   "profession": "神盾骑士",
   "uid": 36668136,
-  "updated_at": 1774774142.2411335,
-  "fight_point": 44296
+  "updated_at": 1774859799.2740762,
+  "fight_point": 44586,
+  "level": 60
  },
  "1841256": {
   "name": "可可萝",
@@ -166,5 +167,20 @@
   "fight_point": 48151,
   "uid": 416070,
   "updated_at": 1774783780.7791593
+ },
+ "5548497": {
+  "name": "桜羽艾玛",
+  "profession": "冰魔导师",
+  "fight_point": 51693,
+  "uid": 5548497,
+  "updated_at": 1774853778.5451574
+ },
+ "1519791": {
+  "name": "魔刹盈月",
+  "profession": "神盾骑士",
+  "fight_point": 46772,
+  "level": 60,
+  "uid": 1519791,
+  "updated_at": 1774861661.173882
  }
 }

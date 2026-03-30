@@ -516,6 +516,12 @@ def _build_packet_skill_slots(player: PlayerData):
             has_buff_mods = tmp_cd_pct > 0 or tmp_cd_fixed > 0 or tmp_accel > 0
             has_pkt_mods = pkt_sub_ratio > 0 or pkt_sub_fixed > 0 or pkt_accel > 0
 
+            # 4. FightResCdSpeedPct (11980) — CD speed modifier from server
+            #    Observed values < 10000 → CDs are shorter than base duration.
+            #    Interpretation: effective_cd = base_cd × (value / 10000)
+            fight_res_speed = max(0, int(getattr(player, 'attr_fight_res_cd_speed', 0) or 0))
+            has_fight_res = 0 < fight_res_speed < 10000
+
             # ── Compute effective CD duration (resonance-logs-cn formula) ──
             # Entity/buff attrs: calculated_duration = (1 - pct_reduce) * (base - flat_reduce)
             # Per-packet fields are applied ON TOP of entity attrs (per-skill passives)
@@ -543,6 +549,10 @@ def _build_packet_skill_slots(player: PlayerData):
                         effective_ms = int(effective_ms * max(0, 10000 - pkt_sub_ratio) / 10000)
                 if pkt_accel > 0:
                     accel_rate = pkt_accel / 10000.0
+            elif has_fight_res:
+                # FightResCdSpeedPct fallback: use as CD duration multiplier
+                # value/10000 = fraction of base CD that remains after acceleration
+                effective_ms = max(0, int(total_ms * fight_res_speed / 10000.0))
 
             # Speed multiplier: 1 + accel_rate (resonance-logs-cn convention)
             speed_mult = 1.0 + accel_rate

@@ -350,6 +350,21 @@ class GameStateManager:
         cache = settings.get('game_cache', {})
         if not cache or not isinstance(cache, dict):
             return
+
+        # ── One-time migration: clear stale level_extra from old priority logic ──
+        # The v1.2.0 code incorrectly used AttrSeasonLv (196) for level_extra.
+        # After the priority fix, the cached value may be wrong. Clear it once
+        # so fresh data from season_medal/season_attr is used on next map change.
+        if not cache.get('_level_extra_migrated_v2'):
+            cache.pop('level_extra', None)
+            cache['_level_extra_migrated_v2'] = True
+            try:
+                settings.set('game_cache', cache)
+                settings.save()
+            except Exception:
+                pass
+            print('[GameState] 已清除旧 level_extra 缓存 (优先级修复迁移)')
+
         with self._lock:
             for k in _CACHE_FIELDS:
                 v = cache.get(k)
@@ -360,7 +375,8 @@ class GameStateManager:
                     except (ValueError, TypeError):
                         pass
             print(f'[GameState] 从缓存加载: HP={self._state.hp_current}/{self._state.hp_max}, '
-                  f'LV={self._state.level_base}')
+                  f'LV={self._state.level_base}'
+                  f'{"(+" + str(self._state.level_extra) + ")" if self._state.level_extra > 0 else ""}')
 
     def save_cache(self, settings):
         """将当前状态持久化到 settings (定期调用)
