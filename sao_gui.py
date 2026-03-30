@@ -1394,6 +1394,24 @@ class SAOPlayerGUI:
             if uid_txt:
                 draw.text((id_x_start + 12, id_y + int(id_h * 0.56)), uid_txt,
                           fill=(97, 98, 86, 180), font=fn_uid, anchor='lm')
+            # ── 时钟 / Boss 狂暴倒计时 ──
+            timer_txt = ''
+            timer_fill = (97, 98, 86, 180)  # default: muted olive
+            if gs_ok:
+                _bt = getattr(gs, 'boss_timer_text', '') or ''
+                _br = float(getattr(gs, 'boss_enrage_remaining', 0) or 0)
+                if _bt:
+                    timer_txt = f'ENRAGE {_bt}'
+                    if 0 < _br < 60:
+                        timer_fill = (220, 50, 50, 240)   # urgent red
+                    else:
+                        timer_fill = (212, 156, 23, 230)  # gold
+            if not timer_txt:
+                import datetime as _dt
+                timer_txt = _dt.datetime.now().strftime('%H:%M')
+                timer_fill = (97, 98, 86, 150)
+            draw.text((id_x_start + 12, id_y + int(id_h * 0.63)), timer_txt,
+                      fill=timer_fill, font=fn_uid, anchor='lm')
             # NErVGear — LINK OK
             draw.text((id_x_start + 12, id_y + int(id_h * 0.70)),
                       'NErVGear \u2500 LINK OK',
