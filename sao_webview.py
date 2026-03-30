@@ -1908,13 +1908,33 @@ class SAOWebViewGUI:
         self._sync_boss_raid_menu()
 
     def _on_packet_damage(self, event):
-        """Damage event callback from packet_parser → boss raid engine + DPS tracker."""
+        """Damage event callback from packet_parser → boss raid engine + DPS tracker.
+
+        This is the critical path: when the DPS panel shows data, damage events
+        ARE flowing. We use this to also ensure the boss bar target is set.
+        """
         # Track last self→monster damage for boss bar target
         if event.get('attacker_is_self') and event.get('target_is_monster'):
             target_uuid = event.get('target_uuid', 0)
             if target_uuid:
                 self._bb_last_target_uuid = target_uuid
                 self._bb_last_damage_ts = time.time()
+                # Proactively check if the monster has max_hp in parser.
+                # If not, log a warning (likely due to stale reset or late entity sync).
+                try:
+                    _bridge = getattr(self, '_packet_engine', None)
+                    _m = _bridge.get_monster(target_uuid) if _bridge else None
+                    if _m and _m.max_hp == 0:
+                        # Monster exists but max_hp is 0 — this means the initial
+                        # SyncNearEntities data was lost (e.g. from a late reset).
+                        # Try to use total_damage from DPS tracker as a fallback hint.
+                        _total_dmg = int(event.get('total_damage', 0) or event.get('damage', 0) or 0)
+                        logger.warning(
+                            f'[WebView] Damage target uuid={target_uuid} has max_hp=0! '
+                            f'hp={_m.hp} dmg={_total_dmg} — boss bar may not show'
+                        )
+                except Exception:
+                    pass
         if self._boss_raid_engine:
             try:
                 self._boss_raid_engine.on_damage_event(event)
@@ -1927,12 +1947,50 @@ class SAOWebViewGUI:
                 pass
 
     def _on_monster_update(self, monster_data):
-        """Monster update callback from packet_parser → boss raid engine."""
+        """Monster update callback from packet_parser → boss raid engine + break bar tracking.
+
+        When a boss monster appears in a new scene (after SyncNearEntities),
+        pre-set the target UUID so the boss bar can immediately display HP
+        when the player starts attacking. Also handles break bar pre-tracking.
+        """
         if self._boss_raid_engine:
             try:
                 self._boss_raid_engine.on_monster_update(monster_data)
             except Exception:
                 pass
+
+        # Pre-track monsters for boss bar:
+        # - Any monster with HP (for immediate boss bar when damage starts)
+        # - Monsters with break data (for immediate break bar display)
+        try:
+            _uuid = monster_data.get('uuid', 0)
+            _max_ext = int(monster_data.get('max_extinction', 0) or 0)
+            _max_hp = int(monster_data.get('max_hp', 0) or 0)
+            _is_dead = monster_data.get('is_dead', False)
+            if _uuid and _max_hp > 0 and not _is_dead:
+                # Adopt this monster as the target if:
+                # 1. No target yet (first monster after scene change)
+                # 2. Current target is stale (dead, or no longer in monsters dict)
+                _should_adopt = False
+                if not self._bb_last_target_uuid:
+                    _should_adopt = True
+                else:
+                    # Check if current target is still valid
+                    try:
+                        _bridge = getattr(self, '_packet_engine', None)
+                        _cur = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
+                        if _cur is None or _cur.is_dead or _cur.max_hp == 0:
+                            _should_adopt = True
+                    except Exception:
+                        pass
+                if _should_adopt:
+                    self._bb_last_target_uuid = _uuid
+                    logger.debug(
+                        f'[WebView] Pre-tracked monster target uuid={_uuid} '
+                        f'max_hp={_max_hp} max_ext={_max_ext}'
+                    )
+        except Exception:
+            pass
 
     def _on_boss_event(self, event):
         """Boss buff event callback from packet_parser → boss raid engine + boss bar effects."""
@@ -1969,15 +2027,32 @@ class SAOWebViewGUI:
         - Boss bar 目标追踪: 清除 uuid + 时间戳
         - DPS tracker: 结束当前遭遇战并重置
         - Boss raid engine: 如果不在 raid 中则重置
+        - HP/Level: 强制重推当前值 (确保 webview 在新场景后及时刷新)
         """
         print('[SAO] ⚡ 场景切换 — 重置 boss bar 和 DPS 追踪', flush=True)
 
-        # 1. Boss HP bar: 强制隐藏
+        # 1. Boss HP bar: 强制隐藏, 清除所有 boss 状态
         self._bb_last_target_uuid = 0
         self._bb_last_damage_ts = 0.0
         self._last_boss_bar_sig = None  # 强制下次更新重新推送
         try:
             self._eval_boss_hp('updateBossBar({active:false})')
+        except Exception:
+            pass
+        # Reset GameState boss fields to defaults (avoid stale data in fallback path)
+        try:
+            gs = self._game_state
+            if gs:
+                gs.boss_breaking_stage = -1
+                gs.boss_extinction_pct = 0.0
+                gs.boss_current_hp = 0
+                gs.boss_total_hp = 0
+                gs.boss_hp_source = 'none'
+                gs.boss_hp_est_pct = 1.0
+                gs.boss_shield_active = False
+                gs.boss_shield_pct = 0.0
+                gs.boss_in_overdrive = False
+                gs.boss_invincible = False
         except Exception:
             pass
 
@@ -1996,6 +2071,20 @@ class SAOWebViewGUI:
                     self._boss_raid_engine.reset()
             except Exception:
                 pass
+
+        # 4. Force re-push current level + HP to webview so display doesn't go stale
+        try:
+            gs = self._game_state
+            if gs:
+                _lv = getattr(gs, 'level_base', 0) or self._level
+                _lv_extra = int(getattr(gs, 'level_extra', 0) or 0)
+                _lv_str = f'{_lv}(+{_lv_extra})' if _lv_extra > 0 else str(_lv)
+                _hp = int(getattr(gs, 'hp_current', 0) or 0)
+                _hp_max = int(getattr(gs, 'hp_max', 0) or 0)
+                if _hp_max > 0:
+                    self._eval_hp(f'updateHP({_hp}, {_hp_max}, "{_lv_str}")')
+        except Exception:
+            pass
 
     def _refresh_boss_raid_upload_auth(self, force: bool = False):
         config = self._load_boss_raid_config()
@@ -5005,9 +5094,25 @@ class SAOWebViewGUI:
                 sta_pct = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
                 sta_str = f'{sta_pct}%'
             gs_desc = f'HP: {hp_str}  STA: {sta_str}'
+        # 使用 GameState 中最新的等级数据 (来自 packet bridge)
+        _menu_level = self._level
+        _menu_level_str = str(_menu_level)
+        if gs and hasattr(gs, 'level_base') and gs.level_base > 0:
+            _menu_level = gs.level_base
+            self._level = _menu_level  # 同步到 instance 变量
+            _menu_level_extra = int(getattr(gs, 'level_extra', 0) or 0)
+            if _menu_level_extra > 0:
+                _menu_level_str = f'{_menu_level}(+{_menu_level_extra})'
+            else:
+                _menu_level_str = str(_menu_level)
+        # 使用 GameState 中最新的职业名 (来自 packet bridge)
+        _menu_prof = self._profession
+        if gs and hasattr(gs, 'profession_name') and gs.profession_name:
+            _menu_prof = gs.profession_name
+            self._profession = _menu_prof
         info = {
-            'username': self._username, 'level': self._level,
-            'profession': self._profession,
+            'username': self._username, 'level': _menu_level_str,
+            'profession': _menu_prof,
             'hp': hp_str, 'sta': sta_str,
             'des': gs_desc,
             'file': '',
@@ -5171,7 +5276,19 @@ class SAOWebViewGUI:
                             try:
                                 _bridge = getattr(self, '_packet_engine', None)
                                 _m = _bridge.get_monster(_target_uuid) if _bridge else None
-                                if _m and not _m.is_dead:
+                                if _m and not _m.is_dead and _m.max_hp > 0:
+                                    _bb_direct_max = int(_m.max_hp)
+                                    _bb_direct_hp = max(0, int(_m.hp))
+                                    _bb_direct_data = _m.to_dict()
+                                    _bb_src = 'packet'
+                            except Exception:
+                                pass
+                        elif _target_uuid and not _has_recent_self_damage:
+                            # Pre-tracked boss: still fetch data for when damage arrives
+                            try:
+                                _bridge = getattr(self, '_packet_engine', None)
+                                _m = _bridge.get_monster(_target_uuid) if _bridge else None
+                                if _m and not _m.is_dead and _m.max_hp > 0:
                                     _bb_direct_max = int(_m.max_hp)
                                     _bb_direct_hp = max(0, int(_m.hp))
                                     _bb_direct_data = _m.to_dict()
@@ -5199,6 +5316,7 @@ class SAOWebViewGUI:
                         _bb_shield_active = bool(_bb_direct_data.get('shield_active'))
                         _bb_shield_pct = float(_bb_direct_data.get('shield_pct') or 0.0)
                         _bb_breaking = int(_bb_direct_data.get('breaking_stage') or 0)
+                        _bb_has_break = bool(_bb_direct_data.get('has_break_data'))
                         _bb_extinction = float(_bb_direct_data.get('extinction_pct') or 0.0)
                         _bb_extinction_raw = int(_bb_direct_data.get('extinction') or 0)
                         _bb_max_extinction = int(_bb_direct_data.get('max_extinction') or 0)
@@ -5211,7 +5329,8 @@ class SAOWebViewGUI:
                         _bb_total_hp = getattr(gs, 'boss_total_hp', 0)
                         _bb_shield_active = getattr(gs, 'boss_shield_active', False)
                         _bb_shield_pct = round(getattr(gs, 'boss_shield_pct', 0.0), 3)
-                        _bb_breaking = getattr(gs, 'boss_breaking_stage', 0)
+                        _bb_breaking = getattr(gs, 'boss_breaking_stage', -1)
+                        _bb_has_break = getattr(gs, 'boss_breaking_stage', -1) != -1
                         _bb_extinction = round(getattr(gs, 'boss_extinction_pct', 0.0), 3)
                         _bb_extinction_raw = 0
                         _bb_max_extinction = 0
@@ -5228,6 +5347,7 @@ class SAOWebViewGUI:
                         bool(_bb_shield_active),
                         round(float(_bb_shield_pct), 3),
                         int(_bb_breaking),
+                        bool(_bb_has_break),
                         round(float(_bb_extinction), 3),
                         int(_bb_extinction_raw),
                         int(_bb_max_extinction),
@@ -5246,12 +5366,13 @@ class SAOWebViewGUI:
                             'shield_active': _bb_sig[5],
                             'shield_pct': _bb_sig[6],
                             'breaking_stage': _bb_sig[7],
-                            'extinction_pct': _bb_sig[8],
-                            'extinction': _bb_sig[9],
-                            'max_extinction': _bb_sig[10],
-                            'stop_breaking_ticking': _bb_sig[11],
-                            'in_overdrive': _bb_sig[12],
-                            'invincible': _bb_sig[13],
+                            'has_break_data': _bb_sig[8],
+                            'extinction_pct': _bb_sig[9],
+                            'extinction': _bb_sig[10],
+                            'max_extinction': _bb_sig[11],
+                            'stop_breaking_ticking': _bb_sig[12],
+                            'in_overdrive': _bb_sig[13],
+                            'invincible': _bb_sig[14],
                             'boss_name': (_bb_direct_data or {}).get('name', '') or '',
                         }
                         self._eval_boss_hp(f'updateBossBar({json.dumps(_bb_data)})')

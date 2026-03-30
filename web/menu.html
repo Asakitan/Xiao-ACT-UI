@@ -1457,6 +1457,44 @@ html, body {
     100% { padding-bottom: 0; }
 }
 
+/* ═══ SAO-style Clock ═══ */
+.sao-clock-container {
+    text-align: center;
+    padding: 10px 4px 6px;
+    border-top: 1px solid rgba(170, 170, 170, 0.3);
+}
+.sao-clock-frame {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+.sao-clock-bracket {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 14px;
+    color: rgba(243,175,18,0.45);
+    font-weight: 300;
+}
+.sao-clock-digits {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 16px;
+    letter-spacing: 2px;
+    color: rgba(90,90,80,0.72);
+    text-shadow: 0 0 6px rgba(243,175,18,0.18);
+    animation: sao-clock-pulse 4s ease-in-out infinite;
+}
+.sao-clock-label {
+    font-size: 9px;
+    letter-spacing: 3px;
+    color: rgba(160,158,150,0.55);
+    margin-top: 3px;
+    text-transform: uppercase;
+}
+@keyframes sao-clock-pulse {
+    0%, 100% { opacity: 0.72; text-shadow: 0 0 6px rgba(243,175,18,0.18); }
+    50%      { opacity: 1.0;  text-shadow: 0 0 10px rgba(243,175,18,0.35); }
+}
+
 /* ═══ Info Panel Content ═══ */
 .info-content {
     padding: 12px;
@@ -2787,9 +2825,13 @@ html, body {
                             <span class="label">STA</span>
                             <span class="value" id="info-sta" style="color:#f3af12">—</span>
                         </div>
-                        <div class="info-stat">
-                            <span class="label">TIME</span>
-                            <span class="value" id="info-clock" style="color:rgba(97,98,86,0.65)">--:--</span>
+                        <div class="sao-clock-container">
+                            <div class="sao-clock-frame">
+                                <span class="sao-clock-bracket">[</span>
+                                <span class="sao-clock-digits" id="info-clock">--:--:--</span>
+                                <span class="sao-clock-bracket">]</span>
+                            </div>
+                            <div class="sao-clock-label">SYSTEM TIME</div>
                         </div>
                     </div>
                 </div>
@@ -6013,15 +6055,18 @@ setTimeout(function() {
             }
         });
     }
-    // System clock
+    // System clock — SAO sci-fi style with seconds
     function _menuClock() {
         var el = document.getElementById('info-clock');
         if (!el) return;
         var now = new Date();
-        el.textContent = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+        var h = String(now.getHours()).padStart(2,'0');
+        var m = String(now.getMinutes()).padStart(2,'0');
+        var s = String(now.getSeconds()).padStart(2,'0');
+        el.textContent = h + ':' + m + ':' + s;
     }
     _menuClock();
-    setInterval(_menuClock, 10000);
+    setInterval(_menuClock, 1000);
 }, 250);
 </script>
 </body>

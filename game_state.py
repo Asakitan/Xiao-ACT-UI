@@ -139,7 +139,7 @@ class GameState:
     boss_hp_source: str = 'none'           # 'packet' | 'estimate' | 'none'
     boss_shield_active: bool = False
     boss_shield_pct: float = 0.0
-    boss_breaking_stage: int = 0
+    boss_breaking_stage: int = -1          # -1=not received; 0=Breaking; 1=BreakEnd
     boss_extinction_pct: float = 0.0
     boss_in_overdrive: bool = False
     boss_invincible: bool = False

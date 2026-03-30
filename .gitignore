@@ -7,6 +7,7 @@ __pycache__/
 # ── User data (excluded from repo) ────────────────
 player_profile.json
 settings.json
+player_cache.json
 
 # ── Debug / log files ─────────────────────────────
 packet_debug.jsonl
@@ -35,3 +36,4 @@ Thumbs.db
 .DS_Store
 server/data/
 server/*.db
+temp/

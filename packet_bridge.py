@@ -327,24 +327,26 @@ def _infer_slot_map_from_cds(player: PlayerData) -> dict:
             rest.append(slid)
 
     # Filter rest: keep only skills from the current profession or shared/environment
-    # skills. Each profession has a unique 2-digit prefix (base // 100); any skill
-    # whose prefix matches a DIFFERENT profession is excluded.
+    # skills. Use _SKILL_TO_PROFESSION for precise filtering — only exclude skills
+    # that are EXPLICITLY assigned to a different profession in the lookup table.
+    # Prefix-based filtering was too aggressive (e.g. removing shared skill 1222
+    # because prefix 12 belongs to 冰魔导师, even on a 神盾骑士).
     if profession_id > 0:
-        current_prefix = _PROFESSION_PREFIX.get(profession_id, 0)
         filtered_rest = []
         for slid in rest:
             base = slid // 100 if slid >= 100 else slid
-            skill_prefix = base // 100
-            if skill_prefix == current_prefix:
-                filtered_rest.append(slid)           # Same profession
-            elif skill_prefix not in _ALL_PROFESSION_PREFIXES:
-                filtered_rest.append(slid)           # Shared / environment skill
+            assigned_profession = _SKILL_TO_PROFESSION.get(base, 0)
+            if assigned_profession > 0 and assigned_profession != profession_id:
+                continue  # Known to belong to a different profession — exclude
+            filtered_rest.append(slid)
         rest = filtered_rest
 
-    # Sort remaining by most recently used, then by id
-    rest.sort(key=lambda slid: (-last_use.get(slid, 0.0), slid))
+    # Sort remaining deterministically by skill_level_id to avoid slot jumping
+    # when last_use timestamps change on every skill cast
+    rest.sort(key=lambda slid: slid)
 
     # Build slot map: pin normal→1, profession skill→2, ultimate→7
+    # (Inferred map uses DISPLAY positions directly — no remap applied)
     # Remaining fill into 3-6 (选配) and 8-9 (共鸣)
     slot_map = {}
     if pinned_normal:
@@ -363,7 +365,7 @@ def _infer_slot_map_from_cds(player: PlayerData) -> dict:
     # If no profession anchoring at all, fall back to simple sequential assignment
     if not pinned_normal and not pinned_skill and not pinned_ultimate:
         slot_map = {}
-        deduped.sort(key=lambda slid: (-last_use.get(slid, 0.0), slid))
+        deduped.sort()  # deterministic by skill_level_id
         for idx, slid in enumerate(deduped[:9], start=1):
             slot_map[idx] = slid
     return slot_map
@@ -446,7 +448,39 @@ def _build_packet_skill_slots(player: PlayerData):
         slot_map = _infer_slot_map_from_cds(player)
         if slot_map:
             inferred = True
+            # Cache the inferred map so subsequent calls produce stable slot ordering
+            player.skill_slot_map = dict(slot_map)
+            player._inferred_skill_count = len(slot_map)
             logger.info(f'[Bridge] inferred {len(slot_map)} skill slots from observed CDs')
+    else:
+        # Re-inference: only when the slot map was INFERRED (not from ProfessionList).
+        # _inferred_skill_count > 0 means at least one inference was done.
+        # When ProfessionList provides slots, _inferred_skill_count stays 0 and
+        # we skip this block entirely — ProfessionList is the authoritative source.
+        inferred_count = getattr(player, '_inferred_skill_count', 0)
+        if inferred_count > 0:
+            cd_map = getattr(player, 'skill_cd_map', {}) or {}
+            seen_ids = list(getattr(player, 'skill_seen_ids', []) or [])
+            current_known = set()
+            for slid in list(cd_map.keys()) + seen_ids:
+                if int(slid or 0) > 0:
+                    current_known.add(int(slid))
+            prev_count = max(inferred_count, len(slot_map))
+            existing_skills = set(slot_map.values())
+            new_skills = current_known - existing_skills
+            if new_skills and len(current_known) > prev_count:
+                fresh = _infer_slot_map_from_cds(player)
+                if fresh:
+                    # Merge: keep all existing slot assignments, only add new slots
+                    # Also skip skills already assigned to another slot (prevent duplicates)
+                    for s_idx, s_slid in fresh.items():
+                        if s_idx not in slot_map and s_slid not in existing_skills:
+                            slot_map[s_idx] = s_slid
+                            existing_skills.add(s_slid)
+                    player.skill_slot_map = dict(slot_map)
+                    player._inferred_skill_count = len(current_known)
+                    inferred = True
+                    logger.info(f'[Bridge] merged new skill slots into inferred map')
     if not slot_map:
         return []
 
@@ -459,8 +493,11 @@ def _build_packet_skill_slots(player: PlayerData):
     seen_ids = list(getattr(player, 'skill_seen_ids', []) or [])
     if slot_bar_map:
         for bar_slot_id, bar_skill_id in slot_bar_map.items():
-            if bar_slot_id in slot_map:
-                continue  # ProfessionList already provides this slot
+            # When inferred, slot_map keys are display positions; remap
+            # proto slot numbers so resonance 7→8, 8→9 match the HUD.
+            effective_slot = _remap_slot_index(bar_slot_id) if inferred else bar_slot_id
+            if effective_slot in slot_map:
+                continue  # already provided by ProfessionList / inference
             if bar_skill_id <= 0:
                 continue
             # Resolve skill_level_id: find a matching CD entry for this base skill_id
@@ -469,7 +506,7 @@ def _build_packet_skill_slots(player: PlayerData):
             if skill_level_id <= 0:
                 # Fallback: try compose with level 1
                 skill_level_id = bar_skill_id * 100 + 1
-            slot_map[bar_slot_id] = skill_level_id
+            slot_map[effective_slot] = skill_level_id
     _raw_offset = getattr(player, 'server_time_offset_ms', None)
     server_offset_ms = float(_raw_offset) if _raw_offset is not None else None
     now_local_ms = int(time.time() * 1000)
@@ -563,13 +600,13 @@ def _build_packet_skill_slots(player: PlayerData):
                 server_elapsed = now_server_ms - begin_ms
                 if server_elapsed > 200:
                     measured_speed = elapsed_ms / server_elapsed
-                    if 0.8 <= measured_speed <= 6.0:
+                    if 0.8 <= measured_speed <= 25.0:
                         vcd_speed = measured_speed
 
             # Method 2: parser-tracked VCD speed from consecutive observations
             if vcd_speed == accel_speed_mult:  # method 1 didn't fire
                 parser_speed = float(cd_info.get('vcd_speed_ratio') or 0)
-                if 0.8 <= parser_speed <= 6.0:
+                if 0.8 <= parser_speed <= 25.0:
                     vcd_speed = parser_speed
 
             # Filter out impossible values (wrapped int64 from charge entries)
@@ -591,20 +628,25 @@ def _build_packet_skill_slots(player: PlayerData):
                     local_since_ms = max(0, now_local_ms - last_update_ms)
                     estimated_vcd = elapsed_ms + local_since_ms * vcd_speed
                     remaining_vcd = max(0, total_ms - estimated_vcd)
-                    # Percentage: directly from VCD ratio (always accurate)
-                    cooldown_pct = max(0.0, min(1.0, remaining_vcd / total_ms))
                     # Convert VCD remaining → real time remaining
                     remaining_ms = max(0, int(remaining_vcd / vcd_speed)) if vcd_speed > 0.01 else 0
+                    # Total real CD = base_duration / vcd_speed.
+                    # The server bakes ALL CDR (entity attrs, buffs, passives) into
+                    # VCD progression speed, so total_ms / vcd_speed gives the true
+                    # real-time CD. Do NOT use effective_ms here — that would
+                    # double-count the reductions already embedded in vcd_speed.
+                    display_total_ms = int(total_ms / vcd_speed) if vcd_speed > 0.01 else total_ms
+                    cooldown_pct = max(0.0, min(1.0, remaining_ms / display_total_ms)) if display_total_ms > 0 else 0.0
                     source_confidence = 0.95
                 else:
-                    # Fallback: use local observation timestamp
+                    # Fallback: no usable VCD data yet — use attr-estimated
+                    # effective_ms as best guess for total CD duration.
                     local_elapsed = max(0, now_local_ms - last_update_ms)
+                    display_total_ms = effective_ms
                     remaining_ms = max(0, int(effective_ms - local_elapsed))
                     cooldown_pct = max(0.0, min(1.0, remaining_ms / effective_ms)) if effective_ms > 0 else 0.0
                     source_confidence = 0.55
 
-                # Effective total CD in real time
-                display_total_ms = int(total_ms / vcd_speed) if vcd_speed > 0.01 else effective_ms
                 effective_ms = display_total_ms
 
                 if charge_count > 0:
@@ -953,12 +995,23 @@ class PacketBridge:
             self._last_publish_t = 0  # 清除节流, 确保下次更新立即推送
 
         # 3. 延迟重发当前玩家数据, 确保 webview 在新场景同步后能及时刷新
+        #    Also force re-emit at 0.5s for immediate level/HP refresh
         def _re_publish():
             with self._lock:
                 if self._last_player:
                     self._publish_player_update(self._last_player, from_tick=False)
+        threading.Timer(0.5, _re_publish).start()
         threading.Timer(2.0, _re_publish).start()
         threading.Timer(5.0, _re_publish).start()
+
+        # 4. 清除推断的技能槽位缓存, 让新场景重新推断
+        #    (profession/level 保留, 但 skill slot map 可能因换技能改变)
+        with self._lock:
+            if self._last_player:
+                # Only clear inferred map, not ProfessionList-based map
+                if getattr(self._last_player, '_inferred_skill_count', 0) > 0:
+                    self._last_player.skill_slot_map = {}
+                    self._last_player._inferred_skill_count = 0
 
     def _on_player_update(self, player: PlayerData):
         """解析器回调: 当前玩家数据变更 (节流: 跳过高频重复推送)"""
@@ -1130,22 +1183,27 @@ class PacketBridge:
                     # 没有绝对数值, 不更新 stamina_current/stamina_max
                     logger.debug(f'[Bridge] ratio-only STA fallback: pct={ratio_value:.3f}')
 
-        if self._use_packet_source('skills'):
-            skill_slots = _build_packet_skill_slots(player)
-            previous_slots = {}
-            for slot in getattr(self._state_mgr.state, 'skill_slots', []) or []:
-                if not isinstance(slot, dict):
-                    continue
-                try:
-                    previous_slots[int(slot.get('index', 0) or 0)] = slot
-                except Exception:
-                    continue
-            for slot in skill_slots:
-                prev_slot = previous_slots.get(int(slot.get('index', 0) or 0))
-                slot['ready_edge'] = bool(prev_slot and _slot_is_ready(slot) and not _slot_is_ready(prev_slot))
-            updates['skill_slots'] = skill_slots
-            watched = self._get_watched_slots()
-            updates['burst_ready'] = compute_burst_ready(skill_slots, watched)
+        try:
+            if self._use_packet_source('skills'):
+                skill_slots = _build_packet_skill_slots(player)
+                previous_slots = {}
+                for slot in getattr(self._state_mgr.state, 'skill_slots', []) or []:
+                    if not isinstance(slot, dict):
+                        continue
+                    try:
+                        previous_slots[int(slot.get('index', 0) or 0)] = slot
+                    except Exception:
+                        continue
+                for slot in skill_slots:
+                    prev_slot = previous_slots.get(int(slot.get('index', 0) or 0))
+                    slot['ready_edge'] = bool(prev_slot and _slot_is_ready(slot) and not _slot_is_ready(prev_slot))
+                updates['skill_slots'] = skill_slots
+                watched = self._get_watched_slots()
+                updates['burst_ready'] = compute_burst_ready(skill_slots, watched)
+        except Exception as e:
+            logger.error(f'[Bridge] skill slot build error: {e}')
+            import traceback
+            logger.error(traceback.format_exc())
 
         self._state_mgr.update(**updates)
         # ── 积极缓存: 有意义的数据就保存 (节流写盘) ──

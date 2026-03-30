@@ -905,16 +905,17 @@ body {
     text-overflow: ellipsis;
     animation: id-pulse 4s ease-in-out infinite 0.5s;
 }
-/* ── Boss Raid Timer — replaces id-link when active ── */
+/* ── Boss Raid Timer / System Clock — centered in id-plate ── */
 .id-plate .id-boss-timer {
     position: absolute;
-    right: 18px;
-    bottom: 8px;
-    text-align: right;
-    font-size: 14px;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    font-size: 13px;
     font-family: var(--font-sao);
     color: rgba(104, 228, 255, 0.95);
-    letter-spacing: 2px;
+    letter-spacing: 3px;
     z-index: 3;
     white-space: nowrap;
     display: none;
@@ -1011,7 +1012,6 @@ body {
     </div>
     <div class="id-name" id="id-name">Player</div>
     <div class="id-info-row">
-        <div class="id-lv" id="id-lv">Lv.1</div>
         <div class="id-uid" id="id-uid"></div>
     </div>
     <div class="id-link" id="id-link">NErVGear ─ LINK OK</div>
@@ -1157,12 +1157,15 @@ function _updateClock() {
     var now = new Date();
     var hh = String(now.getHours()).padStart(2, '0');
     var mm = String(now.getMinutes()).padStart(2, '0');
-    el.textContent = hh + ':' + mm;
-    el.style.color = 'rgba(97, 98, 86, 0.65)';
+    var ss = String(now.getSeconds()).padStart(2, '0');
+    el.textContent = '\u2500 ' + hh + ':' + mm + ':' + ss + ' \u2500';
+    el.style.color = 'rgba(97, 98, 86, 0.55)';
     el.style.textShadow = 'none';
+    el.style.fontSize = '30px';
+    el.style.letterSpacing = '3px';
 }
-// Start clock — updates every 10s, shows when no boss timer
-setInterval(_updateClock, 10000);
+// Start clock — updates every 1s for HH:MM:SS, shows when no boss timer
+setInterval(_updateClock, 1000);
 // Initial clock display after page loads
 setTimeout(function() {
     if (!_bossTimerActive) {
