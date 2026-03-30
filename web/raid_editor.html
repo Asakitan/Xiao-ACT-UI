@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>SAO-RaidEditor</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+@font-face{font-family:'sao';src:url('fonts/SAOUI.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+@font-face{font-family:'saoLatin';src:url('fonts/SAOWelcome.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+:root{
+    --font-sao:'saoLatin','sao','Segoe UI',sans-serif;
+    --panel-bg:rgba(203,205,194,0.88);
+    --panel-bg-2:rgba(216,218,206,0.88);
+    --panel-edge:rgba(160,162,150,0.62);
+    --panel-line:rgba(255,255,255,0.52);
+    --text-main:rgb(83,84,73);
+    --text-muted:rgb(139,139,130);
+    --gold:rgb(222,166,32);
+    --gold-soft:rgba(222,166,32,0.22);
+    --cyan:rgba(104,228,255,0.55);
+    --cyan-strong:rgba(104,228,255,0.90);
+    --green-a:rgb(211,234,124);
+    --green-b:rgb(154,211,52);
+    --shadow:rgba(31,34,16,0.28);
+    --danger:rgb(239,104,78);
+    --boss-accent:rgb(239,104,78);
+    --enemy-accent:rgba(222,166,32,0.80);
+}
+html,body{
+    width:100%;height:100%;overflow:hidden;
+    background:transparent;color:var(--text-main);
+    font-family:var(--font-sao);user-select:none;-webkit-user-select:none;
+}
+body{padding:10px}
+.editor-shell{
+    position:relative;width:100%;height:100%;
+    background:linear-gradient(180deg,var(--panel-bg) 0%,var(--panel-bg-2) 100%);
+    border:1px solid var(--panel-edge);border-radius:6px;overflow:hidden;
+    box-shadow:2px 4px 18px var(--shadow),inset 0 1px 0 rgba(255,255,255,0.42),
+        inset 0 0 18px rgba(255,255,255,0.10);
+    opacity:0;display:flex;flex-direction:column;
+    will-change:opacity,transform;
+}
+.editor-shell.visible{opacity:1;transition:opacity 280ms ease}
+.editor-shell.exiting{opacity:0;transition:opacity 240ms ease}
+/* Corner accents (DPS style) */
+.editor-shell::before{
+    content:'';position:absolute;top:0;left:0;width:28px;height:28px;
+    border-top:2px solid var(--cyan-strong);border-left:2px solid var(--cyan-strong);
+    border-radius:6px 0 0 0;pointer-events:none;z-index:9;
+}
+.editor-shell::after{
+    content:'';position:absolute;bottom:0;right:0;width:28px;height:28px;
+    border-bottom:2px solid var(--gold);border-right:2px solid var(--gold);
+    border-radius:0 0 6px 0;pointer-events:none;z-index:9;
+}
+/* Header — draggable */
+.header{
+    padding:10px 16px 8px;cursor:move;
+    border-bottom:1px solid rgba(255,255,255,0.38);flex-shrink:0;
+    background:linear-gradient(180deg,rgba(255,255,255,0.12) 0%,transparent 100%);
+}
+.header .eyebrow{
+    font-size:9px;letter-spacing:2.4px;text-transform:uppercase;
+    color:var(--text-muted);margin-bottom:2px;
+}
+.header .title-row{display:flex;align-items:baseline;gap:10px}
+.header .title{font-size:16px;letter-spacing:1.2px;color:var(--text-main)}
+.header .badge{
+    font-size:9px;letter-spacing:1.6px;padding:2px 8px;
+    background:var(--boss-accent);color:#fff;border-radius:2px;
+}
+.header .badge.idle{background:var(--text-muted)}
+.header .badge.running{background:var(--boss-accent)}
+/* ── Tabs ── */
+.tab-bar{
+    display:flex;gap:0;padding:0 12px;flex-shrink:0;
+    border-bottom:1px solid rgba(0,0,0,0.06);
+}
+.tab{
+    padding:7px 16px;font-size:11px;letter-spacing:1.2px;cursor:pointer;
+    color:var(--text-muted);border-bottom:2px solid transparent;
+    transition:color 120ms,border-color 120ms;
+}
+.tab.active{color:var(--text-main);border-bottom-color:var(--gold)}
+.tab:hover{color:var(--text-main)}
+/* ── Content area ── */
+.content{flex:1;overflow-y:auto;padding:8px 12px}
+.content::-webkit-scrollbar{width:4px}
+.content::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.12);border-radius:2px}
+/* ── Entity list ── */
+.entity-card{
+    display:flex;align-items:center;gap:10px;
+    padding:8px 12px;margin-bottom:6px;
+    background:rgba(255,255,255,0.32);border-radius:4px;
+    border:1px solid rgba(255,255,255,0.42);
+    transition:background 150ms,border-color 150ms;cursor:pointer;
+}
+.entity-card:hover{background:rgba(255,255,255,0.50)}
+.entity-card.is-boss{border-left:3px solid var(--boss-accent)}
+.entity-card.is-enemy{border-left:3px solid var(--enemy-accent)}
+.entity-rank{
+    width:22px;height:22px;display:flex;align-items:center;justify-content:center;
+    font-size:10px;font-weight:600;border-radius:50%;flex-shrink:0;
+    background:rgba(0,0,0,0.06);color:var(--text-muted);
+}
+.entity-card.is-boss .entity-rank{background:var(--boss-accent);color:#fff}
+.entity-card.is-enemy .entity-rank{background:var(--enemy-accent);color:#fff}
+.entity-info{flex:1;min-width:0}
+.entity-name{font-size:12px;letter-spacing:0.6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.entity-sub{font-size:9px;color:var(--text-muted);letter-spacing:0.5px;margin-top:1px}
+.entity-hp-bar{
+    width:100%;height:4px;background:rgba(0,0,0,0.08);border-radius:2px;margin-top:3px;overflow:hidden;
+}
+.entity-hp-fill{height:100%;border-radius:2px;background:linear-gradient(to right,var(--green-a),var(--green-b));transition:width 200ms}
+.entity-role-btn{
+    padding:3px 10px;font-size:9px;letter-spacing:1px;border-radius:2px;
+    border:1px solid rgba(0,0,0,0.12);cursor:pointer;flex-shrink:0;
+    clip-path:polygon(6px 0,100% 0,100% 100%,0 100%,0 6px);
+    transition:background 120ms,color 120ms;
+}
+.entity-role-btn.boss{background:var(--boss-accent);color:#fff;border-color:var(--boss-accent)}
+.entity-role-btn.enemy{background:var(--enemy-accent);color:#fff;border-color:var(--enemy-accent)}
+.entity-role-btn:hover{filter:brightness(1.08)}
+/* ── Phase controls ── */
+.phase-section{margin-top:8px}
+.phase-header{
+    font-size:10px;letter-spacing:1.6px;text-transform:uppercase;
+    color:var(--text-muted);margin-bottom:6px;
+}
+.phase-card{
+    display:flex;align-items:center;gap:10px;
+    padding:6px 12px;margin-bottom:4px;
+    background:rgba(255,255,255,0.28);border-radius:4px;
+    border:1px solid rgba(255,255,255,0.38);
+    transition:background 150ms;
+}
+.phase-card.current{background:rgba(222,166,32,0.15);border-color:var(--gold)}
+.phase-name{font-size:12px;letter-spacing:0.6px;flex:1}
+.phase-trigger{font-size:9px;color:var(--text-muted);letter-spacing:0.4px}
+.phase-btn{
+    padding:3px 10px;font-size:9px;letter-spacing:1px;cursor:pointer;
+    background:var(--gold);color:#fff;border:none;border-radius:2px;
+    clip-path:polygon(6px 0,100% 0,100% 100%,0 100%,0 6px);
+}
+.phase-btn:hover{filter:brightness(1.1)}
+/* ── Action buttons ── */
+.action-row{
+    display:flex;gap:8px;padding:8px 12px;flex-shrink:0;
+    border-top:1px solid rgba(255,255,255,0.38);
+}
+.action-btn{
+    flex:1;padding:7px 0;text-align:center;font-size:10px;letter-spacing:1.2px;
+    cursor:pointer;border:1px solid rgba(0,0,0,0.08);border-radius:3px;
+    background:rgba(255,255,255,0.42);color:var(--text-main);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+    transition:background 120ms;
+}
+.action-btn:hover{background:rgba(255,255,255,0.62)}
+.action-btn.accent{background:var(--gold);color:#fff;border-color:var(--gold)}
+.action-btn.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
+/* ── Status bar ── */
+.status-bar{
+    padding:5px 14px;font-size:9px;letter-spacing:0.8px;
+    color:var(--text-muted);border-top:1px solid rgba(0,0,0,0.04);
+    display:flex;justify-content:space-between;flex-shrink:0;
+}
+/* ── Empty state ── */
+.empty-state{
+    text-align:center;padding:32px 16px;
+    color:var(--text-muted);font-size:11px;letter-spacing:0.8px;line-height:1.8;
+}
+</style>
+</head>
+<body>
+<div class="editor-shell" id="shell">
+    <!-- Header (draggable) -->
+    <div class="header" id="drag-handle">
+        <div class="eyebrow">Live Raid Editor</div>
+        <div class="title-row">
+            <span class="title">Boss Raid</span>
+            <span class="badge idle" id="state-badge">IDLE</span>
+        </div>
+    </div>
+    <!-- Tabs -->
+    <div class="tab-bar">
+        <div class="tab active" data-tab="entities" onclick="switchTab('entities')">Entities</div>
+        <div class="tab" data-tab="phases" onclick="switchTab('phases')">Phases</div>
+        <div class="tab" data-tab="timeline" onclick="switchTab('timeline')">Timeline</div>
+    </div>
+    <!-- Content -->
+    <div class="content" id="content">
+        <div id="tab-entities">
+            <div class="empty-state" id="entity-empty">
+                Waiting for combat data...<br/>
+                <span style="font-size:9px;color:rgba(139,139,130,0.7)">Attack a monster to begin tracking</span>
+            </div>
+            <div id="entity-list"></div>
+        </div>
+        <div id="tab-phases" style="display:none">
+            <div class="phase-header">Raid Phases</div>
+            <div id="phase-list"></div>
+        </div>
+        <div id="tab-timeline" style="display:none">
+            <div class="empty-state">
+                Phase timeline alerts will appear here during combat.
+            </div>
+        </div>
+    </div>
+    <!-- Action buttons -->
+    <div class="action-row">
+        <div class="action-btn accent" onclick="advancePhase()">NEXT PHASE</div>
+        <div class="action-btn" onclick="resetRaid()">RESET</div>
+    </div>
+    <!-- Status bar -->
+    <div class="status-bar">
+        <span id="status-elapsed">00:00</span>
+        <span id="status-dps">0 DPS</span>
+        <span id="status-phase">P1</span>
+    </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════ */
+/*  SAO Raid Editor — Live Overlay JS     */
+/* ═══════════════════════════════════════ */
+var _currentTab = 'entities';
+var _lastEntities = [];
+var _lastStatus = {};
+var _dragStart = null;
+
+// ── Tab switching ──
+function switchTab(tab) {
+    _currentTab = tab;
+    document.querySelectorAll('.tab').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.tab === tab);
+    });
+    document.getElementById('tab-entities').style.display = tab === 'entities' ? '' : 'none';
+    document.getElementById('tab-phases').style.display = tab === 'phases' ? '' : 'none';
+    document.getElementById('tab-timeline').style.display = tab === 'timeline' ? '' : 'none';
+}
+
+// ── Entity list rendering ──
+function updateEntities(entities) {
+    _lastEntities = entities || [];
+    var list = document.getElementById('entity-list');
+    var empty = document.getElementById('entity-empty');
+    if (!_lastEntities.length) {
+        empty.style.display = '';
+        list.innerHTML = '';
+        return;
+    }
+    empty.style.display = 'none';
+    var html = '';
+    for (var i = 0; i < _lastEntities.length; i++) {
+        var e = _lastEntities[i];
+        var isBoss = e.role === 'boss';
+        var roleClass = isBoss ? 'is-boss' : 'is-enemy';
+        var roleLabel = isBoss ? 'BOSS' : 'ENEMY';
+        var roleBtnClass = isBoss ? 'boss' : 'enemy';
+        var hpPct = e.max_hp > 0 ? Math.round(e.hp / e.max_hp * 100) : 0;
+        var dmgStr = _fmtNum(e.damage_dealt || 0);
+        var name = e.name || ('Entity ' + (e.uuid & 0xFFFF));
+        html += '<div class="entity-card ' + roleClass + '" data-uuid="' + e.uuid + '">'
+            + '<div class="entity-rank">' + (i + 1) + '</div>'
+            + '<div class="entity-info">'
+            + '  <div class="entity-name">' + _esc(name) + '</div>'
+            + '  <div class="entity-sub">DMG: ' + dmgStr + ' · HP: ' + hpPct + '%'
+            + (e.shield_active ? ' · Shield' : '')
+            + (e.in_overdrive ? ' · OD' : '')
+            + (e.breaking_stage > 0 ? ' · Break' : '')
+            + '  </div>'
+            + '  <div class="entity-hp-bar"><div class="entity-hp-fill" style="width:' + hpPct + '%"></div></div>'
+            + '</div>'
+            + '<div class="entity-role-btn ' + roleBtnClass + '" onclick="toggleRole(' + e.uuid + ')">'
+            + roleLabel + '</div>'
+            + '</div>';
+    }
+    list.innerHTML = html;
+}
+
+function toggleRole(uuid) {
+    // Find current role; toggle between boss/enemy
+    for (var i = 0; i < _lastEntities.length; i++) {
+        if (_lastEntities[i].uuid === uuid) {
+            var newRole = _lastEntities[i].role === 'boss' ? 'enemy' : 'boss';
+            if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.set_entity_role(uuid, newRole);
+            }
+            break;
+        }
+    }
+}
+
+// ── Phase list rendering ──
+function updatePhases(phases, currentIdx) {
+    var list = document.getElementById('phase-list');
+    if (!phases || !phases.length) {
+        list.innerHTML = '<div class="empty-state">No phases configured</div>';
+        return;
+    }
+    var html = '';
+    for (var i = 0; i < phases.length; i++) {
+        var p = phases[i];
+        var isCurrent = i === currentIdx;
+        html += '<div class="phase-card' + (isCurrent ? ' current' : '') + '">'
+            + '<div class="phase-name">' + _esc(p.name || ('P' + (i + 1))) + '</div>'
+            + '<div class="phase-trigger">' + _triggerText(p.trigger) + '</div>'
+            + (isCurrent ? '<div class="phase-btn" onclick="advancePhase()">→</div>' : '')
+            + '</div>';
+    }
+    list.innerHTML = html;
+}
+
+function _triggerText(trigger) {
+    if (!trigger) return 'Manual';
+    var t = trigger.type || 'manual';
+    var v = trigger.value || 0;
+    switch(t) {
+        case 'manual': return 'Manual (F8)';
+        case 'time': return v + 's elapsed';
+        case 'hp_pct': return 'HP ≤ ' + v + '%';
+        case 'dps_total': return 'DMG ≥ ' + _fmtNum(v);
+        case 'breaking': return 'Break event';
+        case 'shield_broken': return 'Shield broken';
+        case 'overdrive': return 'Overdrive';
+        case 'extinction_pct': return 'Break bar ≥ ' + v + '%';
+        case 'breaking_stage': return 'Break stage ≥ ' + v;
+        default: return t + ': ' + v;
+    }
+}
+
+// ── Status update ──
+function updateStatus(status) {
+    _lastStatus = status || {};
+    var badge = document.getElementById('state-badge');
+    var state = status.state || 'idle';
+    badge.textContent = state.toUpperCase();
+    badge.className = 'badge ' + state;
+    document.getElementById('status-elapsed').textContent = _fmtTime(status.elapsed_s || 0);
+    document.getElementById('status-dps').textContent = _fmtNum(status.dps || 0) + ' DPS';
+    document.getElementById('status-phase').textContent = status.phase_name || ('P' + ((status.phase_idx || 0) + 1));
+    // Update entities if included
+    if (status.entities) {
+        updateEntities(status.entities);
+    }
+}
+
+// ── Full state push (status + phases) ──
+function updateFull(data) {
+    if (data.status) updateStatus(data.status);
+    if (data.phases) updatePhases(data.phases, (data.status || {}).phase_idx || 0);
+}
+
+// ── Actions ──
+function advancePhase() {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.raid_next_phase();
+    }
+}
+function resetRaid() {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.raid_reset();
+    }
+}
+
+// ── Show/Hide ──
+function fadeIn(data) {
+    var shell = document.getElementById('shell');
+    shell.classList.remove('exiting');
+    shell.classList.add('visible');
+    if (data) updateFull(data);
+}
+function fadeOut() {
+    var shell = document.getElementById('shell');
+    shell.classList.add('exiting');
+    shell.classList.remove('visible');
+}
+
+// ── Helpers ──
+function _fmtNum(v) {
+    if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+    if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+    return '' + v;
+}
+function _fmtTime(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+}
+function _esc(s) {
+    var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML;
+}
+
+// ── Drag ──
+(function() {
+    var handle = document.getElementById('drag-handle');
+    handle.addEventListener('mousedown', function(e) {
+        if (e.button !== 0) return;
+        _dragStart = { x: e.screenX, y: e.screenY };
+        e.preventDefault();
+    });
+    window.addEventListener('mousemove', function(e) {
+        if (!_dragStart) return;
+        var dx = e.screenX - _dragStart.x;
+        var dy = e.screenY - _dragStart.y;
+        _dragStart = { x: e.screenX, y: e.screenY };
+        if (window.pywebview && window.pywebview.api) {
+            window.pywebview.api.window_drag(dx, dy);
+        }
+    });
+    window.addEventListener('mouseup', function() { _dragStart = null; });
+})();
+
+// ── Public API ──
+window.RaidEditor = {
+    updateEntities: updateEntities,
+    updatePhases: updatePhases,
+    updateStatus: updateStatus,
+    updateFull: updateFull,
+    fadeIn: fadeIn,
+    fadeOut: fadeOut,
+};
+</script>
+</body>
+</html>

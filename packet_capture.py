@@ -246,10 +246,13 @@ class TcpReassembler:
     """
     单向 TCP 流重组 + 游戏帧提取。
     识别游戏服务器后，对下行流重组并按 [4B-size][payload] 切割游戏帧。
+    支持场景服务器切换检测 (切换地图/副本时游戏连接新的场景服务器)。
     """
 
-    def __init__(self, on_game_packet: Callable[[bytes], None]):
+    def __init__(self, on_game_packet: Callable[[bytes], None],
+                 on_server_change: Optional[Callable[[], None]] = None):
         self._on_pkt = on_game_packet  # 回调: 一个完整游戏帧
+        self._on_server_change = on_server_change  # 回调: 场景服务器切换
         self._server_addr: Optional[str] = None
         self._lock = threading.Lock()
 
@@ -266,6 +269,7 @@ class TcpReassembler:
             'complete_game_frames': 0,
             'seq_resets': 0,
             'cache_overflows': 0,
+            'server_changes': 0,
         }
         self._frag = _IpFragmentCache()
 
@@ -316,7 +320,37 @@ class TcpReassembler:
             return
 
         if addr != self._server_addr:
-            return  # 非游戏服务器的包，跳过
+            # ─── 场景服务器切换检测 ───
+            # 切换地图/副本时，游戏会连接新的场景服务器。
+            # 检查来自不同地址的包中是否含有 c3SB 签名，
+            # 若有则切换到新服务器。(参考 SRDC: clearDataOnServerChange)
+            if self._try_identify(payload, addr):
+                old_addr = self._server_addr
+                self._server_addr = addr
+                # 重置 TCP 重组状态
+                with self._lock:
+                    self._next_seq = -1
+                    self._cache.clear()
+                    self._buf = b''
+                self.stats['server_changes'] += 1
+                logger.info(
+                    f'[Capture] 场景服务器切换: {old_addr} → {addr} '
+                    f'({_fmt_ip(src_ip)}:{sport})'
+                )
+                print(
+                    f'[Capture] ⚡ 场景服务器切换 → {_fmt_ip(src_ip)}:{sport} '
+                    f'(第 {self.stats["server_changes"]} 次)',
+                    flush=True,
+                )
+                # 通知上层: 场景已切换，需要清理旧数据
+                if self._on_server_change:
+                    try:
+                        self._on_server_change()
+                    except Exception as e:
+                        logger.error(f'[Capture] on_server_change callback error: {e}')
+                # 继续处理新服务器的首个包
+                self._feed_tcp(seq, payload)
+            return
 
         # ─── TCP 重组 ───
         self._feed_tcp(seq, payload)
@@ -444,12 +478,14 @@ class PacketCapture:
     """
 
     def __init__(self, on_game_packet: Callable[[bytes], None],
-                 device: Optional[Dict[str, str]] = None):
+                 device: Optional[Dict[str, str]] = None,
+                 on_server_change: Optional[Callable[[], None]] = None):
         self._on_pkt = on_game_packet
         self._device = device
         self._running = False
         self._thread: Optional[threading.Thread] = None
-        self._reassembler = TcpReassembler(on_game_packet)
+        self._reassembler = TcpReassembler(on_game_packet,
+                                            on_server_change=on_server_change)
 
     @property
     def server_identified(self) -> bool:

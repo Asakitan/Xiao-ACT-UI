@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from config import BASE_DIR
 
 BOSS_RAID_SCHEMA_VERSION = 1
-DEFAULT_BOSS_RAID_SERVER_URL = ""
+DEFAULT_BOSS_RAID_SERVER_URL = "http://47.82.157.220:9320"
 BOSS_RAID_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "boss_raids")
 
 # ═══════════════════════════════════════════════
@@ -510,18 +510,21 @@ class BossRaidEngine:
 
     def __init__(self, state_mgr, settings,
                  on_alert: Optional[Callable[[str, str], None]] = None,
-                 on_sound: Optional[Callable[[str], None]] = None):
+                 on_sound: Optional[Callable[[str], None]] = None,
+                 on_entity_update: Optional[Callable[[List[Dict[str, Any]]], None]] = None):
         """
         Args:
             state_mgr: GameStateManager instance
             settings: SettingsManager instance
             on_alert: callback(title, message) for visual alert
             on_sound: callback(sound_name) for playing sound
+            on_entity_update: callback([entity_dict, ...]) for visual editor entity list
         """
         self._state_mgr = state_mgr
         self._settings = settings
         self._on_alert = on_alert
         self._on_sound = on_sound
+        self._on_entity_update_cb = on_entity_update
 
         self._lock = threading.Lock()
         self._state = self.STATE_IDLE
@@ -552,6 +555,14 @@ class BossRaidEngine:
         self._immune_streak: int = 0          # Consecutive immune hits for invincibility detection
         self._immune_window_start: float = 0.0
         self._last_monster_data: Optional[Dict[str, Any]] = None
+
+        # ── Multi-entity tracking (boss + enemies) ──
+        # entities: uuid → {uuid, name, role, hp, max_hp, damage_dealt, first_seen, last_seen, ...}
+        # role: 'boss' | 'enemy' | 'unknown'
+        self._entities: Dict[int, Dict[str, Any]] = {}  # all tracked monsters
+        self._entity_order: List[int] = []               # UUIDs in order of first attack
+        self._boss_manually_set: bool = False             # user manually pinned the boss
+        self._on_entity_update: Optional[Callable] = None # callback for visual editor
 
         # Thread
         self._running = False
@@ -586,6 +597,10 @@ class BossRaidEngine:
             self._boss_invincible = False
             self._immune_streak = 0
             self._last_monster_data = None
+            # Reset multi-entity tracking
+            self._entities.clear()
+            self._entity_order.clear()
+            self._boss_manually_set = False
 
         if not self._running:
             self._running = True
@@ -611,6 +626,9 @@ class BossRaidEngine:
             self._boss_max_hp = 0
             self._boss_invincible = False
             self._immune_streak = 0
+            self._entities.clear()
+            self._entity_order.clear()
+            self._boss_manually_set = False
         self._push_game_state_clear()
 
     def next_phase(self):
@@ -638,10 +656,98 @@ class BossRaidEngine:
             self._boss_invincible = False
             self._immune_streak = 0
             self._last_monster_data = None
+            self._entities.clear()
+            self._entity_order.clear()
+            self._boss_manually_set = False
         self._push_game_state_clear()
 
+    # ── Entity role management (for visual editor) ──
+
+    def set_entity_role(self, uuid: int, role: str):
+        """Set entity role: 'boss' or 'enemy'. Called from visual editor overlay.
+
+        When a user explicitly marks a UUID as 'boss', the old boss (if any)
+        is demoted to 'enemy', and all future boss-tracking fields update
+        to the newly-designated boss.
+        """
+        uuid = int(uuid or 0)
+        if not uuid or role not in ('boss', 'enemy'):
+            return
+        with self._lock:
+            if uuid not in self._entities:
+                return
+            if role == 'boss':
+                # Demote current boss to enemy
+                for u, ent in self._entities.items():
+                    if ent['role'] == 'boss' and u != uuid:
+                        ent['role'] = 'enemy'
+                self._entities[uuid]['role'] = 'boss'
+                self._boss_uuid = uuid
+                self._boss_manually_set = True
+                # Sync HP fields from entity
+                ent = self._entities[uuid]
+                if ent.get('max_hp', 0) > 0:
+                    self._boss_hp = ent['hp']
+                    self._boss_max_hp = ent['max_hp']
+                self._boss_shield_active = ent.get('shield_active', False)
+                self._boss_shield_pct = ent.get('shield_pct', 0.0)
+                self._boss_breaking_stage = ent.get('breaking_stage', 0)
+                self._boss_extinction_pct = ent.get('extinction_pct', 0.0)
+                self._boss_in_overdrive = ent.get('in_overdrive', False)
+            else:
+                self._entities[uuid]['role'] = 'enemy'
+                if self._boss_uuid == uuid:
+                    self._boss_uuid = 0
+                    self._boss_manually_set = False
+            self._fire_entity_update_locked()
+
+    def get_entities(self) -> List[Dict[str, Any]]:
+        """Return ordered list of tracked entities with their roles + stats."""
+        with self._lock:
+            return self._get_entities_locked()
+
+    def _get_entities_locked(self) -> List[Dict[str, Any]]:
+        """Build entity list (called under lock)."""
+        result = []
+        for uuid in self._entity_order:
+            ent = self._entities.get(uuid)
+            if not ent:
+                continue
+            result.append({
+                'uuid': ent['uuid'],
+                'name': ent.get('name', ''),
+                'role': ent.get('role', 'unknown'),
+                'hp': ent.get('hp', 0),
+                'max_hp': ent.get('max_hp', 0),
+                'hp_pct': round(ent['hp'] / max(1, ent['max_hp']), 4) if ent.get('max_hp', 0) > 0 else 0.0,
+                'damage_dealt': ent.get('damage_dealt', 0),
+                'hit_count': ent.get('hit_count', 0),
+                'shield_active': ent.get('shield_active', False),
+                'shield_pct': round(ent.get('shield_pct', 0.0), 4),
+                'breaking_stage': ent.get('breaking_stage', 0),
+                'extinction_pct': round(ent.get('extinction_pct', 0.0), 4),
+                'in_overdrive': ent.get('in_overdrive', False),
+                'is_boss': ent.get('role') == 'boss',
+            })
+        return result
+
+    def _fire_entity_update_locked(self):
+        """Notify visual editor of entity list change (call under lock)."""
+        if self._on_entity_update_cb:
+            entities = self._get_entities_locked()
+            try:
+                self._on_entity_update_cb(entities)
+            except Exception:
+                pass
+
     def on_damage_event(self, event: Dict[str, Any]):
-        """Called from packet_parser damage callback. Accumulates boss damage and detects invincibility."""
+        """Called from packet_parser damage callback. Accumulates boss damage and detects invincibility.
+
+        Multi-entity auto-detect logic:
+        - First attacked monster UUID becomes the boss
+        - Subsequent unique UUIDs become enemies (mechanic adds)
+        - Users can override roles via the visual editor
+        """
         if not event:
             return
         with self._lock:
@@ -651,17 +757,52 @@ class BossRaidEngine:
             attacker_is_self = event.get("attacker_is_self")
             is_immune = event.get("is_immune", False)
             is_absorbed = event.get("is_absorbed", False)
+            damage = max(0, int(event.get("damage") or 0))
 
             if attacker_is_self and target_is_monster:
-                target_uuid = event.get("target_uuid", 0)
+                target_uuid = int(event.get("target_uuid", 0))
+                now = time.time()
 
-                # Auto-detect boss: track the first monster we hit, or biggest HP
+                # ── Track entity ──
+                if target_uuid and target_uuid not in self._entities:
+                    role = 'unknown'
+                    if not self._boss_manually_set:
+                        if self._boss_uuid == 0:
+                            role = 'boss'  # First attacked = boss
+                        else:
+                            role = 'enemy'  # Subsequent = enemy (mechanic add)
+                    self._entities[target_uuid] = {
+                        'uuid': target_uuid,
+                        'name': _string(event.get('target_name', '')),
+                        'role': role,
+                        'hp': 0, 'max_hp': 0,
+                        'damage_dealt': 0,
+                        'hit_count': 0,
+                        'first_seen': now, 'last_seen': now,
+                        'shield_active': False, 'shield_pct': 0.0,
+                        'breaking_stage': 0, 'extinction_pct': 0.0,
+                        'in_overdrive': False,
+                    }
+                    self._entity_order.append(target_uuid)
+
+                # Auto-detect boss: first monster we hit
                 if self._boss_uuid == 0 and target_uuid:
                     self._boss_uuid = target_uuid
+                    if target_uuid in self._entities:
+                        self._entities[target_uuid]['role'] = 'boss'
+
+                # Update entity damage tracking
+                if target_uuid in self._entities:
+                    ent = self._entities[target_uuid]
+                    ent['last_seen'] = now
+                    if not (is_immune or is_absorbed) and not event.get('is_heal'):
+                        ent['damage_dealt'] += damage
+                        ent['hit_count'] += 1
+                    if not ent.get('name'):
+                        ent['name'] = _string(event.get('target_name', ''))
 
                 if is_immune or is_absorbed:
                     # Invincibility detection: consecutive immune/absorbed hits
-                    now = time.time()
                     if self._immune_streak == 0:
                         self._immune_window_start = now
                     self._immune_streak += 1
@@ -674,28 +815,53 @@ class BossRaidEngine:
                         self._boss_invincible = False
                     self._immune_streak = 0
                     if not event.get("is_heal"):
-                        self._total_damage += max(0, int(event.get("damage") or 0))
+                        self._total_damage += damage
+
+                # Notify visual editor of entity list change
+                self._fire_entity_update_locked()
 
     def on_monster_update(self, monster_data: Dict[str, Any]):
-        """Called from packet_parser monster update callback. Updates real boss HP/shield/breaking."""
+        """Called from packet_parser monster update callback. Updates real boss HP/shield/breaking.
+
+        Also updates multi-entity tracking for all known monsters.
+        """
         if not monster_data:
             return
         with self._lock:
             if self._state != self.STATE_RUNNING:
                 # Still track even when idle so we can show info
                 pass
-            uuid = monster_data.get("uuid", 0)
-            # Auto-detect boss: biggest max_hp monster
+            uuid = int(monster_data.get("uuid", 0))
+            hp = int(monster_data.get("hp") or 0)
+            max_hp = int(monster_data.get("max_hp") or 0)
+
+            # ── Update multi-entity tracking ──
+            if uuid and uuid in self._entities:
+                ent = self._entities[uuid]
+                if max_hp > 0:
+                    ent['hp'] = hp
+                    ent['max_hp'] = max_hp
+                ent['shield_active'] = bool(monster_data.get('shield_active'))
+                ent['shield_pct'] = float(monster_data.get('shield_pct') or 0.0)
+                ent['breaking_stage'] = int(monster_data.get('breaking_stage') or 0)
+                ent['extinction_pct'] = float(monster_data.get('extinction_pct') or 0.0)
+                ent['in_overdrive'] = bool(monster_data.get('in_overdrive'))
+                name = _string(monster_data.get('name', ''))
+                if name and not ent.get('name'):
+                    ent['name'] = name
+
+            # Auto-detect boss: biggest max_hp monster (if no boss yet)
             if self._boss_uuid == 0:
-                new_max = int(monster_data.get("max_hp") or 0)
-                if new_max > 0:
+                if max_hp > 0:
                     self._boss_uuid = uuid
+                    if uuid in self._entities:
+                        self._entities[uuid]['role'] = 'boss'
+
+            # ── Update boss-specific fields (for main tracking) ──
             if uuid != self._boss_uuid:
                 return
 
             self._last_monster_data = monster_data
-            hp = int(monster_data.get("hp") or 0)
-            max_hp = int(monster_data.get("max_hp") or 0)
             if max_hp > 0:
                 self._boss_hp = hp
                 self._boss_max_hp = max_hp
@@ -793,6 +959,7 @@ class BossRaidEngine:
             "boss_extinction_pct": round(self._boss_extinction_pct, 4),
             "boss_in_overdrive": self._boss_in_overdrive,
             "boss_invincible": self._boss_invincible,
+            "entities": self._get_entities_locked(),
         }
 
     def _run_loop(self):

@@ -18,7 +18,7 @@ from config import BASE_DIR, GAME_PROCESS_NAMES
 from window_locator import WindowLocator, _get_process_name
 
 AUTO_KEY_SCHEMA_VERSION = 1
-DEFAULT_AUTO_KEY_SERVER_URL = ""
+DEFAULT_AUTO_KEY_SERVER_URL = "http://47.82.157.220:9320"
 AUTO_KEY_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "auto_keys")
 AUTO_KEY_IMPORT_DIR = BASE_DIR
 
@@ -677,12 +677,20 @@ class AutoKeyEngine:
             return
 
         slot_map = self._slot_map(gs)
+        # Evaluate normal profile actions first
         for action in list(profile.get("actions", []) or []):
             if not _coerce_bool(action.get("enabled"), True):
                 continue
             if self._action_ready(profile, action, gs, slot_map, now):
                 self._fire_action(profile, action, now)
                 post_delay = _coerce_int(action.get("post_delay_ms"), 120, 0) / 1000.0
+                self._next_loop_at = max(self._next_loop_at, time.time() + post_delay)
+                return
+        # Evaluate burst visual editor actions (appended virtual actions)
+        for action in self._get_burst_virtual_actions():
+            if self._action_ready(profile, action, gs, slot_map, now):
+                self._fire_action(profile, action, now)
+                post_delay = _coerce_int(action.get("post_delay_ms"), 200, 0) / 1000.0
                 self._next_loop_at = max(self._next_loop_at, time.time() + post_delay)
                 return
         self._set_status(last_reason="idle")
@@ -821,6 +829,54 @@ class AutoKeyEngine:
             last_fire_at=now,
             last_reason="fired",
         )
+
+    # ── Burst-ready actions (from visual editor) ──
+
+    def set_burst_actions(self, actions: list):
+        """Set burst-ready → skill trigger actions from the visual editor.
+
+        Each action: {trigger_slot: int, action_slot: int}
+        These are converted to autokey actions with burst_ready_is=True condition
+        and appended to the active profile as virtual actions.
+        """
+        self._burst_visual_actions = list(actions or [])
+
+    def get_burst_actions(self) -> list:
+        return list(getattr(self, '_burst_visual_actions', []) or [])
+
+    def _get_burst_virtual_actions(self) -> list:
+        """Convert visual editor burst actions to virtual autokey actions."""
+        raw = getattr(self, '_burst_visual_actions', []) or []
+        result = []
+        # Slot index → default key mapping (1-9 → keys 1-9)
+        SLOT_KEY_MAP = {1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8', 9: '9'}
+        for i, ba in enumerate(raw):
+            trigger_slot = _coerce_int(ba.get('trigger_slot'), 0, 1, 9)
+            action_slot = _coerce_int(ba.get('action_slot'), 0, 1, 9)
+            if trigger_slot <= 0 or action_slot <= 0:
+                continue
+            key = SLOT_KEY_MAP.get(action_slot)
+            if not key:
+                continue
+            result.append({
+                'id': f'_burst_visual_{i}',
+                'label': f'Burst S{trigger_slot}→S{action_slot}',
+                'enabled': True,
+                'slot_index': action_slot,
+                'key': key,
+                'press_mode': 'tap',
+                'press_count': 1,
+                'hold_ms': 80,
+                'post_delay_ms': 200,
+                'ready_delay_ms': 0,
+                'min_rearm_ms': 500,
+                'conditions': [
+                    {'type': 'burst_ready_is', 'value': True},
+                    {'type': 'slot_state_is', 'slot_index': trigger_slot, 'state': 'ready'},
+                    {'type': 'slot_state_is', 'slot_index': action_slot, 'state': 'ready'},
+                ],
+            })
+        return result
 
 
 __all__ = [
