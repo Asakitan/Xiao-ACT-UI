@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>SAO-AutoKeyEditor</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+@font-face{font-family:'sao';src:url('fonts/SAOUI.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+@font-face{font-family:'saoLatin';src:url('fonts/SAOWelcome.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+:root{
+    --font-sao:'saoLatin','sao','Segoe UI',sans-serif;
+    --panel-bg:rgba(203,205,194,0.88);
+    --panel-bg-2:rgba(216,218,206,0.88);
+    --panel-edge:rgba(160,162,150,0.62);
+    --text-main:rgb(83,84,73);
+    --text-muted:rgb(139,139,130);
+    --gold:rgb(222,166,32);
+    --gold-soft:rgba(222,166,32,0.22);
+    --cyan:rgba(104,228,255,0.55);
+    --cyan-strong:rgba(104,228,255,0.90);
+    --green-a:rgb(211,234,124);
+    --green-b:rgb(154,211,52);
+    --shadow:rgba(31,34,16,0.28);
+    --danger:rgb(239,104,78);
+    --ready:rgb(104,228,155);
+    --cooldown:rgba(222,166,32,0.65);
+    --active:rgba(104,228,255,0.75);
+}
+html,body{
+    width:100%;height:100%;overflow:hidden;
+    background:transparent;color:var(--text-main);
+    font-family:var(--font-sao);user-select:none;-webkit-user-select:none;
+}
+body{padding:10px}
+.editor-shell{
+    position:relative;width:100%;height:100%;
+    background:linear-gradient(180deg,var(--panel-bg) 0%,var(--panel-bg-2) 100%);
+    border:1px solid var(--panel-edge);border-radius:6px;overflow:hidden;
+    box-shadow:2px 4px 18px var(--shadow),inset 0 1px 0 rgba(255,255,255,0.42),
+        inset 0 0 18px rgba(255,255,255,0.10);
+    opacity:0;display:flex;flex-direction:column;
+    will-change:opacity,transform;
+}
+.editor-shell.visible{opacity:1;transition:opacity 280ms ease}
+.editor-shell.exiting{opacity:0;transition:opacity 240ms ease}
+.editor-shell::before{
+    content:'';position:absolute;top:0;left:0;width:28px;height:28px;
+    border-top:2px solid var(--cyan-strong);border-left:2px solid var(--cyan-strong);
+    border-radius:6px 0 0 0;pointer-events:none;z-index:9;
+}
+.editor-shell::after{
+    content:'';position:absolute;bottom:0;right:0;width:28px;height:28px;
+    border-bottom:2px solid var(--gold);border-right:2px solid var(--gold);
+    border-radius:0 0 6px 0;pointer-events:none;z-index:9;
+}
+/* Header */
+.header{
+    padding:10px 16px 8px;cursor:move;
+    border-bottom:1px solid rgba(255,255,255,0.38);flex-shrink:0;
+    background:linear-gradient(180deg,rgba(255,255,255,0.12) 0%,transparent 100%);
+}
+.header .eyebrow{font-size:9px;letter-spacing:2.4px;text-transform:uppercase;color:var(--text-muted);margin-bottom:2px}
+.header .title-row{display:flex;align-items:baseline;gap:10px}
+.header .title{font-size:16px;letter-spacing:1.2px;color:var(--text-main)}
+.header .badge{font-size:9px;letter-spacing:1.6px;padding:2px 8px;border-radius:2px}
+.header .badge.off{background:var(--text-muted);color:#fff}
+.header .badge.on{background:var(--ready);color:var(--text-main)}
+/* Skill grid */
+.content{flex:1;overflow-y:auto;padding:8px 12px}
+.content::-webkit-scrollbar{width:4px}
+.content::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.12);border-radius:2px}
+.section-title{
+    font-size:10px;letter-spacing:1.6px;text-transform:uppercase;
+    color:var(--text-muted);margin:8px 0 6px;
+}
+/* Skill slot cards */
+.skill-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px}
+.skill-card{
+    position:relative;padding:8px;
+    background:rgba(255,255,255,0.32);border-radius:4px;
+    border:1px solid rgba(255,255,255,0.42);cursor:pointer;
+    transition:background 150ms,border-color 150ms,box-shadow 150ms;
+    overflow:hidden;
+}
+.skill-card:hover{background:rgba(255,255,255,0.50)}
+.skill-card.state-ready{border-left:3px solid var(--ready)}
+.skill-card.state-cooldown{border-left:3px solid var(--cooldown)}
+.skill-card.state-active{border-left:3px solid var(--active)}
+.skill-card.state-ready .skill-state-dot{background:var(--ready)}
+.skill-card.state-cooldown .skill-state-dot{background:var(--cooldown)}
+.skill-card.state-active .skill-state-dot{background:var(--active)}
+/* Ready pulse animation */
+.skill-card.just-ready{
+    animation:skill-ready-pulse 620ms cubic-bezier(.16,.84,.24,1);
+}
+@keyframes skill-ready-pulse{
+    0%{box-shadow:0 0 0 0 rgba(104,228,155,0.5)}
+    40%{box-shadow:0 0 12px 4px rgba(104,228,155,0.35)}
+    100%{box-shadow:none}
+}
+.skill-slot{font-size:9px;color:var(--text-muted);letter-spacing:0.8px;margin-bottom:2px}
+.skill-name{font-size:11px;letter-spacing:0.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.skill-state{display:flex;align-items:center;gap:4px;margin-top:3px}
+.skill-state-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.skill-state-text{font-size:9px;color:var(--text-muted);letter-spacing:0.4px}
+.skill-cd-bar{
+    width:100%;height:3px;background:rgba(0,0,0,0.08);border-radius:2px;margin-top:4px;overflow:hidden;
+}
+.skill-cd-fill{height:100%;border-radius:2px;background:var(--cooldown);transition:width 200ms}
+.skill-card.selected{
+    border-color:var(--cyan-strong);box-shadow:0 0 8px rgba(104,228,255,0.3);
+    background:rgba(104,228,255,0.08);
+}
+/* Action recording */
+.record-section{margin-top:6px}
+.record-row{
+    display:flex;align-items:center;gap:8px;
+    padding:6px 10px;margin-bottom:4px;
+    background:rgba(255,255,255,0.28);border-radius:4px;
+    border:1px solid rgba(255,255,255,0.38);
+}
+.record-trigger{font-size:10px;flex:1;letter-spacing:0.4px}
+.record-action{font-size:10px;color:var(--gold);letter-spacing:0.4px}
+.record-remove{
+    width:18px;height:18px;display:flex;align-items:center;justify-content:center;
+    font-size:11px;color:var(--danger);cursor:pointer;
+    border-radius:50%;border:1px solid rgba(239,104,78,0.3);
+}
+.record-remove:hover{background:rgba(239,104,78,0.1)}
+/* Recording mode indicator */
+.recording-indicator{
+    display:none;padding:6px 12px;text-align:center;
+    font-size:10px;letter-spacing:1.2px;color:var(--danger);
+    animation:rec-blink 1.2s ease-in-out infinite;
+}
+.recording-indicator.active{display:block}
+@keyframes rec-blink{
+    0%,100%{opacity:1}50%{opacity:0.4}
+}
+/* Action bar */
+.action-row{
+    display:flex;gap:8px;padding:8px 12px;flex-shrink:0;
+    border-top:1px solid rgba(255,255,255,0.38);
+}
+.action-btn{
+    flex:1;padding:7px 0;text-align:center;font-size:10px;letter-spacing:1.2px;
+    cursor:pointer;border:1px solid rgba(0,0,0,0.08);border-radius:3px;
+    background:rgba(255,255,255,0.42);color:var(--text-main);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+    transition:background 120ms;
+}
+.action-btn:hover{background:rgba(255,255,255,0.62)}
+.action-btn.accent{background:var(--gold);color:#fff;border-color:var(--gold)}
+.action-btn.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
+.action-btn.recording{background:var(--danger);color:#fff;animation:rec-blink 1.2s ease-in-out infinite}
+/* Status bar */
+.status-bar{
+    padding:5px 14px;font-size:9px;letter-spacing:0.8px;
+    color:var(--text-muted);border-top:1px solid rgba(0,0,0,0.04);
+    display:flex;justify-content:space-between;flex-shrink:0;
+}
+/* Burst ready overlay */
+.burst-indicator{
+    display:none;padding:4px 12px;text-align:center;flex-shrink:0;
+    font-size:11px;letter-spacing:1.4px;
+    background:linear-gradient(90deg,transparent,rgba(104,228,155,0.15),transparent);
+    color:var(--ready);border-bottom:1px solid rgba(104,228,155,0.2);
+}
+.burst-indicator.active{display:block}
+</style>
+</head>
+<body>
+<div class="editor-shell" id="shell">
+    <div class="header" id="drag-handle">
+        <div class="eyebrow">Live Skill Monitor</div>
+        <div class="title-row">
+            <span class="title">Auto Key</span>
+            <span class="badge off" id="state-badge">OFF</span>
+        </div>
+    </div>
+    <div class="burst-indicator" id="burst-indicator">✦ BURST READY ✦</div>
+    <div class="content" id="content">
+        <div class="section-title">Skill Slots</div>
+        <div class="skill-grid" id="skill-grid">
+            <!-- Populated by JS -->
+        </div>
+        <div class="section-title">Auto Actions</div>
+        <div class="recording-indicator" id="rec-indicator">● RECORDING — press slot to trigger when burst ready</div>
+        <div id="action-list">
+            <div class="record-row" style="color:var(--text-muted);font-size:10px;text-align:center;justify-content:center">
+                No auto-key actions recorded
+            </div>
+        </div>
+    </div>
+    <div class="action-row">
+        <div class="action-btn" id="record-btn" onclick="toggleRecord()">RECORD</div>
+        <div class="action-btn" onclick="clearActions()">CLEAR</div>
+        <div class="action-btn accent" onclick="saveActions()">SAVE</div>
+    </div>
+    <div class="status-bar">
+        <span id="status-profession">—</span>
+        <span id="status-burst">Burst: —</span>
+    </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════ */
+/*  SAO AutoKey Editor — Live Overlay JS  */
+/* ═══════════════════════════════════════ */
+var _slots = [];
+var _recording = false;
+var _recordingTriggerSlot = null;  // slot index that triggers the action
+var _actions = [];  // [{trigger_slot, trigger_condition, action_slot, action_key}]
+var _dragStart = null;
+var _prevSlotStates = {};  // track ready-edge transitions
+var _burstReady = false;
+var _selectedSlot = null;
+
+// ── Skill slot grid rendering ──
+function updateSlots(slots) {
+    _slots = slots || [];
+    var grid = document.getElementById('skill-grid');
+    var html = '';
+    for (var i = 0; i < _slots.length; i++) {
+        var s = _slots[i];
+        var stateClass = 'state-' + (s.state || 'ready');
+        var cdPct = Math.round((s.cooldown_pct || 0) * 100);
+        var remainStr = s.remaining_ms > 0 ? (s.remaining_ms / 1000).toFixed(1) + 's' : 'Ready';
+        var stateText = s.state === 'ready' ? 'Ready'
+            : s.state === 'active' ? 'Active'
+            : remainStr;
+        var name = s.name || ('Slot ' + s.index);
+        var selected = _selectedSlot === s.index ? ' selected' : '';
+
+        // Ready-edge detection
+        var prevState = _prevSlotStates[s.index];
+        var justReady = (prevState === 'cooldown' && s.state === 'ready') ? ' just-ready' : '';
+        _prevSlotStates[s.index] = s.state;
+
+        html += '<div class="skill-card ' + stateClass + justReady + selected + '" '
+            + 'data-index="' + s.index + '" onclick="onSlotClick(' + s.index + ')">'
+            + '<div class="skill-slot">Slot ' + s.index + (s.charge_count > 0 ? ' ×' + s.charge_count : '') + '</div>'
+            + '<div class="skill-name">' + _esc(name) + '</div>'
+            + '<div class="skill-state">'
+            + '  <div class="skill-state-dot"></div>'
+            + '  <div class="skill-state-text">' + stateText + '</div>'
+            + '</div>'
+            + '<div class="skill-cd-bar"><div class="skill-cd-fill" style="width:' + cdPct + '%"></div></div>'
+            + '</div>';
+    }
+    grid.innerHTML = html;
+}
+
+function onSlotClick(index) {
+    if (_recording) {
+        // In recording mode: first click selects trigger, second selects action
+        if (_recordingTriggerSlot === null) {
+            _recordingTriggerSlot = index;
+            document.getElementById('rec-indicator').textContent =
+                '● Slot ' + index + ' = trigger. Now click the action slot to fire.';
+        } else {
+            // Record: when trigger slot is ready → press action slot key
+            var triggerSlot = _findSlot(_recordingTriggerSlot);
+            var actionSlot = _findSlot(index);
+            if (triggerSlot && actionSlot) {
+                _actions.push({
+                    trigger_slot: _recordingTriggerSlot,
+                    trigger_name: triggerSlot.name || 'Slot ' + _recordingTriggerSlot,
+                    trigger_condition: 'burst_ready',
+                    action_slot: index,
+                    action_name: actionSlot.name || 'Slot ' + index,
+                    action_key: '' + index,
+                });
+                _renderActions();
+            }
+            _recordingTriggerSlot = null;
+            document.getElementById('rec-indicator').textContent =
+                '● RECORDING — press slot to set trigger condition';
+        }
+        return;
+    }
+    // Normal mode: select/deselect
+    _selectedSlot = _selectedSlot === index ? null : index;
+    updateSlots(_slots);
+}
+
+function _findSlot(index) {
+    for (var i = 0; i < _slots.length; i++) {
+        if (_slots[i].index === index) return _slots[i];
+    }
+    return null;
+}
+
+// ── Action list ──
+function _renderActions() {
+    var list = document.getElementById('action-list');
+    if (!_actions.length) {
+        list.innerHTML = '<div class="record-row" style="color:var(--text-muted);font-size:10px;text-align:center;justify-content:center">No auto-key actions recorded</div>';
+        return;
+    }
+    var html = '';
+    for (var i = 0; i < _actions.length; i++) {
+        var a = _actions[i];
+        html += '<div class="record-row">'
+            + '<div class="record-trigger">When <b>' + _esc(a.trigger_name) + '</b> is <b>' + _condText(a.trigger_condition) + '</b></div>'
+            + '<div class="record-action">→ Press <b>' + _esc(a.action_name) + '</b></div>'
+            + '<div class="record-remove" onclick="removeAction(' + i + ')">×</div>'
+            + '</div>';
+    }
+    list.innerHTML = html;
+}
+
+function _condText(cond) {
+    switch(cond) {
+        case 'burst_ready': return 'Burst Ready';
+        case 'ready': return 'Ready';
+        case 'cooldown': return 'On Cooldown';
+        default: return cond;
+    }
+}
+
+function removeAction(idx) {
+    _actions.splice(idx, 1);
+    _renderActions();
+}
+
+// ── Recording ──
+function toggleRecord() {
+    _recording = !_recording;
+    _recordingTriggerSlot = null;
+    var btn = document.getElementById('record-btn');
+    var indicator = document.getElementById('rec-indicator');
+    if (_recording) {
+        btn.classList.add('recording');
+        btn.textContent = '■ STOP';
+        indicator.classList.add('active');
+        indicator.textContent = '● RECORDING — click slot to set trigger condition';
+    } else {
+        btn.classList.remove('recording');
+        btn.textContent = 'RECORD';
+        indicator.classList.remove('active');
+    }
+}
+
+function clearActions() {
+    _actions = [];
+    _renderActions();
+}
+
+function saveActions() {
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.save_autokey_actions(JSON.stringify(_actions));
+    }
+}
+
+// ── Status updates ──
+function updateState(data) {
+    var badge = document.getElementById('state-badge');
+    var enabled = data.enabled || false;
+    badge.textContent = enabled ? 'ON' : 'OFF';
+    badge.className = 'badge ' + (enabled ? 'on' : 'off');
+
+    // Update burst indicator
+    var burstEl = document.getElementById('burst-indicator');
+    _burstReady = data.burst_ready || false;
+    burstEl.classList.toggle('active', _burstReady);
+
+    // Profession display
+    document.getElementById('status-profession').textContent = data.profession || '—';
+    document.getElementById('status-burst').textContent = 'Burst: ' + (_burstReady ? 'Ready ✦' : 'Not Ready');
+
+    // Skill slots
+    if (data.slots) updateSlots(data.slots);
+}
+
+// Load existing actions from profile
+function loadActions(actions) {
+    _actions = actions || [];
+    _renderActions();
+}
+
+// ── Show/Hide ──
+function fadeIn(data) {
+    var shell = document.getElementById('shell');
+    shell.classList.remove('exiting');
+    shell.classList.add('visible');
+    if (data) updateState(data);
+}
+function fadeOut() {
+    var shell = document.getElementById('shell');
+    shell.classList.add('exiting');
+    shell.classList.remove('visible');
+}
+
+// ── Helpers ──
+function _esc(s) {
+    var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML;
+}
+
+// ── Drag ──
+(function() {
+    var handle = document.getElementById('drag-handle');
+    handle.addEventListener('mousedown', function(e) {
+        if (e.button !== 0) return;
+        _dragStart = { x: e.screenX, y: e.screenY };
+        e.preventDefault();
+    });
+    window.addEventListener('mousemove', function(e) {
+        if (!_dragStart) return;
+        var dx = e.screenX - _dragStart.x;
+        var dy = e.screenY - _dragStart.y;
+        _dragStart = { x: e.screenX, y: e.screenY };
+        if (window.pywebview && window.pywebview.api) {
+            window.pywebview.api.window_drag(dx, dy);
+        }
+    });
+    window.addEventListener('mouseup', function() { _dragStart = null; });
+})();
+
+// ── Public API ──
+window.AutoKeyEditor = {
+    updateSlots: updateSlots,
+    updateState: updateState,
+    loadActions: loadActions,
+    fadeIn: fadeIn,
+    fadeOut: fadeOut,
+};
+</script>
+</body>
+</html>

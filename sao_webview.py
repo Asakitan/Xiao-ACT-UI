@@ -1047,6 +1047,41 @@ class SAOWebAPI:
         """Receive display regions from boss_hp.html for pass-through."""
         pass  # Boss HP is always fully click-through
 
+    # ── Raid Editor toggle ──
+    def toggle_raid_editor(self):
+        """Show/hide the Raid Editor overlay."""
+        def _do():
+            if self._g._raid_editor_visible:
+                self._g._hide_raid_editor()
+            else:
+                self._g._show_raid_editor()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def get_raid_editor_visible(self):
+        return bool(self._g._raid_editor_visible)
+
+    # ── AutoKey Editor toggle ──
+    def toggle_autokey_editor(self):
+        """Show/hide the AutoKey Editor overlay."""
+        def _do():
+            if self._g._autokey_editor_visible:
+                self._g._hide_autokey_editor()
+            else:
+                self._g._show_autokey_editor()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def get_autokey_editor_visible(self):
+        return bool(self._g._autokey_editor_visible)
+
+    # ── Hide & Seek toggle ──
+    def toggle_hide_seek(self):
+        """Toggle the Hide & Seek automation on/off."""
+        threading.Thread(target=self._g._toggle_hide_seek, daemon=True).start()
+
+    def get_hide_seek_active(self):
+        engine = getattr(self._g, '_hide_seek_engine', None)
+        return bool(engine and engine.running)
+
     # ── Data source mode ──
     def set_data_source(self, mode):
         """Legacy no-op: stamina and skills are fixed to vision now."""
@@ -1221,6 +1256,92 @@ class DpsWindowAPI:
         threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
 
 
+class RaidEditorAPI:
+    """pywebview js_api for the Raid Editor overlay — entity role, phase control."""
+
+    def __init__(self, gui: 'SAOWebViewGUI'):
+        self._g = gui
+
+    def window_drag(self, dx, dy):
+        try:
+            win = self._g.raid_editor_win
+            if win:
+                win.move(win.x + int(dx), win.y + int(dy))
+        except Exception:
+            pass
+
+    def set_entity_role(self, uuid, role):
+        """Mark a tracked entity as 'boss' or 'enemy'."""
+        try:
+            engine = getattr(self._g, '_boss_raid_engine', None)
+            if engine:
+                engine.set_entity_role(int(uuid), str(role))
+        except Exception:
+            pass
+
+    def raid_next_phase(self):
+        """Force-advance to the next phase."""
+        try:
+            engine = getattr(self._g, '_boss_raid_engine', None)
+            if engine:
+                engine.next_phase()
+        except Exception:
+            pass
+
+    def raid_reset(self):
+        """Reset the raid engine."""
+        try:
+            engine = getattr(self._g, '_boss_raid_engine', None)
+            if engine:
+                engine.reset()
+                self._g._push_raid_editor_full()
+        except Exception:
+            pass
+
+    def play_sound(self, name: str):
+        threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
+
+
+class AutoKeyEditorAPI:
+    """pywebview js_api for the AutoKey Editor overlay — skill recording."""
+
+    def __init__(self, gui: 'SAOWebViewGUI'):
+        self._g = gui
+
+    def window_drag(self, dx, dy):
+        try:
+            win = self._g.autokey_editor_win
+            if win:
+                win.move(win.x + int(dx), win.y + int(dy))
+        except Exception:
+            pass
+
+    def save_autokey_actions(self, actions_json):
+        """Save recorded burst-ready → skill trigger actions.
+        actions_json: JSON string of [{trigger_slot, action_slot}, ...]
+        """
+        try:
+            actions = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
+            engine = getattr(self._g, '_autokey_engine', None)
+            if engine:
+                engine.set_burst_actions(actions)
+            self._g._set_setting('autokey_burst_actions', actions)
+            self._g._sync_menu_settings()
+        except Exception:
+            pass
+
+    def get_autokey_actions(self):
+        """Return current burst-ready actions as JSON."""
+        try:
+            actions = self._g._get_setting('autokey_burst_actions', [])
+            return json.dumps(actions, ensure_ascii=False)
+        except Exception:
+            return '[]'
+
+    def play_sound(self, name: str):
+        threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
+
+
 # ════════════════════════════════════════════════
 #  主类
 # ════════════════════════════════════════════════
@@ -1263,6 +1384,7 @@ class SAOWebViewGUI:
         lv, cur_xp, need_xp = calc_level(self._xp)
         self._level = lv
         self._xp_pct = (cur_xp / max(1, need_xp)) * 100
+        self._last_displayed_level_base = 0  # 用于检测等级变化并触发升级动画
 
         # 识别状态
         self._recognition_active = False
@@ -1303,6 +1425,20 @@ class SAOWebViewGUI:
         self._dps_tracker = None
         self._dps_api = None
         self._dps_last_report_available = False
+
+        # Raid Editor overlay
+        self.raid_editor_win = None
+        self._raid_editor_visible = False
+        self._raid_editor_api = None
+
+        # AutoKey Editor overlay
+        self.autokey_editor_win = None
+        self._autokey_editor_visible = False
+        self._autokey_editor_api = None
+
+        # Hide & Seek engine
+        self._hide_seek_engine = None
+        self._hide_seek_alert_timer = None
 
         # 热切换目标
         self._pending_switch: Optional[str] = None
@@ -1705,6 +1841,67 @@ class SAOWebViewGUI:
         if not self._boss_raid_engine:
             return
         self._boss_raid_engine.next_phase()
+
+    # ── Hide & Seek ──
+
+    def _toggle_hide_seek(self):
+        """Toggle the Hide & Seek automation engine on/off."""
+        if self._hide_seek_engine and self._hide_seek_engine.running:
+            self._stop_hide_seek()
+        else:
+            self._start_hide_seek()
+
+    def _start_hide_seek(self):
+        """Start the Hide & Seek engine and show persistent alert."""
+        if self._hide_seek_engine and self._hide_seek_engine.running:
+            return
+        try:
+            from hide_seek_engine import HideSeekEngine
+            from window_locator import WindowLocator
+            locator = getattr(self, '_locator', None)
+            if not locator:
+                locator = WindowLocator()
+            self._hide_seek_engine = HideSeekEngine(
+                locator=locator,
+                on_status=self._on_hide_seek_status,
+            )
+            self._hide_seek_engine.start()
+            self._eval_menu('SAO.showToast("HIDE & SEEK: ON")')
+            self._show_hide_seek_persistent_alert()
+        except Exception as e:
+            print(f'[SAO] Hide&Seek start failed: {e}')
+            import traceback; traceback.print_exc()
+
+    def _stop_hide_seek(self):
+        """Stop the Hide & Seek engine and dismiss persistent alert."""
+        if self._hide_seek_engine:
+            self._hide_seek_engine.stop()
+        self._hide_seek_engine = None
+        self._hide_hide_seek_persistent_alert()
+        self._eval_menu('SAO.showToast("HIDE & SEEK: OFF")')
+
+    def _on_hide_seek_status(self, message: str, step: int):
+        """Callback from engine — could push status to UI if needed."""
+        pass  # status is already printed by the engine
+
+    def _show_hide_seek_persistent_alert(self):
+        """Show a persistent SAO alert that re-fires every 8s while running."""
+        if not (self._hide_seek_engine and self._hide_seek_engine.running):
+            return
+        self._show_identity_alert_window(
+            "AUTO HIDE & SEEK", "Auto Hide'seek is on", duration_ms=10000)
+        self._hide_seek_alert_timer = threading.Timer(
+            8.0, self._show_hide_seek_persistent_alert)
+        self._hide_seek_alert_timer.daemon = True
+        self._hide_seek_alert_timer.start()
+
+    def _hide_hide_seek_persistent_alert(self):
+        """Cancel the persistent alert refresh timer and hide alert."""
+        t = self._hide_seek_alert_timer
+        if t:
+            t.cancel()
+        self._hide_seek_alert_timer = None
+        self._hide_identity_alert_window()
         self._sync_boss_raid_menu()
 
     def _on_packet_damage(self, event):
@@ -1760,6 +1957,42 @@ class SAOWebViewGUI:
                 self._eval_boss_hp(f'triggerBreakEffect("{js_type}")')
         except Exception:
             pass
+
+    def _on_scene_change(self):
+        """场景服务器切换回调 (切换地图/副本时由 packet_parser 触发)。
+
+        清理:
+        - Boss HP bar: 立即隐藏 (旧怪物已不在新场景)
+        - Boss bar 目标追踪: 清除 uuid + 时间戳
+        - DPS tracker: 结束当前遭遇战并重置
+        - Boss raid engine: 如果不在 raid 中则重置
+        """
+        print('[SAO] ⚡ 场景切换 — 重置 boss bar 和 DPS 追踪', flush=True)
+
+        # 1. Boss HP bar: 强制隐藏
+        self._bb_last_target_uuid = 0
+        self._bb_last_damage_ts = 0.0
+        self._last_boss_bar_sig = None  # 强制下次更新重新推送
+        try:
+            self._eval_boss_hp('updateBossBar({active:false})')
+        except Exception:
+            pass
+
+        # 2. DPS tracker: 结束当前遭遇战
+        if self._dps_tracker:
+            try:
+                self._dps_tracker.reset()
+                print('[SAO] DPS tracker reset on scene change', flush=True)
+            except Exception:
+                pass
+
+        # 3. Boss raid engine: 仅在非活动时重置
+        if self._boss_raid_engine:
+            try:
+                if getattr(self._boss_raid_engine, '_state', '') != 'running':
+                    self._boss_raid_engine.reset()
+            except Exception:
+                pass
 
     def _refresh_boss_raid_upload_auth(self, force: bool = False):
         config = self._load_boss_raid_config()
@@ -2063,7 +2296,8 @@ class SAOWebViewGUI:
             packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref,
                                          on_damage=self._on_packet_damage,
                                          on_monster_update=self._on_monster_update,
-                                         on_boss_event=self._on_boss_event)
+                                         on_boss_event=self._on_boss_event,
+                                         on_scene_change=self._on_scene_change)
             packet_engine.start()
             engines.append(packet_engine)
             self._packet_engine = packet_engine
@@ -2250,6 +2484,44 @@ class SAOWebViewGUI:
             js_api=self._dps_api,
         )
 
+        # Raid Editor overlay — left side, same height as DPS
+        raid_editor_url = os.path.join(web_dir, 'raid_editor.html')
+        _re_w = max(360, int(min(_sw, 1920) * 0.22))
+        _re_h = max(460, int(min(_sh, 1080) * 0.52))
+        _re_x = max(16, int(_sw * 0.012))
+        _re_y = max(0, int(_sh * 0.18))
+        self._raid_editor_api = RaidEditorAPI(self)
+        self.raid_editor_win = webview.create_window(
+            'SAO-RaidEditor', raid_editor_url,
+            width=_re_w, height=_re_h,
+            x=_re_x, y=_re_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._raid_editor_api,
+        )
+
+        # AutoKey Editor overlay — left side, below raid editor
+        autokey_editor_url = os.path.join(web_dir, 'autokey_editor.html')
+        _ak_w = max(340, int(min(_sw, 1920) * 0.20))
+        _ak_h = max(400, int(min(_sh, 1080) * 0.44))
+        _ak_x = max(16, int(_sw * 0.012))
+        _ak_y = _re_y + _re_h + 12
+        self._autokey_editor_api = AutoKeyEditorAPI(self)
+        self.autokey_editor_win = webview.create_window(
+            'SAO-AutoKeyEditor', autokey_editor_url,
+            width=_ak_w, height=_ak_h,
+            x=_ak_x, y=_ak_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._autokey_editor_api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -2395,6 +2667,12 @@ class SAOWebViewGUI:
                 time.sleep(0.12)
                 _tick += 1
                 try:
+                    # 如果 hwnd 还没有获取到, 持续尝试 (首次开机可能延迟)
+                    if not self._hp_hwnd:
+                        _found = ctypes.windll.user32.FindWindowW(None, 'SAO-HP')
+                        if _found:
+                            self._hp_hwnd = _found
+                            self._setup_click_through()
                     if self._hp_hwnd and not self._hp_entry_animating and self._is_hp_position_locked():
                         self._force_hp_to_bottom(force=True, quiet=True)
                 except Exception:
@@ -2611,6 +2889,37 @@ class SAOWebViewGUI:
             ex = user32.GetWindowLongW(dps_hwnd, _GWL_EXSTYLE)
             user32.SetWindowLongW(
                 dps_hwnd, _GWL_EXSTYLE,
+                ex | _WS_EX_TRANSPARENT | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _wait_and_apply_click_through(self, title: str, timeout: float = 2.0):
+        """Block (up to *timeout* seconds) until the window hwnd is findable.
+
+        This ensures that FindWindowW-based click-through setup can succeed
+        before the window is shown, preventing a brief non-passthrough window.
+        Intended to be called from background init thread only.
+        """
+        try:
+            user32 = ctypes.windll.user32
+            deadline = time.time() + max(0.1, float(timeout))
+            hwnd = 0
+            while time.time() < deadline:
+                hwnd = user32.FindWindowW(None, title)
+                if hwnd:
+                    break
+                time.sleep(0.05)
+            if not hwnd:
+                return
+            # Cache hwnd if it's a known window
+            if title == 'SAO-BossHP':
+                self._boss_hp_hwnd = hwnd
+            elif title == 'SAO-DPS':
+                self._dps_hwnd = hwnd
+            # Ensure WS_EX_TRANSPARENT + WS_EX_LAYERED is set
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            user32.SetWindowLongW(
+                hwnd, _GWL_EXSTYLE,
                 ex | _WS_EX_TRANSPARENT | _WS_EX_LAYERED)
         except Exception:
             pass
@@ -3063,6 +3372,21 @@ class SAOWebViewGUI:
                     self._force_hp_to_bottom()
             threading.Timer(1.5, _safety_force).start()
             threading.Timer(3.0, _safety_force).start()
+            # 首次启动安全网: 12s/20s 后再做一次完整的 click-through + 透明重试,
+            # 针对第一次开机 WebView2 初始化极慢的情况.
+            def _late_hp_recovery():
+                try:
+                    self._apply_webview2_transparency()
+                    # 如果 hwnd 仍未获取, 再尝试一次
+                    if not self._hp_hwnd:
+                        self._setup_click_through()
+                    self._ensure_hp_clickable()
+                    self._request_hp_hit_regions()
+                    self._set_hp_region(False)
+                except Exception:
+                    pass
+            threading.Timer(12.0, _late_hp_recovery).start()
+            threading.Timer(20.0, _late_hp_recovery).start()
             # 任务栏图标
             self._set_window_icon('SAO-HP')
             self._set_window_icon('SAO Menu')
@@ -3075,12 +3399,16 @@ class SAOWebViewGUI:
             self._set_window_alpha('SAO SkillFX', 1.0)
             self._set_window_alpha('SAO Alert', 1.0)
             # Boss HP overlay: transparency + click-through + show (hidden by default)
+            # Ensure click-through is applied BEFORE the window becomes visible.
             self._setup_boss_hp_click_through()
+            self._wait_and_apply_click_through('SAO-BossHP', timeout=2.0)
             self._set_window_alpha('SAO-BossHP', 1.0)
             try:
                 if self.boss_hp_win:
                     self.boss_hp_win.show()
                     self._boss_hp_visible = True
+                    # show() 后再确认一次穿透 (防止 show 重置 exstyle)
+                    self._setup_boss_hp_click_through()
                     # Sync FX overflow margins so CSS padding matches the enlarged window
                     _g = self._boss_hp_geometry
                     _fx_lr = _g.get('fx_lr', 200)
@@ -3099,6 +3427,9 @@ class SAOWebViewGUI:
                     self._apply_webview2_transparency()
                     self._set_window_alpha('SAO-DPS', 1.0)
                 # 启动时 DPS 面板处于隐藏状态, 设为鼠标穿透避免点击穿透到游戏窗口
+                # 确保 hwnd 已就绪再设穿透, 避免首次 FindWindow 失败
+                # (DPS 本身是隐藏的, 用短超时避免阻塞初始化)
+                self._wait_and_apply_click_through('SAO-DPS', timeout=0.5)
                 self._make_dps_unclickable()
                 self._sync_dps_report_availability()
             except Exception:
@@ -3202,6 +3533,7 @@ class SAOWebViewGUI:
                 self._cfg_settings_ref,
                 on_alert=_on_boss_alert_with_linkage,
                 on_sound=self._play_sound,
+                on_entity_update=self._on_raid_entity_update,
             )
             self._sync_boss_raid_menu()
 
@@ -3250,6 +3582,7 @@ class SAOWebViewGUI:
             'hide_panels': lambda: None,
             'boss_raid_start': self._toggle_boss_raid,
             'boss_raid_next_phase': self._boss_raid_next_phase,
+            'toggle_hide_seek': self._toggle_hide_seek,
         }
         self._hk_pressed = set()
         self._hk_listener = None
@@ -3501,6 +3834,224 @@ class SAOWebViewGUI:
             return ''
         return s.replace('\\', '\\\\').replace('"', '\\"').replace("'", "\\'").replace('\n', '\\n')
 
+    # ── Raid Editor overlay ──
+
+    def _eval_raid_editor(self, js):
+        try:
+            if self.raid_editor_win:
+                self.raid_editor_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_raid_editor_clickable(self):
+        """Remove WS_EX_TRANSPARENT so overlay receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-RaidEditor')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_raid_editor(self):
+        try:
+            if self.raid_editor_win and not self._raid_editor_visible:
+                self._apply_webview2_transparency()
+                self._set_window_alpha('SAO-RaidEditor', 0.0)
+                self.raid_editor_win.show()
+                self._eval_raid_editor('if(window.RaidEditor&&RaidEditor.fadeIn)RaidEditor.fadeIn()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-RaidEditor', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._raid_editor_visible = True
+                self._ensure_raid_editor_clickable()
+                threading.Timer(0.5, self._ensure_raid_editor_clickable).start()
+                self._push_raid_editor_full()
+        except Exception:
+            pass
+
+    def _hide_raid_editor(self):
+        try:
+            if self.raid_editor_win and self._raid_editor_visible:
+                self._eval_raid_editor('if(window.RaidEditor&&RaidEditor.fadeOut)RaidEditor.fadeOut()')
+                def _finish():
+                    try:
+                        if self.raid_editor_win and not self._raid_editor_visible:
+                            self.raid_editor_win.hide()
+                    except Exception:
+                        pass
+                threading.Timer(0.3, _finish).start()
+        except Exception:
+            pass
+        self._raid_editor_visible = False
+
+    def _push_raid_editor_entities(self, entities=None):
+        """Push entity list to the raid editor overlay."""
+        if not self._raid_editor_visible:
+            return
+        try:
+            if entities is None:
+                engine = getattr(self, '_boss_raid_engine', None)
+                if engine:
+                    entities = engine.get_entities()
+                else:
+                    entities = []
+            self._eval_raid_editor(
+                f'RaidEditor.updateEntities({json.dumps(entities, ensure_ascii=False)})')
+        except Exception:
+            pass
+
+    def _push_raid_editor_status(self):
+        """Push engine status to the raid editor overlay."""
+        if not self._raid_editor_visible:
+            return
+        try:
+            engine = getattr(self, '_boss_raid_engine', None)
+            if engine:
+                status = engine.get_status()
+                self._eval_raid_editor(
+                    f'RaidEditor.updateStatus({json.dumps(status, ensure_ascii=False)})')
+        except Exception:
+            pass
+
+    def _push_raid_editor_full(self):
+        """Push full state (entities + status) to the raid editor."""
+        if not self._raid_editor_visible:
+            return
+        try:
+            engine = getattr(self, '_boss_raid_engine', None)
+            if engine:
+                status = engine.get_status()
+                entities = engine.get_entities()
+                payload = {**status, 'entities': entities}
+                self._eval_raid_editor(
+                    f'RaidEditor.updateFull({json.dumps(payload, ensure_ascii=False)})')
+        except Exception:
+            pass
+
+    def _on_raid_entity_update(self, entities):
+        """Callback from BossRaidEngine when entity list changes."""
+        if self._raid_editor_visible:
+            self._push_raid_editor_entities(entities)
+
+    # ── AutoKey Editor overlay ──
+
+    def _eval_autokey_editor(self, js):
+        try:
+            if self.autokey_editor_win:
+                self.autokey_editor_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_autokey_editor_clickable(self):
+        """Remove WS_EX_TRANSPARENT so overlay receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-AutoKeyEditor')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_autokey_editor(self):
+        try:
+            if self.autokey_editor_win and not self._autokey_editor_visible:
+                self._apply_webview2_transparency()
+                self._set_window_alpha('SAO-AutoKeyEditor', 0.0)
+                self.autokey_editor_win.show()
+                self._eval_autokey_editor('if(window.AutoKeyEditor&&AutoKeyEditor.fadeIn)AutoKeyEditor.fadeIn()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-AutoKeyEditor', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._autokey_editor_visible = True
+                self._ensure_autokey_editor_clickable()
+                threading.Timer(0.5, self._ensure_autokey_editor_clickable).start()
+                self._push_autokey_editor_state()
+                # Load saved actions
+                actions = self._get_setting('autokey_burst_actions', [])
+                self._eval_autokey_editor(
+                    f'AutoKeyEditor.loadActions({json.dumps(actions, ensure_ascii=False)})')
+        except Exception:
+            pass
+
+    def _hide_autokey_editor(self):
+        try:
+            if self.autokey_editor_win and self._autokey_editor_visible:
+                self._eval_autokey_editor('if(window.AutoKeyEditor&&AutoKeyEditor.fadeOut)AutoKeyEditor.fadeOut()')
+                def _finish():
+                    try:
+                        if self.autokey_editor_win and not self._autokey_editor_visible:
+                            self.autokey_editor_win.hide()
+                    except Exception:
+                        pass
+                threading.Timer(0.3, _finish).start()
+        except Exception:
+            pass
+        self._autokey_editor_visible = False
+
+    def _push_autokey_editor_slots(self, skill_slots=None):
+        """Push current skill slot states to the autokey editor."""
+        if not self._autokey_editor_visible:
+            return
+        try:
+            if skill_slots is None:
+                gs = getattr(self, '_game_state', None)
+                if gs:
+                    skill_slots = getattr(gs, 'skill_slots', [])
+                else:
+                    skill_slots = []
+            slots_data = []
+            for s in skill_slots:
+                if isinstance(s, dict):
+                    slots_data.append(s)
+                else:
+                    slots_data.append({
+                        'slot_index': getattr(s, 'slot_index', 0),
+                        'skill_id': getattr(s, 'skill_id', 0),
+                        'skill_name': getattr(s, 'skill_name', ''),
+                        'state': getattr(s, 'state', 'unknown'),
+                        'cooldown_pct': getattr(s, 'cooldown_pct', 0),
+                        'remaining_ms': getattr(s, 'remaining_ms', 0),
+                        'total_cd_ms': getattr(s, 'total_cd_ms', 0),
+                        'charge_count': getattr(s, 'charge_count', 0),
+                        'max_charges': getattr(s, 'max_charges', 1),
+                    })
+            self._eval_autokey_editor(
+                f'AutoKeyEditor.updateSlots({json.dumps(slots_data, ensure_ascii=False)})')
+        except Exception:
+            pass
+
+    def _push_autokey_editor_state(self):
+        """Push burst ready state and profession to autokey editor."""
+        if not self._autokey_editor_visible:
+            return
+        try:
+            gs = getattr(self, '_game_state', None)
+            burst_ready = False
+            profession = self._profession or ''
+            if gs:
+                burst_ready = getattr(gs, 'burst_ready', False)
+            state = {
+                'burst_ready': burst_ready,
+                'profession': profession,
+            }
+            self._eval_autokey_editor(
+                f'AutoKeyEditor.updateState({json.dumps(state, ensure_ascii=False)})')
+        except Exception:
+            pass
+
     def _ensure_skillfx_on_top(self):
         try:
             if not self._skillfx_hwnd:
@@ -3688,13 +4239,19 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _setup_boss_hp_click_through(self):
-        """Make Boss HP overlay fully click-through (like SkillFX)."""
+    def _setup_boss_hp_click_through(self, _wait_retries: int = 20):
+        """Make Boss HP overlay fully click-through (like SkillFX).
+
+        Waits for the hwnd to become findable (up to ~2s) before applying,
+        so the window is always transparent before it becomes visible.
+        """
         try:
             user32 = ctypes.windll.user32
             hwnd = user32.FindWindowW(None, 'SAO-BossHP')
+            if not hwnd and _wait_retries > 0:
+                threading.Timer(0.1, lambda: self._setup_boss_hp_click_through(_wait_retries - 1)).start()
+                return
             if not hwnd:
-                threading.Timer(0.3, self._setup_boss_hp_click_through).start()
                 return
             self._boss_hp_hwnd = hwnd
             ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
@@ -4328,6 +4885,10 @@ class SAOWebViewGUI:
             cfg['dps_enabled'] = bool(self._get_setting('dps_enabled', True))
             cfg['dps_fade_timeout_s'] = int(self._get_setting('dps_fade_timeout_s', 8))
             cfg['dps_last_report_available'] = self._get_dps_last_report_available()
+            cfg['raid_editor_visible'] = bool(self._raid_editor_visible)
+            cfg['autokey_editor_visible'] = bool(self._autokey_editor_visible)
+            _hs_engine = getattr(self, '_hide_seek_engine', None)
+            cfg['hide_seek_active'] = bool(_hs_engine and _hs_engine.running)
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
         except Exception:
             pass
@@ -4350,6 +4911,7 @@ class SAOWebViewGUI:
         _map = {
             'toggle_recognition': self._toggle_recognition,
             'toggle_auto_script': self._toggle_auto_script,
+            'toggle_hide_seek': self._toggle_hide_seek,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
         }
@@ -4400,6 +4962,12 @@ class SAOWebViewGUI:
                         level_str = str(level_base)
                     else:
                         level_str = str(self._level)
+                    # ── 等级升级检测 ──
+                    if level_base > 0 and self._last_displayed_level_base > 0 \
+                            and level_base > self._last_displayed_level_base:
+                        self._eval_hp(f'showLevelUp({self._last_displayed_level_base}, {level_base})')
+                    if level_base > 0:
+                        self._last_displayed_level_base = level_base
                     # Use packet HP data if available, else XP-based fallback
                     if gs.hp_max > 0 or gs.level_base > 0:
                         self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
@@ -4650,6 +5218,20 @@ class SAOWebViewGUI:
                     if (not _burst_now) and _burst_prev:
                         self._eval_skillfx('SkillFX.hideBurstReady()')
                     self._last_burst_ready = _burst_now
+                    # ── Push to AutoKey Editor overlay ──
+                    if self._autokey_editor_visible:
+                        try:
+                            self._push_autokey_editor_slots()
+                            if _burst_now != _burst_prev:
+                                self._push_autokey_editor_state()
+                        except Exception:
+                            pass
+                    # ── Push to Raid Editor overlay (status tick) ──
+                    if self._raid_editor_visible:
+                        try:
+                            self._push_raid_editor_status()
+                        except Exception:
+                            pass
                     # 缓存到 _game_state 供菜单使用
                     self._game_state = gs
                     # ── 同步玩家名到 WebView ──
@@ -4706,6 +5288,12 @@ class SAOWebViewGUI:
                             level_str = str(level_base)
                         else:
                             level_str = str(self._level)
+                        # ── 等级升级检测 (idle path) ──
+                        if level_base > 0 and self._last_displayed_level_base > 0 \
+                                and level_base > self._last_displayed_level_base:
+                            self._eval_hp(f'showLevelUp({self._last_displayed_level_base}, {level_base})')
+                        if level_base > 0:
+                            self._last_displayed_level_base = level_base
                         self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
                         self._eval_hp('setPlayState("idle")')
                     else:

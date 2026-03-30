@@ -536,15 +536,24 @@ def _build_packet_skill_slots(player: PlayerData):
                 elif 0 < elapsed_ms <= max(total_ms, effective_ms):
                     # valid_cd_time is elapsed (server-side, uses base CD scale).
                     # Compare against effective_ms (after CD reduction) for remaining.
+                    # When acceleration changed mid-CD, account for previously
+                    # accumulated elapsed time at old speed.
                     observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
-                    local_extra = max(0, now_local_ms - observed_at_ms) * speed_mult
-                    remaining_ms = max(0, int(effective_ms - elapsed_ms - local_extra))
+                    accel_base = float(cd_info.get('accel_elapsed_at_change_ms') or 0.0)
+                    change_at = int(cd_info.get('accel_change_at_ms') or observed_at_ms)
+                    local_extra = max(0, now_local_ms - change_at) * speed_mult
+                    total_accel_elapsed = accel_base + elapsed_ms + local_extra
+                    remaining_ms = max(0, int(effective_ms - total_accel_elapsed))
                     source_confidence = 0.85
                 else:
                     # Fallback: use local observation timestamp
+                    # Account for mid-CD acceleration changes
                     observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
-                    local_elapsed = max(0, now_local_ms - observed_at_ms) * speed_mult
-                    remaining_ms = max(0, int(effective_ms - local_elapsed))
+                    accel_base = float(cd_info.get('accel_elapsed_at_change_ms') or 0.0)
+                    change_at = int(cd_info.get('accel_change_at_ms') or observed_at_ms)
+                    local_elapsed = max(0, now_local_ms - change_at) * speed_mult
+                    total_accel_elapsed = accel_base + local_elapsed
+                    remaining_ms = max(0, int(effective_ms - total_accel_elapsed))
                     source_confidence = 0.55
 
                 # Use effective_ms for percentage to reflect actual visible CD bar
@@ -572,7 +581,9 @@ def _build_packet_skill_slots(player: PlayerData):
             'state': state,
             'cooldown_pct': round(cooldown_pct, 3),
             'remaining_ms': max(0, int(remaining_ms or 0)),
+            'total_cd_ms': max(0, int(effective_ms or total_ms or 0)),
             'charge_count': max(0, int(charge_count or 0)),
+            'max_charges': max(1, int(cd_info.get('max_charges') or 1)) if cd_info else 1,
             'skill_cd_type': max(0, int(skill_cd_type or 0)),
             'active': bool(active),
             'source_confidence': round(float(source_confidence or 0.0), 2),
@@ -602,12 +613,14 @@ class PacketBridge:
     _SAVE_CACHE_INTERVAL = 5.0       # settings 写盘最小间隔 (秒)
 
     def __init__(self, state_mgr: GameStateManager, settings=None, on_damage=None,
-                 on_monster_update=None, on_boss_event=None):
+                 on_monster_update=None, on_boss_event=None,
+                 on_scene_change=None):
         self._state_mgr = state_mgr
         self._settings = settings
         self._on_damage = on_damage
         self._on_monster_update = on_monster_update
         self._on_boss_event = on_boss_event
+        self._on_scene_change = on_scene_change  # 场景切换通知 (给 webview 清理 boss HP / DPS)
         self._running = False
 
         # 抓包层
@@ -774,6 +787,7 @@ class PacketBridge:
             on_damage=self._on_damage,
             on_monster_update=self._on_monster_update,
             on_boss_event=self._on_boss_event,
+            on_scene_change=self._on_scene_change,
         )
 
         # ── 从 settings 恢复缓存的职业技能映射 ──
@@ -792,7 +806,8 @@ class PacketBridge:
         # 创建抓包器
         self._capture = PacketCapture(
             on_game_packet=self._parser.process_packet,
-            device=dev
+            device=dev,
+            on_server_change=self._on_server_change,
         )
 
         self._npcap_ok = True
@@ -866,6 +881,28 @@ class PacketBridge:
                 )
 
         logger.info('[Bridge] 数据桥已停止')
+
+    def _on_server_change(self):
+        """抓包层回调: 检测到场景服务器切换 (切换地图/副本)。
+
+        重置解析器场景数据 (清除旧怪物)，
+        并重置 bridge 内部状态以等待新场景的数据。
+        """
+        logger.info('[Bridge] 场景服务器切换 — 重置场景数据')
+        print('[Bridge] ⚡ 场景服务器切换 — 清理旧场景数据，等待新场景同步', flush=True)
+        # 1. 让解析器清理怪物缓存 (会触发 on_scene_change → webview)
+        if self._parser:
+            self._parser.reset_scene()
+        # 2. 重置 bridge 内部状态
+        with self._lock:
+            self._stable_sta_current = 0
+            self._stable_sta_max = 0
+            self._pending_sta_current = None
+            self._pending_sta_hits = 0
+            # 不清除 _last_player — 保留玩家身份信息
+            # 不清除 _last_update_t — 避免 "等待角色数据" 误报
+            self._identity_warn_logged = False  # 允许重新提示 identity
+            self._identity_alert_sent = False
 
     def _on_player_update(self, player: PlayerData):
         """解析器回调: 当前玩家数据变更 (节流: 跳过高频重复推送)"""

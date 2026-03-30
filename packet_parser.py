@@ -23,7 +23,7 @@ import time
 from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger('sao_auto.parser')
-_PACKET_DEBUG_ENABLED = True  # Enable to log raw packet snapshots for field confirmation
+_PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
 
 
 
@@ -1186,11 +1186,13 @@ class PacketParser:
                  on_damage: Optional[Callable[[dict], None]] = None,
                  on_monster_update: Optional[Callable[[dict], None]] = None,
                  on_boss_event: Optional[Callable[[dict], None]] = None,
+                 on_scene_change: Optional[Callable[[], None]] = None,
                  preferred_uid: int = 0):
         self._on_update = on_self_update
         self._on_damage = on_damage   # callback(DamageEvent dict)
         self._on_monster_update = on_monster_update  # callback(MonsterData.to_dict())
         self._on_boss_event = on_boss_event          # callback({event_type, host_uuid, ...})
+        self._on_scene_change = on_scene_change      # callback() — 场景服务器切换时清理
         self._current_uuid: int = 0   # Current player UUID
         self._current_uid: int = max(0, int(preferred_uid))    # Current player UID (uuid >> 16)
         self._players: Dict[int, PlayerData] = {}  # uid -> PlayerData
@@ -1207,6 +1209,7 @@ class PacketParser:
             'damage_events': 0,
             'monster_updates': 0,
             'boss_events': 0,
+            'scene_changes': 0,
         }
         if self._current_uid > 0:
             logger.info(f'[Parser] bootstrap self UID from cache: {self._current_uid}')
@@ -1226,6 +1229,39 @@ class PacketParser:
         if uuid not in self._monsters:
             self._monsters[uuid] = MonsterData(uuid)
         return self._monsters[uuid]
+
+    def reset_scene(self):
+        """场景服务器切换时重置场景数据。
+
+        清除:
+        - 怪物缓存 (旧场景的怪物不会出现在新场景)
+        - 服务器时间偏移 (新服务器有独立时间)
+
+        保留:
+        - 玩家数据 (player identity/profession 跨场景不变)
+        - 玩家 UUID/UID (保持身份连续)
+        - 职业技能缓存 (profession_skill_cache 跨场景不变)
+        """
+        old_count = len(self._monsters)
+        self._monsters.clear()
+        self._server_time_offset_ms = None
+        self.stats['scene_changes'] += 1
+        logger.info(
+            f'[Parser] 场景重置: 清除 {old_count} 个怪物, '
+            f'保留 {len(self._players)} 个玩家, '
+            f'current_uid={self._current_uid}'
+        )
+        print(
+            f'[Parser] 场景切换重置: 清除 {old_count} 个旧怪物, '
+            f'等待新场景 SyncNearEntities / SyncContainerData',
+            flush=True,
+        )
+        # 通知上层 (bridge/webview) 场景已切换
+        if self._on_scene_change:
+            try:
+                self._on_scene_change()
+            except Exception as e:
+                logger.error(f'[Parser] on_scene_change callback error: {e}')
 
     def get_monsters(self) -> Dict[int, MonsterData]:
         """Return the current monster tracking dict (uuid → MonsterData)."""
@@ -1413,23 +1449,64 @@ class PacketParser:
         }
         prev = player.skill_cd_map.get(skill_level_id)
         if prev:
-            same_core = (
+            same_timing = (
                 prev.get('begin_time') == new_entry['begin_time'] and
-                prev.get('duration') == new_entry['duration'] and
+                prev.get('duration') == new_entry['duration']
+            )
+            same_core = (
+                same_timing and
                 prev.get('valid_cd_time') == new_entry['valid_cd_time'] and
                 prev.get('skill_cd_type') == new_entry['skill_cd_type'] and
                 prev.get('charge_count') == new_entry['charge_count'] and
-                prev.get('accelerate_cd_ratio') == new_entry['accelerate_cd_ratio']
+                prev.get('accelerate_cd_ratio') == new_entry['accelerate_cd_ratio'] and
+                prev.get('sub_cd_ratio') == new_entry['sub_cd_ratio'] and
+                prev.get('sub_cd_fixed') == new_entry['sub_cd_fixed']
             )
             if same_core:
                 new_entry['observed_at_ms'] = prev.get('observed_at_ms', observed_at_ms)
+                # Preserve accel tracking from previous entry
+                if 'accel_elapsed_at_change_ms' in prev:
+                    new_entry['accel_elapsed_at_change_ms'] = prev['accel_elapsed_at_change_ms']
+                    new_entry['accel_change_at_ms'] = prev.get('accel_change_at_ms', observed_at_ms)
+                    new_entry['prev_speed_mult'] = prev.get('prev_speed_mult', 1.0)
+                player.skill_cd_map[skill_level_id] = new_entry
                 return False
+
+            # Mid-CD acceleration/reduction change (same begin_time, same duration,
+            # but acceleration fields differ) — track elapsed time at old speed so the
+            # bridge can compute remaining time precisely across speed transitions.
+            accel_changed = same_timing and (
+                prev.get('accelerate_cd_ratio') != new_entry['accelerate_cd_ratio'] or
+                prev.get('sub_cd_ratio') != new_entry['sub_cd_ratio'] or
+                prev.get('sub_cd_fixed') != new_entry['sub_cd_fixed']
+            )
+            if accel_changed:
+                # Compute accelerated elapsed time at old speed up to this moment
+                prev_accel = max(0, int(prev.get('accelerate_cd_ratio') or 0))
+                prev_speed = 10000.0 / max(1.0, 10000.0 - prev_accel) if (0 < prev_accel < 10000) else 1.0
+                prev_observed = int(prev.get('observed_at_ms') or observed_at_ms)
+                # Carry forward any previously accumulated elapsed
+                base_elapsed = float(prev.get('accel_elapsed_at_change_ms') or 0.0)
+                prev_change_at = int(prev.get('accel_change_at_ms') or prev_observed)
+                # Time since last speed change, at previous speed
+                segment_real_ms = max(0, observed_at_ms - prev_change_at)
+                segment_accel_ms = segment_real_ms * prev_speed
+                new_entry['accel_elapsed_at_change_ms'] = base_elapsed + segment_accel_ms
+                new_entry['accel_change_at_ms'] = observed_at_ms
+                new_entry['prev_speed_mult'] = prev_speed
+                # Keep original observed_at_ms for the CD's overall start
+                new_entry['observed_at_ms'] = prev.get('observed_at_ms', observed_at_ms)
+
             if new_entry['begin_time'] != prev.get('begin_time'):
                 # Only treat a *new* begin_time as a fresh skill cast.
                 # valid_cd_time increases naturally during CD progress and
                 # must NOT reset last_use_at, otherwise the 'active' state
                 # flickers on every server delta update.
                 player.skill_last_use_at[skill_level_id] = time.time()
+                # Fresh CD — clear accel tracking
+                new_entry.pop('accel_elapsed_at_change_ms', None)
+                new_entry.pop('accel_change_at_ms', None)
+                new_entry.pop('prev_speed_mult', None)
         else:
             player.skill_last_use_at[skill_level_id] = time.time()
 
