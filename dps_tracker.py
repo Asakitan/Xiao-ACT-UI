@@ -267,7 +267,8 @@ class DpsTracker:
                 self._save_player_cache_if_dirty()
 
     def _update_player_cache_locked(self, uid: int, name: str = '',
-                                     profession: str = '', fight_point: int = 0):
+                                     profession: str = '', fight_point: int = 0,
+                                     level: int = 0):
         """Merge new info into the persistent player cache (caller holds _lock)."""
         key = str(uid)
         entry = self._player_cache.get(key, {})
@@ -280,6 +281,9 @@ class DpsTracker:
             changed = True
         if fight_point > 0 and entry.get('fight_point') != fight_point:
             entry['fight_point'] = fight_point
+            changed = True
+        if level > 0 and entry.get('level') != level:
+            entry['level'] = level
             changed = True
         if changed:
             entry['uid'] = uid
@@ -415,8 +419,9 @@ class DpsTracker:
         return entity
 
     def update_player_info(self, uid: int, name: str = '',
-                           profession: str = '', fight_point: int = 0):
-        """Update display name/profession/fight_point for an entity."""
+                           profession: str = '', fight_point: int = 0,
+                           level: int = 0):
+        """Update display name/profession/fight_point/level for an entity."""
         with self._lock:
             entity = self._entities.get(uid)
             if entity:
@@ -433,8 +438,8 @@ class DpsTracker:
                 if changed:
                     self._dirty = True
             # Persist to player cache (regardless of entity existing yet)
-            if uid and (name or profession or fight_point > 0):
-                self._update_player_cache_locked(uid, name, profession, fight_point)
+            if uid and (name or profession or fight_point > 0 or level > 0):
+                self._update_player_cache_locked(uid, name, profession, fight_point, level)
 
     def reset(self):
         with self._lock:

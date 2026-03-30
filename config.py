@@ -28,8 +28,8 @@ WINDOW_SIZE = "900x980"
 APP_VERSION = "1.2.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 
-BASE_CLIENT_WIDTH = 1919.0
-BASE_CLIENT_HEIGHT = 1079.0
+BASE_CLIENT_WIDTH = 1920.0
+BASE_CLIENT_HEIGHT = 1080.0
 
 VISUAL_RECT_SPECS: Dict[str, Dict[str, int]] = {
     "stamina_bar_visual": {"right": 1214, "bottom": 1050, "width": 250, "height": 10},

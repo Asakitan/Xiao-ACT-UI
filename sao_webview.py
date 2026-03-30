@@ -2687,6 +2687,11 @@ class SAOWebViewGUI:
                         self._ensure_dps_clickable()
                     except Exception:
                         pass
+                    # 确保隐藏面板保持 WS_EX_TRANSPARENT (防止隐藏窗口意外拦截点击)
+                    try:
+                        self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
 
         threading.Thread(target=_loop, daemon=True, name='hp_position_guard').start()
 
@@ -2820,11 +2825,12 @@ class SAOWebViewGUI:
             except Exception:
                 pass
             self._set_hp_region(False)
-            if getattr(self, '_hp_fullscreen', False):
-                self._set_hp_mouse_passthrough(True)
-                self._start_hp_mouse_passthrough_poller()
-            else:
-                self._set_hp_mouse_passthrough(False)
+            # 始终启用鼠标穿透轮询: 光标在 UI 热区外时设 WS_EX_TRANSPARENT (穿透),
+            # 进入热区时移除 WS_EX_TRANSPARENT (可点击).
+            # 这取代了仅依赖 SetWindowRgn 剪裁 + LWA_COLORKEY 的旧方案,
+            # 彻底解决 HP 窗口在 JS hit-regions 未就绪时独占点击的问题.
+            self._set_hp_mouse_passthrough(True)  # 先穿透, 等 poller 接管
+            self._start_hp_mouse_passthrough_poller()
             # 安全网: 始终确认 WS_EX_TRANSPARENT 未被意外设置
             self._ensure_hp_clickable()
         except Exception as e:
@@ -2833,10 +2839,13 @@ class SAOWebViewGUI:
     def _ensure_hp_clickable(self):
         """安全检查: 确保 HP 窗口未被意外设为鼠标穿透.
 
-        移除 WS_EX_TRANSPARENT (如果存在), 保留 WS_EX_LAYERED.
-        非 fullscreen 模式下, 鼠标穿透完全由 LWA_COLORKEY 处理, 不需要 WS_EX_TRANSPARENT.
+        当 passthrough poller 已在运行时, 穿透状态完全由 poller 管理, 此方法不干预.
+        仅在 poller 未启用时才移除 WS_EX_TRANSPARENT.
         """
-        if not self._hp_hwnd or getattr(self, '_hp_fullscreen', False):
+        if not self._hp_hwnd:
+            return
+        # passthrough poller 已接管, 不干预
+        if getattr(self, '_hp_mouse_passthrough_started', False):
             return
         try:
             user32 = ctypes.windll.user32
@@ -2892,6 +2901,36 @@ class SAOWebViewGUI:
                 ex | _WS_EX_TRANSPARENT | _WS_EX_LAYERED)
         except Exception:
             pass
+
+    def _ensure_hidden_panels_passthrough(self):
+        """确保所有当前隐藏的面板窗口保持 WS_EX_TRANSPARENT, 防止意外拦截点击.
+
+        在 position guard 中周期性调用.
+        """
+        _panels = [
+            ('SAO-DPS', '_dps_visible', '_dps_hwnd'),
+            ('SAO-RaidEditor', '_raid_editor_visible', None),
+            ('SAO-AutoKeyEditor', '_autokey_editor_visible', None),
+        ]
+        user32 = ctypes.windll.user32
+        for title, vis_attr, hwnd_attr in _panels:
+            try:
+                if getattr(self, vis_attr, False):
+                    continue  # 面板已显示, 不干预
+                hwnd = getattr(self, hwnd_attr, 0) if hwnd_attr else 0
+                if not hwnd:
+                    hwnd = user32.FindWindowW(None, title)
+                    if hwnd and hwnd_attr:
+                        setattr(self, hwnd_attr, hwnd)
+                if not hwnd:
+                    continue
+                ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+                if not (ex & _WS_EX_TRANSPARENT):
+                    user32.SetWindowLongW(
+                        hwnd, _GWL_EXSTYLE,
+                        ex | _WS_EX_TRANSPARENT | _WS_EX_LAYERED)
+            except Exception:
+                pass
 
     def _wait_and_apply_click_through(self, title: str, timeout: float = 2.0):
         """Block (up to *timeout* seconds) until the window hwnd is findable.
@@ -3394,6 +3433,8 @@ class SAOWebViewGUI:
             self._set_window_icon('SAO Alert')
             self._set_window_icon('SAO-BossHP')
             self._set_window_icon('SAO-DPS')
+            self._set_window_icon('SAO-RaidEditor')
+            self._set_window_icon('SAO-AutoKeyEditor')
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
             self._set_window_alpha('SAO SkillFX', 1.0)
@@ -3432,6 +3473,12 @@ class SAOWebViewGUI:
                 self._wait_and_apply_click_through('SAO-DPS', timeout=0.5)
                 self._make_dps_unclickable()
                 self._sync_dps_report_availability()
+            except Exception:
+                pass
+            # Raid Editor / AutoKey Editor: 初始隐藏, 设为鼠标穿透
+            try:
+                self._wait_and_apply_click_through('SAO-RaidEditor', timeout=0.5)
+                self._wait_and_apply_click_through('SAO-AutoKeyEditor', timeout=0.5)
             except Exception:
                 pass
             # 重新触发 HP 入场动态模糊 (避免页面预加载时动画已经跑完)
@@ -4448,10 +4495,25 @@ class SAOWebViewGUI:
             if _hwnd2:
                 GWL_EXSTYLE = -20; WS_EX_LAYERED = 0x80000
                 _ex2 = ctypes.windll.user32.GetWindowLongW(_hwnd2, GWL_EXSTYLE)
+                # 确保 WS_EX_LAYERED 已设置
                 if not (_ex2 & WS_EX_LAYERED):
                     ctypes.windll.user32.SetWindowLongW(_hwnd2, GWL_EXSTYLE, _ex2 | WS_EX_LAYERED)
+                # 确保 WS_EX_TRANSPARENT 已移除 (菜单必须可点击)
+                _ex2 = ctypes.windll.user32.GetWindowLongW(_hwnd2, GWL_EXSTYLE)
+                if _ex2 & _WS_EX_TRANSPARENT:
+                    ctypes.windll.user32.SetWindowLongW(
+                        _hwnd2, GWL_EXSTYLE,
+                        (_ex2 & ~_WS_EX_TRANSPARENT) | WS_EX_LAYERED)
                 ctypes.windll.user32.SetLayeredWindowAttributes(_hwnd2, _COLORREF_KEY, 0,
                                                                 _LWA_ALPHA | _LWA_COLORKEY)
+                # 设为 TOPMOST, 确保菜单在所有 HUD 窗口之上
+                HWND_TOPMOST = ctypes.c_void_p(-1)
+                SWP_NOMOVE = 0x0002; SWP_NOSIZE = 0x0001; SWP_NOACTIVATE = 0x0010
+                ctypes.windll.user32.SetWindowPos(
+                    _hwnd2, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE)
+                # 激活菜单窗口让它接收输入焦点
+                ctypes.windll.user32.SetForegroundWindow(_hwnd2)
         except Exception:
             pass
         try:
@@ -4528,6 +4590,12 @@ class SAOWebViewGUI:
                 hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO Menu')
                 if hwnd:
                     ctypes.windll.user32.ShowWindow(hwnd, 0)
+                    # 还原为非 TOPMOST, 避免隐藏菜单仍占据 Z-order 顶层
+                    HWND_NOTOPMOST = ctypes.c_void_p(-2)
+                    SWP_NOMOVE = 0x0002; SWP_NOSIZE = 0x0001; SWP_NOACTIVATE = 0x0010
+                    ctypes.windll.user32.SetWindowPos(
+                        hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
             except Exception:
                 pass
             self._ensure_hp_on_top()
@@ -4592,6 +4660,14 @@ class SAOWebViewGUI:
             self._native_fade_window('SAO-BossHP', duration_ms=180, steps=10)
         except Exception:
             pass
+        try:
+            self._native_fade_window('SAO-RaidEditor', duration_ms=140, steps=8)
+        except Exception:
+            pass
+        try:
+            self._native_fade_window('SAO-AutoKeyEditor', duration_ms=140, steps=8)
+        except Exception:
+            pass
 
         try:
             self._destroy_all_panels()
@@ -4626,6 +4702,16 @@ class SAOWebViewGUI:
         try:
             if self.dps_win:
                 self.dps_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.raid_editor_win:
+                self.raid_editor_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.autokey_editor_win:
+                self.autokey_editor_win.destroy()
         except Exception:
             pass
 
@@ -4912,6 +4998,8 @@ class SAOWebViewGUI:
             'toggle_recognition': self._toggle_recognition,
             'toggle_auto_script': self._toggle_auto_script,
             'toggle_hide_seek': self._toggle_hide_seek,
+            'toggle_raid_editor': lambda: (self._show_raid_editor() if not self._raid_editor_visible else self._hide_raid_editor()),
+            'toggle_autokey_editor': lambda: (self._show_autokey_editor() if not self._autokey_editor_visible else self._hide_autokey_editor()),
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
         }
@@ -5125,6 +5213,7 @@ class SAOWebViewGUI:
                                         gs.player_name or '',
                                         gs.profession_name or '',
                                         _self_fp,
+                                        int(gs.level_base or 0),
                                     )
 
                             # ── Sync ALL players' info (name, profession, fight_point) ──
@@ -5138,6 +5227,7 @@ class SAOWebViewGUI:
                                                 _pd.name or '',
                                                 _pd.profession or '',
                                                 getattr(_pd, 'fight_point', 0) or 0,
+                                                getattr(_pd, 'level', 0) or 0,
                                             )
                                 except Exception:
                                     pass
