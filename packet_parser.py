@@ -554,7 +554,8 @@ class PlayerData:
                  'server_time_offset_ms',
                  'attr_skill_cd', 'attr_skill_cd_pct', 'attr_cd_accelerate_pct',
                  'temp_attr_cd_pct', 'temp_attr_cd_fixed', 'temp_attr_cd_accel',
-                 'attr_fight_res_cd_speed')
+                 'attr_fight_res_cd_speed',
+                 'cd_speed_ratio')
 
     def __init__(self, uid: int):
         self.uid = uid
@@ -606,6 +607,9 @@ class PlayerData:
         # FightResCdSpeedPct (11980) — CD speed/duration modifier /10000
         # 10000 = base (1x), values below 10000 → shorter CDs
         self.attr_fight_res_cd_speed: int = 0
+        # Observed VCD speed ratio: how fast valid_cd_time ticks vs real time
+        # e.g. 2.3 means VCD advances 2.3ms per 1ms real time (CD acceleration)
+        self.cd_speed_ratio: float = 1.0
 
 
 def _decode_energy_item(data: bytes) -> Dict[str, Any]:
@@ -1077,8 +1081,8 @@ def _is_sane_attr_stamina_max(value: int) -> bool:
 
 
 _LEVEL_EXTRA_SOURCE_PRIORITY = {
-    'season_medal': 100,  # SeasonMedalInfo CoreHole from CharSerialize field 52 — most reliable
-    'season_attr': 80,    # AttrSeasonLevel (10070) — sometimes stale or diverges
+    'season_attr': 100,   # AttrSeasonLevel (10070) — server-authoritative total season level
+    'season_medal': 80,   # SeasonMedalInfo CoreHole from CharSerialize field 52 — component, not total
     'monster_hunt': 10,   # MonsterHuntInfo CurLevel from CharSerialize field 56
     'battlepass': 5,
     'battlepass_data': 3,
@@ -1432,6 +1436,9 @@ class PacketParser:
             prev = previous.get(skill_level_id)
             if prev and prev.get('begin_time') == normalized[skill_level_id].get('begin_time'):
                 normalized[skill_level_id]['observed_at_ms'] = prev.get('observed_at_ms', observed_at_ms)
+                # Carry forward VCD speed tracking
+                if 'vcd_speed_ratio' in prev:
+                    normalized[skill_level_id]['vcd_speed_ratio'] = prev['vcd_speed_ratio']
 
         if previous == normalized and not seen_changed:
             return False
@@ -1493,6 +1500,9 @@ class PacketParser:
                     new_entry['accel_elapsed_at_change_ms'] = prev['accel_elapsed_at_change_ms']
                     new_entry['accel_change_at_ms'] = prev.get('accel_change_at_ms', observed_at_ms)
                     new_entry['prev_speed_mult'] = prev.get('prev_speed_mult', 1.0)
+                # Carry forward VCD speed ratio
+                if 'vcd_speed_ratio' in prev:
+                    new_entry['vcd_speed_ratio'] = prev['vcd_speed_ratio']
                 player.skill_cd_map[skill_level_id] = new_entry
                 return False
 
@@ -1521,6 +1531,28 @@ class PacketParser:
                 # Keep original observed_at_ms for the CD's overall start
                 new_entry['observed_at_ms'] = prev.get('observed_at_ms', observed_at_ms)
 
+            # --- VCD speed tracking ---
+            # Track how fast valid_cd_time progresses vs real time to estimate
+            # real remaining CD (server bakes in CD acceleration).
+            if same_timing and not accel_changed:
+                prev_vcd = int(prev.get('valid_cd_time') or 0)
+                new_vcd = new_entry['valid_cd_time']
+                delta_vcd = new_vcd - prev_vcd
+                prev_obs_ms = int(prev.get('observed_at_ms') or 0)
+                delta_real_ms = observed_at_ms - prev_obs_ms
+                if delta_vcd > 0 and delta_real_ms > 50:
+                    sample_speed = delta_vcd / delta_real_ms
+                    if 0.5 < sample_speed < 10.0:  # sanity bounds
+                        old_skill = prev.get('vcd_speed_ratio') or player.cd_speed_ratio
+                        new_entry['vcd_speed_ratio'] = 0.3 * sample_speed + 0.7 * old_skill
+                        player.cd_speed_ratio = (
+                            0.2 * sample_speed + 0.8 * player.cd_speed_ratio
+                        )
+                elif 'vcd_speed_ratio' in prev:
+                    new_entry['vcd_speed_ratio'] = prev['vcd_speed_ratio']
+            elif 'vcd_speed_ratio' in prev:
+                new_entry['vcd_speed_ratio'] = prev['vcd_speed_ratio']
+
             if new_entry['begin_time'] != prev.get('begin_time'):
                 # Only treat a *new* begin_time as a fresh skill cast.
                 # valid_cd_time increases naturally during CD progress and
@@ -1531,6 +1563,7 @@ class PacketParser:
                 new_entry.pop('accel_elapsed_at_change_ms', None)
                 new_entry.pop('accel_change_at_ms', None)
                 new_entry.pop('prev_speed_mult', None)
+                # Keep vcd_speed_ratio — player buff doesn't change per-cast
         else:
             player.skill_last_use_at[skill_level_id] = time.time()
 

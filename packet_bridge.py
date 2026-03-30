@@ -490,7 +490,7 @@ def _build_packet_skill_slots(player: PlayerData):
         effective_ms = 0
         cd_info = cd_map.get(skill_level_id)
         if cd_info:
-            # 'duration' is the BASE CD length; 'valid_cd_time' is elapsed time
+            # 'duration' is the BASE CD length; 'valid_cd_time' is server-accelerated progress
             total_ms = int(cd_info.get('duration') or 0)
             elapsed_ms = int(cd_info.get('valid_cd_time') or 0)
             charge_count = max(0, int(cd_info.get('charge_count') or 0))
@@ -515,12 +515,6 @@ def _build_packet_skill_slots(player: PlayerData):
             has_entity_mods = ent_cd_flat > 0 or ent_cd_pct > 0 or ent_accel > 0
             has_buff_mods = tmp_cd_pct > 0 or tmp_cd_fixed > 0 or tmp_accel > 0
             has_pkt_mods = pkt_sub_ratio > 0 or pkt_sub_fixed > 0 or pkt_accel > 0
-
-            # 4. FightResCdSpeedPct (11980) — CD speed modifier from server
-            #    Observed values < 10000 → CDs are shorter than base duration.
-            #    Interpretation: effective_cd = base_cd × (value / 10000)
-            fight_res_speed = max(0, int(getattr(player, 'attr_fight_res_cd_speed', 0) or 0))
-            has_fight_res = 0 < fight_res_speed < 10000
 
             # ── Compute effective CD duration (resonance-logs-cn formula) ──
             # Entity/buff attrs: calculated_duration = (1 - pct_reduce) * (base - flat_reduce)
@@ -549,13 +543,21 @@ def _build_packet_skill_slots(player: PlayerData):
                         effective_ms = int(effective_ms * max(0, 10000 - pkt_sub_ratio) / 10000)
                 if pkt_accel > 0:
                     accel_rate = pkt_accel / 10000.0
-            elif has_fight_res:
-                # FightResCdSpeedPct fallback: use as CD duration multiplier
-                # value/10000 = fraction of base CD that remains after acceleration
-                effective_ms = max(0, int(total_ms * fight_res_speed / 10000.0))
+            # NOTE: FightResCdSpeedPct (11980) applies to fight RESOURCE regeneration
+            # (e.g. shield energy), NOT skill cooldowns. Do NOT use it for skill CD calc.
 
-            # Speed multiplier: 1 + accel_rate (resonance-logs-cn convention)
-            speed_mult = 1.0 + accel_rate
+            # Known-accel speed multiplier from packet/entity modifiers
+            accel_speed_mult = 1.0 + accel_rate
+
+            # ── Observed VCD speed ratio ──
+            # The server bakes CD acceleration into valid_cd_time progression:
+            # e.g. a 45s CD finishes in ~19s real time because VCD ticks at 2.3x.
+            # Use the tracked ratio for accurate real-time estimation.
+            vcd_speed = float(cd_info.get('vcd_speed_ratio') or 0)
+            if vcd_speed < 0.5:
+                vcd_speed = float(getattr(player, 'cd_speed_ratio', 0) or 0)
+            if vcd_speed < 0.5:
+                vcd_speed = accel_speed_mult  # from packet/entity modifiers (often 1.0)
 
             # Filter out impossible values (wrapped int64 from charge entries)
             if total_ms > 600_000 or total_ms < 0:
@@ -565,48 +567,33 @@ def _build_packet_skill_slots(player: PlayerData):
                 elapsed_ms = 0
 
             if total_ms > 0:
-                begin_ms = int(cd_info.get('begin_time') or 0)
+                observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
 
-                # ValidCDTime scaling: valid_cd_time progresses in base CD units;
-                # when CD is reduced, scale it proportionally.
-                # scaled_valid = valid_cd_time * (effective / base)
-                # (from resonance-logs-cn overlay-utils.ts)
-                valid_cd_scale = effective_ms / total_ms if total_ms > 0 else 1.0
-                scaled_elapsed_ms = elapsed_ms * valid_cd_scale
-
-                if now_server_ms > 0 and begin_ms > 0:
-                    # Best path: compute remaining from server clock
-                    raw_elapsed_ms = now_server_ms - begin_ms
-                    progressed = raw_elapsed_ms * speed_mult
-                    remaining_ms = max(0, int(effective_ms - progressed))
-                    source_confidence = 1.0
-                elif 0 < elapsed_ms <= max(total_ms, effective_ms):
-                    # valid_cd_time path: scale valid_cd_time + local elapsed
-                    # remaining = effective - (scaled_valid + local_extra * speed_mult)
-                    observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
-                    accel_base = float(cd_info.get('accel_elapsed_at_change_ms') or 0.0)
-                    change_at = int(cd_info.get('accel_change_at_ms') or observed_at_ms)
-                    local_extra = max(0, now_local_ms - change_at) * speed_mult
-                    progressed = accel_base + scaled_elapsed_ms + local_extra
-                    remaining_ms = max(0, int(effective_ms - progressed))
-                    source_confidence = 0.85
+                # ── Primary path: valid_cd_time based ──
+                # valid_cd_time is the server-accelerated progress (already includes
+                # all CD acceleration buffs). It advances from 0 → duration.
+                # Interpolate between server updates using observed VCD speed.
+                if 0 < elapsed_ms <= max(total_ms * 2, effective_ms * 2):
+                    local_since_ms = max(0, now_local_ms - observed_at_ms)
+                    estimated_vcd = elapsed_ms + local_since_ms * vcd_speed
+                    remaining_vcd = max(0, total_ms - estimated_vcd)
+                    # Convert VCD remaining → real time remaining
+                    remaining_ms = max(0, int(remaining_vcd / vcd_speed)) if vcd_speed > 0.01 else 0
+                    source_confidence = 0.95
                 else:
                     # Fallback: use local observation timestamp
-                    # Account for mid-CD acceleration changes
-                    observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
-                    accel_base = float(cd_info.get('accel_elapsed_at_change_ms') or 0.0)
-                    change_at = int(cd_info.get('accel_change_at_ms') or observed_at_ms)
-                    local_elapsed = max(0, now_local_ms - change_at) * speed_mult
-                    total_accel_elapsed = accel_base + local_elapsed
-                    remaining_ms = max(0, int(effective_ms - total_accel_elapsed))
+                    local_elapsed = max(0, now_local_ms - observed_at_ms)
+                    remaining_ms = max(0, int(effective_ms - local_elapsed))
                     source_confidence = 0.55
 
-                # Use effective_ms for percentage to reflect actual visible CD bar
-                display_total = effective_ms if effective_ms > 0 else total_ms
+                # Effective total CD in real time
+                display_total_ms = int(total_ms / vcd_speed) if vcd_speed > 0.01 else effective_ms
+                effective_ms = display_total_ms
+
                 if charge_count > 0:
                     cooldown_pct = 0.0
                 else:
-                    cooldown_pct = max(0.0, min(1.0, remaining_ms / display_total))
+                    cooldown_pct = max(0.0, min(1.0, remaining_ms / display_total_ms)) if display_total_ms > 0 else 0.0
                 active = remaining_ms > 0 and (now_t - float(last_use_map.get(skill_level_id, 0.0))) <= 0.45
         skill_id = _get_skill_id_for_level(player, skill_level_id)
         skill_name = _get_skill_name(skill_id) or _get_skill_name(skill_level_id)
