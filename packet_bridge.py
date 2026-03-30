@@ -551,21 +551,26 @@ def _build_packet_skill_slots(player: PlayerData):
 
             # ── Compute VCD speed from begin_time + server clock (single-observation) ──
             # The server bakes ALL CD acceleration (passives, buffs, equipment) into
-            # valid_cd_time progression speed. We can measure it directly:
-            #   vcd_speed = valid_cd_time / (server_now - begin_time)
-            # This works from the FIRST observation without needing EMA tracking.
+            # valid_cd_time progression speed. We can measure it directly.
+            # Priority: 1) begin_time + server clock, 2) parser VCD speed EMA, 3) attr modifiers
             begin_ms = int(cd_info.get('begin_time') or 0)
             vcd_speed = accel_speed_mult  # default from attr modifiers (often 1.0)
 
-            # begin_time must be a Unix ms timestamp (2020-2030 range)
+            # Method 1: begin_time + server clock (single-observation, most accurate)
             _ts_2020 = 1577836800000  # 2020-01-01
             _ts_2030 = 1893456000000  # 2030-01-01
             if (now_server_ms > 0 and _ts_2020 < begin_ms < _ts_2030 and elapsed_ms > 0):
                 server_elapsed = now_server_ms - begin_ms
-                if server_elapsed > 200:  # need enough time for stable measurement
+                if server_elapsed > 200:
                     measured_speed = elapsed_ms / server_elapsed
-                    if 0.8 <= measured_speed <= 6.0:  # sanity bounds
+                    if 0.8 <= measured_speed <= 6.0:
                         vcd_speed = measured_speed
+
+            # Method 2: parser-tracked VCD speed from consecutive observations
+            if vcd_speed == accel_speed_mult:  # method 1 didn't fire
+                parser_speed = float(cd_info.get('vcd_speed_ratio') or 0)
+                if 0.8 <= parser_speed <= 6.0:
+                    vcd_speed = parser_speed
 
             # Filter out impossible values (wrapped int64 from charge entries)
             if total_ms > 600_000 or total_ms < 0:
@@ -575,14 +580,15 @@ def _build_packet_skill_slots(player: PlayerData):
                 elapsed_ms = 0
 
             if total_ms > 0:
-                observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
+                # Use last_vcd_update_ms for extrapolation (when VCD was last refreshed from server)
+                last_update_ms = int(cd_info.get('last_vcd_update_ms') or cd_info.get('observed_at_ms') or now_local_ms)
 
                 # ── Primary path: valid_cd_time based ──
                 # VCD progresses from 0 → duration at accelerated speed.
                 # cooldown_pct is always correct from VCD / duration.
                 # remaining_ms needs speed-based conversion to real time.
                 if 0 < elapsed_ms <= max(total_ms * 2, effective_ms * 2):
-                    local_since_ms = max(0, now_local_ms - observed_at_ms)
+                    local_since_ms = max(0, now_local_ms - last_update_ms)
                     estimated_vcd = elapsed_ms + local_since_ms * vcd_speed
                     remaining_vcd = max(0, total_ms - estimated_vcd)
                     # Percentage: directly from VCD ratio (always accurate)
@@ -592,7 +598,7 @@ def _build_packet_skill_slots(player: PlayerData):
                     source_confidence = 0.95
                 else:
                     # Fallback: use local observation timestamp
-                    local_elapsed = max(0, now_local_ms - observed_at_ms)
+                    local_elapsed = max(0, now_local_ms - last_update_ms)
                     remaining_ms = max(0, int(effective_ms - local_elapsed))
                     cooldown_pct = max(0.0, min(1.0, remaining_ms / effective_ms)) if effective_ms > 0 else 0.0
                     source_confidence = 0.55

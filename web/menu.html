@@ -2787,6 +2787,10 @@ html, body {
                             <span class="label">STA</span>
                             <span class="value" id="info-sta" style="color:#f3af12">—</span>
                         </div>
+                        <div class="info-stat">
+                            <span class="label">TIME</span>
+                            <span class="value" id="info-clock" style="color:rgba(97,98,86,0.65)">--:--</span>
+                        </div>
                     </div>
                 </div>
                 <div class="bottom">
@@ -6009,6 +6013,15 @@ setTimeout(function() {
             }
         });
     }
+    // System clock
+    function _menuClock() {
+        var el = document.getElementById('info-clock');
+        if (!el) return;
+        var now = new Date();
+        el.textContent = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+    }
+    _menuClock();
+    setInterval(_menuClock, 10000);
 }, 250);
 </script>
 </body>
