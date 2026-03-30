@@ -3,8 +3,8 @@
   "name": "咲",
   "profession": "神盾骑士",
   "uid": 36668136,
-  "updated_at": 1774859799.2740762,
-  "fight_point": 44586,
+  "updated_at": 1774867639.5857153,
+  "fight_point": 45097,
   "level": 60
  },
  "1841256": {
@@ -182,5 +182,573 @@
   "level": 60,
   "uid": 1519791,
   "updated_at": 1774861661.173882
+ },
+ "32887": {
+  "name": "sana",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 50613,
+  "level": 60,
+  "uid": 32887,
+  "updated_at": 1774864059.0041983
+ },
+ "2142563": {
+  "name": "阿尔酱",
+  "profession": "雷影剑士",
+  "fight_point": 45609,
+  "level": 60,
+  "uid": 2142563,
+  "updated_at": 1774867789.787727
+ },
+ "29698783": {
+  "name": "笨笨小雪",
+  "profession": "雷影剑士",
+  "fight_point": 53361,
+  "level": 60,
+  "uid": 29698783,
+  "updated_at": 1774867688.632129
+ },
+ "87452498": {
+  "name": "貓車伊始",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 43245,
+  "level": 60,
+  "uid": 87452498,
+  "updated_at": 1774868267.4535391
+ },
+ "848004": {
+  "name": "Hitzfeld",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 49232,
+  "level": 60,
+  "uid": 848004,
+  "updated_at": 1774868304.7905617
+ },
+ "481621": {
+  "name": "可爱吉吉",
+  "profession": "雷影剑士",
+  "fight_point": 43573,
+  "level": 60,
+  "uid": 481621,
+  "updated_at": 1774868381.2692862
+ },
+ "1208456": {
+  "name": "叱咤月海鱼鱼猫",
+  "profession": "灵魂乐手",
+  "fight_point": 45858,
+  "level": 60,
+  "uid": 1208456,
+  "updated_at": 1774868304.7915542
+ },
+ "25370": {
+  "name": "门小姐",
+  "profession": "雷影剑士",
+  "fight_point": 49205,
+  "level": 60,
+  "uid": 25370,
+  "updated_at": 1774868304.7915542
+ },
+ "95136": {
+  "name": "K",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 44500,
+  "level": 60,
+  "uid": 95136,
+  "updated_at": 1774868424.0892792
+ },
+ "9851341": {
+  "name": "九重凛",
+  "profession": "冰魔导师",
+  "fight_point": 47287,
+  "level": 60,
+  "uid": 9851341,
+  "updated_at": 1774868381.2702918
+ },
+ "5562450": {
+  "name": "陈皮糖",
+  "profession": "神盾骑士",
+  "fight_point": 50107,
+  "level": 60,
+  "uid": 5562450,
+  "updated_at": 1774868433.5713613
+ },
+ "1420256": {
+  "name": "MilfHunter",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 47016,
+  "level": 60,
+  "uid": 1420256,
+  "updated_at": 1774868304.7915542
+ },
+ "1102424": {
+  "name": "泡泡哦哦",
+  "profession": "冰魔导师",
+  "fight_point": 49472,
+  "level": 60,
+  "uid": 1102424,
+  "updated_at": 1774868304.7915542
+ },
+ "1720626": {
+  "name": "用可爱输出",
+  "profession": "灵魂乐手",
+  "fight_point": 45594,
+  "level": 60,
+  "uid": 1720626,
+  "updated_at": 1774868381.2702918
+ },
+ "1063399": {
+  "name": "祁",
+  "profession": "雷影剑士",
+  "fight_point": 44920,
+  "level": 60,
+  "uid": 1063399,
+  "updated_at": 1774868304.7915542
+ },
+ "4307386": {
+  "name": "云山雾锁",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 46639,
+  "level": 60,
+  "uid": 4307386,
+  "updated_at": 1774868304.7915542
+ },
+ "105269683": {
+  "name": "音城赛拉",
+  "profession": "灵魂乐手",
+  "fight_point": 29729,
+  "level": 60,
+  "uid": 105269683,
+  "updated_at": 1774868304.7915542
+ },
+ "3113450": {
+  "name": "小笼包",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 47954,
+  "level": 60,
+  "uid": 3113450,
+  "updated_at": 1774868304.7915542
+ },
+ "103836244": {
+  "name": "鹤望兰",
+  "profession": "巨刃守护者",
+  "fight_point": 42055,
+  "level": 60,
+  "uid": 103836244,
+  "updated_at": 1774868304.7915542
+ },
+ "1381265": {
+  "name": "他妈乃给",
+  "profession": "灵魂乐手",
+  "fight_point": 45673,
+  "level": 60,
+  "uid": 1381265,
+  "updated_at": 1774868304.7915542
+ },
+ "368764": {
+  "name": "吴夜",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 45305,
+  "level": 60,
+  "uid": 368764,
+  "updated_at": 1774868304.7915542
+ },
+ "643078": {
+  "name": "长离",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 43929,
+  "level": 60,
+  "uid": 643078,
+  "updated_at": 1774868304.7915542
+ },
+ "1274533": {
+  "name": "Mo",
+  "profession": "森语者",
+  "fight_point": 43500,
+  "level": 60,
+  "uid": 1274533,
+  "updated_at": 1774868304.7915542
+ },
+ "6157023": {
+  "name": "后来",
+  "profession": "灵魂乐手",
+  "fight_point": 48746,
+  "level": 60,
+  "uid": 6157023,
+  "updated_at": 1774868304.7915542
+ },
+ "1663786": {
+  "name": "berserker",
+  "profession": "巨刃守护者",
+  "fight_point": 46945,
+  "level": 60,
+  "uid": 1663786,
+  "updated_at": 1774868493.3215413
+ },
+ "6367416": {
+  "name": "犬齿",
+  "profession": "青岚骑士",
+  "fight_point": 47267,
+  "level": 60,
+  "uid": 6367416,
+  "updated_at": 1774868304.7915542
+ },
+ "10058128": {
+  "name": "雪雪",
+  "profession": "冰魔导师",
+  "fight_point": 45777,
+  "level": 60,
+  "uid": 10058128,
+  "updated_at": 1774868304.7915542
+ },
+ "43632": {
+  "name": "泪滴花束雪花莲",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 49622,
+  "level": 60,
+  "uid": 43632,
+  "updated_at": 1774868381.2702918
+ },
+ "1876379": {
+  "name": "恋",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 42570,
+  "level": 60,
+  "uid": 1876379,
+  "updated_at": 1774868304.7915542
+ },
+ "32977069": {
+  "name": "宁蒂",
+  "profession": "雷影剑士",
+  "fight_point": 45543,
+  "level": 60,
+  "uid": 32977069,
+  "updated_at": 1774868304.7915542
+ },
+ "1679743": {
+  "name": "Remilia",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 47738,
+  "level": 60,
+  "uid": 1679743,
+  "updated_at": 1774868304.7915542
+ },
+ "1292537": {
+  "name": "大河喵天上来",
+  "profession": "森语者",
+  "fight_point": 45745,
+  "level": 60,
+  "uid": 1292537,
+  "updated_at": 1774868304.7915542
+ },
+ "283197": {
+  "name": "天海夜玖",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 48768,
+  "level": 60,
+  "uid": 283197,
+  "updated_at": 1774868434.2996259
+ },
+ "2011376": {
+  "name": "喵",
+  "profession": "灵魂乐手",
+  "fight_point": 48223,
+  "level": 60,
+  "uid": 2011376,
+  "updated_at": 1774868304.7915542
+ },
+ "34222556": {
+  "name": "绫弥一条",
+  "profession": "雷影剑士",
+  "fight_point": 36682,
+  "level": 60,
+  "uid": 34222556,
+  "updated_at": 1774868501.4434168
+ },
+ "93391676": {
+  "name": "飞杯橘4A",
+  "profession": "神射手",
+  "fight_point": 2336,
+  "level": 60,
+  "uid": 93391676,
+  "updated_at": 1774868306.1418428
+ },
+ "429049": {
+  "name": "吞兮兮",
+  "profession": "巨刃守护者",
+  "fight_point": 38021,
+  "level": 60,
+  "uid": 429049,
+  "updated_at": 1774868381.2702918
+ },
+ "40165649": {
+  "name": "KURO",
+  "profession": "冰魔导师",
+  "fight_point": 44219,
+  "level": 60,
+  "uid": 40165649,
+  "updated_at": 1774868381.2702918
+ },
+ "1387085": {
+  "name": "unue丶",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 45754,
+  "level": 60,
+  "uid": 1387085,
+  "updated_at": 1774868381.2702918
+ },
+ "278735": {
+  "name": "FOD丶JZ",
+  "profession": "森语者",
+  "fight_point": 44155,
+  "level": 60,
+  "uid": 278735,
+  "updated_at": 1774868460.8948777
+ },
+ "1110413": {
+  "name": "狸沐",
+  "profession": "灵魂乐手",
+  "fight_point": 45489,
+  "level": 60,
+  "uid": 1110413,
+  "updated_at": 1774868381.2702918
+ },
+ "1616443": {
+  "name": "AAA不吃香菜",
+  "profession": "森语者",
+  "fight_point": 51773,
+  "level": 60,
+  "uid": 1616443,
+  "updated_at": 1774868381.2702918
+ },
+ "1489912": {
+  "name": "超级玉玉天子",
+  "profession": "灵魂乐手",
+  "fight_point": 45449,
+  "level": 60,
+  "uid": 1489912,
+  "updated_at": 1774868381.2702918
+ },
+ "1675435": {
+  "name": "长期素食",
+  "profession": "雷影剑士",
+  "fight_point": 45168,
+  "level": 60,
+  "uid": 1675435,
+  "updated_at": 1774868506.2421913
+ },
+ "434999": {
+  "name": "Mortis",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 44906,
+  "level": 60,
+  "uid": 434999,
+  "updated_at": 1774868427.7315948
+ },
+ "88886156": {
+  "name": "小杯橘6A",
+  "profession": "神射手",
+  "fight_point": 2218,
+  "level": 60,
+  "uid": 88886156,
+  "updated_at": 1774868381.2702918
+ },
+ "97896869": {
+  "name": "小杯橘5C",
+  "profession": "神射手",
+  "fight_point": 10662,
+  "level": 60,
+  "uid": 97896869,
+  "updated_at": 1774868381.2702918
+ },
+ "1583247": {
+  "name": "爱画本子的猫",
+  "profession": "森语者",
+  "fight_point": 44132,
+  "level": 60,
+  "uid": 1583247,
+  "updated_at": 1774868381.2702918
+ },
+ "22122836": {
+  "name": "冬月",
+  "profession": "雷影剑士",
+  "fight_point": 51451,
+  "level": 60,
+  "uid": 22122836,
+  "updated_at": 1774868382.82749
+ },
+ "2083272": {
+  "name": "魚喵喵",
+  "profession": "冰魔导师",
+  "fight_point": 50033,
+  "level": 60,
+  "uid": 2083272,
+  "updated_at": 1774868383.1411054
+ },
+ "49803431": {
+  "name": "庭坂莉良",
+  "profession": "神盾骑士",
+  "fight_point": 46777,
+  "level": 60,
+  "uid": 49803431,
+  "updated_at": 1774868383.1411054
+ },
+ "11882733": {
+  "name": "卡西法",
+  "profession": "神盾骑士",
+  "fight_point": 48561,
+  "level": 60,
+  "uid": 11882733,
+  "updated_at": 1774868491.7505636
+ },
+ "305357": {
+  "name": "路人兔子",
+  "profession": "神盾骑士",
+  "fight_point": 45422,
+  "level": 60,
+  "uid": 305357,
+  "updated_at": 1774868393.396663
+ },
+ "27039958": {
+  "name": "浅颜半夏",
+  "profession": "雷影剑士",
+  "fight_point": 52191,
+  "level": 60,
+  "uid": 27039958,
+  "updated_at": 1774868395.1846895
+ },
+ "18434107": {
+  "name": "星之悦动",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 45894,
+  "level": 60,
+  "uid": 18434107,
+  "updated_at": 1774868397.9034674
+ },
+ "2278051": {
+  "name": "葛城莉莉娅",
+  "profession": "灵魂乐手",
+  "fight_point": 41606,
+  "level": 60,
+  "uid": 2278051,
+  "updated_at": 1774868400.0917814
+ },
+ "80669": {
+  "name": "白呀yaa",
+  "profession": "灵魂乐手",
+  "fight_point": 45558,
+  "level": 60,
+  "uid": 80669,
+  "updated_at": 1774868408.5467744
+ },
+ "2681841": {
+  "name": "KIRI",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 50716,
+  "level": 60,
+  "uid": 2681841,
+  "updated_at": 1774868431.5852413
+ },
+ "491656": {
+  "name": "绿茶加椰果",
+  "profession": "青岚骑士",
+  "fight_point": 48191,
+  "level": 60,
+  "uid": 491656,
+  "updated_at": 1774868437.7367325
+ },
+ "316061": {
+  "name": "最叹好景终散荡",
+  "profession": "神盾骑士",
+  "fight_point": 46952,
+  "level": 60,
+  "uid": 316061,
+  "updated_at": 1774868446.748043
+ },
+ "389213": {
+  "name": "南殷",
+  "profession": "冰魔导师",
+  "fight_point": 44689,
+  "level": 60,
+  "uid": 389213,
+  "updated_at": 1774868461.6233644
+ },
+ "1474941": {
+  "name": "白柒子",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 42532,
+  "level": 60,
+  "uid": 1474941,
+  "updated_at": 1774868465.0585124
+ },
+ "1458675": {
+  "name": "小狸捣乱",
+  "profession": "灵魂乐手",
+  "fight_point": 46063,
+  "level": 60,
+  "uid": 1458675,
+  "updated_at": 1774868466.4238176
+ },
+ "4339913": {
+  "name": "夕咲千重纱",
+  "profession": "森语者",
+  "fight_point": 42826,
+  "level": 60,
+  "uid": 4339913,
+  "updated_at": 1774868466.8423717
+ },
+ "45283740": {
+  "name": "枵鞘",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 47818,
+  "level": 60,
+  "uid": 45283740,
+  "updated_at": 1774868470.1683998
+ },
+ "492306": {
+  "name": "黑兔",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 49511,
+  "level": 60,
+  "uid": 492306,
+  "updated_at": 1774868506.0321484
+ },
+ "76485": {
+  "name": "桜酱",
+  "profession": "灵魂乐手",
+  "fight_point": 46208,
+  "level": 60,
+  "uid": 76485,
+  "updated_at": 1774868479.5665526
+ },
+ "1563303": {
+  "name": "P酱",
+  "profession": "雷影剑士",
+  "fight_point": 51908,
+  "level": 60,
+  "uid": 1563303,
+  "updated_at": 1774868479.569309
+ },
+ "10037387": {
+  "name": "栗木莉",
+  "profession": "涤罪恶火·战斧",
+  "fight_point": 45710,
+  "level": 60,
+  "uid": 10037387,
+  "updated_at": 1774868481.3466516
+ },
+ "2079290": {
+  "name": "凸浪子凸",
+  "profession": "神射手",
+  "fight_point": 42916,
+  "level": 60,
+  "uid": 2079290,
+  "updated_at": 1774868486.7645657
+ },
+ "74140162": {
+  "name": "一方之斌",
+  "profession": "冰魔导师",
+  "fight_point": 45492,
+  "level": 60,
+  "uid": 74140162,
+  "updated_at": 1774868497.6943967
  }
 }

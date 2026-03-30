@@ -549,15 +549,23 @@ def _build_packet_skill_slots(player: PlayerData):
             # Known-accel speed multiplier from packet/entity modifiers
             accel_speed_mult = 1.0 + accel_rate
 
-            # ── Observed VCD speed ratio ──
-            # The server bakes CD acceleration into valid_cd_time progression:
-            # e.g. a 45s CD finishes in ~19s real time because VCD ticks at 2.3x.
-            # Use the tracked ratio for accurate real-time estimation.
-            vcd_speed = float(cd_info.get('vcd_speed_ratio') or 0)
-            if vcd_speed < 0.5:
-                vcd_speed = float(getattr(player, 'cd_speed_ratio', 0) or 0)
-            if vcd_speed < 0.5:
-                vcd_speed = accel_speed_mult  # from packet/entity modifiers (often 1.0)
+            # ── Compute VCD speed from begin_time + server clock (single-observation) ──
+            # The server bakes ALL CD acceleration (passives, buffs, equipment) into
+            # valid_cd_time progression speed. We can measure it directly:
+            #   vcd_speed = valid_cd_time / (server_now - begin_time)
+            # This works from the FIRST observation without needing EMA tracking.
+            begin_ms = int(cd_info.get('begin_time') or 0)
+            vcd_speed = accel_speed_mult  # default from attr modifiers (often 1.0)
+
+            # begin_time must be a Unix ms timestamp (2020-2030 range)
+            _ts_2020 = 1577836800000  # 2020-01-01
+            _ts_2030 = 1893456000000  # 2030-01-01
+            if (now_server_ms > 0 and _ts_2020 < begin_ms < _ts_2030 and elapsed_ms > 0):
+                server_elapsed = now_server_ms - begin_ms
+                if server_elapsed > 200:  # need enough time for stable measurement
+                    measured_speed = elapsed_ms / server_elapsed
+                    if 0.8 <= measured_speed <= 6.0:  # sanity bounds
+                        vcd_speed = measured_speed
 
             # Filter out impossible values (wrapped int64 from charge entries)
             if total_ms > 600_000 or total_ms < 0:
@@ -570,13 +578,15 @@ def _build_packet_skill_slots(player: PlayerData):
                 observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
 
                 # ── Primary path: valid_cd_time based ──
-                # valid_cd_time is the server-accelerated progress (already includes
-                # all CD acceleration buffs). It advances from 0 → duration.
-                # Interpolate between server updates using observed VCD speed.
+                # VCD progresses from 0 → duration at accelerated speed.
+                # cooldown_pct is always correct from VCD / duration.
+                # remaining_ms needs speed-based conversion to real time.
                 if 0 < elapsed_ms <= max(total_ms * 2, effective_ms * 2):
                     local_since_ms = max(0, now_local_ms - observed_at_ms)
                     estimated_vcd = elapsed_ms + local_since_ms * vcd_speed
                     remaining_vcd = max(0, total_ms - estimated_vcd)
+                    # Percentage: directly from VCD ratio (always accurate)
+                    cooldown_pct = max(0.0, min(1.0, remaining_vcd / total_ms))
                     # Convert VCD remaining → real time remaining
                     remaining_ms = max(0, int(remaining_vcd / vcd_speed)) if vcd_speed > 0.01 else 0
                     source_confidence = 0.95
@@ -584,6 +594,7 @@ def _build_packet_skill_slots(player: PlayerData):
                     # Fallback: use local observation timestamp
                     local_elapsed = max(0, now_local_ms - observed_at_ms)
                     remaining_ms = max(0, int(effective_ms - local_elapsed))
+                    cooldown_pct = max(0.0, min(1.0, remaining_ms / effective_ms)) if effective_ms > 0 else 0.0
                     source_confidence = 0.55
 
                 # Effective total CD in real time
@@ -592,8 +603,6 @@ def _build_packet_skill_slots(player: PlayerData):
 
                 if charge_count > 0:
                     cooldown_pct = 0.0
-                else:
-                    cooldown_pct = max(0.0, min(1.0, remaining_ms / display_total_ms)) if display_total_ms > 0 else 0.0
                 active = remaining_ms > 0 and (now_t - float(last_use_map.get(skill_level_id, 0.0))) <= 0.45
         skill_id = _get_skill_id_for_level(player, skill_level_id)
         skill_name = _get_skill_name(skill_id) or _get_skill_name(skill_level_id)

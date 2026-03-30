@@ -686,20 +686,31 @@ def _decode_battlepass_level(data: bytes) -> int:
     return 0
 
 
-def _decode_season_medal_level(data: bytes) -> int:
-    """Decode the most likely seasonal level from SeasonMedalInfo (field 52)."""
+def _decode_season_medal_level(data: bytes) -> Dict[str, int]:
+    """Decode seasonal levels from SeasonMedalInfo (field 52).
+
+    Returns a dict with:
+        core   – CoreHoleInfo.HoleLevel (field 3.2)
+        total  – core + sum(NormalHole levels)   ← most likely the displayed "+N"
+    """
+    empty: Dict[str, int] = {'core': 0, 'total': 0}
     if not isinstance(data, bytes) or not data:
-        return 0
+        return empty
 
     medal = _decode_fields(data)
+    core_level_raw = 0
+    core_level_norm = 0
+    normal_levels_raw: list = []
+    normal_levels_norm: list = []
+    core_node_levels: list = []
+
     core_hole_raw = medal.get(3, [None])[0]
     if isinstance(core_hole_raw, bytes):
         core_hole = _decode_fields(core_hole_raw)
-        core_level = core_hole.get(2, [None])[0]
-        if isinstance(core_level, int) and core_level > 0:
-            return _normalize_season_medal_level(core_level)
+        core_level_raw = core_hole.get(2, [None])[0] or 0
+        if isinstance(core_level_raw, int) and core_level_raw > 0:
+            core_level_norm = _normalize_season_medal_level(core_level_raw)
 
-    normal_levels = []
     for entry_raw in medal.get(2, []):
         if not isinstance(entry_raw, bytes):
             continue
@@ -710,9 +721,32 @@ def _decode_season_medal_level(data: bytes) -> int:
         hole = _decode_fields(hole_raw)
         hole_level = hole.get(2, [None])[0]
         if isinstance(hole_level, int) and hole_level > 0:
-            normal_levels.append(_normalize_season_medal_level(hole_level))
+            normal_levels_raw.append(hole_level)
+            normal_levels_norm.append(_normalize_season_medal_level(hole_level))
 
-    return max(normal_levels) if normal_levels else 0
+    # CoreHoleNodeInfos (field 4): map<uint32, MedalNode>
+    for node_entry_raw in medal.get(4, []):
+        if not isinstance(node_entry_raw, bytes):
+            continue
+        node_entry = _decode_fields(node_entry_raw)
+        node_raw = node_entry.get(2, [None])[0]
+        if not isinstance(node_raw, bytes):
+            continue
+        node = _decode_fields(node_raw)
+        node_level = node.get(2, [None])[0]
+        if isinstance(node_level, int) and node_level > 0:
+            core_node_levels.append(node_level)
+
+    total_level = core_level_norm + sum(normal_levels_norm)
+
+    logger.info(
+        f'[Parser] SeasonMedalInfo decode: '
+        f'core_raw={core_level_raw} core_norm={core_level_norm} '
+        f'normal_raw={normal_levels_raw} normal_norm={normal_levels_norm} '
+        f'core_nodes={core_node_levels} total={total_level}'
+    )
+
+    return {'core': core_level_norm, 'total': total_level}
 
 
 def _decode_monster_hunt_level(data: bytes) -> int:
@@ -1082,14 +1116,15 @@ def _is_sane_attr_stamina_max(value: int) -> bool:
 
 _LEVEL_EXTRA_SOURCE_PRIORITY = {
     'season_attr': 100,   # AttrSeasonLevel (10070) — server-authoritative total season level
-    'season_medal': 80,   # SeasonMedalInfo CoreHole from CharSerialize field 52 — component, not total
+    'season_medal_total': 90,  # CoreHole + sum(NormalHoles) — likely the displayed "+N"
+    'season_medal': 80,   # SeasonMedalInfo CoreHole only from CharSerialize field 52
     'monster_hunt': 10,   # MonsterHuntInfo CurLevel from CharSerialize field 56
     'battlepass': 5,
     'battlepass_data': 3,
 }
 
 # Sources that are reliable enough to commit on first observation (no 2-hit)
-_TRUSTED_LEVEL_SOURCES = frozenset({'season_attr', 'season_medal'})
+_TRUSTED_LEVEL_SOURCES = frozenset({'season_attr', 'season_medal_total', 'season_medal'})
 
 
 def _source_priority(source: str) -> int:
@@ -1846,7 +1881,9 @@ class PacketParser:
         monster_hunt_raw = vdata.get(56, [None])[0]
         season_center_raw = vdata.get(50, [None])[0]
         battlepass_data_raw = vdata.get(86, [None])[0]
-        season_medal_level = _decode_season_medal_level(season_medal_raw) if isinstance(season_medal_raw, bytes) else 0
+        medal_info = _decode_season_medal_level(season_medal_raw) if isinstance(season_medal_raw, bytes) else {'core': 0, 'total': 0}
+        season_medal_level = medal_info['core']
+        season_medal_total = medal_info['total']
         monster_hunt_level = _decode_monster_hunt_level(monster_hunt_raw) if isinstance(monster_hunt_raw, bytes) else 0
         battlepass_level = _decode_battlepass_level(season_center_raw) if isinstance(season_center_raw, bytes) else 0
         battlepass_data_level = _decode_battlepass_data_level(battlepass_data_raw) if isinstance(battlepass_data_raw, bytes) else 0
@@ -1854,7 +1891,9 @@ class PacketParser:
         player.monster_hunt_level = monster_hunt_level
         player.battlepass_level = battlepass_level
         player.battlepass_data_level = battlepass_data_level
-        player.season_level = max(season_medal_level, monster_hunt_level)
+        player.season_level = max(season_medal_total, season_medal_level, monster_hunt_level)
+        if _set_level_extra_candidate(player, 'season_medal_total', season_medal_total):
+            changed = True
         if _set_level_extra_candidate(player, 'season_medal', season_medal_level):
             changed = True
         if _set_level_extra_candidate(player, 'monster_hunt', monster_hunt_level):
@@ -1880,6 +1919,7 @@ class PacketParser:
                 'level_extra_source': player.level_extra_source,
                 'season_level': player.season_level,
                 'season_medal_level': season_medal_level,
+                'season_medal_total': season_medal_total,
                 'monster_hunt_level': monster_hunt_level,
                 'battlepass_level': battlepass_level,
                 'battlepass_data_level': battlepass_data_level,
