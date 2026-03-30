@@ -643,7 +643,7 @@ html,body{
 }
 .break-fill{
     height:100%;
-    width:0;
+    width:100%;
     background:linear-gradient(to right,rgb(212,170,50),rgb(243,195,72));
     transition:width 240ms ease;
     box-shadow:0 0 6px rgba(243,175,18,0.20);
@@ -884,7 +884,7 @@ html,body{
         <div class="break-row">
             <span class="break-label">BRK</span>
             <div class="break-track"><div class="break-fill" id="break-fill"></div></div>
-            <span class="break-text" id="break-text">0%</span>
+            <span class="break-text" id="break-text">100%</span>
         </div>
     </div>
 </div>
@@ -1467,19 +1467,19 @@ function updateBossBar(data) {
     }
     _lastShieldPct = shieldPct;
 
-    // Compute break % from raw extinction values if available;
-    // when max_extinction is unknown but extinction > 0, treat as 100% (gauge exists, max pending)
+    // Compute break % as REMAINING health (depleting bar):
+    // 100% = undamaged (full bar), 0% = fully broken (empty bar)
+    // Game: extinction=0 means no break damage; extinction=max means fully broken.
     var _rawExt = Number(data.extinction || 0);
     var _rawMaxExt = Number(data.max_extinction || 0);
     var breakPct;
     var _breakDataAvailable = false;  // true when we have real extinction data from server
     if (_rawMaxExt > 0) {
-        breakPct = Math.max(0, Math.min(1, _rawExt / _rawMaxExt));
-        _breakDataAvailable = true;
-    } else if (_rawExt > 0) {
-        breakPct = 1.0;
+        // Depleting bar: remaining = (max - current) / max
+        breakPct = Math.max(0, Math.min(1, (_rawMaxExt - _rawExt) / _rawMaxExt));
         _breakDataAvailable = true;
     } else {
+        // Use precomputed extinction_pct from Python (same depleting convention)
         var _extPct = Number(data.extinction_pct || 0);
         if (_extPct > 0) {
             breakPct = Math.max(0, Math.min(1, _extPct));

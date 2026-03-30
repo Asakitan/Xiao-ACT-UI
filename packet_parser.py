@@ -245,21 +245,30 @@ class NotifyMethod:
 class AttrType:
     NAME = 0x01
     ID = 0x0A
-    PROFESSION_ID = 0xDC
-    FIGHT_POINT = 0x272E
-    LEVEL = 0x2710
-    RANK_LEVEL = 0x274C
-    CRI = 0x2B66
-    LUCKY = 0x2B7A
-    HP = 0x2C2E
-    MAX_HP = 0x2C38
+    # ── Player info attrs ──
+    COMBAT_STATE = 104           # AttrCombatState  — 0=out, 1=in combat
+    COMBAT_STATE_TIME = 114      # AttrCombatStateTime — transition timestamp
+    SEASON_LV = 196              # AttrSeasonLv (season star rank — display extra level)
+    PROFESSION_ID = 0xDC         # 220 = AttrProfessionId
+    MONSTER_SEASON_LEVEL = 462   # AttrMonsterSeasonLevel — monster season level
+    FIGHT_POINT = 0x272E         # 10030
+    LEVEL = 0x2710               # 10000
+    RANK_LEVEL = 0x274C          # 10060
+    SEASON_LEVEL = 10070         # AttrSeasonLevel (from StarResonanceDps)
+    CRI = 0x2B66                 # 11110
+    LUCKY = 0x2B7A               # 11130
+    HP = 0x2C2E                  # 11310
+    MAX_HP = 0x2C38              # 11320
+    MAX_HP_VARIANTS = (11321, 11322, 11323, 11324, 11325)  # Base/Pct/Add/Total/WithShield
     ELEMENT_FLAG = 0x646D6C
     REDUCTION_LEVEL = 0x64696D
-    ENERGY_FLAG = 0x543CD3C6    # Flag field, not a stamina value
+    ENERGY_FLAG = 0x543CD3C6     # Flag field, not a stamina value
+    # ── Season strength (梦境强度) ──
+    SEASON_STRENGTH = 11440      # AttrSeasonStrength base
+    SEASON_STRENGTH_VARIANTS = (11440, 11441, 11442, 11443, 11444, 11445)
+    # ── Stamina ──
     STA_MAX_FALLBACK = 11324
     STA_RATIO_SET = (11850, 11851, 11852)
-    SEASON_LEVEL = 10070       # AttrSeasonLevel (from StarResonanceDps)
-    SEASON_LV = 196             # AttrSeasonLv (season star rank — NOT display extra level)
     # ── CD modifier attrs: base + Total variants ──
     SKILL_CD_TOTAL = 11751      # AttrSkillCDTotal (server-computed sum)
     SKILL_CD_PCT_TOTAL = 11761  # AttrSkillCDPCTTotal (server-computed sum)
@@ -473,7 +482,7 @@ _ALL_PROFESSION_PREFIXES: frozenset = frozenset(_PROFESSION_PREFIX.values())
 class MonsterData:
     """Tracks one monster entity's parsed state."""
     __slots__ = ('uuid', 'uid', 'name', 'template_id',
-                 'hp', 'max_hp',
+                 'hp', 'max_hp', 'season_level',
                  'breaking_stage', 'extinction', 'max_extinction',
                  'stunned', 'max_stunned', 'in_overdrive',
                  'is_lock_stunned', 'stop_breaking_ticking',
@@ -487,6 +496,7 @@ class MonsterData:
         self.template_id: int = 0
         self.hp: int = 0
         self.max_hp: int = 0
+        self.season_level: int = 0
         self.breaking_stage: int = 0
         self.extinction: int = 0
         self.max_extinction: int = 0
@@ -515,6 +525,7 @@ class MonsterData:
             'uid': self.uid,
             'name': self.name,
             'template_id': self.template_id,
+            'season_level': self.season_level,
             'hp': self.hp,
             'max_hp': self.max_hp,
             'hp_pct': (self.hp / self.max_hp) if self.max_hp > 0 else 0.0,
@@ -540,7 +551,8 @@ class PlayerData:
                  'level_extra', 'level_extra_source',
                  'level_extra_pending_source', 'level_extra_pending_value',
                  'level_extra_pending_hits',
-                 'fight_point',
+                 'fight_point', 'season_strength',
+                 'in_combat', 'combat_state_time',
                  'hp', 'max_hp', 'energy', 'energy_limit', 'extra_energy_limit',
                  'energy_info_value', 'energy_valid', 'energy_source_priority',
                  'resource_values', 'energy_info_map', 'stamina_resource_id',
@@ -552,6 +564,7 @@ class PlayerData:
                  'skill_slot_map', 'skill_level_info_map',
                  'slot_bar_map',
                  'skill_cd_map', 'skill_last_use_at', 'skill_seen_ids',
+                 'fight_res_cd_map',
                  'server_time_offset_ms',
                  'attr_skill_cd', 'attr_skill_cd_pct', 'attr_cd_accelerate_pct',
                  'temp_attr_cd_pct', 'temp_attr_cd_fixed', 'temp_attr_cd_accel',
@@ -570,6 +583,9 @@ class PlayerData:
         self.level_extra_pending_value: int = 0
         self.level_extra_pending_hits: int = 0
         self.fight_point: int = 0
+        self.season_strength: int = 0     # AttrSeasonStrength (11440) — 梦境强度
+        self.in_combat: bool = False      # AttrCombatState (104)
+        self.combat_state_time: int = 0   # AttrCombatStateTime (114) — timestamp ms
         self.hp: int = 0
         self.max_hp: int = 0
         self.energy: float = 0.0
@@ -597,6 +613,7 @@ class PlayerData:
         self.skill_cd_map: Dict[int, Dict[str, Any]] = {}
         self.skill_last_use_at: Dict[int, float] = {}
         self.skill_seen_ids = []
+        self.fight_res_cd_map: Dict[int, Dict[str, Any]] = {}  # res_id → FightResCD state
         self.server_time_offset_ms: Optional[float] = None
         # Entity-level CD modifiers (from AttrCollection + TempAttr)
         self.attr_skill_cd: int = 0           # AttrSkillCD 11750 — flat CD reduction ms
@@ -1502,11 +1519,6 @@ class PacketParser:
             if same_core:
                 new_entry['observed_at_ms'] = prev.get('observed_at_ms', observed_at_ms)
                 new_entry['last_vcd_update_ms'] = prev.get('last_vcd_update_ms', observed_at_ms)
-                # Preserve accel tracking from previous entry
-                if 'accel_elapsed_at_change_ms' in prev:
-                    new_entry['accel_elapsed_at_change_ms'] = prev['accel_elapsed_at_change_ms']
-                    new_entry['accel_change_at_ms'] = prev.get('accel_change_at_ms', observed_at_ms)
-                    new_entry['prev_speed_mult'] = prev.get('prev_speed_mult', 1.0)
                 # Carry forward VCD speed ratio
                 if 'vcd_speed_ratio' in prev:
                     new_entry['vcd_speed_ratio'] = prev['vcd_speed_ratio']
@@ -1514,27 +1526,13 @@ class PacketParser:
                 return False
 
             # Mid-CD acceleration/reduction change (same begin_time, same duration,
-            # but acceleration fields differ) — track elapsed time at old speed so the
-            # bridge can compute remaining time precisely across speed transitions.
+            # but acceleration fields differ)
             accel_changed = same_timing and (
                 prev.get('accelerate_cd_ratio') != new_entry['accelerate_cd_ratio'] or
                 prev.get('sub_cd_ratio') != new_entry['sub_cd_ratio'] or
                 prev.get('sub_cd_fixed') != new_entry['sub_cd_fixed']
             )
             if accel_changed:
-                # Compute accelerated elapsed time at old speed up to this moment
-                prev_accel = max(0, int(prev.get('accelerate_cd_ratio') or 0))
-                prev_speed = 1.0 + prev_accel / 10000.0 if prev_accel > 0 else 1.0
-                prev_observed = int(prev.get('observed_at_ms') or observed_at_ms)
-                # Carry forward any previously accumulated elapsed
-                base_elapsed = float(prev.get('accel_elapsed_at_change_ms') or 0.0)
-                prev_change_at = int(prev.get('accel_change_at_ms') or prev_observed)
-                # Time since last speed change, at previous speed
-                segment_real_ms = max(0, observed_at_ms - prev_change_at)
-                segment_accel_ms = segment_real_ms * prev_speed
-                new_entry['accel_elapsed_at_change_ms'] = base_elapsed + segment_accel_ms
-                new_entry['accel_change_at_ms'] = observed_at_ms
-                new_entry['prev_speed_mult'] = prev_speed
                 new_entry['last_vcd_update_ms'] = observed_at_ms
 
             # --- VCD speed tracking ---
@@ -1564,14 +1562,7 @@ class PacketParser:
 
             if new_entry['begin_time'] != prev.get('begin_time'):
                 # Only treat a *new* begin_time as a fresh skill cast.
-                # valid_cd_time increases naturally during CD progress and
-                # must NOT reset last_use_at, otherwise the 'active' state
-                # flickers on every server delta update.
                 player.skill_last_use_at[skill_level_id] = time.time()
-                # Fresh CD — clear accel tracking
-                new_entry.pop('accel_elapsed_at_change_ms', None)
-                new_entry.pop('accel_change_at_ms', None)
-                new_entry.pop('prev_speed_mult', None)
                 # Keep vcd_speed_ratio — player buff doesn't change per-cast
         else:
             player.skill_last_use_at[skill_level_id] = time.time()
@@ -2430,8 +2421,17 @@ class PacketParser:
                 if not isinstance(fight_cd_raw, bytes):
                     continue
                 decoded_fight_cd = _decode_fight_res_cd(fight_cd_raw)
-                if decoded_fight_cd.get('res_id', 0) > 0:
+                res_id = decoded_fight_cd.get('res_id', 0)
+                if res_id > 0:
                     fight_res_cds.append(decoded_fight_cd)
+                    # Store on player for resource CD tracking
+                    player.fight_res_cd_map[res_id] = {
+                        'res_id': res_id,
+                        'begin_time': decoded_fight_cd.get('begin_time', 0),
+                        'duration': decoded_fight_cd.get('duration', 0),
+                        'valid_cd_time': decoded_fight_cd.get('valid_cd_time', 0),
+                        'observed_at_ms': int(time.time() * 1000),
+                    }
             if fight_res_cds:
                 _append_packet_debug(
                     'fight_res_cd',
@@ -2636,6 +2636,12 @@ class PacketParser:
                 if mhp > 0 and mhp != monster.max_hp:
                     monster.max_hp = mhp
                     changed = True
+            elif attr_id == AttrType.MONSTER_SEASON_LEVEL:
+                # AttrMonsterSeasonLevel (462) — monster's season level
+                if int_value > 0 and int_value != monster.season_level:
+                    monster.season_level = int_value
+                    changed = True
+                    logger.info(f'[Parser] Monster SEASON_LEVEL={int_value} uuid={uuid}')
             elif attr_id == AttrType.BREAKING_STAGE:
                 if int_value != monster.breaking_stage:
                     monster.breaking_stage = int_value
@@ -2958,6 +2964,32 @@ class PacketParser:
             elif attr_id in (AttrType.CRI, AttrType.LUCKY, AttrType.ELEMENT_FLAG,
                              AttrType.REDUCTION_LEVEL, AttrType.ID):
                 pass
+            elif attr_id == AttrType.COMBAT_STATE:
+                # AttrCombatState (104) — 0=out of combat, 1=in combat
+                flag = bool(int_value)
+                if flag != player.in_combat:
+                    player.in_combat = flag
+                    changed = True
+                    logger.info(f'[Parser] AttrCollection COMBAT_STATE={flag} uid={uid}')
+            elif attr_id == AttrType.COMBAT_STATE_TIME:
+                # AttrCombatStateTime (114) — transition timestamp in server ms
+                if int_value > 0:
+                    player.combat_state_time = int_value
+                    changed = True
+            elif attr_id in AttrType.SEASON_STRENGTH_VARIANTS:
+                # AttrSeasonStrength (11440-11445) — 梦境强度 (any variant)
+                if int_value > 0 and int_value > player.season_strength:
+                    player.season_strength = int_value
+                    changed = True
+                    logger.info(f'[Parser] AttrCollection SeasonStrength={int_value} (0x{attr_id:X}) uid={uid}')
+            elif attr_id in AttrType.MAX_HP_VARIANTS:
+                # MaxHp variants (Base/Pct/Add/Total/WithShield) — treat same as MAX_HP
+                # Skip STA_MAX_FALLBACK (11324=MaxHpTotal) if attr was already used for stamina
+                if attr_id != AttrType.STA_MAX_FALLBACK:
+                    mhp = int_value
+                    if mhp > 0:
+                        player.max_hp = mhp
+                        changed = True
             elif attr_id in (AttrType.SKILL_CD, AttrType.SKILL_CD_TOTAL):
                 # Flat CD reduction in ms (from equipment/passives)
                 # Prefer Total (11751) — server-computed sum of all contributions
