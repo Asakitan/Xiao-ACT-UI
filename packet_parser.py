@@ -502,11 +502,12 @@ class MonsterData:
         self.last_update: float = 0.0
 
     def to_dict(self) -> dict:
-        # Break gauge: prefer extinction data; fall back to stunned data
+        # Break gauge: extinction goes 0 → max as boss takes break damage.
+        # Game shows a depleting bar, so remaining = (max - current) / max.
         if self.max_extinction > 0:
-            _ext_pct = self.extinction / self.max_extinction
+            _ext_pct = max(0.0, (self.max_extinction - self.extinction) / self.max_extinction)
         elif self.max_stunned > 0:
-            _ext_pct = self.stunned / self.max_stunned
+            _ext_pct = max(0.0, (self.max_stunned - self.stunned) / self.max_stunned)
         else:
             _ext_pct = 0.0
         return {
@@ -686,23 +687,19 @@ def _decode_battlepass_level(data: bytes) -> int:
     return 0
 
 
-def _decode_season_medal_level(data: bytes) -> Dict[str, int]:
-    """Decode seasonal levels from SeasonMedalInfo (field 52).
+def _decode_season_medal_level(data: bytes) -> int:
+    """Decode the CoreHoleInfo.HoleLevel from SeasonMedalInfo (field 52).
 
-    Returns a dict with:
-        core   – CoreHoleInfo.HoleLevel (field 3.2)
-        total  – core + sum(NormalHole levels)   ← most likely the displayed "+N"
+    Returns the normalized core hole level as the season medal value.
+    This is a SUBSYSTEM value (not the displayed +N); the accurate +N
+    comes from AttrSeasonLevel (10070) or AttrSeasonLv (196) attrs.
     """
-    empty: Dict[str, int] = {'core': 0, 'total': 0}
     if not isinstance(data, bytes) or not data:
-        return empty
+        return 0
 
     medal = _decode_fields(data)
     core_level_raw = 0
     core_level_norm = 0
-    normal_levels_raw: list = []
-    normal_levels_norm: list = []
-    core_node_levels: list = []
 
     core_hole_raw = medal.get(3, [None])[0]
     if isinstance(core_hole_raw, bytes):
@@ -711,42 +708,13 @@ def _decode_season_medal_level(data: bytes) -> Dict[str, int]:
         if isinstance(core_level_raw, int) and core_level_raw > 0:
             core_level_norm = _normalize_season_medal_level(core_level_raw)
 
-    for entry_raw in medal.get(2, []):
-        if not isinstance(entry_raw, bytes):
-            continue
-        entry = _decode_fields(entry_raw)
-        hole_raw = entry.get(2, [None])[0]
-        if not isinstance(hole_raw, bytes):
-            continue
-        hole = _decode_fields(hole_raw)
-        hole_level = hole.get(2, [None])[0]
-        if isinstance(hole_level, int) and hole_level > 0:
-            normal_levels_raw.append(hole_level)
-            normal_levels_norm.append(_normalize_season_medal_level(hole_level))
+    if core_level_norm > 0:
+        logger.info(
+            f'[Parser] SeasonMedalInfo core_raw={core_level_raw} '
+            f'core_norm={core_level_norm}'
+        )
 
-    # CoreHoleNodeInfos (field 4): map<uint32, MedalNode>
-    for node_entry_raw in medal.get(4, []):
-        if not isinstance(node_entry_raw, bytes):
-            continue
-        node_entry = _decode_fields(node_entry_raw)
-        node_raw = node_entry.get(2, [None])[0]
-        if not isinstance(node_raw, bytes):
-            continue
-        node = _decode_fields(node_raw)
-        node_level = node.get(2, [None])[0]
-        if isinstance(node_level, int) and node_level > 0:
-            core_node_levels.append(node_level)
-
-    total_level = core_level_norm + sum(normal_levels_norm)
-
-    logger.info(
-        f'[Parser] SeasonMedalInfo decode: '
-        f'core_raw={core_level_raw} core_norm={core_level_norm} '
-        f'normal_raw={normal_levels_raw} normal_norm={normal_levels_norm} '
-        f'core_nodes={core_node_levels} total={total_level}'
-    )
-
-    return {'core': core_level_norm, 'total': total_level}
+    return core_level_norm
 
 
 def _decode_monster_hunt_level(data: bytes) -> int:
@@ -1116,15 +1084,15 @@ def _is_sane_attr_stamina_max(value: int) -> bool:
 
 _LEVEL_EXTRA_SOURCE_PRIORITY = {
     'season_attr': 100,   # AttrSeasonLevel (10070) — server-authoritative total season level
-    'season_medal_total': 90,  # CoreHole + sum(NormalHoles) — likely the displayed "+N"
-    'season_medal': 80,   # SeasonMedalInfo CoreHole only from CharSerialize field 52
+    'season_attr_lv': 100, # AttrSeasonLv (196) — same authority per DPS project reference
+    'season_medal': 50,   # SeasonMedalInfo CoreHole (subsystem, not display level)
     'monster_hunt': 10,   # MonsterHuntInfo CurLevel from CharSerialize field 56
     'battlepass': 5,
     'battlepass_data': 3,
 }
 
 # Sources that are reliable enough to commit on first observation (no 2-hit)
-_TRUSTED_LEVEL_SOURCES = frozenset({'season_attr', 'season_medal_total', 'season_medal'})
+_TRUSTED_LEVEL_SOURCES = frozenset({'season_attr', 'season_attr_lv'})
 
 
 def _source_priority(source: str) -> int:
@@ -1470,7 +1438,10 @@ class PacketParser:
             }
             prev = previous.get(skill_level_id)
             if prev and prev.get('begin_time') == normalized[skill_level_id].get('begin_time'):
+                # Same CD instance — carry forward first-observation time and speed
                 normalized[skill_level_id]['observed_at_ms'] = prev.get('observed_at_ms', observed_at_ms)
+                # VCD value changed → update last_vcd_update_ms to now
+                normalized[skill_level_id]['last_vcd_update_ms'] = observed_at_ms
                 # Carry forward VCD speed tracking
                 if 'vcd_speed_ratio' in prev:
                     normalized[skill_level_id]['vcd_speed_ratio'] = prev['vcd_speed_ratio']
@@ -1530,6 +1501,7 @@ class PacketParser:
             )
             if same_core:
                 new_entry['observed_at_ms'] = prev.get('observed_at_ms', observed_at_ms)
+                new_entry['last_vcd_update_ms'] = prev.get('last_vcd_update_ms', observed_at_ms)
                 # Preserve accel tracking from previous entry
                 if 'accel_elapsed_at_change_ms' in prev:
                     new_entry['accel_elapsed_at_change_ms'] = prev['accel_elapsed_at_change_ms']
@@ -1563,8 +1535,7 @@ class PacketParser:
                 new_entry['accel_elapsed_at_change_ms'] = base_elapsed + segment_accel_ms
                 new_entry['accel_change_at_ms'] = observed_at_ms
                 new_entry['prev_speed_mult'] = prev_speed
-                # Keep original observed_at_ms for the CD's overall start
-                new_entry['observed_at_ms'] = prev.get('observed_at_ms', observed_at_ms)
+                new_entry['last_vcd_update_ms'] = observed_at_ms
 
             # --- VCD speed tracking ---
             # Track how fast valid_cd_time progresses vs real time to estimate
@@ -1573,8 +1544,9 @@ class PacketParser:
                 prev_vcd = int(prev.get('valid_cd_time') or 0)
                 new_vcd = new_entry['valid_cd_time']
                 delta_vcd = new_vcd - prev_vcd
-                prev_obs_ms = int(prev.get('observed_at_ms') or 0)
-                delta_real_ms = observed_at_ms - prev_obs_ms
+                # Use last_vcd_update_ms (not observed_at_ms) to avoid stale timing
+                prev_vcd_time = int(prev.get('last_vcd_update_ms') or prev.get('observed_at_ms') or 0)
+                delta_real_ms = observed_at_ms - prev_vcd_time
                 if delta_vcd > 0 and delta_real_ms > 50:
                     sample_speed = delta_vcd / delta_real_ms
                     if 0.5 < sample_speed < 10.0:  # sanity bounds
@@ -1587,6 +1559,8 @@ class PacketParser:
                     new_entry['vcd_speed_ratio'] = prev['vcd_speed_ratio']
             elif 'vcd_speed_ratio' in prev:
                 new_entry['vcd_speed_ratio'] = prev['vcd_speed_ratio']
+            # Always refresh last_vcd_update_ms when VCD changes
+            new_entry['last_vcd_update_ms'] = observed_at_ms
 
             if new_entry['begin_time'] != prev.get('begin_time'):
                 # Only treat a *new* begin_time as a fresh skill cast.
@@ -1881,9 +1855,7 @@ class PacketParser:
         monster_hunt_raw = vdata.get(56, [None])[0]
         season_center_raw = vdata.get(50, [None])[0]
         battlepass_data_raw = vdata.get(86, [None])[0]
-        medal_info = _decode_season_medal_level(season_medal_raw) if isinstance(season_medal_raw, bytes) else {'core': 0, 'total': 0}
-        season_medal_level = medal_info['core']
-        season_medal_total = medal_info['total']
+        season_medal_level = _decode_season_medal_level(season_medal_raw) if isinstance(season_medal_raw, bytes) else 0
         monster_hunt_level = _decode_monster_hunt_level(monster_hunt_raw) if isinstance(monster_hunt_raw, bytes) else 0
         battlepass_level = _decode_battlepass_level(season_center_raw) if isinstance(season_center_raw, bytes) else 0
         battlepass_data_level = _decode_battlepass_data_level(battlepass_data_raw) if isinstance(battlepass_data_raw, bytes) else 0
@@ -1891,9 +1863,7 @@ class PacketParser:
         player.monster_hunt_level = monster_hunt_level
         player.battlepass_level = battlepass_level
         player.battlepass_data_level = battlepass_data_level
-        player.season_level = max(season_medal_total, season_medal_level, monster_hunt_level)
-        if _set_level_extra_candidate(player, 'season_medal_total', season_medal_total):
-            changed = True
+        player.season_level = max(season_medal_level, monster_hunt_level)
         if _set_level_extra_candidate(player, 'season_medal', season_medal_level):
             changed = True
         if _set_level_extra_candidate(player, 'monster_hunt', monster_hunt_level):
@@ -1919,7 +1889,6 @@ class PacketParser:
                 'level_extra_source': player.level_extra_source,
                 'season_level': player.season_level,
                 'season_medal_level': season_medal_level,
-                'season_medal_total': season_medal_total,
                 'monster_hunt_level': monster_hunt_level,
                 'battlepass_level': battlepass_level,
                 'battlepass_data_level': battlepass_data_level,
@@ -2679,13 +2648,7 @@ class PacketParser:
                     logger.info(f'[Parser] Monster EXTINCTION={int_value} max={monster.max_extinction} uuid={uuid}')
             elif attr_id == AttrType.MAX_EXTINCTION:
                 if int_value > 0 and int_value != monster.max_extinction:
-                    was_zero = monster.max_extinction == 0
                     monster.max_extinction = int_value
-                    # First encounter: if extinction hasn't been set yet (still 0),
-                    # assume the break bar starts full (100%).
-                    if was_zero and monster.extinction == 0:
-                        monster.extinction = int_value
-                        logger.info(f'[Parser] Monster extinction auto-filled to {int_value} (first encounter)')
                     changed = True
                     logger.info(f'[Parser] Monster MAX_EXTINCTION={int_value} uuid={uuid}')
             elif attr_id == AttrType.STUNNED:
@@ -2984,10 +2947,14 @@ class PacketParser:
                         f'[Parser] AttrCollection AttrSeasonLevel={sl} uid={uid}'
                     )
             elif attr_id == AttrType.SEASON_LV:
-                # AttrSeasonLv (196) — season star rank, NOT the display extra level
-                logger.debug(
-                    f'[Parser] AttrCollection AttrSeasonLv={int_value} uid={uid} (ignored for level_extra)'
-                )
+                # AttrSeasonLv (196) — per DPS project, treated same as AttrSeasonLevel
+                sl = int_value
+                if 0 < sl <= 60:
+                    if _set_level_extra_candidate(player, 'season_attr_lv', sl):
+                        changed = True
+                    logger.info(
+                        f'[Parser] AttrCollection AttrSeasonLv={sl} uid={uid}'
+                    )
             elif attr_id in (AttrType.CRI, AttrType.LUCKY, AttrType.ELEMENT_FLAG,
                              AttrType.REDUCTION_LEVEL, AttrType.ID):
                 pass

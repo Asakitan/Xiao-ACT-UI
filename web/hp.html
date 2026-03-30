@@ -1126,25 +1126,51 @@ function setPlayerInfo(info) {
     scheduleHitRegionReport();
 }
 
-/* ═══ Boss Raid Timer API ═══ */
+/* ═══ Boss Raid Timer / System Clock API ═══ */
 var _bossTimerActive = false;
 function setBossTimer(text, urgency) {
-    // text = '' → hide; urgency = 'normal' | 'urgent'
+    // text = '' → hide boss timer, show clock; urgency = 'normal' | 'urgent'
     var el = document.getElementById('id-boss-timer');
     var link = document.getElementById('id-link');
     if (!text) {
-        el.classList.remove('active', 'urgent');
-        el.textContent = '';
-        if (link) link.style.display = '';
+        el.classList.remove('urgent');
+        el.classList.add('active');  // keep visible for clock
+        if (link) link.style.display = 'none';
         _bossTimerActive = false;
+        _updateClock();  // show clock immediately
         return;
     }
     el.textContent = text;
     el.classList.add('active');
     el.classList.toggle('urgent', urgency === 'urgent');
+    // Restore boss timer styling (override clock muted style)
+    el.style.color = '';
+    el.style.textShadow = '';
     if (link) link.style.display = 'none';
     _bossTimerActive = true;
 }
+
+function _updateClock() {
+    if (_bossTimerActive) return;
+    var el = document.getElementById('id-boss-timer');
+    if (!el) return;
+    var now = new Date();
+    var hh = String(now.getHours()).padStart(2, '0');
+    var mm = String(now.getMinutes()).padStart(2, '0');
+    el.textContent = hh + ':' + mm;
+    el.style.color = 'rgba(97, 98, 86, 0.65)';
+    el.style.textShadow = 'none';
+}
+// Start clock — updates every 10s, shows when no boss timer
+setInterval(_updateClock, 10000);
+// Initial clock display after page loads
+setTimeout(function() {
+    if (!_bossTimerActive) {
+        var el = document.getElementById('id-boss-timer');
+        if (el) { el.classList.add('active'); }
+        _updateClock();
+    }
+}, 200);
 
 
 /* ═══ STA Bar API ═══ */
