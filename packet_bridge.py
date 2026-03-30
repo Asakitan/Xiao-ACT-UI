@@ -486,6 +486,8 @@ def _build_packet_skill_slots(player: PlayerData):
         charge_count = 0
         skill_cd_type = 0
         source_confidence = 0.0
+        total_ms = 0
+        effective_ms = 0
         cd_info = cd_map.get(skill_level_id)
         if cd_info:
             # 'duration' is the BASE CD length; 'valid_cd_time' is elapsed time
@@ -494,21 +496,56 @@ def _build_packet_skill_slots(player: PlayerData):
             charge_count = max(0, int(cd_info.get('charge_count') or 0))
             skill_cd_type = max(0, int(cd_info.get('skill_cd_type') or 0))
 
-            # CD acceleration fields from SkillCDInfo (fields 9/10/11)
-            # sub_cd_ratio: passive CD reduction ratio (万分比, e.g. 光盾被动)
-            # sub_cd_fixed: passive CD reduction fixed ms
-            # accelerate_cd_ratio: external CD speed multiplier (万分比, e.g. 奥义！时间法令)
-            sub_cd_ratio = max(0, int(cd_info.get('sub_cd_ratio') or 0))
-            sub_cd_fixed = max(0, int(cd_info.get('sub_cd_fixed') or 0))
-            accel_cd_ratio = max(0, int(cd_info.get('accelerate_cd_ratio') or 0))
+            # ── CD modifier sources ──
+            # 1. Per-packet SkillCDInfo fields 9/10/11 (per-skill passives)
+            pkt_sub_ratio = max(0, int(cd_info.get('sub_cd_ratio') or 0))
+            pkt_sub_fixed = max(0, int(cd_info.get('sub_cd_fixed') or 0))
+            pkt_accel = max(0, int(cd_info.get('accelerate_cd_ratio') or 0))
 
-            # Compute effective total CD with passive reduction
-            # effective = (base - fixed) * (1 - sub_ratio/10000)
+            # 2. Entity-level attrs (AttrSkillCD/AttrSkillCDPCT/AttrCdAcceleratePct)
+            ent_cd_flat = max(0, int(getattr(player, 'attr_skill_cd', 0) or 0))
+            ent_cd_pct = max(0, int(getattr(player, 'attr_skill_cd_pct', 0) or 0))
+            ent_accel = max(0, int(getattr(player, 'attr_cd_accelerate_pct', 0) or 0))
+
+            # 3. Buff-based TempAttr (types 100/101/103)
+            tmp_cd_pct = max(0, int(getattr(player, 'temp_attr_cd_pct', 0) or 0))
+            tmp_cd_fixed = max(0, int(getattr(player, 'temp_attr_cd_fixed', 0) or 0))
+            tmp_accel = max(0, int(getattr(player, 'temp_attr_cd_accel', 0) or 0))
+
+            has_entity_mods = ent_cd_flat > 0 or ent_cd_pct > 0 or ent_accel > 0
+            has_buff_mods = tmp_cd_pct > 0 or tmp_cd_fixed > 0 or tmp_accel > 0
+            has_pkt_mods = pkt_sub_ratio > 0 or pkt_sub_fixed > 0 or pkt_accel > 0
+
+            # ── Compute effective CD duration (resonance-logs-cn formula) ──
+            # Entity/buff attrs: calculated_duration = (1 - pct_reduce) * (base - flat_reduce)
+            # Per-packet fields are applied ON TOP of entity attrs (per-skill passives)
             effective_ms = total_ms
-            if sub_cd_fixed > 0 or sub_cd_ratio > 0:
-                effective_ms = max(0, total_ms - sub_cd_fixed)
-                if sub_cd_ratio > 0:
-                    effective_ms = int(effective_ms * max(0, 10000 - sub_cd_ratio) / 10000)
+            accel_rate = 0.0  # as a fraction (0.2 = 20% faster)
+
+            if has_entity_mods or has_buff_mods:
+                # Primary: entity + buff modifiers (from resonance-logs-cn)
+                total_pct = (ent_cd_pct + tmp_cd_pct) / 10000.0
+                total_flat = ent_cd_flat + tmp_cd_fixed
+                effective_ms = max(0, int((1.0 - total_pct) * (total_ms - total_flat)))
+                accel_rate = (ent_accel + tmp_accel) / 10000.0
+                # Also layer per-packet per-skill passive reductions on top
+                if pkt_sub_fixed > 0 or pkt_sub_ratio > 0:
+                    effective_ms = max(0, effective_ms - pkt_sub_fixed)
+                    if pkt_sub_ratio > 0:
+                        effective_ms = int(effective_ms * max(0, 10000 - pkt_sub_ratio) / 10000)
+                if pkt_accel > 0:
+                    accel_rate += pkt_accel / 10000.0
+            elif has_pkt_mods:
+                # Fallback: per-packet fields only (no entity attrs available)
+                if pkt_sub_fixed > 0 or pkt_sub_ratio > 0:
+                    effective_ms = max(0, total_ms - pkt_sub_fixed)
+                    if pkt_sub_ratio > 0:
+                        effective_ms = int(effective_ms * max(0, 10000 - pkt_sub_ratio) / 10000)
+                if pkt_accel > 0:
+                    accel_rate = pkt_accel / 10000.0
+
+            # Speed multiplier: 1 + accel_rate (resonance-logs-cn convention)
+            speed_mult = 1.0 + accel_rate
 
             # Filter out impossible values (wrapped int64 from charge entries)
             if total_ms > 600_000 or total_ms < 0:
@@ -520,30 +557,28 @@ def _build_packet_skill_slots(player: PlayerData):
             if total_ms > 0:
                 begin_ms = int(cd_info.get('begin_time') or 0)
 
-                # CD acceleration: when AccelerateCDRatio > 0, time passes faster
-                # speed_mult = 10000 / (10000 - accel_ratio), e.g. 2000 → 1.25x speed
-                speed_mult = 1.0
-                if accel_cd_ratio > 0 and accel_cd_ratio < 10000:
-                    speed_mult = 10000.0 / max(1.0, 10000.0 - accel_cd_ratio)
+                # ValidCDTime scaling: valid_cd_time progresses in base CD units;
+                # when CD is reduced, scale it proportionally.
+                # scaled_valid = valid_cd_time * (effective / base)
+                # (from resonance-logs-cn overlay-utils.ts)
+                valid_cd_scale = effective_ms / total_ms if total_ms > 0 else 1.0
+                scaled_elapsed_ms = elapsed_ms * valid_cd_scale
 
                 if now_server_ms > 0 and begin_ms > 0:
                     # Best path: compute remaining from server clock
-                    # With acceleration, real time passes faster
                     raw_elapsed_ms = now_server_ms - begin_ms
-                    accel_elapsed_ms = raw_elapsed_ms * speed_mult
-                    remaining_ms = max(0, int(effective_ms - accel_elapsed_ms))
+                    progressed = raw_elapsed_ms * speed_mult
+                    remaining_ms = max(0, int(effective_ms - progressed))
                     source_confidence = 1.0
                 elif 0 < elapsed_ms <= max(total_ms, effective_ms):
-                    # valid_cd_time is elapsed (server-side, uses base CD scale).
-                    # Compare against effective_ms (after CD reduction) for remaining.
-                    # When acceleration changed mid-CD, account for previously
-                    # accumulated elapsed time at old speed.
+                    # valid_cd_time path: scale valid_cd_time + local elapsed
+                    # remaining = effective - (scaled_valid + local_extra * speed_mult)
                     observed_at_ms = int(cd_info.get('observed_at_ms') or now_local_ms)
                     accel_base = float(cd_info.get('accel_elapsed_at_change_ms') or 0.0)
                     change_at = int(cd_info.get('accel_change_at_ms') or observed_at_ms)
                     local_extra = max(0, now_local_ms - change_at) * speed_mult
-                    total_accel_elapsed = accel_base + elapsed_ms + local_extra
-                    remaining_ms = max(0, int(effective_ms - total_accel_elapsed))
+                    progressed = accel_base + scaled_elapsed_ms + local_extra
+                    remaining_ms = max(0, int(effective_ms - progressed))
                     source_confidence = 0.85
                 else:
                     # Fallback: use local observation timestamp
@@ -903,6 +938,15 @@ class PacketBridge:
             # 不清除 _last_update_t — 避免 "等待角色数据" 误报
             self._identity_warn_logged = False  # 允许重新提示 identity
             self._identity_alert_sent = False
+            self._last_publish_t = 0  # 清除节流, 确保下次更新立即推送
+
+        # 3. 延迟重发当前玩家数据, 确保 webview 在新场景同步后能及时刷新
+        def _re_publish():
+            with self._lock:
+                if self._last_player:
+                    self._publish_player_update(self._last_player, from_tick=False)
+        threading.Timer(2.0, _re_publish).start()
+        threading.Timer(5.0, _re_publish).start()
 
     def _on_player_update(self, player: PlayerData):
         """解析器回调: 当前玩家数据变更 (节流: 跳过高频重复推送)"""
@@ -912,7 +956,13 @@ class PacketBridge:
                 print(
                     f'[Bridge] 首次收到玩家数据: name={player.name!r} lv={player.level} '
                     f'hp={player.hp}/{player.max_hp} uid={player.uid} '
-                    f'profession={player.profession!r} slots={len(player.skill_slot_map)}',
+                    f'profession={player.profession!r} slots={len(player.skill_slot_map)} '
+                    f'cd_mods=(flat={getattr(player, "attr_skill_cd", 0)}, '
+                    f'pct={getattr(player, "attr_skill_cd_pct", 0)}, '
+                    f'accel={getattr(player, "attr_cd_accelerate_pct", 0)}, '
+                    f'tmp_pct={getattr(player, "temp_attr_cd_pct", 0)}, '
+                    f'tmp_fixed={getattr(player, "temp_attr_cd_fixed", 0)}, '
+                    f'tmp_accel={getattr(player, "temp_attr_cd_accel", 0)})',
                     flush=True,
                 )
             self._last_update_t = now

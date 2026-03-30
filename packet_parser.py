@@ -271,6 +271,10 @@ class AttrType:
     BREAKING_STAGE = 455        # Breaking phase stage (0/1/2...)
     SHIELD_LIST = 60050         # AttrShieldList — repeated ShieldInfo message
     STUNNED_DAMAGE_PCT = 11830  # Bonus damage % during stun
+    # ── Player CD-modifier attrs (from resonance-logs-cn skill_cd_monitor.rs) ──
+    SKILL_CD = 11750            # AttrSkillCD — flat CD reduction (ms)
+    SKILL_CD_PCT = 11760        # AttrSkillCDPCT — percent CD reduction (万分比, /10000)
+    CD_ACCELERATE_PCT = 11960   # AttrCdAcceleratePct — CD acceleration (万分比, /10000)
 
 
 SERVICE_UUID_C3SB = 0x0000000063335342
@@ -540,7 +544,9 @@ class PlayerData:
                  'skill_slot_map', 'skill_level_info_map',
                  'slot_bar_map',
                  'skill_cd_map', 'skill_last_use_at', 'skill_seen_ids',
-                 'server_time_offset_ms')
+                 'server_time_offset_ms',
+                 'attr_skill_cd', 'attr_skill_cd_pct', 'attr_cd_accelerate_pct',
+                 'temp_attr_cd_pct', 'temp_attr_cd_fixed', 'temp_attr_cd_accel')
 
     def __init__(self, uid: int):
         self.uid = uid
@@ -582,6 +588,13 @@ class PlayerData:
         self.skill_last_use_at: Dict[int, float] = {}
         self.skill_seen_ids = []
         self.server_time_offset_ms: Optional[float] = None
+        # Entity-level CD modifiers (from AttrCollection + TempAttr)
+        self.attr_skill_cd: int = 0           # AttrSkillCD 11750 — flat CD reduction ms
+        self.attr_skill_cd_pct: int = 0       # AttrSkillCDPCT 11760 — pct /10000
+        self.attr_cd_accelerate_pct: int = 0  # AttrCdAcceleratePct 11960 — accel /10000
+        self.temp_attr_cd_pct: int = 0        # TempAttr type 100 — buff pct CD reduce /10000
+        self.temp_attr_cd_fixed: int = 0      # TempAttr type 101 — buff flat CD reduce ms
+        self.temp_attr_cd_accel: int = 0      # TempAttr type 103 — buff CD accelerate /10000
 
 
 def _decode_energy_item(data: bytes) -> Dict[str, Any]:
@@ -1483,7 +1496,7 @@ class PacketParser:
             if accel_changed:
                 # Compute accelerated elapsed time at old speed up to this moment
                 prev_accel = max(0, int(prev.get('accelerate_cd_ratio') or 0))
-                prev_speed = 10000.0 / max(1.0, 10000.0 - prev_accel) if (0 < prev_accel < 10000) else 1.0
+                prev_speed = 1.0 + prev_accel / 10000.0 if prev_accel > 0 else 1.0
                 prev_observed = int(prev.get('observed_at_ms') or observed_at_ms)
                 # Carry forward any previously accumulated elapsed
                 base_elapsed = float(prev.get('accel_elapsed_at_change_ms') or 0.0)
@@ -2257,12 +2270,17 @@ class PacketParser:
 
             # AttrCollection (field 3)
             attr_raw = ef.get(3, [None])[0]
+            # TempAttrCollection (field 4)
+            temp_attr_raw = ef.get(4, [None])[0]
 
             if _is_player(uuid):
                 uid = _uuid_to_uid(uuid)
                 player_uids_appeared.append(uid)
                 if isinstance(attr_raw, bytes):
                     self._process_attr_collection(uid, attr_raw)
+                if isinstance(temp_attr_raw, bytes):
+                    if uid == self._current_uid or self._current_uid == 0:
+                        self._process_temp_attr_collection(uid, temp_attr_raw)
             elif _is_monster(uuid):
                 monster_uuids_appeared.append(uuid)
                 # Reset dead state on re-appear
@@ -2408,6 +2426,12 @@ class PacketParser:
                 self._process_attr_collection(uid, attr_raw)
             elif target_is_monster:
                 self._process_monster_attr_collection(uuid, attr_raw)
+
+        # TempAttrs (field 3) — buff-based temporary attributes (CD modifiers etc.)
+        temp_attr_raw = df.get(3, [None])[0]
+        if isinstance(temp_attr_raw, bytes) and target_is_player:
+            if uid == self._current_uid or self._current_uid == 0:
+                self._process_temp_attr_collection(uid, temp_attr_raw)
 
         # BuffEffectSync (field 11) — boss buff events
         buff_effect_raw = df.get(11, [None])[0]
@@ -2702,6 +2726,79 @@ class PacketParser:
             logger.debug(f'[Parser] BuffEffectSync decode error: {e}')
 
 
+    # TempAttrCollection parsing — Player CD buff modifiers
+
+
+    def _process_temp_attr_collection(self, uid: int, data: bytes):
+        """Process TempAttrCollection for CD-related buff modifiers.
+
+        TempAttrCollection { repeated TempAttr Attrs = 1; }
+        TempAttr { int32 Id = 1; int32 Value = 2; }
+
+        Relevant TempAttr types (from resonance-logs-cn skill_cd_monitor.rs):
+          100 = percent CD reduction (万分比, /10000) — cumulative across buffs
+          101 = flat CD reduction (ms) — cumulative
+          103 = CD acceleration (万分比, /10000) — cumulative
+        """
+        try:
+            tac = _decode_fields(data)
+            attrs_list = tac.get(1, [])
+            if not attrs_list:
+                return
+
+            player = self._get_player(uid)
+            # TempAttrs are replacement-style: recompute accumulated values from the full list
+            cd_pct = 0
+            cd_fixed = 0
+            cd_accel = 0
+
+            for attr_raw in attrs_list:
+                if not isinstance(attr_raw, bytes):
+                    continue
+                af = _decode_fields(attr_raw)
+                attr_id = af.get(1, [0])[0]
+                attr_val = af.get(2, [0])[0]
+                if isinstance(attr_val, int) and attr_val > 0x7FFFFFFF:
+                    attr_val -= 0x100000000  # signed int32
+
+                if attr_id == 100:    # Percent CD reduction
+                    cd_pct += attr_val
+                elif attr_id == 101:  # Flat CD reduction (ms)
+                    cd_fixed += attr_val
+                elif attr_id == 103:  # CD acceleration
+                    cd_accel += attr_val
+
+            changed = False
+            if player.temp_attr_cd_pct != cd_pct:
+                player.temp_attr_cd_pct = cd_pct
+                changed = True
+            if player.temp_attr_cd_fixed != cd_fixed:
+                player.temp_attr_cd_fixed = cd_fixed
+                changed = True
+            if player.temp_attr_cd_accel != cd_accel:
+                player.temp_attr_cd_accel = cd_accel
+                changed = True
+
+            if changed:
+                logger.info(
+                    f'[Parser] TempAttr CD modifiers: pct={cd_pct} fixed={cd_fixed} '
+                    f'accel={cd_accel} uid={uid}'
+                )
+                _append_packet_debug(
+                    'temp_attr_cd',
+                    {
+                        'uid': uid,
+                        'cd_pct': cd_pct,
+                        'cd_fixed': cd_fixed,
+                        'cd_accel': cd_accel,
+                    }
+                )
+                if uid == self._current_uid:
+                    self._notify_self()
+        except Exception as e:
+            logger.debug(f'[Parser] TempAttrCollection decode error: {e}')
+
+
     # AttrCollection parsing — Player
 
 
@@ -2800,6 +2897,24 @@ class PacketParser:
             elif attr_id in (AttrType.CRI, AttrType.LUCKY, AttrType.ELEMENT_FLAG,
                              AttrType.REDUCTION_LEVEL, AttrType.ID):
                 pass
+            elif attr_id == AttrType.SKILL_CD:
+                # Flat CD reduction in ms (from equipment/passives)
+                if int_value >= 0:
+                    player.attr_skill_cd = int_value
+                    changed = True
+                    logger.info(f'[Parser] AttrCollection AttrSkillCD={int_value} uid={uid}')
+            elif attr_id == AttrType.SKILL_CD_PCT:
+                # Percent CD reduction (万分比, /10000)
+                if int_value >= 0:
+                    player.attr_skill_cd_pct = int_value
+                    changed = True
+                    logger.info(f'[Parser] AttrCollection AttrSkillCDPCT={int_value} uid={uid}')
+            elif attr_id == AttrType.CD_ACCELERATE_PCT:
+                # CD acceleration percent (万分比, /10000)
+                if int_value >= 0:
+                    player.attr_cd_accelerate_pct = int_value
+                    changed = True
+                    logger.info(f'[Parser] AttrCollection AttrCdAcceleratePct={int_value} uid={uid}')
             else:
                 if attr_id == AttrType.STA_MAX_FALLBACK and _is_sane_attr_stamina_max(int_value):
                     stamina_max_candidate = max(stamina_max_candidate, int_value)

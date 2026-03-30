@@ -903,6 +903,7 @@ var _lastBreakPct = -1;
 var _lastHpPct = 1;
 var _lastStopTicking = false;
 var _breakEverHadGauge = false;  // true once break gauge was seen > 50%
+var _firstBreakSeen = false;     // true once first valid breaking_stage received
 
 /*
  * Break state machine:
@@ -1214,6 +1215,12 @@ function _showBossBar() {
         // display:none→display:block always triggers a fresh animation
         root.classList.add('visible');
     }
+    // 初始化 break 条为 100% (满): 新遇到的 boss 破碎条默认满值,
+    // 后续 updateBossBar 会用实际服务器数据覆盖.
+    var breakFill = document.getElementById('break-fill');
+    var breakText = document.getElementById('break-text');
+    if (breakFill) breakFill.style.width = '100%';
+    if (breakText) breakText.textContent = '100%';
     _visible = true;
     _reportRegions();
 }
@@ -1233,6 +1240,7 @@ function _hideBossBar() {
         _lastStopTicking = false;
         _breakState = 'normal';
         _breakEverHadGauge = false;
+        _firstBreakSeen = false;
         _refillCompletedTs = 0;
         // Reset name/text to defaults
         var _nameEl = document.getElementById('boss-name');
@@ -1464,19 +1472,29 @@ function updateBossBar(data) {
     var _rawExt = Number(data.extinction || 0);
     var _rawMaxExt = Number(data.max_extinction || 0);
     var breakPct;
+    var _breakDataAvailable = false;  // true when we have real extinction data from server
     if (_rawMaxExt > 0) {
         breakPct = Math.max(0, Math.min(1, _rawExt / _rawMaxExt));
+        _breakDataAvailable = true;
     } else if (_rawExt > 0) {
         breakPct = 1.0;
+        _breakDataAvailable = true;
     } else {
-        breakPct = Math.max(0, Math.min(1, Number(data.extinction_pct || 0)));
+        var _extPct = Number(data.extinction_pct || 0);
+        if (_extPct > 0) {
+            breakPct = Math.max(0, Math.min(1, _extPct));
+            _breakDataAvailable = true;
+        } else {
+            // 没有收到有效的 extinction 数据, 保留当前显示值 (初始为 100%)
+            breakPct = _lastBreakPct >= 0 ? _lastBreakPct : 1.0;
+        }
     }
     var breakFill = document.getElementById('break-fill');
     var breakTrack = breakFill.parentElement;
     // During broken/recovering states the state machine owns the visual —
     // don't let stale server data overwrite the 0% / interpolated width.
     var _breakVisualLocked = (_breakState === 'broken' || _recoverInterpolating);
-    if (!_breakVisualLocked) {
+    if (!_breakVisualLocked && _breakDataAvailable) {
         breakFill.style.width = Math.round(breakPct * 100) + '%';
     }
     breakFill.classList.toggle('full', breakPct >= 0.95 && !_breakVisualLocked);
@@ -1486,7 +1504,18 @@ function updateBossBar(data) {
     if (stage >= 0) {
         document.getElementById('stage-text').textContent = 'P' + Math.max(1, stage);
     }
-    if (!_breakVisualLocked) {
+
+    // 首次看到 breaking_stage=0 时 (boss 已处于 break 状态),
+    // 强制 breakPct=0 避免显示陈旧的 extinction 值.
+    if (stage === 0 && _breakState === 'normal' && !_firstBreakSeen) {
+        breakPct = 0;
+        if (!_breakVisualLocked) {
+            breakFill.style.width = '0%';
+        }
+    }
+    if (stage >= 0) _firstBreakSeen = true;
+
+    if (!_breakVisualLocked && (_breakDataAvailable || (stage === 0 && !_firstBreakSeen))) {
         document.getElementById('break-text').textContent = Math.round(breakPct * 100) + '%';
     }
 
@@ -1541,7 +1570,7 @@ function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
         // Post-refill cooldown: skip ALL break heuristics for 4s after refilled→normal
         if (_refillCompletedTs > 0 && (Date.now() - _refillCompletedTs) < 4000) break;
         // Packet signal: breaking_stage transitions to 0 (fallback)
-        if (_lastBreakingStage >= 1 && stage !== _lastBreakingStage && stage === 0) {
+        if ((_lastBreakingStage >= 1 || _lastBreakingStage === -1) && stage !== _lastBreakingStage && stage === 0) {
             _enterBroken(fill, track);
             return;
         }

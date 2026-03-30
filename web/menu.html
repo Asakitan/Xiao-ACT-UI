@@ -2859,6 +2859,9 @@ html, body {
                         <span>自动脚本启用 Auto Script Active</span>
                     </label>
                     <div class="auto-key-runtime" id="auto-key-runtime">自动按键运行状态 Auto Key Runtime: Idle</div>
+                    <div style="margin:6px 0 2px 0;">
+                        <button class="boss-raid-btn" type="button" onclick="_toggleAutoKeyEditorPanel(); return false;">📊 可视化面板 Visual Panel</button>
+                    </div>
                     <div class="widget-note">F6 可以快速切换自动按键。动作会使用 packet 技能状态、HP、STA、Burst 状态、前台检测和死亡暂停规则。 F6 toggles the engine instantly using packet skill state, HP, STA, burst state, foreground checks, and death pause rules.</div>
                 </li>
                 <li class="widget-row auto-key-shell-row">
@@ -3048,6 +3051,9 @@ html, body {
                         <button class="boss-raid-btn" type="button" onclick="_brNextPhase(); return false;">⏭ 下一阶段 Next</button>
                         <button class="boss-raid-btn danger" type="button" onclick="_brReset(); return false;">↺ 重置 Reset</button>
                     </div>
+                    <div style="margin:6px 0 2px 0;">
+                        <button class="boss-raid-btn" type="button" onclick="_toggleRaidEditorPanel(); return false;">📊 可视化面板 Visual Panel</button>
+                    </div>
                     <div class="widget-note">F7 开始/停止，F8 切换阶段。配置 Boss 血量与狂暴计时器，时间轴触发点会弹出提醒和音效。 F7 start/stop, F8 next phase. Set boss HP, enrage timer, and timeline alerts.</div>
                 </li>
                 <li class="widget-row boss-raid-shell-row">
@@ -3183,6 +3189,7 @@ html, body {
             <ul class="child-menu" id="sub-panels" data-group="panels">
                 <li data-action="toggle_auto_script"><i class="menu-glyph mi-play"></i><span>自动按键 Auto Key Engine</span><small class="shortcut">F6</small></li>
                 <li data-action="toggle_recognition"><i class="menu-glyph mi-play"></i><span>识别 开/关</span><small class="shortcut">F5</small></li>
+                <li data-action="toggle_hide_seek"><i class="menu-glyph mi-play"></i><span>自动躲猫猫 Hide & Seek</span><small class="shortcut">F11</small></li>
                 <li class="sep"></li>
                 <li class="widget-row">
                     <div class="widget-label">SOUND</div>
@@ -5531,6 +5538,17 @@ function _brNextPhase() {
 }
 function _brReset() {
     _brCallApi('boss_raid_reset', [], function() { showToast('BOSS RAID RESET'); });
+}
+
+function _toggleRaidEditorPanel() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.toggle_raid_editor) {
+        window.pywebview.api.toggle_raid_editor();
+    }
+}
+function _toggleAutoKeyEditorPanel() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.toggle_autokey_editor) {
+        window.pywebview.api.toggle_autokey_editor();
+    }
 }
 
 function _brRenderCloud() {

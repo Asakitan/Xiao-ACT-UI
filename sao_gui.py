@@ -2131,6 +2131,8 @@ class SAOPlayerGUI:
                                     _p_uid,
                                     gs.player_name or '',
                                     gs.profession_name or '',
+                                    0,
+                                    int(gs.level_base or 0),
                                 )
                         except Exception:
                             pass
