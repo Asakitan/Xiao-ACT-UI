@@ -14,7 +14,6 @@ SAO-UI WebView GUI — sao_auto 移植版 (从 28midi/sao_webview.py 完全复�
   - 面板系统 (control / status / viz / piano)
   - 透明窗口 (Win32 LWA_COLORKEY + .NET WebView2)
   - 音效系统 (pygame)
-  - 角色等级系统 (character_profile)
   - 3-UI 热切换
   - 所有动画特效
 """
@@ -1358,7 +1357,7 @@ class SAOWebViewGUI:
         _ensure_webview()
         _set_process_app_id('sao.auto.overlay')
 
-        from character_profile import load_profile, calc_level
+        from character_profile import load_profile
 
         self.settings = SettingsManager()
         self.settings.set('ui_mode', 'webview')
@@ -1373,17 +1372,11 @@ class SAOWebViewGUI:
         except Exception:
             self._sao_sound = None
 
-        # 角色
+        # 角色 (从上次保存的 profile 加载用户名/职业, 等级来自抓包)
         profile = load_profile()
         self._username = profile.get('username', '') or 'Player'
         self._profession = profile.get('profession', '剑士')
-        self._level = profile.get('level', 1)
-        self._xp = profile.get('xp', 0)
-        self._songs_played = profile.get('songs_played', 0)
-        self._play_time = profile.get('play_time', 0)
-        lv, cur_xp, need_xp = calc_level(self._xp)
-        self._level = lv
-        self._xp_pct = (cur_xp / max(1, need_xp)) * 100
+        self._level = max(1, int(profile.get('level', 1) or 1))
         self._last_displayed_level_base = 0  # 用于检测等级变化并触发升级动画
 
         # 识别状态
@@ -1439,6 +1432,7 @@ class SAOWebViewGUI:
         # Hide & Seek engine
         self._hide_seek_engine = None
         self._hide_seek_alert_timer = None
+        self._hide_seek_alert_active = False
 
         # 热切换目标
         self._pending_switch: Optional[str] = None
@@ -1867,6 +1861,9 @@ class SAOWebViewGUI:
             )
             self._hide_seek_engine.start()
             self._eval_menu('SAO.showToast("HIDE & SEEK: ON")')
+            # Set flag synchronously BEFORE showing alert, so _sync_identity_alert
+            # won't dismiss the alert even if engine.running isn't set yet.
+            self._hide_seek_alert_active = True
             self._show_hide_seek_persistent_alert()
         except Exception as e:
             print(f'[SAO] Hide&Seek start failed: {e}')
@@ -1887,9 +1884,14 @@ class SAOWebViewGUI:
     def _show_hide_seek_persistent_alert(self):
         """Show a persistent SAO alert that re-fires every 8s while running."""
         if not (self._hide_seek_engine and self._hide_seek_engine.running):
+            self._hide_seek_alert_active = False
             return
-        self._show_identity_alert_window(
-            "AUTO HIDE & SEEK", "Auto Hide'seek is on", duration_ms=10000)
+        # Only do the full show (with sound + transparency) on the FIRST call;
+        # subsequent 8s re-fires just reschedule the timer to keep it alive.
+        if not getattr(self, '_hide_seek_alert_active', False):
+            self._hide_seek_alert_active = True
+            self._show_identity_alert_window(
+                "AUTO HIDE & SEEK", "Auto Hide'seek is on", duration_ms=60000)
         self._hide_seek_alert_timer = threading.Timer(
             8.0, self._show_hide_seek_persistent_alert)
         self._hide_seek_alert_timer.daemon = True
@@ -1897,6 +1899,7 @@ class SAOWebViewGUI:
 
     def _hide_hide_seek_persistent_alert(self):
         """Cancel the persistent alert refresh timer and hide alert."""
+        self._hide_seek_alert_active = False
         t = self._hide_seek_alert_timer
         if t:
             t.cancel()
@@ -2083,6 +2086,12 @@ class SAOWebViewGUI:
         if alert_serial > 0 and alert_serial != getattr(self, '_last_identity_alert_serial', 0):
             self._last_identity_alert_serial = alert_serial
             self._show_identity_alert_window(alert_title, alert_message, 9000)
+            return
+
+        # Don't auto-dismiss when Hide & Seek persistent alert is active —
+        # the H&S engine manages its own alert lifecycle via the 8s timer.
+        # Use the synchronous flag (not engine.running) to avoid race conditions.
+        if getattr(self, '_hide_seek_alert_active', False):
             return
 
         has_identity = bool(
@@ -3368,7 +3377,6 @@ class SAOWebViewGUI:
     # ─── WebView 就绪 ───
     def _on_webview_started(self):
         def _init():
-            from character_profile import calc_level
             self._lock_hp_position(2.0)
             self._hp_hit_regions_ready = False
             self._hp_js_hit_regions_ready = False
@@ -3391,8 +3399,8 @@ class SAOWebViewGUI:
                 pass
             time.sleep(0.18)
             self._eval_hp(f'setUsername("{self._safe_js(self._username)}")')
-            lv, cur_xp, need_xp = calc_level(self._xp)
-            self._eval_hp(f'updateHP({cur_xp}, {need_xp}, {lv})')
+            # 初始显示等级 (来自 profile 缓存, 等待抓包数据覆盖)
+            self._eval_hp(f'updateHP(0, 1, {self._level})')
             self._sync_menu_info()
             # 设置 click-through (延迟确保窗口已完全创建)
             time.sleep(0.3)
@@ -3633,6 +3641,7 @@ class SAOWebViewGUI:
         }
         self._hk_pressed = set()
         self._hk_listener = None
+        self._hk_poll_prev = {}  # previous state for GetAsyncKeyState polling
         try:
             from pynput.keyboard import Listener as KbListener, Key, KeyCode
             self._hk_Key = Key
@@ -3645,7 +3654,19 @@ class SAOWebViewGUI:
             print('[SAO WebView] Hotkeys (pynput): F5=toggle_recognition, F6=toggle_auto_script')
         except Exception as e:
             self._hotkeys_ok = False
-            print(f'[SAO WebView] Hotkeys unavailable: {e}')
+            print(f'[SAO WebView] Hotkeys (pynput) unavailable: {e}')
+
+        # ── GetAsyncKeyState polling fallback ──
+        # pynput's WH_KEYBOARD_LL hook can fail silently when the game uses
+        # DirectInput / exclusive input. Polling GetAsyncKeyState always works.
+        self._hk_poll_ok = False
+        try:
+            import ctypes
+            self._hk_GetAsyncKeyState = ctypes.windll.user32.GetAsyncKeyState
+            self._hk_poll_ok = True
+            print('[SAO WebView] Hotkeys (poll fallback): enabled')
+        except Exception as e:
+            print(f'[SAO WebView] Hotkeys poll fallback unavailable: {e}')
 
     def _hk_on_press(self, key):
         try:
@@ -3655,7 +3676,10 @@ class SAOWebViewGUI:
                 self._hk_pressed.add(key.value.vk if hasattr(key.value, 'vk') else str(key))
         except Exception:
             pass
-        self._hk_check()
+        try:
+            self._hk_check()
+        except Exception:
+            pass
 
     def _hk_on_release(self, key):
         try:
@@ -3667,9 +3691,12 @@ class SAOWebViewGUI:
             pass
 
     def _hk_check(self):
+        # Merge saved hotkeys with defaults so new keys (like toggle_hide_seek)
+        # are always available even if settings.json doesn't contain them.
         saved = getattr(self, '_cfg_settings_ref', None)
-        hotkeys = DEFAULT_HOTKEYS if saved is None else saved.get('hotkeys', DEFAULT_HOTKEYS)
-        for action, info in (hotkeys or {}).items():
+        user_hotkeys = {} if saved is None else (saved.get('hotkeys') or {})
+        hotkeys = {**DEFAULT_HOTKEYS, **user_hotkeys}
+        for action, info in hotkeys.items():
             vk = None
             if isinstance(info, dict):
                 vk = info.get('vk')
@@ -3681,6 +3708,40 @@ class SAOWebViewGUI:
                     threading.Thread(target=cb, daemon=True).start()
                     self._hk_pressed.clear()
                     return
+
+    def _hk_poll_tick(self):
+        """Poll GetAsyncKeyState for F-key presses (called from recognition loop).
+
+        This is a fallback for when pynput's keyboard hook fails to receive events
+        (common with DirectInput games). Detects rising edges only.
+        """
+        if not getattr(self, '_hk_poll_ok', False):
+            return
+        try:
+            # Merge saved hotkeys with defaults
+            saved = getattr(self, '_cfg_settings_ref', None)
+            user_hotkeys = {} if saved is None else (saved.get('hotkeys') or {})
+            hotkeys = {**DEFAULT_HOTKEYS, **user_hotkeys}
+            for action, info in hotkeys.items():
+                vk = None
+                if isinstance(info, dict):
+                    vk = info.get('vk')
+                elif isinstance(info, str) and info:
+                    vk = self._FKEY_VK.get(info.upper())
+                if not vk:
+                    continue
+                # GetAsyncKeyState returns short; bit 15 = currently pressed
+                state = self._hk_GetAsyncKeyState(vk)
+                is_pressed = bool(state & 0x8000)
+                was_pressed = self._hk_poll_prev.get(vk, False)
+                self._hk_poll_prev[vk] = is_pressed
+                if is_pressed and not was_pressed:
+                    cb = self._hk_actions.get(action)
+                    if cb:
+                        threading.Thread(target=cb, daemon=True).start()
+                        return
+        except Exception:
+            pass
 
     # ════════════════════════════════════════
     #  JS 辅助
@@ -4946,7 +5007,7 @@ class SAOWebViewGUI:
             gs_desc = f'HP: {hp_str}  STA: {sta_str}'
         info = {
             'username': self._username, 'level': self._level,
-            'xp_pct': round(self._xp_pct, 1), 'profession': self._profession,
+            'profession': self._profession,
             'hp': hp_str, 'sta': sta_str,
             'des': gs_desc,
             'file': '',
@@ -5021,6 +5082,11 @@ class SAOWebViewGUI:
                 _ = self.hp_win.x
             except Exception:
                 return
+            # ── Hotkey polling (GetAsyncKeyState fallback) ──
+            try:
+                self._hk_poll_tick()
+            except Exception:
+                pass
             gs = None
             if hasattr(self, '_state_mgr'):
                 try:
@@ -5056,13 +5122,8 @@ class SAOWebViewGUI:
                         self._eval_hp(f'showLevelUp({self._last_displayed_level_base}, {level_base})')
                     if level_base > 0:
                         self._last_displayed_level_base = level_base
-                    # Use packet HP data if available, else XP-based fallback
-                    if gs.hp_max > 0 or gs.level_base > 0:
-                        self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
-                    else:
-                        from character_profile import calc_level
-                        lv, cur_xp, need_xp = calc_level(self._xp)
-                        self._eval_hp(f'updateHP({cur_xp}, {need_xp}, {lv})')
+                    # Use packet HP data if available
+                    self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
                     if gs.recognition_ok:
                         sta_offline = getattr(gs, 'stamina_offline', False)
                         if sta_offline:
@@ -5385,16 +5446,8 @@ class SAOWebViewGUI:
                         if level_base > 0:
                             self._last_displayed_level_base = level_base
                         self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
-                        self._eval_hp('setPlayState("idle")')
-                    else:
-                        from character_profile import calc_level
-                        lv, cur_xp, need_xp = calc_level(self._xp)
-                        self._eval_hp(f'updateHP({cur_xp}, {need_xp}, {lv})')
-                        self._eval_hp('setPlayState("idle")')
+                    self._eval_hp('setPlayState("idle")')
                 else:
-                    from character_profile import calc_level
-                    lv, cur_xp, need_xp = calc_level(self._xp)
-                    self._eval_hp(f'updateHP({cur_xp}, {need_xp}, {lv})')
                     self._eval_hp('setPlayState("idle")')
 
             _panel_tick += 1

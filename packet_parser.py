@@ -23,7 +23,7 @@ import time
 from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger('sao_auto.parser')
-_PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
+_PACKET_DEBUG_ENABLED = True  # Enable to log raw packet snapshots for field confirmation
 
 
 
@@ -258,8 +258,12 @@ class AttrType:
     ENERGY_FLAG = 0x543CD3C6    # Flag field, not a stamina value
     STA_MAX_FALLBACK = 11324
     STA_RATIO_SET = (11850, 11851, 11852)
-    SEASON_LEVEL = 10070       # AttrSeasonLevel (authoritative, from StarResonanceDps)
-    SEASON_LV = 196             # AttrSeasonLv (alternate attr)
+    SEASON_LEVEL = 10070       # AttrSeasonLevel (from StarResonanceDps)
+    SEASON_LV = 196             # AttrSeasonLv (season star rank — NOT display extra level)
+    # ── CD modifier attrs: base + Total variants ──
+    SKILL_CD_TOTAL = 11751      # AttrSkillCDTotal (server-computed sum)
+    SKILL_CD_PCT_TOTAL = 11761  # AttrSkillCDPCTTotal (server-computed sum)
+    CD_ACCELERATE_PCT_TOTAL = 11961  # AttrCdAcceleratePctTotal (server-computed sum)
     # ── Boss / Monster mechanic attrs (from SRDPS enum_e_attr_type.proto) ──
     MAX_EXTINCTION = 440        # Breaking bar max (extinction gauge)
     EXTINCTION = 441            # Breaking bar current
@@ -275,6 +279,9 @@ class AttrType:
     SKILL_CD = 11750            # AttrSkillCD — flat CD reduction (ms)
     SKILL_CD_PCT = 11760        # AttrSkillCDPCT — percent CD reduction (万分比, /10000)
     CD_ACCELERATE_PCT = 11960   # AttrCdAcceleratePct — CD acceleration (万分比, /10000)
+    # ── Fight resource / general CD speed ──
+    FIGHT_RES_CD_SPEED_PCT = 11980       # AttrFightResCdSpeedPct — CD speed pct (/10000)
+    FIGHT_RES_CD_SPEED_PCT_TOTAL = 11981 # AttrFightResCdSpeedPctTotal
 
 
 SERVICE_UUID_C3SB = 0x0000000063335342
@@ -546,7 +553,8 @@ class PlayerData:
                  'skill_cd_map', 'skill_last_use_at', 'skill_seen_ids',
                  'server_time_offset_ms',
                  'attr_skill_cd', 'attr_skill_cd_pct', 'attr_cd_accelerate_pct',
-                 'temp_attr_cd_pct', 'temp_attr_cd_fixed', 'temp_attr_cd_accel')
+                 'temp_attr_cd_pct', 'temp_attr_cd_fixed', 'temp_attr_cd_accel',
+                 'attr_fight_res_cd_speed')
 
     def __init__(self, uid: int):
         self.uid = uid
@@ -595,6 +603,9 @@ class PlayerData:
         self.temp_attr_cd_pct: int = 0        # TempAttr type 100 — buff pct CD reduce /10000
         self.temp_attr_cd_fixed: int = 0      # TempAttr type 101 — buff flat CD reduce ms
         self.temp_attr_cd_accel: int = 0      # TempAttr type 103 — buff CD accelerate /10000
+        # FightResCdSpeedPct (11980) — CD speed/duration modifier /10000
+        # 10000 = base (1x), values below 10000 → shorter CDs
+        self.attr_fight_res_cd_speed: int = 0
 
 
 def _decode_energy_item(data: bytes) -> Dict[str, Any]:
@@ -1066,8 +1077,8 @@ def _is_sane_attr_stamina_max(value: int) -> bool:
 
 
 _LEVEL_EXTRA_SOURCE_PRIORITY = {
-    'season_attr': 100,   # AttrSeasonLevel (10070) / AttrSeasonLv (196) — authoritative
-    'season_medal': 50,   # SeasonMedalInfo CoreHole from CharSerialize field 52
+    'season_medal': 100,  # SeasonMedalInfo CoreHole from CharSerialize field 52 — most reliable
+    'season_attr': 80,    # AttrSeasonLevel (10070) — sometimes stale or diverges
     'monster_hunt': 10,   # MonsterHuntInfo CurLevel from CharSerialize field 56
     'battlepass': 5,
     'battlepass_data': 3,
@@ -2595,7 +2606,13 @@ class PacketParser:
                     logger.info(f'[Parser] Monster EXTINCTION={int_value} max={monster.max_extinction} uuid={uuid}')
             elif attr_id == AttrType.MAX_EXTINCTION:
                 if int_value > 0 and int_value != monster.max_extinction:
+                    was_zero = monster.max_extinction == 0
                     monster.max_extinction = int_value
+                    # First encounter: if extinction hasn't been set yet (still 0),
+                    # assume the break bar starts full (100%).
+                    if was_zero and monster.extinction == 0:
+                        monster.extinction = int_value
+                        logger.info(f'[Parser] Monster extinction auto-filled to {int_value} (first encounter)')
                     changed = True
                     logger.info(f'[Parser] Monster MAX_EXTINCTION={int_value} uuid={uuid}')
             elif attr_id == AttrType.STUNNED:
@@ -2884,37 +2901,48 @@ class PacketParser:
                 # This is a flag field, not the actual stamina value.
                 ef_i = int_value
                 logger.debug(f'[Parser] AttrCollection EnergyFlag={ef_i} (flag only)')
-            elif attr_id in (AttrType.SEASON_LEVEL, AttrType.SEASON_LV):
-                # Authoritative server-calculated season level
+            elif attr_id == AttrType.SEASON_LEVEL:
+                # AttrSeasonLevel (10070) — server-calculated season level
                 sl = int_value
                 if 0 < sl <= 60:
                     if _set_level_extra_candidate(player, 'season_attr', sl):
                         changed = True
                     logger.info(
-                        f'[Parser] AttrCollection AttrSeasonLevel={sl} '
-                        f'(attr_id=0x{attr_id:X}) uid={uid}'
+                        f'[Parser] AttrCollection AttrSeasonLevel={sl} uid={uid}'
                     )
+            elif attr_id == AttrType.SEASON_LV:
+                # AttrSeasonLv (196) — season star rank, NOT the display extra level
+                logger.debug(
+                    f'[Parser] AttrCollection AttrSeasonLv={int_value} uid={uid} (ignored for level_extra)'
+                )
             elif attr_id in (AttrType.CRI, AttrType.LUCKY, AttrType.ELEMENT_FLAG,
                              AttrType.REDUCTION_LEVEL, AttrType.ID):
                 pass
-            elif attr_id == AttrType.SKILL_CD:
+            elif attr_id in (AttrType.SKILL_CD, AttrType.SKILL_CD_TOTAL):
                 # Flat CD reduction in ms (from equipment/passives)
+                # Prefer Total (11751) — server-computed sum of all contributions
                 if int_value >= 0:
                     player.attr_skill_cd = int_value
                     changed = True
-                    logger.info(f'[Parser] AttrCollection AttrSkillCD={int_value} uid={uid}')
-            elif attr_id == AttrType.SKILL_CD_PCT:
+                    logger.info(f'[Parser] AttrCollection AttrSkillCD={int_value} (0x{attr_id:X}) uid={uid}')
+            elif attr_id in (AttrType.SKILL_CD_PCT, AttrType.SKILL_CD_PCT_TOTAL):
                 # Percent CD reduction (万分比, /10000)
                 if int_value >= 0:
                     player.attr_skill_cd_pct = int_value
                     changed = True
-                    logger.info(f'[Parser] AttrCollection AttrSkillCDPCT={int_value} uid={uid}')
-            elif attr_id == AttrType.CD_ACCELERATE_PCT:
-                # CD acceleration percent (万分比, /10000)
+                    logger.info(f'[Parser] AttrCollection AttrSkillCDPCT={int_value} (0x{attr_id:X}) uid={uid}')
+            elif attr_id in (AttrType.CD_ACCELERATE_PCT, AttrType.CD_ACCELERATE_PCT_TOTAL):
+                # CD acceleration percent (万分比, /10000) — includes passive bonuses
                 if int_value >= 0:
                     player.attr_cd_accelerate_pct = int_value
                     changed = True
-                    logger.info(f'[Parser] AttrCollection AttrCdAcceleratePct={int_value} uid={uid}')
+                    logger.info(f'[Parser] AttrCollection AttrCdAcceleratePct={int_value} (0x{attr_id:X}) uid={uid}')
+            elif attr_id in (AttrType.FIGHT_RES_CD_SPEED_PCT, AttrType.FIGHT_RES_CD_SPEED_PCT_TOTAL):
+                # FightResCdSpeedPct — CD speed/duration modifier (万分比, /10000)
+                if int_value > 0:
+                    player.attr_fight_res_cd_speed = int_value
+                    changed = True
+                    logger.info(f'[Parser] AttrCollection FightResCdSpeedPct={int_value} (0x{attr_id:X}) uid={uid}')
             else:
                 if attr_id == AttrType.STA_MAX_FALLBACK and _is_sane_attr_stamina_max(int_value):
                     stamina_max_candidate = max(stamina_max_candidate, int_value)
