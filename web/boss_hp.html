@@ -27,6 +27,7 @@
     --fx-pad-right:160px;
     --fx-pad-bottom:160px;
     --fx-pad-left:160px;
+    --multi-extra-h: 240px;
 }
 html,body{
     width:100%;
@@ -843,6 +844,72 @@ html,body{
     46%{opacity:0.32;transform:scale(1.04)}
     100%{opacity:0;transform:scale(1.08)}
 }
+
+/* Ensure no elements block clicks — fix for upper-center non-click-through remnant */
+.stage *,
+.boss-root *,
+.boss-root * * {
+    pointer-events: none !important;
+}
+
+/* Additional units tightly below main boss bar - horizontal layout, SAO cover style matching main panel */
+.additional-units {
+    position:absolute;
+    top:195px; /* below main boss panel*/
+    left:0;
+    width:100%;
+    display:flex;
+    flex-direction:row;
+    justify-content:center;
+    gap:8px;
+    pointer-events:none;
+    z-index:5;
+}
+.additional-unit {
+    width:156px;
+    height:38px;
+    background:linear-gradient(175deg,var(--cover-a) 0%,rgba(180,182,170,1) 48%,var(--cover-b) 100%);
+    border:1px solid var(--cover-edge);
+    border-radius:6px;
+    box-shadow:2px 4px 18px var(--shadow),inset 0 0 12px rgba(255,255,255,0.08);
+    overflow:hidden;
+    position:relative;
+    pointer-events:none;
+}
+.additional-unit .mini-hp-row {
+    height:21px;
+    display:flex;
+    align-items:center;
+    padding:0 10px;
+    font-size:12px;
+    color:var(--text-main);
+    position:relative;
+    z-index:2;
+}
+.additional-unit .mini-hp-bar {
+    position:absolute;
+    left:10px;
+    top:5px;
+    height:11px;
+    background:linear-gradient(90deg, #5edcff, #0fa);
+    border-radius:2px;
+    box-shadow:0 0 6px #5edcff;
+}
+.additional-unit .mini-break-row {
+    height:13px;
+    background:rgba(35,38,45,0.85);
+    position:relative;
+}
+.additional-unit .mini-break-bar {
+    position:absolute;
+    left:10px;
+    top:3px;
+    height:7px;
+    background:linear-gradient(90deg, #ff5e5e, #c22);
+    border-radius:1px;
+}
+.additional-unit .name { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-left:2px; font-size:12.5px; }
+.additional-unit .hp { font-family:var(--font-ui); color:#6cf; font-weight:700; min-width:38px; text-align:right; }
 </style>
 </head>
 <body>
@@ -887,6 +954,9 @@ html,body{
             <span class="break-text" id="break-text">100%</span>
         </div>
     </div>
+
+    <!-- Additional attacked units (smaller panels below main boss bar) -->
+    <div class="additional-units" id="additional-units"></div>
 </div>
 
 <script>
@@ -930,6 +1000,7 @@ var _breakStaleTimer = null;  // fallback: stale-detection timer
 var _recoverEndTimer = null;
 var _breakEnteredTs = 0;      // timestamp when entered broken state
 var _refillCompletedTs = 0;   // timestamp when refilled→normal, cooldown guard
+var _refillsCompleted = 0;     // count of completed refills; skip 4s lock on first repair to avoid freeze
 
 /* ── Client-side recovery interpolation ──
  * The protocol has no dedicated break-recovery-rate attr (IDs 446-449 unassigned).
@@ -1242,6 +1313,7 @@ function _hideBossBar() {
         _breakEverHadGauge = false;
         _firstBreakSeen = false;
         _refillCompletedTs = 0;
+        _refillsCompleted = 0;
         // Reset name/text to defaults
         var _nameEl = document.getElementById('boss-name');
         if (_nameEl) _nameEl.textContent = 'Enemy';
@@ -1384,6 +1456,8 @@ function updateBossBar(data) {
     var root = document.getElementById('boss-root');
     if (!data || !data.active) {
         _hideBossBar();
+        var addContainer = document.getElementById('additional-units');
+        if (addContainer) addContainer.innerHTML = '';
         return;
     }
 
@@ -1454,8 +1528,8 @@ function updateBossBar(data) {
         shieldFill.classList.toggle('is-empty', shieldPct <= 0);
         if (!_lastShieldActive) _lastShieldActive = true;
     } else {
+        _clearShieldGhost(true);  // Force shield disappear on broken/no-active (fix parsing/display issue)
         if (_lastShieldActive) {
-            _startShieldGhost(Math.max(_lastShieldPct, shieldPct));
             _triggerShieldFx('breaking');
         } else if (!_shieldGhostTimer) {
             shieldFill.classList.remove('breaking-ghost');
@@ -1466,6 +1540,42 @@ function updateBossBar(data) {
         _lastShieldActive = false;
     }
     _lastShieldPct = shieldPct;
+
+    // Multi-unit: render mini panels tightly below main bar with HP bar + break bar (mini version of main UI)
+    var addContainer = document.getElementById('additional-units');
+    if (addContainer) {
+        addContainer.innerHTML = '';
+        if (data.additional && Array.isArray(data.additional) && data.additional.length > 0) {
+            data.additional.forEach(function(u) {
+                var el = document.createElement('div');
+                el.className = 'additional-unit';
+                var hpPct = (u.hp_pct || 0);
+                var breakPct = (u.extinction_pct || 1.0);
+                var hasBreak = !!u.has_break_data;
+                var pct = Math.round(hpPct * 100);
+                var breakW = Math.round(breakPct * 100);
+                var name = (u.name || 'Unit');
+                var html = 
+                    '<div class="mini-hp-row">' +
+                        '<span class="name">' + name + '</span>' +
+                        '<span class="hp">' + pct + '%</span>' +
+                    '</div>' +
+                    '<div class="mini-break-row">' +
+                        (hasBreak ? 
+                            '<div class="mini-break-bar" style="width:' + breakW + '%"></div>' : 
+                            '<div style="color:#777;padding-left:12px;font-size:10px;line-height:13px;letter-spacing:0.5px;">OFFLINE</div>'
+                        ) +
+                    '</div>';
+                el.innerHTML = html;
+                // Add mini HP bar (absolute positioned)
+                var hpBar = document.createElement('div');
+                hpBar.className = 'mini-hp-bar';
+                hpBar.style.width = Math.round(hpPct * 100) + '%';
+                el.appendChild(hpBar);
+                addContainer.appendChild(el);
+            });
+        }
+    }
 
     // Compute break % as REMAINING health (depleting bar):
     // 100% = undamaged (full bar), 0% = fully broken (empty bar)
@@ -1501,9 +1611,9 @@ function updateBossBar(data) {
     var breakTrack = breakFill.parentElement;
     // During broken/recovering/refilled states the state machine owns the visual —
     // don't let stale server data overwrite the 0% / interpolated width.
-    // Post-refill grace: after refilled→normal, lock visual for 4s so the raw
-    // server data (which lags behind the animation) doesn't flash the bar to 0%.
-    var _postRefillLock = (_refillCompletedTs > 0 && (Date.now() - _refillCompletedTs) < 4000);
+    // Post-refill grace: after refilled→normal, lock visual for 1.0s (skipped on first repair)
+    // so the raw server data (which lags) doesn't flash the bar to 0%.
+    var _postRefillLock = (_refillCompletedTs > 0 && (Date.now() - _refillCompletedTs) < 1000 && _refillsCompleted >= 2);
     var _breakVisualLocked = (_breakState === 'broken' || _breakState === 'refilled' || _recoverInterpolating || _postRefillLock);
     if (!_breakVisualLocked && _breakDataAvailable) {
         breakFill.style.width = Math.round(breakPct * 100) + '%';
@@ -1582,7 +1692,8 @@ function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
         // If TCP event already triggered this break, skip heuristics for 2.5s
         if (_tcpBreakTriggered && (Date.now() - _tcpBreakTs) < 2500) break;
         // Post-refill cooldown: skip ALL break heuristics for 4s after refilled→normal
-        if (_refillCompletedTs > 0 && (Date.now() - _refillCompletedTs) < 4000) break;
+        // (skipped on first repair per user request; use 2nd+ repair logic)
+        if (_refillCompletedTs > 0 && (Date.now() - _refillCompletedTs) < 4000 && _refillsCompleted >= 2) break;
         // Packet signal: breaking_stage transitions to 0 (fallback)
         if ((_lastBreakingStage >= 1 || _lastBreakingStage === -1) && stage !== _lastBreakingStage && stage === 0) {
             _enterBroken(fill, track);
@@ -1744,6 +1855,7 @@ function _enterRefilled(fill, track) {
         track.classList.remove('broken', 'recovering');
         _breakState = 'normal';
         _refillCompletedTs = Date.now();  // start post-refill cooldown
+        _refillsCompleted = (_refillsCompleted || 0) + 1;
         _breakEverHadGauge = false;       // reset so stale heuristics require fresh >50%
         _recoverEndTimer = null;
     }, 520);
@@ -1786,12 +1898,15 @@ window.BossHP = {
     show: _showBossBar,
     hide: _hideBossBar,
     triggerBreakEffect: triggerBreakEffect,
-    setFxMargins: function(top, right, bottom, left) {
+    setFxMargins: function(top, right, bottom, left, multiExtra) {
         var r = document.documentElement.style;
         r.setProperty('--fx-pad-top', top + 'px');
         r.setProperty('--fx-pad-right', right + 'px');
         r.setProperty('--fx-pad-bottom', bottom + 'px');
         r.setProperty('--fx-pad-left', left + 'px');
+        if (multiExtra !== undefined) {
+            r.setProperty('--multi-extra-h', (multiExtra || 240) + 'px');
+        }
     }
 };
 </script>

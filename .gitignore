@@ -6,8 +6,8 @@ __pycache__/
 
 # ── User data (excluded from repo) ────────────────
 player_profile.json
-settings.json
 player_cache.json
+settings.json
 
 # ── Debug / log files ─────────────────────────────
 packet_debug.jsonl

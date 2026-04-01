@@ -59,6 +59,18 @@ body {
     pointer-events: none;
 }
 
+/* Container-level pass-through for saoalert: shell passes clicks to desktop/game; only interactive children capture */
+.alert-shell {
+    pointer-events: none;
+}
+.alert-box,
+.alert-title,
+.alert-body,
+.alert-footer,
+.alert-shell button {
+    pointer-events: auto;
+}
+
 .alert-shell {
     width: 392px;
     opacity: 0;

@@ -903,6 +903,24 @@ html, body {
     overflow-y: auto;
     padding-right: 4px;
 }
+.auto-key-list::-webkit-scrollbar,
+.auto-key-cloud-results::-webkit-scrollbar,
+.auto-key-action-list::-webkit-scrollbar {
+    width: 5px;
+}
+.auto-key-list::-webkit-scrollbar-thumb,
+.auto-key-cloud-results::-webkit-scrollbar-thumb,
+.auto-key-action-list::-webkit-scrollbar-thumb {
+    background: var(--cyan);
+    border-radius: 3px;
+    opacity: 0.65;
+}
+.auto-key-list::-webkit-scrollbar-thumb:hover,
+.auto-key-cloud-results::-webkit-scrollbar-thumb:hover,
+.auto-key-action-list::-webkit-scrollbar-thumb:hover {
+    background: var(--cyan-strong);
+    opacity: 0.9;
+}
 .auto-key-profile,
 .auto-key-cloud-card,
 .auto-key-action-card {
@@ -1059,7 +1077,15 @@ html, body {
     width: min(76vw, 1180px);
     min-width: min(76vw, 1180px);
     max-width: calc(100vw - 220px);
-    top: clamp(-44px, -2vh, -18px);
+    max-height: calc(100vh - 16px); /* occupy nearly full viewport so content can scroll through arrow/system mask */
+    overflow-y: auto;
+    overscroll-behavior-y: none;
+    top: -189px; /* lift panel above the left arrow zone */
+    padding-top: 80px; /* keep initial content position while allowing upward scroll past arrow */
+    padding-bottom: 150px; /* let bottom content scroll past the SYSTEM overlay */
+    scroll-padding-top: 80px;
+    scroll-padding-bottom: 150px;
+    z-index: 100;
 }
 .child-menu.auto-key-menu li {
     width: 100%;
@@ -1068,7 +1094,7 @@ html, body {
     width: 100%;
 }
 .auto-key-shell {
-    min-height: min(calc(100vh - 190px), 760px);
+    min-height: min(calc(100vh - 96px), 820px);
     display: flex;
     flex-direction: column;
 }
@@ -2209,7 +2235,15 @@ html, body {
     width: min(76vw, 1180px);
     min-width: min(76vw, 1180px);
     max-width: calc(100vw - 220px);
-    top: clamp(-44px, -2vh, -18px);
+    max-height: calc(100vh - 16px); /* occupy nearly full viewport so content can scroll through arrow/system mask */
+    overflow-y: auto;
+    overscroll-behavior-y: none;
+    top: -189px; /* lift panel above the left arrow zone */
+    padding-top: 80px; /* keep initial content position while allowing upward scroll past arrow */
+    padding-bottom: 150px; /* let bottom content scroll past the SYSTEM overlay */
+    scroll-padding-top: 80px;
+    scroll-padding-bottom: 150px;
+    z-index: 100;
 }
 .child-menu.boss-raid-menu li { width: 100%; }
 .child-menu.boss-raid-menu .widget-row { width: 100%; }
@@ -2232,7 +2266,7 @@ html, body {
 }
 .boss-raid-shell {
     width: 100%;
-    min-height: min(calc(100vh - 190px), 660px);
+    min-height: min(calc(100vh - 96px), 820px);
     display: flex; flex-direction: column;
 }
 .boss-raid-panel { display: none; }
@@ -2472,6 +2506,14 @@ html, body {
     flex-direction: column;
     gap: 8px;
     width: 100%;
+    max-height: 380px;
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+}
+#br-phases-container::-webkit-scrollbar-thumb:hover {
+    background: var(--cyan-strong);
 }
 .boss-raid-btn:disabled {
     opacity: 0.38;
@@ -2778,6 +2820,20 @@ html, body {
 }
 #sub-panels .source-summary {
     color: rgb(160,158,160);
+}
+
+/* ═══════════════════════════════════════
+   Hidden scrollbar (keep scroll but no visual bar on right)
+   ═══════════════════════════════════════ */
+.child-menu::-webkit-scrollbar,
+.auto-key-list::-webkit-scrollbar,
+.boss-raid-editor-layout::-webkit-scrollbar,
+#br-phases-container::-webkit-scrollbar,
+.auto-key-cloud-results::-webkit-scrollbar,
+.auto-key-action-list::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
 }
 
 </style>
