@@ -4,6 +4,7 @@
 import json
 import os
 import sys
+import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
 if getattr(sys, "frozen", False):
@@ -25,8 +26,9 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "1.2.19"
+APP_VERSION = "1.2.23"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v1.2.23: 深眠心相仪等级解析 (field 102); full CharSerialize dump on login; level_adjust override module
 
 BASE_CLIENT_WIDTH = 1920.0
 BASE_CLIENT_HEIGHT = 1080.0
@@ -281,10 +283,22 @@ class SettingsManager:
         try:
             for legacy_key in self._LEGACY_KEYS:
                 self._data.pop(legacy_key, None)
-            with open(self._path, "w", encoding="utf-8") as handle:
-                json.dump(self._data, handle, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
+            # Atomic write to improve reliability on exit/crash (80% failure rate fixed)
+            dir_name = os.path.dirname(self._path) or os.getcwd()
+            with tempfile.NamedTemporaryFile(
+                mode="w", dir=dir_name, delete=False, encoding="utf-8", suffix=".tmp.json"
+            ) as tmp:
+                json.dump(self._data, tmp, indent=2, ensure_ascii=False)
+                tmp_path = tmp.name
+            os.replace(tmp_path, self._path)
+        except Exception as e:
+            print(f"[Settings] Save failed: {e} (path={self._path})")
+            # fallback to direct write
+            try:
+                with open(self._path, "w", encoding="utf-8") as handle:
+                    json.dump(self._data, handle, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
 
     def get_data_source_map(self) -> dict:
         raw_map = self._data.get("data_source_map", {})

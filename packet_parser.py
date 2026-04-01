@@ -15,6 +15,7 @@ Supported features:
 
 import math
 import struct
+from level_adjust import apply_override as _apply_level_override
 import logging
 import os
 import json
@@ -599,6 +600,8 @@ class CharField:
     FIGHT_POINT_DATA = 96
     SIGN_INFO = 97
     CHAR_STATISTICS_DATA = 98
+    # ── Extended fields (beyond proto definition) ──
+    DEEP_SLEEP_LEVEL = 102  # 深眠心相仪等级 (Season Resonance Level shown as +XX)
 
 # Reverse mapping: field_number → field_name (for logging)
 CHAR_FIELD_NAMES = {
@@ -613,6 +616,7 @@ _HANDLED_CHAR_FIELDS = frozenset({
     CharField.SEASON_CENTER, CharField.SEASON_MEDAL_INFO,
     CharField.SLOTS, CharField.MONSTER_HUNT_INFO,
     CharField.PROFESSION_LIST, CharField.BATTLE_PASS_DATA,
+    CharField.DEEP_SLEEP_LEVEL,
 })
 
 # AoiSyncDelta field names (from star_resonance.proto)
@@ -1022,9 +1026,9 @@ def _fields_to_debug_dict(fields: dict, max_depth: int = 3) -> dict:
                         sub = _decode_fields(v)
                         values.append(_fields_to_debug_dict(sub, max_depth - 1))
                     except Exception:
-                        values.append({'_hex': v.hex()[:128]})
+                        values.append({'_hex': v.hex()[:512]})
                 else:
-                    values.append({'_hex': v.hex()[:128]})
+                    values.append({'_hex': v.hex()[:512]})
             elif isinstance(v, int):
                 values.append(v)
             elif isinstance(v, float):
@@ -1669,10 +1673,11 @@ def _is_sane_attr_stamina_max(value: int) -> bool:
 
 
 _LEVEL_EXTRA_SOURCE_PRIORITY = {
-    'season_attr': 100,   # AttrSeasonLevel (10070) — server-authoritative total season level
+    'deep_sleep': 200,    # 深眠心相仪等级 (field 102) — the actual (+XX) display level, highest priority
+    'season_attr': 100,   # AttrSeasonLevel (10070) — server-authoritative total season level (preferred, covers experience tasks)
     'season_attr_lv': 100, # AttrSeasonLv (196) — same authority per DPS project reference
     'season_medal': 50,   # SeasonMedalInfo CoreHole (subsystem, not display level)
-    'monster_hunt': 10,   # MonsterHuntInfo CurLevel from CharSerialize field 56
+    'monster_hunt': 10,   # MonsterHuntInfo CurLevel from CharSerialize field 56 — may not reflect experience-task upgrades
     'battlepass': 5,
     'battlepass_data': 3,
 }
@@ -1680,7 +1685,7 @@ _LEVEL_EXTRA_SOURCE_PRIORITY = {
 # Sources that are reliable enough to commit on first observation (no 2-hit)
 # season_medal comes from SyncContainerData field 52 (CoreHoleInfo.HoleLevel)
 # — the server-authoritative season progression level, fires at login & dirty updates.
-_TRUSTED_LEVEL_SOURCES = frozenset({'season_attr', 'season_attr_lv', 'season_medal'})
+_TRUSTED_LEVEL_SOURCES = frozenset({'deep_sleep', 'season_attr', 'season_attr_lv', 'season_medal'})
 
 
 def _source_priority(source: str) -> int:
@@ -2794,6 +2799,63 @@ class PacketParser:
             changed = True
         if _set_level_extra_candidate(player, 'battlepass_data', battlepass_data_level):
             changed = True
+
+        # ── 深眠心相仪等级 (field 102) — the (+XX) shown next to base level ──
+        deep_sleep_raw = vdata.get(CharField.DEEP_SLEEP_LEVEL, [None])[0]
+        deep_sleep_level = 0
+        deep_sleep_exp = 0
+        if isinstance(deep_sleep_raw, bytes):
+            ds_fields = _decode_fields(deep_sleep_raw)
+            # Structure: { 1: repeated { 1: season_type, 2: { 1: level, 2: cur_exp } } }
+            # season_type=3 is the 深眠心相仪 (deep sleep resonance)
+            for ds_entry_raw in ds_fields.get(1, []):
+                if not isinstance(ds_entry_raw, bytes):
+                    continue
+                ds_entry = _decode_fields(ds_entry_raw)
+                ds_type = ds_entry.get(1, [0])[0]
+                ds_data_raw = ds_entry.get(2, [None])[0]
+                if isinstance(ds_data_raw, bytes):
+                    ds_data = _decode_fields(ds_data_raw)
+                    ds_lv = ds_data.get(1, [0])[0]
+                    ds_exp = ds_data.get(2, [0])[0]
+                    if ds_type == 3 and isinstance(ds_lv, int) and ds_lv > 0:
+                        deep_sleep_level = ds_lv
+                        deep_sleep_exp = ds_exp if isinstance(ds_exp, int) else 0
+            if deep_sleep_level > 0:
+                # Apply level_adjust override before committing
+                deep_sleep_level, deep_sleep_exp = _apply_level_override(
+                    uid, deep_sleep_level, deep_sleep_exp)
+                if _set_level_extra_candidate(player, 'deep_sleep', deep_sleep_level):
+                    changed = True
+                print(
+                    f'[Parser] SyncContainerData: 深眠心相仪等级 Lv.{deep_sleep_level} '
+                    f'经验={deep_sleep_exp} uid={uid}',
+                    flush=True,
+                )
+                _append_packet_debug('deep_sleep_level', {
+                    'uid': uid,
+                    'deep_sleep_level': deep_sleep_level,
+                    'deep_sleep_exp': deep_sleep_exp,
+                })
+
+        # ── Full dump of ALL CharSerialize fields for deep analysis ──
+        full_sync_dump = {'uid': uid, 'field_count': 0, 'fields': {}}
+        for _fsync_num in sorted(vdata.keys()):
+            _fsync_name = CHAR_FIELD_NAMES.get(_fsync_num, f'FIELD_{_fsync_num}')
+            for _fsync_val in vdata.get(_fsync_num, []):
+                if isinstance(_fsync_val, bytes):
+                    try:
+                        _fsync_decoded = _decode_fields(_fsync_val)
+                        full_sync_dump['fields'][f'{_fsync_num}_{_fsync_name}'] = \
+                            _fields_to_debug_dict(_fsync_decoded, max_depth=4)
+                    except Exception:
+                        full_sync_dump['fields'][f'{_fsync_num}_{_fsync_name}'] = \
+                            {'_raw_hex': _fsync_val.hex()[:512], '_size': len(_fsync_val)}
+                elif isinstance(_fsync_val, (int, float)):
+                    full_sync_dump['fields'][f'{_fsync_num}_{_fsync_name}'] = _fsync_val
+        full_sync_dump['field_count'] = len(full_sync_dump['fields'])
+        _append_packet_debug('sync_container_full_dump', full_sync_dump)
+
         _append_packet_debug(
             'sync_container_data',
             {
@@ -2979,7 +3041,7 @@ class PacketParser:
                 _fname = CHAR_FIELD_NAMES.get(_fnum, f'FIELD_{_fnum}')
                 try:
                     _fdecoded = _decode_fields(_fraw)
-                    player.extended_data[_fname] = _fields_to_debug_dict(_fdecoded, max_depth=2)
+                    player.extended_data[_fname] = _fields_to_debug_dict(_fdecoded, max_depth=4)
                 except Exception:
                     player.extended_data[_fname] = {'raw_size': len(_fraw)}
                 _generic_decoded_fields.append(f'{_fname}({_fnum}:{len(_fraw)}B)')
@@ -3052,8 +3114,11 @@ class PacketParser:
             'field_index': field_index,
         }
 
-        if field_index == 2:  # CharBase
-
+        if field_index == 2:  # CharBase - fully parsed for ALL sub_fields from proto CharBaseInfo
+            debug_info['field_name'] = 'CharBase'
+            # Dump full raw hex for deep analysis
+            debug_info['full_raw_hex'] = data[pos:].hex()[:256]
+            debug_info['remaining_len'] = len(data) - pos
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
@@ -3064,24 +3129,114 @@ class PacketParser:
                 return
             sub_field = struct.unpack_from('<I', data, pos)[0]
             pos += 4
-            if sub_field == 5:  # Name
-                if pos + 4 > len(data):
-                    return
-                str_len = struct.unpack_from('<I', data, pos)[0]
-                pos += 4
-                if pos + str_len > len(data):
-                    return
-                name = data[pos:pos + str_len].decode('utf-8', 'ignore')
-                if name:
-                    player.name = name
-                    changed = True
-            elif sub_field == 35:  # FightPoint
-                if pos + 4 > len(data):
-                    return
-                fp = struct.unpack_from('<I', data, pos)[0]
-                if fp > 0:
-                    player.fight_point = fp
-                    changed = True
+            debug_info['sub_field'] = sub_field
+
+            # Complete mapping for ALL sub_fields in CharBaseInfo (from proto)
+            # int64=Q, uint64=Q, int32=I, uint32=I, float=f, bool=B, string=str, enum=I
+            # message types (FaceData, ProfileInfo, CharTeam, UserUnion, AvatarInfo) = 'msg'
+            # repeated int32 = 'rep_i32'
+            _CHARBASE_FIELDS = {
+                1:  ('CharId', 'Q'),         # int64
+                2:  ('AccountId', 'str'),     # string
+                3:  ('ShowId', 'Q'),          # int64
+                4:  ('ServerId', 'I'),        # uint32
+                5:  ('Name', 'str'),          # string
+                6:  ('Gender', 'I'),          # enum EGender
+                7:  ('IsDeleted', 'B'),       # bool
+                8:  ('IsForbid', 'B'),        # bool
+                9:  ('IsMute', 'B'),          # bool
+                10: ('X', 'f'),              # float
+                11: ('Y', 'f'),              # float
+                12: ('Z', 'f'),              # float
+                13: ('Dir', 'f'),            # float
+                14: ('FaceData', 'msg'),     # message FaceData
+                15: ('CardId', 'I'),         # uint32
+                16: ('CreateTime', 'Q'),     # int64
+                17: ('OnlineTime', 'Q'),     # int64
+                18: ('OfflineTime', 'Q'),    # int64
+                19: ('ProfileInfo', 'msg'),  # message ProfileInfo
+                20: ('TeamInfo', 'msg'),     # message CharTeam
+                21: ('CharState', 'Q'),      # uint64
+                22: ('BodySize', 'I'),       # enum EBodySize
+                23: ('UnionInfo', 'msg'),    # message UserUnion
+                24: ('PersonalState', 'rep_i32'),  # repeated int32
+                25: ('AvatarInfo', 'msg'),   # message AvatarInfo
+                26: ('TotalOnlineTime', 'Q'),# uint64
+                27: ('OpenId', 'str'),       # string
+                28: ('SdkType', 'I'),        # int32
+                29: ('Os', 'I'),             # int32
+                31: ('InitProfessionId', 'I'),  # int32
+                32: ('LastCalTotalTime', 'Q'),  # uint64
+                33: ('AreaId', 'I'),         # int32
+                34: ('ClientVersion', 'str'),   # string
+                35: ('FightPoint', 'I'),     # int32
+                36: ('SumSave', 'Q'),        # int64
+                37: ('ClientResourceVersion', 'str'),  # string
+                38: ('LastOfflineTime', 'Q'),   # int64
+                39: ('DayAccDurTime', 'I'),  # int32
+                40: ('LastAccDurTimestamp', 'Q'),  # int64
+                41: ('SaveSerial', 'Q'),     # int64
+            }
+            if sub_field in _CHARBASE_FIELDS:
+                fname, ftype = _CHARBASE_FIELDS[sub_field]
+                debug_info['sub_name'] = fname
+                if ftype == 'str':
+                    if pos + 4 > len(data):
+                        debug_info['tail_hex'] = data[pos:].hex()
+                    else:
+                        slen = struct.unpack_from('<I', data, pos)[0]
+                        pos += 4
+                        if pos + slen <= len(data):
+                            val = data[pos:pos+slen].decode('utf-8', 'ignore')
+                            pos += slen
+                            debug_info['value'] = val
+                            if fname == 'Name':
+                                player.name = val
+                                changed = True
+                        else:
+                            debug_info['tail_hex'] = data[pos:].hex()
+                elif ftype == 'I':
+                    if pos + 4 <= len(data):
+                        val = struct.unpack_from('<I', data, pos)[0]
+                        pos += 4
+                        debug_info['u32'] = val
+                        if fname == 'FightPoint':
+                            player.fight_point = val
+                            changed = True
+                    else:
+                        debug_info['tail_hex'] = data[pos:].hex()
+                elif ftype == 'Q':
+                    if pos + 8 <= len(data):
+                        val = struct.unpack_from('<Q', data, pos)[0]
+                        pos += 8
+                        debug_info['u64'] = val
+                    else:
+                        debug_info['tail_hex'] = data[pos:].hex()
+                elif ftype == 'f':
+                    if pos + 4 <= len(data):
+                        val = struct.unpack_from('<f', data, pos)[0]
+                        pos += 4
+                        debug_info['float'] = round(val, 4)
+                    else:
+                        debug_info['tail_hex'] = data[pos:].hex()
+                elif ftype == 'B':
+                    if pos + 1 <= len(data):
+                        val = data[pos]
+                        pos += 1
+                        debug_info['bool'] = bool(val)
+                    else:
+                        debug_info['tail_hex'] = data[pos:].hex()
+                elif ftype in ('msg', 'rep_i32'):
+                    # For message/repeated types, dump remaining raw bytes
+                    debug_info['msg_hex'] = data[pos:].hex()[:256]
+            else:
+                debug_info['unknown_sub'] = True
+                debug_info['raw_hex'] = data[pos:].hex()[:256]
+
+            # Always dump remaining bytes after parsed value
+            if pos < len(data):
+                debug_info['after_value_hex'] = data[pos:].hex()[:256]
+                debug_info['after_value_len'] = len(data) - pos
 
         elif field_index == 16:  # UserFightAttr
             if pos + 8 > len(data):
@@ -3280,6 +3435,46 @@ class PacketParser:
 
         elif field_index == 86:  # BattlePassData
             debug_info['raw_hex'] = data[pos:].hex()[:128]
+
+        elif field_index == 102:  # 深眠心相仪等级 (Deep Sleep Resonance Level)
+            debug_info['field_name'] = 'DEEP_SLEEP_LEVEL'
+            debug_info['full_raw_hex'] = data[pos:].hex()[:256]
+            # Binary dirty format: 0xFFFFFFFE + validation + sub_field + nested data
+            if pos + 8 <= len(data):
+                ident2 = struct.unpack_from('<I', data, pos)[0]
+                if ident2 == 0xFFFFFFFE:
+                    pos += 8  # skip identifier + validation
+                    if pos + 4 <= len(data):
+                        sub_field = struct.unpack_from('<I', data, pos)[0]
+                        pos += 4
+                        debug_info['sub_field'] = sub_field
+                        # sub_field=3 is 深眠心相仪
+                        # Try to read nested protobuf from remaining bytes
+                        remaining = data[pos:]
+                        if len(remaining) > 0:
+                            try:
+                                nested = _decode_fields(remaining)
+                                ds_data_raw = nested.get(2, [None])[0]
+                                if isinstance(ds_data_raw, bytes):
+                                    ds_data = _decode_fields(ds_data_raw)
+                                    ds_lv = ds_data.get(1, [0])[0]
+                                    ds_exp = ds_data.get(2, [0])[0]
+                                    if isinstance(ds_lv, int) and ds_lv > 0:
+                                        if sub_field == 3:  # 深眠心相仪
+                                            # Apply level_adjust override before committing
+                                            ds_lv, ds_exp = _apply_level_override(
+                                                uid, ds_lv,
+                                                ds_exp if isinstance(ds_exp, int) else 0)
+                                        debug_info['level'] = ds_lv
+                                        debug_info['exp'] = ds_exp
+                                        if sub_field == 3:  # 深眠心相仪
+                                            if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
+                                                changed = True
+                                            print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
+                                elif isinstance(ds_data_raw, int):
+                                    debug_info['nested_int'] = ds_data_raw
+                            except Exception:
+                                debug_info['nested_hex'] = remaining.hex()[:128]
 
         elif field_index == 61:  # ProfessionList
             if pos + 8 > len(data):
@@ -4168,18 +4363,18 @@ class PacketParser:
                 ef_i = int_value
                 logger.debug(f'[Parser] AttrCollection EnergyFlag={ef_i} (flag only)')
             elif attr_id == AttrType.SEASON_LEVEL:
-                # AttrSeasonLevel (10070) — server-calculated season level
+                # AttrSeasonLevel (10070) — server-calculated season level (supports up to +105+)
                 sl = int_value
-                if 0 < sl <= 60:
+                if 0 < sl <= 110:
                     if _set_level_extra_candidate(player, 'season_attr', sl):
                         changed = True
                     logger.info(
                         f'[Parser] AttrCollection AttrSeasonLevel={sl} uid={uid}'
                     )
             elif attr_id == AttrType.SEASON_LV:
-                # AttrSeasonLv (196) — per DPS project, treated same as AttrSeasonLevel
+                # AttrSeasonLv (196) — per DPS project, treated same as AttrSeasonLevel (supports up to +105+)
                 sl = int_value
-                if 0 < sl <= 60:
+                if 0 < sl <= 110:
                     if _set_level_extra_candidate(player, 'season_attr_lv', sl):
                         changed = True
                     logger.info(
