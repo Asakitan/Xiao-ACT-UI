@@ -1499,9 +1499,12 @@ function updateBossBar(data) {
     }
     var breakFill = document.getElementById('break-fill');
     var breakTrack = breakFill.parentElement;
-    // During broken/recovering states the state machine owns the visual —
+    // During broken/recovering/refilled states the state machine owns the visual —
     // don't let stale server data overwrite the 0% / interpolated width.
-    var _breakVisualLocked = (_breakState === 'broken' || _recoverInterpolating);
+    // Post-refill grace: after refilled→normal, lock visual for 4s so the raw
+    // server data (which lags behind the animation) doesn't flash the bar to 0%.
+    var _postRefillLock = (_refillCompletedTs > 0 && (Date.now() - _refillCompletedTs) < 4000);
+    var _breakVisualLocked = (_breakState === 'broken' || _breakState === 'refilled' || _recoverInterpolating || _postRefillLock);
     if (!_breakVisualLocked && _breakDataAvailable) {
         breakFill.style.width = Math.round(breakPct * 100) + '%';
     }
@@ -1525,6 +1528,9 @@ function updateBossBar(data) {
 
     if (!_breakVisualLocked && (_breakDataAvailable || (stage === 0 && !_firstBreakSeen))) {
         document.getElementById('break-text').textContent = Math.round(breakPct * 100) + '%';
+    } else if (_postRefillLock) {
+        // During post-refill grace: show 100% text
+        document.getElementById('break-text').textContent = '100%';
     }
 
     var stopTicking = !!data.stop_breaking_ticking;

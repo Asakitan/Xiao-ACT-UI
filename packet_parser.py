@@ -846,7 +846,11 @@ class MonsterData:
     def to_dict(self) -> dict:
         # Break gauge: extinction works like HP — starts at max, depletes to 0.
         # remaining = current / max  →  100% = undamaged, 0% = fully broken.
-        _has_break = self.max_extinction > 0 or self.max_stunned > 0
+        # Also consider break data present if we have raw values (even without max)
+        # or if breaking_stage has been received (>= 0).
+        _has_break = (self.max_extinction > 0 or self.max_stunned > 0
+                      or self.extinction > 0 or self.stunned > 0
+                      or self.breaking_stage >= 0)
         if self.max_extinction > 0:
             _ext_pct = max(0.0, self.extinction / self.max_extinction)
         elif self.max_stunned > 0:
@@ -3787,6 +3791,16 @@ class PacketParser:
                 if int_value != monster.extinction:
                     monster.extinction = int_value
                     changed = True
+                    # Estimate max_extinction if server never sent it
+                    # (same pattern as the max_hp estimation)
+                    if monster.max_extinction == 0 and int_value > 0:
+                        monster.max_extinction = int_value
+                        logger.info(
+                            f'[Parser] Monster max_extinction estimated from first value: '
+                            f'{int_value} uuid={uuid}'
+                        )
+                    elif int_value > monster.max_extinction > 0:
+                        monster.max_extinction = int_value  # recovery exceeded old max
                     logger.info(f'[Parser] Monster EXTINCTION={int_value} max={monster.max_extinction} uuid={uuid}')
             elif attr_id == AttrType.MAX_EXTINCTION:
                 if int_value > 0 and int_value != monster.max_extinction:
@@ -3797,6 +3811,15 @@ class PacketParser:
                 if int_value != monster.stunned:
                     monster.stunned = int_value
                     changed = True
+                    # Estimate max_stunned if server never sent it
+                    if monster.max_stunned == 0 and int_value > 0:
+                        monster.max_stunned = int_value
+                        logger.info(
+                            f'[Parser] Monster max_stunned estimated from first value: '
+                            f'{int_value} uuid={uuid}'
+                        )
+                    elif int_value > monster.max_stunned > 0:
+                        monster.max_stunned = int_value  # new phase with higher max
                     logger.info(f'[Parser] Monster STUNNED={int_value} max={monster.max_stunned} uuid={uuid}')
             elif attr_id == AttrType.MAX_STUNNED:
                 if int_value > 0 and int_value != monster.max_stunned:
@@ -3877,6 +3900,7 @@ class PacketParser:
             self._notify_monster(monster)
             # Log break-related attrs to packet_debug for diagnosis
             if (monster.max_extinction > 0 or monster.max_stunned > 0
+                    or monster.extinction > 0 or monster.stunned > 0
                     or monster.breaking_stage >= 0 or monster.shield_active):
                 _append_packet_debug('monster_break', {
                     'uuid': uuid,
