@@ -1920,18 +1920,17 @@ class SAOWebViewGUI:
                 self._bb_last_target_uuid = target_uuid
                 self._bb_last_damage_ts = time.time()
                 # Proactively check if the monster has max_hp in parser.
-                # If not, log a warning (likely due to stale reset or late entity sync).
+                # If not, estimate from current HP (the server never sends
+                # AttrMaxHp for monsters, so packet_parser estimates it from
+                # the first HP observation; this is a secondary fallback).
                 try:
                     _bridge = getattr(self, '_packet_engine', None)
                     _m = _bridge.get_monster(target_uuid) if _bridge else None
-                    if _m and _m.max_hp == 0:
-                        # Monster exists but max_hp is 0 — this means the initial
-                        # SyncNearEntities data was lost (e.g. from a late reset).
-                        # Try to use total_damage from DPS tracker as a fallback hint.
-                        _total_dmg = int(event.get('total_damage', 0) or event.get('damage', 0) or 0)
-                        logger.warning(
-                            f'[WebView] Damage target uuid={target_uuid} has max_hp=0! '
-                            f'hp={_m.hp} dmg={_total_dmg} — boss bar may not show'
+                    if _m and _m.max_hp == 0 and _m.hp > 0:
+                        _m.max_hp = _m.hp
+                        logger.info(
+                            f'[WebView] Estimated max_hp from HP on damage: '
+                            f'{_m.hp} uuid={target_uuid}'
                         )
                 except Exception:
                     pass
@@ -1966,8 +1965,11 @@ class SAOWebViewGUI:
             _uuid = monster_data.get('uuid', 0)
             _max_ext = int(monster_data.get('max_extinction', 0) or 0)
             _max_hp = int(monster_data.get('max_hp', 0) or 0)
+            _hp = int(monster_data.get('hp', 0) or 0)
             _is_dead = monster_data.get('is_dead', False)
-            if _uuid and _max_hp > 0 and not _is_dead:
+            # Accept monster if it has either max_hp or hp (server may not
+            # send AttrMaxHp; packet_parser estimates max_hp from HP).
+            if _uuid and (_max_hp > 0 or _hp > 0) and not _is_dead:
                 # Adopt this monster as the target if:
                 # 1. No target yet (first monster after scene change)
                 # 2. Current target is stale (dead, or no longer in monsters dict)
@@ -1979,7 +1981,7 @@ class SAOWebViewGUI:
                     try:
                         _bridge = getattr(self, '_packet_engine', None)
                         _cur = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
-                        if _cur is None or _cur.is_dead or _cur.max_hp == 0:
+                        if _cur is None or _cur.is_dead or (_cur.max_hp == 0 and _cur.hp == 0):
                             _should_adopt = True
                     except Exception:
                         pass
@@ -1987,7 +1989,7 @@ class SAOWebViewGUI:
                     self._bb_last_target_uuid = _uuid
                     logger.debug(
                         f'[WebView] Pre-tracked monster target uuid={_uuid} '
-                        f'max_hp={_max_hp} max_ext={_max_ext}'
+                        f'max_hp={_max_hp} hp={_hp} max_ext={_max_ext}'
                     )
         except Exception:
             pass
@@ -5276,8 +5278,8 @@ class SAOWebViewGUI:
                             try:
                                 _bridge = getattr(self, '_packet_engine', None)
                                 _m = _bridge.get_monster(_target_uuid) if _bridge else None
-                                if _m and not _m.is_dead and _m.max_hp > 0:
-                                    _bb_direct_max = int(_m.max_hp)
+                                if _m and not _m.is_dead and (_m.max_hp > 0 or _m.hp > 0):
+                                    _bb_direct_max = int(_m.max_hp) if _m.max_hp > 0 else int(_m.hp)
                                     _bb_direct_hp = max(0, int(_m.hp))
                                     _bb_direct_data = _m.to_dict()
                                     _bb_src = 'packet'
@@ -5288,8 +5290,8 @@ class SAOWebViewGUI:
                             try:
                                 _bridge = getattr(self, '_packet_engine', None)
                                 _m = _bridge.get_monster(_target_uuid) if _bridge else None
-                                if _m and not _m.is_dead and _m.max_hp > 0:
-                                    _bb_direct_max = int(_m.max_hp)
+                                if _m and not _m.is_dead and (_m.max_hp > 0 or _m.hp > 0):
+                                    _bb_direct_max = int(_m.max_hp) if _m.max_hp > 0 else int(_m.hp)
                                     _bb_direct_hp = max(0, int(_m.hp))
                                     _bb_direct_data = _m.to_dict()
                                     _bb_src = 'packet'

@@ -3739,10 +3739,32 @@ class PacketParser:
                 hp = int_value
                 if hp >= 0 and hp != monster.hp:
                     monster.hp = hp
+                    # ── max_hp estimation ──
+                    # The game server never sends AttrMaxHp for monsters.
+                    # Estimate max_hp from the first HP observation (monster
+                    # appears at full health) and track the highest HP seen
+                    # to handle healing / regen.
+                    if monster.max_hp == 0 and hp > 0:
+                        monster.max_hp = hp
+                        logger.info(
+                            f'[Parser] Monster max_hp estimated from first HP: '
+                            f'{hp} uuid={uuid} name={monster.name!r}'
+                        )
+                        # Save estimated max to cache
+                        if monster.template_id > 0:
+                            self._monster_hp_cache[monster.template_id] = hp
+                    elif hp > monster.max_hp > 0:
+                        monster.max_hp = hp  # HP exceeded estimate (healing)
+                        logger.info(
+                            f'[Parser] Monster max_hp raised to {hp} '
+                            f'(healing/regen) uuid={uuid}'
+                        )
                     if hp == 0 and monster.max_hp > 0:
                         monster.is_dead = True
                     changed = True
             elif attr_id == AttrType.MAX_HP:
+                # Server rarely sends this for monsters, but handle it
+                # properly when it does arrive.
                 mhp = int_value
                 if mhp > 0 and mhp != monster.max_hp:
                     monster.max_hp = mhp
@@ -3844,6 +3866,13 @@ class PacketParser:
                         f'[Parser] Monster max_hp recovered from cache: '
                         f'tid={monster.template_id} max_hp={cached_max} uuid={uuid}'
                     )
+            # Final fallback: if max_hp is still 0 but HP is known, use HP as max
+            if monster.max_hp == 0 and monster.hp > 0:
+                monster.max_hp = monster.hp
+                logger.info(
+                    f'[Parser] Monster max_hp fallback from HP: '
+                    f'{monster.hp} uuid={uuid}'
+                )
             monster.last_update = time.time()
             self._notify_monster(monster)
             # Log break-related attrs to packet_debug for diagnosis
