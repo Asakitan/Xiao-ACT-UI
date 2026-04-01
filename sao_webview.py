@@ -26,6 +26,9 @@ import json
 import copy
 import ctypes
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 from typing import Optional
 
 from auto_key_engine import (
@@ -1406,6 +1409,7 @@ class SAOWebViewGUI:
         self._boss_hp_geometry = None
         self._bb_last_target_uuid = 0     # UUID of last monster damaged by self
         self._bb_last_damage_ts = 0.0     # timestamp of last self→monster damage
+        self._bb_recent_targets = {}      # uuid -> last_damage_ts for multi-unit secondary panels
         self._bb_damage_timeout = 5.0     # seconds before boss bar fades out
 
         # DPS Meter
@@ -1917,6 +1921,7 @@ class SAOWebViewGUI:
         if event.get('attacker_is_self') and event.get('target_is_monster'):
             target_uuid = event.get('target_uuid', 0)
             if target_uuid:
+                self._bb_recent_targets[target_uuid] = time.time()
                 self._bb_last_target_uuid = target_uuid
                 self._bb_last_damage_ts = time.time()
                 # Proactively check if the monster has max_hp in parser.
@@ -2036,6 +2041,7 @@ class SAOWebViewGUI:
         # 1. Boss HP bar: 强制隐藏, 清除所有 boss 状态
         self._bb_last_target_uuid = 0
         self._bb_last_damage_ts = 0.0
+        self._bb_recent_targets = {}
         self._last_boss_bar_sig = None  # 强制下次更新重新推送
         try:
             self._eval_boss_hp('updateBossBar({active:false})')
@@ -3538,6 +3544,8 @@ class SAOWebViewGUI:
             self._set_window_alpha('SAO Menu', 0.0)
             self._set_window_alpha('SAO SkillFX', 1.0)
             self._set_window_alpha('SAO Alert', 1.0)
+            # Alert window: default click-through so the hidden window never captures clicks
+            self._setup_alert_click_through()
             # Boss HP overlay: transparency + click-through + show (hidden by default)
             # Ensure click-through is applied BEFORE the window becomes visible.
             self._setup_boss_hp_click_through()
@@ -3554,8 +3562,9 @@ class SAOWebViewGUI:
                     _fx_lr = _g.get('fx_lr', 200)
                     _fx_top = _g.get('fx_top', 120)
                     _fx_bot = _g.get('fx_bot', 160)
+                    multi_h = _g.get('multi_extra_h', 240)
                     self._eval_boss_hp(
-                        f'if(window.BossHP)BossHP.setFxMargins({_fx_top},{_fx_lr},{_fx_bot},{_fx_lr})'
+                        f'if(window.BossHP)BossHP.setFxMargins({_fx_top},{_fx_lr},{_fx_bot},{_fx_lr},{multi_h})'
                     )
             except Exception:
                 pass
@@ -3890,14 +3899,17 @@ class SAOWebViewGUI:
         # small-margin code where max(0, 4-24)+24 = 24.
         bar_screen_x = right - bar_w - pad
         bar_screen_y = max(0, int(sh * 0.0046) - 24) + 24  # preserve legacy offset
+        # Extra height for multi-unit support (additional attacked units below main bar)
+        multi_extra_h = 240  # room for ~3 additional small bars
         return {
             'width':  bar_w + pad * 2 + 20 + fx_lr * 2,
-            'height': bar_h + pad * 2 + fx_top + fx_bot,
+            'height': bar_h + pad * 2 + fx_top + fx_bot + multi_extra_h,
             'x': bar_screen_x - fx_lr,
             'y': bar_screen_y - fx_top,
             'fx_lr':  fx_lr,
             'fx_top': fx_top,
             'fx_bot': fx_bot,
+            'multi_extra_h': multi_extra_h,
         }
 
     def _refresh_boss_hp_geometry(self, force: bool = False):
@@ -3913,9 +3925,12 @@ class SAOWebViewGUI:
                 _fx_lr = geom.get('fx_lr', 200)
                 _fx_top = geom.get('fx_top', 120)
                 _fx_bot = geom.get('fx_bot', 160)
+                multi_h = geom.get('multi_extra_h', 240)
                 self._eval_boss_hp(
-                    f'if(window.BossHP)BossHP.setFxMargins({_fx_top},{_fx_lr},{_fx_bot},{_fx_lr})'
+                    f'if(window.BossHP)BossHP.setFxMargins({_fx_top},{_fx_lr},{_fx_bot},{_fx_lr},{multi_h})'
                 )
+                # Re-apply click-through after resize/move (container flags can reset)
+                self._setup_boss_hp_click_through()
         except Exception:
             pass
 
@@ -4370,6 +4385,8 @@ class SAOWebViewGUI:
             self._apply_webview2_transparency()
         except Exception:
             pass
+        # Remove click-through so alert buttons can be clicked while visible
+        self._remove_alert_click_through()
         self._set_window_alpha('SAO Alert', 1.0)
         self._ensure_alert_on_top()
         self._play_sound('alert')
@@ -4409,6 +4426,7 @@ class SAOWebViewGUI:
                 self.alert_win.hide()
             except Exception:
                 pass
+            self._setup_alert_click_through()
             return
 
         self._play_sound('alert_close')
@@ -4421,8 +4439,42 @@ class SAOWebViewGUI:
                 self.alert_win.hide()
             except Exception:
                 pass
+            # Restore click-through so hidden alert window never captures mouse
+            self._setup_alert_click_through()
 
         threading.Timer(0.52, _finish_hide).start()
+
+    def _setup_alert_click_through(self):
+        """Make alert window fully click-through (WS_EX_TRANSPARENT).
+
+        Default state: always click-through. Temporarily removed
+        when an alert is actively showing so buttons can be clicked.
+        """
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = self._alert_hwnd or user32.FindWindowW(None, 'SAO Alert')
+            if not hwnd:
+                return
+            self._alert_hwnd = hwnd
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            ex |= (_WS_EX_TRANSPARENT | _WS_EX_LAYERED)
+            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex)
+        except Exception:
+            pass
+
+    def _remove_alert_click_through(self):
+        """Temporarily remove WS_EX_TRANSPARENT so alert buttons are clickable."""
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = self._alert_hwnd or user32.FindWindowW(None, 'SAO Alert')
+            if not hwnd:
+                return
+            self._alert_hwnd = hwnd
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE,
+                                  (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
 
     def _setup_skillfx_click_through(self):
         try:
@@ -5265,35 +5317,65 @@ class SAOWebViewGUI:
                     _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
 
                     # ── Target-based boss bar: show HP of the monster we're attacking ──
+                    # Multi-unit support: highest-HP unit = main panel; others as .additional panels (sorted by HP desc, attack time)
                     _bb_direct_hp = 0
                     _bb_direct_max = 0
                     _bb_direct_data = None
+                    _bb_additional = []
                     _now = time.time()
                     _has_recent_self_damage = (_now - self._bb_last_damage_ts) < self._bb_damage_timeout
 
+                    # Cleanup stale recent targets (prevent accumulation)
+                    for uuid in list(self._bb_recent_targets.keys()):
+                        if _now - self._bb_recent_targets.get(uuid, 0) > self._bb_damage_timeout * 3:
+                            self._bb_recent_targets.pop(uuid, None)
+
                     if not _bb_raid_active:
-                        # Try to get the specific monster we last damaged
-                        _target_uuid = self._bb_last_target_uuid
-                        if _target_uuid and _has_recent_self_damage:
+                        _bridge = getattr(self, '_packet_engine', None)
+                        if _bridge and _has_recent_self_damage and self._bb_recent_targets:
+                            # Collect all recently damaged monsters
+                            _recent_monsters = []
+                            for uuid, dmg_ts in list(self._bb_recent_targets.items()):
+                                if _now - dmg_ts < self._bb_damage_timeout * 1.5:
+                                    m = _bridge.get_monster(uuid)
+                                    if m and not getattr(m, 'is_dead', False) and (getattr(m, 'max_hp', 0) > 0 or getattr(m, 'hp', 0) > 0):
+                                        _recent_monsters.append(m)
+                            if _recent_monsters:
+                                # Sort: HP% desc (highest = primary/boss unit), then recent attack time desc
+                                def _sort_key(m):
+                                    hp = getattr(m, 'hp', 0) or 0
+                                    maxhp = getattr(m, 'max_hp', 0) or hp or 1
+                                    hp_pct = hp / maxhp if maxhp > 0 else 0
+                                    last_ts = self._bb_recent_targets.get(getattr(m, 'uuid', 0), 0)
+                                    return (-hp_pct, -last_ts)
+                                _recent_monsters.sort(key=_sort_key)
+                                main_m = _recent_monsters[0]
+                                self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)  # update target to highest-HP
+                                _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
+                                _bb_direct_hp = max(0, int(getattr(main_m, 'hp', 0)))
+                                _bb_direct_data = main_m.to_dict() if hasattr(main_m, 'to_dict') else {}
+                                _bb_src = 'packet'
+                                # Additional units for secondary panels
+                                for m in _recent_monsters[1:]:
+                                    if len(_bb_additional) >= 4: break
+                                    d = m.to_dict() if hasattr(m, 'to_dict') else {}
+                                    _bb_additional.append({
+                                        'name': str(d.get('name', 'Unit'))[:20],
+                                        'hp_pct': round(float(d.get('hp_pct', 0.0)), 3),
+                                        'extinction_pct': round(float(d.get('extinction_pct', 0.0)), 3),
+                                        'has_break_data': bool(d.get('has_break_data', False)),
+                                        'breaking_stage': int(d.get('breaking_stage', -1)),
+                                        'shield_active': bool(d.get('shield_active', False)),
+                                        'shield_pct': round(float(d.get('shield_pct', 0.0)), 3)
+                                    })
+                        elif self._bb_last_target_uuid and not _has_recent_self_damage:
+                            # Pre-tracked boss: still fetch data for when damage arrives (single)
                             try:
-                                _bridge = getattr(self, '_packet_engine', None)
-                                _m = _bridge.get_monster(_target_uuid) if _bridge else None
-                                if _m and not _m.is_dead and (_m.max_hp > 0 or _m.hp > 0):
-                                    _bb_direct_max = int(_m.max_hp) if _m.max_hp > 0 else int(_m.hp)
-                                    _bb_direct_hp = max(0, int(_m.hp))
-                                    _bb_direct_data = _m.to_dict()
-                                    _bb_src = 'packet'
-                            except Exception:
-                                pass
-                        elif _target_uuid and not _has_recent_self_damage:
-                            # Pre-tracked boss: still fetch data for when damage arrives
-                            try:
-                                _bridge = getattr(self, '_packet_engine', None)
-                                _m = _bridge.get_monster(_target_uuid) if _bridge else None
-                                if _m and not _m.is_dead and (_m.max_hp > 0 or _m.hp > 0):
-                                    _bb_direct_max = int(_m.max_hp) if _m.max_hp > 0 else int(_m.hp)
-                                    _bb_direct_hp = max(0, int(_m.hp))
-                                    _bb_direct_data = _m.to_dict()
+                                _m = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
+                                if _m and not getattr(_m, 'is_dead', False) and (getattr(_m, 'max_hp', 0) > 0 or getattr(_m, 'hp', 0) > 0):
+                                    _bb_direct_max = int(getattr(_m, 'max_hp', 0)) or int(getattr(_m, 'hp', 0))
+                                    _bb_direct_hp = max(0, int(getattr(_m, 'hp', 0)))
+                                    _bb_direct_data = _m.to_dict() if hasattr(_m, 'to_dict') else {}
                                     _bb_src = 'packet'
                             except Exception:
                                 pass
@@ -5376,6 +5458,7 @@ class SAOWebViewGUI:
                             'in_overdrive': _bb_sig[13],
                             'invincible': _bb_sig[14],
                             'boss_name': (_bb_direct_data or {}).get('name', '') or '',
+                            'additional': _bb_additional,
                         }
                         self._eval_boss_hp(f'updateBossBar({json.dumps(_bb_data)})')
                     # ── DPS Meter push (packet-driven, always runs) ──
