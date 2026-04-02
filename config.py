@@ -26,8 +26,9 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "1.2.24"
+APP_VERSION = "1.2.25"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v1.2.25: 移除 level_adjust 模块依赖
 # v1.2.24: 副本重开死亡单位重置; 升级时赛季等级优先级修复; 移除 level_adjust 模块
 # v1.2.23: 深眠心相仪等级解析 (field 102); full CharSerialize dump on login; level_adjust override module
 
