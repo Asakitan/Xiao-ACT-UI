@@ -15,7 +15,6 @@ Supported features:
 
 import math
 import struct
-from level_adjust import apply_override as _apply_level_override
 import logging
 import os
 import json
@@ -2846,9 +2845,6 @@ class PacketParser:
                         deep_sleep_level = ds_lv
                         deep_sleep_exp = ds_exp if isinstance(ds_exp, int) else 0
             if deep_sleep_level > 0:
-                # Apply level_adjust override before committing
-                deep_sleep_level, deep_sleep_exp = _apply_level_override(
-                    uid, deep_sleep_level, deep_sleep_exp)
                 if _set_level_extra_candidate(player, 'deep_sleep', deep_sleep_level):
                     changed = True
                 print(
@@ -3484,11 +3480,6 @@ class PacketParser:
                                     ds_lv = ds_data.get(1, [0])[0]
                                     ds_exp = ds_data.get(2, [0])[0]
                                     if isinstance(ds_lv, int) and ds_lv > 0:
-                                        if sub_field == 3:  # 深眠心相仪
-                                            # Apply level_adjust override before committing
-                                            ds_lv, ds_exp = _apply_level_override(
-                                                uid, ds_lv,
-                                                ds_exp if isinstance(ds_exp, int) else 0)
                                         debug_info['level'] = ds_lv
                                         debug_info['exp'] = ds_exp
                                         if sub_field == 3:  # 深眠心相仪
