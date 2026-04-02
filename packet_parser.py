@@ -1717,12 +1717,15 @@ def _set_level_extra_candidate(player: PlayerData, source: str, value: int) -> b
     candidate_priority = _source_priority(source)
 
     # Block lower-priority sources from overriding a higher-priority confirmed value.
+    # Exception: trusted sources may INCREASE level_extra (level-up arrives via
+    # AttrSeasonLevel attr before dirty_update field 102 deep_sleep).
     if (
         getattr(player, 'level_extra', 0) > 0 and
         value != player.level_extra and
         current_priority > candidate_priority
     ):
-        return False
+        if not (source in _TRUSTED_LEVEL_SOURCES and value > player.level_extra):
+            return False
 
     # Trusted sources (season_medal, season_attr) commit immediately.
     if source in _TRUSTED_LEVEL_SOURCES:
@@ -2549,6 +2552,27 @@ class PacketParser:
                     flush=True,
                 )
                 self.reset_scene()
+            elif dungeon_id == self._last_dungeon_id and self._last_dungeon_id != 0:
+                # Same dungeon retry (刷本): UUID 不变, 需要重置死亡状态
+                # 不调用 reset_scene() 以保留 max_hp 缓存,
+                # 仅清除 is_dead 让 boss HP 面板可以重新呼出。
+                revived = 0
+                for m in self._monsters.values():
+                    if m.is_dead:
+                        m.is_dead = False
+                        m.hp = 0  # 等待新 HP 数据
+                        m.last_update = time.time()
+                        revived += 1
+                if revived:
+                    print(
+                        f'[Parser] ♻ 同副本重开: dungeon={dungeon_id}, '
+                        f'重置 {revived} 个死亡单位',
+                        flush=True,
+                    )
+                    logger.info(
+                        f'[Parser] Same dungeon restart: reset {revived} dead monsters '
+                        f'dungeon_id={dungeon_id}'
+                    )
             self._last_dungeon_id = dungeon_id
             if self._current_uid and self._current_uid in self._players:
                 player = self._players[self._current_uid]
@@ -3960,6 +3984,13 @@ class PacketParser:
                         )
                     if hp == 0 and monster.max_hp > 0:
                         monster.is_dead = True
+                    elif hp > 0 and monster.is_dead:
+                        # Auto-revive: same UUID re-used in dungeon retry
+                        monster.is_dead = False
+                        logger.info(
+                            f'[Parser] Monster REVIVED (hp>0 on dead unit) '
+                            f'uuid={uuid} hp={hp} name={monster.name!r}'
+                        )
                     changed = True
             elif attr_id == AttrType.MAX_HP:
                 # Server rarely sends this for monsters, but handle it
