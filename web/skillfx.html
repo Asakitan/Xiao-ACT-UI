@@ -910,9 +910,11 @@ function update(payload) {
     var burstSlot = parseInt(payload.burst_slot || 0, 10) || 0;
     if (enabled && burstReady && burstSlot > 0) {
         if (!_burstLatchReady || _burstLatchSlot !== burstSlot) {
-            _burstLatchReady = true;
-            _burstLatchSlot = burstSlot;
-            showBurstReady(burstSlot);
+            if (!_exitingLock) {
+                _burstLatchReady = true;
+                _burstLatchSlot = burstSlot;
+                showBurstReady(burstSlot);
+            }
         } else if (_burstVisible && _currentBurstSlot === burstSlot) {
             _positionBurstReady(burstSlot, false);
         }

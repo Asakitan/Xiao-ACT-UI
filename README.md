@@ -2,7 +2,7 @@
 
 `SAO Auto` 是一个面向《星痕共鸣》的外部 HUD / 自动化实验项目。当前主线版本已经切到 `pywebview` 透明覆盖层方案，围绕抓包、窗口识图、Boss Raid、DPS 统计和自动按键工作流持续迭代。
 
-当前版本：`1.2.24`
+当前版本：`1.2.26`
 
 ## 当前版本支持内容
 
@@ -15,6 +15,7 @@
 - `Boss Raid` 阶段计时、时间轴提醒、狂暴倒计时
 - `Boss ↔ AutoKey` 联动触发
 - 自动按键本地配置、导入导出、云端脚本库
+- `Commander` 指挥官面板 (队伍概览、Boss Raid 统计)
 
 ## 当前版本说明
 
@@ -159,6 +160,7 @@ sao_auto/
 │  ├─ hp.html              # 主 HUD
 │  ├─ menu.html            # 全屏菜单
 │  ├─ skillfx.html         # Burst / 特效面板
+│  ├─ commander.html      # 指挥官面板
 │  ├─ boss_hp.html         # Boss HP 覆盖条
 │  ├─ dps.html             # DPS 面板
 │  ├─ panel.html           # 通用子面板
@@ -169,6 +171,20 @@ sao_auto/
 ```
 
 ## 更新日志
+
+### v1.2.26
+
+- 新增 Commander 指挥官面板：队伍成员概览、Boss Raid 实时排名
+- Commander 面板默认隐藏，通过菜单点击呼出，隐藏时完全点击穿透
+- 菜单子面板增加滚动支持，避免内容超出屏幕
+- 修复 .NET 透明窗口 Invoke 报错 (句柄未创建时延迟重试)
+- 修复退出时进程挂起不能完全结束的问题
+- 修复退出动画期间 HP/ID 面板背板闪烁
+- 启动时 Commander 不再闪现 (先 CSS 隐藏再 Python 控制显示)
+
+### v1.2.25
+
+- 移除 level_adjust 模块依赖
 
 ### v1.2.24
 

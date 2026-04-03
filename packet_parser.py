@@ -25,6 +25,9 @@ from typing import Optional, Callable, Dict, Any
 logger = logging.getLogger('sao_auto.parser')
 _PACKET_DEBUG_ENABLED = True  # Enable to log raw packet snapshots for field confirmation
 
+# Lazy import for protobuf JSON conversion (used in full sync dump)
+_MessageToDict = None
+
 
 
 
@@ -48,19 +51,25 @@ def _ensure_zstd():
 
 def _ensure_pb():
     """Load compiled protobuf module if available."""
-    global _pb, _pb_loaded
+    global _pb, _pb_loaded, _MessageToDict
     if _pb_loaded:
         return _pb
     _pb_loaded = True
-
 
     try:
         from proto import star_resonance_pb2
         _pb = star_resonance_pb2
         logger.info('[Parser] using compiled protobuf')
-        return _pb
     except ImportError:
         pass
+
+    try:
+        from google.protobuf.json_format import MessageToDict
+        _MessageToDict = MessageToDict
+    except ImportError:
+        pass
+
+    return _pb
 
 
     try:
@@ -610,8 +619,10 @@ CHAR_FIELD_NAMES = {
 
 # CharSerialize fields that have dedicated handlers (skip in generic loop)
 _HANDLED_CHAR_FIELDS = frozenset({
-    CharField.CHAR_ID, CharField.CHAR_BASE, CharField.ENERGY_ITEM,
-    CharField.USER_FIGHT_ATTR, CharField.ROLE_LEVEL,
+    CharField.CHAR_ID, CharField.CHAR_BASE, CharField.SCENE_DATA,
+    CharField.BUFF_DB_INFO, CharField.EQUIP_LIST, CharField.ENERGY_ITEM,
+    CharField.DUNGEON_LIST, CharField.USER_FIGHT_ATTR, CharField.ROLE_LEVEL,
+    CharField.RESONANCE,
     CharField.SEASON_CENTER, CharField.SEASON_MEDAL_INFO,
     CharField.SLOTS, CharField.MONSTER_HUNT_INFO,
     CharField.PROFESSION_LIST, CharField.BATTLE_PASS_DATA,
@@ -761,6 +772,24 @@ SUB_PROFESSION_NAMES: Dict[int, str] = {
     2307: '协奏', 2361: '协奏', 55302: '协奏',
 }
 
+
+
+# Skill level ID composition helper
+
+
+def _compose_skill_level_id(skill_id: int, level: int = 0) -> int:
+    """Compose a skill_level_id from a base skill_id and skill level.
+
+    Convention: skill_level_id = skill_id * 100 + level.
+    Returns skill_id as-is if level is 0 or negative.
+    """
+    skill_id = int(skill_id or 0)
+    level = int(level or 0)
+    if skill_id <= 0:
+        return 0
+    if level > 0:
+        return skill_id * 100 + level
+    return skill_id
 
 
 # UUID helpers
@@ -1038,616 +1067,36 @@ def _fields_to_debug_dict(fields: dict, max_depth: int = 3) -> dict:
     return result
 
 
-def _decode_buff_info_sync(data: bytes) -> list:
-    """Decode BuffInfoSync { repeated BuffInfo Infos = 1 } from entity/delta.
+def _decode_buff_info_sync_pb(bfs) -> list:
+    """Decode BuffInfoSync pb2 object → list of buff dicts.
 
-    BuffInfo proto:
-        int32 BuffId = 1;
-        int64 BeginTime = 2;
-        int32 Duration = 3;
-        int32 Layer = 4;
-        int64 OuterUuid = 5;
-        int32 SkillId = 6;
-        int32 SkillLevelId = 7;
-        int32 CurLayer = 8;
-        float LeftTime = 9;
+    BuffInfoSync { int64 Uuid = 1; repeated BuffInfo BuffInfos = 2; }
+    BuffInfo { BuffUuid(1), BaseId(2), Level(3), HostUuid(4), TableUuid(5),
+               CreateTime(6), FireUuid(7), Layer(8), PartId(9), Count(10),
+               Duration(11), FightSourceInfo(12), LogicEffect(13) }
     """
     buffs = []
     try:
-        outer = _decode_fields(data)
-        for buff_raw in outer.get(1, []):
-            if not isinstance(buff_raw, bytes):
-                continue
-            bf = _decode_fields(buff_raw)
-            buff_id = bf.get(1, [0])[0]
-            if not buff_id:
+        for bi in bfs.BuffInfos:
+            base_id = bi.BaseId
+            if not base_id:
                 continue
             buffs.append({
-                'buff_id': buff_id,
-                'begin_time': _varint_to_int64(bf.get(2, [0])[0]),
-                'duration': bf.get(3, [0])[0],
-                'layer': bf.get(4, [0])[0],
-                'outer_uuid': _varint_to_int64(bf.get(5, [0])[0]),
-                'skill_id': bf.get(6, [0])[0],
-                'skill_level_id': bf.get(7, [0])[0],
-                'cur_layer': bf.get(8, [0])[0],
+                'buff_id': base_id,
+                'buff_uuid': bi.BuffUuid,
+                'begin_time': bi.CreateTime,
+                'duration': bi.Duration,
+                'layer': bi.Layer,
+                'host_uuid': bi.HostUuid,
+                'fire_uuid': bi.FireUuid,
+                'level': bi.Level,
+                'count': bi.Count,
+                'cur_layer': bi.Layer,
             })
     except Exception as e:
-        logger.debug(f'[Parser] _decode_buff_info_sync error: {e}')
+        logger.debug(f'[Parser] _decode_buff_info_sync_pb error: {e}')
     return buffs
 
-
-def _decode_scene_data(data: bytes) -> dict:
-    """Decode CharSerialize.SceneData (field 3) for scene/map identification.
-
-    SceneData proto:
-        int32 SceneId = 1;
-        int32 MapId = 2;
-        ScenePosition Position = 3;
-        ...
-    """
-    try:
-        sf = _decode_fields(data)
-        return {
-            'scene_id': sf.get(1, [0])[0],
-            'map_id': sf.get(2, [0])[0],
-        }
-    except Exception:
-        return {}
-
-
-def _decode_buff_db_info(data: bytes) -> list:
-    """Decode CharSerialize.BuffDBInfo (field 6) — active buffs on self.
-
-    BuffDBInfo proto:
-        repeated BuffDBData Infos = 1;
-    BuffDBData proto:
-        int32 BuffId = 1;
-        int64 BeginTime = 2;
-        int32 Duration = 3;
-        int32 Layer = 4;
-        int64 OuterUuid = 5;
-        int32 SkillId = 6;
-        int32 SkillLevelId = 7;
-    """
-    buffs = []
-    try:
-        outer = _decode_fields(data)
-        for buf_raw in outer.get(1, []):
-            if not isinstance(buf_raw, bytes):
-                continue
-            bf = _decode_fields(buf_raw)
-            buff_id = bf.get(1, [0])[0]
-            if not buff_id:
-                continue
-            buffs.append({
-                'buff_id': buff_id,
-                'begin_time': _varint_to_int64(bf.get(2, [0])[0]),
-                'duration': bf.get(3, [0])[0],
-                'layer': bf.get(4, [0])[0],
-                'skill_id': bf.get(6, [0])[0],
-                'skill_level_id': bf.get(7, [0])[0],
-            })
-    except Exception as e:
-        logger.debug(f'[Parser] _decode_buff_db_info error: {e}')
-    return buffs
-
-
-def _decode_dungeon_list(data: bytes) -> dict:
-    """Decode CharSerialize.DungeonList (field 15) for dungeon context.
-
-    DungeonList proto:
-        int32 CurDungeonId = 1;
-        repeated DungeonData Datas = 2;
-    """
-    try:
-        df = _decode_fields(data)
-        raw_id = df.get(1, [0])[0]
-        # _decode_fields may return bytes for varint fields — ensure int
-        if isinstance(raw_id, bytes):
-            raw_id = int.from_bytes(raw_id, 'little', signed=False) if raw_id else 0
-        return {
-            'cur_dungeon_id': int(raw_id),
-            'dungeon_count': len(df.get(2, [])),
-        }
-    except Exception:
-        return {}
-
-
-def _decode_equip_list(data: bytes) -> dict:
-    """Decode CharSerialize.EquipList (field 12) — equipped items summary.
-
-    EquipList proto:
-        repeated EquipInfo Equips = 1;
-    EquipInfo proto:
-        int32 Pos = 1;
-        int64 Uid = 2;
-        int32 TableId = 3;
-        ...
-    """
-    equips = []
-    try:
-        outer = _decode_fields(data)
-        for eq_raw in outer.get(1, []):
-            if not isinstance(eq_raw, bytes):
-                continue
-            ef = _decode_fields(eq_raw)
-            equips.append({
-                'pos': ef.get(1, [0])[0],
-                'uid': _varint_to_int64(ef.get(2, [0])[0]),
-                'table_id': ef.get(3, [0])[0],
-            })
-    except Exception as e:
-        logger.debug(f'[Parser] _decode_equip_list error: {e}')
-    return {'equip_count': len(equips), 'equips': equips}
-
-
-def _decode_resonance_data(data: bytes) -> dict:
-    """Decode CharSerialize.Resonance (field 28) — resonance system.
-
-    Resonance proto:
-        repeated ResonanceSlot Slots = 1;
-        int32 ActivePlan = 2;
-        ...
-    """
-    try:
-        rf = _decode_fields(data)
-        return {
-            'slot_count': len(rf.get(1, [])),
-            'active_plan': rf.get(2, [0])[0],
-        }
-    except Exception:
-        return {}
-
-
-def _decode_energy_item(data: bytes) -> Dict[str, Any]:
-    """Decode CharSerialize.EnergyItem (field 13) from the upstream schema."""
-    result = {
-        'energy_limit': 0,
-        'extra_energy_limit': 0,
-        'energy_values': [],
-        'unlock_nums': [],
-        'current_energy_value': 0,
-        'derived_total_limit': 0,
-        'energy_info_map': {},
-    }
-    if not isinstance(data, bytes) or not data:
-        return result
-
-    fields = _decode_fields(data)
-    energy_limit = fields.get(1, [0])[0]
-    extra_energy_limit = fields.get(2, [0])[0]
-    if isinstance(energy_limit, int) and energy_limit > 0:
-        result['energy_limit'] = energy_limit
-    if isinstance(extra_energy_limit, int) and extra_energy_limit > 0:
-        result['extra_energy_limit'] = extra_energy_limit
-
-    for entry_raw in fields.get(3, []):
-        if not isinstance(entry_raw, bytes):
-            continue
-        entry = _decode_fields(entry_raw)
-        energy_id_raw = entry.get(1, [None])[0]
-        value_raw = entry.get(2, [None])[0]
-        if not isinstance(value_raw, bytes):
-            continue
-        energy_info = _decode_fields(value_raw)
-        energy_value = energy_info.get(1, [None])[0]
-        unlock_num = energy_info.get(2, [None])[0]
-        energy_id = _varint_to_int32(energy_id_raw) if isinstance(energy_id_raw, int) else 0
-        entry_info = {
-            'energy_value': _varint_to_int32(energy_value) if isinstance(energy_value, int) else 0,
-            'unlock_num': _varint_to_int32(unlock_num) if isinstance(unlock_num, int) else 0,
-            'item_info_count': len(energy_info.get(3, [])),
-        }
-        if isinstance(energy_value, int) and energy_value >= 0:
-            result['energy_values'].append(energy_value)
-        if isinstance(unlock_num, int) and unlock_num >= 0:
-            result['unlock_nums'].append(unlock_num)
-        if energy_id > 0:
-            result['energy_info_map'][energy_id] = entry_info
-
-    total_limit = result['energy_limit'] + result['extra_energy_limit']
-    sane_limit = total_limit if total_limit > 0 else 20000
-    sane_values = [v for v in result['energy_values'] if 0 <= v <= sane_limit]
-    if sane_values:
-        result['derived_total_limit'] = max(sane_values)
-    if sane_values:
-        result['current_energy_value'] = max(sane_values)
-
-    return result
-
-
-def _decode_battlepass_level(data: bytes) -> int:
-    """Decode SeasonCenter.BattlePass.Level from CharSerialize field 50."""
-    if not isinstance(data, bytes) or not data:
-        return 0
-
-    season_center = _decode_fields(data)
-    battlepass_raw = season_center.get(2, [None])[0]
-    if not isinstance(battlepass_raw, bytes):
-        return 0
-
-    battlepass = _decode_fields(battlepass_raw)
-    level_raw = battlepass.get(2, [None])[0]
-    if isinstance(level_raw, int) and level_raw > 0:
-        return level_raw
-    return 0
-
-
-def _decode_season_medal_level(data: bytes) -> int:
-    """Decode CoreHoleInfo.HoleLevel from SeasonMedalInfo (field 52).
-
-    Returns the normalized core hole level as the season medal value.
-    NormalHoleInfos are individual skill-tree nodes — NOT additive to displayed level.
-    The accurate +N comes from AttrSeasonLevel (10070) or AttrSeasonLv (196) attrs
-    when available; this core level serves as a fallback.
-    """
-    if not isinstance(data, bytes) or not data:
-        return 0
-
-    medal = _decode_fields(data)
-    core_level_raw = 0
-    core_level_norm = 0
-
-    # CoreHoleInfo (field 3) → MedalHole.HoleLevel (field 2)
-    core_hole_raw = medal.get(3, [None])[0]
-    if isinstance(core_hole_raw, bytes):
-        core_hole = _decode_fields(core_hole_raw)
-        core_level_raw = core_hole.get(2, [None])[0] or 0
-        if isinstance(core_level_raw, int) and core_level_raw > 0:
-            core_level_norm = _normalize_season_medal_level(core_level_raw)
-
-    if core_level_norm > 0:
-        logger.info(
-            f'[Parser] SeasonMedalInfo core_raw={core_level_raw} '
-            f'core_norm={core_level_norm}'
-        )
-
-    return core_level_norm
-
-
-def _decode_monster_hunt_level(data: bytes) -> int:
-    """Decode MonsterHuntInfo.CurLevel from CharSerialize field 56."""
-    if not isinstance(data, bytes) or not data:
-        return 0
-
-    hunt = _decode_fields(data)
-    cur_level = hunt.get(2, [None])[0]
-    if isinstance(cur_level, int) and cur_level > 0:
-        return cur_level
-    return 0
-
-
-def _normalize_season_medal_level(raw_level: int) -> int:
-    """Normalize raw SeasonMedal level values to the UI-visible seasonal level.
-    SeasonMedalInfo hole_level values >= 100 that are multiples of 10 encode
-    as ``raw_level // 10`` (previously had an off-by-one ``-1``).
-    """
-    if raw_level <= 0:
-        return 0
-    if raw_level >= 100 and raw_level % 10 == 0:
-        return max(0, raw_level // 10)
-    return raw_level
-
-
-def _decode_battlepass_data_level(data: bytes) -> int:
-    """Decode the highest BattlePass.Level from BattlePassData (field 86)."""
-    if not isinstance(data, bytes) or not data:
-        return 0
-
-    bp_data = _decode_fields(data)
-    levels = []
-    for entry_raw in bp_data.get(1, []):
-        if not isinstance(entry_raw, bytes):
-            continue
-        entry = _decode_fields(entry_raw)
-        battle_raw = entry.get(2, [None])[0]
-        if not isinstance(battle_raw, bytes):
-            continue
-        battle = _decode_fields(battle_raw)
-        level = battle.get(2, [None])[0]
-        if isinstance(level, int) and level > 0:
-            levels.append(level)
-    return max(levels) if levels else 0
-
-
-def _decode_slot_bar(data: bytes) -> Dict[int, int]:
-    """Decode CharSerialize.Slots (field 55).
-
-    Proto schema (from StarResonanceDps):
-        message Slot {
-            map<int32, SlotInfo> Slots = 1;
-        }
-        message SlotInfo {
-            int32 Id = 1;
-            int32 SkillId = 2;
-            bool IsAutoBattleClose = 3;
-        }
-
-    Returns: {slot_id: skill_id}
-    """
-    result: Dict[int, int] = {}
-    if not isinstance(data, bytes) or not data:
-        return result
-    outer = _decode_fields(data)
-    # field 1 = map<int32, SlotInfo>, each entry is a nested map-entry message
-    for entry_raw in outer.get(1, []):
-        if not isinstance(entry_raw, bytes):
-            continue
-        entry = _decode_fields(entry_raw)
-        key_raw = entry.get(1, [None])[0]
-        value_raw = entry.get(2, [None])[0]
-        if not isinstance(key_raw, int):
-            continue
-        slot_id = _varint_to_int32(key_raw)
-        if slot_id <= 0:
-            continue
-        # value is SlotInfo message
-        skill_id = 0
-        if isinstance(value_raw, bytes):
-            si = _decode_fields(value_raw)
-            sid_raw = si.get(2, [None])[0]  # SkillId = field 2
-            if isinstance(sid_raw, int):
-                skill_id = _varint_to_int32(sid_raw)
-        elif isinstance(value_raw, int):
-            # Fallback: if SlotInfo is just a varint (unlikely)
-            skill_id = _varint_to_int32(value_raw)
-        if skill_id > 0:
-            result[slot_id] = skill_id
-    return result
-
-
-def _decode_int_map(entries) -> Dict[int, int]:
-    """Decode protobuf map<int32, int32> entries from raw nested messages."""
-    result: Dict[int, int] = {}
-    for entry_raw in entries or []:
-        if not isinstance(entry_raw, bytes):
-            continue
-        entry = _decode_fields(entry_raw)
-        key_raw = entry.get(1, [None])[0]
-        value_raw = entry.get(2, [None])[0]
-        if not isinstance(key_raw, int) or not isinstance(value_raw, int):
-            continue
-        key = _varint_to_int32(key_raw)
-        value = _varint_to_int32(value_raw)
-        result[key] = value
-    return result
-
-
-def _decode_profession_skill_info(data: bytes) -> Dict[str, int]:
-    """Decode ProfessionSkillInfo enough to map slot entries to SkillLevelId."""
-    if not isinstance(data, bytes) or not data:
-        return {}
-    fields = _decode_fields(data)
-    skill_id_raw = fields.get(1, [None])[0]
-    level_raw = fields.get(2, [None])[0]
-    result = {
-        'skill_id': _varint_to_int32(skill_id_raw) if isinstance(skill_id_raw, int) else 0,
-        'level': _varint_to_int32(level_raw) if isinstance(level_raw, int) else 0,
-    }
-    return result
-
-
-def _compose_skill_level_id(skill_id: int, level: int) -> int:
-    """Compose the runtime skill_level_id used by SyncSkillCDs from skill_id + learned level."""
-    skill_id = int(skill_id or 0)
-    level = int(level or 0)
-    if skill_id <= 0:
-        return 0
-    if 1 <= level <= 99:
-        return (skill_id * 100) + level
-    return skill_id
-
-
-def _decode_profession_skill_map(entries) -> Dict[int, Dict[str, int]]:
-    """Decode map<int32, ProfessionSkillInfo> into {skill_level_id: info}."""
-    result: Dict[int, Dict[str, int]] = {}
-    for entry_raw in entries or []:
-        if not isinstance(entry_raw, bytes):
-            continue
-        entry = _decode_fields(entry_raw)
-        key_raw = entry.get(1, [None])[0]
-        value_raw = entry.get(2, [None])[0]
-        if not isinstance(key_raw, int) or not isinstance(value_raw, bytes):
-            continue
-        key = _varint_to_int32(key_raw)
-        if key <= 0:
-            continue
-        result[key] = _decode_profession_skill_info(value_raw)
-    return result
-
-
-def _decode_profession_list(data: bytes) -> Dict[str, Any]:
-    """Decode current profession skill-slot mapping from CharSerialize.ProfessionList."""
-    result = {
-        'profession_id': 0,
-        'slot_skill_level_map': {},
-        'active_skill_ids': [],
-        'skill_info_map': {},
-        'skill_level_info_map': {},
-    }
-    if not isinstance(data, bytes) or not data:
-        return result
-
-    fields = _decode_fields(data)
-    cur_prof_raw = fields.get(1, [None])[0]
-    cur_prof_id = _varint_to_int32(cur_prof_raw) if isinstance(cur_prof_raw, int) else 0
-    result['profession_id'] = cur_prof_id
-
-    all_skill_info = _decode_profession_skill_map(fields.get(7, []))
-    current_prof_raw = None
-    profession_entries = []
-    for entry_raw in fields.get(4, []):
-        if not isinstance(entry_raw, bytes):
-            continue
-        entry = _decode_fields(entry_raw)
-        key_raw = entry.get(1, [None])[0]
-        value_raw = entry.get(2, [None])[0]
-        if not isinstance(key_raw, int) or not isinstance(value_raw, bytes):
-            continue
-        prof_id = _varint_to_int32(key_raw)
-        profession_entries.append((prof_id, value_raw))
-        if prof_id == cur_prof_id:
-            current_prof_raw = value_raw
-
-    if current_prof_raw is None and len(profession_entries) == 1:
-        result['profession_id'] = profession_entries[0][0]
-        current_prof_raw = profession_entries[0][1]
-
-    if not isinstance(current_prof_raw, bytes):
-        return result
-
-    current_prof = _decode_fields(current_prof_raw)
-    current_skill_info = _decode_profession_skill_map(current_prof.get(4, []))
-    for skill_level_id, info in all_skill_info.items():
-        current_skill_info.setdefault(skill_level_id, info)
-    result['skill_info_map'] = current_skill_info
-    skill_level_info_map: Dict[int, Dict[str, int]] = {}
-    for info_key, info in current_skill_info.items():
-        skill_id = int(info.get('skill_id') or info_key or 0)
-        skill_level_id = _compose_skill_level_id(skill_id, info.get('level', 0))
-        if skill_level_id <= 0:
-            skill_level_id = int(info_key or 0)
-        if skill_level_id > 0:
-            skill_level_info_map[skill_level_id] = {
-                'skill_id': skill_id,
-                'level': int(info.get('level', 0) or 0),
-            }
-    result['skill_level_info_map'] = skill_level_info_map
-    result['active_skill_ids'] = [
-        _varint_to_int32(v) for v in current_prof.get(6, []) if isinstance(v, int)
-    ]
-
-    raw_slot_map = _decode_int_map(current_prof.get(7, []))
-    normalized_slot_map: Dict[int, int] = {}
-    for slot, mapped_id in raw_slot_map.items():
-        if slot < 0 or mapped_id <= 0:
-            continue
-        skill_info = current_skill_info.get(mapped_id)
-        skill_level_id = 0
-        if skill_info:
-            skill_level_id = _compose_skill_level_id(mapped_id, skill_info.get('level', 0))
-        if skill_level_id <= 0:
-            for info_key, info in current_skill_info.items():
-                if info.get('skill_id') == mapped_id:
-                    skill_level_id = _compose_skill_level_id(info_key, info.get('level', 0))
-                    break
-        if skill_level_id <= 0:
-            skill_level_id = mapped_id
-        normalized_slot_map[slot] = skill_level_id
-        if skill_level_id > 0 and skill_level_id not in skill_level_info_map:
-            skill_info = current_skill_info.get(mapped_id) or {}
-            skill_level_info_map[skill_level_id] = {
-                'skill_id': int(skill_info.get('skill_id') or mapped_id or 0),
-                'level': int(skill_info.get('level', 0) or 0),
-            }
-
-    result['slot_skill_level_map'] = normalized_slot_map
-    return result
-
-
-def _decode_skill_cd(data: bytes) -> Dict[str, int]:
-    """Decode AoiSyncToMeDelta.SyncSkillCDs.
-
-    The C# authoritative proto (StarResonanceDps) declares SyncSkillCDs as
-    ``repeated SkillCDInfo`` which uses field 7=ChargeCount, 8=ValidCDTime.
-    The older JS schema (SRDC) defined a simpler ``SkillCD`` with field
-    5=ValidCDTime and no ChargeCount.
-
-    To be robust against both wire formats we try the SkillCDInfo fields
-    first and fall back to the SkillCD positions.
-    """
-    if not isinstance(data, bytes) or not data:
-        return {}
-    fields = _decode_fields(data)
-    skill_level_id_raw = fields.get(1, [None])[0]
-    begin_time_raw = fields.get(2, [None])[0]
-    duration_raw = fields.get(3, [None])[0]
-    cd_type_raw = fields.get(4, [None])[0]
-
-    # valid_cd_time: prefer field 8 (SkillCDInfo), fall back to field 5 (SkillCD)
-    vcd_f8_raw = fields.get(8, [None])[0]
-    vcd_f5_raw = fields.get(5, [None])[0]
-    vcd_f8 = _varint_to_int32(vcd_f8_raw) if isinstance(vcd_f8_raw, int) else 0
-    vcd_f5 = _varint_to_int32(vcd_f5_raw) if isinstance(vcd_f5_raw, int) else 0
-    valid_cd_time = vcd_f8 if vcd_f8 > 0 else vcd_f5
-
-    # charge_count: field 7 (SkillCDInfo only; SkillCD has none)
-    charge_count_raw = fields.get(7, [None])[0]
-    charge_count = _varint_to_int32(charge_count_raw) if isinstance(charge_count_raw, int) else 0
-
-    # CD acceleration fields (SkillCDInfo only, fields 9/10/11)
-    sub_cd_ratio_raw = fields.get(9, [None])[0]
-    sub_cd_fixed_raw = fields.get(10, [None])[0]
-    accel_cd_ratio_raw = fields.get(11, [None])[0]
-    sub_cd_ratio = _varint_to_int32(sub_cd_ratio_raw) if isinstance(sub_cd_ratio_raw, int) else 0
-    sub_cd_fixed = _varint_to_int64(sub_cd_fixed_raw) if isinstance(sub_cd_fixed_raw, int) else 0
-    accel_cd_ratio = _varint_to_int32(accel_cd_ratio_raw) if isinstance(accel_cd_ratio_raw, int) else 0
-
-    skill_level_id = _varint_to_int32(skill_level_id_raw) if isinstance(skill_level_id_raw, int) else 0
-    return {
-        'skill_level_id': skill_level_id,
-        'begin_time': _varint_to_int64(begin_time_raw) if isinstance(begin_time_raw, int) else 0,
-        'duration': _varint_to_int32(duration_raw) if isinstance(duration_raw, int) else 0,
-        'skill_cd_type': _varint_to_int32(cd_type_raw) if isinstance(cd_type_raw, int) else 0,
-        'valid_cd_time': max(0, valid_cd_time),
-        'charge_count': max(0, charge_count),
-        'sub_cd_ratio': max(0, sub_cd_ratio),
-        'sub_cd_fixed': max(0, int(sub_cd_fixed)),
-        'accelerate_cd_ratio': max(0, accel_cd_ratio),
-    }
-
-
-def _decode_skill_cd_info(data: bytes) -> Dict[str, int]:
-    """Decode UserFightAttr.CdInfo / SkillCDInfo.
-
-    Field numbers follow the StarResonanceDps authoritative schema:
-      1=SkillLevelId, 2=SkillBeginTime, 3=Duration, 4=SkillCDType,
-      6=ProfessionHoldBeginTime (field 5 unused), 7=ChargeCount,
-      8=ValidCDTime, 9=SubCDRatio, 10=SubCDFixed, 11=AccelerateCDRatio
-    """
-    if not isinstance(data, bytes) or not data:
-        return {}
-    fields = _decode_fields(data)
-    skill_level_id_raw = fields.get(1, [None])[0]
-    begin_time_raw = fields.get(2, [None])[0]
-    duration_raw = fields.get(3, [None])[0]
-    cd_type_raw = fields.get(4, [None])[0]
-    charge_count_raw = fields.get(7, [None])[0]    # field 7 per StarResonanceDps
-    valid_cd_time_raw = fields.get(8, [None])[0]    # field 8 per StarResonanceDps
-    # CD acceleration fields (fields 9/10/11)
-    sub_cd_ratio_raw = fields.get(9, [None])[0]
-    sub_cd_fixed_raw = fields.get(10, [None])[0]
-    accel_cd_ratio_raw = fields.get(11, [None])[0]
-    skill_level_id = _varint_to_int32(skill_level_id_raw) if isinstance(skill_level_id_raw, int) else 0
-    return {
-        'skill_level_id': skill_level_id,
-        'begin_time': _varint_to_int64(begin_time_raw) if isinstance(begin_time_raw, int) else 0,
-        'duration': _varint_to_int32(duration_raw) if isinstance(duration_raw, int) else 0,
-        'skill_cd_type': _varint_to_int32(cd_type_raw) if isinstance(cd_type_raw, int) else 0,
-        'valid_cd_time': _varint_to_int32(valid_cd_time_raw) if isinstance(valid_cd_time_raw, int) else 0,
-        'charge_count': _varint_to_int32(charge_count_raw) if isinstance(charge_count_raw, int) else 0,
-        'sub_cd_ratio': max(0, _varint_to_int32(sub_cd_ratio_raw)) if isinstance(sub_cd_ratio_raw, int) else 0,
-        'sub_cd_fixed': max(0, int(_varint_to_int64(sub_cd_fixed_raw))) if isinstance(sub_cd_fixed_raw, int) else 0,
-        'accelerate_cd_ratio': max(0, _varint_to_int32(accel_cd_ratio_raw)) if isinstance(accel_cd_ratio_raw, int) else 0,
-    }
-
-
-def _decode_fight_res_cd(data: bytes) -> Dict[str, int]:
-    """Decode AoiSyncToMeDelta.FightResCDs for future stamina/resource mapping."""
-    if not isinstance(data, bytes) or not data:
-        return {}
-    fields = _decode_fields(data)
-    res_id_raw = fields.get(1, [None])[0]
-    begin_time_raw = fields.get(2, [None])[0]
-    duration_raw = fields.get(3, [None])[0]
-    valid_cd_time_raw = fields.get(4, [None])[0]
-    return {
-        'res_id': _varint_to_int32(res_id_raw) if isinstance(res_id_raw, int) else 0,
-        'begin_time': _varint_to_int64(begin_time_raw) if isinstance(begin_time_raw, int) else 0,
-        'duration': _varint_to_int32(duration_raw) if isinstance(duration_raw, int) else 0,
-        'valid_cd_time': _varint_to_int32(valid_cd_time_raw) if isinstance(valid_cd_time_raw, int) else 0,
-    }
 
 
 def _decode_dirty_energy_value(raw_u32: int, raw_f32: float, stamina_max: int = 0) -> Optional[float]:
@@ -1704,6 +1153,15 @@ def _commit_level_extra(player: PlayerData, source: str, value: int) -> bool:
     player.level_extra_pending_value = 0
     player.level_extra_pending_hits = 0
     return True
+
+
+def _normalize_season_medal_level(raw_level: int) -> int:
+    """Normalize season medal level from raw server value.
+    
+    The server may send various representations of the medal level.
+    This function converts to a canonical form.
+    """
+    return max(0, int(raw_level or 0))
 
 
 def _set_level_extra_candidate(player: PlayerData, source: str, value: int) -> bool:
@@ -1823,6 +1281,13 @@ class PacketParser:
         self._current_uid: int = max(0, int(preferred_uid))    # Current player UID (uuid >> 16)
         self._players: Dict[int, PlayerData] = {}  # uid -> PlayerData
         self._monsters: Dict[int, MonsterData] = {}  # uuid -> MonsterData
+        # Team member cache: uid -> {uid, name, profession, profession_id,
+        #                            fight_point, level, joined_at}
+        # Populated from CharTeam (SyncContainerData / DirtyData).
+        # Persists across scene changes so commander panel can always show info.
+        self._team_members: Dict[int, Dict[str, Any]] = {}
+        self._team_id: int = 0
+        self._team_leader_uid: int = 0
         # Cache template_id → max_hp from observed monsters.
         # Survives scene resets so if a monster re-appears without MAX_HP in
         # its AttrCollection (only incremental deltas), we can restore max_hp
@@ -2033,11 +1498,20 @@ class PacketParser:
         observed_at_ms = int(time.time() * 1000)
         previous = player.skill_cd_map
         seen_changed = False
+        # Server time for expiry check
+        _server_now_ms = 0
+        _ts_2020 = 1577836800000
+        if self._server_time_offset_ms is not None:
+            _server_now_ms = int(observed_at_ms + self._server_time_offset_ms)
         for skill_cd in skill_cds or []:
             skill_level_id = int(skill_cd.get('skill_level_id') or 0)
             # duration = total CD length; valid_cd_time = elapsed or progress
             total_ms = int(skill_cd.get('duration') or 0)
             if skill_level_id <= 0 or total_ms <= 0:
+                continue
+            # Skip CDs that have already expired based on server clock
+            begin_time_ms = int(skill_cd.get('begin_time') or 0)
+            if _server_now_ms > 0 and begin_time_ms > _ts_2020 and (begin_time_ms + total_ms) < _server_now_ms:
                 continue
             if self._remember_seen_skill(player, skill_level_id):
                 seen_changed = True
@@ -2088,21 +1562,46 @@ class PacketParser:
                 return True
             return seen_changed
 
+        # Expiry check: if begin_time + duration < server_time, CD already expired
+        begin_time_ms = int(skill_cd.get('begin_time') or 0)
+        if begin_time_ms > 0 and self._server_time_offset_ms is not None:
+            server_now_ms = int(time.time() * 1000 + self._server_time_offset_ms)
+            _ts_2020 = 1577836800000
+            if begin_time_ms > _ts_2020 and (begin_time_ms + total_ms) < server_now_ms:
+                # CD already expired — treat as ready
+                player.skill_last_use_at[skill_level_id] = time.time()
+                if skill_level_id in player.skill_cd_map:
+                    del player.skill_cd_map[skill_level_id]
+                    return True
+                return seen_changed
+
         observed_at_ms = int(time.time() * 1000)
+
+        # SkillCD proto (from SyncToMeDelta) only has 5 fields and does NOT
+        # include ChargeCount, SubCDRatio, SubCDFixed, AccelerateCDRatio.
+        # The caller hardcodes these as 0.  When a previous entry exists
+        # (from UserFightAttr full-sync SkillCDInfo which *does* have those
+        # fields), carry forward the full-sync values so we don't lose
+        # charge state and CD-reduction data.
+        prev = player.skill_cd_map.get(skill_level_id)
+        _carry_charge   = max(0, int((prev or {}).get('charge_count') or 0))
+        _carry_sub_r    = max(0, int((prev or {}).get('sub_cd_ratio') or 0))
+        _carry_sub_f    = max(0, int((prev or {}).get('sub_cd_fixed') or 0))
+        _carry_accel    = max(0, int((prev or {}).get('accelerate_cd_ratio') or 0))
+
         new_entry = {
             'skill_level_id': skill_level_id,
             'begin_time': max(0, int(skill_cd.get('begin_time') or 0)),
             'duration': max(0, int(skill_cd.get('duration') or 0)),
             'valid_cd_time': max(0, int(skill_cd.get('valid_cd_time') or 0)),
             'skill_cd_type': max(0, int(skill_cd.get('skill_cd_type') or 0)),
-            'charge_count': max(0, int(skill_cd.get('charge_count') or 0)),
-            'sub_cd_ratio': max(0, int(skill_cd.get('sub_cd_ratio') or 0)),
-            'sub_cd_fixed': max(0, int(skill_cd.get('sub_cd_fixed') or 0)),
-            'accelerate_cd_ratio': max(0, int(skill_cd.get('accelerate_cd_ratio') or 0)),
+            'charge_count': max(0, int(skill_cd.get('charge_count') or 0)) or _carry_charge,
+            'sub_cd_ratio': max(0, int(skill_cd.get('sub_cd_ratio') or 0)) or _carry_sub_r,
+            'sub_cd_fixed': max(0, int(skill_cd.get('sub_cd_fixed') or 0)) or _carry_sub_f,
+            'accelerate_cd_ratio': max(0, int(skill_cd.get('accelerate_cd_ratio') or 0)) or _carry_accel,
             'observed_at_ms': observed_at_ms,
             'source': 'delta',
         }
-        prev = player.skill_cd_map.get(skill_level_id)
         if prev:
             same_timing = (
                 prev.get('begin_time') == new_entry['begin_time'] and
@@ -2306,11 +1805,17 @@ class PacketParser:
 
     def _on_sync_server_time(self, data: bytes):
         """Track server/client time delta for packet-only cooldown progress."""
-        fields = _decode_fields(data)
-        client_ms_raw = fields.get(1, [None])[0]
-        server_ms_raw = fields.get(2, [None])[0]
-        client_ms = _varint_to_int64(client_ms_raw) if isinstance(client_ms_raw, int) else 0
-        server_ms = _varint_to_int64(server_ms_raw) if isinstance(server_ms_raw, int) else 0
+        pb = _ensure_pb()
+        if not pb:
+            return
+        try:
+            msg = pb.SyncServerTime()
+            msg.ParseFromString(data)
+        except Exception as e:
+            logger.debug(f'[Parser] SyncServerTime pb2 parse error: {e}')
+            return
+        client_ms = msg.ClientMilliseconds
+        server_ms = msg.ServerMilliseconds
         if client_ms <= 0 and server_ms <= 0:
             return
 
@@ -2331,65 +1836,23 @@ class PacketParser:
 
 
     def _on_notify_buff_change(self, data: bytes):
-        """Handle NotifyBuffChange (0x3003 / 12291) — buff add/remove/update.
+        """Handle NotifyBuffChange (0x3003 / 12291) — buff replacement notification.
 
         NotifyBuffChange proto:
-            int64 Uuid = 1;            // Target entity UUID
-            int32 ChangeType = 2;      // 1=Add, 2=Remove, 3=Update
-            BuffInfo Info = 3;         // The buff data
+            int32 OldBuffId = 1;   // 被替换的buff
+            int32 NewBuffId = 2;   // 新buff
+        Note: Full buff state is tracked from AoiSyncDelta.BuffInfos and Entity.BuffInfos.
         """
+        pb = _ensure_pb()
+        if not pb:
+            return
         try:
-            outer = _decode_fields(data)
-            uuid_raw = outer.get(1, [0])[0]
-            uuid = _varint_to_int64(uuid_raw) if isinstance(uuid_raw, int) else 0
-            change_type = outer.get(2, [0])[0]  # 1=Add, 2=Remove, 3=Update
-            buff_raw = outer.get(3, [None])[0]
-            buff_id = 0
-            buff_info = {}
-            if isinstance(buff_raw, bytes):
-                bf = _decode_fields(buff_raw)
-                buff_id = bf.get(1, [0])[0]
-                buff_info = {
-                    'buff_id': buff_id,
-                    'begin_time': _varint_to_int64(bf.get(2, [0])[0]),
-                    'duration': bf.get(3, [0])[0],
-                    'layer': bf.get(4, [0])[0],
-                    'skill_id': bf.get(6, [0])[0],
-                    'skill_level_id': bf.get(7, [0])[0],
-                    'cur_layer': bf.get(8, [0])[0],
-                }
-            logger.info(
-                f'[Parser] NotifyBuffChange: uuid={uuid} type={change_type} '
-                f'buff_id={buff_id} info={buff_info}'
-            )
-            _append_packet_debug('buff_change', {
-                'uuid': uuid,
-                'change_type': change_type,
-                'buff_info': buff_info,
-            })
-            # Update buff_list on player/monster if tracked
-            if _is_player(uuid):
-                uid = _uuid_to_uid(uuid)
-                if uid in self._players:
-                    player = self._players[uid]
-                    if change_type == 1 and buff_info:  # Add
-                        player.buff_list.append(buff_info)
-                    elif change_type == 2 and buff_id:  # Remove
-                        player.buff_list = [b for b in player.buff_list if b.get('buff_id') != buff_id]
-                    elif change_type == 3 and buff_info:  # Update
-                        player.buff_list = [b for b in player.buff_list if b.get('buff_id') != buff_id]
-                        player.buff_list.append(buff_info)
-                    if uid == self._current_uid:
-                        self._notify_self()
-            elif _is_monster(uuid) and uuid in self._monsters:
-                monster = self._monsters[uuid]
-                if change_type == 1 and buff_info:
-                    monster.buff_list.append(buff_info)
-                elif change_type == 2 and buff_id:
-                    monster.buff_list = [b for b in monster.buff_list if b.get('buff_id') != buff_id]
-                elif change_type == 3 and buff_info:
-                    monster.buff_list = [b for b in monster.buff_list if b.get('buff_id') != buff_id]
-                    monster.buff_list.append(buff_info)
+            msg = pb.NotifyBuffChange()
+            msg.ParseFromString(data)
+            old_id = msg.OldBuffId
+            new_id = msg.NewBuffId
+            logger.info(f'[Parser] NotifyBuffChange(pb2): old={old_id} new={new_id}')
+            _append_packet_debug('buff_change', {'old_buff_id': old_id, 'new_buff_id': new_id})
         except Exception as e:
             logger.debug(f'[Parser] NotifyBuffChange decode error: {e}')
 
@@ -2397,40 +1860,34 @@ class PacketParser:
         """Handle SyncClientUseSkill (0x3002 / 12290) — skill use confirmation.
 
         SyncClientUseSkill proto:
-            int64 Uuid = 1;
-            int32 SkillId = 2;
-            int32 SkillLevelId = 3;
-            ScenePosition Pos = 4;
-            ScenePosition Dir = 5;
-            int64 TargetUuid = 6;
+            int64 SkillTargetUuid = 1;   // 技能目标
+            int32 SkillLevelId = 2;      // 技能等级ID
+        Note: caster is implied to be the local player ("Client" use skill).
         """
+        pb = _ensure_pb()
+        if not pb:
+            return
         try:
-            outer = _decode_fields(data)
-            uuid_raw = outer.get(1, [0])[0]
-            uuid = _varint_to_int64(uuid_raw) if isinstance(uuid_raw, int) else 0
-            skill_id = outer.get(2, [0])[0]
-            skill_level_id = outer.get(3, [0])[0]
-            target_raw = outer.get(6, [0])[0]
-            target_uuid = _varint_to_int64(target_raw) if isinstance(target_raw, int) else 0
+            msg = pb.SyncClientUseSkill()
+            msg.ParseFromString(data)
+            target_uuid = msg.SkillTargetUuid
+            skill_level_id = msg.SkillLevelId
             logger.info(
-                f'[Parser] SyncClientUseSkill: uuid={uuid} skill_id={skill_id} '
-                f'skill_level_id={skill_level_id} target={target_uuid}'
+                f'[Parser] SyncClientUseSkill(pb2): target={target_uuid} '
+                f'skill_level_id={skill_level_id}'
             )
             _append_packet_debug('use_skill', {
-                'uuid': uuid,
-                'skill_id': skill_id,
-                'skill_level_id': skill_level_id,
                 'target_uuid': target_uuid,
+                'skill_level_id': skill_level_id,
             })
-            # Record skill use timestamp for CD tracking
-            if _is_player(uuid):
-                uid = _uuid_to_uid(uuid)
-                if uid == self._current_uid and uid in self._players:
-                    player = self._players[uid]
-                    if skill_level_id > 0:
-                        player.skill_last_use_at[skill_level_id] = time.time()
-                        self._remember_seen_skill(player, skill_level_id)
-                        self._try_detect_profession(player, skill_level_id)
+            # Record skill use timestamp for CD tracking (caster = current player)
+            uid = self._current_uid
+            if uid and uid in self._players:
+                player = self._players[uid]
+                if skill_level_id > 0:
+                    player.skill_last_use_at[skill_level_id] = time.time()
+                    self._remember_seen_skill(player, skill_level_id)
+                    self._try_detect_profession(player, skill_level_id)
         except Exception as e:
             logger.debug(f'[Parser] SyncClientUseSkill decode error: {e}')
 
@@ -2438,24 +1895,16 @@ class PacketParser:
         """Handle SyncServerSkillEnd (0x3005 / 12293) — skill cast completed.
 
         SyncServerSkillEnd proto:
-            int64 Uuid = 1;
-            int32 SkillId = 2;
-            int32 SkillLevelId = 3;
+            int32 SkillUuid = 1;    // 技能会话ID
         """
+        pb = _ensure_pb()
+        if not pb:
+            return
         try:
-            outer = _decode_fields(data)
-            uuid_raw = outer.get(1, [0])[0]
-            uuid = _varint_to_int64(uuid_raw) if isinstance(uuid_raw, int) else 0
-            skill_id = outer.get(2, [0])[0]
-            skill_level_id = outer.get(3, [0])[0]
-            logger.debug(
-                f'[Parser] SyncServerSkillEnd: uuid={uuid} skill_id={skill_id} '
-                f'skill_level_id={skill_level_id}'
-            )
-            _append_packet_debug('skill_end', {
-                'uuid': uuid, 'skill_id': skill_id,
-                'skill_level_id': skill_level_id,
-            })
+            msg = pb.SyncServerSkillEnd()
+            msg.ParseFromString(data)
+            logger.debug(f'[Parser] SyncServerSkillEnd(pb2): skill_uuid={msg.SkillUuid}')
+            _append_packet_debug('skill_end', {'skill_uuid': msg.SkillUuid})
         except Exception as e:
             logger.debug(f'[Parser] SyncServerSkillEnd decode error: {e}')
 
@@ -2463,32 +1912,30 @@ class PacketParser:
         """Handle SyncServerSkillStageEnd (0x3004 / 12292).
 
         SyncServerSkillStageEnd proto:
-            int64 Uuid = 1;
-            int32 SkillId = 2;
-            int32 SkillLevelId = 3;
-            int32 StageIndex = 4;
+            ServerSkillStageEnd SkillStageEndInfo = 1;
+        ServerSkillStageEnd proto:
+            int32 SkillUuid = 1;
+            uint32 StageId = 2;
+            uint32 NewStageId = 3;
+            uint32 ConditionId = 4;
         """
+        pb = _ensure_pb()
+        if not pb:
+            return
         try:
-            outer = _decode_fields(data)
-            uuid_raw = outer.get(1, [0])[0]
-            uuid = _varint_to_int64(uuid_raw) if isinstance(uuid_raw, int) else 0
-            skill_id = outer.get(2, [0])[0]
-            skill_level_id = outer.get(3, [0])[0]
-            stage_index = outer.get(4, [0])[0]
+            msg = pb.SyncServerSkillStageEnd()
+            msg.ParseFromString(data)
+            info = msg.SkillStageEndInfo
             logger.debug(
-                f'[Parser] SyncServerSkillStageEnd: uuid={uuid} skill={skill_id} '
-                f'slid={skill_level_id} stage={stage_index}'
+                f'[Parser] SyncServerSkillStageEnd(pb2): skill_uuid={info.SkillUuid} '
+                f'stage={info.StageId} new_stage={info.NewStageId} cond={info.ConditionId}'
             )
         except Exception as e:
             logger.debug(f'[Parser] SyncServerSkillStageEnd decode error: {e}')
 
     def _on_qte_begin(self, data: bytes):
         """Handle QteBegin (0x3001 / 12289) — QTE event start.
-
-        QteBegin proto:
-            int32 QteId = 1;
-            int32 QteType = 2;
-            float Duration = 3;
+        Note: QteBegin not in compiled proto — uses _decode_fields.
         """
         try:
             outer = _decode_fields(data)
@@ -2509,15 +1956,26 @@ class PacketParser:
         """Handle SyncDungeonData (0x17) — dungeon context sync.
 
         SyncDungeonData proto:
-            int32 CurDungeonId = 1;
-            repeated DungeonData Datas = 2;
+            DungeonSyncData VData = 1;
+        DungeonSyncData proto:
+            int64 SceneUuid = 1;
+            DungeonFlowInfo FlowInfo = 2;
+            DungeonSettlement Settlement = 7;
+            DungeonSceneInfo DungeonSceneInfo = 21;
+            ...
         """
+        pb = _ensure_pb()
+        if not pb:
+            return
         try:
-            outer = _decode_fields(data)
-            dungeon_id = outer.get(1, [0])[0]
-            logger.info(f'[Parser] SyncDungeonData: dungeon_id={dungeon_id} last={self._last_dungeon_id}')
-            _append_packet_debug('dungeon_data', {'dungeon_id': dungeon_id, 'last_dungeon_id': self._last_dungeon_id})
+            msg = pb.SyncDungeonData()
+            msg.ParseFromString(data)
+            vd = msg.VData
+            scene_uuid = vd.SceneUuid
+            logger.info(f'[Parser] SyncDungeonData(pb2): scene_uuid={scene_uuid} last={self._last_dungeon_id}')
+            _append_packet_debug('dungeon_data', {'scene_uuid': scene_uuid, 'last_dungeon_id': self._last_dungeon_id})
             # Detect dungeon change → reset scene to clear old monsters
+            dungeon_id = scene_uuid  # Use scene_uuid as dungeon identity
             if dungeon_id != self._last_dungeon_id and self._last_dungeon_id != 0:
                 print(
                     f'[Parser] ⚡ 副本切换: dungeon {self._last_dungeon_id} → {dungeon_id}, 重置场景',
@@ -2610,18 +2068,17 @@ class PacketParser:
         """Handle NotifyReviveUser (0x27) — player revived.
 
         NotifyReviveUser proto:
-            int64 Uuid = 1;
-            int32 ReviveType = 2;
+            int64 VActorUuid = 1;
         """
+        pb = _ensure_pb()
+        if not pb:
+            return
         try:
-            outer = _decode_fields(data)
-            uuid_raw = outer.get(1, [0])[0]
-            uuid = _varint_to_int64(uuid_raw) if isinstance(uuid_raw, int) else 0
-            revive_type = outer.get(2, [0])[0]
-            logger.info(f'[Parser] NotifyReviveUser: uuid={uuid} type={revive_type}')
-            _append_packet_debug('revive_user', {
-                'uuid': uuid, 'revive_type': revive_type,
-            })
+            msg = pb.NotifyReviveUser()
+            msg.ParseFromString(data)
+            uuid = msg.VActorUuid
+            logger.info(f'[Parser] NotifyReviveUser(pb2): uuid={uuid}')
+            _append_packet_debug('revive_user', {'uuid': uuid})
             # Reset dead state for player
             if _is_player(uuid):
                 uid = _uuid_to_uid(uuid)
@@ -2634,29 +2091,21 @@ class PacketParser:
             logger.debug(f'[Parser] NotifyReviveUser decode error: {e}')
 
     def _on_sync_container_data(self, data: bytes):
-        """
-        SyncContainerData { CharSerialize VData = 1 }
-        CharSerialize {
-            int64 CharId = 1;
-            CharBaseInfo CharBase = 2;
-            EnergyItem EnergyItem = 13;
-            UserFightAttr Attr = 16;
-            RoleLevel RoleLevel = 22;
-            ProfessionList ProfessionList = 61;
-        }
-        """
-        outer = _decode_fields(data)
-        vdata_raw = outer.get(1, [None])[0]
-        if not vdata_raw or not isinstance(vdata_raw, bytes):
+        """SyncContainerData { CharSerialize VData = 1 } — 纯 pb2 解析."""
+        pb = _ensure_pb()
+        if not pb:
+            logger.error('[Parser] SyncContainerData: pb2 模块未加载，跳过')
             return
-        vdata = _decode_fields(vdata_raw)
 
-
-        char_id_raw = vdata.get(1, [0])[0]
-        if isinstance(char_id_raw, int):
-            uid = char_id_raw
-        else:
+        try:
+            msg = pb.SyncContainerData()
+            msg.ParseFromString(data)
+            char = msg.VData
+        except Exception as e:
+            logger.error(f'[Parser] SyncContainerData pb2 解析失败: {e}')
             return
+
+        uid = char.CharId
         if uid <= 0:
             return
 
@@ -2694,73 +2143,80 @@ class PacketParser:
         changed = False
 
         # CharBase (field 2)
-        char_base_raw = vdata.get(2, [None])[0]
-        if isinstance(char_base_raw, bytes):
-            cb = _decode_fields(char_base_raw)
-            # Name (field 5)
-            name_raw = cb.get(5, [None])[0]
-            if isinstance(name_raw, bytes):
-                name = name_raw.decode('utf-8', 'ignore')
-                if name:
-                    player.name = name
-                    changed = True
-                    logger.info(f'[Parser] SyncContainerData CharBase Name={name!r} uid={uid}')
-            # FightPoint (field 35)
-            fp = cb.get(35, [None])[0]
-            if isinstance(fp, int) and fp > 0:
-                player.fight_point = fp
+        if char.HasField('CharBase'):
+            cb = char.CharBase
+            if cb.Name:
+                player.name = cb.Name
                 changed = True
+                logger.info(f'[Parser] SyncContainerData CharBase Name={cb.Name!r} uid={uid}')
+            if cb.FightPoint > 0:
+                player.fight_point = cb.FightPoint
+                changed = True
+            # ── CharTeam (field 20) — parse team members ──
+            if cb.HasField('TeamInfo'):
+                ti = cb.TeamInfo
+                logger.info(
+                    f'[Parser] SyncContainerData CharTeam: '
+                    f'team_id={ti.TeamId} char_ids={list(ti.CharIds)} '
+                    f'member_data_keys={list(ti.TeamMemberData.keys())}'
+                )
+                self._process_char_team(uid, ti)
+            else:
+                logger.info(f'[Parser] SyncContainerData: No TeamInfo in CharBase')
 
         # UserFightAttr (field 16)
-        attr_raw = vdata.get(16, [None])[0]
         attr_resource_ids = []
         attr_resources = []
         attr_skill_cd_count = 0
-        if isinstance(attr_raw, bytes):
-            attr = _decode_fields(attr_raw)
+        if char.HasField('Attr'):
+            a = char.Attr
             # CurHp (field 1)
-            cur_hp = attr.get(1, [None])[0]
-            if isinstance(cur_hp, int):
-                player.hp = _varint_to_int64(cur_hp)
-                player.hp_from_full_sync = True  # HP from the full sync path is trusted
+            if a.CurHp != 0:
+                player.hp = a.CurHp
+                player.hp_from_full_sync = True
                 changed = True
             # MaxHp (field 2)
-            max_hp = attr.get(2, [None])[0]
-            if isinstance(max_hp, int):
-                player.max_hp = _varint_to_int64(max_hp)
+            if a.MaxHp != 0:
+                player.max_hp = a.MaxHp
                 changed = True
-            # OriginEnergy (field 3, wire=5 float)
-            energy = attr.get(3, [None])[0]
-            if energy is not None:
-                new_energy = player.energy
-                new_energy_valid = False
-                if isinstance(energy, float):
-                    new_energy = energy
-                    new_energy_valid = math.isfinite(energy) and energy >= 0.0
-                elif isinstance(energy, int):
-                    new_energy = float(energy)
-                    new_energy_valid = energy >= 0
-                if (
-                    abs(float(new_energy or 0.0) - float(getattr(player, 'energy', 0.0) or 0.0)) > 0.001 or
-                    bool(getattr(player, 'energy_valid', False)) != bool(new_energy_valid)
-                ):
-                    player.energy = new_energy
-                    player.energy_valid = bool(new_energy_valid)
-                    player.energy_source_priority = 99 if new_energy_valid else 0
-                    changed = True
-            attr_resource_ids = [v for v in attr.get(4, []) if isinstance(v, int)]
-            attr_resources = [v for v in attr.get(5, []) if isinstance(v, int)]
+            # OriginEnergy (field 3, float)
+            new_energy = float(a.OriginEnergy)
+            new_energy_valid = math.isfinite(new_energy) and new_energy >= 0.0
+            if (
+                abs(new_energy - float(getattr(player, 'energy', 0.0) or 0.0)) > 0.001 or
+                bool(getattr(player, 'energy_valid', False)) != bool(new_energy_valid)
+            ):
+                player.energy = new_energy
+                player.energy_valid = bool(new_energy_valid)
+                player.energy_source_priority = 99 if new_energy_valid else 0
+                changed = True
+            # ResourceIds / Resources (fields 4, 5)
+            attr_resource_ids = list(a.ResourceIds)
+            attr_resources = list(a.Resources)
             resource_values = _decode_resource_value_map(attr_resource_ids, attr_resources)
             if resource_values != player.resource_values:
                 player.resource_values = resource_values
                 changed = True
+            # CdInfo (field 9, repeated SkillCDInfo)
             skill_cds = []
-            for cd_raw in attr.get(9, []):
-                if not isinstance(cd_raw, bytes):
-                    continue
-                decoded_cd = _decode_skill_cd_info(cd_raw)
-                if decoded_cd.get('skill_level_id', 0) > 0:
-                    skill_cds.append(decoded_cd)
+            for cd in a.CdInfo:
+                if cd.SkillLevelId > 0:
+                    # UserFightAttr sends SkillCDInfo (VCD at field 8).
+                    # Also check field 5 (ValidCDTimeLegacy) for safety.
+                    vcd_legacy = max(0, cd.ValidCDTimeLegacy)  # field 5
+                    vcd_info   = max(0, cd.ValidCDTime)        # field 8
+                    effective_vcd = vcd_info if vcd_info > 0 else vcd_legacy
+                    skill_cds.append({
+                        'skill_level_id': cd.SkillLevelId,
+                        'begin_time': cd.SkillBeginTime,
+                        'duration': cd.Duration,
+                        'skill_cd_type': cd.SkillCDType,
+                        'valid_cd_time': effective_vcd,
+                        'charge_count': max(0, cd.ChargeCount),
+                        'sub_cd_ratio': max(0, cd.SubCDRatio),
+                        'sub_cd_fixed': max(0, int(cd.SubCDFixed)),
+                        'accelerate_cd_ratio': max(0, cd.AccelerateCDRatio),
+                    })
             attr_skill_cd_count = len(skill_cds)
             if self._replace_skill_cds(player, skill_cds):
                 changed = True
@@ -2768,47 +2224,100 @@ class PacketParser:
                 changed = True
 
         # EnergyItem (field 13)
-        energy_item_raw = vdata.get(13, [None])[0]
         energy_item = {
             'unlock_nums': [],
             'energy_info_map': {},
         }
-        if isinstance(energy_item_raw, bytes):
-            energy_item = _decode_energy_item(energy_item_raw)
-            if energy_item.get('energy_info_map', {}) != player.energy_info_map:
-                player.energy_info_map = dict(energy_item.get('energy_info_map', {}))
+        if char.HasField('EnergyItem'):
+            ei = char.EnergyItem
+            energy_limit = ei.EnergyLimit
+            extra_energy_limit = ei.ExtraEnergyLimit
+            energy_info_map = {}
+            energy_values = []
+            unlock_nums = []
+            for eid, einfo in ei.EnergyInfo.items():
+                ev = einfo.EnergyValue
+                un = einfo.UnlockNum
+                entry_info = {
+                    'energy_value': ev,
+                    'unlock_num': un,
+                    'item_info_count': len(einfo.EnergyItemInfo),
+                }
+                if ev >= 0:
+                    energy_values.append(ev)
+                if un >= 0:
+                    unlock_nums.append(un)
+                if eid > 0:
+                    energy_info_map[eid] = entry_info
+            energy_item = {
+                'unlock_nums': unlock_nums,
+                'energy_info_map': energy_info_map,
+            }
+            if energy_info_map != player.energy_info_map:
+                player.energy_info_map = dict(energy_info_map)
                 changed = True
-            total_limit = energy_item['energy_limit'] + energy_item['extra_energy_limit']
+            total_limit = energy_limit + extra_energy_limit
             if total_limit > 0:
-                player.energy_limit = energy_item['energy_limit']
-                player.extra_energy_limit = energy_item['extra_energy_limit']
+                player.energy_limit = energy_limit
+                player.extra_energy_limit = extra_energy_limit
                 changed = True
                 logger.info(
                     f'[Parser] SyncContainerData EnergyItem '
-                    f'limit={energy_item["energy_limit"]} '
-                    f'extra={energy_item["extra_energy_limit"]} uid={uid}'
+                    f'limit={energy_limit} extra={extra_energy_limit} uid={uid}'
                 )
-            elif energy_item['derived_total_limit'] > 0:
-                player.energy_limit = energy_item['derived_total_limit']
-                player.extra_energy_limit = 0
-                changed = True
-                logger.info(
-                    f'[Parser] SyncContainerData EnergyItem derived_limit='
-                    f'{energy_item["derived_total_limit"]} uid={uid}'
-                )
-            if energy_item['current_energy_value'] > 0:
-                player.energy_info_value = energy_item['current_energy_value']
+            else:
+                sane_limit = max(energy_values) if energy_values else 0
+                if sane_limit > 0:
+                    player.energy_limit = sane_limit
+                    player.extra_energy_limit = 0
+                    changed = True
+                    logger.info(
+                        f'[Parser] SyncContainerData EnergyItem derived_limit='
+                        f'{sane_limit} uid={uid}'
+                    )
+            cur_energy = max(energy_values) if energy_values else 0
+            if cur_energy > 0:
+                player.energy_info_value = cur_energy
             if _refresh_stamina_resource(player):
                 changed = True
 
-        season_medal_raw = vdata.get(52, [None])[0]
-        monster_hunt_raw = vdata.get(56, [None])[0]
-        season_center_raw = vdata.get(50, [None])[0]
-        battlepass_data_raw = vdata.get(86, [None])[0]
-        season_medal_level = _decode_season_medal_level(season_medal_raw) if isinstance(season_medal_raw, bytes) else 0
-        monster_hunt_level = _decode_monster_hunt_level(monster_hunt_raw) if isinstance(monster_hunt_raw, bytes) else 0
-        battlepass_level = _decode_battlepass_level(season_center_raw) if isinstance(season_center_raw, bytes) else 0
-        battlepass_data_level = _decode_battlepass_data_level(battlepass_data_raw) if isinstance(battlepass_data_raw, bytes) else 0
+        # ── Season / Level-related fields (50, 52, 56, 86, 102) ──
+        # SeasonCenter (field 50) → BattlePass.Level
+        battlepass_level = 0
+        if char.HasField('SeasonCenter') and char.SeasonCenter.HasField('BattlePass'):
+            battlepass_level = char.SeasonCenter.BattlePass.Level
+        # SeasonMedalInfo (field 52) → CoreHoleInfo.HoleLevel
+        season_medal_level = 0
+        if char.HasField('SeasonMedalInfo') and char.SeasonMedalInfo.HasField('CoreHoleInfo'):
+            raw_level = char.SeasonMedalInfo.CoreHoleInfo.HoleLevel
+            season_medal_level = _normalize_season_medal_level(raw_level)
+            if season_medal_level > 0:
+                logger.info(
+                    f'[Parser] SeasonMedalInfo core_raw={raw_level} '
+                    f'core_norm={season_medal_level}'
+                )
+        # MonsterHuntInfo (field 56) → CurLevel
+        monster_hunt_level = 0
+        if char.HasField('MonsterHuntInfo'):
+            monster_hunt_level = char.MonsterHuntInfo.CurLevel
+        # BattlePassData (field 86) → max BattlePass.Level across entries
+        battlepass_data_level = 0
+        if char.HasField('BattlePassData'):
+            bp_levels = [bp.Level for bp in char.BattlePassData.BattleMap.values() if bp.Level > 0]
+            battlepass_data_level = max(bp_levels) if bp_levels else 0
+        # DeepSleepResonance (field 102) → season_type==3 entry
+        deep_sleep_level = 0
+        deep_sleep_exp = 0
+        if char.HasField('DeepSleepResonance'):
+            for entry in char.DeepSleepResonance.Entries:
+                if entry.SeasonType == 3 and entry.HasField('Info'):
+                    ds_lv = entry.Info.Level
+                    ds_exp = entry.Info.CurExp
+                    if ds_lv > 0:
+                        deep_sleep_level = ds_lv
+                        deep_sleep_exp = ds_exp
+
+        # Apply all level-related values (common for both paths)
         player.season_medal_level = season_medal_level
         player.monster_hunt_level = monster_hunt_level
         player.battlepass_level = battlepass_level
@@ -2822,57 +2331,41 @@ class PacketParser:
             changed = True
         if _set_level_extra_candidate(player, 'battlepass_data', battlepass_data_level):
             changed = True
+        if deep_sleep_level > 0:
+            if _set_level_extra_candidate(player, 'deep_sleep', deep_sleep_level):
+                changed = True
+            print(
+                f'[Parser] SyncContainerData: 深眠心相仪等级 Lv.{deep_sleep_level} '
+                f'经验={deep_sleep_exp} uid={uid}',
+                flush=True,
+            )
+            _append_packet_debug('deep_sleep_level', {
+                'uid': uid,
+                'deep_sleep_level': deep_sleep_level,
+                'deep_sleep_exp': deep_sleep_exp,
+            })
 
-        # ── 深眠心相仪等级 (field 102) — the (+XX) shown next to base level ──
-        deep_sleep_raw = vdata.get(CharField.DEEP_SLEEP_LEVEL, [None])[0]
-        deep_sleep_level = 0
-        deep_sleep_exp = 0
-        if isinstance(deep_sleep_raw, bytes):
-            ds_fields = _decode_fields(deep_sleep_raw)
-            # Structure: { 1: repeated { 1: season_type, 2: { 1: level, 2: cur_exp } } }
-            # season_type=3 is the 深眠心相仪 (deep sleep resonance)
-            for ds_entry_raw in ds_fields.get(1, []):
-                if not isinstance(ds_entry_raw, bytes):
-                    continue
-                ds_entry = _decode_fields(ds_entry_raw)
-                ds_type = ds_entry.get(1, [0])[0]
-                ds_data_raw = ds_entry.get(2, [None])[0]
-                if isinstance(ds_data_raw, bytes):
-                    ds_data = _decode_fields(ds_data_raw)
-                    ds_lv = ds_data.get(1, [0])[0]
-                    ds_exp = ds_data.get(2, [0])[0]
-                    if ds_type == 3 and isinstance(ds_lv, int) and ds_lv > 0:
-                        deep_sleep_level = ds_lv
-                        deep_sleep_exp = ds_exp if isinstance(ds_exp, int) else 0
-            if deep_sleep_level > 0:
-                if _set_level_extra_candidate(player, 'deep_sleep', deep_sleep_level):
-                    changed = True
-                print(
-                    f'[Parser] SyncContainerData: 深眠心相仪等级 Lv.{deep_sleep_level} '
-                    f'经验={deep_sleep_exp} uid={uid}',
-                    flush=True,
-                )
-                _append_packet_debug('deep_sleep_level', {
-                    'uid': uid,
-                    'deep_sleep_level': deep_sleep_level,
-                    'deep_sleep_exp': deep_sleep_exp,
-                })
-
-        # ── Full dump of ALL CharSerialize fields for deep analysis ──
+        # ── Full dump of ALL CharSerialize fields for deep analysis (pb2) ──
         full_sync_dump = {'uid': uid, 'field_count': 0, 'fields': {}}
-        for _fsync_num in sorted(vdata.keys()):
-            _fsync_name = CHAR_FIELD_NAMES.get(_fsync_num, f'FIELD_{_fsync_num}')
-            for _fsync_val in vdata.get(_fsync_num, []):
-                if isinstance(_fsync_val, bytes):
-                    try:
-                        _fsync_decoded = _decode_fields(_fsync_val)
-                        full_sync_dump['fields'][f'{_fsync_num}_{_fsync_name}'] = \
-                            _fields_to_debug_dict(_fsync_decoded, max_depth=4)
-                    except Exception:
-                        full_sync_dump['fields'][f'{_fsync_num}_{_fsync_name}'] = \
-                            {'_raw_hex': _fsync_val.hex()[:512], '_size': len(_fsync_val)}
-                elif isinstance(_fsync_val, (int, float)):
-                    full_sync_dump['fields'][f'{_fsync_num}_{_fsync_name}'] = _fsync_val
+        if _MessageToDict:
+            try:
+                all_fields = _MessageToDict(char, preserving_proto_field_name=True)
+                for fk, fv in all_fields.items():
+                    if fk == 'CharId':
+                        continue
+                    full_sync_dump['fields'][fk] = fv
+            except Exception as e:
+                logger.debug(f'[Parser] MessageToDict error: {e}')
+        else:
+            # Fallback: list field names only
+            for fd in char.DESCRIPTOR.fields:
+                if fd.number == 1:
+                    continue
+                try:
+                    if fd.message_type and char.HasField(fd.name):
+                        full_sync_dump['fields'][fd.name] = f'<{fd.message_type.name}>'
+                except (ValueError, AttributeError):
+                    pass
         full_sync_dump['field_count'] = len(full_sync_dump['fields'])
         _append_packet_debug('sync_container_full_dump', full_sync_dump)
 
@@ -2902,60 +2395,139 @@ class PacketParser:
             }
         )
 
-        role_lv_raw = vdata.get(22, [None])[0]
-        if isinstance(role_lv_raw, bytes):
-            rl = _decode_fields(role_lv_raw)
-            role_level = rl.get(1, [None])[0]
-            prev_season_max_lv = rl.get(11, [None])[0]
+        # RoleLevel (field 22)
+        if char.HasField('RoleLevel'):
+            rl = char.RoleLevel
+            role_level = rl.Level
+            prev_season_max_lv = rl.PrevSeasonMaxLv
             role_level_debug = {
                 'uid': uid,
                 'role_level': role_level,
                 'prev_season_max_lv': prev_season_max_lv,
-                'last_season_day': rl.get(6, [None])[0],
-                'bless_exp_pool': rl.get(7, [None])[0],
-                'grant_bless_exp': rl.get(8, [None])[0],
-                'accumulate_bless_exp': rl.get(9, [None])[0],
-                'accumulate_exp': rl.get(10, [None])[0],
+                'last_season_day': rl.LastSeasonDay,
+                'bless_exp_pool': rl.BlessExpPool,
+                'grant_bless_exp': rl.GrantBlessExp,
+                'accumulate_bless_exp': rl.AccumulateBlessExp,
+                'accumulate_exp': rl.AccumulateExp,
             }
             logger.info(
-                f'[Parser] SyncContainerData RoleLevel raw_fields={dict(rl)}, '
+                f'[Parser] SyncContainerData RoleLevel(pb2) '
                 f'role_level={role_level}, prev_season_max_lv={prev_season_max_lv}, uid={uid}'
             )
             _append_packet_debug('role_level', role_level_debug)
-            if isinstance(role_level, int) and role_level > 0:
-                # Upstream packet.js treats RoleLevel.Level like the visible level.
+            if role_level > 0:
                 player.level = role_level
                 changed = True
                 print(f'[Parser] SyncContainerData: 等级 Lv.{role_level} uid={uid}', flush=True)
             else:
                 logger.warning(
-                    f'[Parser] SyncContainerData RoleLevel: level NOT parsed! '
-                    f'raw={role_level!r} type={type(role_level).__name__} uid={uid}'
+                    f'[Parser] SyncContainerData RoleLevel(pb2): level=0! uid={uid}'
                 )
-        else:
-            logger.warning(
-                f'[Parser] SyncContainerData: field 22 (RoleLevel) missing or not bytes! '
-                f'raw={role_lv_raw!r} uid={uid}'
-            )
 
         # Slots (field 55) — full skill bar layout including resonance slots 7,8
-        slots_bar_raw = vdata.get(55, [None])[0]
-        if isinstance(slots_bar_raw, bytes):
-            slot_bar = _decode_slot_bar(slots_bar_raw)
+        if char.HasField('Slots'):
+            slot_bar = {}
+            for slot_id, si in char.Slots.Slots.items():
+                sid = si.SkillId
+                if slot_id > 0 and sid > 0:
+                    slot_bar[slot_id] = sid
             if slot_bar and slot_bar != player.slot_bar_map:
                 player.slot_bar_map = dict(slot_bar)
                 changed = True
-                logger.info(f'[Parser] SyncContainerData Slots(55) bar={slot_bar} uid={uid}')
+                logger.info(f'[Parser] SyncContainerData Slots(55/pb2) bar={slot_bar} uid={uid}')
                 _append_packet_debug(
                     'slot_bar',
                     {'uid': uid, 'slot_bar_map': slot_bar}
                 )
 
         # ProfessionList (field 61)
-        prof_raw = vdata.get(61, [None])[0]
-        if isinstance(prof_raw, bytes):
-            profession_data = _decode_profession_list(prof_raw)
-            pid = int(profession_data.get('profession_id') or 0)
+        if char.HasField('ProfessionList'):
+            pl = char.ProfessionList
+            cur_prof_id = pl.CurProfessionId
+
+            # Build all_skill_info from AoyiSkillInfoMap (field 7)
+            all_skill_info: Dict[int, Dict[str, int]] = {}
+            for key, psi in pl.AoyiSkillInfoMap.items():
+                all_skill_info[key] = {
+                    'skill_id': psi.SkillId,
+                    'level': psi.Level,
+                }
+
+            # Find current profession data from ProfessionList_ (field 4)
+            current_prof = None
+            profession_entries = list(pl.ProfessionList_.items())
+            for pid_key, pinfo in profession_entries:
+                if pid_key == cur_prof_id:
+                    current_prof = pinfo
+                    break
+            if current_prof is None and len(profession_entries) == 1:
+                cur_prof_id = profession_entries[0][0]
+                current_prof = profession_entries[0][1]
+
+            profession_data: Dict[str, Any] = {
+                'profession_id': cur_prof_id,
+                'slot_skill_level_map': {},
+                'active_skill_ids': [],
+                'skill_info_map': {},
+                'skill_level_info_map': {},
+            }
+
+            if current_prof is not None:
+                # Current profession's SkillInfoMap (field 4 of ProfessionInfo)
+                current_skill_info: Dict[int, Dict[str, int]] = {}
+                for sk, psi in current_prof.SkillInfoMap.items():
+                    current_skill_info[sk] = {
+                        'skill_id': psi.SkillId,
+                        'level': psi.Level,
+                    }
+                for sk, info in all_skill_info.items():
+                    current_skill_info.setdefault(sk, info)
+
+                profession_data['skill_info_map'] = current_skill_info
+
+                # Build skill_level_info_map
+                skill_level_info_map: Dict[int, Dict[str, int]] = {}
+                for info_key, info in current_skill_info.items():
+                    skill_id = int(info.get('skill_id') or info_key or 0)
+                    skill_level_id = _compose_skill_level_id(skill_id, info.get('level', 0))
+                    if skill_level_id <= 0:
+                        skill_level_id = int(info_key or 0)
+                    if skill_level_id > 0:
+                        skill_level_info_map[skill_level_id] = {
+                            'skill_id': skill_id,
+                            'level': int(info.get('level', 0) or 0),
+                        }
+                profession_data['skill_level_info_map'] = skill_level_info_map
+
+                profession_data['active_skill_ids'] = list(current_prof.ActiveSkillIds)
+
+                # SlotSkillInfoMap (field 7 of ProfessionInfo) → map<int32, int32>
+                raw_slot_map = dict(current_prof.SlotSkillInfoMap)
+                normalized_slot_map: Dict[int, int] = {}
+                for slot, mapped_id in raw_slot_map.items():
+                    if slot < 0 or mapped_id <= 0:
+                        continue
+                    skill_info = current_skill_info.get(mapped_id)
+                    skill_level_id = 0
+                    if skill_info:
+                        skill_level_id = _compose_skill_level_id(mapped_id, skill_info.get('level', 0))
+                    if skill_level_id <= 0:
+                        for ik, iv in current_skill_info.items():
+                            if iv.get('skill_id') == mapped_id:
+                                skill_level_id = _compose_skill_level_id(ik, iv.get('level', 0))
+                                break
+                    if skill_level_id <= 0:
+                        skill_level_id = mapped_id
+                    normalized_slot_map[slot] = skill_level_id
+                    if skill_level_id > 0 and skill_level_id not in skill_level_info_map:
+                        si = current_skill_info.get(mapped_id) or {}
+                        skill_level_info_map[skill_level_id] = {
+                            'skill_id': int(si.get('skill_id') or mapped_id or 0),
+                            'level': int(si.get('level', 0) or 0),
+                        }
+                profession_data['slot_skill_level_map'] = normalized_slot_map
+
+            pid = profession_data['profession_id']
             if pid > 0:
                 player.profession_id = pid
                 player.profession = PROFESSION_NAMES.get(pid, '')
@@ -2986,85 +2558,98 @@ class PacketParser:
                 }
             )
 
-        # ── Parse ALL remaining CharSerialize fields (generic decode) ──
-        # Fields 1-98 not in _HANDLED_CHAR_FIELDS are decoded generically
-        # and stored in player.extended_data for completeness.
-        #
-        # Specific useful fields get dedicated decoders:
-        #   3 (SceneData) → scene_id
+        # ── Parse ALL remaining CharSerialize fields via pb2 ──
+        # Specific useful fields get dedicated pb2 decoders:
+        #   3 (SceneData) → scene_id (MapId)
         #   6 (BuffDBInfo) → buff_list
         #   12 (EquipList) → equip info
-        #   15 (DungeonList) → dungeon_id
+        #   15 (DungeonList) → dungeon data
         #   28 (Resonance) → resonance data
 
         # SceneData (field 3) — current scene/map
-        scene_raw = vdata.get(CharField.SCENE_DATA, [None])[0]
-        if isinstance(scene_raw, bytes):
-            scene = _decode_scene_data(scene_raw)
-            new_scene_id = scene.get('scene_id', 0)
+        if char.HasField('SceneData'):
+            sd = char.SceneData
+            new_scene_id = sd.MapId
+            scene = {
+                'map_id': sd.MapId,
+                'channel_id': sd.ChannelId,
+                'plane_id': sd.PlaneId,
+                'scene_layer': sd.SceneLayer,
+            }
             if new_scene_id > 0:
                 player.scene_id = new_scene_id
                 changed = True
-                # Track scene_id changes at parser level
                 if self._last_scene_id != 0 and new_scene_id != self._last_scene_id:
                     logger.info(
                         f'[Parser] 场景ID变更: {self._last_scene_id} → {new_scene_id} uid={uid}'
                     )
                 self._last_scene_id = new_scene_id
             player.extended_data['SCENE_DATA'] = scene
-            logger.info(f'[Parser] CharSerialize SceneData: {scene} uid={uid}')
+            logger.info(f'[Parser] CharSerialize SceneData(pb2): {scene} uid={uid}')
 
         # BuffDBInfo (field 6) — active buffs on self
-        buff_db_raw = vdata.get(CharField.BUFF_DB_INFO, [None])[0]
-        if isinstance(buff_db_raw, bytes):
-            buffs = _decode_buff_db_info(buff_db_raw)
+        if char.HasField('BuffInfo'):
+            bi = char.BuffInfo
+            buffs = []
+            for buf_id, buf_data in bi.AllBuffDbData.items():
+                buffs.append({
+                    'buff_id': buf_id,
+                    'config_id': buf_data.BuffConfigId,
+                    'level': buf_data.Level,
+                    'layer': buf_data.Layer,
+                    'duration': buf_data.Duration,
+                })
             player.buff_list = buffs
             player.extended_data['BUFF_DB_INFO'] = {'buff_count': len(buffs)}
             changed = True
-            logger.info(f'[Parser] CharSerialize BuffDBInfo: {len(buffs)} buffs uid={uid}')
+            logger.info(f'[Parser] CharSerialize BuffDBInfo(pb2): {len(buffs)} buffs uid={uid}')
 
         # EquipList (field 12) — equipped items
-        equip_raw = vdata.get(CharField.EQUIP_LIST, [None])[0]
-        if isinstance(equip_raw, bytes):
-            equip_data = _decode_equip_list(equip_raw)
-            player.extended_data['EQUIP_LIST'] = equip_data
-            logger.info(f'[Parser] CharSerialize EquipList: {equip_data.get("equip_count",0)} items uid={uid}')
+        if char.HasField('Equip'):
+            eq = char.Equip
+            equip_count = len(eq.EquipList_)
+            player.extended_data['EQUIP_LIST'] = {'equip_count': equip_count}
+            logger.info(f'[Parser] CharSerialize EquipList(pb2): {equip_count} items uid={uid}')
 
         # DungeonList (field 15) — dungeon data
-        dungeon_raw = vdata.get(CharField.DUNGEON_LIST, [None])[0]
-        if isinstance(dungeon_raw, bytes):
-            dungeon_data = _decode_dungeon_list(dungeon_raw)
-            if dungeon_data.get('cur_dungeon_id', 0) > 0:
-                player.dungeon_id = dungeon_data['cur_dungeon_id']
+        if char.HasField('DungeonList'):
+            dl = char.DungeonList
+            dungeon_data = {
+                'complete_count': len(dl.CompleteDungeon),
+                'reset_time': dl.ResetTime,
+            }
             player.extended_data['DUNGEON_LIST'] = dungeon_data
-            logger.info(f'[Parser] CharSerialize DungeonList: {dungeon_data} uid={uid}')
+            logger.info(f'[Parser] CharSerialize DungeonList(pb2): {dungeon_data} uid={uid}')
 
         # Resonance (field 28) — resonance system
-        resonance_raw = vdata.get(CharField.RESONANCE, [None])[0]
-        if isinstance(resonance_raw, bytes):
-            res_data = _decode_resonance_data(resonance_raw)
+        if char.HasField('Resonance'):
+            res = char.Resonance
+            res_data = {
+                'installed': res.Installed,
+                'resonance_count': len(res.Resonances),
+            }
             player.extended_data['RESONANCE'] = res_data
-            logger.info(f'[Parser] CharSerialize Resonance: {res_data} uid={uid}')
+            logger.info(f'[Parser] CharSerialize Resonance(pb2): {res_data} uid={uid}')
 
-        # Generic decode for ALL other CharSerialize fields
+        # Generic pb2 decode for ALL other CharSerialize fields
         _generic_decoded_fields = []
-        for _fnum in range(1, 99):
-            if _fnum in _HANDLED_CHAR_FIELDS:
+        for _fd in char.DESCRIPTOR.fields:
+            if _fd.number <= 1:
+                continue  # skip CharId
+            if _fd.number in _HANDLED_CHAR_FIELDS:
                 continue
-            # Skip fields already handled above with specific decoders
-            if _fnum in (CharField.SCENE_DATA, CharField.BUFF_DB_INFO,
-                         CharField.EQUIP_LIST, CharField.DUNGEON_LIST,
-                         CharField.RESONANCE):
-                continue
-            _fraw = vdata.get(_fnum, [None])[0]
-            if isinstance(_fraw, bytes) and len(_fraw) > 0:
-                _fname = CHAR_FIELD_NAMES.get(_fnum, f'FIELD_{_fnum}')
-                try:
-                    _fdecoded = _decode_fields(_fraw)
-                    player.extended_data[_fname] = _fields_to_debug_dict(_fdecoded, max_depth=4)
-                except Exception:
-                    player.extended_data[_fname] = {'raw_size': len(_fraw)}
-                _generic_decoded_fields.append(f'{_fname}({_fnum}:{len(_fraw)}B)')
+            try:
+                if _fd.message_type and char.HasField(_fd.name):
+                    sub_msg = getattr(char, _fd.name)
+                    if _MessageToDict:
+                        player.extended_data[_fd.name] = _MessageToDict(
+                            sub_msg, preserving_proto_field_name=True
+                        )
+                    else:
+                        player.extended_data[_fd.name] = f'<{_fd.message_type.name}>'
+                    _generic_decoded_fields.append(f'{_fd.name}({_fd.number})')
+            except (ValueError, AttributeError):
+                pass
 
         if _generic_decoded_fields:
             logger.info(
@@ -3129,10 +2714,18 @@ class PacketParser:
             return
         field_index = struct.unpack_from('<I', data, pos)[0]
         pos += 4
+        _fname = CHAR_FIELD_NAMES.get(field_index, f'FIELD_{field_index}')
         debug_info = {
             'uid': uid,
             'field_index': field_index,
         }
+        # Track DirtyData field distribution
+        if not hasattr(self, '_dirty_field_counts'):
+            self._dirty_field_counts = {}
+        self._dirty_field_counts[field_index] = self._dirty_field_counts.get(field_index, 0) + 1
+        total_dirty = sum(self._dirty_field_counts.values())
+        if total_dirty <= 5 or total_dirty % 50 == 0:
+            logger.info(f'[Parser] DirtyData field={field_index}({_fname}) total_dirty={total_dirty} dist={dict(sorted(self._dirty_field_counts.items()))}')
 
         if field_index == 2:  # CharBase - fully parsed for ALL sub_fields from proto CharBaseInfo
             debug_info['field_name'] = 'CharBase'
@@ -3249,6 +2842,21 @@ class PacketParser:
                 elif ftype in ('msg', 'rep_i32'):
                     # For message/repeated types, dump remaining raw bytes
                     debug_info['msg_hex'] = data[pos:].hex()[:256]
+                    # ── Parse CharTeam (sub_field 20) via pb2 ──
+                    if sub_field == 20 and ftype == 'msg':
+                        try:
+                            pb = _ensure_pb()
+                            if pb:
+                                team_msg = pb.CharTeam()
+                                team_msg.ParseFromString(data[pos:])
+                                logger.info(
+                                    f'[Parser] DirtyData CharTeam received: '
+                                    f'team_id={team_msg.TeamId} char_ids={list(team_msg.CharIds)} '
+                                    f'member_data_keys={list(team_msg.TeamMemberData.keys())}'
+                                )
+                                self._process_char_team(self._current_uid, team_msg)
+                        except Exception as e:
+                            logger.debug(f'[Parser] DirtyData CharTeam parse error: {e}')
             else:
                 debug_info['unknown_sub'] = True
                 debug_info['raw_hex'] = data[pos:].hex()[:256]
@@ -3469,25 +3077,38 @@ class PacketParser:
                         pos += 4
                         debug_info['sub_field'] = sub_field
                         # sub_field=3 is 深眠心相仪
-                        # Try to read nested protobuf from remaining bytes
                         remaining = data[pos:]
                         if len(remaining) > 0:
                             try:
-                                nested = _decode_fields(remaining)
-                                ds_data_raw = nested.get(2, [None])[0]
-                                if isinstance(ds_data_raw, bytes):
-                                    ds_data = _decode_fields(ds_data_raw)
-                                    ds_lv = ds_data.get(1, [0])[0]
-                                    ds_exp = ds_data.get(2, [0])[0]
-                                    if isinstance(ds_lv, int) and ds_lv > 0:
+                                # Use pb2 DeepSleepSeasonEntry for inner protobuf decode
+                                pb = _ensure_pb()
+                                if pb:
+                                    entry = pb.DeepSleepSeasonEntry()
+                                    entry.ParseFromString(remaining)
+                                    ds_lv = entry.Info.Level if entry.HasField('Info') else 0
+                                    ds_exp = entry.Info.CurExp if entry.HasField('Info') else 0
+                                    if ds_lv > 0:
                                         debug_info['level'] = ds_lv
                                         debug_info['exp'] = ds_exp
-                                        if sub_field == 3:  # 深眠心相仪
+                                        if sub_field == 3:
                                             if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
                                                 changed = True
                                             print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
-                                elif isinstance(ds_data_raw, int):
-                                    debug_info['nested_int'] = ds_data_raw
+                                else:
+                                    # fallback to manual decode
+                                    nested = _decode_fields(remaining)
+                                    ds_data_raw = nested.get(2, [None])[0]
+                                    if isinstance(ds_data_raw, bytes):
+                                        ds_data = _decode_fields(ds_data_raw)
+                                        ds_lv = ds_data.get(1, [0])[0]
+                                        ds_exp = ds_data.get(2, [0])[0]
+                                        if isinstance(ds_lv, int) and ds_lv > 0:
+                                            debug_info['level'] = ds_lv
+                                            debug_info['exp'] = ds_exp
+                                            if sub_field == 3:
+                                                if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
+                                                    changed = True
+                                                print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
                             except Exception:
                                 debug_info['nested_hex'] = remaining.hex()[:128]
 
@@ -3532,19 +3153,22 @@ class PacketParser:
 
 
     def _on_sync_near_entities(self, data: bytes):
-        outer = _decode_fields(data)
+        pb = _ensure_pb()
+        if not pb:
+            return
+        try:
+            msg = pb.SyncNearEntities()
+            msg.ParseFromString(data)
+        except Exception as e:
+            logger.debug(f'[Parser] SyncNearEntities pb2 parse error: {e}')
+            return
 
-        # ── Disappear (field 2, repeated) ──
-        disappear_list = outer.get(2, [])
-        for entity_raw in disappear_list:
-            if not isinstance(entity_raw, bytes):
+        # ── Disappear ──
+        for de in msg.Disappear:
+            uuid = de.Uuid
+            if not uuid:
                 continue
-            ef = _decode_fields(entity_raw)
-            uuid_raw = ef.get(1, [0])[0]
-            if not isinstance(uuid_raw, int) or uuid_raw == 0:
-                continue
-            uuid = _varint_to_int64(uuid_raw)
-            disappear_type = ef.get(2, [0])[0]  # EDisappearType: 1=Dead, 2=FarAway, ...
+            disappear_type = int(de.Type)
 
             if _is_monster(uuid) and uuid in self._monsters:
                 monster = self._monsters[uuid]
@@ -3557,40 +3181,49 @@ class PacketParser:
                 else:
                     logger.debug(f'[Parser] Monster disappeared type={disappear_type} uuid={uuid}')
 
-        # ── Appear (field 1, repeated) ──
-        appear_list = outer.get(1, [])
+        # ── Appear ──
         player_uids_appeared = []
         monster_uuids_appeared = []
-        for entity_raw in appear_list:
-            if not isinstance(entity_raw, bytes):
+        for entity in msg.Appear:
+            uuid = entity.Uuid
+            if not uuid:
                 continue
-            ef = _decode_fields(entity_raw)
-            uuid_raw = ef.get(1, [0])[0]
-            if not isinstance(uuid_raw, int) or uuid_raw == 0:
-                continue
-            uuid = _varint_to_int64(uuid_raw)
-            ent_type = ef.get(2, [0])[0]
 
-            # AttrCollection (field 3)
-            attr_raw = ef.get(3, [None])[0]
-            # TempAttrCollection (field 4)
-            temp_attr_raw = ef.get(4, [None])[0]
-            # BuffInfoSync (field 7) — initial buff state
-            buff_info_raw = ef.get(EntityField.BUFF_INFOS, [None])[0]
+            has_attrs = entity.HasField('Attrs')
+            has_temp_attrs = entity.HasField('TempAttrs')
+            has_buffs = entity.HasField('BuffInfos')
 
             if _is_player(uuid):
                 uid = _uuid_to_uid(uuid)
                 player_uids_appeared.append(uid)
-                if isinstance(attr_raw, bytes):
-                    self._process_attr_collection(uid, attr_raw)
-                if isinstance(temp_attr_raw, bytes):
+                if has_attrs:
+                    self._process_attr_collection(uid, entity.Attrs)
+                    # Debug: log what attrs were present for this player
+                    attr_ids = [a.Id for a in entity.Attrs.Attrs]
+                    has_name_attr = 1 in attr_ids
+                    p = self._get_player(uid)
+                    logger.info(
+                        f'[Parser] Entity appear player uid={uid} attrs={attr_ids[:15]} '
+                        f'has_name={has_name_attr} resolved_name={p.name!r}'
+                    )
+                    if uid != self._current_uid:
+                        print(
+                            f'[Parser] 其他玩家出现: uid={uid} name={p.name!r} '
+                            f'has_name_attr={has_name_attr} n_attrs={len(attr_ids)}',
+                            flush=True,
+                        )
+                else:
+                    logger.info(f'[Parser] Entity appear player uid={uid} NO attrs')
+                    if uid != self._current_uid:
+                        print(f'[Parser] 其他玩家出现: uid={uid} NO attrs', flush=True)
+                if has_temp_attrs:
                     if uid == self._current_uid or self._current_uid == 0:
-                        self._process_temp_attr_collection(uid, temp_attr_raw)
+                        self._process_temp_attr_collection(uid, entity.TempAttrs)
                 # Decode initial buff state from entity appear
-                if isinstance(buff_info_raw, bytes):
+                if has_buffs:
                     if uid == self._current_uid or self._current_uid == 0:
                         player = self._get_player(uid)
-                        buffs = _decode_buff_info_sync(buff_info_raw)
+                        buffs = _decode_buff_info_sync_pb(entity.BuffInfos)
                         if buffs:
                             player.buff_list = buffs
                             logger.info(f'[Parser] Entity appear: {len(buffs)} buffs on player uid={uid}')
@@ -3607,17 +3240,13 @@ class PacketParser:
                         f'HP={player.hp}/{player.max_hp} 职业={player.profession!r}',
                         flush=True
                     )
-                    # If this is a re-appear (scene change), trigger a player update
-                    # to ensure bridge/webview gets fresh data immediately
                     self._notify_self()
             elif _is_monster(uuid):
                 monster_uuids_appeared.append(uuid)
-                # Reset dead state on re-appear
                 monster = self._get_monster(uuid)
                 monster.is_dead = False
-                if isinstance(attr_raw, bytes):
-                    self._process_monster_attr_collection(uuid, attr_raw)
-                # If max_hp still unknown after attr processing, try cache
+                if has_attrs:
+                    self._process_monster_attr_collection(uuid, entity.Attrs)
                 if monster.max_hp == 0 and monster.template_id > 0:
                     cached_max = self._monster_hp_cache.get(monster.template_id)
                     if cached_max and cached_max > 0:
@@ -3627,13 +3256,11 @@ class PacketParser:
                             f'tid={monster.template_id} max_hp={cached_max} uuid={uuid}'
                         )
                 # Decode initial buff state on monster
-                if isinstance(buff_info_raw, bytes):
-                    buffs = _decode_buff_info_sync(buff_info_raw)
+                if has_buffs:
+                    buffs = _decode_buff_info_sync_pb(entity.BuffInfos)
                     if buffs:
                         monster.buff_list = buffs
                         logger.debug(f'[Parser] Entity appear: {len(buffs)} buffs on monster uuid={uuid}')
-                # Always notify on appear so boss bar can track new scene monsters
-                # (_process_monster_attr_collection only notifies if attrs changed)
                 monster.last_update = time.time()
                 self._notify_monster(monster)
 
@@ -3655,18 +3282,21 @@ class PacketParser:
 
 
     def _on_sync_to_me_delta(self, data: bytes):
-        outer = _decode_fields(data)
-        delta_raw = outer.get(1, [None])[0]
-        if not isinstance(delta_raw, bytes):
+        pb = _ensure_pb()
+        if not pb:
             return
-
-        df = _decode_fields(delta_raw)
+        try:
+            msg = pb.SyncToMeDeltaInfo()
+            msg.ParseFromString(data)
+        except Exception as e:
+            logger.debug(f'[Parser] SyncToMeDeltaInfo pb2 parse error: {e}')
+            return
+        di = msg.DeltaInfo  # AoiSyncToMeDelta
         player = None
 
-        # UUID helpers
-        uuid_raw = df.get(5, [0])[0]
-        if isinstance(uuid_raw, int) and uuid_raw != 0:
-            uuid = _varint_to_int64(uuid_raw)
+        # UUID from AoiSyncToMeDelta.Uuid (field 5)
+        uuid = di.Uuid
+        if uuid != 0:
             if _is_player(uuid):
                 new_uid = _uuid_to_uid(uuid)
                 player = self._get_player(new_uid)
@@ -3676,79 +3306,97 @@ class PacketParser:
                     logger.info(f'[Parser] confirmed self UUID={uuid}, UID={new_uid}')
                     if new_uid in self._players:
                         self._notify_self()
+        else:
+            # Uuid field 5 is 0 — try BaseDelta.Uuid, then fall back to _current_uid
+            base_uuid = di.BaseDelta.Uuid if di.HasField('BaseDelta') else 0
+            if base_uuid != 0 and _is_player(base_uuid):
+                fallback_uid = _uuid_to_uid(base_uuid)
+                player = self._get_player(fallback_uid)
+                if self._current_uuid != base_uuid:
+                    self._current_uuid = base_uuid
+                    self._current_uid = fallback_uid
+                    logger.info(f'[Parser] confirmed self UUID={base_uuid} (from BaseDelta), UID={fallback_uid}')
+                    if fallback_uid in self._players:
+                        self._notify_self()
+            elif self._current_uid:
+                # SyncToMeDelta is always about self — use known UID
+                player = self._get_player(self._current_uid)
+
+        # Debug: log SyncToMeDelta summary
+        n_cds = len(di.SyncSkillCDs)
+        n_fres = len(di.FightResCDs)
+        has_base = di.HasField('BaseDelta')
+        if n_cds > 0 or n_fres > 0:
+            logger.info(
+                f'[Parser] SyncToMeDelta: uuid={uuid} player={"yes" if player else "NO"} '
+                f'skill_cds={n_cds} fight_res_cds={n_fres} has_base={has_base} '
+                f'current_uid={self._current_uid}'
+            )
 
         skill_cd_changed = False
         sync_skill_cds = []
         fight_res_cds = []
         if player is not None:
-            for cd_raw in df.get(3, []):
-                if not isinstance(cd_raw, bytes):
-                    continue
-                decoded_cd = _decode_skill_cd(cd_raw)
-                if decoded_cd.get('skill_level_id', 0) <= 0:
+            for cd in di.SyncSkillCDs:
+                # Capture VCD from BOTH field 5 (SkillCD wire format used by
+                # SyncToMeDelta) and field 8 (SkillCDInfo format used by
+                # UserFightAttr).  The server sends SkillCD format for
+                # SyncToMeDelta, where ValidCDTime lives at proto field 5.
+                vcd_legacy = max(0, cd.ValidCDTimeLegacy)  # field 5
+                vcd_info   = max(0, cd.ValidCDTime)        # field 8
+                effective_vcd = vcd_legacy if vcd_legacy > 0 else vcd_info
+                decoded_cd = {
+                    'skill_level_id': cd.SkillLevelId,
+                    'begin_time': cd.SkillBeginTime,
+                    'duration': cd.Duration,
+                    'skill_cd_type': int(cd.SkillCDType),
+                    'valid_cd_time': effective_vcd,
+                    'vcd_f5': vcd_legacy,
+                    'vcd_f8': vcd_info,
+                    'charge_count': cd.ChargeCount,
+                    'sub_cd_ratio': cd.SubCDRatio,
+                    'sub_cd_fixed': cd.SubCDFixed,
+                    'accelerate_cd_ratio': cd.AccelerateCDRatio,
+                }
+                if decoded_cd['skill_level_id'] <= 0:
                     continue
                 sync_skill_cds.append(decoded_cd)
                 if self._update_skill_cd(player, decoded_cd):
                     skill_cd_changed = True
-                # Log when CD acceleration is active (光盾被动 / 时间法令 etc.)
-                accel = int(decoded_cd.get('accelerate_cd_ratio') or 0)
-                sub_r = int(decoded_cd.get('sub_cd_ratio') or 0)
-                sub_f = int(decoded_cd.get('sub_cd_fixed') or 0)
-                if accel > 0 or sub_r > 0 or sub_f > 0:
-                    logger.info(
-                        f'[Parser] SkillCD acceleration: slid={decoded_cd["skill_level_id"]} '
-                        f'accel_ratio={accel} sub_ratio={sub_r} sub_fixed={sub_f} '
-                        f'duration={decoded_cd.get("duration")} valid_cd={decoded_cd.get("valid_cd_time")}'
-                    )
             if sync_skill_cds:
-                _append_packet_debug(
-                    'sync_skill_cd',
-                    {
-                        'uid': player.uid,
-                        'skill_cds': sync_skill_cds,
-                    }
-                )
-            else:
-                # Log when SyncToMeDelta arrives but has no skill CDs
-                # (helps diagnose missing skill data)
-                raw_field3 = df.get(3, [])
-                if raw_field3:
-                    _append_packet_debug(
-                        'sync_skill_cd_empty',
-                        {
-                            'uid': player.uid,
-                            'raw_field3_count': len(raw_field3),
-                            'raw_field3_types': [type(x).__name__ for x in raw_field3[:5]],
-                        }
-                    )
-            for fight_cd_raw in df.get(4, []):
-                if not isinstance(fight_cd_raw, bytes):
-                    continue
-                decoded_fight_cd = _decode_fight_res_cd(fight_cd_raw)
-                res_id = decoded_fight_cd.get('res_id', 0)
+                # One-time diagnostic: log first VCD capture from field 5
+                sample_vcd = [(c['skill_level_id'], c['vcd_f5'], c['vcd_f8'])
+                              for c in sync_skill_cds[:5]]
+                if any(v5 > 0 for _, v5, _ in sample_vcd):
+                    logger.info(f'[Parser] VCD field5 captured: {sample_vcd}')
+                _append_packet_debug('sync_skill_cd', {
+                    'uid': player.uid, 'skill_cds': sync_skill_cds,
+                })
+            for fcd in di.FightResCDs:
+                decoded_fight_cd = {
+                    'res_id': fcd.ResId,
+                    'begin_time': fcd.BeginTime,
+                    'duration': fcd.Duration,
+                    'valid_cd_time': fcd.ValidCDTime,
+                }
+                res_id = decoded_fight_cd['res_id']
                 if res_id > 0:
                     fight_res_cds.append(decoded_fight_cd)
-                    # Store on player for resource CD tracking
                     player.fight_res_cd_map[res_id] = {
                         'res_id': res_id,
-                        'begin_time': decoded_fight_cd.get('begin_time', 0),
-                        'duration': decoded_fight_cd.get('duration', 0),
-                        'valid_cd_time': decoded_fight_cd.get('valid_cd_time', 0),
+                        'begin_time': decoded_fight_cd['begin_time'],
+                        'duration': decoded_fight_cd['duration'],
+                        'valid_cd_time': decoded_fight_cd['valid_cd_time'],
                         'observed_at_ms': int(time.time() * 1000),
                     }
             if fight_res_cds:
-                _append_packet_debug(
-                    'fight_res_cd',
-                    {
-                        'uid': player.uid,
-                        'fight_res_cds': fight_res_cds,
-                    }
-                )
+                _append_packet_debug('fight_res_cd', {
+                    'uid': player.uid, 'fight_res_cds': fight_res_cds,
+                })
 
-        # AoiSyncDelta handling
-        base_raw = df.get(1, [None])[0]
-        if isinstance(base_raw, bytes):
-            self._process_aoi_sync_delta(base_raw)
+        # AoiSyncDelta handling — BaseDelta (field 1)
+        if di.HasField('BaseDelta'):
+            self._process_aoi_sync_delta(di.BaseDelta)
         if skill_cd_changed and player is not None and player.uid == self._current_uid:
             self._notify_self()
 
@@ -3757,48 +3405,50 @@ class PacketParser:
 
 
     def _on_sync_near_delta(self, data: bytes):
-        outer = _decode_fields(data)
-        for delta_raw in outer.get(1, []):
-            if isinstance(delta_raw, bytes):
-                self._process_aoi_sync_delta(delta_raw)
+        pb = _ensure_pb()
+        if not pb:
+            return
+        try:
+            msg = pb.SyncNearDeltaInfo()
+            msg.ParseFromString(data)
+        except Exception as e:
+            logger.debug(f'[Parser] SyncNearDeltaInfo pb2 parse error: {e}')
+            return
+        for delta in msg.DeltaInfos:
+            self._process_aoi_sync_delta(delta)
 
 
     # AoiSyncDelta handling
 
 
-    def _process_aoi_sync_delta(self, data: bytes):
-        df = _decode_fields(data)
-        uuid_raw = df.get(1, [0])[0]
-        if not isinstance(uuid_raw, int) or uuid_raw == 0:
+    def _process_aoi_sync_delta(self, delta):
+        """Process an AoiSyncDelta pb2 object."""
+        uuid = delta.Uuid
+        if uuid == 0:
             return
-        uuid = _varint_to_int64(uuid_raw)
         target_is_player = _is_player(uuid)
         target_is_monster = _is_monster(uuid)
         uid = _uuid_to_uid(uuid)
 
         # Attrs (field 2) — players and monsters
-        attr_raw = df.get(2, [None])[0]
-        if isinstance(attr_raw, bytes):
+        if delta.HasField('Attrs'):
             if target_is_player:
-                self._process_attr_collection(uid, attr_raw)
+                self._process_attr_collection(uid, delta.Attrs)
             elif target_is_monster:
-                self._process_monster_attr_collection(uuid, attr_raw)
+                self._process_monster_attr_collection(uuid, delta.Attrs)
 
         # TempAttrs (field 3) — buff-based temporary attributes (CD modifiers etc.)
-        temp_attr_raw = df.get(3, [None])[0]
-        if isinstance(temp_attr_raw, bytes) and target_is_player:
+        if delta.HasField('TempAttrs') and target_is_player:
             if uid == self._current_uid or self._current_uid == 0:
-                self._process_temp_attr_collection(uid, temp_attr_raw)
+                self._process_temp_attr_collection(uid, delta.TempAttrs)
 
         # BuffEffectSync (field 11) — boss buff events
-        buff_effect_raw = df.get(11, [None])[0]
-        if isinstance(buff_effect_raw, bytes) and target_is_monster:
-            self._process_buff_effect_sync(uuid, buff_effect_raw)
+        if delta.HasField('BuffEffect') and target_is_monster:
+            self._process_buff_effect_sync(uuid, delta.BuffEffect)
 
         # BuffInfoSync (field 10) — buff state updates
-        buff_info_raw = df.get(DeltaField.BUFF_INFOS, [None])[0]
-        if isinstance(buff_info_raw, bytes):
-            buffs = _decode_buff_info_sync(buff_info_raw)
+        if delta.HasField('BuffInfos'):
+            buffs = _decode_buff_info_sync_pb(delta.BuffInfos)
             if buffs:
                 if target_is_player:
                     if uid in self._players:
@@ -3807,67 +3457,52 @@ class PacketParser:
                     self._monsters[uuid].buff_list = buffs
 
         # PassiveSkillInfos (field 8) — passive skill triggers
-        passive_raw = df.get(DeltaField.PASSIVE_SKILL_INFOS, [None])[0]
-        if isinstance(passive_raw, bytes):
-            logger.debug(f'[Parser] AoiDelta PassiveSkillInfos uuid={uuid} len={len(passive_raw)}')
+        if delta.HasField('PassiveSkillInfos'):
+            logger.debug(f'[Parser] AoiDelta PassiveSkillInfos uuid={uuid}')
 
         # PassiveSkillEndInfos (field 9) — passive skill end
-        passive_end_raw = df.get(DeltaField.PASSIVE_SKILL_END_INFOS, [None])[0]
-        if isinstance(passive_end_raw, bytes):
-            logger.debug(f'[Parser] AoiDelta PassiveSkillEndInfos uuid={uuid} len={len(passive_end_raw)}')
+        if delta.HasField('PassiveSkillEndInfos'):
+            logger.debug(f'[Parser] AoiDelta PassiveSkillEndInfos uuid={uuid}')
 
         # SkillEffect (field 7) — damage extraction
-        skill_effect_raw = df.get(7, [None])[0]
-        if isinstance(skill_effect_raw, bytes):
-            self._process_skill_effect(uuid, target_is_player, target_is_monster, skill_effect_raw)
+        if delta.HasField('SkillEffects'):
+            self._process_skill_effect(uuid, target_is_player, target_is_monster, delta.SkillEffects)
 
     def _process_skill_effect(self, target_uuid: int, target_is_player: bool,
-                              target_is_monster: bool, data: bytes):
+                              target_is_monster: bool, se):
         """Decode SkillEffect (AoiSyncDelta field 7) and emit damage events.
-
-        SkillEffect {
-            int64 Uuid = 1;
-            repeated SyncDamageInfo Damages = 2;
-            int64 TotalDamage = 3;
-        }
-        SyncDamageInfo fields: see star_resonance.proto lines 5107-5132.
+        se is a pb2 SkillEffect object.
         """
-        se = _decode_fields(data)
-        for dmg_raw in se.get(2, []):
-            if not isinstance(dmg_raw, bytes):
-                continue
+        for dmg in se.Damages:
             try:
                 self._decode_sync_damage_info(target_uuid, target_is_player,
-                                              target_is_monster, dmg_raw)
+                                              target_is_monster, dmg)
             except Exception as e:
                 logger.debug(f'[Parser] damage decode error: {e}')
 
     def _decode_sync_damage_info(self, target_uuid: int, target_is_player: bool,
-                                 target_is_monster: bool, data: bytes):
-        """Decode a single SyncDamageInfo and fire on_damage callback."""
-        df = _decode_fields(data)
-        damage_type = df.get(4, [0])[0]     # EDamageType: 0=Normal, 1=Miss, 2=Heal, 3=Immune, 4=Fall, 5=Absorbed
-        # Miss and Fall are truly irrelevant — skip them.
-        # Immune and Absorbed are now emitted for invincibility detection.
+                                 target_is_monster: bool, dmg):
+        """Decode a single SyncDamageInfo pb2 object and fire on_damage callback."""
+        damage_type = int(dmg.Type)
         if damage_type in (DamageType.MISS, DamageType.FALL):
             return
         is_heal = damage_type == DamageType.HEAL
         is_immune = damage_type == DamageType.IMMUNE
         is_absorbed = damage_type == DamageType.ABSORBED
-        type_flag = df.get(5, [0])[0]       # bit0=crit, bit2=cause_lucky
-        value = df.get(6, [0])[0]           # Primary damage/heal amount
-        actual_value = df.get(7, [0])[0]
-        lucky_value = df.get(8, [0])[0]     # Non-zero when lucky proc
-        hp_lessen = df.get(9, [0])[0]       # Actual HP reduction on target
-        shield_lessen = df.get(10, [0])[0]  # Shield damage absorbed
-        attacker_raw = df.get(11, [0])[0]   # AttackerUuid
-        skill_id = df.get(12, [0])[0]       # OwnerId = skill ID
-        is_dead = bool(df.get(17, [0])[0])  # Target died
-        element = df.get(18, [0])[0]        # EDamageProperty
-        top_summoner_raw = df.get(21, [0])[0]  # TopSummonerId (real owner if summon)
+        type_flag = dmg.TypeFlag
+        value = dmg.Value
+        actual_value = dmg.ActualValue
+        lucky_value = dmg.LuckyValue
+        hp_lessen = dmg.HpLessenValue
+        shield_lessen = dmg.ShieldLessenValue
+        attacker_uuid_raw = dmg.AttackerUuid
+        skill_id = dmg.OwnerId
+        is_dead = dmg.IsDead
+        element = int(dmg.Property)
+        top_summoner = dmg.TopSummonerId
 
-        # Use signed int64 for UUIDs
-        attacker_uuid = _varint_to_int64(top_summoner_raw) if top_summoner_raw else _varint_to_int64(attacker_raw)
+        # Use TopSummonerId as the real attacker if set (summon owner)
+        attacker_uuid = top_summoner if top_summoner else attacker_uuid_raw
         damage_amount = value if value else lucky_value
 
         # For Immune/Absorbed events, allow zero-damage through (they signal invincibility)
@@ -3908,6 +3543,25 @@ class PacketParser:
             'timestamp': time.time(),
         }
         self.stats['damage_events'] += 1
+
+        # ── Track shield depletion via damage events ──
+        # When ShieldLessenValue > 0, the target's shield absorbed that much damage.
+        # Subtract from the tracked shield_total. If it reaches 0, auto-clear the
+        # shield_active flag (handles case where server doesn't send a final
+        # AttrShieldList update or SHIELD_BROKEN buff event).
+        if target_is_monster and shield_lessen > 0:
+            monster = self._monsters.get(target_uuid)
+            if monster and monster.shield_active:
+                monster.shield_total = max(0, monster.shield_total - int(shield_lessen))
+                if monster.shield_total <= 0:
+                    monster.shield_active = False
+                    monster.shield_total = 0
+                    logger.info(
+                        f'[Parser] Shield depleted via damage events, '
+                        f'auto-clearing shield_active uuid={target_uuid}'
+                    )
+                    self._notify_monster(monster)
+
         if self._on_damage:
             try:
                 self._on_damage(event)
@@ -3918,23 +3572,18 @@ class PacketParser:
     # AttrCollection parsing — Monster
 
 
-    def _process_monster_attr_collection(self, uuid: int, data: bytes):
-        """Decode AttrCollection from a monster delta and update MonsterData."""
-        ac = _decode_fields(data)
-        attrs_list = ac.get(2, [])
-        if not attrs_list:
+    def _process_monster_attr_collection(self, uuid: int, ac):
+        """Decode AttrCollection pb2 object from a monster delta and update MonsterData."""
+        if not ac.Attrs:
             return
 
         monster = self._get_monster(uuid)
         changed = False
 
-        for attr_raw in attrs_list:
-            if not isinstance(attr_raw, bytes):
-                continue
-            af = _decode_fields(attr_raw)
-            attr_id = af.get(1, [0])[0]
-            raw_data = af.get(2, [None])[0]
-            if not isinstance(raw_data, bytes) or not attr_id:
+        for attr in ac.Attrs:
+            attr_id = attr.Id
+            raw_data = attr.RawData
+            if not raw_data or not attr_id:
                 continue
             int_value = _decode_int32_from_raw(raw_data)
 
@@ -4085,11 +3734,27 @@ class PacketParser:
                 if name:
                     monster.hated_char_name = name
                     changed = True
+                    # ── Use aggro name to populate player data ──
+                    if monster.hated_char_id > 0:
+                        _aggro_player = self._get_player(monster.hated_char_id)
+                        if not _aggro_player.name:
+                            _aggro_player.name = name
+                            logger.info(f'[Parser] Player name from aggro: {name!r} uid={monster.hated_char_id}')
+            elif attr_id == AttrType.HATED_CHAR_JOB:
+                _job_id = int_value
+                # Use aggro job to populate player profession
+                if _job_id > 0 and monster.hated_char_id > 0:
+                    _aggro_player = self._get_player(monster.hated_char_id)
+                    if not _aggro_player.profession_id or _aggro_player.profession_id != _job_id:
+                        _aggro_player.profession_id = _job_id
+                        _aggro_player.profession = PROFESSION_NAMES.get(_job_id, '')
+                        logger.info(f'[Parser] Player profession from aggro: {_job_id} uid={monster.hated_char_id}')
+                logger.debug(f'[Parser] Monster aggro job 0x{attr_id:X}={int_value} uuid={uuid}')
             elif attr_id in AttrType._MONSTER_EXTENDED_IDS:
                 # Remaining extended monster attrs — logged
                 logger.debug(f'[Parser] Monster extended attr 0x{attr_id:X}={int_value} uuid={uuid}')
-            elif attr_id in (AttrType.HATED_CHAR_JOB, AttrType.HATED_CHAR_LIST):
-                # Aggro related — logged
+            elif attr_id == AttrType.HATED_CHAR_LIST:
+                # Aggro list — logged
                 logger.debug(f'[Parser] Monster aggro attr 0x{attr_id:X}={int_value} uuid={uuid}')
             else:
                 # Log unknown monster attrs at debug level for future analysis
@@ -4137,6 +3802,133 @@ class PacketParser:
                     'max_hp': monster.max_hp,
                 })
 
+    # ── CharTeam parsing — party / team members ──
+
+    def _process_char_team(self, self_uid: int, team_info):
+        """Parse CharTeam pb2 message and populate _players + _team_members.
+
+        CharTeam fields:
+          TeamId(1), LeaderId(2), TeamTargetId(3), TeamNum(4),
+          CharIds(5, repeated int64), IsMatching(6), CharTeamVersion(7),
+          TeamMemberData(8, map<int64, TeamMemData>)
+
+        TeamMemData → SocialData(9, TeamMemberSocialData) →
+          BasicData(1) → Name(3), Level(6)
+          ProfessionData(4) → ProfessionId(1)
+          UserAttrData(8) → FightPoint(2)
+        """
+        team_id = team_info.TeamId
+        leader_id = team_info.LeaderId
+        char_ids = list(team_info.CharIds)
+        member_map = team_info.TeamMemberData  # map<int64, TeamMemData>
+
+        if not char_ids and not member_map:
+            return
+
+        # Update team-level state
+        self._team_id = team_id
+        self._team_leader_uid = leader_id
+
+        # Build new team member cache — preserve existing entries for
+        # members still in the team, add new ones, remove departed ones.
+        new_team: Dict[int, Dict[str, Any]] = {}
+        now_ts = time.time()
+
+        # Add self to team if present in char_ids
+        if self_uid > 0 and self_uid in char_ids:
+            self_player = self._players.get(self_uid)
+            new_team[self_uid] = {
+                'uid': self_uid,
+                'name': (self_player.name if self_player else '') or '',
+                'profession': (self_player.profession if self_player else '') or '',
+                'profession_id': (self_player.profession_id if self_player else 0) or 0,
+                'fight_point': (self_player.fight_point if self_player else 0) or 0,
+                'level': (self_player.level if self_player else 0) or 0,
+                'is_self': True,
+                'joined_at': self._team_members.get(self_uid, {}).get('joined_at', now_ts),
+            }
+
+        members_parsed = []
+        for char_id, mem_data in member_map.items():
+            if char_id <= 0:
+                continue
+            if char_id == self_uid:
+                continue  # self already added above
+            social = mem_data.SocialData if mem_data.HasField('SocialData') else None
+            if not social:
+                continue
+
+            name = ''
+            level = 0
+            prof_id = 0
+            fight_point = 0
+
+            if social.HasField('BasicData'):
+                bd = social.BasicData
+                name = bd.Name or ''
+                level = bd.Level
+            if social.HasField('ProfessionData'):
+                pd = social.ProfessionData
+                prof_id = pd.ProfessionId
+            if social.HasField('UserAttrData'):
+                ua = social.UserAttrData
+                fight_point = int(ua.FightPoint)
+
+            profession_name = PROFESSION_NAMES.get(prof_id, '')
+
+            # Populate PlayerData for this team member
+            member_player = self._get_player(int(char_id))
+            member_changed = False
+            if name and name != member_player.name:
+                member_player.name = name
+                member_changed = True
+            if level > 0 and level != member_player.level:
+                member_player.level = level
+                member_changed = True
+            if prof_id > 0 and prof_id != member_player.profession_id:
+                member_player.profession_id = prof_id
+                member_player.profession = profession_name
+                member_changed = True
+            if fight_point > 0 and fight_point != member_player.fight_point:
+                member_player.fight_point = fight_point
+                member_changed = True
+
+            member_info = {
+                'uid': int(char_id),
+                'name': name,
+                'profession': profession_name,
+                'profession_id': prof_id,
+                'fight_point': fight_point,
+                'level': level,
+                'is_self': False,
+                'joined_at': self._team_members.get(int(char_id), {}).get('joined_at', now_ts),
+            }
+            new_team[int(char_id)] = member_info
+            members_parsed.append(member_info)
+
+        # Atomically update team cache
+        self._team_members = new_team
+
+        if members_parsed:
+            logger.info(
+                f'[Parser] CharTeam parsed: team_id={team_id} leader={leader_id} '
+                f'{len(members_parsed)} members (excluding self uid={self_uid})'
+            )
+            for m in members_parsed:
+                print(
+                    f'[Parser] 队伍成员: {m["name"]} (UID={m["uid"]}) '
+                    f'职业={m["profession"]}({m["profession_id"]}) '
+                    f'战力={m["fight_point"]} Lv.{m["level"]}',
+                    flush=True,
+                )
+            _append_packet_debug('char_team', {
+                'self_uid': self_uid,
+                'team_id': team_id,
+                'leader_id': leader_id,
+                'char_ids': char_ids,
+                'members': members_parsed,
+            })
+
     def _decode_shield_list(self, monster: MonsterData, raw_data: bytes):
         """Decode AttrShieldList (60050) — repeated ShieldInfo messages."""
         # The raw_data for AttrShieldList is a protobuf with repeated ShieldInfo
@@ -4174,28 +3966,15 @@ class PacketParser:
     # BuffEffectSync parsing
 
 
-    def _process_buff_effect_sync(self, host_uuid: int, data: bytes):
-        """Decode BuffEffectSync (AoiSyncDelta field 11) for boss events.
-
-        BuffEffectSync { int64 Uuid = 1; repeated BuffEffect BuffEffects = 2; }
-        BuffEffect { EBuffEventType Type = 1; int32 BuffUuid = 2;
-                     int64 HostUuid = 3; int64 TriggerTime = 4; ... }
-        """
+    def _process_buff_effect_sync(self, host_uuid: int, sync):
+        """Decode BuffEffectSync pb2 object (AoiSyncDelta field 11) for boss events."""
         try:
-            sync = _decode_fields(data)
-            for buff_raw in sync.get(2, []):
-                if not isinstance(buff_raw, bytes):
-                    continue
-                bf = _decode_fields(buff_raw)
-                event_type = bf.get(1, [0])[0]
+            for be in sync.BuffEffects:
+                event_type = int(be.Type)
                 if event_type not in _BOSS_BUFF_EVENTS:
                     continue
-                buff_uuid = bf.get(2, [0])[0]
-                buff_host = bf.get(3, [0])[0]
-                if isinstance(buff_host, int) and buff_host != 0:
-                    buff_host = _varint_to_int64(buff_host)
-                else:
-                    buff_host = host_uuid
+                buff_uuid = be.BuffUuid
+                buff_host = be.HostUuid if be.HostUuid != 0 else host_uuid
 
                 logger.info(f'[Parser] BuffEvent type={event_type} buff={buff_uuid} '
                             f'host={buff_host} target_uuid={host_uuid}')
@@ -4229,11 +4008,8 @@ class PacketParser:
     # TempAttrCollection parsing — Player CD buff modifiers
 
 
-    def _process_temp_attr_collection(self, uid: int, data: bytes):
-        """Process TempAttrCollection for CD-related buff modifiers.
-
-        TempAttrCollection { repeated TempAttr Attrs = 1; }
-        TempAttr { int32 Id = 1; int32 Value = 2; }
+    def _process_temp_attr_collection(self, uid: int, tac):
+        """Process TempAttrCollection pb2 object for CD-related buff modifiers.
 
         Relevant TempAttr types (from resonance-logs-cn skill_cd_monitor.rs):
           100 = percent CD reduction (万分比, /10000) — cumulative across buffs
@@ -4241,31 +4017,24 @@ class PacketParser:
           103 = CD acceleration (万分比, /10000) — cumulative
         """
         try:
-            tac = _decode_fields(data)
-            attrs_list = tac.get(1, [])
-            if not attrs_list:
+            if not tac.Attrs:
                 return
 
             player = self._get_player(uid)
-            # TempAttrs are replacement-style: recompute accumulated values from the full list
             cd_pct = 0
             cd_fixed = 0
             cd_accel = 0
 
-            for attr_raw in attrs_list:
-                if not isinstance(attr_raw, bytes):
-                    continue
-                af = _decode_fields(attr_raw)
-                attr_id = af.get(1, [0])[0]
-                attr_val = af.get(2, [0])[0]
-                if isinstance(attr_val, int) and attr_val > 0x7FFFFFFF:
-                    attr_val -= 0x100000000  # signed int32
+            for attr in tac.Attrs:
+                attr_id = attr.Id
+                attr_val = attr.Value
+                # protobuf int32 is already signed
 
-                if attr_id == 100:    # Percent CD reduction
+                if attr_id == 100:
                     cd_pct += attr_val
-                elif attr_id == 101:  # Flat CD reduction (ms)
+                elif attr_id == 101:
                     cd_fixed += attr_val
-                elif attr_id == 103:  # CD acceleration
+                elif attr_id == 103:
                     cd_accel += attr_val
 
             changed = False
@@ -4302,10 +4071,9 @@ class PacketParser:
     # AttrCollection parsing — Player
 
 
-    def _process_attr_collection(self, uid: int, data: bytes):
-        ac = _decode_fields(data)
-        attrs_list = ac.get(2, [])
-        if not attrs_list:
+    def _process_attr_collection(self, uid: int, ac):
+        """Process AttrCollection pb2 object for player attrs."""
+        if not ac.Attrs:
             return
 
         player = self._get_player(uid)
@@ -4313,13 +4081,10 @@ class PacketParser:
         stamina_max_candidate = 0
         stamina_ratio_values = []
 
-        for attr_raw in attrs_list:
-            if not isinstance(attr_raw, bytes):
-                continue
-            af = _decode_fields(attr_raw)
-            attr_id = af.get(1, [0])[0]
-            raw_data = af.get(2, [None])[0]
-            if not isinstance(raw_data, bytes) or not attr_id:
+        for attr in ac.Attrs:
+            attr_id = attr.Id
+            raw_data = attr.RawData
+            if not raw_data or not attr_id:
                 continue
             int_value = _decode_int32_from_raw(raw_data)
 

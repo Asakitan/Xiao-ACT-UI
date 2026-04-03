@@ -2726,6 +2726,28 @@ html, body {
     filter: none;
     transform: none;
 }
+
+/* Panels sub-menu (系统设置) — enable scrolling like the other two complex menus */
+.child-menu#sub-panels {
+    width: min(76vw, 1180px);
+    min-width: min(76vw, 1180px);
+    max-width: calc(100vw - 220px);
+    max-height: calc(100vh - 16px); /* occupy nearly full viewport so content can scroll through arrow/system mask */
+    overflow-y: auto;
+    overscroll-behavior-y: none;
+    top: -189px; /* lift panel above the left arrow zone */
+    padding-top: 80px; /* keep initial content position while allowing upward scroll past arrow */
+    padding-bottom: 150px; /* let bottom content scroll past the SYSTEM overlay */
+    scroll-padding-top: 80px;
+    scroll-padding-bottom: 150px;
+    z-index: 100;
+}
+.child-menu#sub-panels li {
+    width: 100%;
+}
+.child-menu#sub-panels .widget-row {
+    width: 100%;
+}
 /* ─── Text clarity: disable blur / motion-heavy transitions on the menu shell ─── */
 .info,
 .info.visible,
@@ -2826,6 +2848,7 @@ html, body {
    Hidden scrollbar (keep scroll but no visual bar on right)
    ═══════════════════════════════════════ */
 .child-menu::-webkit-scrollbar,
+#sub-panels::-webkit-scrollbar,
 .auto-key-list::-webkit-scrollbar,
 .boss-raid-editor-layout::-webkit-scrollbar,
 #br-phases-container::-webkit-scrollbar,
@@ -3292,6 +3315,7 @@ html, body {
                 <li data-action="toggle_auto_script"><i class="menu-glyph mi-play"></i><span>自动按键 Auto Key Engine</span><small class="shortcut">F6</small></li>
                 <li data-action="toggle_recognition"><i class="menu-glyph mi-play"></i><span>识别 开/关</span><small class="shortcut">F5</small></li>
                 <li data-action="toggle_hide_seek"><i class="menu-glyph mi-play"></i><span>自动躲猫猫 Hide & Seek</span><small class="shortcut">F11</small></li>
+                <li data-action="toggle_commander"><i class="menu-glyph mi-play"></i><span>团本指挥 Commander</span></li>
                 <li class="sep"></li>
                 <li class="widget-row">
                     <div class="widget-label">SOUND</div>

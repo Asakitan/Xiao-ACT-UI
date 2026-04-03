@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO Commander</title>
+<style>
+/* ═══════════════════════════════════════
+   SAO Commander Panel — Team Raid Overview
+   ═══════════════════════════════════════ */
+
+/* fonts — same as DPS/menu */
+@font-face { font-family:'sao'; src:url('fonts/SAOUI.ttf'); font-display:swap; }
+@font-face { font-family:'saoLatin'; src:url('fonts/SAOUI.ttf'); font-display:swap; unicode-range:U+0020-007F,U+00A0-00FF,U+2000-206F; }
+@font-face { font-family:'yuanJWD'; src:url('fonts/ZhuZiAYuanJWD.ttf'); font-display:swap; }
+@font-face { font-family:'yuanJWDCJK'; src:url('fonts/ZhuZiAYuanJWD.ttf'); font-display:swap; unicode-range:U+4E00-9FFF,U+3400-4DBF,U+3000-303F,U+FF00-FFEF; }
+:root {
+    --font-sao: 'saoLatin','sao',sans-serif;
+    --font-round: 'yuanJWD','yuanJWDCJK',sans-serif;
+    --font-ui: 'saoLatin','yuanJWD','yuanJWDCJK','sao',sans-serif;
+    --cyan: rgba(104,228,255,0.85);
+    --gold: rgba(243,175,18,0.85);
+    --panel-bg: rgba(203,205,194,0.92);
+    --panel-header: rgba(240,240,236,0.98);
+    --panel-header-fg: #3c3e32;
+    --text-primary: #3c3e32;
+    --text-secondary: #8c8a8c;
+    --text-dim: #b0aeb0;
+    --accent-cyan: #68e4ff;
+    --accent-gold: #f3af12;
+    --card-bg: rgba(255,255,255,0.65);
+    --card-border: rgba(201,198,198,0.45);
+    --cd-active: #f3af12;
+    --cd-ready: #5cc46a;
+    --cd-cooldown: rgba(180,178,176,0.8);
+    --hp-green: #9ad334;
+    --hp-yellow: #f4fa49;
+    --hp-red: #ef684e;
+}
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+html,body { background:transparent!important; overflow:hidden; user-select:none; -webkit-user-select:none; }
+
+/* ═══ Panel Shell ═══ */
+.cmd-shell {
+    position:fixed; inset:0;
+    display:flex; flex-direction:column;
+    background: var(--panel-bg);
+    border-radius: 6px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.18), inset 0 0 0 1px rgba(255,255,255,0.35);
+    overflow:hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.cmd-shell.visible {
+    opacity: 1;
+    pointer-events: auto;
+    animation: cmd-enter 0.38s cubic-bezier(0.19,1,0.22,1) forwards;
+}
+@keyframes cmd-enter {
+    0%   { opacity:0; transform:scale(0.96) translateY(6px); filter:blur(4px); }
+    60%  { opacity:1; transform:scale(1.005); filter:blur(0); }
+    100% { opacity:1; transform:scale(1); filter:blur(0); }
+}
+.cmd-shell.exiting {
+    opacity: 0;
+    pointer-events: none;
+    animation: cmd-exit 0.18s ease-in forwards;
+}
+@keyframes cmd-exit {
+    to { opacity:0; transform:scale(0.97); filter:blur(3px); }
+}
+
+/* ═══ Corner Accents ═══ */
+.cmd-shell::before {
+    content:''; position:absolute; top:0; left:0;
+    width:42px; height:42px;
+    border-top:2px solid var(--cyan); border-left:2px solid var(--cyan);
+    border-radius:6px 0 0 0; pointer-events:none; z-index:5; opacity:0.7;
+}
+.cmd-shell::after {
+    content:''; position:absolute; bottom:0; right:0;
+    width:42px; height:42px;
+    border-bottom:2px solid var(--gold); border-right:2px solid var(--gold);
+    border-radius:0 0 6px 0; pointer-events:none; z-index:5; opacity:0.7;
+}
+
+/* ═══ Header ═══ */
+.cmd-header {
+    display:flex; align-items:center; gap:8px;
+    height:30px; min-height:30px;
+    padding:0 12px;
+    background: var(--panel-header);
+    cursor:grab; color: var(--panel-header-fg);
+    position:relative; z-index:10;
+}
+.cmd-header:active { cursor:grabbing; }
+.cmd-header .diamond { color:var(--accent-cyan); font-size:10px; margin-right:2px; }
+.cmd-header .title {
+    font-family:var(--font-sao); font-size:12px; letter-spacing:1.5px;
+    text-transform:uppercase; flex:1;
+}
+.cmd-header .accent-bar {
+    position:absolute; bottom:0; left:0; right:0; height:2px;
+    background: linear-gradient(90deg, var(--accent-cyan) 0%, transparent 50%, var(--accent-gold) 100%);
+    opacity:0.7;
+}
+
+/* ═══ Tab Bar ═══ */
+.cmd-tabs {
+    display:flex; gap:0; height:26px; min-height:26px;
+    background: rgba(240,240,236,0.95);
+    border-bottom:1px solid var(--card-border);
+}
+.cmd-tab {
+    flex:1; display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-ui); font-size:11px; letter-spacing:0.8px;
+    color:var(--text-secondary); cursor:pointer;
+    border-bottom:2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+}
+.cmd-tab:hover { color:var(--text-primary); }
+.cmd-tab.active {
+    color:var(--accent-gold); border-bottom-color:var(--accent-gold);
+    font-weight:600;
+}
+
+/* ═══ Content Area ═══ */
+.cmd-body {
+    flex:1; overflow-y:auto; overflow-x:hidden;
+    padding:8px 10px;
+    scrollbar-width:thin; scrollbar-color: rgba(180,178,176,0.4) transparent;
+}
+.cmd-body::-webkit-scrollbar { width:4px; }
+.cmd-body::-webkit-scrollbar-thumb { background:rgba(180,178,176,0.4); border-radius:2px; }
+
+/* ═══ Team Section ═══ */
+.team-section { margin-bottom:10px; }
+.team-header {
+    display:flex; align-items:center; gap:6px;
+    margin-bottom:6px;
+    font-family:var(--font-sao); font-size:10px; letter-spacing:1.2px;
+    color:var(--text-secondary); text-transform:uppercase;
+}
+.team-header .line { flex:1; height:1px; background:linear-gradient(90deg, var(--card-border), transparent); }
+
+/* ═══ Member Card ═══ */
+.member-card {
+    background: var(--card-bg);
+    border:1px solid var(--card-border);
+    border-radius:4px;
+    padding:6px 8px;
+    margin-bottom:5px;
+    position:relative;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.member-card.is-self {
+    border-left:2px solid var(--accent-cyan);
+}
+.member-card.is-leader::after {
+    content:'★'; position:absolute; top:4px; right:6px;
+    font-size:11px; color:var(--accent-gold); opacity:0.8;
+}
+.member-top {
+    display:flex; align-items:center; gap:6px; margin-bottom:4px;
+}
+.member-name {
+    font-family:var(--font-ui); font-size:12px; color:var(--text-primary);
+    font-weight:600; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.member-prof {
+    font-family:var(--font-ui); font-size:10px; color:var(--text-secondary);
+    background:rgba(0,0,0,0.04); padding:1px 5px; border-radius:2px;
+}
+.member-meta {
+    display:flex; gap:10px;
+    font-family:var(--font-sao); font-size:9px; color:var(--text-dim);
+    letter-spacing:0.5px;
+}
+
+/* ═══ HP Mini Bar ═══ */
+.hp-mini { display:flex; align-items:center; gap:4px; margin-top:3px; }
+.hp-bar-bg {
+    flex:1; height:4px; background:rgba(0,0,0,0.08); border-radius:2px; overflow:hidden;
+}
+.hp-bar-fill {
+    height:100%; border-radius:2px;
+    transition: width 0.3s ease-out, background 0.3s;
+}
+.hp-text {
+    font-family:var(--font-sao); font-size:9px; color:var(--text-dim);
+    min-width:32px; text-align:right;
+}
+
+/* ═══ Skill CD Grid (self player) ═══ */
+.cd-grid {
+    display:flex; flex-wrap:wrap; gap:3px; margin-top:4px;
+}
+.cd-slot {
+    width:32px; height:32px;
+    border-radius:3px;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    font-family:var(--font-sao);
+    position:relative; overflow:hidden;
+    border:1px solid var(--card-border);
+    background:rgba(255,255,255,0.5);
+    transition: border-color 0.2s;
+}
+.cd-slot.ready {
+    border-color: var(--cd-ready);
+    background: rgba(92,196,106,0.08);
+}
+.cd-slot.cooldown {
+    border-color: var(--cd-cooldown);
+}
+.cd-slot.active {
+    border-color: var(--cd-active);
+    box-shadow: 0 0 6px rgba(243,175,18,0.3);
+}
+.cd-slot .cd-idx {
+    font-size:8px; color:var(--text-dim); line-height:1;
+}
+.cd-slot .cd-time {
+    font-size:9px; color:var(--text-primary); line-height:1; font-weight:600;
+}
+.cd-slot .cd-fill {
+    position:absolute; bottom:0; left:0; right:0;
+    background:rgba(243,175,18,0.15);
+    transition: height 0.3s ease-out;
+}
+.cd-slot.ready .cd-time { color:var(--cd-ready); }
+.cd-slot.cooldown .cd-time { color:var(--text-secondary); }
+
+/* ═══ Empty State ═══ */
+.empty-state {
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    padding:24px 16px; text-align:center;
+}
+.empty-icon {
+    font-size:28px; color:var(--text-dim); margin-bottom:8px; opacity:0.5;
+}
+.empty-text {
+    font-family:var(--font-ui); font-size:11px; color:var(--text-secondary); line-height:1.5;
+}
+
+/* ═══ Boss Info Section ═══ */
+.boss-section { margin-bottom:10px; }
+.boss-card {
+    background: var(--card-bg); border:1px solid var(--card-border);
+    border-radius:4px; padding:8px; position:relative;
+}
+.boss-card .boss-name {
+    font-family:var(--font-ui); font-size:12px; color:var(--text-primary); font-weight:600;
+}
+.boss-card .boss-phase {
+    font-family:var(--font-sao); font-size:10px; color:var(--accent-gold);
+    letter-spacing:0.5px; margin-top:2px;
+}
+.boss-mechanic {
+    font-family:var(--font-ui); font-size:10px; color:var(--text-secondary);
+    margin-top:4px; padding:4px 6px;
+    background:rgba(0,0,0,0.03); border-radius:2px;
+    line-height:1.5;
+}
+
+/* ═══ Footer ═══ */
+.cmd-footer {
+    height:20px; min-height:20px;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(240,240,236,0.6);
+    border-top:1px solid var(--card-border);
+    font-family:var(--font-sao); font-size:8px; letter-spacing:1px;
+    color:var(--text-dim); text-transform:uppercase;
+}
+
+/* ═══ HUD Lanes (same as DPS) ═══ */
+.hud-lane {
+    position:fixed; pointer-events:none; z-index:0; opacity:0.06;
+}
+.hud-lane.top { top:0; left:0; right:0; height:1px; background:var(--cyan); }
+.hud-lane.bot { bottom:0; left:0; right:0; height:1px; background:var(--gold); }
+.hud-lane.left { top:0; bottom:0; left:0; width:1px; background:linear-gradient(180deg,var(--cyan),var(--gold)); }
+.hud-lane.right { top:0; bottom:0; right:0; width:1px; background:linear-gradient(180deg,var(--cyan),var(--gold)); }
+</style>
+</head>
+<body>
+<!-- HUD decoration lanes -->
+<div class="hud-lane top"></div>
+<div class="hud-lane bot"></div>
+<div class="hud-lane left"></div>
+<div class="hud-lane right"></div>
+
+<div class="cmd-shell" id="cmd-shell">
+    <!-- Header -->
+    <div class="cmd-header" id="cmd-header">
+        <span class="diamond">◇</span>
+        <span class="title">COMMANDER</span>
+        <div class="accent-bar"></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="cmd-tabs" id="cmd-tabs">
+        <div class="cmd-tab active" data-tab="team">TEAM</div>
+        <div class="cmd-tab" data-tab="boss">BOSS RAID</div>
+    </div>
+
+    <!-- Body -->
+    <div class="cmd-body" id="cmd-body">
+        <!-- Populated by JS -->
+    </div>
+
+    <!-- Footer -->
+    <div class="cmd-footer">
+        <span>COMMANDER PANEL — LIVE</span>
+    </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+// ═══ State ═══
+var _data = null;  // latest commander data
+var _activeTab = 'team';
+var _dragState = null;
+
+// ═══ DOM shortcuts ═══
+var $body = document.getElementById('cmd-body');
+var $shell = document.getElementById('cmd-shell');
+var $header = document.getElementById('cmd-header');
+
+// ═══ Drag ═══
+$header.addEventListener('mousedown', function(e) {
+    _dragState = { sx: e.screenX, sy: e.screenY };
+    e.preventDefault();
+});
+document.addEventListener('mousemove', function(e) {
+    if (!_dragState) return;
+    var dx = e.screenX - _dragState.sx;
+    var dy = e.screenY - _dragState.sy;
+    _dragState.sx = e.screenX;
+    _dragState.sy = e.screenY;
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.window_drag) {
+        window.pywebview.api.window_drag(dx, dy);
+    }
+});
+document.addEventListener('mouseup', function() { _dragState = null; });
+
+// ═══ Tabs ═══
+document.querySelectorAll('.cmd-tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+        var t = this.getAttribute('data-tab');
+        if (t === _activeTab) return;
+        _activeTab = t;
+        document.querySelectorAll('.cmd-tab').forEach(function(x) { x.classList.remove('active'); });
+        this.classList.add('active');
+        render();
+    });
+});
+
+// ═══ Util ═══
+function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function fmtTime(ms) {
+    if (ms <= 0) return '';
+    var s = Math.ceil(ms / 1000);
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60);
+    s = s % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function hpColor(pct) {
+    if (pct > 0.5) return 'var(--hp-green)';
+    if (pct > 0.2) return 'var(--hp-yellow)';
+    return 'var(--hp-red)';
+}
+
+function fmtFightPoint(fp) {
+    if (!fp || fp <= 0) return '--';
+    if (fp >= 10000) return (fp / 10000).toFixed(1) + 'w';
+    return fp.toString();
+}
+
+// ═══ Render Functions ═══
+function renderTeamTab() {
+    if (!_data || !_data.members || _data.members.length === 0) {
+        return '<div class="empty-state">' +
+            '<div class="empty-icon">⚔</div>' +
+            '<div class="empty-text">暂无队伍信息<br>No team data — join a party to see members</div>' +
+            '</div>';
+    }
+    var html = '<div class="team-section">';
+    html += '<div class="team-header"><span>PARTY</span><span class="line"></span></div>';
+
+    for (var i = 0; i < _data.members.length; i++) {
+        var m = _data.members[i];
+        var selfCls = m.is_self ? ' is-self' : '';
+        var leaderCls = m.is_leader ? ' is-leader' : '';
+        html += '<div class="member-card' + selfCls + leaderCls + '" data-uid="' + m.uid + '">';
+
+        // Top: name + profession badge
+        html += '<div class="member-top">';
+        html += '<span class="member-name">' + esc(m.name || ('UID:' + m.uid)) + '</span>';
+        if (m.profession) {
+            html += '<span class="member-prof">' + esc(m.profession) + '</span>';
+        }
+        html += '</div>';
+
+        // Meta: level, fight power
+        html += '<div class="member-meta">';
+        html += '<span>Lv.' + (m.level || '--') + '</span>';
+        html += '<span>CP ' + fmtFightPoint(m.fight_point) + '</span>';
+        if (m.is_self) html += '<span style="color:var(--accent-cyan)">SELF</span>';
+        html += '</div>';
+
+        // HP mini bar (if HP data available)
+        if (m.max_hp > 0) {
+            var hpPct = Math.max(0, Math.min(1, m.hp / m.max_hp));
+            html += '<div class="hp-mini">';
+            html += '<div class="hp-bar-bg"><div class="hp-bar-fill" style="width:' +
+                    (hpPct * 100).toFixed(1) + '%;background:' + hpColor(hpPct) + '"></div></div>';
+            html += '<span class="hp-text">' + Math.round(hpPct * 100) + '%</span>';
+            html += '</div>';
+        }
+
+        // Skill CD grid (self player only — server doesn't send other players' CDs)
+        if (m.is_self && m.skill_slots && m.skill_slots.length > 0) {
+            html += '<div class="cd-grid">';
+            for (var j = 0; j < m.skill_slots.length; j++) {
+                var s = m.skill_slots[j];
+                var slotCls = s.state || 'ready';
+                var fillH = s.cooldown_pct ? (s.cooldown_pct * 100).toFixed(1) : '0';
+                var timeStr = s.state === 'cooldown' ? fmtTime(s.remaining_ms) : '✓';
+                var nameAttr = s.name ? ' title="' + esc(s.name) + '"' : '';
+                html += '<div class="cd-slot ' + slotCls + '"' + nameAttr + '>';
+                html += '<div class="cd-fill" style="height:' + fillH + '%"></div>';
+                html += '<span class="cd-idx">' + s.index + '</span>';
+                html += '<span class="cd-time">' + timeStr + '</span>';
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+
+        html += '</div>'; // member-card
+    }
+    html += '</div>';
+    return html;
+}
+
+function renderBossTab() {
+    // Boss raid info — placeholder for now, can be populated from boss raid profiles
+    var html = '<div class="boss-section">';
+    html += '<div class="team-header"><span>BOSS RAID</span><span class="line"></span></div>';
+
+    if (!_data || !_data.dungeon_id) {
+        html += '<div class="empty-state">' +
+            '<div class="empty-icon">⚑</div>' +
+            '<div class="empty-text">未进入副本<br>Not in a dungeon instance</div>' +
+            '</div>';
+    } else {
+        html += '<div class="boss-card">';
+        html += '<div class="boss-name">副本 Dungeon ID: ' + _data.dungeon_id + '</div>';
+        html += '<div class="boss-phase">ACTIVE</div>';
+        html += '</div>';
+    }
+
+    // Team overview (compact) in boss tab
+    if (_data && _data.members && _data.members.length > 0) {
+        html += '<div class="team-header" style="margin-top:10px"><span>TEAM OVERVIEW</span><span class="line"></span></div>';
+        for (var i = 0; i < _data.members.length; i++) {
+            var m = _data.members[i];
+            var selfCls = m.is_self ? ' is-self' : '';
+            html += '<div class="member-card' + selfCls + '" style="padding:4px 8px">';
+            html += '<div class="member-top">';
+            html += '<span class="member-name" style="font-size:11px">' + esc(m.name || ('UID:' + m.uid)) + '</span>';
+            if (m.profession) {
+                html += '<span class="member-prof">' + esc(m.profession) + '</span>';
+            }
+            html += '</div>';
+            // Compact CD display for self in boss tab
+            if (m.is_self && m.skill_slots && m.skill_slots.length > 0) {
+                html += '<div class="cd-grid">';
+                for (var j = 0; j < m.skill_slots.length; j++) {
+                    var s = m.skill_slots[j];
+                    var slotCls = s.state || 'ready';
+                    var fillH = s.cooldown_pct ? (s.cooldown_pct * 100).toFixed(1) : '0';
+                    var timeStr = s.state === 'cooldown' ? fmtTime(s.remaining_ms) : '✓';
+                    html += '<div class="cd-slot ' + slotCls + '">';
+                    html += '<div class="cd-fill" style="height:' + fillH + '%"></div>';
+                    html += '<span class="cd-idx">' + s.index + '</span>';
+                    html += '<span class="cd-time">' + timeStr + '</span>';
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+    }
+    html += '</div>';
+    return html;
+}
+
+function render() {
+    if (_activeTab === 'team') {
+        $body.innerHTML = renderTeamTab();
+    } else {
+        $body.innerHTML = renderBossTab();
+    }
+}
+
+// ═══ Public API ═══
+function update(data) {
+    _data = data;
+    render();
+}
+
+function fadeIn() {
+    $shell.classList.remove('exiting');
+    $shell.classList.add('visible');
+}
+
+function fadeOut() {
+    $shell.classList.add('exiting');
+    setTimeout(() => {
+        $shell.classList.remove('visible');
+    }, 200);
+}
+
+// Expose to Python bridge
+window.Commander = {
+    update: update,
+    fadeIn: fadeIn,
+    fadeOut: fadeOut,
+    render: render
+};
+
+// Initial render (silent - no visible flash)
+render();
+
+})();
+</script>
+</body>
+</html>

@@ -586,28 +586,22 @@ def _build_packet_skill_slots(player: PlayerData):
             # Known-accel speed multiplier from packet/entity modifiers
             accel_speed_mult = 1.0 + accel_rate
 
-            # ── Compute VCD speed from begin_time + server clock (single-observation) ──
-            # The server bakes ALL CD acceleration (passives, buffs, equipment) into
-            # valid_cd_time progression speed. We can measure it directly.
-            # Priority: 1) begin_time + server clock, 2) parser VCD speed EMA, 3) attr modifiers
+            # ── Compute remaining CD ──
+            # With proto fix (ValidCDTimeLegacy at field 5), valid_cd_time is
+            # now captured from SyncToMeDelta's SkillCD wire format.
+            #
+            # Priority:
+            # A) VCD-based + measured speed (most accurate; CDR is inherently
+            #    included because VCD ticks faster when CDR is active)
+            # B) begin_time + CDR attrs (when VCD = 0, first ~1s of a CD)
+            # C) local elapsed fallback (least accurate)
+            #
+            # VCD formula (resonance-logs-cn): the server sends valid_cd_time
+            # which progresses from 0 → duration.  VCD speed > 1.0 when CDR
+            # reduces the real CD.  remaining_real = (duration − VCD) / speed.
             begin_ms = int(cd_info.get('begin_time') or 0)
-            vcd_speed = accel_speed_mult  # default from attr modifiers (often 1.0)
-
-            # Method 1: begin_time + server clock (single-observation, most accurate)
             _ts_2020 = 1577836800000  # 2020-01-01
             _ts_2030 = 1893456000000  # 2030-01-01
-            if (now_server_ms > 0 and _ts_2020 < begin_ms < _ts_2030 and elapsed_ms > 0):
-                server_elapsed = now_server_ms - begin_ms
-                if server_elapsed > 200:
-                    measured_speed = elapsed_ms / server_elapsed
-                    if 0.8 <= measured_speed <= 25.0:
-                        vcd_speed = measured_speed
-
-            # Method 2: parser-tracked VCD speed from consecutive observations
-            if vcd_speed == accel_speed_mult:  # method 1 didn't fire
-                parser_speed = float(cd_info.get('vcd_speed_ratio') or 0)
-                if 0.8 <= parser_speed <= 25.0:
-                    vcd_speed = parser_speed
 
             # Filter out impossible values (wrapped int64 from charge entries)
             if total_ms > 600_000 or total_ms < 0:
@@ -616,35 +610,91 @@ def _build_packet_skill_slots(player: PlayerData):
             if elapsed_ms > 600_000 or elapsed_ms < 0:
                 elapsed_ms = 0
 
-            if total_ms > 0:
-                # Use last_vcd_update_ms for extrapolation (when VCD was last refreshed from server)
-                last_update_ms = int(cd_info.get('last_vcd_update_ms') or cd_info.get('observed_at_ms') or now_local_ms)
+            # ── Measure VCD speed ──
+            # vcd_speed = VCD / server_elapsed  →  captures ALL CDR effects
+            vcd_speed = accel_speed_mult  # default from entity/buff CDR attrs
+            server_elapsed_ms = 0
+            has_server_clock = (now_server_ms > 0 and _ts_2020 < begin_ms < _ts_2030)
 
-                # ── Primary path: valid_cd_time based ──
-                # VCD progresses from 0 → duration at accelerated speed.
-                # cooldown_pct is always correct from VCD / duration.
-                # remaining_ms needs speed-based conversion to real time.
-                if 0 < elapsed_ms <= max(total_ms * 2, effective_ms * 2):
-                    local_since_ms = max(0, now_local_ms - last_update_ms)
-                    estimated_vcd = elapsed_ms + local_since_ms * vcd_speed
-                    remaining_vcd = max(0, total_ms - estimated_vcd)
-                    # Convert VCD remaining → real time remaining
-                    remaining_ms = max(0, int(remaining_vcd / vcd_speed)) if vcd_speed > 0.01 else 0
-                    # Total real CD = base_duration / vcd_speed.
-                    # The server bakes ALL CDR (entity attrs, buffs, passives) into
-                    # VCD progression speed, so total_ms / vcd_speed gives the true
-                    # real-time CD. Do NOT use effective_ms here — that would
-                    # double-count the reductions already embedded in vcd_speed.
-                    display_total_ms = int(total_ms / vcd_speed) if vcd_speed > 0.01 else total_ms
-                    cooldown_pct = max(0.0, min(1.0, remaining_ms / display_total_ms)) if display_total_ms > 0 else 0.0
-                    source_confidence = 0.95
+            if has_server_clock:
+                server_elapsed_ms = max(0, now_server_ms - begin_ms)
+
+            # Measure from VCD + server clock (most reliable)
+            measured_vcd_speed = 0.0
+            if elapsed_ms > 0 and server_elapsed_ms > 500:
+                measured_vcd_speed = elapsed_ms / server_elapsed_ms
+                if 0.5 <= measured_vcd_speed <= 25.0:
+                    vcd_speed = measured_vcd_speed
+
+            # Fall back to parser-tracked EMA speed from prior VCD deltas
+            if measured_vcd_speed <= 0:
+                parser_speed = float(cd_info.get('vcd_speed_ratio') or 0)
+                if 0.8 <= parser_speed <= 25.0:
+                    vcd_speed = parser_speed
+
+            if total_ms > 0:
+                last_update_ms = int(
+                    cd_info.get('last_vcd_update_ms')
+                    or cd_info.get('observed_at_ms')
+                    or now_local_ms
+                )
+                local_since_ms = max(0, now_local_ms - last_update_ms)
+
+                # ── Path A: VCD available → VCD-speed approach ──
+                # remaining_real = (duration − extrapolated_vcd) / vcd_speed
+                if elapsed_ms > 0 and vcd_speed > 0.01:
+                    # Extrapolate VCD forward from last update
+                    current_vcd = elapsed_ms + local_since_ms * vcd_speed
+                    if current_vcd >= total_ms:
+                        remaining_ms = 0
+                        cooldown_pct = 0.0
+                    else:
+                        remaining_vcd = total_ms - current_vcd
+                        remaining_ms = max(0, int(remaining_vcd / vcd_speed))
+                        display_total_ms = max(1, int(total_ms / vcd_speed))
+                        cooldown_pct = max(0.0, min(1.0,
+                            remaining_ms / display_total_ms
+                        )) if display_total_ms > 0 else 0.0
+                    source_confidence = 0.97
+                    display_total_ms = max(1, int(total_ms / vcd_speed))
+
+                # ── Path B: begin_time + CDR attrs (VCD = 0) ──
+                # Falls back to CDR-adjusted duration.  Accuracy depends on
+                # whether entity/buff CDR attrs are populated.
+                elif has_server_clock:
+                    # actual total real CD = effective_ms / (1 + accel)
+                    real_total_cd = (
+                        int(effective_ms / accel_speed_mult)
+                        if accel_speed_mult > 0.01
+                        else effective_ms
+                    )
+                    if server_elapsed_ms >= real_total_cd:
+                        remaining_ms = 0
+                        cooldown_pct = 0.0
+                    elif server_elapsed_ms >= 0:
+                        remaining_ms = max(0, real_total_cd - int(server_elapsed_ms))
+                        cooldown_pct = max(0.0, min(1.0,
+                            remaining_ms / real_total_cd
+                        )) if real_total_cd > 0 else 0.0
+                    else:
+                        remaining_ms = real_total_cd
+                        cooldown_pct = 1.0
+                    display_total_ms = max(1, real_total_cd)
+                    source_confidence = 0.80
+
+                # ── Path C: local elapsed fallback ──
                 else:
-                    # Fallback: no usable VCD data yet — use attr-estimated
-                    # effective_ms as best guess for total CD duration.
                     local_elapsed = max(0, now_local_ms - last_update_ms)
-                    display_total_ms = effective_ms
-                    remaining_ms = max(0, int(effective_ms - local_elapsed))
-                    cooldown_pct = max(0.0, min(1.0, remaining_ms / effective_ms)) if effective_ms > 0 else 0.0
+                    real_total_cd = (
+                        int(effective_ms / accel_speed_mult)
+                        if accel_speed_mult > 0.01
+                        else effective_ms
+                    )
+                    remaining_ms = max(0, int(real_total_cd - local_elapsed))
+                    display_total_ms = max(1, real_total_cd)
+                    cooldown_pct = max(0.0, min(1.0,
+                        remaining_ms / display_total_ms
+                    )) if display_total_ms > 0 else 0.0
                     source_confidence = 0.55
 
                 effective_ms = display_total_ms
@@ -1012,6 +1062,76 @@ class PacketBridge:
                 if getattr(self._last_player, '_inferred_skill_count', 0) > 0:
                     self._last_player.skill_slot_map = {}
                     self._last_player._inferred_skill_count = 0
+
+    # ═══════════════════════════════════════
+    #  Commander Panel data
+    # ═══════════════════════════════════════
+
+    def get_commander_data(self) -> dict:
+        """Build a snapshot for the Commander Panel.
+
+        Returns dict with:
+          team_id, leader_uid, members (list of member dicts with is_self flag),
+          self_skill_slots (computed CDs for self player),
+          dungeon_id, dungeon scene info.
+        """
+        if not self._parser:
+            return {'team_id': 0, 'leader_uid': 0, 'members': [],
+                    'self_skill_slots': [], 'dungeon_id': 0}
+
+        parser = self._parser
+        team_id = parser._team_id
+        leader_uid = parser._team_leader_uid
+        team_members = dict(parser._team_members)  # snapshot
+        self_uid = parser._current_uid
+
+        # Build member list with self always first
+        members = []
+        # Self entry
+        self_player = parser._players.get(self_uid)
+        self_member = team_members.pop(self_uid, None)
+        if self_player:
+            self_slots = _build_packet_skill_slots(self_player)
+            self_entry = {
+                'uid': self_uid,
+                'name': self_player.name or '',
+                'profession': self_player.profession or '',
+                'profession_id': self_player.profession_id or 0,
+                'fight_point': self_player.fight_point or 0,
+                'level': self_player.level or 0,
+                'is_self': True,
+                'is_leader': (self_uid == leader_uid),
+                'hp': self_player.hp,
+                'max_hp': self_player.max_hp,
+                'skill_slots': self_slots,
+            }
+            members.append(self_entry)
+        # Other team members
+        for uid, info in sorted(team_members.items(), key=lambda x: x[1].get('joined_at', 0)):
+            p = parser._players.get(uid)
+            entry = {
+                'uid': uid,
+                'name': info.get('name') or (p.name if p else '') or '',
+                'profession': info.get('profession') or (p.profession if p else '') or '',
+                'profession_id': info.get('profession_id') or (p.profession_id if p else 0) or 0,
+                'fight_point': info.get('fight_point') or (p.fight_point if p else 0) or 0,
+                'level': info.get('level') or (p.level if p else 0) or 0,
+                'is_self': False,
+                'is_leader': (uid == leader_uid),
+                'hp': p.hp if p else 0,
+                'max_hp': p.max_hp if p else 0,
+                'skill_slots': [],  # Server doesn't send CDs for other players
+            }
+            members.append(entry)
+
+        return {
+            'team_id': team_id,
+            'leader_uid': leader_uid,
+            'members': members,
+            'self_skill_slots': members[0]['skill_slots'] if members else [],
+            'dungeon_id': parser._last_dungeon_id,
+            'self_uid': self_uid,
+        }
 
     def _on_player_update(self, player: PlayerData):
         """解析器回调: 当前玩家数据变更 (节流: 跳过高频重复推送)"""

@@ -1908,7 +1908,7 @@ message AoiSyncDelta {
 message AoiSyncToMeDelta {
     AoiSyncDelta BaseDelta = 1;
     repeated int64 SyncHateIds = 2;
-    repeated SkillCD SyncSkillCDs = 3;
+    repeated SkillCDInfo SyncSkillCDs = 3;
     repeated FightResCD FightResCDs = 4;
     int64 Uuid = 5;
 }
@@ -2313,11 +2313,27 @@ message CharSerialize {
     FightPoint FightPoint = 96;
     SignInfo Sign = 97;
     CharStatisticsData CharStatisticsData = 98;
+    // Fields 99-101: unknown / not yet discovered
+    DeepSleepResonanceData DeepSleepResonance = 102; // Season Resonance Level, shown as +XX
 }
 
 message CharStatisticsData {
     int32 LoginDays = 1;
     uint64 LastLoginTime = 2;
+}
+
+message DeepSleepResonanceData {
+    repeated DeepSleepSeasonEntry Entries = 1; // One entry per season type
+}
+
+message DeepSleepSeasonEntry {
+    int32 SeasonType = 1;      // 3 = Deep Sleep Resonance
+    DeepSleepLevelInfo Info = 2;
+}
+
+message DeepSleepLevelInfo {
+    int32 Level = 1;           // Current season resonance level (the +XX)
+    int64 CurExp = 2;          // Current experience points
 }
 
 message CharTeam {
@@ -4928,7 +4944,10 @@ message SkillCDInfo {
     int64 SkillBeginTime = 2;
     int32 Duration = 3;
     uint32 SkillCDType = 4;
-    // field 5 reserved (no longer used)
+    // field 5: ValidCDTime from SkillCD format (used in AoiSyncToMeDelta).
+    // SkillCD has ValidCDTime at field 5; SkillCDInfo originally reserved it.
+    // We expose it to capture VCD from servers that send SkillCD wire format.
+    int32 ValidCDTimeLegacy = 5;
     int64 ProfessionHoldBeginTime = 6;
     int32 ChargeCount = 7;
     int32 ValidCDTime = 8;

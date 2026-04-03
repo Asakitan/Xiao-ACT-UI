@@ -3,6 +3,7 @@
 
 import json
 import os
+import sys
 import copy
 import threading
 import time
@@ -13,7 +14,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 # ═══════════════════════════════════════════════
 #  Player cache path
 # ═══════════════════════════════════════════════
-_PLAYER_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'player_cache.json')
+# 打包环境下 __file__ 位于只读的 _MEIPASS 临时目录，
+# 需要将可写文件放在 exe 同级目录 (sys.executable)
+_BASE_DIR = (
+    os.path.dirname(sys.executable)
+    if getattr(sys, 'frozen', False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
+_PLAYER_CACHE_PATH = os.path.join(_BASE_DIR, 'player_cache.json')
 
 
 # ═══════════════════════════════════════════════
@@ -90,7 +98,7 @@ class EntityStats:
                  'heal_total', 'heal_hits',
                  'taken_total', 'taken_hits',
                  'first_damage_time', 'last_damage_time',
-                 'skills', 'max_hit')
+                 'skills', 'max_hit', 'created_at')
 
     def __init__(self, uid: int, name: str = '', profession: str = '',
                  is_self: bool = False, fight_point: int = 0):
@@ -110,6 +118,7 @@ class EntityStats:
         self.last_damage_time = 0.0
         self.skills: Dict[int, SkillStats] = {}
         self.max_hit = 0
+        self.created_at = time.time()
 
     def add_damage(self, skill_id: int, value: int, is_crit: bool = False,
                    skill_name: str = '', timestamp: float = 0.0):
@@ -198,9 +207,10 @@ class DpsTracker:
 
     # Inactivity auto-reset (seconds)
     INACTIVITY_TIMEOUT = 30.0
-    HIT_FX_WINDOW_S = 1.6
+    HIT_FX_WINDOW_S = 9.0
     BIG_HIT_THRESHOLD = 1_000_000
     MEGA_HIT_THRESHOLD = 5_000_000
+    STARBURST_HIT_THRESHOLD = 8_000_000
 
     def __init__(self, skill_names: Optional[Dict[int, str]] = None,
                  on_update: Optional[Callable[[], None]] = None):
@@ -213,6 +223,8 @@ class DpsTracker:
         self._last_damage_time: float = 0.0
         self._total_damage: int = 0
         self._total_heal: int = 0
+        self._boss_uuid: int = 0
+        self._total_damage_boss: int = 0
         self._skill_names: Dict[int, str] = dict(skill_names or {})
         self._on_update = on_update
         self._dirty = False
@@ -228,6 +240,11 @@ class DpsTracker:
     def set_self_uid(self, uid: int):
         with self._lock:
             self._self_uid = uid
+
+    def set_boss_uuid(self, uuid: int):
+        """Set the current boss monster UUID for boss-only damage filtering."""
+        with self._lock:
+            self._boss_uuid = int(uuid or 0)
 
     # ── Player info cache (persistence) ──
 
@@ -375,6 +392,8 @@ class DpsTracker:
                 entity.add_damage(skill_id, damage, is_crit, skill_name, now)
                 self._track_big_hit_fx_locked(entity, damage, now)
                 self._total_damage += damage
+                if self._boss_uuid and target_uuid == self._boss_uuid:
+                    self._total_damage_boss += damage
                 self._last_damage_time = now
                 tracked = True
         else:
@@ -397,7 +416,12 @@ class DpsTracker:
     def _track_big_hit_fx_locked(self, entity: EntityStats, damage: int, timestamp: float):
         if damage < self.BIG_HIT_THRESHOLD:
             return
-        tier = 'mega' if damage >= self.MEGA_HIT_THRESHOLD else 'impact'
+        if damage >= self.STARBURST_HIT_THRESHOLD:
+            tier = 'starburst'
+        elif damage >= self.MEGA_HIT_THRESHOLD:
+            tier = 'mega'
+        else:
+            tier = 'impact'
         self._hit_fx_seq += 1
         self._last_hit_fx = {
             'seq': self._hit_fx_seq,
@@ -421,9 +445,16 @@ class DpsTracker:
     def update_player_info(self, uid: int, name: str = '',
                            profession: str = '', fight_point: int = 0,
                            level: int = 0):
-        """Update display name/profession/fight_point/level for an entity."""
+        """Update display name/profession/fight_point/level for an entity.
+        
+        If no entity exists yet but we have a valid name, pre-create the entity
+        so that when damage events arrive later, the name is already set.
+        """
         with self._lock:
             entity = self._entities.get(uid)
+            if not entity and name and uid:
+                # Pre-create entity with name so it's ready when damage arrives
+                entity = self._get_or_create(uid)
             if entity:
                 changed = False
                 if name and entity.name != name:
@@ -454,6 +485,8 @@ class DpsTracker:
         self._last_damage_time = 0.0
         self._total_damage = 0
         self._total_heal = 0
+        self._boss_uuid = 0
+        self._total_damage_boss = 0
         self._last_hit_fx = None
         self._dirty = True
 
@@ -464,9 +497,15 @@ class DpsTracker:
         elapsed = max(0.001, self._encounter_end - self._encounter_start) \
             if self._encounter_start else 0.001
 
+        now = time.time()
+        # Remove players who have never dealt damage/heal after 5 seconds
+        _IDLE_REMOVE_S = 5.0
         entities = sorted(
             [e.to_dict(include_skills=include_skills)
-             for e in self._entities.values()],
+             for e in self._entities.values()
+             if (e.damage_total > 0 or e.heal_total > 0
+                 or e.is_self
+                 or (now - e.created_at) < _IDLE_REMOVE_S)],
             key=lambda e: e['damage_total'],
             reverse=True,
         )
@@ -490,9 +529,10 @@ class DpsTracker:
             'encounter_started_at': self._encounter_start,
             'encounter_ended_at': self._encounter_end,
             'elapsed_s': round(elapsed, 1),
-            'total_damage': self._total_damage,
+            'total_damage': self._total_damage_boss if self._boss_uuid else self._total_damage,
+            'total_damage_all': self._total_damage,
             'total_heal': self._total_heal,
-            'total_dps': int(self._total_damage / elapsed),
+            'total_dps': int((self._total_damage_boss if self._boss_uuid else self._total_damage) / elapsed),
             'total_hps': int(self._total_heal / elapsed),
             'entities': entities,
         }

@@ -188,6 +188,13 @@ def _invoke_dotnet_transparency(win_obj):
         form = getattr(win_obj, 'native', None)
         if form is None:
             return
+        # 避免 "在创建窗口句柄之前，不能在控件上调用 Invoke" 错误
+        if not form.IsHandleCreated:
+            # 句柄尚未创建，延迟重试 (常见于 startup 阶段)
+            t = threading.Timer(0.15, lambda: _invoke_dotnet_transparency(win_obj))
+            t.daemon = True
+            t.start()
+            return
         from System import Action
         form.Invoke(Action(lambda: _setup_dotnet_transparency(form)))
     except Exception as e:
@@ -1304,6 +1311,40 @@ class RaidEditorAPI:
         threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
 
 
+class CommanderAPI:
+    """pywebview js_api for the Commander panel — team overview & self CDs."""
+
+    def __init__(self, gui: 'SAOWebViewGUI'):
+        self._g = gui
+
+    def window_drag(self, dx, dy):
+        try:
+            win = self._g.commander_win
+            if win:
+                win.move(win.x + int(dx), win.y + int(dy))
+        except Exception:
+            pass
+
+    def close_commander(self):
+        """Hide the commander panel."""
+        try:
+            self._g._hide_commander()
+        except Exception:
+            pass
+
+    def request_data(self):
+        """JS->Python: request a fresh commander data push."""
+        def _push():
+            try:
+                self._g._push_commander_data()
+            except Exception:
+                pass
+        threading.Thread(target=_push, daemon=True).start()
+
+    def play_sound(self, name: str):
+        threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
+
+
 class AutoKeyEditorAPI:
     """pywebview js_api for the AutoKey Editor overlay — skill recording."""
 
@@ -1432,6 +1473,11 @@ class SAOWebViewGUI:
         self.autokey_editor_win = None
         self._autokey_editor_visible = False
         self._autokey_editor_api = None
+
+        # Commander panel
+        self.commander_win = None
+        self._commander_visible = False
+        self._commander_api = None
 
         # Hide & Seek engine
         self._hide_seek_engine = None
@@ -1924,6 +1970,12 @@ class SAOWebViewGUI:
                 self._bb_recent_targets[target_uuid] = time.time()
                 self._bb_last_target_uuid = target_uuid
                 self._bb_last_damage_ts = time.time()
+                # Update DPS tracker boss target for boss-only total filtering
+                if self._dps_tracker:
+                    try:
+                        self._dps_tracker.set_boss_uuid(target_uuid)
+                    except Exception:
+                        pass
                 # Proactively check if the monster has max_hp in parser.
                 # If not, estimate from current HP (the server never sends
                 # AttrMaxHp for monsters, so packet_parser estimates it from
@@ -2628,6 +2680,25 @@ class SAOWebViewGUI:
             js_api=self._autokey_editor_api,
         )
 
+        # Commander panel — center-left, above raid editor
+        commander_url = os.path.join(web_dir, 'commander.html')
+        _cmd_w = max(300, int(min(_sw, 1920) * 0.18))
+        _cmd_h = max(380, int(min(_sh, 1080) * 0.42))
+        _cmd_x = max(16, int(_sw * 0.25))
+        _cmd_y = max(0, int(_sh * 0.15))
+        self._commander_api = CommanderAPI(self)
+        self.commander_win = webview.create_window(
+            'SAO-Commander', commander_url,
+            width=_cmd_w, height=_cmd_h,
+            x=_cmd_x, y=_cmd_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._commander_api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -2718,6 +2789,13 @@ class SAOWebViewGUI:
             menu_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO Menu')
             if menu_hwnd:
                 _make_transparent_ctypes(menu_hwnd)
+        except Exception:
+            pass
+        # Commander: only Win32 (needs to be clickable when visible; .NET TransparencyKey interferes)
+        try:
+            cmd_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-Commander')
+            if cmd_hwnd:
+                _make_transparent_ctypes(cmd_hwnd)
         except Exception:
             pass
 
@@ -3017,6 +3095,7 @@ class SAOWebViewGUI:
             ('SAO-DPS', '_dps_visible', '_dps_hwnd'),
             ('SAO-RaidEditor', '_raid_editor_visible', None),
             ('SAO-AutoKeyEditor', '_autokey_editor_visible', None),
+            ('SAO-Commander', '_commander_visible', None),
         ]
         user32 = ctypes.windll.user32
         for title, vis_attr, hwnd_attr in _panels:
@@ -3540,6 +3619,7 @@ class SAOWebViewGUI:
             self._set_window_icon('SAO-DPS')
             self._set_window_icon('SAO-RaidEditor')
             self._set_window_icon('SAO-AutoKeyEditor')
+            self._set_window_icon('SAO-Commander')
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
             self._set_window_alpha('SAO SkillFX', 1.0)
@@ -3583,10 +3663,20 @@ class SAOWebViewGUI:
                 self._sync_dps_report_availability()
             except Exception:
                 pass
-            # Raid Editor / AutoKey Editor: 初始隐藏, 设为鼠标穿透
+            # Raid Editor / AutoKey Editor / Commander: 初始隐藏, 设为鼠标穿透
             try:
                 self._wait_and_apply_click_through('SAO-RaidEditor', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-AutoKeyEditor', timeout=0.5)
+                self._wait_and_apply_click_through('SAO-Commander', timeout=0.5)
+            except Exception:
+                pass
+            # Commander panel must start hidden (explicitly enforce after webview init)
+            try:
+                self._commander_visible = False
+                if self.commander_win:
+                    self._set_window_alpha('SAO-Commander', 0.0)
+                    self.commander_win.hide()
+                    self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
             # 重新触发 HP 入场动态模糊 (避免页面预加载时动画已经跑完)
@@ -4153,6 +4243,80 @@ class SAOWebViewGUI:
         """Callback from BossRaidEngine when entity list changes."""
         if self._raid_editor_visible:
             self._push_raid_editor_entities(entities)
+
+    # ── Commander panel ──
+
+    def _eval_commander(self, js):
+        try:
+            if self.commander_win:
+                self.commander_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_commander_clickable(self):
+        """Remove WS_EX_TRANSPARENT so commander receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-Commander')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_commander(self):
+        try:
+            if self.commander_win and not self._commander_visible:
+                self._apply_webview2_transparency()
+                self._set_window_alpha('SAO-Commander', 0.0)
+                self.commander_win.show()
+                self._eval_commander('if(window.Commander&&Commander.fadeIn)Commander.fadeIn()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-Commander', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._commander_visible = True
+                self._ensure_commander_clickable()
+                threading.Timer(0.5, self._ensure_commander_clickable).start()
+                self._push_commander_data()
+        except Exception:
+            pass
+
+    def _hide_commander(self):
+        try:
+            if self.commander_win and self._commander_visible:
+                self._eval_commander('if(window.Commander&&Commander.fadeOut)Commander.fadeOut()')
+                def _finish():
+                    try:
+                        if self.commander_win:
+                            self.commander_win.hide()
+                            # Ensure click-through when hidden
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.3, _finish).start()
+        except Exception:
+            pass
+        self._commander_visible = False
+
+    def _push_commander_data(self):
+        """Push team + CD data to the commander panel."""
+        if not self._commander_visible:
+            return
+        try:
+            bridge = getattr(self, '_bridge', None)
+            if bridge:
+                data = bridge.get_commander_data()
+            else:
+                data = {'members': [], 'team_id': 0, 'leader_uid': 0, 'dungeon_id': 0}
+            self._eval_commander(
+                f'Commander.update({json.dumps(data, ensure_ascii=False)})')
+        except Exception:
+            pass
 
     # ── AutoKey Editor overlay ──
 
@@ -4820,6 +4984,8 @@ class SAOWebViewGUI:
                 ctypes.windll.user32.SetLayeredWindowAttributes(
                     hwnd, _COLORREF_KEY, max(0, alpha), _LWA_ALPHA | _LWA_COLORKEY)
                 time.sleep(max(0.01, duration_ms / max(1, steps) / 1000.0))
+            # 淡出完成后立即隐藏窗口, 防止 destroy() 重置样式导致底板闪现
+            ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE
         except Exception:
             pass
 
@@ -4872,6 +5038,10 @@ class SAOWebViewGUI:
             self._native_fade_window('SAO-AutoKeyEditor', duration_ms=140, steps=8)
         except Exception:
             pass
+        try:
+            self._native_fade_window('SAO-Commander', duration_ms=140, steps=8)
+        except Exception:
+            pass
 
         try:
             self._destroy_all_panels()
@@ -4918,6 +5088,18 @@ class SAOWebViewGUI:
                 self.autokey_editor_win.destroy()
         except Exception:
             pass
+        try:
+            if self.commander_win:
+                self.commander_win.destroy()
+        except Exception:
+            pass
+
+        # 强制退出进程 — webview/.NET 内部线程无法自行终止
+        def _force_exit():
+            time.sleep(0.5)
+            os._exit(0)
+        t = threading.Thread(target=_force_exit, daemon=True)
+        t.start()
 
     def _exit_with_animation(self):
         self._transition_with_animation()
@@ -5193,6 +5375,7 @@ class SAOWebViewGUI:
             cfg['dps_last_report_available'] = self._get_dps_last_report_available()
             cfg['raid_editor_visible'] = bool(self._raid_editor_visible)
             cfg['autokey_editor_visible'] = bool(self._autokey_editor_visible)
+            cfg['commander_visible'] = bool(self._commander_visible)
             _hs_engine = getattr(self, '_hide_seek_engine', None)
             cfg['hide_seek_active'] = bool(_hs_engine and _hs_engine.running)
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
@@ -5220,6 +5403,7 @@ class SAOWebViewGUI:
             'toggle_hide_seek': self._toggle_hide_seek,
             'toggle_raid_editor': lambda: (self._show_raid_editor() if not self._raid_editor_visible else self._hide_raid_editor()),
             'toggle_autokey_editor': lambda: (self._show_autokey_editor() if not self._autokey_editor_visible else self._hide_autokey_editor()),
+            'toggle_commander': lambda: (self._show_commander() if not self._commander_visible else self._hide_commander()),
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
         }
@@ -5661,6 +5845,12 @@ class SAOWebViewGUI:
                 self._refresh_boss_hp_geometry()
                 self._sync_auto_key_menu()
                 self._sync_boss_raid_menu()
+                # Push commander data every ~0.5s when visible
+                if self._commander_visible:
+                    try:
+                        self._push_commander_data()
+                    except Exception:
+                        pass
             if _panel_tick >= 10 and self._panel_wins:
                 _panel_tick = 0
                 self._sync_all_panels()

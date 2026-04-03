@@ -1611,9 +1611,9 @@ function updateBossBar(data) {
     var breakTrack = breakFill.parentElement;
     // During broken/recovering/refilled states the state machine owns the visual —
     // don't let stale server data overwrite the 0% / interpolated width.
-    // Post-refill grace: after refilled→normal, lock visual for 1.0s (skipped on first repair)
+    // Post-refill grace: after refilled→normal, lock visual for 2.0s (skipped on first repair)
     // so the raw server data (which lags) doesn't flash the bar to 0%.
-    var _postRefillLock = (_refillCompletedTs > 0 && (Date.now() - _refillCompletedTs) < 1000 && _refillsCompleted >= 2);
+    var _postRefillLock = (_refillCompletedTs > 0 && (Date.now() - _refillCompletedTs) < 2000 && _refillsCompleted >= 2);
     var _breakVisualLocked = (_breakState === 'broken' || _breakState === 'refilled' || _recoverInterpolating || _postRefillLock);
     if (!_breakVisualLocked && _breakDataAvailable) {
         breakFill.style.width = Math.round(breakPct * 100) + '%';
