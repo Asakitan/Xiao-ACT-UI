@@ -2091,16 +2091,14 @@ class SAOLinkStart:
     _TUNNEL_R_MIN = 10      # 隧道更收束
     _TUNNEL_R_MAX = 38      # 隧道半径略收紧
     _STREAK_H = 420         # 更长的柱体拖尾, 提升速度感
-    _NUM_PARTICLES = 380    # 粒子数量
-    _NUM_PARTICLES_CANVAS = 190  # Canvas 回退时使用较少粒子 (性能)
+    _NUM_PARTICLES = 300    # 粒子数量 (增加密度提升质感)
+    _NUM_PARTICLES_CANVAS = 150  # Canvas 回退时使用较少粒子 (性能)
 
     # ──── 摄像机动画参数 (匹配 SAO-UI) ────
     _CAM_Z_START = -1200    # 摄像机起始 z (= CSS translateZ(-1200px))
     _CAM_Z_END = 1500       # 摄像机终止 z (= CSS translateZ(1500px))
     _CAM_DURATION = 3.5     # 单次飞行时长 = SAO-UI animation: 3.5s
-    _STARTUP_PRELUDE = 0.92 # 启动扫描/光阀独占时长, 与 LinkStart 语音时长更贴合
-    _SFX_LINK_START_LEN = 1.0
-    _SFX_NERVEGEAR_LEN = 3.9
+    _STARTUP_PRELUDE = 0.72 # 启动扫描/光阀独占时长, 结束后再进入 P1
 
     # ──── 时间线 ────
     _DURATION = 9.0
@@ -2200,39 +2198,6 @@ void main() {
     scanRing *= scan * 0.65;
     float ripple = smoothstep(0.022, 0.0, abs(radius - mix(0.05, 0.56, explode)));
     ripple *= (1.0 - smoothstep(0.52, 0.92, startwave)) * (0.18 + startburst * 0.34);
-    float gateSweep = smoothstep(0.020, 0.0, abs(radius - mix(0.08, 0.94, fract(u_time * 0.18 + energy * 0.32))));
-    float vertGate = smoothstep(0.018, 0.0, abs(abs(lens.x) - mix(0.08, 0.74, scan)));
-    vertGate *= smoothstep(0.86, 0.04, abs(lens.y));
-    float horizGate = smoothstep(0.016, 0.0, abs(abs(centered.y) - mix(0.02, 0.22, scan)));
-    horizGate *= smoothstep(1.05, 0.05, abs(lens.x));
-    float gateCoreA = smoothstep(0.012, 0.0, abs(radius - 0.125));
-    float gateCoreB = smoothstep(0.014, 0.0, abs(radius - 0.188));
-    float gateHalo = smoothstep(0.28, 0.05, radius) * (1.0 - smoothstep(0.10, 0.23, radius));
-    float gateBeam = smoothstep(0.012, 0.0, abs(centered.y));
-    gateBeam *= smoothstep(0.26, 0.04, abs(lens.x));
-    float gateVeil = smoothstep(0.30, 0.10, radius) * (1.0 - smoothstep(0.08, 0.18, radius));
-    float moteAng = (angle / 6.2831853 + 0.5) * mix(18.0, 24.0, energy);
-    float moteRad = radius * mix(18.0, 26.0, energy) - u_time * (5.5 + energy * 4.0);
-    float moteSeed = hash11(floor(moteAng) * 17.13 + floor(moteRad) * 41.7);
-    vec2 moteCell = vec2(fract(moteAng) - 0.5, fract(moteRad) - 0.5);
-    float mote = smoothstep(0.18 - moteSeed * 0.05, 0.0, length(vec2(moteCell.x * 1.45, moteCell.y)));
-    mote *= smoothstep(0.80, 0.95, moteSeed) * smoothstep(0.92, 0.07, radius);
-    float moteTrail = smoothstep(0.42, -0.04, moteCell.y) * smoothstep(0.16, 0.0, abs(moteCell.x));
-    moteTrail *= smoothstep(0.76, 0.95, moteSeed) * smoothstep(0.92, 0.08, radius);
-    float moteRibbon = smoothstep(0.82, -0.16, moteCell.y) * smoothstep(0.24, 0.0, abs(moteCell.x));
-    moteRibbon *= smoothstep(0.78, 0.96, moteSeed) * smoothstep(0.96, 0.10, radius);
-    float mote2Ang = (angle / 6.2831853 + 0.5) * mix(11.0, 16.0, energy);
-    float mote2Rad = radius * mix(12.0, 18.0, energy) - u_time * (3.2 + energy * 2.8) + 0.37;
-    float mote2Seed = hash11(floor(mote2Ang) * 29.7 + floor(mote2Rad) * 53.2 + 7.0);
-    vec2 mote2Cell = vec2(fract(mote2Ang) - 0.5, fract(mote2Rad) - 0.5);
-    float mote2 = smoothstep(0.22 - mote2Seed * 0.08, 0.0, length(vec2(mote2Cell.x * 1.2, mote2Cell.y)));
-    mote2 *= smoothstep(0.72, 0.95, mote2Seed) * smoothstep(0.86, 0.10, radius);
-    float mote3Ang = (angle / 6.2831853 + 0.5) * mix(26.0, 34.0, energy);
-    float mote3Rad = radius * mix(24.0, 34.0, energy) - u_time * (8.2 + energy * 5.8) + 0.19;
-    float mote3Seed = hash11(floor(mote3Ang) * 43.1 + floor(mote3Rad) * 21.7 + 11.0);
-    vec2 mote3Cell = vec2(fract(mote3Ang) - 0.5, fract(mote3Rad) - 0.5);
-    float mote3 = smoothstep(0.13 - mote3Seed * 0.03, 0.0, length(vec2(mote3Cell.x * 1.8, mote3Cell.y)));
-    mote3 *= smoothstep(0.84, 0.97, mote3Seed) * smoothstep(0.92, 0.08, radius);
 
     vec3 col = u_bg_color;
     vec3 shutterCol = mix(vec3(0.005, 0.010, 0.018), u_bg_color * 0.16, apertureOpen * 0.34);
@@ -2244,19 +2209,6 @@ void main() {
     col += vec3(0.70, 0.95, 1.0) * scanRing;
     col += u_tint * ripple;
     col += vec3(1.0, 0.97, 0.88) * valveLine;
-    col += vec3(0.76, 0.96, 1.0) * vertGate * (0.05 + scan * 0.10);
-    col += mix(u_tint, vec3(0.88, 0.98, 1.0), 0.45) * horizGate * (0.04 + energy * 0.06);
-    col += vec3(0.82, 0.96, 1.0) * gateSweep * (0.04 + flash * 0.08 + startburst * 0.12);
-    col += vec3(0.72, 0.95, 1.0) * gateCoreA * (0.08 + energy * 0.08 + flash * 0.06);
-    col += vec3(0.94, 0.99, 1.0) * gateCoreB * (0.05 + flash * 0.05);
-    col += vec3(0.68, 0.92, 1.0) * gateHalo * (0.05 + energy * 0.05);
-    col += vec3(0.84, 0.98, 1.0) * gateBeam * (0.04 + flash * 0.05);
-    col += vec3(0.78, 0.96, 1.0) * gateVeil * (0.04 + energy * 0.04);
-    col += mix(vec3(0.74, 0.95, 1.0), u_tint, 0.24) * mote * (0.05 + energy * 0.04 + flash * 0.03);
-    col += vec3(0.90, 0.98, 1.0) * moteTrail * (0.03 + energy * 0.03);
-    col += vec3(0.80, 0.96, 1.0) * moteRibbon * (0.04 + energy * 0.04 + flash * 0.02);
-    col += vec3(0.68, 0.92, 1.0) * mote2 * (0.03 + energy * 0.03);
-    col += vec3(0.94, 0.99, 1.0) * mote3 * (0.020 + energy * 0.025 + flash * 0.010);
     col = mix(shutterCol, col, max(apertureMask * (0.22 + apertureOpen * 0.78), 1.0 - apertureFade));
     col += vec3(0.86, 0.96, 1.0) * shutterMask * 0.032;
     fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
@@ -2270,55 +2222,11 @@ uniform float     u_ca;    // 色差偏移 (单位: UV坐标)
 uniform float     u_fx_energy;
 uniform float     u_fx_flash;
 uniform float     u_aspect;
-uniform float     u_time;
 uniform vec3      u_fx_tint;
 out vec4 fragColor;
-
-float hash21(vec2 p) {
-    p = fract(p * vec2(123.34, 345.45));
-    p += dot(p, p + 34.345);
-    return fract(p.x * p.y);
-}
-
-float luma(vec3 c) {
-    return dot(c, vec3(0.2126, 0.7152, 0.0722));
-}
-
-vec3 brightTap(sampler2D tex, vec2 uv) {
-    vec3 c = texture(tex, clamp(uv, 0.0, 1.0)).rgb;
-    float w = smoothstep(0.58, 0.98, luma(c));
-    return c * w;
-}
-
-vec3 gatherGlare(sampler2D tex, vec2 uv, vec2 resolution, vec2 dir, float spreadPx) {
-    vec2 stepUv = dir * (spreadPx / resolution);
-    vec3 acc = brightTap(tex, uv) * 0.14;
-    acc += brightTap(tex, uv + stepUv * 1.2) * 0.17;
-    acc += brightTap(tex, uv - stepUv * 1.2) * 0.17;
-    acc += brightTap(tex, uv + stepUv * 2.8) * 0.13;
-    acc += brightTap(tex, uv - stepUv * 2.8) * 0.13;
-    acc += brightTap(tex, uv + stepUv * 4.6) * 0.09;
-    acc += brightTap(tex, uv - stepUv * 4.6) * 0.09;
-    acc += brightTap(tex, uv + stepUv * 6.8) * 0.06;
-    acc += brightTap(tex, uv - stepUv * 6.8) * 0.06;
-    return acc;
-}
-
-vec3 sampleScene(sampler2D tex, vec2 uv, vec2 radialDir,
-                 float radius, float energy, float flash) {
-    vec2 delta = radialDir * (0.0042 + radius * 0.016 + energy * 0.009 + flash * 0.010);
-    vec3 s0 = texture(tex, clamp(uv, 0.0, 1.0)).rgb;
-    vec3 s1 = texture(tex, clamp(uv - delta * 1.1, 0.0, 1.0)).rgb;
-    vec3 s2 = texture(tex, clamp(uv - delta * 2.3, 0.0, 1.0)).rgb;
-    vec3 s3 = texture(tex, clamp(uv - delta * 3.8, 0.0, 1.0)).rgb;
-    vec3 s4 = texture(tex, clamp(uv + delta * 1.0, 0.0, 1.0)).rgb;
-    return s0 * 0.34 + s1 * 0.22 + s2 * 0.18 + s3 * 0.12 + s4 * 0.14;
-}
-
 void main() {
     ivec2 sz = textureSize(u_cur, 0);
-    vec2  resolution = vec2(sz);
-    vec2  uv = gl_FragCoord.xy / resolution;
+    vec2  uv = gl_FragCoord.xy / vec2(sz);
     vec2  centered = uv - 0.5;
     vec2  lens = vec2(centered.x * u_aspect, centered.y);
     float radius = length(lens);
@@ -2326,63 +2234,35 @@ void main() {
 
     float energy = clamp(u_fx_energy, 0.0, 1.0);
     float flash  = clamp(u_fx_flash, 0.0, 1.0);
-    float ca     = u_ca * (0.45 + radius * 1.10) * (0.55 + energy * 0.35 + flash * 0.30);
-    vec2 radialDir = radius > 0.0001 ? normalize(centered) : vec2(0.0, 0.0);
-    vec3 base = texture(u_cur, uv).rgb;
-    vec3 scene = sampleScene(u_cur, uv, radialDir, radius, energy, flash);
-    float localGlowMask = smoothstep(0.18, 0.82, luma(base));
+    float ca     = u_ca * (1.0 + energy * 0.9 + flash * 0.8);
 
-    float r = texture(u_cur, clamp(uv + radialDir * ca * 0.65, 0.0, 1.0)).r;
-    float g = base.g;
-    float b = texture(u_cur, clamp(uv - radialDir * ca * 0.65, 0.0, 1.0)).b;
-    vec3 current = mix(base, vec3(r, g, b), 0.32 + energy * 0.10 + flash * 0.08);
-    current = mix(current, scene, 0.22 + energy * 0.08 + flash * 0.05);
+    vec2 smear = dir * (0.016 * energy + 0.022 * flash);
+    vec2 squeeze = vec2(1.0 + flash * 0.015, 1.0 - energy * 0.010);
+    vec2 zoomUv = centered * squeeze + 0.5;
+    vec3 scene0 = texture(u_cur, clamp(zoomUv, 0.0, 1.0)).rgb;
+    vec3 scene1 = texture(u_cur, clamp(zoomUv - smear * 0.8, 0.0, 1.0)).rgb;
+    vec3 scene2 = texture(u_cur, clamp(zoomUv - smear * 1.8, 0.0, 1.0)).rgb;
+    vec3 scene  = scene0 * 0.46 + scene1 * 0.34 + scene2 * 0.20;
 
+    // 色差: R 右偏, G 原位, B 左偏
+    float r = texture(u_cur, uv + vec2(ca, 0.0)).r;
+    float g = scene.g;
+    float b = texture(u_cur, uv - vec2(ca, 0.0)).b;
+    // 运动模糊: 22% 历史 + 78% 当前
     vec3 prev   = texture(u_prv, uv).rgb;
-    vec3 result = mix(prev, current, 0.48);
+    vec3 result = mix(prev, vec3(r, g, b), 0.60);  // 40% history = stronger motion trail
 
     float centerGlow = pow(max(0.0, 1.0 - radius * 1.85), 2.6);
     float streak = exp(-abs(centered.y) * (74.0 - 22.0 * energy));
-    streak *= smoothstep(0.58, 0.0, abs(centered.x));
-    float bloom = centerGlow * (0.040 + energy * 0.05 + flash * 0.06);
-    float flare = streak * (energy * 0.09 + flash * 0.14);
-    vec3 imageGlareH = gatherGlare(u_cur, uv, resolution, vec2(1.0, 0.0),
-                                   9.0 + energy * 11.0 + flash * 10.0);
-    vec3 imageGlareD = gatherGlare(u_cur, uv, resolution, normalize(vec2(1.0, 0.22)),
-                                   6.0 + energy * 8.0 + flash * 7.0);
-    vec3 imageGlareR = gatherGlare(u_cur, uv, resolution, radialDir,
-                                   6.0 + radius * 10.0 + energy * 5.0 + flash * 6.0);
-    vec3 imageGlare = imageGlareH * 0.54 + imageGlareD * 0.14 + imageGlareR * 0.32;
-    imageGlare *= (0.12 + energy * 0.08 + flash * 0.08) * localGlowMask * smoothstep(1.18, 0.06, radius);
-    float centerGlare = exp(-abs(centered.y) * 132.0) * smoothstep(0.42, 0.04, abs(centered.x));
-    centerGlare *= (0.004 + energy * 0.004 + flash * 0.006) * (0.30 + localGlowMask * 0.70);
-    float ring = smoothstep(0.022, 0.0, abs(radius - (0.16 + 0.62 * fract(u_time * 0.16 + energy * 0.32))));
-    float gate = smoothstep(0.020, 0.0, abs(abs(centered.x) - (0.20 + 0.06 * sin(u_time * 2.0))));
-    gate *= smoothstep(0.42, 0.0, abs(centered.y));
+    streak *= smoothstep(0.52, 0.0, abs(centered.x));
+    float bloom = centerGlow * (0.035 + energy * 0.05 + flash * 0.05);
+    float flare = streak * (energy * 0.08 + flash * 0.12);
     vec3 fx = u_fx_tint * (bloom + flare);
-    fx += mix(u_fx_tint, vec3(0.82, 0.96, 1.0), 0.45) * ring * (0.04 + flash * 0.05);
-    fx += vec3(0.74, 0.92, 1.0) * gate * (0.02 + energy * 0.03);
-
-    float scanline = 0.965 + 0.035 * sin(uv.y * resolution.y * 1.65 + u_time * 30.0);
-    float scanSweep = exp(-abs(uv.y - fract(u_time * 0.22)) * (120.0 + energy * 50.0));
-    float mask = 1.0 - (0.020 + flash * 0.030) * (
-        0.5 + 0.5 * sin(uv.x * resolution.x * 0.72) * sin(uv.y * resolution.y * 1.06)
-    );
-    float vignette = smoothstep(1.18, 0.16, radius);
-    float n0 = hash21(uv * resolution + floor(u_time * 60.0));
-    float n1 = hash21(uv.yx * resolution + floor(u_time * 90.0) + 17.0);
-    vec3 noise = (
-        vec3(n0, n1, hash21(uv * resolution * 0.5 + 91.0)) - 0.5
-    ) * (0.010 + flash * 0.016 + energy * 0.008);
+    float vignette = smoothstep(1.22, 0.18, radius);
 
     result += fx;
-    result += vec3(0.75, 0.95, 1.0) * scanSweep * (0.010 + flash * 0.018 + energy * 0.006);
-    result += imageGlare;
-    result += vec3(0.88, 0.97, 1.0) * centerGlare;
-    result += noise;
-    result *= scanline * mask;
     result = mix(result, result + u_fx_tint * 0.08, flash * centerGlow);
-    result *= mix(0.90, 1.06, vignette);
+    result *= mix(0.92, 1.04, vignette);
     result = clamp(result, 0.0, 1.0);
     fragColor = vec4(result, 1.0);
 }
@@ -2391,7 +2271,6 @@ void main() {
     def __init__(self, root: tk.Tk, on_done: Optional[Callable] = None):
         self.root = root
         self.on_done = on_done
-        self._STREAK_H = 560
         self._overlay = None
         self._sound_player = None
         self._ls_font_cache = {}
@@ -2472,9 +2351,6 @@ void main() {
         self._gl_ctx = None
         self._gl_photo = None     # 保持 PhotoImage 引用
         self._prev_gl_arr = None  # 运动模糊前帧帧缓存 (numpy uint8 HxWx3)
-        self._gl_readback = None
-        self._gl_readback_size = None
-        self._gl_frame_image = None
         self._gl_fx_energy = 0.0
         self._gl_fx_flash = 0.0
         self._gl_fx_tint = (0.95, 0.85, 0.35)
@@ -2519,7 +2395,6 @@ void main() {
                 'brightness': random.uniform(0.7, 1.0),
                 'flicker_freq': random.uniform(3.0, 8.0),
                 'width_mult': random.uniform(0.8, 1.4),
-                'appear_t': 0.08 + pow(random.random(), 0.62) * 0.92,
             })
         return particles
 
@@ -2558,21 +2433,6 @@ void main() {
     _GL_CYL_SEGMENTS = 10     # 每根管子的截面段数
     _GL_TUBE_RADIUS = 1.8     # 管子视觉半径(世界单位)
 
-    def _get_startup_p1_bridge_state(self, startup_t: float):
-        """Fade warm pillars into the startup console so it lands naturally in P1."""
-        startup_t = max(0.0, float(startup_t))
-        startup_wave = min(1.0, startup_t / max(0.01, self._STARTUP_PRELUDE))
-        bridge_mix = max(0.0, min(1.0, (startup_wave - 0.32) / 0.68))
-        if bridge_mix <= 0.0:
-            return 0.0, 0.0, self._CAM_Z_START - 620.0, 0.0
-
-        mix_eased = ease_out(bridge_mix)
-        bridge_fade = lerp(0.02, 0.24, mix_eased)
-        bridge_fade *= 0.94 + 0.06 * math.sin(startup_t * 7.6)
-        bridge_cam_z = lerp(self._CAM_Z_START - 620.0, self._CAM_Z_START, mix_eased)
-        bridge_t = max(0.0, startup_t * 0.78 - 0.10)
-        return bridge_mix, bridge_fade, bridge_cam_z, bridge_t
-
     def _init_gl(self):
         """创建 ModernGL standalone context, 着色器, 几何体, FBO."""
         ctx = moderngl.create_standalone_context()
@@ -2603,14 +2463,11 @@ out vec3  v_normal;
 out vec3  v_color;
 out float v_alpha;
 out float v_fog;
-out float v_axial;
 
 void main() {
     // 缩放单位圆柱到实际管子
     vec3 pos = in_pos;
-    float axialShape = pow(clamp(in_pos.z, 0.0, 1.0), 0.70);
-    float taper = mix(0.56, 1.04, axialShape);
-    pos.xy *= i_radius * taper;
+    pos.xy *= i_radius;
     pos.z   = pos.z * i_len + i_center.z;
     pos.xy += i_center.xy;
 
@@ -2628,7 +2485,6 @@ void main() {
     v_color  = i_color;
     v_alpha  = i_alpha;
     v_fog    = i_fog;
-    v_axial  = in_pos.z;
 
     gl_Position = u_vp * vec4(pos, 1.0);
 }
@@ -2641,14 +2497,9 @@ in vec3  v_normal;
 in vec3  v_color;
 in float v_alpha;
 in float v_fog;
-in float v_axial;
 
 uniform vec3 u_cam_pos;   // 摄像机位置 (0, 0, cam_z)
 uniform vec3 u_bg_color;  // 背景色 [0,1]
-uniform vec3 u_fx_tint;
-uniform float u_time;
-uniform float u_energy;
-uniform float u_flash;
 
 out vec4 fragColor;
 
@@ -2656,67 +2507,32 @@ void main() {
     vec3 N = normalize(v_normal);
 
     // ─── 光源 = 隧道中轴 (0,0,z) → 方向: 径向指向中心 ───
-    vec3 lightPos = vec3(0.0, 0.0, u_cam_pos.z - 220.0);
-    vec3 L = normalize(lightPos - v_world);
+    vec3 L = normalize(vec3(-v_world.xy, 0.0));
 
     // ─── 视线方向 ───
     vec3 V = normalize(u_cam_pos - v_world);
 
-    // ─── Blinn-Phong + 轴向能量扫光 ───
+    // ─── Blinn-Phong ───
     vec3 H = normalize(L + V);
     float diff = max(dot(N, L), 0.0);
     float spec = pow(max(dot(N, H), 0.0), 48.0);
-    vec3 axisL = normalize(vec3(-v_world.xy, 0.42));
-    float diff2 = max(dot(N, axisL), 0.0);
-    float centerFacing = max(dot(N, normalize(mix(axisL, L, 0.72))), 0.0);
 
     // Fresnel 边缘光
     float rim = 1.0 - max(dot(N, V), 0.0);
     rim = pow(rim, 2.5) * 0.45;
-    float rimHot = pow(max(rim, 0.0), 2.2) * (0.16 + u_energy * 0.26 + u_flash * 0.12);
-    float rimBlue = pow(max(rim, 0.0), 3.6) * (0.30 + u_energy * 0.30 + u_flash * 0.14);
-
-    float axial = clamp(v_axial, 0.0, 1.0);
-    float shellPulse = 0.74 + 0.26 * sin(u_time * (4.0 + u_energy * 1.4) + length(v_world.xy) * 0.16);
-    float headGlow = exp(-axial * (2.6 + u_energy * 0.9));
-    float tailGlow = pow(max(axial, 0.0), 0.42);
-    float tailFade = 1.0 - smoothstep(0.92, 1.02, axial);
-    float streamBand = exp(-pow(axial - (0.18 + fract(u_time * (0.24 + u_energy * 0.05)) * 0.66), 2.0) * 24.0);
-    float longShell = clamp(tailGlow * 0.82 + headGlow * 0.34 + streamBand * 0.18, 0.0, 1.5) * tailFade;
-    float longCore = clamp(tailGlow * 0.18 + headGlow * 0.94 + streamBand * 0.30, 0.0, 1.5) * tailFade;
-    float headSpecBoost = 0.72 + headGlow * 0.50;
-    float shellInner = pow(max(diff2, 0.0), 1.55) * (0.18 + u_energy * 0.18);
-    float shellCore = pow(max(diff2, 0.0), 3.30) * (0.12 + u_energy * 0.14 + u_flash * 0.10);
-    float stripLight = pow(centerFacing, 3.1) * (0.24 + u_energy * 0.16 + u_flash * 0.08);
-    float shellDepth = smoothstep(0.08, 0.92, diff2);
-    float coreDepth = pow(smoothstep(0.24, 1.0, diff2), 1.45);
-    float tubeWall = pow(max(1.0 - abs(dot(N, V)), 0.0), 1.45);
-    float glassFalloff = 0.72 + 0.28 * shellDepth;
-    float shadowSoft = 0.58 + 0.42 * shellDepth;
-    float translucency = 0.44 + 0.12 * longShell + 0.10 * headGlow + 0.06 * tubeWall;
-    float nearBoost = pow(max(0.0, 1.0 - v_fog), 1.4) * (0.05 + u_flash * 0.10);
-    float coreSpec = pow(max(dot(N, normalize(axisL + V)), 0.0), 96.0) * (0.10 + u_flash * 0.22);
-    float edgeSpec = pow(max(1.0 - abs(dot(N, V)), 0.0), 6.8) * (0.04 + u_energy * 0.06) * headSpecBoost;
 
     // 组合光照
-    vec3 ambient  = mix(v_color, u_bg_color, 0.34) * (0.24 + 0.08 * tailGlow);
-    vec3 diffuse  = v_color * ((0.12 + diff * 0.24 + diff2 * 0.14 + stripLight * 0.22) * glassFalloff * shadowSoft);
-    vec3 specular = vec3(0.96, 0.99, 1.0) * ((spec * (0.18 + u_flash * 0.14) + coreSpec * 0.42 + stripLight * 0.34) * (0.68 + headGlow * 0.14));
-    vec3 emissive = mix(v_color, u_fx_tint, 0.24) * (0.08 + 0.08 * longShell) +
-                    mix(v_color, vec3(0.82, 0.96, 1.0), 0.26) * shellInner * (0.22 + 0.28 * shellPulse) * longShell;
-    vec3 rim_c    = mix(v_color, u_fx_tint, 0.18) * (rim * 0.34 + rimHot * 0.24) * (0.62 + tailGlow * 0.18);
-    vec3 cool_rim = mix(v_color, vec3(0.78, 0.95, 1.0), 0.22) * (rimBlue * 0.24 + edgeSpec + stripLight * 0.30) * (0.58 + tubeWall * 0.20);
-    vec3 inner_shell = mix(v_color, vec3(0.78, 0.96, 1.0), 0.26) * shellDepth * (0.06 + 0.12 * shellPulse + stripLight * 0.10) * longShell;
-    vec3 core_c   = mix(v_color, vec3(0.94, 0.99, 1.0), 0.34) * coreDepth * (0.10 + 0.18 * shellPulse + stripLight * 0.14) * longCore;
-    vec3 head_c   = mix(v_color, vec3(0.94, 0.99, 1.0), 0.28) * (0.03 + u_energy * 0.02 + u_flash * 0.02)
-                    * (headGlow * 0.72 + streamBand * 0.24);
-    vec3 near_c   = mix(v_color, vec3(1.0), 0.22) * nearBoost;
+    vec3 ambient  = v_color * 0.20;
+    vec3 diffuse  = v_color * diff * 0.55;
+    vec3 specular = vec3(1.0) * spec * 0.65;
+    vec3 emissive = v_color * 0.30;
+    vec3 rim_c    = v_color * rim;
 
-    vec3 lit = ambient + diffuse + specular + emissive + rim_c + cool_rim + inner_shell + core_c + head_c + near_c;
+    vec3 lit = ambient + diffuse + specular + emissive + rim_c;
     lit = clamp(lit, 0.0, 1.0);
 
     // 综合淡入/淡出 + 雾
-    float total_fade = v_alpha * (1.0 - v_fog) * translucency;
+    float total_fade = v_alpha * (1.0 - v_fog);
     vec3 final_c = mix(u_bg_color, lit, total_fade);
 
     fragColor = vec4(final_c, 1.0);
@@ -2752,7 +2568,6 @@ void main() {
         max_inst = self._NUM_PARTICLES + 16
         self._gl_inst_buf = ctx.buffer(reserve=max_inst * 10 * 4)
         self._gl_max_inst = max_inst
-        self._gl_inst_np = np.empty((max_inst, 10), dtype='f4')
 
         # ── VAO ──
         self._gl_vao = ctx.vertex_array(self._gl_prog, [
@@ -2795,15 +2610,14 @@ void main() {
         self._gl_pframe  = 0   # 帧计数 (偏奇偶决定 ping-pong 方向)
         # Fullscreen triangle VAO (无顶点数据, 纯靠 gl_VertexID)
         self._gl_postvao = ctx.vertex_array(self._gl_postprog, [])
-        # 色差 UV 偏移: 控制在更轻的量级，避免柱体飞出时发生明显形变感
-        self._gl_ca_uv  = 1.1 / sw
+        # 色差 UV 偏移 = 2 像素 / 屏宽 (x 方向)
+        self._gl_ca_uv  = 2.0 / sw
         self._gl_bg_prog['u_aspect'].value = sw / max(1.0, float(sh))
         self._gl_bg_prog['u_resolution'].value = (float(sw), float(sh))
         self._gl_bg_prog['u_startburst'].value = 0.0
         self._gl_bg_prog['u_startwave'].value = 0.0
         self._gl_postprog['u_fx_energy'].value = 0.0
         self._gl_postprog['u_fx_flash'].value = 0.0
-        self._gl_postprog['u_time'].value = 0.0
         self._gl_postprog['u_aspect'].value = sw / max(1.0, float(sh))
         self._gl_postprog['u_fx_tint'].value = (0.95, 0.85, 0.35)
 
@@ -2816,33 +2630,9 @@ void main() {
                 pass
             self._gl_ctx = None
         self._gl_photo = None
-        self._gl_readback = None
-        self._gl_readback_size = None
-        self._gl_frame_image = None
         self._gl_startup_tex = None
         self._gl_startup_fbo = None
         self._gl_startup_size = None
-
-    def _present_gl_frame(self, cv: tk.Canvas, fbo, width: int, height: int):
-        """Read back the GL framebuffer with reusable buffers and image objects."""
-        size = (width, height)
-        if self._gl_readback is None or self._gl_readback_size != size:
-            self._gl_readback = bytearray(width * height * 3)
-            self._gl_readback_size = size
-            self._gl_frame_image = None
-            self._gl_photo = None
-
-        fbo.read_into(self._gl_readback, components=3, alignment=1)
-        frame = Image.frombuffer('RGB', size, self._gl_readback, 'raw', 'RGB', 0, -1)
-        self._gl_frame_image = frame
-        if self._gl_photo is None:
-            self._gl_photo = ImageTk.PhotoImage(frame)
-        else:
-            try:
-                self._gl_photo.paste(frame)
-            except Exception:
-                self._gl_photo = ImageTk.PhotoImage(frame)
-        cv.create_image(0, 0, image=self._gl_photo, anchor='nw')
 
     # ════════════════════════════════════════════════════════
     #  构建 View-Projection 矩阵
@@ -2909,21 +2699,21 @@ void main() {
     # ════════════════════════════════════════════════════════
     def _draw_tunnel(self, cv: tk.Canvas, particles: list,
                      cam_z: float, bg: str, fade: float = 1.0,
-                     t: float = 0.0, density_progress: float = 1.0):
+                     t: float = 0.0):
         """
         3D 隧道渲染. 如果 OpenGL 可用, 使用真 3D 圆柱体 + Blinn-Phong;
         否则回退到 Canvas 2D.
         """
         if self._gl_ctx:
             try:
-                self._draw_tunnel_gl(cv, particles, cam_z, bg, fade, t, density_progress)
+                self._draw_tunnel_gl(cv, particles, cam_z, bg, fade, t)
                 return
             except Exception as e:
                 print(f'[LinkStart] GL render error: {e}')
                 self._gl_ctx = None   # 降级到 canvas
 
         # ── Canvas 2D 回退 ──
-        self._draw_tunnel_canvas(cv, particles, cam_z, bg, fade, t, density_progress)
+        self._draw_tunnel_canvas(cv, particles, cam_z, bg, fade, t)
 
     def _draw_startup_gl(self, cv: tk.Canvas, bg: str, t: float = 0.0):
         """启动扫描前奏专用 GPU 渲染：只跑背景 shader，避免几何与后处理拖慢 FPS。"""
@@ -2949,11 +2739,15 @@ void main() {
         self._gl_bg_vao.render(moderngl.TRIANGLES, vertices=3)
         ctx.enable(moderngl.DEPTH_TEST)
 
-        self._present_gl_frame(cv, self._gl_fbo, sw, sh)
+        raw = self._gl_fbo.read(components=3)
+        arr = np.frombuffer(raw, dtype=np.uint8).reshape(sh, sw, 3)
+        photo = ImageTk.PhotoImage(Image.fromarray(arr[::-1], 'RGB'))
+        self._gl_photo = photo
+        cv.create_image(0, 0, image=photo, anchor='nw')
 
     def _draw_tunnel_gl(self, cv: tk.Canvas, particles: list,
                         cam_z: float, bg: str, fade: float = 1.0,
-                        t: float = 0.0, density_progress: float = 1.0):
+                        t: float = 0.0):
         """
         使用 ModernGL 渲染真 3D 圆柱体隧道.
 
@@ -2970,10 +2764,9 @@ void main() {
         rot = t * 0.06
         streak_h = self._STREAK_H
         tube_r = self._GL_TUBE_RADIUS
-        density_progress = max(0.0, min(1.0, density_progress))
 
         # ── 构建 instance data ──
-        inst_np = self._gl_inst_np
+        inst_data = []
         count = 0
         for p in particles:
             if count >= self._gl_max_inst:
@@ -3001,11 +2794,6 @@ void main() {
             flkr = p.get('flicker_freq', 5.0)
             shimmer = 0.85 + 0.15 * math.sin(t * flkr + d * 0.005)
             alpha *= bright * shimmer
-            reveal_t = p.get('appear_t', 0.0)
-            if density_progress < reveal_t:
-                continue
-            reveal_mix = max(0.0, min(1.0, (density_progress - reveal_t) / 0.18))
-            alpha *= lerp(0.24, 1.0, ease_out(reveal_mix))
             if alpha < 0.02:
                 continue
 
@@ -3015,33 +2803,29 @@ void main() {
                 fog = min(0.95, (z_near - 150) / 2200.0)
 
             # ── 颜色 → [0,1] ──
-            cr, cg, cb = p.get('rgb', hex_to_rgb(p['color']))
+            cr, cg, cb = hex_to_rgb(p['color'])
 
             # ── 管子半径随 width_mult 缩放 ──
             wmult = p.get('width_mult', 1.0)
-            close_mix = 1.0 - min(1.0, max(z_near, 0.0) / 900.0)
-            actual_r = tube_r * wmult * lerp(1.00, 0.62, close_mix)
-            alpha *= lerp(1.0, 1.18, close_mix)
+            actual_r = tube_r * wmult
 
             # instance: center(3) + len(1) + radius(1) + color(3) + alpha(1) + fog(1)
-            row = inst_np[count]
-            row[0] = cx_p
-            row[1] = cy_p
-            row[2] = d
-            row[3] = streak_h
-            row[4] = actual_r
-            row[5] = cr / 255.0
-            row[6] = cg / 255.0
-            row[7] = cb / 255.0
-            row[8] = alpha
-            row[9] = fog
+            inst_data.extend([
+                cx_p, cy_p, d,
+                streak_h,
+                actual_r,
+                cr / 255.0, cg / 255.0, cb / 255.0,
+                alpha,
+                fog
+            ])
             count += 1
 
         if count == 0:
             return
 
         # ── 上传 instance data ──
-        self._gl_inst_buf.write(inst_np[:count])
+        inst_np = np.array(inst_data, dtype='f4')
+        self._gl_inst_buf.write(inst_np.tobytes())
 
         # ── 设置 uniforms ──
         vp = self._build_vp_matrix(cam_z)
@@ -3049,10 +2833,6 @@ void main() {
         self._gl_prog['u_rot'].value = rot
         self._gl_prog['u_cam_pos'].value = (0.0, 0.0, cam_z)
         self._gl_prog['u_bg_color'].value = bg_norm
-        self._gl_prog['u_fx_tint'].value = tuple(getattr(self, '_gl_fx_tint', (0.95, 0.85, 0.35)))
-        self._gl_prog['u_time'].value = t
-        self._gl_prog['u_energy'].value = float(getattr(self, '_gl_fx_energy', 0.0))
-        self._gl_prog['u_flash'].value = float(getattr(self, '_gl_fx_flash', 0.0))
 
         # ── 渲染 ──
         self._gl_fbo.use()
@@ -3085,28 +2865,30 @@ void main() {
         self._gl_postprog['u_ca'].value  = self._gl_ca_uv
         self._gl_postprog['u_fx_energy'].value = float(getattr(self, '_gl_fx_energy', 0.0))
         self._gl_postprog['u_fx_flash'].value = float(getattr(self, '_gl_fx_flash', 0.0))
-        self._gl_postprog['u_time'].value = t
         self._gl_postprog['u_fx_tint'].value = tuple(getattr(self, '_gl_fx_tint', (0.95, 0.85, 0.35)))
         self._gl_postvao.render(moderngl.TRIANGLES, vertices=3)
         ctx.enable(moderngl.DEPTH_TEST)
         self._gl_pframe = pf + 1
 
         # ── 读回后处理结果: 已含色差+模糊, 无需 CPU 运算 ──
-        self._present_gl_frame(cv, write_fbo, sw, sh)
+        raw = write_fbo.read(components=3)
+        arr = np.frombuffer(raw, dtype=np.uint8).reshape(sh, sw, 3)
+        photo = ImageTk.PhotoImage(Image.fromarray(arr[::-1], 'RGB'))
+        self._gl_photo = photo   # 防止 GC
+        cv.create_image(0, 0, image=photo, anchor='nw')
 
     # ════════════════════════════════════════════════════════
     #  Canvas 2D 回退渲染
     # ════════════════════════════════════════════════════════
     def _draw_tunnel_canvas(self, cv: tk.Canvas, particles: list,
                             cam_z: float, bg: str, fade: float = 1.0,
-                            t: float = 0.0, density_progress: float = 1.0):
+                            t: float = 0.0):
         """Canvas 回退: 锥形多边形 + 屏幕空间高光."""
         cx, cy = self._cx, self._cy
         focal = self._FOCAL
         sw, sh = self._sw, self._sh
         streak_h = self._STREAK_H
         bgr, bgg, bgb = hex_to_rgb(bg)
-        density_progress = max(0.0, min(1.0, density_progress))
 
         rot = t * 0.06
         cos_rot, sin_rot = math.cos(rot), math.sin(rot)
@@ -3150,8 +2932,6 @@ void main() {
 
             wmult = p.get('width_mult', 1.0)
             alpha = fade
-            close_mix = 1.0 - min(1.0, max(z_near, 0.0) / 900.0)
-            wmult = wmult * lerp(1.00, 0.64, close_mix)
 
             depth_fog = 0.0
             if z_near > 150:
@@ -3161,12 +2941,6 @@ void main() {
             flkr = p.get('flicker_freq', 5.0)
             shimmer = 0.85 + 0.15 * math.sin(t * flkr + d * 0.005)
             alpha *= bright * shimmer
-            reveal_t = p.get('appear_t', 0.0)
-            if density_progress < reveal_t:
-                continue
-            reveal_mix = max(0.0, min(1.0, (density_progress - reveal_t) / 0.18))
-            alpha *= lerp(0.24, 1.0, ease_out(reveal_mix))
-            alpha *= lerp(1.0, 1.16, close_mix)
             if alpha < 0.08:
                 continue
 
@@ -3223,7 +2997,6 @@ void main() {
 
         cv = self._canvas
         cv.delete('all')
-        self._ls_live_photos = []
         sw, sh = self._sw, self._sh
 
         # ── 背景 ──
@@ -3237,36 +3010,21 @@ void main() {
             startup_t = max(0.0, elapsed)
             startup_burst = max(0.0, 1.0 - startup_t / 0.52)
             startup_wave = min(1.0, startup_t / self._STARTUP_PRELUDE)
-            bridge_mix, bridge_fade, bridge_cam_z, bridge_t = self._get_startup_p1_bridge_state(startup_t)
-            bridge_density = 0.04 + bridge_mix * 0.18
             self._gl_start_burst = startup_burst
             self._gl_start_wave = startup_wave
-            self._gl_fx_energy = startup_wave * 0.18 + bridge_mix * 0.16
-            self._gl_fx_flash = max(0.0, 1.0 - startup_t / self._STARTUP_PRELUDE) * 0.42 + startup_burst * 0.30 + bridge_mix * 0.05
+            self._gl_fx_energy = startup_wave * 0.18
+            self._gl_fx_flash = max(0.0, 1.0 - startup_t / self._STARTUP_PRELUDE) * 0.42 + startup_burst * 0.30
             self._gl_fx_tint = (0.96, 0.78, 0.24)
-            if self._gl_ctx and bridge_mix > 0.0:
-                self._draw_tunnel(cv, self._color_particles, bridge_cam_z, bg,
-                                  bridge_fade, t=bridge_t, density_progress=bridge_density)
-            elif self._gl_ctx:
+            if self._gl_ctx:
                 self._draw_startup_gl(cv, bg, t=elapsed)
             else:
                 self._draw_start_aperture_cv(cv, startup_t, bg)
                 self._draw_start_connect_cv(cv, startup_t, bg)
                 self._draw_entry_burst_cv(cv, startup_t, bg)
-                if bridge_mix > 0.0:
-                    self._draw_tunnel(cv, self._color_particles, bridge_cam_z, bg,
-                                      bridge_fade, t=bridge_t, density_progress=bridge_density)
-            self._draw_startup_system_hud(cv, startup_t, bg)
             _render_ms = (time.perf_counter() - _t0) * 1000
             _delay = max(1, int(16.67 - _render_ms))
             self._overlay.after(_delay, self._animate)
             return
-
-        # Draw 2D overlays first so the tunnel pillars always stay on top.
-        if text_state:
-            self._draw_text_phase_underlay(cv, scene_t, text_state)
-            self._render_text_phase(cv, scene_t, text_state)
-            text_state = None
 
         # ── Phase 1: 彩色隧道 (0 ~ P1_END) ──
         if scene_t < self._P1_END + 0.5:
@@ -3282,8 +3040,6 @@ void main() {
             # 使用原始 _CAM_DURATION (3.5s) 保持与 P3 相同的飞行速度.
             # z_near < 1.0 的近裁剪guard已处理摄像机追上粒子的情况 → 直接跳过不渲染.
             cam_z = self._cam_z(scene_t, self._CAM_DURATION)
-            p1_density = max(0.0, min(1.0, (elapsed - self._STARTUP_PRELUDE) / max(0.01, self._SFX_NERVEGEAR_LEN)))
-            p1_density = pow(p1_density, 1.35)
 
             # 粒子隧道
             startup_bridge_t = min(self._STARTUP_PRELUDE + 0.64, elapsed)
@@ -3297,15 +3053,13 @@ void main() {
             if not self._gl_ctx:
                 self._draw_focus_flow_cv(cv, scene_t, self._CAM_DURATION,
                                          particle_fade, bg, warm=True)
+            self._draw_tunnel(cv, self._color_particles, cam_z, bg,
+                              particle_fade, t=scene_t)
 
             # P1 HUD 角标叠加
             self._draw_tunnel_hud_overlay(cv, scene_t, particle_fade, warm=True)
-            self._draw_linkstart_gate_overlay(
-                cv, scene_t, self._CAM_DURATION, particle_fade, bg, warm=True)
 
-            self._draw_tunnel(cv, self._color_particles, cam_z, bg,
-                              particle_fade, t=scene_t, density_progress=p1_density)
-            # P1 收尾渲染环需要压到柱子前面.
+            # P1 收尾: 暗色圆形从中心扩张扫过, 盖住未飞出的圆柱体
             if scene_t >= self._P1_END - 0.05:
                 self._draw_p1_circle_wipe(cv, scene_t)
 
@@ -3324,8 +3078,6 @@ void main() {
             p3_t = scene_t - self._P3_START
             p3_dur = self._P3_END - self._P3_START  # = 2.3s, 确保摄像机在相结束前走完全程
             cam_z = self._cam_z(p3_t, p3_dur)
-            p3_density = max(0.0, min(1.0, p3_t / 1.35))
-            p3_density = pow(p3_density, 1.15)
             self._gl_start_burst = 0.0
             self._gl_start_wave = 1.0
             self._gl_fx_energy = p3_fade * (0.20 + 0.80 * min(1.0, p3_t / max(0.01, p3_dur)))
@@ -3334,19 +3086,17 @@ void main() {
             if not self._gl_ctx:
                 self._draw_focus_flow_cv(cv, p3_t, p3_dur,
                                          p3_fade, bg, warm=False)
+            self._draw_tunnel(cv, self._blue_particles, cam_z, bg,
+                              p3_fade, t=scene_t)
 
             # P3 HUD 角标叠加
             self._draw_tunnel_hud_overlay(cv, scene_t, p3_fade, warm=False)
-            self._draw_linkstart_gate_overlay(
-                cv, p3_t, p3_dur, p3_fade, bg, warm=False)
-            self._draw_tunnel(cv, self._blue_particles, cam_z, bg,
-                              p3_fade, t=scene_t, density_progress=p3_density)
 
         # ── Phase 2 overlay: HUD / text 保持可见，但不把底层纹波放到圆柱体上方 ──
         if text_state:
             self._render_text_phase(cv, scene_t, text_state)
 
-        # ── Phase 4: 收尾白闪扩张环需要覆盖隧道柱体 ──
+        # ── Phase 4: 渐隐 (7.3 ~ 9.0s) ──
         if scene_t >= self._P4_START:
             self._draw_whiteout_cv(cv, scene_t)
             self._draw_connected_overlay(cv, scene_t)
@@ -3392,19 +3142,6 @@ void main() {
             int(lerp(bg, fg, alpha)),
             int(lerp(bb, fb, alpha)),
         )
-
-    def _poly_points(self, cx: int, cy: int, rx: int, ry: int,
-                     sides: int = 6, rotation: float = 0.0):
-        """Build polygon points for HUD rings and scan gates."""
-        pts = []
-        sides = max(3, int(sides))
-        for idx in range(sides):
-            ang = rotation - math.pi / 2.0 + (math.tau * idx / sides)
-            pts.extend([
-                int(cx + math.cos(ang) * rx),
-                int(cy + math.sin(ang) * ry),
-            ])
-        return pts
 
     def _draw_start_aperture_cv(self, cv: tk.Canvas, t: float, bg: str):
         """Canvas 回退的中心光阀: 从一条水平狭缝快速扩张成椭圆视域."""
@@ -3561,166 +3298,6 @@ void main() {
             col = self._blend_over_bg(bg, (230, 246, 255), alpha)
             cv.create_line(cx - half, cy + off, cx + half, cy + off,
                            fill=col, width=1 if off else 2)
-
-    def _draw_startup_system_hud(self, cv: tk.Canvas, t: float, bg: str):
-        """Startup prelude HUD: lock gate, rotating scan rings, and system callouts."""
-        if t < 0.0 or t > self._STARTUP_PRELUDE:
-            return
-
-        cx, cy = self._cx, self._cy
-        sw = self._sw
-        p = max(0.0, min(1.0, t / max(0.001, self._STARTUP_PRELUDE)))
-        vis = ease_out(min(1.0, p / 0.42))
-        vis *= 1.0 - 0.30 * max(0.0, min(1.0, (p - 0.82) / 0.18))
-        if vis <= 0.03:
-            return
-
-        scan = ease_out(max(0.0, min(1.0, (p - 0.08) / 0.74)))
-        pulse = 0.5 + 0.5 * math.sin(5.8 * t + 0.4)
-        spin = 0.18 + p * 1.8
-        cool_rgb = (108, 230, 255)
-        warm_rgb = (255, 210, 118)
-        white_rgb = (245, 248, 255)
-
-        hex_rx = int(lerp(26, 140, scan))
-        hex_ry = int(lerp(7, 74, scan))
-        for sx, sy, alpha, width, rot, rgb in [
-            (1.00, 1.00, 0.34, 2, spin, cool_rgb),
-            (1.24, 1.40, 0.18, 1, -spin * 0.74, white_rgb),
-            (0.76, 0.62, 0.22, 1, spin * 1.14, warm_rgb),
-        ]:
-            pts = self._poly_points(cx, cy, int(hex_rx * sx), int(hex_ry * sy), 6, rot)
-            cv.create_polygon(
-                pts,
-                outline=self._blend_over_bg(bg, rgb, vis * alpha),
-                fill='',
-                width=width,
-            )
-
-        for inset, extent, alpha, rgb in [
-            (0, 72, 0.22, cool_rgb),
-            (18, 56, 0.16, warm_rgb),
-        ]:
-            rx = hex_rx + 38 + inset
-            ry = hex_ry + 24 + inset // 2
-            color = self._blend_over_bg(bg, rgb, alpha * vis)
-            cv.create_arc(cx - rx, cy - ry, cx + rx, cy + ry,
-                          start=18 + p * 180, extent=extent,
-                          style='arc', outline=color, width=2 if inset == 0 else 1)
-            cv.create_arc(cx - rx, cy - ry, cx + rx, cy + ry,
-                          start=198 - p * 150, extent=extent - 8,
-                          style='arc', outline=color, width=1)
-
-        gate_alpha = vis * (0.16 + 0.12 * pulse)
-        left_gate_x = cx - int(lerp(88, sw * 0.22, scan))
-        right_gate_x = cx + int(lerp(88, sw * 0.22, scan))
-        gate_color = self._blend_over_bg(bg, white_rgb, gate_alpha)
-        accent_color = self._blend_over_bg(bg, cool_rgb, gate_alpha * 0.78)
-        cv.create_line(left_gate_x, cy, cx - hex_rx, cy, fill=gate_color, width=2)
-        cv.create_line(cx + hex_rx, cy, right_gate_x, cy, fill=gate_color, width=2)
-        for gx, sign in [(left_gate_x, -1), (right_gate_x, 1)]:
-            cv.create_line(gx, cy - 24, gx, cy + 24, fill=accent_color, width=1)
-            cv.create_line(gx, cy - 24, gx + sign * 18, cy - 24, fill=accent_color, width=1)
-            cv.create_line(gx, cy + 24, gx + sign * 18, cy + 24, fill=accent_color, width=1)
-
-        title_alpha = int(255 * vis * (0.64 + 0.18 * pulse))
-        self._draw_linkstart_canvas_text(
-            cv, cx, cy - max(76, hex_ry + 34),
-            'SYSTEM CALL // LINK START', 14,
-            (cool_rgb[0], cool_rgb[1], cool_rgb[2], title_alpha),
-            (18, 34, 56, int(title_alpha * 0.84)),
-            (cool_rgb[0], cool_rgb[1], cool_rgb[2], int(title_alpha * 0.20)),
-            stroke_width=1, blur_radius=1.0, anchor='center')
-        self._draw_linkstart_canvas_text(
-            cv, cx, cy + max(82, hex_ry + 40),
-            'OBJECT CONTROL AUTHORITY CONNECTING', 11,
-            (warm_rgb[0], warm_rgb[1], warm_rgb[2], int(title_alpha * 0.82)),
-            (28, 28, 34, int(title_alpha * 0.78)),
-            (warm_rgb[0], warm_rgb[1], warm_rgb[2], int(title_alpha * 0.16)),
-            stroke_width=1, blur_radius=0.9, anchor='center')
-
-        auth_w = int(lerp(132, 248, scan))
-        auth_h = int(lerp(24, 40, scan))
-        auth_y = cy - int(max(42, hex_ry * 0.34))
-        auth_x1 = cx - auth_w // 2
-        auth_x2 = cx + auth_w // 2
-        auth_y1 = auth_y - auth_h // 2
-        auth_y2 = auth_y + auth_h // 2
-        auth_c = self._blend_over_bg(bg, white_rgb, vis * 0.24)
-        auth_sub_c = self._blend_over_bg(bg, cool_rgb, vis * 0.18)
-        cv.create_rectangle(auth_x1, auth_y1, auth_x2, auth_y2, outline=auth_c, width=1)
-        cv.create_line(auth_x1 + 10, auth_y, auth_x2 - 10, auth_y, fill=auth_sub_c, width=1)
-        cv.create_line(auth_x1 + 24, auth_y1, auth_x1 + 24, auth_y2, fill=auth_sub_c, width=1)
-        cv.create_line(auth_x2 - 24, auth_y1, auth_x2 - 24, auth_y2, fill=auth_sub_c, width=1)
-        bar_y1 = auth_y2 + 8
-        bar_y2 = bar_y1 + 5
-        for idx in range(8):
-            seg_x1 = auth_x1 + 10 + idx * int((auth_w - 28) / 8)
-            seg_x2 = seg_x1 + int((auth_w - 40) / 10)
-            fill_a = vis * (0.08 + 0.10 * max(0.0, pulse - idx * 0.05))
-            cv.create_rectangle(seg_x1, bar_y1, seg_x2, bar_y2,
-                                outline=auth_sub_c,
-                                fill=self._blend_over_bg(bg, warm_rgb, fill_a),
-                                width=1)
-        self._draw_linkstart_canvas_text(
-            cv, cx, auth_y - 3, 'CARDINAL ACCESS', 11,
-            (white_rgb[0], white_rgb[1], white_rgb[2], int(255 * vis * 0.70)),
-            (20, 32, 48, int(255 * vis * 0.56)),
-            (white_rgb[0], white_rgb[1], white_rgb[2], int(255 * vis * 0.10)),
-            stroke_width=1, blur_radius=0.8, anchor='center')
-        self._draw_linkstart_canvas_text(
-            cv, cx, auth_y + 14, 'PRIORITY 07.4 // VISUALIZER', 9,
-            (warm_rgb[0], warm_rgb[1], warm_rgb[2], int(220 * vis * 0.50)),
-            (28, 28, 34, int(180 * vis * 0.40)),
-            (warm_rgb[0], warm_rgb[1], warm_rgb[2], int(36 * vis * 0.18)),
-            stroke_width=1, blur_radius=0.8, anchor='center')
-
-        def _draw_plate(center_x: int, center_y: int, label: str, sub_label: str,
-                        cool_alpha: float, warm_alpha: float):
-            box_w = int(lerp(88, 162, scan))
-            box_h = 26
-            x1 = center_x - box_w // 2
-            x2 = center_x + box_w // 2
-            y1 = center_y - box_h // 2
-            y2 = center_y + box_h // 2
-            line_c = self._blend_over_bg(bg, cool_rgb, vis * cool_alpha)
-            sub_c = self._blend_over_bg(bg, warm_rgb, vis * warm_alpha)
-            cv.create_rectangle(x1, y1, x2, y2, outline=line_c, width=1)
-            cv.create_line(x1 + 8, center_y, x2 - 8, center_y, fill=line_c, width=1)
-            for idx in range(5):
-                seg_x1 = x1 + 10 + idx * 24
-                seg_x2 = seg_x1 + 14
-                fill_a = vis * (0.08 + 0.10 * max(0.0, pulse - idx * 0.06))
-                cv.create_rectangle(seg_x1, y2 + 8, seg_x2, y2 + 13,
-                                    outline=sub_c,
-                                    fill=self._blend_over_bg(bg, warm_rgb, fill_a),
-                                    width=1)
-            self._draw_linkstart_canvas_text(
-                cv, center_x, center_y - 3, label, 10,
-                (cool_rgb[0], cool_rgb[1], cool_rgb[2], int(255 * vis * cool_alpha)),
-                (16, 30, 48, int(255 * vis * cool_alpha * 0.82)),
-                (cool_rgb[0], cool_rgb[1], cool_rgb[2], int(255 * vis * cool_alpha * 0.16)),
-                stroke_width=1, blur_radius=0.9, anchor='center')
-            self._draw_linkstart_canvas_text(
-                cv, center_x, center_y + 18, sub_label, 9,
-                (warm_rgb[0], warm_rgb[1], warm_rgb[2], int(255 * vis * warm_alpha)),
-                (26, 28, 34, int(255 * vis * warm_alpha * 0.76)),
-                (warm_rgb[0], warm_rgb[1], warm_rgb[2], int(255 * vis * warm_alpha * 0.14)),
-                stroke_width=1, blur_radius=0.8, anchor='center')
-
-        left_x = int(lerp(-180, cx - 244, ease_out(min(1.0, p * 1.04))))
-        right_x = int(lerp(sw + 180, cx + 244, ease_out(max(0.0, min(1.0, (p - 0.04) / 0.96)))))
-        _draw_plate(left_x, cy - 92, 'CARDINAL SYS', 'AUTHORITY CORE', 0.24, 0.14)
-        _draw_plate(right_x, cy + 92, 'ARTS CTRL', 'SACRED FORMULA', 0.22, 0.16)
-
-        ruler_y = cy + int(lerp(120, 146, scan))
-        ruler_w = int(lerp(sw * 0.10, sw * 0.22, scan))
-        ruler_c = self._blend_over_bg(bg, cool_rgb, vis * 0.18)
-        cv.create_line(cx - ruler_w, ruler_y, cx + ruler_w, ruler_y, fill=ruler_c, width=1)
-        for idx in range(9):
-            x = int(cx - ruler_w + idx * (2 * ruler_w / 8.0))
-            tick_h = 8 if idx % 2 else 14
-            cv.create_line(x, ruler_y - tick_h // 2, x, ruler_y + tick_h // 2, fill=ruler_c, width=1)
 
     def _draw_focus_flow_cv(self, cv: tk.Canvas, phase_t: float, phase_dur: float,
                             fade: float, bg: str, warm: bool = True):
@@ -3966,180 +3543,6 @@ void main() {
     # ════════════════════════════════════════════════════════
     #  P4 "CONNECTED" 叠加文字
     # ════════════════════════════════════════════════════════
-    def _draw_linkstart_gate_overlay(self, cv: tk.Canvas, phase_t: float, phase_dur: float,
-                                     fade: float, bg: str, warm: bool = True):
-        """Tunnel overlay: center lock gate, scan arcs, and SAO system cards."""
-        if fade <= 0.03 or phase_dur <= 0.0:
-            return
-
-        cx, cy = self._cx, self._cy
-        sw = self._sw
-        tn = max(0.0, min(1.0, phase_t / phase_dur))
-        pulse = 0.5 + 0.5 * math.sin(phase_t * (2.8 if warm else 2.2) + (0.4 if warm else 1.1))
-        vis = fade * (0.30 + 0.56 * pulse)
-        if vis <= 0.04:
-            return
-
-        if warm:
-            cool_rgb = (138, 236, 255)
-            warm_rgb = (255, 220, 146)
-            main_label = 'SYSTEM CALL // AUTHORITY'
-            side_left = 'ARMAMENT CTRL'
-            side_right = 'SACRED ARTS'
-        else:
-            cool_rgb = (142, 224, 255)
-            warm_rgb = (228, 246, 255)
-            main_label = 'CARDINAL WINDOW // SHIFT'
-            side_left = 'OBJECT STATUS'
-            side_right = 'RESOURCE FIELD'
-
-        hex_rx = int(lerp(54, 122, ease_out(tn)))
-        hex_ry = int(lerp(20, 58, ease_out(tn)))
-        rotation = (0.26 + tn * 1.30) * (1.0 if warm else -1.0)
-        for sx, sy, alpha, width, rot, rgb in [
-            (1.00, 1.00, 0.28, 2, rotation, cool_rgb),
-            (0.78, 0.68, 0.20, 1, -rotation * 1.24, warm_rgb),
-            (1.34, 1.52, 0.12, 1, rotation * 0.62, (235, 244, 255)),
-        ]:
-            pts = self._poly_points(cx, cy, int(hex_rx * sx), int(hex_ry * sy), 6, rot)
-            cv.create_polygon(
-                pts,
-                outline=self._blend_over_bg(bg, rgb, vis * alpha),
-                fill='',
-                width=width,
-            )
-        for sx, sy, alpha, width, rgb in [
-            (1.10, 1.06, 0.16, 1, (232, 246, 255)),
-            (0.88, 0.84, 0.12, 1, cool_rgb),
-        ]:
-            cv.create_oval(
-                cx - int(hex_rx * sx), cy - int(hex_ry * sy),
-                cx + int(hex_rx * sx), cy + int(hex_ry * sy),
-                outline=self._blend_over_bg(bg, rgb, vis * alpha),
-                width=width,
-            )
-
-        for inset, rgb, alpha, extent, phase_mul in [
-            (0, cool_rgb, 0.24, 72, 160),
-            (16, warm_rgb, 0.16, 54, -120),
-            (34, (240, 248, 255), 0.12, 48, 84),
-        ]:
-            rx = hex_rx + 26 + inset
-            ry = hex_ry + 18 + inset // 2
-            color = self._blend_over_bg(bg, rgb, vis * alpha)
-            start = phase_t * phase_mul
-            cv.create_arc(cx - rx, cy - ry, cx + rx, cy + ry,
-                          start=start, extent=extent,
-                          style='arc', outline=color, width=2 if inset == 0 else 1)
-            cv.create_arc(cx - rx, cy - ry, cx + rx, cy + ry,
-                          start=start + 180, extent=max(16, extent - 10),
-                          style='arc', outline=color, width=1)
-
-        brace_color = self._blend_over_bg(bg, (245, 248, 255), vis * 0.24)
-        accent_color = self._blend_over_bg(bg, cool_rgb, vis * 0.20)
-        brace_dx = hex_rx + 22
-        brace_dy = hex_ry + 10
-        for sign in (-1, 1):
-            bx = cx + sign * brace_dx
-            cv.create_line(bx, cy - brace_dy, bx + sign * 18, cy - brace_dy, fill=brace_color, width=2)
-            cv.create_line(bx, cy + brace_dy, bx + sign * 18, cy + brace_dy, fill=brace_color, width=2)
-            cv.create_line(bx, cy - brace_dy, bx, cy - 8, fill=accent_color, width=1)
-            cv.create_line(bx, cy + brace_dy, bx, cy + 8, fill=accent_color, width=1)
-        cv.create_line(cx - hex_rx - 10, cy, cx + hex_rx + 10, cy,
-                       fill=self._blend_over_bg(bg, (228, 248, 255), vis * 0.14), width=1)
-
-        band_y = cy + int(lerp(92, 118, tn))
-        band_w = int(lerp(sw * 0.12, sw * 0.24, tn))
-        band_color = self._blend_over_bg(bg, cool_rgb, vis * 0.14)
-        cv.create_line(cx - band_w, band_y, cx + band_w, band_y, fill=band_color, width=1)
-        for idx in range(11):
-            x = int(cx - band_w + idx * (2 * band_w / 10.0))
-            tick = 12 if idx % 2 == 0 else 6
-            cv.create_line(x, band_y - tick // 2, x, band_y + tick // 2, fill=band_color, width=1)
-
-        top_alpha = int(255 * vis * 0.82)
-        self._draw_linkstart_canvas_text(
-            cv, cx, cy - int(max(82, hex_ry + 32)),
-            main_label, 12,
-            (cool_rgb[0], cool_rgb[1], cool_rgb[2], top_alpha),
-            (18, 34, 56, int(top_alpha * 0.82)),
-            (cool_rgb[0], cool_rgb[1], cool_rgb[2], int(top_alpha * 0.18)),
-            stroke_width=1, blur_radius=0.9, anchor='center')
-
-        authority_w = int(lerp(152, 284, tn))
-        authority_h = int(lerp(28, 44, tn))
-        authority_y = cy - int(lerp(30, 24, tn))
-        ax1 = cx - authority_w // 2
-        ax2 = cx + authority_w // 2
-        ay1 = authority_y - authority_h // 2
-        ay2 = authority_y + authority_h // 2
-        frame_c = self._blend_over_bg(bg, (245, 248, 255), vis * 0.20)
-        accent_c = self._blend_over_bg(bg, cool_rgb, vis * 0.16)
-        warm_c = self._blend_over_bg(bg, warm_rgb, vis * 0.14)
-        cv.create_rectangle(ax1, ay1, ax2, ay2, outline=frame_c, width=1)
-        cv.create_line(ax1 + 18, authority_y, ax2 - 18, authority_y, fill=accent_c, width=1)
-        cv.create_line(ax1 + 26, ay1, ax1 + 26, ay2, fill=accent_c, width=1)
-        cv.create_line(ax2 - 26, ay1, ax2 - 26, ay2, fill=accent_c, width=1)
-        for idx in range(10):
-            seg_x1 = ax1 + 14 + idx * int((authority_w - 34) / 10)
-            seg_x2 = seg_x1 + int((authority_w - 48) / 16)
-            fill_a = vis * (0.05 + 0.10 * max(0.0, pulse - idx * 0.04))
-            cv.create_rectangle(seg_x1, ay2 + 7, seg_x2, ay2 + 11,
-                                outline=warm_c,
-                                fill=self._blend_over_bg(bg, warm_rgb, fill_a),
-                                width=1)
-        self._draw_linkstart_canvas_text(
-            cv, cx, authority_y - 3, 'OBJECT CONTROL AUTHORITY', 11,
-            (245, 248, 255, int(255 * vis * 0.66)),
-            (20, 34, 50, int(255 * vis * 0.54)),
-            (245, 248, 255, int(255 * vis * 0.10)),
-            stroke_width=1, blur_radius=0.8, anchor='center')
-        self._draw_linkstart_canvas_text(
-            cv, cx, authority_y + 15,
-            'CALL SIGN : ALICIZATION // PRIORITY 08.3', 9,
-            (warm_rgb[0], warm_rgb[1], warm_rgb[2], int(220 * vis * 0.48)),
-            (26, 28, 34, int(180 * vis * 0.40)),
-            (warm_rgb[0], warm_rgb[1], warm_rgb[2], int(38 * vis * 0.16)),
-            stroke_width=1, blur_radius=0.8, anchor='center')
-
-        def _draw_side_card(side: str, y: int, label: str, sub: str, alpha_mul: float):
-            sign = -1 if side == 'left' else 1
-            anchor_x = cx + sign * int(lerp(210, 292, tn))
-            card_w = int(lerp(96, 154, tn))
-            card_h = 22
-            x1 = anchor_x - card_w // 2
-            x2 = anchor_x + card_w // 2
-            y1 = y - card_h // 2
-            y2 = y + card_h // 2
-            card_c = self._blend_over_bg(bg, cool_rgb, vis * alpha_mul)
-            warm_c = self._blend_over_bg(bg, warm_rgb, vis * alpha_mul * 0.82)
-            cv.create_rectangle(x1, y1, x2, y2, outline=card_c, width=1)
-            cv.create_line(x1 + 6, y, x2 - 6, y, fill=card_c, width=1)
-            cv.create_line(cx + sign * (hex_rx + 18), y, x1 if sign < 0 else x2, y, fill=warm_c, width=1)
-            for idx in range(4):
-                seg_x1 = x1 + 10 + idx * 18
-                seg_x2 = seg_x1 + 10
-                fill_a = vis * (0.06 + 0.08 * max(0.0, pulse - idx * 0.08))
-                cv.create_rectangle(seg_x1, y2 + 7, seg_x2, y2 + 11,
-                                    outline=warm_c,
-                                    fill=self._blend_over_bg(bg, warm_rgb, fill_a),
-                                    width=1)
-            self._draw_linkstart_canvas_text(
-                cv, anchor_x, y - 2, label, 10,
-                (cool_rgb[0], cool_rgb[1], cool_rgb[2], int(255 * vis * alpha_mul)),
-                (18, 34, 56, int(255 * vis * alpha_mul * 0.80)),
-                (cool_rgb[0], cool_rgb[1], cool_rgb[2], int(255 * vis * alpha_mul * 0.15)),
-                stroke_width=1, blur_radius=0.8, anchor='center')
-            self._draw_linkstart_canvas_text(
-                cv, anchor_x, y + 16, sub, 9,
-                (warm_rgb[0], warm_rgb[1], warm_rgb[2], int(220 * vis * alpha_mul)),
-                (26, 28, 34, int(180 * vis * alpha_mul)),
-                (warm_rgb[0], warm_rgb[1], warm_rgb[2], int(40 * vis * alpha_mul)),
-                stroke_width=1, blur_radius=0.8, anchor='center')
-
-        _draw_side_card('left', cy - 88, side_left, 'FULL CONTROL', 0.20)
-        _draw_side_card('right', cy + 88, side_right, 'GENERATION CODE', 0.18)
-
     def _draw_connected_overlay(self, cv: tk.Canvas, t: float):
         """在 P4 早期闪现 'SYSTEM >> CONNECTED' 确认文字."""
         wt = t - self._P4_START
@@ -4154,58 +3557,16 @@ void main() {
             return
 
         cx, cy = self._cx, self._cy
-        sw = self._sw
-        base_bg = self._calc_bg(t)
-        line_c = self._blend_over_bg(base_bg, (116, 232, 255), alpha * 0.34)
-        accent_c = self._blend_over_bg(base_bg, (255, 214, 124), alpha * 0.22)
-        scan_c = self._blend_over_bg(base_bg, (228, 248, 255), alpha * 0.44)
-        frame_w = int(sw * 0.46)
-        frame_h = 88
-        x1 = cx - frame_w // 2
-        x2 = cx + frame_w // 2
-        y1 = cy - frame_h // 2
-        y2 = cy + frame_h // 2
-        brace = 28
-
-        cv.create_rectangle(x1, y1, x2, y2, outline=line_c, width=1)
-        cv.create_line(x1 + 18, cy, x2 - 18, cy, fill=line_c, width=1)
-        for sx, sy in [(x1, y1), (x2, y1), (x1, y2), (x2, y2)]:
-            sign_x = 1 if sx == x1 else -1
-            sign_y = 1 if sy == y1 else -1
-            cv.create_line(sx, sy, sx + sign_x * brace, sy, fill=accent_c, width=2)
-            cv.create_line(sx, sy, sx, sy + sign_y * brace, fill=accent_c, width=2)
-
-        inner_x1 = x1 + 24
-        inner_x2 = x2 - 24
-        inner_y1 = y1 + 18
-        inner_y2 = y2 - 18
-        cv.create_rectangle(inner_x1, inner_y1, inner_x2, inner_y2, outline=line_c, width=1)
-
-        scan_phase = ease_out(min(1.0, wt / 0.52))
-        scan_y = inner_y1 + int((0.14 + 0.72 * scan_phase) * max(1, inner_y2 - inner_y1))
-        for off, mul in [(-2, 0.18), (0, 0.44), (2, 0.18)]:
-            cv.create_line(inner_x1 + 12, scan_y + off, inner_x2 - 12, scan_y + off,
-                           fill=self._blend_over_bg(base_bg, (228, 248, 255), alpha * mul),
-                           width=1 if off else 2)
-
-        for idx in range(10):
-            seg_x1 = inner_x1 + 10 + idx * max(12, int((inner_x2 - inner_x1 - 28) / 10))
-            seg_x2 = seg_x1 + max(8, int((inner_x2 - inner_x1) / 18))
-            cv.create_rectangle(seg_x1, y2 + 10, seg_x2, y2 + 14,
-                                outline=accent_c,
-                                fill=self._blend_over_bg(base_bg, (255, 214, 124), alpha * (0.05 + 0.02 * (idx % 3))),
-                                width=1)
-
         main_alpha = int(255 * alpha * 0.90)
         sub_alpha = int(255 * alpha * 0.64)
         self._draw_linkstart_canvas_text(
-            cv, cx, cy - 14, 'SYSTEM CALL >> CONNECTED', 24,
+            cv, cx, cy - 14, 'SYSTEM >> CONNECTED', 24,
             (255, 255, 255, main_alpha),
             (36, 48, 76, int(main_alpha * 0.88)),
             (160, 224, 255, int(main_alpha * 0.18)),
             stroke_width=2, blur_radius=1.6, anchor='center')
         self._draw_linkstart_canvas_text(
-            cv, cx, cy + 14, 'OBJECT CONTROL AUTHORITY ONLINE', 12,
+            cv, cx, cy + 14, 'FULL DIVE INITIALIZED', 12,
             (110, 232, 255, sub_alpha),
             (22, 34, 48, int(sub_alpha * 0.84)),
             (110, 232, 255, int(sub_alpha * 0.18)),
@@ -4314,20 +3675,14 @@ void main() {
              (112, 232, 255, 180), (18, 34, 56, 150), (112, 232, 255, 36), 1, 1.0),
             ('GAIN ROUTE', 'sao', 15,
              (255, 196, 104, 188), (34, 30, 38, 156), (255, 214, 120, 40), 1, 1.0),
-            ('SACRED ARTS', 'sao', 15,
+            ('NERVE GEAR', 'sao', 15,
              (112, 232, 255, 188), (18, 34, 56, 156), (112, 232, 255, 42), 1, 1.0),
-            ('AUTHORITY LV', 'sao', 15,
+            ('LINK RATE', 'sao', 15,
              (255, 196, 104, 180), (34, 30, 38, 150), (255, 214, 120, 36), 1, 1.0),
             ('AXIS LOCK', 'sao', 14,
              (112, 232, 255, 176), (18, 34, 56, 150), (112, 232, 255, 34), 1, 1.0),
-            ('SYSTEM CALL // LINK START', 'sao', 14,
-             (112, 232, 255, 192), (18, 34, 56, 160), (112, 232, 255, 40), 1, 1.0),
-            ('OBJECT CONTROL AUTHORITY', 'sao', 11,
-             (240, 248, 255, 176), (20, 34, 50, 144), (240, 248, 255, 28), 1, 0.8),
-            ('CARDINAL ACCESS', 'sao', 11,
-             (240, 248, 255, 176), (20, 32, 48, 144), (240, 248, 255, 24), 1, 0.8),
-            ('PHASE:COLORSTREAM', 'sao', 12,
-             (112, 232, 255, 176), (10, 20, 28, 144), (112, 232, 255, 34), 1, 1.0),
+              ('PHASE:COLORSTREAM', 'sao', 12,
+               (112, 232, 255, 176), (10, 20, 28, 144), (112, 232, 255, 34), 1, 1.0),
               ('PHASE:BLUESHIFT', 'sao', 12,
                (92, 190, 255, 176), (10, 20, 28, 144), (92, 190, 255, 34), 1, 1.0),
               ('SPD: 100%', 'sao', 10,
@@ -4338,10 +3693,10 @@ void main() {
                (255, 214, 120, 160), (18, 18, 14, 132), (255, 214, 120, 28), 1, 0.8),
               ('NERVE:ACTIVE', 'sao', 10,
                (255, 214, 120, 160), (18, 18, 14, 132), (255, 214, 120, 28), 1, 0.8),
-            ('SYSTEM CALL >> CONNECTED', 'sao', 24,
-             (255, 255, 255, 224), (36, 48, 76, 192), (160, 224, 255, 40), 2, 1.5),
-            ('OBJECT CONTROL AUTHORITY ONLINE', 'sao', 12,
-             (112, 232, 255, 176), (22, 34, 48, 144), (112, 232, 255, 30), 1, 1.0),
+              ('SYSTEM >> CONNECTED', 'sao', 24,
+               (255, 255, 255, 224), (36, 48, 76, 192), (160, 224, 255, 40), 2, 1.5),
+              ('FULL DIVE INITIALIZED', 'sao', 12,
+               (112, 232, 255, 176), (22, 34, 48, 144), (112, 232, 255, 30), 1, 1.0),
         ]
         for text, family, size, fill_rgba, stroke_rgba, glow_rgba, stroke_width, blur_radius in warm_jobs:
             try:
@@ -4574,8 +3929,8 @@ void main() {
                 'x': int(lerp(-180, cx - 352, ease_out(min(1.0, phase * 0.92))) + slow * 16 + slow_b * 9),
                 'y': int(cy - 82 + slow_b * 11),
                 'cool': (104, 228, 255), 'warm': (176, 232, 255),
-                'label': 'CARDINAL SYS',
-                'sub': 'COORD AUTH',
+                'label': 'SYS CORE',
+                'sub': 'COORD LOCK',
                 'accent_up': False,
             },
             {
@@ -4583,8 +3938,8 @@ void main() {
                 'x': int(lerp(-260, cx - 268, ease_out(min(1.0, max(0.0, (phase - 0.06) / 0.94)))) + fast * 28 + slow * 6),
                 'y': int(cy + 96 + fast_b * 14),
                 'cool': (110, 232, 255), 'warm': (255, 196, 104),
-                'label': 'ARMAMENT CTRL',
-                'sub': 'RSLT 02',
+                'label': 'GAIN ROUTE',
+                'sub': 'LINE 02',
                 'accent_up': True,
             },
             {
@@ -4592,8 +3947,8 @@ void main() {
                 'x': int(lerp(sw + 190, cx + 344, ease_out(min(1.0, max(0.0, (phase - 0.02) / 0.98)))) - slow * 12 + slow_b * 15),
                 'y': int(cy + 78 + slow * 9),
                 'cool': (104, 228, 255), 'warm': (150, 230, 255),
-                'label': 'SACRED ARTS',
-                'sub': 'CAST RATE',
+                'label': 'NERVE GEAR',
+                'sub': 'LINK RATE',
                 'accent_up': True,
             },
             {
@@ -4601,7 +3956,7 @@ void main() {
                 'x': int(lerp(sw + 280, cx + 278, ease_out(min(1.0, max(0.0, (phase - 0.12) / 0.88)))) - fast * 30 + fast_b * 8),
                 'y': int(cy - 102 + fast * 13),
                 'cool': (110, 232, 255), 'warm': (255, 196, 104),
-                'label': 'AUTHORITY LV',
+                'label': 'LINK RATE',
                 'sub': 'AXIS LOCK',
                 'accent_up': False,
             },
