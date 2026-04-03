@@ -171,7 +171,7 @@ def _setup_dotnet_transparency(form):
         return False
 
 
-def _invoke_dotnet_transparency(win_obj):
+def _invoke_dotnet_transparency(win_obj, _retries_left=60):
     """从后台线程安全地在 GUI 线程设置 Form 色键透明.
 
     原理:
@@ -183,17 +183,26 @@ def _invoke_dotnet_transparency(win_obj):
     win_obj.native 是 pywebview BrowserForm 实例
     (winforms.py BrowserForm.__init__: self.pywebview_window.native = self).
     通过 form.Invoke 投递到 GUI 线程执行, 避免跨线程 .NET 访问死锁.
+
+    冷启动时 WebView2 初始化可能需要 10-30 秒, native 和 Handle
+    都不会立即就绪, 因此需要持续重试 (最多 ~30 秒).
     """
     try:
         form = getattr(win_obj, 'native', None)
         if form is None:
+            # WebView2 尚未初始化, native 未赋值 — 持续重试
+            if _retries_left > 0:
+                t = threading.Timer(0.5, lambda: _invoke_dotnet_transparency(win_obj, _retries_left - 1))
+                t.daemon = True
+                t.start()
             return
         # 避免 "在创建窗口句柄之前，不能在控件上调用 Invoke" 错误
         if not form.IsHandleCreated:
             # 句柄尚未创建，延迟重试 (常见于 startup 阶段)
-            t = threading.Timer(0.15, lambda: _invoke_dotnet_transparency(win_obj))
-            t.daemon = True
-            t.start()
+            if _retries_left > 0:
+                t = threading.Timer(0.2, lambda: _invoke_dotnet_transparency(win_obj, _retries_left - 1))
+                t.daemon = True
+                t.start()
             return
         from System import Action
         form.Invoke(Action(lambda: _setup_dotnet_transparency(form)))
@@ -1502,6 +1511,7 @@ class SAOWebViewGUI:
         self._hp_last_hit_region_ts = 0.0
         self._hp_click_bootstrap_started = False
         self._hp_fullscreen = False
+        self._hp_reveal_pending = False
         self._hp_mouse_passthrough_started = False
         self._hp_mouse_passthrough = None
         self._skillfx_hwnd = 0
@@ -2804,7 +2814,9 @@ class SAOWebViewGUI:
         def _apply_once():
             try:
                 self._apply_webview2_transparency()
-                self._set_window_alpha('SAO-HP', alpha)
+                # reveal 未完成时不设置 alpha, 避免与 reveal 定时器冲突
+                if not getattr(self, '_hp_reveal_pending', False):
+                    self._set_window_alpha('SAO-HP', alpha)
                 self._setup_click_through()
                 self._ensure_hp_on_top()
                 self._request_hp_hit_regions()
@@ -2874,6 +2886,22 @@ class SAOWebViewGUI:
                     # 确保隐藏面板保持 WS_EX_TRANSPARENT (防止隐藏窗口意外拦截点击)
                     try:
                         self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                    # 确保纯覆盖层窗口始终保持 WS_EX_TRANSPARENT
+                    # (show() 或其他 WinForms 操作可能重置 exstyle)
+                    try:
+                        self._setup_skillfx_click_through()
+                    except Exception:
+                        pass
+                    try:
+                        self._setup_boss_hp_click_through(_wait_retries=0)
+                    except Exception:
+                        pass
+                    try:
+                        # Alert 只在未显示时设穿透, 避免干扰活动弹窗的按钮点击
+                        if not getattr(self, '_identity_alert_visible', False):
+                            self._setup_alert_click_through()
                     except Exception:
                         pass
 
@@ -2950,12 +2978,17 @@ class SAOWebViewGUI:
             return []
 
     def _default_hp_hot_regions(self):
-        """Fallback clickable regions when JS hit-regions have not registered yet."""
+        """Fallback clickable regions when JS hit-regions have not registered yet.
+
+        返回所有 display regions 作为默认热区, 确保整个 HP 面板内容区域
+        在 JS 报告真实点击区域之前就可以接收点击事件,
+        从而触发 JS 注册精确的 hit regions.
+        """
         try:
             display_regions = self._default_hp_display_regions()
             if not display_regions:
                 return []
-            return [display_regions[2]]
+            return list(display_regions)
         except Exception:
             return []
 
@@ -3231,6 +3264,12 @@ class SAOWebViewGUI:
                 time.sleep(0.02)
                 try:
                     if not self._hp_hwnd:
+                        continue
+                    # JS 未报告 hit regions 且无缓存 click regions 时,
+                    # 保持窗口可点击, 让 JS 有机会接收事件并注册区域
+                    if (not getattr(self, '_hp_js_hit_regions_ready', False)
+                            and not getattr(self, '_hp_click_regions', None)):
+                        self._set_hp_mouse_passthrough(False)
                         continue
                     self._set_hp_mouse_passthrough(not self._cursor_over_hp_hot_region())
                 except Exception:
@@ -3557,10 +3596,13 @@ class SAOWebViewGUI:
             self._hp_hit_regions_ready = False
             self._hp_js_hit_regions_ready = False
             self._hp_last_hit_region_ts = 0.0
-            # ── 先应用透明, 再显示窗口 (防止白底闪现) ──
+            # ── 先应用透明, 再显示窗口 (防止白底/黑底闪现) ──
             self._apply_webview2_transparency()
             time.sleep(0.15)
             self._apply_webview2_transparency()  # 二次确保
+            # 显示前设 alpha=0, 防止冷启动时 WebView2 未就绪导致黑底闪现
+            self._set_window_alpha('SAO-HP', 0.0)
+            self._set_window_alpha('SAO SkillFX', 0.0)
             try:
                 if self.hp_win and not self._hp_visible:
                     self.hp_win.show()
@@ -3573,6 +3615,10 @@ class SAOWebViewGUI:
                     self._skillfx_visible = True
             except Exception:
                 pass
+            # SkillFX 是纯覆盖层, 必须立即设为鼠标穿透 (WS_EX_TRANSPARENT)
+            # 否则 show() 到 _update_skillfx_layout() 之间窗口会拦截点击
+            self._setup_skillfx_click_through()
+            threading.Timer(0.5, self._setup_skillfx_click_through).start()
             time.sleep(0.18)
             self._eval_hp(f'setUsername("{self._safe_js(self._username)}")')
             # 初始显示等级 (来自 profile 缓存, 等待抓包数据覆盖)
@@ -3587,7 +3633,16 @@ class SAOWebViewGUI:
             self._start_hp_click_bootstrap(8.0)
             # WebView2 透明背景 — 持续重试
             self._apply_webview2_transparency()
+            # 标记 reveal 未完成, 阻止 _reassert_hp_transparency 修改 alpha
+            self._hp_reveal_pending = True
             self._reassert_hp_transparency(1.0, retries=15, delay=0.35)
+            # HP/SkillFX 启动时 alpha=0, 0.8s 后淡入 (等待透明应用后再变可见)
+            def _reveal_windows():
+                self._hp_reveal_pending = False
+                self._set_window_alpha('SAO-HP', 1.0)
+                self._set_window_alpha('SAO SkillFX', 1.0)
+                self._setup_skillfx_click_through()
+            threading.Timer(0.8, _reveal_windows).start()
             # Safety: re-run _force_hp_to_bottom after a delay in case hwnd
             # was not available during the first attempt.
             def _safety_force():
@@ -3606,6 +3661,8 @@ class SAOWebViewGUI:
                     self._ensure_hp_clickable()
                     self._request_hp_hit_regions()
                     self._set_hp_region(False)
+                    # SkillFX 也需要重新设置穿透 (冷启动可能延迟)
+                    self._setup_skillfx_click_through()
                 except Exception:
                     pass
             threading.Timer(12.0, _late_hp_recovery).start()
@@ -3622,7 +3679,6 @@ class SAOWebViewGUI:
             self._set_window_icon('SAO-Commander')
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
-            self._set_window_alpha('SAO SkillFX', 1.0)
             self._set_window_alpha('SAO Alert', 1.0)
             # Alert window: default click-through so the hidden window never captures clicks
             self._setup_alert_click_through()
