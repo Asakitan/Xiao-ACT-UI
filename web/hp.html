@@ -93,6 +93,11 @@ body {
     100% { opacity: 1; transform: scale(1); filter: drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
 }
 
+@keyframes hp-restore-in {
+    0%   { opacity: 0; transform: scale(0.96) translateX(8px); filter: drop-shadow(0 0 0 rgba(50, 50, 0, 0)); }
+    100% { opacity: 1; transform: scale(1) translateX(0); filter: drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
+}
+
 @keyframes hp-live-blur {
     0%   { filter: drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.5)); }
     25%  { filter: drop-shadow(1px 6px 8px rgba(50, 50, 0, 0.38)); }
@@ -132,6 +137,11 @@ body {
 .XTBox.hp-reenter {
     animation: hp-slide-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) both,
                hp-live-blur 8.5s ease-in-out 0.7s infinite;
+}
+
+.XTBox.hp-restore {
+    animation: hp-restore-in 0.18s cubic-bezier(0.22, 1, 0.36, 1) both,
+               hp-live-blur 8.5s ease-in-out 0.18s infinite;
 }
 
 .XTBox.hp-exit {
@@ -737,7 +747,8 @@ body {
     font-family: var(--font-ui);
     color: rgba(97, 98, 86, 1);
     letter-spacing: 1.5px;
-    pointer-events: none;
+    pointer-events: auto;
+    cursor: pointer;
     /* box-shadow 被 clip-path 裁剪, 用 filter:drop-shadow 代替 —
        drop-shadow 在 clip-path 裁剪后应用, 因此右侧斜角也有阴影/描边效果 */
     filter: drop-shadow(2px 3px 14px rgba(0, 0, 0, 0.32))
@@ -749,6 +760,16 @@ body {
     z-index: 1;
     border-radius: 6px;
     overflow: hidden;
+    transition: filter 0.15s ease, opacity 0.15s ease;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.id-plate:hover {
+    filter: drop-shadow(2px 3px 14px rgba(0, 0, 0, 0.38))
+            drop-shadow(0 0 2px rgba(104, 228, 255, 0.22));
+}
+.id-plate:active {
+    opacity: 0.82;
 }
 /* Scan-line overlay — matches hp-bg-cover texture */
 .id-plate .id-scanline-overlay {
@@ -877,10 +898,14 @@ body {
     max-width: 170px;
 }
 .id-plate .id-lv {
+    position: absolute;
+    top: 8px;
+    right: 18px;
     font-size: 16px;
     font-family: var(--font-sao);
     color: rgba(212, 156, 23, 0.92);
     letter-spacing: 2px;
+    z-index: 2;
 }
 .id-plate .id-uid {
     font-size: 11px;
@@ -935,6 +960,29 @@ body {
 }
 
 
+/* ═══ HP 组隐藏: 未检测到 STA 条时隐藏 HP 组件 (ID 板保持可见) ═══ */
+.hp-bg-cover {
+    transition: opacity 0.5s ease;
+}
+.hp-bg-cover.hp-hidden {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+.hp-bg-cover.hp-fadeout {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+.hp-bg-cover.hp-restore {
+    transition-duration: 0.12s;
+}
+#hp.XTBox {
+    transition: opacity 0.5s ease;
+}
+#hp.hp-hidden {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
 /* ═══ STA bar row — gold SAO style below HP ═══ */
 .sta-row {
     position: absolute;
@@ -949,10 +997,21 @@ body {
     font-family: var(--font-ui);
     opacity: 1.0;
     z-index: 2;
-    transition: opacity 0.4s ease;
+    transition: opacity 0.5s ease;
 }
 .sta-row.offline {
     opacity: 0.35;
+}
+.sta-row.hp-hidden {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+.sta-row.hp-fadeout {
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+.sta-row.hp-restore {
+    transition-duration: 0.12s;
 }
 .sta-pip {
     display: inline-block;
@@ -1010,6 +1069,7 @@ body {
         <div class="id-sys" id="id-sys">SYSTEM</div>
         <div class="id-prof" id="id-prof"></div>
     </div>
+    <div class="id-lv" id="id-lv"></div>
     <div class="id-name" id="id-name">Player</div>
     <div class="id-info-row">
         <div class="id-uid" id="id-uid"></div>
@@ -1178,6 +1238,107 @@ setTimeout(function() {
 
 /* ═══ STA Bar API ═══ */
 var _staOffline = false;
+var _hpGroupHidden = false;
+var _staOfflineHideTimer = null;
+var _STA_HIDE_DELAY = 200; // 短防抖后开始隐藏 HP 组，避免 OFFLINE 停留过久
+
+var _hpGroupFadeTimer = null;
+var _HP_GROUP_FADE_MS = 500;
+var _hpGroupRestoreTimer = null;
+var _HP_GROUP_RESTORE_MS = 180;
+var _staOfflineDebounceTimer = null;
+var _STA_OFFLINE_DEBOUNCE = 100; // ms 防抖: 持续离线才显示 OFFLINE
+
+function _clearHPGroupRestoreClasses(cover, hp, sta) {
+    if (cover) cover.classList.remove('hp-restore');
+    if (hp)    hp.classList.remove('hp-restore');
+    if (sta)   sta.classList.remove('hp-restore');
+}
+
+function _restartHPPanelAnimation(hp, mode) {
+    if (!hp) return;
+    hp.classList.remove('hp-reenter');
+    hp.classList.remove('hp-exit');
+    hp.classList.remove('hp-restore');
+    void hp.offsetWidth;
+    if (mode === 'enter') hp.classList.add('hp-reenter');
+    else if (mode === 'restore') hp.classList.add('hp-restore');
+    else hp.classList.add('hp-exit');
+}
+
+function _setHPGroupHidden(hidden) {
+    var cover = document.querySelector('.hp-bg-cover');
+    var hp    = document.getElementById('hp');
+    var sta   = document.getElementById('sta-row');
+
+    if (hidden) {
+        if (_hpGroupHidden || _hpGroupFadeTimer) return;
+        if (_hpGroupRestoreTimer) {
+            clearTimeout(_hpGroupRestoreTimer);
+            _hpGroupRestoreTimer = null;
+        }
+        _clearHPGroupRestoreClasses(cover, hp, sta);
+        if (cover) cover.classList.add('hp-fadeout');
+        if (sta)   sta.classList.add('hp-fadeout');
+        _restartHPPanelAnimation(hp, 'exit');
+        _hpGroupFadeTimer = setTimeout(function() {
+            _hpGroupFadeTimer = null;
+            _hpGroupHidden = true;
+            if (cover) {
+                cover.classList.add('hp-hidden');
+                cover.classList.remove('hp-fadeout');
+            }
+            if (hp) {
+                hp.classList.add('hp-hidden');
+                hp.classList.remove('hp-exit');
+            }
+            if (sta) {
+                sta.classList.add('hp-hidden');
+                sta.classList.remove('hp-fadeout');
+            }
+            scheduleHitRegionReport();
+        }, _HP_GROUP_FADE_MS);
+        scheduleHitRegionReport();
+        return;
+    }
+
+    if (_hpGroupFadeTimer) {
+        clearTimeout(_hpGroupFadeTimer);
+        _hpGroupFadeTimer = null;
+    }
+    if (_hpGroupRestoreTimer) {
+        clearTimeout(_hpGroupRestoreTimer);
+        _hpGroupRestoreTimer = null;
+    }
+    if (!_hpGroupHidden &&
+        !(cover && cover.classList.contains('hp-fadeout')) &&
+        !(hp && hp.classList.contains('hp-exit')) &&
+        !(sta && sta.classList.contains('hp-fadeout'))) {
+        return;
+    }
+
+    _hpGroupHidden = false;
+    if (cover) {
+        cover.classList.add('hp-restore');
+        cover.classList.remove('hp-hidden');
+        cover.classList.remove('hp-fadeout');
+    }
+    if (hp) {
+        hp.classList.remove('hp-hidden');
+        _restartHPPanelAnimation(hp, 'restore');
+    }
+    if (sta) {
+        sta.classList.add('hp-restore');
+        sta.classList.remove('hp-hidden');
+        sta.classList.remove('hp-fadeout');
+    }
+    _hpGroupRestoreTimer = setTimeout(function() {
+        _hpGroupRestoreTimer = null;
+        _clearHPGroupRestoreClasses(cover, hp, sta);
+    }, _HP_GROUP_RESTORE_MS);
+    scheduleHitRegionReport();
+}
+
 function updateSTA(current, total) {
     var pct = total > 0 ? Math.round(current / total * 100) : 100;
     document.getElementById('sta-fill').style.width = pct + '%';
@@ -1194,16 +1355,33 @@ function setSTAOffline(offline) {
     var row = document.getElementById('sta-row');
     var text = document.getElementById('sta-text');
     if (offline) {
-        if (!_staOffline) {
-            _staOffline = true;
-            row.classList.add('offline');
-            text.textContent = 'OFFLINE';
+        // 防抖: 延迟显示 OFFLINE 标签, 避免闪烁
+        if (!_staOfflineDebounceTimer && !_staOffline) {
+            _staOfflineDebounceTimer = setTimeout(function() {
+                _staOfflineDebounceTimer = null;
+                if (_staOffline) return; // 已被取消
+                _staOffline = true;
+                row.classList.add('offline');
+                text.textContent = 'OFFLINE';
+            }, _STA_OFFLINE_DEBOUNCE);
+        }
+        // 冷却定时器: STA 持续不在线超过阻尼就隐藏 HP 组
+        if (!_staOfflineHideTimer) {
+            _staOfflineHideTimer = setTimeout(function() {
+                _staOfflineHideTimer = null;
+                if (_staOffline || _staOfflineDebounceTimer) _setHPGroupHidden(true);
+            }, _STA_HIDE_DELAY);
         }
     } else {
+        // 立即取消防抖
+        if (_staOfflineDebounceTimer) { clearTimeout(_staOfflineDebounceTimer); _staOfflineDebounceTimer = null; }
+        if (_staOfflineHideTimer) { clearTimeout(_staOfflineHideTimer); _staOfflineHideTimer = null; }
         if (_staOffline) {
             _staOffline = false;
             row.classList.remove('offline');
         }
+        // STA 恢复在线时立即显示 HP 组
+        _setHPGroupHidden(false);
     }
 }
 
@@ -1347,18 +1525,15 @@ function _collectRegions(selectors) {
 }
 
 function collectHitRegions() {
+    var dispSel = ['.id-plate', '#ctx-menu'];
+    var clkSel  = ['.id-plate', '#ctx-menu'];
+    if (!_hpGroupHidden) {
+        dispSel.push('.hp-bg-cover', '#hp', '#sta-row');
+        clkSel.push('#hp');
+    }
     return {
-        display_regions: _collectRegions([
-            '.id-plate',
-            '.hp-bg-cover',
-            '#hp',
-            '#sta-row',
-            '#ctx-menu'
-        ]),
-        click_regions: _collectRegions([
-            '#hp',
-            '#ctx-menu'
-        ])
+        display_regions: _collectRegions(dispSel),
+        click_regions:   _collectRegions(clkSel)
     };
 }
 
@@ -1424,18 +1599,12 @@ function startHitRegionBootRetry() {
 
 function retriggerEntryBlur() {
     var hp = document.getElementById('hp');
-    hp.classList.remove('hp-reenter');
-    hp.classList.remove('hp-exit');
-    void hp.offsetWidth;
-    hp.classList.add('hp-reenter');
+    _restartHPPanelAnimation(hp, 'enter');
 }
 
 function preExit() {
     var hp = document.getElementById('hp');
-    hp.classList.remove('hp-reenter');
-    hp.classList.remove('hp-exit');
-    void hp.offsetWidth;
-    hp.classList.add('hp-exit');
+    _restartHPPanelAnimation(hp, 'exit');
 }
 
 function exitApplication() {
@@ -1489,6 +1658,30 @@ function hideCtxMenu() {
 }
 
 /* ═══ Click (NO drag — fixed position) ═══ */
+function _registerIdPlateClickHandlers() {
+    var idPlate = document.querySelector('.id-plate');
+    if (!idPlate) { setTimeout(_registerIdPlateClickHandlers, 50); return; }
+    if (idPlate._saoClickBound) return;
+    idPlate._saoClickBound = true;
+    idPlate.addEventListener('click', function(e) {
+        if (ctxMenu && ctxMenu.classList.contains('show')) { hideCtxMenu(); return; }
+        snd('click');
+        if (window.pywebview && window.pywebview.api) {
+            window.pywebview.api.toggle_menu();
+        }
+    });
+    idPlate.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        snd('click');
+        showCtxMenu(e.clientX + 4, e.clientY - 26);
+    });
+}
+_registerIdPlateClickHandlers();
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _registerIdPlateClickHandlers);
+}
+
 function _registerHpClickHandlers() {
     var hp = document.getElementById('hp');
     if (!hp) {

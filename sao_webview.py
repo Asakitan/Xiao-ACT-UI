@@ -5474,7 +5474,7 @@ class SAOWebViewGUI:
         """后台识别循环 — 从 GameStateManager 读取状态, 推送到 HP 条 + 体力覆盖板"""
         _panel_tick = 0
         while True:
-            time.sleep(0.1)
+            time.sleep(0.05)
             try:
                 if self.hp_win is None:
                     return
@@ -5533,6 +5533,8 @@ class SAOWebViewGUI:
                             self._eval_hp(f'updateSTA({sta}, 100)')
                         self._eval_hp('setPlayState("playing")')
                     else:
+                        # 游戏窗口未找到时也触发 STA offline → HP 组延迟隐藏
+                        self._eval_hp('setSTAOffline(true)')
                         self._eval_hp('setPlayState("idle")')
                     # ── Boss Timer push (packet-driven, always runs) ──
                     _boss_text = getattr(gs, 'boss_timer_text', '') or ''

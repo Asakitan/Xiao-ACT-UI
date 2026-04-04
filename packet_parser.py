@@ -1790,6 +1790,13 @@ class PacketParser:
             self._on_notify_revive_user(msg_payload)
         elif method_id == NotifyMethod.NOTIFY_CLIENT_KICK_OFF:
             logger.info('[Parser] NotifyClientKickOff received — session ended')
+        # ── Team notify ──
+        elif method_id == NotifyMethod.NOTIFY_ALL_MEMBER_READY:
+            self._on_notify_team_generic('AllMemberReady', msg_payload)
+        elif method_id == NotifyMethod.NOTIFY_CAPTAIN_READY:
+            self._on_notify_team_generic('CaptainReady', msg_payload)
+        elif method_id == NotifyMethod.ENTER_MATCH_RESULT_NTF:
+            self._on_notify_team_generic('EnterMatchResult', msg_payload)
         # ── All other known methods — log for completeness ──
         else:
             method_name = _NOTIFY_METHOD_NAMES.get(method_id)
@@ -2089,6 +2096,46 @@ class PacketParser:
                         self._notify_self()
         except Exception as e:
             logger.debug(f'[Parser] NotifyReviveUser decode error: {e}')
+
+    def _on_notify_team_generic(self, notify_name: str, data: bytes):
+        """Handle team-related notify packets (AllMemberReady, CaptainReady, MatchResult).
+
+        These packets may carry team roster data. We log the raw payload and
+        attempt to decode it as CharTeam or other team-related messages.
+        """
+        print(
+            f'[Parser] 收到队伍通知: {notify_name} (len={len(data)})',
+            flush=True,
+        )
+        logger.info(f'[Parser] Team notify {notify_name}: len={len(data)} hex={data.hex()[:256]}')
+        _append_packet_debug(f'team_notify_{notify_name}', {
+            'raw_hex': data.hex()[:1024],
+            'raw_len': len(data),
+        })
+        # Attempt proto decode as CharTeam (some team notifies may wrap CharTeam)
+        pb = _ensure_pb()
+        if pb and len(data) > 4:
+            for msg_cls_name in ('CharTeam',):
+                try:
+                    msg_cls = getattr(pb, msg_cls_name, None)
+                    if not msg_cls:
+                        continue
+                    tmsg = msg_cls()
+                    tmsg.ParseFromString(data)
+                    char_ids = list(tmsg.CharIds)
+                    if char_ids:
+                        print(
+                            f'[Parser] {notify_name} decoded as {msg_cls_name}: '
+                            f'team_id={tmsg.TeamId} char_ids={char_ids} '
+                            f'member_keys={list(tmsg.TeamMemberData.keys())}',
+                            flush=True,
+                        )
+                        self._process_char_team(self._current_uid, tmsg)
+                        return
+                except Exception:
+                    pass
+            # If not CharTeam, log what we can
+            logger.info(f'[Parser] {notify_name}: not decodable as CharTeam, raw logged')
 
     def _on_sync_container_data(self, data: bytes):
         """SyncContainerData { CharSerialize VData = 1 } — 纯 pb2 解析."""
@@ -2856,7 +2903,13 @@ class PacketParser:
                                 )
                                 self._process_char_team(self._current_uid, team_msg)
                         except Exception as e:
-                            logger.debug(f'[Parser] DirtyData CharTeam parse error: {e}')
+                            print(f'[Parser] DirtyData CharTeam 解析失败: {e}', flush=True)
+                            logger.warning(f'[Parser] DirtyData CharTeam parse error: {e}')
+                            _append_packet_debug('char_team_parse_error', {
+                                'error': str(e),
+                                'raw_hex': data[pos:].hex()[:512],
+                                'raw_len': len(data) - pos,
+                            })
             else:
                 debug_info['unknown_sub'] = True
                 debug_info['raw_hex'] = data[pos:].hex()[:256]
@@ -3821,8 +3874,30 @@ class PacketParser:
         leader_id = team_info.LeaderId
         char_ids = list(team_info.CharIds)
         member_map = team_info.TeamMemberData  # map<int64, TeamMemData>
+        team_num = team_info.TeamNum
+        is_matching = team_info.IsMatching
+        team_version = team_info.CharTeamVersion
 
+        # ── 详细日志: 原始 CharTeam 字段 ──
+        print(
+            f'[Parser] CharTeam 原始数据: team_id={team_id} leader={leader_id} '
+            f'char_ids={char_ids} member_map_keys={list(member_map.keys())} '
+            f'team_num={team_num} matching={is_matching} ver={team_version}',
+            flush=True,
+        )
+
+        # ── 队伍解散检测 ──
         if not char_ids and not member_map:
+            if self._team_id != 0:
+                print('[Parser] 队伍已解散 (CharTeam char_ids 为空)', flush=True)
+                logger.info('[Parser] Team disbanded (empty CharIds + empty MemberData)')
+            self._team_id = 0
+            self._team_leader_uid = 0
+            self._team_members = {}
+            _append_packet_debug('char_team_disband', {
+                'self_uid': self_uid,
+                'old_team_id': self._team_id,
+            })
             return
 
         # Update team-level state
@@ -3849,30 +3924,83 @@ class PacketParser:
             }
 
         members_parsed = []
+        _social_missing_uids = []
         for char_id, mem_data in member_map.items():
             if char_id <= 0:
                 continue
             if char_id == self_uid:
                 continue  # self already added above
+
+            # ── 调试: 输出 TeamMemData 所有字段 ──
+            _mem_fields = {
+                'CharId': mem_data.CharId,
+                'EnterTime': mem_data.EnterTime,
+                'CallStatus': mem_data.CallStatus,
+                'TalentId': mem_data.TalentId,
+                'OnlineStatus': mem_data.OnlineStatus,
+                'SceneId': mem_data.SceneId,
+                'VoiceIsOpen': mem_data.VoiceIsOpen,
+                'GroupId': mem_data.GroupId,
+                'HasSocialData': mem_data.HasField('SocialData'),
+            }
+            logger.info(f'[Parser] TeamMemData uid={char_id}: {_mem_fields}')
+
             social = mem_data.SocialData if mem_data.HasField('SocialData') else None
-            if not social:
-                continue
 
             name = ''
             level = 0
             prof_id = 0
             fight_point = 0
+            _data_source = 'none'
 
-            if social.HasField('BasicData'):
-                bd = social.BasicData
-                name = bd.Name or ''
-                level = bd.Level
-            if social.HasField('ProfessionData'):
-                pd = social.ProfessionData
-                prof_id = pd.ProfessionId
-            if social.HasField('UserAttrData'):
-                ua = social.UserAttrData
-                fight_point = int(ua.FightPoint)
+            if social:
+                _has_basic = social.HasField('BasicData')
+                _has_prof = social.HasField('ProfessionData')
+                _has_attr = social.HasField('UserAttrData')
+                logger.info(
+                    f'[Parser] TeamMemberSocialData uid={char_id}: '
+                    f'HasBasicData={_has_basic} HasProfessionData={_has_prof} '
+                    f'HasUserAttrData={_has_attr}'
+                )
+                if _has_basic:
+                    bd = social.BasicData
+                    name = bd.Name or ''
+                    level = bd.Level
+                if _has_prof:
+                    pd = social.ProfessionData
+                    prof_id = pd.ProfessionId
+                if _has_attr:
+                    ua = social.UserAttrData
+                    fight_point = int(ua.FightPoint)
+                _data_source = 'social'
+            else:
+                _social_missing_uids.append(char_id)
+
+            # ── Fallback: 从 AoI _players 缓存补充缺失字段 ──
+            aoi_player = self._players.get(int(char_id))
+            if aoi_player:
+                if not name and aoi_player.name:
+                    name = aoi_player.name
+                    _data_source = 'aoi' if _data_source == 'none' else _data_source + '+aoi'
+                if level <= 0 and aoi_player.level > 0:
+                    level = aoi_player.level
+                if prof_id <= 0 and aoi_player.profession_id > 0:
+                    prof_id = aoi_player.profession_id
+                if fight_point <= 0 and aoi_player.fight_point > 0:
+                    fight_point = aoi_player.fight_point
+
+            # ── Fallback: 从上一轮 _team_members 缓存补充 ──
+            if not name or fight_point <= 0:
+                prev = self._team_members.get(int(char_id), {})
+                if not name and prev.get('name'):
+                    name = prev['name']
+                    _data_source = (_data_source + '+prev') if _data_source != 'none' else 'prev'
+                if fight_point <= 0 and prev.get('fight_point', 0) > 0:
+                    fight_point = prev['fight_point']
+                if level <= 0 and prev.get('level', 0) > 0:
+                    level = prev['level']
+                if prof_id <= 0 and prev.get('profession_id', 0) > 0:
+                    prof_id = prev['profession_id']
 
             profession_name = PROFESSION_NAMES.get(prof_id, '')
 
@@ -3902,32 +4030,82 @@ class PacketParser:
                 'level': level,
                 'is_self': False,
                 'joined_at': self._team_members.get(int(char_id), {}).get('joined_at', now_ts),
+                '_data_source': _data_source,
             }
             new_team[int(char_id)] = member_info
             members_parsed.append(member_info)
 
+        # ── Fallback B: char_ids 中有成员不在 member_map 中, 尝试从 AoI 补充 ──
+        _missing_from_map = [cid for cid in char_ids
+                             if cid != self_uid and cid > 0 and cid not in member_map]
+        for cid in _missing_from_map:
+            aoi_p = self._players.get(int(cid))
+            prev_m = self._team_members.get(int(cid), {})
+            _name = (aoi_p.name if aoi_p else '') or prev_m.get('name', '')
+            _level = (aoi_p.level if aoi_p else 0) or prev_m.get('level', 0)
+            _pid = (aoi_p.profession_id if aoi_p else 0) or prev_m.get('profession_id', 0)
+            _fp = (aoi_p.fight_point if aoi_p else 0) or prev_m.get('fight_point', 0)
+            member_info = {
+                'uid': int(cid),
+                'name': _name,
+                'profession': PROFESSION_NAMES.get(_pid, ''),
+                'profession_id': _pid,
+                'fight_point': _fp,
+                'level': _level,
+                'is_self': False,
+                'joined_at': self._team_members.get(int(cid), {}).get('joined_at', now_ts),
+                '_data_source': 'aoi_fallback' if aoi_p else ('prev_fallback' if prev_m else 'empty'),
+            }
+            new_team[int(cid)] = member_info
+            members_parsed.append(member_info)
+            print(
+                f'[Parser] 队伍成员 (AoI/缓存 fallback): uid={cid} name={_name!r} '
+                f'fight_point={_fp} lv={_level} prof={_pid} '
+                f'aoi_exists={aoi_p is not None} prev_exists={bool(prev_m)}',
+                flush=True,
+            )
+
         # Atomically update team cache
         self._team_members = new_team
 
-        if members_parsed:
-            logger.info(
-                f'[Parser] CharTeam parsed: team_id={team_id} leader={leader_id} '
-                f'{len(members_parsed)} members (excluding self uid={self_uid})'
+        # ── 日志: 显示完整队伍信息 ──
+        if _social_missing_uids:
+            print(
+                f'[Parser] CharTeam: {len(_social_missing_uids)} 个成员缺少 SocialData: '
+                f'{_social_missing_uids}',
+                flush=True,
             )
-            for m in members_parsed:
-                print(
-                    f'[Parser] 队伍成员: {m["name"]} (UID={m["uid"]}) '
-                    f'职业={m["profession"]}({m["profession_id"]}) '
-                    f'战力={m["fight_point"]} Lv.{m["level"]}',
-                    flush=True,
-                )
-            _append_packet_debug('char_team', {
-                'self_uid': self_uid,
-                'team_id': team_id,
-                'leader_id': leader_id,
-                'char_ids': char_ids,
-                'members': members_parsed,
-            })
+        if _missing_from_map:
+            print(
+                f'[Parser] CharTeam: {len(_missing_from_map)} 个 char_ids 不在 TeamMemberData 中: '
+                f'{_missing_from_map}',
+                flush=True,
+            )
+
+        logger.info(
+            f'[Parser] CharTeam parsed: team_id={team_id} leader={leader_id} '
+            f'总成员={len(new_team)} (含自己) map_keys={len(member_map)} '
+            f'char_ids={len(char_ids)} social_missing={len(_social_missing_uids)} '
+            f'map_missing={len(_missing_from_map)}'
+        )
+        for m in members_parsed:
+            print(
+                f'[Parser] 队伍成员: {m["name"]} (UID={m["uid"]}) '
+                f'职业={m["profession"]}({m["profession_id"]}) '
+                f'战力={m["fight_point"]} Lv.{m["level"]} '
+                f'[来源={m.get("_data_source", "?")}]',
+                flush=True,
+            )
+        _append_packet_debug('char_team', {
+            'self_uid': self_uid,
+            'team_id': team_id,
+            'leader_id': leader_id,
+            'char_ids': char_ids,
+            'member_map_keys': list(member_map.keys()),
+            'social_missing': _social_missing_uids,
+            'map_missing': _missing_from_map,
+            'members': members_parsed,
+        })
 
     def _decode_shield_list(self, monster: MonsterData, raw_data: bytes):
         """Decode AttrShieldList (60050) — repeated ShieldInfo messages."""
