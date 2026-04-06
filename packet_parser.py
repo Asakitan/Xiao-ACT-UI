@@ -23,7 +23,7 @@ import time
 from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger('sao_auto.parser')
-_PACKET_DEBUG_ENABLED = True  # Enable to log raw packet snapshots for field confirmation
+_PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
 
 # Lazy import for protobuf JSON conversion (used in full sync dump)
 _MessageToDict = None
