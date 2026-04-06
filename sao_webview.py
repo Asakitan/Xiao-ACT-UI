@@ -1946,9 +1946,9 @@ class SAOWebViewGUI:
         pass  # status is already printed by the engine
 
     def _schedule_hide_seek_alert_refresh(self):
-        """Schedule the next alert refresh tick (also serves as watchdog)."""
+        """Schedule the next alert refresh tick."""
         self._hide_seek_alert_timer = threading.Timer(
-            30.0, self._refresh_hide_seek_alert)
+            50.0, self._refresh_hide_seek_alert)
         self._hide_seek_alert_timer.daemon = True
         self._hide_seek_alert_timer.start()
 
@@ -1957,22 +1957,24 @@ class SAOWebViewGUI:
 
         The hide & seek game mode can last a very long time (up to 8 min per round),
         so the alert must stay visible for the entire duration of the automation engine.
-        If the engine thread died unexpectedly, auto-restart it."""
+
+        IMPORTANT: This timer must NEVER call resume()/restart() or otherwise
+        kill the engine thread.  Each detection phase can take many minutes of
+        idle waiting; interrupting the thread would reset that wait.
+        """
         engine = self._hide_seek_engine
         if not engine:
             self._hide_seek_alert_active = False
             return
 
-        # Auto-resume: if the engine object exists but the thread died,
-        # re-launch the thread from the CURRENT step (don't reset to step 0).
+        # If the engine object is gone (user stopped it), stop refreshing.
+        # But do NOT call resume/restart — the engine might just be waiting
+        # a long time for the next UI element to appear.
         if not engine.running:
-            print('[SAO] Hide&Seek engine thread died — auto-resuming')
-            try:
-                engine.resume()
-            except Exception as e:
-                print(f'[SAO] Hide&Seek auto-resume failed: {e}')
-                self._hide_seek_alert_active = False
-                return
+            # Thread truly died (crash) — just log it, keep alert alive so
+            # user knows the mode is still "on" conceptually.  They can
+            # toggle off/on manually if needed.
+            print('[SAO] Hide&Seek engine thread is no longer running')
 
         # Re-show without sound — this resets the 60s auto-hide timer via nonce
         self._show_identity_alert_window(
