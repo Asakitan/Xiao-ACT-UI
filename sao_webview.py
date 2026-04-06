@@ -1921,10 +1921,14 @@ class SAOWebViewGUI:
             )
             self._hide_seek_engine.start()
             self._eval_menu('SAO.showToast("HIDE & SEEK: ON")')
-            # Set flag synchronously BEFORE showing alert, so _sync_identity_alert
+            # Set flag synchronously so _sync_identity_alert
             # won't dismiss the alert even if engine.running isn't set yet.
             self._hide_seek_alert_active = True
-            self._show_hide_seek_persistent_alert()
+            # Show the initial alert with sound
+            self._show_identity_alert_window(
+                "AUTO HIDE & SEEK", "Auto Hide'seek is on", duration_ms=60000)
+            # Start periodic refresh to keep the alert visible
+            self._schedule_hide_seek_alert_refresh()
         except Exception as e:
             print(f'[SAO] Hide&Seek start failed: {e}')
             import traceback; traceback.print_exc()
@@ -1941,21 +1945,40 @@ class SAOWebViewGUI:
         """Callback from engine — could push status to UI if needed."""
         pass  # status is already printed by the engine
 
-    def _show_hide_seek_persistent_alert(self):
-        """Show a persistent SAO alert that re-fires every 8s while running."""
-        if not (self._hide_seek_engine and self._hide_seek_engine.running):
-            self._hide_seek_alert_active = False
-            return
-        # Only do the full show (with sound + transparency) on the FIRST call;
-        # subsequent 8s re-fires just reschedule the timer to keep it alive.
-        if not getattr(self, '_hide_seek_alert_active', False):
-            self._hide_seek_alert_active = True
-            self._show_identity_alert_window(
-                "AUTO HIDE & SEEK", "Auto Hide'seek is on", duration_ms=60000)
+    def _schedule_hide_seek_alert_refresh(self):
+        """Schedule the next alert refresh tick (also serves as watchdog)."""
         self._hide_seek_alert_timer = threading.Timer(
-            8.0, self._show_hide_seek_persistent_alert)
+            30.0, self._refresh_hide_seek_alert)
         self._hide_seek_alert_timer.daemon = True
         self._hide_seek_alert_timer.start()
+
+    def _refresh_hide_seek_alert(self):
+        """Re-show the alert (without sound) every ~50s to prevent the 60s auto-hide.
+
+        The hide & seek game mode can last a very long time (up to 8 min per round),
+        so the alert must stay visible for the entire duration of the automation engine.
+        If the engine thread died unexpectedly, auto-restart it."""
+        engine = self._hide_seek_engine
+        if not engine:
+            self._hide_seek_alert_active = False
+            return
+
+        # Auto-resume: if the engine object exists but the thread died,
+        # re-launch the thread from the CURRENT step (don't reset to step 0).
+        if not engine.running:
+            print('[SAO] Hide&Seek engine thread died — auto-resuming')
+            try:
+                engine.resume()
+            except Exception as e:
+                print(f'[SAO] Hide&Seek auto-resume failed: {e}')
+                self._hide_seek_alert_active = False
+                return
+
+        # Re-show without sound — this resets the 60s auto-hide timer via nonce
+        self._show_identity_alert_window(
+            "AUTO HIDE & SEEK", "Auto Hide'seek is on",
+            duration_ms=60000, play_sound=False)
+        self._schedule_hide_seek_alert_refresh()
 
     def _hide_hide_seek_persistent_alert(self):
         """Cancel the persistent alert refresh timer and hide alert."""
@@ -4586,7 +4609,7 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _show_identity_alert_window(self, title: str, message: str, duration_ms: int = 9000):
+    def _show_identity_alert_window(self, title: str, message: str, duration_ms: int = 9000, play_sound: bool = True):
         if not self.alert_win:
             return
         self._identity_alert_visible = True
@@ -4609,7 +4632,8 @@ class SAOWebViewGUI:
         self._remove_alert_click_through()
         self._set_window_alpha('SAO Alert', 1.0)
         self._ensure_alert_on_top()
-        self._play_sound('alert')
+        if play_sound:
+            self._play_sound('alert')
 
         safe_title = self._safe_js(title or '提示')
         safe_message = self._safe_js(message or '')

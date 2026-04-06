@@ -153,7 +153,13 @@ class HideSeekEngine:
 
     @property
     def running(self) -> bool:
-        return self._running
+        return self._running and self._thread is not None and self._thread.is_alive()
+
+    @property
+    def thread_alive(self) -> bool:
+        """True only if the background thread is actually alive."""
+        t = self._thread
+        return t is not None and t.is_alive()
 
     @property
     def current_step(self) -> int:
@@ -194,17 +200,51 @@ class HideSeekEngine:
             self._templates[img_name] = None
             print(f'[HideSeek] WARNING: template not found: {path}')
 
+    def resume(self):
+        """Re-launch the worker thread WITHOUT resetting the current step.
+
+        Used by the external watchdog when the thread died unexpectedly.
+        """
+        self._running = False
+        t = self._thread
+        if t and t.is_alive():
+            t.join(timeout=2.0)
+        # Keep _current_step as-is
+        self._running = True
+        if not self._templates:
+            self._load_templates()
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name='hide_seek_engine')
+        self._thread.start()
+        self._fire_status(
+            f'Resumed at Step {self._current_step}', self._current_step)
+
+    def restart(self):
+        """Full restart — reset to step 0."""
+        self.stop()
+        self.start()
+
     # ── Main loop ──
 
     def _run(self):
-        while self._running:
-            time.sleep(1.0)
-            if not self._running:
-                break
-            try:
-                self._tick()
-            except Exception as e:
-                self._fire_status(f'Error: {e}', self._current_step)
+        try:
+            while self._running:
+                time.sleep(1.0)
+                if not self._running:
+                    break
+                try:
+                    self._tick()
+                except Exception as e:
+                    self._fire_status(f'Error: {e}', self._current_step)
+                    import traceback
+                    traceback.print_exc()
+        except BaseException as e:
+            print(f'[HideSeek] Thread fatal error: {e}')
+            import traceback
+            traceback.print_exc()
+        finally:
+            self._running = False
+            print('[HideSeek] Thread exited')
 
     def _tick(self):
         # Find game window
@@ -224,11 +264,59 @@ class HideSeekEngine:
             self._fire_status('Screenshot failed', self._current_step)
             return
 
-        step = STEPS[self._current_step]
+        cur = self._current_step
+
+        # 1) Try current step first
+        hit = self._try_detect_step(cur, screenshot, win_w, win_h, cl, ct)
+        if hit is not None:
+            step_idx, click_x, click_y, conf = hit
+            self._execute_step(step_idx, click_x, click_y, conf)
+            return
+
+        # 2) Current step not found — also check ALL earlier steps (0 .. cur-1)
+        #    so the engine can follow the game back to an earlier state.
+        if cur > 0:
+            for fallback_idx in range(cur):
+                hit = self._try_detect_step(
+                    fallback_idx, screenshot, win_w, win_h, cl, ct)
+                if hit is not None:
+                    step_idx, click_x, click_y, conf = hit
+                    self._fire_status(
+                        f'Fallback: detected Step {step_idx} '
+                        f'({STEPS[step_idx]["name"]}) while on Step {cur}',
+                        step_idx,
+                    )
+                    # Jump to the detected earlier step
+                    with self._lock:
+                        self._current_step = step_idx
+                    self._execute_step(step_idx, click_x, click_y, conf)
+                    return
+
+        # Nothing matched — keep waiting
+        self._fire_status(
+            f'Step {cur} ({STEPS[cur]["name"]}): waiting …',
+            cur,
+        )
+
+    # ── Step detection (pure, no side effects) ──
+
+    def _try_detect_step(
+        self,
+        step_idx: int,
+        screenshot: np.ndarray,
+        win_w: int,
+        win_h: int,
+        cl: int,
+        ct: int,
+    ) -> Optional[Tuple[int, int, int, float]]:
+        """Try to detect a specific step in the screenshot.
+
+        Returns (step_idx, click_x, click_y, confidence) on success, else None.
+        """
+        step = STEPS[step_idx]
         tpl = self._templates.get(step['image'])
         if tpl is None:
-            self._fire_status(f'Template missing: {step["image"]}', self._current_step)
-            return
+            return None
 
         # Compute absolute ROI from relative coords
         rx, ry, rw, rh = step['roi']
@@ -242,50 +330,44 @@ class HideSeekEngine:
         # Extract ROI from screenshot
         roi_img = screenshot[roi_y:roi_y2, roi_x:roi_x2]
         if roi_img.size == 0:
-            self._fire_status('ROI empty', self._current_step)
-            return
+            return None
 
-        # Color filter: create combined mask for all expected colors
+        # Color filter
         colors = step['colors']
         mask = self._build_color_mask(roi_img, colors)
-
-        # Apply mask — keep only matching-color pixels
         filtered = cv2.bitwise_and(roi_img, roi_img, mask=mask)
 
         # Resize template to fit ROI dimensions if needed
         tpl_resized = self._resize_template(tpl, roi_img.shape[:2])
         if tpl_resized is None:
-            self._fire_status(f'Template too large for ROI', self._current_step)
-            return
+            return None
 
-        # Also filter template with same colors
+        # Color-filtered template matching
         tpl_mask = self._build_color_mask(tpl_resized, colors)
         tpl_filtered = cv2.bitwise_and(tpl_resized, tpl_resized, mask=tpl_mask)
-
-        # Template match on filtered images
         match_pos, confidence = self._template_match(filtered, tpl_filtered)
         if match_pos is None:
-            # Fallback: try raw template match without color filtering
+            # Fallback: raw template match
             match_pos, confidence = self._template_match(roi_img, tpl_resized)
 
         if match_pos is None or confidence < _MATCH_THRESHOLD:
-            self._fire_status(
-                f'Step {self._current_step} ({step["name"]}): '
-                f'not found (conf={confidence:.2f})',
-                self._current_step,
-            )
-            return
+            return None
 
-        # Found! Compute click position in screen coordinates
+        # Compute click position in screen coordinates
         mx, my = match_pos
         th, tw = tpl_resized.shape[:2]
         click_x = cl + roi_x + mx + tw // 2
         click_y = ct + roi_y + my + th // 2
+        return (step_idx, click_x, click_y, confidence)
 
+    # ── Execute a matched step ──
+
+    def _execute_step(self, step_idx: int, click_x: int, click_y: int, conf: float):
+        step = STEPS[step_idx]
         self._fire_status(
-            f'Step {self._current_step} ({step["name"]}): '
-            f'MATCH conf={confidence:.2f} → click ({click_x}, {click_y})',
-            self._current_step,
+            f'Step {step_idx} ({step["name"]}): '
+            f'MATCH conf={conf:.2f} → click ({click_x}, {click_y})',
+            step_idx,
         )
 
         # Perform action
@@ -296,7 +378,7 @@ class HideSeekEngine:
 
         # Advance to next step (wrap around)
         with self._lock:
-            self._current_step = (self._current_step + 1) % len(STEPS)
+            self._current_step = (step_idx + 1) % len(STEPS)
 
     # ── Screenshot capture ──
 
