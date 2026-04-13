@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
@@ -79,7 +80,13 @@ def _br_to_rel(br_x, br_y, w, h, ref_w=1920, ref_h=1080):
 # Color ranges: (B, G, R) center, tolerance
 _WHITE = ((255, 255, 255), 35)
 _DARK_GRAY = ((50, 50, 50), 35)
-_LIGHT_GRAY = ((200, 200, 200), 35)
+_LIGHT_GRAY = ((200, 200, 200), 55)  # widened tolerance 35→55
+
+# Debug: save ROI/filtered/template images to temp/debug_hs/
+# Automatically disabled in packaged (frozen) builds.
+_DEBUG_SAVE = not getattr(sys, 'frozen', False)
+_DEBUG_DIR = os.path.join(os.path.dirname(__file__), 'temp', 'debug_hs')
+_DEBUG_INTERVAL_S = 1.0  # minimum seconds between saves per step
 
 STEPS: List[Dict] = [
     {  # Step 0: accept invitation
@@ -87,20 +94,23 @@ STEPS: List[Dict] = [
         'roi': _br_to_rel(1446, 650, 35, 100),
         'colors': [_WHITE],
         'alt_click': True,
+        'sqdiff': False,
         'name': 'Accept',
     },
-    {  # Step 1: confirm dialog 1
+    {  # Step 1: confirm dialog 1  ("匹配进入" — must NOT match "取消匹配")
         'image': '2.png',
         'roi': _br_to_rel(1893, 1020, 260, 75),
         'colors': [_DARK_GRAY, _LIGHT_GRAY],
         'alt_click': False,
+        'sqdiff': False,
         'name': 'Confirm-1',
     },
-    {  # Step 2: confirm dialog 2
+    {  # Step 2: confirm dialog 2  ("接受" — low-contrast, needs SQDIFF)
         'image': '3.png',
         'roi': _br_to_rel(1869, 956, 310, 75),
         'colors': [_DARK_GRAY, _LIGHT_GRAY],
         'alt_click': False,
+        'sqdiff': True,
         'name': 'Confirm-2',
     },
     {  # Step 3: confirm dialog 3
@@ -108,6 +118,7 @@ STEPS: List[Dict] = [
         'roi': _br_to_rel(1115, 1005, 310, 75),
         'colors': [_DARK_GRAY, _LIGHT_GRAY],
         'alt_click': False,
+        'sqdiff': True,
         'name': 'Confirm-3',
     },
     {  # Step 4: confirm dialog 4 → loop back
@@ -115,12 +126,15 @@ STEPS: List[Dict] = [
         'roi': _br_to_rel(1115, 1005, 310, 75),
         'colors': [_DARK_GRAY, _LIGHT_GRAY],
         'alt_click': False,
+        'sqdiff': True,
         'name': 'Confirm-4',
     },
 ]
 
 # Template matching threshold
 _MATCH_THRESHOLD = 0.70
+# TM_SQDIFF_NORMED threshold (lower = more similar; catches white-on-white buttons)
+_SQDIFF_THRESHOLD = 0.10
 
 
 class HideSeekEngine:
@@ -148,6 +162,17 @@ class HideSeekEngine:
         self._templates: Dict[str, Optional[np.ndarray]] = {}
         self._lock = threading.Lock()
         self._assets_dir = os.path.join(os.path.dirname(__file__), 'assets')
+        # Track the step we just clicked + when, so we can skip fallback
+        # to that SAME step briefly (its UI may still linger on screen).
+        self._last_executed_step: int = -1
+        self._last_click_ts: float = 0.0
+        # Cooldown (seconds) before we allow re-detecting the SAME step
+        # we just clicked.  Other earlier steps are always fair game.
+        self.STEP_COOLDOWN_S: float = 5.0
+        # Debug save: last save timestamp per step index
+        self._debug_last_save: Dict[int, float] = {}
+        if _DEBUG_SAVE:
+            os.makedirs(_DEBUG_DIR, exist_ok=True)
 
     # ── Public API ──
 
@@ -266,16 +291,22 @@ class HideSeekEngine:
 
         cur = self._current_step
 
-        # 1) Try current step first
+        # After a click, ALL earlier steps' UI may still linger on screen
+        # for a few seconds.  Skip fallback to ANY earlier step during the
+        # cooldown period to prevent looping (0→1→2→0→1→2…).
+        # The current step itself is always checked — no timeout limit.
+        since_click = time.time() - self._last_click_ts
+        fallback_allowed = (since_click >= self.STEP_COOLDOWN_S)
+
+        # 1) Always try current step (no cooldown restriction)
         hit = self._try_detect_step(cur, screenshot, win_w, win_h, cl, ct)
         if hit is not None:
             step_idx, click_x, click_y, conf = hit
             self._execute_step(step_idx, click_x, click_y, conf)
             return
 
-        # 2) Current step not found — also check ALL earlier steps (0 .. cur-1)
-        #    so the engine can follow the game back to an earlier state.
-        if cur > 0:
+        # 2) Check ALL earlier steps (0 .. cur-1) only after cooldown
+        if cur > 0 and fallback_allowed:
             for fallback_idx in range(cur):
                 hit = self._try_detect_step(
                     fallback_idx, screenshot, win_w, win_h, cl, ct)
@@ -286,7 +317,6 @@ class HideSeekEngine:
                         f'({STEPS[step_idx]["name"]}) while on Step {cur}',
                         step_idx,
                     )
-                    # Jump to the detected earlier step
                     with self._lock:
                         self._current_step = step_idx
                     self._execute_step(step_idx, click_x, click_y, conf)
@@ -346,11 +376,49 @@ class HideSeekEngine:
         tpl_mask = self._build_color_mask(tpl_resized, colors)
         tpl_filtered = cv2.bitwise_and(tpl_resized, tpl_resized, mask=tpl_mask)
         match_pos, confidence = self._template_match(filtered, tpl_filtered)
-        if match_pos is None:
-            # Fallback: raw template match
-            match_pos, confidence = self._template_match(roi_img, tpl_resized)
+        match_method = 'color-filtered'
 
         if match_pos is None or confidence < _MATCH_THRESHOLD:
+            # Fallback 1: raw CCOEFF template match
+            match_pos, confidence = self._template_match(roi_img, tpl_resized)
+            match_method = 'raw'
+
+        if match_pos is None or confidence < _MATCH_THRESHOLD:
+            # Fallback 2: SQDIFF match — only for steps that opt in.
+            # Excellent for low-contrast templates (white buttons with dark
+            # text) where CCOEFF fails, but CANNOT distinguish buttons with
+            # different text of similar length, so only enabled per-step.
+            if step.get('sqdiff'):
+                sq_pos, sq_val = self._template_match_sqdiff(roi_img, tpl_resized)
+                if sq_pos is not None and sq_val <= _SQDIFF_THRESHOLD:
+                    match_pos = sq_pos
+                    confidence = 1.0 - sq_val  # invert so higher = better
+                    match_method = f'sqdiff({sq_val:.4f})'
+
+        if match_pos is None or confidence < _MATCH_THRESHOLD:
+            # Fallback 3: multi-scale raw template match
+            best_pos, best_conf, best_scale = self._multi_scale_match(
+                roi_img, tpl)
+            if best_pos is not None and best_conf >= _MATCH_THRESHOLD:
+                match_pos = best_pos
+                confidence = best_conf
+                match_method = f'multi-scale({best_scale:.2f})'
+                # Use scaled template size for click offset
+                th = max(1, int(tpl.shape[0] * best_scale))
+                tw = max(1, int(tpl.shape[1] * best_scale))
+                click_x = cl + roi_x + best_pos[0] + tw // 2
+                click_y = ct + roi_y + best_pos[1] + th // 2
+                # Debug save (success)
+                self._debug_save_step(step_idx, roi_img, filtered, tpl_resized,
+                                      confidence, match_method, True)
+                return (step_idx, click_x, click_y, confidence)
+
+        # Debug save (rate-limited)
+        detected = (match_pos is not None and confidence >= _MATCH_THRESHOLD)
+        self._debug_save_step(step_idx, roi_img, filtered, tpl_resized,
+                              confidence, match_method, detected)
+
+        if not detected:
             return None
 
         # Compute click position in screen coordinates
@@ -359,6 +427,77 @@ class HideSeekEngine:
         click_x = cl + roi_x + mx + tw // 2
         click_y = ct + roi_y + my + th // 2
         return (step_idx, click_x, click_y, confidence)
+
+    # ── Debug save helper ──
+
+    def _debug_save_step(
+        self,
+        step_idx: int,
+        roi_img: np.ndarray,
+        filtered_img: np.ndarray,
+        tpl: np.ndarray,
+        confidence: float,
+        method: str,
+        detected: bool,
+    ):
+        """Rate-limited save of ROI/filtered/template images for debugging."""
+        if not _DEBUG_SAVE:
+            return
+        now = time.time()
+        last = self._debug_last_save.get(step_idx, 0.0)
+        # Save immediately on success, otherwise rate-limit
+        if not detected and (now - last) < _DEBUG_INTERVAL_S:
+            return
+        self._debug_last_save[step_idx] = now
+        tag = 'HIT' if detected else 'MISS'
+        ts = time.strftime('%H%M%S')
+        prefix = os.path.join(
+            _DEBUG_DIR, f'step{step_idx}_{tag}_{ts}_c{confidence:.2f}')
+        try:
+            cv2.imwrite(f'{prefix}_roi.png', roi_img)
+            cv2.imwrite(f'{prefix}_filtered.png', filtered_img)
+            cv2.imwrite(f'{prefix}_tpl.png', tpl)
+            print(f'[HideSeek][DEBUG] Saved {prefix}_*.png '
+                  f'({method}, conf={confidence:.2f})')
+        except Exception as e:
+            print(f'[HideSeek][DEBUG] Save error: {e}')
+
+    # ── Multi-scale template matching ──
+
+    @staticmethod
+    def _multi_scale_match(
+        img: np.ndarray,
+        tpl: np.ndarray,
+        scales: Optional[list] = None,
+    ) -> Tuple[Optional[Tuple[int, int]], float, float]:
+        """Try template match at multiple scales.
+
+        Returns (match_pos, confidence, best_scale) or (None, 0.0, 1.0).
+        """
+        if scales is None:
+            scales = [0.75, 0.80, 0.85, 0.90, 0.95, 1.05, 1.10, 1.15, 1.20, 1.25]
+        ih, iw = img.shape[:2]
+        best_pos = None
+        best_conf = 0.0
+        best_scale = 1.0
+        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+        tpl_gray = cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY) if len(tpl.shape) == 3 else tpl
+        for s in scales:
+            tw = max(1, int(tpl_gray.shape[1] * s))
+            th = max(1, int(tpl_gray.shape[0] * s))
+            if tw > iw or th > ih or tw <= 0 or th <= 0:
+                continue
+            tpl_s = cv2.resize(tpl_gray, (tw, th), interpolation=cv2.INTER_AREA)
+            try:
+                result = cv2.matchTemplate(img_gray, tpl_s, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                if max_val > best_conf:
+                    best_conf = max_val
+                    best_pos = max_loc
+                    best_scale = s
+            except Exception:
+                continue
+        return best_pos, best_conf, best_scale
 
     # ── Execute a matched step ──
 
@@ -375,6 +514,10 @@ class HideSeekEngine:
             self._alt_click(click_x, click_y)
         else:
             self._click(click_x, click_y)
+
+        # Record which step we just executed + when
+        self._last_executed_step = step_idx
+        self._last_click_ts = time.time()
 
         # Advance to next step (wrap around)
         with self._lock:
@@ -454,7 +597,7 @@ class HideSeekEngine:
         img: np.ndarray,
         tpl: np.ndarray,
     ) -> Tuple[Optional[Tuple[int, int]], float]:
-        """Run template matching. Returns ((x, y), confidence) or (None, 0.0)."""
+        """Run template matching (TM_CCOEFF_NORMED). Returns ((x, y), confidence) or (None, 0.0)."""
         if img is None or tpl is None:
             return None, 0.0
         ih, iw = img.shape[:2]
@@ -472,6 +615,37 @@ class HideSeekEngine:
             return max_loc, float(max_val)
         except Exception:
             return None, 0.0
+
+    @staticmethod
+    def _template_match_sqdiff(
+        img: np.ndarray,
+        tpl: np.ndarray,
+    ) -> Tuple[Optional[Tuple[int, int]], float]:
+        """Run TM_SQDIFF_NORMED template matching.
+
+        Better than CCOEFF for low-contrast templates (e.g. white button with
+        dark text) because it measures pixel-level difference rather than
+        variance-normalised correlation.
+
+        Returns ((x, y), sqdiff_value) where LOWER = more similar.
+        Returns (None, 1.0) on failure.
+        """
+        if img is None or tpl is None:
+            return None, 1.0
+        ih, iw = img.shape[:2]
+        th, tw = tpl.shape[:2]
+        if th > ih or tw > iw:
+            return None, 1.0
+        if th <= 0 or tw <= 0:
+            return None, 1.0
+        try:
+            img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+            tpl_gray = cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY) if len(tpl.shape) == 3 else tpl
+            result = cv2.matchTemplate(img_gray, tpl_gray, cv2.TM_SQDIFF_NORMED)
+            min_val, _, min_loc, _ = cv2.minMaxLoc(result)
+            return min_loc, float(min_val)
+        except Exception:
+            return None, 1.0
 
     # ── Input simulation ──
 
