@@ -26,7 +26,7 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v1.3.1: 躲猫猫引擎：失败回退检测所有前置步骤; 线程崩溃自动恢复(resume); alert 持久显示修复
 # v1.2.26: Commander 面板; 菜单滚动; 退出流程修复
