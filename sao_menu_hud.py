@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as _dt
 import math
 import os
+import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -16,7 +17,11 @@ except Exception:
     _gpu_shell = None
 
 
-_BASE = os.path.dirname(os.path.abspath(__file__))
+_BASE = (
+    getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    if getattr(sys, 'frozen', False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
 _FONTS_DIR = os.path.join(_BASE, 'assets', 'fonts')
 _FONT_SAO = os.path.join(_FONTS_DIR, 'SAOUI.ttf')
 _FONT_CJK = os.path.join(_FONTS_DIR, 'ZhuZiAYuanJWD.ttf')

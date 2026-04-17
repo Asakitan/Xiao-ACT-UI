@@ -6,6 +6,7 @@ Matches web/alert.html: 392×194, title(68px) + body(106px) + footer(20px).
 """
 
 import os
+import sys
 import tkinter as tk
 import ctypes
 import time
@@ -23,7 +24,11 @@ WS_EX_TRANSPARENT = 0x00000020
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_TOPMOST = 0x00000008
 
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_BASE_DIR = (
+    getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    if getattr(sys, 'frozen', False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
 _FONT_DIR = os.path.join(_BASE_DIR, 'assets', 'fonts')
 _FONT_CACHE = {}
 
