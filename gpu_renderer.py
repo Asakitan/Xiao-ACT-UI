@@ -1,0 +1,448 @@
+"""gpu_renderer.py — Shared moderngl-backed GPU acceleration for overlays.
+
+Goal: offload the expensive per-frame CPU pixel ops to the GPU while keeping
+the existing ULW + PIL pipeline intact. The single standalone moderngl
+context is created lazily on first use and reused by all overlays (DPS /
+HP / BossHP / SkillFX / Alert).
+
+Public entry points (all fall back to CPU if the GPU context fails):
+    gpu_available()                              → bool
+    gaussian_blur_rgba(img, sigma)               → PIL.Image
+    render_shell_rgba(params)                    → PIL.Image
+    premultiply_bgra_bytes(rgba_np)              → bytes   (BGRA, premult'd)
+
+Threading: OpenGL contexts are thread-affine. Overlays schedule frame
+composition via Tk ``after()``, so all calls happen on the Tk main thread.
+Do not call these from background threads.
+"""
+
+from __future__ import annotations
+
+import os
+import threading
+from typing import Optional, Tuple, Dict, Any
+
+import numpy as np
+from PIL import Image, ImageFilter
+
+
+_DISABLED = os.environ.get('SAO_GPU_DISABLE', '') == '1'
+
+_ctx_lock = threading.Lock()
+_ctx = None                    # moderngl.Context | None
+_ctx_failed = False            # flipped once a real init attempt fails
+_ctx_thread_id: Optional[int] = None   # thread that owns the GL context
+
+_blur_prog = None
+_blur_quad = None
+_shell_prog = None
+_prem_prog = None
+
+# Cached FBOs keyed by (w, h)
+_fbo_cache: Dict[Tuple[int, int, str], Any] = {}
+
+
+def _on_owner_thread() -> bool:
+    """Return True iff called from the thread that owns the GL context.
+
+    GL contexts on Windows (WGL) are thread-affine. Callers on worker
+    threads must fall back to CPU paths to avoid driver crashes.
+    """
+    return (_ctx_thread_id is None
+            or threading.get_ident() == _ctx_thread_id)
+
+
+# ---------------------------------------------------------------------------
+# Context lifecycle
+# ---------------------------------------------------------------------------
+
+def _try_init() -> bool:
+    """Create a standalone moderngl context. Returns True on success."""
+    global _ctx, _ctx_failed, _ctx_thread_id
+    if _DISABLED:
+        _ctx_failed = True
+        return False
+    if _ctx is not None:
+        # Already initialised; only the owning thread may actually *use* it.
+        return _on_owner_thread()
+    if _ctx_failed:
+        return False
+    with _ctx_lock:
+        if _ctx is not None:
+            return _on_owner_thread()
+        if _ctx_failed:
+            return False
+        try:
+            import moderngl  # type: ignore
+            if os.name == 'nt':
+                _ctx = moderngl.create_standalone_context(require=330)
+            else:
+                _ctx = moderngl.create_standalone_context(
+                    require=330, backend='egl',
+                )
+            _ctx_thread_id = threading.get_ident()
+            _build_programs()
+            return True
+        except Exception as exc:
+            try:
+                print(f'[GPU] init failed, falling back to CPU: {exc}')
+            except Exception:
+                pass
+            _ctx = None
+            _ctx_failed = True
+            return False
+
+
+def gpu_available() -> bool:
+    return _try_init() and _on_owner_thread()
+
+
+# ---------------------------------------------------------------------------
+# Shaders
+# ---------------------------------------------------------------------------
+
+_VS_FULLSCREEN = """
+#version 330
+in vec2 in_pos;
+out vec2 v_uv;
+void main() {
+    v_uv = in_pos * 0.5 + 0.5;
+    gl_Position = vec4(in_pos, 0.0, 1.0);
+}
+"""
+
+_FS_BLUR = """
+#version 330
+uniform sampler2D u_tex;
+uniform vec2 u_dir;        // pixel step, e.g. (1/w, 0) or (0, 1/h)
+uniform float u_sigma;
+uniform int u_radius;
+in vec2 v_uv;
+out vec4 f_color;
+void main() {
+    float two_sigma2 = 2.0 * u_sigma * u_sigma;
+    vec4 sum = vec4(0.0);
+    float wsum = 0.0;
+    for (int i = -64; i <= 64; ++i) {
+        if (abs(i) > u_radius) continue;
+        float w = exp(-float(i * i) / two_sigma2);
+        sum += w * texture(u_tex, v_uv + float(i) * u_dir);
+        wsum += w;
+    }
+    f_color = sum / wsum;
+}
+"""
+
+_FS_SHELL = """
+#version 330
+uniform vec2 u_size;            // (w, h) pixels
+uniform vec2 u_body_min;        // rect min
+uniform vec2 u_body_max;        // rect max
+uniform float u_radius;
+uniform vec4 u_color_a;         // top
+uniform vec4 u_color_b;         // bottom
+uniform vec4 u_edge;            // outer border
+uniform vec4 u_inner;           // inner highlight 1px
+uniform vec4 u_scan;            // scanline colour
+uniform float u_scan_period;
+uniform vec4 u_shadow_color;
+uniform float u_shadow_dx;
+uniform float u_shadow_dy;
+uniform float u_shadow_sigma;
+uniform float u_shadow_radius;
+
+in vec2 v_uv;
+out vec4 f_color;
+
+// Signed distance to rounded rect
+float sdf_round_rect(vec2 p, vec2 b, float r) {
+    vec2 q = abs(p) - b + vec2(r);
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+void main() {
+    vec2 px = v_uv * u_size;
+    vec2 half_size = (u_body_max - u_body_min) * 0.5;
+    vec2 center = (u_body_max + u_body_min) * 0.5;
+
+    // Rounded-rect body SDF
+    float d = sdf_round_rect(px - center, half_size, u_radius);
+
+    // Vertical gradient between body top and bottom (clamped)
+    float ty = clamp((px.y - u_body_min.y) / (u_body_max.y - u_body_min.y),
+                     0.0, 1.0);
+    vec4 grad = mix(u_color_a, u_color_b, ty);
+
+    // Body alpha with 1px AA
+    float body_a = 1.0 - smoothstep(-0.5, 0.5, d);
+
+    // Scanlines (every u_scan_period px, 1px wide)
+    if (u_scan_period > 0.5) {
+        float row = mod(px.y - u_body_min.y, u_scan_period);
+        if (row < 1.0) {
+            grad.rgb = mix(grad.rgb, u_scan.rgb, u_scan.a);
+        }
+    }
+
+    vec4 body = vec4(grad.rgb, grad.a * body_a);
+
+    // Outer border (1px band around the rounded edge)
+    float edge_band = 1.0 - smoothstep(0.5, 1.5, abs(d));
+    vec4 edge = vec4(u_edge.rgb, u_edge.a * edge_band);
+
+    // Inner highlight (1px inside at d=-1)
+    float inner_band = 1.0 - smoothstep(0.5, 1.5, abs(d + 1.0));
+    vec4 inner = vec4(u_inner.rgb, u_inner.a * inner_band * body_a);
+
+    // Soft drop shadow: approximate via analytic SDF falloff.
+    // Offset sample point, compute SDF, map positive distance to falloff.
+    vec2 shadow_p = px - vec2(u_shadow_dx, u_shadow_dy) - center;
+    float sd = sdf_round_rect(shadow_p, half_size, u_shadow_radius);
+    float sh_a = u_shadow_color.a *
+                 exp(-max(sd, 0.0) * max(sd, 0.0) /
+                     (2.0 * u_shadow_sigma * u_shadow_sigma));
+    // Only show shadow OUTSIDE the body (don't bleed through the body)
+    sh_a *= (1.0 - body_a);
+    vec4 shadow = vec4(u_shadow_color.rgb, sh_a);
+
+    // Composite: shadow → body → inner highlight → edge
+    vec4 c = shadow;
+    c.rgb = mix(c.rgb, body.rgb, body.a);
+    c.a = body.a + c.a * (1.0 - body.a);
+    c.rgb = mix(c.rgb, inner.rgb, inner.a);
+    c.a = inner.a + c.a * (1.0 - inner.a);
+    c.rgb = mix(c.rgb, edge.rgb, edge.a);
+    c.a = edge.a + c.a * (1.0 - edge.a);
+
+    f_color = c;
+}
+"""
+
+_FS_PREMULT = """
+#version 330
+uniform sampler2D u_tex;
+in vec2 v_uv;
+out vec4 f_color;
+void main() {
+    vec4 c = texture(u_tex, v_uv);
+    // Output BGRA premultiplied; packed in vec4 rgba where R=B, G=G, B=R
+    f_color = vec4(c.b * c.a, c.g * c.a, c.r * c.a, c.a);
+}
+"""
+
+
+def _build_programs() -> None:
+    global _blur_prog, _blur_quad, _shell_prog, _prem_prog
+    assert _ctx is not None
+    quad = np.array([-1, -1,  1, -1, -1,  1,
+                      1, -1,  1,  1, -1,  1], dtype='f4')
+    vbo = _ctx.buffer(quad.tobytes())
+
+    _blur_prog = _ctx.program(
+        vertex_shader=_VS_FULLSCREEN, fragment_shader=_FS_BLUR,
+    )
+    _blur_quad = _ctx.vertex_array(_blur_prog, [(vbo, '2f', 'in_pos')])
+
+    _shell_prog = _ctx.program(
+        vertex_shader=_VS_FULLSCREEN, fragment_shader=_FS_SHELL,
+    )
+    _ctx._shell_quad = _ctx.vertex_array(
+        _shell_prog, [(vbo, '2f', 'in_pos')],
+    )
+
+    _prem_prog = _ctx.program(
+        vertex_shader=_VS_FULLSCREEN, fragment_shader=_FS_PREMULT,
+    )
+    _ctx._prem_quad = _ctx.vertex_array(
+        _prem_prog, [(vbo, '2f', 'in_pos')],
+    )
+
+
+def _get_fbo(w: int, h: int, tag: str = 'rgba'):
+    key = (w, h, tag)
+    fbo = _fbo_cache.get(key)
+    if fbo is not None:
+        return fbo
+    tex = _ctx.texture((w, h), 4, dtype='f1')
+    tex.filter = (0x2600, 0x2600)  # GL_NEAREST
+    fbo = _ctx.framebuffer(color_attachments=[tex])
+    _fbo_cache[key] = fbo
+    return fbo
+
+
+def _to_rgba_np(img) -> np.ndarray:
+    if isinstance(img, np.ndarray):
+        arr = img
+    elif isinstance(img, Image.Image):
+        arr = np.asarray(img.convert('RGBA'))
+    else:
+        raise TypeError(f'unsupported image type: {type(img)}')
+    if arr.dtype != np.uint8 or arr.ndim != 3 or arr.shape[2] != 4:
+        raise ValueError(f'expected uint8 RGBA ndarray, got {arr.shape} {arr.dtype}')
+    return np.ascontiguousarray(arr)
+
+
+# ---------------------------------------------------------------------------
+# Gaussian blur (two-pass separable)
+# ---------------------------------------------------------------------------
+
+def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
+    """GPU-accelerated gaussian blur. Returns a PIL RGBA image.
+
+    Falls back to PIL.ImageFilter.GaussianBlur on any failure.
+    """
+    pil_in = img if isinstance(img, Image.Image) else None
+    if sigma <= 0.05:
+        return pil_in.copy() if pil_in is not None else Image.fromarray(
+            _to_rgba_np(img), 'RGBA',
+        )
+    if not _try_init():
+        if pil_in is None:
+            pil_in = Image.fromarray(_to_rgba_np(img), 'RGBA')
+        return pil_in.filter(ImageFilter.GaussianBlur(sigma))
+
+    try:
+        arr = _to_rgba_np(img)
+        h, w, _ = arr.shape
+        radius = min(64, max(1, int(round(sigma * 3.0))))
+
+        src_tex = _ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
+        src_tex.filter = (0x2601, 0x2601)  # GL_LINEAR
+        src_tex.repeat_x = False
+        src_tex.repeat_y = False
+
+        fbo_h = _get_fbo(w, h, 'blurH')
+        fbo_v = _get_fbo(w, h, 'blurV')
+
+        _blur_prog['u_sigma'].value = float(sigma)
+        _blur_prog['u_radius'].value = int(radius)
+        _blur_prog['u_tex'].value = 0
+
+        # Horizontal pass
+        fbo_h.use()
+        _ctx.clear(0.0, 0.0, 0.0, 0.0)
+        src_tex.use(0)
+        _blur_prog['u_dir'].value = (1.0 / w, 0.0)
+        _blur_quad.render()
+
+        # Vertical pass
+        fbo_v.use()
+        _ctx.clear(0.0, 0.0, 0.0, 0.0)
+        fbo_h.color_attachments[0].use(0)
+        _blur_prog['u_dir'].value = (0.0, 1.0 / h)
+        _blur_quad.render()
+
+        data = fbo_v.read(components=4, alignment=1)
+        out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
+        out = np.flipud(out).copy()
+
+        src_tex.release()
+        return Image.fromarray(out, 'RGBA')
+    except Exception as exc:
+        try:
+            print(f'[GPU] blur failed, fallback: {exc}')
+        except Exception:
+            pass
+        if pil_in is None:
+            pil_in = Image.fromarray(_to_rgba_np(img), 'RGBA')
+        return pil_in.filter(ImageFilter.GaussianBlur(sigma))
+
+
+# ---------------------------------------------------------------------------
+# One-pass shell renderer (shadow + body + gradient + scanlines + borders)
+# ---------------------------------------------------------------------------
+
+def render_shell_rgba(
+    w: int, h: int,
+    body_pad: int,
+    radius: float,
+    color_a: Tuple[int, int, int, int],
+    color_b: Tuple[int, int, int, int],
+    edge: Tuple[int, int, int, int],
+    inner: Tuple[int, int, int, int],
+    scan: Tuple[int, int, int, int] = (0, 0, 0, 0),
+    scan_period: float = 0.0,
+    shadow: Tuple[int, int, int, int] = (0, 0, 0, 0),
+    shadow_dx: float = 0.0, shadow_dy: float = 0.0,
+    shadow_sigma: float = 0.0, shadow_radius: Optional[float] = None,
+) -> Optional[Image.Image]:
+    """Render the static shell in a single shader pass.
+
+    Returns a PIL RGBA image. Returns None (caller should fall back to CPU
+    path) if the GPU context is unavailable.
+    """
+    if not _try_init():
+        return None
+    try:
+        fbo = _get_fbo(w, h, 'shell')
+        fbo.use()
+        _ctx.viewport = (0, 0, w, h)
+        _ctx.clear(0.0, 0.0, 0.0, 0.0)
+        p = _shell_prog
+        p['u_size'].value = (float(w), float(h))
+        p['u_body_min'].value = (float(body_pad), float(body_pad))
+        p['u_body_max'].value = (float(w - body_pad), float(h - body_pad))
+        p['u_radius'].value = float(radius)
+        p['u_color_a'].value = tuple(c / 255.0 for c in color_a)
+        p['u_color_b'].value = tuple(c / 255.0 for c in color_b)
+        p['u_edge'].value = tuple(c / 255.0 for c in edge)
+        p['u_inner'].value = tuple(c / 255.0 for c in inner)
+        p['u_scan'].value = tuple(c / 255.0 for c in scan)
+        p['u_scan_period'].value = float(scan_period)
+        p['u_shadow_color'].value = tuple(c / 255.0 for c in shadow)
+        p['u_shadow_dx'].value = float(shadow_dx)
+        p['u_shadow_dy'].value = float(shadow_dy)
+        p['u_shadow_sigma'].value = float(shadow_sigma) if shadow_sigma > 0 else 1.0
+        p['u_shadow_radius'].value = float(
+            shadow_radius if shadow_radius is not None else radius,
+        )
+        _ctx._shell_quad.render()
+
+        data = fbo.read(components=4, alignment=1)
+        arr = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
+        arr = np.flipud(arr).copy()
+        return Image.fromarray(arr, 'RGBA')
+    except Exception as exc:
+        try:
+            print(f'[GPU] shell render failed, fallback: {exc}')
+        except Exception:
+            pass
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Premultiply + BGRA swizzle for UpdateLayeredWindow
+# ---------------------------------------------------------------------------
+
+def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
+    """GPU-accelerated RGBA → premultiplied BGRA conversion for ULW upload.
+
+    Returns the raw byte buffer (top-down) suitable for the DIB section, or
+    None if the GPU path is unavailable. Only worth calling for larger
+    surfaces; for ~260×220 panels numpy is already fast enough.
+    """
+    if not _try_init():
+        return None
+    try:
+        arr = _to_rgba_np(rgba)
+        h, w, _ = arr.shape
+        src_tex = _ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
+        src_tex.filter = (0x2600, 0x2600)
+        fbo = _get_fbo(w, h, 'prem')
+        fbo.use()
+        _ctx.viewport = (0, 0, w, h)
+        _ctx.clear(0.0, 0.0, 0.0, 0.0)
+        src_tex.use(0)
+        _prem_prog['u_tex'].value = 0
+        _ctx._prem_quad.render()
+        data = fbo.read(components=4, alignment=1)
+        out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
+        out = np.flipud(out).copy()
+        src_tex.release()
+        return out.tobytes()
+    except Exception as exc:
+        try:
+            print(f'[GPU] premult failed, fallback: {exc}')
+        except Exception:
+            pass
+        return None

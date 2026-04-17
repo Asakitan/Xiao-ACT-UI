@@ -1460,7 +1460,7 @@ class SAOWebViewGUI:
         self._bb_last_target_uuid = 0     # UUID of last monster damaged by self
         self._bb_last_damage_ts = 0.0     # timestamp of last self→monster damage
         self._bb_recent_targets = {}      # uuid -> last_damage_ts for multi-unit secondary panels
-        self._bb_damage_timeout = 5.0     # seconds before boss bar fades out
+        self._bb_damage_timeout = 15.0    # seconds before boss bar fades out
 
         # DPS Meter
         self.dps_win = None
@@ -4113,7 +4113,14 @@ class SAOWebViewGUI:
             pass
 
     def _combat_damage_timeout_s(self) -> float:
-        return 5.0
+        # User-configurable fade timeout (seconds). Default large enough that
+        # normal combat lulls (cast animations, mechanic phases, target swaps)
+        # don't cause the DPS panel to disappear every few seconds.
+        try:
+            v = int(self._get_setting('dps_fade_timeout_s', 15) or 15)
+        except Exception:
+            v = 15
+        return float(max(5, v))
 
     def _get_dps_last_report_available(self) -> bool:
         tracker = getattr(self, '_dps_tracker', None)
@@ -5177,11 +5184,13 @@ class SAOWebViewGUI:
             pass
 
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
-        def _force_exit():
-            time.sleep(0.5)
-            os._exit(0)
-        t = threading.Thread(target=_force_exit, daemon=True)
-        t.start()
+        # 热切换时不强杀: _do_hot_switch 需要在 webview.start() 返回后运行
+        if not self._pending_switch:
+            def _force_exit():
+                time.sleep(0.5)
+                os._exit(0)
+            t = threading.Thread(target=_force_exit, daemon=True)
+            t.start()
 
     def _exit_with_animation(self):
         self._transition_with_animation()
@@ -5453,7 +5462,7 @@ class SAOWebViewGUI:
             cfg['auto_key'] = self._get_auto_key_menu_state()
             cfg['boss_bar_mode'] = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
             cfg['dps_enabled'] = bool(self._get_setting('dps_enabled', True))
-            cfg['dps_fade_timeout_s'] = int(self._get_setting('dps_fade_timeout_s', 8))
+            cfg['dps_fade_timeout_s'] = int(self._get_setting('dps_fade_timeout_s', 15))
             cfg['dps_last_report_available'] = self._get_dps_last_report_available()
             cfg['raid_editor_visible'] = bool(self._raid_editor_visible)
             cfg['autokey_editor_visible'] = bool(self._autokey_editor_visible)
@@ -5965,11 +5974,6 @@ class SAOWebViewGUI:
         if target != 'entity':
             print(f'[SAO WebView] Unknown switch target: {target}')
             return
-        try:
-            self.settings.set('ui_mode', 'entity')
-            self.settings.save()
-        except Exception:
-            pass
         import gc; gc.collect()
         import time as _t; _t.sleep(0.3)
         try:
@@ -5979,6 +5983,9 @@ class SAOWebViewGUI:
         except Exception as e:
             print(f"[SAO] Hot switch to Entity failed: {e}")
             import traceback; traceback.print_exc()
+        finally:
+            # Entity UI 退出后, webview/.NET 残留线程仍阻塞进程, 强制终止
+            os._exit(0)
 
     def _exit(self):
         if self._exit_animating:

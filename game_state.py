@@ -13,6 +13,7 @@ from typing import Optional, List, Callable
 # 缓存字段名列表
 _CACHE_FIELDS = (
     'player_name', 'level_base', 'level_extra', 'player_id',
+    'season_exp',
     'hp_current', 'hp_max', 'hp_pct',
     'stamina_current', 'stamina_max', 'stamina_pct',
     'profession_id', 'profession_name',
@@ -88,6 +89,7 @@ class GameState:
     player_name: str = ''
     level_base: int = 0                # 基础等级 (0=未识别)
     level_extra: int = 0               # 括号内加成等级 (+XX)
+    season_exp: int = 0                # 当前赛季/extraLevel EXP
     player_id: str = ''                # 玩家编号
 
     # ── 生命值 ──
@@ -172,6 +174,7 @@ class GameState:
             'player_name': self.player_name,
             'level_base': self.level_base,
             'level_extra': self.level_extra,
+            'season_exp': self.season_exp,
             'level_text': self.level_text,
             'player_id': self.player_id,
             'hp_current': self.hp_current,
@@ -269,6 +272,9 @@ class GameStateManager:
                         continue
                 elif k == 'level_extra':
                     if not isinstance(v, int) or v < 0 or v > 999:
+                        continue
+                elif k == 'season_exp':
+                    if not isinstance(v, int) or v < 0:
                         continue
                 elif k in ('hp_current', 'hp_max', 'stamina_current', 'stamina_max'):
                     if not isinstance(v, int) or v < 0:

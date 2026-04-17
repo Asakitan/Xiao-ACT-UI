@@ -818,15 +818,16 @@ body {
 .id-plate::before {
     top: 0; left: 0;
     width: 16px; height: 16px;
-    border-top: 1.5px solid rgba(104, 228, 255, 0.55);
-    border-left: 1.5px solid rgba(104, 228, 255, 0.55);
+    border-top: 1.5px solid rgba(104, 228, 255, 1);
+    border-left: 1.5px solid rgba(104, 228, 255, 1);
     animation: id-pulse 2.5s ease-in-out infinite;
 }
 .id-plate::after {
-    bottom: 0; right: 12%;
+    bottom: 2px; right: 2px;
     width: 16px; height: 16px;
-    border-bottom: 1.5px solid rgba(212, 156, 23, 0.50);
-    border-right: 1.5px solid rgba(212, 156, 23, 0.50);
+    border-bottom: 1.5px solid rgba(212, 156, 23, 1);
+    border-right: 1.5px solid rgba(212, 156, 23, 1);
+    border-radius: 0 0 3px 0;
     animation: id-pulse 2.5s ease-in-out infinite 1.2s;
 }
 /* Diagonal cut border overlay — follows the same clip-path, draws
@@ -1018,6 +1019,7 @@ body {
     width: 5px;
     height: 5px;
     border: 1px solid rgba(212, 156, 23, 0.75);
+    background: rgba(212, 156, 23, 0.82);
     transform: rotate(45deg);
     flex-shrink: 0;
 }
