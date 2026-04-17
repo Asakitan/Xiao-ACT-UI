@@ -117,6 +117,8 @@ def run_ui():
         from config import SettingsManager
         _s = SettingsManager()
         ui_mode = _s.get('ui_mode', 'webview') or 'webview'
+        if ui_mode == 'sao':
+            ui_mode = 'entity'
     except Exception:
         pass
 

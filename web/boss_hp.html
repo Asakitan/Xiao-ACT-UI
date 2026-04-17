@@ -1300,7 +1300,14 @@ function _hideBossBar() {
     if (!_visible) return;
     var root = document.getElementById('boss-root');
     root.classList.add('exiting');
+    // If a previous hide timer is still pending, cancel it so we don't
+    // end up with two overlapping teardown callbacks.
+    if (_hideTimer) {
+        clearTimeout(_hideTimer);
+        _hideTimer = null;
+    }
     _hideTimer = setTimeout(function() {
+        _hideTimer = null;
         root.classList.remove('visible', 'exiting', 'invincible', 'overdrive');
         _visible = false;
         _lastShieldActive = false;
@@ -1464,7 +1471,15 @@ function updateBossBar(data) {
     // Show (or cancel pending exit) whenever data is active.
     // _visible stays true during the 260ms exit-animation window, so we must
     // also check for the exiting class to correctly interrupt an ongoing hide.
-    if (!_visible || root.classList.contains('exiting')) _showBossBar();
+    // Additionally, if our JS `_visible` flag is out-of-sync with the DOM
+    // (e.g. the hide timer fired but `active=true` arrived before the flag
+    // could be observed), force a re-show so the bar can never get stuck
+    // hidden while Python keeps reporting active=true.
+    if (!_visible
+            || root.classList.contains('exiting')
+            || !root.classList.contains('visible')) {
+        _showBossBar();
+    }
 
     // Update boss name
     var bossNameEl = document.getElementById('boss-name');

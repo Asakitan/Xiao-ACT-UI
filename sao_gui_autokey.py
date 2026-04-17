@@ -18,6 +18,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import uuid, copy, json, os
 from typing import Callable, Optional, Any
+from window_effects import apply_native_chrome
 
 # ── 颜色令牌 (与 sao_gui ModernColors 一致) ──
 _C = type('C', (), {
@@ -100,7 +101,7 @@ class AutoKeyPanel:
         w.configure(bg=_C.BG)
         w.geometry('540x620')
         w.resizable(True, True)
-        w.transient(self._master)
+        apply_native_chrome(w)
         try:
             w.attributes('-topmost', True)
         except Exception:

@@ -22,6 +22,7 @@ import numpy as np
 from config import (
     APP_VERSION_LABEL, WINDOW_TITLE, WINDOW_SIZE,
     DEFAULT_HOTKEYS,
+    SettingsManager,
     get_skill_slot_rects,
 )
 from sao_theme import (
@@ -34,7 +35,6 @@ from sao_theme import (
 from character_profile import (
     load_profile, save_profile, get_or_ask_profile,
     show_welcome_dialog, PROFESSION_LIST,
-    calc_level, add_song_xp
 )
 from sao_sound import play_sound, LevelUpEffect, load_sao_fonts, get_sao_font, get_cjk_font
 from auto_key_engine import (
@@ -60,9 +60,22 @@ from boss_autokey_linkage import (
 from dps_tracker import DpsTracker
 from sao_gui_dps import DpsOverlay
 from sao_gui_bosshp import BossHpOverlay
+from sao_gui_hp import HpOverlay
 from sao_gui_alert import AlertOverlay
+from sao_gui_skillfx import BurstReadyOverlay
 from sao_gui_autokey import AutoKeyPanel
 from sao_gui_bossraid import BossRaidPanel
+from sao_gui_commander import CommanderPanel
+
+try:
+    import pynput.keyboard as pynput_kb
+    from pynput.keyboard import Key, KeyCode
+    PYNPUT_HOTKEY_AVAILABLE = True
+except Exception:
+    pynput_kb = None
+    Key = None
+    KeyCode = None
+    PYNPUT_HOTKEY_AVAILABLE = False
 
 
 class ModernColors:
@@ -95,26 +108,6 @@ class SmoothButton(tk.Canvas):
                  bg=None, fg="#FFFFFF", radius=8, font_size=11, **kwargs):
         super().__init__(parent, width=width, height=height,
                          highlightthickness=0, bd=0, **kwargs)
-
-class MidiVisualizer(tk.Frame):
-    NUM_BARS = 36; BAR_DECAY = 0.90; UPDATE_INTERVAL = 33
-    def __init__(self, parent, settings=None, **kwargs):
-        super().__init__(parent, **kwargs)
-        self._canvas = tk.Canvas(self, bg='#131315', highlightthickness=0)
-        self._canvas.pack(fill='both', expand=True)
-    def feed_note(self, *a, **kw): pass
-    def set_mode(self, *a, **kw): pass
-    def start(self, *a, **kw): pass
-    def stop(self, *a, **kw): pass
-    def trigger_note(self, *a, **kw): pass
-
-KEYBOARD_LAYOUT = {'row1': [], 'row2': [], 'row3': []}
-NOTE_NAMES = {'row1': [], 'row2': [], 'row3': []}
-BLACK_KEY_LAYOUT = {}
-BLACK_KEY_NAMES = {}
-NOTE_NAMES_EXTENDED = {'row1': [], 'row2': [], 'row3': []}
-BLACK_KEY_NAMES_EXTENDED = {}
-KEY_TO_MIDI = {}
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
 
 # pyglet Link Start 渲染器 (已弃用, 保留文件但不再使用)
@@ -124,8 +117,8 @@ HAS_PYGLET = False
 # ── 全局快捷键检测 (复用 gui.py 逻辑) ──
 def _is_admin():
     try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
         return False
 
 KEYBOARD_HOTKEY_AVAILABLE = False
@@ -157,25 +150,47 @@ GLOBAL_HOTKEY_AVAILABLE = PYNPUT_HOTKEY_AVAILABLE or KEYBOARD_HOTKEY_AVAILABLE
 #  Settings Manager (与 gui.py 共享 settings.json)
 # ══════════════════════════════════════════════════════════
 class SettingsManager:
+    _LEGACY_KEYS = (
+        'last_file', 'speed', 'transpose', 'chord_mode',
+        'show_piano', 'show_viz', 'show_control',
+        'piano_x', 'piano_y', 'viz_x', 'viz_y',
+        'control_x', 'control_y',
+    )
+
     def __init__(self):
         self.settings = {
             'hotkeys': DEFAULT_HOTKEYS.copy(),
-            'ui_mode': 'sao',
+            'ui_mode': 'entity',
         }
         self.load()
 
+    def _prune_legacy_settings(self):
+        dirty = False
+        for legacy_key in self._LEGACY_KEYS:
+            if legacy_key in self.settings:
+                self.settings.pop(legacy_key, None)
+                dirty = True
+        return dirty
+
     def load(self):
+        dirty = False
         try:
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     self.settings.update(json.load(f))
         except:
             pass
+        if self.settings.get('ui_mode') == 'sao':
+            self.settings['ui_mode'] = 'entity'
+            dirty = True
+        if self._prune_legacy_settings():
+            dirty = True
+        if dirty:
+            self.save()
 
     def save(self):
         try:
-            for legacy_key in ('last_file', 'speed', 'transpose', 'chord_mode'):
-                self.settings.pop(legacy_key, None)
+            self._prune_legacy_settings()
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.settings, f, indent=2, ensure_ascii=False)
         except:
@@ -336,11 +351,6 @@ def _sao_pill(parent, text, active, command):
                    padx=8, pady=2, cursor='hand2', relief=tk.FLAT)
     lbl.bind('<Button-1>', lambda e: command())
     return lbl
-
-
-def _apply_viz_light_theme(viz, sao_colors=None):
-    """No-op stub — visualizer theme removed."""
-    pass
 
 
 def _set_clickthrough_style(win):
@@ -539,15 +549,6 @@ def _get_hp_pil_font(size, family='sao', _cache={}):
     return font
 
 
-# ══════════════════════════════════════════════════════════
-#  迷你钢琴 (60键可视化) — 精简版
-# ══════════════════════════════════════════════════════════
-class SAOMiniPiano(tk.Canvas):
-    """No-op stub — MIDI piano removed."""
-    def __init__(self, *a, **kw): super().__init__(*a, **kw)
-    def note_on(self, *a, **kw): pass
-    def reset(self, *a, **kw): pass
-
 class SAOHotkeyManager:
     """全局快捷键管理 (与 gui.py HotkeyPanel 逻辑一致)"""
 
@@ -629,14 +630,15 @@ class SAOPlayerPanel(tk.Frame):
     SAO 风格左侧信息面板 — 对标 SAO-UI LeftInfo + HP 组件
     
     结构:
-    - Top 区 (白色, 240×280): 用户名/分隔线/HP条/等级/文件信息
-    - Bottom 区 (灰色, 240×120): 描述 + 状态信息
+    - Top 区 (白色, 240×280): 用户名/分隔线/等级/EXP/HP/STA
+    - Bottom 区 (灰色, 240×120): 菜单模式状态
     - 右三角指示器 (连接 MenuBar)
     - 下三角装饰 (连接 top/bottom)
     """
 
     def __init__(self, parent, username='Player', profession='', **kw):
-        super().__init__(parent, bg=parent.cget('bg'), highlightthickness=0, **kw)
+        # 不继承 parent bg (#010101 = 透明色键), 用实际可见色
+        super().__init__(parent, bg='#ffffff', highlightthickness=0, **kw)
         self._active = False
         self._anim = Animator(self)
         self._target_w = 240
@@ -647,26 +649,14 @@ class SAOPlayerPanel(tk.Frame):
         self._username = username
         self._profession = profession
 
-        # 等级数据
+        # 角色 / 赛季进度
         self._level = 1
-        self._xp_percent = 0.0  # 当前经验百分比 (0~1)
-        self._xp_total = 0  # 累计 XP (用于 calc_level)
-
-        # 播放数据
-        self._file_name = "未选择文件"
-        self._status = "就绪"
-        self._time_current = 0
-        self._time_total = 0
-        self._speed = 1.0
-        self._transpose = 0
-        self._hp_percent = 1.0
-        self._hp_current = 1000
-        self._hp_total = 1000
-        self._mode = "经典60键"
+        self._level_extra = 0
+        self._season_exp = 0
+        self._sta_hp = (0, 0)
+        self._sta_sta = (0, 0)
         self._shift_mode = "普通模式"
-        self._bpm = 0
-        self._is_playing = False
-        self._sustain = False
+        self._on_mode_change = None  # callback(mode_text) 供外部持久化
 
         self._build()
 
@@ -687,63 +677,31 @@ class SAOPlayerPanel(tk.Frame):
         else:
             self._animate_close()
 
-    def update_file(self, name):
-        self._file_name = name
-        if self._active:
-            self._redraw_top(self._target_w, self._top_h)
-
-    def update_progress(self, current, total):
-        self._time_current = current
-        self._time_total = total
-        if total > 0:
-            self._hp_percent = current / total
-            self._hp_current = int(current)
-            self._hp_total = int(total)
-        if self._active:
-            self._redraw_top(self._target_w, self._top_h)
-
-    def update_status(self, status, is_playing=None):
-        self._status = status
-        if is_playing is not None:
-            self._is_playing = is_playing
-        if self._active:
-            self._redraw_bottom(self._target_w, self._bottom_h)
-
-    def update_speed(self, speed):
-        self._speed = speed
-        if self._active:
-            self._redraw_top(self._target_w, self._top_h)
-
-    def update_transpose(self, t):
-        self._transpose = t
-        if self._active:
-            self._redraw_top(self._target_w, self._top_h)
-
-    def update_mode(self, mode_text):
-        self._mode = mode_text
-        if self._active:
-            self._redraw_bottom(self._target_w, self._bottom_h)
-
-    def update_bpm(self, bpm):
-        self._bpm = bpm
-        if self._active:
-            self._redraw_top(self._target_w, self._top_h)
-
-    def update_sustain(self, on: bool):
-        self._sustain = on
-        if self._active:
-            self._redraw_bottom(self._target_w, self._bottom_h)
-
     def update_shift_mode(self, mode_text: str):
         self._shift_mode = mode_text
         if self._active:
             self._redraw_bottom(self._target_w, self._bottom_h)
+        if self._on_mode_change:
+            try:
+                self._on_mode_change(mode_text)
+            except Exception:
+                pass
 
-    def update_level(self, level: int, xp_pct: float, xp_total: int = 0):
-        """更新等级信息"""
+    def update_level(self, level: int, level_extra: int = 0,
+                     season_exp: Optional[int] = None):
+        """更新等级/赛季等级/EXP 信息。"""
+        level = max(1, int(level or 1))
+        level_extra = max(0, int(level_extra or 0))
+        next_exp = self._season_exp if season_exp is None else max(0, int(season_exp or 0))
+        if (
+            self._level == level and
+            self._level_extra == level_extra and
+            self._season_exp == next_exp
+        ):
+            return
         self._level = level
-        self._xp_percent = xp_pct
-        self._xp_total = xp_total
+        self._level_extra = level_extra
+        self._season_exp = next_exp
         if self._active:
             self._redraw_top(self._target_w, self._top_h)
 
@@ -830,25 +788,28 @@ class SAOPlayerPanel(tk.Frame):
         # 等级标签
         self._top.create_text(20, 62, text='LEVEL', anchor='w',
                               font=get_sao_font(7), fill=LABEL)
+        level_text = f'Lv. {self._level}'
+        level_font_size = 20
+        if self._level_extra > 0:
+            level_text = f'Lv. {self._level}(+{self._level_extra})'
+            level_font_size = 16 if self._level_extra < 100 else 14
         self._top.create_text(w // 2, 84,
-                              text=f'Lv. {self._level}',
-                              font=get_sao_font(20, True), fill=GOLD)
+                              text=level_text,
+                              font=get_sao_font(level_font_size, True), fill=GOLD)
 
         if h < 120:
             return
 
-        # ── 经验值条 ──
-        from character_profile import calc_level as _cl
-        _lv, _cur_xp, _need_xp = _cl(
-            getattr(self, '_xp_total', 0) if hasattr(self, '_xp_total') else 0)
+        # ── 赛季 EXP ──
+        exp_text = f'{self._season_exp:,}' if self._season_exp > 0 else '—'
 
         # EXP 标签
         self._top.create_text(20, 108, text='EXP', anchor='w',
                               font=get_sao_font(7), fill=LABEL)
-        self._top.create_text(w - 20, 108, text=f'{_cur_xp} / {_need_xp}',
+        self._top.create_text(w - 20, 108, text=exp_text,
                               anchor='e', font=get_sao_font(8), fill='#999999')
 
-        # 经验条 (带边框)
+        # EXP 条 (当前协议仅提供 CurExp, 无下一等级阈值时保留轨道)
         if h > 124:
             xp_y = 122
             xp_x = 20
@@ -857,14 +818,12 @@ class SAOPlayerPanel(tk.Frame):
             # 底色
             self._top.create_rectangle(xp_x, xp_y, xp_x + xp_w, xp_y + xp_h,
                                        fill='#e8e8e8', outline='#d8d8d8', width=1)
-            xp_fill = int(xp_w * self._xp_percent)
-            if xp_fill > 0:
+            if self._season_exp > 0:
                 self._top.create_rectangle(xp_x + 1, xp_y + 1,
-                                           xp_x + xp_fill, xp_y + xp_h - 1,
+                                           xp_x + 10, xp_y + xp_h - 1,
                                            fill=GOLD, outline='')
-                # 光泽高亮
                 self._top.create_rectangle(xp_x + 1, xp_y + 1,
-                                           xp_x + xp_fill, xp_y + 3,
+                                           xp_x + 10, xp_y + 3,
                                            fill='#f5c644', outline='')
 
         # ── 状态标签行 (使用游戏识别数据) ──
@@ -894,7 +853,8 @@ class SAOPlayerPanel(tk.Frame):
             self._top.create_line(10, scan_y, w - 10, scan_y, fill='#e8e8e8', width=1)
             t = time.time()
             scan_x = 10 + int((w - 20) * ((math.sin(t * 1.5) + 1) / 2))
-            self._top.create_rectangle(scan_x - 12, scan_y - 1, scan_x + 12, scan_y + 1,
+            self._top.create_rectangle(scan_x - 12, scan_y - 1,
+                                       scan_x + 12, scan_y + 1,
                                        fill=CYAN, outline='')
 
     def _redraw_bottom(self, w, h):
@@ -926,18 +886,12 @@ class SAOPlayerPanel(tk.Frame):
         self._bottom.create_text(12, 12, text='STATUS', anchor='w',
                                  font=get_sao_font(6), fill='#b0b0b0')
 
-        # ── 键位模式 + 延音状态 ──
+        # ── 菜单模式 ──
         sm = self._shift_mode if self._shift_mode else '普通模式'
         sm_color = '#2196f3' if sm == '普通模式' else ('#e65100' if 'CTRL' in sm else '#1565c0')
         self._bottom.create_text(15, h // 2 - 2, text=sm,
                                  font=get_cjk_font(9, True), fill=sm_color,
                                  anchor='w')
-        # 延音指示
-        sus_text = '延音 ON' if self._sustain else ''
-        if sus_text:
-            self._bottom.create_text(w - 12, h // 2 - 2, text=sus_text,
-                                     font=get_sao_font(7, True), fill='#3ad86c',
-                                     anchor='e')
 
         # 底部系统标签
         if h > 50:
@@ -954,9 +908,9 @@ class SAOPlayerGUI:
     纯悬浮 SAO Utils 风格 GUI — 没有传统窗口！
     - 常驻: 小型悬浮触发按钮 (Toplevel)
     - 展开: SAO PopUpMenu 全屏菜单 = 主界面
-    - 左面板: SAOPlayerPanel (文件/进度/状态)
-    - 菜单按钮: 5 类 (文件/播放/设置/控制/关于)
-    - 子菜单: 所有播放控制
+    - 左面板: SAOPlayerPanel (玩家信息/赛季进度/状态)
+    - 菜单按钮: 5 类 (控制/自动/Boss/面板/关于)
+    - 子菜单: 实时工具与面板控制
     - 可选: 浮动钢琴/可视化面板
     """
 
@@ -968,7 +922,7 @@ class SAOPlayerGUI:
 
         self.settings = SettingsManager()
         # 记录当前 UI 模式 — 下次启动时使用
-        self.settings.set('ui_mode', 'sao')
+        self.settings.set('ui_mode', 'entity')
         self.settings.save()
 
         # ── 角色配置 ──
@@ -976,9 +930,8 @@ class SAOPlayerGUI:
         self._username = profile.get('username', '')
         self._profession = profile.get('profession', '')
         self._level = profile.get('level', 1)
-        self._xp = profile.get('xp', 0)
-        self._songs_played = profile.get('songs_played', 0)
-        self._play_time = profile.get('play_time', 0)
+        self._level_extra = 0
+        self._season_exp = 0
 
         # 加载 SAO 字体
         load_sao_fonts()
@@ -988,14 +941,9 @@ class SAOPlayerGUI:
         self._hidden_panels_snapshot = []  # 隐藏前记录哪些面板是开的
         self._player_panel = None  # 当 SAO 菜单打开时设置
         self._picker = None        # SAOFilePicker 引用 (防止 GC)
-        self._piano_panel = None   # 浮动钢琴面板
-        self._viz_panel = None     # 浮动可视化面板
         self._status_panel = None  # 浮动状态面板
-        self._control_panel = None # 浮动控制面板
         self._fisheye_ov = None    # 菜单开启时的持久鱼眼叠加层
         self._ctx_menu_open = False  # 右键菜单弹出中, 暂停 z-order 置顶
-        self._mini_piano = None
-        self._visualizer = None
         self._lift_loop_active = False
         self._skip_canvas_click = False
         self._float_progress_pct = 0.0
@@ -1040,7 +988,8 @@ class SAOPlayerGUI:
         self._boss_raid_engine = None
         self._boss_autokey_linkage = None
         self._dps_tracker = None
-        self._dps_visible = True
+        self._dps_visible = False
+        self._dps_enabled = True
         self._dps_faded = False
         self._last_burst_ready = False
         self._last_burst_slot = 0
@@ -1052,15 +1001,23 @@ class SAOPlayerGUI:
         self._last_gs_name = ''
         self._last_gs_prof = ''
         self._last_gs_uid = ''
+        self._hide_seek_engine = None
+        self._hide_seek_alert_timer = None
+        self._hide_seek_alert_active = False
 
         # ── ULW 覆盖层引用 ──
         self._dps_overlay = None
         self._boss_hp_overlay = None
+        self._hp_overlay = None
         self._alert_overlay = None
+        self._skillfx_overlay = None
+        self._skillfx_layout = None
 
         # ── 配置面板实例 ──
         self._autokey_panel = None    # AutoKeyPanel
         self._bossraid_panel = None   # BossRaidPanel
+        self._commander_panel = None  # CommanderPanel
+        self._commander_last_push = 0.0
 
         self._set_icon()
         self._create_floating_widget()
@@ -1101,393 +1058,24 @@ class SAOPlayerGUI:
         pass
 
     def _render_hp_shell(self, hover=False, scale=4):
-        """渲染静态 HP 外壳 + 身份面板底板为 RGBA PIL Image (4× 超采样 + LANCZOS)。"""
-        FW, FH = self._fw, self._fh
-        ox, oy = self._hp_ox, self._hp_oy
-        BW, BH = 505, 48
-        xt_w = 26
-        xr_x = ox + xt_w + 3
-        xr_w = BW - xt_w - 3
-        bar_x = ox + 110
-        bar_y = oy + 10
-        PW, PT, PH, PS = 350, 19, 27, 145
-        num_x = ox + int(BW * 0.60)
-        num_y = oy + int(BH * 0.90)
-        xp_w = int(170 * 0.69)
-        lv_x = num_x + xp_w + 3
-        lv_w = int(170 * 0.30)
-
-        bg = '#cfd0c5' if hover else '#cfd0c5'
-        border = '#b4b6aa' if hover else '#b4b6aa'
-        glow_cyan = '#9cecff' if hover else '#86dfff'
-        glow_gold = '#ffd06a' if hover else '#f3af12'
-
-        sw, sh = FW * scale, FH * scale
-        img = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-
-        def S(v):
-            return int(round(v * scale))
-
-        def P(pts):
-            return [(S(x), S(y)) for x, y in pts]
-
-        # ── 不透明底板: 覆盖 HP+STA 通过 SAO 形状元素自身实现 ──
-        # (无额外矩形, 避免覆盖技能栏)
-
-        # ── xt_left 方块 ──
-        draw.rectangle((S(ox), S(oy), S(ox + xt_w), S(oy + BH)), fill=_hex_rgba(bg, 255))
-        draw.rectangle((S(ox), S(oy + BH / 4), S(ox + xt_w / 2), S(oy + BH * 3 / 4)),
-                        fill=(0, 0, 0, 0))
-
-        # ── xt_right 异形多边形 ──
-        xr_pts = [
-            (xr_x + 75, oy + int(BH * 0.22)),
-            (xr_x + xr_w, oy + int(BH * 0.22)),
-            (xr_x + xr_w, oy),
-            (xr_x, oy), (xr_x, oy + BH),
-            (xr_x + 210, oy + BH),
-            (xr_x + 210, oy + int(BH * 0.80)),
-            (xr_x + xr_w, oy + int(BH * 0.80)),
-            (xr_x + xr_w, oy + int(BH * 0.60)),
-            (xr_x + 200, oy + int(BH * 0.60)),
-            (xr_x + 195, oy + int(BH * 0.77)),
-            (xr_x + 75, oy + int(BH * 0.77)),
-        ]
-        draw.polygon(P(xr_pts), fill=_hex_rgba(bg, 252))
-
-        # ── 右侧渐隐条纹 ──
-        fade_start = xr_x + int(xr_w * 0.40)
-        fade_end = xr_x + xr_w
-        n_strips = 72
-        bg_rgb = _hex_rgba(bg, 255)
-        for i in range(n_strips):
-            t = i / max(1, n_strips - 1)
-            alpha = int(248 * (1.0 - t * t))
-            sx = fade_start + (fade_end - fade_start) * i / n_strips
-            ex = fade_start + (fade_end - fade_start) * (i + 1) / n_strips + 1
-            fill = (bg_rgb[0], bg_rgb[1], bg_rgb[2], alpha)
-            draw.rectangle((S(sx), S(oy), S(ex), S(oy + BH * 0.22)), fill=fill)
-            draw.rectangle((S(sx), S(oy + BH * 0.60), S(ex), S(oy + BH * 0.80)), fill=fill)
-
-        # ── HP 条边框 ──
-        bar_pts = [
-            (bar_x, bar_y), (bar_x + PW, bar_y),
-            (bar_x + PW - 5, bar_y + PT), (bar_x + PS, bar_y + PT),
-            (bar_x + PS - 4, bar_y + PH), (bar_x, bar_y + PH),
-        ]
-        draw.polygon(P(bar_pts), fill=(180, 182, 170, 255))
-        draw.line(P(bar_pts + [bar_pts[0]]),
-                  fill=_hex_rgba(border, 255), width=max(1, scale))
-        draw.line(P([(bar_x + 2, bar_y + 1), (bar_x + PW - 2, bar_y + 1)]),
-                  fill=_hex_rgba(border, 220), width=max(1, scale))
-        draw.line(P([(bar_x + 2, bar_y + PH - 1), (bar_x + PS - 5, bar_y + PH - 1)]),
-                  fill=_hex_rgba(border, 220), width=max(1, scale))
-        draw.polygon(P([
-            (bar_x + 2, bar_y + 2), (bar_x + PW - 3, bar_y + 2),
-            (bar_x + PW - 8, bar_y + PT - 1), (bar_x + PS + 1, bar_y + PT - 1),
-            (bar_x + PS - 6, bar_y + PH - 3), (bar_x + 2, bar_y + PH - 3),
-        ]), fill=(207, 208, 197, 120))
-
-        # ── 数值底框 ──
-        draw.rectangle((S(num_x), S(num_y), S(num_x + xp_w), S(num_y + 20)),
-                        fill=_hex_rgba(bg, 250))
-        draw.rectangle((S(lv_x), S(num_y), S(lv_x + lv_w), S(num_y + 20)),
-                        fill=_hex_rgba(bg, 250))
-
-        # ── 身份面板底板 (从 ~4%FW 开始, 无间隙衔接 HP 条) ──
-        id_x_start = max(4, int(FW * 0.04))   # 与 HUD x-offset 对齐
-        id_y = 0               # 从画布顶部开始, 填满整个面板
-        id_h = FH - 2          # 延伸到画布底部
-        id_right = ox          # 无间隙, 直接衔接 HP 条左端
-        # 带角度的 SAO 风格多边形
-        id_pts = [
-            (id_x_start, id_y),
-            (int(id_right * 0.96), id_y),
-            (id_right, id_y + int(id_h * 0.28)),
-            (id_right, FH - 2),
-            (id_x_start, FH - 2),
-        ]
-        draw.polygon(P(id_pts), fill=(207, 208, 197, 255))
-        draw.polygon(P(id_pts), outline=(180, 182, 170, 200))
-        # SAO 角标 (左上青色, 右下金色)
-        clen = S(6)
-        draw.line([(S(id_x_start + 1), S(id_y + 1)), (S(id_x_start + 1) + clen, S(id_y + 1))], fill=(104, 228, 255, 140), width=max(1, scale))
-        draw.line([(S(id_x_start + 1), S(id_y + 1)), (S(id_x_start + 1), S(id_y + 1) + clen)], fill=(104, 228, 255, 140), width=max(1, scale))
-        draw.line([(S(id_right - 4), S(FH - 4)), (S(id_right - 4) - clen, S(FH - 4))], fill=(212, 156, 23, 120), width=max(1, scale))
-        draw.line([(S(id_right - 4), S(FH - 4)), (S(id_right - 4), S(FH - 4) - clen)], fill=(212, 156, 23, 120), width=max(1, scale))
-
-        # ── STA 条底板 (HP 下方, +12px 更低) ──
-        sta_x = ox + 28
-        sta_y = oy + BH + 16
-        sta_track_w = 460
-        sta_h = 8
-        # 不透明磨砂轨道底 (完全覆盖原生STA)
-        draw.rectangle((S(sta_x), S(sta_y), S(sta_x + sta_track_w), S(sta_y + sta_h)),
-                        fill=(207, 208, 197, 255), outline=(180, 182, 170, 200))
-
-        return img.resize((FW, FH), Image.LANCZOS)
+        """(deprecated) HP 外壳已由 sao_gui_hp.HpOverlay 独立渲染。"""
+        return None
 
     def _render_hp_dynamic(self):
-        """合成完整 HP 帧: 静态外壳 + HP 填充 + 文字 + 身份面板 + STA 条。"""
-        FW, FH = self._fw, self._fh
-        shell = self._hp_shell_hover.copy() if self._hp_hover else self._hp_shell_normal.copy()
-        draw = ImageDraw.Draw(shell)
-
-        ox, oy = self._hp_ox, self._hp_oy
-
-        # ── HP 填充 (带从左到右的 alpha 梯度) ──
-        pct = self._float_progress_pct
-        if pct > 0:
-            if pct >= 0.60:
-                c = (154, 211, 52)
-            elif pct >= 0.25:
-                c = (244, 250, 73)
-            else:
-                c = (239, 104, 78)
-            top_max_w = self._hp_bar_right - self._hp_bar_x
-            top_fill_w = max(1, int(top_max_w * pct))
-            bot_max_w = self._hp_bar_step_x - self._hp_bar_x
-            bot_fill_w = min(top_fill_w, bot_max_w)
-            alpha_base = 1.0
-
-            # 上层 — 完全不透明 HP 填充
-            h_top = max(1, self._hp_bar_bot_top - self._hp_bar_y)
-            grad_top = np.zeros((h_top, top_fill_w, 4), dtype=np.uint8)
-            grad_top[:, :, :3] = c
-            grad_top[:, :, 3] = 255
-            fill_top_img = Image.fromarray(grad_top)
-            shell.paste(fill_top_img, (self._hp_bar_x, self._hp_bar_y), fill_top_img)
-
-            # 下层 — 完全不透明 HP 填充
-            if bot_fill_w > 0:
-                h_bot = max(1, self._hp_bar_bot_full - self._hp_bar_bot_top)
-                grad_bot = np.zeros((h_bot, bot_fill_w, 4), dtype=np.uint8)
-                grad_bot[:, :, :3] = c
-                grad_bot[:, :, 3] = 255
-                fill_bot_img = Image.fromarray(grad_bot)
-                shell.paste(fill_bot_img, (self._hp_bar_x, self._hp_bar_bot_top), fill_bot_img)
-
-        # ── 文字: 用户名 (XTBox 内) ──
-        name = getattr(self, '_hp_display_name', 'Player')
-        BW, BH = 505, 48
-        xr_x = ox + 26 + 3
-        name_cx = (xr_x + xr_x + 85) // 2
-        name_cy = oy + BH // 2
-        try:
-            fn = _get_hp_pil_font(16, 'cjk')
-            draw.text((name_cx, name_cy), name, fill=(60, 62, 50, 255),
-                      font=fn, anchor='mm')
-        except Exception:
-            draw.text((name_cx - 10, name_cy - 6), name, fill=(60, 62, 50, 255))
-
-        # ── 文字: XP / 等级 ──
-        num_x = ox + int(BW * 0.60)
-        num_y = oy + int(BH * 0.90)
-        xp_w = int(170 * 0.69)
-        lv_x = num_x + xp_w + 3
-        lv_w = int(170 * 0.30)
-        try:
-            fn_num = _get_hp_pil_font(14, 'sao')
-            if self._playing or self._paused:
-                # 播放中/暂停中: 显示时间 mm:ss / mm:ss
-                tc = getattr(self, '_time_current', 0)
-                tt = getattr(self, '_time_total', 0)
-                cur_m, cur_s = int(tc) // 60, int(tc) % 60
-                tot_m, tot_s = int(tt) // 60, int(tt) % 60
-                time_str = f'{cur_m:02d}:{cur_s:02d}/{tot_m:02d}:{tot_s:02d}'
-                draw.text((num_x + xp_w - 5, num_y + 9),
-                          time_str, fill=(88, 152, 190, 255),
-                          font=fn_num, anchor='rm')
-                draw.text((lv_x + lv_w - 5, num_y + 9),
-                          f'lv.{self._level}', fill=(60, 62, 50, 255),
-                          font=fn_num, anchor='rm')
-            else:
-                gs = getattr(self, '_game_state', None)
-                if self._recognition_active and gs is not None:
-                    # 识别模式: 显示真实 HP 和等级
-                    if gs.hp_max > 0:
-                        hp_c, hp_m = self._sta_hp
-                        draw.text((num_x + xp_w - 5, num_y + 9),
-                                  f'{hp_c}/{hp_m}', fill=(88, 152, 190, 255),
-                                  font=fn_num, anchor='rm')
-                    else:
-                        _lv, _cur_xp, _need_xp = calc_level(self._xp)
-                        draw.text((num_x + xp_w - 5, num_y + 9),
-                                  f'{_cur_xp}/{_need_xp}', fill=(60, 62, 50, 255),
-                                  font=fn_num, anchor='rm')
-                    # 等级: 优先显示 (+XX) 部分，否则显示 level_base
-                    if gs.level_extra > 0:
-                        lv_disp = gs.level_extra
-                    elif gs.level_base > 0:
-                        lv_disp = gs.level_base
-                    else:
-                        lv_disp = self._level
-                    draw.text((lv_x + lv_w - 5, num_y + 9),
-                              f'lv.{lv_disp}', fill=(60, 62, 50, 255),
-                              font=fn_num, anchor='rm')
-                else:
-                    _lv, _cur_xp, _need_xp = calc_level(self._xp)
-                    draw.text((num_x + xp_w - 5, num_y + 9),
-                              f'{_cur_xp}/{_need_xp}', fill=(60, 62, 50, 255),
-                              font=fn_num, anchor='rm')
-                    draw.text((lv_x + lv_w - 5, num_y + 9),
-                              f'lv.{self._level}', fill=(60, 62, 50, 255),
-                              font=fn_num, anchor='rm')
-        except Exception:
-            pass
-
-        # ── 身份面板文字 (左侧 — frosted-glass 暗橄榄色文字) ──
-        try:
-            id_x_start = max(4, int(FW * 0.04))
-            id_y = oy - 4
-            id_h = FH - id_y - 2
-            id_right = ox - 2
-            fn_sys = _get_hp_pil_font(8, 'sao')
-            fn_name = _get_hp_pil_font(15, 'cjk')
-            fn_lv = _get_hp_pil_font(12, 'sao')
-            fn_link = _get_hp_pil_font(8, 'sao')
-            fn_uid = _get_hp_pil_font(7, 'sao')
-            # ── 使用完整面板高度 (匹配 shell 底板) ──
-            id_y = 0
-            id_h = FH - 2
-            id_right = ox
-            # ── 读取 GameState 数据 ──
-            gs = getattr(self, '_game_state', None)
-            gs_ok = self._recognition_active and gs is not None
-            # 等级文本
-            if gs_ok:
-                if gs.level_extra > 0 and gs.level_base > 0:
-                    lv_txt = f'Lv.{gs.level_base}(+{gs.level_extra})'
-                elif gs.level_extra > 0:
-                    lv_txt = f'Lv.{gs.level_extra}'
-                elif gs.level_base > 0:
-                    lv_txt = f'Lv.{gs.level_base}'
-                else:
-                    lv_txt = f'Lv.{self._level}'
-            else:
-                lv_txt = f'Lv.{self._level}'
-            # 职业
-            prof_txt = ''
-            if gs_ok and gs.profession_name:
-                prof_txt = gs.profession_name
-            # UID
-            uid_txt = ''
-            if gs_ok and gs.player_id:
-                uid_txt = f'UID: {gs.player_id}'
-
-            # SYSTEM 标签
-            draw.text((id_x_start + 12, id_y + int(id_h * 0.06)), 'SYSTEM',
-                      fill=(97, 98, 86, 140), font=fn_sys, anchor='lm')
-            # 玩家名
-            draw.text((id_x_start + 12, id_y + int(id_h * 0.20)), name,
-                      fill=(60, 62, 50, 255), font=fn_name, anchor='lm')
-            # 职业
-            if prof_txt:
-                draw.text((id_x_start + 12, id_y + int(id_h * 0.34)), prof_txt,
-                          fill=(88, 152, 190, 230), font=fn_lv, anchor='lm')
-            # 等级
-            lv_y_pos = 0.44 if prof_txt else 0.34
-            draw.text((id_x_start + 12, id_y + int(id_h * lv_y_pos)), lv_txt,
-                      fill=(212, 156, 23, 230), font=fn_lv, anchor='lm')
-            # UID
-            if uid_txt:
-                draw.text((id_x_start + 12, id_y + int(id_h * 0.56)), uid_txt,
-                          fill=(97, 98, 86, 180), font=fn_uid, anchor='lm')
-            # NErVGear — LINK OK
-            draw.text((id_x_start + 12, id_y + int(id_h * 0.70)),
-                      'NErVGear \u2500 LINK OK',
-                      fill=(88, 152, 190, 200), font=fn_link, anchor='lm')
-            # LINKRATE (模拟连接状态)
-            draw.text((id_x_start + 12, id_y + int(id_h * 0.84)),
-                      'LINKRATE: 100.0%',
-                      fill=(154, 211, 52, 160), font=fn_uid, anchor='lm')
-        except Exception:
-            pass
-
-        # ── STA 条填充 (金色, HP 下方) ──
-        try:
-            sta_cur, sta_max = self._sta_sta
-            sta_x = ox + 28
-            sta_y_bar = oy + 48 + 16   # BH=48, +12px lower
-            sta_track_w = 460
-            sta_h = 8
-            sta_pct = sta_cur / max(1, sta_max)
-            sta_fill_w = max(0, int(sta_track_w * sta_pct))
-            if sta_fill_w > 0:
-                draw.rectangle((sta_x + 1, sta_y_bar + 1, sta_x + sta_fill_w, sta_y_bar + sta_h - 1),
-                                fill=(243, 175, 18, 255))
-                # 高光
-                draw.line([(sta_x + 1, sta_y_bar + 1), (sta_x + sta_fill_w, sta_y_bar + 1)],
-                          fill=(255, 220, 100, 100))
-            # STA 标签 + 数值
-            fn_sta = _get_hp_pil_font(9, 'sao')
-            draw.text((sta_x - 24, sta_y_bar + sta_h // 2), 'STA',
-                      fill=(212, 156, 23, 220), font=fn_sta, anchor='lm')
-            draw.text((sta_x + sta_track_w + 6, sta_y_bar + sta_h // 2),
-                      f'{sta_cur}/{sta_max}',
-                      fill=(97, 98, 86, 180), font=fn_sta, anchor='lm')
-        except Exception:
-            pass
-
-        # ── 技能栏已移至 WebView — 此处禁用渲染 ──
-        # (Burst Mode Ready animation replaces the old skill bar grid)
-
-        return shell
+        """(deprecated) HP 动态内容已由 sao_gui_hp.HpOverlay 独立渲染。"""
+        return None
 
     def _refresh_hp_layered(self):
-        """重新渲染并更新分层 HP 窗口。"""
-        if self._destroyed and not self._exit_animating:
-            return
-        try:
-            if not self._float or not self._float.winfo_exists():
-                return
-        except Exception:
-            return
-        if not self._float_hwnd:
-            return
-        alpha = getattr(self, '_float_alpha', 0.92)
-        try:
-            if alpha <= 0.01:
-                # alpha ≈ 0: 仍然调用 ULW (全透明), 防止 Tk 黑底暴露
-                _blank = Image.new('RGBA', (self._fw, self._fh), (0, 0, 0, 0))
-                _update_layered_win(self._float_hwnd, _blank, 0)
-                return
-            img = self._render_hp_dynamic()
-            dst_pos = None
-            try:
-                dst_pos = (self._float.winfo_rootx(), self._float.winfo_rooty())
-            except Exception:
-                pass
-            ok = _update_layered_win(self._float_hwnd, img, int(255 * alpha), dst_pos=dst_pos)
-            if not ok and not getattr(self, '_ulw_warned', False):
-                self._ulw_warned = True
-                print(f'[SAO-HP] UpdateLayeredWindow FAILED, hwnd=0x{self._float_hwnd:X}')
-        except Exception as e:
-            if not getattr(self, '_ulw_warned', False):
-                self._ulw_warned = True
-                print(f'[SAO-HP] _refresh_hp_layered error: {e}')
-                import traceback; traceback.print_exc()
+        """(deprecated) 旧 75%屏宽 HP ULW 已移除, 此方法为兼容占位。"""
+        return
 
     def _set_float_alpha(self, alpha):
-        """设置 HP 窗口整体透明度并刷新。"""
+        """(deprecated) _float 现为全透明点击锚点, 不再需要 alpha。"""
         self._float_alpha = alpha
-        self._refresh_hp_layered()
 
     def _animate_float_hud(self):
-        """30fps HUD 呼吸动画循环 — 每帧重新渲染分层窗口。"""
-        if self._destroyed:
-            return
-        try:
-            if not self._float.winfo_exists():
-                return
-        except Exception:
-            return
-        self._refresh_hp_layered()
-        try:
-            self.root.after(33, self._animate_float_hud)
-        except Exception:
-            pass
+        """(deprecated) 旧 30fps HP 重绘循环已移除 (HpOverlay 自管帧率)。"""
+        return
 
     def _attach_sao_panel_fx(self, panel, header, inner, accent='#86dfff'):
         """给 Tk 浮动面板附加 SAO 风格 HUD 背景和左右错层漂移。"""
@@ -1544,9 +1132,12 @@ class SAOPlayerGUI:
     #  悬浮触发按钮 — 纯 SAO-UI HP 组件 (对标 HP/src/index.vue)
     # ══════════════════════════════════════════════
     def _create_floating_widget(self):
-        """SAO-UI 统一 HUD — 覆盖身份面板 + HP + STA 区域。
-        使用 UpdateLayeredWindow 实现真正的逐像素 alpha 透明，
-        所有内容(外壳/HP填充/身份/STA/文字)统一由 PIL 渲染后一次性刷新。
+        """SAO 菜单点击锚点窗口 (不渲染 HP — HP 由 sao_gui_hp.HpOverlay 独立渲染).
+
+        历史: 本窗口曾以 UpdateLayeredWindow + PIL 方式渲染一个 75% 屏宽
+        的 HP HUD。该渲染已被 ``sao_gui_hp.HpOverlay`` 取代, 故本窗口现
+        仅作为 SAOPopUpMenu 的 anchor_widget 和右键菜单宿主使用, 全透
+        明但保留点击命中测试。
         """
         try:
             _sw = self.root.winfo_screenwidth()
@@ -1554,57 +1145,53 @@ class SAOPlayerGUI:
         except Exception:
             _sw, _sh = 1920, 1080
 
-        # ── 统一 HUD 尺寸: 75% 屏宽, 高 140px (覆盖原生 HP+STA) ──
+        # ── 锚点窗口尺寸 (保持旧 SAO 菜单定位): 75% 屏宽, 高 140px ──
         FW = int(_sw * 0.75)
         FH = 140
         self._fw, self._fh = FW, FH
         self._float_alpha = 0.0
         self._hp_hover = False
 
-        # HP XTBox 偏移: 44% 对齐游戏 HP 条 (下移 + 右移)
+        # (legacy — no longer rendered here; kept for stub compatibility)
         self._hp_ox = int(FW * 0.44)
         self._hp_oy = 38
-        # 身份面板宽度: ~40% 窗口 (覆盖游戏左下角信息)
         self._id_plate_w = int(FW * 0.40)
 
         self._float = tk.Toplevel(self.root)
         self._float.overrideredirect(True)
         self._float.attributes('-topmost', True)
         self._float.geometry(f'{FW}x{FH}')
+        # 完全透明点击锚点: Tk 的 -alpha=0.0 (底层 LWA_ALPHA=0) 在 Windows
+        # 下窗口不可见, 但 WS_EX_LAYERED + 统一 alpha 模式下点击仍能命中
+        # 窗口矩形 — 这正是我们希望的 (保留 SAO 菜单 anchor + 右键菜单).
         self._float.configure(bg='#000000')
+        try:
+            self._float.attributes('-alpha', 0.0)
+        except Exception:
+            pass
         _apply_window_icon(self._float)
 
-        # Win32: 设为分层窗口 + 任务栏可见
+        # ── 获取 HWND 仅用于 AppBar 样式 (不再用 ULW) ──
         self._float_hwnd = 0
         try:
             self._float.update_idletasks()
             GWL_EXSTYLE = -20
             WS_EX_APPWINDOW = 0x00040000
             WS_EX_TOOLWINDOW = 0x00000080
-            WS_EX_LAYERED = 0x00080000
             hwnd = int(_user32.GetParent(ctypes.c_void_p(self._float.winfo_id())))
             self._float_hwnd = hwnd
             style = _user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
-            style = (style | WS_EX_APPWINDOW | WS_EX_LAYERED) & ~WS_EX_TOOLWINDOW
+            style = (style | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
             _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE, style)
             _disable_native_window_shadow(self._float)
-            # 立即绘制一帧全透明 ULW, 让 Win32 接管渲染 (Tk 黑底永不显示)
-            try:
-                _blank = Image.new('RGBA', (FW, FH), (0, 0, 0, 0))
-                _update_layered_win(hwnd, _blank, 0)
-            except Exception:
-                pass
-            print(f'[SAO-HP] ULW hwnd=0x{hwnd:X}, layered OK')
-        except Exception as e:
-            print(f'[SAO-HP] ULW init FAILED: {e}')
-            import traceback; traceback.print_exc()
+        except Exception:
             self._float_hwnd = 0
 
-        # ── 预渲染静态外壳 (normal / hover) ──
-        self._hp_shell_normal = self._render_hp_shell(hover=False)
-        self._hp_shell_hover = self._render_hp_shell(hover=True)
+        # (占位符 — 旧 HP shell 缓存, 已弃用)
+        self._hp_shell_normal = None
+        self._hp_shell_hover = None
 
-        # ── HP 布局常量 (相对于 hp_ox/hp_oy) ──
+        # ── HP 布局常量 (保留 — 外部代码可能仍引用) ──
         ox, oy = self._hp_ox, self._hp_oy
         bar_x = ox + 110; bar_y = oy + 10
         PW, PT, PH, PS = 350, 19, 27, 145
@@ -1665,202 +1252,6 @@ class SAOPlayerGUI:
         # 初始隐藏 — LinkStart 完成后才显示
         self._float.withdraw()
 
-    # ══════════════════════════════════════════════
-    #  体力覆盖板 (Stamina Overlay — SAO style ULW)
-    # ══════════════════════════════════════════════
-    def _create_stamina_overlay(self):
-        """创建体力/HP 覆盖板窗口 — SAO 风格, 覆盖游戏原生 HP/STA 区域."""
-        try:
-            _sw = self.root.winfo_screenwidth()
-            _sh = self.root.winfo_screenheight()
-        except Exception:
-            _sw, _sh = 1920, 1080
-
-        # 位置: 屏幕下方中央 (覆盖游戏原生 生命值/体力值 条)
-        sta_w = self.settings.get('sta_width', int(_sw * 0.36))
-        sta_h = self.settings.get('sta_height', 76)
-        sta_x = self.settings.get('sta_fixed_x', int((_sw - sta_w) * 0.5))
-        sta_y = self.settings.get('sta_fixed_y', int(_sh - sta_h - 1))
-        self._sta_w, self._sta_h = sta_w, sta_h
-
-        win = tk.Toplevel(self.root)
-        win.overrideredirect(True)
-        win.attributes('-topmost', True)
-        win.geometry(f'{sta_w}x{sta_h}+{sta_x}+{sta_y}')
-        win.configure(bg='#000000')
-        _apply_window_icon(win)
-        win.withdraw()
-
-        hwnd = 0
-        try:
-            win.update_idletasks()
-            GWL_EXSTYLE = -20
-            WS_EX_LAYERED = 0x00080000
-            WS_EX_TOOLWINDOW = 0x00000080
-            h = int(_user32.GetParent(ctypes.c_void_p(win.winfo_id())))
-            hwnd = h
-            style = _user32.GetWindowLongW(ctypes.c_void_p(h), GWL_EXSTYLE)
-            style = (style | WS_EX_LAYERED | WS_EX_TOOLWINDOW)
-            _user32.SetWindowLongW(ctypes.c_void_p(h), GWL_EXSTYLE, style)
-            _blank = Image.new('RGBA', (sta_w, sta_h), (0, 0, 0, 0))
-            _update_layered_win(h, _blank, 0)
-            print(f'[SAO-STA] ULW hwnd=0x{h:X}, layered OK  ({sta_w}x{sta_h})')
-        except Exception as e:
-            print(f'[SAO-STA] ULW init FAILED: {e}')
-            hwnd = 0
-
-        self._stamina_win = win
-        self._stamina_hwnd = hwnd
-
-    def _render_stamina_frame(self):
-        """PIL 渲染覆盖板 — 不透明 SAO 系统 HUD。
-        上: SYSTEM / LINK STATUS / NErVGEAR / 时钟
-        下: STA 金条 + 数值
-        """
-        W, H = self._sta_w, self._sta_h
-        if W < 10 or H < 10:
-            return Image.new('RGBA', (max(10, W), max(10, H)), (0, 0, 0, 0))
-
-        scale = 2
-        sw, sh = W * scale, H * scale
-        img = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-
-        def S(v):
-            return int(round(v * scale))
-
-        # ━━ 不透明底板 — 磨砂玻璃 frosted-glass 质感 ━━
-        bg_fill = (207, 208, 197, 245)
-        body = [
-            (S(0), S(2)), (S(W - 8), S(0)),
-            (S(W), S(4)), (S(W), S(H)),
-            (S(8), S(H)), (S(0), S(H - 3)),
-        ]
-        draw.polygon(body, fill=bg_fill)
-
-        # 内侧淡边框
-        draw.polygon(body, outline=(180, 182, 170, 140))
-
-        # 微妙水平纹理 (每隔几行画一条极淡的线, 模拟 HUD 行扫描)
-        for yy in range(0, sh, S(3)):
-            draw.line([(S(1), yy), (sw - S(1), yy)], fill=(255, 255, 255, 18))
-
-        # SAO 角标装饰
-        clen = S(7)
-        cyan_a = (104, 228, 255, 140)
-        gold_a = (212, 156, 23, 120)
-        draw.line([(S(1), S(3)), (S(1) + clen, S(3))], fill=cyan_a, width=max(1, scale))
-        draw.line([(S(1), S(3)), (S(1), S(3) + clen)], fill=cyan_a, width=max(1, scale))
-        draw.line([(sw - S(1), sh - S(2)), (sw - S(1) - clen, sh - S(2))], fill=gold_a, width=max(1, scale))
-        draw.line([(sw - S(1), sh - S(2)), (sw - S(1), sh - S(2) - clen)], fill=gold_a, width=max(1, scale))
-
-        sta_cur, sta_max = self._sta_sta
-
-        try:
-            fn_sys = _get_hp_pil_font(9, 'sao')
-            fn_label = _get_hp_pil_font(12, 'sao')
-            fn_text = _get_hp_pil_font(10, 'sao')
-        except Exception:
-            fn_sys = fn_label = fn_text = None
-
-        # ━━ 上行: SAO 系统状态行 ━━
-        y_top = S(14)
-        pad_x = S(10)
-
-        # 左: ▪ SYSTEM [ LINK ACTIVE ]
-        dot_r = S(2)
-        draw.rectangle([pad_x, y_top - dot_r, pad_x + dot_r * 2, y_top + dot_r],
-                        fill=(88, 152, 190, 200))
-        draw.text((pad_x + S(7), y_top), 'SYSTEM',
-                  fill=(97, 98, 86, 180), font=fn_sys, anchor='lm')
-        draw.text((pad_x + S(52), y_top), '[ LINK ACTIVE ]',
-                  fill=(97, 98, 86, 100), font=fn_sys, anchor='lm')
-
-        # 中间: NErVGEAR
-        draw.text((sw // 2, y_top), 'NErVGEAR',
-                  fill=(97, 98, 86, 70), font=fn_sys, anchor='mm')
-
-        # 右: 时间
-        import time as _time
-        _ts = _time.strftime('%H:%M:%S')
-        draw.text((sw - pad_x, y_top), _ts,
-                  fill=(97, 98, 86, 120), font=fn_text, anchor='rm')
-
-        # 分隔线
-        mid_y = S(28)
-        draw.line([(S(6), mid_y), (sw - S(6), mid_y)], fill=(180, 182, 170, 80), width=max(1, scale))
-
-        # ━━ 下行: STA 条 ━━
-        y_sta = S(48)
-        label_w = S(32)
-        text_w = S(72)
-        sta_pct = sta_cur / max(1, sta_max)
-
-        # pip 指示点
-        draw.rectangle([pad_x, y_sta - dot_r, pad_x + dot_r * 2, y_sta + dot_r],
-                        fill=(212, 156, 23, 220))
-        # STA 标签
-        draw.text((pad_x + S(7), y_sta), 'STA',
-                  fill=(212, 156, 23, 240), font=fn_label, anchor='lm')
-
-        bar_x = pad_x + label_w + S(14)
-        bar_w = sw - bar_x - text_w - S(8)
-        bar_h = S(7)
-        by_sta = y_sta - bar_h // 2
-
-        # 条形背景 — 浅色磨砂轨道
-        draw.rectangle([bar_x, by_sta, bar_x + bar_w, by_sta + bar_h],
-                        fill=(190, 192, 180, 200), outline=(180, 182, 170, 100))
-        # 填充
-        sta_fill_w = max(0, int(bar_w * sta_pct))
-        if sta_fill_w > 0:
-            draw.rectangle([bar_x + scale, by_sta + scale, bar_x + sta_fill_w, by_sta + bar_h - scale],
-                            fill=(243, 175, 18, 255))
-            # 亮边高光
-            draw.line([(bar_x + scale, by_sta + scale), (bar_x + sta_fill_w, by_sta + scale)],
-                      fill=(255, 220, 100, 100), width=max(1, scale))
-        # 数值
-        draw.text((bar_x + bar_w + S(6), y_sta), f'{sta_cur}/{sta_max}',
-                  fill=(97, 98, 86, 180), font=fn_text, anchor='lm')
-
-        return img.resize((W, H), Image.LANCZOS)
-
-    def _refresh_stamina_layered(self):
-        """重新渲染并更新体力覆盖板分层窗口."""
-        if self._destroyed or not self._stamina_hwnd:
-            return
-        try:
-            if not self._stamina_win or not self._stamina_win.winfo_exists():
-                return
-        except Exception:
-            return
-        try:
-            img = self._render_stamina_frame()
-            dst_pos = None
-            try:
-                dst_pos = (self._stamina_win.winfo_rootx(), self._stamina_win.winfo_rooty())
-            except Exception:
-                pass
-            _update_layered_win(self._stamina_hwnd, img, 255, dst_pos=dst_pos)
-        except Exception:
-            pass
-
-    def _show_stamina_overlay(self):
-        """显示体力覆盖板 (link-start 完成后调用)."""
-        try:
-            if self._stamina_win:
-                self._stamina_win.deiconify()
-                self._stamina_win.lift()
-                if self._stamina_hwnd:
-                    GWL_EXSTYLE = -20
-                    WS_EX_LAYERED = 0x00080000
-                    h = self._stamina_hwnd
-                    ex = _user32.GetWindowLongW(ctypes.c_void_p(h), GWL_EXSTYLE)
-                    if not (ex & WS_EX_LAYERED):
-                        _user32.SetWindowLongW(ctypes.c_void_p(h), GWL_EXSTYLE, ex | WS_EX_LAYERED)
-                self._refresh_stamina_layered()
-        except Exception as e:
-            print(f'[SAO-STA] show error: {e}')
 
     # ══════════════════════════════════════════════
     #  识别引擎
@@ -1875,6 +1266,16 @@ class SAOPlayerGUI:
             try: self._boss_raid_engine.stop()
             except Exception: pass
             self._boss_raid_engine = None
+        self._hide_seek_alert_active = False
+        timer = getattr(self, '_hide_seek_alert_timer', None)
+        if timer:
+            try: timer.cancel()
+            except Exception: pass
+            self._hide_seek_alert_timer = None
+        if getattr(self, '_hide_seek_engine', None):
+            try: self._hide_seek_engine.stop()
+            except Exception: pass
+            self._hide_seek_engine = None
         engines = list(getattr(self, '_recognition_engines', []) or [])
         if not engines and self._recognition_engine:
             engines = [self._recognition_engine]
@@ -2053,12 +1454,13 @@ class SAOPlayerGUI:
             )
 
             # ── 初始化 ULW 覆盖层 ──
-            self._dps_visible = bool(self._get_setting('dps_enabled', True))
+            # DPS panel mirrors webview: stays hidden on startup regardless of
+            # the `dps_enabled` setting. Combat/report triggers bring it up.
+            self._dps_enabled = bool(self._get_setting('dps_enabled', True))
+            self._dps_visible = False
             try:
                 self._dps_overlay = DpsOverlay(self.root, self._cfg_settings_ref)
-                if self._dps_visible:
-                    self._dps_overlay.show()
-                print('[SAO Entity] DPS overlay initialized')
+                print('[SAO Entity] DPS overlay initialized (hidden)')
             except Exception as e:
                 print(f'[SAO Entity] DPS overlay init failed: {e}')
                 self._dps_overlay = None
@@ -2070,12 +1472,61 @@ class SAOPlayerGUI:
                 print(f'[SAO Entity] Boss HP overlay init failed: {e}')
                 self._boss_hp_overlay = None
 
+            self._hp_ov_visible = bool(self._get_setting('hp_ov_enabled', True))
+            try:
+                self._hp_overlay = HpOverlay(
+                    self.root, self._cfg_settings_ref,
+                    on_click=self._hp_overlay_on_click,
+                    on_menu=self._hp_overlay_on_menu,
+                )
+                if self._hp_ov_visible:
+                    self._hp_overlay.show()
+                # Push cached game state to HP overlay immediately
+                if self._state_mgr:
+                    try:
+                        _gs = self._state_mgr.state
+                        if _gs.hp_max > 0:
+                            _hp_lv = int(_gs.level_base or 1)
+                            _hp_lv_extra = int(getattr(_gs, 'level_extra', 0) or 0)
+                            if _hp_lv_extra > 0 and _hp_lv > 0:
+                                _hp_lv_text = f'{_hp_lv}(+{_hp_lv_extra})'
+                            else:
+                                _hp_lv_text = str(_hp_lv)
+                            self._hp_overlay.update_hp(
+                                _gs.hp_current, _gs.hp_max, _hp_lv_text)
+                        if _gs.stamina_max > 0:
+                            self._hp_overlay.update_sta(
+                                _gs.stamina_current, _gs.stamina_max)
+                        self._hp_overlay.set_sta_offline(
+                            (not bool(getattr(_gs, 'recognition_ok', True)))
+                            or bool(getattr(_gs, 'stamina_offline', False))
+                        )
+                        if _gs.player_name:
+                            self._hp_overlay.set_player_info({
+                                'name': _gs.player_name,
+                                'profession': _gs.profession_name or '',
+                                'uid': _gs.player_id or '',
+                            })
+                    except Exception:
+                        pass
+                print('[SAO Entity] Player HP overlay initialized')
+            except Exception as e:
+                print(f'[SAO Entity] Player HP overlay init failed: {e}')
+                self._hp_overlay = None
+
             try:
                 self._alert_overlay = AlertOverlay(self.root, self._cfg_settings_ref)
                 print('[SAO Entity] Alert overlay initialized')
             except Exception as e:
                 print(f'[SAO Entity] Alert overlay init failed: {e}')
                 self._alert_overlay = None
+
+            try:
+                self._skillfx_overlay = BurstReadyOverlay(self.root, self._cfg_settings_ref)
+                print('[SAO Entity] SkillFX (Burst) overlay initialized')
+            except Exception as e:
+                print(f'[SAO Entity] SkillFX overlay init failed: {e}')
+                self._skillfx_overlay = None
 
             # 启动定时缓存保存 (每30秒)
             import threading as _thr
@@ -2093,6 +1544,153 @@ class SAOPlayerGUI:
             print(f'[SAO Entity] Data engine failed: {e}')
             import traceback; traceback.print_exc()
             self._recognition_active = False
+
+    # ────────────────────────────────────────────
+    #  SkillFX / Burst Mode Ready helpers
+    # ────────────────────────────────────────────
+
+    def _get_skillfx_layout(self, gs=None):
+        """Compute the screen-relative layout for the BurstReady overlay.
+
+        Mirrors the one in sao_webview._get_skillfx_layout so the tk
+        port's anchor + callout positioning matches the original webview.
+        """
+        if gs is None and getattr(self, '_state_mgr', None) is not None:
+            gs = self._state_mgr.state
+        client_rect = getattr(gs, 'window_rect', None) if gs else None
+        if not client_rect:
+            try:
+                from window_locator import WindowLocator
+                client_rect = WindowLocator().get_rect()
+            except Exception:
+                client_rect = None
+        if not client_rect:
+            return None
+        client_left, client_top, client_right, client_bottom = client_rect
+        client_w = max(1, int(client_right - client_left))
+        client_h = max(1, int(client_bottom - client_top))
+
+        slots = []
+        for slot in list(getattr(gs, 'skill_slots', []) or []) if gs else []:
+            if not isinstance(slot, dict):
+                continue
+            rect = slot.get('rect') or {}
+            try:
+                sx = int(rect.get('x', 0)); sy = int(rect.get('y', 0))
+                sw = int(rect.get('w', 0)); sh = int(rect.get('h', 0))
+                idx = int(slot.get('index', 0) or 0)
+            except Exception:
+                continue
+            if idx <= 0 or sw <= 0 or sh <= 0:
+                continue
+            slots.append({
+                'index': idx,
+                'screen_rect': {'x': client_left + sx, 'y': client_top + sy,
+                                'w': sw, 'h': sh},
+            })
+        if not slots:
+            for item in get_skill_slot_rects(client_rect):
+                left, top, right, bottom = item['bbox']
+                slots.append({
+                    'index': int(item['index']),
+                    'screen_rect': {'x': left, 'y': top,
+                                    'w': right - left, 'h': bottom - top},
+                })
+        if not slots:
+            return None
+
+        min_x = min(s['screen_rect']['x'] for s in slots)
+        max_y = max(s['screen_rect']['y'] + s['screen_rect']['h'] for s in slots)
+        pad_x = max(18, int(round(client_w * 0.012)))
+        pad_y = max(18, int(round(client_h * 0.016)))
+        pad_left = max(96, int(round(client_w * 0.055)))
+        pad_right = max(84, int(round(client_w * 0.044)))
+        win_x = max(0, min_x - pad_left)
+        win_y = max(0, client_top)
+        width = max(420, int((client_right - win_x) + pad_right))
+        height = max(220, int((max_y - win_y) + pad_y))
+        callout_w = max(440, int(round(client_w * 0.29)))
+        callout_h = max(128, int(round(client_h * 0.115)))
+        callout_margin_x = max(28, int(round(client_w * 0.022)))
+        callout_margin_y = max(24, int(round(client_h * 0.040)))
+        callout_x = max(callout_margin_x,
+                        width - callout_w - callout_margin_x)
+        callout_y = callout_margin_y
+
+        payload_slots = []
+        for s in slots:
+            r = s['screen_rect']
+            payload_slots.append({
+                'index': s['index'],
+                'rect': {'x': r['x'] - win_x, 'y': r['y'] - win_y,
+                         'w': r['w'], 'h': r['h']},
+            })
+        payload_slots.sort(key=lambda it: it['index'])
+        return {
+            'window': {'x': int(win_x), 'y': int(win_y),
+                       'w': int(width), 'h': int(height)},
+            'viewport': {
+                'width': int(width), 'height': int(height),
+                'padding_x': int(max(pad_x, pad_left, pad_right)),
+                'padding_y': int(pad_y),
+                'callout': {'x': int(callout_x), 'y': int(callout_y),
+                            'w': int(callout_w), 'h': int(callout_h)},
+            },
+            'slots': payload_slots,
+        }
+
+    def _pick_burst_trigger_slot(self, gs):
+        watched = self._get_setting(
+            'watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]) or []
+        try:
+            watched = [int(x) for x in watched if int(x) > 0]
+        except Exception:
+            watched = []
+        if not watched:
+            watched = [1]
+        slots = getattr(gs, 'skill_slots', []) or []
+        edge_slot = 0; first_ready = 0; first_active = 0; first_low_cd = 0
+        prev_slot = getattr(self, '_last_burst_slot', 0)
+        prev_still_ok = False
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            try:
+                idx = int(slot.get('index', 0) or 0)
+            except Exception:
+                continue
+            if idx not in watched:
+                continue
+            state = str(slot.get('state', '') or '').strip().lower()
+            try:
+                cd = float(slot.get('cooldown_pct', 1.0) or 1.0)
+            except Exception:
+                cd = 1.0
+            is_ready = state in ('ready', 'active') or cd <= 0.02
+            if bool(slot.get('ready_edge')) and not edge_slot:
+                edge_slot = idx
+            if state == 'ready' and not first_ready:
+                first_ready = idx
+            if state == 'active' and not first_active:
+                first_active = idx
+            if cd <= 0.02 and not first_low_cd:
+                first_low_cd = idx
+            if idx == prev_slot and is_ready:
+                prev_still_ok = True
+        if edge_slot:
+            chosen = edge_slot
+        elif prev_still_ok and prev_slot:
+            chosen = prev_slot
+        elif first_ready:
+            chosen = first_ready
+        elif first_active:
+            chosen = first_active
+        elif first_low_cd:
+            chosen = first_low_cd
+        else:
+            chosen = 0
+        self._last_burst_slot = chosen
+        return chosen
 
     def _recognition_loop(self):
         """后台识别循环 — 读取 GameStateManager 并更新 HP 条 + 体力覆盖板 + DPS + Boss."""
@@ -2120,6 +1718,19 @@ class SAOPlayerGUI:
                     self._sta_hp = (hp, hp_max)
                     self._sta_sta = (sta, sta_max)
                     self._game_state = gs
+                    menu_level = int(gs.level_base or self._level or 1)
+                    menu_level_extra = int(getattr(gs, 'level_extra', 0) or 0)
+                    menu_season_exp = int(getattr(gs, 'season_exp', 0) or 0)
+                    self._level = menu_level
+                    self._level_extra = menu_level_extra
+                    self._season_exp = menu_season_exp
+
+                    # 同步 HP/STA 到菜单面板
+                    _pp = getattr(self, '_player_panel', None)
+                    if _pp:
+                        _pp._sta_hp = (hp, hp_max)
+                        _pp._sta_sta = (sta, sta_max)
+                        _pp.update_level(menu_level, menu_level_extra, menu_season_exp)
 
                     # ── DPS tracker: 更新玩家信息 ──
                     if self._dps_tracker and gs.player_id:
@@ -2186,6 +1797,76 @@ class SAOPlayerGUI:
                         except Exception:
                             pass
 
+                    # ── Player HP Overlay push ──
+                    if self._hp_overlay and getattr(self, '_hp_ov_visible', True):
+                        try:
+                            _lv = int(gs.level_base or 1)
+                            _lv_extra = int(getattr(gs, 'level_extra', 0) or 0)
+                            if _lv_extra > 0 and _lv > 0:
+                                _lv_text = f'{_lv}(+{_lv_extra})'
+                            else:
+                                _lv_text = str(_lv)
+                            self._hp_overlay.update_hp(hp, hp_max, _lv_text)
+                            self._hp_overlay.update_sta(sta, sta_max)
+                            _sta_offline = (
+                                (not bool(getattr(gs, 'recognition_ok', True)))
+                                or bool(getattr(gs, 'stamina_offline', False))
+                            )
+                            self._hp_overlay.set_sta_offline(
+                                _sta_offline)
+                            if gs.player_name:
+                                self._hp_overlay.set_player_info({
+                                    'name': gs.player_name,
+                                    'profession': gs.profession_name or '',
+                                    'uid': gs.player_id or '',
+                                })
+                            # Boss timer ↔ clock
+                            _raid_active = bool(getattr(gs, 'boss_raid_active', False))
+                            _raid_left = getattr(gs, 'boss_raid_seconds_left', 0) or 0
+                            if _raid_active and _raid_left > 0:
+                                _mm = int(_raid_left) // 60
+                                _ss = int(_raid_left) % 60
+                                _urg = 'urgent' if _raid_left <= 10 else 'normal'
+                                self._hp_overlay.set_boss_timer(
+                                    f'{_mm:02d}:{_ss:02d}', _urg)
+                            else:
+                                self._hp_overlay.set_boss_timer('', 'normal')
+                        except Exception:
+                            pass
+
+                    # ── SkillFX (Burst Mode Ready) Overlay push ──
+                    if self._skillfx_overlay is not None:
+                        try:
+                            _burst_enabled = bool(self._get_setting('burst_enabled', True))
+                            _burst_now = bool(getattr(gs, 'burst_ready', False))
+                            _burst_prev = bool(getattr(self, '_last_burst_ready', False))
+                            _burst_slot = self._pick_burst_trigger_slot(gs) if _burst_enabled else 0
+                            _new_layout = self._get_skillfx_layout(gs)
+                            if _new_layout and _new_layout != getattr(self, '_skillfx_layout', None):
+                                self._skillfx_layout = _new_layout
+                                self._skillfx_overlay.set_layout(_new_layout)
+                            if _burst_enabled and _burst_now and _burst_slot > 0:
+                                if not _burst_prev or _burst_slot != getattr(self, '_last_burst_slot_shown', 0):
+                                    self._skillfx_overlay.show_burst(_burst_slot)
+                                    self._last_burst_slot_shown = _burst_slot
+                            elif _burst_prev and not _burst_now:
+                                self._skillfx_overlay.hide_burst()
+                                self._last_burst_slot_shown = 0
+                            self._last_burst_ready = _burst_now
+                        except Exception:
+                            pass
+
+                    # ── Commander panel refresh (300 ms) ──
+                    try:
+                        if self._commander_panel and self._commander_panel.is_visible():
+                            import time as _t
+                            _now = _t.time()
+                            if _now - self._commander_last_push > 0.30:
+                                self._commander_last_push = _now
+                                self._push_commander_data()
+                    except Exception:
+                        pass
+
                     # ── 同步玩家信息到显示变量 ──
                     if gs.player_name and gs.player_name != self._last_gs_name:
                         self._last_gs_name = gs.player_name
@@ -2208,6 +1889,13 @@ class SAOPlayerGUI:
                             )
                             print(f'[SAO-UI] 自动保存角色: {gs.player_name}, '
                                   f'职业={gs.profession_name}, LV={lv}, UID={gs.player_id}')
+                        except Exception:
+                            pass
+                else:
+                    # Recognition offline — notify HP overlay
+                    if self._hp_overlay and getattr(self, '_hp_ov_visible', True):
+                        try:
+                            self._hp_overlay.set_sta_offline(True)
                         except Exception:
                             pass
             except Exception as e:
@@ -2408,22 +2096,26 @@ class SAOPlayerGUI:
                                profession=self._profession or '')
         self._player_panel = panel
 
-        # 等级信息
-        panel._level = self._level
-        try:
-            lv, cur_xp, need_xp = calc_level(self._xp)
-            panel._xp_percent = cur_xp / max(1, need_xp)
-            panel._xp_total = self._xp
-        except Exception:
-            panel._xp_percent = 0.0
-            panel._xp_total = 0
+        panel.update_level(self._level, self._level_extra, self._season_exp)
+
+        # HP / STA 数据 (来自识别引擎)
+        panel._sta_hp = getattr(self, '_sta_hp', (0, 0))
+        panel._sta_sta = getattr(self, '_sta_sta', (0, 0))
+
+        # 菜单模式 (从 settings 恢复)
+        saved_mode = self._get_setting('shift_mode', '普通模式')
+        if saved_mode:
+            panel._shift_mode = saved_mode
+
+        # 模式变更 → 自动保存
+        panel._on_mode_change = lambda m: self._set_setting('shift_mode', m)
 
         return panel
 
     def _build_menu_children(self):
-        """动态构建子菜单 (支持状态反映) — SAO Auto (5 categories)"""
-        # 读取快捷键配置
+        """动态构建子菜单 (支持状态反映) — SAO Auto (6 categories)"""
         hk = self.settings.get('hotkeys', DEFAULT_HOTKEYS)
+
         def _k(key_id):
             v = hk.get(key_id, DEFAULT_HOTKEYS.get(key_id, ''))
             return f'  [{v}]' if v else ''
@@ -2431,23 +2123,66 @@ class SAOPlayerGUI:
         recog_label = '识别: ON' if getattr(self, '_recognition_active', False) else '识别: OFF'
         topmost_label = '置顶: ON' if self._float.attributes('-topmost') else '置顶: OFF'
 
-        # AutoKey 状态
         ak_config = self._load_auto_key_config() if self._cfg_settings_ref else {}
         ak_on = bool(ak_config.get('enabled', False))
         ak_label = f'AutoKey: {"ON" if ak_on else "OFF"}' + _k('toggle_auto_script')
+        hs_on = bool(self._hide_seek_engine and self._hide_seek_engine.running)
+        hs_label = f'自动躲猫猫: {"ON" if hs_on else "OFF"}' + _k('toggle_hide_seek')
 
-        # BossRaid 状态
         br_config = self._load_boss_raid_config() if self._cfg_settings_ref else {}
         br_on = bool(br_config.get('enabled', False))
         br_label = f'BossRaid: {"ON" if br_on else "OFF"}' + _k('boss_raid_start')
 
-        # Sound / Display 状态
-        _snd_on = bool(self._get_setting('sound_enabled', True))
-        _dps_on = bool(self._get_setting('dps_enabled', True))
-        _burst_on = bool(self._get_setting('burst_enabled', True))
-        _bbm = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
-        _bbm_labels = {'always': '常显', 'boss_raid': 'Boss战', 'off': '关闭'}
-        _bbm_disp = _bbm_labels.get(_bbm, _bbm)
+        snd_on = bool(self._get_setting('sound_enabled', True))
+        dps_on = bool(self._get_setting('dps_enabled', True))
+        burst_on = bool(self._get_setting('burst_enabled', True))
+        burst_slots = self._normalize_watched_skill_slots(
+            self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9])
+        )
+        if not burst_slots:
+            burst_slots = [1]
+        burst_slot_set = set(burst_slots)
+        burst_slots_disp = ','.join(str(s) for s in burst_slots)
+        boss_bar_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
+        boss_bar_labels = {'always': '常显', 'boss_raid': 'Boss战', 'off': '关闭'}
+        boss_bar_disp = boss_bar_labels.get(boss_bar_mode, boss_bar_mode)
+
+        auto_items = [
+            {'icon': '⚡', 'label': ak_label, 'command': self._toggle_auto_script},
+            {'icon': '◈', 'label': hs_label, 'command': self._toggle_hide_seek},
+            {'icon': '◆', 'label': 'AutoKey 配置', 'command': self._toggle_autokey_panel},
+        ]
+
+        boss_items = [
+            {'icon': '⚔', 'label': br_label, 'command': self._toggle_boss_raid},
+            {'icon': '▸', 'label': '下一阶段' + _k('boss_raid_next_phase'), 'command': self._boss_raid_next_phase},
+            {'icon': '◆', 'label': 'BossRaid 配置', 'command': self._toggle_bossraid_panel},
+        ]
+
+        burst_items = [
+            {'icon': '◆', 'label': f'爆发提示: {"ON" if burst_on else "OFF"}', 'command': self._toggle_burst_enabled},
+            {'icon': '◇', 'label': f'Burst技能槽: [{burst_slots_disp}]',
+             'command': lambda: self._show_entity_alert('BURST SKILLS', f'当前槽位: {burst_slots_disp}', display_time=3.0)},
+            {'icon': '─', 'label': '──────────'},
+        ]
+        for slot in range(1, 10):
+            burst_items.append({
+                'icon': '◆' if slot in burst_slot_set else '◇',
+                'label': f'Burst槽 {slot}' + (' ✓' if slot in burst_slot_set else ''),
+                'command': lambda s=slot: self._toggle_burst_slot(s),
+            })
+
+        panel_items = [
+            {'icon': '◈', 'label': 'Commander', 'command': self._toggle_commander_panel},
+            {'icon': '◉', 'label': '状态面板', 'command': self._toggle_status_panel},
+            {'icon': '◈', 'label': '一键隐藏面板' + (' ✓' if self._panels_hidden else ''), 'command': self._toggle_hide_all_panels},
+            {'icon': '─', 'label': '──────────'},
+            {'icon': '♪', 'label': f'音效: {"ON" if snd_on else "OFF"}', 'command': self._toggle_sound_enabled},
+            {'icon': '♪', 'label': '音量+', 'command': lambda: self._adj_sound_volume(10)},
+            {'icon': '♪', 'label': '音量-', 'command': lambda: self._adj_sound_volume(-10)},
+            {'icon': '◆', 'label': f'DPS面板: {"ON" if dps_on else "OFF"}', 'command': self._toggle_dps_enabled},
+            {'icon': '◇', 'label': f'Boss血条: {boss_bar_disp}', 'command': self._cycle_boss_bar_mode},
+        ]
 
         return {
             '控制': [
@@ -2455,26 +2190,10 @@ class SAOPlayerGUI:
                 {'icon': '⬆', 'label': topmost_label + _k('toggle_topmost'), 'command': self._toggle_topmost},
                 {'icon': '✓', 'label': '保存设置', 'command': lambda: self.settings.save()},
             ],
-            '自动': [
-                {'icon': '⚡', 'label': ak_label, 'command': self._toggle_auto_script},
-                {'icon': '◆', 'label': 'AutoKey 配置', 'command': self._toggle_autokey_panel},
-            ],
-            'Boss': [
-                {'icon': '⚔', 'label': br_label, 'command': self._toggle_boss_raid},
-                {'icon': '▸', 'label': '下一阶段' + _k('boss_raid_next_phase'), 'command': self._boss_raid_next_phase},
-                {'icon': '◆', 'label': 'BossRaid 配置', 'command': self._toggle_bossraid_panel},
-            ],
-            '面板': [
-                {'icon': '◉', 'label': '状态面板', 'command': self._toggle_status_panel},
-                {'icon': '◈', 'label': '一键隐藏面板' + (' ✓' if self._panels_hidden else ''), 'command': self._toggle_hide_all_panels},
-                {'icon': '─', 'label': '──────────'},  # separator
-                {'icon': '♪', 'label': f'音效: {"ON" if _snd_on else "OFF"}', 'command': self._toggle_sound_enabled},
-                {'icon': '♪', 'label': '音量+', 'command': lambda: self._adj_sound_volume(10)},
-                {'icon': '♪', 'label': '音量-', 'command': lambda: self._adj_sound_volume(-10)},
-                {'icon': '◆', 'label': f'DPS面板: {"ON" if _dps_on else "OFF"}', 'command': self._toggle_dps_enabled},
-                {'icon': '◆', 'label': f'爆发提示: {"ON" if _burst_on else "OFF"}', 'command': self._toggle_burst_enabled},
-                {'icon': '◇', 'label': f'Boss血条: {_bbm_disp}', 'command': self._cycle_boss_bar_mode},
-            ],
+            '自动': auto_items,
+            'Boss': boss_items,
+            'Burst': burst_items,
+            '面板': panel_items,
             '关于': [
                 {'icon': '◇', 'label': '关于本程序', 'command': self._show_about},
                 {'icon': '✎', 'label': '修改角色资料', 'command': self._edit_profile},
@@ -2483,8 +2202,34 @@ class SAOPlayerGUI:
             ],
         }
 
+    def _dismiss_sao_menu_for_panel(self):
+        """SAO 菜单关掉再弹面板, 避免 topmost overlay 压在面板上看不见."""
+        try:
+            menu = getattr(self, '_sao_menu', None)
+            if menu is not None and getattr(menu, 'visible', False):
+                menu.close()
+        except Exception:
+            pass
+
+    def _raise_panel_window(self, panel):
+        """把面板提到最前并取焦, 防止被 SAO overlay 或其他 topmost 挡住."""
+        if panel is None:
+            return
+        win = getattr(panel, '_win', None)
+        if win is None:
+            return
+        try:
+            if not win.winfo_exists():
+                return
+            win.attributes('-topmost', True)
+            win.lift()
+            win.focus_force()
+        except Exception:
+            pass
+
     def _toggle_autokey_panel(self):
         """打开/关闭 AutoKey 配置面板 (tkinter)."""
+        self._dismiss_sao_menu_for_panel()
         if not self._autokey_panel:
             self._autokey_panel = AutoKeyPanel(
                 master=self.root,
@@ -2495,9 +2240,11 @@ class SAOPlayerGUI:
                 author_fn=getattr(self, '_auto_key_author_snapshot', None),
             )
         self._autokey_panel.toggle()
+        self.root.after(120, lambda: self._raise_panel_window(self._autokey_panel))
 
     def _toggle_bossraid_panel(self):
         """打开/关闭 BossRaid 配置面板 (tkinter)."""
+        self._dismiss_sao_menu_for_panel()
         if not self._bossraid_panel:
             self._bossraid_panel = BossRaidPanel(
                 master=self.root,
@@ -2512,13 +2259,42 @@ class SAOPlayerGUI:
                 ),
             )
         self._bossraid_panel.toggle()
+        self.root.after(120, lambda: self._raise_panel_window(self._bossraid_panel))
+
+    def _toggle_commander_panel(self):
+        """打开/关闭 Commander 面板 (tkinter)."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._commander_panel:
+            self._commander_panel = CommanderPanel(self.root)
+        if self._commander_panel.is_visible():
+            self._commander_panel.hide()
+        else:
+            self._commander_panel.show()
+            self._push_commander_data()
+            self.root.after(120, lambda: self._raise_panel_window(self._commander_panel))
+
+    def _push_commander_data(self):
+        """Build + push a snapshot to the Commander panel."""
+        if not self._commander_panel or not self._commander_panel.is_visible():
+            return
+        try:
+            bridge = getattr(self, '_packet_engine', None)
+            if bridge and hasattr(bridge, 'get_commander_data'):
+                data = bridge.get_commander_data()
+            else:
+                data = {'members': [], 'team_id': 0,
+                        'leader_uid': 0, 'dungeon_id': 0}
+            self._commander_panel.update(data)
+        except Exception:
+            pass
 
     def _setup_sao_menu(self):
-        """构建 SAO PopUpMenu 菜单 = 主界面 (5 categories)"""
+        """构建 SAO PopUpMenu 菜单 = 主界面 (6 categories)"""
         self._menu_icons = [
             {'name': '控制', 'icon': '⚙', 'can_active': True},
             {'name': '自动', 'icon': '⚡', 'can_active': True},
             {'name': 'Boss', 'icon': '⚔', 'can_active': True},
+            {'name': 'Burst', 'icon': 'B', 'can_active': True},
             {'name': '面板', 'icon': '◆', 'can_active': True},
             {'name': '关于', 'icon': 'ℹ', 'can_active': True},
         ]
@@ -2614,6 +2390,14 @@ class SAOPlayerGUI:
             self._play_motion_blur(closing=True)
             self._sao_menu.close()
         else:
+            self._stop_float_breath()
+            try:
+                if self._float and self._float.winfo_exists():
+                    self._float.update_idletasks()
+                    self._breath_base_x = self._float.winfo_x()
+                    self._breath_base_y = self._float.winfo_y()
+            except Exception:
+                pass
             try:
                 play_sound('menu_open')
             except Exception:
@@ -2653,8 +2437,7 @@ class SAOPlayerGUI:
         """检查是否有任何浮动面板处于打开且可见状态"""
         if self._panels_hidden:
             return False
-        for p in (self._piano_panel, self._viz_panel,
-                  self._status_panel, self._control_panel):
+        for p in (self._status_panel,):
             try:
                 if p and p.winfo_exists():
                     return True
@@ -2689,9 +2472,6 @@ class SAOPlayerGUI:
     # ══════════════════════════════════════════════
     #  浮动面板: 钢琴 / 可视化
     # ══════════════════════════════════════════════
-    def _toggle_piano_panel(self):
-        """钢琴面板已禁用 (SAO Auto)"""
-        pass
     def _toggle_status_panel(self):
         """浮动状态面板 — 显示识别状态 + 引擎信息"""
         if self._status_panel and self._status_panel.winfo_exists():
@@ -2779,20 +2559,10 @@ class SAOPlayerGUI:
             recog_fg = '#3ad86c' if recog_text == 'ON' else '#556677'
             self._status_recog_lbl.configure(text=recog_text, fg=recog_fg)
 
-    def _toggle_viz_panel(self):
-        """可视化面板已禁用 (SAO Auto)"""
-        pass
-    def _toggle_control_panel(self):
-        """控制面板已禁用 (SAO Auto — MIDI已移除)"""
-        pass
-
     def _toggle_hide_all_panels(self):
         """一键隐藏/显示所有浮动面板 (不销毁, 只是 withdraw/deiconify)"""
         panels = [
-            ('piano',   self._piano_panel),
-            ('viz',     self._viz_panel),
             ('status',  self._status_panel),
-            ('control', self._control_panel),
         ]
 
         if not self._panels_hidden:
@@ -2829,18 +2599,85 @@ class SAOPlayerGUI:
         # 如果面板处于隐藏状态则跳过恢复
         if self._panels_hidden:
             return
-        if self.settings.get('show_piano', False):
-            if not (self._piano_panel and self._piano_panel.winfo_exists()):
-                self._toggle_piano_panel()
-        if self.settings.get('show_viz', False):
-            if not (self._viz_panel and self._viz_panel.winfo_exists()):
-                self._toggle_viz_panel()
         if self.settings.get('show_status', False):
             if not (self._status_panel and self._status_panel.winfo_exists()):
                 self._toggle_status_panel()
-        if self.settings.get('show_control', False):
-            if not (self._control_panel and self._control_panel.winfo_exists()):
-                self._toggle_control_panel()
+
+    # ──────────────────────────────────────────
+    #  HP overlay click / context-menu hooks
+    # ──────────────────────────────────────────
+
+    def _hp_overlay_on_click(self):
+        """Left-click on HP panel: open the SAO radial menu (web parity)."""
+        try:
+            self._toggle_sao_menu()
+        except Exception:
+            pass
+
+    def _hp_overlay_on_menu(self, x_root: int, y_root: int):
+        """Right-click on HP panel: web-parity context menu."""
+        try:
+            menu = tk.Menu(self.root, tearoff=0,
+                           bg='#cfd0c5', fg='#3c3e32',
+                           activebackground='#e9ddb7',
+                           activeforeground='#aa7814',
+                           relief='flat', bd=1,
+                           activeborderwidth=0,
+                           font=get_cjk_font(9))
+            menu.add_command(
+                label='◆ SAO 菜单',
+                command=self._hp_overlay_on_click,
+            )
+            recog_on = getattr(self, '_recognition_active', False)
+            recog_label = '识别: ON' if recog_on else '识别: OFF'
+            menu.add_command(
+                label=f'◈ {recog_label}',
+                command=self._toggle_recognition_menu,
+            )
+            menu.add_separator()
+            menu.add_command(
+                label='⟲ 复原位置',
+                command=self._hp_overlay_restore_position,
+            )
+            menu.add_command(
+                label='◈ 隐藏 HP 面板',
+                command=self._hp_overlay_hide,
+            )
+            menu.add_separator()
+            menu.add_command(
+                label='✕ 退出',
+                command=self._on_close,
+            )
+            try:
+                menu.tk_popup(x_root, max(0, y_root - 90))
+            finally:
+                menu.grab_release()
+        except Exception:
+            pass
+
+    def _hp_overlay_restore_position(self):
+        ov = getattr(self, '_hp_overlay', None)
+        if ov is not None:
+            try:
+                ov.restore_position()
+            except Exception:
+                pass
+
+    def _hp_overlay_hide(self):
+        ov = getattr(self, '_hp_overlay', None)
+        if ov is not None:
+            try:
+                ov.hide()
+                self._hp_ov_visible = False
+                try:
+                    self.settings.set('hp_ov_enabled', False)
+                    save = getattr(self.settings, 'save', None)
+                    if callable(save):
+                        save()
+                except Exception:
+                    pass
+            except Exception:
+                pass
 
     # ══════════════════════════════════════════════════════════════
     #  点击悬浮按钮 → 径向运动模糊闪现
@@ -3494,28 +3331,8 @@ class SAOPlayerGUI:
 
         def on_done():
             self._float.geometry(f'{self._fw}x{self._fh}+{fx_start}+{fy_start}')
-            self._set_float_alpha(0.0)
             self._float.deiconify()
             self._float.lift()
-            # Re-assert WS_EX_LAYERED (withdraw/deiconify 可能重置)
-            try:
-                GWL_EXSTYLE = -20
-                WS_EX_LAYERED = 0x00080000
-                h = self._float_hwnd
-                if h:
-                    ex = _user32.GetWindowLongW(ctypes.c_void_p(h), GWL_EXSTYLE)
-                    if not (ex & WS_EX_LAYERED):
-                        _user32.SetWindowLongW(ctypes.c_void_p(h), GWL_EXSTYLE,
-                                               ex | WS_EX_LAYERED)
-                        print('[SAO-HP] Re-asserted WS_EX_LAYERED after deiconify')
-            except Exception:
-                pass
-            # 立即绘制全透明 ULW 帧, 防止 deiconify 后暴露 Tk 黑底
-            try:
-                _blank = Image.new('RGBA', (self._fw, self._fh), (0, 0, 0, 0))
-                _update_layered_win(self._float_hwnd, _blank, 0)
-            except Exception:
-                pass
             self._play_motion_blur(closing=False)
             self._run_entry_animation(fx_start, fy_start, fx_final, fy_final)
 
@@ -3557,6 +3374,7 @@ class SAOPlayerGUI:
             'toggle_topmost': lambda: self.root.after(0, self._toggle_topmost),
             'toggle_auto_script': lambda: self.root.after(0, self._toggle_auto_script),
             'hide_panels': lambda: self.root.after(0, self._toggle_hide_all_panels),
+            'toggle_hide_seek': lambda: self.root.after(0, self._toggle_hide_seek),
             'boss_raid_start': lambda: self.root.after(0, self._toggle_boss_raid),
             'boss_raid_next_phase': lambda: self.root.after(0, self._boss_raid_next_phase),
         })
@@ -3604,6 +3422,104 @@ class SAOPlayerGUI:
         if not self._boss_raid_engine:
             return
         self._boss_raid_engine.next_phase()
+
+    def _show_entity_alert(self, title: str, message: str = '', display_time: float = 5.0):
+        overlay = getattr(self, '_alert_overlay', None)
+        if overlay is not None:
+            try:
+                overlay.show_alert(title, message, display_time=display_time)
+                return
+            except Exception:
+                pass
+        if message:
+            print(f'[SAO Entity] {title}: {message}')
+        else:
+            print(f'[SAO Entity] {title}')
+
+    def _toggle_hide_seek(self):
+        """切换自动躲猫猫引擎开关."""
+        if self._hide_seek_engine and self._hide_seek_engine.running:
+            self._stop_hide_seek()
+        else:
+            self._start_hide_seek()
+
+    def _start_hide_seek(self):
+        """启动自动躲猫猫并用 AlertOverlay 保持状态提示."""
+        if self._hide_seek_engine and self._hide_seek_engine.running:
+            return
+        try:
+            from hide_seek_engine import HideSeekEngine
+            from window_locator import WindowLocator
+
+            locator = getattr(self, '_locator', None)
+            if locator is None:
+                locator = WindowLocator()
+
+            engine = HideSeekEngine(locator=locator, on_status=self._on_hide_seek_status)
+            engine.start()
+            self._hide_seek_engine = engine
+            self._hide_seek_alert_active = True
+            self._show_entity_alert('AUTO HIDE & SEEK', '自动躲猫猫已启动', display_time=60.0)
+            self._schedule_hide_seek_alert_refresh()
+            self._refresh_menu_if_open()
+        except Exception as exc:
+            print(f'[SAO Entity] Hide&Seek start failed: {exc}')
+            import traceback
+            traceback.print_exc()
+            self._hide_seek_engine = None
+            self._hide_seek_alert_active = False
+            self._show_entity_alert('AUTO HIDE & SEEK', '启动失败，请检查游戏窗口与模板资源', display_time=4.0)
+            self._refresh_menu_if_open()
+
+    def _stop_hide_seek(self, show_alert: bool = True):
+        """停止自动躲猫猫并取消持久提示刷新."""
+        self._hide_seek_alert_active = False
+        timer = getattr(self, '_hide_seek_alert_timer', None)
+        if timer:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+            self._hide_seek_alert_timer = None
+        engine = self._hide_seek_engine
+        self._hide_seek_engine = None
+        if engine is not None:
+            try:
+                engine.stop()
+            except Exception:
+                pass
+        if show_alert:
+            self._show_entity_alert('AUTO HIDE & SEEK', '自动躲猫猫已关闭', display_time=3.2)
+        self._refresh_menu_if_open()
+
+    def _on_hide_seek_status(self, message: str, step: int):
+        """Hide & Seek 状态回调 — 当前仅用于调试日志."""
+        if message:
+            print(f'[HideSeek] step={step}: {message}')
+
+    def _schedule_hide_seek_alert_refresh(self):
+        timer = getattr(self, '_hide_seek_alert_timer', None)
+        if timer:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+        self._hide_seek_alert_timer = threading.Timer(50.0, self._refresh_hide_seek_alert)
+        self._hide_seek_alert_timer.daemon = True
+        self._hide_seek_alert_timer.start()
+
+    def _refresh_hide_seek_alert(self):
+        if self._destroyed or not getattr(self, '_hide_seek_alert_active', False):
+            return
+        engine = getattr(self, '_hide_seek_engine', None)
+        if engine is None:
+            self._hide_seek_alert_active = False
+            self._hide_seek_alert_timer = None
+            return
+        if not engine.running:
+            print('[SAO Entity] Hide&Seek engine thread is no longer running')
+        self._show_entity_alert('AUTO HIDE & SEEK', '自动躲猫猫运行中', display_time=60.0)
+        self._schedule_hide_seek_alert_refresh()
 
     # ── AutoKey config helpers ──
     def _auto_key_settings_ref(self):
@@ -3667,6 +3583,7 @@ class SAOPlayerGUI:
         new = not get_sound_enabled()
         set_sound_enabled(new)
         self._set_setting('sound_enabled', new)
+        self._refresh_menu_if_open()
 
     def _adj_sound_volume(self, delta: int):
         from sao_sound import set_sound_volume, get_sound_volume
@@ -3679,16 +3596,56 @@ class SAOPlayerGUI:
         cur = bool(self._get_setting('dps_enabled', True))
         new = not cur
         self._set_setting('dps_enabled', new)
+        self._dps_enabled = new
         self._dps_visible = new
         if self._dps_overlay:
             if new:
                 self._dps_overlay.show()
             else:
                 self._dps_overlay.hide()
+        self._refresh_menu_if_open()
+
+    def _normalize_watched_skill_slots(self, slots):
+        normalized = []
+        seen = set()
+        for raw in list(slots or []):
+            try:
+                slot = int(raw)
+            except Exception:
+                continue
+            if 1 <= slot <= 9 and slot not in seen:
+                seen.add(slot)
+                normalized.append(slot)
+        return normalized
+
+    def _reset_burst_tracking_state(self):
+        self._last_burst_ready = False
+        self._last_burst_slot = 0
+        self._last_burst_slot_shown = 0
 
     def _toggle_burst_enabled(self):
         cur = bool(self._get_setting('burst_enabled', True))
         self._set_setting('burst_enabled', not cur)
+        self._reset_burst_tracking_state()
+        self._refresh_menu_if_open()
+
+    def _toggle_burst_slot(self, slot: int):
+        watched = self._normalize_watched_skill_slots(
+            self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9])
+        )
+        if not watched:
+            watched = [1]
+        watched_set = set(watched)
+        if slot in watched_set:
+            if len(watched_set) == 1:
+                self._show_entity_alert('BURST SKILLS', '至少保留一个技能槽', display_time=3.0)
+                return
+            watched_set.remove(slot)
+        else:
+            watched_set.add(slot)
+        self._set_setting('watched_skill_slots', sorted(watched_set))
+        self._reset_burst_tracking_state()
+        self._refresh_menu_if_open()
 
     def _cycle_boss_bar_mode(self):
         modes = ['boss_raid', 'always', 'off']
@@ -3696,6 +3653,7 @@ class SAOPlayerGUI:
         idx = modes.index(cur) if cur in modes else 0
         nxt = modes[(idx + 1) % len(modes)]
         self._set_setting('boss_bar_mode', nxt)
+        self._refresh_menu_if_open()
 
     # ══════════════════════════════════════════════
     #  其他功能
@@ -3704,7 +3662,7 @@ class SAOPlayerGUI:
         current = self._float.attributes('-topmost')
         new_val = not current
         self._float.attributes('-topmost', new_val)
-        for panel in [self._piano_panel, self._viz_panel, self._status_panel]:
+        for panel in [self._status_panel]:
             try:
                 if panel and panel.winfo_exists():
                     panel.attributes('-topmost', new_val)
@@ -3715,9 +3673,6 @@ class SAOPlayerGUI:
     def _switch_to_webview_ui(self):
         """切换到 WebView UI (sao_webview.py) — 热切换"""
         def _do_switch():
-            self.settings.set('ui_mode', 'webview')
-            self.settings.save()
-
             def _launch_next():
                 import gc; gc.collect()
                 time.sleep(0.3)
@@ -3908,7 +3863,7 @@ void main() {
 }
 ''')
             vao = ctx.vertex_array(prog, [])
-            tex = ctx.texture((width, height), 3)
+            tex = ctx.texture((width, height), 4)
             fbo = ctx.framebuffer(color_attachments=[tex])
             prog['u_resolution'].value = (float(width), float(height))
             return {
@@ -3937,9 +3892,9 @@ void main() {
             gl['ctx'].clear(0.0, 0.0, 0.0, 1.0)
             prog['u_progress'].value = float(max(0.0, min(1.0, progress)))
             vao.render()
-            raw = fbo.read(components=3)
-            arr = np.frombuffer(raw, dtype=np.uint8).reshape(ov['sh'], ov['sw'], 3)
-            photo = ImageTk.PhotoImage(Image.fromarray(arr[::-1], 'RGB'))
+            raw = fbo.read(components=4, alignment=1)
+            arr = np.frombuffer(raw, dtype=np.uint8).reshape(ov['sh'], ov['sw'], 4)
+            photo = ImageTk.PhotoImage(Image.fromarray(arr[::-1], 'RGBA'))
             ov['gl_photo'] = photo
             cv.create_image(0, 0, image=photo, anchor='nw')
             return True
@@ -3989,10 +3944,12 @@ void main() {
             return
 
         sw, sh = ov['sw'], ov['sh']
-        stage1 = min(1.0, progress / 0.34)
-        stage2 = max(0.0, min(1.0, (progress - 0.24) / 0.76))
-        bloom = ease_out(stage1)
-        deploy = ease_in_out(stage2)
+        ignite_t = min(1.0, progress / 0.30)
+        deploy_t = max(0.0, min(1.0, (progress - 0.10) / 0.70))
+        settle_t = max(0.0, min(1.0, (progress - 0.80) / 0.20))
+        bloom = ease_out(ignite_t)
+        deploy = ease_in_out(deploy_t)
+        settle = ease_in_out(settle_t)
         cx = int(lerp(ov['start_x'], ov['end_x'], deploy))
         cy = int(lerp(ov['start_y'], ov['end_y'], deploy))
         cyan = '#86dfff'
@@ -4000,19 +3957,19 @@ void main() {
         white = '#edf7ff'
         dim_cyan = '#173746'
         dim_gold = '#5e4211'
-        # TV-on: 0→1 during 0–0.62, settled: 1.0 during 0.62–0.80, TV-close: 1→0 during 0.80–1.0
-        if progress <= 0.62:
-            boot_t = progress / 0.62
-        elif progress <= 0.80:
-            boot_t = 1.0
+        if progress <= 0.68:
+            boot_t = progress / 0.68
         else:
-            boot_t = max(0.0, 1.0 - (progress - 0.80) / 0.20)
-        tv_close_f = max(0.0, (progress - 0.80) / 0.20)  # 0→1 during close phase
+            boot_t = 1.0
 
         try:
-            base_alpha = max(0.0, min(0.95, (1.0 - progress) ** 0.28 * 0.92))
-            # fade window to near-zero as TV screen collapses
-            win.attributes('-alpha', max(0.0, base_alpha * (1.0 - tv_close_f * 0.95)))
+            if progress < 0.14:
+                overlay_alpha = lerp(0.18, 0.94, ease_out(progress / 0.14))
+            elif progress < 0.80:
+                overlay_alpha = lerp(0.94, 0.74, ease_in_out((progress - 0.14) / 0.66))
+            else:
+                overlay_alpha = 0.74 * (1.0 - settle)
+            win.attributes('-alpha', max(0.0, min(0.94, overlay_alpha)))
         except Exception:
             pass
 
@@ -4026,8 +3983,7 @@ void main() {
                 col = dim_cyan if ((y // scan_pitch) % 2 == 0) else '#101823'
                 cv.create_line(0, yy, sw, yy, fill=col, width=1)
 
-        # suppress all Canvas HUD elements once TV-close is under way
-        if tv_close_f > 0.08:
+        if settle > 0.82:
             return
 
         span = int(lerp(min(sw * 0.42, 520), min(sw * 0.22, 260), deploy))
@@ -4085,8 +4041,8 @@ void main() {
     def _run_entry_animation(self, fx_start, fy_start, fx_final, fy_final):
         self._create_entry_overlay(fx_start, fy_start, fx_final, fy_final)
         anim_start = time.time()
-        total = 1.28
-        phase1 = 0.44
+        total = 1.16
+        phase1 = 0.34
 
         def _done():
             self._cleanup_entry_overlay()
@@ -4121,7 +4077,7 @@ void main() {
 
             if elapsed < phase1:
                 hold = ease_out(elapsed / phase1)
-                self._set_float_alpha(0.15 * hold)
+                self._set_float_alpha(0.12 * hold)
                 try:
                     self.root.after(16, _tick)
                 except Exception:
@@ -4190,12 +4146,6 @@ uniform vec2 u_center;
 uniform float u_progress;
 out vec4 fragColor;
 
-float hash21(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
-}
-
 float band(float x, float center, float width) {
     return exp(-pow((x - center) / max(0.0001, width), 2.0));
 }
@@ -4210,132 +4160,57 @@ void main() {
     vec2 p = uv - center;
     p.x *= u_resolution.x / max(1.0, u_resolution.y);
     float r = length(p);
+    float ang = atan(p.y, p.x);
     float progress = clamp(u_progress, 0.0, 1.0);
-
-    float bluePulse = smoothstep(0.00, 0.09, progress) * (1.0 - smoothstep(0.12, 0.30, progress));
-    float whitePulse = smoothstep(0.14, 0.24, progress) * (1.0 - smoothstep(0.28, 0.46, progress));
-    float exposure = smoothstep(0.00, 0.08, progress) * (1.0 - smoothstep(0.12, 0.32, progress));
-    float edgeFlood = smoothstep(0.18, 0.74, progress);
-    float tvClose = smoothstep(0.80, 1.0, progress);
-
-    float fracture1 = band(uv.y, 0.26 + progress * 0.28, 0.014) * step(0.34, hash21(vec2(floor(uv.x * 180.0), floor(progress * 80.0) + 7.0)));
-    float fracture2 = band(uv.y, 0.60 - progress * 0.18, 0.018) * step(0.42, hash21(vec2(floor(uv.x * 140.0) + 9.0, floor(progress * 110.0) + 3.0)));
-    float fracture = fracture1 + fracture2;
-    vec2 radialDir = normalize(p + vec2(0.0001, 0.0));
-    vec2 hudBreak = vec2(fracture * (0.020 + whitePulse * 0.018), fracture * 0.0015);
-
-    float ringRadius = mix(0.012, 0.74, progress);
-    float ringWidth = mix(0.040, 0.014, progress);
-    float refractBand = band(r, ringRadius - mix(0.015, 0.060, progress), ringWidth * 3.6)
-                      * smoothstep(0.05, 0.78, progress);
-    vec2 distort = radialDir * refractBand * (0.022 + whitePulse * 0.020)
-                 + hudBreak
-                 + vec2(sin(uv.y * u_resolution.y * 0.090 + progress * 28.0),
-                        cos(uv.x * u_resolution.x * 0.052 - progress * 21.0)) * refractBand * 0.0045;
-
-    // layered HUD slab displacement: horizontal bands shift left/right in alternating direction
-    // each activates after the pulse ring sweeps through its Y position
-    float s1 = band(uv.y, 0.24, 0.022) * smoothstep(0.10, 0.22, progress);
-    float s2 = band(uv.y, 0.43, 0.018) * smoothstep(0.16, 0.28, progress);
-    float s3 = band(uv.y, 0.66, 0.024) * smoothstep(0.20, 0.34, progress);
-    float s4 = band(uv.y, 0.81, 0.016) * smoothstep(0.26, 0.40, progress);
-    float slabFade = 1.0 - smoothstep(0.78, 0.96, progress);
-    distort.x += (s1 * 0.032 - s2 * 0.024 + s3 * 0.028 - s4 * 0.019) * slabFade;
-    distort.y += (s1 * 0.005 - s3 * 0.004) * slabFade;
-    float slabEdge = max(max(s1, s2), max(s3, s4)) * slabFade;
-
-    vec2 rp = p + distort;
-    float rr = length(rp);
-    float rang = atan(rp.y, rp.x);
-
-    float fringe = (0.012 + bluePulse * 0.012 + whitePulse * 0.018) * (0.35 + rr * 2.1);
-    float segmentA = smoothstep(0.12, 0.94, 0.5 + 0.5 * sin(rang * 16.0 + progress * 18.0 + rr * 34.0));
-    float segmentB = smoothstep(0.20, 0.97, 0.5 + 0.5 * cos(rang * 10.0 - progress * 16.0 - rr * 24.0));
-    float segmentMask = clamp(segmentA * 0.65 + segmentB * 0.95, 0.0, 1.0);
-
-    float ringR = band(rr, ringRadius + fringe * 1.06, ringWidth * 1.08) * (0.45 + 0.55 * segmentMask);
-    float ringG = band(rr, ringRadius, ringWidth) * (0.26 + 0.74 * segmentMask);
-    float ringB = band(rr, max(0.0, ringRadius - fringe), ringWidth * 0.88) * (0.36 + 0.64 * segmentMask);
-
-    float echoR = band(rr, ringRadius + 0.030, ringWidth * 1.6) * (1.0 - smoothstep(0.24, 0.82, progress));
-    float echoC = band(rr, max(0.0, ringRadius - 0.080), ringWidth * 2.8) * (1.0 - smoothstep(0.14, 0.62, progress));
-    float echoB = band(rr, max(0.0, ringRadius - 0.136), ringWidth * 3.7) * (1.0 - smoothstep(0.10, 0.52, progress));
-
     vec2 dirA = normalize(vec2(1.0, 0.0));
     vec2 dirB = normalize(vec2(0.5, 0.8660254));
     vec2 dirC = normalize(vec2(-0.5, 0.8660254));
-    float hexScale = mix(21.0, 32.0, smoothstep(0.08, 0.82, progress));
-    float lineA = gridLine(rp, dirA, hexScale, 0.035);
-    float lineB = gridLine(rp, dirB, hexScale, 0.033);
-    float lineC = gridLine(rp, dirC, hexScale, 0.033);
-    float hexWire = max(lineA, max(lineB, lineC));
-    float hexNode = max(lineA * lineB, max(lineB * lineC, lineC * lineA));
-    float hexMask = band(rr, ringRadius + 0.018, ringWidth * 5.0)
-                  + band(rr, ringRadius - 0.096, ringWidth * 6.6) * 0.8;
-    float chainWave = band(fract((rang / 6.2831853) + progress * 1.55), 0.5, 0.18);
-    float nodeCascade = hexNode * hexMask * (0.35 + 0.65 * chainWave);
-    float circuitry = clamp((hexWire * 0.58 + nodeCascade * 1.22), 0.0, 1.0);
-
-    float core = exp(-rr * mix(62.0, 24.0, progress)) * (0.76 + 0.24 * whitePulse);
-    float bloom = exp(-rr * 7.0) * (bluePulse * 0.90 + whitePulse * 1.10 + exposure * 0.58);
-    float halo = exp(-rr * 2.8) * smoothstep(0.04, 0.22, progress) * (1.0 - smoothstep(0.58, 1.0, progress));
-
-    vec2 edgeUv = abs(uv - 0.5) * 2.0;
-    float edgeWave = band(rr, mix(0.18, 1.04, progress), mix(0.10, 0.020, progress));
-    float edgeMask = pow(max(edgeUv.x, edgeUv.y), 3.0);
-    float edgeSweep = edgeWave * edgeMask * edgeFlood;
-    float edgeGlow = pow(max(edgeUv.x, edgeUv.y), 2.1) * (0.10 + 0.90 * edgeFlood) * (1.0 - tvClose * 0.55);
-
-    float scanlines = 0.90 + 0.10 * sin((uv.y * u_resolution.y + progress * 2900.0) * 1.14);
-    float scanMicro = 0.95 + 0.05 * sin((uv.y * u_resolution.y) * 4.2 + progress * 970.0);
-    float lensSweep = band(uv.y, 0.24 + progress * 0.54, 0.045) + band(uv.y, 0.64 - progress * 0.10, 0.062) * 0.6;
-
-    float tearBand1 = band(uv.y, 0.33 + 0.09 * sin(progress * 12.0), 0.012 + whitePulse * 0.008);
-    float tearBand2 = band(uv.y, 0.61 + 0.06 * cos(progress * 10.0 + 0.7), 0.015 + bluePulse * 0.010);
-    float tearPattern1 = step(0.38, hash21(vec2(floor((uv.x + distort.x * 9.0) * 220.0), floor(progress * 90.0) + 13.0)));
-    float tearPattern2 = step(0.32, hash21(vec2(floor((uv.x - distort.x * 7.0) * 180.0) + 7.0, floor(progress * 126.0) + 27.0)));
-    float tear = tearBand1 * tearPattern1 + tearBand2 * tearPattern2;
-
-    float closeH = mix(0.50, 0.010, tvClose);
-    float closeW = mix(0.50, 0.022, tvClose);
+    float hexScale = mix(20.0, 34.0, smoothstep(0.14, 0.86, progress));
+    float lineA = gridLine(p, dirA, hexScale, 0.030);
+    float lineB = gridLine(p, dirB, hexScale, 0.028);
+    float lineC = gridLine(p, dirC, hexScale, 0.028);
+    float ringRadius = mix(0.02, 0.92, smoothstep(0.0, 0.80, progress));
+    float ringWidth = mix(0.090, 0.014, progress);
+    float ring = band(r, ringRadius, ringWidth);
+    float echoInner = band(r, max(0.0, ringRadius - 0.085), ringWidth * 2.2) * (1.0 - smoothstep(0.26, 0.84, progress));
+    float echoOuter = band(r, ringRadius + 0.055, ringWidth * 1.5) * (1.0 - smoothstep(0.48, 0.94, progress));
+    float hexMask = band(r, ringRadius - 0.018, ringWidth * 3.8);
+    float grid = max(lineA, max(lineB, lineC)) * hexMask;
+    float arc = smoothstep(0.18, 1.0, 0.5 + 0.5 * sin(ang * 12.0 - progress * 18.0));
+    float core = exp(-r * mix(58.0, 22.0, progress));
+    float halo = exp(-r * 3.4) * smoothstep(0.00, 0.18, progress) * (1.0 - smoothstep(0.62, 1.0, progress));
+    float sweep = band(uv.y, 0.18 + progress * 0.60, 0.035) + band(uv.y, 0.58 - progress * 0.08, 0.055) * 0.55;
+    float closeV = smoothstep(0.82, 1.0, progress);
+    float closeH = mix(0.50, 0.006, closeV);
+    float closeW = mix(0.50, 0.018, closeV);
     float tvMaskY = 1.0 - smoothstep(closeH, closeH + 0.02, abs(uv.y - 0.5));
     float tvMaskX = 1.0 - smoothstep(closeW, closeW + 0.02, abs(uv.x - 0.5));
-    float tvMask = mix(1.0, tvMaskY, smoothstep(0.80, 0.92, progress));
-    tvMask *= mix(1.0, tvMaskX, smoothstep(0.90, 1.0, progress));
+    float tvMask = mix(1.0, tvMaskY, smoothstep(0.82, 0.94, progress));
+    tvMask *= mix(1.0, tvMaskX, smoothstep(0.92, 1.0, progress));
+    float scanlines = 0.92 + 0.08 * sin((uv.y * u_resolution.y) * 2.4 + progress * 1500.0);
+    float vignette = smoothstep(1.34, 0.28, r);
 
-    float grain = hash21(gl_FragCoord.xy * 0.05 + progress * 31.0) * 0.045;
     vec3 cyan = vec3(0.60, 0.95, 1.0);
     vec3 blue = vec3(0.06, 0.48, 1.0);
     vec3 white = vec3(1.0, 1.0, 1.0);
-    vec3 ghost = vec3(0.34, 0.88, 1.0);
+    vec3 gold = vec3(1.0, 0.80, 0.28);
     vec3 color = vec3(0.0);
 
-    color += mix(blue, cyan, 0.42) * exposure * (0.54 + 0.46 * exp(-rr * 2.0));
-    color += vec3(0.82, 0.96, 1.0) * lensSweep * (0.08 + exposure * 0.22);
-    color += white * whitePulse * (0.26 + 0.74 * exp(-rr * 3.2));
-    color.r += ringR * 0.96 + echoR * 0.46 + whitePulse * 0.18;
-    color.g += ringG * 1.02 + echoC * 0.40 + circuitry * 0.26;
-    color.b += ringB * 1.86 + echoC * 0.66 + echoB * 0.58 + edgeSweep * 0.96 + circuitry * 0.40;
-    color += cyan * bloom * 1.02;
-    color += ghost * (echoC * 0.64 + echoB * 0.46 + halo * 0.60);
-    color += vec3(0.40, 0.90, 1.0) * edgeGlow * 0.65;
-    color += vec3(0.50, 0.94, 1.0) * edgeSweep;
-    color += vec3(0.54, 0.96, 1.0) * circuitry * (0.48 + bluePulse * 0.60);
-    color += vec3(0.92, 1.0, 1.0) * nodeCascade * 0.40;
-    color += vec3(0.60, 0.96, 1.0) * slabEdge * (0.34 + whitePulse * 0.24) * (1.0 - tvClose);
-    color += vec3(0.80, 0.98, 1.0) * tear * (0.42 + exposure * 0.48);
-    color += white * core * (0.24 + whitePulse * 0.42);
-    color += vec3(grain) * (0.18 + tear * 0.22 + circuitry * 0.08);
-
-    color *= scanlines * scanMicro;
-    color += vec3(0.08, 0.18, 0.36) * fracture * 0.32;
-    color *= tvMask;
+    color += mix(blue, cyan, 0.42) * ring * (0.58 + 0.42 * arc);
+    color += cyan * echoInner * 0.82;
+    color += gold * echoOuter * 0.44;
+    color += mix(cyan, gold, 0.34) * grid * 0.58;
+    color += white * core * (0.26 + 0.74 * (1.0 - smoothstep(0.16, 0.60, progress)));
+    color += cyan * halo * 0.40;
+    color += vec3(0.82, 0.96, 1.0) * sweep * (0.08 + ring * 0.24);
+    color *= scanlines * vignette * tvMask;
     color = clamp(color, 0.0, 1.0);
-    fragColor = vec4(color, 1.0);
+    float alpha = clamp((ring * 0.88 + echoInner * 0.52 + grid * 0.30 + core * 0.82 + sweep * 0.16) * tvMask, 0.0, 1.0);
+    fragColor = vec4(color, alpha);
 }
 ''')
             vao = ctx.vertex_array(prog, [])
-            tex = ctx.texture((width, height), 3)
+            tex = ctx.texture((width, height), 4)
             fbo = ctx.framebuffer(color_attachments=[tex])
             prog['u_resolution'].value = (float(width), float(height))
             return {
@@ -4361,13 +4236,13 @@ void main() {
             fbo = gl['pulse_fbo']
             vao = gl['pulse_vao']
             fbo.use()
-            gl['ctx'].clear(0.0, 0.0, 0.0, 1.0)
+            gl['ctx'].clear(0.0, 0.0, 0.0, 0.0)
             prog['u_center'].value = (float(cx), float(cy))
             prog['u_progress'].value = float(max(0.0, min(1.0, purge_t)))
             vao.render()
-            raw = fbo.read(components=3)
-            arr = np.frombuffer(raw, dtype=np.uint8).reshape(ov['sh'], ov['sw'], 3)
-            photo = ImageTk.PhotoImage(Image.fromarray(arr[::-1], 'RGB'))
+            raw = fbo.read(components=4, alignment=1)
+            arr = np.frombuffer(raw, dtype=np.uint8).reshape(ov['sh'], ov['sw'], 4)
+            photo = ImageTk.PhotoImage(Image.fromarray(arr[::-1], 'RGBA'))
             ov['gl_photo'] = photo
             cv.create_image(0, 0, image=photo, anchor='nw')
             return True
@@ -4430,8 +4305,8 @@ void main() {
 
         sw, sh = ov['sw'], ov['sh']
         cx, cy = ov['fx'], ov['fy']
-        lock_t = min(1.0, progress / 0.34)
-        purge_t = max(0.0, min(1.0, (progress - 0.34) / 0.66))
+        lock_t = min(1.0, progress / 0.30)
+        purge_t = max(0.0, min(1.0, (progress - 0.18) / 0.82))
         lock_e = ease_out(lock_t)
         purge_e = ease_in_out(purge_t)
         cyan = '#86dfff'
@@ -4442,18 +4317,17 @@ void main() {
 
         wash = 0.22 + 0.78 * lock_e
         sweep = ((lock_t * 0.45) + purge_t * 1.2) % 1.0
-        tv_fade = 0.0 if progress <= 0.82 else min(1.0, max(0.0, (progress - 0.82) / 0.18))
+        tv_fade = 0.0 if progress <= 0.84 else min(1.0, max(0.0, (progress - 0.84) / 0.16))
         tv_fade = ease_in_out(tv_fade)
 
         try:
-            # fade window all the way to transparent as TV-close completes
-            peak_alpha = min(0.97, 0.12 + 0.58 * lock_e + 0.20 * purge_e)
+            peak_alpha = min(0.96, 0.16 + 0.50 * lock_e + 0.18 * purge_e)
             win.attributes('-alpha', max(0.0, peak_alpha * (1.0 - tv_fade * 0.97)))
         except Exception:
             pass
 
         cv.delete('all')
-        if purge_t < 0.02 or not ov.get('gl'):
+        if purge_t < 0.06 or not ov.get('gl'):
             scan_pitch = 26
             scan_shift = int((progress * 280) % scan_pitch)
             for y in range(-scan_pitch, sh + scan_pitch, scan_pitch):
@@ -4493,8 +4367,7 @@ void main() {
                     cv.create_rectangle(0, 0, sw, sh, fill=fill, outline='',
                                         stipple='gray50' if tv_fade < 0.7 else '')
 
-        # suppress Canvas HUD once TV-close is visually dominant
-        if tv_fade > 0.25:
+        if tv_fade > 0.18:
             return
 
         span = int(lerp(min(sw * 0.30, 360), min(sw * 0.38, 460), lock_e))
@@ -4617,6 +4490,24 @@ void main() {
             except Exception:
                 pass
 
+        def _add_panel_owner(panel, order=0):
+            if not panel:
+                return
+            try:
+                if hasattr(panel, 'is_visible') and not panel.is_visible():
+                    return
+            except Exception:
+                pass
+            win = getattr(panel, '_win', None)
+            if not win:
+                return
+            try:
+                if hasattr(win, 'state') and str(win.state()) == 'withdrawn':
+                    return
+            except Exception:
+                pass
+            _add(win, 'panel', order=order)
+
         # HP float 使用 ULW，不能用 attributes('-alpha') 读写
         _float = getattr(self, '_float', None)
         if _float:
@@ -4637,8 +4528,13 @@ void main() {
                         })
             except Exception:
                 pass
-        for idx, panel in enumerate([self._piano_panel, self._viz_panel, self._status_panel, self._control_panel]):
+        for idx, panel in enumerate([
+            self._status_panel,
+            getattr(self._autokey_panel, '_win', None),
+            getattr(self._bossraid_panel, '_win', None),
+        ]):
             _add(panel, 'panel', order=idx)
+        _add_panel_owner(self._commander_panel, order=3)
         _add(getattr(getattr(self, '_sao_menu', None), '_overlay', None), 'menu')
         _add(getattr(self, '_fisheye_ov', None), 'fisheye')
         # _hp_alpha_windows 已废弃 (ULW 内部渲染)
@@ -4658,8 +4554,7 @@ void main() {
         self._stop_fisheye_overlay()
         try:
             self._sao_menu.unbind_events()
-            if self._sao_menu.visible:
-                self._sao_menu.close()
+            self._sao_menu.force_destroy_overlay()
         except Exception:
             pass
         # 停止识别引擎
@@ -4670,20 +4565,20 @@ void main() {
             try: self._state_mgr.save_cache(self._cfg_settings_ref)
             except Exception: pass
         # 销毁所有浮动面板
-        for panel in [self._piano_panel, self._viz_panel, self._status_panel, self._control_panel]:
+        for panel in [self._status_panel]:
             try:
                 if panel and panel.winfo_exists():
                     panel.destroy()
             except Exception:
                 pass
         # 销毁 ULW 覆盖层 + 配置面板
-        for ov in [self._dps_overlay, self._boss_hp_overlay, self._alert_overlay]:
+        for ov in [self._dps_overlay, self._boss_hp_overlay, self._hp_overlay, self._alert_overlay, self._skillfx_overlay]:
             try:
                 if ov:
                     ov.destroy()
             except Exception:
                 pass
-        for pnl in [self._autokey_panel, self._bossraid_panel]:
+        for pnl in [self._autokey_panel, self._bossraid_panel, self._commander_panel]:
             try:
                 if pnl:
                     pnl.destroy()
@@ -4691,9 +4586,12 @@ void main() {
                 pass
         self._dps_overlay = None
         self._boss_hp_overlay = None
+        self._hp_overlay = None
         self._alert_overlay = None
+        self._skillfx_overlay = None
         self._autokey_panel = None
         self._bossraid_panel = None
+        self._commander_panel = None
         self._destroy_hp_alpha_strip_windows()
         try:
             if self._float and self._float.winfo_exists():
@@ -4722,9 +4620,22 @@ void main() {
             pass
         try:
             if self._sao_menu.visible:
-                self._sao_menu.close()
+                self._sao_menu.prepare_external_fade()
         except Exception:
             pass
+        # ULW overlays (HP / BossHP / DPS) cannot be alpha-faded by
+        # _collect_exit_windows() because their windows are layered. Ask
+        # them to self-fade so the panels do not snap off-screen.
+        for ov in (
+            getattr(self, '_hp_overlay', None),
+            getattr(self, '_boss_hp_overlay', None),
+            getattr(self, '_dps_overlay', None),
+        ):
+            try:
+                if ov is not None and hasattr(ov, 'hide'):
+                    ov.hide()
+            except Exception:
+                pass
 
         wins = self._collect_exit_windows()
         self._create_exit_overlay(mode=mode, target_label=target_label)
@@ -4739,8 +4650,8 @@ void main() {
             return
 
         t0 = time.time()
-        stage1 = 0.42
-        stage2 = 0.96
+        stage1 = 0.34
+        stage2 = 0.82
         duration = stage1 + stage2
 
         def _finish():
@@ -4764,12 +4675,12 @@ void main() {
                         continue
                     if elapsed < stage1:
                         hold = ease_out(min(1.0, elapsed / stage1))
-                        new_alpha = item['alpha'] * (1.0 - 0.16 * hold)
+                        new_alpha = item['alpha'] * (1.0 - 0.10 * hold)
                         if item.get('movable'):
-                            dx = int(item['ux'] * item['travel'] * 0.10 * hold)
-                            dy = int(item['uy'] * item['travel'] * 0.10 * hold)
+                            dx = int(item['ux'] * item['travel'] * 0.06 * hold)
+                            dy = int(item['uy'] * item['travel'] * 0.06 * hold)
                             if item.get('role') == 'float':
-                                dy -= int(8 * hold)
+                                dy -= int(6 * hold)
                             try:
                                 win.geometry(f'+{item["x"] + dx}+{item["y"] + dy}')
                             except Exception:
@@ -4777,13 +4688,13 @@ void main() {
                     else:
                         local = min(1.0, max(0.0, (elapsed - stage1 - item['delay']) / max(0.001, item['duration'])))
                         fade = ease_in_out(local)
-                        base_alpha = item['alpha'] * 0.84
+                        base_alpha = item['alpha'] * 0.90
                         new_alpha = max(0.0, base_alpha * (1.0 - fade))
                         if item.get('movable'):
-                            dx = int(item['ux'] * item['travel'] * (0.10 + 0.90 * fade))
-                            dy = int(item['uy'] * item['travel'] * (0.10 + 0.90 * fade))
+                            dx = int(item['ux'] * item['travel'] * (0.06 + 0.94 * fade))
+                            dy = int(item['uy'] * item['travel'] * (0.06 + 0.94 * fade))
                             if item.get('role') == 'float':
-                                dy -= int(18 + 18 * fade)
+                                dy -= int(14 + 18 * fade)
                             try:
                                 win.geometry(f'+{item["x"] + dx}+{item["y"] + dy}')
                             except Exception:

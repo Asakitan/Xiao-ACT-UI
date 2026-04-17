@@ -8,10 +8,34 @@ PyInstaller spec — 咲 ACT UI (Xiao ACT UI)
 import os
 import sys
 
+from PyInstaller.utils.hooks import collect_submodules
+
 block_cipher = None
 
 # ── 项目根目录 ──
 HERE = os.path.dirname(os.path.abspath(SPECPATH))
+
+LOCAL_HIDDENIMPORTS = [
+    'sao_gui',
+    'sao_webview',
+    'sao_theme',
+    'sao_sound',
+    'sao_menu_hud',
+    'sao_gui_alert',
+    'sao_gui_autokey',
+    'sao_gui_bosshp',
+    'sao_gui_bossraid',
+    'sao_gui_commander',
+    'sao_gui_dps',
+    'sao_gui_hp',
+    'sao_gui_skillfx',
+    'gpu_renderer',
+    'overlay_scheduler',
+    'window_effects',
+    'install_npcap',
+]
+
+WEBVIEW_PLATFORM_HIDDENIMPORTS = collect_submodules('webview.platforms')
 
 a = Analysis(
     ['main.py'],
@@ -22,25 +46,18 @@ a = Analysis(
         ('web', 'web'),
         # 资源 (音效、字体、技能名表)
         ('assets', 'assets'),
-        # Protobuf 模块
-        ('proto/__init__.py', 'proto'),
-        ('proto/star_resonance_pb2.py', 'proto'),
-        ('proto/star_resonance.proto', 'proto'),
+        # Protobuf / schema
+        ('proto', 'proto'),
         # 图标
         ('icon.ico', '.'),
-        # 默认配置
-        ('settings.json', '.'),
-        ('player_profile.json', '.'),
     ],
-    hiddenimports=[
+    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
         'clr',
         'clr_loader',
         'pythonnet',
         # pywebview 及其后端
         'webview',
-        'webview.platforms',
-        'webview.platforms.edgechromium',
         # pygame 音效
         'pygame',
         'pygame.mixer',
@@ -92,8 +109,6 @@ a = Analysis(
         'xmlrpc',
         'pydoc',
         'doctest',
-        'sao_gui',           # 弃用的 tkinter 旧 UI
-        'install_npcap',     # 安装脚本不随包发布
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

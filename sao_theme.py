@@ -24,6 +24,12 @@ from typing import Optional, Callable, List, Dict, Tuple
 import numpy as np
 from config import APP_VERSION_LABEL
 from sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font
+from sao_menu_hud import (
+    MenuCircleButtonRenderer,
+    MenuHudSpriteRenderer,
+    MenuLeftInfoRenderer,
+)
+from overlay_scheduler import get_scheduler as _get_scheduler
 
 try:
     import moderngl
@@ -264,10 +270,15 @@ class SAOCircleButton(tk.Canvas):
     """
     RADIUS = 27
     SIZE = 54
+    # Canvas stays at this fixed size through the whole entry + fisheye
+    # animation. The sprite inside is re-centered at the current _size to
+    # produce the visual growth without paying for Tk geometry changes or
+    # reallocating a new PhotoImage on every animation frame.
+    MAX_SIZE = 70
 
     def __init__(self, parent, icon_text: str = '●', name: str = '',
                  can_activate: bool = True, command: Optional[Callable] = None, **kw):
-        super().__init__(parent, width=self.SIZE, height=self.SIZE,
+        super().__init__(parent, width=self.MAX_SIZE, height=self.MAX_SIZE,
                          highlightthickness=0, bd=0, bg=parent.cget('bg'), **kw)
         self.icon_text = icon_text
         self.name = name
@@ -278,6 +289,15 @@ class SAOCircleButton(tk.Canvas):
         self._hover_t = 0.0  # 0=normal, 1=hover/active (用于平滑过渡)
         self._size = float(self.SIZE)  # 实例级尺寸, 鱼眼缩放时动态修改
         self._anim = Animator(self)
+        self._renderer = MenuCircleButtonRenderer()
+        self._bg_item = None
+        self._bg_photo = None
+        # Reusable max-size canvas used to center each frame's sprite without
+        # reallocating a Pillow image every tick.
+        self._bg_canvas_image = Image.new(
+            'RGBA', (self.MAX_SIZE, self.MAX_SIZE), (0, 0, 0, 0))
+        self._visual_sig = None
+        self._last_pasted_size: Optional[int] = None
 
         self._draw()
         self.bind('<Enter>', self._on_enter)
@@ -294,80 +314,60 @@ class SAOCircleButton(tk.Canvas):
         self._draw()
 
     def _draw(self):
-        self.delete('all')
-        _s = int(self._size)       # 当前实例尺寸 (鱼眼时与 SIZE 不同)
-        cx, cy = _s // 2, _s // 2
+        size = max(1, min(self.MAX_SIZE, int(self._size)))
         t = self._hover_t
 
         if self._active:
             border_color = SAOColors.ACTIVE_BORDER
-        else:
-            border_color = lerp_color(SAOColors.CIRCLE_BORDER, SAOColors.ACTIVE_BORDER, t)
-
-        # ── PIL 4× 超采样抗锯齿 (premultiplied-alpha composite) ──
-        scale = 4
-        ss = _s * scale
-        scx, scy = ss // 2, ss // 2
-        # 在透明底上绘制, 避免 LANCZOS ringing 污染背景 RGB
-        img = Image.new('RGBA', (ss, ss), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-
-        # 主边框
-        border_rgba = _hex_to_rgba(border_color, 255)
-        draw.ellipse((2 * scale, 2 * scale, ss - 2 * scale, ss - 2 * scale),
-                     outline=border_rgba, width=2 * scale, fill=None)
-
-        # 内圆填充
-        ir = scx - 4 * scale
-        if self._active:
-            inner_fill = _hex_to_rgba(SAOColors.ACTIVE_BG, 255)
-        else:
-            inner_hex = lerp_color('#ffffff', SAOColors.HOVER_BG, t)
-            inner_fill = _hex_to_rgba(inner_hex, 255)
-        draw.ellipse((scx - ir, scy - ir, scx + ir, scy + ir),
-                     fill=inner_fill, outline=None)
-
-        # ── premultiplied-alpha LANCZOS → 消除 dark-halo ──
-        arr = np.array(img, dtype=np.float32)
-        a = arr[:, :, 3:4] / 255.0
-        arr[:, :, :3] *= a                          # premultiply
-        premul = Image.fromarray(arr.clip(0, 255).astype(np.uint8), 'RGBA')
-        resized = premul.resize((_s, _s), Image.LANCZOS)
-
-        # ── composite against transparent-key bg (1,1,1) ──
-        r_arr = np.array(resized, dtype=np.float32)
-        fg_a = r_arr[:, :, 3:4] / 255.0
-        # premul composite:  result = fg_premul + bg*(1-fg_a)
-        key_f = np.float32(1.0)                      # key color channel value
-        out_rgb = r_arr[:, :, :3] + key_f * (1.0 - fg_a)
-        # build final opaque image
-        final_arr = np.empty((_s, _s, 4), dtype=np.uint8)
-        final_arr[:, :, :3] = out_rgb.clip(0, 255).astype(np.uint8)
-        final_arr[:, :, 3] = 255
-        # snap background (original alpha ≈ 0) to exact key → 100% match
-        bg_mask = r_arr[:, :, 3] < 32.0
-        final_arr[bg_mask, 0] = 1
-        final_arr[bg_mask, 1] = 1
-        final_arr[bg_mask, 2] = 1
-
-        final = Image.fromarray(final_arr, 'RGBA')
-        photo = ImageTk.PhotoImage(final)
-        self._bg_photo = photo  # prevent GC
-        self.create_image(0, 0, image=photo, anchor='nw')
-
-        # ── 图标 (保留 Tk 文字渲染 — ClearType 抗锯齿) ──
-        if self._active:
+            inner_fill = SAOColors.ACTIVE_BG
             icon_color = SAOColors.ACTIVE_ICON
         else:
+            border_color = lerp_color(SAOColors.CIRCLE_BORDER, SAOColors.ACTIVE_BORDER, t)
+            inner_fill = lerp_color('#ffffff', SAOColors.HOVER_BG, t)
             icon_color = lerp_color(SAOColors.CIRCLE_ICON, SAOColors.HOVER_ICON, t)
 
-        fs = max(8, int(16 * self._size / self.SIZE))
-        try:
-            self.create_text(cx, cy, text=self.icon_text,
-                             fill=icon_color, font=_sao_font(fs))
-        except Exception:
-            self.create_text(cx, cy, text='●',
-                             fill=icon_color, font=_sao_font(fs))
+        bg_key = self.cget('bg') or '#010101'
+        sig = (size, self.icon_text, border_color, inner_fill, icon_color, bg_key)
+        if sig == self._visual_sig and self._bg_item is not None:
+            return
+
+        image = self._renderer.render(
+            size,
+            self.icon_text or '●',
+            border_color,
+            inner_fill,
+            icon_color,
+            bg_key,
+        )
+
+        # Clear only the region previously covered, then paste the new sprite
+        # centered. This keeps the PhotoImage size constant (MAX_SIZE) so we
+        # never reallocate during the growth / fisheye animation.
+        canvas_img = self._bg_canvas_image
+        prev = self._last_pasted_size
+        if prev is not None and prev != size:
+            po = (self.MAX_SIZE - prev) // 2
+            canvas_img.paste((0, 0, 0, 0), (po, po, po + prev, po + prev))
+        elif prev is None:
+            canvas_img.paste((0, 0, 0, 0), (0, 0, self.MAX_SIZE, self.MAX_SIZE))
+        off = (self.MAX_SIZE - size) // 2
+        canvas_img.paste(image, (off, off))
+        self._last_pasted_size = size
+
+        if self._bg_photo is None:
+            self._bg_photo = ImageTk.PhotoImage(canvas_img)
+        else:
+            try:
+                self._bg_photo.paste(canvas_img)
+            except Exception:
+                self._bg_photo = ImageTk.PhotoImage(canvas_img)
+
+        if self._bg_item is None:
+            self.delete('all')
+            self._bg_item = self.create_image(0, 0, image=self._bg_photo, anchor='nw')
+        else:
+            self.itemconfigure(self._bg_item, image=self._bg_photo)
+        self._visual_sig = sig
 
     def _on_enter(self, e=None):
         self._hovering = True
@@ -384,7 +384,13 @@ class SAOCircleButton(tk.Canvas):
         self._anim.animate('hover', 200, fade)
 
     def _set_hover_t(self, t):
-        self._hover_t = max(0, min(1, t))
+        t = max(0.0, min(1.0, t))
+        # Quantize to ~20 buckets so the renderer's image cache actually
+        # hits during smooth hover fades instead of missing every frame.
+        tq = round(t * 20.0) / 20.0
+        if abs(tq - self._hover_t) < 1e-4:
+            return
+        self._hover_t = tq
         self._draw()
 
     def _on_click(self, e=None):
@@ -399,11 +405,13 @@ class SAOCircleButton(tk.Canvas):
 class SAOMenuBar(tk.Frame):
     """
     SAO 风格垂直菜单栏
-    - 最多显示 5 个圆形按钮
+    - 最多显示 6 个圆形按钮
     - 下落动画 (from top:-500 to top:0)
     - 滚轮滚动
     - 点击激活 → 触发 LeftInfo + ChildBar
     """
+
+    _MAX_VISIBLE = 6
 
     def __init__(self, parent, icon_arr: List[Dict], on_activate=None, **kw):
         super().__init__(parent, bg='', highlightthickness=0, **kw)
@@ -414,7 +422,12 @@ class SAOMenuBar(tk.Frame):
         self._slots:   List[tk.Frame] = []
         self._active_item = None
         self._hover_idx: Optional[int] = None
-        self._float_job = None
+        self._float_registered = False
+        self._float_sched_ident = f'sao_menu_bar_{id(self)}'
+        self._enter_active = False
+        self._enter_t0 = 0.0
+        self._enter_delay_s = 0.08
+        self._enter_duration_s = 0.28
         self._float_phases: List[float] = []
         self._anim = Animator(self)
         self.bind('<Destroy>', lambda e: self._stop_float())
@@ -429,7 +442,7 @@ class SAOMenuBar(tk.Frame):
         self._buttons.clear()
         self._slots.clear()
         bg = self.cget('bg')
-        for idx, item in enumerate(self.icon_arr[:5]):
+        for idx, item in enumerate(self.icon_arr[:self._MAX_VISIBLE]):
             slot = tk.Frame(self, width=self._SLOT, height=self._SLOT, bg=bg)
             slot.pack_propagate(False)
             slot.pack(side='top')
@@ -440,8 +453,10 @@ class SAOMenuBar(tk.Frame):
                 can_activate=item.get('can_active', True),
                 command=lambda it=item: self._on_item_click(it)
             )
-            _off = (self._SLOT - SAOCircleButton.SIZE) // 2
-            btn.place(x=_off, y=_off)
+            # Canvas is MAX_SIZE (==_SLOT); place once and never reposition.
+            # The sprite inside is re-centered at _size each frame so we
+            # avoid Tk geometry changes during fisheye / entry animation.
+            btn.place(x=0, y=0)
             self._buttons.append(btn)
             self._slots.append(slot)
             # 鱼眼: hover 时通知 MenuBar 更新所有按钮尺寸
@@ -449,7 +464,6 @@ class SAOMenuBar(tk.Frame):
             btn.bind('<Leave>', lambda e: self._off_fisheye(),         add='+')
         self.bind_all_recursive('<MouseWheel>', self._on_scroll)
         self._float_phases = [i * 1.57 for i in range(len(self._buttons))]
-        self._start_float()
 
     def bind_all_recursive(self, event, handler):
         self.bind(event, handler)
@@ -480,7 +494,7 @@ class SAOMenuBar(tk.Frame):
             self.on_activate(item)
 
     def _on_scroll(self, e):
-        if not self.icon_arr or len(self.icon_arr) <= 5:
+        if not self.icon_arr or len(self.icon_arr) <= self._MAX_VISIBLE:
             return
         if e.delta > 0:
             self.icon_arr.insert(0, self.icon_arr.pop())
@@ -492,82 +506,101 @@ class SAOMenuBar(tk.Frame):
         self._build()
 
     def play_enter_animation(self):
-        """下落入场: 按钮逐个从透明变为可见, 带缩放效果"""
+        """下落入场: 单时间轴动画，避免 5 路 after 同时抢帧。"""
         self._stop_float()
-        total = len(self._buttons)
-        for i, (btn, slot) in enumerate(zip(self._buttons, self._slots)):
-            delay = i * 80
+        self._enter_active = True
+        self._enter_t0 = time.time()
+        for btn in self._buttons:
             btn.configure(cursor='')
-
-            def animate_btn(b=btn, d=delay, sl=slot, is_last=(i == total - 1)):
-                anim = Animator(b)
-                b._size = 1.0
-                b.configure(width=1, height=1)
-                _c = (self._SLOT - 1) // 2
-                b.place(in_=sl, x=_c, y=_c)
-
-                def grow(t, button=b, slt=sl, last=is_last):
-                    s = int(SAOCircleButton.SIZE * ease_out(t))
-                    s = max(1, s)
-                    button._size = float(s)
-                    button.configure(width=s, height=s)
-                    _off = (self._SLOT - s) // 2
-                    button.place(in_=slt, x=_off, y=_off)
-                    if t >= 1.0:
-                        button.configure(cursor='hand2')
-                        button._draw()
-                        if last:
-                            self._start_float()
-
-                b.after(d, lambda: anim.animate('grow', 300, grow))
-
-            animate_btn()
+            btn._size = 1.0
+            btn._draw()
+            btn._float_prev_s = 1
+        self._start_float()
 
 
     # ── 浮动 + 鱼眼循环 ──────────────────────────────────────────
 
     def _start_float(self):
-        self._stop_float()
-        if not self.winfo_exists():
+        if self._float_registered or not self.winfo_exists():
             return
-        self._do_float()
+        try:
+            _get_scheduler().register(
+                self._float_sched_ident,
+                self._tick_float,
+                self._float_animating,
+            )
+            self._float_registered = True
+        except Exception:
+            self._float_registered = False
+        self._tick_float(time.time())
 
     def _stop_float(self):
-        if self._float_job:
+        if self._float_registered:
             try:
-                self.after_cancel(self._float_job)
+                _get_scheduler().unregister(self._float_sched_ident)
             except Exception:
                 pass
-            self._float_job = None
+            self._float_registered = False
 
-    def _do_float(self):
+    def _float_animating(self) -> bool:
+        if not self.winfo_exists() or not self._buttons:
+            return False
+        if self._enter_active:
+            return True
+        if self._hover_idx is not None:
+            return True
+        for btn in self._buttons:
+            if abs(float(btn._size) - float(SAOCircleButton.SIZE)) > 0.18:
+                return True
+        return False
+
+    def _tick_float(self, _now: float):
         if not self.winfo_exists() or not self._buttons:
             return
-        now = time.time()
-        for i, (btn, slot) in enumerate(zip(self._buttons, self._slots)):
-            # 鱼眼目标尺寸: 高斯衰减, 悬停按钮 +22%, 相邻 +8%
-            if self._hover_idx is not None:
+        keep_animating = False
+        for i, btn in enumerate(self._buttons):
+            if self._enter_active:
+                local_t = (_now - self._enter_t0 - i * self._enter_delay_s) / self._enter_duration_s
+                local_t = max(0.0, min(1.0, local_t))
+                btn._size = float(max(1, int(round(SAOCircleButton.SIZE * ease_out(local_t)))))
+                if local_t < 1.0:
+                    keep_animating = True
+                else:
+                    btn.configure(cursor='hand2')
+            elif self._hover_idx is not None:
                 dist = abs(self._hover_idx - i)
                 target = SAOCircleButton.SIZE * (1.0 + 0.22 * math.exp(-0.9 * dist * dist))
+                delta = target - btn._size
+                if abs(delta) > 0.18:
+                    keep_animating = True
+                    btn._size += delta * 0.28
+                else:
+                    btn._size = target
             else:
                 target = float(SAOCircleButton.SIZE)
-            # 平滑插值 (每帧趋近 28%)
-            btn._size += (target - btn._size) * 0.28
-            s = max(1, int(btn._size))
-            if abs(s - btn.winfo_width()) > 0:
-                btn.configure(width=s, height=s)
+                delta = target - btn._size
+                if abs(delta) > 0.18:
+                    keep_animating = True
+                    btn._size += delta * 0.28
+                else:
+                    btn._size = target
+            s = max(1, int(round(btn._size)))
+            prev_s = getattr(btn, '_float_prev_s', None)
+            if prev_s != s:
                 btn._draw()
-            # 垂直浮动 (各按钮相位不同, 像海浪)
-            dy = 2.5 * math.sin(now * 1.4 + self._float_phases[i])
-            _off = (self._SLOT - s) // 2
-            btn.place(in_=slot, x=_off, y=int(_off + dy))
-        self._float_job = self.after(16, self._do_float)
+                btn._float_prev_s = s
+        if self._enter_active and not keep_animating:
+            self._enter_active = False
+        if not keep_animating and self._hover_idx is None:
+            self._stop_float()
 
     def _on_fisheye(self, idx: int):
         self._hover_idx = idx
+        self._start_float()
 
     def _off_fisheye(self):
         self._hover_idx = None
+        self._start_float()
 
 
 # ──────────────────── 左侧信息面板 (LeftInfo) ────────────────────
@@ -582,8 +615,7 @@ class SAOLeftInfo(tk.Frame):
 
     def __init__(self, parent, username: str = 'Player',
                  description: str = 'Welcome to SAO world', **kw):
-        super().__init__(parent, bg='', highlightthickness=0, **kw)
-        self.configure(bg=parent.cget('bg'))
+        super().__init__(parent, bg=parent.cget('bg'), highlightthickness=0, **kw)
         self.username = username
         self.description = description
         self._active = False
@@ -591,16 +623,27 @@ class SAOLeftInfo(tk.Frame):
         self._target_w = 240
         self._top_h = 200
         self._bottom_h = 80
+        self._open_ms = 240
+        self._close_ms = 160
+        self._pulse_ms = 180
+        self._renderer = MenuLeftInfoRenderer()
+        self._top_image_id = None
+        self._top_photo = None
+        self._bottom_image_id = None
+        self._bottom_photo = None
+        self._sweep_phase = 0.0
+        self._sweep_strength = 0.0
 
         self._build()
 
     def _build(self):
+        bg = self.cget('bg')
         self._top = tk.Canvas(self, width=0, height=0,
-                              bg='#ffffff', highlightthickness=0)
+                              bg=bg, highlightthickness=0)
         self._top.pack(anchor='nw')
 
         self._bottom = tk.Canvas(self, width=0, height=0,
-                                 bg='#e5e3e3', highlightthickness=0)
+                                 bg=bg, highlightthickness=0)
         self._bottom.pack(anchor='nw')
 
     def set_active(self, active: bool):
@@ -613,60 +656,103 @@ class SAOLeftInfo(tk.Frame):
             self._animate_close()
 
     def _animate_open(self):
-        def phase1(t):
-            w = max(1, int(self._target_w * t))
-            h = max(1, int(self._top_h * t))
-            self._top.configure(width=w, height=h)
-            self._redraw_top(w, h)
+        self._anim.cancel('close')
 
-        def phase2(t):
-            h = max(1, int(self._bottom_h * t))
-            self._bottom.configure(width=self._target_w, height=h)
-            self._redraw_bottom(self._target_w, h)
+        def phase(t):
+            self._apply_panel_state(t, opening=True)
 
-        self._anim.animate('top_open', 500, phase1,
-                           on_done=lambda: self._anim.animate('bottom_open', 500, phase2))
+        self._anim.animate('panel_sync', self._open_ms, phase, easing=ease_in_out)
 
     def _animate_close(self):
-        def fade(t):
-            inv = 1 - t
-            w = max(1, int(self._target_w * inv))
-            self._top.configure(width=w, height=max(1, int(self._top_h * inv)))
-            self._bottom.configure(width=w, height=max(1, int(self._bottom_h * inv)))
+        self._anim.cancel('panel_sync')
 
-        self._anim.animate('close', 200, fade)
+        def fade(t):
+            self._apply_panel_state(t, opening=False)
+
+        self._anim.animate('close', self._close_ms, fade, easing=ease_in_out)
+
+    def sync_pulse(self):
+        if not self._active:
+            return
+        self._anim.cancel('close')
+
+        def pulse(t):
+            shrink = math.sin(t * math.pi)
+            top_t = 1.0 - 0.040 * shrink
+            bottom_t = 1.0 - 0.058 * shrink
+            self._apply_panel_progresses(
+                top_t, bottom_t,
+                sweep_phase=t,
+                sweep_strength=shrink * 0.88,
+            )
+
+        self._anim.animate('panel_sync', self._pulse_ms, pulse, easing=ease_in_out)
+
+    def _apply_panel_state(self, t: float, opening: bool):
+        t = max(0.0, min(1.0, t))
+        if opening:
+            top_t = t
+            bottom_t = max(0.0, min(1.0, (t - 0.12) / 0.88))
+        else:
+            inv = 1.0 - t
+            top_t = inv
+            bottom_t = max(0.0, min(1.0, (inv - 0.04) / 0.96))
+
+        self._apply_panel_progresses(top_t, bottom_t)
+
+    def _apply_panel_progresses(self, top_t: float, bottom_t: float,
+                                sweep_phase: float = 0.0, sweep_strength: float = 0.0):
+        top_t = max(0.0, min(1.0, top_t))
+        bottom_t = max(0.0, min(1.0, bottom_t))
+        self._sweep_phase = max(0.0, min(1.0, sweep_phase))
+        self._sweep_strength = max(0.0, min(1.0, sweep_strength))
+        top_w = max(1, int(round(self._target_w * top_t)))
+        top_h = max(1, int(round(self._top_h * top_t)))
+        bottom_w = max(1, int(round(self._target_w * max(top_t, bottom_t * 0.94))))
+        bottom_h = max(1, int(round(self._bottom_h * bottom_t)))
+
+        self._top.configure(width=top_w, height=top_h)
+        self._bottom.configure(width=bottom_w, height=bottom_h)
+        self._redraw_top(top_w, top_h)
+        self._redraw_bottom(bottom_w, bottom_h)
 
     def _redraw_top(self, w, h):
-        self._top.delete('all')
         if w < 20 or h < 20:
+            if self._top_image_id is not None:
+                self._top.delete('all')
+                self._top_image_id = None
+                self._top_photo = None
             return
-        # 底部阴影渐变
-        for i in range(6):
-            av = int(20 * (1 - i / 6))
-            sc = f'#{av:02x}{av:02x}{av:02x}'
-            self._top.create_line(3, h - i, w - 3, h - i, fill=sc)
-        # 右三角
-        self._top.create_polygon(w, h * 0.77, w + 18, h * 0.77 + 7, w, h * 0.77 + 14,
-                                 fill='#ffffff', outline='')
-        self._top.create_text(w // 2, 30, text=self.username,
-                              font=_cjk_font(13), fill='#333333')
-        if h > 50:
-            # 分隔线: 渐变效果
-            for i in range(3):
-                lv = int(170 + i * 25)
-                self._top.create_line(10 + i * 2, 50 - 1 + i, w - 10 - i * 2, 50 - 1 + i,
-                                      fill=f'#{lv:02x}{lv:02x}{lv:02x}', width=1)
+        photo = self._renderer.render_top(
+            self.username, w, h,
+            sweep_phase=self._sweep_phase,
+            sweep_strength=self._sweep_strength,
+        )
+        if self._top_image_id is None:
+            self._top.delete('all')
+            self._top_image_id = self._top.create_image(0, 0, image=photo, anchor='nw')
+        else:
+            self._top.itemconfigure(self._top_image_id, image=photo)
+        self._top_photo = photo
 
     def _redraw_bottom(self, w, h):
-        self._bottom.delete('all')
         if w < 20 or h < 15:
+            if self._bottom_image_id is not None:
+                self._bottom.delete('all')
+                self._bottom_image_id = None
+                self._bottom_photo = None
             return
-        # 下三角
-        self._bottom.create_polygon(30, 0, 30 + 7, -10, 30 + 15, 0,
-                                    fill='#e5e3e3', outline='')
-        self._bottom.create_text(10, 15, text=self.description,
-                                 font=_cjk_font(9), fill='#555',
-                                 anchor='nw', width=w - 20)
+        photo = self._renderer.render_bottom(
+            self.description, w, h,
+            sweep_phase=self._sweep_phase,
+            sweep_strength=self._sweep_strength,
+        )
+        if self._bottom_image_id is None:
+            self._bottom.delete('all')
+            self._bottom_image_id = self._bottom.create_image(0, 0, image=photo, anchor='nw')
+        else:
+            self._bottom.itemconfigure(self._bottom_image_id, image=photo)
+        self._bottom_photo = photo
 
 
 # ──────────────────── 子菜单 (ChildBar) ────────────────────
@@ -685,48 +771,191 @@ class SAOChildBar(tk.Frame):
         self._menus: Dict[str, List[Dict]] = {}
         self._current_name = None
         self._items: List[tk.Frame] = []
+        self._content_wrap = None
+        self._line_cv = None
+        self._arrow_cv = None
+        self._line_item_specs = []
+        self._arrow_item_specs = []
+        self._transition_serial = 0
+        self._row_anim_registered = False
+        self._row_anim_active = False
+        self._row_anim_t0 = 0.0
+        self._row_anim_duration_s = 0.24
+        self._row_anim_stagger_s = 0.028
+        self._row_anim_sched_ident = f'sao_child_bar_{id(self)}'
+        self._locked_size: Optional[Tuple[int, int]] = None
+        self._size_anim_active = False
         self._anim = Animator(self)
+        self.bind('<Destroy>', lambda e: self._stop_row_anim())
 
     def register_menu(self, name: str, items: List[Dict]):
         self._menus[name] = items
 
-    def show_menu(self, name: str):
-        if name == self._current_name:
+    def show_menu(self, name: str, force: bool = False):
+        if not force and name == self._current_name and self._items:
             return
-        self._current_name = name
         items = self._menus.get(name, [])
-        self._rebuild(items)
+        if self._items and items and self._current_name and name != self._current_name:
+            self._current_name = name
+            self._rebuild(items, animate_rows=False)
+            return
+        self._transition_to(name, items)
 
     def hide_menu(self):
-        self._current_name = None
-        for w in self.winfo_children():
-            w.destroy()
-        self._items.clear()
+        self._transition_to(None, [])
 
-    def _rebuild(self, items: List[Dict]):
+    def _transition_to(self, name: Optional[str], items: List[Dict]):
+        self._transition_serial += 1
+        serial = self._transition_serial
+
+        def _swap_in():
+            if serial != self._transition_serial or not self.winfo_exists():
+                return
+            self._current_name = name
+            self._rebuild(items, animate_rows=not bool(self._items))
+
+        if self._items:
+            self._animate_out_current(_swap_in)
+        else:
+            _swap_in()
+
+    def _animate_out_current(self, on_done: Callable[[], None]):
+        self._stop_row_anim()
+        rows = [getattr(outer, '_row_body', None) for outer in self._items]
+        rows = [row for row in rows if row is not None and row.winfo_exists()]
+        if not rows:
+            for w in self.winfo_children():
+                w.destroy()
+            self._items.clear()
+            self._content_wrap = None
+            self._line_cv = None
+            self._arrow_cv = None
+            self._line_item_specs = []
+            self._arrow_item_specs = []
+            on_done()
+            return
+
+        start_widths = []
+        for row in rows:
+            try:
+                start_widths.append(max(1, row.winfo_width(), int(row.cget('width'))))
+            except Exception:
+                start_widths.append(240)
+
+        line_start = 10
+        arrow_start = 12
+        try:
+            if self._line_cv is not None and self._line_cv.winfo_exists():
+                line_start = max(1, self._line_cv.winfo_width(), int(self._line_cv.cget('width')))
+        except Exception:
+            pass
+        try:
+            if self._arrow_cv is not None and self._arrow_cv.winfo_exists():
+                arrow_start = max(1, self._arrow_cv.winfo_width(), int(self._arrow_cv.cget('width')))
+        except Exception:
+            pass
+
+        def _step(t: float):
+            for row, start_w in zip(rows, start_widths):
+                if row.winfo_exists():
+                    row.configure(width=max(1, int(round(lerp(start_w, 1, t)))))
+            fade_t = ease_in_out(t)
+            self._apply_line_arrow_fade(fade_t)
+            for outer in self._items:
+                apply_visual = getattr(outer, '_apply_fade_visual', None)
+                if apply_visual:
+                    apply_visual(fade_t)
+            if self._line_cv is not None and self._line_cv.winfo_exists():
+                self._line_cv.configure(width=max(1, int(round(lerp(line_start, 1, t)))))
+            if self._arrow_cv is not None and self._arrow_cv.winfo_exists():
+                self._arrow_cv.configure(width=max(1, int(round(lerp(arrow_start, 1, t)))))
+
+        def _finish():
+            for w in self.winfo_children():
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+            self._items.clear()
+            self._content_wrap = None
+            self._line_cv = None
+            self._arrow_cv = None
+            self._line_item_specs = []
+            self._arrow_item_specs = []
+            on_done()
+
+        self._anim.animate('switch_out', 140, _step, on_done=_finish, easing=ease_in_out)
+
+    def _apply_line_arrow_fade(self, fade_t: float):
+        fade_t = max(0.0, min(1.0, fade_t))
+        bg = self.cget('bg')
+        if self._line_cv is not None and self._line_cv.winfo_exists():
+            for item_id, base_color in self._line_item_specs:
+                try:
+                    self._line_cv.itemconfigure(item_id, fill=lerp_color(base_color, bg, fade_t))
+                except Exception:
+                    pass
+        if self._arrow_cv is not None and self._arrow_cv.winfo_exists():
+            for item_id, base_color, channel in self._arrow_item_specs:
+                try:
+                    self._arrow_cv.itemconfigure(item_id, **{channel: lerp_color(base_color, bg, fade_t)})
+                except Exception:
+                    pass
+
+    def _rebuild(self, items: List[Dict], animate_rows: bool = True):
+        self._stop_row_anim()
+        old_w = max(0, self.winfo_width(), self.winfo_reqwidth()) if self.winfo_exists() else 0
+        old_h = max(0, self.winfo_height(), self.winfo_reqheight()) if self.winfo_exists() else 0
+        if old_w > 1 or old_h > 1:
+            try:
+                self.pack_propagate(False)
+                self.configure(width=old_w, height=old_h)
+                self._locked_size = (old_w, old_h)
+            except Exception:
+                self._locked_size = None
         for w in self.winfo_children():
             w.destroy()
         self._items.clear()
+        self._content_wrap = None
+        self._line_cv = None
+        self._arrow_cv = None
+        self._line_item_specs = []
+        self._arrow_item_specs = []
 
         if not items:
+            self._anim.cancel('size_shift')
+            self._size_anim_active = False
+            self._locked_size = None
+            try:
+                self.configure(width=0, height=0)
+            except Exception:
+                pass
             return
 
         content = tk.Frame(self, bg=self.cget('bg'), highlightthickness=0)
         content.pack(anchor='nw')
+        self._content_wrap = content
 
         # 连接线 (带微弱辉光)
         line_h = len(items) * 47 - 3
         line_cv = tk.Canvas(content, width=10, height=max(1, line_h),
                             bg=self.cget('bg'), highlightthickness=0)
         # 辉光层
-        line_cv.create_line(5, 5, 5, line_h - 5, fill='#d4d0d0', width=4)
+        glow_line = line_cv.create_line(5, 5, 5, line_h - 5, fill='#d4d0d0', width=4)
         # 主线
-        line_cv.create_line(5, 5, 5, line_h - 5, fill='#9c9999', width=2)
+        main_line = line_cv.create_line(5, 5, 5, line_h - 5, fill='#9c9999', width=2)
         # 顶部高光点
-        line_cv.create_oval(3, 3, 7, 7, fill='#b0b0b0', outline='')
+        top_dot = line_cv.create_oval(3, 3, 7, 7, fill='#b0b0b0', outline='')
         # 底部高光点
-        line_cv.create_oval(3, line_h - 7, 7, line_h - 3, fill='#b0b0b0', outline='')
+        bottom_dot = line_cv.create_oval(3, line_h - 7, 7, line_h - 3, fill='#b0b0b0', outline='')
         line_cv.pack(side=tk.LEFT, padx=(0, 3), anchor='n', pady=5)
+        self._line_cv = line_cv
+        self._line_item_specs = [
+            (glow_line, '#d4d0d0'),
+            (main_line, '#9c9999'),
+            (top_dot, '#b0b0b0'),
+            (bottom_dot, '#b0b0b0'),
+        ]
 
         # 箭头指示器 (微弱金色点)
         arrow_cv = tk.Canvas(content, width=12, height=max(1, line_h),
@@ -735,12 +964,18 @@ class SAOChildBar(tk.Frame):
         for gr in range(6, 0, -2):
             ga = int(15 * (1 - gr / 6))
             gc = f'#{int(ga * 3.5):02x}{int(ga * 2.2):02x}{int(ga * 0.3):02x}'
-            arrow_cv.create_oval(6 - gr, line_h // 2 - gr,
-                                 6 + gr, line_h // 2 + gr,
-                                 fill=gc, outline='')
-        arrow_cv.create_oval(4, line_h // 2 - 2, 9, line_h // 2 + 3,
-                             fill='#c9b896', outline='#d4c8a8')
+            oid = arrow_cv.create_oval(6 - gr, line_h // 2 - gr,
+                                       6 + gr, line_h // 2 + gr,
+                                       fill=gc, outline='')
+            self._arrow_item_specs.append((oid, gc, 'fill'))
+        core_dot = arrow_cv.create_oval(4, line_h // 2 - 2, 9, line_h // 2 + 3,
+                                        fill='#c9b896', outline='#d4c8a8')
+        self._arrow_item_specs.extend([
+            (core_dot, '#c9b896', 'fill'),
+            (core_dot, '#d4c8a8', 'outline'),
+        ])
         arrow_cv.pack(side=tk.LEFT, padx=(0, 2), anchor='n', pady=5)
+        self._arrow_cv = arrow_cv
 
         list_frame = tk.Frame(content, bg=self.cget('bg'), highlightthickness=0)
         list_frame.pack(side=tk.LEFT, anchor='n')
@@ -748,6 +983,138 @@ class SAOChildBar(tk.Frame):
         for i, item in enumerate(items):
             row = self._create_item(list_frame, item, i)
             self._items.append(row)
+        # Pre-size every row to its final width BEFORE we measure the
+        # content frame. _create_item leaves rows shrunk to 88px so the
+        # row-anim can grow them in; if we measure target_w with rows
+        # still at 88px we lock child-bar at ~118px wide, then later
+        # the rows expand back to 240 and bleed past the locked frame
+        # (the right-side cut the user sees after switching menus a few
+        # times — show_menu(name, force=False) calls _rebuild with
+        # animate_rows=False, which never runs the row-anim fixup).
+        for outer in self._items:
+            row = getattr(outer, '_row_body', None)
+            if row is not None and row.winfo_exists():
+                try:
+                    row.configure(width=240)
+                except Exception:
+                    pass
+        try:
+            self.update_idletasks()
+            target_w = max(1, content.winfo_reqwidth())
+            target_h = max(1, content.winfo_reqheight())
+            start_w = self._locked_size[0] if self._locked_size is not None else target_w
+            start_h = self._locked_size[1] if self._locked_size is not None else target_h
+            self.configure(width=start_w, height=start_h)
+            self._animate_size_to(target_w, target_h)
+        except Exception:
+            pass
+        if animate_rows:
+            self._start_row_anim()
+        else:
+            for outer in self._items:
+                row = getattr(outer, '_row_body', None)
+                if row is not None and row.winfo_exists():
+                    row.configure(width=240)
+
+    def _start_row_anim(self):
+        if not self._items:
+            return
+        self._row_anim_active = True
+        self._row_anim_t0 = time.time()
+        if self._row_anim_registered:
+            return
+        try:
+            _get_scheduler().register(
+                self._row_anim_sched_ident,
+                self._tick_row_anim,
+                self._row_animating,
+            )
+            self._row_anim_registered = True
+        except Exception:
+            self._row_anim_registered = False
+
+    def _stop_row_anim(self):
+        self._row_anim_active = False
+        if self._row_anim_registered:
+            try:
+                _get_scheduler().unregister(self._row_anim_sched_ident)
+            except Exception:
+                pass
+            self._row_anim_registered = False
+
+    def _row_animating(self) -> bool:
+        return self._row_anim_active and self.winfo_exists()
+
+    def _tick_row_anim(self, now: float):
+        if not self.winfo_exists() or not self._items:
+            self._stop_row_anim()
+            return
+        keep_animating = False
+        for idx, outer in enumerate(self._items):
+            row = getattr(outer, '_row_body', None)
+            if row is None or not row.winfo_exists():
+                continue
+            local_t = (now - self._row_anim_t0 - idx * self._row_anim_stagger_s) / self._row_anim_duration_s
+            local_t = max(0.0, min(1.0, local_t))
+            start_w = max(1, int(getattr(outer, '_row_start_w', 72)))
+            width = max(1, int(round(lerp(start_w, 240, ease_out(local_t)))))
+            if int(row.cget('width')) != width:
+                row.configure(width=width)
+            if local_t < 1.0:
+                keep_animating = True
+        if not keep_animating:
+            try:
+                self.update_idletasks()
+                if (not self._size_anim_active and
+                        self._content_wrap is not None and self._content_wrap.winfo_exists()):
+                    self.configure(
+                        width=max(1, self._content_wrap.winfo_reqwidth()),
+                        height=max(1, self._content_wrap.winfo_reqheight()),
+                    )
+            except Exception:
+                pass
+            if not self._size_anim_active:
+                self._locked_size = None
+            self._stop_row_anim()
+
+    def _animate_size_to(self, target_w: int, target_h: int, duration_ms: int = 180):
+        target_w = max(1, int(target_w))
+        target_h = max(1, int(target_h))
+        try:
+            start_w = max(1, self.winfo_width(), int(self.cget('width') or 0), self.winfo_reqwidth())
+            start_h = max(1, self.winfo_height(), int(self.cget('height') or 0), self.winfo_reqheight())
+        except Exception:
+            start_w = target_w
+            start_h = target_h
+        if abs(start_w - target_w) <= 1 and abs(start_h - target_h) <= 1:
+            try:
+                self.configure(width=target_w, height=target_h)
+            except Exception:
+                pass
+            self._size_anim_active = False
+            self._locked_size = None
+            return
+
+        self._size_anim_active = True
+
+        def _step(t: float):
+            try:
+                self.configure(
+                    width=max(1, int(round(lerp(start_w, target_w, t)))),
+                    height=max(1, int(round(lerp(start_h, target_h, t)))),
+                )
+            except Exception:
+                pass
+
+        def _finish():
+            self._size_anim_active = False
+            self._locked_size = None
+            try:
+                self.configure(width=target_w, height=target_h)
+            except Exception:
+                pass
+
+        self._anim.animate('size_shift', duration_ms, _step, on_done=_finish, easing=ease_in_out)
 
     def _create_item(self, parent, item: Dict, index: int) -> tk.Frame:
         # 外容器: 包含阴影层 + 主体
@@ -758,6 +1125,7 @@ class SAOChildBar(tk.Frame):
                        width=240, height=44)
         row.pack(fill=tk.X)
         row.pack_propagate(False)
+        outer._row_body = row
 
         # 左侧激活指示条 (2px, 初始透明)
         indicator = tk.Frame(row, bg='#ffffff', width=2, height=44)
@@ -782,6 +1150,7 @@ class SAOChildBar(tk.Frame):
         # 平滑悬停过渡
         _anim = Animator(row)
         _hover_state = {'t': 0.0}
+        fade_bg = self.cget('bg') or '#010101'
 
         def _update_hover(t, r=row, il=icon_lbl, tl=text_lbl,
                           ind=indicator, arr=arrow_lbl):
@@ -791,6 +1160,26 @@ class SAOChildBar(tk.Frame):
             icon_fg = lerp_color('#555555', SAOColors.CHILD_HOVER_FG, t)
             ind_color = lerp_color('#ffffff', SAOColors.ACTIVE_BORDER, t)
             arr_fg = lerp_color('#ffffff', SAOColors.CHILD_HOVER_FG, t)
+            r.configure(bg=bg)
+            il.configure(bg=bg, fg=icon_fg)
+            tl.configure(bg=bg, fg=fg)
+            ind.configure(bg=ind_color)
+            arr.configure(bg=bg, fg=arr_fg)
+
+        def _apply_fade_visual(fade_t, r=row, il=icon_lbl, tl=text_lbl,
+                               ind=indicator, arr=arrow_lbl):
+            fade_t = max(0.0, min(1.0, fade_t))
+            ht = _hover_state['t']
+            bg_now = lerp_color('#ffffff', SAOColors.CHILD_HOVER, ht)
+            fg_now = lerp_color(SAOColors.CHILD_TEXT, SAOColors.CHILD_HOVER_FG, ht)
+            icon_now = lerp_color('#555555', SAOColors.CHILD_HOVER_FG, ht)
+            ind_now = lerp_color('#ffffff', SAOColors.ACTIVE_BORDER, ht)
+            arr_now = lerp_color('#ffffff', SAOColors.CHILD_HOVER_FG, ht)
+            bg = lerp_color(bg_now, fade_bg, fade_t)
+            fg = lerp_color(fg_now, fade_bg, fade_t)
+            icon_fg = lerp_color(icon_now, fade_bg, fade_t)
+            ind_color = lerp_color(ind_now, fade_bg, fade_t)
+            arr_fg = lerp_color(arr_now, fade_bg, fade_t)
             r.configure(bg=bg)
             il.configure(bg=bg, fg=icon_fg)
             tl.configure(bg=bg, fg=fg)
@@ -824,19 +1213,9 @@ class SAOChildBar(tk.Frame):
                 widget.bind('<Button-1>', _click_with_sound)
 
         # 入场动画: 从右侧滑入
-        row.configure(width=0)
-        delay = index * 60
-
-        def slide_in(r=row):
-            a = Animator(r)
-
-            def grow(t, r2=r):
-                w = max(1, int(240 * ease_out(t)))
-                r2.configure(width=w)
-
-            a.animate('slide', 250, grow)
-
-        row.after(delay, slide_in)
+        outer._apply_fade_visual = _apply_fade_visual
+        outer._row_start_w = 88
+        row.configure(width=outer._row_start_w)
 
         return outer
 
@@ -884,14 +1263,61 @@ class SAOPopUpMenu:
         self._throttle_timer = None
         self._breath_job = None
         self._menu_hud_job = None
+        self._menu_sched_ident = f'sao_menu_{id(self)}'
+        self._menu_anim_t0 = 0.0
+        self._menu_anim_registered = False
         self._menu_hud_cv = None
+        self._menu_hud_item = None
+        self._menu_hud_sprite = None
+        self._menu_hud_origin = None
+        # Canvas-native items for dynamic HUD elements. Keyed dict so we
+        # only call coords/itemconfigure when state actually changed.
+        self._menu_hud_items: Dict[str, object] = {}
+        self._menu_hud_static_photo = None
+        self._menu_hud_renderer = MenuHudSpriteRenderer()
         self._menu_hud_backdrop = None
         self._menu_hud_backdrop_key = None
+        self._content_place_sig = None
+        self._hud_cached_dims: Optional[Tuple[int, int, int, int]] = None
+        self._menu_force_60_until = 0.0
         self._root_click_id = None
         self._first_y = 0
         self._first_time = 0
         self._slide_threshold = 250
         self._slide_duration = 666
+        self._external_close_prepared = False
+
+    def _refresh_anchor_layout(self) -> None:
+        if self.anchor_widget is None or not self._overlay or not self._content:
+            return
+        try:
+            if not self._overlay.winfo_exists() or not self._content.winfo_exists():
+                return
+            self._overlay.update_idletasks()
+            sw = max(1, self._overlay.winfo_width() or self.root.winfo_screenwidth())
+            sh = max(1, self._overlay.winfo_height() or self.root.winfo_screenheight())
+            cw = max(120, self._content.winfo_reqwidth())
+            ch = max(120, self._content.winfo_reqheight())
+            margin = 16
+
+            aw = self.anchor_widget
+            if aw and aw.winfo_exists():
+                anchor_x = aw.winfo_rootx() + aw.winfo_width() - 8
+                anchor_y = aw.winfo_rooty() - 8
+            else:
+                anchor_x = self._content_x or (sw - margin)
+                anchor_y = self._content_y or (ch + margin)
+
+            anchor_x = max(cw + margin, min(int(anchor_x), sw - margin))
+            anchor_y = max(ch + margin, min(int(anchor_y), sh - margin))
+
+            self._content_x = anchor_x
+            self._content_y = anchor_y
+            self._content.place(x=anchor_x, y=anchor_y, anchor='se')
+            self._content_place_sig = ('abs', anchor_x, anchor_y)
+            self._hud_cached_dims = None
+        except Exception:
+            pass
 
     def bind_events(self):
         self.root.bind_all('<Alt-KeyPress>', self._on_alt_key)
@@ -935,6 +1361,7 @@ class SAOPopUpMenu:
         if self._visible:
             return
         self._visible = True
+        self._external_close_prepared = False
         self._create_overlay()
 
     def close(self):
@@ -959,10 +1386,20 @@ class SAOPopUpMenu:
         self._overlay = tk.Toplevel(self.root)
         self._overlay.overrideredirect(True)
         self._overlay.attributes('-topmost', True)
+        self._overlay.withdraw()
 
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        self._overlay.geometry(f'{sw}x{sh}+0+0')
+        # Oversize the overlay by BREATH_PAD on every side so we can
+        # drift it ~1-5 px each tick without exposing missing pixels at
+        # the screen edge. Drift is applied to the WINDOW geometry only,
+        # so no Tk widget layout runs per frame (no tearing).
+        self._breath_pad = 12
+        self._overlay_base_x = -self._breath_pad
+        self._overlay_base_y = -self._breath_pad
+        self._overlay.geometry(
+            f'{sw + self._breath_pad * 2}x{sh + self._breath_pad * 2}'
+            f'+{self._overlay_base_x}+{self._overlay_base_y}')
         self._overlay.configure(bg=self._TRANSPARENT_KEY)
         self._overlay.attributes('-alpha', 0.0)
         # 透明色键: 使 overlay 背景完全透明, 只保留 HUD 元素和内容组件
@@ -987,26 +1424,9 @@ class SAOPopUpMenu:
             aw = self.anchor_widget
             if aw and aw.winfo_exists():
                 self._overlay.update_idletasks()
-                ax = aw.winfo_rootx()
-                ay = aw.winfo_rooty()
-                awd = aw.winfo_width()
-                # SE 角贴近 float 右上角 (向左上展开)
-                # 确保右侧不超出屏幕
-                self._content_x = min(ax + awd - 8, sw - 20)
-                self._content_y = ay - 8
+                self._content_x = aw.winfo_rootx() + aw.winfo_width() - 8
+                self._content_y = aw.winfo_rooty() - 8
                 self._content.place(x=self._content_x, y=self._content_y, anchor='se')
-                # 延迟检查: 确保内容左边不被裁剪
-                def _clamp_left():
-                    try:
-                        self._overlay.update_idletasks()
-                        cw = self._content.winfo_reqwidth()
-                        left_edge = self._content_x - cw
-                        if left_edge < 10:
-                            self._content_x = cw + 10
-                            self._content.place(x=self._content_x, y=self._content_y, anchor='se')
-                    except Exception:
-                        pass
-                self._overlay.after(50, _clamp_left)
             else:
                 self._content_x = None
                 self._content_y = None
@@ -1037,7 +1457,12 @@ class SAOPopUpMenu:
             self._child_bar.register_menu(name, items)
 
         self._overlay.update_idletasks()
+        self._refresh_anchor_layout()
         self._draw_menu_hud(0, 0, phase=0.0)
+        try:
+            _get_scheduler(self.root)
+        except Exception:
+            pass
 
         # fadeIn 0.4s + 弹出入场动画
         self._anim = Animator(self._overlay)
@@ -1054,8 +1479,7 @@ class SAOPopUpMenu:
                 return 1.0 + (1.06 - 1.0) * (1.0 - (t - 0.7) / 0.3)  # 回弹到 1.0
 
         def _anim_frame(t: float):
-            alpha = t * 0.92
-            self._set_alpha(alpha)
+            self._set_alpha(0.92 * t)
             # 内容各sprite 从偏移位置弹至目标
             st = _spring_ease(t)
             dy = int(spring_offset * (1.0 - st))
@@ -1071,12 +1495,21 @@ class SAOPopUpMenu:
             except Exception:
                 pass
 
-        self._anim.animate('fade_in', 420, _anim_frame)
+        def _finish_open():
+            self._menu_anim_t0 = time.time()
+            self._menu_force_60_until = self._menu_anim_t0 + 0.8
+            self._start_menu_hud_anim()
 
         # 菜单栏入场动画
         self._menu_bar.play_enter_animation()
+        try:
+            self._overlay.deiconify()
+            self._overlay.lift()
+        except Exception:
+            pass
+
+        self._anim.animate('fade_in', 420, _anim_frame, on_done=_finish_open)
         self._start_breath()
-        self._start_menu_hud_anim()
 
         if self.on_open_callback:
             self.on_open_callback()
@@ -1134,29 +1567,29 @@ class SAOPopUpMenu:
         if self._menu_hud_backdrop_key == key and self._menu_hud_backdrop is not None:
             return self._menu_hud_backdrop
 
-        pad = 64
+        pad = 24
         img_w = width + pad * 2
         img_h = height + pad * 2
 
         shadow = Image.new('RGBA', (img_w, img_h), (0, 0, 0, 0))
         sdraw = ImageDraw.Draw(shadow)
-        sdraw.rounded_rectangle((pad + 12, pad + 16, pad + width + 12, pad + height + 16),
-                radius=46, fill=(0, 0, 0, 56))
-        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=22))
+        sdraw.rounded_rectangle((pad + 5, pad + 7, pad + width + 5, pad + height + 7),
+            radius=32, fill=(0, 0, 0, 40))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=10))
 
         plate = Image.new('RGBA', (img_w, img_h), (0, 0, 0, 0))
         pdraw = ImageDraw.Draw(plate)
         outer = (pad, pad, pad + width, pad + height)
-        inner = (pad + 10, pad + 10, pad + width - 10, pad + height - 10)
-        pdraw.rounded_rectangle(outer, radius=44,
+        inner = (pad + 8, pad + 8, pad + width - 8, pad + height - 8)
+        pdraw.rounded_rectangle(outer, radius=32,
                 fill=(10, 16, 24, 180), outline=(110, 210, 240, 60), width=1)
-        pdraw.rounded_rectangle(inner, radius=36,
+        pdraw.rounded_rectangle(inner, radius=26,
                 fill=(14, 20, 30, 140), outline=(160, 230, 255, 36), width=1)
         gloss = Image.new('RGBA', (img_w, img_h), (0, 0, 0, 0))
         gdraw = ImageDraw.Draw(gloss)
-        gdraw.rounded_rectangle((pad + 10, pad + 8, pad + width - 12, int(pad + height * 0.40)),
-                radius=34, fill=(200, 240, 255, 18))
-        gloss = gloss.filter(ImageFilter.GaussianBlur(radius=18))
+        gdraw.rounded_rectangle((pad + 8, pad + 6, pad + width - 10, int(pad + height * 0.36)),
+            radius=24, fill=(200, 240, 255, 14))
+        gloss = gloss.filter(ImageFilter.GaussianBlur(radius=10))
         plate = Image.alpha_composite(plate, gloss)
 
         merged = Image.alpha_composite(shadow, plate)
@@ -1167,100 +1600,184 @@ class SAOPopUpMenu:
     def _draw_menu_hud(self, dx: int = 0, dy: int = 0, phase: float = 0.0):
         if not self._menu_hud_cv or not self._overlay or not self._overlay.winfo_exists():
             return
-        try:
-            self._content.update_idletasks()
-            sw = self._overlay.winfo_width()
-            sh = self._overlay.winfo_height()
-            cw = max(120, self._content.winfo_width() or self._content.winfo_reqwidth())
-            ch = max(120, self._content.winfo_height() or self._content.winfo_reqheight())
+        # Cache overlay + content dimensions. The overlay is a fullscreen
+        # Toplevel and the content frame doesn't change size after the
+        # menu is built, so we only need to query Tk when the cache is
+        # invalidated (sized None = force refresh on next tick).
+        cached = self._hud_cached_dims
+        if cached is None:
+            try:
+                sw = self._overlay.winfo_width()
+                sh = self._overlay.winfo_height()
+                cw = max(120, self._content.winfo_width() or self._content.winfo_reqwidth())
+                ch = max(120, self._content.winfo_height() or self._content.winfo_reqheight())
+            except Exception:
+                return
+            if sw <= 1 or sh <= 1 or cw <= 1 or ch <= 1:
+                # Tk hasn't laid out yet; try again next tick without caching.
+                return
+            self._hud_cached_dims = (sw, sh, cw, ch)
+        else:
+            sw, sh, cw, ch = cached
+
+        if self._content_x is not None and self._content_y is not None:
             left = self._content.winfo_x()
             top = self._content.winfo_y()
-            right = left + cw
-            bottom = top + ch
-        except Exception:
-            return
+        else:
+            left = (sw - cw) // 2 + dx
+            top = (sh - ch) // 2 + dy
 
         cv = self._menu_hud_cv
-        cv.delete('all')
+        frame = self._menu_hud_renderer.render(
+            max(120, cw),
+            max(120, ch),
+            sw,
+            sh,
+            phase,
+        )
+        ox, oy = self._menu_hud_renderer.sprite_origin(left, top)
 
-        CYAN = '#5eb8ca'
-        GOLD = '#f3af12'
-        DIM_CYAN = '#5eb8ca'
-        DIM_GOLD = '#c8910e'
+        items = self._menu_hud_items
+        # ── Static background photo (brackets + rails + labels) ─────────
+        if items.get('static') is None:
+            items['static'] = cv.create_image(
+                ox, oy, image=frame.static_photo, anchor='nw')
+            self._menu_hud_static_photo = frame.static_photo
+            items['static_origin'] = (ox, oy)
+        else:
+            if items['static_origin'] != (ox, oy):
+                cv.coords(items['static'], ox, oy)
+                items['static_origin'] = (ox, oy)
+            if frame.static_photo is not self._menu_hud_static_photo:
+                cv.itemconfigure(items['static'], image=frame.static_photo)
+                self._menu_hud_static_photo = frame.static_photo
 
-        # ── 2. 内容区角标 (四角 L 型支架) ──
-        bk = 20
-        m = 12  # margin outside content
-        cx1, cy1 = left - m, top - m
-        cx2, cy2 = right + m, bottom + m
-        for (x, y, dx1, dy1, dx2, dy2, col) in [
-            (cx1, cy1, bk, 0, 0, bk, CYAN),
-            (cx2, cy1, -bk, 0, 0, bk, GOLD),
-            (cx1, cy2, bk, 0, 0, -bk, CYAN),
-            (cx2, cy2, -bk, 0, 0, -bk, GOLD),
-        ]:
-            cv.create_line(x, y, x + dx1, y + dy1, fill=col, width=1)
-            cv.create_line(x, y, x + dx2, y + dy2, fill=col, width=1)
+        # ── Scan line + 2 trail lines (native Canvas lines) ─────────────
+        scan_y = oy + frame.scan_y
+        cx1 = ox + frame.cx1
+        cx2 = ox + frame.cx2
+        self._ensure_line(items, 'scan',
+                          cx1, scan_y, cx2, scan_y, frame.scan_color)
+        for idx, ty in enumerate(frame.trail_ys):
+            ty_abs = oy + ty
+            self._ensure_line(items, f'trail{idx}',
+                              cx1, ty_abs, cx2, ty_abs,
+                              frame.trail_colors[idx])
 
-        # ── 4. 水平扫描线 (动态, 从上到下缓慢移动) ──
-        scan_period = 6.0  # seconds for full sweep
-        scan_pos = (phase % scan_period) / scan_period
-        scan_y = int(cy1 + (cy2 - cy1) * scan_pos)
-        # 扫描线本体
-        cv.create_line(cx1, scan_y, cx2, scan_y, fill=CYAN, width=1)
-        # 扫描线拖影 (上方2条渐淡)
-        for i, a_hex in enumerate(['#3a6a78', '#2a5060']):
-            cv.create_line(cx1, scan_y - 3 - i * 3,
-                           cx2, scan_y - 3 - i * 3,
-                           fill=a_hex, width=1)
+        # ── Dot glow sprites (image items) + tiny solid dot overlays ────
+        gs = frame.dot_glow_size
+        glow_off = gs // 2
+        self._ensure_image(items, 'glow_l', frame.dot_photo_l,
+                           ox + frame.rail_x_l - glow_off,
+                           oy + frame.dot_y_l - glow_off)
+        self._ensure_image(items, 'glow_r', frame.dot_photo_r,
+                           ox + frame.rail_x_r - glow_off,
+                           oy + frame.dot_y_r - glow_off)
+        r = frame.dot_radius
+        self._ensure_oval(items, 'dot_l',
+                          ox + frame.rail_x_l - r,
+                          oy + frame.dot_y_l - r,
+                          ox + frame.rail_x_l + r,
+                          oy + frame.dot_y_l + r,
+                          frame.dot_color_l)
+        self._ensure_oval(items, 'dot_r',
+                          ox + frame.rail_x_r - r,
+                          oy + frame.dot_y_r - r,
+                          ox + frame.rail_x_r + r,
+                          oy + frame.dot_y_r + r,
+                          frame.dot_color_r)
 
-        # ── 5. 数据标签 (系统信息风格) ──
-        # 左上
-        cv.create_text(cx1 + 4, cy1 - 4, text='SYS:MENU', anchor='sw',
-                       font=('Consolas', 7), fill=DIM_CYAN)
-        # 右上
-        cv.create_text(cx2 - 4, cy1 - 4, text=f'RES:{sw}x{sh}', anchor='se',
-                       font=('Consolas', 7), fill=DIM_GOLD)
-        # 左下
-        cv.create_text(cx1 + 4, cy2 + 4, text='ACTIVE', anchor='nw',
-                       font=('Consolas', 7), fill=DIM_CYAN)
-        # 右下时间戳
-        import datetime
-        ts = datetime.datetime.now().strftime('%H:%M:%S')
-        cv.create_text(cx2 - 4, cy2 + 4, text=ts, anchor='ne',
-                       font=('Consolas', 7), fill=DIM_GOLD)
+        # ── Clock stamp text (Canvas text, updates once per second) ─────
+        tx, ty = ox + frame.stamp_pos[0], oy + frame.stamp_pos[1]
+        self._ensure_text(items, 'stamp', tx, ty,
+                          frame.stamp_text, frame.stamp_color,
+                          frame.stamp_font)
 
-        # ── 6. 侧边导轨 (左右各一条, 带呼吸光点) ──
-        rail_x_l = cx1 - 8
-        rail_x_r = cx2 + 8
-        cv.create_line(rail_x_l, cy1 + bk, rail_x_l, cy2 - bk,
-                       fill=CYAN, width=1)
-        cv.create_line(rail_x_r, cy1 + bk, rail_x_r, cy2 - bk,
-                       fill=GOLD, width=1)
+        self._menu_hud_origin = (ox, oy)
+        self._menu_hud_sprite = frame.static_photo
 
-        # 呼吸光点沿导轨上下移动
-        dot_travel = cy2 - cy1 - bk * 2
-        dot_y_l = cy1 + bk + int(dot_travel * ((math.sin(phase * 0.8) + 1) / 2))
-        dot_y_r = cy1 + bk + int(dot_travel * ((math.sin(phase * 0.8 + math.pi) + 1) / 2))
-        cv.create_oval(rail_x_l - 3, dot_y_l - 3, rail_x_l + 3, dot_y_l + 3,
-                       fill=CYAN, outline='')
-        cv.create_oval(rail_x_r - 3, dot_y_r - 3, rail_x_r + 3, dot_y_r + 3,
-                       fill=GOLD, outline='')
+    def _ensure_line(self, items, key, x1, y1, x2, y2, color):
+        cv = self._menu_hud_cv
+        item = items.get(key)
+        new_coords = (x1, y1, x2, y2)
+        if item is None:
+            items[key] = cv.create_line(*new_coords, fill=color, width=1)
+            items[key + '_coords'] = new_coords
+            items[key + '_color'] = color
+            return
+        if items.get(key + '_coords') != new_coords:
+            cv.coords(item, *new_coords)
+            items[key + '_coords'] = new_coords
+        if items.get(key + '_color') != color:
+            cv.itemconfigure(item, fill=color)
+            items[key + '_color'] = color
+
+    def _ensure_image(self, items, key, photo, x, y):
+        cv = self._menu_hud_cv
+        item = items.get(key)
+        if item is None:
+            items[key] = cv.create_image(x, y, image=photo, anchor='nw')
+            items[key + '_coords'] = (x, y)
+            items[key + '_photo'] = photo
+            return
+        if items.get(key + '_coords') != (x, y):
+            cv.coords(item, x, y)
+            items[key + '_coords'] = (x, y)
+        if items.get(key + '_photo') is not photo:
+            cv.itemconfigure(item, image=photo)
+            items[key + '_photo'] = photo
+
+    def _ensure_oval(self, items, key, x1, y1, x2, y2, color):
+        cv = self._menu_hud_cv
+        item = items.get(key)
+        coords = (x1, y1, x2, y2)
+        if item is None:
+            items[key] = cv.create_oval(*coords, fill=color, outline='')
+            items[key + '_coords'] = coords
+            items[key + '_color'] = color
+            return
+        if items.get(key + '_coords') != coords:
+            cv.coords(item, *coords)
+            items[key + '_coords'] = coords
+        if items.get(key + '_color') != color:
+            cv.itemconfigure(item, fill=color)
+            items[key + '_color'] = color
+
+    def _ensure_text(self, items, key, x, y, text, color, font):
+        cv = self._menu_hud_cv
+        item = items.get(key)
+        if item is None:
+            items[key] = cv.create_text(
+                x, y, text=text, fill=color, font=font, anchor='ne')
+            items[key + '_coords'] = (x, y)
+            items[key + '_text'] = text
+            items[key + '_color'] = color
+            return
+        if items.get(key + '_coords') != (x, y):
+            cv.coords(item, x, y)
+            items[key + '_coords'] = (x, y)
+        if items.get(key + '_text') != text:
+            cv.itemconfigure(item, text=text)
+            items[key + '_text'] = text
+        if items.get(key + '_color') != color:
+            cv.itemconfigure(item, fill=color)
+            items[key + '_color'] = color
 
     def _start_menu_hud_anim(self):
         if not self._overlay or not self._overlay.winfo_exists():
             return
-
-        t0 = time.time()
-
-        def _tick():
-            if not self._visible or not self._overlay or not self._overlay.winfo_exists():
-                return
-            elapsed = time.time() - t0
-            self._draw_menu_hud(0, 0, elapsed)
-            self._menu_hud_job = self._overlay.after(16, _tick)
-
-        _tick()
+        self._draw_menu_hud(0, 0, phase=0.0)
+        if self._menu_anim_registered:
+            return
+        try:
+            _get_scheduler(self.root).register(
+                self._menu_sched_ident,
+                self._tick_menu_overlay,
+                self._menu_overlay_animating,
+            )
+            self._menu_anim_registered = True
+        except Exception:
+            self._menu_anim_registered = False
 
     def _on_root_click_outside(self, e):
         """root 层点击处理: 透明区域的点击穿透到 root, 判断是否在内容区外."""
@@ -1303,14 +1820,35 @@ class SAOPopUpMenu:
             self.close()
 
     def _on_menu_activate(self, item):
+        self._menu_force_60_until = time.time() + 0.95
+        # Content width changes when a child menu is shown/hidden, so the
+        # cached HUD dimensions must be re-queried on the next tick.
+        self._hud_cached_dims = None
+        self._content_place_sig = None
+        self._menu_hud_renderer.reset()
         lw = self._left_widget
         if item is None:
             if lw and hasattr(lw, 'set_active'):
                 lw.set_active(False)
             self._child_bar.hide_menu()
+            try:
+                self._overlay.update_idletasks()
+                self._refresh_anchor_layout()
+                self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
+            except Exception:
+                pass
             return
         if lw and hasattr(lw, 'set_active'):
+            was_active = bool(getattr(lw, '_active', False))
             lw.set_active(True)
+            if was_active and hasattr(lw, 'sync_pulse'):
+                try:
+                    top = getattr(lw, '_top', None)
+                    target_w = int(getattr(lw, '_target_w', 0) or 0)
+                    if top is None or target_w <= 0 or top.winfo_width() >= int(target_w * 0.90):
+                        lw.sync_pulse()
+                except Exception:
+                    lw.sync_pulse()
         name = item.get('name', '')
         if name in self.child_menus:
             try:
@@ -1321,6 +1859,12 @@ class SAOPopUpMenu:
             self._child_bar.show_menu(name)
         else:
             self._child_bar.hide_menu()
+        try:
+            self._overlay.update_idletasks()
+            self._refresh_anchor_layout()
+            self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
+        except Exception:
+            pass
 
     def refresh_child_menu(self, name: str, items: List[Dict]):
         """动态更新某个子菜单的内容"""
@@ -1328,7 +1872,31 @@ class SAOPopUpMenu:
         if self._child_bar:
             self._child_bar.register_menu(name, items)
             if self._child_bar._current_name == name:
-                self._child_bar.show_menu(name)
+                self._child_bar.show_menu(name, force=True)
+                self._hud_cached_dims = None
+                self._content_place_sig = None
+                self._menu_hud_renderer.reset()
+                try:
+                    self._overlay.update_idletasks()
+                    self._refresh_anchor_layout()
+                    self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
+                except Exception:
+                    pass
+
+    def _clear_menu_hud_items(self) -> None:
+        """Drop all canvas-native HUD items so the next frame re-creates
+        them at the new positions/photos. Cheaper than re-positioning
+        everything when the content size changes."""
+        if self._menu_hud_cv is not None:
+            try:
+                self._menu_hud_cv.delete('all')
+            except Exception:
+                pass
+        self._menu_hud_items = {}
+        self._menu_hud_static_photo = None
+        self._menu_hud_item = None
+        self._menu_hud_sprite = None
+        self._menu_hud_origin = None
 
     @property
     def left_widget(self):
@@ -1347,59 +1915,132 @@ class SAOPopUpMenu:
             pass
 
         def fade(t):
-            self._set_alpha(0.92 * (1 - t))
+            dy = int(24 * t)
+            self._set_alpha(0.92 * (1.0 - t))
+            try:
+                if self._content and self._content.winfo_exists():
+                    if self._content_x is not None:
+                        self._content.place(
+                            x=self._content_x,
+                            y=self._content_y - dy,
+                            anchor='se')
+                    else:
+                        self._content.place(relx=0.5, rely=0.5, anchor='center',
+                                            x=0, y=-dy)
+            except Exception:
+                pass
 
         def destroy():
-            if self._overlay and self._overlay.winfo_exists():
-                self._overlay.destroy()
-            self._overlay = None
-            if self.on_close_callback:
-                self.on_close_callback()
+            self._destroy_overlay(invoke_callback=True)
 
         anim = Animator(self._overlay)
         anim.animate('fade_out', 500, fade, on_done=destroy)
 
-    def _start_breath(self):
+    def prepare_external_fade(self):
         if not self._overlay or not self._overlay.winfo_exists():
             return
-        t0 = time.time()
+        self._visible = False
+        self._external_close_prepared = True
+        self._stop_breath()
+        try:
+            if hasattr(self, '_root_click_id') and self._root_click_id:
+                self.root.unbind('<Button-1>', self._root_click_id)
+                self._root_click_id = None
+        except Exception:
+            pass
 
-        def breathe():
-            if not self._visible or not self._overlay or not self._overlay.winfo_exists():
-                return
-            elapsed = time.time() - t0
-            # 双正弦叠加 → 李萨如浮动轨迹, 自然且永不重复
-            # 16ms 间隔保证 60fps 流畅度
-            dx = int(7 * math.sin(elapsed * 0.52) + 3 * math.sin(elapsed * 1.13))
-            dy = int(5 * math.sin(elapsed * 0.38 + 1.0) + 2 * math.sin(elapsed * 0.91))
+    def force_destroy_overlay(self, invoke_callback: bool = False):
+        self._visible = False
+        self._stop_breath()
+        try:
+            if hasattr(self, '_root_click_id') and self._root_click_id:
+                self.root.unbind('<Button-1>', self._root_click_id)
+                self._root_click_id = None
+        except Exception:
+            pass
+        self._destroy_overlay(invoke_callback=invoke_callback)
+
+    def _destroy_overlay(self, invoke_callback: bool = True):
+        self._visible = False
+        if self._overlay and self._overlay.winfo_exists():
             try:
-                if self._content_x is not None:
-                    self._content.place(
-                        x=int(self._content_x + dx),
-                        y=int(self._content_y + dy),
-                        anchor='se')
-                else:
-                    self._content.place(relx=0.5, rely=0.5, anchor='center',
-                                        x=int(dx), y=int(dy))
+                self._overlay.destroy()
             except Exception:
-                return
-            self._breath_job = self._overlay.after(16, breathe)
+                pass
+        self._overlay = None
+        self._menu_hud_item = None
+        self._menu_hud_sprite = None
+        self._menu_hud_origin = None
+        self._menu_hud_items = {}
+        self._menu_hud_static_photo = None
+        self._content_place_sig = None
+        self._menu_hud_renderer.reset()
+        self._hud_cached_dims = None
+        self._external_close_prepared = False
+        if invoke_callback and self.on_close_callback:
+            self.on_close_callback()
 
-        breathe()
+    def _start_breath(self):
+        self._draw_menu_hud(0, 0, phase=0.0)
 
     def _stop_breath(self):
-        if self._breath_job and self._overlay and self._overlay.winfo_exists():
+        if self._menu_anim_registered:
             try:
-                self._overlay.after_cancel(self._breath_job)
+                _get_scheduler(self.root).unregister(self._menu_sched_ident)
             except Exception:
                 pass
-            self._breath_job = None
-        if self._menu_hud_job and self._overlay and self._overlay.winfo_exists():
-            try:
-                self._overlay.after_cancel(self._menu_hud_job)
-            except Exception:
-                pass
-            self._menu_hud_job = None
+            self._menu_anim_registered = False
+        self._menu_force_60_until = 0.0
+        self._breath_job = None
+        self._menu_hud_job = None
+
+    def _menu_overlay_animating(self) -> bool:
+        if not self._visible or not self._overlay or not self._overlay.winfo_exists():
+            return False
+        return time.time() < self._menu_force_60_until
+
+    def _tick_menu_overlay(self, now: float) -> None:
+        if not self._visible or not self._overlay or not self._overlay.winfo_exists():
+            return
+        elapsed = now - self._menu_anim_t0
+        if now < self._menu_force_60_until:
+            self._hud_cached_dims = None
+        # Gentle 1 px drift used by the HUD canvas only. The content
+        # frame itself is NEVER re-placed every tick: doing that re-runs
+        # Tk's geometry pass on the whole menu and causes visible tearing
+        # and right-edge clipping when the anchored menu is near the
+        # screen edge. Drift is now applied purely as a visual offset to
+        # the HUD sprite via _draw_menu_hud(dx, dy, ...).
+        raw_dx = 4.8 * math.sin(elapsed * 0.44) + 1.8 * math.sin(elapsed * 0.96)
+        raw_dy = 3.8 * math.sin(elapsed * 0.32 + 1.0) + 1.4 * math.sin(elapsed * 0.79)
+        if now < self._menu_force_60_until:
+            dx = 0
+            dy = 0
+        else:
+            dx = int(round(raw_dx))
+            dy = int(round(raw_dy))
+        # Apply 1 px-resolution breathing as an OVERLAY-window offset.
+        # This moves every child together with zero Tk re-layout, so
+        # the menu drifts visibly without tearing or right-edge clip.
+        try:
+            base_x = getattr(self, '_overlay_base_x', 0)
+            base_y = getattr(self, '_overlay_base_y', 0)
+            new_x = base_x + dx
+            new_y = base_y + dy
+            cur = self._overlay.geometry()
+            # Tk geometry is 'WxH+X+Y'. Only re-set when X/Y actually
+            # change to avoid pointless WM round-trips.
+            sig = (new_x, new_y)
+            if getattr(self, '_overlay_drift_sig', None) != sig:
+                self._overlay_drift_sig = sig
+                size_part = cur.split('+', 1)[0] if '+' in cur else cur
+                self._overlay.geometry(f'{size_part}+{new_x}+{new_y}')
+        except Exception:
+            pass
+        # IMPORTANT: do not re-.place() the content frame on every tick.
+        # The HUD sprite already absorbs (dx, dy) below to express the
+        # breathing motion visually without retriggering layout.
+        self._draw_menu_hud(dx, dy, elapsed)
 
 
 # ──────────────────── SAO 对话框 (Alert) ────────────────────

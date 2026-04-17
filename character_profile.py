@@ -61,59 +61,265 @@ SKILL_TO_ROLE = {
 
 # 配置文件路径（打包后使用 exe 所在目录，开发时使用脚本目录）
 _base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-_PROFILE_FILE = os.path.join(_base_dir, 'player_profile.json')
+
+# ── 主配置文件: settings.json (新, 与 sao_webview / config.py 共用) ──
+# 玩家身份字段现在统一缓存在 settings.json 的 "game_cache" 键下,
+# 由抓包线程实时更新 (见 sao_webview.py 的 _profile_auto_saved 流程).
+_SETTINGS_FILE = os.path.join(_base_dir, 'settings.json')
+
+# ── 旧版 midiplayer 时代的独立配置文件 ──
+# 2026.04 之前的版本把角色信息 + XP/弹琴统计存在 player_profile.json.
+# 现保留常量以便一次性迁移 & 随后删除, 不再写入.
+_LEGACY_PROFILE_FILE = os.path.join(_base_dir, 'player_profile.json')
+
+# settings.json 内存放角色缓存的键
+_GAME_CACHE_KEY = 'game_cache'
+# 当前通用统计键；旧的 midiplayer_stats 会在读取时迁移过来并清理掉。
+_PROFILE_STATS_KEY = 'player_stats'
+_LEGACY_STATS_KEYS = ('midiplayer_stats',)
+_PROFILE_STATS_FIELDS = ('xp', 'songs_played', 'play_time')
+
+# 迁移只执行一次, 避免每次调用 load_profile 都去检查磁盘.
+_migration_done = False
+
+
+def _default_profile() -> dict:
+    """Return a fresh, empty profile dict with stable keys."""
+    return {
+        'username': '',
+        'profession': '',
+        'level': 1,
+        'xp': 0,
+        'songs_played': 0,
+        'play_time': 0,
+        'uid': '',
+    }
+
+
+def _read_settings() -> dict:
+    """Read the full settings.json blob; returns {} on any failure."""
+    try:
+        if os.path.exists(_SETTINGS_FILE):
+            with open(_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+    except Exception:
+        pass
+    return {}
+
+
+def _write_settings(data: dict) -> bool:
+    """Atomically write settings.json. Returns True on success."""
+    if not isinstance(data, dict):
+        return False
+    try:
+        dir_name = os.path.dirname(_SETTINGS_FILE) or '.'
+        tmp_path = _SETTINGS_FILE + '.tmp'
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, _SETTINGS_FILE)
+        return True
+    except Exception:
+        # Last-ditch direct write
+        try:
+            with open(_SETTINGS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            return False
+
+
+def _load_profile_stats(settings: dict) -> tuple[dict, bool]:
+    """Load stats from the canonical key and prune legacy MIDI-era aliases."""
+    dirty = False
+    stats = settings.get(_PROFILE_STATS_KEY)
+    if isinstance(stats, dict):
+        stats = dict(stats)
+    else:
+        stats = {}
+        for legacy_key in _LEGACY_STATS_KEYS:
+            legacy_stats = settings.get(legacy_key)
+            if isinstance(legacy_stats, dict):
+                stats = dict(legacy_stats)
+                dirty = True
+                break
+    for legacy_key in _LEGACY_STATS_KEYS:
+        if legacy_key in settings:
+            settings.pop(legacy_key, None)
+            dirty = True
+    if dirty and stats:
+        settings[_PROFILE_STATS_KEY] = dict(stats)
+    return stats, dirty
+
+
+def _store_profile_stats(settings: dict, stats: dict):
+    for legacy_key in _LEGACY_STATS_KEYS:
+        settings.pop(legacy_key, None)
+    if stats:
+        settings[_PROFILE_STATS_KEY] = dict(stats)
+    else:
+        settings.pop(_PROFILE_STATS_KEY, None)
+
+
+def _migrate_legacy_profile_once():
+    """One-shot migration: copy fields from legacy player_profile.json into
+    settings.json (game_cache + player_stats), then delete the legacy file.
+
+    Safe to call repeatedly: the module-level flag short-circuits subsequent
+    calls, and the legacy file is removed after a successful merge.
+    """
+    global _migration_done
+    if _migration_done:
+        return
+    _migration_done = True
+    try:
+        if not os.path.exists(_LEGACY_PROFILE_FILE):
+            return
+        with open(_LEGACY_PROFILE_FILE, 'r', encoding='utf-8') as f:
+            legacy = json.load(f)
+        if not isinstance(legacy, dict):
+            return
+    except Exception:
+        return
+
+    settings = _read_settings()
+    cache = settings.get(_GAME_CACHE_KEY)
+    if not isinstance(cache, dict):
+        cache = {}
+
+    # 姓名 / 职业 / 等级 / UID → game_cache.
+    # 只在新缓存字段为空时填充, 不覆盖抓包已写入的真实数据.
+    name_legacy = str(legacy.get('username') or '').strip()
+    if name_legacy and not cache.get('player_name'):
+        cache['player_name'] = name_legacy
+    prof_legacy = str(legacy.get('profession') or '').strip()
+    if prof_legacy and not cache.get('profession_name'):
+        cache['profession_name'] = prof_legacy
+    try:
+        lv_legacy = int(legacy.get('level') or 0)
+        if lv_legacy > 0 and not cache.get('level_base'):
+            cache['level_base'] = lv_legacy
+    except Exception:
+        pass
+    uid_legacy = str(legacy.get('uid') or '').strip()
+    if uid_legacy and not cache.get('player_id'):
+        cache['player_id'] = uid_legacy
+
+    # 旧档里的统计字段迁移到通用 player_stats，并顺手清掉 legacy key。
+    stats, _ = _load_profile_stats(settings)
+    for k in _PROFILE_STATS_FIELDS:
+        v = legacy.get(k)
+        if v is not None and k not in stats:
+            stats[k] = v
+
+    settings[_GAME_CACHE_KEY] = cache
+    _store_profile_stats(settings, stats)
+    if _write_settings(settings):
+        try:
+            os.remove(_LEGACY_PROFILE_FILE)
+        except Exception:
+            pass
+
 
 # ═══════════════════════════════════════════════
-#  配置管理
+#  配置管理 (settings.json / game_cache)
 # ═══════════════════════════════════════════════
 
 def load_profile() -> dict:
-    """加载玩家配置 (名称 + 职业 + 等级 + 经验)"""
-    try:
-        if os.path.exists(_PROFILE_FILE):
-            with open(_PROFILE_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return {
-                    'username': data.get('username', ''),
-                    'profession': data.get('profession', ''),
-                    'level': data.get('level', 1),
-                    'xp': data.get('xp', 0),
-                    'songs_played': data.get('songs_played', 0),
-                    'play_time': data.get('play_time', 0),
-                }
-    except Exception:
-        pass
-    return {'username': '', 'profession': '', 'level': 1, 'xp': 0,
-            'songs_played': 0, 'play_time': 0}
+    """加载玩家配置 (名称 + 职业 + 等级 + UID + 历史统计).
+
+    数据来源: settings.json 的 "game_cache" 字段 (由抓包线程实时更新);
+    统计字段从 "player_stats" 读取，旧的 "midiplayer_stats" 会自动迁移。
+    首次调用时会自动把 player_profile.json 的残留数据迁移进来.
+    """
+    _migrate_legacy_profile_once()
+    profile = _default_profile()
+
+    settings = _read_settings()
+    cache = settings.get(_GAME_CACHE_KEY)
+    if isinstance(cache, dict):
+        profile['username'] = str(cache.get('player_name') or '').strip()
+        profile['profession'] = str(cache.get('profession_name') or '').strip()
+        try:
+            lv = int(cache.get('level_base') or 0)
+            if lv > 0:
+                profile['level'] = lv
+        except Exception:
+            pass
+        uid = cache.get('player_id')
+        if uid:
+            profile['uid'] = str(uid)
+
+    stats, stats_dirty = _load_profile_stats(settings)
+    if stats_dirty:
+        _write_settings(settings)
+    if isinstance(stats, dict):
+        try:
+            profile['xp'] = int(stats.get('xp') or 0)
+        except Exception:
+            pass
+        try:
+            profile['songs_played'] = int(stats.get('songs_played') or 0)
+        except Exception:
+            pass
+        try:
+            profile['play_time'] = float(stats.get('play_time') or 0)
+        except Exception:
+            pass
+
+    return profile
 
 
 def save_profile(username: str, profession: str, level: int = 1,
                  xp: int = 0, songs_played: int = 0, play_time: float = 0,
                  uid: str = ''):
-    """保存玩家配置"""
-    # 先读取旧数据, 合并
-    old = {}
+    """保存玩家配置到 settings.json.
+
+    角色字段 → game_cache (与抓包线程共享), 可选统计字段 → player_stats.
+    只在调用方显式提供的字段被写入 — 避免用默认值 (level=1, xp=0) 覆盖
+    抓包线程已经写好的真实值.
+    """
+    _migrate_legacy_profile_once()
+    settings = _read_settings()
+
+    # game_cache: 角色身份字段
+    cache = settings.get(_GAME_CACHE_KEY)
+    if not isinstance(cache, dict):
+        cache = {}
+    name = str(username or '').strip()
+    if name:
+        cache['player_name'] = name
+    prof = str(profession or '').strip()
+    if prof:
+        cache['profession_name'] = prof
     try:
-        if os.path.exists(_PROFILE_FILE):
-            with open(_PROFILE_FILE, 'r', encoding='utf-8') as f:
-                old = json.load(f)
+        lv = int(level or 0)
+        if lv > 0:
+            cache['level_base'] = lv
     except Exception:
         pass
-    old.update({
-        'username': username,
-        'profession': profession,
-        'level': level,
-        'xp': xp,
-        'songs_played': songs_played,
-        'play_time': play_time,
-    })
-    if uid:
-        old['uid'] = uid
-    try:
-        with open(_PROFILE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(old, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    uid_str = str(uid or '').strip()
+    if uid_str:
+        cache['player_id'] = uid_str
+    settings[_GAME_CACHE_KEY] = cache
+
+    # 统计字段只在调用方显式提供非默认值时写入，避免普通身份保存覆盖它们。
+    stats, stats_dirty = _load_profile_stats(settings)
+    if xp or songs_played or play_time:
+        if xp:
+            try: stats['xp'] = int(xp)
+            except Exception: pass
+        if songs_played:
+            try: stats['songs_played'] = int(songs_played)
+            except Exception: pass
+        if play_time:
+            try: stats['play_time'] = float(play_time)
+            except Exception: pass
+    if stats or stats_dirty:
+        _store_profile_stats(settings, stats)
+
+    _write_settings(settings)
 
 
 # ═══════════════════════════════════════════════

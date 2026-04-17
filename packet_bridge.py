@@ -1207,6 +1207,14 @@ class PacketBridge:
                 f'medal={player.season_medal_level}, hunt={player.monster_hunt_level}, '
                 f'bp={player.battlepass_level}, bp_data={player.battlepass_data_level})'
             )
+        _season_exp_src = str(getattr(player, 'season_exp_source', '') or '')
+        if self._use_packet_source('level') and _season_exp_src:
+            _season_exp = max(0, int(getattr(player, 'season_exp', 0) or 0))
+            updates['season_exp'] = _season_exp
+            logger.info(
+                f'[Bridge] season_exp={_season_exp} '
+                f'(source={_season_exp_src})'
+            )
         if player.profession_id > 0 and self._use_packet_source('identity'):
             updates['profession_id'] = player.profession_id
             if player.profession:

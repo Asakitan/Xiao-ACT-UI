@@ -919,6 +919,7 @@ class PlayerData:
     """Tracks one player's parsed data."""
     __slots__ = ('uid', 'name', 'level', 'rank_level', 'season_level',
                  'level_extra', 'level_extra_source',
+                 'season_exp', 'season_exp_source',
                  'level_extra_pending_source', 'level_extra_pending_value',
                  'level_extra_pending_hits',
                  'fight_point', 'season_strength',
@@ -962,6 +963,8 @@ class PlayerData:
         self.season_level: int = 0   # Seasonal extra level shown as (+XX)
         self.level_extra: int = 0
         self.level_extra_source: str = ''
+        self.season_exp: int = 0
+        self.season_exp_source: str = ''
         self.level_extra_pending_source: str = ''
         self.level_extra_pending_value: int = 0
         self.level_extra_pending_hits: int = 0
@@ -1203,6 +1206,38 @@ def _set_level_extra_candidate(player: PlayerData, source: str, value: int) -> b
         return False
 
     return _commit_level_extra(player, source, value)
+
+
+def _set_season_exp_candidate(player: PlayerData, source: str, value: int) -> bool:
+    source = str(source or '')
+    if not source:
+        return False
+
+    value = max(0, int(value or 0))
+    current_value = int(getattr(player, 'season_exp', 0) or 0)
+    current_source = str(getattr(player, 'season_exp_source', '') or '')
+    bound_source = str(getattr(player, 'level_extra_source', '') or '')
+    current_priority = _source_priority(current_source)
+    candidate_priority = _source_priority(source)
+    bound_priority = _source_priority(bound_source)
+
+    if current_value == value and current_source == source:
+        return False
+
+    if source == bound_source:
+        player.season_exp = value
+        player.season_exp_source = source
+        return True
+
+    if current_source and current_priority > candidate_priority:
+        return False
+
+    if bound_source and bound_priority > candidate_priority:
+        return False
+
+    player.season_exp = value
+    player.season_exp_source = source
+    return True
 
 
 def _decode_resource_value_map(resource_ids, resources) -> Dict[int, int]:
@@ -2343,10 +2378,12 @@ class PacketParser:
                     f'[Parser] SeasonMedalInfo core_raw={raw_level} '
                     f'core_norm={season_medal_level}'
                 )
-        # MonsterHuntInfo (field 56) → CurLevel
+        # MonsterHuntInfo (field 56) → CurLevel / CurExp
         monster_hunt_level = 0
+        monster_hunt_exp = 0
         if char.HasField('MonsterHuntInfo'):
             monster_hunt_level = char.MonsterHuntInfo.CurLevel
+            monster_hunt_exp = max(0, int(char.MonsterHuntInfo.CurExp or 0))
         # BattlePassData (field 86) → max BattlePass.Level across entries
         battlepass_data_level = 0
         if char.HasField('BattlePassData'):
@@ -2374,12 +2411,16 @@ class PacketParser:
             changed = True
         if _set_level_extra_candidate(player, 'monster_hunt', monster_hunt_level):
             changed = True
+        if _set_season_exp_candidate(player, 'monster_hunt', monster_hunt_exp):
+            changed = True
         if _set_level_extra_candidate(player, 'battlepass', battlepass_level):
             changed = True
         if _set_level_extra_candidate(player, 'battlepass_data', battlepass_data_level):
             changed = True
         if deep_sleep_level > 0:
             if _set_level_extra_candidate(player, 'deep_sleep', deep_sleep_level):
+                changed = True
+            if _set_season_exp_candidate(player, 'deep_sleep', deep_sleep_exp):
                 changed = True
             print(
                 f'[Parser] SyncContainerData: 深眠心相仪等级 Lv.{deep_sleep_level} '
@@ -3111,6 +3152,13 @@ class PacketParser:
                     logger.info(f'[Parser] DirtyData MonsterHuntInfo.CurLevel -> {hunt_lv}')
                     if _set_level_extra_candidate(player, 'monster_hunt', hunt_lv):
                         changed = True
+            elif sub_field == 3 and pos + 4 <= len(data):  # CurExp
+                hunt_exp = struct.unpack_from('<I', data, pos)[0]
+                debug_info['u32'] = hunt_exp
+                debug_info['monster_hunt_exp'] = hunt_exp
+                logger.info(f'[Parser] DirtyData MonsterHuntInfo.CurExp -> {hunt_exp}')
+                if _set_season_exp_candidate(player, 'monster_hunt', hunt_exp):
+                    changed = True
             else:
                 debug_info['raw_hex'] = data[pos:].hex()[:128]
 
@@ -3146,6 +3194,8 @@ class PacketParser:
                                         if sub_field == 3:
                                             if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
                                                 changed = True
+                                            if _set_season_exp_candidate(player, 'deep_sleep', ds_exp):
+                                                changed = True
                                             print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
                                 else:
                                     # fallback to manual decode
@@ -3160,6 +3210,8 @@ class PacketParser:
                                             debug_info['exp'] = ds_exp
                                             if sub_field == 3:
                                                 if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
+                                                    changed = True
+                                                if _set_season_exp_candidate(player, 'deep_sleep', ds_exp):
                                                     changed = True
                                                 print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
                             except Exception:
