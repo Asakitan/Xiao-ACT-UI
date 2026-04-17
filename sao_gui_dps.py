@@ -148,7 +148,7 @@ def _ulw_update(hwnd: int, img: Image.Image, x: int, y: int,
 # ═══════════════════════════════════════════════
 
 _BASE_DIR = (
-    os.path.dirname(sys.executable)
+    getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
     if getattr(sys, 'frozen', False)
     else os.path.dirname(os.path.abspath(__file__))
 )

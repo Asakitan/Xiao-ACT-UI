@@ -538,7 +538,11 @@ def _get_hp_pil_font(size, family='sao', _cache={}):
     key = (family, size)
     if key in _cache:
         return _cache[key]
-    base = os.path.dirname(os.path.abspath(__file__))
+    base = (
+        getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+        if getattr(sys, 'frozen', False)
+        else os.path.dirname(os.path.abspath(__file__))
+    )
     fname = 'SAOUI.ttf' if family == 'sao' else 'ZhuZiAYuanJWD.ttf'
     fp = os.path.join(base, 'assets', 'fonts', fname)
     try:
