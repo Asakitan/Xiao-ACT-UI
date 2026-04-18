@@ -1005,6 +1005,12 @@ class SAOPlayerGUI:
         self._last_gs_name = ''
         self._last_gs_prof = ''
         self._last_gs_uid = ''
+
+        # ── Boss bar target tracking (mirrors webview) ──
+        self._bb_last_target_uuid = 0
+        self._bb_last_damage_ts = 0.0
+        self._bb_recent_targets = {}
+        self._bb_damage_timeout = 15.0
         self._hide_seek_engine = None
         self._hide_seek_alert_timer = None
         self._hide_seek_alert_active = False
@@ -1376,6 +1382,17 @@ class SAOPlayerGUI:
         if self._dps_tracker:
             try: self._dps_tracker.on_damage_event(event)
             except Exception: pass
+        # Track self→monster damage for boss bar target (mirrors webview)
+        if event.get('attacker_is_self') and event.get('target_is_monster'):
+            target_uuid = event.get('target_uuid', 0)
+            if target_uuid:
+                import time as _t
+                self._bb_recent_targets[target_uuid] = _t.time()
+                self._bb_last_target_uuid = target_uuid
+                self._bb_last_damage_ts = _t.time()
+                if self._dps_tracker:
+                    try: self._dps_tracker.set_boss_uuid(target_uuid)
+                    except Exception: pass
 
     def _on_monster_update(self, monster_data):
         """Monster update from packet_parser → boss raid engine."""
@@ -1742,61 +1759,174 @@ class SAOPlayerGUI:
                             _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
                             if _p_uid:
                                 self._dps_tracker.set_self_uid(_p_uid)
+                                if self._dps_overlay:
+                                    self._dps_overlay.set_self_uid(_p_uid)
+                                _self_fp = 0
+                                _bridge = getattr(self, '_packet_engine', None)
+                                if _bridge:
+                                    _all_p = _bridge.get_players()
+                                    _sp = _all_p.get(_p_uid)
+                                    if _sp:
+                                        _self_fp = getattr(_sp, 'fight_point', 0) or 0
                                 self._dps_tracker.update_player_info(
                                     _p_uid,
                                     gs.player_name or '',
                                     gs.profession_name or '',
-                                    0,
+                                    _self_fp,
                                     int(gs.level_base or 0),
                                 )
                         except Exception:
                             pass
 
+                    # ── Sync ALL players' info from packet bridge ──
+                    if self._dps_tracker:
+                        _bridge = getattr(self, '_packet_engine', None)
+                        if _bridge:
+                            try:
+                                for _pu, _pd in _bridge.get_players().items():
+                                    if _pu and _pd.name:
+                                        self._dps_tracker.update_player_info(
+                                            _pu,
+                                            _pd.name or '',
+                                            _pd.profession or '',
+                                            getattr(_pd, 'fight_point', 0) or 0,
+                                            getattr(_pd, 'level', 0) or 0,
+                                        )
+                            except Exception:
+                                pass
+
                     # ── DPS Overlay push ──
-                    if self._dps_tracker and self._dps_overlay and self._dps_visible:
+                    if self._dps_tracker:
                         try:
+                            _dps_enabled = bool(self._get_setting('dps_enabled', True))
+                            _dps_fade_timeout = float(self._get_setting('dps_fade_timeout_s', 15) or 15)
+                            _dps_fade_timeout = max(5.0, _dps_fade_timeout)
+                            self._dps_tracker.finalize_if_idle(_dps_fade_timeout, 'idle_timeout')
                             if self._dps_tracker.is_dirty():
                                 _dps_snap = self._dps_tracker.get_snapshot()
-                                self._dps_overlay.update(_dps_snap)
+                                _dps_has_live = bool(
+                                    int(_dps_snap.get('total_damage') or 0) > 0
+                                    and self._dps_tracker.has_recent_damage(_dps_fade_timeout)
+                                )
+                                if _dps_enabled and _dps_has_live and self._dps_overlay:
+                                    if not self._dps_visible:
+                                        self._dps_visible = True
+                                        self._dps_faded = False
+                                        self._dps_overlay.show()
+                                    self._dps_overlay.update(_dps_snap)
+                                elif self._dps_overlay and self._dps_visible:
+                                    self._dps_overlay.update(_dps_snap)
                             # DPS fade-out on idle
-                            _dps_idle = self._dps_tracker.idle_seconds
-                            _dps_fade_timeout = float(self._get_setting('dps_fade_timeout_s', 8.0) or 8.0)
-                            if _dps_fade_timeout > 0 and _dps_idle >= _dps_fade_timeout and not self._dps_faded:
-                                self._dps_overlay.fade_out()
-                                self._dps_faded = True
-                            elif self._dps_faded and _dps_idle < _dps_fade_timeout:
-                                self._dps_overlay.fade_in()
-                                self._dps_faded = False
+                            if self._dps_overlay and self._dps_visible:
+                                if not self._dps_tracker.has_recent_damage(_dps_fade_timeout):
+                                    if not self._dps_faded:
+                                        self._dps_overlay.fade_out()
+                                        self._dps_faded = True
+                                elif self._dps_faded:
+                                    self._dps_overlay.fade_in()
+                                    self._dps_faded = False
                         except Exception:
                             pass
 
-                    # ── Boss HP Overlay push ──
+                    # ── Boss HP Overlay push (mirrors webview target-based tracking) ──
                     if self._boss_hp_overlay:
                         try:
                             _bb_raid_active = getattr(gs, 'boss_raid_active', False)
                             _bb_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
                             _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
-                            # Determine visibility
+
+                            _now = time.time()
+                            _has_recent_self_damage = (_now - self._bb_last_damage_ts) < self._bb_damage_timeout
+
+                            # Cleanup stale recent targets
+                            for uuid in list(self._bb_recent_targets.keys()):
+                                if _now - self._bb_recent_targets.get(uuid, 0) > self._bb_damage_timeout * 3:
+                                    self._bb_recent_targets.pop(uuid, None)
+
+                            _bb_direct_data = None
+                            _bb_direct_hp = 0
+                            _bb_direct_max = 0
+                            if not _bb_raid_active:
+                                _bridge = getattr(self, '_packet_engine', None)
+                                if _bridge and _has_recent_self_damage and self._bb_recent_targets:
+                                    _recent_monsters = []
+                                    for uuid, dmg_ts in list(self._bb_recent_targets.items()):
+                                        if _now - dmg_ts < self._bb_damage_timeout * 1.5:
+                                            m = _bridge.get_monster(uuid)
+                                            if m and not getattr(m, 'is_dead', False) and (getattr(m, 'max_hp', 0) > 0 or getattr(m, 'hp', 0) > 0):
+                                                _recent_monsters.append(m)
+                                    if _recent_monsters:
+                                        def _sort_key(m):
+                                            hp = getattr(m, 'hp', 0) or 0
+                                            maxhp = getattr(m, 'max_hp', 0) or hp or 1
+                                            hp_pct = hp / maxhp if maxhp > 0 else 0
+                                            last_ts = self._bb_recent_targets.get(getattr(m, 'uuid', 0), 0)
+                                            return (-hp_pct, -last_ts)
+                                        _recent_monsters.sort(key=_sort_key)
+                                        main_m = _recent_monsters[0]
+                                        self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)
+                                        _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
+                                        _bb_direct_hp = max(0, int(getattr(main_m, 'hp', 0)))
+                                        _bb_direct_data = main_m.to_dict() if hasattr(main_m, 'to_dict') else {}
+                                        _bb_src = 'packet'
+                                elif self._bb_last_target_uuid and not _has_recent_self_damage:
+                                    try:
+                                        _m = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
+                                        if _m and not getattr(_m, 'is_dead', False) and (getattr(_m, 'max_hp', 0) > 0 or getattr(_m, 'hp', 0) > 0):
+                                            _bb_direct_max = int(getattr(_m, 'max_hp', 0)) or int(getattr(_m, 'hp', 0))
+                                            _bb_direct_hp = max(0, int(getattr(_m, 'hp', 0)))
+                                            _bb_direct_data = _m.to_dict() if hasattr(_m, 'to_dict') else {}
+                                            _bb_src = 'packet'
+                                    except Exception:
+                                        pass
+
                             if _bb_mode == 'off':
                                 _bb_show = False
-                            elif _bb_mode == 'always':
-                                _bb_show = (_bb_src != 'none') or _bb_raid_active
+                            elif _bb_raid_active:
+                                _bb_show = True
                             else:
-                                _bb_show = _bb_raid_active
-                            _bb_data = {
-                                'active': _bb_show,
-                                'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
-                                'hp_source': _bb_src,
-                                'current_hp': getattr(gs, 'boss_current_hp', 0),
-                                'total_hp': getattr(gs, 'boss_total_hp', 0),
-                                'shield_active': getattr(gs, 'boss_shield_active', False),
-                                'shield_pct': round(getattr(gs, 'boss_shield_pct', 0.0), 3),
-                                'breaking_stage': getattr(gs, 'boss_breaking_stage', 0),
-                                'extinction_pct': round(getattr(gs, 'boss_extinction_pct', 0.0), 3),
-                                'in_overdrive': getattr(gs, 'boss_in_overdrive', False),
-                                'invincible': getattr(gs, 'boss_invincible', False),
-                                'boss_name': '',
-                            }
+                                _bb_show = _has_recent_self_damage and (_bb_src != 'none' or _bb_direct_data is not None)
+
+                            if _bb_direct_data and not _bb_raid_active:
+                                _bb_hp_pct = _bb_direct_hp / _bb_direct_max if _bb_direct_max > 0 else 1.0
+                                _bb_data = {
+                                    'active': _bb_show,
+                                    'hp_pct': round(_bb_hp_pct, 3),
+                                    'hp_source': _bb_src,
+                                    'current_hp': _bb_direct_hp,
+                                    'total_hp': _bb_direct_max,
+                                    'shield_active': bool(_bb_direct_data.get('shield_active')),
+                                    'shield_pct': round(float(_bb_direct_data.get('shield_pct') or 0.0), 3),
+                                    'breaking_stage': int(_bb_direct_data.get('breaking_stage') or 0),
+                                    'has_break_data': bool(_bb_direct_data.get('has_break_data')),
+                                    'extinction_pct': round(float(_bb_direct_data.get('extinction_pct') or 0.0), 3),
+                                    'extinction': int(_bb_direct_data.get('extinction') or 0),
+                                    'max_extinction': int(_bb_direct_data.get('max_extinction') or 0),
+                                    'stop_breaking_ticking': bool(_bb_direct_data.get('stop_breaking_ticking')),
+                                    'in_overdrive': bool(_bb_direct_data.get('in_overdrive')),
+                                    'invincible': False,
+                                    'boss_name': str(_bb_direct_data.get('name', ''))[:20] or '',
+                                }
+                            else:
+                                _bb_breaking_stage_gs = getattr(gs, 'boss_breaking_stage', -1)
+                                _bb_data = {
+                                    'active': _bb_show,
+                                    'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
+                                    'hp_source': _bb_src,
+                                    'current_hp': getattr(gs, 'boss_current_hp', 0),
+                                    'total_hp': getattr(gs, 'boss_total_hp', 0),
+                                    'shield_active': getattr(gs, 'boss_shield_active', False),
+                                    'shield_pct': round(getattr(gs, 'boss_shield_pct', 0.0), 3),
+                                    'breaking_stage': _bb_breaking_stage_gs,
+                                    'has_break_data': _bb_breaking_stage_gs != -1,
+                                    'extinction_pct': round(getattr(gs, 'boss_extinction_pct', 0.0), 3),
+                                    'extinction': 0,
+                                    'max_extinction': 0,
+                                    'stop_breaking_ticking': False,
+                                    'in_overdrive': getattr(gs, 'boss_in_overdrive', False),
+                                    'invincible': getattr(gs, 'boss_invincible', False),
+                                    'boss_name': '',
+                                }
                             self._boss_hp_overlay.update(_bb_data)
                         except Exception:
                             pass
@@ -1819,22 +1949,32 @@ class SAOPlayerGUI:
                             self._hp_overlay.set_sta_offline(
                                 _sta_offline)
                             if gs.player_name:
-                                self._hp_overlay.set_player_info({
-                                    'name': gs.player_name,
-                                    'profession': gs.profession_name or '',
-                                    'uid': gs.player_id or '',
-                                })
-                            # Boss timer ↔ clock
-                            _raid_active = bool(getattr(gs, 'boss_raid_active', False))
-                            _raid_left = getattr(gs, 'boss_raid_seconds_left', 0) or 0
-                            if _raid_active and _raid_left > 0:
-                                _mm = int(_raid_left) // 60
-                                _ss = int(_raid_left) % 60
-                                _urg = 'urgent' if _raid_left <= 10 else 'normal'
-                                self._hp_overlay.set_boss_timer(
-                                    f'{_mm:02d}:{_ss:02d}', _urg)
+                                _pi_sig = (
+                                    str(gs.player_name),
+                                    str(gs.profession_name or ''),
+                                    str(gs.player_id or ''),
+                                )
+                                if _pi_sig != getattr(self, '_last_hp_player_info_sig', None):
+                                    self._last_hp_player_info_sig = _pi_sig
+                                    self._hp_overlay.set_player_info({
+                                        'name': _pi_sig[0],
+                                        'profession': _pi_sig[1],
+                                        'uid': _pi_sig[2],
+                                    })
+                            # Boss timer (use boss_timer_text + boss_enrage_remaining like webview)
+                            _boss_text = getattr(gs, 'boss_timer_text', '') or ''
+                            _boss_active = getattr(gs, 'boss_raid_active', False)
+                            _boss_enrage = float(getattr(gs, 'boss_enrage_remaining', 0) or 0)
+                            if _boss_active and _boss_text:
+                                _boss_urgency = 'urgent' if 0 < _boss_enrage < 60 else 'normal'
                             else:
-                                self._hp_overlay.set_boss_timer('', 'normal')
+                                _boss_text = ''
+                                _boss_urgency = 'normal'
+                            if _boss_text != self._last_boss_timer_text or \
+                               _boss_urgency != self._last_boss_timer_urgency:
+                                self._last_boss_timer_text = _boss_text
+                                self._last_boss_timer_urgency = _boss_urgency
+                                self._hp_overlay.set_boss_timer(_boss_text, _boss_urgency)
                         except Exception:
                             pass
 
@@ -3601,11 +3741,10 @@ class SAOPlayerGUI:
         new = not cur
         self._set_setting('dps_enabled', new)
         self._dps_enabled = new
-        self._dps_visible = new
-        if self._dps_overlay:
-            if new:
-                self._dps_overlay.show()
-            else:
+        if not new:
+            self._dps_visible = False
+            self._dps_faded = False
+            if self._dps_overlay:
                 self._dps_overlay.hide()
         self._refresh_menu_if_open()
 

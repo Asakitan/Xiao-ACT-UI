@@ -199,6 +199,12 @@ class BossHpOverlay:
         self._target_break_pct = 1.0
         self._breaking_stage = 0
         self._last_breaking_stage = -1
+        # Webview-parity break detection state
+        self._has_break_data = False
+        self._stop_breaking_ticking = False
+        self._last_stop_breaking_ticking = False
+        self._first_break_seen = False
+        self._last_break_pct = 1.0
 
         self._in_overdrive = False
         self._invincible = False
@@ -365,15 +371,39 @@ class BossHpOverlay:
         self._shield_active = shield_active
         self._target_shield_pct = shield_pct if shield_active else 0.0
 
-        stage = int(data.get('breaking_stage') or 0)
+        stage = int(data.get('breaking_stage') if data.get('breaking_stage') is not None else -1)
         ext_pct = max(0.0, min(1.0, float(data.get('extinction_pct') or 0)))
-        # Break burst when stage transitions 1→0 (boss entered broken state)
-        if (self._last_breaking_stage > 0 and stage == 0) or \
-           (self._last_breaking_stage == -1 and stage == 0 and ext_pct <= 0.05):
+        has_break = bool(data.get('has_break_data', False))
+        stop_ticking = bool(data.get('stop_breaking_ticking', False))
+
+        # Webview-parity break burst trigger:
+        #   1) breaking_stage transition X→0 (BuffEventEnterBreaking)
+        #   2) stop_breaking_ticking edge False→True
+        #   3) first observation of stage==0 with stale extinction
+        prev_stage = self._last_breaking_stage
+        prev_stop = self._last_stop_breaking_ticking
+        burst_now = False
+        if prev_stage > 0 and stage == 0:
+            burst_now = True
+        elif prev_stage == -1 and stage == 0 and ext_pct <= 0.05 and not self._first_break_seen:
+            burst_now = True
+        elif stop_ticking and not prev_stop:
+            burst_now = True
+        if burst_now:
             self._break_burst_start = time.time()
+        if stage >= 0:
+            self._first_break_seen = True
         self._last_breaking_stage = stage
+        self._last_stop_breaking_ticking = stop_ticking
         self._breaking_stage = stage
+        self._has_break_data = has_break
+        self._stop_breaking_ticking = stop_ticking
+        # When stage==0 just observed for first time, force display to 0%
+        # to avoid showing stale extinction values from before break entry.
+        if stage == 0 and not self._first_break_seen:
+            ext_pct = 0.0
         self._target_break_pct = ext_pct
+        self._last_break_pct = ext_pct
 
         self._in_overdrive = bool(data.get('in_overdrive', False))
         self._invincible = bool(data.get('invincible', False))
