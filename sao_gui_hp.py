@@ -41,6 +41,7 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur, render_shell_rgba as _gpu_shell
 from overlay_scheduler import get_scheduler as _get_scheduler
+from overlay_render_worker import AsyncFrameWorker, ulw_commit
 
 from sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
@@ -147,12 +148,18 @@ _recompute_layout()
 # Palette (RGB from hp.html CSS)
 COVER_A = (188, 190, 178, 255)
 COVER_B = (172, 174, 162, 255)
-COVER_BORDER = (160, 162, 150, 127)
+COVER_BORDER = (160, 162, 150, 255)
+COVER_BORDER_DEEP = (122, 124, 112, 255)
 BOX_BG = (207, 208, 197, 255)
 TEXT_MAIN = (60, 62, 50, 255)
 TEXT_MUTED = (97, 98, 86, 255)
 TEXT_UID = (97, 98, 86, 255)
+TEXT_STA = (97, 98, 86, 255)
 LINE = (218, 215, 215, 255)
+LINE_SOFT = (240, 242, 234, 255)
+HAIRLINE_LIGHT = (240, 242, 234, 255)
+HAIRLINE_MID = (224, 226, 216, 255)
+HAIRLINE_DARK = (102, 104, 92, 255)
 CYAN = (104, 228, 255, 255)
 CYAN_SOFT = (104, 228, 255, 255)
 GOLD = (212, 156, 23, 255)
@@ -229,6 +236,27 @@ def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
     return Image.fromarray(a, 'RGBA')
 
 
+def _multiply_alpha_regions(img: Image.Image,
+                            rects: Tuple[Tuple[int, int, int, int], ...],
+                            alpha: float) -> Image.Image:
+    if alpha >= 0.999:
+        return img
+    arr = np.asarray(img, dtype=np.uint8).copy()
+    h, w = arr.shape[:2]
+    mul = int(max(0, min(255, alpha * 255)))
+    for x0, y0, x1, y1 in rects:
+        rx0 = max(0, min(w, int(x0)))
+        ry0 = max(0, min(h, int(y0)))
+        rx1 = max(rx0, min(w, int(x1)))
+        ry1 = max(ry0, min(h, int(y1)))
+        if rx1 <= rx0 or ry1 <= ry0:
+            continue
+        arr[ry0:ry1, rx0:rx1, 3] = (
+            arr[ry0:ry1, rx0:rx1, 3].astype(np.uint16) * mul // 255
+        ).astype(np.uint8)
+    return Image.fromarray(arr, 'RGBA')
+
+
 def _make_scanline_texture(w: int, h: int, alpha: int = 10) -> Image.Image:
     """Web-parity horizontal scan-line overlay: 2px transparent + 1px white at
     the given alpha (CSS repeating-linear-gradient 0deg 0-2px transparent,
@@ -262,12 +290,11 @@ def _make_skew_cap(h: int,
                    col: Tuple[int, int, int, int],
                    skew_px: int = 6,
                    extra: int = 7) -> Image.Image:
-    """Build the CSS `::after { right:-11px; skewX(-14deg); }` parallelogram
-    that juts past the fill end. `extra` = +6 width on the right."""
-    w = skew_px * 2 + extra
+    """Build the CSS `::after { right:-11px; skewX(-14deg) }` angled tip."""
+    w = max(18, skew_px * 2 + extra)
     img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
     ImageDraw.Draw(img).polygon(
-        [(0, 0), (w, 0), (w - skew_px, h), (-skew_px, h)], fill=col,
+        [(skew_px, 0), (w, 0), (w - skew_px, h), (0, h)], fill=col,
     )
     return img
 
@@ -393,6 +420,9 @@ class HpOverlay:
         self._static_cache: Optional[Image.Image] = None
         self._static_sig: tuple = ()
 
+        # Async render worker — compose + premult off main thread.
+        self._render_worker = AsyncFrameWorker()
+
     def _default_panel_pos(self) -> Tuple[int, int]:
         sw, sh = _get_screen_metrics()
         # Webview HP window sits at `sw * HUD_WINDOW_LEFT_PCT`; the hud-stage
@@ -466,6 +496,11 @@ class HpOverlay:
             ctypes.c_void_p(self._hwnd), GWL_EXSTYLE,
             ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         )
+        # Exclude from screen capture so vision engine never sees this overlay
+        try:
+            _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
+        except Exception:
+            pass
 
         self._win.bind('<Button-1>', self._on_drag_start)
         self._win.bind('<B1-Motion>', self._on_drag_move)
@@ -499,6 +534,11 @@ class HpOverlay:
 
     def destroy(self) -> None:
         self._cancel_tick()
+        if hasattr(self, '_render_worker') and self._render_worker is not None:
+            try:
+                self._render_worker.stop()
+            except Exception:
+                pass
         if self._win is not None:
             try:
                 self._win.destroy()
@@ -652,10 +692,34 @@ class HpOverlay:
         dt = min(0.1, max(0.001, now - (self._last_render_t or now)))
         self._last_render_t = now
         self._advance(now, dt)
-        try:
-            self._render(now)
-        except Exception as e:
-            print(f'[HP-OV] render error: {e}')
+
+        # ── Async render pipeline ──
+        # 1. Commit the most recent off-thread frame (if ready).
+        if self._hwnd:
+            fb = self._render_worker.take_result()
+            if fb is not None:
+                try:
+                    ulw_commit(self._hwnd, fb)
+                except Exception as e:
+                    print(f'[HP-OV] ulw error: {e}')
+
+            # Periodic topmost enforcement
+            if now - self._last_topmost_t > _TOPMOST_INTERVAL:
+                self._last_topmost_t = now
+                try:
+                    _user32.SetWindowPos(
+                        ctypes.c_void_p(self._hwnd),
+                        ctypes.c_void_p(HWND_TOPMOST),
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    )
+                except Exception:
+                    pass
+
+            # 2. Submit next frame for off-thread composition.
+            self._render_worker.submit(
+                self.compose_frame, now, self._hwnd, self._x, self._y)
+
         if self._hide_after_exit and self._fade_alpha <= 0.01:
             self.destroy()
 
@@ -778,6 +842,9 @@ class HpOverlay:
             self._static_cache = base
             self._static_sig = sig
         img = self._static_cache.copy()
+        cover_rect = (COVER_X, COVER_Y + y_off, COVER_X + COVER_W, COVER_Y + COVER_H + y_off)
+        box_rect = (BOX_X, BOX_Y + y_off, BOX_X + BOX_W, BOX_Y + BOX_H + y_off)
+        sta_rect = (STA_X, STA_Y + y_off, STA_X + STA_W, STA_Y + STA_H + y_off)
 
         # Dynamic layers
         self._draw_brackets(img, y_off, now)
@@ -789,6 +856,9 @@ class HpOverlay:
         self._draw_sta_text(img, y_off)
         if self._hp_flash_start and now - self._hp_flash_start < 0.45:
             self._draw_hp_flash(img, y_off, now)
+
+        if self._sta_offline:
+            img = _multiply_alpha_regions(img, (sta_rect,), 0.35)
 
         # HP group auto-hide opacity (web: _setHPGroupHidden — 500ms
         # fade / 180ms restore on cover + XTBox + STA, id-plate stays)
@@ -803,15 +873,7 @@ class HpOverlay:
             t = min(1.0, (now - self._hp_group_restore_t) / self._hp_group_restore_duration)
             hp_group_alpha = min(1.0, _ease_out_cubic(t))
         if hp_group_alpha < 0.999:
-            a = np.asarray(img, dtype=np.uint8).copy()
-            mul = int(max(0, min(255, hp_group_alpha * 255)))
-            cy0 = max(0, COVER_Y + y_off)
-            cy1 = min(h, COVER_Y + COVER_H + y_off)
-            cx0, cx1 = COVER_X, COVER_X + COVER_W
-            a[cy0:cy1, cx0:cx1, 3] = (
-                a[cy0:cy1, cx0:cx1, 3].astype(np.uint16)
-                * mul // 255).astype(np.uint8)
-            img = Image.fromarray(a, 'RGBA')
+            img = _multiply_alpha_regions(img, (cover_rect, box_rect, sta_rect), hp_group_alpha)
 
         # Global fade
         if self._fade_alpha < 0.999:
@@ -866,7 +928,13 @@ class HpOverlay:
         # halo above the ID plate and (b) capture clicks that should pass
         # through to the game window.
         shadow = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rounded_rectangle(
+        sd = ImageDraw.Draw(shadow)
+        sd.rounded_rectangle(
+            (ID_X + 5, ID_Y + 10 + y_off,
+             ID_X + ID_W + 2, ID_Y + ID_H + 3 + y_off),
+            radius=8, fill=(12, 14, 10, 46),
+        )
+        sd.rounded_rectangle(
             (ID_X + 2, ID_Y + 5 + y_off,
              ID_X + ID_W - 1, ID_Y + ID_H - 1 + y_off),
             radius=6, fill=(0, 0, 0, 82),
@@ -886,10 +954,15 @@ class HpOverlay:
         # Inset highlight (top 1 px line)
         ov = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         od = ImageDraw.Draw(ov)
-        od.line(
-            (ID_X + 2, ID_Y + 1 + y_off,
-             ID_X + ID_W - 3, ID_Y + 1 + y_off),
-            fill=(255, 255, 255, 64),
+        od.rounded_rectangle(
+            (ID_X + 3, ID_Y + 3 + y_off,
+             ID_X + ID_W - 4, ID_Y + 18 + y_off),
+            radius=5, fill=(255, 255, 255, 16),
+        )
+        od.rounded_rectangle(
+            (ID_X + 8, ID_Y + ID_H // 2 + y_off,
+             ID_X + ID_W - 8, ID_Y + ID_H - 6 + y_off),
+            radius=5, fill=(24, 26, 18, 10),
         )
         img.alpha_composite(_clip_alpha(ov, mask))
 
@@ -903,6 +976,11 @@ class HpOverlay:
             (ID_X, ID_Y + y_off,
              ID_X + ID_W - 1, ID_Y + ID_H - 1 + y_off),
             radius=6, outline=COVER_BORDER, width=1,
+        )
+        d.rounded_rectangle(
+            (ID_X + 1, ID_Y + 1 + y_off,
+             ID_X + ID_W - 2, ID_Y + ID_H - 2 + y_off),
+            radius=5, outline=COVER_BORDER_DEEP, width=1,
         )
         # TL cyan bracket — drawn dynamically in _draw_brackets()
         # BR gold bracket — drawn dynamically in _draw_brackets()
@@ -918,36 +996,48 @@ class HpOverlay:
         # TL cyan bracket — web: 2.5s ease-in-out infinite pulse (0.6→1→0.6)
         tl_pulse = (now % 2.5) / 2.5
         tl_env = 0.6 + 0.4 * (0.5 - 0.5 * math.cos(tl_pulse * 2 * math.pi))
-        tl_col = (CYAN_SOFT[0], CYAN_SOFT[1], CYAN_SOFT[2],
-                  int(CYAN_SOFT[3] * tl_env))
-        id_tlx = ID_X + 2
-        id_tly = ID_Y + 2 + y_off
+        tl_gain = 0.62 + 0.38 * tl_env
+        tl_col = (
+            int(CYAN_SOFT[0] * tl_gain),
+            int(CYAN_SOFT[1] * tl_gain),
+            int(CYAN_SOFT[2] * tl_gain),
+            255,
+        )
+        id_tlx = ID_X + 1
+        id_tly = ID_Y + 1 + y_off
         d.line((id_tlx, id_tly, id_tlx + 16, id_tly), fill=tl_col, width=2)
         d.line((id_tlx, id_tly, id_tlx, id_tly + 16), fill=tl_col, width=2)
         _corner_dot(id_tlx, id_tly, tl_col)
         # BR gold bracket — web: 2.5s, 1.2s delay
         br_pulse = ((now + 1.3) % 2.5) / 2.5
         br_env = 0.6 + 0.4 * (0.5 - 0.5 * math.cos(br_pulse * 2 * math.pi))
-        br_col = (GOLD_SOFT[0], GOLD_SOFT[1], GOLD_SOFT[2],
-                  int(GOLD_SOFT[3] * br_env))
-        brx = ID_X + ID_W - 3
-        bry = ID_Y + ID_H - 3 + y_off
+        br_gain = 0.62 + 0.38 * br_env
+        br_col = (
+            int(GOLD_SOFT[0] * br_gain),
+            int(GOLD_SOFT[1] * br_gain),
+            int(GOLD_SOFT[2] * br_gain),
+            255,
+        )
+        brx = ID_X + ID_W - 2
+        bry = ID_Y + ID_H - 2 + y_off
         d.line((brx, bry, brx - 16, bry), fill=br_col, width=2)
         d.line((brx, bry, brx, bry - 16), fill=br_col, width=2)
         _corner_dot(brx, bry, br_col)
-        # ── Cover panel brackets (same pulse) ──
+        # ── Cover panel corners are static in web CSS ──
+        cover_tl = (CYAN[0], CYAN[1], CYAN[2], 255)
+        cover_br = (GOLD[0], GOLD[1], GOLD[2], 255)
         cover_tlx = COVER_X + 2
         cover_tly = COVER_Y + 2 + y_off
         d.line((cover_tlx, cover_tly,
-            cover_tlx + 16, cover_tly), fill=tl_col, width=2)
+            cover_tlx + 16, cover_tly), fill=cover_tl, width=2)
         d.line((cover_tlx, cover_tly,
-            cover_tlx, cover_tly + 16), fill=tl_col, width=2)
-        _corner_dot(cover_tlx, cover_tly, tl_col)
+            cover_tlx, cover_tly + 16), fill=cover_tl, width=2)
+        _corner_dot(cover_tlx, cover_tly, cover_tl)
         c_brx = COVER_X + COVER_W - 3
         c_bry = COVER_Y + COVER_H - 3 + y_off
-        d.line((c_brx, c_bry, c_brx - 16, c_bry), fill=br_col, width=2)
-        d.line((c_brx, c_bry, c_brx, c_bry - 16), fill=br_col, width=2)
-        _corner_dot(c_brx, c_bry, br_col)
+        d.line((c_brx, c_bry, c_brx - 16, c_bry), fill=cover_br, width=2)
+        d.line((c_brx, c_bry, c_brx, c_bry - 16), fill=cover_br, width=2)
+        _corner_dot(c_brx, c_bry, cover_br)
 
     def _draw_id_plate_scanline(self, img: Image.Image, y_off: int,
                                 now: float) -> None:
@@ -990,7 +1080,7 @@ class HpOverlay:
             _draw_text_shadow(
                 img, (ID_X + 78, ID_Y + 6 + y_off),
                 prof_text, prof_font,
-                shadow_color=(243, 175, 18, 76), blur=3,
+                shadow_color=(243, 175, 18, 38), blur=2,
             )
             _draw_tracked(
                 draw, (ID_X + 78, ID_Y + 6 + y_off),
@@ -1003,7 +1093,7 @@ class HpOverlay:
         lv_w = _tracked_width(draw, lv_txt, lv_font, spacing=2)
         _draw_tracked(
             draw, (ID_X + ID_W - 22 - lv_w, ID_Y + 6 + y_off),
-            lv_txt, font=lv_font, fill=(212, 156, 23, 235),
+            lv_txt, font=lv_font, fill=(212, 156, 23, 255),
             spacing=2,
         )
 
@@ -1017,8 +1107,13 @@ class HpOverlay:
                 pulse = (now % 0.8) / 0.8
                 env = 0.55 + 0.45 * (0.5 - 0.5 *
                                      math.cos(pulse * 2 * math.pi))
-                col = (URGENT_RED[0], URGENT_RED[1], URGENT_RED[2],
-                       int(245 * env))
+                gain = 0.62 + 0.38 * env
+                col = (
+                    int(URGENT_RED[0] * gain),
+                    int(URGENT_RED[1] * gain),
+                    int(URGENT_RED[2] * gain),
+                    255,
+                )
             else:
                 col = CYAN
             tw = _text_width(draw, txt, bt_font)
@@ -1059,12 +1154,12 @@ class HpOverlay:
 
         # ── Name (bottom, large bold) ──  web: 24px, text-shadow
         name_font = _pick_font(self._name, 24)
-        name = _truncate(draw, self._name, name_font, ID_W - 30)
+        name = _truncate(draw, self._name, name_font, max(32, ID_W - 190))
         # web: text-shadow 0 0 6px rgba(255,255,255,0.2)
         _draw_text_shadow(
             img, (ID_X + 18, ID_Y + ID_H - 34 + y_off),
             name, name_font,
-            shadow_color=(255, 255, 255, 51), blur=3,
+            shadow_color=(255, 255, 255, 22), blur=2,
         )
         draw.text(
             (ID_X + 18, ID_Y + ID_H - 34 + y_off),
@@ -1076,7 +1171,7 @@ class HpOverlay:
             uid_font = _load_font('sao', 11)
             uid_w = _tracked_width(draw, self._uid, uid_font, spacing=1)
             _draw_tracked(
-                draw, (ID_X + ID_W - 18 - uid_w, ID_Y + 32 + y_off),
+                draw, (ID_X + ID_W - 18 - uid_w, ID_Y + 34 + y_off),
                 self._uid, font=uid_font, fill=TEXT_UID,
                 spacing=1,  # web: letter-spacing 1px
             )
@@ -1093,12 +1188,17 @@ class HpOverlay:
             lw_r = _text_width(draw, right_txt, link_font)
             gap = 10   # space reserved for the dash
             total = lw_l + gap + lw_r
-            # Subtle 4s pulse opacity: 0.55 → 1.0 → 0.55
+            # Web: base alpha 0.85 with id-pulse opacity 0.6 → 1.0.
             t = ((now - self._spawn_time + 0.5) % 4.0) / 4.0
-            env = 0.55 + 0.45 * (0.5 - 0.5 *
+            env = 0.6 + 0.4 * (0.5 - 0.5 *
                                  math.cos(t * 2 * math.pi))
-            a = int(round(210 + 45 * env))
-            col = (LINK_BLUE[0], LINK_BLUE[1], LINK_BLUE[2], a)
+            gain = 0.64 + 0.36 * env
+            col = (
+                int(LINK_BLUE[0] * gain),
+                int(LINK_BLUE[1] * gain),
+                int(LINK_BLUE[2] * gain),
+                255,
+            )
             bx = ID_X + ID_W - 18 - total
             by = ID_Y + ID_H - 16 + y_off
             draw.text((bx, by), left_txt, fill=col, font=link_font)
@@ -1152,7 +1252,13 @@ class HpOverlay:
         # the panel boundary into the area above (which would be visible
         # as a halo and capture mouse clicks).
         shadow = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rounded_rectangle(
+        sd = ImageDraw.Draw(shadow)
+        sd.rounded_rectangle(
+            (COVER_X + 6, COVER_Y + 10 + y_off,
+             COVER_X + COVER_W + 2, COVER_Y + COVER_H + 5 + y_off),
+            radius=8, fill=(18, 20, 14, 40),
+        )
+        sd.rounded_rectangle(
             (COVER_X + 2, COVER_Y + 5 + y_off,
              COVER_X + COVER_W - 1, COVER_Y + COVER_H - 1 + y_off),
             radius=6, fill=(0, 0, 0, 60),
@@ -1169,10 +1275,15 @@ class HpOverlay:
 
         ov = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         od = ImageDraw.Draw(ov)
-        od.line(
-            (COVER_X + 2, COVER_Y + 1 + y_off,
-             COVER_X + COVER_W - 3, COVER_Y + 1 + y_off),
-            fill=(255, 255, 255, 64),
+        od.rounded_rectangle(
+            (COVER_X + 3, COVER_Y + 3 + y_off,
+             COVER_X + COVER_W - 4, COVER_Y + 18 + y_off),
+            radius=5, fill=(255, 255, 255, 14),
+        )
+        od.rounded_rectangle(
+            (COVER_X + 8, COVER_Y + COVER_H // 2 + y_off,
+             COVER_X + COVER_W - 8, COVER_Y + COVER_H - 6 + y_off),
+            radius=5, fill=(24, 26, 18, 10),
         )
         img.alpha_composite(_clip_alpha(ov, mask))
 
@@ -1185,6 +1296,11 @@ class HpOverlay:
             (COVER_X, COVER_Y + y_off,
              COVER_X + COVER_W - 1, COVER_Y + COVER_H - 1 + y_off),
             radius=6, outline=COVER_BORDER, width=1,
+        )
+        d.rounded_rectangle(
+            (COVER_X + 1, COVER_Y + 1 + y_off,
+             COVER_X + COVER_W - 2, COVER_Y + COVER_H - 2 + y_off),
+            radius=5, outline=COVER_BORDER_DEEP, width=1,
         )
         # TL cyan + BR gold corner brackets — drawn dynamically in _draw_brackets()
 
@@ -1247,6 +1363,19 @@ class HpOverlay:
                          * m_arr // 255).astype(np.uint8)
         img.alpha_composite(Image.fromarray(grad, 'RGBA'))
 
+        shell_fx = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        sfd = ImageDraw.Draw(shell_fx, 'RGBA')
+        sfd.polygon(
+            [
+                (rx0 + 86, by + 2),
+                (rx0 + rw - 10, by + 2),
+                (rx0 + rw - 15, by + 12),
+                (rx0 + 90, by + 12),
+            ],
+            fill=(255, 255, 255, 12),
+        )
+        img.alpha_composite(_clip_alpha(shell_fx, shape_mask))
+
         # svg_border stroke — polygon outline
         border_x = bx + 114
         border_y = by + 10
@@ -1288,24 +1417,32 @@ class HpOverlay:
             return HP_YELLOW
         return HP_RED
 
+    def _hp_fill_width_px(self, pct: float) -> int:
+        value = max(0.0, min(1.0, float(pct or 0.0)))
+        if value <= 0.0:
+            return 0
+        if value >= 0.997:
+            return int(round(350 + 6.0))
+        return int(round(350 * value + 8.0))
+
     def _draw_hp_fill(self, img: Image.Image, y_off: int,
                       now: float) -> None:
         pct = max(0.0, min(1.0, self._hp_pct_disp))
         if pct <= 0.002:
             return
-        # fill width inside the 350-wide xt_border
-        fill_w = int(round(350 * pct))
+        # Web width math: 0 → 0, full → 100% + 6px, otherwise % + 8px.
+        fill_w = self._hp_fill_width_px(pct)
         if fill_w <= 0:
             return
         ca, cb = self._hp_gradient(pct)
         bar = _make_hgrad_bar(fill_w, 25, ca, cb)
-        cap = _make_skew_cap(25, cb, skew_px=6, extra=7)
+        cap = _make_skew_cap(25, cb, skew_px=7, extra=7)
         canvas = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
         canvas.paste(bar, (BOX_X + 114 + 1, BOX_Y + 10 + 1 + y_off))
         if pct < 0.995:
             canvas.paste(
                 cap,
-                (BOX_X + 114 + fill_w - 1, BOX_Y + 10 + 1 + y_off),
+                (BOX_X + 114 + fill_w - 7, BOX_Y + 10 + 1 + y_off),
                 cap,
             )
         img.alpha_composite(_clip_alpha(canvas, self._hp_bar_mask(y_off)))
@@ -1357,7 +1494,7 @@ class HpOverlay:
         lv_font = _load_font('sao', 12)
         lv_txt = f'lv.{self._level}'
         draw.text((nx0 + cell_w + 6, ny0 + 1), lv_txt,
-                  fill=TEXT_MUTED, font=lv_font)
+                  fill=TEXT_MAIN, font=lv_font)
 
     # ── STA row ─────────────────────────────────────────────────────
 
@@ -1368,13 +1505,17 @@ class HpOverlay:
         cy = STA_Y + STA_H // 2 + y_off
         draw.polygon(
             [(cx, cy - 4), (cx + 4, cy), (cx, cy + 4), (cx - 4, cy)],
-            outline=(212, 156, 23, 190), fill=GOLD,
+            outline=(212, 156, 23, 255), fill=(212, 156, 23, 255),
+        )
+        draw.polygon(
+            [(cx, cy - 2), (cx + 2, cy), (cx, cy + 2), (cx - 2, cy)],
+            fill=(255, 236, 180, 196),
         )
         # Label "STA"  — web: letter-spacing 2px
         lbl_font = _load_font('sao', 9)
         _draw_tracked(
             draw, (STA_X + 18, STA_Y + 2 + y_off),
-            'STA', font=lbl_font, fill=GOLD,
+            'STA', font=lbl_font, fill=(212, 156, 23, 255),
             spacing=2,
         )
         # Track
@@ -1383,7 +1524,7 @@ class HpOverlay:
         tx1 = STA_X + STA_W - 60
         draw.rounded_rectangle(
             (tx0, ty0, tx1, ty0 + 6), radius=1,
-            fill=BOX_BG, outline=(212, 156, 23, 63), width=1,
+            fill=BOX_BG, outline=(212, 156, 23, 255), width=1,
         )
 
     def _draw_sta_fill(self, img: Image.Image, y_off: int) -> None:
@@ -1400,6 +1541,8 @@ class HpOverlay:
             return
         bar = _make_hgrad_bar(fw - 2, 4, STA_A, STA_B)
         img.alpha_composite(bar, (tx0 + 1, ty0 + 1))
+        highlight = Image.new('RGBA', (max(1, fw - 2), 1), (255, 242, 202, 72))
+        img.alpha_composite(highlight, (tx0 + 1, ty0 + 1))
         # Soft glow above bar (box-shadow: 0 0 6px gold)
         glow = Image.new('RGBA',
                          (fw + 12, 14), (0, 0, 0, 0))
@@ -1415,7 +1558,7 @@ class HpOverlay:
         txt = self._sta_text
         ty = STA_Y + 2 + y_off
         col = ((212, 90, 60, 255) if self._sta_offline
-               else TEXT_MUTED)
+             else TEXT_STA)
         # web: letter-spacing 1px, right-aligned at STA_X + STA_W - 54
         tw = _tracked_width(draw, txt, font, spacing=1)
         tx0 = STA_X + STA_W - 54

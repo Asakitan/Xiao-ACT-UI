@@ -4,19 +4,12 @@ Design:
 - One ``root.after`` loop ticks at TARGET_HZ using a high-resolution
   perf-counter deadline. No drift, no pileup.
 - Each overlay registers ``tick_fn(now)``; scheduler calls it on the Tk main
-    thread. No worker threads; overlay state is main-thread mutable.
+  thread. Overlay ``_advance`` (animation state mutation) runs on this thread.
+- Heavy compose + premultiply work is offloaded to per-overlay worker threads
+  via ``AsyncFrameWorker`` (see overlay_render_worker.py). Only the cheap
+  ``UpdateLayeredWindow`` GDI commit runs on the main thread.
 - Idle overlays (``animating_fn()`` returns False) only tick every Nth frame,
   giving roughly 20 Hz for idle HP/DPS while the rest of the loop stays at 60.
-- Compose + GL calls stay where they belong: on main thread.
-
-Why not a worker-thread compose pipeline?
-- Overlay state (fade alphas, per-row interpolations, etc.) is mutated during
-  ``_advance_animations`` and read during compose. Moving compose off-thread
-  would create a race the refactor can't locally fix without snapshotting all
-  that state into an immutable DTO. That's a much bigger rewrite, not worth
-  it for ~2-4 ms frames.
-- Pillow and NumPy already release the GIL inside their C routines, so the
-  real-world throughput gain from threading a 3 ms compose is minimal.
 """
 from __future__ import annotations
 

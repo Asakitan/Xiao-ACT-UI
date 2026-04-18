@@ -1,55 +1,40 @@
-"""
-SAO Entity Mode — AutoKey 配置面板 (纯 tkinter Toplevel).
-
-提供:
-  • Profile CRUD (新建 / 复制 / 删除 / 激活 / 导入 / 导出)
-  • 全局 enabled 开关
-  • Actions 列表编辑 (添加 / 删除 / 上下移)
-  • 每个 Action 的全部字段
-  • 可选 Conditions 编辑
-
-使用方法:
-    panel = AutoKeyPanel(root, load_fn, save_fn, engine_ref, on_toggle)
-    panel.show()   # toggle visibility
-"""
 from __future__ import annotations
 
+import time
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import uuid, copy, json, os
-from typing import Callable, Optional, Any
-from window_effects import apply_native_chrome
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-# ── 颜色令牌 (与 sao_gui ModernColors 一致) ──
-_C = type('C', (), {
-    'BG': '#1C1C1E', 'CARD': '#2C2C2E', 'INPUT': '#1C1C1E',
-    'ACCENT': '#0A84FF', 'GREEN': '#30D158', 'RED': '#FF453A',
-    'ORANGE': '#FF9F0A', 'GOLD': '#FFD700',
-    'TEXT': '#F5F5F7', 'TEXT2': '#98989D', 'DIM': '#636366',
-    'BORDER': '#38383A', 'BTN': '#0A84FF', 'BTN2': '#48484A',
-    'HOVER': '#3A3A3C',
-})()
-
-# ── 支持的按键列表 ──
-_VK_KEYS = (
-    ['SPACE', 'TAB', 'ENTER', 'ESC', 'SHIFT', 'CTRL', 'ALT']
-    + [str(i) for i in range(10)]
-    + [chr(c) for c in range(65, 91)]
-    + [f'F{i}' for i in range(1, 13)]
+from sao_web_panel_common import (
+    PANEL_BG,
+    PANEL_BG_ALT,
+    PANEL_CARD,
+    PANEL_CARD_ALT,
+    PANEL_EDGE,
+    PANEL_HEADER,
+    TEXT_DIM,
+    TEXT_MAIN,
+    TEXT_MUTED,
+    GOLD,
+    DANGER,
+    READY,
+    ACTIVE,
+    COOLDOWN,
+    CYAN,
+    apply_surface_chrome,
+    apply_badge,
+    bind_drag,
+    calc_panel_geometry,
+    clear_frame,
+    create_scrollable_area,
+    make_action_button,
+    make_section_title,
+    panel_font,
+    place_corner_accents,
+    set_action_button_kind,
 )
 
 
-def _make_id(prefix: str = 'ak') -> str:
-    return f'{prefix}_{uuid.uuid4().hex[:12]}'
-
-
-def _clamp(v, lo, hi):
-    return max(lo, min(hi, v))
-
-
 class AutoKeyPanel:
-    """AutoKey 配置面板 — tkinter Toplevel."""
-
     def __init__(
         self,
         master: tk.Tk,
@@ -57,7 +42,9 @@ class AutoKeyPanel:
         save_fn: Callable[[dict], Any],
         engine_ref: Callable[[], Any],
         on_toggle: Callable[[bool], None],
-        author_fn: Callable[[], dict] | None = None,
+        author_fn: Optional[Callable[[], dict]] = None,
+        load_burst_actions: Optional[Callable[[], List[dict]]] = None,
+        save_burst_actions: Optional[Callable[[List[dict]], None]] = None,
     ):
         self._master = master
         self._load = load_fn
@@ -65,445 +52,496 @@ class AutoKeyPanel:
         self._engine_ref = engine_ref
         self._on_toggle = on_toggle
         self._author_fn = author_fn or (lambda: {})
+        self._load_burst_actions = load_burst_actions
+        self._save_burst_actions = save_burst_actions
+
         self._win: Optional[tk.Toplevel] = None
-        self._cfg: dict = {}
-        self._dirty = False
+        self._visible = False
+        self._cfg: Dict[str, Any] = {}
+        self._slots: List[Dict[str, Any]] = []
+        self._actions: List[Dict[str, Any]] = []
+        self._recording = False
+        self._recording_trigger_slot: Optional[int] = None
+        self._selected_slot: Optional[int] = None
+        self._burst_ready = False
+        self._profession = ''
+        self._drag_ox = 0
+        self._drag_oy = 0
+        self._poll_after_id: Optional[str] = None
+        self._slot_prev_states: Dict[int, str] = {}
+        self._ready_flash_until: Dict[int, float] = {}
+        self._last_signature: Optional[Tuple[Any, ...]] = None
 
-    # ── public ──
+        self._badge: Optional[tk.Label] = None
+        self._burst_indicator: Optional[tk.Label] = None
+        self._content_body: Optional[tk.Frame] = None
+        self._rec_indicator: Optional[tk.Label] = None
+        self._record_btn: Optional[tk.Label] = None
+        self._status_profession: Optional[tk.Label] = None
+        self._status_burst: Optional[tk.Label] = None
+        self._canvas: Optional[tk.Canvas] = None
 
-    def show(self):
-        if self._win and self._win.winfo_exists():
-            self._win.lift()
-            return
+    def is_visible(self) -> bool:
+        return bool(self._visible and self._win and self._win.winfo_exists())
+
+    def show(self) -> None:
         self._cfg = self._load()
-        self._build()
+        self._actions = self._load_actions()
+        if self._win is None or not self._win.winfo_exists():
+            self._build()
+        self._visible = True
+        try:
+            self._win.deiconify()
+            self._win.lift()
+            self._win.focus_force()
+        except Exception:
+            pass
+        self._refresh_live(force=True)
 
-    def hide(self):
-        if self._win and self._win.winfo_exists():
-            self._win.destroy()
-        self._win = None
+    def hide(self) -> None:
+        self._cancel_poll()
+        if self._win is not None:
+            try:
+                self._win.withdraw()
+            except Exception:
+                pass
+        self._visible = False
 
-    def toggle(self):
-        if self._win and self._win.winfo_exists():
+    def toggle(self) -> None:
+        if self.is_visible():
             self.hide()
         else:
             self.show()
 
-    def destroy(self):
-        self.hide()
+    def destroy(self) -> None:
+        self._cancel_poll()
+        if self._win is not None:
+            try:
+                self._win.destroy()
+            except Exception:
+                pass
+        self._win = None
+        self._visible = False
 
-    # ── build ──
-
-    def _build(self):
-        w = tk.Toplevel(self._master)
-        self._win = w
-        w.title('AutoKey 配置')
-        w.configure(bg=_C.BG)
-        w.geometry('540x620')
-        w.resizable(True, True)
-        apply_native_chrome(w)
+    def _build(self) -> None:
+        width, height, pos_x, pos_y = calc_panel_geometry(
+            self._master,
+            min_w=340,
+            min_h=400,
+            width_ratio=0.20,
+            height_ratio=0.44,
+            x_ratio=0.012,
+            y_ratio=0.64,
+        )
+        win = tk.Toplevel(self._master)
+        win.overrideredirect(True)
+        win.configure(bg=PANEL_EDGE)
+        win.geometry(f'{width}x{height}+{pos_x}+{pos_y}')
         try:
-            w.attributes('-topmost', True)
+            win.attributes('-topmost', True)
         except Exception:
             pass
-        w.protocol('WM_DELETE_WINDOW', self.hide)
+        win.bind('<Escape>', lambda _event: self.hide())
+        self._win = win
 
-        # ── toolbar ──
-        tb = tk.Frame(w, bg=_C.CARD, height=36)
-        tb.pack(fill='x', padx=4, pady=(4, 0))
-        self._chk_enabled_var = tk.BooleanVar(value=self._cfg.get('enabled', False))
-        chk = tk.Checkbutton(tb, text='启用 AutoKey', variable=self._chk_enabled_var,
-                             bg=_C.CARD, fg=_C.TEXT, selectcolor=_C.BG,
-                             activebackground=_C.CARD, activeforeground=_C.TEXT,
-                             command=self._on_enabled_toggle)
-        chk.pack(side='left', padx=6)
+        shell = tk.Frame(win, bg=PANEL_BG, highlightthickness=1, highlightbackground=PANEL_EDGE)
+        shell.pack(fill=tk.BOTH, expand=True)
+        apply_surface_chrome(shell, accent=CYAN, accent_side='top')
+        place_corner_accents(shell)
 
-        for txt, cmd in [('新建', self._new_profile), ('复制', self._copy_profile),
-                         ('删除', self._del_profile), ('导入', self._import_profile),
-                         ('导出', self._export_profile)]:
-            b = tk.Button(tb, text=txt, command=cmd,
-                          bg=_C.BTN2, fg=_C.TEXT, relief='flat', padx=6, pady=1,
-                          activebackground=_C.HOVER, activeforeground=_C.TEXT)
-            b.pack(side='left', padx=2)
+        header = tk.Frame(shell, bg=PANEL_HEADER, height=58)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        apply_surface_chrome(header)
 
-        # ── profile selector ──
-        pf = tk.Frame(w, bg=_C.BG)
-        pf.pack(fill='x', padx=4, pady=4)
-        tk.Label(pf, text='配置:', bg=_C.BG, fg=_C.TEXT2).pack(side='left')
-        self._prof_var = tk.StringVar()
-        self._prof_cb = ttk.Combobox(pf, textvariable=self._prof_var, state='readonly', width=40)
-        self._prof_cb.pack(side='left', padx=4, fill='x', expand=True)
-        self._prof_cb.bind('<<ComboboxSelected>>', self._on_profile_selected)
-        self._refresh_profile_list()
+        tk.Label(
+            header,
+            text='Live Skill Monitor',
+            bg=PANEL_HEADER,
+            fg=TEXT_MUTED,
+            font=panel_font(8),
+        ).pack(anchor='w', padx=16, pady=(10, 0))
 
-        # ── scrollable body ──
-        outer = tk.Frame(w, bg=_C.BG)
-        outer.pack(fill='both', expand=True, padx=4, pady=2)
-        canvas = tk.Canvas(outer, bg=_C.BG, highlightthickness=0)
-        vsb = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
-        self._body = tk.Frame(canvas, bg=_C.BG)
-        self._body.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.create_window((0, 0), window=self._body, anchor='nw')
-        canvas.configure(yscrollcommand=vsb.set)
-        canvas.pack(side='left', fill='both', expand=True)
-        vsb.pack(side='right', fill='y')
-        # mouse wheel
-        def _on_mw(e):
-            canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
-        canvas.bind_all('<MouseWheel>', _on_mw, add='+')
+        title_row = tk.Frame(header, bg=PANEL_HEADER)
+        title_row.pack(fill=tk.X, padx=16, pady=(2, 8))
+        tk.Label(
+            title_row,
+            text='Auto Key',
+            bg=PANEL_HEADER,
+            fg=TEXT_MAIN,
+            font=panel_font(13, bold=True),
+        ).pack(side=tk.LEFT)
+        self._badge = tk.Label(
+            title_row,
+            text='OFF',
+            bg=TEXT_MUTED,
+            fg='#ffffff',
+            font=panel_font(8, bold=True),
+            padx=8,
+            pady=2,
+        )
+        self._badge.pack(side=tk.LEFT, padx=(10, 0))
+        bind_drag(header, self._on_drag_start, self._on_drag_move)
+
+        self._burst_indicator = tk.Label(
+            shell,
+            text='✦ BURST READY ✦',
+            bg=PANEL_CARD_ALT,
+            fg=READY,
+            font=panel_font(9, bold=True),
+            padx=12,
+            pady=4,
+            highlightthickness=1,
+            highlightbackground=READY,
+        )
+
+        content = tk.Frame(shell, bg=PANEL_BG, padx=12, pady=8)
+        content.pack(fill=tk.BOTH, expand=True)
+        _, canvas, body = create_scrollable_area(content, PANEL_BG)
         self._canvas = canvas
+        self._content_body = body
 
-        # ── bottom bar ──
-        bb = tk.Frame(w, bg=_C.CARD, height=36)
-        bb.pack(fill='x', padx=4, pady=(0, 4))
-        tk.Button(bb, text='保存', command=self._save_current, bg=_C.ACCENT, fg='#fff',
-                  relief='flat', padx=12, activebackground='#0070E0',
-                  activeforeground='#fff').pack(side='right', padx=4, pady=4)
-        tk.Button(bb, text='还原', command=self._reload_current, bg=_C.BTN2, fg=_C.TEXT,
-                  relief='flat', padx=12, activebackground=_C.HOVER,
-                  activeforeground=_C.TEXT).pack(side='right', padx=4, pady=4)
+        action_row = tk.Frame(shell, bg=PANEL_BG, padx=12, pady=8)
+        action_row.pack(fill=tk.X)
+        self._record_btn = make_action_button(action_row, 'RECORD', self._toggle_record)
+        self._record_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        make_action_button(action_row, 'CLEAR', self._clear_actions).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
+        make_action_button(action_row, 'SAVE', self._save_actions, kind='accent').pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
 
-        self._populate_profile()
+        tk.Frame(shell, bg=PANEL_EDGE, height=1).pack(fill=tk.X)
+        status_bar = tk.Frame(shell, bg=PANEL_BG, padx=14, pady=5)
+        status_bar.pack(fill=tk.X)
+        self._status_profession = tk.Label(status_bar, bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(8, bold=True))
+        self._status_profession.pack(side=tk.LEFT)
+        self._status_burst = tk.Label(status_bar, bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(8, bold=True))
+        self._status_burst.pack(side=tk.RIGHT)
 
-    # ── profile list ──
+    def _cancel_poll(self) -> None:
+        if self._poll_after_id and self._win is not None:
+            try:
+                self._win.after_cancel(self._poll_after_id)
+            except Exception:
+                pass
+        self._poll_after_id = None
 
-    def _refresh_profile_list(self):
-        profiles = self._cfg.get('profiles', [])
-        names = [f"{p.get('profile_name', '?')}  [{p.get('id', '')[:8]}]" for p in profiles]
-        self._prof_cb['values'] = names
-        active_id = self._cfg.get('active_profile_id', '')
-        for i, p in enumerate(profiles):
-            if p.get('id') == active_id:
-                self._prof_cb.current(i)
-                return
-        if names:
-            self._prof_cb.current(0)
+    def _schedule_poll(self) -> None:
+        self._cancel_poll()
+        if self._win is None or not self._visible:
+            return
+        self._poll_after_id = self._win.after(180, self._refresh_live)
 
-    def _active_profile(self) -> Optional[dict]:
-        profiles = self._cfg.get('profiles', [])
-        idx = self._prof_cb.current()
-        if 0 <= idx < len(profiles):
-            return profiles[idx]
-        aid = self._cfg.get('active_profile_id', '')
-        for p in profiles:
-            if p.get('id') == aid:
-                return p
-        return profiles[0] if profiles else None
-
-    def _on_profile_selected(self, _evt=None):
-        profiles = self._cfg.get('profiles', [])
-        idx = self._prof_cb.current()
-        if 0 <= idx < len(profiles):
-            self._cfg['active_profile_id'] = profiles[idx]['id']
-        self._populate_profile()
-
-    # ── profile CRUD ──
-
-    def _new_profile(self):
+    def _refresh_live(self, force: bool = False) -> None:
+        if self._win is None or not self._visible:
+            return
         try:
-            from auto_key_engine import make_default_profile
-            prof = make_default_profile()
+            self._cfg = self._load()
         except Exception:
-            prof = {'id': _make_id('profile'), 'profile_name': '新配置', 'actions': [],
-                    'engine': {'tick_ms': 50, 'require_foreground': True, 'pause_on_death': True}}
-        self._cfg.setdefault('profiles', []).append(prof)
-        self._cfg['active_profile_id'] = prof['id']
-        self._refresh_profile_list()
-        self._populate_profile()
+            pass
+        engine = self._engine_ref() if self._engine_ref else None
+        gs = getattr(getattr(engine, '_state_mgr', None), 'state', None)
+        self._burst_ready = bool(getattr(gs, 'burst_ready', False)) if gs is not None else False
+        self._profession = str(getattr(gs, 'profession_name', '') or getattr(gs, 'profession', '') or '')
+        if not self._profession:
+            try:
+                self._profession = str((self._author_fn() or {}).get('profession_name') or '')
+            except Exception:
+                self._profession = ''
+        self._slots = self._normalize_slots(getattr(gs, 'skill_slots', []) if gs is not None else [])
+        self._update_ready_transitions()
+        self._update_header_status()
+        self._render_if_needed(force=force)
+        self._schedule_poll()
 
-    def _copy_profile(self):
-        src = self._active_profile()
-        if not src:
-            return
-        cp = copy.deepcopy(src)
-        cp['id'] = _make_id('profile')
-        cp['profile_name'] = src.get('profile_name', '') + ' (复制)'
-        cp['source'] = 'local'
-        self._cfg.setdefault('profiles', []).append(cp)
-        self._cfg['active_profile_id'] = cp['id']
-        self._refresh_profile_list()
-        self._populate_profile()
+    def _load_actions(self) -> List[Dict[str, Any]]:
+        if self._load_burst_actions is not None:
+            try:
+                return list(self._load_burst_actions() or [])
+            except Exception:
+                pass
+        engine = self._engine_ref() if self._engine_ref else None
+        if engine and hasattr(engine, 'get_burst_actions'):
+            try:
+                return list(engine.get_burst_actions() or [])
+            except Exception:
+                pass
+        return []
 
-    def _del_profile(self):
-        src = self._active_profile()
-        if not src:
-            return
-        if not messagebox.askyesno('删除', f"确认删除 '{src.get('profile_name', '')}'?", parent=self._win):
-            return
-        self._cfg['profiles'] = [p for p in self._cfg.get('profiles', []) if p.get('id') != src.get('id')]
-        if self._cfg.get('active_profile_id') == src.get('id'):
-            self._cfg['active_profile_id'] = ''
-        self._refresh_profile_list()
-        self._populate_profile()
+    def _normalize_slots(self, slots: Any) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        for raw in list(slots or []):
+            if not isinstance(raw, dict):
+                continue
+            index = int(raw.get('index') or raw.get('slot_index') or 0)
+            if index <= 0:
+                continue
+            result.append({
+                'index': index,
+                'name': raw.get('skill_name') or raw.get('name') or f'Slot {index}',
+                'state': str(raw.get('state') or 'ready').lower(),
+                'cooldown_pct': float(raw.get('cooldown_pct') or 0.0),
+                'remaining_ms': float(raw.get('remaining_ms') or 0.0),
+                'charge_count': int(raw.get('charge_count') or 0),
+            })
+        result.sort(key=lambda item: item['index'])
+        return result
 
-    def _import_profile(self):
-        path = filedialog.askopenfilename(parent=self._win, filetypes=[('JSON', '*.json')],
-                                          title='导入 AutoKey 配置')
-        if not path:
+    def _update_ready_transitions(self) -> None:
+        now = time.time()
+        seen = set()
+        for slot in self._slots:
+            index = int(slot['index'])
+            state = str(slot.get('state') or 'ready')
+            prev = self._slot_prev_states.get(index)
+            if prev == 'cooldown' and state == 'ready':
+                self._ready_flash_until[index] = now + 0.62
+            self._slot_prev_states[index] = state
+            seen.add(index)
+        for index in list(self._slot_prev_states.keys()):
+            if index not in seen:
+                self._slot_prev_states.pop(index, None)
+        for index, until in list(self._ready_flash_until.items()):
+            if until <= now:
+                self._ready_flash_until.pop(index, None)
+
+    def _update_header_status(self) -> None:
+        enabled = bool(self._cfg.get('enabled', False))
+        if self._badge is not None:
+            apply_badge(self._badge, 'ON' if enabled else 'OFF', 'on' if enabled else 'off')
+        if self._burst_indicator is not None:
+            if self._burst_ready:
+                self._burst_indicator.pack(fill=tk.X)
+            else:
+                self._burst_indicator.pack_forget()
+        if self._status_profession is not None:
+            self._status_profession.configure(text=self._profession or '—')
+        if self._status_burst is not None:
+            self._status_burst.configure(text='Burst: Ready ✦' if self._burst_ready else 'Burst: Not Ready')
+        if self._rec_indicator is not None and self._recording:
+            self._rec_indicator.configure(
+                text='● Slot selection in progress' if self._recording_trigger_slot is not None
+                else '● RECORDING — click slot to set trigger condition'
+            )
+
+    def _render_if_needed(self, force: bool = False) -> None:
+        if self._content_body is None:
             return
+        signature = (
+            bool(self._cfg.get('enabled', False)),
+            self._burst_ready,
+            self._profession,
+            self._selected_slot,
+            self._recording,
+            self._recording_trigger_slot,
+            tuple(
+                (
+                    int(slot['index']),
+                    str(slot.get('name') or ''),
+                    str(slot.get('state') or ''),
+                    round(float(slot.get('cooldown_pct') or 0.0), 3),
+                    int(float(slot.get('remaining_ms') or 0.0)),
+                    int(slot.get('charge_count') or 0),
+                    int(self._ready_flash_until.get(int(slot['index']), 0) > time.time()),
+                )
+                for slot in self._slots
+            ),
+            tuple(
+                (
+                    int(action.get('trigger_slot') or 0),
+                    int(action.get('action_slot') or 0),
+                    str(action.get('trigger_name') or ''),
+                    str(action.get('action_name') or ''),
+                )
+                for action in self._actions
+            ),
+        )
+        if not force and signature == self._last_signature:
+            return
+        self._last_signature = signature
+        clear_frame(self._content_body)
+        self._render_content()
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                raw = json.load(f)
-            if isinstance(raw, dict):
-                raw.setdefault('id', _make_id('profile'))
-                raw['source'] = 'local'
-                self._cfg.setdefault('profiles', []).append(raw)
-                self._cfg['active_profile_id'] = raw['id']
-                self._refresh_profile_list()
-                self._populate_profile()
-        except Exception as e:
-            messagebox.showerror('导入失败', str(e), parent=self._win)
-
-    def _export_profile(self):
-        src = self._active_profile()
-        if not src:
-            return
-        path = filedialog.asksaveasfilename(parent=self._win, filetypes=[('JSON', '*.json')],
-                                            defaultextension='.json',
-                                            initialfile=f"autokey_{src.get('profile_name', 'profile')}.json",
-                                            title='导出 AutoKey 配置')
-        if not path:
-            return
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(src, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            messagebox.showerror('导出失败', str(e), parent=self._win)
-
-    # ── populate ──
-
-    def _populate_profile(self):
-        for w in self._body.winfo_children():
-            w.destroy()
-        prof = self._active_profile()
-        if not prof:
-            tk.Label(self._body, text='暂无配置，请新建', bg=_C.BG, fg=_C.TEXT2).pack(pady=20)
-            return
-        self._build_profile_header(prof)
-        self._build_engine_settings(prof)
-        self._build_actions_list(prof)
-
-    def _build_profile_header(self, prof: dict):
-        frm = tk.LabelFrame(self._body, text='配置信息', bg=_C.CARD, fg=_C.TEXT2,
-                            labelanchor='nw', padx=8, pady=4)
-        frm.pack(fill='x', padx=4, pady=4)
-        # name
-        r = tk.Frame(frm, bg=_C.CARD)
-        r.pack(fill='x', pady=2)
-        tk.Label(r, text='名称:', bg=_C.CARD, fg=_C.TEXT2, width=10, anchor='e').pack(side='left')
-        self._prof_name_var = tk.StringVar(value=prof.get('profile_name', ''))
-        tk.Entry(r, textvariable=self._prof_name_var, bg=_C.INPUT, fg=_C.TEXT,
-                 insertbackground=_C.TEXT, relief='flat').pack(side='left', fill='x', expand=True, padx=4)
-        # description
-        r2 = tk.Frame(frm, bg=_C.CARD)
-        r2.pack(fill='x', pady=2)
-        tk.Label(r2, text='描述:', bg=_C.CARD, fg=_C.TEXT2, width=10, anchor='e').pack(side='left')
-        self._prof_desc_var = tk.StringVar(value=prof.get('description', ''))
-        tk.Entry(r2, textvariable=self._prof_desc_var, bg=_C.INPUT, fg=_C.TEXT,
-                 insertbackground=_C.TEXT, relief='flat').pack(side='left', fill='x', expand=True, padx=4)
-
-    def _build_engine_settings(self, prof: dict):
-        eng = prof.get('engine', {})
-        frm = tk.LabelFrame(self._body, text='引擎设置', bg=_C.CARD, fg=_C.TEXT2,
-                            labelanchor='nw', padx=8, pady=4)
-        frm.pack(fill='x', padx=4, pady=4)
-        # tick_ms
-        r = tk.Frame(frm, bg=_C.CARD)
-        r.pack(fill='x', pady=2)
-        tk.Label(r, text='Tick (ms):', bg=_C.CARD, fg=_C.TEXT2, width=14, anchor='e').pack(side='left')
-        self._tick_var = tk.IntVar(value=eng.get('tick_ms', 50))
-        tk.Spinbox(r, from_=10, to=1000, textvariable=self._tick_var, width=8,
-                   bg=_C.INPUT, fg=_C.TEXT, buttonbackground=_C.BTN2,
-                   insertbackground=_C.TEXT).pack(side='left', padx=4)
-        # require_foreground
-        self._fg_var = tk.BooleanVar(value=eng.get('require_foreground', True))
-        tk.Checkbutton(frm, text='仅前台时触发', variable=self._fg_var,
-                       bg=_C.CARD, fg=_C.TEXT, selectcolor=_C.BG,
-                       activebackground=_C.CARD, activeforeground=_C.TEXT).pack(anchor='w', pady=1)
-        # pause_on_death
-        self._death_var = tk.BooleanVar(value=eng.get('pause_on_death', True))
-        tk.Checkbutton(frm, text='死亡时暂停', variable=self._death_var,
-                       bg=_C.CARD, fg=_C.TEXT, selectcolor=_C.BG,
-                       activebackground=_C.CARD, activeforeground=_C.TEXT).pack(anchor='w', pady=1)
-
-    # ── actions list ──
-
-    def _build_actions_list(self, prof: dict):
-        actions = prof.get('actions', [])
-        hdr = tk.Frame(self._body, bg=_C.BG)
-        hdr.pack(fill='x', padx=4, pady=(8, 2))
-        tk.Label(hdr, text=f'动作列表 ({len(actions)})', bg=_C.BG, fg=_C.TEXT).pack(side='left')
-        tk.Button(hdr, text='+ 添加动作', command=lambda: self._add_action(prof),
-                  bg=_C.GREEN, fg='#fff', relief='flat', padx=6,
-                  activebackground='#28B04C', activeforeground='#fff').pack(side='right')
-
-        self._action_widgets = []
-        for i, act in enumerate(actions):
-            self._build_action_card(prof, act, i)
-
-    def _add_action(self, prof: dict):
-        idx = len(prof.get('actions', [])) + 1
-        try:
-            from auto_key_engine import make_default_action
-            act = make_default_action(idx)
+            self._canvas.configure(scrollregion=self._canvas.bbox('all'))
         except Exception:
-            act = {'id': _make_id('action'), 'label': f'Action {idx}', 'enabled': True,
-                   'slot_index': min(idx, 9), 'key': str(min(idx, 9)),
-                   'press_mode': 'tap', 'press_count': 1, 'press_interval_ms': 40,
-                   'hold_ms': 80, 'ready_delay_ms': 0, 'min_rearm_ms': 800,
-                   'post_delay_ms': 120, 'conditions': []}
-        prof.setdefault('actions', []).append(act)
-        self._populate_profile()
+            pass
 
-    def _remove_action(self, prof: dict, action_id: str):
-        prof['actions'] = [a for a in prof.get('actions', []) if a.get('id') != action_id]
-        self._populate_profile()
+    def _render_content(self) -> None:
+        make_section_title(self._content_body, 'Skill Slots')
+        grid = tk.Frame(self._content_body, bg=PANEL_BG)
+        grid.pack(fill=tk.X, pady=(0, 10))
 
-    def _build_action_card(self, prof: dict, act: dict, index: int):
-        card = tk.LabelFrame(self._body, text=f"#{index+1}  {act.get('label', '')}",
-                             bg=_C.CARD, fg=_C.ORANGE, labelanchor='nw', padx=6, pady=4)
-        card.pack(fill='x', padx=4, pady=2)
-        card._act_data = act  # keep ref for saving
+        if not self._slots:
+            tk.Label(grid, text='No skill slot data', bg=PANEL_BG, fg=TEXT_DIM, font=panel_font(9)).pack(pady=12)
+        else:
+            for idx, slot in enumerate(self._slots):
+                row = idx // 3
+                col = idx % 3
+                card = self._make_skill_card(grid, slot)
+                card.grid(row=row, column=col, padx=3, pady=3, sticky='nsew')
+                grid.grid_columnconfigure(col, weight=1)
 
-        # row 1: label + enabled + delete
-        r1 = tk.Frame(card, bg=_C.CARD)
-        r1.pack(fill='x', pady=1)
-        tk.Label(r1, text='标签:', bg=_C.CARD, fg=_C.TEXT2, width=8, anchor='e').pack(side='left')
-        act['_label_var'] = tk.StringVar(value=act.get('label', ''))
-        tk.Entry(r1, textvariable=act['_label_var'], bg=_C.INPUT, fg=_C.TEXT,
-                 insertbackground=_C.TEXT, relief='flat', width=16).pack(side='left', padx=2)
-        act['_enabled_var'] = tk.BooleanVar(value=act.get('enabled', True))
-        tk.Checkbutton(r1, text='启用', variable=act['_enabled_var'],
-                       bg=_C.CARD, fg=_C.TEXT, selectcolor=_C.BG,
-                       activebackground=_C.CARD).pack(side='left', padx=6)
-        tk.Button(r1, text='✕', command=lambda a=act: self._remove_action(prof, a.get('id', '')),
-                  bg=_C.RED, fg='#fff', relief='flat', width=3,
-                  activebackground='#CC3030').pack(side='right')
+        make_section_title(self._content_body, 'Auto Actions')
+        self._rec_indicator = tk.Label(
+            self._content_body,
+            bg=PANEL_BG,
+            fg=DANGER,
+            font=panel_font(8, bold=True),
+            text='● Slot selection in progress' if self._recording_trigger_slot is not None
+            else '● RECORDING — click slot to set trigger condition',
+        )
+        if self._recording:
+            self._rec_indicator.pack(fill=tk.X, pady=(0, 6))
 
-        # row 2: slot + key + mode
-        r2 = tk.Frame(card, bg=_C.CARD)
-        r2.pack(fill='x', pady=1)
-        tk.Label(r2, text='技能槽:', bg=_C.CARD, fg=_C.TEXT2, width=8, anchor='e').pack(side='left')
-        act['_slot_var'] = tk.IntVar(value=act.get('slot_index', 1))
-        tk.Spinbox(r2, from_=1, to=9, textvariable=act['_slot_var'], width=4,
-                   bg=_C.INPUT, fg=_C.TEXT, buttonbackground=_C.BTN2,
-                   insertbackground=_C.TEXT).pack(side='left', padx=2)
-        tk.Label(r2, text='按键:', bg=_C.CARD, fg=_C.TEXT2).pack(side='left', padx=(10, 0))
-        act['_key_var'] = tk.StringVar(value=act.get('key', '1'))
-        kcb = ttk.Combobox(r2, textvariable=act['_key_var'], values=_VK_KEYS,
-                           state='readonly', width=8)
-        kcb.pack(side='left', padx=2)
-        tk.Label(r2, text='模式:', bg=_C.CARD, fg=_C.TEXT2).pack(side='left', padx=(10, 0))
-        act['_mode_var'] = tk.StringVar(value=act.get('press_mode', 'tap'))
-        ttk.Combobox(r2, textvariable=act['_mode_var'], values=['tap', 'hold'],
-                     state='readonly', width=6).pack(side='left', padx=2)
-
-        # row 3: timing params
-        r3 = tk.Frame(card, bg=_C.CARD)
-        r3.pack(fill='x', pady=1)
-        timings = [
-            ('次数:', 'press_count', 1, 1, 20, 4),
-            ('间隔ms:', 'press_interval_ms', 40, 0, 10000, 6),
-            ('按住ms:', 'hold_ms', 80, 0, 10000, 6),
-        ]
-        for label, key, default, lo, hi, w in timings:
-            tk.Label(r3, text=label, bg=_C.CARD, fg=_C.TEXT2).pack(side='left', padx=(4, 0))
-            var = tk.IntVar(value=act.get(key, default))
-            act[f'_{key}_var'] = var
-            tk.Spinbox(r3, from_=lo, to=hi, textvariable=var, width=w,
-                       bg=_C.INPUT, fg=_C.TEXT, buttonbackground=_C.BTN2,
-                       insertbackground=_C.TEXT).pack(side='left', padx=1)
-
-        # row 4: delay params
-        r4 = tk.Frame(card, bg=_C.CARD)
-        r4.pack(fill='x', pady=1)
-        delays = [
-            ('就绪延迟ms:', 'ready_delay_ms', 0, 0, 60000, 6),
-            ('冷却ms:', 'min_rearm_ms', 800, 0, 120000, 6),
-            ('后延ms:', 'post_delay_ms', 120, 0, 120000, 6),
-        ]
-        for label, key, default, lo, hi, w in delays:
-            tk.Label(r4, text=label, bg=_C.CARD, fg=_C.TEXT2).pack(side='left', padx=(4, 0))
-            var = tk.IntVar(value=act.get(key, default))
-            act[f'_{key}_var'] = var
-            tk.Spinbox(r4, from_=lo, to=hi, textvariable=var, width=w,
-                       bg=_C.INPUT, fg=_C.TEXT, buttonbackground=_C.BTN2,
-                       insertbackground=_C.TEXT).pack(side='left', padx=1)
-
-        # conditions (collapsed by default)
-        conds = act.get('conditions', [])
-        if conds:
-            cf = tk.LabelFrame(card, text=f'条件 ({len(conds)})', bg=_C.BG, fg=_C.DIM,
-                               padx=4, pady=2)
-            cf.pack(fill='x', pady=2)
-            for ci, cond in enumerate(conds):
-                _t = cond.get('type', '?')
-                _v = cond.get('value', '')
-                tk.Label(cf, text=f'  {ci+1}. {_t} = {_v}', bg=_C.BG, fg=_C.TEXT2,
-                         anchor='w').pack(fill='x')
-
-        self._action_widgets.append(card)
-
-    # ── save / reload ──
-
-    def _collect_profile(self) -> Optional[dict]:
-        prof = self._active_profile()
-        if not prof:
-            return None
-        prof['profile_name'] = self._prof_name_var.get()
-        prof['description'] = self._prof_desc_var.get()
-        eng = prof.setdefault('engine', {})
-        eng['tick_ms'] = _clamp(self._tick_var.get(), 10, 1000)
-        eng['require_foreground'] = self._fg_var.get()
-        eng['pause_on_death'] = self._death_var.get()
-        # actions
-        for act in prof.get('actions', []):
-            for attr, key in [('_label_var', 'label'), ('_enabled_var', 'enabled'),
-                              ('_slot_var', 'slot_index'), ('_key_var', 'key'),
-                              ('_mode_var', 'press_mode')]:
-                var = act.get(attr)
-                if var is not None:
-                    act[key] = var.get()
-            for key in ['press_count', 'press_interval_ms', 'hold_ms',
-                        'ready_delay_ms', 'min_rearm_ms', 'post_delay_ms']:
-                var = act.get(f'_{key}_var')
-                if var is not None:
-                    act[key] = var.get()
-            # clean up tk vars
-            for k in list(act.keys()):
-                if k.startswith('_') and k.endswith('_var'):
-                    del act[k]
-        return prof
-
-    def _save_current(self):
-        prof = self._collect_profile()
-        if not prof:
+        action_list = tk.Frame(self._content_body, bg=PANEL_BG)
+        action_list.pack(fill=tk.X)
+        if not self._actions:
+            row = tk.Frame(action_list, bg=PANEL_CARD, highlightbackground=PANEL_EDGE, highlightthickness=1, padx=10, pady=8)
+            row.pack(fill=tk.X)
+            apply_surface_chrome(row, accent=CYAN)
+            tk.Label(row, text='No auto-key actions recorded', bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(9)).pack()
             return
-        # upsert
-        profiles = self._cfg.get('profiles', [])
-        found = False
-        for i, p in enumerate(profiles):
-            if p.get('id') == prof.get('id'):
-                profiles[i] = prof
-                found = True
-                break
-        if not found:
-            profiles.append(prof)
-        self._cfg['profiles'] = profiles
-        self._cfg['enabled'] = self._chk_enabled_var.get()
-        self._save(self._cfg)
-        self._dirty = False
-        self._refresh_profile_list()
-        self._populate_profile()
 
-    def _reload_current(self):
-        self._cfg = self._load()
-        self._refresh_profile_list()
-        self._populate_profile()
-        self._chk_enabled_var.set(self._cfg.get('enabled', False))
+        for index, action in enumerate(self._actions):
+            row = tk.Frame(action_list, bg=PANEL_CARD, highlightbackground=PANEL_EDGE, highlightthickness=1, padx=10, pady=8)
+            row.pack(fill=tk.X, pady=(0, 4))
+            apply_surface_chrome(row, accent=GOLD)
+            trigger_name = str(action.get('trigger_name') or f'Slot {int(action.get("trigger_slot") or 0)}')
+            action_name = str(action.get('action_name') or f'Slot {int(action.get("action_slot") or 0)}')
+            tk.Label(row, text=f'When {trigger_name} is Burst Ready', bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(9), anchor='w').pack(side=tk.LEFT, fill=tk.X, expand=True)
+            tk.Label(row, text=f'→ Press {action_name}', bg=PANEL_CARD, fg=GOLD, font=panel_font(9, bold=True)).pack(side=tk.LEFT, padx=(8, 8))
+            remove = tk.Label(row, text='×', bg=PANEL_CARD, fg=DANGER, font=panel_font(11, bold=True), cursor='hand2')
+            remove.pack(side=tk.RIGHT)
+            remove.bind('<Button-1>', lambda _event, idx=index: self._remove_action(idx))
 
-    def _on_enabled_toggle(self):
-        enabled = self._chk_enabled_var.get()
-        self._cfg['enabled'] = enabled
-        self._save(self._cfg)
-        self._on_toggle(enabled)
+    def _make_skill_card(self, parent: tk.Widget, slot: Dict[str, Any]) -> tk.Frame:
+        state = str(slot.get('state') or 'ready')
+        index = int(slot.get('index') or 0)
+        selected = self._selected_slot == index
+        flash = self._ready_flash_until.get(index, 0.0) > time.time()
+
+        left_color = PANEL_EDGE
+        if state == 'ready':
+            left_color = READY
+        elif state == 'active':
+            left_color = ACTIVE
+        elif state == 'cooldown':
+            left_color = COOLDOWN
+
+        frame = tk.Frame(
+            parent,
+            bg=PANEL_CARD_ALT if selected else PANEL_CARD,
+            highlightbackground=ACTIVE if selected else PANEL_EDGE,
+            highlightthickness=2 if flash else 1,
+            padx=8,
+            pady=8,
+            cursor='hand2',
+        )
+        if flash:
+            frame.configure(highlightbackground=READY)
+        tk.Frame(frame, bg=left_color, width=3, height=64).place(x=0, y=0, relheight=1.0)
+        apply_surface_chrome(frame, accent=left_color)
+
+        slot_label = f'Slot {index}'
+        charges = int(slot.get('charge_count') or 0)
+        if charges > 0:
+            slot_label += f' ×{charges}'
+        tk.Label(frame, text=slot_label, bg=frame.cget('bg'), fg=TEXT_MUTED, font=panel_font(8)).pack(anchor='w')
+        tk.Label(frame, text=str(slot.get('name') or f'Slot {index}'), bg=frame.cget('bg'), fg=TEXT_MAIN, font=panel_font(9, bold=True), anchor='w').pack(fill=tk.X, pady=(2, 0))
+
+        state_row = tk.Frame(frame, bg=frame.cget('bg'))
+        state_row.pack(fill=tk.X, pady=(4, 0))
+        dot = tk.Frame(state_row, bg=left_color, width=6, height=6)
+        dot.pack(side=tk.LEFT)
+        dot.pack_propagate(False)
+        remain_ms = float(slot.get('remaining_ms') or 0.0)
+        if state == 'ready':
+            state_text = 'Ready'
+        elif state == 'active':
+            state_text = 'Active'
+        else:
+            state_text = f'{remain_ms / 1000.0:.1f}s' if remain_ms > 0 else 'Cooldown'
+        tk.Label(state_row, text=state_text, bg=frame.cget('bg'), fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT, padx=(4, 0))
+
+        bar_bg = tk.Frame(frame, bg=PANEL_BG_ALT, height=3)
+        bar_bg.pack(fill=tk.X, pady=(4, 0))
+        fill = tk.Frame(bar_bg, bg=COOLDOWN, height=3)
+        fill.place(relwidth=max(0.0, min(1.0, float(slot.get('cooldown_pct') or 0.0))), relheight=1.0)
+
+        def _bind_all(widget: tk.Widget) -> None:
+            widget.bind('<Button-1>', lambda _event, idx=index: self._on_slot_click(idx))
+            for child in widget.winfo_children():
+                _bind_all(child)
+
+        _bind_all(frame)
+        return frame
+
+    def _on_slot_click(self, index: int) -> None:
+        if self._recording:
+            if self._recording_trigger_slot is None:
+                self._recording_trigger_slot = index
+            else:
+                trigger_slot = self._find_slot(self._recording_trigger_slot)
+                action_slot = self._find_slot(index)
+                if trigger_slot and action_slot:
+                    self._actions.append({
+                        'trigger_slot': int(self._recording_trigger_slot),
+                        'trigger_name': str(trigger_slot.get('name') or f'Slot {self._recording_trigger_slot}'),
+                        'trigger_condition': 'burst_ready',
+                        'action_slot': int(index),
+                        'action_name': str(action_slot.get('name') or f'Slot {index}'),
+                        'action_key': str(index),
+                    })
+                self._recording_trigger_slot = None
+            self._render_if_needed(force=True)
+            return
+        self._selected_slot = None if self._selected_slot == index else index
+        self._render_if_needed(force=True)
+
+    def _find_slot(self, index: int) -> Optional[Dict[str, Any]]:
+        for slot in self._slots:
+            if int(slot.get('index') or 0) == int(index):
+                return slot
+        return None
+
+    def _toggle_record(self) -> None:
+        self._recording = not self._recording
+        self._recording_trigger_slot = None
+        if self._record_btn is not None:
+            if self._recording:
+                set_action_button_kind(self._record_btn, 'danger', text='■ STOP')
+            else:
+                set_action_button_kind(self._record_btn, 'default', text='RECORD')
+        self._render_if_needed(force=True)
+
+    def _remove_action(self, index: int) -> None:
+        if 0 <= index < len(self._actions):
+            self._actions.pop(index)
+            self._render_if_needed(force=True)
+
+    def _clear_actions(self) -> None:
+        self._actions = []
+        self._render_if_needed(force=True)
+
+    def _save_actions(self) -> None:
+        if self._save_burst_actions is not None:
+            try:
+                self._save_burst_actions(list(self._actions))
+            except Exception:
+                pass
+        else:
+            engine = self._engine_ref() if self._engine_ref else None
+            if engine and hasattr(engine, 'set_burst_actions'):
+                try:
+                    engine.set_burst_actions(list(self._actions))
+                except Exception:
+                    pass
+
+    def _on_drag_start(self, event) -> None:
+        if self._win is None:
+            return
+        self._drag_ox = event.x_root - self._win.winfo_x()
+        self._drag_oy = event.y_root - self._win.winfo_y()
+
+    def _on_drag_move(self, event) -> None:
+        if self._win is None:
+            return
+        self._win.geometry(f'+{event.x_root - self._drag_ox}+{event.y_root - self._drag_oy}')

@@ -1,55 +1,88 @@
-"""
-SAO Entity Mode — BossRaid 配置面板 (纯 tkinter Toplevel).
-
-提供:
-  • Profile CRUD (新建 / 复制 / 删除 / 激活 / 导入 / 导出)
-  • 全局 enabled 开关 + 运行控制 (Start / Stop / NextPhase / Reset)
-  • Phase 列表编辑 (不同 trigger 类型)
-  • Timeline (Alert) 列表编辑
-  • 运行时状态显示
-
-使用方法:
-    panel = BossRaidPanel(root, load_fn, save_fn, engine_ref, on_toggle, on_start, on_next, on_reset)
-    panel.show()
-"""
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import uuid, copy, json
-from typing import Callable, Optional, Any
-from window_effects import apply_native_chrome
+from typing import Any, Callable, Dict, Optional, Tuple
 
-# ── 颜色 ──
-_C = type('C', (), {
-    'BG': '#1C1C1E', 'CARD': '#2C2C2E', 'INPUT': '#1C1C1E',
-    'ACCENT': '#0A84FF', 'GREEN': '#30D158', 'RED': '#FF453A',
-    'ORANGE': '#FF9F0A', 'GOLD': '#FFD700', 'PURPLE': '#BF5AF2',
-    'TEXT': '#F5F5F7', 'TEXT2': '#98989D', 'DIM': '#636366',
-    'BORDER': '#38383A', 'BTN': '#0A84FF', 'BTN2': '#48484A',
-    'HOVER': '#3A3A3C',
-})()
+from sao_web_panel_common import (
+    PANEL_BG,
+    PANEL_BG_ALT,
+    PANEL_CARD,
+    PANEL_CARD_ALT,
+    PANEL_EDGE,
+    PANEL_HEADER,
+    TEXT_DIM,
+    TEXT_MAIN,
+    TEXT_MUTED,
+    GOLD,
+    CYAN,
+    DANGER,
+    READY,
+    LINE,
+    apply_surface_chrome,
+    apply_badge,
+    attach_tab_underline,
+    bind_drag,
+    calc_panel_geometry,
+    clear_frame,
+    create_scrollable_area,
+    make_action_button,
+    make_section_title,
+    make_tab_label,
+    panel_font,
+    place_corner_accents,
+    set_tab_active,
+)
 
-_TRIGGER_TYPES = [
-    'manual', 'time', 'dps_total', 'hp_pct', 'breaking',
-    'buff_event', 'shield_broken', 'overdrive', 'extinction_pct', 'breaking_stage',
-]
-_ALERT_TYPES = ['sound', 'visual', 'both']
-_COND_TYPES = ['always', 'hp_pct', 'shield_active', 'breaking']
-_COMPARATORS = ['>=', '<=', '>', '<', '==']
+
+def _fmt_num(value: Any) -> str:
+    try:
+        num = float(value or 0)
+    except Exception:
+        return '0'
+    if num >= 1_000_000_000:
+        return f'{num / 1_000_000_000:.1f}B'
+    if num >= 1_000_000:
+        return f'{num / 1_000_000:.1f}M'
+    if num >= 1_000:
+        return f'{num / 1_000:.1f}K'
+    return str(int(round(num)))
 
 
-def _make_id(prefix: str = 'br') -> str:
-    return f'{prefix}_{uuid.uuid4().hex[:12]}'
+def _fmt_time(seconds: Any) -> str:
+    try:
+        total = max(0, int(float(seconds or 0)))
+    except Exception:
+        total = 0
+    return f'{total // 60}:{total % 60:02d}'
 
 
-def _clamp(v, lo, hi):
-    return max(lo, min(hi, v))
+def _trigger_text(trigger: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(trigger, dict):
+        return 'Manual'
+    trigger_type = str(trigger.get('type') or 'manual')
+    value = trigger.get('value') or 0
+    if trigger_type == 'manual':
+        return 'Manual (F8)'
+    if trigger_type == 'time':
+        return f'{int(float(value or 0))}s elapsed'
+    if trigger_type == 'hp_pct':
+        return f'HP ≤ {int(float(value or 0))}%'
+    if trigger_type == 'dps_total':
+        return f'DMG ≥ {_fmt_num(value)}'
+    if trigger_type == 'breaking':
+        return 'Break event'
+    if trigger_type == 'shield_broken':
+        return 'Shield broken'
+    if trigger_type == 'overdrive':
+        return 'Overdrive'
+    if trigger_type == 'extinction_pct':
+        return f'Break bar ≥ {int(float(value or 0))}%'
+    if trigger_type == 'breaking_stage':
+        return f'Break stage ≥ {int(float(value or 0))}'
+    return f'{trigger_type}: {value}'
 
 
 class BossRaidPanel:
-    """BossRaid 配置面板 — tkinter Toplevel."""
-
     def __init__(
         self,
         master: tk.Tk,
@@ -59,7 +92,7 @@ class BossRaidPanel:
         on_toggle: Callable[[bool], None],
         on_start: Callable[[], None],
         on_next: Callable[[], None],
-        on_reset: Callable[[], None] | None = None,
+        on_reset: Optional[Callable[[], None]] = None,
     ):
         self._master = master
         self._load = load_fn
@@ -70,497 +103,442 @@ class BossRaidPanel:
         self._on_next = on_next
         self._on_reset = on_reset or (lambda: None)
         self._win: Optional[tk.Toplevel] = None
-        self._cfg: dict = {}
-        self._status_lbl: Optional[tk.Label] = None
-        self._status_after_id = None
+        self._visible = False
+        self._cfg: Dict[str, Any] = {}
+        self._status: Dict[str, Any] = {}
+        self._current_tab = 'entities'
+        self._drag_ox = 0
+        self._drag_oy = 0
+        self._poll_after_id: Optional[str] = None
+        self._tab_labels: Dict[str, tk.Label] = {}
+        self._content_body: Optional[tk.Frame] = None
+        self._canvas: Optional[tk.Canvas] = None
+        self._badge: Optional[tk.Label] = None
+        self._status_elapsed: Optional[tk.Label] = None
+        self._status_dps: Optional[tk.Label] = None
+        self._status_phase: Optional[tk.Label] = None
+        self._last_render_signature: Optional[Tuple[Any, ...]] = None
 
-    # ── public ──
+    def is_visible(self) -> bool:
+        return bool(self._visible and self._win and self._win.winfo_exists())
 
-    def show(self):
-        if self._win and self._win.winfo_exists():
-            self._win.lift()
-            return
+    def show(self) -> None:
         self._cfg = self._load()
-        self._build()
-        self._tick_status()
+        if self._win is None or not self._win.winfo_exists():
+            self._build()
+        self._visible = True
+        try:
+            self._win.deiconify()
+            self._win.lift()
+            self._win.focus_force()
+        except Exception:
+            pass
+        self._refresh_live(force=True)
 
-    def hide(self):
-        if self._status_after_id and self._win:
+    def hide(self) -> None:
+        self._cancel_poll()
+        if self._win is not None:
             try:
-                self._win.after_cancel(self._status_after_id)
+                self._win.withdraw()
             except Exception:
                 pass
-            self._status_after_id = None
-        if self._win and self._win.winfo_exists():
-            self._win.destroy()
-        self._win = None
+        self._visible = False
 
-    def toggle(self):
-        if self._win and self._win.winfo_exists():
+    def toggle(self) -> None:
+        if self.is_visible():
             self.hide()
         else:
             self.show()
 
-    def destroy(self):
-        self.hide()
-
-    # ── build ──
-
-    def _build(self):
-        w = tk.Toplevel(self._master)
-        self._win = w
-        w.title('BossRaid 配置')
-        w.configure(bg=_C.BG)
-        w.geometry('560x650')
-        w.resizable(True, True)
-        apply_native_chrome(w)
-        try:
-            w.attributes('-topmost', True)
-        except Exception:
-            pass
-        w.protocol('WM_DELETE_WINDOW', self.hide)
-
-        # ── toolbar row 1: enabled + runtime buttons ──
-        tb = tk.Frame(w, bg=_C.CARD, height=36)
-        tb.pack(fill='x', padx=4, pady=(4, 0))
-        self._chk_enabled_var = tk.BooleanVar(value=self._cfg.get('enabled', False))
-        tk.Checkbutton(tb, text='启用 BossRaid', variable=self._chk_enabled_var,
-                       bg=_C.CARD, fg=_C.TEXT, selectcolor=_C.BG,
-                       activebackground=_C.CARD, activeforeground=_C.TEXT,
-                       command=self._on_enabled_toggle).pack(side='left', padx=6)
-        # runtime
-        tk.Button(tb, text='▶ 开始', command=self._on_start, bg=_C.GREEN, fg='#fff',
-                  relief='flat', padx=6, activebackground='#28B04C').pack(side='left', padx=2)
-        tk.Button(tb, text='⏭ 下一阶段', command=self._on_next, bg=_C.ACCENT, fg='#fff',
-                  relief='flat', padx=6, activebackground='#0070E0').pack(side='left', padx=2)
-        tk.Button(tb, text='⏹ 重置', command=self._on_reset, bg=_C.RED, fg='#fff',
-                  relief='flat', padx=6, activebackground='#CC3030').pack(side='left', padx=2)
-
-        # status line
-        self._status_lbl = tk.Label(w, text='状态: idle', bg=_C.BG, fg=_C.GOLD, anchor='w')
-        self._status_lbl.pack(fill='x', padx=8, pady=2)
-
-        # ── toolbar row 2: profile CRUD ──
-        tb2 = tk.Frame(w, bg=_C.CARD, height=36)
-        tb2.pack(fill='x', padx=4, pady=(2, 0))
-        for txt, cmd in [('新建', self._new_profile), ('复制', self._copy_profile),
-                         ('删除', self._del_profile), ('导入', self._import_profile),
-                         ('导出', self._export_profile)]:
-            tk.Button(tb2, text=txt, command=cmd, bg=_C.BTN2, fg=_C.TEXT, relief='flat',
-                      padx=6, pady=1, activebackground=_C.HOVER,
-                      activeforeground=_C.TEXT).pack(side='left', padx=2)
-
-        # ── profile selector ──
-        pf = tk.Frame(w, bg=_C.BG)
-        pf.pack(fill='x', padx=4, pady=4)
-        tk.Label(pf, text='配置:', bg=_C.BG, fg=_C.TEXT2).pack(side='left')
-        self._prof_var = tk.StringVar()
-        self._prof_cb = ttk.Combobox(pf, textvariable=self._prof_var, state='readonly', width=42)
-        self._prof_cb.pack(side='left', padx=4, fill='x', expand=True)
-        self._prof_cb.bind('<<ComboboxSelected>>', self._on_profile_selected)
-        self._refresh_profile_list()
-
-        # ── scrollable body ──
-        outer = tk.Frame(w, bg=_C.BG)
-        outer.pack(fill='both', expand=True, padx=4, pady=2)
-        canvas = tk.Canvas(outer, bg=_C.BG, highlightthickness=0)
-        vsb = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
-        self._body = tk.Frame(canvas, bg=_C.BG)
-        self._body.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.create_window((0, 0), window=self._body, anchor='nw')
-        canvas.configure(yscrollcommand=vsb.set)
-        canvas.pack(side='left', fill='both', expand=True)
-        vsb.pack(side='right', fill='y')
-        canvas.bind_all('<MouseWheel>', lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units'), add='+')
-        self._canvas = canvas
-
-        # ── bottom bar ──
-        bb = tk.Frame(w, bg=_C.CARD, height=36)
-        bb.pack(fill='x', padx=4, pady=(0, 4))
-        tk.Button(bb, text='保存', command=self._save_current, bg=_C.ACCENT, fg='#fff',
-                  relief='flat', padx=12, activebackground='#0070E0',
-                  activeforeground='#fff').pack(side='right', padx=4, pady=4)
-        tk.Button(bb, text='还原', command=self._reload_current, bg=_C.BTN2, fg=_C.TEXT,
-                  relief='flat', padx=12, activebackground=_C.HOVER,
-                  activeforeground=_C.TEXT).pack(side='right', padx=4, pady=4)
-
-        self._populate_profile()
-
-    # ── status tick ──
-
-    def _tick_status(self):
-        if not (self._win and self._win.winfo_exists()):
-            return
-        eng = self._engine_ref()
-        if eng:
+    def destroy(self) -> None:
+        self._cancel_poll()
+        if self._win is not None:
             try:
-                st = eng.get_status()
-                state = st.get('state', 'idle')
-                phase = st.get('phase_name', '-')
-                elapsed = st.get('elapsed_s', 0)
-                enrage = st.get('enrage_remaining_s', 0)
-                txt = f"状态: {state}  |  阶段: {phase}  |  时间: {elapsed:.0f}s"
-                if enrage > 0:
-                    txt += f"  |  狂暴: {enrage:.0f}s"
-                if self._status_lbl:
-                    self._status_lbl.config(text=txt)
+                self._win.destroy()
             except Exception:
                 pass
-        self._status_after_id = self._win.after(500, self._tick_status)
+        self._win = None
+        self._visible = False
 
-    # ── profile list ──
+    def _build(self) -> None:
+        width, height, pos_x, pos_y = calc_panel_geometry(
+            self._master,
+            min_w=360,
+            min_h=460,
+            width_ratio=0.22,
+            height_ratio=0.52,
+            x_ratio=0.012,
+            y_ratio=0.18,
+        )
+        win = tk.Toplevel(self._master)
+        win.overrideredirect(True)
+        win.configure(bg=PANEL_EDGE)
+        win.geometry(f'{width}x{height}+{pos_x}+{pos_y}')
+        try:
+            win.attributes('-topmost', True)
+        except Exception:
+            pass
+        win.bind('<Escape>', lambda _event: self.hide())
+        self._win = win
 
-    def _refresh_profile_list(self):
-        profiles = self._cfg.get('profiles', [])
-        names = [f"{p.get('profile_name', '?')}  [{p.get('id', '')[:8]}]" for p in profiles]
-        self._prof_cb['values'] = names
-        active_id = self._cfg.get('active_profile_id', '')
-        for i, p in enumerate(profiles):
-            if p.get('id') == active_id:
-                self._prof_cb.current(i)
-                return
-        if names:
-            self._prof_cb.current(0)
+        shell = tk.Frame(win, bg=PANEL_BG, highlightthickness=1, highlightbackground=PANEL_EDGE)
+        shell.pack(fill=tk.BOTH, expand=True)
+        apply_surface_chrome(shell, accent=CYAN, accent_side='top')
+        place_corner_accents(shell)
 
-    def _active_profile(self) -> Optional[dict]:
-        profiles = self._cfg.get('profiles', [])
-        idx = self._prof_cb.current()
-        if 0 <= idx < len(profiles):
-            return profiles[idx]
-        aid = self._cfg.get('active_profile_id', '')
-        for p in profiles:
-            if p.get('id') == aid:
-                return p
+        header = tk.Frame(shell, bg=PANEL_HEADER, height=58)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        apply_surface_chrome(header)
+
+        tk.Label(
+            header,
+            text='Live Raid Editor',
+            bg=PANEL_HEADER,
+            fg=TEXT_MUTED,
+            font=panel_font(8),
+        ).pack(anchor='w', padx=16, pady=(10, 0))
+
+        title_row = tk.Frame(header, bg=PANEL_HEADER)
+        title_row.pack(fill=tk.X, padx=16, pady=(2, 8))
+        tk.Label(
+            title_row,
+            text='Boss Raid',
+            bg=PANEL_HEADER,
+            fg=TEXT_MAIN,
+            font=panel_font(13, bold=True),
+        ).pack(side=tk.LEFT)
+        self._badge = tk.Label(
+            title_row,
+            text='IDLE',
+            bg=TEXT_MUTED,
+            fg='#ffffff',
+            font=panel_font(8, bold=True),
+            padx=8,
+            pady=2,
+        )
+        self._badge.pack(side=tk.LEFT, padx=(10, 0))
+        bind_drag(header, self._on_drag_start, self._on_drag_move)
+
+        tk.Frame(shell, bg=LINE, height=1).pack(fill=tk.X)
+
+        tab_bar = tk.Frame(shell, bg=PANEL_BG_ALT, height=34)
+        tab_bar.pack(fill=tk.X)
+        tab_bar.pack_propagate(False)
+        for key, text in (
+            ('entities', 'Entities'),
+            ('phases', 'Phases'),
+            ('timeline', 'Timeline'),
+        ):
+            slot = tk.Frame(tab_bar, bg=PANEL_BG_ALT)
+            slot.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
+            label = make_tab_label(slot, text, command=lambda tab=key: self._switch_tab(tab))
+            label.pack(fill=tk.X, expand=True)
+            attach_tab_underline(label, slot)
+            self._tab_labels[key] = label
+        self._refresh_tabs()
+
+        content = tk.Frame(shell, bg=PANEL_BG, padx=12, pady=8)
+        content.pack(fill=tk.BOTH, expand=True)
+        _, canvas, body = create_scrollable_area(content, PANEL_BG)
+        self._canvas = canvas
+        self._content_body = body
+
+        action_row = tk.Frame(shell, bg=PANEL_BG, padx=12, pady=8)
+        action_row.pack(fill=tk.X)
+        make_action_button(action_row, 'NEXT PHASE', self._handle_next_phase, kind='accent').pack(side=tk.LEFT, fill=tk.X, expand=True)
+        make_action_button(action_row, 'RESET', self._handle_reset).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
+
+        tk.Frame(shell, bg=PANEL_EDGE, height=1).pack(fill=tk.X)
+
+        status_bar = tk.Frame(shell, bg=PANEL_BG, padx=14, pady=5)
+        status_bar.pack(fill=tk.X)
+        self._status_elapsed = tk.Label(status_bar, bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(8, bold=True))
+        self._status_elapsed.pack(side=tk.LEFT)
+        self._status_dps = tk.Label(status_bar, bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(8, bold=True))
+        self._status_dps.pack(side=tk.LEFT, expand=True)
+        self._status_phase = tk.Label(status_bar, bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(8, bold=True))
+        self._status_phase.pack(side=tk.RIGHT)
+
+    def _cancel_poll(self) -> None:
+        if self._poll_after_id and self._win is not None:
+            try:
+                self._win.after_cancel(self._poll_after_id)
+            except Exception:
+                pass
+        self._poll_after_id = None
+
+    def _schedule_poll(self) -> None:
+        self._cancel_poll()
+        if self._win is None or not self._visible:
+            return
+        self._poll_after_id = self._win.after(250, self._refresh_live)
+
+    def _refresh_live(self, force: bool = False) -> None:
+        if self._win is None or not self._visible:
+            return
+        try:
+            self._cfg = self._load()
+        except Exception:
+            pass
+        engine = self._engine_ref() if self._engine_ref else None
+        if engine and hasattr(engine, 'get_status'):
+            try:
+                self._status = engine.get_status() or {}
+            except Exception:
+                self._status = {}
+        else:
+            self._status = {}
+        self._update_header_status()
+        self._render_if_needed(force=force)
+        self._schedule_poll()
+
+    def _update_header_status(self) -> None:
+        state = str(self._status.get('state') or 'idle').lower()
+        if self._badge is not None:
+            if state == 'running':
+                apply_badge(self._badge, 'RUNNING', 'running')
+            elif state == 'completed':
+                apply_badge(self._badge, 'DONE', 'active')
+            else:
+                apply_badge(self._badge, 'IDLE', 'off')
+        if self._status_elapsed is not None:
+            self._status_elapsed.configure(text=_fmt_time(self._status.get('elapsed_s') or 0))
+        if self._status_dps is not None:
+            self._status_dps.configure(text=f'{_fmt_num(self._status.get("dps") or 0)} DPS')
+        if self._status_phase is not None:
+            phase_name = self._status.get('phase_name') or f'P{int(self._status.get("phase_idx") or 0) + 1}'
+            self._status_phase.configure(text=str(phase_name))
+
+    def _render_if_needed(self, force: bool = False) -> None:
+        if self._content_body is None:
+            return
+        signature = self._build_signature()
+        if not force and signature == self._last_render_signature:
+            return
+        self._last_render_signature = signature
+        clear_frame(self._content_body)
+        if self._current_tab == 'entities':
+            self._render_entities_tab()
+        elif self._current_tab == 'phases':
+            self._render_phases_tab()
+        else:
+            self._render_timeline_tab()
+        try:
+            self._canvas.configure(scrollregion=self._canvas.bbox('all'))
+        except Exception:
+            pass
+
+    def _build_signature(self) -> Tuple[Any, ...]:
+        profile = self._active_profile()
+        phases = list((profile or {}).get('phases') or [])
+        entities = list(self._status.get('entities') or [])
+        entity_sig = tuple(
+            (
+                int(item.get('uuid') or 0),
+                str(item.get('role') or ''),
+                round(float(item.get('hp_pct') or 0.0), 3),
+                int(item.get('damage_dealt') or 0),
+                bool(item.get('shield_active')),
+                int(item.get('breaking_stage') or 0),
+                bool(item.get('in_overdrive')),
+            )
+            for item in entities
+        )
+        phase_sig = tuple(
+            (
+                str(phase.get('name') or ''),
+                str((phase.get('trigger') or {}).get('type') or ''),
+                (phase.get('trigger') or {}).get('value') or 0,
+                tuple(
+                    (
+                        round(float(timeline.get('time_s') or 0.0), 1),
+                        str(timeline.get('label') or ''),
+                        str(timeline.get('alert_type') or ''),
+                    )
+                    for timeline in list(phase.get('timelines') or [])
+                ),
+            )
+            for phase in phases
+        )
+        return (
+            self._current_tab,
+            str(self._status.get('state') or ''),
+            int(self._status.get('phase_idx') or 0),
+            round(float(self._status.get('elapsed_s') or 0.0), 1),
+            int(self._status.get('dps') or 0),
+            entity_sig,
+            phase_sig,
+        )
+
+    def _active_profile(self) -> Optional[Dict[str, Any]]:
+        profiles = list(self._cfg.get('profiles') or [])
+        active_id = self._cfg.get('active_profile_id')
+        for profile in profiles:
+            if profile.get('id') == active_id:
+                return profile
         return profiles[0] if profiles else None
 
-    def _on_profile_selected(self, _evt=None):
-        profiles = self._cfg.get('profiles', [])
-        idx = self._prof_cb.current()
-        if 0 <= idx < len(profiles):
-            self._cfg['active_profile_id'] = profiles[idx]['id']
-        self._populate_profile()
+    def _switch_tab(self, tab: str) -> None:
+        if tab == self._current_tab:
+            return
+        self._current_tab = tab
+        self._refresh_tabs()
+        self._render_if_needed(force=True)
 
-    # ── profile CRUD ──
+    def _refresh_tabs(self) -> None:
+        for key, label in self._tab_labels.items():
+            set_tab_active(label, key == self._current_tab)
 
-    def _new_profile(self):
+    def _render_entities_tab(self) -> None:
+        entities = list(self._status.get('entities') or [])
+        if not entities:
+            self._render_empty('Waiting for combat data...', 'Attack a monster to begin tracking')
+            return
+        container = tk.Frame(self._content_body, bg=PANEL_BG)
+        container.pack(fill=tk.X)
+        for idx, entity in enumerate(entities, start=1):
+            role = str(entity.get('role') or 'enemy')
+            is_boss = role == 'boss'
+            card = tk.Frame(
+                container,
+                bg=PANEL_CARD,
+                highlightbackground=PANEL_EDGE,
+                highlightthickness=1,
+                padx=10,
+                pady=8,
+            )
+            card.pack(fill=tk.X, pady=(0, 6))
+            apply_surface_chrome(card, accent=DANGER if is_boss else GOLD)
+            tk.Frame(card, bg=DANGER if is_boss else GOLD, width=3, height=52).pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+            rank = tk.Label(
+                card,
+                text=str(idx),
+                bg=DANGER if is_boss else GOLD,
+                fg='#ffffff',
+                width=2,
+                font=panel_font(9, bold=True),
+            )
+            rank.pack(side=tk.LEFT, padx=(0, 10))
+
+            info = tk.Frame(card, bg=PANEL_CARD)
+            info.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            name = str(entity.get('name') or f'Entity {int(entity.get("uuid") or 0) & 0xFFFF}')
+            tk.Label(info, text=name, bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(10, bold=True), anchor='w').pack(fill=tk.X)
+            hp_pct = int(round(float(entity.get('hp_pct') or 0.0) * 100.0))
+            parts = [f'DMG: {_fmt_num(entity.get("damage_dealt") or 0)}', f'HP: {hp_pct}%']
+            if entity.get('shield_active'):
+                parts.append('Shield')
+            if entity.get('in_overdrive'):
+                parts.append('OD')
+            if int(entity.get('breaking_stage') or 0) > 0:
+                parts.append('Break')
+            tk.Label(info, text=' · '.join(parts), bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8), anchor='w').pack(fill=tk.X, pady=(1, 0))
+
+            bar_bg = tk.Frame(info, bg=PANEL_CARD_ALT, height=4)
+            bar_bg.pack(fill=tk.X, pady=(4, 0))
+            fill_width = max(0, min(100, hp_pct))
+            bar_fill = tk.Frame(bar_bg, bg=READY, height=4)
+            bar_fill.place(relwidth=fill_width / 100.0, relheight=1.0)
+
+            role_text = 'BOSS' if is_boss else 'ENEMY'
+            role_bg = DANGER if is_boss else GOLD
+            role_btn = tk.Label(
+                card,
+                text=role_text,
+                bg=PANEL_CARD,
+                fg=TEXT_MAIN,
+                font=panel_font(8, bold=True),
+                padx=10,
+                pady=4,
+                cursor='hand2',
+            )
+            role_btn.pack(side=tk.RIGHT)
+            apply_badge(role_btn, role_text, 'running' if is_boss else 'active')
+            role_btn.bind(
+                '<Button-1>',
+                lambda _event, uuid=int(entity.get('uuid') or 0), current=role: self._toggle_role(uuid, current),
+            )
+
+    def _render_phases_tab(self) -> None:
+        make_section_title(self._content_body, 'Raid Phases')
+        profile = self._active_profile()
+        phases = list((profile or {}).get('phases') or [])
+        if not phases:
+            self._render_empty('No phases configured', 'Create or download a raid profile first')
+            return
+        current_idx = int(self._status.get('phase_idx') or 0)
+        for idx, phase in enumerate(phases):
+            current = idx == current_idx
+            bg = PANEL_CARD_ALT if current else PANEL_CARD
+            border = GOLD if current else PANEL_EDGE
+            card = tk.Frame(self._content_body, bg=bg, highlightbackground=border, highlightthickness=1, padx=12, pady=8)
+            card.pack(fill=tk.X, pady=(0, 5))
+            apply_surface_chrome(card, accent=GOLD if current else CYAN)
+            tk.Label(card, text=str(phase.get('name') or f'P{idx + 1}'), bg=bg, fg=TEXT_MAIN, font=panel_font(10, bold=True)).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            tk.Label(card, text=_trigger_text(phase.get('trigger')), bg=bg, fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT, padx=(8, 8))
+            if current:
+                make_action_button(card, '→', self._handle_next_phase, kind='accent', width=2).pack(side=tk.RIGHT)
+
+    def _render_timeline_tab(self) -> None:
+        profile = self._active_profile()
+        phases = list((profile or {}).get('phases') or [])
+        current_idx = int(self._status.get('phase_idx') or 0)
+        current_phase = phases[current_idx] if 0 <= current_idx < len(phases) else None
+        timelines = list((current_phase or {}).get('timelines') or [])
+        if not timelines:
+            self._render_empty('Phase timeline alerts will appear here during combat.', '')
+            return
+        title = str((current_phase or {}).get('name') or f'P{current_idx + 1}')
+        make_section_title(self._content_body, f'{title} Timeline')
+        for idx, timeline in enumerate(timelines, start=1):
+            row = tk.Frame(self._content_body, bg=PANEL_CARD, highlightbackground=PANEL_EDGE, highlightthickness=1, padx=10, pady=6)
+            row.pack(fill=tk.X, pady=(0, 4))
+            apply_surface_chrome(row, accent=CYAN)
+            tk.Label(row, text=f'{idx}.', bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8, bold=True), width=3).pack(side=tk.LEFT)
+            tk.Label(row, text=f'{round(float(timeline.get("time_s") or 0.0), 1)}s', bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(9, bold=True), width=6).pack(side=tk.LEFT)
+            tk.Label(row, text=str(timeline.get('label') or 'Alert'), bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(9), anchor='w').pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+            tk.Label(row, text=str(timeline.get('alert_type') or 'both').upper(), bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.RIGHT)
+
+    def _render_empty(self, title: str, subtitle: str) -> None:
+        wrap = tk.Frame(self._content_body, bg=PANEL_BG)
+        wrap.pack(fill=tk.BOTH, expand=True, pady=26)
+        tk.Label(wrap, text=title, bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(10), justify='center').pack()
+        if subtitle:
+            tk.Label(wrap, text=subtitle, bg=PANEL_BG, fg=TEXT_DIM, font=panel_font(8), justify='center').pack(pady=(4, 0))
+
+    def _toggle_role(self, uuid: int, current_role: str) -> None:
+        engine = self._engine_ref() if self._engine_ref else None
+        if not engine or not hasattr(engine, 'set_entity_role'):
+            return
+        next_role = 'enemy' if current_role == 'boss' else 'boss'
         try:
-            from boss_raid_engine import make_default_profile
-            prof = make_default_profile()
+            engine.set_entity_role(int(uuid), next_role)
         except Exception:
-            prof = {'id': _make_id('boss'), 'profile_name': '新 Boss 配置',
-                    'boss_total_hp': 0, 'enrage_time_s': 600, 'simple_mode': True,
-                    'target_name_pattern': '', 'phases': [], 'source': 'local'}
-        self._cfg.setdefault('profiles', []).append(prof)
-        self._cfg['active_profile_id'] = prof['id']
-        self._refresh_profile_list()
-        self._populate_profile()
+            pass
+        self._refresh_live(force=True)
 
-    def _copy_profile(self):
-        src = self._active_profile()
-        if not src:
-            return
-        cp = copy.deepcopy(src)
-        cp['id'] = _make_id('boss')
-        cp['profile_name'] = src.get('profile_name', '') + ' (复制)'
-        cp['source'] = 'local'
-        self._cfg.setdefault('profiles', []).append(cp)
-        self._cfg['active_profile_id'] = cp['id']
-        self._refresh_profile_list()
-        self._populate_profile()
-
-    def _del_profile(self):
-        src = self._active_profile()
-        if not src:
-            return
-        if not messagebox.askyesno('删除', f"确认删除 '{src.get('profile_name', '')}'?", parent=self._win):
-            return
-        self._cfg['profiles'] = [p for p in self._cfg.get('profiles', []) if p.get('id') != src.get('id')]
-        if self._cfg.get('active_profile_id') == src.get('id'):
-            self._cfg['active_profile_id'] = ''
-        self._refresh_profile_list()
-        self._populate_profile()
-
-    def _import_profile(self):
-        path = filedialog.askopenfilename(parent=self._win, filetypes=[('JSON', '*.json')],
-                                          title='导入 BossRaid 配置')
-        if not path:
-            return
+    def _handle_next_phase(self) -> None:
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                raw = json.load(f)
-            if isinstance(raw, dict):
-                raw.setdefault('id', _make_id('boss'))
-                raw['source'] = 'local'
-                self._cfg.setdefault('profiles', []).append(raw)
-                self._cfg['active_profile_id'] = raw['id']
-                self._refresh_profile_list()
-                self._populate_profile()
-        except Exception as e:
-            messagebox.showerror('导入失败', str(e), parent=self._win)
-
-    def _export_profile(self):
-        src = self._active_profile()
-        if not src:
-            return
-        path = filedialog.asksaveasfilename(parent=self._win, filetypes=[('JSON', '*.json')],
-                                            defaultextension='.json',
-                                            initialfile=f"bossraid_{src.get('profile_name', 'profile')}.json",
-                                            title='导出 BossRaid 配置')
-        if not path:
-            return
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(src, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            messagebox.showerror('导出失败', str(e), parent=self._win)
-
-    # ── populate ──
-
-    def _populate_profile(self):
-        for ww in self._body.winfo_children():
-            ww.destroy()
-        prof = self._active_profile()
-        if not prof:
-            tk.Label(self._body, text='暂无配置，请新建', bg=_C.BG, fg=_C.TEXT2).pack(pady=20)
-            return
-        self._build_profile_header(prof)
-        self._build_phases(prof)
-
-    # ── profile header ──
-
-    def _build_profile_header(self, prof: dict):
-        frm = tk.LabelFrame(self._body, text='配置信息', bg=_C.CARD, fg=_C.TEXT2,
-                            labelanchor='nw', padx=8, pady=4)
-        frm.pack(fill='x', padx=4, pady=4)
-        # name
-        r = tk.Frame(frm, bg=_C.CARD)
-        r.pack(fill='x', pady=2)
-        tk.Label(r, text='名称:', bg=_C.CARD, fg=_C.TEXT2, width=12, anchor='e').pack(side='left')
-        self._pn_var = tk.StringVar(value=prof.get('profile_name', ''))
-        tk.Entry(r, textvariable=self._pn_var, bg=_C.INPUT, fg=_C.TEXT,
-                 insertbackground=_C.TEXT, relief='flat').pack(side='left', fill='x', expand=True, padx=4)
-        # description
-        r2 = tk.Frame(frm, bg=_C.CARD)
-        r2.pack(fill='x', pady=2)
-        tk.Label(r2, text='描述:', bg=_C.CARD, fg=_C.TEXT2, width=12, anchor='e').pack(side='left')
-        self._pd_var = tk.StringVar(value=prof.get('description', ''))
-        tk.Entry(r2, textvariable=self._pd_var, bg=_C.INPUT, fg=_C.TEXT,
-                 insertbackground=_C.TEXT, relief='flat').pack(side='left', fill='x', expand=True, padx=4)
-        # numeric fields
-        r3 = tk.Frame(frm, bg=_C.CARD)
-        r3.pack(fill='x', pady=2)
-        tk.Label(r3, text='Boss总HP:', bg=_C.CARD, fg=_C.TEXT2, width=12, anchor='e').pack(side='left')
-        self._hp_var = tk.IntVar(value=prof.get('boss_total_hp', 0))
-        tk.Spinbox(r3, from_=0, to=999999999, textvariable=self._hp_var, width=12,
-                   bg=_C.INPUT, fg=_C.TEXT, buttonbackground=_C.BTN2,
-                   insertbackground=_C.TEXT).pack(side='left', padx=4)
-        tk.Label(r3, text='狂暴(s):', bg=_C.CARD, fg=_C.TEXT2).pack(side='left', padx=(10, 0))
-        self._enrage_var = tk.IntVar(value=prof.get('enrage_time_s', 600))
-        tk.Spinbox(r3, from_=0, to=3600, textvariable=self._enrage_var, width=6,
-                   bg=_C.INPUT, fg=_C.TEXT, buttonbackground=_C.BTN2,
-                   insertbackground=_C.TEXT).pack(side='left', padx=4)
-        # simple mode + target
-        r4 = tk.Frame(frm, bg=_C.CARD)
-        r4.pack(fill='x', pady=2)
-        self._simple_var = tk.BooleanVar(value=prof.get('simple_mode', True))
-        tk.Checkbutton(r4, text='简易模式', variable=self._simple_var,
-                       bg=_C.CARD, fg=_C.TEXT, selectcolor=_C.BG,
-                       activebackground=_C.CARD).pack(side='left', padx=8)
-        tk.Label(r4, text='目标名:', bg=_C.CARD, fg=_C.TEXT2).pack(side='left', padx=(10, 0))
-        self._target_var = tk.StringVar(value=prof.get('target_name_pattern', ''))
-        tk.Entry(r4, textvariable=self._target_var, bg=_C.INPUT, fg=_C.TEXT,
-                 insertbackground=_C.TEXT, relief='flat', width=20).pack(side='left', padx=4)
-
-    # ── phases ──
-
-    def _build_phases(self, prof: dict):
-        phases = prof.get('phases', [])
-        hdr = tk.Frame(self._body, bg=_C.BG)
-        hdr.pack(fill='x', padx=4, pady=(8, 2))
-        tk.Label(hdr, text=f'阶段 ({len(phases)})', bg=_C.BG, fg=_C.TEXT).pack(side='left')
-        tk.Button(hdr, text='+ 添加阶段', command=lambda: self._add_phase(prof),
-                  bg=_C.GREEN, fg='#fff', relief='flat', padx=6,
-                  activebackground='#28B04C').pack(side='right')
-
-        self._phase_widgets = []
-        for i, phase in enumerate(phases):
-            self._build_phase_card(prof, phase, i)
-
-    def _add_phase(self, prof: dict):
-        idx = len(prof.get('phases', [])) + 1
-        try:
-            from boss_raid_engine import make_default_phase
-            phase = make_default_phase(idx)
+            self._on_next()
         except Exception:
-            phase = {'id': _make_id('phase'), 'name': f'P{idx}',
-                     'trigger': {'type': 'manual', 'value': 0}, 'timelines': []}
-        prof.setdefault('phases', []).append(phase)
-        self._populate_profile()
+            pass
+        self._refresh_live(force=True)
 
-    def _remove_phase(self, prof: dict, phase_id: str):
-        prof['phases'] = [p for p in prof.get('phases', []) if p.get('id') != phase_id]
-        self._populate_profile()
-
-    def _build_phase_card(self, prof: dict, phase: dict, index: int):
-        card = tk.LabelFrame(self._body, text=f"阶段 {index+1}: {phase.get('name', 'P?')}",
-                             bg=_C.CARD, fg=_C.PURPLE, labelanchor='nw', padx=6, pady=4)
-        card.pack(fill='x', padx=4, pady=2)
-        card._phase_data = phase
-
-        # row 1: name + trigger + delete
-        r1 = tk.Frame(card, bg=_C.CARD)
-        r1.pack(fill='x', pady=1)
-        tk.Label(r1, text='名称:', bg=_C.CARD, fg=_C.TEXT2, width=6, anchor='e').pack(side='left')
-        phase['_name_var'] = tk.StringVar(value=phase.get('name', ''))
-        tk.Entry(r1, textvariable=phase['_name_var'], bg=_C.INPUT, fg=_C.TEXT,
-                 insertbackground=_C.TEXT, relief='flat', width=10).pack(side='left', padx=2)
-        tk.Label(r1, text='触发:', bg=_C.CARD, fg=_C.TEXT2).pack(side='left', padx=(8, 0))
-        trig = phase.get('trigger', {})
-        phase['_trig_type_var'] = tk.StringVar(value=trig.get('type', 'manual'))
-        ttk.Combobox(r1, textvariable=phase['_trig_type_var'], values=_TRIGGER_TYPES,
-                     state='readonly', width=14).pack(side='left', padx=2)
-        tk.Label(r1, text='值:', bg=_C.CARD, fg=_C.TEXT2).pack(side='left', padx=(4, 0))
-        phase['_trig_val_var'] = tk.DoubleVar(value=float(trig.get('value', 0)))
-        tk.Spinbox(r1, from_=0, to=999999, textvariable=phase['_trig_val_var'], width=8,
-                   bg=_C.INPUT, fg=_C.TEXT, buttonbackground=_C.BTN2,
-                   insertbackground=_C.TEXT).pack(side='left', padx=2)
-        tk.Button(r1, text='✕', command=lambda p=phase: self._remove_phase(prof, p.get('id', '')),
-                  bg=_C.RED, fg='#fff', relief='flat', width=3,
-                  activebackground='#CC3030').pack(side='right')
-
-        # timelines
-        self._build_timelines(prof, phase, card)
-        self._phase_widgets.append(card)
-
-    # ── timelines ──
-
-    def _build_timelines(self, prof: dict, phase: dict, parent: tk.Widget):
-        timelines = phase.get('timelines', [])
-        hdr = tk.Frame(parent, bg=_C.CARD)
-        hdr.pack(fill='x', pady=(4, 1))
-        tk.Label(hdr, text=f'提醒 ({len(timelines)})', bg=_C.CARD, fg=_C.DIM).pack(side='left')
-        tk.Button(hdr, text='+', command=lambda: self._add_timeline(prof, phase),
-                  bg=_C.ACCENT, fg='#fff', relief='flat', width=3,
-                  activebackground='#0070E0').pack(side='right')
-
-        for ti, tl in enumerate(timelines):
-            self._build_timeline_row(phase, tl, ti)
-
-    def _add_timeline(self, prof: dict, phase: dict):
+    def _handle_reset(self) -> None:
         try:
-            from boss_raid_engine import make_default_timeline
-            tl = make_default_timeline()
+            self._on_reset()
         except Exception:
-            tl = {'id': _make_id('tl'), 'time_s': 30.0, 'label': 'Alert',
-                  'alert_type': 'both', 'repeat_interval_s': 0, 'pre_warn_s': 0,
-                  'duration_s': 0, 'condition': None}
-        phase.setdefault('timelines', []).append(tl)
-        self._populate_profile()
+            pass
+        self._refresh_live(force=True)
 
-    def _remove_timeline(self, phase: dict, tl_id: str):
-        phase['timelines'] = [t for t in phase.get('timelines', []) if t.get('id') != tl_id]
-        self._populate_profile()
-
-    def _build_timeline_row(self, phase: dict, tl: dict, index: int):
-        row = tk.Frame(phase.get('_card_ref', self._body), bg=_C.BG)
-        # find parent — use the last phase widget
-        parent = self._phase_widgets[-1] if self._phase_widgets else self._body
-        row = tk.Frame(parent, bg=_C.BG)
-        row.pack(fill='x', pady=1, padx=4)
-
-        tk.Label(row, text=f'{index+1}.', bg=_C.BG, fg=_C.DIM, width=3).pack(side='left')
-        tl['_time_var'] = tk.DoubleVar(value=tl.get('time_s', 30))
-        tk.Spinbox(row, from_=0, to=9999, textvariable=tl['_time_var'], width=5,
-                   bg=_C.INPUT, fg=_C.TEXT, buttonbackground=_C.BTN2,
-                   insertbackground=_C.TEXT).pack(side='left', padx=1)
-        tk.Label(row, text='s', bg=_C.BG, fg=_C.DIM).pack(side='left')
-
-        tl['_label_var'] = tk.StringVar(value=tl.get('label', ''))
-        tk.Entry(row, textvariable=tl['_label_var'], bg=_C.INPUT, fg=_C.TEXT,
-                 insertbackground=_C.TEXT, relief='flat', width=12).pack(side='left', padx=2)
-
-        tl['_atype_var'] = tk.StringVar(value=tl.get('alert_type', 'both'))
-        ttk.Combobox(row, textvariable=tl['_atype_var'], values=_ALERT_TYPES,
-                     state='readonly', width=7).pack(side='left', padx=2)
-
-        tl['_repeat_var'] = tk.DoubleVar(value=tl.get('repeat_interval_s', 0))
-        tk.Label(row, text='重复:', bg=_C.BG, fg=_C.DIM).pack(side='left', padx=(4, 0))
-        tk.Spinbox(row, from_=0, to=9999, textvariable=tl['_repeat_var'], width=4,
-                   bg=_C.INPUT, fg=_C.TEXT, buttonbackground=_C.BTN2,
-                   insertbackground=_C.TEXT).pack(side='left', padx=1)
-
-        tk.Button(row, text='✕', command=lambda t=tl: self._remove_timeline(phase, t.get('id', '')),
-                  bg=_C.RED, fg='#fff', relief='flat', width=2,
-                  activebackground='#CC3030').pack(side='right')
-
-    # ── save / reload ──
-
-    def _collect_profile(self) -> Optional[dict]:
-        prof = self._active_profile()
-        if not prof:
-            return None
-        prof['profile_name'] = self._pn_var.get()
-        prof['description'] = self._pd_var.get()
-        prof['boss_total_hp'] = max(0, self._hp_var.get())
-        prof['enrage_time_s'] = max(0, self._enrage_var.get())
-        prof['simple_mode'] = self._simple_var.get()
-        prof['target_name_pattern'] = self._target_var.get()
-        # phases
-        for phase in prof.get('phases', []):
-            nv = phase.get('_name_var')
-            if nv:
-                phase['name'] = nv.get()
-            ttv = phase.get('_trig_type_var')
-            tvv = phase.get('_trig_val_var')
-            trig = phase.setdefault('trigger', {})
-            if ttv:
-                trig['type'] = ttv.get()
-            if tvv:
-                trig['value'] = tvv.get()
-            # timelines
-            for tl in phase.get('timelines', []):
-                for attr, key in [('_time_var', 'time_s'), ('_label_var', 'label'),
-                                  ('_atype_var', 'alert_type'), ('_repeat_var', 'repeat_interval_s')]:
-                    var = tl.get(attr)
-                    if var is not None:
-                        tl[key] = var.get()
-                # clean tk vars
-                for k in list(tl.keys()):
-                    if k.startswith('_') and k.endswith('_var'):
-                        del tl[k]
-            # clean phase tk vars
-            for k in list(phase.keys()):
-                if k.startswith('_') and k.endswith('_var'):
-                    del phase[k]
-        return prof
-
-    def _save_current(self):
-        prof = self._collect_profile()
-        if not prof:
+    def _on_drag_start(self, event) -> None:
+        if self._win is None:
             return
-        profiles = self._cfg.get('profiles', [])
-        found = False
-        for i, p in enumerate(profiles):
-            if p.get('id') == prof.get('id'):
-                profiles[i] = prof
-                found = True
-                break
-        if not found:
-            profiles.append(prof)
-        self._cfg['profiles'] = profiles
-        self._cfg['enabled'] = self._chk_enabled_var.get()
-        self._save(self._cfg)
-        self._refresh_profile_list()
-        self._populate_profile()
+        self._drag_ox = event.x_root - self._win.winfo_x()
+        self._drag_oy = event.y_root - self._win.winfo_y()
 
-    def _reload_current(self):
-        self._cfg = self._load()
-        self._refresh_profile_list()
-        self._populate_profile()
-        self._chk_enabled_var.set(self._cfg.get('enabled', False))
-
-    def _on_enabled_toggle(self):
-        enabled = self._chk_enabled_var.get()
-        self._cfg['enabled'] = enabled
-        self._save(self._cfg)
-        self._on_toggle(enabled)
+    def _on_drag_move(self, event) -> None:
+        if self._win is None:
+            return
+        self._win.geometry(f'+{event.x_root - self._drag_ox}+{event.y_root - self._drag_oy}')

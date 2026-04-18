@@ -139,6 +139,10 @@ class AlertOverlay:
         ex = _user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
         _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE,
                                ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT)
+        try:
+            _user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x00000011)
+        except Exception:
+            pass
 
         entry = {
             'win': win, 'hwnd': hwnd, 'base_img': base_img,
