@@ -2,15 +2,16 @@
 
 `SAO Auto` 是一个面向《星痕共鸣》的外部 HUD / 自动化项目，当前版本同时维护 `entity` 与 `webview` 两套 UI 入口，围绕抓包、识图、Boss Raid、DPS 统计、自动按键和云端脚本仓库持续迭代。
 
-当前版本：`2.0.0`
+当前版本：`2.0.1`
 
-## 2.0.0 概览
+## 2.0.1 概览
 
-- 同时支持 `entity` 与 `webview` 两种 UI 模式
-- SAO Menu、ID / HP / BossHP / DPS / Burst Ready / Commander 面板保持并行维护
-- 默认采用 `packet + vision` 混合数据源
-- 自带 Boss Raid / AutoKey 云端仓库服务端
-- 打包脚本已覆盖动态导入模块、运行时资源与发布目录初始化
+- `AutoKey / BossRaid / Commander` 的 entity 编辑面板已按 webview 风格重做并对齐
+- `HP / BossHP / DPS / Burst Ready` 叠加层完成一轮更接近 webview 的视觉与结构修正
+- 新增共享的 overlay 调度与异步渲染 worker，降低 Tk 主线程压力
+- `Burst Ready` 恢复 GL 能量层、运动模糊与更平滑的 steady-state 呈现路径
+- 识图链路切换为面向游戏层的 `PrintWindow + DWM flush` 捕获同步方案
+- 打包脚本已覆盖新增渲染模块、运行时资源与发布目录初始化
 
 ## 功能列表
 
@@ -198,6 +199,16 @@ sao_auto/
 ```
 
 ## 更新记录
+
+### 2.0.1
+
+- entity 侧 `AutoKey / BossRaid / Commander` 面板按 webview 样式重写到原有文件中
+- `HP / BossHP / DPS` overlay 清理了后加的杂乱横线，并修复多处透明线条穿透问题
+- `BossHP` 修正名字阴影透明度、HP 条右端对齐以及 break / shield 相关视觉状态
+- `Burst Ready` 恢复 GL 能量层、加入运动模糊，并调整 steady-state 采样与提交流程以减少帧步感
+- 新增 `overlay_render_worker.py` 与 `render_capture_sync.py`，将重型合成移出 Tk 主线程并与捕获流程同步
+- `recognition.py` 改为以 `PrintWindow` 为主的游戏层捕获路径，并补充缓存帧与耐力条识别稳定性处理
+- `XiaoACTUI.spec` 与 README 同步更新，覆盖新增模块与当前发布内容
 
 ### 2.0.0
 

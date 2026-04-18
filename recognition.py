@@ -16,10 +16,10 @@ from config import (
     CAPTURE_FPS_FAST,
     get_visual_rect_bbox,
 )
+from render_capture_sync import capture_section
 from vision_accel import cvt_color, gaussian_blur
 from window_locator import WindowLocator
 
-_mss_local = threading.local()
 _capture_local = threading.local()
 
 
@@ -92,62 +92,39 @@ def _capture_looks_blank(img: Optional[np.ndarray]) -> bool:
         return False
 
 
-def _capture_hwnd_client_bitblt(
-    hwnd: int,
-    client_rect: Tuple[int, int, int, int],
-) -> Optional[np.ndarray]:
-    if hwnd <= 0 or not client_rect:
-        return None
-    cl, ct, cr, cb = client_rect
-    width = max(1, int(cr - cl))
-    height = max(1, int(cb - ct))
-    if width <= 1 or height <= 1:
-        return None
+# ---------------------------------------------------------------------------
+#  DWM sync – flush the compositor before GDI capture to reduce blank frames.
+# ---------------------------------------------------------------------------
+try:
+    _dwmapi = ctypes.windll.dwmapi
+except Exception:
+    _dwmapi = None
 
-    user32 = ctypes.windll.user32
-    gdi32 = ctypes.windll.gdi32
-    SRCCOPY = 0x00CC0020
-    hdc_window = user32.GetDC(hwnd)
-    if not hdc_window:
-        return None
-    hdc_mem = gdi32.CreateCompatibleDC(hdc_window)
-    hbmp = gdi32.CreateCompatibleBitmap(hdc_window, width, height)
-    old_obj = None
+
+def _dwm_flush() -> None:
+    """Wait for the current DWM composition cycle to finish.
+
+    This greatly reduces the chance of capturing a blank/stale frame when
+    the compositor is busy redrawing overlay windows (entity-mode ULW at
+    60 fps).
+    """
     try:
-        if not hdc_mem or not hbmp:
-            return None
-        old_obj = gdi32.SelectObject(hdc_mem, hbmp)
-        if not gdi32.BitBlt(hdc_mem, 0, 0, width, height, hdc_window, 0, 0, SRCCOPY):
-            return None
-        return _bitmap_to_bgr(hdc_mem, hbmp, width, height)
+        if _dwmapi is not None:
+            _dwmapi.DwmFlush()
     except Exception:
-        return None
-    finally:
-        try:
-            if old_obj:
-                gdi32.SelectObject(hdc_mem, old_obj)
-        except Exception:
-            pass
-        try:
-            if hbmp:
-                gdi32.DeleteObject(hbmp)
-        except Exception:
-            pass
-        try:
-            if hdc_mem:
-                gdi32.DeleteDC(hdc_mem)
-        except Exception:
-            pass
-        try:
-            user32.ReleaseDC(hwnd, hdc_window)
-        except Exception:
-            pass
+        pass
+
+
+# Preferred PrintWindow flags – remembered across calls so the working
+# combo is tried first, avoiding unnecessary retries.
+_preferred_pw_flags: Optional[int] = None
 
 
 def _capture_hwnd_client_printwindow(
     hwnd: int,
     client_rect: Tuple[int, int, int, int],
 ) -> Optional[np.ndarray]:
+    global _preferred_pw_flags
     if hwnd <= 0 or not client_rect:
         return None
     cl, ct, cr, cb = client_rect
@@ -160,6 +137,15 @@ def _capture_hwnd_client_printwindow(
     gdi32 = ctypes.windll.gdi32
     PW_CLIENTONLY = 0x00000001
     PW_RENDERFULLCONTENT = 0x00000002
+    ALL_FLAGS = (PW_CLIENTONLY | PW_RENDERFULLCONTENT, PW_CLIENTONLY, 0)
+
+    # Try the last-known-good flags first to skip unnecessary combos.
+    if _preferred_pw_flags is not None:
+        order = (_preferred_pw_flags,) + tuple(
+            f for f in ALL_FLAGS if f != _preferred_pw_flags
+        )
+    else:
+        order = ALL_FLAGS
 
     hdc_window = user32.GetWindowDC(hwnd)
     if not hdc_window:
@@ -171,7 +157,7 @@ def _capture_hwnd_client_printwindow(
         if not hdc_mem or not hbmp:
             return None
         old_obj = gdi32.SelectObject(hdc_mem, hbmp)
-        for flags in (PW_CLIENTONLY | PW_RENDERFULLCONTENT, PW_CLIENTONLY, 0):
+        for flags in order:
             try:
                 ok = user32.PrintWindow(hwnd, hdc_mem, flags)
             except Exception:
@@ -179,6 +165,7 @@ def _capture_hwnd_client_printwindow(
             if ok:
                 img = _bitmap_to_bgr(hdc_mem, hbmp, width, height)
                 if not _capture_looks_blank(img):
+                    _preferred_pw_flags = flags
                     return img
         return None
     except Exception:
@@ -209,14 +196,24 @@ def _capture_hwnd_client(
     hwnd: int,
     client_rect: Tuple[int, int, int, int],
 ) -> Tuple[Optional[np.ndarray], str]:
-    img = _capture_hwnd_client_printwindow(hwnd, client_rect)
-    if not _capture_looks_blank(img):
-        return img, "printwindow"
-    # PrintWindow failed (blank/black frame) — try BitBlt as fallback
-    img = _capture_hwnd_client_bitblt(hwnd, client_rect)
-    if not _capture_looks_blank(img):
-        return img, "bitblt"
-    return None, "failed"
+    with capture_section():
+        # PrintWindow targets the game HWND directly. Do not fall back to
+        # BitBlt / mss / ImageGrab here, because those can observe desktop
+        # pixels or overlay layers instead of the game's own surface.
+        _dwm_flush()
+        img = _capture_hwnd_client_printwindow(hwnd, client_rect)
+        if not _capture_looks_blank(img):
+            return img, "printwindow"
+
+        # Retry PrintWindow once after another compositor flush before we
+        # give up. This keeps capture game-layer-only while tolerating short
+        # composition races.
+        _dwm_flush()
+        img = _capture_hwnd_client_printwindow(hwnd, client_rect)
+        if not _capture_looks_blank(img):
+            return img, "printwindow"
+
+        return None, "failed"
 
 
 def _crop_client_capture(
@@ -263,32 +260,7 @@ def _grab_region(bbox: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
                 return None
     except Exception:
         return None
-
-    try:
-        import mss
-
-        if not hasattr(_mss_local, "sct") or _mss_local.sct is None:
-            _mss_local.sct = mss.mss()
-        mon = {
-            "left": int(bbox[0]),
-            "top": int(bbox[1]),
-            "width": int(bbox[2] - bbox[0]),
-            "height": int(bbox[3] - bbox[1]),
-        }
-        raw = _mss_local.sct.grab(mon)
-        arr = np.frombuffer(raw.rgb, dtype=np.uint8).reshape(raw.height, raw.width, 3)
-        return arr[:, :, ::-1].copy()
-    except Exception:
-        _mss_local.sct = None
-
-    try:
-        from PIL import ImageGrab
-
-        img = ImageGrab.grab(bbox=bbox, all_screens=True)
-        arr = np.array(img)
-        return arr[:, :, ::-1].copy()
-    except Exception:
-        return None
+    return None
 
 
 def _subpixel_threshold_crossing(score: np.ndarray, threshold: float, last_filled_idx: int) -> float:
@@ -379,8 +351,9 @@ def _row_independent_pct(
 # Euclidean-distance match in BGR space is the most reliable method.
 
 _STA_BGR = np.array([53, 174, 255], dtype=np.float32)   # #FFAE35 in BGR
-_STA_DIST_THRESHOLD = 42.0      # max Euclidean distance to count as "gold"
-_STA_COL_FILL_THRESHOLD = 0.35  # min fraction of rows matching per column
+_STA_DIST_THRESHOLD = 50.0      # max Euclidean distance to count as "gold"
+_STA_COL_FILL_THRESHOLD = 0.18  # min fraction of rows matching per column
+_STA_COL_FILL_NEAR_FULL = 0.07  # relaxed threshold for rightmost columns near 100%
 
 
 def _detect_stamina_pct(img: np.ndarray) -> Tuple[float, float]:
@@ -403,28 +376,70 @@ def _detect_stamina_pct(img: np.ndarray) -> Tuple[float, float]:
         # Column-wise fill ratio (fraction of rows that match gold)
         col_fill = match.mean(axis=0)                         # shape (W,)
 
-        # Smooth with a tiny 3-wide kernel to absorb 1 px jitter
-        kernel = np.array([0.25, 0.50, 0.25], dtype=np.float32)
-        col_fill_s = np.convolve(col_fill, kernel, mode="same")
-
         # Overall confidence: how much of the image is gold
         overall_match = float(match.mean())
         confidence = min(1.0, overall_match / 0.20)
+        max_col_fill = float(np.max(col_fill)) if col_fill.size else 0.0
 
-        if overall_match < 0.03:
+        if overall_match < 0.03 and max_col_fill < _STA_COL_FILL_NEAR_FULL:
             # Almost no gold pixels → bar absent
             return 0.0, 0.0
 
-        # Find rightmost filled column (above threshold)
-        filled_cols = np.where(col_fill_s >= _STA_COL_FILL_THRESHOLD)[0]
+        # Find rightmost filled column using primary threshold
+        filled_cols = np.where(col_fill >= _STA_COL_FILL_THRESHOLD)[0]
         if len(filled_cols) == 0:
-            return 0.0, confidence * 0.5
+            # Full bars can become slightly thinner / more blended, causing
+            # every column to miss the primary threshold while still forming a
+            # near-contiguous relaxed span across almost the entire width.
+            relaxed_cols = np.where(col_fill >= _STA_COL_FILL_NEAR_FULL)[0]
+            if len(relaxed_cols) == 0 or int(relaxed_cols[0]) > 1:
+                return 0.0, confidence * 0.5
+            relaxed_rightmost = int(relaxed_cols[0])
+            for i in range(1, len(relaxed_cols)):
+                if relaxed_cols[i] - relaxed_cols[i - 1] <= 3:
+                    relaxed_rightmost = int(relaxed_cols[i])
+                else:
+                    break
+            if (relaxed_rightmost + 1) < int(round(w * 0.85)):
+                return 0.0, confidence * 0.5
+            pct = max(0.0, min(1.0, (relaxed_rightmost + 1) / float(w)))
+            body_fill = float(np.mean(col_fill[:relaxed_rightmost + 1]))
+            confidence = max(confidence, min(1.0, 0.60 + body_fill * 0.40))
+            return pct, confidence
 
         rightmost = int(filled_cols[-1]) + 1
         pct = max(0.0, min(1.0, rightmost / float(w)))
-        # Near-full clamp: 98-100 % → 100 % to suppress sub-pixel jitter
-        if pct >= 0.98:
-            pct = 1.0
+        body_fill = float(np.mean(col_fill[:rightmost])) if rightmost > 0 else 0.0
+        confidence = max(confidence, min(1.0, body_fill / 0.24))
+
+        # Near-full extension: when bar is already >88% filled and confidence
+        # is strong, scan remaining columns with a relaxed threshold. The
+        # rightmost few columns of a near-full gold bar often have lower fill
+        # ratios due to edge/glow blending, causing under-reads at 93-97%.
+        if pct >= 0.78 and confidence >= 0.40:
+            ext_cols = np.where(col_fill[rightmost:] >= _STA_COL_FILL_NEAR_FULL)[0]
+            if len(ext_cols) > 0:
+                # Only extend if the relaxed columns are contiguous from the
+                # current rightmost edge (allow small gap for sub-pixel jitter).
+                ext_start = ext_cols[0]
+                if ext_start <= 2:
+                    # Find the last contiguous (gap≤3) column in the extension
+                    ext_rightmost = rightmost + int(ext_cols[0])
+                    for i in range(1, len(ext_cols)):
+                        if ext_cols[i] - ext_cols[i - 1] <= 3:
+                            ext_rightmost = rightmost + int(ext_cols[i])
+                        else:
+                            break
+                    rightmost = ext_rightmost + 1
+                    pct = max(0.0, min(1.0, rightmost / float(w)))
+
+        # Near-full confidence boost (no clamp): keep the measured pct so
+        # the 91-100 % range is preserved instead of snapping to 100 %.
+        if pct >= 0.91:
+            tail_w = max(3, int(round(w * 0.09)))
+            tail_fill = float(np.mean(col_fill[max(0, w - tail_w):]))
+            if tail_fill >= (_STA_COL_FILL_NEAR_FULL * 0.80):
+                confidence = max(confidence, min(1.0, 0.72 + tail_fill * 0.28))
         return pct, confidence
     except Exception:
         return 0.0, 0.0
@@ -634,10 +649,15 @@ class RecognitionEngine:
         self._capture_error_logged = False
         self._capture_backend = ""
         self._capture_fail_count = 0
+        self._last_good_frame: Optional[np.ndarray] = None
+        self._last_good_frame_time: float = 0.0
+        # Max age (seconds) for a cached frame to be reused on capture failure.
+        self._FRAME_CACHE_TTL: float = 2.00
         self._last_sta_logged: Optional[int] = None
         self._sta_low_conf_count: int = 0       # consecutive low-confidence frames
         self._sta_offline: bool = False          # True when bar is absent
         self._sta_offline_since: float = 0.0     # first low-confidence timestamp
+        self._sta_online_since: float = 0.0      # first good-confidence after offline
 
     def set_debug_callback(self, cb):
         self._debug_callback = cb
@@ -652,6 +672,8 @@ class RecognitionEngine:
 
     def _accept_stamina_pct(self, pct: float, now: float) -> float:
         pct = max(0.0, min(1.0, float(pct)))
+        if pct >= 0.98:
+            pct = 1.0
         prev = self._sta_filtered_pct
         if prev is not None and pct < (prev - 0.001):
             self._sta_drop_lock_until = max(self._sta_drop_lock_until, now + 0.30)
@@ -718,6 +740,9 @@ class RecognitionEngine:
         self._last_sta_logged = None
         self._sta_low_conf_count = 0
         self._sta_offline = False
+        self._sta_online_since = 0.0
+        self._last_good_frame = None
+        self._last_good_frame_time = 0.0
 
     def _run(self):
         while self._running:
@@ -770,22 +795,35 @@ class RecognitionEngine:
                     return
             client_frame, backend = _capture_hwnd_client(hwnd, rect)
             if client_frame is None or client_frame.size == 0:
-                _set_capture_target(hwnd, rect)
-                self._capture_fail_count += 1
-                if not self._capture_error_logged:
-                    self._capture_error_logged = True
-                    print("[Vision] direct window capture failed (printwindow+bitblt)")
-                # Still push window rect + recognition_ok=True so packet-driven
-                # features (boss bar, DPS, skills) are not blocked by vision failure.
-                # Only stamina (vision-dependent) will be missing.
-                updates["error_msg"] = "vision capture failed"
-                self._state_mgr.update(**updates)
-                return
-            self._capture_fail_count = 0
-            self._capture_error_logged = False
-            if backend != self._capture_backend:
-                self._capture_backend = backend
-                print(f"[Vision] direct window capture backend: {backend}")
+                # Primary capture failed — try the cached frame if fresh.
+                _now_cap = time.time()
+                if (self._last_good_frame is not None
+                        and (_now_cap - self._last_good_frame_time)
+                        < self._FRAME_CACHE_TTL):
+                    client_frame = self._last_good_frame
+                    backend = self._capture_backend or "cached"
+                    # Don't bump fail count or log — cached frame bridges
+                    # the transient gap silently.
+                else:
+                    _set_capture_target(hwnd, rect)
+                    self._capture_fail_count += 1
+                    if not self._capture_error_logged:
+                        self._capture_error_logged = True
+                        print("[Vision] direct game-layer capture failed "
+                            "(printwindow only)")
+                    updates["error_msg"] = "vision capture failed"
+                    self._state_mgr.update(**updates)
+                    return
+            else:
+                # Fresh frame — update cache and reset failure state.
+                self._last_good_frame = client_frame
+                self._last_good_frame_time = time.time()
+                self._capture_fail_count = 0
+                self._capture_error_logged = False
+                if backend != self._capture_backend:
+                    self._capture_backend = backend
+                    print(f"[Vision] game-layer capture backend: "
+                          f"{backend}")
 
         if self._use_vision_source("stamina"):
             st_bbox = get_visual_rect_bbox("stamina_bar_visual", rect)
@@ -794,27 +832,54 @@ class RecognitionEngine:
                 if st_img is not None and st_img.size > 0:
                     raw_pct, confidence = _detect_stamina_pct(st_img)
 
-                    # ── OFFLINE tracking (time-based: 0.2 s of no detection) ──
+                    # ── OFFLINE tracking with hysteresis ──
+                    # Go OFFLINE after 0.10 s sustained low confidence.
+                    # Go ONLINE after 0.10 s sustained good confidence
+                    # to prevent rapid OFFLINE/ONLINE oscillation.
                     _now_sta = time.time()
                     if confidence < 0.12:
+                        self._sta_online_since = 0.0
                         if self._sta_offline_since == 0.0:
                             self._sta_offline_since = _now_sta
                         _offline_elapsed = _now_sta - self._sta_offline_since
                     else:
                         self._sta_offline_since = 0.0
                         _offline_elapsed = 0.0
+                        if self._sta_offline:
+                            if self._sta_online_since == 0.0:
+                                self._sta_online_since = _now_sta
+                        else:
+                            self._sta_online_since = 0.0
 
-                    if _offline_elapsed >= 0.20:
+                    if _offline_elapsed >= 0.10:
                         if not self._sta_offline:
                             self._sta_offline = True
                             print("[Vision] STA bar not detected — OFFLINE")
                         updates["stamina_offline"] = True
-                    else:
-                        if self._sta_offline and confidence >= 0.12:
+                    elif self._sta_offline:
+                        # Currently offline — require sustained good
+                        # confidence for 0.10 s before recovering.
+                        _online_elapsed = (
+                            (_now_sta - self._sta_online_since)
+                            if self._sta_online_since > 0 else 0.0
+                        )
+                        if _online_elapsed >= 0.10:
                             self._sta_offline = False
+                            self._sta_online_since = 0.0
                             print("[Vision] STA bar recovered — ONLINE")
+                            updates["stamina_offline"] = False
+                            sta_pct = self._filter_stamina_pct(raw_pct, confidence)
+                            updates["stamina_pct"] = sta_pct
+                            updates["stamina_current"] = 0
+                            updates["stamina_max"] = 0
+                            sta_pct_int = int(round(sta_pct * 100.0))
+                            if self._last_sta_logged is None or abs(sta_pct_int - self._last_sta_logged) >= 3:
+                                self._last_sta_logged = sta_pct_int
+                                print(f"[Vision] STA visual: {sta_pct_int}%")
+                        else:
+                            updates["stamina_offline"] = True
+                    else:
                         updates["stamina_offline"] = False
-
                         sta_pct = self._filter_stamina_pct(raw_pct, confidence)
                         updates["stamina_pct"] = sta_pct
                         updates["stamina_current"] = 0

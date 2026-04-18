@@ -18,6 +18,7 @@ from typing import Optional
 
 from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont
 import numpy as np
+from render_capture_sync import wait_until_capture_idle
 
 from config import (
     APP_VERSION_LABEL, WINDOW_TITLE, WINDOW_SIZE,
@@ -481,6 +482,8 @@ def _update_layered_win(hwnd, rgba_image, overall_alpha=255, dst_pos=None):
     """使用 Win32 UpdateLayeredWindow 实现真正的逐像素 alpha 透明窗口。
     rgba_image: PIL RGBA Image;  overall_alpha: 0-255 整体 alpha。"""
     if not hwnd:
+        return False
+    if not wait_until_capture_idle(0.010):
         return False
     w, h = rgba_image.size
     # RGBA -> 预乘 BGRA (ULW 要求预乘 alpha)
@@ -1194,6 +1197,10 @@ class SAOPlayerGUI:
             style = (style | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
             _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE, style)
             _disable_native_window_shadow(self._float)
+            try:
+                _user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x00000011)
+            except Exception:
+                pass
         except Exception:
             self._float_hwnd = 0
 
@@ -1448,6 +1455,10 @@ class SAOPlayerGUI:
                 extra_gate=lambda: bool(getattr(self, '_recognition_active', False)),
             )
             self._auto_key_engine.start()
+            try:
+                self._auto_key_engine.set_burst_actions(self._load_autokey_burst_actions())
+            except Exception:
+                pass
 
             # Boss Raid Engine + AutoKey Linkage
             self._boss_autokey_linkage = BossAutoKeyLinkage(
@@ -1822,6 +1833,7 @@ class SAOPlayerGUI:
                                     if not self._dps_faded:
                                         self._dps_overlay.fade_out()
                                         self._dps_faded = True
+                                    self._dps_visible = False
                                 elif self._dps_faded:
                                     self._dps_overlay.fade_in()
                                     self._dps_faded = False
@@ -2382,6 +2394,8 @@ class SAOPlayerGUI:
                 engine_ref=lambda: self._auto_key_engine,
                 on_toggle=self._toggle_auto_script,
                 author_fn=getattr(self, '_auto_key_author_snapshot', None),
+                load_burst_actions=self._load_autokey_burst_actions,
+                save_burst_actions=self._save_autokey_burst_actions,
             )
         self._autokey_panel.toggle()
         self.root.after(120, lambda: self._raise_panel_window(self._autokey_panel))
@@ -3686,6 +3700,23 @@ class SAOPlayerGUI:
         if self._auto_key_engine:
             self._auto_key_engine.invalidate()
         return saved
+
+    def _load_autokey_burst_actions(self):
+        actions = self._get_setting('autokey_burst_actions', [])
+        return list(actions or [])
+
+    def _save_autokey_burst_actions(self, actions):
+        normalized = list(actions or [])
+        self._set_setting('autokey_burst_actions', normalized)
+        if self._auto_key_engine:
+            try:
+                self._auto_key_engine.set_burst_actions(normalized)
+            except Exception:
+                pass
+            try:
+                self._auto_key_engine.invalidate()
+            except Exception:
+                pass
 
     # ── BossRaid config helpers ──
     def _boss_raid_settings_ref(self):

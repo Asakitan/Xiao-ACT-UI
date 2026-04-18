@@ -31,6 +31,7 @@ LOCAL_HIDDENIMPORTS = [
     'sao_gui_skillfx',
     'gpu_renderer',
     'overlay_scheduler',
+    'overlay_render_worker',
     'window_effects',
     'install_npcap',
 ]

@@ -27,12 +27,15 @@ import sys
 import time
 import ctypes
 from typing import Any, Dict, List, Optional
+from decimal import Decimal, ROUND_HALF_UP
 
 import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from overlay_scheduler import get_scheduler as _get_scheduler
+from overlay_render_worker import AsyncFrameWorker, ulw_commit
+from render_capture_sync import wait_until_capture_idle
 
 # ═══════════════════════════════════════════════
 #  Win32 / ULW glue
@@ -90,6 +93,8 @@ def _ulw_update(hwnd: int, img: Image.Image, x: int, y: int,
     The previous implementation used a Python per-pixel loop (~4 FPS for a
     260×220 panel) — the vectorised version is >100× faster.
     """
+    if not wait_until_capture_idle(0.010):
+        return
     w, h = img.size
     hdc_screen = _user32.GetDC(0)
     hdc_mem = _gdi32.CreateCompatibleDC(hdc_screen)
@@ -212,10 +217,12 @@ def _text_width(draw: ImageDraw.ImageDraw, text: str, font) -> int:
 def _fmt_num(v: float) -> str:
     v = float(v or 0)
     if v >= 1_000_000:
-        return f"{v / 1_000_000:.{0 if v >= 10_000_000 else 1}f}M"
+        digits = 0 if v >= 10_000_000 else 1
+        return f"{_to_fixed_half_up(v / 1_000_000, digits)}M"
     if v >= 1_000:
-        return f"{v / 1_000:.{0 if v >= 100_000 else 1}f}K"
-    return f"{int(round(v)):,}"
+        digits = 0 if v >= 100_000 else 1
+        return f"{_to_fixed_half_up(v / 1_000, digits)}K"
+    return f"{_round_half_up_int(v):,}"
 
 
 def _fmt_time(s: float) -> str:
@@ -228,10 +235,21 @@ def _fmt_fp(fp: float) -> str:
     if fp <= 0:
         return ''
     if fp >= 1_000_000:
-        return f"{fp / 1_000_000:.2f}M"
+        return f"{_to_fixed_half_up(fp / 1_000_000, 2)}M"
     if fp >= 1_000:
-        return f"{fp / 1_000:.{0 if fp >= 100_000 else 1}f}K"
-    return f"{int(fp):,}"
+        digits = 0 if fp >= 100_000 else 1
+        return f"{_to_fixed_half_up(fp / 1_000, digits)}K"
+    return f"{_round_half_up_int(fp):,}"
+
+
+def _to_fixed_half_up(value: float, digits: int) -> str:
+    quant = Decimal('1').scaleb(-digits)
+    dec = Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP)
+    return format(dec, f'.{digits}f')
+
+
+def _round_half_up_int(value: float) -> int:
+    return int(Decimal(str(value)).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
 
 
 # ═══════════════════════════════════════════════
@@ -347,7 +365,7 @@ class DpsOverlay:
 
     # Outer panel (ULW window) size
     WIDTH = 340
-    DEFAULT_HEIGHT = 460
+    DEFAULT_HEIGHT = 420
     MAX_HEIGHT = 700
 
     # Body padding (web CSS: body{padding:10})
@@ -374,29 +392,33 @@ class DpsOverlay:
 
     MAX_ROWS = 6
     PAD = BODY_PAD        # back-compat alias
+    PANEL_OPACITY = 1.0
 
     # Colors (parity with web/dps.html CSS vars, alpha 0-255)
     PANEL_BG_A = (203, 205, 194, 255)   # opaque shell bg to avoid hollow panel body
     PANEL_BG_B = (216, 218, 206, 255)   # opaque shell bg to avoid hollow panel body
-    PANEL_EDGE = (160, 162, 150, 158)   # --panel-edge 0.62
-    PANEL_LINE = (255, 255, 255, 132)   # --panel-line 0.52
-    INNER_HIGHLIGHT = (255, 255, 255, 40)   # ::after border 0.16
+    PANEL_EDGE = (160, 162, 150, 255)   # opaque outline for ULW readability
+    PANEL_LINE = (255, 255, 255, 255)   # opaque highlight line
+    INNER_HIGHLIGHT = (255, 255, 255, 255)  # opaque inner border
+    HAIRLINE_LIGHT = (240, 242, 234, 255)
+    HAIRLINE_MID = (224, 226, 216, 255)
+    HAIRLINE_DARK = (102, 104, 92, 255)
     SCAN_LINE = (255, 255, 255, 14)         # ::before 0.055
     TEXT_MAIN = (83, 84, 73, 255)
     TEXT_MUTED = (139, 139, 130, 255)
     GOLD = (222, 166, 32, 255)
     GOLD_SOFT = (222, 166, 32, 56)
-    CYAN = (104, 228, 255, 140)         # --cyan 0.55
-    DIVIDER = (160, 162, 150, 128)      # header/footer borders 0.5
+    CYAN = (104, 228, 255, 255)         # structural cyan lines stay opaque
+    DIVIDER = (160, 162, 150, 255)      # opaque section divider
     LIST_BG = (255, 255, 255, 46)       # list-frame bg 0.18
-    LIST_BORDER = (160, 162, 150, 107)  # list-frame border 0.42
+    LIST_BORDER = (160, 162, 150, 255)  # opaque list border
     ROW_BG = (255, 255, 255, 122)       # entity-row bg 0.48
-    ROW_BORDER = (160, 162, 150, 82)    # entity-row border 0.32
-    ROW_SELF_BAR = (222, 166, 32, 220)  # border-left on .self
+    ROW_BORDER = (160, 162, 150, 255)   # opaque row border
+    ROW_SELF_BAR = (222, 166, 32, 255)  # border-left on .self
     BTN_BG = (255, 255, 255, 112)       # .sao-btn bg 0.44
-    BTN_BORDER = (160, 162, 150, 163)   # .sao-btn border 0.64
+    BTN_BORDER = (160, 162, 150, 255)   # opaque button border
     BTN_LIVE_ACTIVE = (104, 228, 255, 31)    # secondary.active 0.12
-    BTN_LIVE_BORDER = (104, 228, 255, 184)   # secondary.active border 0.72
+    BTN_LIVE_BORDER = (104, 228, 255, 255)   # opaque live border
     BTN_LIVE_COLOR = (68, 144, 162, 255)     # secondary.active color
     BTN_DANGER = (239, 104, 78, 255)         # --danger
     BAR_OTHER_A = (222, 166, 32, 51)    # entity-bar gradient 0.20→0.03
@@ -487,6 +509,9 @@ class DpsOverlay:
         self._shell_cache: Optional[Image.Image] = None
         self._shell_cache_size: tuple = (0, 0)
 
+        # Async render worker — compose + premult off main thread.
+        self._render_worker = AsyncFrameWorker()
+
     # ──────────────────────────────────────────
     #  Lifecycle
     # ──────────────────────────────────────────
@@ -512,6 +537,10 @@ class DpsOverlay:
             GWL_EXSTYLE,
             ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         )
+        try:
+            _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
+        except Exception:
+            pass
 
         # Dragging
         self._win.bind('<Button-1>', self._on_drag_start)
@@ -580,6 +609,24 @@ class DpsOverlay:
     def update(self, snapshot: dict) -> None:
         if snapshot is None:
             return
+        entities = snapshot.get('entities')
+        if entities is None:
+            entities = snapshot.get('party') or []
+        entities = list(entities or [])
+        has_content = bool(
+            entities
+            or int(snapshot.get('total_damage') or 0) > 0
+            or int(snapshot.get('total_heal') or 0) > 0
+        )
+        if (not self._visible or not self._hwnd) and not has_content:
+            self._last_snapshot = dict(snapshot)
+            self._target_total_damage = float(snapshot.get('total_damage') or 0)
+            self._target_total_dps = float(snapshot.get('total_dps') or 0)
+            self._target_total_heal = float(snapshot.get('total_heal') or 0)
+            self._target_total_hps = float(snapshot.get('total_hps') or 0)
+            self._target_elapsed = float(snapshot.get('elapsed_s') or 0)
+            self._encounter_active = bool(snapshot.get('encounter_active'))
+            return
         if not self._visible or not self._hwnd:
             self.show()
         self._last_snapshot = snapshot
@@ -592,10 +639,6 @@ class DpsOverlay:
         self._encounter_active = bool(snapshot.get('encounter_active'))
 
         # dps_tracker emits 'entities'; tolerate legacy 'party' too.
-        entities = snapshot.get('entities')
-        if entities is None:
-            entities = snapshot.get('party') or []
-        entities = list(entities or [])
 
         seen_uids: List[int] = []
         for idx, ent in enumerate(entities[: self.MAX_ROWS]):
@@ -702,10 +745,28 @@ class DpsOverlay:
         if now is None:
             now = time.time()
         self._advance_animations(now)
-        try:
-            self._render(now)
-        except Exception as e:
-            print(f'[DPS-OV] render error: {e}')
+
+        # ── Async render pipeline ──
+        if self._hwnd:
+            fb = self._render_worker.take_result()
+            if fb is not None:
+                # Resize Tk window if panel dimensions changed.
+                sz = (fb.width, fb.height)
+                if self._win is not None and sz != self._last_rendered_size:
+                    try:
+                        self._win.geometry(
+                            f'{fb.width}x{fb.height}+{self._x}+{self._y}')
+                    except Exception:
+                        pass
+                    self._last_rendered_size = sz
+                try:
+                    ulw_commit(self._hwnd, fb)
+                except Exception as e:
+                    print(f'[DPS-OV] ulw error: {e}')
+
+            self._render_worker.submit(
+                self.compose_frame, now, self._hwnd, self._x, self._y)
+
         if self._hide_after_fade and self._fade_alpha <= 0.01:
             self.hide()
 
@@ -748,15 +809,11 @@ class DpsOverlay:
         prev = (self._disp_total_damage, self._disp_total_dps,
                 self._disp_total_heal, self._disp_total_hps,
                 self._disp_elapsed)
-        self._disp_total_damage = self._decay_toward(
-            self._disp_total_damage, self._target_total_damage, self.NUM_TWEEN)
-        self._disp_total_dps = self._decay_toward(
-            self._disp_total_dps, self._target_total_dps, self.NUM_TWEEN)
-        self._disp_total_heal = self._decay_toward(
-            self._disp_total_heal, self._target_total_heal, self.NUM_TWEEN)
-        self._disp_total_hps = self._decay_toward(
-            self._disp_total_hps, self._target_total_hps, self.NUM_TWEEN)
-        # Elapsed ticks in real time — snap rather than tween.
+        # Web dps.html updates totals immediately; do not ease these values.
+        self._disp_total_damage = self._target_total_damage
+        self._disp_total_dps = self._target_total_dps
+        self._disp_total_heal = self._target_total_heal
+        self._disp_total_hps = self._target_total_hps
         self._disp_elapsed = self._target_elapsed
         return prev != (self._disp_total_damage, self._disp_total_dps,
                         self._disp_total_heal, self._disp_total_hps,
@@ -765,18 +822,13 @@ class DpsOverlay:
     def _step_row(self, row: _RowState, now: float) -> bool:
         before = (row.disp_damage, row.disp_dps, row.disp_heal, row.disp_hps,
                   row.disp_bar_pct, row.disp_y)
-        row.disp_damage = self._decay_toward(
-            row.disp_damage, row.target_damage, self.NUM_TWEEN)
-        row.disp_dps = self._decay_toward(
-            row.disp_dps, row.target_dps, self.NUM_TWEEN)
-        row.disp_heal = self._decay_toward(
-            row.disp_heal, row.target_heal, self.NUM_TWEEN)
-        row.disp_hps = self._decay_toward(
-            row.disp_hps, row.target_hps, self.NUM_TWEEN)
-        row.disp_bar_pct = self._decay_toward(
-            row.disp_bar_pct, row.target_bar_pct, self.BAR_TWEEN)
-        row.disp_y = self._decay_toward(
-            row.disp_y, row.target_y, self.ROW_TWEEN)
+        # Web dps.html applies row text, widths, and ordering immediately.
+        row.disp_damage = row.target_damage
+        row.disp_dps = row.target_dps
+        row.disp_heal = row.target_heal
+        row.disp_hps = row.target_hps
+        row.disp_bar_pct = row.target_bar_pct
+        row.disp_y = row.target_y
         if row.fx_tier:
             dur = _HIT_FX_TIERS.get(row.fx_tier, (0,))[0]
             if now - row.fx_start > dur:
@@ -838,14 +890,23 @@ class DpsOverlay:
     def _build_shell_layer(self, w: int, h: int) -> Image.Image:
         """Compose the static shell (shadow + body + corners) once per size."""
         layer = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        shadow = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rounded_rectangle(
-            (self.BODY_PAD + 2, self.BODY_PAD + 4,
-             w - self.BODY_PAD, h - self.BODY_PAD),
-            radius=8, fill=(31, 34, 16, 72),
+        ambient = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(ambient).rounded_rectangle(
+            (self.BODY_PAD + 4, self.BODY_PAD + 8,
+             w - self.BODY_PAD + 1, h - self.BODY_PAD + 4),
+            radius=10, fill=(22, 24, 18, 62),
         )
-        shadow = _gpu_blur(shadow, 18)
-        layer.alpha_composite(shadow)
+        ambient = _gpu_blur(ambient, 8)
+        layer.alpha_composite(ambient)
+
+        contact = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(contact).rounded_rectangle(
+            (self.BODY_PAD + 2, self.BODY_PAD + 4,
+             w - self.BODY_PAD, h - self.BODY_PAD + 1),
+            radius=8, fill=(31, 34, 16, 88),
+        )
+        contact = _gpu_blur(contact, 3)
+        layer.alpha_composite(contact)
 
         sx, sy = self.BODY_PAD, self.BODY_PAD
         sw, sh = w - 2 * self.BODY_PAD, h - 2 * self.BODY_PAD
@@ -887,9 +948,10 @@ class DpsOverlay:
         if self._panel_fx_tier:
             self._overlay_panel_flash(img, sx, sy, sw, sh, now)
 
-        if self._fade_alpha < 0.999:
+        final_alpha = max(0.0, min(1.0, self.PANEL_OPACITY * self._fade_alpha))
+        if final_alpha < 0.999:
             a = np.asarray(img, dtype=np.uint8).copy()
-            mul = int(max(0, min(255, self._fade_alpha * 255)))
+            mul = int(max(0, min(255, final_alpha * 255)))
             a[:, :, 3] = (a[:, :, 3].astype(np.uint16) * mul // 255
                           ).astype(np.uint8)
             img = Image.fromarray(a, 'RGBA')
@@ -912,6 +974,21 @@ class DpsOverlay:
             (0, 0, sw - 1, sh - 1), radius=6, fill=255
         )
         img.paste(grad_img, (sx, sy), mask)
+
+        sheen = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+        sd_sheen = ImageDraw.Draw(sheen, 'RGBA')
+        sd_sheen.rounded_rectangle(
+            (1, 1, sw - 2, max(12, int(sh * 0.22))),
+            radius=6, fill=(255, 255, 255, 22),
+        )
+        sd_sheen.rounded_rectangle(
+            (2, max(10, int(sh * 0.38)), sw - 3, sh - 3),
+            radius=6, fill=(28, 31, 23, 14),
+        )
+        sheen = _gpu_blur(sheen, 3)
+        sheen_masked = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+        sheen_masked.paste(sheen, (0, 0), mask)
+        img.alpha_composite(sheen_masked, (sx, sy))
 
         # ::before repeating horizontal scanlines (every 4px, rgba .055)
         scan = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
@@ -936,7 +1013,7 @@ class DpsOverlay:
         # Top-edge highlight (box-shadow inset 0 1px 0 rgba(255,255,255,0.42))
         draw.line(
             (sx + 1, sy + 2, sx + sw - 2, sy + 2),
-            fill=(255, 255, 255, 107), width=1,
+            fill=self.PANEL_LINE, width=1,
         )
 
     def _draw_corners(self, draw: ImageDraw.ImageDraw,
@@ -949,7 +1026,7 @@ class DpsOverlay:
         draw.line((sx + 2, sy + 2, sx + 2, sy + 2 + cs),
                   fill=cyan, width=2)
         # bottom-right: gold-ish
-        gold_c = (212, 156, 23, 184)
+        gold_c = (212, 156, 23, 255)
         bx = sx + sw - 2
         by = sy + sh - 2
         draw.line((bx - cs, by, bx, by), fill=gold_c, width=2)
@@ -980,9 +1057,8 @@ class DpsOverlay:
         title_w = self._tracked_text_width(draw, title_text, font_title, 1.6)
 
         # Mode-badge "LIVE" (green) or "REPORT" (gold)
-        badge_label = 'LIVE' if self._encounter_active else 'IDLE'
-        badge_color = self.BADGE_LIVE if self._encounter_active \
-            else self.TEXT_MUTED
+        badge_label = 'LIVE'
+        badge_color = self.BADGE_LIVE
         bx = x_left + title_w + 10
         by = y
         font_badge = _load_font('sao', 10)
@@ -991,7 +1067,7 @@ class DpsOverlay:
         bh_ = 20
         self._draw_clip_rect(draw, bx, by, bw, bh_,
                              fill=(255, 255, 255, 107),
-                             outline=(160, 162, 150, 163))
+                             outline=self.BTN_BORDER)
         self._draw_tracked(draw, (bx + 8, by + 4), badge_label,
                            font_badge, badge_color, 1.1)
         y += self.TITLE_H
@@ -999,14 +1075,11 @@ class DpsOverlay:
         # Summary
         if self._encounter_active:
             summary = (
-                f'COMBAT ACTIVE · '
-                f'{_fmt_num(self._disp_total_damage)} DMG · '
-                f'{_fmt_num(self._disp_total_dps)}/s'
+                f'LIVE DPS {_fmt_num(self._disp_total_dps)} · '
+                f'LIVE HPS {_fmt_num(self._disp_total_hps)}'
             )
-        elif self._rows:
-            summary = 'WAITING FOR COMBAT DATA'
         else:
-            summary = 'AWAITING ENGAGEMENT'
+            summary = 'WAITING FOR COMBAT DATA'
         font_sum = _load_font('sao', 10)
         self._draw_tracked(draw, (x_left, y + 2),
                            summary, font_sum, self.TEXT_MUTED, 0.85)
@@ -1047,7 +1120,7 @@ class DpsOverlay:
             fg = self.BTN_LIVE_COLOR
         elif active:
             fill = (222, 166, 32, 46)
-            border = (222, 166, 32, 184)
+            border = (222, 166, 32, 255)
             fg = self.GOLD
         else:
             fill = self.BTN_BG
@@ -1074,11 +1147,11 @@ class DpsOverlay:
             tx = x0 + i * (tab_w + gap)
             if active:
                 fill = (222, 166, 32, 33)       # 0.13
-                border = (222, 166, 32, 168)     # 0.66
+                border = (222, 166, 32, 255)
                 fg = self.GOLD
             else:
                 fill = (255, 255, 255, 66)      # 0.26
-                border = (160, 162, 150, 133)   # 0.52
+                border = self.BTN_BORDER
                 fg = self.TEXT_MUTED
             self._draw_clip_rect(draw, tx, y, tab_w, self.TAB_H,
                                  fill=fill, outline=border, bevel=10)
@@ -1095,12 +1168,20 @@ class DpsOverlay:
         self._fill_rounded_rect(
             img, (lx, ly, lx + lw - 1, ly + lh - 1), radius=4, fill=self.LIST_BG
         )
+        self._fill_rounded_rect(
+            img, (lx + 2, ly + 2, lx + lw - 3, ly + min(lh // 3, 18)),
+            radius=4, fill=(255, 255, 255, 14),
+        )
+        self._fill_rounded_rect(
+            img, (lx + 3, ly + max(14, lh // 2), lx + lw - 4, ly + lh - 4),
+            radius=4, fill=(22, 24, 18, 8),
+        )
         draw.rounded_rectangle(
             (lx, ly, lx + lw - 1, ly + lh - 1),
             radius=4, outline=self.LIST_BORDER, width=1,
         )
         if not self._rows:
-            msg = 'WAITING FOR COMBAT DATA'
+            msg = 'NO LIVE COMBAT DATA'
             font = _load_font('sao', 11)
             self._draw_tracked_centered(draw, msg, font, self.TEXT_MUTED,
                                         lx + lw // 2, ly + lh // 2 - 6, 2)
@@ -1124,14 +1205,58 @@ class DpsOverlay:
     def _draw_row(self, draw: ImageDraw.ImageDraw, img: Image.Image,
                   row: _RowState, x: int, y: int, w: int, h: int,
                   rank_idx: int) -> None:
+        bevel = 10
         # Row background with clip-path:polygon(10px 0,100% 0,100% 100%,0 100%,0 10px)
         self._draw_clip_rect(draw, x, y, w, h,
                              fill=self.ROW_BG, outline=self.ROW_BORDER,
-                             bevel=10)
+                             bevel=bevel)
+        top_sheen = [
+            (x + bevel + 1, y + 1),
+            (x + w - 2, y + 1),
+            (x + w - 3, y + min(h // 3 + 1, h - 4)),
+            (x + 2, y + min(h // 3 + 1, h - 4)),
+            (x + 1, y + bevel),
+        ]
+        self._fill_polygon(img, top_sheen, (255, 255, 255, 12))
+        self._fill_polygon(
+            img,
+            [
+                (x + bevel, y + max(8, h // 2)),
+                (x + w - 2, y + max(8, h // 2)),
+                (x + w - 2, y + h - 2),
+                (x, y + h - 2),
+                (x, y + bevel),
+            ],
+            (20, 20, 14, 9),
+        )
         # Self highlight: left gold border
         if row.is_self:
-            draw.line((x + 1, y + 2, x + 1, y + h - 2),
-                      fill=self.ROW_SELF_BAR, width=3)
+            self._fill_polygon(
+                img,
+                [
+                    (x, y + bevel),
+                    (x + 3, y + bevel - 3),
+                    (x + 3, y + h - 2),
+                    (x, y + h - 2),
+                ],
+                self.ROW_SELF_BAR,
+            )
+            self._draw_clip_rect(
+                draw, x, y, w, h,
+                outline=(222, 166, 32, 255),
+                bevel=bevel,
+            )
+            self._fill_polygon(
+                img,
+                [
+                    (x + bevel, y + 1),
+                    (x + w - 2, y + 1),
+                    (x + w - 2, y + h - 2),
+                    (x, y + h - 2),
+                    (x, y + bevel),
+                ],
+                (222, 166, 32, 8),
+            )
 
         # Animated bar fill (within clip)
         bar_pct = max(0.0, min(1.0, row.disp_bar_pct))
@@ -1151,7 +1276,7 @@ class DpsOverlay:
                 self._draw_clip_rect(
                     draw, x, y, w, h,
                     outline=(tint[0], tint[1], tint[2], outline_a),
-                    bevel=10,
+                    bevel=bevel,
                 )
 
         # Rank number (web: plain digit coloured by rank, no #)
@@ -1198,7 +1323,7 @@ class DpsOverlay:
         fp = _fmt_fp(row.fight_point)
         if fp:
             sub_parts.append(fp)
-        sub_text = ' · '.join(sub_parts).upper() if sub_parts else ''
+        sub_text = ' · '.join(sub_parts).upper() if sub_parts else 'LIVE COMBAT ENTRY'
         if sub_text:
             sub_font = _pick_font(sub_text, 9)
             sub = self._truncate(sub_text, sub_font, max_name_w, draw)
@@ -1231,6 +1356,16 @@ class DpsOverlay:
             draw._image,
             (sx + 1, fy + 1, sx + sw - 2, fy + fh - 2),
             fill=(255, 255, 255, 76),
+        )
+        self._fill_rect(
+            draw._image,
+            (sx + 2, fy + 2, sx + sw - 3, fy + min(fh // 2, 16)),
+            fill=(255, 255, 255, 12),
+        )
+        self._fill_rect(
+            draw._image,
+            (sx + 2, fy + max(14, fh // 2), sx + sw - 3, fy + fh - 3),
+            fill=(22, 24, 18, 8),
         )
         font = _load_font('sao', 10)
         x_left = sx + self.HEADER_PAD_X
@@ -1366,7 +1501,7 @@ class DpsOverlay:
         if bw <= 0 or bh <= 0:
             return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
         if row.is_self:
-            ca, cb = (255, 210, 120, 92), (222, 166, 32, 8)
+            ca, cb = (255, 215, 132, 104), (222, 166, 32, 14)
         elif row.heal_total > row.damage_total and row.heal_total > 0:
             ca, cb = self.BAR_HEAL_A, self.BAR_HEAL_B
         else:
@@ -1389,6 +1524,29 @@ class DpsOverlay:
         )
         out = Image.new('RGBA', (bw, bh), (0, 0, 0, 0))
         out.paste(bar, (0, 0), mask)
+
+        highlight = Image.new('RGBA', (bw, bh), (0, 0, 0, 0))
+        hd = ImageDraw.Draw(highlight, 'RGBA')
+        hd.rounded_rectangle(
+            (0, 0, bw - 1, max(2, bh // 3)),
+            radius=min(3, max(1, bh // 2)),
+            fill=(255, 255, 255, 22 if row.is_self else 16),
+        )
+        hd.line(
+            (1, max(1, bh - 2), max(1, bw - 2), max(1, bh - 2)),
+            fill=(28, 24, 16, 20 if row.is_self else 14), width=1,
+        )
+        highlight = _gpu_blur(highlight, 1.1)
+        out.alpha_composite(highlight)
+
+        leading = Image.new('RGBA', (bw, bh), (0, 0, 0, 0))
+        ld = ImageDraw.Draw(leading, 'RGBA')
+        ld.rounded_rectangle(
+            (0, 0, min(bw - 1, 4), bh - 1),
+            radius=min(3, max(1, bh // 2)),
+            fill=(255, 240, 200, 26 if row.is_self else 14),
+        )
+        out.alpha_composite(leading)
         return out
 
     def _truncate(self, text: str, font, max_w: int,
