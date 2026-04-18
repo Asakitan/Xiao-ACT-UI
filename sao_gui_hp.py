@@ -861,7 +861,10 @@ class HpOverlay:
         plate = Image.fromarray(grad, 'RGBA').resize((w, h))
         mask = self._id_plate_mask(y_off)
 
-        # Shadow
+        # Shadow — clipped to plate-and-below so blur cannot leak upward
+        # into the area above the panel where it would (a) be visible as a
+        # halo above the ID plate and (b) capture clicks that should pass
+        # through to the game window.
         shadow = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         ImageDraw.Draw(shadow).rounded_rectangle(
             (ID_X + 2, ID_Y + 5 + y_off,
@@ -869,6 +872,13 @@ class HpOverlay:
             radius=6, fill=(0, 0, 0, 82),
         )
         shadow = _gpu_blur(shadow, 7)
+        # Zero out everything above the plate's top edge so the blurred
+        # halo cannot leak upward beyond the panel content.
+        clip_top = max(0, ID_Y + y_off)
+        if clip_top > 0:
+            sh_arr = np.array(shadow, dtype=np.uint8)
+            sh_arr[:clip_top, :, 3] = 0
+            shadow = Image.fromarray(sh_arr, 'RGBA')
         img.alpha_composite(shadow)
 
         img.paste(plate, (0, 0), mask)
@@ -1138,7 +1148,9 @@ class HpOverlay:
         cover = Image.fromarray(grad, 'RGBA').resize((w, h))
         mask = self._cover_mask(y_off)
 
-        # Shadow
+        # Shadow — clipped above the cover so blur halo cannot leak past
+        # the panel boundary into the area above (which would be visible
+        # as a halo and capture mouse clicks).
         shadow = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         ImageDraw.Draw(shadow).rounded_rectangle(
             (COVER_X + 2, COVER_Y + 5 + y_off,
@@ -1146,6 +1158,11 @@ class HpOverlay:
             radius=6, fill=(0, 0, 0, 60),
         )
         shadow = _gpu_blur(shadow, 6)
+        clip_top = max(0, COVER_Y + y_off)
+        if clip_top > 0:
+            sh_arr = np.array(shadow, dtype=np.uint8)
+            sh_arr[:clip_top, :, 3] = 0
+            shadow = Image.fromarray(sh_arr, 'RGBA')
         img.alpha_composite(shadow)
 
         img.paste(cover, (0, 0), mask)
