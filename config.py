@@ -343,8 +343,14 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.8"
+APP_VERSION = "2.1.9"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.9:
+#   1) parser 在 self UID 未确认前缓存并回放早到的 0x16 / 0x2E 自身同步包，
+#      修复 EnterGame 较晚时角色名 / 基础等级 / 赛季等级 / 技能 CD 与 slot
+#      长期缺失或显示 unknown；
+#   2) 本版以 full-package + force_update + minimum_version=2.1.9 推送，
+#      强制所有旧版本升级。
 # v2.1.8:
 #   1) 抓包层在识别游戏服务器前先缓冲并回放候选下行首包，修复首个
 #      0x15/0x16 身份同步被丢弃后角色名 / 基础等级 / 赛季等级长期为空；
