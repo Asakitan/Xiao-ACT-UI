@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Pure-vision recognition pipeline for stamina."""
+"""
+Pure-vision recognition ipeline for stamina.
+This module provides a standalone function `detect_stamina_pct` that takes a BGR image of the stamina bar region and returns the detected fill percentage and confidence.
+
+"""
 
 from __future__ import annotations
 

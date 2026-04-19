@@ -14,6 +14,7 @@ Public entry points (all fall back to CPU if the GPU context fails):
 Threading: OpenGL contexts are thread-affine. Overlays schedule frame
 composition via Tk ``after()``, so all calls happen on the Tk main thread.
 Do not call these from background threads.
+
 """
 
 from __future__ import annotations

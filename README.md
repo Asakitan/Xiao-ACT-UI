@@ -2,7 +2,13 @@
 
 `SAO Auto` 是一个面向《星痕共鸣》的外部 HUD / 自动化项目，当前版本同时维护 `entity` 与 `webview` 两套 UI 入口，并补齐了远程更新、独立 updater、模块化发布目录、脚本仓库与更新服务端的完整发布链路。
 
-当前版本：`2.1.2`
+当前版本：`2.1.2-a`
+
+## 2.1.2-a 概览
+
+- 当前发布版本更新为 `2.1.2-a`，继续沿用已修复的后缀版本比较逻辑进行增量分发
+- 同步当前源码整理与远端发布链路，客户端会拿到新的 `runtime-delta` 清单
+- 2.1.2 的 SAO Menu 60Hz 调度、child menu 去重和 updater 版本比较修复继续保留
 
 ## 2.1.2 概览
 
@@ -275,17 +281,22 @@ sao_auto/
 
 ## 更新记录
 
-### 2.1.1-a
+### 2.1.2-a
 
-- entity SAO Menu HUD 在菜单保持打开时持续按 60Hz 调度，扫描线 / 光点 / 呼吸位移不再掉回低帧率
-- `sao_gui.py` 为菜单状态刷新增加签名缓存与 `after_idle` 合帧，避免多个状态变更连续重建整套 child menu
-- `sao_theme.py` 为 child menu 注册和可见菜单切换增加内容签名去重，并减少 overlay geometry / HUD relayout 的无效调用
+- 当前发布版本更新为 `2.1.2-a`，继续通过后缀版本比较逻辑向现有客户端分发更新
+- 同步当前源码整理与远端发布链路，重新生成 `runtime-delta` 更新包
 
 ### 2.1.2
 
 - 延续 entity SAO Menu 的 60Hz 调度与 child menu 去重优化
 - 修复 `sao_updater.py` 版本比较逻辑，使 `2.1.1-a` 等后缀版本能被客户端正确判定为新版本
 - 当前发布版本切换为纯数字 `2.1.2`，兼容旧版 `2.1.1` 客户端的自动更新判断
+
+### 2.1.1-a
+
+- entity SAO Menu HUD 在菜单保持打开时持续按 60Hz 调度，扫描线 / 光点 / 呼吸位移不再掉回低帧率
+- `sao_gui.py` 为菜单状态刷新增加签名缓存与 `after_idle` 合帧，避免多个状态变更连续重建整套 child menu
+- `sao_theme.py` 为 child menu 注册和可见菜单切换增加内容签名去重，并减少 overlay geometry / HUD relayout 的无效调用
 
 ### 2.1.1
 
