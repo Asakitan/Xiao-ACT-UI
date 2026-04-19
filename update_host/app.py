@@ -88,6 +88,88 @@ def _bind_publish_api_key(api_key: str) -> str:
     return value
 
 
+def _safe_channel_target(channel: str, target: str) -> tuple[str, str]:
+    safe_channel = "".join(c for c in channel if c.isalnum() or c in "-_") or "stable"
+    safe_target = "".join(c for c in target if c.isalnum() or c in "-_") or "windows-x64"
+    return safe_channel, safe_target
+
+
+def _anchor_key(channel: str, target: str) -> str:
+    safe_channel, safe_target = _safe_channel_target(channel, target)
+    return f"{safe_channel}/{safe_target}"
+
+
+def _get_anchor(channel: str, target: str) -> dict:
+    safe_channel, safe_target = _safe_channel_target(channel, target)
+    config = _load_host_config()
+    anchors = config.get("anchors") if isinstance(config.get("anchors"), dict) else {}
+    item = anchors.get(_anchor_key(safe_channel, safe_target), {}) if isinstance(anchors, dict) else {}
+    if isinstance(item, dict) and (item.get("commit") or item.get("version")):
+        return {
+            "channel": safe_channel,
+            "target": safe_target,
+            "commit": str(item.get("commit") or ""),
+            "commit_short": str(item.get("commit_short") or ""),
+            "version": str(item.get("version") or ""),
+            "synced_at": str(item.get("synced_at") or ""),
+            "source": str(item.get("source") or "manual-sync"),
+        }
+
+    manifest = _load_manifest(safe_channel, safe_target)
+    if isinstance(manifest, dict) and (manifest.get("commit") or manifest.get("version")):
+        return {
+            "channel": safe_channel,
+            "target": safe_target,
+            "commit": str(manifest.get("commit") or ""),
+            "commit_short": str(manifest.get("commit_short") or ""),
+            "version": str(manifest.get("version") or ""),
+            "synced_at": str(manifest.get("published_at") or ""),
+            "source": "manifest",
+        }
+
+    return {
+        "channel": safe_channel,
+        "target": safe_target,
+        "commit": "",
+        "commit_short": "",
+        "version": "",
+        "synced_at": "",
+        "source": "",
+    }
+
+
+def _set_anchor(
+    channel: str,
+    target: str,
+    commit: str,
+    commit_short: str = "",
+    version: str = "",
+    source: str = "manual-sync",
+) -> dict:
+    safe_channel, safe_target = _safe_channel_target(channel, target)
+    commit = (commit or "").strip()
+    if not commit:
+        raise ValueError("missing commit")
+
+    config = _load_host_config()
+    anchors = config.get("anchors") if isinstance(config.get("anchors"), dict) else {}
+    payload = {
+        "commit": commit,
+        "commit_short": (commit_short or "").strip() or commit[:8],
+        "version": (version or "").strip(),
+        "synced_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": (source or "manual-sync").strip(),
+    }
+    anchors[_anchor_key(safe_channel, safe_target)] = payload
+    config["anchors"] = anchors
+    _save_host_config(config)
+    return {
+        "channel": safe_channel,
+        "target": safe_target,
+        **payload,
+    }
+
+
 def _normalize_url(url: str, base_url: str) -> str:
     if not url:
         return ""
@@ -99,8 +181,7 @@ def _normalize_url(url: str, base_url: str) -> str:
 
 
 def _load_manifest(channel: str, target: str) -> Optional[dict]:
-    safe_channel = "".join(c for c in channel if c.isalnum() or c in "-_") or "stable"
-    safe_target = "".join(c for c in target if c.isalnum() or c in "-_") or "windows-x64"
+    safe_channel, safe_target = _safe_channel_target(channel, target)
     path = os.path.join(DEFAULT_RELEASE_DIR, safe_channel, safe_target, "manifest.json")
     if not os.path.exists(path):
         return None
@@ -169,6 +250,11 @@ def summary():
     return {"channels": out}
 
 
+@app.get("/api/update/anchor")
+def get_anchor(channel: str = "stable", target: str = "windows-x64"):
+    return JSONResponse(_get_anchor(channel, target))
+
+
 @app.get("/")
 def root():
     return {
@@ -177,6 +263,8 @@ def root():
             "/api/health",
             "/api/update/latest",
             "/api/update/summary",
+            "/api/update/anchor",
+            "POST /api/update/anchor",
             "POST /api/update/publish",
             "/downloads/*",
         ],
@@ -185,6 +273,34 @@ def root():
 
 # ── 发布上传 (dev_publish.py --upload 调用) ──────────────────────────
 _PUBLISH_API_KEY = _get_local_publish_api_key()
+
+
+def _authorize_publish_request(request: Request) -> None:
+    api_key = request.headers.get("X-API-Key", "")
+    global _PUBLISH_API_KEY
+    local_api_key = _PUBLISH_API_KEY or _get_local_publish_api_key()
+    if not local_api_key:
+        local_api_key = _bind_publish_api_key(api_key)
+        _PUBLISH_API_KEY = local_api_key
+    if not local_api_key or api_key != local_api_key:
+        raise HTTPException(status_code=401, detail="invalid or missing API key")
+
+
+@app.post("/api/update/anchor")
+def sync_anchor(
+    request: Request,
+    channel: str = "stable",
+    target: str = "windows-x64",
+    commit: str = "",
+    commit_short: str = "",
+    version: str = "",
+    source: str = "manual-sync",
+):
+    _authorize_publish_request(request)
+    try:
+        return JSONResponse(_set_anchor(channel, target, commit, commit_short, version, source))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/api/update/publish")
@@ -199,25 +315,19 @@ async def publish(
     target: str = "windows-x64",
     commit: str = "",
     commit_short: str = "",
+    anchor_commit: str = "",
+    anchor_commit_short: str = "",
+    anchor_version: str = "",
 ):
     """接收 dev_publish.py 上传的 zip 包并写入 releases/."""
-    # ── Auth ──
-    api_key = request.headers.get("X-API-Key", "")
-    global _PUBLISH_API_KEY
-    local_api_key = _PUBLISH_API_KEY or _get_local_publish_api_key()
-    if not local_api_key:
-        local_api_key = _bind_publish_api_key(api_key)
-        _PUBLISH_API_KEY = local_api_key
-    if not local_api_key or api_key != local_api_key:
-        raise HTTPException(status_code=401, detail="invalid or missing API key")
+    _authorize_publish_request(request)
 
     body = await request.body()
     if not body:
         raise HTTPException(status_code=400, detail="empty body")
 
     # ── Sanitize ──
-    safe_ch = "".join(c for c in channel if c.isalnum() or c in "-_") or "stable"
-    safe_tg = "".join(c for c in target if c.isalnum() or c in "-_") or "windows-x64"
+    safe_ch, safe_tg = _safe_channel_target(channel, target)
     safe_ver = "".join(c for c in version if c.isalnum() or c in ".-") or "0.0.0"
     safe_type = package_type if package_type in ("runtime-delta", "full-package") else "runtime-delta"
 
@@ -245,11 +355,24 @@ async def publish(
         "notes": notes,
         "commit": commit,
         "commit_short": commit_short,
+        "anchor_commit": anchor_commit,
+        "anchor_commit_short": anchor_commit_short,
+        "anchor_version": anchor_version,
         "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
     manifest_path = os.path.join(target_dir, "manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    if (commit or "").strip():
+        _set_anchor(
+            channel=safe_ch,
+            target=safe_tg,
+            commit=commit,
+            commit_short=commit_short,
+            version=safe_ver,
+            source="publish",
+        )
 
     return JSONResponse(manifest)
