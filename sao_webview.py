@@ -2309,13 +2309,9 @@ class SAOWebViewGUI:
     def _should_show_sta_offline(self, gs) -> bool:
         if gs is None:
             return False
-        recognition_ok = bool(getattr(gs, 'recognition_ok', False))
-        stamina_offline = bool(getattr(gs, 'stamina_offline', False))
-        if recognition_ok or stamina_offline:
-            self._sta_offline_armed = True
-        if not self._sta_offline_armed:
-            return False
-        return (not recognition_ok) or stamina_offline
+        # STA OFFLINE 仅由 vision 驱动。packet 活动不会抹除该状态，
+        # 但也不会因为 vision recognition_ok 闪动到 False 而误报。
+        return bool(getattr(gs, 'stamina_offline', False))
 
     def _persist_cached_identity_state(self, save_now: bool = False):
         settings = getattr(self, '_cfg_settings_ref', None)
@@ -5772,16 +5768,13 @@ class SAOWebViewGUI:
                     # Use packet HP data if available
                     self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
                     sta_offline = self._should_show_sta_offline(gs)
-                    if gs.recognition_ok:
-                        if sta_offline:
-                            self._eval_hp('setSTAOffline(true)')
-                        else:
-                            self._eval_hp('setSTAOffline(false)')
-                            sta = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
-                            self._eval_hp(f'updateSTA({sta}, 100)')
+                    self._eval_hp(f'setSTAOffline({str(bool(sta_offline)).lower()})')
+                    if not sta_offline:
+                        sta = int(round(max(0.0, min(1.0, float(gs.stamina_pct or 0.0))) * 100.0))
+                        self._eval_hp(f'updateSTA({sta}, 100)')
+                    if gs.recognition_ok or getattr(gs, 'packet_active', False):
                         self._eval_hp('setPlayState("playing")')
                     else:
-                        self._eval_hp(f'setSTAOffline({str(bool(sta_offline)).lower()})')
                         self._eval_hp('setPlayState("idle")')
                     # ── Boss Timer push (packet-driven, always runs) ──
                     _boss_text = getattr(gs, 'boss_timer_text', '') or ''

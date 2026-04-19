@@ -113,12 +113,22 @@ class AlertOverlay:
 
     def _create_alert(self, title: str, message: str, display_time: float | None = None):
         with self._lock:
-            if self._active:
-                try:
-                    self._active['win'].destroy()
-                except Exception:
-                    pass
-                self._active = None
+            prev = self._active
+            self._active = None
+        if prev is not None:
+            # 先标记为 destroyed 以让遗留的 anim/hold 回调提前退出，
+            # 再销毁窗口。避免两个 alert 重叠在一起。
+            prev['destroyed'] = True
+            try:
+                prev['win'].destroy()
+            except Exception:
+                pass
+        try:
+            if self._anim_id is not None:
+                self.root.after_cancel(self._anim_id)
+        except Exception:
+            pass
+        self._anim_id = None
 
         # Pre-render the static frame at full opacity
         base_img = self._render_frame(title, message)
@@ -243,7 +253,7 @@ class AlertOverlay:
         draw = ImageDraw.Draw(img)
 
         # Title text: font-weight 800, 18px, letter-spacing 1px
-        font_title = _load_font('sao', 18)
+        font_title = _load_font('cjk', 18)
         if len(title) > 30:
             title = title[:29] + '…'
         tw = _tracked_text_width(title, font_title, 1.0)
@@ -252,7 +262,7 @@ class AlertOverlay:
         _draw_tracked(draw, (tx, ty), title, fill=self.TITLE_COLOR, font=font_title, spacing=1.0)
 
         # Body text: 14px, centered, pre-line
-        font_body = _load_font('sao', 14)
+        font_body = _load_font('cjk', 14)
         if message:
             lines = message.split('\n')
             line_h = 14 * 1.7  # line-height: 1.7

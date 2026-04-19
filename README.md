@@ -2,7 +2,14 @@
 
 `SAO Auto` 是一个面向《星痕共鸣》的外部 HUD / 自动化项目，当前版本同时维护 `entity` 与 `webview` 两套 UI 入口，并补齐了远程更新、独立 updater、模块化发布目录、脚本仓库与更新服务端的完整发布链路。
 
-当前版本：`2.1.2-a`
+当前版本：`2.1.2-b`
+
+## 2.1.2-b 概览
+
+- STA 识别完全交给 vision，packet bridge 不再写 `recognition_ok`，避免与 vision 抢着翻转造成 STA 误报 OFFLINE
+- entity 更新弹窗 (`AlertOverlay`) 标题与正文改用中文圆体 `ZhuZiAYuanJWD`，修复中文渲染为方框
+- entity 更新弹窗在新弹窗触发时同步取消旧弹窗的动画/驻留回调，旧弹窗不再残留在新弹窗下面
+- `auto_key_engine` 与 entity/webview 的识别循环改为接受 vision OR packet 任一活跃信号
 
 ## 2.1.2-a 概览
 
@@ -280,6 +287,13 @@ sao_auto/
 ```
 
 ## 更新记录
+
+### 2.1.2-b
+
+- STA 识别完全交给 vision，packet bridge 不再写 `recognition_ok`，避免与 vision 抢着翻转造成 STA 误报 OFFLINE
+- entity 更新弹窗 (`AlertOverlay`) 标题与正文改用中文圆体 `ZhuZiAYuanJWD`，修复中文渲染为方框
+- entity 更新弹窗在新弹窗触发时同步取消旧弹窗的动画/驻留回调，旧弹窗不再残留在新弹窗下面
+- `auto_key_engine` 与 entity/webview 的识别循环改为接受 vision OR packet 任一活跃信号
 
 ### 2.1.2-a
 

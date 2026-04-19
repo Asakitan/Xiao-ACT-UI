@@ -1775,13 +1775,9 @@ class SAOPlayerGUI:
     def _should_show_sta_offline(self, gs) -> bool:
         if gs is None:
             return False
-        recognition_ok = bool(getattr(gs, 'recognition_ok', False))
-        stamina_offline = bool(getattr(gs, 'stamina_offline', False))
-        if recognition_ok or stamina_offline:
-            self._sta_offline_armed = True
-        if not self._sta_offline_armed:
-            return False
-        return (not recognition_ok) or stamina_offline
+        # STA OFFLINE 仅由 vision 驱动。packet 活动不会抹除该状态，
+        # 但也不会因为 vision recognition_ok 闪动到 False 而误报。
+        return bool(getattr(gs, 'stamina_offline', False))
 
     def _persist_cached_identity_state(self, save_now: bool = False):
         settings = getattr(self, '_cfg_settings_ref', None)
@@ -1929,7 +1925,7 @@ class SAOPlayerGUI:
         if self._recognition_active and self._state_mgr:
             try:
                 gs = self._state_mgr.state
-                if gs.recognition_ok:
+                if gs.recognition_ok or getattr(gs, 'packet_active', False):
                     # HP data
                     if gs.hp_max > 0:
                         hp, hp_max = gs.hp_current, gs.hp_max
