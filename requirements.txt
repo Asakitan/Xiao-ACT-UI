@@ -23,5 +23,5 @@ pygame>=2.0                     # SAO 音效系统
 # ═══ 抓包数据源 (可选, data_source=packet 时需要) ═══
 zstandard>=0.20                 # zstd 解压 (游戏协议压缩)
 # dpkt>=1.9                     # 以太网/IP/TCP 解析 (已内置手动解析, 可选)
-# protobuf>=4.0                 # Protobuf 解码 (已内置 mini 解码器, 可选)
+protobuf>=6.31.1               # SyncContainerData / compiled proto 解码 (全量身份字段必需)
 # Npcap 驱动需单独安装: https://npcap.com

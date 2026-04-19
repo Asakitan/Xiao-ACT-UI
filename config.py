@@ -343,8 +343,16 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.6"
+APP_VERSION = "2.1.7"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.7:
+#   1) SyncContainerData 在 pb2 缺失 / 解析失败时回退 mini 解码，恢复
+#      UID / 角色名 / 等级 / 职业等关键身份字段；
+#   2) webview HUD 改为跟随游戏窗口所在显示器的 DPI / 几何，修复高 DPI /
+#      多显示器下 STA / HP 区域漂移；
+#   3) _set_dpi_aware 统一复用早期 PerMonitorV2 提升逻辑；
+#   4) 本版以 full-package + force_update + minimum_version=2.1.7 推送，
+#      强制所有旧版本升级。
 # v2.1.6:
 #   1) 识别线程设置 per-thread PerMonitorV2 DPI，修复 onedir/webview 下
 #      GetClientRect 返回逻辑像素导致 STA 裁剪坐标偏移、始终 OFFLINE；

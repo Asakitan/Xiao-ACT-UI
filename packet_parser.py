@@ -321,6 +321,29 @@ def _decode_int32_from_raw(raw: bytes) -> int:
         return 0
 
 
+def _decode_utf8_bytes(raw: Optional[bytes]) -> str:
+    if not raw:
+        return ''
+    try:
+        return bytes(raw).decode('utf-8', 'ignore')
+    except Exception:
+        return ''
+
+
+def _get_field_int(fields: Dict[int, list], field_num: int, default: int = 0) -> int:
+    for value in fields.get(field_num, []) or []:
+        if isinstance(value, int):
+            return int(value)
+    return int(default)
+
+
+def _get_field_bytes(fields: Dict[int, list], field_num: int) -> Optional[bytes]:
+    for value in fields.get(field_num, []) or []:
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value)
+    return None
+
+
 def _decode_float32_from_raw(raw: bytes) -> Optional[float]:
     if not raw or len(raw) < 4:
         return None
@@ -2324,11 +2347,169 @@ class PacketParser:
             # If not CharTeam, log what we can
             logger.info(f'[Parser] {notify_name}: not decodable as CharTeam, raw logged')
 
+    def _try_sync_container_data_fallback(self, data: bytes, reason: str = '') -> bool:
+        """Best-effort identity decode when compiled protobuf is unavailable.
+
+        This keeps the startup identity path alive in frozen builds even if the
+        generated pb2 module cannot import (missing/incompatible protobuf runtime).
+        """
+        try:
+            outer_fields = _decode_fields(data)
+            char_raw = _get_field_bytes(outer_fields, 1)
+            if not char_raw:
+                logger.error('[Parser] SyncContainerData fallback: missing CharSerialize payload')
+                return False
+            char_fields = _decode_fields(char_raw)
+            uid = _get_field_int(char_fields, CharField.CHAR_ID, 0)
+        except Exception as e:
+            logger.error(f'[Parser] SyncContainerData fallback decode failed: {e}')
+            return False
+
+        if uid <= 0:
+            logger.error('[Parser] SyncContainerData fallback: invalid uid=0')
+            return False
+
+        reason_text = f' ({reason})' if reason else ''
+        logger.warning(
+            f'[Parser] SyncContainerData fallback{reason_text}: '
+            f'uid={uid}, current_uid={self._current_uid}'
+        )
+        print(
+            f'[Parser] SyncContainerData fallback{reason_text}: '
+            f'uid={uid}, current_uid={self._current_uid}',
+            flush=True,
+        )
+
+        self._sync_container_count += 1
+
+        if self._current_uid == 0:
+            self._current_uid = uid
+            logger.info(f'[Parser] auto-adopt self UID from SyncContainerData fallback: {uid}')
+        elif self._sync_container_count > 1 and uid == self._current_uid:
+            print(
+                f'[Parser] SyncContainerData 重新同步 (第{self._sync_container_count}次), '
+                f'保留 {len(self._monsters)} 个怪物 (fallback, 不重置场景)',
+                flush=True,
+            )
+
+        player = self._get_player(uid)
+        changed = False
+        fallback_debug = {
+            'uid': uid,
+            'reason': reason,
+            'field_count': len(char_fields),
+        }
+
+        char_base_raw = _get_field_bytes(char_fields, CharField.CHAR_BASE)
+        if char_base_raw:
+            char_base_fields = _decode_fields(char_base_raw)
+            name = _decode_utf8_bytes(_get_field_bytes(char_base_fields, 5)).strip()
+            if name:
+                fallback_debug['name'] = name
+                if name != player.name:
+                    player.name = name
+                    changed = True
+            fight_point = _get_field_int(char_base_fields, 35, 0)
+            if fight_point > 0:
+                fallback_debug['fight_point'] = fight_point
+                if fight_point != int(getattr(player, 'fight_point', 0) or 0):
+                    player.fight_point = fight_point
+                    changed = True
+
+        role_level_raw = _get_field_bytes(char_fields, CharField.ROLE_LEVEL)
+        if role_level_raw:
+            role_level_fields = _decode_fields(role_level_raw)
+            role_level = _get_field_int(role_level_fields, 1, 0)
+            if role_level > 0:
+                fallback_debug['role_level'] = role_level
+                if role_level != player.level:
+                    player.level = role_level
+                    changed = True
+
+        season_center_raw = _get_field_bytes(char_fields, CharField.SEASON_CENTER)
+        if season_center_raw:
+            season_center_fields = _decode_fields(season_center_raw)
+            battlepass_raw = _get_field_bytes(season_center_fields, 2)
+            if battlepass_raw:
+                battlepass_fields = _decode_fields(battlepass_raw)
+                battlepass_level = _get_field_int(battlepass_fields, 2, 0)
+                if battlepass_level > 0:
+                    player.battlepass_level = battlepass_level
+                    fallback_debug['battlepass_level'] = battlepass_level
+                    if _set_level_extra_candidate(player, 'battlepass', battlepass_level):
+                        changed = True
+
+        season_medal_raw = _get_field_bytes(char_fields, CharField.SEASON_MEDAL_INFO)
+        if season_medal_raw:
+            season_medal_fields = _decode_fields(season_medal_raw)
+            core_hole_raw = _get_field_bytes(season_medal_fields, 3)
+            if core_hole_raw:
+                core_hole_fields = _decode_fields(core_hole_raw)
+                season_medal_raw_level = _get_field_int(core_hole_fields, 2, 0)
+                season_medal_level = _normalize_season_medal_level(season_medal_raw_level)
+                if season_medal_level > 0:
+                    player.season_medal_level = season_medal_level
+                    player.season_level = max(int(getattr(player, 'season_level', 0) or 0), season_medal_level)
+                    fallback_debug['season_medal_level'] = season_medal_level
+                    if _set_level_extra_candidate(player, 'season_medal', season_medal_level):
+                        changed = True
+
+        monster_hunt_raw = _get_field_bytes(char_fields, CharField.MONSTER_HUNT_INFO)
+        if monster_hunt_raw:
+            monster_hunt_fields = _decode_fields(monster_hunt_raw)
+            monster_hunt_level = _get_field_int(monster_hunt_fields, 2, 0)
+            monster_hunt_exp = _get_field_int(monster_hunt_fields, 3, 0)
+            if monster_hunt_level > 0:
+                player.monster_hunt_level = monster_hunt_level
+                player.season_level = max(int(getattr(player, 'season_level', 0) or 0), monster_hunt_level)
+                fallback_debug['monster_hunt_level'] = monster_hunt_level
+                if _set_level_extra_candidate(player, 'monster_hunt', monster_hunt_level):
+                    changed = True
+            if monster_hunt_exp > 0:
+                fallback_debug['monster_hunt_exp'] = monster_hunt_exp
+                if _set_season_exp_candidate(player, 'monster_hunt', monster_hunt_exp):
+                    changed = True
+
+        profession_list_raw = _get_field_bytes(char_fields, CharField.PROFESSION_LIST)
+        if profession_list_raw:
+            profession_fields = _decode_fields(profession_list_raw)
+            profession_id = _get_field_int(profession_fields, 1, 0)
+            if profession_id <= 0:
+                for entry_raw in profession_fields.get(4, []) or []:
+                    if not isinstance(entry_raw, (bytes, bytearray)):
+                        continue
+                    entry_fields = _decode_fields(bytes(entry_raw))
+                    profession_id = _get_field_int(entry_fields, 1, 0)
+                    if profession_id > 0:
+                        break
+            if profession_id > 0:
+                fallback_debug['profession_id'] = profession_id
+                profession_name = PROFESSION_NAMES.get(profession_id, '')
+                if profession_id != player.profession_id or profession_name != player.profession:
+                    player.profession_id = profession_id
+                    player.profession = profession_name
+                    changed = True
+                if self._apply_cached_profession_slots(player):
+                    changed = True
+
+        _append_packet_debug('sync_container_data_fallback', fallback_debug)
+
+        if changed and uid == self._current_uid:
+            self._notify_self()
+
+        print(
+            f'[Parser] SyncContainerData fallback 完成: uid={uid} Lv.{player.level} '
+            f'职业={player.profession!r}({player.profession_id})',
+            flush=True,
+        )
+        return True
+
     def _on_sync_container_data(self, data: bytes):
         """SyncContainerData { CharSerialize VData = 1 } — 纯 pb2 解析."""
         pb = _ensure_pb()
         if not pb:
             logger.error('[Parser] SyncContainerData: pb2 模块未加载，跳过')
+            self._try_sync_container_data_fallback(data, reason='pb2 unavailable')
             return
 
         try:
@@ -2337,6 +2518,7 @@ class PacketParser:
             char = msg.VData
         except Exception as e:
             logger.error(f'[Parser] SyncContainerData pb2 解析失败: {e}')
+            self._try_sync_container_data_fallback(data, reason='pb2 parse failed')
             return
 
         uid = char.CharId

@@ -56,6 +56,7 @@ LOCAL_HIDDENIMPORTS = [
 ]
 
 WEBVIEW_PLATFORM_HIDDENIMPORTS = collect_submodules('webview.platforms')
+PROTOBUF_HIDDENIMPORTS = collect_submodules('google.protobuf')
 
 a = Analysis(
     ['main.py'],
@@ -71,7 +72,7 @@ a = Analysis(
         # 图标
         ('icon.ico', '.'),
     ],
-    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + [
+    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
         'clr',
         'clr_loader',
