@@ -29,12 +29,20 @@ except Exception:
     pass
 
 
+def _files_are_identical(left: str, right: str) -> bool:
+    """Return True only when two files are byte-for-byte identical."""
+    try:
+        return filecmp.cmp(left, right, shallow=False)
+    except Exception:
+        return False
+
+
 def _is_main_app_host() -> bool:
     """v2.1.2-k: 只有当宿主进程是 XiaoACTUI 主程序时, 才允许动 update.exe.
 
     update.exe 自己也会 import config (它被 PyInstaller 一起打包),
     如果在 update.exe 进程里跑 promote 逻辑, 会 rename/replace 自己,
-    导致 update.exe 启动后 "凭空消失" (用户反馈)。
+    导致 update.exe 启动后 "凭空消失"。
     """
     if not getattr(sys, "frozen", False):
         return False
@@ -64,8 +72,27 @@ def _promote_update_exe_new_early() -> bool:
                 pass
             print("[config] dropped identical update.exe.new", flush=True)
             return False
-        os.replace(staged, target)
-        print(f"[config] promoted update.exe.new -> {target}", flush=True)
+        if not os.path.isfile(target):
+            os.replace(staged, target)
+            print(f"[config] promoted update.exe.new -> {target}", flush=True)
+            return True
+
+        # Use a temp copy + atomic replace so the live helper stays untouched
+        # until the staged file is fully materialized.
+        tmp_target = os.path.join(BASE_DIR, "update.exe.promoting")
+        try:
+            if os.path.exists(tmp_target):
+                os.remove(tmp_target)
+        except Exception:
+            pass
+        import shutil
+        shutil.copy2(staged, tmp_target)
+        os.replace(tmp_target, target)
+        try:
+            os.remove(staged)
+        except Exception:
+            pass
+        print(f"[config] replaced update.exe from update.exe.new -> {target}", flush=True)
         return True
     except PermissionError:
         return False
@@ -128,14 +155,6 @@ except Exception:
     pass
 
 
-def _files_are_identical(left: str, right: str) -> bool:
-    """Return True only when two files are byte-for-byte identical."""
-    try:
-        return filecmp.cmp(left, right, shallow=False)
-    except Exception:
-        return False
-
-
 def _promote_pending_replacements() -> int:
     """v2.1.2-j: 扫描 BASE_DIR 下所有 *.new 文件并 finalize.
 
@@ -164,6 +183,10 @@ def _promote_pending_replacements() -> int:
                 staged = os.path.join(dirpath, fn)
                 target = staged[:-4]
                 if not target:
+                    continue
+                if os.path.normcase(staged) == os.path.normcase(os.path.join(BASE_DIR, "update.exe.new")):
+                    # update.exe.new is handled by the dedicated early bootstrap
+                    # path above; keep it out of the generic .new finalizer.
                     continue
                 try:
                     if os.path.isfile(target) and _files_are_identical(target, staged):
@@ -303,9 +326,9 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.4"
+APP_VERSION = "2.1.5"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.4:
+# v2.1.5:
 #   1) 启动时优先 finalize 顶层 update.exe.new → update.exe；若没有
 #      update.exe.new，则绝不碰现有 update.exe，避免再次出现 helper 被误删；
 #   2) WebView 模式把 PacketBridge 提前到 LinkStart / pywebview 初始化前启动，
@@ -314,7 +337,7 @@ APP_VERSION_LABEL = f"v{APP_VERSION}"
 #   3) STA 首启 warmup 期间抑制错误 OFFLINE，修复首轮空帧导致的误判；
 #   4) SkillFX Burst Ready 统一按 CSS 像素下发 viewport / slot rect，并把
 #      pywebview 窗口 move/resize 切换到逻辑像素，修复高 DPI 下的偏移；
-#   5) 本版以 full-package + force_update + minimum_version=2.1.4 推送，
+#   5) 本版以 full-package + force_update + minimum_version=2.1.5 推送，
 #      强制所有旧版本升级。
 # v2.1.2-m: 修复 sao_alert 同条 alert 4s 内重复触发只续展不重弹;
 #           webview _maybe_show_update_popup 同步 sao_gui 的 downloading
