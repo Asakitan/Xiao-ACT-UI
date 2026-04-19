@@ -298,10 +298,39 @@ def _apply_zip_package(
                         os.remove(tmp_dst)
                 except Exception:
                     pass
+                # v2.1.2-j: 字体/DLL 等容易被 Windows 字体缓存/进程残留持锁的
+                # 文件, 失败时不 raise (整包回滚代价巨大), 仅 stage 一个 .new
+                # 副本, 主程序 XiaoACTUI 启动时由 config._promote_pending_replacements
+                # 完成最终 rename. 用户不会再卡在 SAOUI.ttf 这种锁定文件上。
+                _skip_on_lock = dst.lower().endswith((".ttf", ".otf", ".ttc", ".dll"))
                 try:
                     with zf.open(info, "r") as src, open(tmp_dst, "wb") as out:
                         shutil.copyfileobj(src, out)
-                    _replace_with_retry(tmp_dst, dst)
+                    try:
+                        _replace_with_retry(tmp_dst, dst)
+                    except Exception as replace_err:
+                        if _skip_on_lock:
+                            # stage to dst+'.new'; promote on next XiaoACTUI start
+                            staged = dst + ".new"
+                            try:
+                                if os.path.exists(staged):
+                                    os.remove(staged)
+                                os.replace(tmp_dst, staged)
+                            except Exception:
+                                pass
+                            applied.append(f"{rel} (deferred .new)")
+                            detail = f"暂存 {rel} (字体被锁定, 重启后切换)"
+                            _emit(
+                                progress_cb,
+                                phase="apply",
+                                step=2,
+                                headline="正在写入新版本文件",
+                                detail=detail,
+                                progress=float(index) / float(total_files),
+                                indeterminate=False,
+                            )
+                            continue
+                        raise replace_err
                 finally:
                     try:
                         if os.path.exists(tmp_dst):
