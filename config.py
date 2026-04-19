@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Shared configuration and settings helpers for SAO Auto."""
 
+import filecmp
 import json
 import os
 import sys
@@ -95,6 +96,14 @@ except Exception:
     pass
 
 
+def _files_are_identical(left: str, right: str) -> bool:
+    """Return True only when two files are byte-for-byte identical."""
+    try:
+        return filecmp.cmp(left, right, shallow=False)
+    except Exception:
+        return False
+
+
 def _promote_pending_replacements() -> int:
     """v2.1.2-j: 扫描 BASE_DIR 下所有 *.new 文件并 finalize.
 
@@ -125,33 +134,19 @@ def _promote_pending_replacements() -> int:
                 if not target:
                     continue
                 try:
-                    if os.path.isfile(target):
+                    if os.path.isfile(target) and _files_are_identical(target, staged):
                         try:
-                            if os.path.getsize(target) == os.path.getsize(staged):
-                                # already same → drop staged
-                                try:
-                                    os.remove(staged)
-                                except Exception:
-                                    pass
-                                continue
+                            os.remove(staged)
                         except Exception:
                             pass
-                        # try to delete target first
-                        try:
-                            os.remove(target)
-                        except PermissionError:
-                            # try rename-aside
-                            try:
-                                old = target + f".old-{int(__import__('time').time())}"
-                                os.rename(target, old)
-                            except Exception:
-                                continue  # still locked; leave .new for next start
-                        except Exception:
-                            continue
+                        continue
                     try:
                         os.replace(staged, target)
                         finalized += 1
                         print(f"[config] finalized pending replacement: {target}", flush=True)
+                    except PermissionError:
+                        # 目标仍被占用时保留 .new，等待下次启动再 finalize。
+                        continue
                     except Exception as e:
                         print(f"[config] finalize failed for {target}: {e}", flush=True)
                 except Exception:
@@ -271,9 +266,9 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.3"
+APP_VERSION = "2.1.3-a"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.3:
+# v2.1.3-a:
 #   1) 修复升级后启动时 update.exe 被回退/删除 — 顶层 update.exe 现在永远
 #      被视为权威 (full-package 解压结果), 嵌套 runtime/update.exe 仅作为
 #      残留清理掉, 不再做 size 比较 + replace 的危险操作 (config.py +
@@ -285,9 +280,12 @@ APP_VERSION_LABEL = f"v{APP_VERSION}"
 #      修复: (a) 新增 XiaoACTUI.exe.manifest 显式声明 PerMonitorV2 +
 #      requireAdministrator; (b) main.py 模块级 _early_dpi_aware() 兜底;
 #      (c) sao_webview._should_show_sta_offline 加保护 — 当 vision
-#      capture failed 时不下发 OFFLINE 信号, 保留 HP 面板可见;
-#   3) 本版以 full-package + force_update + minimum_version=2.1.3 推送,
-#      所有现存 2.1.2-x 安装强制升级。
+#      capture failed 时不下发 OFFLINE 信号, 保留 HP 面板可见; (d)
+#      packet_parser 优先通过标准 proto 包名绑定本地 star_resonance_pb2,
+#      失败时才回退文件直载, 避免 onedir 下 self-state protobuf 失效且不破坏
+#      项目其他 proto 导入语义;
+#   3) 本版以 full-package + force_update + minimum_version=2.1.3-a 推送,
+#      所有现存 2.1.3 及以下安装强制升级。
 # v2.1.2-m: 修复 sao_alert 同条 alert 4s 内重复触发只续展不重弹;
 #           webview _maybe_show_update_popup 同步 sao_gui 的 downloading
 #           静音 + alert 可见时跳过非 error 提示;

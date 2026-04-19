@@ -17,6 +17,8 @@ Supported features:
 import math
 import struct
 import logging
+import importlib
+import importlib.util
 import os
 import json
 import sys
@@ -35,7 +37,7 @@ _MessageToDict = None
 
 _zstd = None
 _pb = None
-_pb_loaded = False
+_pb_last_error = ''
 
 
 def _ensure_zstd():
@@ -50,44 +52,160 @@ def _ensure_zstd():
         raise RuntimeError('缺少 zstandard 模块，请运行: pip install zstandard')
 
 
+def _candidate_pb2_paths() -> list[str]:
+    """Return likely local star_resonance_pb2.py locations.
+
+    onedir builds lift proto/ to the exe top-level, while dev keeps it next to
+    the source tree. Resolve both layouts explicitly instead of relying on
+    `from proto import ...`, which can bind to an unrelated third-party package.
+    """
+    candidates = []
+    seen = set()
+
+    def _add(base_dir: Optional[str]):
+        if not base_dir:
+            return
+        try:
+            base_dir = os.path.abspath(base_dir)
+        except Exception:
+            return
+        pb2_path = os.path.join(base_dir, 'proto', 'star_resonance_pb2.py')
+        if pb2_path in seen:
+            return
+        seen.add(pb2_path)
+        if os.path.isfile(pb2_path):
+            candidates.append(pb2_path)
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    _add(current_dir)
+    _add(os.path.dirname(current_dir))
+    if getattr(sys, 'frozen', False):
+        _add(os.path.dirname(sys.executable))
+        _add(getattr(sys, '_MEIPASS', None))
+    return candidates
+
+
+def _import_local_pb_via_proto_package(pb2_path: str):
+    """Import the local protobuf module through the canonical proto package name."""
+    package_root = os.path.dirname(os.path.dirname(pb2_path))
+    expected_init = os.path.join(package_root, 'proto', '__init__.py')
+    expected_pb2 = os.path.abspath(pb2_path)
+    previous_proto = sys.modules.get('proto')
+    previous_pb = sys.modules.get('proto.star_resonance_pb2')
+    added_path = False
+
+    def _restore_previous():
+        if previous_proto is not None:
+            sys.modules['proto'] = previous_proto
+        else:
+            sys.modules.pop('proto', None)
+        if previous_pb is not None:
+            sys.modules['proto.star_resonance_pb2'] = previous_pb
+        else:
+            sys.modules.pop('proto.star_resonance_pb2', None)
+
+    try:
+        if package_root not in sys.path:
+            sys.path.insert(0, package_root)
+            added_path = True
+
+        proto_mod = sys.modules.get('proto')
+        if proto_mod is not None:
+            proto_file = os.path.abspath(getattr(proto_mod, '__file__', '') or '')
+            proto_paths = [os.path.abspath(p) for p in list(getattr(proto_mod, '__path__', []) or [])]
+            expected_dir = os.path.abspath(os.path.dirname(pb2_path))
+            is_local_proto = proto_file == os.path.abspath(expected_init) or expected_dir in proto_paths
+            if not is_local_proto:
+                sys.modules.pop('proto', None)
+
+        pb_mod = sys.modules.get('proto.star_resonance_pb2')
+        if pb_mod is not None:
+            loaded_pb2 = os.path.abspath(getattr(pb_mod, '__file__', '') or '')
+            if loaded_pb2 != expected_pb2:
+                sys.modules.pop('proto.star_resonance_pb2', None)
+
+        module = importlib.import_module('proto.star_resonance_pb2')
+        loaded_file = os.path.abspath(getattr(module, '__file__', '') or '')
+        if loaded_file != expected_pb2:
+            raise ImportError(f'proto.star_resonance_pb2 resolved to unexpected path: {loaded_file}')
+        return module
+    except Exception:
+        _restore_previous()
+        if added_path:
+            try:
+                sys.path.remove(package_root)
+            except ValueError:
+                pass
+        raise
+
+
+def _load_pb_from_path(pb2_path: str):
+    module_name = '_sao_star_resonance_pb2'
+    spec = importlib.util.spec_from_file_location(module_name, pb2_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f'无法构建 protobuf 模块 spec: {pb2_path}')
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        if previous is not None:
+            sys.modules[module_name] = previous
+        else:
+            sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
 def _ensure_pb():
     """Load compiled protobuf module if available."""
-    global _pb, _pb_loaded, _MessageToDict
-    if _pb_loaded:
+    global _pb, _MessageToDict, _pb_last_error
+    if _pb is not None:
         return _pb
-    _pb_loaded = True
+
+    if _MessageToDict is None:
+        try:
+            from google.protobuf.json_format import MessageToDict
+            _MessageToDict = MessageToDict
+        except ImportError:
+            pass
+
+    last_error = None
+
+    for pb2_path in _candidate_pb2_paths():
+        try:
+            _pb = _import_local_pb_via_proto_package(pb2_path)
+            logger.info(f'[Parser] using compiled protobuf via proto package: {pb2_path}')
+            _pb_last_error = ''
+            return _pb
+        except Exception as exc:
+            last_error = exc
 
     try:
         from proto import star_resonance_pb2
         _pb = star_resonance_pb2
-        logger.info('[Parser] using compiled protobuf')
-    except ImportError:
-        pass
+        logger.info('[Parser] using compiled protobuf via import')
+        _pb_last_error = ''
+        return _pb
+    except Exception as exc:
+        last_error = exc
 
-    try:
-        from google.protobuf.json_format import MessageToDict
-        _MessageToDict = MessageToDict
-    except ImportError:
-        pass
+    for pb2_path in _candidate_pb2_paths():
+        try:
+            _pb = _load_pb_from_path(pb2_path)
+            logger.info(f'[Parser] using compiled protobuf via direct file fallback: {pb2_path}')
+            _pb_last_error = ''
+            return _pb
+        except Exception as exc:
+            last_error = exc
 
-    return _pb
+    if last_error is not None:
+        err_text = str(last_error)
+        if err_text != _pb_last_error:
+            logger.debug(f'[Parser] protobuf module unavailable: {err_text}')
+            _pb_last_error = err_text
 
-
-    try:
-        from google.protobuf import descriptor_pb2, descriptor_pool, symbol_database
-        from google.protobuf import reflection, descriptor
-        import google.protobuf.descriptor as _desc
-
-
-        proto_path = os.path.join(os.path.dirname(__file__), 'proto', 'star_resonance.proto')
-        if os.path.exists(proto_path):
-
-
-            pass
-    except ImportError:
-        pass
-
-    logger.info('[Parser] using built-in mini protobuf decoder')
     return None
 
 
@@ -3302,6 +3420,9 @@ class PacketParser:
             if _is_player(uuid):
                 uid = _uuid_to_uid(uuid)
                 player_uids_appeared.append(uid)
+                if uid == self._current_uid and self._current_uuid != uuid:
+                    self._current_uuid = uuid
+                    logger.info(f'[Parser] matched self entity from SyncNearEntities: uuid={uuid} uid={uid}')
                 if has_attrs:
                     self._process_attr_collection(uid, entity.Attrs)
                     # Debug: log what attrs were present for this player
