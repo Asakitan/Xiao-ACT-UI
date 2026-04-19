@@ -79,22 +79,39 @@ def _promote_update_exe_new_early() -> bool:
 
         # Use a temp copy + atomic replace so the live helper stays untouched
         # until the staged file is fully materialized.
+        # Retry up to 5 times with 0.5 s delays — the target may be transiently
+        # locked by the dying update.exe process or antivirus scanning.
+        import shutil
+        import time as _time
         tmp_target = os.path.join(BASE_DIR, "update.exe.promoting")
+        _MAX_RETRIES = 5
+        for _attempt in range(_MAX_RETRIES):
+            try:
+                if os.path.exists(tmp_target):
+                    os.remove(tmp_target)
+            except Exception:
+                pass
+            try:
+                shutil.copy2(staged, tmp_target)
+                os.replace(tmp_target, target)
+                try:
+                    os.remove(staged)
+                except Exception:
+                    pass
+                print(f"[config] replaced update.exe from update.exe.new -> {target}"
+                      f" (attempt {_attempt + 1})", flush=True)
+                return True
+            except PermissionError:
+                if _attempt < _MAX_RETRIES - 1:
+                    _time.sleep(0.5)
+                continue
+        # All retries exhausted — clean up the .promoting leftover.
         try:
             if os.path.exists(tmp_target):
                 os.remove(tmp_target)
         except Exception:
             pass
-        import shutil
-        shutil.copy2(staged, tmp_target)
-        os.replace(tmp_target, target)
-        try:
-            os.remove(staged)
-        except Exception:
-            pass
-        print(f"[config] replaced update.exe from update.exe.new -> {target}", flush=True)
-        return True
-    except PermissionError:
+        print("[config] promote update.exe.new failed after retries (PermissionError)", flush=True)
         return False
     except Exception as e:
         print(f"[config] promote update.exe.new failed: {e}", flush=True)
@@ -326,18 +343,17 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.5"
+APP_VERSION = "2.1.6"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.5:
-#   1) 启动时优先 finalize 顶层 update.exe.new → update.exe；若没有
-#      update.exe.new，则绝不碰现有 update.exe，避免再次出现 helper 被误删；
-#   2) WebView 模式把 PacketBridge 提前到 LinkStart / pywebview 初始化前启动，
-#      修复 onedir 启动较慢时错过 EnterGame / SyncContainerData 导致名字、UID、
-#      等级长期缺失的问题；
-#   3) STA 首启 warmup 期间抑制错误 OFFLINE，修复首轮空帧导致的误判；
-#   4) SkillFX Burst Ready 统一按 CSS 像素下发 viewport / slot rect，并把
-#      pywebview 窗口 move/resize 切换到逻辑像素，修复高 DPI 下的偏移；
-#   5) 本版以 full-package + force_update + minimum_version=2.1.5 推送，
+# v2.1.6:
+#   1) 识别线程设置 per-thread PerMonitorV2 DPI，修复 onedir/webview 下
+#      GetClientRect 返回逻辑像素导致 STA 裁剪坐标偏移、始终 OFFLINE；
+#   2) update.exe.new 替换增加 5 次重试 + 0.5s 间隔，处理目标被瞬时锁定
+#      的 PermissionError，并在失败后清理 .promoting 残留文件；
+#   3) PacketParser 启动时从 player_cache.json 预填充角色名/等级/职业，
+#      修复中途启动（未经过登录/换图）时名字 UID 等级长期为空的问题；
+#   4) _set_dpi_aware 回退从 SystemDpiAware(1) 改为 PerMonitorDpiAware(2)；
+#   5) 本版以 full-package + force_update + minimum_version=2.1.6 推送，
 #      强制所有旧版本升级。
 # v2.1.2-m: 修复 sao_alert 同条 alert 4s 内重复触发只续展不重弹;
 #           webview _maybe_show_update_popup 同步 sao_gui 的 downloading

@@ -1466,6 +1466,7 @@ class PacketParser:
         }
         if self._current_uid > 0:
             logger.info(f'[Parser] bootstrap self UID from cache: {self._current_uid}')
+            self._prepopulate_from_cache(self._current_uid)
         try:
             debug_path = os.path.join(os.path.dirname(__file__), 'packet_debug.jsonl')
             if os.path.exists(debug_path):
@@ -1482,6 +1483,38 @@ class PacketParser:
         if uuid not in self._monsters:
             self._monsters[uuid] = MonsterData(uuid)
         return self._monsters[uuid]
+
+    def _prepopulate_from_cache(self, uid: int):
+        """Pre-populate player identity from player_cache.json so that the
+        first _notify_self() (from SyncToMeDelta) already carries name/level
+        instead of empty strings.  When SyncContainerData eventually arrives
+        (login / map change), it will overwrite with fresh data."""
+        import json as _json
+        cache_path = os.path.join(os.path.dirname(__file__), 'player_cache.json')
+        try:
+            if not os.path.isfile(cache_path):
+                return
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cache = _json.load(f)
+            entry = cache.get(str(uid))
+            if not entry:
+                return
+            player = self._get_player(uid)
+            if entry.get('name'):
+                player.name = entry['name']
+            if entry.get('level', 0) > 0:
+                player.level = entry['level']
+            if entry.get('profession'):
+                player.profession = entry['profession']
+            if entry.get('fight_point', 0) > 0:
+                player.fight_point = entry['fight_point']
+            print(
+                f'[Parser] 从缓存预填充: name={player.name!r} lv={player.level} '
+                f'prof={player.profession!r} uid={uid}',
+                flush=True,
+            )
+        except Exception as e:
+            logger.debug(f'[Parser] player cache pre-load failed: {e}')
 
     def reset_scene(self):
         """场景服务器切换时重置场景数据。
