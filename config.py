@@ -8,26 +8,63 @@ import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
 if getattr(sys, "frozen", False):
-    # onefile: 资源在 _MEIPASS 临时目录, 用户数据在 exe 旁
-    BUNDLE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    # onedir + 模块化布局:
+    #   BASE_DIR = exe 所在目录, 含 XiaoACTUI.exe / update.exe / web/ / assets/ / proto/ / runtime/
+    #   BUNDLE_DIR = PyInstaller 解包根 (= contents_directory='runtime'), 仅作为最终回退
     BASE_DIR = os.path.dirname(sys.executable)
+    BUNDLE_DIR = getattr(sys, '_MEIPASS', os.path.join(BASE_DIR, 'runtime'))
 else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 只读资源 (打包进 exe 内部)
-ASSETS_DIR = os.path.join(BUNDLE_DIR, "assets")
-SOUNDS_DIR = os.path.join(ASSETS_DIR, "sounds")
-FONTS_DIR = os.path.join(ASSETS_DIR, "fonts")
-WEB_DIR = os.path.join(BUNDLE_DIR, "web")
+# 远程更新可写覆盖层 (可选, delta 直接写到 BASE_DIR 同名子目录, 这里仅用于 staging/backup/state)
+RUNTIME_DIR = BASE_DIR
+RUNTIME_PY_DIR = os.path.join(BASE_DIR, "runtime")           # 我们的 .py 与 Python DLL 同处 runtime/
+RUNTIME_WEB_DIR = os.path.join(BASE_DIR, "web")
+RUNTIME_ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+RUNTIME_PROTO_DIR = os.path.join(BASE_DIR, "proto")
+RUNTIME_STAGING_DIR = os.path.join(BASE_DIR, "staging")
+RUNTIME_BACKUP_DIR = os.path.join(BASE_DIR, "backup")
+UPDATE_STATE_FILE = os.path.join(BASE_DIR, "update_state.json")
+
+
+def _runtime_first(*parts: str) -> str:
+    """返回资源路径: 优先 BASE_DIR (顶层模块化文件夹), 不存在则回退 BUNDLE_DIR."""
+    if not parts:
+        return BASE_DIR
+    top = os.path.join(BASE_DIR, *parts)
+    if os.path.exists(top):
+        return top
+    return os.path.join(BUNDLE_DIR, *parts)
+
+
+def runtime_resource(*parts: str) -> str:
+    return _runtime_first(*parts)
+
+
+def resource_path(*parts: str) -> str:
+    return _runtime_first(*parts)
+
+
+# 只读资源 (优先 BASE_DIR 顶层文件夹, 回退 BUNDLE_DIR)
+ASSETS_DIR = _runtime_first("assets")
+SOUNDS_DIR = _runtime_first("assets", "sounds")
+FONTS_DIR = _runtime_first("assets", "fonts")
+WEB_DIR = _runtime_first("web")
 # 可写数据 (exe 旁边)
 TEMP_DIR = os.path.join(BASE_DIR, "temp")
 SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.1.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+
+# 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
+DEFAULT_UPDATE_HOST = "http://47.82.157.220:9330"
+UPDATE_CHANNEL = "stable"
+UPDATE_TARGET = "windows-x64"
+# v2.1.0: 远程更新链路、独立 update.exe、模块化 onedir 布局、发布工具、entity/webview 更新提示修正
 # v2.0.1: entity 面板 webview 对齐、Overlay 异步渲染、Burst Ready 平滑度与透明线修复
 # v2.0.0: entity/webview 双 UI、SAO 菜单与 HUD 新版打包/发布整理
 # v1.3.1: 躲猫猫引擎：失败回退检测所有前置步骤; 线程崩溃自动恢复(resume); alert 持久显示修复

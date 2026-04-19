@@ -23,8 +23,10 @@ from render_capture_sync import wait_until_capture_idle
 from config import (
     APP_VERSION_LABEL, WINDOW_TITLE, WINDOW_SIZE,
     DEFAULT_HOTKEYS,
+    FONTS_DIR,
     SettingsManager,
     get_skill_slot_rects,
+    resource_path,
 )
 from sao_theme import (
     SAOColors, SAOButton, SAOProgressBar, SAOTitleBar, SAODialog,
@@ -67,6 +69,7 @@ from sao_gui_skillfx import BurstReadyOverlay
 from sao_gui_autokey import AutoKeyPanel
 from sao_gui_bossraid import BossRaidPanel
 from sao_gui_commander import CommanderPanel
+from sao_gui_profile_editors import AutoKeyDetailPanel, BossRaidDetailPanel
 
 try:
     import pynput.keyboard as pynput_kb
@@ -206,11 +209,7 @@ class SettingsManager:
 
 
 def _get_icon_path():
-    if getattr(sys, 'frozen', False):
-        base = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
-    else:
-        base = os.path.dirname(os.path.abspath(__file__))
-    p = os.path.join(base, 'icon.ico')
+    p = resource_path('icon.ico')
     return p if os.path.exists(p) else None
 
 
@@ -541,13 +540,8 @@ def _get_hp_pil_font(size, family='sao', _cache={}):
     key = (family, size)
     if key in _cache:
         return _cache[key]
-    base = (
-        getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-        if getattr(sys, 'frozen', False)
-        else os.path.dirname(os.path.abspath(__file__))
-    )
     fname = 'SAOUI.ttf' if family == 'sao' else 'ZhuZiAYuanJWD.ttf'
-    fp = os.path.join(base, 'assets', 'fonts', fname)
+    fp = os.path.join(FONTS_DIR, fname)
     try:
         font = ImageFont.truetype(fp, size=size)
     except Exception:
@@ -949,6 +943,15 @@ class SAOPlayerGUI:
         self._player_panel = None  # 当 SAO 菜单打开时设置
         self._picker = None        # SAOFilePicker 引用 (防止 GC)
         self._status_panel = None  # 浮动状态面板
+        self._update_panel = None  # 浮动更新面板
+        self._update_snapshot = None
+        self._update_listener_installed = False
+        self._update_listener = None
+        self._update_panel_hidden = False
+        self._update_panel_state_key = ''
+        self._update_popup_ready = False
+        self._pending_update_popup_snapshot = None
+        self._last_update_popup_key = ''
         self._fisheye_ov = None    # 菜单开启时的持久鱼眼叠加层
         self._ctx_menu_open = False  # 右键菜单弹出中, 暂停 z-order 置顶
         self._lift_loop_active = False
@@ -998,6 +1001,8 @@ class SAOPlayerGUI:
         self._dps_visible = False
         self._dps_enabled = True
         self._dps_faded = False
+        self._dps_mode = 'hidden'
+        self._dps_last_report_available = False
         self._last_burst_ready = False
         self._last_burst_slot = 0
         self._last_boss_timer_text = ''
@@ -1008,6 +1013,7 @@ class SAOPlayerGUI:
         self._last_gs_name = ''
         self._last_gs_prof = ''
         self._last_gs_uid = ''
+        self._last_fast_state_sig = None
 
         # ── Boss bar target tracking (mirrors webview) ──
         self._bb_last_target_uuid = 0
@@ -1029,6 +1035,8 @@ class SAOPlayerGUI:
         # ── 配置面板实例 ──
         self._autokey_panel = None    # AutoKeyPanel
         self._bossraid_panel = None   # BossRaidPanel
+        self._autokey_detail_panel = None
+        self._bossraid_detail_panel = None
         self._commander_panel = None  # CommanderPanel
         self._commander_last_push = 0.0
 
@@ -1036,6 +1044,7 @@ class SAOPlayerGUI:
         self._create_floating_widget()
         self._setup_sao_menu()
         self._setup_hotkeys()
+        self.root.after(0, self._ensure_updater_listener)
 
         # LINK START 入场
         self.root.after(100, self._play_link_start)
@@ -1240,8 +1249,10 @@ class SAOPlayerGUI:
         self._float_ctx.add_command(label='◆ 打开 SAO 菜单', command=self._toggle_sao_menu)
         self._float_ctx.add_separator()
         self._float_ctx.add_command(label='◉ 状态面板', command=self._toggle_status_panel)
-        self._float_ctx.add_command(label='⚡ AutoKey 配置', command=self._toggle_autokey_panel)
-        self._float_ctx.add_command(label='⚔ BossRaid 配置', command=self._toggle_bossraid_panel)
+        self._float_ctx.add_command(label='⚡ AutoKey Quick', command=self._toggle_autokey_panel)
+        self._float_ctx.add_command(label='⚡ AutoKey Detail', command=self._toggle_autokey_detail_panel)
+        self._float_ctx.add_command(label='⚔ BossRaid Quick', command=self._toggle_bossraid_panel)
+        self._float_ctx.add_command(label='⚔ BossRaid Detail', command=self._toggle_bossraid_detail_panel)
         self._float_ctx.add_separator()
         self._float_ctx.add_command(label='◈ 隐藏/显示面板', command=self._toggle_hide_all_panels)
         self._float_ctx.add_command(label='◇ WebView UI', command=self._switch_to_webview_ui)
@@ -1425,6 +1436,10 @@ class SAOPlayerGUI:
             # 加载上次缓存的游戏状态 (立即显示)
             self._state_mgr.load_cache(cfg_settings)
             self._cfg_settings_ref = cfg_settings
+            try:
+                self._state_mgr.subscribe(self._on_game_state_update)
+            except Exception:
+                pass
 
             # Restore sound settings
             try:
@@ -1491,7 +1506,18 @@ class SAOPlayerGUI:
             self._dps_enabled = bool(self._get_setting('dps_enabled', True))
             self._dps_visible = False
             try:
-                self._dps_overlay = DpsOverlay(self.root, self._cfg_settings_ref)
+                self._dps_overlay = DpsOverlay(
+                    self.root,
+                    self._cfg_settings_ref,
+                    request_live_snapshot=self._request_dps_live_snapshot,
+                    show_last_report=self._request_dps_last_report,
+                    reset_dps=self._reset_dps_tracker,
+                    has_last_report=self._get_dps_last_report_available,
+                    request_entity_detail=self._request_dps_entity_detail,
+                    alert=self._show_entity_alert,
+                )
+                self._dps_overlay.set_report_available(
+                    self._get_dps_last_report_available())
                 print('[SAO Entity] DPS overlay initialized (hidden)')
             except Exception as e:
                 print(f'[SAO Entity] DPS overlay init failed: {e}')
@@ -1724,6 +1750,87 @@ class SAOPlayerGUI:
         self._last_burst_slot = chosen
         return chosen
 
+    def _format_level_text(self, level_base: int, level_extra: int) -> str:
+        level_base = int(level_base or self._level or 1)
+        level_extra = int(level_extra or 0)
+        if level_extra > 0 and level_base > 0:
+            return f'{level_base}(+{level_extra})'
+        return str(level_base)
+
+    def _on_game_state_update(self, gs):
+        """Fast path for identity/level updates from packet or vision threads."""
+        if self._destroyed or gs is None:
+            return
+        try:
+            sig = (
+                int(getattr(gs, 'level_base', 0) or 0),
+                int(getattr(gs, 'level_extra', 0) or 0),
+                int(getattr(gs, 'season_exp', 0) or 0),
+                str(getattr(gs, 'player_name', '') or ''),
+                str(getattr(gs, 'profession_name', '') or ''),
+                str(getattr(gs, 'player_id', '') or ''),
+            )
+        except Exception:
+            return
+        if sig == getattr(self, '_last_fast_state_sig', None):
+            return
+        self._last_fast_state_sig = sig
+        try:
+            self.root.after(0, lambda snap=gs: self._apply_fast_state_update(snap))
+        except Exception:
+            pass
+
+    def _apply_fast_state_update(self, gs):
+        if self._destroyed or gs is None:
+            return
+        try:
+            level_base = int(getattr(gs, 'level_base', 0) or self._level or 1)
+            level_extra = int(getattr(gs, 'level_extra', 0) or 0)
+            season_exp = int(getattr(gs, 'season_exp', 0) or 0)
+            self._level = max(1, level_base)
+            self._level_extra = max(0, level_extra)
+            self._season_exp = max(0, season_exp)
+
+            player_name = str(getattr(gs, 'player_name', '') or '')
+            profession = str(getattr(gs, 'profession_name', '') or '')
+            uid = str(getattr(gs, 'player_id', '') or '')
+            if player_name:
+                self._username = player_name
+                disp = player_name
+                if len(disp) > 10:
+                    disp = disp[:9] + '...'
+                self._hp_display_name = disp
+            if profession:
+                self._profession = profession
+            if self._sao_menu:
+                self._sao_menu.username = self._username or 'Player'
+                self._sao_menu.description = self._profession or 'SAO Auto'
+
+            panel = getattr(self, '_player_panel', None)
+            if panel:
+                try:
+                    panel.update_level(self._level, self._level_extra, self._season_exp)
+                except Exception:
+                    pass
+
+            if self._hp_overlay and getattr(self, '_hp_ov_visible', True):
+                hp = int(getattr(gs, 'hp_current', 0) or 0)
+                hp_max = int(getattr(gs, 'hp_max', 0) or 0)
+                if hp_max <= 0:
+                    hp, hp_max = getattr(self, '_sta_hp', (0, 1))
+                self._hp_overlay.update_hp(
+                    int(hp), max(1, int(hp_max)),
+                    self._format_level_text(self._level, self._level_extra),
+                )
+                if player_name or profession or uid:
+                    self._hp_overlay.set_player_info({
+                        'name': player_name or self._username or '',
+                        'profession': profession or self._profession or '',
+                        'uid': uid,
+                    })
+        except Exception:
+            pass
+
     def _recognition_loop(self):
         """后台识别循环 — 读取 GameStateManager 并更新 HP 条 + 体力覆盖板 + DPS + Boss."""
         if self._destroyed:
@@ -1813,27 +1920,48 @@ class SAOPlayerGUI:
                             _dps_fade_timeout = float(self._get_setting('dps_fade_timeout_s', 15) or 15)
                             _dps_fade_timeout = max(5.0, _dps_fade_timeout)
                             self._dps_tracker.finalize_if_idle(_dps_fade_timeout, 'idle_timeout')
+                            self._sync_dps_report_availability()
                             if self._dps_tracker.is_dirty():
                                 _dps_snap = self._dps_tracker.get_snapshot()
                                 _dps_has_live = bool(
                                     int(_dps_snap.get('total_damage') or 0) > 0
                                     and self._dps_tracker.has_recent_damage(_dps_fade_timeout)
                                 )
-                                if _dps_enabled and _dps_has_live and self._dps_overlay:
+                                if self._dps_overlay:
+                                    self._dps_overlay.set_report_available(
+                                        self._get_dps_last_report_available())
+                                if _dps_enabled and _dps_has_live and self._dps_overlay and self._dps_mode != 'report':
                                     if not self._dps_visible:
                                         self._dps_visible = True
                                         self._dps_faded = False
+                                        self._dps_mode = 'live'
                                         self._dps_overlay.show()
                                     self._dps_overlay.update(_dps_snap)
-                                elif self._dps_overlay and self._dps_visible:
+                                elif self._dps_overlay and (self._dps_visible or self._dps_mode == 'report'):
                                     self._dps_overlay.update(_dps_snap)
+                            # Push fresh entity-detail snapshots while detail
+                            # view is open in live mode (parity with webview
+                            # DpsAPI.get_entity_detail polling).
+                            if (self._dps_overlay
+                                    and getattr(self._dps_overlay, '_detail_visible', False)
+                                    and self._dps_mode == 'live'):
+                                _detail_uid = int(getattr(self._dps_overlay,
+                                                          '_detail_uid', 0) or 0)
+                                if _detail_uid > 0:
+                                    try:
+                                        _det = self._dps_tracker.get_entity_detail(_detail_uid)
+                                        if _det:
+                                            self._dps_overlay.update_detail(_det)
+                                    except Exception:
+                                        pass
                             # DPS fade-out on idle
-                            if self._dps_overlay and self._dps_visible:
+                            if self._dps_overlay and self._dps_visible and self._dps_mode != 'report':
                                 if not self._dps_tracker.has_recent_damage(_dps_fade_timeout):
                                     if not self._dps_faded:
                                         self._dps_overlay.fade_out()
                                         self._dps_faded = True
                                     self._dps_visible = False
+                                    self._dps_mode = 'hidden'
                                 elif self._dps_faded:
                                     self._dps_overlay.fade_in()
                                     self._dps_faded = False
@@ -2291,6 +2419,7 @@ class SAOPlayerGUI:
 
         snd_on = bool(self._get_setting('sound_enabled', True))
         dps_on = bool(self._get_setting('dps_enabled', True))
+        dps_report_available = self._get_dps_last_report_available()
         burst_on = bool(self._get_setting('burst_enabled', True))
         burst_slots = self._normalize_watched_skill_slots(
             self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9])
@@ -2306,13 +2435,15 @@ class SAOPlayerGUI:
         auto_items = [
             {'icon': '⚡', 'label': ak_label, 'command': self._toggle_auto_script},
             {'icon': '◈', 'label': hs_label, 'command': self._toggle_hide_seek},
-            {'icon': '◆', 'label': 'AutoKey 配置', 'command': self._toggle_autokey_panel},
+            {'icon': '◆', 'label': 'AutoKey Quick Panel', 'command': self._toggle_autokey_panel},
+            {'icon': '◇', 'label': 'AutoKey Detail Editor', 'command': self._toggle_autokey_detail_panel},
         ]
 
         boss_items = [
             {'icon': '⚔', 'label': br_label, 'command': self._toggle_boss_raid},
             {'icon': '▸', 'label': '下一阶段' + _k('boss_raid_next_phase'), 'command': self._boss_raid_next_phase},
-            {'icon': '◆', 'label': 'BossRaid 配置', 'command': self._toggle_bossraid_panel},
+            {'icon': '◆', 'label': 'BossRaid Quick Panel', 'command': self._toggle_bossraid_panel},
+            {'icon': '◇', 'label': 'BossRaid Detail Editor', 'command': self._toggle_bossraid_detail_panel},
         ]
 
         burst_items = [
@@ -2337,6 +2468,9 @@ class SAOPlayerGUI:
             {'icon': '♪', 'label': '音量+', 'command': lambda: self._adj_sound_volume(10)},
             {'icon': '♪', 'label': '音量-', 'command': lambda: self._adj_sound_volume(-10)},
             {'icon': '◆', 'label': f'DPS面板: {"ON" if dps_on else "OFF"}', 'command': self._toggle_dps_enabled},
+            {'icon': '◆' if dps_report_available else '◇',
+             'label': '查看上次战斗DPS' + (' ✓' if dps_report_available else ' (暂无)'),
+             'command': self._show_last_dps_report_menu},
             {'icon': '◇', 'label': f'Boss血条: {boss_bar_disp}', 'command': self._cycle_boss_bar_mode},
         ]
 
@@ -2352,6 +2486,7 @@ class SAOPlayerGUI:
             '面板': panel_items,
             '关于': [
                 {'icon': '◇', 'label': '关于本程序', 'command': self._show_about},
+                {'icon': '⬇', 'label': self._build_update_menu_label(), 'command': self._check_for_updates_interactive},
                 {'icon': '✎', 'label': '修改角色资料', 'command': self._edit_profile},
                 {'icon': '◇', 'label': '切换到 WebView UI', 'command': self._switch_to_webview_ui},
                 {'icon': '✕', 'label': '退出', 'command': self._on_close},
@@ -2418,6 +2553,32 @@ class SAOPlayerGUI:
             )
         self._bossraid_panel.toggle()
         self.root.after(120, lambda: self._raise_panel_window(self._bossraid_panel))
+
+    def _toggle_autokey_detail_panel(self):
+        """Open/close the full AutoKey profile editor."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._autokey_detail_panel:
+            self._autokey_detail_panel = AutoKeyDetailPanel(
+                master=self.root,
+                load_fn=self._load_auto_key_config,
+                save_fn=self._save_auto_key_config,
+                author_fn=getattr(self, '_auto_key_author_snapshot', None),
+            )
+        self._autokey_detail_panel.toggle()
+        self.root.after(120, lambda: self._raise_panel_window(self._autokey_detail_panel))
+
+    def _toggle_bossraid_detail_panel(self):
+        """Open/close the full BossRaid profile editor."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._bossraid_detail_panel:
+            self._bossraid_detail_panel = BossRaidDetailPanel(
+                master=self.root,
+                load_fn=self._load_boss_raid_config,
+                save_fn=self._save_boss_raid_config,
+                author_fn=getattr(self, '_boss_raid_author_snapshot', None),
+            )
+        self._bossraid_detail_panel.toggle()
+        self.root.after(120, lambda: self._raise_panel_window(self._bossraid_detail_panel))
 
     def _toggle_commander_panel(self):
         """打开/关闭 Commander 面板 (tkinter)."""
@@ -2595,9 +2756,21 @@ class SAOPlayerGUI:
         """检查是否有任何浮动面板处于打开且可见状态"""
         if self._panels_hidden:
             return False
-        for p in (self._status_panel,):
+        for p in (self._status_panel, self._update_panel):
             try:
                 if p and p.winfo_exists():
+                    return True
+            except Exception:
+                pass
+        for panel in (
+            self._autokey_panel,
+            self._bossraid_panel,
+            self._autokey_detail_panel,
+            self._bossraid_detail_panel,
+            self._commander_panel,
+        ):
+            try:
+                if panel and panel.is_visible():
                     return True
             except Exception:
                 pass
@@ -2638,7 +2811,7 @@ class SAOPlayerGUI:
 
         try: play_sound('panel')
         except: pass
-        sw, sh = 220, 130
+        sw, sh = 236, 178
         saved_sx = self.settings.get('status_x', None)
         saved_sy = self.settings.get('status_y', None)
         if saved_sx is not None:
@@ -2683,6 +2856,14 @@ class SAOPlayerGUI:
         self._status_source_lbl = _sao_row(body_pad, '数据源', src_text,
                                             value_fg=_SAO_PANEL_GOLD)
 
+        # 更新状态行
+        self._status_update_lbl = _sao_row(body_pad, '更新', '待机',
+                                           value_fg='#556677',
+                                           value_font=get_cjk_font(9, True))
+        self._status_update_progress_lbl = _sao_row(body_pad, '进度', '--',
+                                                    value_fg=_SAO_PANEL_ACCENT,
+                                                    value_font=get_cjk_font(9, True))
+
         # 底部 HUD 装饰
         hud_cv = _sao_panel_hud_canvas(body)
         hud_cv.create_text(4, 8, text='SYS:STATUS', anchor='w',
@@ -2716,11 +2897,544 @@ class SAOPlayerGUI:
             recog_text = 'ON' if getattr(self, '_recognition_active', False) else 'OFF'
             recog_fg = '#3ad86c' if recog_text == 'ON' else '#556677'
             self._status_recog_lbl.configure(text=recog_text, fg=recog_fg)
+        if hasattr(self, '_status_source_lbl'):
+            src_text = 'Packet'
+            if getattr(self, '_cfg_settings_ref', None):
+                src = self._cfg_settings_ref.get('data_source', 'packet')
+                src_text = 'Packet' if src == 'packet' else 'OCR'
+            self._status_source_lbl.configure(text=src_text, fg=_SAO_PANEL_GOLD)
+        view = self._get_update_view()
+        if hasattr(self, '_status_update_lbl'):
+            self._status_update_lbl.configure(text=view['status_text'], fg=view['status_color'])
+        if hasattr(self, '_status_update_progress_lbl'):
+            self._status_update_progress_lbl.configure(text=view['progress_text'], fg=view['progress_color'])
+
+    def _get_update_snapshot(self):
+        try:
+            from sao_updater import get_manager
+            return get_manager().snapshot()
+        except Exception:
+            return None
+
+    def _get_update_view(self, snapshot=None):
+        snap = snapshot or self._update_snapshot or self._get_update_snapshot()
+        state = getattr(snap, 'state', 'idle') if snap else 'idle'
+        latest_version = str(getattr(snap, 'latest_version', '') or '') if snap else ''
+        package_type = str(getattr(snap, 'package_type', '') or '') if snap else ''
+        notes = str(getattr(snap, 'notes', '') or '').strip() if snap else ''
+        error = str(getattr(snap, 'error', '') or '').strip() if snap else ''
+        skipped_version = str(getattr(snap, 'skipped_version', '') or '') if snap else ''
+        force_required = bool(getattr(snap, 'force_required', False)) if snap else False
+        try:
+            progress = max(0.0, min(1.0, float(getattr(snap, 'progress', 0.0) or 0.0))) if snap else 0.0
+        except Exception:
+            progress = 0.0
+        package_text = '模块增量包' if package_type == 'runtime-delta' else ('完整更新包' if package_type == 'full-package' else '更新包')
+        view = {
+            'state': state,
+            'latest_version': latest_version,
+            'force_required': force_required,
+            'progress': progress,
+            'show_panel': False,
+            'show_progress': False,
+            'status_text': '待机',
+            'status_color': '#556677',
+            'progress_text': '--',
+            'progress_color': '#8896a8',
+            'badge_text': 'IDLE',
+            'badge_color': '#556677',
+            'headline': '等待更新检查',
+            'version_text': f'当前 {APP_VERSION_LABEL}',
+            'meta_text': '菜单中的“检查更新”可主动拉取远端版本信息。',
+            'notes_text': '当检测到新版本时，将自动显示下载与重启入口。',
+            'primary_text': '检查更新',
+            'primary_action': 'check',
+            'secondary_text': '',
+            'secondary_action': None,
+        }
+        if state == 'checking':
+            view.update({
+                'status_text': '检查中',
+                'status_color': _SAO_PANEL_ACCENT,
+                'badge_text': 'CHECKING',
+                'badge_color': _SAO_PANEL_ACCENT,
+                'headline': '正在检查更新',
+                'meta_text': '正在连接更新服务…',
+                'notes_text': '请稍候，系统正在比较本地版本与远端 manifest。',
+                'primary_text': '检查中...',
+                'primary_action': None,
+            })
+        elif state == 'available':
+            skipped = bool(latest_version and skipped_version == latest_version and not force_required)
+            view.update({
+                'show_panel': not skipped,
+                'status_text': '已跳过' if skipped else '可更新',
+                'status_color': '#8896a8' if skipped else _SAO_PANEL_GOLD,
+                'progress_text': latest_version and f'v{latest_version}' or '--',
+                'progress_color': '#8896a8' if skipped else _SAO_PANEL_GOLD,
+                'badge_text': 'SKIPPED' if skipped else ('REQUIRED' if force_required else 'AVAILABLE'),
+                'badge_color': '#8896a8' if skipped else _SAO_PANEL_GOLD,
+                'headline': '已跳过当前版本' if skipped else '检测到新版本',
+                'version_text': latest_version and f'新版本 v{latest_version}' or f'当前 {APP_VERSION_LABEL}',
+                'meta_text': ('强制更新 · ' if force_required else '') + package_text,
+                'notes_text': notes or ('当前版本低于服务器最低要求，请先完成更新。' if force_required else ('该版本已被标记为跳过，可手动重新检查或等待下一版。' if skipped else '下载完成后，重启应用将自动进入独立更新器。')),
+                'primary_text': '重新检查' if skipped else '立即更新',
+                'primary_action': 'check' if skipped else 'download',
+                'secondary_text': '' if skipped else ('退出应用' if force_required else '跳过此版'),
+                'secondary_action': None if skipped else ('quit' if force_required else 'skip'),
+            })
+        elif state == 'downloading':
+            view.update({
+                'show_panel': True,
+                'show_progress': True,
+                'status_text': f'下载中 {int(progress * 100)}%',
+                'status_color': _SAO_PANEL_ACCENT,
+                'progress_text': f'{int(progress * 100)}%',
+                'progress_color': _SAO_PANEL_ACCENT,
+                'badge_text': 'DOWNLOADING',
+                'badge_color': _SAO_PANEL_ACCENT,
+                'headline': '正在下载更新包',
+                'version_text': latest_version and f'目标 v{latest_version}' or f'当前 {APP_VERSION_LABEL}',
+                'meta_text': f'正在拉取 {package_text}',
+                'notes_text': notes or '下载完成后可直接重启应用，文件替换会交给独立 updater 完成。',
+                'primary_text': '下载中...',
+                'primary_action': None,
+                'secondary_text': '',
+                'secondary_action': None,
+            })
+        elif state == 'ready':
+            view.update({
+                'show_panel': True,
+                'show_progress': True,
+                'progress': 1.0,
+                'status_text': '已就绪',
+                'status_color': '#3ad86c',
+                'progress_text': '100%',
+                'progress_color': '#3ad86c',
+                'badge_text': 'READY',
+                'badge_color': '#3ad86c',
+                'headline': '更新包已下载完成',
+                'version_text': latest_version and f'待切换 v{latest_version}' or f'当前 {APP_VERSION_LABEL}',
+                'meta_text': '重启应用后将进入独立更新器完成替换',
+                'notes_text': notes or '当前下载已完成，点击“重启应用”即可开始替换模块与启动器。',
+                'primary_text': '重启应用',
+                'primary_action': 'apply',
+                'secondary_text': '' if force_required else '稍后',
+                'secondary_action': None if force_required else 'dismiss',
+            })
+        elif state == 'error':
+            view.update({
+                'show_panel': True,
+                'status_text': '错误',
+                'status_color': '#ff707a',
+                'progress_text': '失败',
+                'progress_color': '#ff707a',
+                'badge_text': 'ERROR',
+                'badge_color': '#ff707a',
+                'headline': '更新流程失败',
+                'version_text': latest_version and f'目标 v{latest_version}' or f'当前 {APP_VERSION_LABEL}',
+                'meta_text': error or '更新服务暂不可用',
+                'notes_text': error or '可以稍后重新检查一次。',
+                'primary_text': '重新检查',
+                'primary_action': 'check',
+                'secondary_text': '关闭',
+                'secondary_action': 'dismiss',
+            })
+        elif state == 'up_to_date':
+            view.update({
+                'status_text': '最新',
+                'status_color': _SAO_PANEL_ACCENT,
+                'progress_text': latest_version and f'v{latest_version}' or APP_VERSION_LABEL,
+                'progress_color': _SAO_PANEL_ACCENT,
+                'badge_text': 'LATEST',
+                'badge_color': _SAO_PANEL_ACCENT,
+                'headline': '当前已是最新版本',
+                'version_text': latest_version and f'当前 v{latest_version}' or f'当前 {APP_VERSION_LABEL}',
+                'meta_text': '无需下载更新包',
+                'notes_text': '未检测到比当前客户端更高的版本。',
+            })
+        return view
+
+    def _ensure_updater_listener(self):
+        if getattr(self, '_update_listener_installed', False):
+            return
+        try:
+            from sao_updater import get_manager
+            mgr = get_manager()
+        except Exception:
+            return
+
+        def _listener(snapshot):
+            try:
+                self.root.after(0, lambda snap=snapshot: self._on_update_snapshot(snap))
+            except Exception:
+                pass
+
+        self._update_listener = _listener
+        mgr.add_listener(_listener)
+        self._update_listener_installed = True
+        try:
+            self._on_update_snapshot(mgr.snapshot())
+        except Exception:
+            pass
+
+    def _on_update_snapshot(self, snapshot):
+        self._update_snapshot = snapshot
+        view = self._get_update_view(snapshot)
+        panel_key = f"{view['state']}:{view['latest_version']}"
+        if panel_key != getattr(self, '_update_panel_state_key', ''):
+            self._update_panel_hidden = False
+        self._update_panel_state_key = panel_key
+
+        self._update_status_panel()
+        self._refresh_menu_if_open()
+
+        if self._update_panel and self._update_panel.winfo_exists():
+            if view['show_panel']:
+                self._refresh_update_panel(snapshot)
+            else:
+                self._close_update_panel(persist_hidden=False)
+
+        if not getattr(self, '_update_popup_ready', False):
+            self._pending_update_popup_snapshot = snapshot
+            return
+
+        self._maybe_show_update_popup(snapshot)
+
+        if self._panels_hidden:
+            if not view['show_panel']:
+                try:
+                    if self._update_panel and self._update_panel.winfo_exists():
+                        self._update_panel.destroy()
+                except Exception:
+                    pass
+                self._update_panel = None
+                try:
+                    self._hidden_panels_snapshot = [name for name in self._hidden_panels_snapshot if name != 'updater']
+                except Exception:
+                    pass
+            return
+
+    def _mark_update_popup_ready(self):
+        self._update_popup_ready = True
+        pending = getattr(self, '_pending_update_popup_snapshot', None)
+        if pending is None:
+            return
+        self._pending_update_popup_snapshot = None
+        self._maybe_show_update_popup(pending)
+
+    def _build_update_popup_payload(self, snapshot=None):
+        view = self._get_update_view(snapshot)
+        state = str(view.get('state') or 'idle')
+        latest_version = str(view.get('latest_version') or '')
+        force_required = bool(view.get('force_required', False))
+        progress = int(round(float(view.get('progress') or 0.0) * 100.0))
+        skipped_version = ''
+        try:
+            skipped_version = str(getattr(snapshot, 'skipped_version', '') or '')
+        except Exception:
+            skipped_version = ''
+        if state == 'available':
+            if latest_version and skipped_version == latest_version and not force_required:
+                return None
+            body = f'检测到新版本 v{latest_version or "?"}'
+            if force_required:
+                body += '\n此更新为强制更新，请尽快在 关于 > 检查更新 中完成下载。'
+            else:
+                body += '\n打开 SAO 菜单 > 关于 > 检查更新 可开始下载。'
+            return {
+                'key': f'available:{latest_version}:{int(force_required)}',
+                'title': 'SYSTEM UPDATE',
+                'message': body,
+                'display_time': 6.5,
+            }
+        if state == 'downloading':
+            body = f'正在下载更新包 v{latest_version or "?"}'
+            body += f'\n当前进度 {progress}% ，完成后会提示重启应用。'
+            return {
+                'key': f'downloading:{latest_version}',
+                'title': 'DOWNLOADING UPDATE',
+                'message': body,
+                'display_time': 5.0,
+            }
+        if state == 'ready':
+            body = f'更新包 v{latest_version or "?"} 已下载完成'
+            body += '\n打开 SAO 菜单 > 关于 > 检查更新 可立即重启应用。'
+            return {
+                'key': f'ready:{latest_version}',
+                'title': 'UPDATE READY',
+                'message': body,
+                'display_time': 6.5,
+            }
+        if state == 'error':
+            error = ''
+            try:
+                error = str(getattr(snapshot, 'error', '') or '').strip()
+            except Exception:
+                error = ''
+            body = error or '更新服务暂不可用，请稍后重试。'
+            return {
+                'key': f'error:{latest_version}:{body}',
+                'title': 'UPDATE ERROR',
+                'message': body,
+                'display_time': 5.2,
+            }
+        return None
+
+    def _maybe_show_update_popup(self, snapshot=None):
+        payload = self._build_update_popup_payload(snapshot)
+        if not payload:
+            return
+        popup_key = str(payload.get('key') or '')
+        if not popup_key or popup_key == getattr(self, '_last_update_popup_key', ''):
+            return
+        self._last_update_popup_key = popup_key
+        self._show_entity_alert(
+            str(payload.get('title') or 'SYSTEM UPDATE'),
+            str(payload.get('message') or ''),
+            display_time=float(payload.get('display_time') or 5.0),
+        )
+
+    def _start_update_download(self):
+        try:
+            from sao_updater import get_manager
+            get_manager().download_async()
+        except Exception as e:
+            SAODialog.showinfo(self._float, '更新', f'下载启动失败: {e}')
+
+    def _start_update_check(self):
+        try:
+            from sao_updater import get_manager
+            get_manager().check_async()
+        except Exception as e:
+            SAODialog.showinfo(self._float, '更新', f'检查失败: {e}')
+
+    def _skip_update_version(self):
+        try:
+            from sao_updater import get_manager
+            get_manager().skip_current()
+            self._close_update_panel(persist_hidden=True)
+        except Exception as e:
+            SAODialog.showinfo(self._float, '更新', f'跳过版本失败: {e}')
+
+    def _apply_downloaded_update(self):
+        try:
+            from sao_updater import has_pending_update, schedule_apply_on_exit
+            if not has_pending_update():
+                SAODialog.showinfo(self._float, '更新', '当前没有待应用的更新包。')
+                return
+            if not schedule_apply_on_exit():
+                SAODialog.showinfo(self._float, '更新', '启动 updater 失败，请稍后重试。')
+                return
+            self._show_entity_alert('SYSTEM UPDATE', '正在切换到独立更新器', display_time=2.4)
+            self._on_close()
+        except Exception as e:
+            SAODialog.showinfo(self._float, '更新', f'应用更新失败: {e}')
+
+    def _resolve_update_action(self, action_name):
+        return {
+            'download': self._start_update_download,
+            'check': self._start_update_check,
+            'skip': self._skip_update_version,
+            'apply': self._apply_downloaded_update,
+            'dismiss': lambda: self._close_update_panel(persist_hidden=True),
+            'quit': self._on_close,
+        }.get(action_name)
+
+    def _set_update_button(self, button, text, action_name, side=tk.LEFT):
+        if not text:
+            if button.winfo_manager():
+                button.pack_forget()
+            button.command = None
+            return
+        button.set_text(text)
+        button.command = self._resolve_update_action(action_name)
+        if not button.winfo_manager():
+            button.pack(side=side, padx=4)
+
+    def _close_update_panel(self, persist_hidden=True):
+        if persist_hidden:
+            self._update_panel_hidden = True
+        else:
+            self._update_panel_hidden = False
+        panel = self._update_panel
+        self._update_panel = None
+        if not (panel and panel.winfo_exists()):
+            return
+        try: play_sound('alert_close')
+        except: pass
+        t0 = time.time()
+        dur = 0.22
+
+        def _step():
+            try:
+                if not panel.winfo_exists():
+                    return
+            except Exception:
+                return
+            t = min(1.0, (time.time() - t0) / dur)
+            et = t * t
+            try:
+                panel.attributes('-alpha', max(0.0, 0.92 * (1.0 - et)))
+            except Exception:
+                pass
+            if t < 1.0:
+                try:
+                    self.root.after(16, _step)
+                except Exception:
+                    pass
+            else:
+                try:
+                    panel.destroy()
+                except Exception:
+                    pass
+
+        _step()
+
+    def _open_update_panel(self, snapshot=None):
+        if self._panels_hidden:
+            return
+        self._update_panel_hidden = False
+        if self._update_panel and self._update_panel.winfo_exists():
+            try:
+                self._update_panel.deiconify()
+                self._update_panel.lift()
+            except Exception:
+                pass
+            self._refresh_update_panel(snapshot)
+            return
+
+        try: play_sound('panel')
+        except: pass
+        sw, sh = 320, 228
+        saved_ux = self.settings.get('update_x', None)
+        saved_uy = self.settings.get('update_y', None)
+        if saved_ux is not None:
+            fx, fy = int(saved_ux), int(saved_uy)
+        else:
+            fx = self._float.winfo_x() + self._fw + 10
+            fy = self._float.winfo_y() + 110
+            screen_w = self._float.winfo_screenwidth()
+            screen_h = self._float.winfo_screenheight()
+            if fx + sw > screen_w - 10:
+                fx = self._float.winfo_x() - sw - 10
+            if fy + sh > screen_h - 10:
+                fy = max(20, self._float.winfo_y() - sh + 36)
+
+        self._update_panel = tk.Toplevel(self.root)
+        self._update_panel.overrideredirect(True)
+        self._update_panel.attributes('-topmost', True)
+        self._update_panel.attributes('-alpha', 0.0)
+        self._update_panel.geometry(f'{sw}x{sh}+{fx}+{fy}')
+        self._update_panel.configure(bg=_SAO_PANEL_HEADER_BG)
+        _apply_panel_style(self._update_panel)
+
+        border = tk.Frame(self._update_panel, bg=_SAO_PANEL_BORDER, padx=1, pady=1)
+        border.pack(fill=tk.BOTH, expand=True)
+        inner = tk.Frame(border, bg=_SAO_PANEL_BODY_BG)
+        inner.pack(fill=tk.BOTH, expand=True)
+
+        hdr, close_lbl = _sao_panel_header(inner, '⬇', 'UPDATER', lambda: self._close_update_panel(True))
+        body = _sao_panel_body(inner)
+        body_pad = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
+        body_pad.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+
+        top_row = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
+        top_row.pack(fill=tk.X)
+        self._update_badge = SAOStatusPill(top_row, text='IDLE', color='#556677', width=126, height=22)
+        self._update_badge.pack(side=tk.LEFT)
+        self._update_version_lbl = tk.Label(top_row, text=f'当前 {APP_VERSION_LABEL}',
+                                            bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                                            font=get_cjk_font(8, True), anchor='e')
+        self._update_version_lbl.pack(side=tk.RIGHT)
+
+        self._update_headline_lbl = tk.Label(body_pad, text='等待更新检查',
+                                             bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                                             anchor='w', justify=tk.LEFT,
+                                             font=get_cjk_font(10, True))
+        self._update_headline_lbl.pack(fill=tk.X, pady=(8, 2))
+        self._update_meta_lbl = tk.Label(body_pad, text='',
+                                         bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
+                                         anchor='w', justify=tk.LEFT,
+                                         font=get_sao_font(7))
+        self._update_meta_lbl.pack(fill=tk.X)
+        self._update_notes_lbl = tk.Label(body_pad, text='',
+                                          bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
+                                          anchor='w', justify=tk.LEFT,
+                                          wraplength=286,
+                                          font=get_cjk_font(8))
+        self._update_notes_lbl.pack(fill=tk.X, pady=(6, 8))
+
+        self._update_progress_wrap = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
+        self._update_progress_wrap.pack(fill=tk.X)
+        self._update_progress_bar = SAOProgressBar(self._update_progress_wrap, width=286, height=18)
+        self._update_progress_bar.pack(fill=tk.X)
+        self._update_progress_lbl = tk.Label(self._update_progress_wrap, text='0%',
+                                             bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_ACCENT,
+                                             anchor='e', justify=tk.RIGHT,
+                                             font=get_sao_font(7, True))
+        self._update_progress_lbl.pack(fill=tk.X, pady=(3, 0))
+
+        self._update_buttons_frame = tk.Frame(body_pad, bg=_SAO_PANEL_BODY_BG)
+        self._update_buttons_frame.pack(fill=tk.X, pady=(10, 0))
+        self._update_primary_btn = SAOButton(self._update_buttons_frame, width=134, height=32)
+        self._update_secondary_btn = SAOButton(self._update_buttons_frame, width=134, height=32)
+
+        hud_cv = _sao_panel_hud_canvas(body)
+        hud_cv.create_text(4, 8, text='SYS:UPDATER', anchor='w',
+                           font=('Consolas', 6), fill='#d0d0d0')
+        hud_cv.create_line(92, 8, sw - 10, 8, fill='#e8e8e8', width=1)
+
+        _ud = {'x': 0, 'y': 0}
+        def udstart(e): _ud['x'], _ud['y'] = e.x_root, e.y_root
+        def udmove(e):
+            dx, dy = e.x_root - _ud['x'], e.y_root - _ud['y']
+            nx, ny = self._update_panel.winfo_x()+dx, self._update_panel.winfo_y()+dy
+            self._update_panel.geometry(f'+{nx}+{ny}')
+            _ud['x'], _ud['y'] = e.x_root, e.y_root
+            self.settings.set('update_x', nx); self.settings.set('update_y', ny)
+        _bind_panel_drag(hdr, close_lbl, udstart, udmove)
+
+        self._fade_panel_in(self._update_panel, target=0.92)
+        self._attach_sao_panel_fx(self._update_panel, hdr, inner)
+        self._attach_panel_float(self._update_panel, phase=4.1)
+        self._refresh_update_panel(snapshot)
+
+    def _refresh_update_panel(self, snapshot=None):
+        if not (self._update_panel and self._update_panel.winfo_exists()):
+            return
+        view = self._get_update_view(snapshot)
+        if hasattr(self, '_update_badge'):
+            self._update_badge.set_status(view['badge_text'], view['badge_color'])
+        if hasattr(self, '_update_version_lbl'):
+            self._update_version_lbl.configure(text=view['version_text'])
+        if hasattr(self, '_update_headline_lbl'):
+            self._update_headline_lbl.configure(text=view['headline'])
+        if hasattr(self, '_update_meta_lbl'):
+            self._update_meta_lbl.configure(text=view['meta_text'])
+        if hasattr(self, '_update_notes_lbl'):
+            self._update_notes_lbl.configure(text=view['notes_text'])
+        if hasattr(self, '_update_progress_wrap'):
+            if view['show_progress']:
+                if not self._update_progress_wrap.winfo_manager():
+                    self._update_progress_wrap.pack(fill=tk.X, before=self._update_buttons_frame)
+                self._update_progress_bar.set_value(view['progress'])
+                self._update_progress_lbl.configure(text=view['progress_text'], fg=view['progress_color'])
+            elif self._update_progress_wrap.winfo_manager():
+                self._update_progress_wrap.pack_forget()
+        self._set_update_button(self._update_primary_btn, view['primary_text'], view['primary_action'], side=tk.LEFT)
+        self._set_update_button(self._update_secondary_btn, view['secondary_text'], view['secondary_action'], side=tk.RIGHT)
 
     def _toggle_hide_all_panels(self):
         """一键隐藏/显示所有浮动面板 (不销毁, 只是 withdraw/deiconify)"""
         panels = [
             ('status',  self._status_panel),
+            ('updater', self._update_panel),
+            ('autokey_quick', getattr(self._autokey_panel, '_win', None)),
+            ('bossraid_quick', getattr(self._bossraid_panel, '_win', None)),
+            ('autokey_detail', getattr(self._autokey_detail_panel, '_win', None)),
+            ('bossraid_detail', getattr(self._bossraid_detail_panel, '_win', None)),
+            ('commander', getattr(self._commander_panel, '_win', None)),
         ]
 
         if not self._panels_hidden:
@@ -3731,7 +4445,7 @@ class SAOPlayerGUI:
 
     def _load_boss_raid_config(self):
         ref = self._boss_raid_settings_ref()
-        return load_boss_raid_config(ref)
+        return load_boss_raid_config(ref, state_snapshot=self._boss_raid_author_snapshot())
 
     def _save_boss_raid_config(self, config):
         ref = self._boss_raid_settings_ref()
@@ -3750,6 +4464,123 @@ class SAOPlayerGUI:
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
             return self._cfg_settings_ref.get(key, default)
         return default
+
+    @staticmethod
+    def _empty_dps_snapshot():
+        return {
+            'encounter_active': False,
+            'elapsed_s': 0.0,
+            'total_damage': 0,
+            'total_heal': 0,
+            'total_dps': 0,
+            'total_hps': 0,
+            'entities': [],
+        }
+
+    def _get_dps_last_report_available(self) -> bool:
+        tracker = getattr(self, '_dps_tracker', None)
+        if not tracker:
+            return False
+        try:
+            return bool(tracker.has_last_report())
+        except Exception:
+            return False
+
+    def _sync_dps_report_availability(self):
+        available = self._get_dps_last_report_available()
+        if self._dps_overlay:
+            self._dps_overlay.set_report_available(available)
+        if available == self._dps_last_report_available:
+            return
+        self._dps_last_report_available = available
+        if getattr(self, '_sao_menu', None) is not None:
+            self._refresh_menu_if_open()
+
+    def _request_dps_live_snapshot(self):
+        tracker = getattr(self, '_dps_tracker', None)
+        self._dps_mode = 'live'
+        if tracker:
+            try:
+                return tracker.get_snapshot() or self._empty_dps_snapshot()
+            except Exception:
+                pass
+        return self._empty_dps_snapshot()
+
+    def _get_dps_last_report(self):
+        tracker = getattr(self, '_dps_tracker', None)
+        if not tracker:
+            return None
+        try:
+            return tracker.get_last_report()
+        except Exception:
+            return None
+
+    def _request_dps_last_report(self):
+        report = self._get_dps_last_report()
+        if report:
+            self._dps_mode = 'report'
+            self._dps_visible = True
+            self._dps_faded = False
+        return report
+
+    def _request_dps_entity_detail(self, uid):
+        """Fetch detail+skill breakdown for `uid`. Returns dict or None.
+
+        Mirrors sao_webview.py DpsAPI.get_entity_detail. Called by the
+        entity DpsOverlay when the user clicks an entity row in live mode.
+        """
+        tracker = getattr(self, '_dps_tracker', None)
+        if not tracker:
+            return None
+        try:
+            return tracker.get_entity_detail(int(uid or 0))
+        except Exception:
+            return None
+
+    def _show_dps_live_snapshot(self, snapshot=None):
+        if not self._dps_overlay:
+            return False
+        if snapshot is None:
+            snapshot = self._request_dps_live_snapshot()
+        self._dps_visible = True
+        self._dps_faded = False
+        self._dps_mode = 'live'
+        self._dps_overlay.show_live(snapshot)
+        return True
+
+    def _show_dps_last_report(self, report=None) -> bool:
+        if not self._dps_overlay:
+            return False
+        if report is None:
+            report = self._request_dps_last_report()
+        if not report:
+            self._sync_dps_report_availability()
+            return False
+        self._dps_visible = True
+        self._dps_faded = False
+        self._dps_mode = 'report'
+        self._dps_overlay.set_report_available(True)
+        return bool(self._dps_overlay.show_last_report(report))
+
+    def _reset_dps_tracker(self):
+        tracker = getattr(self, '_dps_tracker', None)
+        if tracker:
+            try:
+                tracker.reset()
+            except Exception:
+                pass
+        self._sync_dps_report_availability()
+        self._dps_mode = 'live'
+        return self._request_dps_live_snapshot()
+
+    def _show_last_dps_report_menu(self):
+        if self._show_dps_last_report():
+            return
+        self._show_entity_alert(
+            'DPS METER',
+            '暂无上一场战斗报告 / No last combat report yet.',
+            display_time=3.0,
+        )
 
     # ── Sound / Display 开关 ──
 
@@ -3775,6 +4606,7 @@ class SAOPlayerGUI:
         if not new:
             self._dps_visible = False
             self._dps_faded = False
+            self._dps_mode = 'hidden'
             if self._dps_overlay:
                 self._dps_overlay.hide()
         self._refresh_menu_if_open()
@@ -3836,7 +4668,7 @@ class SAOPlayerGUI:
         current = self._float.attributes('-topmost')
         new_val = not current
         self._float.attributes('-topmost', new_val)
-        for panel in [self._status_panel]:
+        for panel in [self._status_panel, self._update_panel]:
             try:
                 if panel and panel.winfo_exists():
                     panel.attributes('-topmost', new_val)
@@ -3873,11 +4705,140 @@ class SAOPlayerGUI:
     def _show_about(self):
         if self._sao_menu.visible:
             self._sao_menu.close()
+        try:
+            from sao_updater import get_manager, STATE_AVAILABLE, STATE_READY
+            st = get_manager().snapshot()
+            extra = ''
+            if st.state in (STATE_AVAILABLE, STATE_READY) and st.latest_version:
+                tag = '已下载, 待重启' if st.state == STATE_READY else '可更新'
+                extra = f"\n\n[{tag}] 新版本 v{st.latest_version}"
+        except Exception:
+            extra = ''
         self.root.after(600, lambda: SAODialog.showinfo(
             self._float, "关于",
-            f"SAO Auto — 游戏辅助 UI\n{APP_VERSION_LABEL}\n\n"
+            f"SAO Auto — 游戏辅助 UI\n{APP_VERSION_LABEL}{extra}\n\n"
             "Alt+A 打开 SAO 菜单\n"
             "右键悬浮按钮查看更多选项"))
+
+    def _build_update_menu_label(self) -> str:
+        try:
+            from sao_updater import get_manager, STATE_AVAILABLE, STATE_READY, STATE_DOWNLOADING
+            st = get_manager().snapshot()
+            if st.state == STATE_READY:
+                return f'更新就绪 v{st.latest_version} (重启应用)'
+            if st.state == STATE_AVAILABLE:
+                if (not st.force_required) and getattr(st, 'skipped_version', '') == st.latest_version:
+                    return '检查更新'
+                tag = '强制' if st.force_required else '可更新'
+                return f'[{tag}] 新版本 v{st.latest_version}'
+            if st.state == STATE_DOWNLOADING:
+                return f'下载中 {int(st.progress * 100)}%'
+        except Exception:
+            pass
+        return '检查更新'
+
+    def _check_for_updates_interactive(self):
+        try:
+            from sao_updater import (
+                get_manager,
+                STATE_AVAILABLE, STATE_UP_TO_DATE, STATE_READY,
+                STATE_DOWNLOADING, STATE_ERROR,
+            )
+        except Exception as e:
+            SAODialog.showinfo(self._float, '更新', f'更新模块不可用: {e}')
+            return
+        if self._sao_menu.visible:
+            self._sao_menu.close()
+        mgr = get_manager()
+        st = mgr.snapshot()
+
+        # 已就绪 -> 询问是否立即重启
+        if st.state == STATE_READY:
+            SAODialog.ask(self._float, '更新就绪',
+                          f'v{st.latest_version} 已下载完成。\n现在重启应用更新?',
+                          on_ok=self._apply_downloaded_update)
+            return
+
+        # 已知有新版本 -> 直接询问是否下载
+        if st.state == STATE_AVAILABLE:
+            self._prompt_update_available(st)
+            return
+
+        if st.state == STATE_DOWNLOADING:
+            SAODialog.showinfo(self._float, '更新', f'正在下载 ({int(st.progress * 100)}%)...')
+            return
+
+        # 否则发起一次检查
+        SAODialog.showinfo(self._float, '更新', '正在检查更新...')
+
+        def _on_status(snapshot):
+            if snapshot.state == STATE_AVAILABLE:
+                try:
+                    self.root.after(0, lambda: self._prompt_update_available(snapshot))
+                except Exception:
+                    pass
+                mgr.remove_listener(_on_status)
+            elif snapshot.state == STATE_UP_TO_DATE:
+                try:
+                    self.root.after(0, lambda: SAODialog.showinfo(
+                        self._float, '更新', f'已是最新版本 ({APP_VERSION_LABEL})'))
+                except Exception:
+                    pass
+                mgr.remove_listener(_on_status)
+            elif snapshot.state == STATE_ERROR:
+                try:
+                    self.root.after(0, lambda: SAODialog.showinfo(
+                        self._float, '更新', f'检查失败: {snapshot.error}'))
+                except Exception:
+                    pass
+                mgr.remove_listener(_on_status)
+
+        mgr.add_listener(_on_status)
+        mgr.check_async()
+
+    def _prompt_update_available(self, snapshot):
+        from sao_updater import get_manager, STATE_READY, STATE_ERROR
+        mgr = get_manager()
+        notes = (snapshot.notes or '').strip()
+        size_mb = (snapshot.size or 0) / 1024 / 1024
+        body = f'发现新版本 v{snapshot.latest_version}'
+        if size_mb > 0:
+            body += f' ({size_mb:.1f} MB)'
+        if notes:
+            body += f'\n\n{notes[:300]}'
+        if snapshot.force_required:
+            body += '\n\n[强制更新] 必须升级才能继续使用'
+
+        def _do_download():
+            def _on_dl(snap):
+                if snap.state == STATE_READY:
+                    try:
+                        self.root.after(0, lambda: SAODialog.ask(
+                            self._float, '更新就绪',
+                            f'v{snap.latest_version} 已下载. 现在重启应用?',
+                            on_ok=self._apply_downloaded_update))
+                    except Exception:
+                        pass
+                    mgr.remove_listener(_on_dl)
+                elif snap.state == STATE_ERROR:
+                    try:
+                        self.root.after(0, lambda: SAODialog.showinfo(
+                            self._float, '更新', f'下载失败: {snap.error}'))
+                    except Exception:
+                        pass
+                    mgr.remove_listener(_on_dl)
+            mgr.add_listener(_on_dl)
+            mgr.download_async()
+
+        if snapshot.force_required:
+            # 强制: 只能更新或退出
+            def _quit():
+                self._on_close()
+            SAODialog.ask(self._float, '强制更新—仅可选择 更新/退出', body,
+                          on_ok=_do_download, on_cancel=_quit)
+        else:
+            SAODialog.ask(self._float, '发现更新', body,
+                          on_ok=_do_download)
 
     def _edit_profile(self):
         """打开角色资料编辑对话框"""
@@ -4232,6 +5193,7 @@ void main() {
             else:
                 self.root.after(420, self._toggle_sao_menu)
             self.root.after(900, self._restore_panels)
+            self.root.after(220, self._mark_update_popup_ready)
 
         def _tick():
             if self._destroyed:
@@ -4706,9 +5668,11 @@ void main() {
             self._status_panel,
             getattr(self._autokey_panel, '_win', None),
             getattr(self._bossraid_panel, '_win', None),
+            getattr(self._autokey_detail_panel, '_win', None),
+            getattr(self._bossraid_detail_panel, '_win', None),
         ]):
             _add(panel, 'panel', order=idx)
-        _add_panel_owner(self._commander_panel, order=3)
+        _add_panel_owner(self._commander_panel, order=5)
         _add(getattr(getattr(self, '_sao_menu', None), '_overlay', None), 'menu')
         _add(getattr(self, '_fisheye_ov', None), 'fisheye')
         # _hp_alpha_windows 已废弃 (ULW 内部渲染)
@@ -4725,6 +5689,11 @@ void main() {
         self._cleanup_exit_overlay()
         if hasattr(self, '_hotkey_mgr'):
             self._hotkey_mgr.cleanup()
+        try:
+            if self._state_mgr:
+                self._state_mgr.unsubscribe(self._on_game_state_update)
+        except Exception:
+            pass
         self._stop_fisheye_overlay()
         try:
             self._sao_menu.unbind_events()
@@ -4739,7 +5708,7 @@ void main() {
             try: self._state_mgr.save_cache(self._cfg_settings_ref)
             except Exception: pass
         # 销毁所有浮动面板
-        for panel in [self._status_panel]:
+        for panel in [self._status_panel, self._update_panel]:
             try:
                 if panel and panel.winfo_exists():
                     panel.destroy()
@@ -4752,7 +5721,13 @@ void main() {
                     ov.destroy()
             except Exception:
                 pass
-        for pnl in [self._autokey_panel, self._bossraid_panel, self._commander_panel]:
+        for pnl in [
+            self._autokey_panel,
+            self._bossraid_panel,
+            self._autokey_detail_panel,
+            self._bossraid_detail_panel,
+            self._commander_panel,
+        ]:
             try:
                 if pnl:
                     pnl.destroy()
@@ -4765,6 +5740,8 @@ void main() {
         self._skillfx_overlay = None
         self._autokey_panel = None
         self._bossraid_panel = None
+        self._autokey_detail_panel = None
+        self._bossraid_detail_panel = None
         self._commander_panel = None
         self._destroy_hp_alpha_strip_windows()
         try:

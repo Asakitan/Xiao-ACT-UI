@@ -1,0 +1,2 @@
+python dev_publish_gui.py
+pause

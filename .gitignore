@@ -37,3 +37,16 @@ Thumbs.db
 server/data/
 server/*.db
 temp/
+
+# ── Dev publish tool (local only, contains API key) ───
+dev_publish.py
+dev_publish_gui.py
+dev_publish_config.json
+update_host/update_host_config.json
+
+# ── Updater runtime artifacts ─────────────────────
+update_state.json
+staging/
+backup/
+update_apply.log
+update_host/releases/

@@ -22,7 +22,7 @@ import struct
 from PIL import Image, ImageDraw, ImageFilter, ImageTk, ImageEnhance, ImageChops, ImageFont
 from typing import Optional, Callable, List, Dict, Tuple
 import numpy as np
-from config import APP_VERSION_LABEL
+from config import APP_VERSION_LABEL, FONTS_DIR
 from sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font
 from sao_menu_hud import (
     MenuCircleButtonRenderer,
@@ -4292,9 +4292,8 @@ void main() {
         if key in self._ls_font_cache:
             return self._ls_font_cache[key]
 
-        base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
         font_file = 'SAOUI.ttf' if family == 'sao' else 'ZhuZiAYuanJWD.ttf'
-        font_path = os.path.join(base, 'assets', 'fonts', font_file)
+        font_path = os.path.join(FONTS_DIR, font_file)
         try:
             font = ImageFont.truetype(font_path, size=size)
         except Exception:

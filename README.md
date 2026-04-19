@@ -1,17 +1,17 @@
 # SAO Auto
 
-`SAO Auto` 是一个面向《星痕共鸣》的外部 HUD / 自动化项目，当前版本同时维护 `entity` 与 `webview` 两套 UI 入口，围绕抓包、识图、Boss Raid、DPS 统计、自动按键和云端脚本仓库持续迭代。
+`SAO Auto` 是一个面向《星痕共鸣》的外部 HUD / 自动化项目，当前版本同时维护 `entity` 与 `webview` 两套 UI 入口，并补齐了远程更新、独立 updater、模块化发布目录、脚本仓库与更新服务端的完整发布链路。
 
-当前版本：`2.0.1`
+当前版本：`2.1.0`
 
-## 2.0.1 概览
+## 2.1.0 概览
 
-- `AutoKey / BossRaid / Commander` 的 entity 编辑面板已按 webview 风格重做并对齐
-- `HP / BossHP / DPS / Burst Ready` 叠加层完成一轮更接近 webview 的视觉与结构修正
-- 新增共享的 overlay 调度与异步渲染 worker，降低 Tk 主线程压力
-- `Burst Ready` 恢复 GL 能量层、运动模糊与更平滑的 steady-state 呈现路径
-- 识图链路切换为面向游戏层的 `PrintWindow + DWM flush` 捕获同步方案
-- 打包脚本已覆盖新增渲染模块、运行时资源与发布目录初始化
+- 新增客户端远程更新链路，`entity / webview` 两套 UI 都会展示发现更新、下载中、下载完成三种 SAO 状态提示
+- 引入独立 `update.exe` 与 `update_apply.py`，主程序退出后由 updater 接管文件替换与重启
+- 客户端发布目录切换为模块化 `onedir` 布局：`XiaoACTUI.exe + update.exe + web/ + assets/ + proto/ + runtime/`
+- 新增 `update_host/` 与本地发布工具链，支持差量/全量包构建和远端上传
+- 冻结版资源路径统一改为 `config.py` 的运行时解析，顶层 `web / assets / proto / icon.ico` 可被源码端与打包端共用
+- entity 侧补齐 `AutoKey / BossRaid` 详情编辑器、DPS 上次战斗报告与明细交互，并继续和 webview 行为对齐
 
 ## 功能列表
 
@@ -19,12 +19,13 @@
 - `HP / 等级 / 身份 / 技能状态` 抓包同步
 - `STA` 识图识别与离线检测
 - 独立 `Boss HP` 覆盖条
-- 独立 `DPS / HPS` 面板与技能拆分
+- 独立 `DPS / HPS` 面板、上次战斗报告与技能拆分
 - `Burst Ready` 视觉与音效提示
 - `Boss Raid` 阶段计时、时间轴提醒、狂暴倒计时
 - `Boss ↔ AutoKey` 联动触发
-- 自动按键本地配置、导入导出、云端脚本库
+- 自动按键本地配置、Quick Panel / Detail Editor、导入导出、云端脚本库
 - `Commander` 指挥官面板与队伍概览
+- 远程更新检查、下载、独立更新器接管与重启应用
 
 ## 运行要求
 
@@ -120,20 +121,24 @@ python main.py
 - 玩家排行
 - 单人明细面板
 - 技能伤害拆分
+- 上次战斗报告
 - 战斗重置
 - 空闲自动淡出
 
 ## 自建服务端
 
-仓库内自带 `FastAPI` 服务端，默认监听 `9320` 端口。
+仓库内自带两类 `FastAPI` 服务端：
 
-在 `sao_auto` 目录下执行：
+- 脚本仓库服务端：默认监听 `9320`
+- 更新服务端：默认监听 `9330`
+
+脚本仓库服务在 `sao_auto` 目录下执行：
 
 ```bash
 python server/app.py
 ```
 
-服务端提供两类数据：
+脚本仓库服务端提供两类数据：
 
 - 自动按键脚本：`/api/scripts`
 - Boss Raid 配置：`/api/boss-raids`
@@ -141,6 +146,27 @@ python server/app.py
 本地数据库默认位于：
 
 - `server/data/scripts.db`
+
+更新服务端在 `sao_auto` 目录下执行：
+
+```bash
+python update_host/app.py
+```
+
+更新服务端提供：
+
+- 更新清单：`/api/update/latest`
+- 更新摘要：`/api/update/summary`
+- 更新包下载：`/downloads/*`
+
+更新服务端的部署与发布细节见 `update_host/README.md`。
+
+## 远程更新
+
+- 客户端启动后会后台检查 `settings.json` 中的 `update_host`；为空时回退到 `config.DEFAULT_UPDATE_HOST`
+- `entity / webview` 两套 UI 都会在 HUD 启动完成后再弹出全局 SAO 更新提示，不依赖隐藏菜单窗口
+- 下载完成后不会直接覆盖运行中的主程序，而是由同目录 `update.exe` 在主进程退出后应用 `runtime-delta` 或 `full-package`
+- `staging/`、`backup/`、`update_state.json` 和 `update_apply.log` 都属于本地运行时产物，不参与源码版本管理
 
 ## 打包
 
@@ -150,10 +176,22 @@ python server/app.py
 pyinstaller --clean --noconfirm XiaoACTUI.spec
 ```
 
+独立 updater 打包：
+
+```bash
+pyinstaller --clean --noconfirm update.spec
+```
+
 服务端打包：
 
 ```bash
 pyinstaller --clean --noconfirm server/AutoKeyServer.spec
+```
+
+更新服务端打包：
+
+```bash
+pyinstaller --clean --noconfirm update_host/UpdateHost.spec
 ```
 
 一键发布目录：
@@ -162,14 +200,27 @@ pyinstaller --clean --noconfirm server/AutoKeyServer.spec
 build_release.bat
 ```
 
+更新服务端部署包：
+
+```bat
+build_update_host_package.bat
+```
+
+差量 / 全量更新包：
+
+```bash
+python build_delta.py --version 2.1.0 --files runtime/sao_gui.py web/menu.html
+python build_full_package.py --version 2.1.0
+```
+
 当前打包脚本会：
 
-- 显式包含 `main.py` 中动态导入的 `entity` / `webview` UI 模块
-- 打包 `web/`、`assets/`、`proto/` 等运行时资源
-- 保留 `install_npcap` 相关逻辑，避免抓包安装链路在发布包中缺失
-- 生成 `dist/release/XiaoACTUI` 与 `dist/release/AutoKeyServer`
+- 构建 `XiaoACTUI.exe`、`update.exe` 与 `AutoKeyServer.exe`
+- 显式包含 `main.py` 中动态导入的 `entity / webview` UI 模块与更新模块
+- 生成模块化发布目录 `dist/release/XiaoACTUI`，并将 `web/`、`assets/`、`proto/`、`icon.ico` 提升到客户端顶层
+- `runtime/` 仅保留 Python 解释器、依赖 DLL、`.py` / `.pyc` 与运行时模块
 - 预建 `exports/auto_keys`、`exports/boss_raids`、`temp`、`server/data` 等运行目录
-- 复制 `README.md`、`LICENSE`、`Start.bat` 等发布说明文件
+- 支持后续将变更内容打成 `runtime-delta` 或 `full-package` 更新包
 
 ## 目录概览
 
@@ -186,19 +237,34 @@ sao_auto/
 ├─ boss_raid_engine.py     # Boss Raid 阶段、时间轴、状态机
 ├─ boss_autokey_linkage.py # Boss 事件与自动按键联动
 ├─ auto_key_engine.py      # 自动按键引擎与云端客户端
+├─ sao_updater.py          # 客户端更新检查 / 下载 / 状态管理
 ├─ sao_webview.py          # WebView HUD 主进程
 ├─ sao_gui.py              # Entity HUD 主进程
 ├─ sao_theme.py            # SAO 菜单与视觉主题
 ├─ sao_sound.py            # 音效、字体与 Burst Ready 语音
+├─ update_apply.py         # 外部更新应用器
+├─ build_delta.py          # runtime-delta 包构建脚本
+├─ build_full_package.py   # full-package 包构建脚本
 ├─ build_release.bat       # 发布目录打包脚本
+├─ build_update_host_package.bat # 更新服务端部署包脚本
 ├─ web/                    # WebView 页面资源
 ├─ assets/                 # 字体、音效、技能名表、贴图资源
 ├─ proto/                  # Protobuf 与协议相关文件
+├─ update_host/            # FastAPI 更新服务端与发布脚本
 └─ server/
    └─ app.py               # FastAPI 脚本 / BossRaid 服务端
 ```
 
 ## 更新记录
+
+### 2.1.0
+
+- 新增 `sao_updater.py` / `update_apply.py` 远程更新链路，支持 `runtime-delta` 与 `full-package`
+- 引入 `update.exe`、`build_delta.py`、`build_full_package.py`、`build_update_host_package.bat` 和 `update_host/` 发布 / 部署工具链
+- 客户端发布目录改成模块化 `onedir` 布局，冻结版资源解析统一收口到 `config.py`
+- webview / entity 更新提示改为启动完成后再弹出，并统一走全局 SAO alert 宿主
+- entity 新增 `AutoKey / BossRaid` detail editor、DPS 上次战斗报告与实体明细交互
+- `BossHP / HP / DPS / Burst Ready` 等 overlay 继续修正显示与交互细节
 
 ### 2.0.1
 

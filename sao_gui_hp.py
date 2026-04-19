@@ -846,6 +846,21 @@ class HpOverlay:
         box_rect = (BOX_X, BOX_Y + y_off, BOX_X + BOX_W, BOX_Y + BOX_H + y_off)
         sta_rect = (STA_X, STA_Y + y_off, STA_X + STA_W, STA_Y + STA_H + y_off)
 
+        hp_group_alpha = 1.0
+        if self._hp_group_hidden:
+            if self._hp_group_fade_t > 0:
+                t = min(1.0, (now - self._hp_group_fade_t) / self._hp_group_fade_duration)
+                hp_group_alpha = max(0.0, 1.0 - _ease_out_cubic(t))
+            else:
+                hp_group_alpha = 0.0
+        elif self._hp_group_restore_t > 0:
+            t = min(1.0, (now - self._hp_group_restore_t) / self._hp_group_restore_duration)
+            hp_group_alpha = min(1.0, _ease_out_cubic(t))
+
+        if hp_group_alpha > 0.02:
+            self._draw_root_outer_pulse(img, y_off, now, hp_group_alpha)
+            self._draw_root_cover_pulse(img, y_off, now, hp_group_alpha)
+
         # Dynamic layers
         self._draw_brackets(img, y_off, now)
         self._draw_id_plate_text(img, y_off, now)
@@ -862,16 +877,6 @@ class HpOverlay:
 
         # HP group auto-hide opacity (web: _setHPGroupHidden — 500ms
         # fade / 180ms restore on cover + XTBox + STA, id-plate stays)
-        hp_group_alpha = 1.0
-        if self._hp_group_hidden:
-            if self._hp_group_fade_t > 0:
-                t = min(1.0, (now - self._hp_group_fade_t) / self._hp_group_fade_duration)
-                hp_group_alpha = max(0.0, 1.0 - _ease_out_cubic(t))
-            else:
-                hp_group_alpha = 0.0
-        elif self._hp_group_restore_t > 0:
-            t = min(1.0, (now - self._hp_group_restore_t) / self._hp_group_restore_duration)
-            hp_group_alpha = min(1.0, _ease_out_cubic(t))
         if hp_group_alpha < 0.999:
             img = _multiply_alpha_regions(img, (cover_rect, box_rect, sta_rect), hp_group_alpha)
 
@@ -883,6 +888,103 @@ class HpOverlay:
                           ).astype(np.uint8)
             img = Image.fromarray(a, 'RGBA')
         return img
+
+    def _draw_root_outer_pulse(self, img: Image.Image, y_off: int,
+                               now: float, alpha_scale: float = 1.0) -> None:
+        pulse = (now - self._spawn_time) / 3.2
+        env = 0.5 - 0.5 * math.cos((pulse % 1.0) * 2 * math.pi)
+        low_hp = max(0.0, min(1.0, (0.42 - self._hp_pct_disp) / 0.42))
+        flash = 0.0
+        if self._hp_flash_start:
+            flash_age = now - self._hp_flash_start
+            if flash_age < 0.45:
+                flash = (1.0 - flash_age / 0.45) ** 2
+        strength = (0.10 + 0.10 * env + 0.18 * low_hp + 0.22 * flash) * alpha_scale
+        if strength <= 0.01:
+            return
+
+        layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        ld = ImageDraw.Draw(layer, 'RGBA')
+        ld.rounded_rectangle(
+            (ID_X - 18, ID_Y - 8 + y_off,
+             ID_X + ID_W + 10, ID_Y + ID_H + 8 + y_off),
+            radius=12,
+            fill=(104, 228, 255, int(34 * strength)),
+        )
+        ld.rounded_rectangle(
+            (COVER_X - 14, COVER_Y - 8 + y_off,
+             COVER_X + COVER_W + 18, COVER_Y + COVER_H + 10 + y_off),
+            radius=10,
+            fill=(243, 175, 18, int(26 * strength)),
+        )
+        ld.rounded_rectangle(
+            (STA_X - 8, STA_Y - 4 + y_off,
+             STA_X + STA_W + 10, STA_Y + STA_H + 6 + y_off),
+            radius=8,
+            fill=(212, 156, 23, int(18 * strength)),
+        )
+        layer = _gpu_blur(layer, 8)
+        img.alpha_composite(layer)
+
+        ring = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        rd = ImageDraw.Draw(ring, 'RGBA')
+        rd.rounded_rectangle(
+            (COVER_X - 6, COVER_Y - 4 + y_off,
+             COVER_X + COVER_W + 6, COVER_Y + COVER_H + 4 + y_off),
+            radius=9,
+            outline=(208, 244, 255, int(52 * strength)),
+            width=1,
+        )
+        rd.rounded_rectangle(
+            (ID_X - 4, ID_Y - 3 + y_off,
+             ID_X + ID_W + 4, ID_Y + ID_H + 3 + y_off),
+            radius=8,
+            outline=(255, 226, 154, int(38 * strength)),
+            width=1,
+        )
+        img.alpha_composite(ring)
+
+    def _draw_root_cover_pulse(self, img: Image.Image, y_off: int,
+                               now: float, alpha_scale: float = 1.0) -> None:
+        pulse = ((now - self._spawn_time + 0.45) % 2.8) / 2.8
+        env = 0.5 - 0.5 * math.cos(pulse * 2 * math.pi)
+        low_hp = max(0.0, min(1.0, (0.48 - self._hp_pct_disp) / 0.48))
+        flash = 0.0
+        if self._hp_flash_start:
+            flash_age = now - self._hp_flash_start
+            if flash_age < 0.45:
+                flash = (1.0 - flash_age / 0.45) ** 2
+        strength = (0.08 + 0.10 * env + 0.14 * low_hp + 0.18 * flash) * alpha_scale
+        if strength <= 0.01:
+            return
+
+        id_glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        idd = ImageDraw.Draw(id_glow, 'RGBA')
+        idd.rounded_rectangle(
+            (ID_X + 2, ID_Y + 2 + y_off,
+             ID_X + ID_W - 3, ID_Y + ID_H - 3 + y_off),
+            radius=6,
+            fill=(104, 228, 255, int(26 * strength)),
+        )
+        id_glow = _gpu_blur(id_glow, 5)
+        img.alpha_composite(_clip_alpha(id_glow, self._id_plate_mask(y_off)))
+
+        cover_glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        cgd = ImageDraw.Draw(cover_glow, 'RGBA')
+        cgd.rounded_rectangle(
+            (COVER_X + 2, COVER_Y + 2 + y_off,
+             COVER_X + COVER_W - 3, COVER_Y + COVER_H - 3 + y_off),
+            radius=6,
+            fill=(255, 220, 132, int(24 * strength)),
+        )
+        sweep_x = COVER_X - 42 + int((COVER_W + 84) * (((now - self._spawn_time) * 0.22) % 1.0))
+        cgd.rectangle(
+            (sweep_x, COVER_Y + 4 + y_off,
+             sweep_x + 54, COVER_Y + COVER_H - 4 + y_off),
+            fill=(255, 255, 255, int(10 + 12 * strength)),
+        )
+        cover_glow = _gpu_blur(cover_glow, 5)
+        img.alpha_composite(_clip_alpha(cover_glow, self._cover_mask(y_off)))
 
     # ── identity plate background ───────────────────────────────────
 
