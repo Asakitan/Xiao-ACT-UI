@@ -89,6 +89,75 @@ try:
 except Exception:
     pass
 
+
+def _promote_pending_replacements() -> int:
+    """v2.1.2-j: 扫描 BASE_DIR 下所有 *.new 文件并 finalize.
+
+    场景:
+      - 旧 update.exe 用 os.replace 覆盖 SAOUI.ttf 失败 → 我们的新 update_apply
+        把它 stage 到 SAOUI.ttf.new。
+      - 旧 update.exe 处理 update.exe 自身时, 失败时 fallback 留下 update.exe.new
+        (之前由 MoveFileEx DELAY_UNTIL_REBOOT 排队, 但用户要求重启前完成)。
+    主程序 XiaoACTUI 启动到这里时, 之前持锁的进程已完全退出, 可以直接 rename。
+    返回 finalize 成功的文件数。
+    """
+    if not getattr(sys, "frozen", False):
+        return 0
+    finalized = 0
+    skip_dirs = {os.path.join(BASE_DIR, d) for d in ("backup", "staging", "temp", "exports")}
+    try:
+        for dirpath, dirnames, filenames in os.walk(BASE_DIR):
+            # prune
+            dirnames[:] = [d for d in dirnames if os.path.join(dirpath, d) not in skip_dirs]
+            for fn in filenames:
+                if not fn.endswith(".new"):
+                    continue
+                staged = os.path.join(dirpath, fn)
+                target = staged[:-4]
+                if not target:
+                    continue
+                try:
+                    if os.path.isfile(target):
+                        try:
+                            if os.path.getsize(target) == os.path.getsize(staged):
+                                # already same → drop staged
+                                try:
+                                    os.remove(staged)
+                                except Exception:
+                                    pass
+                                continue
+                        except Exception:
+                            pass
+                        # try to delete target first
+                        try:
+                            os.remove(target)
+                        except PermissionError:
+                            # try rename-aside
+                            try:
+                                old = target + f".old-{int(__import__('time').time())}"
+                                os.rename(target, old)
+                            except Exception:
+                                continue  # still locked; leave .new for next start
+                        except Exception:
+                            continue
+                    try:
+                        os.replace(staged, target)
+                        finalized += 1
+                        print(f"[config] finalized pending replacement: {target}", flush=True)
+                    except Exception as e:
+                        print(f"[config] finalize failed for {target}: {e}", flush=True)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return finalized
+
+
+try:
+    _promote_pending_replacements()
+except Exception:
+    pass
+
 # 远程更新可写覆盖层 (可选, delta 直接写到 BASE_DIR 同名子目录, 这里仅用于 staging/backup/state)
 RUNTIME_DIR = BASE_DIR
 RUNTIME_PY_DIR = os.path.join(BASE_DIR, "runtime")           # 我们的 .py 与 Python DLL 同处 runtime/
@@ -129,11 +198,11 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.2-i"
+APP_VERSION = "2.1.2-j"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.2-i: update_apply 替换文件加 retry+rename 备用 (修复 SAOUI.ttf 拒绝访问);
-#           promote_runtime_update_exe 增加 rollback (修复 update.exe 凭空消失);
-#           本版强制 full-package + force_update。
+# v2.1.2-j: TTF/DLL 锁定文件失败时 stage 到 .new (不再回滚整包);
+#           XiaoACTUI 启动时 _promote_pending_replacements 扫描所有 *.new
+#           完成 finalize (含 update.exe.new); 避免用户卡在 SAOUI.ttf。
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://47.82.157.220:9330"
