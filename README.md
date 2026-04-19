@@ -2,7 +2,13 @@
 
 `SAO Auto` 是一个面向《星痕共鸣》的外部 HUD / 自动化项目，当前版本同时维护 `entity` 与 `webview` 两套 UI 入口，并补齐了远程更新、独立 updater、模块化发布目录、脚本仓库与更新服务端的完整发布链路。
 
-当前版本：`2.1.1`
+当前版本：`2.1.1-a`
+
+## 2.1.1-a 概览
+
+- entity SAO Menu 打开后改为持续走 60Hz HUD 调度，不再在短暂强制阶段后退回到 20Hz idle tick
+- 为 entity 菜单状态刷新补了签名缓存与 idle 合帧，同一帧内重复状态变更只会刷新一轮子菜单
+- 为 child menu 注册与可见菜单重建补了内容去重，未变化时不再重复触发布局/HUD 重算
 
 ## 2.1.1 概览
 
@@ -262,6 +268,12 @@ sao_auto/
 ```
 
 ## 更新记录
+
+### 2.1.1-a
+
+- entity SAO Menu HUD 在菜单保持打开时持续按 60Hz 调度，扫描线 / 光点 / 呼吸位移不再掉回低帧率
+- `sao_gui.py` 为菜单状态刷新增加签名缓存与 `after_idle` 合帧，避免多个状态变更连续重建整套 child menu
+- `sao_theme.py` 为 child menu 注册和可见菜单切换增加内容签名去重，并减少 overlay geometry / HUD relayout 的无效调用
 
 ### 2.1.1
 
