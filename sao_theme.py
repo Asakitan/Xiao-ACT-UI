@@ -769,6 +769,7 @@ class SAOChildBar(tk.Frame):
         super().__init__(parent, bg='', highlightthickness=0, **kw)
         self.configure(bg=parent.cget('bg'))
         self._menus: Dict[str, List[Dict]] = {}
+        self._menu_signatures: Dict[str, Tuple] = {}
         self._current_name = None
         self._items: List[tk.Frame] = []
         self._content_wrap = None
@@ -788,21 +789,51 @@ class SAOChildBar(tk.Frame):
         self._anim = Animator(self)
         self.bind('<Destroy>', lambda e: self._stop_row_anim())
 
-    def register_menu(self, name: str, items: List[Dict]):
-        self._menus[name] = items
+    @staticmethod
+    def _menu_signature(items: List[Dict]) -> Tuple:
+        sig = []
+        for item in list(items or []):
+            if not isinstance(item, dict):
+                sig.append((str(item), '', False))
+                continue
+            sig.append((
+                str(item.get('icon', '') or ''),
+                str(item.get('label', '') or ''),
+                bool(item.get('command')),
+            ))
+        return tuple(sig)
+
+    def register_menu(self, name: str, items: List[Dict], force: bool = False):
+        normalized = list(items or [])
+        new_sig = self._menu_signature(normalized)
+        if not force and self._menu_signatures.get(name) == new_sig:
+            return False
+        self._menus[name] = normalized
+        self._menu_signatures[name] = new_sig
+        return True
+
+    def unregister_menu(self, name: str):
+        self._menus.pop(name, None)
+        self._menu_signatures.pop(name, None)
 
     def show_menu(self, name: str, force: bool = False):
-        if not force and name == self._current_name and self._items:
-            return
+        target_sig = self._menu_signatures.get(name)
+        current_sig = self._menu_signatures.get(self._current_name) if self._current_name else None
+        if not force and name == self._current_name and self._items and current_sig == target_sig:
+            return False
         items = self._menus.get(name, [])
         if self._items and items and self._current_name and name != self._current_name:
             self._current_name = name
             self._rebuild(items, animate_rows=False)
-            return
+            return True
         self._transition_to(name, items)
+        return True
 
     def hide_menu(self):
+        if self._current_name is None and not self._items:
+            return False
         self._transition_to(None, [])
+        return True
 
     def _transition_to(self, name: Optional[str], items: List[Dict]):
         self._transition_serial += 1
@@ -1278,6 +1309,8 @@ class SAOPopUpMenu:
         self._menu_hud_backdrop = None
         self._menu_hud_backdrop_key = None
         self._content_place_sig = None
+        self._overlay_size_part = ''
+        self._overlay_drift_sig = None
         self._hud_cached_dims: Optional[Tuple[int, int, int, int]] = None
         self._menu_force_60_until = 0.0
         self._root_click_id = None
@@ -1397,9 +1430,12 @@ class SAOPopUpMenu:
         self._breath_pad = 12
         self._overlay_base_x = -self._breath_pad
         self._overlay_base_y = -self._breath_pad
+        overlay_w = sw + self._breath_pad * 2
+        overlay_h = sh + self._breath_pad * 2
+        self._overlay_size_part = f'{overlay_w}x{overlay_h}'
+        self._overlay_drift_sig = (self._overlay_base_x, self._overlay_base_y)
         self._overlay.geometry(
-            f'{sw + self._breath_pad * 2}x{sh + self._breath_pad * 2}'
-            f'+{self._overlay_base_x}+{self._overlay_base_y}')
+            f'{self._overlay_size_part}+{self._overlay_base_x}+{self._overlay_base_y}')
         self._overlay.configure(bg=self._TRANSPARENT_KEY)
         self._overlay.attributes('-alpha', 0.0)
         # 透明色键: 使 overlay 背景完全透明, 只保留 HUD 元素和内容组件
@@ -1821,22 +1857,22 @@ class SAOPopUpMenu:
 
     def _on_menu_activate(self, item):
         self._menu_force_60_until = time.time() + 0.95
-        # Content width changes when a child menu is shown/hidden, so the
-        # cached HUD dimensions must be re-queried on the next tick.
-        self._hud_cached_dims = None
-        self._content_place_sig = None
-        self._menu_hud_renderer.reset()
         lw = self._left_widget
+        layout_changed = False
         if item is None:
             if lw and hasattr(lw, 'set_active'):
                 lw.set_active(False)
-            self._child_bar.hide_menu()
-            try:
-                self._overlay.update_idletasks()
-                self._refresh_anchor_layout()
-                self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
-            except Exception:
-                pass
+            layout_changed = bool(self._child_bar.hide_menu())
+            if layout_changed:
+                self._hud_cached_dims = None
+                self._content_place_sig = None
+                self._menu_hud_renderer.reset()
+                try:
+                    self._overlay.update_idletasks()
+                    self._refresh_anchor_layout()
+                    self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
+                except Exception:
+                    pass
             return
         if lw and hasattr(lw, 'set_active'):
             was_active = bool(getattr(lw, '_active', False))
@@ -1856,32 +1892,58 @@ class SAOPopUpMenu:
                 _ps('submenu', volume=0.5)
             except Exception:
                 pass
-            self._child_bar.show_menu(name)
+            layout_changed = bool(self._child_bar.show_menu(name))
         else:
-            self._child_bar.hide_menu()
+            layout_changed = bool(self._child_bar.hide_menu())
+        if layout_changed:
+            self._hud_cached_dims = None
+            self._content_place_sig = None
+            self._menu_hud_renderer.reset()
+            try:
+                self._overlay.update_idletasks()
+                self._refresh_anchor_layout()
+                self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
+            except Exception:
+                pass
+
+    def refresh_child_menus(self, menus: Dict[str, List[Dict]], force: bool = False):
+        """Batch-refresh child menus and redraw HUD only if the visible menu changed."""
+        menus = dict(menus or {})
+        self.child_menus = menus
+        if not self._child_bar:
+            return False
+
+        layout_changed = False
+        for name in list(getattr(self._child_bar, '_menus', {}).keys()):
+            if name not in menus:
+                self._child_bar.unregister_menu(name)
+                if getattr(self._child_bar, '_current_name', None) == name:
+                    layout_changed = bool(self._child_bar.hide_menu()) or layout_changed
+
+        for name, items in menus.items():
+            changed = self._child_bar.register_menu(name, items, force=force)
+            if changed and getattr(self._child_bar, '_current_name', None) == name:
+                layout_changed = bool(self._child_bar.show_menu(name, force=True)) or layout_changed
+
+        if not layout_changed:
+            return False
+
+        self._hud_cached_dims = None
+        self._content_place_sig = None
+        self._menu_hud_renderer.reset()
         try:
             self._overlay.update_idletasks()
             self._refresh_anchor_layout()
             self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
         except Exception:
             pass
+        return True
 
     def refresh_child_menu(self, name: str, items: List[Dict]):
         """动态更新某个子菜单的内容"""
-        self.child_menus[name] = items
-        if self._child_bar:
-            self._child_bar.register_menu(name, items)
-            if self._child_bar._current_name == name:
-                self._child_bar.show_menu(name, force=True)
-                self._hud_cached_dims = None
-                self._content_place_sig = None
-                self._menu_hud_renderer.reset()
-                try:
-                    self._overlay.update_idletasks()
-                    self._refresh_anchor_layout()
-                    self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
-                except Exception:
-                    pass
+        menus = dict(self.child_menus or {})
+        menus[name] = items
+        return self.refresh_child_menus(menus)
 
     def _clear_menu_hud_items(self) -> None:
         """Drop all canvas-native HUD items so the next frame re-creates
@@ -1974,6 +2036,8 @@ class SAOPopUpMenu:
         self._menu_hud_items = {}
         self._menu_hud_static_photo = None
         self._content_place_sig = None
+        self._overlay_size_part = ''
+        self._overlay_drift_sig = None
         self._menu_hud_renderer.reset()
         self._hud_cached_dims = None
         self._external_close_prepared = False
@@ -1997,15 +2061,13 @@ class SAOPopUpMenu:
     def _menu_overlay_animating(self) -> bool:
         if not self._visible or not self._overlay or not self._overlay.winfo_exists():
             return False
-        return time.time() < self._menu_force_60_until
+        return True
 
     def _tick_menu_overlay(self, now: float) -> None:
         if not self._visible or not self._overlay or not self._overlay.winfo_exists():
             return
-        elapsed = now - self._menu_anim_t0
-        if now < self._menu_force_60_until:
-            self._hud_cached_dims = None
-        # Gentle 1 px drift used by the HUD canvas only. The content
+        elapsed = max(0.0, now - self._menu_anim_t0)
+        # Gentle 2 px-quantized drift used by the HUD canvas only. The content
         # frame itself is NEVER re-placed every tick: doing that re-runs
         # Tk's geometry pass on the whole menu and causes visible tearing
         # and right-edge clipping when the anchored menu is near the
@@ -2017,9 +2079,9 @@ class SAOPopUpMenu:
             dx = 0
             dy = 0
         else:
-            dx = int(round(raw_dx))
-            dy = int(round(raw_dy))
-        # Apply 1 px-resolution breathing as an OVERLAY-window offset.
+            dx = int(round(raw_dx / 2.0) * 2)
+            dy = int(round(raw_dy / 2.0) * 2)
+        # Apply quantized breathing as an OVERLAY-window offset.
         # This moves every child together with zero Tk re-layout, so
         # the menu drifts visibly without tearing or right-edge clip.
         try:
@@ -2027,13 +2089,13 @@ class SAOPopUpMenu:
             base_y = getattr(self, '_overlay_base_y', 0)
             new_x = base_x + dx
             new_y = base_y + dy
-            cur = self._overlay.geometry()
-            # Tk geometry is 'WxH+X+Y'. Only re-set when X/Y actually
-            # change to avoid pointless WM round-trips.
             sig = (new_x, new_y)
             if getattr(self, '_overlay_drift_sig', None) != sig:
                 self._overlay_drift_sig = sig
-                size_part = cur.split('+', 1)[0] if '+' in cur else cur
+                size_part = getattr(self, '_overlay_size_part', '')
+                if not size_part:
+                    size_part = self._overlay.geometry().split('+', 1)[0]
+                    self._overlay_size_part = size_part
                 self._overlay.geometry(f'{size_part}+{new_x}+{new_y}')
         except Exception:
             pass

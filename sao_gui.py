@@ -953,6 +953,10 @@ class SAOPlayerGUI:
         self._update_popup_ready = False
         self._pending_update_popup_snapshot = None
         self._last_update_popup_key = ''
+        self._menu_refresh_after_id = None
+        self._menu_refresh_force = False
+        self._menu_children_cache_sig = None
+        self._menu_children_cache = None
         self._fisheye_ov = None    # 菜单开启时的持久鱼眼叠加层
         self._ctx_menu_open = False  # 右键菜单弹出中, 暂停 z-order 置顶
         self._lift_loop_active = False
@@ -2479,6 +2483,94 @@ class SAOPlayerGUI:
 
         return panel
 
+    def _compute_menu_refresh_signature(self):
+        hk = self.settings.get('hotkeys', DEFAULT_HOTKEYS) or {}
+        hotkey_sig = tuple(sorted((str(k), str(v)) for k, v in hk.items()))
+        try:
+            topmost = bool(self._float.attributes('-topmost'))
+        except Exception:
+            topmost = False
+
+        ak_on = False
+        br_on = False
+        if self._cfg_settings_ref:
+            try:
+                ak_on = bool(self._load_auto_key_config().get('enabled', False))
+            except Exception:
+                ak_on = False
+            try:
+                br_on = bool(self._load_boss_raid_config().get('enabled', False))
+            except Exception:
+                br_on = False
+
+        hs_on = bool(self._hide_seek_engine and self._hide_seek_engine.running)
+        snd_on = bool(self._get_setting('sound_enabled', True))
+        dps_on = bool(self._get_setting('dps_enabled', True))
+        dps_report_available = bool(self._get_dps_last_report_available())
+        burst_on = bool(self._get_setting('burst_enabled', True))
+        burst_slots = self._normalize_watched_skill_slots(
+            self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9])
+        )
+        if not burst_slots:
+            burst_slots = [1]
+        boss_bar_mode = str(self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid')
+        update_label = self._build_update_menu_label()
+
+        return (
+            hotkey_sig,
+            bool(getattr(self, '_recognition_active', False)),
+            topmost,
+            ak_on,
+            hs_on,
+            br_on,
+            snd_on,
+            dps_on,
+            dps_report_available,
+            burst_on,
+            tuple(burst_slots),
+            boss_bar_mode,
+            bool(self._panels_hidden),
+            update_label,
+        )
+
+    def _get_menu_children_cached(self, force: bool = False):
+        sig = self._compute_menu_refresh_signature()
+        if not force and self._menu_children_cache is not None and self._menu_children_cache_sig == sig:
+            return self._menu_children_cache
+        children = self._build_menu_children()
+        self._menu_children_cache_sig = sig
+        self._menu_children_cache = children
+        return children
+
+    def _cancel_pending_menu_refresh(self):
+        after_id = getattr(self, '_menu_refresh_after_id', None)
+        if after_id:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+        self._menu_refresh_after_id = None
+        self._menu_refresh_force = False
+
+    def _apply_menu_refresh_if_open(self):
+        self._menu_refresh_after_id = None
+        force = bool(self._menu_refresh_force)
+        self._menu_refresh_force = False
+        if self._destroyed:
+            return
+        menu = getattr(self, '_sao_menu', None)
+        if not (menu and menu.visible):
+            self._update_float_status()
+            return
+        children = self._get_menu_children_cached(force=force)
+        refresh_all = getattr(menu, 'refresh_child_menus', None)
+        if callable(refresh_all):
+            refresh_all(children, force=force)
+        else:
+            for name, items in children.items():
+                menu.refresh_child_menu(name, items)
+        self._update_float_status()
+
     def _build_menu_children(self):
         """动态构建子菜单 (支持状态反映) — SAO Auto (6 categories)"""
         hk = self.settings.get('hotkeys', DEFAULT_HOTKEYS)
@@ -2702,7 +2794,7 @@ class SAOPlayerGUI:
         ]
 
         self._sao_menu = SAOPopUpMenu(
-            self.root, self._menu_icons, self._build_menu_children(),
+            self.root, self._menu_icons, self._get_menu_children_cached(force=True),
             username=self._username or 'Player',
             description=self._profession or 'SAO Auto — 游戏辅助 UI',
             on_close=self._on_sao_menu_close,
@@ -2805,7 +2897,7 @@ class SAOPlayerGUI:
             except Exception:
                 pass
             self._play_motion_blur(closing=False)
-            self._sao_menu.child_menus = self._build_menu_children()
+            self._sao_menu.child_menus = self._get_menu_children_cached(force=True)
             self._sao_menu.open()
             # 立即将悬浮按钮浮到 overlay 之上 (避免撕裂)
             self._float.lift()
@@ -2874,19 +2966,29 @@ class SAOPlayerGUI:
     def _on_sao_menu_close(self):
         """SAO 菜单关闭时 — 重启呼吸动画; 面板仍开时保持鱼眼, 否则渐隐销毁"""
         self._lift_loop_active = False
+        self._cancel_pending_menu_refresh()
         self._persist_entity_menu_state(save_now=False)
         self._player_panel = None
         self._maybe_stop_fisheye()
         if not self._destroyed:
             pass  # 呼吸动画已禁用 (固定位置)
 
-    def _refresh_menu_if_open(self):
+    def _refresh_menu_if_open(self, force: bool = False):
         """如果菜单打开, 刷新子菜单和面板"""
-        if self._sao_menu.visible:
-            children = self._build_menu_children()
-            for name, items in children.items():
-                self._sao_menu.refresh_child_menu(name, items)
-        self._update_float_status()
+        menu = getattr(self, '_sao_menu', None)
+        if self._destroyed:
+            return
+        if not (menu and menu.visible):
+            self._update_float_status()
+            return
+        if force:
+            self._menu_refresh_force = True
+        if self._menu_refresh_after_id:
+            return
+        try:
+            self._menu_refresh_after_id = self.root.after_idle(self._apply_menu_refresh_if_open)
+        except Exception:
+            self._apply_menu_refresh_if_open()
 
     # ══════════════════════════════════════════════
     #  浮动面板: 钢琴 / 可视化
