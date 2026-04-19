@@ -57,8 +57,11 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.2-f"
+APP_VERSION = "2.1.2-g"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.2-g: 新 update.exe 改用嵌套路径 runtime/update.exe 投递, 主程序启动时
+#           sao_updater.promote_runtime_update_exe() 一次性提升到顶层, 解决
+#           旧 update.exe 拒收 runtime-delta 顶层 .exe 的 bootstrap 死局。
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://47.82.157.220:9330"
