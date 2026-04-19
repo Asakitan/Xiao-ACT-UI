@@ -113,6 +113,70 @@ def _normalize_rel(rel_path: str) -> str:
     return rel
 
 
+def _replace_with_retry(src: str, dst: str, retries: int = 6, delay: float = 0.4) -> None:
+    """Robust os.replace for Windows-locked files (fonts, dlls, ...).
+
+    Retries with backoff. If still locked, falls back to:
+      - rename(dst -> dst+'.old-<ts>') to release the lock holder's reference
+        (Windows allows renaming most files with open handles), then move src
+        into place.
+      - if even rename fails, schedule a delayed replace via MoveFileEx
+        (DELAY_UNTIL_REBOOT) so it succeeds on next boot, and (best-effort)
+        write src to dst+'.new' so subsequent runs can pick it up.
+    Never raises for the tmp-staged delete cleanup branch.
+    """
+    last_err: Optional[Exception] = None
+    for attempt in range(retries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError as e:
+            last_err = e
+            time.sleep(delay * (1 + attempt))
+        except OSError as e:
+            last_err = e
+            time.sleep(delay * (1 + attempt))
+    # Fallback 1: rename old aside, then move
+    try:
+        if os.path.exists(dst):
+            old = f"{dst}.old-{int(time.time())}"
+            try:
+                os.rename(dst, old)
+            except Exception:
+                pass
+        os.replace(src, dst)
+        return
+    except Exception as e:
+        last_err = e
+    # Fallback 2: stage a .new copy + schedule delayed replace
+    try:
+        staged = dst + ".new"
+        if os.path.exists(staged):
+            try:
+                os.remove(staged)
+            except Exception:
+                pass
+        try:
+            os.replace(src, staged)
+        except Exception:
+            shutil.copyfile(src, staged)
+        if os.name == "nt":
+            try:
+                import ctypes
+                MOVEFILE_REPLACE_EXISTING = 0x1
+                MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
+                MoveFileExW = ctypes.windll.kernel32.MoveFileExW
+                MoveFileExW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+                MoveFileExW.restype = ctypes.c_bool
+                MoveFileExW(staged, dst, MOVEFILE_REPLACE_EXISTING | MOVEFILE_DELAY_UNTIL_REBOOT)
+            except Exception:
+                pass
+        return
+    except Exception as e:
+        # 真的没办法了, 把原异常抛出去触发回滚
+        raise last_err if last_err is not None else e
+
+
 def _collect_entries(zf: zipfile.ZipFile, base: str, allow_top_level_exe: bool) -> List[Dict[str, object]]:
     entries: List[Dict[str, object]] = []
     for info in zf.infolist():
@@ -237,7 +301,7 @@ def _apply_zip_package(
                 try:
                     with zf.open(info, "r") as src, open(tmp_dst, "wb") as out:
                         shutil.copyfileobj(src, out)
-                    os.replace(tmp_dst, dst)
+                    _replace_with_retry(tmp_dst, dst)
                 finally:
                     try:
                         if os.path.exists(tmp_dst):

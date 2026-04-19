@@ -43,6 +43,7 @@ def _promote_runtime_update_exe_early() -> bool:
         if not os.path.isfile(nested):
             return False
         target = os.path.join(BASE_DIR, "update.exe")
+        renamed_old: Optional[str] = None
         if os.path.isfile(target):
             try:
                 if os.path.getsize(target) == os.path.getsize(nested):
@@ -61,14 +62,23 @@ def _promote_runtime_update_exe_early() -> bool:
                 pass
             try:
                 os.replace(target, old)
+                renamed_old = old
             except Exception:
+                # 旧 update.exe 占用 → 不动它, 留待下次启动
                 return False
         try:
             os.replace(nested, target)
             print(f"[config] promoted runtime/update.exe -> {target}", flush=True)
             return True
         except Exception as e:
-            print(f"[config] promote update.exe failed: {e}", flush=True)
+            # CRITICAL: move 失败时, 把 .old 还原回 target, 避免用户看到
+            # update.exe 凭空消失。然后保留 nested 留待下次重试。
+            print(f"[config] promote update.exe failed: {e}; rolling back", flush=True)
+            if renamed_old and os.path.exists(renamed_old) and not os.path.exists(target):
+                try:
+                    os.replace(renamed_old, target)
+                except Exception:
+                    pass
             return False
     except Exception:
         return False
@@ -119,18 +129,22 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.2-h"
+APP_VERSION = "2.1.2-i"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.2-h: main.py bootstrap 把 EXE-dir 加入 sys.path → 修复 onedir 下
-#           `from proto import star_resonance_pb2` ImportError (proto/ 被
-#           build_release.bat 提升出 runtime/, 旧 sys.path 找不到);
-#           同时 main.py 最早调用 promote_runtime_update_exe() 解决新
-#           update.exe 不替换的问题; spec 显式 hiddenimport 抓包链路。
+# v2.1.2-i: update_apply 替换文件加 retry+rename 备用 (修复 SAOUI.ttf 拒绝访问);
+#           promote_runtime_update_exe 增加 rollback (修复 update.exe 凭空消失);
+#           本版强制 full-package + force_update。
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://47.82.157.220:9330"
 UPDATE_CHANNEL = "stable"
 UPDATE_TARGET = "windows-x64"
+
+# v2.1.2-h: main.py bootstrap 把 EXE-dir 加入 sys.path → 修复 onedir 下
+#           `from proto import star_resonance_pb2` ImportError (proto/ 被
+#           build_release.bat 提升出 runtime/, 旧 sys.path 找不到);
+#           同时 main.py 最早调用 promote_runtime_update_exe() 解决新
+#           update.exe 不替换的问题; spec 显式 hiddenimport 抓包链路。
 # v2.1.2-f: 彻底去掉 entity 识别循环的 _recognition_active 闸门 + 修复模块化布局下资源路径 (skill_names.json / fonts) + dev_publish 自动重建 update.exe 并注入增量包
 # v2.1.2-e: entity 识别循环外层 recognition_ok/packet_active 总闸门完全去除，BurstReady / HP overlay / commander / identity 仅依赖自身数据检查
 # v2.1.2-d: DPS/Boss HP 推送完全脱离 recognition gate (_push_packet_overlays); update.exe 无边框 + 圆角 + 60FPS 动画

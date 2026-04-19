@@ -224,6 +224,7 @@ def promote_runtime_update_exe() -> bool:
         if not os.path.isfile(nested):
             return False
         target = os.path.join(BASE_DIR, "update.exe")
+        renamed_old = None
         # 大小一致时认为已经提升过, 清理嵌套副本
         if os.path.isfile(target):
             try:
@@ -243,6 +244,7 @@ def promote_runtime_update_exe() -> bool:
                 pass
             try:
                 os.replace(target, old)
+                renamed_old = old
             except Exception:
                 # 主进程或其他 update.exe 占用 → 留待下次启动
                 return False
@@ -251,7 +253,13 @@ def promote_runtime_update_exe() -> bool:
             print(f"[updater] promoted runtime/update.exe -> {target}")
             return True
         except Exception as e:
-            print(f"[updater] promote failed: {e}")
+            print(f"[updater] promote failed: {e}; rolling back")
+            # CRITICAL: rollback so user never sees a missing update.exe
+            if renamed_old and os.path.exists(renamed_old) and not os.path.exists(target):
+                try:
+                    os.replace(renamed_old, target)
+                except Exception:
+                    pass
             return False
     except Exception:
         return False
