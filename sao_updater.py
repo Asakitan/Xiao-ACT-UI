@@ -659,6 +659,77 @@ def has_pending_update() -> bool:
         return False
 
 
+def _prestage_locked_targets_for_old_helper() -> int:
+    """v2.1.2-n: 在主进程退出前, 主程序自己把 staging zip 里 TTF/OTF/TTC/DLL
+    路径上对应的现有文件 rename 到 ``<name>.old-<ts>``。
+
+    背景: 老 update.exe (<2.1.2-j) 没有 skip-on-lock, 遇到字体被
+    Windows 字体缓存/SAO 主题持锁时 ``os.replace`` 直接 raise →
+    用户看到 "更新失败 [WinError 5] SAOUI.ttf.tmp-update -> SAOUI.ttf"。
+
+    用户的 update.exe 有可能停在 -j 之前的版本 (因为 -k/-l/-m 没动
+    update_apply.py, 只有 --rebuild 才会强制重打 update.exe), 没法假设
+    它会自带 skip 逻辑。主程序自己持有最新 update_apply 代码, 在退出前:
+      1. 打开 staging zip
+      2. 列出所有 .ttf / .otf / .ttc / .dll 条目
+      3. 对应已存在文件 rename 到 ``<name>.old-<ts>``
+        (Windows 即使有 GDI font handle 也允许 rename, 仅不允许覆盖)
+    rename 成功后, 老 update.exe 看到目标不存在, 直接写新文件, 不会再 raise。
+    本进程持有的 font/dll handle 在主进程 sys.exit() 后释放,
+    老 .old- 文件由 _promote_pending_replacements 下次启动顺手清理。"""
+    try:
+        meta_path = os.path.join(RUNTIME_STAGING_DIR, "pending.json")
+        if not os.path.isfile(meta_path):
+            return 0
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f) or {}
+        except Exception:
+            return 0
+        zip_path = str(meta.get("package_path") or "").strip()
+        if not zip_path or not os.path.isfile(zip_path):
+            return 0
+        import zipfile
+        ts = int(time.time())
+        renamed = 0
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                names = zf.namelist()
+        except Exception:
+            return 0
+        for name in names:
+            if not name:
+                continue
+            low = name.lower()
+            if not low.endswith((".ttf", ".otf", ".ttc", ".dll")):
+                continue
+            rel = name.replace("\\", "/").lstrip("/")
+            if ".." in rel.split("/"):
+                continue
+            dst = os.path.join(BASE_DIR, *rel.split("/"))
+            try:
+                if not os.path.isfile(dst):
+                    continue
+            except Exception:
+                continue
+            old = f"{dst}.old-{ts}"
+            try:
+                if os.path.exists(old):
+                    try:
+                        os.remove(old)
+                    except Exception:
+                        pass
+                os.rename(dst, old)
+                renamed += 1
+                print(f"[updater] prestaged locked target aside: {rel}")
+            except Exception as e:
+                # rename 失败 → 文件被独占锁; 留给老 update.exe 自己重试
+                print(f"[updater] prestage skip {rel}: {e}")
+        return renamed
+    except Exception:
+        return 0
+
+
 def schedule_apply_on_exit() -> bool:
     """在主进程退出前调用. 启动外部 helper 来应用 staging 中的更新.
 
@@ -672,6 +743,12 @@ def schedule_apply_on_exit() -> bool:
         if _APPLY_SCHEDULED:
             return True
         try:
+            # v2.1.2-n: 先把 zip 里 ttf/otf/ttc/dll 对应的现有文件 rename 到
+            # .old-<ts>, 让老 update.exe 看到 dst 不存在直接写, 不再 raise。
+            try:
+                _prestage_locked_targets_for_old_helper()
+            except Exception as _pre_err:
+                print(f"[Updater] prestage locked targets failed: {_pre_err}")
             import subprocess
             helper = _resolve_apply_helper()
             if not helper:

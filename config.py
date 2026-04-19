@@ -183,6 +183,71 @@ try:
 except Exception:
     pass
 
+
+def _cleanup_old_renamed_targets() -> int:
+    """v2.1.2-n: 清理 schedule_apply_on_exit 留下的 ``<name>.old-<ts>`` 文件.
+
+    主程序在退出前 rename 字体/DLL 让老 update.exe 能直接 os.replace,
+    本进程持有的 GDI/loader handle 在主进程退出后释放, 重新启动时
+    这些 .old-<ts> 文件已经无人持有, 可以安全删除避免堆积。"""
+    if not _is_main_app_host():
+        return 0
+    import re as _re
+    pattern = _re.compile(r"\.old-\d+$")
+    cleaned = 0
+    skip_dirs = {os.path.join(BASE_DIR, d) for d in ("backup", "staging", "temp", "exports")}
+    try:
+        for dirpath, dirnames, filenames in os.walk(BASE_DIR):
+            dirnames[:] = [d for d in dirnames if os.path.join(dirpath, d) not in skip_dirs]
+            for fn in filenames:
+                if not pattern.search(fn):
+                    continue
+                full = os.path.join(dirpath, fn)
+                try:
+                    os.remove(full)
+                    cleaned += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return cleaned
+
+
+try:
+    _cleanup_old_renamed_targets()
+except Exception:
+    pass
+
+
+def _cleanup_orphan_swap_scripts() -> int:
+    """v2.1.2-n: 清理 BASE_DIR 下残留的 _swap_update_*.cmd.
+
+    update.exe 自己被覆盖时, _schedule_self_replace 会 spawn 一个 cmd 脚本,
+    脚本末尾 `del /f /q "%~f0"` 应自删, 但偶尔 cmd.exe 没释放句柄就退出
+    (用户截图能看到 _swap_update_<ts>.cmd 残留)。主程序启动时, 旧 update.exe
+    及其 spawn 的 cmd 都已彻底退出, 直接清掉。"""
+    if not _is_main_app_host():
+        return 0
+    cleaned = 0
+    try:
+        for fn in os.listdir(BASE_DIR):
+            if not fn.startswith("_swap_update_") or not fn.endswith(".cmd"):
+                continue
+            try:
+                os.remove(os.path.join(BASE_DIR, fn))
+                cleaned += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return cleaned
+
+
+try:
+    _cleanup_orphan_swap_scripts()
+except Exception:
+    pass
+
 # 远程更新可写覆盖层 (可选, delta 直接写到 BASE_DIR 同名子目录, 这里仅用于 staging/backup/state)
 RUNTIME_DIR = BASE_DIR
 RUNTIME_PY_DIR = os.path.join(BASE_DIR, "runtime")           # 我们的 .py 与 Python DLL 同处 runtime/
@@ -223,8 +288,13 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.2-m"
+APP_VERSION = "2.1.2-n"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.2-n: 主进程退出前自己 rename 走 staging zip 里 ttf/otf/ttc/dll 对应的
+#           现有文件 (.old-<ts>), 让老 update.exe 看到 dst 不存在直接写,
+#           不再卡 SAOUI.ttf [WinError 5] 拒绝访问;
+#           启动时清理残留 _swap_update_*.cmd 与 *.old-<ts> 文件;
+#           本版以 full-package + force_update 推送 (顺带刷新 update.exe)。
 # v2.1.2-m: 修复 sao_alert 同条 alert 4s 内重复触发只续展不重弹;
 #           webview _maybe_show_update_popup 同步 sao_gui 的 downloading
 #           静音 + alert 可见时跳过非 error 提示;
