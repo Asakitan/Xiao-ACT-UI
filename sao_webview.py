@@ -4717,6 +4717,26 @@ class SAOWebViewGUI:
                                     alert_kind: str = 'generic'):
         if not self.alert_win:
             return
+        # v2.1.2-m: 防"alert 一直弹很多次"问题. 调用方很多 (boss_raid /
+        # identity / hide&seek / update_popup / start_recognition 等),
+        # 同一条 (title,message) 在 alert 仍可见 + 4s 窗口内重复触发时,
+        # 直接续展当前 alert, 不再 hide+show 闪一下。
+        try:
+            now_ts = time.time()
+        except Exception:
+            now_ts = 0.0
+        sig = (str(alert_kind or 'generic'), str(title or ''), str(message or ''))
+        last_sig = getattr(self, '_last_alert_sig', None)
+        last_ts = float(getattr(self, '_last_alert_sig_ts', 0.0) or 0.0)
+        if (sig == last_sig
+                and getattr(self, '_identity_alert_visible', False)
+                and (now_ts - last_ts) < 4.0):
+            # 同一条 alert 重复触发: 仅刷新 timestamp / 续 stay 计时, 不重弹
+            self._last_alert_sig_ts = now_ts
+            return
+        self._last_alert_sig = sig
+        self._last_alert_sig_ts = now_ts
+
         self._identity_alert_visible = True
         self._identity_alert_kind = str(alert_kind or 'generic')
         self._identity_alert_nonce = int(getattr(self, '_identity_alert_nonce', 0) or 0) + 1
@@ -5622,11 +5642,22 @@ class SAOWebViewGUI:
         return None
 
     def _maybe_show_update_popup(self, snapshot=None):
+        # v2.1.2-m: 防 sao_alert 反复弹窗:
+        #   1) downloading 状态完全静音 (进度由 SAO 菜单/状态面板显示)
+        #   2) 同一个 popup_key 不重复弹 (依旧依赖 _last_update_popup_key)
+        #   3) 当前 alert 还在显示且不是 error → 跳过 (避免无意义重叠)
         payload = self._build_update_popup_payload(snapshot)
         if not payload:
             return
         popup_key = str(payload.get('key') or '')
         if not popup_key or popup_key == getattr(self, '_last_update_popup_key', ''):
+            return
+        if popup_key.startswith('downloading:'):
+            self._last_update_popup_key = popup_key
+            return
+        if (getattr(self, '_identity_alert_visible', False)
+                and not popup_key.startswith('error:')):
+            self._last_update_popup_key = popup_key
             return
         self._last_update_popup_key = popup_key
         self._show_identity_alert_window(
