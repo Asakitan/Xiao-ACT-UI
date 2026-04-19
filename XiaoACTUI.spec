@@ -162,7 +162,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='icon.ico',
-    uac_admin=True,
+    manifest='XiaoACTUI.exe.manifest',  # v2.1.3: DPI PerMonitorV2 + requireAdministrator (manifest 内已含)
     contents_directory='runtime',  # 默认 _internal -> runtime
 )
 

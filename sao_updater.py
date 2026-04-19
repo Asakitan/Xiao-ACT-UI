@@ -235,42 +235,24 @@ def promote_runtime_update_exe() -> bool:
         if not os.path.isfile(nested):
             return False
         target = os.path.join(BASE_DIR, "update.exe")
-        renamed_old = None
-        # 大小一致时认为已经提升过, 清理嵌套副本
+        # v2.1.3 修复: 顶层 update.exe 总是权威 (full-package 解压结果),
+        # 嵌套 runtime/update.exe 是 runtime-delta 的残留, 直接清理掉,
+        # 不再尝试通过 size 比较去 "升级" — 之前的逻辑会把新版顶层
+        # update.exe 重命名成 .old 再用 stale nested 覆盖, 表现为
+        # "启动时 update.exe 被删/回退"。
         if os.path.isfile(target):
             try:
-                if os.path.getsize(target) == os.path.getsize(nested):
-                    try:
-                        os.remove(nested)
-                    except Exception:
-                        pass
-                    return False
+                os.remove(nested)
+                print(f"[updater] dropped stale runtime/update.exe (top-level present)")
             except Exception:
                 pass
-            old = target + ".old"
-            try:
-                if os.path.exists(old):
-                    os.remove(old)
-            except Exception:
-                pass
-            try:
-                os.replace(target, old)
-                renamed_old = old
-            except Exception:
-                # 主进程或其他 update.exe 占用 → 留待下次启动
-                return False
+            return False
         try:
             os.replace(nested, target)
             print(f"[updater] promoted runtime/update.exe -> {target}")
             return True
         except Exception as e:
-            print(f"[updater] promote failed: {e}; rolling back")
-            # CRITICAL: rollback so user never sees a missing update.exe
-            if renamed_old and os.path.exists(renamed_old) and not os.path.exists(target):
-                try:
-                    os.replace(renamed_old, target)
-                except Exception:
-                    pass
+            print(f"[updater] promote failed: {e}")
             return False
     except Exception:
         return False
