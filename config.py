@@ -343,8 +343,13 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.7"
+APP_VERSION = "2.1.8"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.8:
+#   1) 抓包层在识别游戏服务器前先缓冲并回放候选下行首包，修复首个
+#      0x15/0x16 身份同步被丢弃后角色名 / 基础等级 / 赛季等级长期为空；
+#   2) 本版以 full-package + force_update + minimum_version=2.1.8 推送，
+#      强制所有旧版本升级。
 # v2.1.7:
 #   1) SyncContainerData 在 pb2 缺失 / 解析失败时回退 mini 解码，恢复
 #      UID / 角色名 / 等级 / 职业等关键身份字段；

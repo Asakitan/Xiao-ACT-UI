@@ -257,14 +257,6 @@ def promote_runtime_update_exe() -> bool:
     except Exception:
         return False
 
-
-# Bootstrap: 启动时立即尝试提升嵌套 update.exe
-try:
-    promote_runtime_update_exe()
-except Exception:
-    pass
-
-
 def _http_get_json(url: str, timeout: float = HTTP_TIMEOUT) -> Tuple[int, Optional[Dict[str, Any]], str]:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     try:
