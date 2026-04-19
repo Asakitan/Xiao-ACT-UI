@@ -119,8 +119,11 @@ def _collect_entries(zf: zipfile.ZipFile, base: str, allow_top_level_exe: bool) 
         if info.is_dir():
             continue
         rel = _normalize_rel(info.filename)
+        # v2.1.2-f: runtime-delta 默认禁止顶层 .exe (避免覆盖 XiaoACTUI.exe),
+        # 但 update.exe 自身允许走 delayed self-replace 路径。
         if not allow_top_level_exe and rel.lower().endswith(".exe") and "/" not in rel:
-            raise ValueError(f"runtime-delta 不允许覆盖启动器 exe: {rel}")
+            if rel.lower() != "update.exe":
+                raise ValueError(f"runtime-delta 不允许覆盖启动器 exe: {rel}")
         dst = os.path.join(base, rel)
         entries.append({
             "info": info,
@@ -206,7 +209,13 @@ def _apply_zip_package(
             rel = str(entry["rel"])
             dst = str(entry["dst"])
             os.makedirs(os.path.dirname(dst) or base, exist_ok=True)
-            if allow_top_level_exe and rel.lower() == self_rel:
+            # v2.1.2-f: 如果当前正在运行的 helper 自身被增量包覆盖 (例如
+            # runtime-delta 顶层带 update.exe), 走 delayed self-replace 路径,
+            # 不要直接 rename (Windows 上正在运行的 .exe 不能覆盖).
+            _is_self_overwrite = (rel.lower() == self_rel) or (
+                rel.lower() == "update.exe" and self_rel.endswith("update.exe")
+            )
+            if (allow_top_level_exe or rel.lower() == "update.exe") and _is_self_overwrite:
                 staged_path = dst + ".new"
                 try:
                     if os.path.exists(staged_path):
