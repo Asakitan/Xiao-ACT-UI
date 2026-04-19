@@ -556,6 +556,13 @@ class UpdateApplyWindow:
         self.root.configure(bg=UI_BG)
         self.root.resizable(False, False)
         self.root.attributes("-topmost", True)
+        # 无边框 + 圆角 (Win11 原生圆角 / 全平台 SetWindowRgn fallback)
+        try:
+            self.root.overrideredirect(True)
+            self._borderless = True
+        except Exception:
+            self._borderless = False
+        self._drag_off = (0, 0)
         try:
             self.root.attributes("-alpha", 0.0)
             self._alpha_supported = True
@@ -566,8 +573,9 @@ class UpdateApplyWindow:
         self._build_ui()
         self._center_window()
         self.root.deiconify()
+        self._apply_rounded_corners()
         self.root.after(20, self._poll_events)
-        self.root.after(33, self._animate)
+        self.root.after(16, self._animate)
         self.root.after(80, self._start_worker)
 
     def _apply_icon(self):
@@ -577,6 +585,49 @@ class UpdateApplyWindow:
         try:
             self.root.iconbitmap(default=icon_path)
             self.root.iconbitmap(icon_path)
+        except Exception:
+            pass
+
+    def _apply_rounded_corners(self):
+        """Win11 原生圆角 + Win10/旧系统 SetWindowRgn fallback."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            self.root.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
+            # Win11 DWM 原生圆角 (DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2)
+            try:
+                pref = ctypes.c_int(2)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    wintypes.HWND(hwnd), 33,
+                    ctypes.byref(pref), ctypes.sizeof(pref)
+                )
+            except Exception:
+                pass
+            # 不论 Win10/Win11 都贴一个圆角 region (保证视觉圆角 + 裁剪子控件)
+            try:
+                radius = 14
+                rgn = ctypes.windll.gdi32.CreateRoundRectRgn(
+                    0, 0, self.WIDTH + 1, self.HEIGHT + 1, radius * 2, radius * 2)
+                ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _start_window_drag(self, event):
+        try:
+            self._drag_off = (event.x_root - self.root.winfo_x(),
+                              event.y_root - self.root.winfo_y())
+        except Exception:
+            self._drag_off = (0, 0)
+
+    def _do_window_drag(self, event):
+        try:
+            dx, dy = self._drag_off
+            self.root.geometry(f"+{event.x_root - dx}+{event.y_root - dy}")
         except Exception:
             pass
 
@@ -598,21 +649,31 @@ class UpdateApplyWindow:
         header = tk.Frame(card, bg=UI_HEADER, height=40)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
+        # 无边框下用 header 拖动窗口
+        for _w in (header,):
+            _w.bind("<Button-1>", self._start_window_drag)
+            _w.bind("<B1-Motion>", self._do_window_drag)
         tk.Frame(header, bg=UI_ACCENT, width=4).pack(side=tk.LEFT, fill=tk.Y, padx=(8, 0), pady=8)
-        tk.Label(
+        _ttl = tk.Label(
             header,
             text="SYSTEM UPDATER",
             bg=UI_HEADER,
             fg=UI_TEXT,
             font=("Segoe UI Semibold", 11),
-        ).pack(side=tk.LEFT, padx=10)
-        tk.Label(
+        )
+        _ttl.pack(side=tk.LEFT, padx=10)
+        _ttl.bind("<Button-1>", self._start_window_drag)
+        _ttl.bind("<B1-Motion>", self._do_window_drag)
+        _sub = tk.Label(
             header,
             text="SAO://TRANSFER",
             bg=UI_HEADER,
             fg=UI_DIM,
             font=("Consolas", 8),
-        ).pack(side=tk.RIGHT, padx=12)
+        )
+        _sub.pack(side=tk.RIGHT, padx=12)
+        _sub.bind("<Button-1>", self._start_window_drag)
+        _sub.bind("<B1-Motion>", self._do_window_drag)
 
         body = tk.Frame(card, bg=UI_CARD)
         body.pack(fill=tk.BOTH, expand=True, padx=18, pady=(16, 14))
@@ -898,7 +959,7 @@ class UpdateApplyWindow:
             self._on_close()
             return
         if self.root.winfo_exists():
-            self.root.after(33, self._animate)
+            self.root.after(16, self._animate)
 
     def run(self) -> int:
         self.root.mainloop()

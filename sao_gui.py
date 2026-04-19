@@ -1918,6 +1918,205 @@ class SAOPlayerGUI:
         except Exception:
             pass
 
+    def _push_packet_overlays(self, gs):
+        """始终运行的 DPS / Boss HP 覆盖板推送 — 数据完全由 packet on_damage 回调驱动,
+        与 recognition_ok / packet_active 闸门解耦, 避免抓包链路里任何一处中断都拖累弹出.
+        """
+        # ── DPS tracker: 更新自身玩家信息 ──
+        if self._dps_tracker and gs is not None and getattr(gs, 'player_id', ''):
+            try:
+                _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
+                if _p_uid:
+                    self._dps_tracker.set_self_uid(_p_uid)
+                    if self._dps_overlay:
+                        self._dps_overlay.set_self_uid(_p_uid)
+                    _self_fp = 0
+                    _bridge = getattr(self, '_packet_engine', None)
+                    if _bridge:
+                        _all_p = _bridge.get_players()
+                        _sp = _all_p.get(_p_uid)
+                        if _sp:
+                            _self_fp = getattr(_sp, 'fight_point', 0) or 0
+                    self._dps_tracker.update_player_info(
+                        _p_uid,
+                        gs.player_name or '',
+                        gs.profession_name or '',
+                        _self_fp,
+                        int(gs.level_base or 0),
+                    )
+            except Exception:
+                pass
+
+        # ── 同步队伍中所有玩家信息 ──
+        if self._dps_tracker:
+            _bridge = getattr(self, '_packet_engine', None)
+            if _bridge:
+                try:
+                    for _pu, _pd in _bridge.get_players().items():
+                        if _pu and _pd.name:
+                            self._dps_tracker.update_player_info(
+                                _pu,
+                                _pd.name or '',
+                                _pd.profession or '',
+                                getattr(_pd, 'fight_point', 0) or 0,
+                                getattr(_pd, 'level', 0) or 0,
+                            )
+                except Exception:
+                    pass
+
+        # ── DPS Overlay push ──
+        if self._dps_tracker:
+            try:
+                _dps_enabled = bool(self._get_setting('dps_enabled', True))
+                _dps_fade_timeout = float(self._get_setting('dps_fade_timeout_s', 15) or 15)
+                _dps_fade_timeout = max(5.0, _dps_fade_timeout)
+                self._dps_tracker.finalize_if_idle(_dps_fade_timeout, 'idle_timeout')
+                self._sync_dps_report_availability()
+                if self._dps_tracker.is_dirty():
+                    _dps_snap = self._dps_tracker.get_snapshot()
+                    _dps_has_live = bool(
+                        int(_dps_snap.get('total_damage') or 0) > 0
+                        and self._dps_tracker.has_recent_damage(_dps_fade_timeout)
+                    )
+                    if self._dps_overlay:
+                        self._dps_overlay.set_report_available(
+                            self._get_dps_last_report_available())
+                    if _dps_enabled and _dps_has_live and self._dps_overlay and self._dps_mode != 'report':
+                        if not self._dps_visible:
+                            self._dps_visible = True
+                            self._dps_faded = False
+                            self._dps_mode = 'live'
+                            self._dps_overlay.show()
+                        self._dps_overlay.update(_dps_snap)
+                    elif self._dps_overlay and (self._dps_visible or self._dps_mode == 'report'):
+                        self._dps_overlay.update(_dps_snap)
+                if (self._dps_overlay
+                        and getattr(self._dps_overlay, '_detail_visible', False)
+                        and self._dps_mode == 'live'):
+                    _detail_uid = int(getattr(self._dps_overlay,
+                                              '_detail_uid', 0) or 0)
+                    if _detail_uid > 0:
+                        try:
+                            _det = self._dps_tracker.get_entity_detail(_detail_uid)
+                            if _det:
+                                self._dps_overlay.update_detail(_det)
+                        except Exception:
+                            pass
+                if self._dps_overlay and self._dps_visible and self._dps_mode != 'report':
+                    if not self._dps_tracker.has_recent_damage(_dps_fade_timeout):
+                        if not self._dps_faded:
+                            self._dps_overlay.fade_out()
+                            self._dps_faded = True
+                        self._dps_visible = False
+                        self._dps_mode = 'hidden'
+                    elif self._dps_faded:
+                        self._dps_overlay.fade_in()
+                        self._dps_faded = False
+            except Exception:
+                pass
+
+        # ── Boss HP Overlay push (镜像 webview target-based 追踪) ──
+        if self._boss_hp_overlay and gs is not None:
+            try:
+                _bb_raid_active = getattr(gs, 'boss_raid_active', False)
+                _bb_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
+                _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
+
+                _now = time.time()
+                _has_recent_self_damage = (_now - self._bb_last_damage_ts) < self._bb_damage_timeout
+
+                for uuid in list(self._bb_recent_targets.keys()):
+                    if _now - self._bb_recent_targets.get(uuid, 0) > self._bb_damage_timeout * 3:
+                        self._bb_recent_targets.pop(uuid, None)
+
+                _bb_direct_data = None
+                _bb_direct_hp = 0
+                _bb_direct_max = 0
+                _bridge = getattr(self, '_packet_engine', None)
+                if not _bb_raid_active:
+                    if _bridge and _has_recent_self_damage and self._bb_recent_targets:
+                        _recent_monsters = []
+                        for uuid, dmg_ts in list(self._bb_recent_targets.items()):
+                            if _now - dmg_ts < self._bb_damage_timeout * 1.5:
+                                m = _bridge.get_monster(uuid)
+                                if m and not getattr(m, 'is_dead', False) and (getattr(m, 'max_hp', 0) > 0 or getattr(m, 'hp', 0) > 0):
+                                    _recent_monsters.append(m)
+                        if _recent_monsters:
+                            def _sort_key(m):
+                                hp = getattr(m, 'hp', 0) or 0
+                                maxhp = getattr(m, 'max_hp', 0) or hp or 1
+                                hp_pct = hp / maxhp if maxhp > 0 else 0
+                                last_ts = self._bb_recent_targets.get(getattr(m, 'uuid', 0), 0)
+                                return (-hp_pct, -last_ts)
+                            _recent_monsters.sort(key=_sort_key)
+                            main_m = _recent_monsters[0]
+                            self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)
+                            _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
+                            _bb_direct_hp = max(0, int(getattr(main_m, 'hp', 0)))
+                            _bb_direct_data = main_m.to_dict() if hasattr(main_m, 'to_dict') else {}
+                            _bb_src = 'packet'
+                    elif self._bb_last_target_uuid and not _has_recent_self_damage:
+                        try:
+                            _m = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
+                            if _m and not getattr(_m, 'is_dead', False) and (getattr(_m, 'max_hp', 0) > 0 or getattr(_m, 'hp', 0) > 0):
+                                _bb_direct_max = int(getattr(_m, 'max_hp', 0)) or int(getattr(_m, 'hp', 0))
+                                _bb_direct_hp = max(0, int(getattr(_m, 'hp', 0)))
+                                _bb_direct_data = _m.to_dict() if hasattr(_m, 'to_dict') else {}
+                                _bb_src = 'packet'
+                        except Exception:
+                            pass
+
+                if _bb_mode == 'off':
+                    _bb_show = False
+                elif _bb_raid_active:
+                    _bb_show = True
+                else:
+                    _bb_show = _has_recent_self_damage and (_bb_src != 'none' or _bb_direct_data is not None)
+
+                if _bb_direct_data and not _bb_raid_active:
+                    _bb_hp_pct = _bb_direct_hp / _bb_direct_max if _bb_direct_max > 0 else 1.0
+                    _bb_data = {
+                        'active': _bb_show,
+                        'hp_pct': round(_bb_hp_pct, 3),
+                        'hp_source': _bb_src,
+                        'current_hp': _bb_direct_hp,
+                        'total_hp': _bb_direct_max,
+                        'shield_active': bool(_bb_direct_data.get('shield_active')),
+                        'shield_pct': round(float(_bb_direct_data.get('shield_pct') or 0.0), 3),
+                        'breaking_stage': int(_bb_direct_data.get('breaking_stage') or 0),
+                        'has_break_data': bool(_bb_direct_data.get('has_break_data')),
+                        'extinction_pct': round(float(_bb_direct_data.get('extinction_pct') or 0.0), 3),
+                        'extinction': int(_bb_direct_data.get('extinction') or 0),
+                        'max_extinction': int(_bb_direct_data.get('max_extinction') or 0),
+                        'stop_breaking_ticking': bool(_bb_direct_data.get('stop_breaking_ticking')),
+                        'in_overdrive': bool(_bb_direct_data.get('in_overdrive')),
+                        'invincible': False,
+                        'boss_name': str(_bb_direct_data.get('name', ''))[:20] or '',
+                    }
+                else:
+                    _bb_breaking_stage_gs = getattr(gs, 'boss_breaking_stage', -1)
+                    _bb_data = {
+                        'active': _bb_show,
+                        'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
+                        'hp_source': _bb_src,
+                        'current_hp': getattr(gs, 'boss_current_hp', 0),
+                        'total_hp': getattr(gs, 'boss_total_hp', 0),
+                        'shield_active': getattr(gs, 'boss_shield_active', False),
+                        'shield_pct': round(getattr(gs, 'boss_shield_pct', 0.0), 3),
+                        'breaking_stage': _bb_breaking_stage_gs,
+                        'has_break_data': _bb_breaking_stage_gs != -1,
+                        'extinction_pct': round(getattr(gs, 'boss_extinction_pct', 0.0), 3),
+                        'extinction': 0,
+                        'max_extinction': 0,
+                        'stop_breaking_ticking': False,
+                        'in_overdrive': getattr(gs, 'boss_in_overdrive', False),
+                        'invincible': getattr(gs, 'boss_invincible', False),
+                        'boss_name': '',
+                    }
+                self._boss_hp_overlay.update(_bb_data)
+            except Exception:
+                pass
+
     def _recognition_loop(self):
         """后台识别循环 — 读取 GameStateManager 并更新 HP 条 + 体力覆盖板 + DPS + Boss."""
         if self._destroyed:
@@ -1925,6 +2124,12 @@ class SAOPlayerGUI:
         if self._recognition_active and self._state_mgr:
             try:
                 gs = self._state_mgr.state
+                # DPS / Boss HP 推送独立于 recognition gate, 完全由抓包驱动 ——
+                # 只要 packet bridge 收到伤害事件就能弹出
+                try:
+                    self._push_packet_overlays(gs)
+                except Exception:
+                    pass
                 if gs.recognition_ok or getattr(gs, 'packet_active', False):
                     # HP data
                     if gs.hp_max > 0:
@@ -1958,205 +2163,7 @@ class SAOPlayerGUI:
                         _pp._sta_sta = (sta, sta_max)
                         _pp.update_level(menu_level, menu_level_extra, menu_season_exp)
 
-                    # ── DPS tracker: 更新玩家信息 ──
-                    if self._dps_tracker and gs.player_id:
-                        try:
-                            _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
-                            if _p_uid:
-                                self._dps_tracker.set_self_uid(_p_uid)
-                                if self._dps_overlay:
-                                    self._dps_overlay.set_self_uid(_p_uid)
-                                _self_fp = 0
-                                _bridge = getattr(self, '_packet_engine', None)
-                                if _bridge:
-                                    _all_p = _bridge.get_players()
-                                    _sp = _all_p.get(_p_uid)
-                                    if _sp:
-                                        _self_fp = getattr(_sp, 'fight_point', 0) or 0
-                                self._dps_tracker.update_player_info(
-                                    _p_uid,
-                                    gs.player_name or '',
-                                    gs.profession_name or '',
-                                    _self_fp,
-                                    int(gs.level_base or 0),
-                                )
-                        except Exception:
-                            pass
-
-                    # ── Sync ALL players' info from packet bridge ──
-                    if self._dps_tracker:
-                        _bridge = getattr(self, '_packet_engine', None)
-                        if _bridge:
-                            try:
-                                for _pu, _pd in _bridge.get_players().items():
-                                    if _pu and _pd.name:
-                                        self._dps_tracker.update_player_info(
-                                            _pu,
-                                            _pd.name or '',
-                                            _pd.profession or '',
-                                            getattr(_pd, 'fight_point', 0) or 0,
-                                            getattr(_pd, 'level', 0) or 0,
-                                        )
-                            except Exception:
-                                pass
-
-                    # ── DPS Overlay push ──
-                    if self._dps_tracker:
-                        try:
-                            _dps_enabled = bool(self._get_setting('dps_enabled', True))
-                            _dps_fade_timeout = float(self._get_setting('dps_fade_timeout_s', 15) or 15)
-                            _dps_fade_timeout = max(5.0, _dps_fade_timeout)
-                            self._dps_tracker.finalize_if_idle(_dps_fade_timeout, 'idle_timeout')
-                            self._sync_dps_report_availability()
-                            if self._dps_tracker.is_dirty():
-                                _dps_snap = self._dps_tracker.get_snapshot()
-                                _dps_has_live = bool(
-                                    int(_dps_snap.get('total_damage') or 0) > 0
-                                    and self._dps_tracker.has_recent_damage(_dps_fade_timeout)
-                                )
-                                if self._dps_overlay:
-                                    self._dps_overlay.set_report_available(
-                                        self._get_dps_last_report_available())
-                                if _dps_enabled and _dps_has_live and self._dps_overlay and self._dps_mode != 'report':
-                                    if not self._dps_visible:
-                                        self._dps_visible = True
-                                        self._dps_faded = False
-                                        self._dps_mode = 'live'
-                                        self._dps_overlay.show()
-                                    self._dps_overlay.update(_dps_snap)
-                                elif self._dps_overlay and (self._dps_visible or self._dps_mode == 'report'):
-                                    self._dps_overlay.update(_dps_snap)
-                            # Push fresh entity-detail snapshots while detail
-                            # view is open in live mode (parity with webview
-                            # DpsAPI.get_entity_detail polling).
-                            if (self._dps_overlay
-                                    and getattr(self._dps_overlay, '_detail_visible', False)
-                                    and self._dps_mode == 'live'):
-                                _detail_uid = int(getattr(self._dps_overlay,
-                                                          '_detail_uid', 0) or 0)
-                                if _detail_uid > 0:
-                                    try:
-                                        _det = self._dps_tracker.get_entity_detail(_detail_uid)
-                                        if _det:
-                                            self._dps_overlay.update_detail(_det)
-                                    except Exception:
-                                        pass
-                            # DPS fade-out on idle
-                            if self._dps_overlay and self._dps_visible and self._dps_mode != 'report':
-                                if not self._dps_tracker.has_recent_damage(_dps_fade_timeout):
-                                    if not self._dps_faded:
-                                        self._dps_overlay.fade_out()
-                                        self._dps_faded = True
-                                    self._dps_visible = False
-                                    self._dps_mode = 'hidden'
-                                elif self._dps_faded:
-                                    self._dps_overlay.fade_in()
-                                    self._dps_faded = False
-                        except Exception:
-                            pass
-
-                    # ── Boss HP Overlay push (mirrors webview target-based tracking) ──
-                    if self._boss_hp_overlay:
-                        try:
-                            _bb_raid_active = getattr(gs, 'boss_raid_active', False)
-                            _bb_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
-                            _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
-
-                            _now = time.time()
-                            _has_recent_self_damage = (_now - self._bb_last_damage_ts) < self._bb_damage_timeout
-
-                            # Cleanup stale recent targets
-                            for uuid in list(self._bb_recent_targets.keys()):
-                                if _now - self._bb_recent_targets.get(uuid, 0) > self._bb_damage_timeout * 3:
-                                    self._bb_recent_targets.pop(uuid, None)
-
-                            _bb_direct_data = None
-                            _bb_direct_hp = 0
-                            _bb_direct_max = 0
-                            if not _bb_raid_active:
-                                _bridge = getattr(self, '_packet_engine', None)
-                                if _bridge and _has_recent_self_damage and self._bb_recent_targets:
-                                    _recent_monsters = []
-                                    for uuid, dmg_ts in list(self._bb_recent_targets.items()):
-                                        if _now - dmg_ts < self._bb_damage_timeout * 1.5:
-                                            m = _bridge.get_monster(uuid)
-                                            if m and not getattr(m, 'is_dead', False) and (getattr(m, 'max_hp', 0) > 0 or getattr(m, 'hp', 0) > 0):
-                                                _recent_monsters.append(m)
-                                    if _recent_monsters:
-                                        def _sort_key(m):
-                                            hp = getattr(m, 'hp', 0) or 0
-                                            maxhp = getattr(m, 'max_hp', 0) or hp or 1
-                                            hp_pct = hp / maxhp if maxhp > 0 else 0
-                                            last_ts = self._bb_recent_targets.get(getattr(m, 'uuid', 0), 0)
-                                            return (-hp_pct, -last_ts)
-                                        _recent_monsters.sort(key=_sort_key)
-                                        main_m = _recent_monsters[0]
-                                        self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)
-                                        _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
-                                        _bb_direct_hp = max(0, int(getattr(main_m, 'hp', 0)))
-                                        _bb_direct_data = main_m.to_dict() if hasattr(main_m, 'to_dict') else {}
-                                        _bb_src = 'packet'
-                                elif self._bb_last_target_uuid and not _has_recent_self_damage:
-                                    try:
-                                        _m = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
-                                        if _m and not getattr(_m, 'is_dead', False) and (getattr(_m, 'max_hp', 0) > 0 or getattr(_m, 'hp', 0) > 0):
-                                            _bb_direct_max = int(getattr(_m, 'max_hp', 0)) or int(getattr(_m, 'hp', 0))
-                                            _bb_direct_hp = max(0, int(getattr(_m, 'hp', 0)))
-                                            _bb_direct_data = _m.to_dict() if hasattr(_m, 'to_dict') else {}
-                                            _bb_src = 'packet'
-                                    except Exception:
-                                        pass
-
-                            if _bb_mode == 'off':
-                                _bb_show = False
-                            elif _bb_raid_active:
-                                _bb_show = True
-                            else:
-                                _bb_show = _has_recent_self_damage and (_bb_src != 'none' or _bb_direct_data is not None)
-
-                            if _bb_direct_data and not _bb_raid_active:
-                                _bb_hp_pct = _bb_direct_hp / _bb_direct_max if _bb_direct_max > 0 else 1.0
-                                _bb_data = {
-                                    'active': _bb_show,
-                                    'hp_pct': round(_bb_hp_pct, 3),
-                                    'hp_source': _bb_src,
-                                    'current_hp': _bb_direct_hp,
-                                    'total_hp': _bb_direct_max,
-                                    'shield_active': bool(_bb_direct_data.get('shield_active')),
-                                    'shield_pct': round(float(_bb_direct_data.get('shield_pct') or 0.0), 3),
-                                    'breaking_stage': int(_bb_direct_data.get('breaking_stage') or 0),
-                                    'has_break_data': bool(_bb_direct_data.get('has_break_data')),
-                                    'extinction_pct': round(float(_bb_direct_data.get('extinction_pct') or 0.0), 3),
-                                    'extinction': int(_bb_direct_data.get('extinction') or 0),
-                                    'max_extinction': int(_bb_direct_data.get('max_extinction') or 0),
-                                    'stop_breaking_ticking': bool(_bb_direct_data.get('stop_breaking_ticking')),
-                                    'in_overdrive': bool(_bb_direct_data.get('in_overdrive')),
-                                    'invincible': False,
-                                    'boss_name': str(_bb_direct_data.get('name', ''))[:20] or '',
-                                }
-                            else:
-                                _bb_breaking_stage_gs = getattr(gs, 'boss_breaking_stage', -1)
-                                _bb_data = {
-                                    'active': _bb_show,
-                                    'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
-                                    'hp_source': _bb_src,
-                                    'current_hp': getattr(gs, 'boss_current_hp', 0),
-                                    'total_hp': getattr(gs, 'boss_total_hp', 0),
-                                    'shield_active': getattr(gs, 'boss_shield_active', False),
-                                    'shield_pct': round(getattr(gs, 'boss_shield_pct', 0.0), 3),
-                                    'breaking_stage': _bb_breaking_stage_gs,
-                                    'has_break_data': _bb_breaking_stage_gs != -1,
-                                    'extinction_pct': round(getattr(gs, 'boss_extinction_pct', 0.0), 3),
-                                    'extinction': 0,
-                                    'max_extinction': 0,
-                                    'stop_breaking_ticking': False,
-                                    'in_overdrive': getattr(gs, 'boss_in_overdrive', False),
-                                    'invincible': getattr(gs, 'boss_invincible', False),
-                                    'boss_name': '',
-                                }
-                            self._boss_hp_overlay.update(_bb_data)
-                        except Exception:
-                            pass
+                    # DPS / Boss HP 推送已迁移到 _push_packet_overlays (在闸门外执行)
 
                     # ── Player HP Overlay push ──
                     if self._hp_overlay and getattr(self, '_hp_ov_visible', True):
