@@ -2,12 +2,18 @@
 
 `SAO Auto` 是一个面向《星痕共鸣》的外部 HUD / 自动化项目，当前版本同时维护 `entity` 与 `webview` 两套 UI 入口，并补齐了远程更新、独立 updater、模块化发布目录、脚本仓库与更新服务端的完整发布链路。
 
-当前版本：`2.1.2-d`
+当前版本：`2.1.2-e`
+
+## 2.1.2-e 概览
+
+- entity 识别循环外层 `recognition_ok` / `packet_active` 总闸门完全去除，BurstReady / HP overlay / commander / identity 持久化仅依赖自身字段检查，不会被 vision/packet 任一路闪断拖住
+- 2.1.2-d 只抽出了 DPS/Boss HP 两项，本版为收尾性整体修复
 
 ## 2.1.2-d 概览
 
-- 彻底修复 entity GUI 下 DPS 面板 / Boss HP 血条不弹出：抽取 `_push_packet_overlays` 在 recognition 闸门之外执行，推送完全由抓包 `on_damage` 回调驱动
-- update.exe 采用无边框 + Win11 原生圆角 + Win10 SetWindowRgn 回退，动画提升至 60 FPS，拖动区在 header
+- entity 识别循环完全去掉外层 `recognition_ok` / `packet_active` 总闸门，BurstReady / HP overlay / commander / identity 持久化都仅依赖自身字段检查，不会被 vision/packet 任一路闪断拖住
+- 同时把 DPS 面板 / Boss HP 血条推送抽取到 `_push_packet_overlays(gs)` 在闸门之外执行，由 packet `on_damage` 回调直接驱动
+- update.exe 採用无边框 + Win11 原生圆角 / SetWindowRgn fallback，标题栏可拖拽，动画推进到 60 FPS (16ms tick)
 
 ## 2.1.2-c 概览
 
@@ -297,10 +303,14 @@ sao_auto/
 ```
 
 ## 更新记录
+### 2.1.2-e
+
+- entity GUI: 识别循环外层 `recognition_ok / packet_active` 总闸门完全去除，BurstReady、HP overlay、commander 面板、角色自动保存等纯抓包驱动子模块只依赖自身数据校验
 
 ### 2.1.2-d
 
-- entity GUI: DPS / Boss HP 推送完全脱离 `recognition_ok / packet_active` 闸门，以 `_push_packet_overlays(gs)` 单独执行
+- entity GUI: 识别循环外层 `recognition_ok / packet_active` 闸门完全去除，BurstReady、HP overlay、commander 面板、角色自动保存等纯抓包驱动子模块只依赖自身数据校验，不再被 vision/packet 任意一路闪断拖住
+- entity GUI: DPS / Boss HP 推送独立由 `_push_packet_overlays(gs)` 在闸门外执行
 - update.exe (update_apply.py): `overrideredirect(True)` 无边框 + DWM Round Corner / SetWindowRgn 双路线圆角 + 16 ms (~60 FPS) 动画刷新 + header 拖动
 
 ### 2.1.2-c

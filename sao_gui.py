@@ -2130,7 +2130,11 @@ class SAOPlayerGUI:
                     self._push_packet_overlays(gs)
                 except Exception:
                     pass
-                if gs.recognition_ok or getattr(gs, 'packet_active', False):
+                # ── 与 webview 对齐: HP/STA、SkillFX、commander、identity 持久化等
+                # 均依靠各子模块自带的字段空检查来决定是否更新, 不再被 recognition_ok
+                # / packet_active 总闸门拦下, 否则任意一路 vision/packet 闪断都会
+                # 让整圈 overlay 卡住 (例如 BurstReady 不出来).
+                if True:
                     # HP data
                     if gs.hp_max > 0:
                         hp, hp_max = gs.hp_current, gs.hp_max
@@ -2264,13 +2268,6 @@ class SAOPlayerGUI:
                             )
                             print(f'[SAO-UI] 自动保存角色: {gs.player_name}, '
                                   f'职业={gs.profession_name}, LV={lv}, UID={gs.player_id}')
-                        except Exception:
-                            pass
-                else:
-                    # Recognition offline — notify HP overlay
-                    if self._hp_overlay and getattr(self, '_hp_ov_visible', True):
-                        try:
-                            self._hp_overlay.set_sta_offline(self._should_show_sta_offline(gs))
                         except Exception:
                             pass
             except Exception as e:
