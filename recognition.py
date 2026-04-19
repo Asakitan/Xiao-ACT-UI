@@ -662,6 +662,7 @@ class RecognitionEngine:
         self._sta_offline: bool = False          # True when bar is absent
         self._sta_offline_since: float = 0.0     # first low-confidence timestamp
         self._sta_online_since: float = 0.0      # first good-confidence after offline
+        self._sta_warmup_until: float = 0.0      # suppress offline during startup warmup
 
     def set_debug_callback(self, cb):
         self._debug_callback = cb
@@ -729,6 +730,7 @@ class RecognitionEngine:
         if self._running:
             return
         self._running = True
+        self._sta_warmup_until = time.time() + 2.0
         self._thread = threading.Thread(target=self._run, daemon=True, name="recognition_vision")
         self._thread.start()
 
@@ -745,6 +747,7 @@ class RecognitionEngine:
         self._sta_low_conf_count = 0
         self._sta_offline = False
         self._sta_online_since = 0.0
+        self._sta_warmup_until = 0.0
         self._last_good_frame = None
         self._last_good_frame_time = 0.0
 
@@ -856,10 +859,15 @@ class RecognitionEngine:
                             self._sta_online_since = 0.0
 
                     if _offline_elapsed >= 0.10:
-                        if not self._sta_offline:
-                            self._sta_offline = True
-                            print("[Vision] STA bar not detected — OFFLINE")
-                        updates["stamina_offline"] = True
+                        if _now_sta < self._sta_warmup_until:
+                            # Suppress offline during startup warmup — PrintWindow
+                            # returns blank frames for the first few seconds.
+                            updates["stamina_offline"] = False
+                        else:
+                            if not self._sta_offline:
+                                self._sta_offline = True
+                                print("[Vision] STA bar not detected — OFFLINE")
+                            updates["stamina_offline"] = True
                     elif self._sta_offline:
                         # Currently offline — require sustained good
                         # confidence for 0.10 s before recovering.

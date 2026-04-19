@@ -409,7 +409,12 @@ def _rollback(
         )
 
 
-def _schedule_self_replace(staged_path: str, live_path: str, base: str) -> bool:
+def _schedule_self_replace(
+    staged_path: str,
+    live_path: str,
+    base: str,
+    restart_target: Optional[str] = None,
+) -> bool:
     if os.name != "nt" or not staged_path or not live_path:
         return False
     script_path = os.path.join(base, f"_swap_update_{int(time.time() * 1000)}.cmd")
@@ -419,6 +424,8 @@ def _schedule_self_replace(staged_path: str, live_path: str, base: str) -> bool:
             f.write("ping 127.0.0.1 -n 4 > nul\r\n")
             f.write(f'copy /y "{staged_path}" "{live_path}" > nul\r\n')
             f.write(f'if exist "{staged_path}" del /f /q "{staged_path}" > nul 2>nul\r\n')
+            if restart_target and os.path.exists(restart_target):
+                f.write(f'start "" /d "{base}" "{restart_target}"\r\n')
             f.write('del /f /q "%~f0" > nul 2>nul\r\n')
         creationflags = 0
         if os.name == "nt":
@@ -570,12 +577,6 @@ def run_apply_flow(
 
     _cleanup_staging(package_path, pending_path)
 
-    if staged_self_update:
-        if _schedule_self_replace(staged_self_update[0], staged_self_update[1], base):
-            _log("scheduled delayed self-replace for update.exe", base)
-        else:
-            _log("failed to schedule delayed self-replace for update.exe", base)
-
     _emit(
         progress_cb,
         phase="restart",
@@ -589,12 +590,29 @@ def run_apply_flow(
 
     target = _resolve_restart_target(base, exe_path)
     launched = False
-    if target:
+    restart_via_script = False
+    if staged_self_update:
+        if _schedule_self_replace(
+            staged_self_update[0],
+            staged_self_update[1],
+            base,
+            restart_target=target,
+        ):
+            restart_via_script = bool(target)
+            _log("scheduled delayed self-replace for update.exe", base)
+            if restart_via_script:
+                _log(f"restart deferred to swap script: {target}", base)
+        else:
+            _log("failed to schedule delayed self-replace for update.exe", base)
+
+    if target and not restart_via_script:
         try:
             _log(f"restarting {target}", base)
             launched = _restart_target(target, base)
         except Exception as e:
             _log(f"restart failed: {e}", base)
+    else:
+        launched = restart_via_script
 
     if launched:
         _emit(

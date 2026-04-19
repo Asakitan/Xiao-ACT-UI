@@ -1472,6 +1472,7 @@ class SAOWebViewGUI:
         # 识别状态
         self._recognition_active = False
         self._game_state = None  # GameState dataclass
+        self._state_mgr = None
         self._recognition_engine = None
         self._recognition_engines = []
         self._packet_engine = None
@@ -1601,6 +1602,9 @@ class SAOWebViewGUI:
         # Boss ↔ AutoKey 联动
         self._boss_autokey_linkage = None
 
+        self._bootstrap_runtime_state()
+        self._start_packet_engine_early()
+
     # ─── 音效 ───
     def _play_sound(self, name: str):
         if self._sound_ok and self._sao_sound:
@@ -1652,6 +1656,53 @@ class SAOWebViewGUI:
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
             return self._cfg_settings_ref.get(key, default)
         return default
+
+    def _bootstrap_runtime_state(self):
+        if getattr(self, '_state_mgr', None) is not None and getattr(self, '_cfg_settings_ref', None):
+            return
+        try:
+            from game_state import GameStateManager
+            from config import SettingsManager as CfgSettings
+
+            if getattr(self, '_state_mgr', None) is None:
+                self._state_mgr = GameStateManager()
+            if not getattr(self, '_cfg_settings_ref', None):
+                self._cfg_settings_ref = CfgSettings()
+            self._state_mgr.load_cache(self._cfg_settings_ref)
+        except Exception as e:
+            print(f'[SAO] Runtime state bootstrap failed: {e}')
+
+    def _start_packet_engine_early(self):
+        if getattr(self, '_packet_engine', None) is not None:
+            return
+        if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
+            return
+        try:
+            from packet_bridge import PacketBridge
+
+            packet_engine = PacketBridge(
+                self._state_mgr,
+                self._cfg_settings_ref,
+                on_damage=self._on_packet_damage,
+                on_monster_update=self._on_monster_update,
+                on_boss_event=self._on_boss_event,
+                on_scene_change=self._on_scene_change,
+            )
+            packet_engine.start()
+            self._packet_engine = packet_engine
+            self._recognition_engines = [packet_engine] + [
+                engine for engine in (getattr(self, '_recognition_engines', []) or [])
+                if engine is not packet_engine
+            ]
+            if not getattr(self, '_recognition_engine', None):
+                self._recognition_engine = packet_engine
+            self._recognition_active = True
+            print('[SAO] Packet bridge started early (pre-webview)')
+        except Exception as e:
+            import traceback
+            print(f'[SAO] Early packet bridge FAILED to start: {e}', flush=True)
+            traceback.print_exc()
+            self._packet_engine = None
 
     def _auto_key_settings_ref(self):
         return self._cfg_settings_ref or self.settings
@@ -2415,7 +2466,7 @@ class SAOWebViewGUI:
         layout = self._get_skillfx_layout(getattr(self, '_game_state', None))
         if layout:
             self._skillfx_layout = layout
-            payload['viewport'] = dict(layout['viewport'])
+            payload['viewport'] = self._viewport_to_css(layout['viewport'])
         try:
             self._eval_skillfx(f'SkillFX.update({json.dumps(payload, ensure_ascii=False)})')
             self._eval_skillfx('SkillFX.hideBurstReady()')
@@ -2532,7 +2583,7 @@ class SAOWebViewGUI:
         self._last_burst_slot = chosen
         return chosen
 
-    def _stop_recognition_engines(self):
+    def _stop_recognition_engines(self, preserve_packet: bool = False):
         if getattr(self, '_auto_key_engine', None):
             try:
                 self._auto_key_engine.stop()
@@ -2548,14 +2599,19 @@ class SAOWebViewGUI:
         engines = list(getattr(self, '_recognition_engines', []) or [])
         if not engines and self._recognition_engine:
             engines = [self._recognition_engine]
+        kept_engines = []
         for engine in engines:
+            if preserve_packet and engine is getattr(self, '_packet_engine', None):
+                kept_engines.append(engine)
+                continue
             try:
                 engine.stop()
             except Exception:
                 pass
-        self._recognition_engines = []
-        self._recognition_engine = None
-        self._packet_engine = None
+        self._recognition_engines = kept_engines
+        self._recognition_engine = kept_engines[0] if kept_engines else None
+        if not preserve_packet:
+            self._packet_engine = None
         self._vision_engine = None
         self._reset_sta_offline_state()
         # Flush DPS player cache to disk before teardown
@@ -2566,13 +2622,15 @@ class SAOWebViewGUI:
                 pass
         self._vision_paused_for_death = False
         self._last_dead_state = False
+        if not preserve_packet:
+            self._recognition_active = False
 
-    def _reconfigure_data_engines(self):
+    def _reconfigure_data_engines(self, restart_packet: bool = True):
         """Restart packet/vision engines to match the current per-component source map."""
         if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
             return
 
-        self._stop_recognition_engines()
+        self._stop_recognition_engines(preserve_packet=not restart_packet)
         try:
             self._state_mgr.update(burst_ready=False)
         except Exception:
@@ -2585,23 +2643,27 @@ class SAOWebViewGUI:
         self._state_mgr._prev_stamina_current = 0
         self._sta_pixel_detector_enabled = False
 
-        engines = []
-        try:
-            from packet_bridge import PacketBridge
-            packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref,
-                                         on_damage=self._on_packet_damage,
-                                         on_monster_update=self._on_monster_update,
-                                         on_boss_event=self._on_boss_event,
-                                         on_scene_change=self._on_scene_change)
-            packet_engine.start()
-            engines.append(packet_engine)
-            self._packet_engine = packet_engine
-            print('[SAO] Packet bridge started (network capture)')
-        except Exception as e:
-            import traceback
-            print(f'[SAO] Packet bridge FAILED to start: {e}', flush=True)
-            traceback.print_exc()
-            self._packet_engine = None
+        engines = list(getattr(self, '_recognition_engines', []) or [])
+        if restart_packet or getattr(self, '_packet_engine', None) is None:
+            try:
+                from packet_bridge import PacketBridge
+                packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref,
+                                             on_damage=self._on_packet_damage,
+                                             on_monster_update=self._on_monster_update,
+                                             on_boss_event=self._on_boss_event,
+                                             on_scene_change=self._on_scene_change)
+                packet_engine.start()
+                self._packet_engine = packet_engine
+                engines = [engine for engine in engines if engine is not packet_engine]
+                engines.insert(0, packet_engine)
+                print('[SAO] Packet bridge started (network capture)')
+            except Exception as e:
+                import traceback
+                print(f'[SAO] Packet bridge FAILED to start: {e}', flush=True)
+                traceback.print_exc()
+                self._packet_engine = None
+        elif self._packet_engine not in engines:
+            engines.insert(0, self._packet_engine)
 
         # DPS Tracker
         try:
@@ -2641,8 +2703,8 @@ class SAOWebViewGUI:
             self._vision_engine = None
 
         self._recognition_engines = engines
-        self._recognition_engine = engines[0] if engines else None
-        self._recognition_active = bool(engines)
+        self._recognition_engine = getattr(self, '_packet_engine', None) or (engines[0] if engines else None)
+        self._recognition_active = bool(getattr(self, '_packet_engine', None) or getattr(self, '_vision_engine', None))
 
     # ════════════════════════════════════════
     #  入口
@@ -2716,10 +2778,10 @@ class SAOWebViewGUI:
 
         self.skillfx_win = webview.create_window(
             'SAO SkillFX', skillfx_url,
-            width=max(320, int(_sw * 0.42)),
-            height=max(140, int(_sh * 0.20)),
-            x=max(0, int(_sw * 0.29)),
-            y=max(0, int(_sh * 0.74)),
+            width=self._to_webview_px(max(320, int(_sw * 0.42))),
+            height=self._to_webview_px(max(140, int(_sh * 0.20))),
+            x=self._to_webview_px(max(0, int(_sw * 0.29))),
+            y=self._to_webview_px(max(0, int(_sh * 0.74))),
             frameless=True,
             easy_drag=False,
             transparent=True,
@@ -3878,15 +3940,8 @@ class SAOWebViewGUI:
     def _start_recognition(self):
         """启动游戏数据引擎 (抓包 + 纯识图)"""
         try:
-            from game_state import GameStateManager
-            from config import SettingsManager as CfgSettings
-
-            self._state_mgr = GameStateManager()
-            cfg_settings = CfgSettings()
-
-            # 加载上次缓存的游戏状态 (立即显示)
-            self._state_mgr.load_cache(cfg_settings)
-            self._cfg_settings_ref = cfg_settings  # 保留引用用于定时保存
+            self._bootstrap_runtime_state()
+            cfg_settings = self._cfg_settings_ref
             try:
                 self._update_skillfx_layout()
             except Exception:
@@ -3932,7 +3987,7 @@ class SAOWebViewGUI:
                 self._eval_hp(f'setPlayerInfo({_j.dumps(info, ensure_ascii=False)})')
                 print(f'[SAO] 从缓存加载: 职业={cached_prof}, UID={cached_uid}')
 
-            self._reconfigure_data_engines()
+            self._reconfigure_data_engines(restart_packet=not bool(getattr(self, '_packet_engine', None)))
             self._auto_key_engine = AutoKeyEngine(
                 self._state_mgr,
                 self._cfg_settings_ref,
@@ -5009,6 +5064,40 @@ class SAOWebViewGUI:
             'client_rect': tuple(client_rect),
         }
 
+    def _viewport_to_css(self, viewport: dict) -> dict:
+        """Convert viewport/callout coords from physical pixels to CSS pixels for JS rendering."""
+        dpi_s = max(1.0, float(getattr(self, '_dpi_scale', 1.0) or 1.0))
+        if dpi_s <= 1.001:
+            return viewport
+        vp = dict(viewport)
+        for key in ('width', 'height', 'padding_x', 'padding_y'):
+            if key in vp and isinstance(vp[key], (int, float)):
+                vp[key] = int(round(vp[key] / dpi_s))
+        if 'callout' in vp and isinstance(vp['callout'], dict):
+            co = dict(vp['callout'])
+            for key in ('x', 'y', 'w', 'h'):
+                if key in co and isinstance(co[key], (int, float)):
+                    co[key] = int(round(co[key] / dpi_s))
+            vp['callout'] = co
+        return vp
+
+    def _to_webview_px(self, value) -> int:
+        dpi_s = max(1.0, float(getattr(self, '_dpi_scale', 1.0) or 1.0))
+        try:
+            px = float(value)
+        except Exception:
+            px = 0.0
+        if dpi_s <= 1.001:
+            return int(round(px))
+        return int(round(px / dpi_s))
+
+    def _rect_to_css(self, rect: dict) -> dict:
+        """Convert a slot rect from physical pixels to CSS pixels."""
+        dpi_s = max(1.0, float(getattr(self, '_dpi_scale', 1.0) or 1.0))
+        if dpi_s <= 1.001:
+            return rect
+        return {k: (int(round(v / dpi_s)) if isinstance(v, (int, float)) else v) for k, v in rect.items()}
+
     def _build_skillfx_payload(self, gs):
         layout = self._get_skillfx_layout(gs)
         if not layout:
@@ -5026,7 +5115,7 @@ class SAOWebViewGUI:
             slot = slot_map.get(slot_layout['index'], {})
             payload_slots.append({
                 'index': slot_layout['index'],
-                'rect': dict(slot_layout['rect']),
+                'rect': self._rect_to_css(slot_layout['rect']),
                 'state': str(slot.get('state', 'unknown') or 'unknown'),
                 'cooldown_ratio': float(slot.get('cooldown_ratio', slot.get('cooldown_pct', 0.0)) or 0.0),
                 'insufficient_energy': bool(slot.get('insufficient_energy')),
@@ -5034,7 +5123,7 @@ class SAOWebViewGUI:
                 'active': bool(slot.get('active')),
             })
         return {
-            'viewport': dict(layout['viewport']),
+            'viewport': self._viewport_to_css(layout['viewport']),
             'slots': payload_slots,
             'watched_slots': self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]),
             'burst_enabled': bool(self._get_setting('burst_enabled', True)),
@@ -5048,15 +5137,20 @@ class SAOWebViewGUI:
             return
         self._skillfx_layout = layout
         window = layout['window']
+        webview_w = max(1, self._to_webview_px(window['w']))
+        webview_h = max(1, self._to_webview_px(window['h']))
+        webview_x = self._to_webview_px(window['x'])
+        webview_y = self._to_webview_px(window['y'])
         try:
-            self.skillfx_win.resize(int(window['w']), int(window['h']))
+            self.skillfx_win.resize(int(webview_w), int(webview_h))
         except Exception:
             pass
         try:
-            self.skillfx_win.move(int(window['x']), int(window['y']))
+            self.skillfx_win.move(int(webview_x), int(webview_y))
         except Exception:
             pass
-        self._eval_skillfx(f'SkillFX.setViewport({json.dumps(layout["viewport"], ensure_ascii=False)})')
+        css_vp = self._viewport_to_css(layout['viewport'])
+        self._eval_skillfx(f'SkillFX.setViewport({json.dumps(css_vp, ensure_ascii=False)})')
         self._setup_skillfx_click_through()
 
     # ════════════════════════════════════════
