@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -133,22 +134,68 @@ class UpdateStatus:
 
 
 def _parse_version(v: str) -> tuple:
+    raw = (v or "").strip().lstrip("vV")
+    if not raw:
+        return (0, 0, 0, 0), ()
+
+    match = re.match(r"^(\d+(?:\.\d+)*)(.*)$", raw)
+    if match:
+        core_text = match.group(1)
+        suffix_text = (match.group(2) or "").lstrip("-+_.")
+    else:
+        core_text = ""
+        suffix_text = raw
+
     parts = []
-    for chunk in (v or "").strip().lstrip("vV").split("."):
+    for chunk in core_text.split(".") if core_text else []:
         try:
             parts.append(int(chunk))
         except Exception:
             parts.append(0)
-    while len(parts) < 3:
+    while len(parts) < 4:
         parts.append(0)
-    return tuple(parts[:4])
+
+    suffix_tokens = []
+    for token in re.findall(r"\d+|[A-Za-z]+", suffix_text):
+        if token.isdigit():
+            suffix_tokens.append((1, int(token)))
+        else:
+            suffix_tokens.append((0, token.lower()))
+
+    return tuple(parts[:4]), tuple(suffix_tokens)
 
 
 def compare_versions(a: str, b: str) -> int:
     pa, pb = _parse_version(a), _parse_version(b)
-    if pa < pb:
+    core_a, suffix_a = pa
+    core_b, suffix_b = pb
+    if core_a < core_b:
         return -1
-    if pa > pb:
+    if core_a > core_b:
+        return 1
+
+    if not suffix_a and not suffix_b:
+        return 0
+    # In this project a suffix marks a follow-up release after the base
+    # numeric version, e.g. 2.1.1-a > 2.1.1.
+    if suffix_a and not suffix_b:
+        return 1
+    if suffix_b and not suffix_a:
+        return -1
+
+    for token_a, token_b in zip(suffix_a, suffix_b):
+        if token_a == token_b:
+            continue
+        if token_a[0] != token_b[0]:
+            return -1 if token_a[0] < token_b[0] else 1
+        if token_a[1] < token_b[1]:
+            return -1
+        if token_a[1] > token_b[1]:
+            return 1
+
+    if len(suffix_a) < len(suffix_b):
+        return -1
+    if len(suffix_a) > len(suffix_b):
         return 1
     return 0
 
