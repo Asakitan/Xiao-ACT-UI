@@ -334,9 +334,15 @@ class BossHpOverlay:
         if self._win is not None:
             return
         self._win = tk.Toplevel(self.root)
+        # Black bg + 1x1 initial geometry prevents any default-bg white flash
+        # before the first UpdateLayeredWindow call commits real pixels.
+        try:
+            self._win.configure(bg='black')
+        except Exception:
+            pass
         self._win.overrideredirect(True)
         self._win.attributes('-topmost', True)
-        self._win.geometry(f'{self.WIDTH}x{self.HEIGHT}+{self._x}+{self._y}')
+        self._win.geometry(f'1x1+{self._x}+{self._y}')
         self._win.update_idletasks()
 
         try:

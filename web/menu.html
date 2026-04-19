@@ -2174,6 +2174,198 @@ html, body {
     transform: translateX(-50%) translateY(0);
 }
 
+/* ═══ SAO updater panel ═══ */
+.saoUpdaterDock {
+    position: fixed;
+    top: 18px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-12px);
+    z-index: 640;
+    display: none;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.24s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.saoUpdaterDock.show {
+    display: block;
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+}
+.saoUpdaterBox {
+    width: min(468px, calc(100vw - 28px));
+    overflow: hidden;
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(235,238,230,0.82));
+    border: 1px solid rgba(255,255,255,0.62);
+    box-shadow: 0 18px 42px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(104,228,255,0.12);
+    position: relative;
+}
+.saoUpdaterBox::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+        linear-gradient(130deg, rgba(104,228,255,0.15), rgba(255,255,255,0.0) 28%, rgba(243,175,18,0.08) 100%),
+        repeating-linear-gradient(90deg, rgba(255,255,255,0.0) 0 17px, rgba(255,255,255,0.06) 17px 18px, rgba(255,255,255,0.0) 18px 28px);
+    pointer-events: none;
+}
+.saoUpdaterHead {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 15px 18px 11px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(236,239,231,0.72));
+    border-bottom: 1px solid rgba(180, 182, 170, 0.28);
+}
+.saoUpdaterHead::after {
+    content: '';
+    position: absolute;
+    left: 18px;
+    right: 18px;
+    bottom: 0;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(104,228,255,0.0), rgba(104,228,255,0.48), rgba(243,175,18,0.22), rgba(104,228,255,0.0));
+}
+.saoUpdaterKicker {
+    font-family: var(--font-sao);
+    font-size: 10px;
+    letter-spacing: 2.2px;
+    color: rgba(74, 92, 104, 0.88);
+    margin-bottom: 6px;
+}
+.saoUpdaterHeadline {
+    font-family: var(--font-ui);
+    font-size: 16px;
+    letter-spacing: 0.7px;
+    color: rgba(44, 52, 59, 0.96);
+}
+.saoUpdaterVersion {
+    margin-top: 5px;
+    font-size: 11px;
+    letter-spacing: 0.8px;
+    color: rgba(78, 87, 93, 0.82);
+}
+.saoUpdaterBadge {
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 94px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(180, 182, 170, 0.44);
+    background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(226,228,220,0.56));
+    color: rgba(60, 62, 50, 0.82);
+    font-family: var(--font-sao);
+    font-size: 10px;
+    letter-spacing: 1.2px;
+}
+.saoUpdaterBadge.active {
+    border-color: rgba(104, 228, 255, 0.58);
+    background: linear-gradient(180deg, rgba(175,247,255,0.42), rgba(104,228,255,0.20));
+    color: rgba(38, 77, 88, 0.92);
+}
+.saoUpdaterBadge.ready {
+    border-color: rgba(104, 228, 255, 0.58);
+    background: linear-gradient(180deg, rgba(188,250,255,0.62), rgba(104,228,255,0.22));
+    color: rgba(33, 74, 86, 0.95);
+}
+.saoUpdaterBadge.force {
+    border-color: rgba(243, 175, 18, 0.54);
+    background: linear-gradient(180deg, rgba(255,244,232,0.94), rgba(248,214,168,0.58));
+    color: rgba(108, 72, 12, 0.92);
+}
+.saoUpdaterBody {
+    padding: 14px 18px 16px;
+    background: rgba(250, 250, 246, 0.88);
+}
+.saoUpdaterNotes {
+    font-size: 12px;
+    line-height: 1.7;
+    letter-spacing: 0.35px;
+    color: rgba(78, 87, 93, 0.92);
+    white-space: pre-line;
+    max-height: 116px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+.saoUpdaterNotes::-webkit-scrollbar {
+    width: 5px;
+}
+.saoUpdaterNotes::-webkit-scrollbar-thumb {
+    background: rgba(104, 228, 255, 0.55);
+    border-radius: 999px;
+}
+.saoUpdaterProgress {
+    display: none;
+    margin-top: 14px;
+    height: 8px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(184, 188, 178, 0.48);
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.12);
+}
+.saoUpdaterProgressFill {
+    width: 0;
+    height: 100%;
+    background: linear-gradient(90deg, rgba(104,228,255,0.92), rgba(243,175,18,0.72));
+    box-shadow: 0 0 12px rgba(104,228,255,0.18);
+    transition: width 0.2s ease;
+}
+.saoUpdaterMeta {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 8px;
+    font-size: 10px;
+    letter-spacing: 0.7px;
+    color: rgba(91, 96, 103, 0.82);
+}
+.saoUpdaterProgressText {
+    min-width: 42px;
+    text-align: right;
+    color: rgba(38, 77, 88, 0.94);
+}
+.saoUpdaterActions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+}
+.saoUpdaterActions .auto-key-btn {
+    min-width: 102px;
+}
+@media (max-width: 560px) {
+    .saoUpdaterDock {
+        top: 10px;
+    }
+    .saoUpdaterHead {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .saoUpdaterBadge {
+        align-self: flex-start;
+    }
+    .saoUpdaterMeta {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .saoUpdaterProgressText {
+        min-width: 0;
+        text-align: left;
+    }
+    .saoUpdaterActions {
+        flex-direction: column-reverse;
+    }
+    .saoUpdaterActions .auto-key-btn {
+        width: 100%;
+    }
+}
+
 /* ═══ Current file display ═══ */
 .current-file {
     position: fixed;
@@ -3488,6 +3680,35 @@ html, body {
         <div class="alert-footer">
             <div class="btn-circle btn-ok" id="alert-ok"><div class="inner"></div></div>
             <div class="btn-circle btn-close" id="alert-close"><div class="inner"></div></div>
+        </div>
+    </div>
+</div>
+
+<!-- Updater Panel -->
+<div class="saoUpdaterDock" id="updater-panel" aria-hidden="true">
+    <div class="saoUpdaterBox">
+        <div class="saoUpdaterHead">
+            <div>
+                <div class="saoUpdaterKicker">SYSTEM UPDATE</div>
+                <div class="saoUpdaterHeadline" id="sao-updater-headline">发现新版本</div>
+                <div class="saoUpdaterVersion" id="sao-updater-versionline">等待服务器返回更新信息</div>
+            </div>
+            <div class="saoUpdaterBadge" id="sao-updater-badge">IDLE</div>
+        </div>
+        <div class="saoUpdaterBody">
+            <div class="saoUpdaterNotes" id="sao-updater-notes">此处会显示更新说明。</div>
+            <div class="saoUpdaterProgress" id="sao-updater-progress">
+                <div class="saoUpdaterProgressFill" id="sao-updater-progress-fill"></div>
+            </div>
+            <div class="saoUpdaterMeta">
+                <span id="sao-updater-meta">等待更新状态</span>
+                <span class="saoUpdaterProgressText" id="sao-updater-progress-text">0%</span>
+            </div>
+            <div class="saoUpdaterActions">
+                <button class="auto-key-btn warn" id="sao-updater-skip" type="button">跳过此版本</button>
+                <button class="auto-key-btn" id="sao-updater-later" type="button">稍后</button>
+                <button class="auto-key-btn primary" id="sao-updater-action" type="button">立即更新</button>
+            </div>
         </div>
     </div>
 </div>
@@ -5067,6 +5288,188 @@ function updateBadge(id, isOn) {
     }
 }
 
+/* ═══ 远程更新 UI 状态机 ═══ */
+var __SAO_UPDATER_STATE = null;
+var __SAO_UPDATER_PROMPTED = '';
+
+function _saoEnsureUpdaterBanner() {
+    if (window.__SAO_UPDATER_UI) return window.__SAO_UPDATER_UI;
+    var root = document.getElementById('updater-panel');
+    if (!root) return null;
+    var ui = {
+        root: root,
+        headline: document.getElementById('sao-updater-headline'),
+        version: document.getElementById('sao-updater-versionline'),
+        badge: document.getElementById('sao-updater-badge'),
+        notes: document.getElementById('sao-updater-notes'),
+        progress: document.getElementById('sao-updater-progress'),
+        progressFill: document.getElementById('sao-updater-progress-fill'),
+        meta: document.getElementById('sao-updater-meta'),
+        progressText: document.getElementById('sao-updater-progress-text'),
+        action: document.getElementById('sao-updater-action'),
+        later: document.getElementById('sao-updater-later'),
+        skip: document.getElementById('sao-updater-skip')
+    };
+    ui.action.onclick = function() {
+        var s = __SAO_UPDATER_STATE || {};
+        if (s.state === 'ready') {
+            ui.headline.textContent = '正在切换到更新器';
+            ui.version.textContent = '主程序退出后继续替换文件';
+            _saoSetUpdaterBadge(ui, 'HANDOFF', 'ready');
+            _saoSetUpdaterNotes(ui, '独立 updater 已接管本次更新，接下来会继续完成模块替换、启动器更新与应用重启。');
+            _saoSetUpdaterProgress(ui, 100, true);
+            ui.meta.textContent = '请稍候…';
+            ui.action.disabled = true;
+            ui.action.textContent = '切换中...';
+            ui.later.style.display = 'none';
+            ui.skip.style.display = 'none';
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.apply_update) {
+                Promise.resolve(window.pywebview.api.apply_update())
+                    .then(function(ok) {
+                        if (ok) return;
+                        _saoRestoreUpdaterState(s);
+                        showToast('启动 updater 失败', 3200);
+                    })
+                    .catch(function() {
+                        _saoRestoreUpdaterState(s);
+                        showToast('启动 updater 失败', 3200);
+                    });
+            } else {
+                _saoRestoreUpdaterState(s);
+                showToast('更新器接口不可用', 3200);
+            }
+        } else {
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.download_update)
+                window.pywebview.api.download_update();
+        }
+    };
+    ui.later.onclick = function() {
+        _saoShowUpdaterPanel(false);
+    };
+    ui.skip.onclick = function() {
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.skip_update)
+            window.pywebview.api.skip_update();
+        _saoShowUpdaterPanel(false);
+    };
+    window.__SAO_UPDATER_UI = ui;
+    return ui;
+}
+
+function _saoShowUpdaterPanel(show) {
+    var ui = _saoEnsureUpdaterBanner();
+    if (!ui) return;
+    ui.root.classList.toggle('show', !!show);
+    ui.root.setAttribute('aria-hidden', show ? 'false' : 'true');
+}
+
+function _saoSetUpdaterBadge(ui, text, variant) {
+    ui.badge.textContent = text;
+    ui.badge.className = 'saoUpdaterBadge' + (variant ? ' ' + variant : '');
+}
+
+function _saoSetUpdaterNotes(ui, text, fallback) {
+    var content = String(text || fallback || '').trim();
+    ui.notes.textContent = content;
+    ui.notes.style.display = content ? '' : 'none';
+}
+
+function _saoSetUpdaterProgress(ui, pct, visible) {
+    var value = Math.max(0, Math.min(100, Number(pct) || 0));
+    ui.progress.style.display = visible ? '' : 'none';
+    ui.progressText.style.display = visible ? '' : 'none';
+    ui.progressText.textContent = value + '%';
+    ui.progressFill.style.width = value + '%';
+}
+
+function _saoRestoreUpdaterState(state) {
+    if (!state) {
+        _saoShowUpdaterPanel(false);
+        return;
+    }
+    updateUpdaterState(state);
+}
+
+function updateUpdaterState(data) {
+    __SAO_UPDATER_STATE = data || {};
+    var s = __SAO_UPDATER_STATE;
+    var ui = _saoEnsureUpdaterBanner();
+    if (!ui) return;
+
+    if (!s.state || s.state === 'idle' || s.state === 'up_to_date') {
+        __SAO_UPDATER_PROMPTED = '';
+        _saoShowUpdaterPanel(false);
+        return;
+    }
+    if (s.state === 'checking') {
+        return;
+    }
+    if (s.state === 'error') {
+        _saoShowUpdaterPanel(false);
+        showToast('更新检查失败: ' + (s.error || ''), 3500);
+        return;
+    }
+
+    var force = !!s.force_required;
+    var sizeMb = (s.size || 0) / 1024 / 1024;
+    var sizeStr = sizeMb > 0 ? sizeMb.toFixed(1) + ' MB' : '等待服务器提供包大小';
+    var promptKey = (s.state || '') + ':' + (s.latest_version || '');
+    if (promptKey && __SAO_UPDATER_PROMPTED !== promptKey && (s.state === 'available' || s.state === 'ready')) {
+        __SAO_UPDATER_PROMPTED = promptKey;
+        if (typeof playSound === 'function') {
+            playSound(force ? 'snd-alert' : 'snd-click');
+        }
+    }
+
+    if (s.state === 'available') {
+        if (s.skipped_version === s.latest_version && !force) {
+            _saoShowUpdaterPanel(false);
+            return;
+        }
+        ui.headline.textContent = force ? '检测到必需更新' : '发现新版本';
+        ui.version.textContent = 'v' + (s.latest_version || '?') + ' · ' + sizeStr;
+        _saoSetUpdaterBadge(ui, force ? 'REQUIRED' : 'AVAILABLE', force ? 'force' : 'active');
+        _saoSetUpdaterNotes(ui, s.notes, force ? '当前版本低于服务端最低要求，请先完成更新。' : '可立即下载更新包，重启应用后自动切换到新版本。');
+        _saoSetUpdaterProgress(ui, 0, false);
+        ui.meta.textContent = force ? '此更新不可跳过。' : '可选择稍后更新或跳过当前版本。';
+        ui.action.textContent = '立即更新';
+        ui.action.disabled = false;
+        ui.later.style.display = force ? 'none' : '';
+        ui.skip.style.display = force ? 'none' : '';
+        _saoShowUpdaterPanel(true);
+    } else if (s.state === 'downloading') {
+        var pct = Math.round((s.progress || 0) * 100);
+        ui.headline.textContent = '正在下载更新';
+        ui.version.textContent = 'v' + (s.latest_version || '?') + ' · ' + sizeStr;
+        _saoSetUpdaterBadge(ui, 'DOWNLOADING', 'active');
+        _saoSetUpdaterNotes(ui, s.notes, '更新包已开始下载，完成后可直接重启应用。');
+        _saoSetUpdaterProgress(ui, pct, true);
+        ui.meta.textContent = force ? '强制更新进行中…' : '下载完成后可一键重启应用。';
+        ui.action.disabled = true;
+        ui.action.textContent = '下载中...';
+        ui.later.style.display = 'none';
+        ui.skip.style.display = 'none';
+        _saoShowUpdaterPanel(true);
+    } else if (s.state === 'ready') {
+        ui.headline.textContent = '更新包已下载完成';
+        ui.version.textContent = 'v' + (s.latest_version || '?') + ' 已就绪';
+        _saoSetUpdaterBadge(ui, 'READY', 'ready');
+        _saoSetUpdaterNotes(ui, s.notes, '重启应用后将自动应用本次更新。');
+        _saoSetUpdaterProgress(ui, 100, true);
+        ui.meta.textContent = '点击“重启应用”完成更新。';
+        ui.action.textContent = '重启应用';
+        ui.action.disabled = false;
+        ui.later.style.display = force ? 'none' : '';
+        ui.skip.style.display = 'none';
+        _saoShowUpdaterPanel(true);
+    }
+}
+
+function escapeHTML(s) {
+    return String(s || '').replace(/[&<>"']/g, function(c) {
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+}
+
 /* ═══ Escape key to close ═══ */
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
@@ -6116,6 +6519,7 @@ window.SAO = {
     syncAutoKeyState: _syncAutoKeyState,
     syncBossRaidState: _syncBossRaidState,
     restoreMenuSettings: restoreMenuSettings,
+    updateUpdaterState: updateUpdaterState,
 };
 
 setTimeout(function() {

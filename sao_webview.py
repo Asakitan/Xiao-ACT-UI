@@ -27,6 +27,7 @@ import copy
 import ctypes
 import numpy as np
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 from typing import Optional
@@ -79,6 +80,8 @@ from dps_tracker import DpsTracker
 from config import (
     DEFAULT_HOTKEYS,
     get_skill_slot_rects,
+    WEB_DIR,
+    resource_path,
 )
 
 # ── 延迟导入 pywebview ──
@@ -102,12 +105,12 @@ def is_webview_available() -> bool:
 
 
 def _get_icon_path() -> Optional[str]:
-    if getattr(sys, 'frozen', False):
-        base = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
-    else:
-        base = os.path.dirname(os.path.abspath(__file__))
-    icon_path = os.path.join(base, 'icon.ico')
+    icon_path = resource_path('icon.ico')
     return icon_path if os.path.exists(icon_path) else None
+
+
+def _web_file_uri(filename: str) -> str:
+    return Path(os.path.join(WEB_DIR, filename)).resolve().as_uri()
 
 
 def _set_process_app_id(app_id: str):
@@ -322,6 +325,54 @@ class SAOWebAPI:
     def switch_to_entity(self):
         """切换到 Entity (tkinter) UI 模式."""
         threading.Thread(target=lambda: self._g._transition_with_animation('entity'), daemon=True).start()
+
+    # ---- 远程更新 ----
+    def get_update_status(self):
+        try:
+            from sao_updater import get_manager
+            return get_manager().snapshot().to_json()
+        except Exception as e:
+            return {"state": "error", "error": str(e)}
+
+    def check_update(self):
+        try:
+            from sao_updater import get_manager
+            get_manager().check_async()
+            return True
+        except Exception as e:
+            print(f"[SAO WebView] check_update failed: {e}")
+            return False
+
+    def download_update(self):
+        try:
+            from sao_updater import get_manager
+            get_manager().download_async()
+            return True
+        except Exception as e:
+            print(f"[SAO WebView] download_update failed: {e}")
+            return False
+
+    def apply_update(self):
+        """应用已下载的更新包，会退出当前进程。"""
+        try:
+            from sao_updater import has_pending_update, schedule_apply_on_exit
+            if not has_pending_update():
+                return False
+            if not schedule_apply_on_exit():
+                return False
+            threading.Thread(target=self._g._exit_with_animation, daemon=True).start()
+            return True
+        except Exception as e:
+            print(f"[SAO WebView] apply_update failed: {e}")
+            return False
+
+    def skip_update(self):
+        try:
+            from sao_updater import get_manager
+            get_manager().skip_current()
+            return True
+        except Exception:
+            return False
 
     def window_drag(self, dx, dy):
         """HP 窗口固定, 不允许拖拽 — 此方法保留但不执行."""
@@ -1495,6 +1546,9 @@ class SAOWebViewGUI:
 
         # 热切换目标
         self._pending_switch: Optional[str] = None
+        self._update_popup_ready = False
+        self._pending_update_popup_snapshot = None
+        self._last_update_popup_key = ''
 
         # JS API
         self._api = SAOWebAPI(self)
@@ -2551,11 +2605,10 @@ class SAOWebViewGUI:
         self._lock_hp_position(1.0)
 
         # ── Phase 2: pywebview ──
-        web_dir = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'web')
-        hp_url = os.path.join(web_dir, 'hp.html')
-        menu_url = os.path.join(web_dir, 'menu.html')
-        skillfx_url = os.path.join(web_dir, 'skillfx.html')
-        alert_url = os.path.join(web_dir, 'alert.html')
+        hp_url = _web_file_uri('hp.html')
+        menu_url = _web_file_uri('menu.html')
+        skillfx_url = _web_file_uri('skillfx.html')
+        alert_url = _web_file_uri('alert.html')
 
         # HP 固定位置: 左下角覆盖 等级/UID 区域
         try:
@@ -2643,7 +2696,7 @@ class SAOWebViewGUI:
 
         # Boss HP overlay — covers native boss bar
         # Reference 1080p: bar 466×61 at (740, 15)-(1206, 76), anchor (1206, 76)
-        boss_hp_url = os.path.join(web_dir, 'boss_hp.html')
+        boss_hp_url = _web_file_uri('boss_hp.html')
         _bhp_geom = self._calc_boss_hp_geometry()
         self._boss_hp_geometry = dict(_bhp_geom)
         self.boss_hp_win = webview.create_window(
@@ -2659,7 +2712,7 @@ class SAOWebViewGUI:
         )
 
         # DPS meter — right side, vertically centered
-        dps_url = os.path.join(web_dir, 'dps.html')
+        dps_url = _web_file_uri('dps.html')
         _dps_w = max(320, int(min(_sw, 1920) * 0.19))
         _dps_h = max(420, int(min(_sh, 1080) * 0.48))
         _dps_x = max(0, _sw - _dps_w - max(16, int(_sw * 0.012)))
@@ -2678,7 +2731,7 @@ class SAOWebViewGUI:
         )
 
         # Raid Editor overlay — left side, same height as DPS
-        raid_editor_url = os.path.join(web_dir, 'raid_editor.html')
+        raid_editor_url = _web_file_uri('raid_editor.html')
         _re_w = max(360, int(min(_sw, 1920) * 0.22))
         _re_h = max(460, int(min(_sh, 1080) * 0.52))
         _re_x = max(16, int(_sw * 0.012))
@@ -2697,7 +2750,7 @@ class SAOWebViewGUI:
         )
 
         # AutoKey Editor overlay — left side, below raid editor
-        autokey_editor_url = os.path.join(web_dir, 'autokey_editor.html')
+        autokey_editor_url = _web_file_uri('autokey_editor.html')
         _ak_w = max(340, int(min(_sw, 1920) * 0.20))
         _ak_h = max(400, int(min(_sh, 1080) * 0.44))
         _ak_x = max(16, int(_sw * 0.012))
@@ -2716,7 +2769,7 @@ class SAOWebViewGUI:
         )
 
         # Commander panel — center-left, above raid editor
-        commander_url = os.path.join(web_dir, 'commander.html')
+        commander_url = _web_file_uri('commander.html')
         _cmd_w = max(300, int(min(_sw, 1920) * 0.18))
         _cmd_h = max(380, int(min(_sh, 1080) * 0.42))
         _cmd_x = max(16, int(_sw * 0.25))
@@ -3667,6 +3720,7 @@ class SAOWebViewGUI:
                 self._set_window_alpha('SAO-HP', 1.0)
                 self._set_window_alpha('SAO SkillFX', 1.0)
                 self._setup_skillfx_click_through()
+                self._mark_update_popup_ready()
             threading.Timer(0.8, _reveal_windows).start()
             # Safety: re-run _force_hp_to_bottom after a delay in case hwnd
             # was not available during the first attempt.
@@ -5302,8 +5356,7 @@ class SAOWebViewGUI:
         self._create_panel_window(panel_type)
 
     def _create_panel_window(self, panel_type):
-        web_dir = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'web')
-        url = os.path.join(web_dir, 'panel.html')
+        url = _web_file_uri('panel.html')
 
         sizes = {
             'control': (280, 240),
@@ -5448,6 +5501,117 @@ class SAOWebViewGUI:
         # Sync menu settings (watched slots, sound, mode, etc.)
         self._sync_menu_settings()
         self._sync_all_panels()
+        self._ensure_updater_listener()
+
+    def _push_update_state(self, snapshot=None):
+        """将 UpdateManager 快照推送到 menu (SAO.updateUpdaterState)。"""
+        try:
+            if snapshot is None:
+                from sao_updater import get_manager
+                snapshot = get_manager().snapshot()
+            data = snapshot.to_json() if hasattr(snapshot, 'to_json') else dict(snapshot)
+            self._eval_menu(f'if(window.SAO&&SAO.updateUpdaterState)SAO.updateUpdaterState({json.dumps(data, ensure_ascii=False)})')
+        except Exception:
+            pass
+
+    def _mark_update_popup_ready(self):
+        self._update_popup_ready = True
+        pending = getattr(self, '_pending_update_popup_snapshot', None)
+        if pending is None:
+            return
+        self._pending_update_popup_snapshot = None
+        self._maybe_show_update_popup(pending)
+
+    def _build_update_popup_payload(self, snapshot=None):
+        if snapshot is None:
+            try:
+                from sao_updater import get_manager
+                snapshot = get_manager().snapshot()
+            except Exception:
+                snapshot = None
+        state = str(getattr(snapshot, 'state', 'idle') or 'idle') if snapshot else 'idle'
+        latest_version = str(getattr(snapshot, 'latest_version', '') or '') if snapshot else ''
+        force_required = bool(getattr(snapshot, 'force_required', False)) if snapshot else False
+        skipped_version = str(getattr(snapshot, 'skipped_version', '') or '') if snapshot else ''
+        progress = 0
+        try:
+            progress = int(round(float(getattr(snapshot, 'progress', 0.0) or 0.0) * 100.0)) if snapshot else 0
+        except Exception:
+            progress = 0
+        error = str(getattr(snapshot, 'error', '') or '').strip() if snapshot else ''
+        if state == 'available':
+            if latest_version and skipped_version == latest_version and not force_required:
+                return None
+            body = f'检测到新版本 v{latest_version or "?"}'
+            if force_required:
+                body += '\n此更新为强制更新，请尽快在 关于 > 检查更新 中完成下载。'
+            else:
+                body += '\n打开 SAO 菜单 > 关于 > 检查更新 可开始下载。'
+            return {
+                'key': f'available:{latest_version}:{int(force_required)}',
+                'title': 'SYSTEM UPDATE',
+                'message': body,
+                'duration_ms': 6500,
+            }
+        if state == 'downloading':
+            return {
+                'key': f'downloading:{latest_version}',
+                'title': 'DOWNLOADING UPDATE',
+                'message': f'正在下载更新包 v{latest_version or "?"}\n当前进度 {progress}% ，完成后会提示重启应用。',
+                'duration_ms': 5000,
+            }
+        if state == 'ready':
+            return {
+                'key': f'ready:{latest_version}',
+                'title': 'UPDATE READY',
+                'message': f'更新包 v{latest_version or "?"} 已下载完成\n打开 SAO 菜单 > 关于 > 检查更新 可立即重启应用。',
+                'duration_ms': 6500,
+            }
+        if state == 'error':
+            return {
+                'key': f'error:{latest_version}:{error}',
+                'title': 'UPDATE ERROR',
+                'message': error or '更新服务暂不可用，请稍后重试。',
+                'duration_ms': 5200,
+            }
+        return None
+
+    def _maybe_show_update_popup(self, snapshot=None):
+        payload = self._build_update_popup_payload(snapshot)
+        if not payload:
+            return
+        popup_key = str(payload.get('key') or '')
+        if not popup_key or popup_key == getattr(self, '_last_update_popup_key', ''):
+            return
+        self._last_update_popup_key = popup_key
+        self._show_identity_alert_window(
+            str(payload.get('title') or 'SYSTEM UPDATE'),
+            str(payload.get('message') or ''),
+            int(payload.get('duration_ms') or 5000),
+        )
+
+    def _handle_update_snapshot(self, snapshot=None):
+        self._push_update_state(snapshot)
+        if not getattr(self, '_update_popup_ready', False):
+            self._pending_update_popup_snapshot = snapshot
+            return
+        self._maybe_show_update_popup(snapshot)
+
+    def _ensure_updater_listener(self):
+        if getattr(self, '_updater_listener_installed', False):
+            return
+        try:
+            from sao_updater import get_manager
+            mgr = get_manager()
+
+            def _listener(snapshot):
+                self._handle_update_snapshot(snapshot)
+
+            mgr.add_listener(_listener)
+            self._updater_listener_installed = True
+            self._handle_update_snapshot(mgr.snapshot())
+        except Exception:
+            pass
 
     def _sync_menu_settings(self):
         """Push current settings to menu so UI toggles reflect saved state."""

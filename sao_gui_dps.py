@@ -26,7 +26,7 @@ import os
 import sys
 import time
 import ctypes
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from decimal import Decimal, ROUND_HALF_UP
 
 import numpy as np
@@ -36,6 +36,7 @@ from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, ulw_commit
 from render_capture_sync import wait_until_capture_idle
+from config import FONTS_DIR
 
 # ═══════════════════════════════════════════════
 #  Win32 / ULW glue
@@ -152,12 +153,7 @@ def _ulw_update(hwnd: int, img: Image.Image, x: int, y: int,
 #  Font helpers
 # ═══════════════════════════════════════════════
 
-_BASE_DIR = (
-    getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-    if getattr(sys, 'frozen', False)
-    else os.path.dirname(os.path.abspath(__file__))
-)
-_FONT_DIR = os.path.join(_BASE_DIR, 'assets', 'fonts')
+_FONT_DIR = FONTS_DIR
 
 _FONT_CACHE: Dict[tuple, Any] = {}
 
@@ -345,6 +341,18 @@ def _tier_of(raw) -> str:
     return 'impact'
 
 
+def _empty_snapshot() -> dict:
+    return {
+        'encounter_active': False,
+        'elapsed_s': 0.0,
+        'total_damage': 0,
+        'total_heal': 0,
+        'total_dps': 0,
+        'total_hps': 0,
+        'entities': [],
+    }
+
+
 # ═══════════════════════════════════════════════
 #  Main overlay
 # ═══════════════════════════════════════════════
@@ -392,7 +400,8 @@ class DpsOverlay:
 
     MAX_ROWS = 6
     PAD = BODY_PAD        # back-compat alias
-    PANEL_OPACITY = 1.0
+    PANEL_OPACITY = 0.93
+    CLICK_DRAG_THRESHOLD = 6
 
     # Colors (parity with web/dps.html CSS vars, alpha 0-255)
     PANEL_BG_A = (203, 205, 194, 255)   # opaque shell bg to avoid hollow panel body
@@ -443,14 +452,37 @@ class DpsOverlay:
     TICK_MS = 16          # ~60 FPS while animating
     IDLE_TICK_MS = 60     # idle refresh still drives clock / fade-out
 
-    def __init__(self, root: tk.Tk, settings: Any = None):
+    def __init__(self, root: tk.Tk, settings: Any = None,
+                 request_live_snapshot=None,
+                 show_last_report=None,
+                 reset_dps=None,
+                 has_last_report=None,
+                 request_entity_detail=None,
+                 alert=None):
         self.root = root
         self.settings = settings
+        self._request_live_snapshot = request_live_snapshot
+        self._show_last_report_cb = show_last_report
+        self._reset_dps_cb = reset_dps
+        self._has_last_report_cb = has_last_report
+        self._request_entity_detail_cb = request_entity_detail
+        self._alert_cb = alert
         self._win: Optional[tk.Toplevel] = None
         self._hwnd: int = 0
         self._visible = False
         self._last_snapshot: Optional[dict] = None
+        self._last_report: Optional[dict] = None
         self._self_uid = 0
+        self._view_mode = 'live'
+        self._current_tab = 'damage'
+        self._report_available = False
+        # Detail view state (parity with web/dps.html _openDetail/_closeDetail)
+        self._detail_visible = False
+        self._detail_uid = 0
+        self._live_detail_cache: Dict[int, dict] = {}
+        # Hit-test regions captured during the most recent compose pass.
+        self._row_click_regions: List[Tuple[int, Tuple[int, int, int, int]]] = []
+        self._detail_back_rect: Optional[Tuple[int, int, int, int]] = None
 
         sw = _user32.GetSystemMetrics(0)
         sh = _user32.GetSystemMetrics(1)
@@ -499,6 +531,8 @@ class DpsOverlay:
 
         self._drag_ox = 0
         self._drag_oy = 0
+        self._drag_start_root = (0, 0)
+        self._drag_moved = False
 
         self._tick_after_id: Optional[str] = None
         self._last_rendered_size: tuple = (0, 0)
@@ -602,13 +636,109 @@ class DpsOverlay:
         for uid_, row in self._rows.items():
             row.is_self = (uid_ == self._self_uid)
 
-    # ──────────────────────────────────────────
-    #  Snapshot ingestion
-    # ──────────────────────────────────────────
+    def set_report_available(self, available: bool) -> None:
+        self._report_available = bool(available) or bool(self._last_report)
+        self._schedule_tick(immediate=True)
 
-    def update(self, snapshot: dict) -> None:
-        if snapshot is None:
+    def is_report_mode(self) -> bool:
+        return self._view_mode == 'report'
+
+    def show_live(self, snapshot: Optional[dict] = None) -> None:
+        self._sync_report_available()
+        self._view_mode = 'live'
+        self._detail_visible = False
+        self._detail_uid = 0
+        if snapshot is None and callable(self._request_live_snapshot):
+            try:
+                snapshot = self._request_live_snapshot()
+            except Exception:
+                snapshot = None
+        self._ingest_live_snapshot(snapshot or self._last_snapshot or _empty_snapshot(),
+                                   force_show=True)
+        self.fade_in()
+        self._schedule_tick(immediate=True)
+
+    def show_last_report(self, report: Optional[dict]) -> bool:
+        if not report:
+            return False
+        self._last_report = dict(report)
+        self._report_available = True
+        self._view_mode = 'report'
+        self._detail_visible = False
+        self._detail_uid = 0
+        if not self._visible or not self._hwnd:
+            self.show()
+        self.fade_in()
+        self._schedule_tick(immediate=True)
+        return True
+
+    # ── Detail view (parity with web/dps.html _openDetail/_closeDetail) ──
+
+    def open_detail(self, uid: int) -> None:
+        try:
+            uid = int(uid or 0)
+        except Exception:
+            uid = 0
+        if uid <= 0:
             return
+        self._detail_uid = uid
+        self._detail_visible = True
+        # In live mode, request a fresh skill breakdown from the controller.
+        if self._view_mode == 'live' and callable(self._request_entity_detail_cb):
+            try:
+                detail = self._request_entity_detail_cb(uid)
+                if isinstance(detail, dict):
+                    self._live_detail_cache[uid] = detail
+            except Exception:
+                pass
+        self._schedule_tick(immediate=True)
+
+    def close_detail(self) -> None:
+        if not self._detail_visible:
+            return
+        self._detail_visible = False
+        self._detail_uid = 0
+        self._schedule_tick(immediate=True)
+
+    def update_detail(self, data: Optional[dict]) -> None:
+        """Push fresh per-entity skill breakdown (called by controller)."""
+        if not isinstance(data, dict):
+            return
+        try:
+            uid = int(data.get('uid') or 0)
+        except Exception:
+            uid = 0
+        if uid <= 0:
+            return
+        self._live_detail_cache[uid] = dict(data)
+        if (self._view_mode == 'live' and self._detail_visible
+                and self._detail_uid == uid):
+            self._schedule_tick(immediate=True)
+
+    def _sync_report_available(self) -> None:
+        available = bool(self._last_report)
+        if callable(self._has_last_report_cb):
+            try:
+                available = bool(self._has_last_report_cb()) or available
+            except Exception:
+                pass
+        self._report_available = available
+
+    def _report_entities(self) -> List[dict]:
+        if not isinstance(self._last_report, dict):
+            return []
+        entities = self._last_report.get('entities')
+        if entities is None:
+            entities = self._last_report.get('party') or []
+        return list(entities or [])
+
+    def _has_report_data(self) -> bool:
+        return bool(self._report_entities())
+
+    def _ingest_live_snapshot(self, snapshot: dict,
+                              force_show: bool = False) -> None:
+        snapshot = dict(snapshot or _empty_snapshot())
+        self._sync_report_available()
         entities = snapshot.get('entities')
         if entities is None:
             entities = snapshot.get('party') or []
@@ -618,8 +748,8 @@ class DpsOverlay:
             or int(snapshot.get('total_damage') or 0) > 0
             or int(snapshot.get('total_heal') or 0) > 0
         )
-        if (not self._visible or not self._hwnd) and not has_content:
-            self._last_snapshot = dict(snapshot)
+        if (not self._visible or not self._hwnd) and not has_content and not force_show:
+            self._last_snapshot = snapshot
             self._target_total_damage = float(snapshot.get('total_damage') or 0)
             self._target_total_dps = float(snapshot.get('total_dps') or 0)
             self._target_total_heal = float(snapshot.get('total_heal') or 0)
@@ -627,7 +757,9 @@ class DpsOverlay:
             self._target_elapsed = float(snapshot.get('elapsed_s') or 0)
             self._encounter_active = bool(snapshot.get('encounter_active'))
             return
-        if not self._visible or not self._hwnd:
+        if (not self._visible or not self._hwnd) and force_show:
+            self.show()
+        elif not self._visible or not self._hwnd:
             self.show()
         self._last_snapshot = snapshot
 
@@ -637,8 +769,6 @@ class DpsOverlay:
         self._target_total_hps = float(snapshot.get('total_hps') or 0)
         self._target_elapsed = float(snapshot.get('elapsed_s') or 0)
         self._encounter_active = bool(snapshot.get('encounter_active'))
-
-        # dps_tracker emits 'entities'; tolerate legacy 'party' too.
 
         seen_uids: List[int] = []
         for idx, ent in enumerate(entities[: self.MAX_ROWS]):
@@ -651,7 +781,6 @@ class DpsOverlay:
             row = self._rows.get(uid)
             if row is None:
                 row = _RowState(uid)
-                # New rows slide in from just below their target slot.
                 row.disp_y = float(idx + 0.6)
                 row.target_y = float(idx)
                 self._rows[uid] = row
@@ -662,13 +791,11 @@ class DpsOverlay:
                 row.is_self = True
             seen_uids.append(uid)
 
-        # Drop rows that fell off the snapshot.
         for stale_uid in [u for u in self._rows if u not in seen_uids]:
             self._rows.pop(stale_uid, None)
 
         self._row_order = seen_uids
 
-        # HitFX
         fx = snapshot.get('hit_fx')
         if isinstance(fx, dict):
             try:
@@ -690,6 +817,15 @@ class DpsOverlay:
                     row.fx_start = self._panel_fx_start
 
         self._schedule_tick(immediate=True)
+
+    # ──────────────────────────────────────────
+    #  Snapshot ingestion
+    # ──────────────────────────────────────────
+
+    def update(self, snapshot: dict) -> None:
+        if snapshot is None:
+            return
+        self._ingest_live_snapshot(snapshot)
 
     # ──────────────────────────────────────────
     #  Animation tick
@@ -728,14 +864,15 @@ class DpsOverlay:
         if self._panel_fx_tier:
             return True
         for row in self._rows.values():
-            if abs(row.disp_dps - row.dps) > 0.5 or \
-               abs(row.disp_damage - row.damage) > 0.5 or \
-               abs(row.disp_hps - row.hps) > 0.5 or \
-               abs(row.disp_heal - row.heal) > 0.5:
+            if abs(row.disp_dps - row.target_dps) > 0.5 or \
+               abs(row.disp_damage - row.target_damage) > 0.5 or \
+               abs(row.disp_hps - row.target_hps) > 0.5 or \
+               abs(row.disp_heal - row.target_heal) > 0.5 or \
+               abs(row.disp_bar_pct - row.target_bar_pct) > 1e-3:
                 return True
-        if abs(self._disp_total_damage - self._total_damage) > 0.5:
+        if abs(self._disp_total_damage - self._target_total_damage) > 0.5:
             return True
-        if abs(self._disp_total_dps - self._total_dps) > 0.5:
+        if abs(self._disp_total_dps - self._target_total_dps) > 0.5:
             return True
         return False
 
@@ -856,8 +993,80 @@ class DpsOverlay:
     def _tabs_height(self) -> int:
         return self.TAB_PAD_TOP + self.TAB_H + self.TAB_PAD_BOT
 
+    def _current_row_count(self) -> int:
+        if self._view_mode == 'report':
+            return min(len(self._report_entities()), self.MAX_ROWS)
+        return min(len(self._rows), self.MAX_ROWS)
+
+    def _build_view_rows(self) -> List[dict]:
+        is_heal = self._current_tab == 'heal'
+        rows: List[dict] = []
+
+        if self._view_mode == 'report':
+            entities = self._report_entities()
+            entities.sort(
+                key=lambda ent: float(ent.get('heal_total' if is_heal else 'damage_total') or 0),
+                reverse=True,
+            )
+            total = float((self._last_report or {}).get(
+                'total_heal' if is_heal else 'total_damage'
+            ) or 0)
+            max_amount = max(
+                [float(ent.get('heal_total' if is_heal else 'damage_total') or 0)
+                 for ent in entities],
+                default=0.0,
+            )
+            for ent in entities[: self.MAX_ROWS]:
+                uid = int(ent.get('uid') or 0)
+                amount = float(ent.get('heal_total' if is_heal else 'damage_total') or 0)
+                rows.append({
+                    'uid': uid,
+                    'name': str(ent.get('name') or f'Player_{uid or 0}'),
+                    'profession': str(ent.get('profession') or ''),
+                    'fight_point': int(ent.get('fight_point') or 0),
+                    'is_self': bool(ent.get('is_self')) or (self._self_uid and uid == self._self_uid),
+                    'amount': amount,
+                    'rate': float(ent.get('hps' if is_heal else 'dps') or 0),
+                    'pct': (amount / total) if total > 0 else 0.0,
+                    'bar_pct': (amount / max_amount) if max_amount > 0 else 0.0,
+                    'is_heal': is_heal,
+                    'fx_tier': '',
+                    'fx_start': 0.0,
+                    'fallback_sub': 'LAST REPORT ENTRY',
+                })
+            return rows
+
+        live_rows = list(self._rows.values())
+        if is_heal:
+            live_rows.sort(key=lambda row: (row.disp_heal, row.uid), reverse=True)
+        else:
+            live_rows.sort(key=lambda row: (row.disp_y, row.uid))
+        total = self._disp_total_heal if is_heal else self._disp_total_damage
+        max_amount = max(
+            [row.disp_heal if is_heal else row.disp_damage for row in live_rows],
+            default=0.0,
+        )
+        for row in live_rows[: self.MAX_ROWS]:
+            amount = row.disp_heal if is_heal else row.disp_damage
+            rows.append({
+                'uid': row.uid,
+                'name': row.name,
+                'profession': row.profession,
+                'fight_point': row.fight_point,
+                'is_self': row.is_self,
+                'amount': amount,
+                'rate': row.disp_hps if is_heal else row.disp_dps,
+                'pct': (amount / total) if total > 0 else 0.0,
+                'bar_pct': (amount / max_amount) if max_amount > 0 else 0.0,
+                'is_heal': is_heal,
+                'fx_tier': row.fx_tier,
+                'fx_start': row.fx_start,
+                'fallback_sub': 'LIVE COMBAT ENTRY',
+            })
+        return rows
+
     def _compute_size(self) -> tuple:
-        rows = min(max(0, len(self._rows)), self.MAX_ROWS)
+        rows = self._current_row_count()
         rows = max(rows, 3)      # reserve a minimum list area for empty state
         list_h = rows * self.ROW_H + self.ROW_MARGIN
         total = (self.BODY_PAD * 2
@@ -935,14 +1144,25 @@ class DpsOverlay:
         draw = ImageDraw.Draw(img, 'RGBA')
         hh = self._header_height()
         self._draw_header(draw, img, sx, sy, sw, hh)
-        tabs_y = sy + hh
-        self._draw_tabs(draw, sx, tabs_y, sw)
-        content_y = tabs_y + self._tabs_height()
-        footer_y = sy + sh - self.FOOTER_H
-        list_x = sx + self.CONTENT_PAD_X
-        list_w = sw - 2 * self.CONTENT_PAD_X
-        list_h = footer_y - content_y - self.CONTENT_PAD_BOT
-        self._draw_list_frame(draw, img, list_x, content_y, list_w, list_h)
+        # Reset captured click regions for this frame.
+        self._row_click_regions = []
+        self._detail_back_rect = None
+        if self._detail_visible:
+            content_y = sy + hh
+            footer_y = sy + sh - self.FOOTER_H
+            list_x = sx + self.CONTENT_PAD_X
+            list_w = sw - 2 * self.CONTENT_PAD_X
+            list_h = footer_y - content_y - self.CONTENT_PAD_BOT
+            self._draw_detail_view(draw, img, list_x, content_y, list_w, list_h)
+        else:
+            tabs_y = sy + hh
+            self._draw_tabs(draw, sx, tabs_y, sw)
+            content_y = tabs_y + self._tabs_height()
+            footer_y = sy + sh - self.FOOTER_H
+            list_x = sx + self.CONTENT_PAD_X
+            list_w = sw - 2 * self.CONTENT_PAD_X
+            list_h = footer_y - content_y - self.CONTENT_PAD_BOT
+            self._draw_list_frame(draw, img, list_x, content_y, list_w, list_h)
         self._draw_footer(draw, sx, footer_y, sw, self.FOOTER_H)
 
         if self._panel_fx_tier:
@@ -1056,9 +1276,11 @@ class DpsOverlay:
                            font_title, self.TEXT_MAIN, 1.6)
         title_w = self._tracked_text_width(draw, title_text, font_title, 1.6)
 
-        # Mode-badge "LIVE" (green) or "REPORT" (gold)
         badge_label = 'LIVE'
         badge_color = self.BADGE_LIVE
+        if self._view_mode == 'report':
+            badge_label = 'LAST REPORT'
+            badge_color = self.BADGE_REPORT
         bx = x_left + title_w + 10
         by = y
         font_badge = _load_font('sao', 10)
@@ -1073,7 +1295,13 @@ class DpsOverlay:
         y += self.TITLE_H
 
         # Summary
-        if self._encounter_active:
+        if self._view_mode == 'report':
+            if self._has_report_data():
+                completed = str((self._last_report or {}).get('completed_local_time') or 'COMPLETED')
+                summary = f'LAST REPORT · {completed}'
+            else:
+                summary = 'NO LAST REPORT AVAILABLE'
+        elif self._encounter_active:
             summary = (
                 f'LIVE DPS {_fmt_num(self._disp_total_dps)} · '
                 f'LIVE HPS {_fmt_num(self._disp_total_hps)}'
@@ -1087,24 +1315,25 @@ class DpsOverlay:
 
         # Button row: LIVE | LAST REPORT | RESET (right-aligned, wrap-below)
         buttons = [
-            ('LIVE', True, 'live'),
-            ('LAST REPORT', False, 'normal'),
-            ('RESET', False, 'danger'),
+            ('LIVE', self._view_mode == 'live', 'live', True),
+            ('LAST REPORT', self._view_mode == 'report', 'normal',
+             self._report_available or self._has_report_data()),
+            ('RESET', False, 'danger', True),
         ]
         btn_font = _load_font('sao', 10)
         # Measure and lay out right-aligned
         gap = self.BTN_GAP
         sizes = []
-        for text, _, _ in buttons:
+        for text, _, _, _ in buttons:
             tw = _text_width(draw, text, btn_font)
             sizes.append(max(76, tw + 20))
         total_w = sum(sizes) + gap * (len(sizes) - 1)
         start_x = x_right - total_w
         bx = start_x
         by = y
-        for (text, active, kind), bw2 in zip(buttons, sizes):
+        for (text, active, kind, enabled), bw2 in zip(buttons, sizes):
             self._draw_button(draw, bx, by, bw2, self.BTN_H,
-                              text, active, kind, btn_font)
+                              text, active, kind, btn_font, enabled)
             bx += bw2 + gap
 
         # Bottom border of header
@@ -1113,8 +1342,12 @@ class DpsOverlay:
 
     def _draw_button(self, draw: ImageDraw.ImageDraw, bx: int, by: int,
                      bw: int, bh: int, text: str, active: bool,
-                     kind: str, font) -> None:
-        if kind == 'live' and active:
+                     kind: str, font, enabled: bool = True) -> None:
+        if not enabled:
+            fill = (255, 255, 255, 58)
+            border = (160, 162, 150, 148)
+            fg = (139, 139, 130, 180)
+        elif kind == 'live' and active:
             fill = self.BTN_LIVE_ACTIVE
             border = self.BTN_LIVE_BORDER
             fg = self.BTN_LIVE_COLOR
@@ -1139,7 +1372,8 @@ class DpsOverlay:
         y = ty + self.TAB_PAD_TOP
         x0 = sx + self.HEADER_PAD_X
         x1 = sx + sw - self.HEADER_PAD_X
-        tabs = [('DAMAGE', True), ('HEALING', False)]
+        tabs = [('DAMAGE', self._current_tab == 'damage'),
+            ('HEALING', self._current_tab == 'heal')]
         gap = 8
         tab_w = (x1 - x0 - gap) // 2
         tf = _load_font('sao', 10)
@@ -1180,30 +1414,31 @@ class DpsOverlay:
             (lx, ly, lx + lw - 1, ly + lh - 1),
             radius=4, outline=self.LIST_BORDER, width=1,
         )
-        if not self._rows:
-            msg = 'NO LIVE COMBAT DATA'
+        view_rows = self._build_view_rows()
+        if not view_rows:
+            msg = 'NO REPORT DATA' if self._view_mode == 'report' else 'NO LIVE COMBAT DATA'
             font = _load_font('sao', 11)
             self._draw_tracked_centered(draw, msg, font, self.TEXT_MUTED,
                                         lx + lw // 2, ly + lh // 2 - 6, 2)
             return
 
-        # Clip region is list-frame; render rows in animated Y order
-        rows = sorted(self._rows.values(), key=lambda r: r.disp_y)
         margin = self.ROW_MARGIN
-        for row in rows:
-            if row.disp_y < -1 or row.disp_y > self.MAX_ROWS + 1:
-                continue
-            rank_idx = int(round(row.disp_y))
-            ry = ly + margin + int(round(row.disp_y * self.ROW_H))
+        for rank_idx, row_data in enumerate(view_rows):
+            ry = ly + margin + rank_idx * self.ROW_H
             rx = lx + margin
             rw = lw - 2 * margin
             rh = self.ROW_H - margin
             if ry + rh > ly + lh - 2:
                 continue
-            self._draw_row(draw, img, row, rx, ry, rw, rh, rank_idx)
+            self._draw_row(draw, img, row_data, rx, ry, rw, rh, rank_idx)
+            uid = int(row_data.get('uid') or 0)
+            if uid > 0:
+                self._row_click_regions.append(
+                    (uid, (rx, ry, rx + rw, ry + rh))
+                )
 
     def _draw_row(self, draw: ImageDraw.ImageDraw, img: Image.Image,
-                  row: _RowState, x: int, y: int, w: int, h: int,
+                  row: dict, x: int, y: int, w: int, h: int,
                   rank_idx: int) -> None:
         bevel = 10
         # Row background with clip-path:polygon(10px 0,100% 0,100% 100%,0 100%,0 10px)
@@ -1230,7 +1465,7 @@ class DpsOverlay:
             (20, 20, 14, 9),
         )
         # Self highlight: left gold border
-        if row.is_self:
+        if row['is_self']:
             self._fill_polygon(
                 img,
                 [
@@ -1259,16 +1494,16 @@ class DpsOverlay:
             )
 
         # Animated bar fill (within clip)
-        bar_pct = max(0.0, min(1.0, row.disp_bar_pct))
+        bar_pct = max(0.0, min(1.0, float(row['bar_pct'] or 0.0)))
         bar_w = int(max(0, (w - 4) * bar_pct))
         if bar_w > 0:
-            bar_img = self._make_bar(bar_w, h - 4, row)
+            bar_img = self._make_bar(bar_w, h - 4, row['is_self'], row['is_heal'])
             img.alpha_composite(bar_img, (x + 2, y + 2))
 
         # Hit-fx pulse outline
-        if row.fx_tier:
-            dur, tint, _ = _HIT_FX_TIERS[row.fx_tier]
-            age = time.time() - row.fx_start
+        if row['fx_tier']:
+            dur, tint, _ = _HIT_FX_TIERS[row['fx_tier']]
+            age = time.time() - row['fx_start']
             t = max(0.0, min(1.0, age / max(0.01, dur)))
             intensity = (1.0 - t) ** 2
             outline_a = int(220 * intensity)
@@ -1290,26 +1525,26 @@ class DpsOverlay:
 
         # Name + subtitle
         name_x = x + 38
-        name_font = _pick_font(row.name, 12)
-        name_color = self.GOLD if row.is_self else self.TEXT_MAIN
+        name_font = _pick_font(row['name'], 12)
+        name_color = self.GOLD if row['is_self'] else self.TEXT_MAIN
         max_name_w = int(w * 0.55) - 40
-        name = self._truncate(row.name or 'Unknown', name_font,
+        name = self._truncate(row['name'] or 'Unknown', name_font,
                               max_name_w, draw)
 
         # Hit-FX text color + shadow (web: .entity-row.impact-hit etc.)
         _fx_shadow = None
-        if row.fx_tier:
-            _dur, _tint, _ = _HIT_FX_TIERS[row.fx_tier]
-            _age = time.time() - row.fx_start
+        if row['fx_tier']:
+            _dur, _tint, _ = _HIT_FX_TIERS[row['fx_tier']]
+            _age = time.time() - row['fx_start']
             _t = max(0.0, min(1.0, _age / max(0.01, _dur)))
             _int = max(0.0, (1.0 - _t) ** 2)
-            if row.fx_tier == 'impact':
+            if row['fx_tier'] == 'impact':
                 name_color = (57, 126, 146, 255)
                 _fx_shadow = (104, 228, 255, int(66 * _int))
-            elif row.fx_tier == 'mega':
+            elif row['fx_tier'] == 'mega':
                 name_color = (196, 135, 16, 255)
                 _fx_shadow = (255, 220, 112, int(87 * _int))
-            elif row.fx_tier == 'starburst':
+            elif row['fx_tier'] == 'starburst':
                 name_color = (110, 118, 182, 255)
                 _fx_shadow = (88, 166, 255, int(77 * _int))
 
@@ -1318,12 +1553,12 @@ class DpsOverlay:
                            shadow_color=_fx_shadow, shadow_blur=5 if _fx_shadow else 0)
 
         sub_parts = []
-        if row.profession:
-            sub_parts.append(row.profession)
-        fp = _fmt_fp(row.fight_point)
+        if row['profession']:
+            sub_parts.append(row['profession'])
+        fp = _fmt_fp(row['fight_point'])
         if fp:
             sub_parts.append(fp)
-        sub_text = ' · '.join(sub_parts).upper() if sub_parts else 'LIVE COMBAT ENTRY'
+        sub_text = ' · '.join(sub_parts).upper() if sub_parts else row['fallback_sub']
         if sub_text:
             sub_font = _pick_font(sub_text, 9)
             sub = self._truncate(sub_text, sub_font, max_name_w, draw)
@@ -1333,14 +1568,14 @@ class DpsOverlay:
         # Right side: damage total (13px) + dps/pct (9px muted)
         font_val = _load_font('sao', 13)
         font_sub = _load_font('sao', 9)
-        val_main = _fmt_num(row.disp_damage)
+        val_main = _fmt_num(row['amount'])
         val_color = name_color if _fx_shadow else self.TEXT_MAIN
         vw = self._tracked_text_width(draw, val_main, font_val, 0.7)
         self._draw_tracked(draw, (x + w - 10 - vw, y + 6), val_main,
                            font_val, val_color, 0.7,
                            shadow_color=_fx_shadow, shadow_blur=5 if _fx_shadow else 0)
-        pct = int(round(row.damage_pct * 100))
-        val_sub = f'{_fmt_num(row.disp_dps)}/s · {pct}%'
+        pct = int(round(float(row['pct'] or 0.0) * 100))
+        val_sub = f'{_fmt_num(row["rate"])}/s · {pct}%'
         sw_ = self._tracked_text_width(draw, val_sub, font_sub, 0.75)
         self._draw_tracked(draw, (x + w - 10 - sw_, y + 22), val_sub,
                            font_sub, self.TEXT_MUTED, 0.75)
@@ -1370,15 +1605,245 @@ class DpsOverlay:
         font = _load_font('sao', 10)
         x_left = sx + self.HEADER_PAD_X
         x_right = sx + sw - self.HEADER_PAD_X
-        left = f'ELAPSED {_fmt_time(self._disp_elapsed)}'
+        if self._view_mode == 'report' and self._has_report_data():
+            completed = str((self._last_report or {}).get('completed_local_time') or _fmt_time((self._last_report or {}).get('elapsed_s') or 0))
+            left = f'COMPLETED {completed}'
+            total_val = _fmt_num(float((self._last_report or {}).get('total_damage') or 0))
+            heal_val = _fmt_num(float((self._last_report or {}).get('total_heal') or 0))
+        else:
+            left = f'ELAPSED {_fmt_time(self._disp_elapsed)}'
+            total_val = _fmt_num(self._disp_total_damage)
+            heal_val = _fmt_num(self._disp_total_heal)
         self._draw_tracked(draw, (x_left, fy + (fh - 12) // 2),
                            left, font, self.TEXT_MUTED, 0.85)
-        total_val = _fmt_num(self._disp_total_damage)
-        heal_val = _fmt_num(self._disp_total_heal)
         right = f'TOTAL {total_val} · HEAL {heal_val}'
         rw = self._tracked_text_width(draw, right, font, 0.85)
         self._draw_tracked(draw, (x_right - rw, fy + (fh - 12) // 2),
                            right, font, self.TEXT_MUTED, 0.85)
+
+    # --------  Detail view  --------
+
+    def _get_detail_entity(self) -> Optional[dict]:
+        uid = int(self._detail_uid or 0)
+        if uid <= 0:
+            return None
+        if self._view_mode == 'report':
+            for ent in self._report_entities():
+                if int(ent.get('uid') or 0) == uid:
+                    return ent
+            return None
+        # Live mode: prefer cached skill breakdown, fall back to row.
+        cached = self._live_detail_cache.get(uid)
+        if isinstance(cached, dict):
+            return cached
+        row = self._rows.get(uid)
+        if row is None:
+            return None
+        return {
+            'uid': row.uid,
+            'name': row.name,
+            'profession': row.profession,
+            'fight_point': row.fight_point,
+            'is_self': row.is_self,
+            'damage_total': row.disp_damage,
+            'damage_hits': 0,
+            'crit_rate': 0.0,
+            'heal_total': row.disp_heal,
+            'heal_hits': 0,
+            'dps': row.disp_dps,
+            'hps': row.disp_hps,
+            'max_hit': 0,
+            'elapsed_s': self._disp_elapsed,
+            'skills': [],
+        }
+
+    def _draw_detail_view(self, draw: ImageDraw.ImageDraw, img: Image.Image,
+                          lx: int, ly: int, lw: int, lh: int) -> None:
+        # Outer detail frame (parity with .detail-view)
+        self._fill_rounded_rect(
+            img, (lx, ly, lx + lw - 1, ly + lh - 1),
+            radius=4, fill=self.LIST_BG,
+        )
+        draw.rounded_rectangle(
+            (lx, ly, lx + lw - 1, ly + lh - 1),
+            radius=4, outline=self.LIST_BORDER, width=1,
+        )
+
+        entity = self._get_detail_entity()
+
+        # Header strip: BACK button + title + badge
+        head_h = 30
+        head_x = lx + 8
+        head_y = ly + 6
+        head_w = lw - 16
+
+        back_w = 56
+        back_rect = (head_x, head_y, head_x + back_w, head_y + head_h - 4)
+        self._draw_clip_rect(draw, back_rect[0], back_rect[1],
+                             back_rect[2] - back_rect[0],
+                             back_rect[3] - back_rect[1],
+                             fill=self.BTN_BG, outline=self.BTN_BORDER,
+                             bevel=8)
+        font_back = _load_font('sao', 10)
+        self._draw_tracked_centered(draw, 'BACK', font_back, self.TEXT_MAIN,
+                                    (back_rect[0] + back_rect[2]) // 2,
+                                    back_rect[1] + ((back_rect[3] - back_rect[1]) - 12) // 2,
+                                    1.0)
+        self._detail_back_rect = back_rect
+
+        # Title (entity name + profession + fight point)
+        title_x = head_x + back_w + 10
+        title_y = head_y + 2
+        if entity:
+            title = str(entity.get('name') or f'Player_{self._detail_uid}')
+            prof = str(entity.get('profession') or '')
+            if prof:
+                title = f'{title} · {prof}'
+            fp = int(entity.get('fight_point') or 0)
+            if fp > 0:
+                title = f'{title} · {_fmt_fp(fp)}'
+        else:
+            title = 'NO DETAIL DATA'
+        title_font = _pick_font(title, 12)
+        self._draw_tracked(draw, (title_x, title_y), title,
+                           title_font, self.TEXT_MAIN, 0.7)
+
+        # Badge (LIVE DETAIL / LAST REPORT DETAIL)
+        badge_text = ('LAST REPORT DETAIL' if self._view_mode == 'report'
+                      else 'LIVE DETAIL')
+        badge_font = _load_font('sao', 9)
+        badge_color = (self.BADGE_REPORT if self._view_mode == 'report'
+                       else self.BADGE_LIVE)
+        bw = self._tracked_text_width(draw, badge_text, badge_font, 1.2)
+        badge_x = head_x + head_w - bw - 6
+        badge_y = head_y + 16
+        self._draw_tracked(draw, (badge_x, badge_y), badge_text,
+                           badge_font, badge_color, 1.2)
+
+        body_y = head_y + head_h + 4
+        body_h = ly + lh - body_y - 6
+        if not entity:
+            font = _load_font('sao', 11)
+            self._draw_tracked_centered(draw, 'NO DETAIL DATA', font,
+                                        self.TEXT_MUTED,
+                                        lx + lw // 2,
+                                        body_y + body_h // 2 - 6, 2)
+            return
+
+        # Stats grid: 2 cols × 4 rows of small cards
+        grid_x = lx + 10
+        grid_w = lw - 20
+        col_gap = 6
+        col_w = (grid_w - col_gap) // 2
+        card_h = 30
+        card_gap = 4
+        rows = 4
+        grid_h = rows * card_h + (rows - 1) * card_gap
+        stats = [
+            ('DAMAGE', _fmt_num(entity.get('damage_total') or 0), self.GOLD),
+            ('DPS', _fmt_num(entity.get('dps') or 0), self.TEXT_MAIN),
+            ('HEALING', _fmt_num(entity.get('heal_total') or 0), (92, 150, 44, 255)),
+            ('HPS', _fmt_num(entity.get('hps') or 0), self.TEXT_MAIN),
+            ('CRIT', f"{int(round(float(entity.get('crit_rate') or 0) * 100))}%", self.TEXT_MAIN),
+            ('MAX HIT', _fmt_num(entity.get('max_hit') or 0), self.GOLD),
+            ('HITS', str(int(entity.get('damage_hits') or 0)), self.TEXT_MAIN),
+            ('TIME', _fmt_time(float(entity.get('elapsed_s') or 0)), self.TEXT_MAIN),
+        ]
+        lbl_font = _load_font('sao', 8)
+        val_font = _load_font('sao', 13)
+        for i, (label, value, color) in enumerate(stats):
+            r = i // 2
+            c = i % 2
+            cx = grid_x + c * (col_w + col_gap)
+            cy = body_y + r * (card_h + card_gap)
+            self._fill_rounded_rect(
+                img, (cx, cy, cx + col_w - 1, cy + card_h - 1),
+                radius=3, fill=(255, 255, 255, 90),
+            )
+            draw.rounded_rectangle(
+                (cx, cy, cx + col_w - 1, cy + card_h - 1),
+                radius=3, outline=self.ROW_BORDER, width=1,
+            )
+            self._draw_tracked(draw, (cx + 6, cy + 3), label,
+                               lbl_font, self.TEXT_MUTED, 1.1)
+            vw = self._tracked_text_width(draw, value, val_font, 0.7)
+            self._draw_tracked(draw, (cx + col_w - 6 - vw, cy + 13),
+                               value, val_font, color, 0.7)
+
+        # Skill rows below the stats grid
+        sk_y = body_y + grid_h + 6
+        sk_h = ly + lh - sk_y - 4
+        if sk_h <= 12:
+            return
+        skills = entity.get('skills') or []
+        if not skills:
+            font = _load_font('sao', 10)
+            msg = ('NO SKILL DATA IN LAST REPORT' if self._view_mode == 'report'
+                   else 'WAITING FOR LIVE SKILL DETAIL')
+            self._draw_tracked_centered(draw, msg, font, self.TEXT_MUTED,
+                                        lx + lw // 2, sk_y + sk_h // 2 - 6, 1.5)
+            return
+
+        # Sort by max(damage_total, heal_total) like the webview
+        skills_sorted = sorted(
+            list(skills),
+            key=lambda s: max(float(s.get('total') or 0),
+                              float(s.get('heal_total') or 0)),
+            reverse=True,
+        )
+        max_val = max(
+            (max(float(s.get('total') or 0), float(s.get('heal_total') or 0))
+             for s in skills_sorted),
+            default=0.0,
+        ) or 1.0
+        sk_row_h = 22
+        max_rows = max(1, sk_h // (sk_row_h + 2))
+        sk_font_name = _load_font('sao', 10)
+        sk_font_extra = _load_font('sao', 8)
+        sk_font_val = _load_font('sao', 11)
+        for i, sk in enumerate(skills_sorted[:max_rows]):
+            ry = sk_y + i * (sk_row_h + 2)
+            if ry + sk_row_h > ly + lh - 4:
+                break
+            dmg = float(sk.get('total') or 0)
+            heal = float(sk.get('heal_total') or 0)
+            amount = max(dmg, heal)
+            is_heal = heal > dmg
+            hits = int(sk.get('heal_hits' if is_heal else 'hits') or 0)
+            crit = (float(sk.get('crit_rate') or 0)
+                    if not is_heal and int(sk.get('hits') or 0) > 0 else 0)
+            bar_pct = amount / max_val if max_val > 0 else 0
+            # Background bar
+            self._fill_rounded_rect(
+                img, (lx + 6, ry, lx + lw - 7, ry + sk_row_h - 1),
+                radius=2, fill=(255, 255, 255, 64),
+            )
+            bar_w = int((lw - 14) * bar_pct)
+            if bar_w > 0:
+                bar_color = ((154, 211, 52, 70) if is_heal
+                             else (222, 166, 32, 70))
+                self._fill_rounded_rect(
+                    img, (lx + 6, ry, lx + 6 + bar_w, ry + sk_row_h - 1),
+                    radius=2, fill=bar_color,
+                )
+            sk_name = self._truncate(
+                str(sk.get('skill_name') or sk.get('skill_id') or 'Unknown'),
+                sk_font_name, int((lw - 14) * 0.55), draw,
+            )
+            self._draw_tracked(draw, (lx + 12, ry + 2), sk_name,
+                               sk_font_name, self.TEXT_MAIN, 0.6)
+            extras = [('HEAL' if is_heal else 'DMG'), f'×{hits}']
+            if not is_heal and crit > 0:
+                extras.append(f'CRIT {int(round(crit * 100))}%')
+            extra_text = ' · '.join(extras)
+            self._draw_tracked(draw, (lx + 12, ry + sk_row_h - 11),
+                               extra_text, sk_font_extra,
+                               self.TEXT_MUTED, 0.6)
+            val_text = _fmt_num(amount)
+            vw = self._tracked_text_width(draw, val_text, sk_font_val, 0.6)
+            val_color = ((92, 150, 44, 255) if is_heal else self.GOLD)
+            self._draw_tracked(draw, (lx + lw - 12 - vw, ry + 4),
+                               val_text, sk_font_val, val_color, 0.6)
 
     # --------  Helpers  --------
 
@@ -1497,13 +1962,14 @@ class DpsOverlay:
             total -= spacing
         return int(round(total))
 
-    def _make_bar(self, bw: int, bh: int, row: _RowState) -> Image.Image:
+    def _make_bar(self, bw: int, bh: int,
+                  is_self: bool, is_heal: bool) -> Image.Image:
         if bw <= 0 or bh <= 0:
             return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
-        if row.is_self:
-            ca, cb = (255, 215, 132, 104), (222, 166, 32, 14)
-        elif row.heal_total > row.damage_total and row.heal_total > 0:
+        if is_heal:
             ca, cb = self.BAR_HEAL_A, self.BAR_HEAL_B
+        elif is_self:
+            ca, cb = (255, 215, 132, 104), (222, 166, 32, 14)
         else:
             ca, cb = self.BAR_OTHER_A, self.BAR_OTHER_B
 
@@ -1530,11 +1996,11 @@ class DpsOverlay:
         hd.rounded_rectangle(
             (0, 0, bw - 1, max(2, bh // 3)),
             radius=min(3, max(1, bh // 2)),
-            fill=(255, 255, 255, 22 if row.is_self else 16),
+            fill=(255, 255, 255, 22 if is_self else 16),
         )
         hd.line(
             (1, max(1, bh - 2), max(1, bw - 2), max(1, bh - 2)),
-            fill=(28, 24, 16, 20 if row.is_self else 14), width=1,
+            fill=(28, 24, 16, 20 if is_self else 14), width=1,
         )
         highlight = _gpu_blur(highlight, 1.1)
         out.alpha_composite(highlight)
@@ -1544,7 +2010,7 @@ class DpsOverlay:
         ld.rounded_rectangle(
             (0, 0, min(bw - 1, 4), bh - 1),
             radius=min(3, max(1, bh // 2)),
-            fill=(255, 240, 200, 26 if row.is_self else 14),
+            fill=(255, 240, 200, 26 if is_self else 14),
         )
         out.alpha_composite(leading)
         return out
@@ -1599,6 +2065,131 @@ class DpsOverlay:
             overlay, Image.new('RGBA', (sw, sh), (0, 0, 0, 0)), mask),
             (sx, sy))
 
+    def _control_regions(self) -> dict:
+        w, h = self._last_rendered_size
+        if not w or not h:
+            w, h = self._compute_size()
+        sx, sy = self.BODY_PAD, self.BODY_PAD
+        sw = w - 2 * self.BODY_PAD
+        hh = self._header_height()
+        dummy = ImageDraw.Draw(Image.new('RGBA', (1, 1), (0, 0, 0, 0)))
+
+        btn_font = _load_font('sao', 10)
+        buttons = [('live', 'LIVE'), ('report', 'LAST REPORT'), ('reset', 'RESET')]
+        sizes = [max(76, _text_width(dummy, label, btn_font) + 20)
+                 for _, label in buttons]
+        total_w = sum(sizes) + self.BTN_GAP * (len(sizes) - 1)
+        start_x = sx + sw - self.HEADER_PAD_X - total_w
+        start_y = (sy + self.HEADER_PAD_TOP + self.EYEBROW_H + 4
+                   + self.TITLE_H + 6 + self.SUMMARY_H + 8)
+
+        button_regions = {}
+        cur_x = start_x
+        for (name, _label), bw in zip(buttons, sizes):
+            button_regions[name] = (cur_x, start_y, cur_x + bw, start_y + self.BTN_H)
+            cur_x += bw + self.BTN_GAP
+
+        tabs_y = sy + hh + self.TAB_PAD_TOP
+        x0 = sx + self.HEADER_PAD_X
+        x1 = sx + sw - self.HEADER_PAD_X
+        gap = 8
+        tab_w = (x1 - x0 - gap) // 2
+        tab_regions = {
+            'damage': (x0, tabs_y, x0 + tab_w, tabs_y + self.TAB_H),
+            'heal': (x0 + tab_w + gap, tabs_y,
+                     x0 + tab_w + gap + tab_w, tabs_y + self.TAB_H),
+        }
+        return {'buttons': button_regions, 'tabs': tab_regions}
+
+    @staticmethod
+    def _point_in_rect(x: int, y: int, rect) -> bool:
+        x0, y0, x1, y1 = rect
+        return x0 <= x <= x1 and y0 <= y <= y1
+
+    def _notify_no_report(self) -> None:
+        if not callable(self._alert_cb):
+            return
+        try:
+            self._alert_cb(
+                'DPS METER',
+                '暂无上一场战斗报告 / No last combat report yet.',
+                display_time=3.0,
+            )
+        except TypeError:
+            try:
+                self._alert_cb(
+                    'DPS METER',
+                    '暂无上一场战斗报告 / No last combat report yet.',
+                    3.0,
+                )
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _activate_live(self) -> None:
+        snapshot = None
+        if callable(self._request_live_snapshot):
+            try:
+                snapshot = self._request_live_snapshot()
+            except Exception:
+                snapshot = None
+        self.show_live(snapshot)
+
+    def _activate_report(self) -> None:
+        self._sync_report_available()
+        report = None
+        if callable(self._show_last_report_cb):
+            try:
+                report = self._show_last_report_cb()
+            except Exception:
+                report = None
+        if report is None:
+            report = self._last_report
+        if not self.show_last_report(report):
+            self._notify_no_report()
+
+    def _activate_reset(self) -> None:
+        snapshot = None
+        if callable(self._reset_dps_cb):
+            try:
+                snapshot = self._reset_dps_cb()
+            except Exception:
+                snapshot = None
+        self.show_live(snapshot or _empty_snapshot())
+
+    def _handle_click(self, x: int, y: int) -> None:
+        # Detail-view back button has highest priority
+        if (self._detail_visible and self._detail_back_rect
+                and self._point_in_rect(x, y, self._detail_back_rect)):
+            self.close_detail()
+            return
+        regions = self._control_regions()
+        for name, rect in regions['buttons'].items():
+            if self._point_in_rect(x, y, rect):
+                if name == 'live':
+                    self._activate_live()
+                elif name == 'report':
+                    if self._report_available or self._has_report_data():
+                        self._activate_report()
+                    else:
+                        self._notify_no_report()
+                elif name == 'reset':
+                    self._activate_reset()
+                return
+        if self._detail_visible:
+            return
+        for name, rect in regions['tabs'].items():
+            if self._point_in_rect(x, y, rect):
+                self._current_tab = name
+                self._schedule_tick(immediate=True)
+                return
+        # Entity row → open detail
+        for uid, rect in self._row_click_regions:
+            if self._point_in_rect(x, y, rect):
+                self.open_detail(uid)
+                return
+
     # ──────────────────────────────────────────
     #  Dragging
     # ──────────────────────────────────────────
@@ -1607,12 +2198,23 @@ class DpsOverlay:
         try:
             self._drag_ox = ev.x_root - self._x
             self._drag_oy = ev.y_root - self._y
+            self._drag_start_root = (int(ev.x_root), int(ev.y_root))
+            self._drag_moved = False
         except Exception:
             self._drag_ox = 0
             self._drag_oy = 0
+            self._drag_start_root = (0, 0)
+            self._drag_moved = False
 
     def _on_drag_move(self, ev) -> None:
         try:
+            dx = int(ev.x_root) - self._drag_start_root[0]
+            dy = int(ev.y_root) - self._drag_start_root[1]
+            if not self._drag_moved and \
+               abs(dx) < self.CLICK_DRAG_THRESHOLD and \
+               abs(dy) < self.CLICK_DRAG_THRESHOLD:
+                return
+            self._drag_moved = True
             self._x = int(ev.x_root - self._drag_ox)
             self._y = int(ev.y_root - self._drag_oy)
             if self._win is not None:
@@ -1621,7 +2223,13 @@ class DpsOverlay:
         except Exception:
             pass
 
-    def _on_drag_end(self, _ev) -> None:
+    def _on_drag_end(self, ev) -> None:
+        if not self._drag_moved:
+            try:
+                self._handle_click(int(ev.x), int(ev.y))
+            except Exception:
+                pass
+            return
         if self.settings is not None:
             try:
                 self.settings.set('dps_ov_x', int(self._x))

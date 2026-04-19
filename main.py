@@ -26,6 +26,16 @@ import argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
+def _bootstrap_runtime_overrides():
+    """预留：在模块化布局下 PyInstaller 会从 runtime/ 加载所有代码，
+    这里不需要额外插入 sys.path。仅保留函数名作为未来扩展点。
+    """
+    return
+
+
+_bootstrap_runtime_overrides()
+
+
 def _set_dpi_aware():
     try:
         import ctypes
@@ -109,6 +119,35 @@ def run_headless():
         print('\n\n已退出')
 
 
+def _start_update_check():
+    """在 UI 启动后后台检查一次更新；状态由 sao_updater 管理器维护，UI 会自行监听。"""
+    try:
+        from config import SettingsManager
+        s = SettingsManager()
+        if not s.get('update_check_enabled', True):
+            return
+    except Exception:
+        pass
+    try:
+        from sao_updater import get_manager
+        get_manager().check_async()
+    except Exception as e:
+        print(f'[SAO Auto] update check skipped: {e}')
+
+
+def _register_apply_on_exit():
+    """注册 atexit hook：如果退出时有 staging 待应用包，就启动外部 helper 应用它。"""
+    import atexit
+    def _hook():
+        try:
+            from sao_updater import has_pending_update, schedule_apply_on_exit
+            if has_pending_update():
+                schedule_apply_on_exit()
+        except Exception:
+            pass
+    atexit.register(_hook)
+
+
 def run_ui():
     """根据 settings.json 中的 ui_mode 启动对应 UI."""
     # 读取 ui_mode 设置
@@ -162,6 +201,7 @@ def run_ui():
 
 def main():
     _set_dpi_aware()
+    _register_apply_on_exit()
 
     parser = argparse.ArgumentParser(description='SAO Auto — 游戏 HUD 与自动化')
     parser.add_argument('--test', action='store_true', help='单次识别测试')
@@ -173,6 +213,7 @@ def main():
     elif args.headless:
         run_headless()
     else:
+        _start_update_check()
         run_ui()
 
 

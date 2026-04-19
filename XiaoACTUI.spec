@@ -34,6 +34,7 @@ LOCAL_HIDDENIMPORTS = [
     'overlay_render_worker',
     'window_effects',
     'install_npcap',
+    'sao_updater',
 ]
 
 WEBVIEW_PLATFORM_HIDDENIMPORTS = collect_submodules('webview.platforms')
@@ -114,18 +115,21 @@ a = Analysis(
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
-    noarchive=False,
+    noarchive=True,   # .pyc 散列到 runtime/ 目录, 不打入 PYZ → exe 瘦身 + 可单独更新模块
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# ── onedir 模式 + 模块化文件夹布局 ──
+# 客户端目录: XiaoACTUI.exe + update.exe + web/ + assets/ + proto/ + runtime/
+# - runtime/ : Python 解释器 + 我们的 .py + 依赖 DLL (PyInstaller 默认 _internal/, 这里改名)
+# - web/assets/proto/ : 由 build_release.bat post-build 步骤从 runtime/ 移到顶层
+# delta 包路径布局与客户端一致 (runtime/sao_gui.py, web/menu.html ...)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='XiaoACTUI',
     debug=False,
     bootloader_ignore_signals=False,
@@ -133,12 +137,24 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,                # 无控制台窗口
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon='icon.ico',
-    uac_admin=True,               # 抓包需要管理员权限
+    uac_admin=True,
+    contents_directory='runtime',  # 默认 _internal -> runtime
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='XiaoACTUI',
 )

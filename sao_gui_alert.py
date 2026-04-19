@@ -14,6 +14,7 @@ import threading
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
+from config import FONTS_DIR
 
 from sao_gui_dps import _ulw_update
 
@@ -24,12 +25,7 @@ WS_EX_TRANSPARENT = 0x00000020
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_TOPMOST = 0x00000008
 
-_BASE_DIR = (
-    getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-    if getattr(sys, 'frozen', False)
-    else os.path.dirname(os.path.abspath(__file__))
-)
-_FONT_DIR = os.path.join(_BASE_DIR, 'assets', 'fonts')
+_FONT_DIR = FONTS_DIR
 _FONT_CACHE = {}
 
 

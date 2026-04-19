@@ -17,14 +17,10 @@ from array import array
 import sys
 import tkinter as tk
 from typing import Optional
+from config import FONTS_DIR, SOUNDS_DIR
 
-if getattr(sys, 'frozen', False):
-    _BASE = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
-else:
-    _BASE = os.path.dirname(os.path.abspath(__file__))
-_ASSETS = os.path.join(_BASE, 'assets')
-_SOUNDS = os.path.join(_ASSETS, 'sounds')
-_FONTS = os.path.join(_ASSETS, 'fonts')
+_SOUNDS = SOUNDS_DIR
+_FONTS = FONTS_DIR
 
 # ═══════════════════════════════════════════════
 #  SAO 音效
