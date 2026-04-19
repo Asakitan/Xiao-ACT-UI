@@ -142,7 +142,7 @@ def _setup_dotnet_transparency(form):
             form_key = id(form)
         if form_key in _DOTNET_TRANSPARENCY_DONE:
             return True
-        from System.Drawing import Color as DColor
+        from System.Drawing import Color as DColor # type: ignore
         key = DColor.FromArgb(255, 1, 0, 1)
         form.BackColor = key
         form.TransparencyKey = key
@@ -192,7 +192,7 @@ def _invoke_dotnet_transparency(win_obj, _retries_left=60):
                 t.daemon = True
                 t.start()
             return
-        from System import Action
+        from System import Action # type: ignore
         form.Invoke(Action(lambda: _setup_dotnet_transparency(form)))
     except Exception as e:
         print(f"[SAO] invoke dotnet transparency: {e}")
