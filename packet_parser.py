@@ -27,6 +27,7 @@ from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger('sao_auto.parser')
 _PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
+_PENDING_SELF_NOTIFY_LIMIT = 16
 
 # Lazy import for protobuf JSON conversion (used in full sync dump)
 _MessageToDict = None
@@ -1259,6 +1260,53 @@ def _decode_dirty_energy_value(raw_u32: int, raw_f32: float, stamina_max: int = 
     return None
 
 
+# ── Smart dirty-stream offset detection ──
+# Base level is capped at 60 in the current game version; use it as an anchor
+# to auto-detect correct parsing offsets when the binary format shifts.
+_KNOWN_BASE_LEVEL = 60
+_DIRTY_IDENT = 0xFFFFFFFE
+_SMART_SCAN_MAX = 64  # max leading bytes to scan
+
+
+def _smart_find_dirty_start(data: bytes) -> Optional[int]:
+    """Scan *data* for the ``0xFFFFFFFE`` identifier to recover the correct
+    starting offset when the dirty stream has unexpected leading bytes.
+
+    For ``RoleLevel`` (field 22) candidates the scan is validated against
+    the known base-level anchor (60) to avoid false positives.
+
+    Returns the byte offset of the first valid identifier, or ``None``.
+    """
+    limit = min(len(data) - 12, _SMART_SCAN_MAX)
+    best: Optional[int] = None
+    for off in range(1, limit):
+        if struct.unpack_from('<I', data, off)[0] != _DIRTY_IDENT:
+            continue
+        fi_pos = off + 8
+        if fi_pos + 4 > len(data):
+            continue
+        fi = struct.unpack_from('<I', data, fi_pos)[0]
+        if fi not in CHAR_FIELD_NAMES:
+            continue
+        # Extra validation for RoleLevel: nested value must equal 60
+        if fi == 22:
+            nested = fi_pos + 4
+            if nested + 12 <= len(data):
+                ident2 = struct.unpack_from('<I', data, nested)[0]
+                if ident2 == _DIRTY_IDENT:
+                    sf_pos = nested + 8
+                    sf = struct.unpack_from('<I', data, sf_pos)[0]
+                    val_pos = sf_pos + 4
+                    if sf == 1 and val_pos + 4 <= len(data):
+                        val = struct.unpack_from('<I', data, val_pos)[0]
+                        if val == _KNOWN_BASE_LEVEL:
+                            return off  # confirmed via anchor
+                        continue  # wrong value → skip this candidate
+        if best is None:
+            best = off
+    return best
+
+
 def _is_sane_attr_stamina_max(value: int) -> bool:
     # Current observed self STA caps stay around 1200. Values like 1350/1500
     # and the larger 2100/3100 spikes are not stable enough to trust.
@@ -1471,6 +1519,7 @@ class PacketParser:
         # from this cache.  Limited to 1024 entries.
         self._monster_hp_cache: Dict[int, int] = {}  # template_id -> max_hp
         self._profession_skill_cache: Dict[int, Dict[int, int]] = {}  # profession_id -> slot map
+        self._pending_self_notifies: list[tuple[int, bytes, str]] = []
         self._zstd = None
         self._server_time_offset_ms: Optional[float] = None
         self._last_dungeon_id: int = 0   # Track dungeon transitions
@@ -1506,6 +1555,40 @@ class PacketParser:
         if uuid not in self._monsters:
             self._monsters[uuid] = MonsterData(uuid)
         return self._monsters[uuid]
+
+    def _remember_pending_self_notify(self, method_id: int, payload: bytes, reason: str):
+        if not payload:
+            return
+        self._pending_self_notifies.append((int(method_id), bytes(payload), str(reason or '')))
+        if len(self._pending_self_notifies) > _PENDING_SELF_NOTIFY_LIMIT:
+            del self._pending_self_notifies[:-_PENDING_SELF_NOTIFY_LIMIT]
+        pending_count = len(self._pending_self_notifies)
+        if pending_count <= 3 or pending_count == _PENDING_SELF_NOTIFY_LIMIT:
+            logger.info(
+                f'[Parser] buffered early self notify method=0x{method_id:X} '
+                f'count={pending_count} reason={reason}'
+            )
+
+    def _replay_pending_self_notifies(self, source: str):
+        if self._current_uid <= 0 or not self._pending_self_notifies:
+            return
+        pending = list(self._pending_self_notifies)
+        self._pending_self_notifies.clear()
+        logger.info(
+            f'[Parser] replaying {len(pending)} buffered self notifies '
+            f'after {source} uid={self._current_uid}'
+        )
+        for method_id, payload, reason in pending:
+            try:
+                if method_id == NotifyMethod.SYNC_CONTAINER_DIRTY_DATA:
+                    self._on_sync_container_dirty(payload)
+                elif method_id == NotifyMethod.SYNC_TO_ME_DELTA_INFO:
+                    self._on_sync_to_me_delta(payload)
+            except Exception as e:
+                logger.warning(
+                    f'[Parser] replay buffered notify failed method=0x{method_id:X} '
+                    f'source={source} reason={reason}: {e}'
+                )
 
     def _prepopulate_from_cache(self, uid: int):
         """Pre-populate player identity from player_cache.json so that the
@@ -2275,9 +2358,13 @@ class PacketParser:
             _append_packet_debug('enter_game', {
                 'uid': uid, 'server_name': server_name,
             })
+            adopted_uid = False
             if uid > 0 and self._current_uid == 0:
                 self._current_uid = uid
+                adopted_uid = True
                 logger.info(f'[Parser] auto-adopt UID from EnterGame: {uid}')
+            if adopted_uid:
+                self._replay_pending_self_notifies('EnterGame')
         except Exception as e:
             logger.debug(f'[Parser] EnterGame decode error: {e}')
 
@@ -2382,8 +2469,10 @@ class PacketParser:
 
         self._sync_container_count += 1
 
+        adopted_uid = False
         if self._current_uid == 0:
             self._current_uid = uid
+            adopted_uid = True
             logger.info(f'[Parser] auto-adopt self UID from SyncContainerData fallback: {uid}')
         elif self._sync_container_count > 1 and uid == self._current_uid:
             print(
@@ -2502,6 +2591,8 @@ class PacketParser:
             f'职业={player.profession!r}({player.profession_id})',
             flush=True,
         )
+        if adopted_uid:
+            self._replay_pending_self_notifies('SyncContainerData fallback')
         return True
 
     def _on_sync_container_data(self, data: bytes):
@@ -2533,8 +2624,10 @@ class PacketParser:
         self._sync_container_count += 1
 
         # SyncContainerData 是登录时的完整同步, 如果当前 UID 未知则自动采纳
+        adopted_uid = False
         if self._current_uid == 0:
             self._current_uid = uid
+            adopted_uid = True
             logger.info(f'[Parser] auto-adopt self UID from SyncContainerData: {uid}')
         elif self._sync_container_count > 1 and uid == self._current_uid:
             # NOTE: Do NOT call reset_scene() here!
@@ -3094,6 +3187,9 @@ class PacketParser:
                 flush=True,
             )
 
+        if adopted_uid:
+            self._replay_pending_self_notifies('SyncContainerData')
+
 
     # SyncContainerDirtyData (incremental updates)
 
@@ -3101,6 +3197,11 @@ class PacketParser:
     def _on_sync_container_dirty(self, data: bytes):
         """Handle the custom dirty-data stream wrapper."""
         if self._current_uid == 0:
+            self._remember_pending_self_notify(
+                NotifyMethod.SYNC_CONTAINER_DIRTY_DATA,
+                data,
+                'current_uid=0',
+            )
             logger.debug('[Parser] _on_sync_container_dirty: skipped (no current_uid)')
             return
 
@@ -3126,8 +3227,20 @@ class PacketParser:
         if pos + 8 > len(data):
             return
         ident = struct.unpack_from('<I', data, pos)[0]
-        if ident != 0xFFFFFFFE:
-            return
+        if ident != _DIRTY_IDENT:
+            # ── Smart offset detection: scan for identifier ──
+            smart_pos = _smart_find_dirty_start(data)
+            if smart_pos is None:
+                logger.debug(
+                    f'[Parser] DirtyData: no 0xFFFFFFFE at pos=0 and smart scan failed '
+                    f'(len={len(data)}, head={data[:16].hex()})'
+                )
+                return
+            logger.warning(
+                f'[Parser] DirtyData smart offset correction: '
+                f'found identifier at pos={smart_pos} (skipped {smart_pos} leading bytes)'
+            )
+            pos = smart_pos
         pos += 4
         # skip validation int32BE
         pos += 4
@@ -3157,7 +3270,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != 0xFFFFFFFE:
+            if ident2 != _DIRTY_IDENT:
                 return
             pos += 8  # skip identifier + validation
             if pos + 4 > len(data):
@@ -3298,7 +3411,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != 0xFFFFFFFE:
+            if ident2 != _DIRTY_IDENT:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3360,7 +3473,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != 0xFFFFFFFE:
+            if ident2 != _DIRTY_IDENT:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3374,6 +3487,11 @@ class PacketParser:
                 lv = struct.unpack_from('<I', data, pos)[0]
                 debug_info['u32'] = lv
                 if lv > 0:
+                    if lv != _KNOWN_BASE_LEVEL:
+                        logger.warning(
+                            f'[Parser] DirtyData RoleLevel: expected {_KNOWN_BASE_LEVEL}, '
+                            f'got {lv}. Possible offset error or game-cap change.'
+                        )
                     player.level = lv
                     changed = True
                     debug_info['role_level'] = lv
@@ -3386,7 +3504,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != 0xFFFFFFFE:
+            if ident2 != _DIRTY_IDENT:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3398,7 +3516,7 @@ class PacketParser:
                 if pos + 8 > len(data):
                     return
                 ident3 = struct.unpack_from('<I', data, pos)[0]
-                if ident3 != 0xFFFFFFFE:
+                if ident3 != _DIRTY_IDENT:
                     return
                 pos += 8
                 if pos + 4 > len(data):
@@ -3424,7 +3542,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != 0xFFFFFFFE:
+            if ident2 != _DIRTY_IDENT:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3436,7 +3554,7 @@ class PacketParser:
                 if pos + 8 > len(data):
                     return
                 ident3 = struct.unpack_from('<I', data, pos)[0]
-                if ident3 != 0xFFFFFFFE:
+                if ident3 != _DIRTY_IDENT:
                     return
                 pos += 8
                 if pos + 4 > len(data):
@@ -3468,7 +3586,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != 0xFFFFFFFE:
+            if ident2 != _DIRTY_IDENT:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3502,10 +3620,10 @@ class PacketParser:
         elif field_index == 102:  # 深眠心相仪等级 (Deep Sleep Resonance Level)
             debug_info['field_name'] = 'DEEP_SLEEP_LEVEL'
             debug_info['full_raw_hex'] = data[pos:].hex()[:256]
-            # Binary dirty format: 0xFFFFFFFE + validation + sub_field + nested data
+            # Binary dirty format: _DIRTY_IDENT + validation + sub_field + nested data
             if pos + 8 <= len(data):
                 ident2 = struct.unpack_from('<I', data, pos)[0]
-                if ident2 == 0xFFFFFFFE:
+                if ident2 == _DIRTY_IDENT:
                     pos += 8  # skip identifier + validation
                     if pos + 4 <= len(data):
                         sub_field = struct.unpack_from('<I', data, pos)[0]
@@ -3555,7 +3673,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != 0xFFFFFFFE:
+            if ident2 != _DIRTY_IDENT:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3735,6 +3853,7 @@ class PacketParser:
             return
         di = msg.DeltaInfo  # AoiSyncToMeDelta
         player = None
+        adopted_uid = False
 
         # UUID from AoiSyncToMeDelta.Uuid (field 5)
         uuid = di.Uuid
@@ -3744,6 +3863,7 @@ class PacketParser:
                 player = self._get_player(new_uid)
                 if self._current_uuid != uuid:
                     self._current_uuid = uuid
+                    adopted_uid = self._current_uid == 0 and new_uid > 0
                     self._current_uid = new_uid
                     logger.info(f'[Parser] confirmed self UUID={uuid}, UID={new_uid}')
                     if new_uid in self._players:
@@ -3756,6 +3876,7 @@ class PacketParser:
                 player = self._get_player(fallback_uid)
                 if self._current_uuid != base_uuid:
                     self._current_uuid = base_uuid
+                    adopted_uid = self._current_uid == 0 and fallback_uid > 0
                     self._current_uid = fallback_uid
                     logger.info(f'[Parser] confirmed self UUID={base_uuid} (from BaseDelta), UID={fallback_uid}')
                     if fallback_uid in self._players:
@@ -3774,6 +3895,17 @@ class PacketParser:
                 f'skill_cds={n_cds} fight_res_cds={n_fres} has_base={has_base} '
                 f'current_uid={self._current_uid}'
             )
+        if player is None and self._current_uid == 0 and (n_cds > 0 or n_fres > 0 or has_base):
+            self._remember_pending_self_notify(
+                NotifyMethod.SYNC_TO_ME_DELTA_INFO,
+                data,
+                'current_uid=0',
+            )
+            logger.info(
+                f'[Parser] SyncToMeDelta buffered until self uid is known '
+                f'skill_cds={n_cds} fight_res_cds={n_fres} has_base={has_base}'
+            )
+            return
 
         skill_cd_changed = False
         sync_skill_cds = []
@@ -3841,6 +3973,8 @@ class PacketParser:
             self._process_aoi_sync_delta(di.BaseDelta)
         if skill_cd_changed and player is not None and player.uid == self._current_uid:
             self._notify_self()
+        if adopted_uid:
+            self._replay_pending_self_notifies('SyncToMeDelta')
 
 
     #  SyncNearDeltaInfo (0x2D)
