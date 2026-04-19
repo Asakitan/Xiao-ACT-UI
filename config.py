@@ -48,6 +48,32 @@ def _is_main_app_host() -> bool:
     return True
 
 
+def _promote_update_exe_new_early() -> bool:
+    """Finalize update.exe.new at process bootstrap without touching old update.exe otherwise."""
+    try:
+        if not _is_main_app_host():
+            return False
+        staged = os.path.join(BASE_DIR, "update.exe.new")
+        if not os.path.isfile(staged):
+            return False
+        target = os.path.join(BASE_DIR, "update.exe")
+        if os.path.isfile(target) and _files_are_identical(target, staged):
+            try:
+                os.remove(staged)
+            except Exception:
+                pass
+            print("[config] dropped identical update.exe.new", flush=True)
+            return False
+        os.replace(staged, target)
+        print(f"[config] promoted update.exe.new -> {target}", flush=True)
+        return True
+    except PermissionError:
+        return False
+    except Exception as e:
+        print(f"[config] promote update.exe.new failed: {e}", flush=True)
+        return False
+
+
 def _promote_runtime_update_exe_early() -> bool:
     """v2.1.2-h: bootstrap 把 runtime/update.exe 提升到顶层.
 
@@ -88,6 +114,12 @@ def _promote_runtime_update_exe_early() -> bool:
             return False
     except Exception:
         return False
+
+
+try:
+    _promote_update_exe_new_early()
+except Exception:
+    pass
 
 
 try:
@@ -264,39 +296,31 @@ WEB_DIR = _runtime_first("web")
 TEMP_DIR = os.path.join(BASE_DIR, "temp")
 SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
-WINDOW_TITLE = "SAO Auto - Game HUD"
-WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.3-a"
-APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.3-a:
-#   1) 修复升级后启动时 update.exe 被回退/删除 — 顶层 update.exe 现在永远
-#      被视为权威 (full-package 解压结果), 嵌套 runtime/update.exe 仅作为
-#      残留清理掉, 不再做 size 比较 + replace 的危险操作 (config.py +
-#      sao_updater.py 两处 promote 同步修复);
-#   2) onedir 模式下 STA 识别失败导致 HP 面板被隐藏 — 根因是 PyInstaller
-#      bootloader 默认 DPI-unaware, 高 DPI 屏上 PrintWindow 抓帧与
-#      GetClientRect 坐标尺度不一致, STA 颜色匹配长期 0 信号 →
-#      stamina_offline=True → setSTAOffline(true) → _setHPGroupHidden(true)。
-#      修复: (a) 新增 XiaoACTUI.exe.manifest 显式声明 PerMonitorV2 +
-#      requireAdministrator; (b) main.py 模块级 _early_dpi_aware() 兜底;
-#      (c) sao_webview._should_show_sta_offline 加保护 — 当 vision
-#      capture failed 时不下发 OFFLINE 信号, 保留 HP 面板可见; (d)
-#      packet_parser 优先通过标准 proto 包名绑定本地 star_resonance_pb2,
-#      失败时才回退文件直载, 避免 onedir 下 self-state protobuf 失效且不破坏
-#      项目其他 proto 导入语义;
-#   3) 本版以 full-package + force_update + minimum_version=2.1.3-a 推送,
-#      所有现存 2.1.3 及以下安装强制升级。
-# v2.1.2-m: 修复 sao_alert 同条 alert 4s 内重复触发只续展不重弹;
-#           webview _maybe_show_update_popup 同步 sao_gui 的 downloading
-#           静音 + alert 可见时跳过非 error 提示;
-#           本版以 full-package + force_update + minimum_version=2.1.2-l
-#           推送, 强制清理积压问题。
-
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://47.82.157.220:9330"
 UPDATE_CHANNEL = "stable"
 UPDATE_TARGET = "windows-x64"
 
+WINDOW_TITLE = "SAO Auto - Game HUD"
+WINDOW_SIZE = "900x980"
+APP_VERSION = "2.1.4"
+APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.4:
+#   1) 启动时优先 finalize 顶层 update.exe.new → update.exe；若没有
+#      update.exe.new，则绝不碰现有 update.exe，避免再次出现 helper 被误删；
+#   2) WebView 模式把 PacketBridge 提前到 LinkStart / pywebview 初始化前启动，
+#      修复 onedir 启动较慢时错过 EnterGame / SyncContainerData 导致名字、UID、
+#      等级长期缺失的问题；
+#   3) STA 首启 warmup 期间抑制错误 OFFLINE，修复首轮空帧导致的误判；
+#   4) SkillFX Burst Ready 统一按 CSS 像素下发 viewport / slot rect，并把
+#      pywebview 窗口 move/resize 切换到逻辑像素，修复高 DPI 下的偏移；
+#   5) 本版以 full-package + force_update + minimum_version=2.1.4 推送，
+#      强制所有旧版本升级。
+# v2.1.2-m: 修复 sao_alert 同条 alert 4s 内重复触发只续展不重弹;
+#           webview _maybe_show_update_popup 同步 sao_gui 的 downloading
+#           静音 + alert 可见时跳过非 error 提示;
+#           本版以 full-package + force_update + minimum_version=2.1.2-l
+#           推送, 强制清理积压问题。
 # v2.1.2-h: main.py bootstrap 把 EXE-dir 加入 sys.path → 修复 onedir 下
 #           `from proto import star_resonance_pb2` ImportError (proto/ 被
 #           build_release.bat 提升出 runtime/, 旧 sys.path 找不到);
