@@ -986,6 +986,9 @@ class PacketBridge:
                 if not getattr(self, '_server_found_printed', False):
                     self._server_found_printed = True
                     print('[Bridge] 已识别游戏服务器', flush=True)
+                # 服务器已识别。即使还没有任何玩家数据包到达，也先把 packet_active
+                # 设为 True，避免 DPS / Boss HP 叠层因为远程/锁屏中过间断发玩家数据
+                # 而一直不弹出。
                 # 检查数据超时 — 仅更新 error_msg, 不覆写 recognition_ok
                 # (该字段由 vision 引擎维护)
                 with self._lock:
@@ -993,9 +996,13 @@ class PacketBridge:
                         idle = time.time() - self._last_update_t
                         if idle > 10:
                             self._state_mgr.update(
+                                packet_active=True,
                                 error_msg=f'数据超时 ({idle:.0f}s)')
+                        else:
+                            self._state_mgr.update(packet_active=True)
                     else:
                         self._state_mgr.update(
+                            packet_active=True,
                             error_msg='已连接服务器，等待角色数据...')
             else:
                 self._state_mgr.update(error_msg='搜索游戏服务器中...')

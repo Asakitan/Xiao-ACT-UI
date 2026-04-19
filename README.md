@@ -2,7 +2,12 @@
 
 `SAO Auto` 是一个面向《星痕共鸣》的外部 HUD / 自动化项目，当前版本同时维护 `entity` 与 `webview` 两套 UI 入口，并补齐了远程更新、独立 updater、模块化发布目录、脚本仓库与更新服务端的完整发布链路。
 
-当前版本：`2.1.2-b`
+当前版本：`2.1.2-c`
+
+## 2.1.2-c 概览
+
+- 修复 2.1.2-b 后 DPS 面板与 Boss HP 血条不弹出的问题：packet bridge 现在在识别到游戏服务器后立即将 `packet_active` 设为 True，不再等待首个玩家数据包
+- 保证 DPS / Boss HP 与 Boss Timer 推送在任何 packet 到达后立即生效，不再依赖玩家 player_update 活跃
 
 ## 2.1.2-b 概览
 
@@ -287,6 +292,11 @@ sao_auto/
 ```
 
 ## 更新记录
+
+### 2.1.2-c
+
+- packet bridge 在识别到游戏服务器后立即写 `packet_active=True`，不再等待首个玩家数据包到达
+- 修复 2.1.2-b 后 DPS 面板与 Boss HP 血条在某些场景下不弹出的回归
 
 ### 2.1.2-b
 
