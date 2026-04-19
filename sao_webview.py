@@ -2311,6 +2311,18 @@ class SAOWebViewGUI:
             return False
         # STA OFFLINE 仅由 vision 驱动。packet 活动不会抹除该状态，
         # 但也不会因为 vision recognition_ok 闪动到 False 而误报。
+        # v2.1.3 修复: 当 vision 抓帧失败时 (onedir 高 DPI 下 PrintWindow
+        # 偶发失败), recognition.py 不会更新 stamina_offline (保留旧值),
+        # 但同时会把 error_msg 设为 "vision capture failed"。这种情况下
+        # 我们不能信任 stamina_offline=True (它可能是上次成功识别留下的
+        # 陈旧值), 因此抑制 OFFLINE 信号, 保持 HP 面板可见 — 比起把整个
+        # HP/STA 面板隐藏掉, 显示一个 stale 的 STA 数值是更好的体验。
+        try:
+            err = str(getattr(gs, 'error_msg', '') or '')
+            if 'vision capture failed' in err:
+                return False
+        except Exception:
+            pass
         return bool(getattr(gs, 'stamina_offline', False))
 
     def _persist_cached_identity_state(self, save_now: bool = False):

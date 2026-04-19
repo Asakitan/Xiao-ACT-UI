@@ -65,42 +65,25 @@ def _promote_runtime_update_exe_early() -> bool:
         if not os.path.isfile(nested):
             return False
         target = os.path.join(BASE_DIR, "update.exe")
-        renamed_old: Optional[str] = None
+        # v2.1.3 修复: 当顶层 update.exe 已经存在时, 永远视其为权威 (full-package
+        # 解压出的最新版), 嵌套 runtime/update.exe 一定是上一次 runtime-delta 的
+        # 残留, 必须直接删掉, 绝不能拿 stale nested 覆盖 fresh top-level —
+        # 之前的 size 比较 + os.replace 路径在升级链 (h→i→…→n) 中导致用户
+        # 启动时看到 "update.exe 被删/回退" 的现象。
         if os.path.isfile(target):
             try:
-                if os.path.getsize(target) == os.path.getsize(nested):
-                    try:
-                        os.remove(nested)
-                    except Exception:
-                        pass
-                    return False
+                os.remove(nested)
+                print(f"[config] dropped stale runtime/update.exe (top-level present)", flush=True)
             except Exception:
                 pass
-            old = target + ".old"
-            try:
-                if os.path.exists(old):
-                    os.remove(old)
-            except Exception:
-                pass
-            try:
-                os.replace(target, old)
-                renamed_old = old
-            except Exception:
-                # 旧 update.exe 占用 → 不动它, 留待下次启动
-                return False
+            return False
+        # 顶层缺失 → 此时才把 nested 提升上来
         try:
             os.replace(nested, target)
             print(f"[config] promoted runtime/update.exe -> {target}", flush=True)
             return True
         except Exception as e:
-            # CRITICAL: move 失败时, 把 .old 还原回 target, 避免用户看到
-            # update.exe 凭空消失。然后保留 nested 留待下次重试。
-            print(f"[config] promote update.exe failed: {e}; rolling back", flush=True)
-            if renamed_old and os.path.exists(renamed_old) and not os.path.exists(target):
-                try:
-                    os.replace(renamed_old, target)
-                except Exception:
-                    pass
+            print(f"[config] promote update.exe failed: {e}", flush=True)
             return False
     except Exception:
         return False
@@ -288,13 +271,23 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.2-n"
+APP_VERSION = "2.1.3"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.2-n: 主进程退出前自己 rename 走 staging zip 里 ttf/otf/ttc/dll 对应的
-#           现有文件 (.old-<ts>), 让老 update.exe 看到 dst 不存在直接写,
-#           不再卡 SAOUI.ttf [WinError 5] 拒绝访问;
-#           启动时清理残留 _swap_update_*.cmd 与 *.old-<ts> 文件;
-#           本版以 full-package + force_update 推送 (顺带刷新 update.exe)。
+# v2.1.3:
+#   1) 修复升级后启动时 update.exe 被回退/删除 — 顶层 update.exe 现在永远
+#      被视为权威 (full-package 解压结果), 嵌套 runtime/update.exe 仅作为
+#      残留清理掉, 不再做 size 比较 + replace 的危险操作 (config.py +
+#      sao_updater.py 两处 promote 同步修复);
+#   2) onedir 模式下 STA 识别失败导致 HP 面板被隐藏 — 根因是 PyInstaller
+#      bootloader 默认 DPI-unaware, 高 DPI 屏上 PrintWindow 抓帧与
+#      GetClientRect 坐标尺度不一致, STA 颜色匹配长期 0 信号 →
+#      stamina_offline=True → setSTAOffline(true) → _setHPGroupHidden(true)。
+#      修复: (a) 新增 XiaoACTUI.exe.manifest 显式声明 PerMonitorV2 +
+#      requireAdministrator; (b) main.py 模块级 _early_dpi_aware() 兜底;
+#      (c) sao_webview._should_show_sta_offline 加保护 — 当 vision
+#      capture failed 时不下发 OFFLINE 信号, 保留 HP 面板可见;
+#   3) 本版以 full-package + force_update + minimum_version=2.1.3 推送,
+#      所有现存 2.1.2-x 安装强制升级。
 # v2.1.2-m: 修复 sao_alert 同条 alert 4s 内重复触发只续展不重弹;
 #           webview _maybe_show_update_popup 同步 sao_gui 的 downloading
 #           静音 + alert 可见时跳过非 error 提示;

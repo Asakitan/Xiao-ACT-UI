@@ -23,6 +23,43 @@ import time
 import json
 import argparse
 
+
+# v2.1.3: 必须在任何 win32 / GUI 窗口创建之前设置 DPI 感知。
+# - 开发模式下 python.exe 自带 PerMonitorV2 manifest, 无须显式设置;
+# - PyInstaller bootloader (runw.exe) 默认 DPI-unaware → 高 DPI 屏上
+#   GetClientRect 返回逻辑像素 (e.g. 1280x720) 而 PrintWindow 抓到的是
+#   原生像素 (e.g. 1920x1080) → STA 条裁剪坐标错位 → 颜色匹配 0 信号
+#   → stamina_offline=True → HP 面板被 setSTAOffline(true) 隐藏。
+# 这里在 main.py 模块级 (sys.path bootstrap 之前) 立即调用,
+# 同时 EXE manifest 也声明 PerMonitorV2 作为最早保险。
+def _early_dpi_aware():
+    try:
+        import ctypes
+        # SetProcessDpiAwarenessContext (Win 10 1703+) 最优, PerMonitorV2
+        try:
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
+            user32 = ctypes.windll.user32
+            user32.SetProcessDpiAwarenessContext.restype = ctypes.c_bool
+            user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+            if user32.SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
+                return
+        except Exception:
+            pass
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+            return
+        except Exception:
+            pass
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+_early_dpi_aware()
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
