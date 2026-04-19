@@ -45,19 +45,28 @@ def _load_skill_names() -> dict:
     global _SKILL_NAMES
     if _SKILL_NAMES:
         return _SKILL_NAMES
+    candidates: list[str] = []
     try:
         if getattr(sys, 'frozen', False):
-            base = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
-        else:
-            base = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.join(base, 'assets', 'skill_names.json')
-        if not os.path.exists(path):
-            logger.warning(f'[Bridge] skill_names.json not found at {path}')
+            # onedir 模块化布局 (build_release.bat) 把 assets/ 提升到 EXE
+            # 所在顶层目录, runtime/ 里已不再有 assets/. 因此先查 EXE dir,
+            # 再退回 _MEIPASS, 最后退回源码目录.
+            exe_dir = os.path.dirname(sys.executable)
+            candidates.append(os.path.join(exe_dir, 'assets', 'skill_names.json'))
+            mei = getattr(sys, '_MEIPASS', '')
+            if mei:
+                candidates.append(os.path.join(mei, 'assets', 'skill_names.json'))
+                candidates.append(os.path.join(os.path.dirname(mei), 'assets', 'skill_names.json'))
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       'assets', 'skill_names.json'))
+        path = next((p for p in candidates if os.path.exists(p)), '')
+        if not path:
+            logger.warning(f'[Bridge] skill_names.json not found, tried: {candidates}')
             return {}
         with open(path, 'r', encoding='utf-8') as f:
             raw = json.load(f)
         _SKILL_NAMES = {int(k): str(v) for k, v in raw.items() if str(k).isdigit()}
-        logger.info(f'[Bridge] loaded {len(_SKILL_NAMES)} skill names')
+        logger.info(f'[Bridge] loaded {len(_SKILL_NAMES)} skill names from {path}')
         return _SKILL_NAMES
     except Exception as e:
         logger.warning(f'[Bridge] failed to load skill names: {e}')
@@ -875,11 +884,21 @@ class PacketBridge:
     def _run_inner(self):
         """主运行流程 (实际逻辑)"""
         logger.info('[Bridge] 启动网络抓包数据桥...')
+        # v2.1.2-f: 把启动诊断信息打到 stdout, 方便用户排查 onedir 模块化打包
+        # 引发的"DPS/BossHP/BurstReady 不弹出"问题.
+        try:
+            print(f'[Bridge] start: frozen={getattr(sys, "frozen", False)} '
+                  f'exe_dir={os.path.dirname(sys.executable)} '
+                  f'meipass={getattr(sys, "_MEIPASS", "")} '
+                  f'cwd={os.getcwd()}', flush=True)
+        except Exception:
+            pass
 
         # ── Npcap 自动安装 ──
         try:
             from install_npcap import ensure_npcap, is_npcap_installed
             if not is_npcap_installed():
+                print('[Bridge] Npcap 未安装, 触发自动安装...', flush=True)
                 self._state_mgr.update(packet_active=False,
                                        error_msg='正在自动安装 Npcap...')
                 ok, msg = ensure_npcap(silent=True)

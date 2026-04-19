@@ -2118,18 +2118,29 @@ class SAOPlayerGUI:
                 pass
 
     def _recognition_loop(self):
-        """后台识别循环 — 读取 GameStateManager 并更新 HP 条 + 体力覆盖板 + DPS + Boss."""
+        """后台识别循环 — 读取 GameStateManager 并更新 HP 条 + 体力覆盖板 + DPS + Boss.
+
+        注意: v2.1.2-f 起完全去除外层 `_recognition_active` 闸门 —
+        即使 vision/packet 引擎初始化中途失败 (engines 列表为空导致
+        `_recognition_active=False`), 只要 GameStateManager 还在运行,
+        就应继续刷新 overlay。子模块 (DPS/Boss HP/BurstReady/HP overlay)
+        各自做空数据检查, 不会因为闸门翻成 False 而集体卡死。
+        """
         if self._destroyed:
             return
-        if self._recognition_active and self._state_mgr:
+        if self._state_mgr is not None:
             try:
                 gs = self._state_mgr.state
                 # DPS / Boss HP 推送独立于 recognition gate, 完全由抓包驱动 ——
                 # 只要 packet bridge 收到伤害事件就能弹出
                 try:
                     self._push_packet_overlays(gs)
-                except Exception:
-                    pass
+                except Exception as _e_pp:
+                    if not getattr(self, '_pp_err_logged', False):
+                        self._pp_err_logged = True
+                        print(f'[SAO Entity] _push_packet_overlays error: {_e_pp}')
+                        import traceback as _tb
+                        _tb.print_exc()
                 # ── 与 webview 对齐: HP/STA、SkillFX、commander、identity 持久化等
                 # 均依靠各子模块自带的字段空检查来决定是否更新, 不再被 recognition_ok
                 # / packet_active 总闸门拦下, 否则任意一路 vision/packet 闪断都会

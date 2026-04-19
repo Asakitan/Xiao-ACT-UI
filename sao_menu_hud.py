@@ -22,7 +22,13 @@ _BASE = (
     if getattr(sys, 'frozen', False)
     else os.path.dirname(os.path.abspath(__file__))
 )
-_FONTS_DIR = os.path.join(_BASE, 'assets', 'fonts')
+# v2.1.2-f: 优先使用 config 的 lifted-out 路径解析器, 兼容
+# build_release.bat 把 assets/ 提升到 EXE 顶层的模块化布局.
+try:
+    from config import FONTS_DIR as _CFG_FONTS_DIR
+    _FONTS_DIR = _CFG_FONTS_DIR
+except Exception:
+    _FONTS_DIR = os.path.join(_BASE, 'assets', 'fonts')
 _FONT_SAO = os.path.join(_FONTS_DIR, 'SAOUI.ttf')
 _FONT_CJK = os.path.join(_FONTS_DIR, 'ZhuZiAYuanJWD.ttf')
 
