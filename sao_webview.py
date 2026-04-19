@@ -2720,19 +2720,16 @@ class SAOWebViewGUI:
         skillfx_url = _web_file_uri('skillfx.html')
         alert_url = _web_file_uri('alert.html')
 
-        # HP 固定位置: 左下角覆盖 等级/UID 区域
-        try:
-            _sw = ctypes.windll.user32.GetSystemMetrics(0)
-            _sh = ctypes.windll.user32.GetSystemMetrics(1)
-        except Exception:
-            _sw, _sh = 1920, 1080
-
-        try:
-            _dpi = ctypes.windll.user32.GetDpiForSystem()
-        except Exception:
-            _dpi = 96
-        _dpi_scale = max(1.0, _dpi / 96.0)
-        self._dpi_scale = _dpi_scale
+        # HP 固定位置: 跟随游戏窗口所在显示器, 避免 webview 在高 DPI /
+        # 多显示器环境下按系统 DPI 定位而产生几何漂移。
+        game_hwnd, game_rect = self._get_game_window_context()
+        monitor_left, monitor_top, monitor_right, monitor_bottom = self._get_monitor_rect_for_target(
+            hwnd=game_hwnd, rect=game_rect
+        )
+        self._hud_monitor_rect = (monitor_left, monitor_top, monitor_right, monitor_bottom)
+        _sw = max(1, monitor_right - monitor_left)
+        _sh = max(1, monitor_bottom - monitor_top)
+        _dpi_scale = self._refresh_webview_dpi_scale(hwnd=game_hwnd, rect=game_rect)
 
         # 统一 HUD 窗口: 覆盖左下角 + 中底 HP + STA
         hud_w = int(_sw * 0.75)
@@ -2742,16 +2739,16 @@ class SAOWebViewGUI:
         self._hp_clip_top = max(200, int(500 - 120 * _dpi_scale))
 
         # 目标位置
-        tx0, ty0 = self._calc_hud_target(_sw, _sh)
+        tx0, ty0 = self._calc_hud_target(_sw, _sh, left=monitor_left, top=monitor_top)
         self._hp_target_x = tx0
         self._hp_target_y = ty0
 
         # HP 悬浮窗 — 初始放在动画起点, 避免 show() 时先闪到错误位置
         if self._hp_fullscreen:
-            cx, cy = 0, 0
+            cx, cy = monitor_left, monitor_top
         else:
-            cx = max(0, int((_sw - hud_w) / 2))
-            cy = max(0, int((_sh - 500) / 2))
+            cx = int(monitor_left + max(0, (_sw - hud_w) / 2))
+            cy = int(monitor_top + max(0, (_sh - 500) / 2))
 
         hp_w = _sw if self._hp_fullscreen else hud_w
         hp_h = _sh if self._hp_fullscreen else 500
@@ -2780,8 +2777,8 @@ class SAOWebViewGUI:
             'SAO SkillFX', skillfx_url,
             width=self._to_webview_px(max(320, int(_sw * 0.42))),
             height=self._to_webview_px(max(140, int(_sh * 0.20))),
-            x=self._to_webview_px(max(0, int(_sw * 0.29))),
-            y=self._to_webview_px(max(0, int(_sh * 0.74))),
+            x=self._to_webview_px(monitor_left + max(0, int(_sw * 0.29))),
+            y=self._to_webview_px(monitor_top + max(0, int(_sh * 0.74))),
             frameless=True,
             easy_drag=False,
             transparent=True,
@@ -2904,8 +2901,143 @@ class SAOWebViewGUI:
             self._do_hot_switch(self._pending_switch)
 
     # ─── HUD 位置自动检测 ───
-    def _calc_hud_target(self, sw: int = 0, sh: int = 0) -> tuple:
-        """计算 HUD 目标位置 (x, y) — 与 Entity 模式对齐: x=4%屏宽, y=屏幕底部。"""
+    def _get_game_window_context(self):
+        rect = None
+        try:
+            gs = self._state_mgr.state if getattr(self, '_state_mgr', None) is not None else None
+            window_rect = getattr(gs, 'window_rect', None) if gs else None
+            if isinstance(window_rect, (list, tuple)) and len(window_rect) == 4:
+                rect = tuple(int(v) for v in window_rect)
+        except Exception:
+            rect = None
+
+        try:
+            from window_locator import WindowLocator
+            locator = getattr(self, '_locator', None)
+            if locator is None:
+                locator = WindowLocator()
+                self._locator = locator
+            result = locator.find_game_window()
+            if result:
+                hwnd, _title, found_rect = result
+                return int(hwnd or 0), tuple(int(v) for v in found_rect)
+        except Exception:
+            pass
+
+        return 0, rect
+
+    def _get_monitor_handle_for_target(self, hwnd: int = 0, rect=None):
+        try:
+            user32 = ctypes.windll.user32
+            monitor_default_to_nearest = 2
+            if hwnd:
+                monitor = user32.MonitorFromWindow(hwnd, monitor_default_to_nearest)
+                if monitor:
+                    return monitor
+            if isinstance(rect, (list, tuple)) and len(rect) == 4:
+                class POINT(ctypes.Structure):
+                    _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
+
+                center = POINT(
+                    int((int(rect[0]) + int(rect[2])) / 2),
+                    int((int(rect[1]) + int(rect[3])) / 2),
+                )
+                monitor = user32.MonitorFromPoint(center, monitor_default_to_nearest)
+                if monitor:
+                    return monitor
+        except Exception:
+            pass
+        return 0
+
+    def _get_monitor_rect_for_target(self, hwnd: int = 0, rect=None):
+        try:
+            user32 = ctypes.windll.user32
+            monitor = self._get_monitor_handle_for_target(hwnd=hwnd, rect=rect)
+            if monitor:
+                class _RECT(ctypes.Structure):
+                    _fields_ = [
+                        ('left', ctypes.c_long),
+                        ('top', ctypes.c_long),
+                        ('right', ctypes.c_long),
+                        ('bottom', ctypes.c_long),
+                    ]
+
+                class _MONITORINFO(ctypes.Structure):
+                    _fields_ = [
+                        ('cbSize', ctypes.c_uint32),
+                        ('rcMonitor', _RECT),
+                        ('rcWork', _RECT),
+                        ('dwFlags', ctypes.c_uint32),
+                    ]
+
+                info = _MONITORINFO()
+                info.cbSize = ctypes.sizeof(_MONITORINFO)
+                if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                    return (
+                        int(info.rcMonitor.left),
+                        int(info.rcMonitor.top),
+                        int(info.rcMonitor.right),
+                        int(info.rcMonitor.bottom),
+                    )
+        except Exception:
+            pass
+
+        try:
+            sw = ctypes.windll.user32.GetSystemMetrics(0)
+            sh = ctypes.windll.user32.GetSystemMetrics(1)
+        except Exception:
+            sw, sh = 1920, 1080
+        return (0, 0, int(sw), int(sh))
+
+    def _get_monitor_dpi_for_target(self, hwnd: int = 0, rect=None) -> int:
+        user32 = ctypes.windll.user32
+        try:
+            dpi = int(user32.GetDpiForWindow(hwnd)) if hwnd else 0
+            if dpi > 0:
+                return dpi
+        except Exception:
+            pass
+
+        try:
+            shcore = ctypes.windll.shcore
+            monitor = self._get_monitor_handle_for_target(hwnd=hwnd, rect=rect)
+            if monitor:
+                xdpi = ctypes.c_uint()
+                ydpi = ctypes.c_uint()
+                if shcore.GetDpiForMonitor(monitor, 0, ctypes.byref(xdpi), ctypes.byref(ydpi)) == 0:
+                    dpi = int(xdpi.value or 0)
+                    if dpi > 0:
+                        return dpi
+        except Exception:
+            pass
+
+        try:
+            dpi = int(user32.GetDpiForSystem() or 0)
+            if dpi > 0:
+                return dpi
+        except Exception:
+            pass
+        return 96
+
+    def _refresh_webview_dpi_scale(self, hwnd: int = 0, rect=None) -> float:
+        dpi = max(96, int(self._get_monitor_dpi_for_target(hwnd=hwnd, rect=rect) or 96))
+        scale = max(1.0, dpi / 96.0)
+        self._dpi_scale = scale
+        self._hp_clip_top = max(200, int(500 - 120 * scale))
+        return scale
+
+    def _calc_hud_target(self, sw: int = 0, sh: int = 0, left: Optional[int] = None, top: Optional[int] = None) -> tuple:
+        """计算 HUD 目标位置 (x, y) — 与 Entity 模式对齐: x=4%屏宽, y=目标显示器底部。"""
+        monitor_rect = getattr(self, '_hud_monitor_rect', None)
+        if (left is None or top is None) and isinstance(monitor_rect, (list, tuple)) and len(monitor_rect) == 4:
+            if left is None:
+                left = int(monitor_rect[0])
+            if top is None:
+                top = int(monitor_rect[1])
+            if not sw:
+                sw = int(monitor_rect[2]) - int(monitor_rect[0])
+            if not sh:
+                sh = int(monitor_rect[3]) - int(monitor_rect[1])
         if not sw:
             try:
                 sw = ctypes.windll.user32.GetSystemMetrics(0)
@@ -2916,11 +3048,15 @@ class SAOWebViewGUI:
                 sh = ctypes.windll.user32.GetSystemMetrics(1)
             except Exception:
                 sh = 1080
+        if left is None:
+            left = 0
+        if top is None:
+            top = 0
         # 可用户自定义偏移
         offset_pct = 0.04
         if self._cfg_settings_ref:
             offset_pct = self._cfg_settings_ref.get('hud_offset_x', 0.04)
-        return int(sw * offset_pct), sh - 500
+        return int(left + sw * offset_pct), int(top + sh - 500)
 
     # ─── LinkStart (tkinter) ───
     def _run_tkinter_link_start(self):
@@ -3214,6 +3350,7 @@ class SAOWebViewGUI:
                 threading.Timer(0.15, self._setup_click_through).start()
                 return
             self._hp_hwnd = hwnd
+            self._refresh_webview_dpi_scale(hwnd=hwnd)
             # Measure actual physical window dimensions early so fallback
             # regions are accurate on high-DPI displays.
             try:
@@ -3577,8 +3714,15 @@ class SAOWebViewGUI:
             return
         try:
             user32 = ctypes.windll.user32
-            sw = user32.GetSystemMetrics(0)
-            sh = user32.GetSystemMetrics(1)
+            game_hwnd, game_rect = self._get_game_window_context()
+            target_hwnd = self._hp_hwnd or game_hwnd
+            monitor_left, monitor_top, monitor_right, monitor_bottom = self._get_monitor_rect_for_target(
+                hwnd=target_hwnd, rect=game_rect
+            )
+            self._hud_monitor_rect = (monitor_left, monitor_top, monitor_right, monitor_bottom)
+            self._refresh_webview_dpi_scale(hwnd=target_hwnd, rect=game_rect)
+            sw = max(1, monitor_right - monitor_left)
+            sh = max(1, monitor_bottom - monitor_top)
 
             class RECT(ctypes.Structure):
                 _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
@@ -3597,15 +3741,15 @@ class SAOWebViewGUI:
                 # Overscan the fullscreen HUD window slightly so the visible
                 # display area truly reaches the monitor edge.
                 overscan = max(12, int(sh * 0.012))
-                target_x = 0
-                target_y = -overscan
+                target_x = monitor_left
+                target_y = monitor_top - overscan
                 win_w = sw
                 win_h = sh + overscan
                 self._hp_viewport_offset_x = 0
                 self._hp_viewport_offset_y = overscan
             else:
-                target_x, _ = self._calc_hud_target(sw, sh)
-                target_y = sh - win_h
+                target_x, _ = self._calc_hud_target(sw, sh, left=monitor_left, top=monitor_top)
+                target_y = monitor_top + sh - win_h
                 self._hp_viewport_offset_x = 0
                 self._hp_viewport_offset_y = 0
 
