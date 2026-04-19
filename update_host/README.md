@@ -96,6 +96,9 @@ update_host/
 - `GET /api/health` — 健康检查
 - `GET /api/update/latest?channel=stable&target=windows-x64&current=2.1.0` — 拉取 manifest
 - `GET /api/update/summary` — 列出所有 channel/target
+- `GET /api/update/anchor?channel=stable&target=windows-x64` — 读取当前服务端锚点
+- `POST /api/update/anchor` — 手动同步锚点到服务端 (需要 `X-API-Key`)
+- `POST /api/update/publish` — 上传更新包并自动把服务端锚点推进到本次发布 commit
 - `GET /downloads/<channel>/<target>/<file>` — 下载更新包
 
 ## Manifest schema
@@ -113,6 +116,8 @@ update_host/
 | size              | int     | 字节数                                              |
 | notes             | string  | 发布说明                                            |
 | published_at      | string  | ISO8601                                             |
+
+发布工具还会额外写入 `commit` / `commit_short` 与 `anchor_commit*` 字段，便于追踪本次 delta 是从哪个 git 锚点生成的；客户端更新逻辑仍然只依赖标准 manifest 字段。
 
 ## 安全
 
