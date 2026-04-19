@@ -674,6 +674,14 @@ class TcpReassembler:
                     return  # 不像有效游戏帧开头
                 self._next_seq = seq
 
+            # ── 丢弃已消费的 TCP 重传段 ──
+            # TCP seq 是 32-bit 循环空间; 当 seq 在 _next_seq "之前" 时
+            # (考虑 wraparound), 该段已被消费, 不需要再缓存.
+            diff = (seq - self._next_seq) & 0xFFFFFFFF
+            if diff > 0x80000000:
+                # seq 在 _next_seq 之前 (wraparound-safe 判断)
+                return
+
             # 缓存
             self._cache[seq] = data
 

@@ -4985,9 +4985,7 @@ class SAOWebViewGUI:
             self._ensure_alert_on_top()
 
         _push()
-        threading.Timer(0.12, _push).start()
-        threading.Timer(0.32, _push).start()
-        threading.Timer(0.72, _push).start()
+        threading.Timer(0.35, _push).start()
         threading.Timer(stay_ms / 1000.0, lambda: self._hide_identity_alert_window(expected_nonce=nonce)).start()
 
     def _hide_identity_alert_window(self, expected_nonce: int = None):

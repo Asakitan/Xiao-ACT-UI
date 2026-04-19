@@ -343,8 +343,14 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.9"
+APP_VERSION = "2.1.10"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.10:
+#   1) TCP 重组层修复重传段缓存泄漏：seq 已消费的段不再入 cache，
+#      杜绝 "TCP cache overflow (301), reset" 导致关键同步包丢失；
+#   2) Alert 弹框从 4× _push (即时+0.12s+0.32s+0.72s) 缩减为 2×
+#      (即时+0.35s)，修复弹框重复显示三次的视觉问题；
+#   3) 本版以 full-package + force_update + minimum_version=2.1.10 推送。
 # v2.1.9:
 #   1) parser 在 self UID 未确认前缓存并回放早到的 0x16 / 0x2E 自身同步包，
 #      修复 EnterGame 较晚时角色名 / 基础等级 / 赛季等级 / 技能 CD 与 slot
