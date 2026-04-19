@@ -3353,10 +3353,12 @@ class SAOPlayerGUI:
                                              anchor='w', justify=tk.LEFT,
                                              font=get_cjk_font(10, True))
         self._update_headline_lbl.pack(fill=tk.X, pady=(8, 2))
+        # meta_text 包含中文 (例如 “正在拉取 ...”), 必须用 CJK 字体,
+        # 否则 SAO UI 字体没有对应字形, 整行会显示成方框 tofu。
         self._update_meta_lbl = tk.Label(body_pad, text='',
                                          bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG,
                                          anchor='w', justify=tk.LEFT,
-                                         font=get_sao_font(7))
+                                         font=get_cjk_font(8))
         self._update_meta_lbl.pack(fill=tk.X)
         self._update_notes_lbl = tk.Label(body_pad, text='',
                                           bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG,
