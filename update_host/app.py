@@ -192,15 +192,41 @@ def _load_manifest(channel: str, target: str) -> Optional[dict]:
         return None
 
 
+def _empty_manifest_response(channel: str, target: str, current: Optional[str] = None) -> dict:
+    safe_channel, safe_target = _safe_channel_target(channel, target)
+    return {
+        "available": False,
+        "detail": "manifest not found",
+        "version": (current or "").strip(),
+        "minimum_version": "",
+        "force_update": False,
+        "package_type": "",
+        "target": safe_target,
+        "channel": safe_channel,
+        "download_url": "",
+        "sha256": "",
+        "size": 0,
+        "notes": "",
+        "published_at": "",
+    }
+
+
 app = FastAPI(title="SAO Auto Update Host", version="1.0.0")
 
-if os.path.isdir(DOWNLOADS_DIR):
-    app.mount("/downloads", StaticFiles(directory=DOWNLOADS_DIR), name="downloads")
+# 始终挂载 /downloads。否则如果服务启动时 releases 目录还不存在,
+# /api/update/latest 之后即使能读到后续写入的 manifest, /downloads/*
+# 仍然因为路由未挂载而持续返回 404, 表现为“能检测到更新但点击下载失败”。
+app.mount("/downloads", StaticFiles(directory=DOWNLOADS_DIR, check_dir=False), name="downloads")
 
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "release_dir": DEFAULT_RELEASE_DIR}
+    return {
+        "ok": True,
+        "release_dir": DEFAULT_RELEASE_DIR,
+        "downloads_dir": DOWNLOADS_DIR,
+        "downloads_dir_exists": os.path.isdir(DOWNLOADS_DIR),
+    }
 
 
 @app.get("/api/update/latest")
@@ -212,9 +238,10 @@ def latest(
 ):
     manifest = _load_manifest(channel, target)
     if not manifest:
-        raise HTTPException(status_code=404, detail="manifest not found")
+        return JSONResponse(_empty_manifest_response(channel, target, current))
     base_url = str(request.base_url).rstrip("/")
     manifest = dict(manifest)
+    manifest.setdefault("available", True)
     manifest["download_url"] = _normalize_url(manifest.get("download_url", ""), base_url)
     return JSONResponse(manifest)
 
