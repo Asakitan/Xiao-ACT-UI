@@ -208,6 +208,62 @@ def _ensure_dirs():
             pass
 
 
+def promote_runtime_update_exe() -> bool:
+    """把 runtime/update.exe 提升到 BASE_DIR/update.exe (bootstrap 用).
+
+    旧版 update.exe (<=2.1.2-f) 不允许 runtime-delta 顶层带 update.exe,
+    所以新 update.exe 通过嵌套路径 runtime/update.exe 投递。
+    主程序启动时调用本函数完成一次性提升:
+      - 若 runtime/update.exe 不存在: no-op
+      - 若 BASE_DIR/update.exe 不存在: 直接 move
+      - 否则: 先把旧文件改名为 update.exe.old, 再 move 新文件
+    所有失败均静默返回 False, 不影响主程序启动。
+    """
+    try:
+        nested = os.path.join(RUNTIME_DIR, "update.exe")
+        if not os.path.isfile(nested):
+            return False
+        target = os.path.join(BASE_DIR, "update.exe")
+        # 大小一致时认为已经提升过, 清理嵌套副本
+        if os.path.isfile(target):
+            try:
+                if os.path.getsize(target) == os.path.getsize(nested):
+                    try:
+                        os.remove(nested)
+                    except Exception:
+                        pass
+                    return False
+            except Exception:
+                pass
+            old = target + ".old"
+            try:
+                if os.path.exists(old):
+                    os.remove(old)
+            except Exception:
+                pass
+            try:
+                os.replace(target, old)
+            except Exception:
+                # 主进程或其他 update.exe 占用 → 留待下次启动
+                return False
+        try:
+            os.replace(nested, target)
+            print(f"[updater] promoted runtime/update.exe -> {target}")
+            return True
+        except Exception as e:
+            print(f"[updater] promote failed: {e}")
+            return False
+    except Exception:
+        return False
+
+
+# Bootstrap: 启动时立即尝试提升嵌套 update.exe
+try:
+    promote_runtime_update_exe()
+except Exception:
+    pass
+
+
 def _http_get_json(url: str, timeout: float = HTTP_TIMEOUT) -> Tuple[int, Optional[Dict[str, Any]], str]:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     try:
