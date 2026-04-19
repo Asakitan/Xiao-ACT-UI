@@ -13,7 +13,7 @@ PacketBridge 与 RecognitionEngine 接口一致，可直接替换。
     bridge = PacketBridge(mgr)
     bridge.start()   # 后台抓包 + 解析 + 推送
     bridge.stop()
-    
+
 """
 
 import threading
@@ -866,7 +866,7 @@ class PacketBridge:
             print(tb, flush=True)
             try:
                 self._state_mgr.update(
-                    recognition_ok=False,
+                    packet_active=False,
                     error_msg=f'数据桥崩溃: {e}',
                 )
             except Exception:
@@ -880,7 +880,7 @@ class PacketBridge:
         try:
             from install_npcap import ensure_npcap, is_npcap_installed
             if not is_npcap_installed():
-                self._state_mgr.update(recognition_ok=False,
+                self._state_mgr.update(packet_active=False,
                                        error_msg='正在自动安装 Npcap...')
                 ok, msg = ensure_npcap(silent=True)
                 if not ok:
@@ -1163,7 +1163,7 @@ class PacketBridge:
 
     def _publish_player_update(self, player: PlayerData, from_tick: bool = False):
         updates = {
-            'recognition_ok': True,
+            'packet_active': True,
             'error_msg': '',
         }
 
@@ -1363,7 +1363,7 @@ class PacketBridge:
 
     def _error(self, msg: str):
         logger.error(f'[Bridge] {msg}')
-        self._state_mgr.update(recognition_ok=False, error_msg=msg)
+        self._state_mgr.update(packet_active=False, error_msg=msg)
 
     def _stabilize_packet_stamina(self, current: int, stamina_max: int, energy_priority: int) -> int:
         """Hold packet-only STA spikes until they repeat, instead of showing instant jumps."""

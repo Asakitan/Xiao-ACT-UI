@@ -150,6 +150,7 @@ class GameState:
     # ── 采集元信息 ──
     capture_timestamp: float = 0.0
     recognition_ok: bool = False
+    packet_active: bool = False
     error_msg: str = ''
     identity_alert_serial: int = 0
     identity_alert_title: str = ''
@@ -191,6 +192,7 @@ class GameState:
             'hp_text': self.hp_text,
             'stamina_text': self.stamina_text,
             'recognition_ok': self.recognition_ok,
+            'packet_active': self.packet_active,
             'capture_ts': self.capture_timestamp,
             'boss_raid_active': self.boss_raid_active,
             'boss_raid_phase': self.boss_raid_phase,

@@ -669,7 +669,7 @@ class AutoKeyEngine:
         if _coerce_bool(engine_cfg.get("pause_on_death"), True) and self._is_dead(gs):
             self._set_status(last_reason="dead")
             return
-        if not bool(getattr(gs, "recognition_ok", False)):
+        if not (bool(getattr(gs, "recognition_ok", False)) or bool(getattr(gs, "packet_active", False))):
             self._set_status(last_reason="recognition-off")
             return
         if _coerce_bool(engine_cfg.get("require_foreground"), True) and not self._is_game_foreground():
