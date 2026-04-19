@@ -218,8 +218,19 @@ def promote_runtime_update_exe() -> bool:
       - 若 BASE_DIR/update.exe 不存在: 直接 move
       - 否则: 先把旧文件改名为 update.exe.old, 再 move 新文件
     所有失败均静默返回 False, 不影响主程序启动。
+
+    v2.1.2-k: 仅在主程序 (XiaoACTUI) 进程里运行 — update.exe 自己 import
+    sao_updater 时不能 promote 自己, 否则正在运行的 update.exe 会被
+    rename 到 .old, 用户看到 update.exe 启动后消失。
     """
     try:
+        if getattr(sys, "frozen", False):
+            try:
+                _exe_name = os.path.basename(sys.executable or "").lower()
+                if "update" in _exe_name:
+                    return False
+            except Exception:
+                return False
         nested = os.path.join(RUNTIME_DIR, "update.exe")
         if not os.path.isfile(nested):
             return False
