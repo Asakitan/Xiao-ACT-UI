@@ -110,7 +110,7 @@ _bootstrap_runtime_overrides()
 def _set_dpi_aware():
     try:
         import ctypes
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
     except Exception:
         try:
             import ctypes

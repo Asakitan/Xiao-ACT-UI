@@ -752,6 +752,20 @@ class RecognitionEngine:
         self._last_good_frame_time = 0.0
 
     def _run(self):
+        # Force PerMonitorV2 DPI awareness on this thread so that
+        # GetClientRect returns physical pixels matching PrintWindow,
+        # regardless of process-level DPI state (manifest, pywebview,
+        # or _early_dpi_aware race).
+        try:
+            _PMV2 = ctypes.c_void_p(-4)
+            _u32 = ctypes.windll.user32
+            _u32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+            _u32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+            prev = _u32.SetThreadDpiAwarenessContext(_PMV2)
+            if prev:
+                print('[Vision] thread DPI context set to PerMonitorV2', flush=True)
+        except Exception as e:
+            print(f'[Vision] SetThreadDpiAwarenessContext failed: {e}', flush=True)
         while self._running:
             start = time.time()
             try:
