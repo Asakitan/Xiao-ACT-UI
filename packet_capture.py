@@ -259,6 +259,9 @@ class TcpReassembler:
     SERVER_IDLE_RESET_SEC = 6.0
     # 回退识别: 某个新地址连续发出多少个疑似游戏帧才视为新场景服务器.
     CANDIDATE_FRAME_THRESHOLD = 3
+    # 在识别出服务器之前, 先缓冲少量候选下行帧, 识别成功后回放,
+    # 避免丢掉最早的 0x15/0x16 身份同步包.
+    CANDIDATE_PACKET_BUFFER_LIMIT = 8
 
     def __init__(self, on_game_packet: Callable[[bytes], None],
                  on_server_change: Optional[Callable[[], None]] = None):
@@ -278,6 +281,7 @@ class TcpReassembler:
         # 候选地址 addr → (first_seen_ts, game_frame_count). 当前服务器静默
         # 期间若某地址持续发出疑似游戏帧, 则可以回退识别为新场景服务器.
         self._candidate_addrs: Dict[str, Tuple[float, int]] = {}
+        self._candidate_packets: Dict[str, List[Tuple[float, int, bytes]]] = {}
 
         # IP 分片
         self.stats = {
@@ -305,6 +309,7 @@ class TcpReassembler:
             self._last_t = 0
             self._last_server_pkt_t = 0.0
             self._candidate_addrs.clear()
+            self._candidate_packets.clear()
 
     # ─── 主入口 ───
     def feed_raw_frame(self, raw: bytes):
@@ -339,6 +344,9 @@ class TcpReassembler:
             return
         now = time.time()
 
+        if packet_from_server and server_addr != self._server_addr:
+            self._remember_candidate_packet(server_addr, seq, payload, now)
+
         # ─── 服务器识别 ───
         if self._server_addr is None:
             if self._try_identify(payload, server_addr):
@@ -347,7 +355,8 @@ class TcpReassembler:
                 self._candidate_addrs.clear()
                 # 仅服务器→客户端的下行流参与 TCP 重组.
                 if packet_from_server:
-                    self._feed_tcp(seq, payload)
+                    if self._replay_candidate_packets(server_addr) == 0:
+                        self._feed_tcp(seq, payload)
                 return
             # c3SB 未命中: 记作候选. 若同一地址持续发出游戏帧, 则回退识别.
             self._track_candidate(server_addr, payload, now)
@@ -541,10 +550,46 @@ class TcpReassembler:
         self._candidate_addrs[addr] = (first_ts, count + 1)
         # 防止无限增长: 清理 60 秒前的旧候选.
         if len(self._candidate_addrs) > 32:
-            self._candidate_addrs = {
+            kept = {
                 a: v for a, v in self._candidate_addrs.items()
                 if now - v[0] < 60.0
             }
+            self._candidate_addrs = kept
+            self._candidate_packets = {
+                a: packets for a, packets in self._candidate_packets.items()
+                if a in kept
+            }
+
+    def _remember_candidate_packet(self, addr: str, seq: int, payload: bytes, now: float):
+        """Keep early downlink packets so server identification does not drop them."""
+        if not self._looks_like_game_frame(payload):
+            return
+        packets = self._candidate_packets.setdefault(addr, [])
+        for _ts, existing_seq, existing_payload in packets:
+            if existing_seq == seq and existing_payload == payload:
+                return
+        packets.append((now, seq, bytes(payload)))
+        packets.sort(key=lambda item: item[1])
+        if len(packets) > self.CANDIDATE_PACKET_BUFFER_LIMIT:
+            del packets[:-self.CANDIDATE_PACKET_BUFFER_LIMIT]
+
+        if len(self._candidate_packets) > 32:
+            self._candidate_packets = {
+                a: buffered for a, buffered in self._candidate_packets.items()
+                if now - buffered[-1][0] < 60.0
+            }
+
+    def _replay_candidate_packets(self, addr: str) -> int:
+        """Replay buffered packets for a newly identified/adopted server."""
+        packets = self._candidate_packets.pop(addr, [])
+        replay_count = 0
+        for _ts, seq, payload in packets:
+            self._feed_tcp(seq, payload)
+            replay_count += 1
+        if replay_count > 1:
+            logger.info(f'[Capture] replayed {replay_count} buffered candidate packets for {addr}')
+        self._candidate_packets.clear()
+        return replay_count
 
     def _adopt_new_server(self, payload: bytes, addr: str, seq: int,
                           server_ip: bytes, server_port: int, reason: str,
@@ -603,7 +648,10 @@ class TcpReassembler:
             )
         # 仅当当前包就是服务器 → 客户端方向时，才把它喂给 TCP 重组。
         if feed_current_packet:
-            self._feed_tcp(seq, payload)
+            if self._replay_candidate_packets(addr) == 0:
+                self._feed_tcp(seq, payload)
+        else:
+            self._candidate_packets.pop(addr, None)
         return True
 
     # ─── TCP 重组 ───
