@@ -1482,6 +1482,7 @@ class SAOWebViewGUI:
         self._profession = profile.get('profession', '剑士')
         self._level = max(1, int(profile.get('level', 1) or 1))
         self._last_displayed_level_base = 0  # 用于检测等级变化并触发升级动画
+        self._sta_offline_armed = False
 
         # 识别状态
         self._recognition_active = False
@@ -2300,6 +2301,7 @@ class SAOWebViewGUI:
         try:
             if hasattr(self, '_state_mgr') and getattr(self, '_state_mgr', None) and \
                hasattr(self, '_cfg_settings_ref') and getattr(self, '_cfg_settings_ref', None):
+                self._persist_cached_identity_state(save_now=False)
                 self._state_mgr.save_cache(self._cfg_settings_ref)
                 if not quiet:
                     gs = self._state_mgr.state
@@ -2311,6 +2313,55 @@ class SAOWebViewGUI:
                     )
         except Exception:
             pass
+
+    def _reset_sta_offline_state(self):
+        self._sta_offline_armed = False
+        try:
+            self._eval_hp('setSTAOffline(false)')
+        except Exception:
+            pass
+
+    def _should_show_sta_offline(self, gs) -> bool:
+        if gs is None:
+            return False
+        recognition_ok = bool(getattr(gs, 'recognition_ok', False))
+        stamina_offline = bool(getattr(gs, 'stamina_offline', False))
+        if recognition_ok or stamina_offline:
+            self._sta_offline_armed = True
+        if not self._sta_offline_armed:
+            return False
+        return (not recognition_ok) or stamina_offline
+
+    def _persist_cached_identity_state(self, save_now: bool = False):
+        settings = getattr(self, '_cfg_settings_ref', None)
+        if not settings:
+            return
+        cache = dict(settings.get('game_cache', {}) or {})
+        name = str(getattr(self, '_username', '') or '').strip()
+        profession = str(getattr(self, '_profession', '') or '').strip()
+        level_base = int(getattr(self, '_level', 0) or 0)
+        if name:
+            cache['player_name'] = name
+        if profession:
+            cache['profession_name'] = profession
+        if level_base > 0:
+            cache['level_base'] = level_base
+        gs = getattr(self, '_game_state', None)
+        level_extra = int(getattr(gs, 'level_extra', 0) or 0) if gs is not None else 0
+        season_exp = int(getattr(gs, 'season_exp', 0) or 0) if gs is not None else 0
+        uid = str(getattr(gs, 'player_id', '') or '').strip() if gs is not None else ''
+        if level_extra > 0:
+            cache['level_extra'] = level_extra
+        if season_exp > 0:
+            cache['season_exp'] = season_exp
+        if uid:
+            cache['player_id'] = uid
+        settings.set('game_cache', cache)
+        if save_now:
+            try:
+                settings.save()
+            except Exception:
+                pass
 
     def _sync_identity_alert(self, gs):
         if gs is None:
@@ -2513,6 +2564,7 @@ class SAOWebViewGUI:
         self._recognition_engine = None
         self._packet_engine = None
         self._vision_engine = None
+        self._reset_sta_offline_state()
         # Flush DPS player cache to disk before teardown
         if self._dps_tracker:
             try:
@@ -3927,6 +3979,7 @@ class SAOWebViewGUI:
                 while True:
                     _t.sleep(30)
                     try:
+                        self._persist_cached_identity_state(save_now=False)
                         self._state_mgr.save_cache(self._cfg_settings_ref)
                     except Exception:
                         pass
@@ -3947,6 +4000,8 @@ class SAOWebViewGUI:
         with self._recog_lock:
             self._recognition_active = not self._recognition_active
             state = "ON" if self._recognition_active else "OFF"
+            if not self._recognition_active:
+                self._reset_sta_offline_state()
         self._eval_menu(f'SAO.showToast("识别: {state}")')
 
 
@@ -5731,8 +5786,8 @@ class SAOWebViewGUI:
                         self._last_displayed_level_base = level_base
                     # Use packet HP data if available
                     self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
+                    sta_offline = self._should_show_sta_offline(gs)
                     if gs.recognition_ok:
-                        sta_offline = getattr(gs, 'stamina_offline', False)
                         if sta_offline:
                             self._eval_hp('setSTAOffline(true)')
                         else:
@@ -5741,8 +5796,7 @@ class SAOWebViewGUI:
                             self._eval_hp(f'updateSTA({sta}, 100)')
                         self._eval_hp('setPlayState("playing")')
                     else:
-                        # 游戏窗口未找到时也触发 STA offline → HP 组延迟隐藏
-                        self._eval_hp('setSTAOffline(true)')
+                        self._eval_hp(f'setSTAOffline({str(bool(sta_offline)).lower()})')
                         self._eval_hp('setPlayState("idle")')
                     # ── Boss Timer push (packet-driven, always runs) ──
                     _boss_text = getattr(gs, 'boss_timer_text', '') or ''
@@ -6102,8 +6156,10 @@ class SAOWebViewGUI:
                         if level_base > 0:
                             self._last_displayed_level_base = level_base
                         self._eval_hp(f'updateHP({hp}, {hp_max}, "{level_str}")')
+                    self._eval_hp('setSTAOffline(false)')
                     self._eval_hp('setPlayState("idle")')
                 else:
+                    self._eval_hp('setSTAOffline(false)')
                     self._eval_hp('setPlayState("idle")')
 
             _panel_tick += 1
@@ -6167,6 +6223,10 @@ class SAOWebViewGUI:
         self._recognition_active = False
         self._stop_recognition_engines()
         # 退出前保存缓存
+        try:
+            self._persist_cached_identity_state(save_now=False)
+        except Exception:
+            pass
         self._save_game_cache(quiet=False)
         self._destroy_all_panels()
         try:
