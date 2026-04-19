@@ -223,12 +223,13 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.2-l"
+APP_VERSION = "2.1.2-m"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.2-l: SAO 菜单更新标签去掉百分比 + _on_update_snapshot 仅在状态切换
-#           时刷菜单 (修 entity HUD 下载中撕裂); entity update alert 在
-#           专用更新面板可见时静音 (合并弹窗); 识别未启动时 HP 面板用
-#           缓存数据兜底 (修 onedir 首启 HP 面板空白)。
+# v2.1.2-m: 修复 sao_alert 同条 alert 4s 内重复触发只续展不重弹;
+#           webview _maybe_show_update_popup 同步 sao_gui 的 downloading
+#           静音 + alert 可见时跳过非 error 提示;
+#           本版以 full-package + force_update + minimum_version=2.1.2-l
+#           推送, 强制清理积压问题。
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://47.82.157.220:9330"
