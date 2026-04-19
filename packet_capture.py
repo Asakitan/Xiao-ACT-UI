@@ -12,7 +12,6 @@ import threading
 import time
 import ctypes
 import ctypes.wintypes
-import ipaddress
 import logging
 import os
 from typing import Optional, Callable, List, Dict, Tuple
@@ -313,7 +312,13 @@ class TcpReassembler:
 
     # ─── 主入口 ───
     def feed_raw_frame(self, raw: bytes):
-        """接收一个原始以太网帧"""
+        """接收一个原始以太网帧
+
+        v1.3.1 兼容路径: 始终使用 **源地址** (src_ip:sport) 标识服务器.
+        c3SB 签名只出现在服务器→客户端的下行包中, 因此含有 c3SB 的包的源
+        地址一定是服务器. 这比猜测方向 (ephemeral port / private IP) 更可靠,
+        避免 VPN/加速器等双私网场景下方向推断出错导致所有下行包被丢弃.
+        """
         self.stats['raw_frames'] += 1
         parsed = _parse_eth_ip_tcp(raw)
         if parsed is None:
@@ -337,43 +342,45 @@ class TcpReassembler:
         if not payload:
             return
 
-        src_addr = f'{src_ip.hex()}:{sport}'
-        server_addr, server_ip, server_port, packet_from_server = \
-            self._infer_server_endpoint(src_ip, dst_ip, sport, dport)
-        if not server_addr:
-            return
+        # 与 v1.3.1 一致: 仅用源地址标识, 不做方向推断.
+        addr = f'{src_ip.hex()}:{sport}'
         now = time.time()
-
-        if packet_from_server and server_addr != self._server_addr:
-            self._remember_candidate_packet(server_addr, seq, payload, now)
 
         # ─── 服务器识别 ───
         if self._server_addr is None:
-            if self._try_identify(payload, server_addr):
-                logger.info(f'[Capture] 识别到游戏服务器: {_fmt_ip(server_ip)}:{server_port}')
+            # 缓冲疑似游戏帧 (识别成功后回放, 避免丢掉最早的同步包)
+            self._remember_candidate_packet(addr, seq, payload, now)
+            if self._try_identify(payload, addr):
+                logger.info(f'[Capture] 识别到游戏服务器: {_fmt_ip(src_ip)}:{sport}')
                 self._last_server_pkt_t = now
                 self._candidate_addrs.clear()
-                # 仅服务器→客户端的下行流参与 TCP 重组.
-                if packet_from_server:
-                    if self._replay_candidate_packets(server_addr) == 0:
-                        self._feed_tcp(seq, payload)
+                if self._replay_candidate_packets(addr) == 0:
+                    self._feed_tcp(seq, payload)
                 return
-            # c3SB 未命中: 记作候选. 若同一地址持续发出游戏帧, 则回退识别.
-            self._track_candidate(server_addr, payload, now)
-            if self._candidate_addrs.get(server_addr, (0, 0))[1] >= self.CANDIDATE_FRAME_THRESHOLD:
-                if self._adopt_new_server(payload, server_addr, seq, server_ip, server_port,
+            # c3SB 未命中: 记作候选. 若同一源地址持续发出游戏帧, 则回退识别.
+            self._track_candidate(addr, payload, now)
+            if self._candidate_addrs.get(addr, (0, 0))[1] >= self.CANDIDATE_FRAME_THRESHOLD:
+                if self._adopt_new_server(payload, addr, seq, src_ip, sport,
                                            reason='initial_game_frame_fallback',
-                                           force=True,
-                                           feed_current_packet=packet_from_server):
+                                           force=True):
                     self.stats['fallback_identify'] += 1
             return
+
+        if addr == self._server_addr:
+            # ─── 当前服务器的下行包 → TCP 重组 ───
+            self._last_server_pkt_t = now
+            self._feed_tcp(seq, payload)
+            return
+
+        # addr != self._server_addr: 来自其他地址 (客户端上行, 或新场景服务器)
+        # 缓冲疑似游戏帧 (供潜在的服务器切换后回放)
+        self._remember_candidate_packet(addr, seq, payload, now)
 
         # ─── 旧服务器静默 → 允许重新识别 ───
         # 切地图/副本后, 新场景服务器的 c3SB 登录包可能被 pcap 缓冲错过,
         # 导致所有新服务器报文因 addr 不匹配而被丢弃, DPS / Boss HP 冻结.
         # 因此当 _server_addr 连续 N 秒无数据时, 主动释放识别锁.
-        if (server_addr != self._server_addr
-                and self._last_server_pkt_t > 0
+        if (self._last_server_pkt_t > 0
                 and now - self._last_server_pkt_t > self.SERVER_IDLE_RESET_SEC):
             old_addr = self._server_addr
             idle = now - self._last_server_pkt_t
@@ -391,43 +398,29 @@ class TcpReassembler:
                 self._buf = b''
             self._last_server_pkt_t = 0.0
             self.stats['idle_reidentify'] += 1
-            # 立即尝试以当前包识别新服务器 (优先 c3SB, 退化为 game-frame)
-            if self._adopt_new_server(payload, server_addr, seq, server_ip, server_port,
+            # 立即尝试以当前包识别新服务器
+            if self._adopt_new_server(payload, addr, seq, src_ip, sport,
                                        reason='idle_timeout',
-                                       treat_as_switch=True,
-                                       feed_current_packet=packet_from_server):
+                                       treat_as_switch=True):
                 return
             # 未能识别: 记作候选, 等下一个包
-            self._track_candidate(server_addr, payload, now)
+            self._track_candidate(addr, payload, now)
             return
 
-        if server_addr != self._server_addr:
-            # ─── 场景服务器切换检测 ───
-            # 切换地图/副本时, 游戏会连接新的场景服务器.
-            # 检查来自不同地址的包中是否含有 c3SB 签名,
-            # 若有则切换到新服务器. (参考 SRDC: clearDataOnServerChange)
-            if self._adopt_new_server(payload, server_addr, seq, server_ip, server_port,
-                                       reason='c3SB_switch',
-                                       feed_current_packet=packet_from_server):
-                return
-            # 未命中 c3SB: 记作候选, 若连续出现大量游戏帧则视为新服务器.
-            self._track_candidate(server_addr, payload, now)
-            if self._candidate_addrs.get(server_addr, (0, 0))[1] >= self.CANDIDATE_FRAME_THRESHOLD:
-                if self._adopt_new_server(payload, server_addr, seq, server_ip, server_port,
-                                           reason='game_frame_fallback',
-                                           force=True,
-                                           feed_current_packet=packet_from_server):
-                    self.stats['fallback_identify'] += 1
-                    return
+        # ─── 场景服务器切换检测 ───
+        # 切换地图/副本时, 游戏会连接新的场景服务器.
+        # 检查来自不同源地址的包中是否含有 c3SB 签名,
+        # 若有则切换到新服务器. (参考 SRDC: clearDataOnServerChange)
+        if self._adopt_new_server(payload, addr, seq, src_ip, sport,
+                                   reason='c3SB_switch'):
             return
-
-        # 当前包属于已识别连接, 但方向是客户端 → 服务器; 不能喂给下行 TCP 重组.
-        if src_addr != self._server_addr:
-            return
-
-        # ─── TCP 重组 ───
-        self._last_server_pkt_t = now
-        self._feed_tcp(seq, payload)
+        # 未命中 c3SB: 记作候选, 若连续出现大量游戏帧则视为新服务器.
+        self._track_candidate(addr, payload, now)
+        if self._candidate_addrs.get(addr, (0, 0))[1] >= self.CANDIDATE_FRAME_THRESHOLD:
+            if self._adopt_new_server(payload, addr, seq, src_ip, sport,
+                                       reason='game_frame_fallback',
+                                       force=True):
+                self.stats['fallback_identify'] += 1
 
     # ─── 服务器识别 ───
     def _try_identify(self, data: bytes, addr: str) -> bool:
@@ -471,57 +464,6 @@ class TcpReassembler:
                 return True
             offset = end
         return False
-
-    @staticmethod
-    def _is_private_or_local_ip(ip: bytes) -> bool:
-        try:
-            addr = ipaddress.ip_address(bytes(ip))
-            return bool(
-                addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_multicast or addr.is_reserved
-            )
-        except Exception:
-            return False
-
-    def _infer_server_endpoint(self, src_ip: bytes, dst_ip: bytes,
-                               sport: int, dport: int) -> Tuple[str, bytes, int, bool]:
-        """Infer the remote game-server endpoint for this packet.
-
-        Returns (server_addr, server_ip, server_port, packet_from_server).
-        The stored _server_addr is always the remote endpoint, which equals the
-        source endpoint for inbound packets and the destination endpoint for
-        outbound packets.
-        """
-        src_addr = f'{src_ip.hex()}:{sport}'
-        dst_addr = f'{dst_ip.hex()}:{dport}'
-
-        # First, preserve any already identified remote endpoint.
-        if self._server_addr == src_addr:
-            return src_addr, src_ip, sport, True
-        if self._server_addr == dst_addr:
-            return dst_addr, dst_ip, dport, False
-
-        src_private = self._is_private_or_local_ip(src_ip)
-        dst_private = self._is_private_or_local_ip(dst_ip)
-        if src_private != dst_private:
-            if not src_private:
-                return src_addr, src_ip, sport, True
-            return dst_addr, dst_ip, dport, False
-
-        src_ephemeral = int(sport) >= 49152
-        dst_ephemeral = int(dport) >= 49152
-        if src_ephemeral != dst_ephemeral:
-            if not src_ephemeral:
-                return src_addr, src_ip, sport, True
-            return dst_addr, dst_ip, dport, False
-
-        # Fallback heuristic: the server side usually uses the smaller port.
-        if sport != dport:
-            if sport < dport:
-                return src_addr, src_ip, sport, True
-            return dst_addr, dst_ip, dport, False
-
-        return src_addr, src_ip, sport, True
 
     # ─── 候选地址跟踪 + 回退识别 ───
     @staticmethod
@@ -594,13 +536,15 @@ class TcpReassembler:
     def _adopt_new_server(self, payload: bytes, addr: str, seq: int,
                           server_ip: bytes, server_port: int, reason: str,
                           force: bool = False,
-                          treat_as_switch: bool = False,
-                          feed_current_packet: bool = True) -> bool:
+                          treat_as_switch: bool = False) -> bool:
         """尝试将 addr 采纳为当前游戏服务器地址.
 
         优先使用 c3SB 签名识别. 若 force=True (例如 game-frame 回退路径), 
         即使没有 c3SB 也会采纳. 返回 True 表示采纳成功, 并已完成状态重置、
         回调触发与首包投喂.
+
+        addr 始终是包的 **源地址** (src_ip:sport). 含有 c3SB 的包一定是
+        服务器→客户端方向, 因此 addr 即为新服务器.
 
         treat_as_switch=True 时, 即使 _server_addr 已为 None, 也把本次采纳
         当作场景切换 (触发 on_server_change 回调). 用于空闲重识别路径 —
@@ -646,12 +590,9 @@ class TcpReassembler:
                 f'[{reason}]',
                 flush=True,
             )
-        # 仅当当前包就是服务器 → 客户端方向时，才把它喂给 TCP 重组。
-        if feed_current_packet:
-            if self._replay_candidate_packets(addr) == 0:
-                self._feed_tcp(seq, payload)
-        else:
-            self._candidate_packets.pop(addr, None)
+        # 回放缓冲的候选包; 若无缓冲则直接喂当前包.
+        if self._replay_candidate_packets(addr) == 0:
+            self._feed_tcp(seq, payload)
         return True
 
     # ─── TCP 重组 ───

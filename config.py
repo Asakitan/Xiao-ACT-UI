@@ -343,8 +343,15 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.10"
+APP_VERSION = "2.1.11"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.11:
+#   1) 抓包层回退到 v1.3.1 的源地址识别策略: 移除 _infer_server_endpoint
+#      方向推断 (私网/临时端口/小端口 启发式), 改为始终用包的源地址
+#      (src_ip:sport) 标识游戏服务器. 修复 VPN/加速器等双私网环境下方向
+#      推断失败→ _server_addr 被设为客户端地址→所有下行包被丢弃的问题;
+#   2) 保留 v2.1.8+ 的候选帧缓冲回放、空闲重识别、game-frame 回退识别;
+#   3) 本版以 full-package + force_update + minimum_version=2.1.11 推送。
 # v2.1.10:
 #   1) TCP 重组层修复重传段缓存泄漏：seq 已消费的段不再入 cache，
 #      杜绝 "TCP cache overflow (301), reset" 导致关键同步包丢失；
