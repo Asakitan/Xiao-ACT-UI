@@ -27,9 +27,44 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def _bootstrap_runtime_overrides():
-    """预留：在模块化布局下 PyInstaller 会从 runtime/ 加载所有代码，
-    这里不需要额外插入 sys.path。仅保留函数名作为未来扩展点。
+    """模块化 onedir 布局适配 + update.exe 提升 (bootstrap).
+
+    在 PyInstaller onedir + noarchive=True + contents_directory='runtime' 下,
+    sys.path 只包含 runtime/。但 build_release.bat 会把 proto/ assets/ web/
+    icon.ico 提升到 EXE 顶层 (便于增量更新), 导致:
+      - `from proto import star_resonance_pb2` 失败 → packet_parser 报错
+      - 开发时 sys.path 包含项目根, onefile 时 _MEIPASS 包含 proto/, 都正常
+      - **只有 onedir 打包后会 ImportError**
+    解决: 把 EXE 所在目录 (frozen) / 当前文件目录 (dev) 加入 sys.path 头部。
+
+    同时:在最早时机调用 sao_updater.promote_runtime_update_exe(), 把
+    runtime/update.exe 提升到顶层 (旧 update.exe 通过嵌套路径绕过 _collect_entries)。
     """
+    try:
+        if getattr(sys, 'frozen', False):
+            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        else:
+            exe_dir = os.path.dirname(os.path.abspath(__file__))
+        if exe_dir and exe_dir not in sys.path:
+            sys.path.insert(0, exe_dir)
+        # _MEIPASS 也兜底加入 (onefile 已默认在内, onedir 下 _MEIPASS = runtime/)
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass and meipass not in sys.path:
+            sys.path.insert(0, meipass)
+        print(f'[main] bootstrap: frozen={getattr(sys, "frozen", False)} '
+              f'exe_dir={exe_dir} meipass={meipass} '
+              f'sys.path[0:3]={sys.path[0:3]}', flush=True)
+    except Exception as e:
+        print(f'[main] bootstrap path setup failed: {e}', flush=True)
+
+    # update.exe bootstrap promotion: 把 runtime/update.exe 提升到顶层
+    try:
+        from sao_updater import promote_runtime_update_exe
+        promoted = promote_runtime_update_exe()
+        if promoted:
+            print('[main] update.exe 已从 runtime/ 提升到顶层', flush=True)
+    except Exception as e:
+        print(f'[main] update.exe promote skipped: {e}', flush=True)
     return
 
 
