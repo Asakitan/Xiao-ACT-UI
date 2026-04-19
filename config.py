@@ -17,6 +17,68 @@ else:
     BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# v2.1.2-h: onedir 下 sys.path 只含 runtime/, 但 build_release.bat 把
+#   proto/ assets/ web/ 提升到 BASE_DIR (exe 顶层), 导致 `from proto import
+#   star_resonance_pb2` ImportError (-> packet_parser 抓包链路死). 在 config
+#   被任何模块 import 时立即把 BASE_DIR 加入 sys.path 头, 这是最早的修复点。
+try:
+    if BASE_DIR and BASE_DIR not in sys.path:
+        sys.path.insert(0, BASE_DIR)
+except Exception:
+    pass
+
+
+def _promote_runtime_update_exe_early() -> bool:
+    """v2.1.2-h: bootstrap 把 runtime/update.exe 提升到顶层.
+
+    与 sao_updater.promote_runtime_update_exe 等价, 但放在 config 里
+    保证最早被调用 (大多数模块都 import config). 解决用户反馈的
+    "升级后 update.exe 没替换" — 之前依赖 sao_updater 的延迟 import
+    路径, 在 webview/atexit 没触发时就跑不到。
+    """
+    try:
+        if not getattr(sys, "frozen", False):
+            return False
+        nested = os.path.join(BASE_DIR, "runtime", "update.exe")
+        if not os.path.isfile(nested):
+            return False
+        target = os.path.join(BASE_DIR, "update.exe")
+        if os.path.isfile(target):
+            try:
+                if os.path.getsize(target) == os.path.getsize(nested):
+                    try:
+                        os.remove(nested)
+                    except Exception:
+                        pass
+                    return False
+            except Exception:
+                pass
+            old = target + ".old"
+            try:
+                if os.path.exists(old):
+                    os.remove(old)
+            except Exception:
+                pass
+            try:
+                os.replace(target, old)
+            except Exception:
+                return False
+        try:
+            os.replace(nested, target)
+            print(f"[config] promoted runtime/update.exe -> {target}", flush=True)
+            return True
+        except Exception as e:
+            print(f"[config] promote update.exe failed: {e}", flush=True)
+            return False
+    except Exception:
+        return False
+
+
+try:
+    _promote_runtime_update_exe_early()
+except Exception:
+    pass
+
 # 远程更新可写覆盖层 (可选, delta 直接写到 BASE_DIR 同名子目录, 这里仅用于 staging/backup/state)
 RUNTIME_DIR = BASE_DIR
 RUNTIME_PY_DIR = os.path.join(BASE_DIR, "runtime")           # 我们的 .py 与 Python DLL 同处 runtime/
@@ -57,11 +119,13 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.2-g"
+APP_VERSION = "2.1.2-h"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.2-g: 新 update.exe 改用嵌套路径 runtime/update.exe 投递, 主程序启动时
-#           sao_updater.promote_runtime_update_exe() 一次性提升到顶层, 解决
-#           旧 update.exe 拒收 runtime-delta 顶层 .exe 的 bootstrap 死局。
+# v2.1.2-h: main.py bootstrap 把 EXE-dir 加入 sys.path → 修复 onedir 下
+#           `from proto import star_resonance_pb2` ImportError (proto/ 被
+#           build_release.bat 提升出 runtime/, 旧 sys.path 找不到);
+#           同时 main.py 最早调用 promote_runtime_update_exe() 解决新
+#           update.exe 不替换的问题; spec 显式 hiddenimport 抓包链路。
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://47.82.157.220:9330"

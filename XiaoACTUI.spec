@@ -35,6 +35,24 @@ LOCAL_HIDDENIMPORTS = [
     'window_effects',
     'install_npcap',
     'sao_updater',
+    # v2.1.2-h: 抓包链路 — 这些是 sao_gui 内 lazy-import 的, onedir +
+    # noarchive 下 PyInstaller 静态分析有时遗漏 → packet_bridge ImportError
+    'packet_bridge',
+    'packet_capture',
+    'packet_parser',
+    'dps_tracker',
+    'boss_raid_engine',
+    'boss_autokey_linkage',
+    'auto_key_engine',
+    'character_profile',
+    'recognition',
+    'skill_recognition',
+    'window_locator',
+    'vision_accel',
+    'game_state',
+    # proto 包 — packet_parser 内 `from proto import star_resonance_pb2`
+    'proto',
+    'proto.star_resonance_pb2',
 ]
 
 WEBVIEW_PLATFORM_HIDDENIMPORTS = collect_submodules('webview.platforms')
