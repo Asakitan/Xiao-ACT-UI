@@ -933,6 +933,7 @@ class SAOPlayerGUI:
         self._level = profile.get('level', 1)
         self._level_extra = 0
         self._season_exp = 0
+        self._sta_offline_armed = False
 
         # 加载 SAO 字体
         load_sao_fonts()
@@ -1314,6 +1315,7 @@ class SAOPlayerGUI:
         self._recognition_engine = None
         self._packet_engine = None
         self._vision_engine = None
+        self._reset_sta_offline_state()
 
     def _reconfigure_data_engines(self):
         """重启 packet/vision 引擎以匹配当前数据源配置."""
@@ -1556,8 +1558,7 @@ class SAOPlayerGUI:
                             self._hp_overlay.update_sta(
                                 _gs.stamina_current, _gs.stamina_max)
                         self._hp_overlay.set_sta_offline(
-                            (not bool(getattr(_gs, 'recognition_ok', True)))
-                            or bool(getattr(_gs, 'stamina_offline', False))
+                            self._should_show_sta_offline(_gs)
                         )
                         if _gs.player_name:
                             self._hp_overlay.set_player_info({
@@ -1593,6 +1594,7 @@ class SAOPlayerGUI:
                 while True:
                     _t.sleep(30)
                     try:
+                        self._persist_cached_identity_state(save_now=False)
                         self._state_mgr.save_cache(self._cfg_settings_ref)
                     except Exception:
                         pass
@@ -1756,6 +1758,90 @@ class SAOPlayerGUI:
         if level_extra > 0 and level_base > 0:
             return f'{level_base}(+{level_extra})'
         return str(level_base)
+
+    def _reset_sta_offline_state(self):
+        self._sta_offline_armed = False
+        try:
+            if self._hp_overlay and getattr(self, '_hp_ov_visible', True):
+                self._hp_overlay.set_sta_offline(False)
+        except Exception:
+            pass
+
+    def _should_show_sta_offline(self, gs) -> bool:
+        if gs is None:
+            return False
+        recognition_ok = bool(getattr(gs, 'recognition_ok', False))
+        stamina_offline = bool(getattr(gs, 'stamina_offline', False))
+        if recognition_ok or stamina_offline:
+            self._sta_offline_armed = True
+        if not self._sta_offline_armed:
+            return False
+        return (not recognition_ok) or stamina_offline
+
+    def _persist_cached_identity_state(self, save_now: bool = False):
+        settings = getattr(self, '_cfg_settings_ref', None)
+        if not settings:
+            return
+        cache = dict(settings.get('game_cache', {}) or {})
+        name = str(getattr(self, '_username', '') or '').strip()
+        profession = str(getattr(self, '_profession', '') or '').strip()
+        level_base = int(getattr(self, '_level', 0) or 0)
+        level_extra = int(getattr(self, '_level_extra', 0) or 0)
+        season_exp = int(getattr(self, '_season_exp', 0) or 0)
+        if name:
+            cache['player_name'] = name
+        if profession:
+            cache['profession_name'] = profession
+        if level_base > 0:
+            cache['level_base'] = level_base
+        if level_extra > 0:
+            cache['level_extra'] = level_extra
+        if season_exp > 0:
+            cache['season_exp'] = season_exp
+        gs = getattr(self, '_game_state', None)
+        uid = str(getattr(gs, 'player_id', '') or '').strip() if gs is not None else ''
+        if uid:
+            cache['player_id'] = uid
+        settings.set('game_cache', cache)
+        if save_now:
+            try:
+                settings.save()
+            except Exception:
+                pass
+
+    def _persist_entity_menu_state(self, save_now: bool = False):
+        settings = getattr(self, '_cfg_settings_ref', None)
+        if not settings:
+            return
+        active_name = ''
+        try:
+            menu_bar = getattr(getattr(self, '_sao_menu', None), '_menu_bar', None)
+            active_item = getattr(menu_bar, '_active_item', None)
+            if isinstance(active_item, dict):
+                active_name = str(active_item.get('name') or '').strip()
+        except Exception:
+            active_name = ''
+        settings.set('entity_last_menu', active_name)
+        if save_now:
+            try:
+                settings.save()
+            except Exception:
+                pass
+
+    def _restore_entity_menu_state(self):
+        saved_name = str(self._get_setting('entity_last_menu', '') or '').strip()
+        if not saved_name:
+            return
+        menu = getattr(self, '_sao_menu', None)
+        menu_bar = getattr(menu, '_menu_bar', None)
+        if not menu or not menu.visible or menu_bar is None:
+            return
+        active_item = getattr(menu_bar, '_active_item', None)
+        if isinstance(active_item, dict) and str(active_item.get('name') or '').strip() == saved_name:
+            return
+        item = next((it for it in (self._menu_icons or []) if str(it.get('name') or '').strip() == saved_name), None)
+        if item:
+            menu_bar._on_item_click(item)
 
     def _on_game_state_update(self, gs):
         """Fast path for identity/level updates from packet or vision threads."""
@@ -2082,10 +2168,7 @@ class SAOPlayerGUI:
                                 _lv_text = str(_lv)
                             self._hp_overlay.update_hp(hp, hp_max, _lv_text)
                             self._hp_overlay.update_sta(sta, sta_max)
-                            _sta_offline = (
-                                (not bool(getattr(gs, 'recognition_ok', True)))
-                                or bool(getattr(gs, 'stamina_offline', False))
-                            )
+                            _sta_offline = self._should_show_sta_offline(gs)
                             self._hp_overlay.set_sta_offline(
                                 _sta_offline)
                             if gs.player_name:
@@ -2179,7 +2262,7 @@ class SAOPlayerGUI:
                     # Recognition offline — notify HP overlay
                     if self._hp_overlay and getattr(self, '_hp_ov_visible', True):
                         try:
-                            self._hp_overlay.set_sta_offline(True)
+                            self._hp_overlay.set_sta_offline(self._should_show_sta_offline(gs))
                         except Exception:
                             pass
             except Exception as e:
@@ -2735,6 +2818,10 @@ class SAOPlayerGUI:
         self._lift_loop_active = False
         # 延迟启动鱼眼叠加 (等菜单渲染完再截图), 带重试确保首次也能生效
         self._start_fisheye_with_retry(retries=5, delay=80)
+        try:
+            self.root.after(90, self._restore_entity_menu_state)
+        except Exception:
+            pass
 
     def _start_fisheye_with_retry(self, retries=5, delay=80):
         """带重试的鱼眼启动 — 首次进入时菜单可能还未完成渲染"""
@@ -2787,6 +2874,7 @@ class SAOPlayerGUI:
     def _on_sao_menu_close(self):
         """SAO 菜单关闭时 — 重启呼吸动画; 面板仍开时保持鱼眼, 否则渐隐销毁"""
         self._lift_loop_active = False
+        self._persist_entity_menu_state(save_now=False)
         self._player_panel = None
         self._maybe_stop_fisheye()
         if not self._destroyed:
@@ -4263,6 +4351,7 @@ class SAOPlayerGUI:
                     self._recognition_active = True
             else:
                 self._recognition_active = False
+                self._reset_sta_offline_state()
         self._refresh_menu_if_open()
 
     def _toggle_auto_script(self, force_enabled=None):
@@ -5707,8 +5796,18 @@ void main() {
         self._stop_recognition_engines()
         # 保存缓存
         if self._state_mgr and self._cfg_settings_ref:
-            try: self._state_mgr.save_cache(self._cfg_settings_ref)
-            except Exception: pass
+            try:
+                self._persist_entity_menu_state(save_now=False)
+                self._persist_cached_identity_state(save_now=False)
+                self._state_mgr.save_cache(self._cfg_settings_ref)
+            except Exception:
+                pass
+        elif self._cfg_settings_ref:
+            try:
+                self._persist_entity_menu_state(save_now=False)
+                self._persist_cached_identity_state(save_now=True)
+            except Exception:
+                pass
         # 销毁所有浮动面板
         for panel in [self._status_panel, self._update_panel]:
             try:
