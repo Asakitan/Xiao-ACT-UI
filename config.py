@@ -28,6 +28,25 @@ except Exception:
     pass
 
 
+def _is_main_app_host() -> bool:
+    """v2.1.2-k: 只有当宿主进程是 XiaoACTUI 主程序时, 才允许动 update.exe.
+
+    update.exe 自己也会 import config (它被 PyInstaller 一起打包),
+    如果在 update.exe 进程里跑 promote 逻辑, 会 rename/replace 自己,
+    导致 update.exe 启动后 "凭空消失" (用户反馈)。
+    """
+    if not getattr(sys, "frozen", False):
+        return False
+    try:
+        exe_name = os.path.basename(sys.executable or "").lower()
+    except Exception:
+        return False
+    # 任何带 update 字样的 helper 都跳过
+    if "update" in exe_name:
+        return False
+    return True
+
+
 def _promote_runtime_update_exe_early() -> bool:
     """v2.1.2-h: bootstrap 把 runtime/update.exe 提升到顶层.
 
@@ -35,9 +54,12 @@ def _promote_runtime_update_exe_early() -> bool:
     保证最早被调用 (大多数模块都 import config). 解决用户反馈的
     "升级后 update.exe 没替换" — 之前依赖 sao_updater 的延迟 import
     路径, 在 webview/atexit 没触发时就跑不到。
+
+    v2.1.2-k: 仅在主程序 (XiaoACTUI) 进程里运行, 防止 update.exe
+    自己 promote 自己导致被删除。
     """
     try:
-        if not getattr(sys, "frozen", False):
+        if not _is_main_app_host():
             return False
         nested = os.path.join(BASE_DIR, "runtime", "update.exe")
         if not os.path.isfile(nested):
@@ -100,8 +122,11 @@ def _promote_pending_replacements() -> int:
         (之前由 MoveFileEx DELAY_UNTIL_REBOOT 排队, 但用户要求重启前完成)。
     主程序 XiaoACTUI 启动到这里时, 之前持锁的进程已完全退出, 可以直接 rename。
     返回 finalize 成功的文件数。
+
+    v2.1.2-k: 仅在主程序 (XiaoACTUI) 进程里运行 — update.exe 自己 import
+    config 时若 finalize update.exe.new 会删除自己。
     """
-    if not getattr(sys, "frozen", False):
+    if not _is_main_app_host():
         return 0
     finalized = 0
     skip_dirs = {os.path.join(BASE_DIR, d) for d in ("backup", "staging", "temp", "exports")}
@@ -198,11 +223,12 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.2-j"
+APP_VERSION = "2.1.2-k"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.2-j: TTF/DLL 锁定文件失败时 stage 到 .new (不再回滚整包);
-#           XiaoACTUI 启动时 _promote_pending_replacements 扫描所有 *.new
-#           完成 finalize (含 update.exe.new); 避免用户卡在 SAOUI.ttf。
+# v2.1.2-k: promote_runtime_update_exe / _promote_pending_replacements
+#           增加 host-process 守卫: 仅在 XiaoACTUI 主程序进程运行,
+#           update.exe 自己 import config 时跳过, 修复 update.exe
+#           启动后被自己删除的问题。
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://47.82.157.220:9330"
