@@ -57,13 +57,14 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.2"
+APP_VERSION = "2.1.2-a"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://47.82.157.220:9330"
 UPDATE_CHANNEL = "stable"
 UPDATE_TARGET = "windows-x64"
+# v2.1.2-a: 同步当前源码整理并重新发布后缀版本增量包，延续 2.1.2 更新链路
 # v2.1.2: entity SAO menu 常驻 60Hz HUD 调度; child-menu 刷新去重与状态合帧; updater 版本后缀比较修复
 # v2.1.1-a: entity SAO menu 常驻 60Hz HUD 调度; child-menu 刷新去重与状态合帧
 # v2.1.1: webview 更新提示不再被身份提示循环瞬时关闭; entity 更新面板中文字体修正; STA offline 状态同步修复

@@ -23,7 +23,7 @@ manifest schema (JSON):
 }
 
 runtime-delta zip 内容: 按 runtime/ 下的相对路径布局, 例如
-    runtime/sao_gui.py
+  runtime/sao_gui.py
   web/menu.html
   assets/sounds/ding.wav
 

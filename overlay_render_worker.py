@@ -22,6 +22,7 @@ Architecture:
 
 PIL and NumPy release the GIL in their C routines, so these background
 jobs genuinely run on other cores.
+
 """
 from __future__ import annotations
 

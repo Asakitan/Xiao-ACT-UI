@@ -13,6 +13,7 @@ PacketBridge 与 RecognitionEngine 接口一致，可直接替换。
     bridge = PacketBridge(mgr)
     bridge.start()   # 后台抓包 + 解析 + 推送
     bridge.stop()
+    
 """
 
 import threading

@@ -3,6 +3,7 @@
 SAO Auto — 统一游戏状态模型
 
 所有识别结果汇总到 GameState，UI 只订阅此对象。
+
 """
 
 import time

@@ -11,6 +11,7 @@ Flow:
   Step 2 → detect 3.png (gray buttons)  → Click     → Step 3
   Step 3 → detect 4.png (gray buttons)  → Click     → Step 4
   Step 4 → detect 5.png (gray buttons)  → Click     → Step 0  (loop)
+
 """
 
 from __future__ import annotations

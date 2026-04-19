@@ -10,6 +10,7 @@ Design:
   ``UpdateLayeredWindow`` GDI commit runs on the main thread.
 - Idle overlays (``animating_fn()`` returns False) only tick every Nth frame,
   giving roughly 20 Hz for idle HP/DPS while the rest of the loop stays at 60.
+  
 """
 from __future__ import annotations
 

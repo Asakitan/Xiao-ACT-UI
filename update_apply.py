@@ -2,6 +2,7 @@
 """SAO Auto - 外部更新应用器
 
 由 sao_updater.schedule_apply_on_exit() 在主进程退出前 detach 启动。
+
 读取 BASE_DIR/staging/pending.json，等待主进程退出后：
   - runtime-delta: 解压模块更新到 BASE_DIR/
   - full-package: 替换完整客户端文件

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 SAO Utils 风格 UI 组件
+
 在 tkinter 中重现 SAO 风格的:
   - PopUpMenu (全屏弹出菜单 + 半透明遮罩)
   - MenuBar (圆形图标按钮条, 下落动画, 滚轮切换)

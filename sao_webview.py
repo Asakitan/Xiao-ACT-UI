@@ -1,21 +1,6 @@
 """
-SAO-UI WebView GUI — sao_auto 移植版 (从 28midi/sao_webview.py 完全复刻)
+SAO-UI WebView GUI 
 
-差异:
-  - 移除 MidiPlayer / 播放控制 / 文件选择 / 文件夹循环 / MIDI解析
-  - HP 条改为显示游戏识别数据 (HP / Stamina / Level)
-  - HP 条固定位置 (不可拖拽)
-  - 窗口检测目标: Star.exe
-  - 新增: RecognitionEngine / GameState 集成
-
-保留 (与 28midi 完全一致):
-  - LinkStart 入场动画 (SAOLinkStart)
-  - SAO Menu (鱼眼背景 / 圆形菜单 / 文件选择器 / 排行榜)
-  - 面板系统 (control / status / viz / piano)
-  - 透明窗口 (Win32 LWA_COLORKEY + .NET WebView2)
-  - 音效系统 (pygame)
-  - 3-UI 热切换
-  - 所有动画特效
 """
 
 import os

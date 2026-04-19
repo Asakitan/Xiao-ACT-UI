@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 sao_gui_alert.py — ULW Alert Overlay for SAO Entity UI
+
 Shows SAO-styled alert modal (centered, light panel with entry/exit animation).
 Matches web/alert.html: 392×194, title(68px) + body(106px) + footer(20px).
+
 """
 
 import os
