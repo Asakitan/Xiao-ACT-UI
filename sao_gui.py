@@ -3286,10 +3286,14 @@ class SAOPlayerGUI:
         panel_key = f"{view['state']}:{view['latest_version']}"
         if panel_key != getattr(self, '_update_panel_state_key', ''):
             self._update_panel_hidden = False
+        prev_panel_key = getattr(self, '_update_panel_state_key', '')
         self._update_panel_state_key = panel_key
 
         self._update_status_panel()
-        self._refresh_menu_if_open()
+        # v2.1.2-l: 仅在状态/版本切换时刷菜单 (避免下载进度变化每秒触发
+        # 整菜单 rebuild → entity HUD 撕裂). 状态面板的进度行依旧每帧实时.
+        if panel_key != prev_panel_key:
+            self._refresh_menu_if_open()
 
         if self._update_panel and self._update_panel.winfo_exists():
             if view['show_panel']:
@@ -3384,11 +3388,29 @@ class SAOPlayerGUI:
         return None
 
     def _maybe_show_update_popup(self, snapshot=None):
+        # v2.1.2-l: 防止"撞屋"式多弹窗:
+        #   1) 如果专用更新面板 (_update_panel) 已经可见, 不再弹 entity alert
+        #      — 信息已经更显眼地呈现在面板里, 重复弹只会刷屏。
+        #   2) downloading 状态本身就有进度条 (面板/状态面板) 在持续显示,
+        #      不需要再来一发短暂的 entity alert。
+        #   只保留 available / ready / error 这种"重要事件型"的一次性提示。
+        try:
+            panel_visible = bool(self._update_panel and self._update_panel.winfo_exists())
+        except Exception:
+            panel_visible = False
         payload = self._build_update_popup_payload(snapshot)
         if not payload:
             return
         popup_key = str(payload.get('key') or '')
         if not popup_key or popup_key == getattr(self, '_last_update_popup_key', ''):
+            return
+        if popup_key.startswith('downloading:'):
+            # 下载进度由专用面板/状态面板显示, 不再 entity 弹窗。
+            self._last_update_popup_key = popup_key
+            return
+        if panel_visible and not popup_key.startswith('error:'):
+            # 已经有面板在前台讲同一件事, 静音 entity alert (error 例外)。
+            self._last_update_popup_key = popup_key
             return
         self._last_update_popup_key = popup_key
         self._show_entity_alert(
@@ -4937,7 +4959,10 @@ class SAOPlayerGUI:
                 tag = '强制' if st.force_required else '可更新'
                 return f'[{tag}] 新版本 v{st.latest_version}'
             if st.state == STATE_DOWNLOADING:
-                return f'下载中 {int(st.progress * 100)}%'
+                # v2.1.2-l: 不再每次 progress 变化都刷新菜单签名 (会触发整菜单
+                # rebuild → entity HUD 撕裂). 这里只显示静态文本, 精确百分比
+                # 由专用状态面板 (_update_status_panel) 实时显示。
+                return '下载中...'
         except Exception:
             pass
         return '检查更新'

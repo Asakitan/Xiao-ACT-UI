@@ -5738,6 +5738,33 @@ class SAOWebViewGUI:
                 except Exception as e:
                     print(f'[SAO-WV] vision lifecycle sync error: {e}')
                     gs = None
+            # v2.1.2-l: 即使 _recognition_active=False (例如 onedir 第一次启动
+            # PacketBridge / RecognitionEngine 还没起来或起失败) 也要把缓存里的
+            # HP/等级推到 HP panel, 否则面板显示空白被用户误判为"HP 不显示"。
+            # 只有 HP 数据推送是无条件的; STA / Boss / SkillFX 这些视觉相关的
+            # 仍然依赖 _recognition_active.
+            if (not self._recognition_active) and gs is not None:
+                try:
+                    if gs.hp_max > 0:
+                        _hp, _hp_max = int(gs.hp_current or 0), int(gs.hp_max)
+                    elif gs.hp_pct > 0:
+                        _hp, _hp_max = int(gs.hp_pct * 100), 100
+                    else:
+                        _hp, _hp_max = 0, 1
+                    _lv_base = gs.level_base if gs.level_base else self._level
+                    if gs.level_extra > 0 and _lv_base > 0:
+                        _lv_str = f'{_lv_base}(+{gs.level_extra})'
+                    elif _lv_base > 0:
+                        _lv_str = str(_lv_base)
+                    else:
+                        _lv_str = str(self._level)
+                    _sig = (_hp, _hp_max, _lv_str)
+                    if getattr(self, '_idle_hp_sig', None) != _sig:
+                        self._idle_hp_sig = _sig
+                        self._eval_hp(f'updateHP({_hp}, {_hp_max}, "{_lv_str}")')
+                        self._eval_hp('setPlayState("idle")')
+                except Exception:
+                    pass
             if self._recognition_active and gs is not None:
                 try:
                     self._sync_identity_alert(gs)

@@ -223,12 +223,12 @@ SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.2-k"
+APP_VERSION = "2.1.2-l"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-# v2.1.2-k: promote_runtime_update_exe / _promote_pending_replacements
-#           增加 host-process 守卫: 仅在 XiaoACTUI 主程序进程运行,
-#           update.exe 自己 import config 时跳过, 修复 update.exe
-#           启动后被自己删除的问题。
+# v2.1.2-l: SAO 菜单更新标签去掉百分比 + _on_update_snapshot 仅在状态切换
+#           时刷菜单 (修 entity HUD 下载中撕裂); entity update alert 在
+#           专用更新面板可见时静音 (合并弹窗); 识别未启动时 HP 面板用
+#           缓存数据兜底 (修 onedir 首启 HP 面板空白)。
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
 DEFAULT_UPDATE_HOST = "http://47.82.157.220:9330"
