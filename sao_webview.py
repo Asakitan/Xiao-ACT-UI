@@ -1549,6 +1549,7 @@ class SAOWebViewGUI:
         self._update_popup_ready = False
         self._pending_update_popup_snapshot = None
         self._last_update_popup_key = ''
+        self._identity_alert_kind = ''
 
         # JS API
         self._api = SAOWebAPI(self)
@@ -2323,7 +2324,7 @@ class SAOWebViewGUI:
 
         if alert_serial > 0 and alert_serial != getattr(self, '_last_identity_alert_serial', 0):
             self._last_identity_alert_serial = alert_serial
-            self._show_identity_alert_window(alert_title, alert_message, 9000)
+            self._show_identity_alert_window(alert_title, alert_message, 9000, alert_kind='identity')
             return
 
         # Don't auto-dismiss when Hide & Seek persistent alert is active —
@@ -2336,7 +2337,9 @@ class SAOWebViewGUI:
             str(getattr(gs, 'player_name', '') or '').strip()
             and int(getattr(gs, 'level_base', 0) or 0) > 0
         )
-        if has_identity and getattr(self, '_identity_alert_visible', False):
+        if (has_identity
+            and getattr(self, '_identity_alert_visible', False)
+            and str(getattr(self, '_identity_alert_kind', '') or '') == 'identity'):
             self._hide_identity_alert_window()
 
     def _is_dead_state(self, gs) -> bool:
@@ -4672,10 +4675,14 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _show_identity_alert_window(self, title: str, message: str, duration_ms: int = 9000, play_sound: bool = True):
+    def _show_identity_alert_window(self, title: str, message: str,
+                                    duration_ms: int = 9000,
+                                    play_sound: bool = True,
+                                    alert_kind: str = 'generic'):
         if not self.alert_win:
             return
         self._identity_alert_visible = True
+        self._identity_alert_kind = str(alert_kind or 'generic')
         self._identity_alert_nonce = int(getattr(self, '_identity_alert_nonce', 0) or 0) + 1
         nonce = self._identity_alert_nonce
         stay_ms = int(duration_ms or 9000)
@@ -4733,6 +4740,7 @@ class SAOWebViewGUI:
                 self.alert_win.hide()
             except Exception:
                 pass
+            self._identity_alert_kind = ''
             self._setup_alert_click_through()
             return
 
@@ -4746,6 +4754,7 @@ class SAOWebViewGUI:
                 self.alert_win.hide()
             except Exception:
                 pass
+            self._identity_alert_kind = ''
             # Restore click-through so hidden alert window never captures mouse
             self._setup_alert_click_through()
 

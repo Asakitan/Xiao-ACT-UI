@@ -2,7 +2,13 @@
 
 `SAO Auto` 是一个面向《星痕共鸣》的外部 HUD / 自动化项目，当前版本同时维护 `entity` 与 `webview` 两套 UI 入口，并补齐了远程更新、独立 updater、模块化发布目录、脚本仓库与更新服务端的完整发布链路。
 
-当前版本：`2.1.0`
+当前版本：`2.1.1`
+
+## 2.1.1 概览
+
+- 修复 webview 更新提示复用全局 alert 宿主时，被身份提示同步循环立即关闭的问题
+- 修复 entity 更新面板 `meta` 行中文使用 SAO 字体导致的方框字形
+- 修复 webview / entity 共用状态下，STA 会被 packet bridge 误判为 `offline` 的问题
 
 ## 2.1.0 概览
 
@@ -256,6 +262,12 @@ sao_auto/
 ```
 
 ## 更新记录
+
+### 2.1.1
+
+- 修复 webview 更新提示复用全局 alert 宿主时被 `_sync_identity_alert()` 立即收起，提示现在会按预期停留到超时或后续状态变化
+- 修复 entity 更新面板 `meta_text` 中文显示为方框的问题，改为使用 CJK 字体渲染
+- 修复 `PacketBridge` 状态轮询覆盖 `RecognitionEngine.recognition_ok`，导致 webview / entity 的 STA 长期显示 `OFFLINE`
 
 ### 2.1.0
 

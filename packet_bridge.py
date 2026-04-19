@@ -950,8 +950,11 @@ class PacketBridge:
         )
 
         self._npcap_ok = True
-        self._state_mgr.update(recognition_ok=False,
-                               error_msg='等待游戏服务器连接...')
+        # 注意: 不再覆写 recognition_ok。该字段由 vision (RecognitionEngine)
+        # 根据是否检测到游戏窗口来维护。packet bridge 只更新 error_msg,
+        # 避免在 vision 已经识别到游戏窗口时被强制翻成 False (导致 webview
+        # STA 一直显示 OFFLINE)。
+        self._state_mgr.update(error_msg='等待游戏服务器连接...')
 
         # 启动抓包
         self._capture.start()
@@ -982,21 +985,19 @@ class PacketBridge:
                 if not getattr(self, '_server_found_printed', False):
                     self._server_found_printed = True
                     print('[Bridge] 已识别游戏服务器', flush=True)
-                # 检查数据超时
+                # 检查数据超时 — 仅更新 error_msg, 不覆写 recognition_ok
+                # (该字段由 vision 引擎维护)
                 with self._lock:
                     if self._last_update_t > 0:
                         idle = time.time() - self._last_update_t
                         if idle > 10:
                             self._state_mgr.update(
-                                recognition_ok=False,
                                 error_msg=f'数据超时 ({idle:.0f}s)')
                     else:
                         self._state_mgr.update(
-                            recognition_ok=False,
                             error_msg='已连接服务器，等待角色数据...')
             else:
-                self._state_mgr.update(recognition_ok=False,
-                                       error_msg='搜索游戏服务器中...')
+                self._state_mgr.update(error_msg='搜索游戏服务器中...')
             # 每 5 秒打印一次诊断统计
             if self._parser and int(now) % 5 == 0:
                 ps = self._parser.stats

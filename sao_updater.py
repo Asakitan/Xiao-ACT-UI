@@ -41,7 +41,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, asdict, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 try:
     from config import (
@@ -161,16 +161,38 @@ def _ensure_dirs():
             pass
 
 
-def _http_get_json(url: str, timeout: float = HTTP_TIMEOUT) -> Optional[Dict[str, Any]]:
+def _http_get_json(url: str, timeout: float = HTTP_TIMEOUT) -> Tuple[int, Optional[Dict[str, Any]], str]:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status = int(getattr(resp, "status", 200) or 200)
             data = resp.read()
-            return json.loads(data.decode("utf-8"))
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, json.JSONDecodeError):
-        return None
-    except Exception:
-        return None
+            if not data:
+                return status, None, ""
+            return status, json.loads(data.decode("utf-8")), ""
+    except urllib.error.HTTPError as e:
+        body = b""
+        try:
+            body = e.read()
+        except Exception:
+            body = b""
+        payload: Optional[Dict[str, Any]] = None
+        if body:
+            try:
+                parsed = json.loads(body.decode("utf-8"))
+                payload = parsed if isinstance(parsed, dict) else None
+            except Exception:
+                payload = None
+        return int(getattr(e, "code", 0) or 0), payload, f"更新服务返回 HTTP {getattr(e, 'code', 'error')}"
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", None)
+        return 0, None, f"无法连接更新服务: {reason or e}"
+    except TimeoutError:
+        return 0, None, "连接更新服务超时"
+    except (ValueError, json.JSONDecodeError) as e:
+        return 0, None, f"更新服务响应无效: {e}"
+    except Exception as e:
+        return 0, None, f"更新服务异常: {e}"
 
 
 def _http_download(
@@ -357,9 +379,47 @@ class UpdateManager:
             return
         self._set_state(state=STATE_CHECKING, error="", progress=0.0)
         url = f"{self.host}/api/update/latest?channel={self.channel}&target={UPDATE_TARGET}&current={APP_VERSION}"
-        data = _http_get_json(url)
+        status_code, data, fetch_error = _http_get_json(url)
+        if status_code in (204, 404):
+            with self._lock:
+                self.manifest = None
+            self._set_state(
+                state=STATE_UP_TO_DATE,
+                latest_version=APP_VERSION,
+                force_required=False,
+                package_type="",
+                notes="",
+                published_at="",
+                download_url="",
+                sha256="",
+                size=0,
+                error="",
+                last_checked=time.time(),
+            )
+            return
+        if data and data.get("available") is False:
+            with self._lock:
+                self.manifest = None
+            self._set_state(
+                state=STATE_UP_TO_DATE,
+                latest_version=str(data.get("version") or APP_VERSION),
+                force_required=False,
+                package_type="",
+                notes="",
+                published_at="",
+                download_url="",
+                sha256="",
+                size=0,
+                error="",
+                last_checked=time.time(),
+            )
+            return
         if not data:
-            self._set_state(state=STATE_ERROR, error="无法连接更新服务", last_checked=time.time())
+            self._set_state(
+                state=STATE_ERROR,
+                error=fetch_error or "无法连接更新服务",
+                last_checked=time.time(),
+            )
             return
         manifest = UpdateManifest.from_json(data)
         with self._lock:
