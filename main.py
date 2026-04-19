@@ -94,12 +94,11 @@ def _bootstrap_runtime_overrides():
     except Exception as e:
         print(f'[main] bootstrap path setup failed: {e}', flush=True)
 
-    # update.exe bootstrap promotion: 把 runtime/update.exe 提升到顶层
+    # config.py already owns all update.exe / update.exe.new bootstrap
+    # promotion paths. Import it here to trigger those handlers exactly once
+    # without re-running the older updater-side bootstrap.
     try:
-        from sao_updater import promote_runtime_update_exe
-        promoted = promote_runtime_update_exe()
-        if promoted:
-            print('[main] update.exe 已从 runtime/ 提升到顶层', flush=True)
+        import config  # noqa: F401
     except Exception as e:
         print(f'[main] update.exe promote skipped: {e}', flush=True)
     return
