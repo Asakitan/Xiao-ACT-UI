@@ -343,8 +343,10 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.3"
+APP_VERSION = "2.2.4"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.2.4:
+#   修正阴影残留。
 # v2.2.3:
 #   [entity HP 右侧外观修正] 把 HP 条右侧壳层改回接近 webview 的结构:
 #   xt_right 不再整块实心铺满，而是左半实体、右半渐隐到底层 cover；
