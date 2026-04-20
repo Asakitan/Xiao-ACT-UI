@@ -1172,6 +1172,8 @@ class PacketBridge:
             updates['player_name'] = player.name
         if player.uid and self._use_packet_source('identity'):
             updates['player_id'] = str(player.uid)
+        if getattr(player, 'fight_point', 0) > 0 and self._use_packet_source('identity'):
+            updates['fight_point'] = player.fight_point
         if player.level > 0 and self._use_packet_source('level'):
             updates['level_base'] = player.level
 

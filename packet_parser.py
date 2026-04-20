@@ -1336,6 +1336,8 @@ class PacketParser:
         - 怪物缓存 (旧场景的怪物不会出现在新场景)
         - 服务器时间偏移 (新服务器有独立时间)
         - 副本 ID 追踪 (防止后续 SyncDungeonData 二次重置)
+        - 同步计数器 (新服务器需要重新接收首个 full sync)
+        - 场景 ID (新服务器/地图的场景 ID 需要重新识别)
 
         保留:
         - 玩家数据 (player identity/profession 跨场景不变)
@@ -1359,6 +1361,10 @@ class PacketParser:
         # 把已经由 SyncNearEntities 填充的新怪物清空 (包括 MAX_HP)
         # → 后续 AoiSyncDelta 只发 HP 增量 → max_hp=0 → boss bar 失效。
         self._last_dungeon_id = 0
+        # 重置同步计数: 新连接需要重新接收首个 full sync
+        self._sync_container_count = 0
+        # 重置场景 ID: 新服务器/地图的场景 ID 需要重新识别
+        self._last_scene_id = 0
         self.stats['scene_changes'] += 1
         logger.info(
             f'[Parser] 场景重置: 清除 {old_count} 个怪物, '
@@ -2062,12 +2068,25 @@ class PacketParser:
             server_raw = outer.get(2, [None])[0]
             server_name = server_raw.decode('utf-8', 'ignore') if isinstance(server_raw, bytes) else ''
             logger.info(f'[Parser] EnterGame: uid={uid} server={server_name!r}')
+            print(f'[Parser] EnterGame: uid={uid} server={server_name!r}', flush=True)
             _append_packet_debug('enter_game', {
                 'uid': uid, 'server_name': server_name,
             })
+            # 重置同步计数: 重新登录时需要接收新的 full sync
+            if self._sync_container_count > 0:
+                logger.info(
+                    f'[Parser] EnterGame 重置 sync_container_count '
+                    f'({self._sync_container_count} → 0)'
+                )
+                self._sync_container_count = 0
             if uid > 0 and self._current_uid == 0:
                 self._current_uid = uid
                 logger.info(f'[Parser] auto-adopt UID from EnterGame: {uid}')
+            elif uid > 0 and uid != self._current_uid:
+                logger.info(
+                    f'[Parser] EnterGame UID 变更: {self._current_uid} → {uid} (切换角色?)'
+                )
+                self._current_uid = uid
         except Exception as e:
             logger.debug(f'[Parser] EnterGame decode error: {e}')
 
@@ -2630,6 +2649,17 @@ class PacketParser:
                     logger.info(
                         f'[Parser] 场景ID变更: {self._last_scene_id} → {new_scene_id} uid={uid}'
                     )
+                    print(
+                        f'[Parser] ⚡ 地图切换: 场景 {self._last_scene_id} → {new_scene_id}',
+                        flush=True,
+                    )
+                    # 同服地图切换: 不 reset_scene (SyncNearEntities 已填充新怪物),
+                    # 但需通知上层 UI 更新 (清理 Boss HP / DPS 等旧场景数据)
+                    if self._on_scene_change:
+                        try:
+                            self._on_scene_change()
+                        except Exception as e:
+                            logger.error(f'[Parser] on_scene_change callback error: {e}')
                 self._last_scene_id = new_scene_id
             player.extended_data['SCENE_DATA'] = scene
             logger.info(f'[Parser] CharSerialize SceneData(pb2): {scene} uid={uid}')

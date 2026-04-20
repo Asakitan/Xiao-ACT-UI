@@ -180,6 +180,32 @@ def _normalize_url(url: str, base_url: str) -> str:
     return base_url.rstrip("/") + "/" + url
 
 
+# ── Version comparison (mirrors sao_updater._parse_version) ──────────
+def _parse_version(v: str) -> tuple:
+    raw = (v or "").strip().lstrip("vV")
+    if not raw:
+        return (0, 0, 0, 0)
+    parts = []
+    for chunk in raw.split(".")[:4]:
+        try:
+            parts.append(int(chunk))
+        except ValueError:
+            parts.append(0)
+    while len(parts) < 4:
+        parts.append(0)
+    return tuple(parts[:4])
+
+
+def compare_versions(a: str, b: str) -> int:
+    pa, pb = _parse_version(a), _parse_version(b)
+    if pa < pb:
+        return -1
+    if pa > pb:
+        return 1
+    return 0
+
+
+# ── Manifest / version-chain helpers ─────────────────────────────────
 def _load_manifest(channel: str, target: str) -> Optional[dict]:
     safe_channel, safe_target = _safe_channel_target(channel, target)
     path = os.path.join(DEFAULT_RELEASE_DIR, safe_channel, safe_target, "manifest.json")
@@ -190,6 +216,52 @@ def _load_manifest(channel: str, target: str) -> Optional[dict]:
             return json.load(f)
     except Exception:
         return None
+
+
+def _load_versioned_manifest(channel: str, target: str, version: str) -> Optional[dict]:
+    safe_ch, safe_tg = _safe_channel_target(channel, target)
+    safe_ver = "".join(c for c in version if c.isalnum() or c in ".-")
+    path = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg, f"manifest-{safe_ver}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _load_versions_index(channel: str, target: str) -> list:
+    safe_ch, safe_tg = _safe_channel_target(channel, target)
+    path = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg, "versions.json")
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return sorted(data, key=lambda v: _parse_version(v))
+        return []
+    except Exception:
+        return []
+
+
+def _save_versions_index(channel: str, target: str, versions: list):
+    safe_ch, safe_tg = _safe_channel_target(channel, target)
+    d = os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg)
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "versions.json")
+    sorted_versions = sorted(set(versions), key=lambda v: _parse_version(v))
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(sorted_versions, f, ensure_ascii=False, indent=2)
+
+
+def _find_next_version(versions: list, current: str) -> str:
+    """Return the first version in the sorted list that is > current."""
+    for v in versions:
+        if compare_versions(v, current) > 0:
+            return v
+    return ""
 
 
 def _empty_manifest_response(channel: str, target: str, current: Optional[str] = None) -> dict:
@@ -236,14 +308,55 @@ def latest(
     target: str = "windows-x64",
     current: Optional[str] = None,
 ):
-    manifest = _load_manifest(channel, target)
-    if not manifest:
+    """按版本链顺序下发更新.
+
+    规则:
+      1. current 未提供 → 返回最新 manifest (向后兼容)
+      2. current >= latest.version → available=false (已是最新)
+      3. latest.minimum_version 存在且 current < minimum_version → 返回最新 (强制跳版本)
+      4. 否则 → 从 versions.json 找到 current 的下一个版本, 返回对应 manifest
+      5. 找不到 / 文件缺失 → 回退返回最新 manifest
+    """
+    safe_ch, safe_tg = _safe_channel_target(channel, target)
+    latest_manifest = _load_manifest(safe_ch, safe_tg)
+    if not latest_manifest:
         return JSONResponse(_empty_manifest_response(channel, target, current))
+
     base_url = str(request.base_url).rstrip("/")
-    manifest = dict(manifest)
-    manifest.setdefault("available", True)
-    manifest["download_url"] = _normalize_url(manifest.get("download_url", ""), base_url)
-    return JSONResponse(manifest)
+    current_ver = (current or "").strip()
+    latest_ver = latest_manifest.get("version", "")
+
+    def _finalize(m: dict) -> JSONResponse:
+        m = dict(m)
+        m.setdefault("available", True)
+        m["download_url"] = _normalize_url(m.get("download_url", ""), base_url)
+        return JSONResponse(m)
+
+    # (1) No current → return latest
+    if not current_ver:
+        return _finalize(latest_manifest)
+
+    # (2) Client >= latest → up to date
+    if compare_versions(current_ver, latest_ver) >= 0:
+        resp = _empty_manifest_response(channel, target, current)
+        resp["version"] = latest_ver
+        return JSONResponse(resp)
+
+    # (3) minimum_version force jump
+    min_ver = (latest_manifest.get("minimum_version") or "").strip()
+    if min_ver and compare_versions(current_ver, min_ver) < 0:
+        return _finalize(latest_manifest)
+
+    # (4) Sequential: find next version after current
+    versions = _load_versions_index(safe_ch, safe_tg)
+    next_ver = _find_next_version(versions, current_ver)
+    if next_ver and next_ver != latest_ver:
+        versioned = _load_versioned_manifest(safe_ch, safe_tg, next_ver)
+        if versioned:
+            return _finalize(versioned)
+
+    # (5) Fallback to latest
+    return _finalize(latest_manifest)
 
 
 @app.get("/api/update/summary")
@@ -391,6 +504,15 @@ async def publish(
     manifest_path = os.path.join(target_dir, "manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    # Per-version manifest + versions index (sequential delivery)
+    versioned_path = os.path.join(target_dir, f"manifest-{safe_ver}.json")
+    with open(versioned_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    versions = _load_versions_index(safe_ch, safe_tg)
+    if safe_ver not in versions:
+        versions.append(safe_ver)
+    _save_versions_index(safe_ch, safe_tg, versions)
 
     if (commit or "").strip():
         _set_anchor(

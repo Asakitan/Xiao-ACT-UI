@@ -14,7 +14,7 @@ from typing import Optional, List, Callable
 # 缓存字段名列表
 _CACHE_FIELDS = (
     'player_name', 'level_base', 'level_extra', 'player_id',
-    'season_exp',
+    'season_exp', 'fight_point',
     'hp_current', 'hp_max', 'hp_pct',
     'stamina_current', 'stamina_max', 'stamina_pct',
     'profession_id', 'profession_name',
@@ -23,7 +23,7 @@ _CACHE_FIELDS = (
 # 身份类字段: 仅当新值有效 (非零/非空) 时才覆写缓存
 _CACHE_IDENTITY_FIELDS = frozenset((
     'player_name', 'level_base', 'level_extra', 'player_id',
-    'profession_id', 'profession_name',
+    'profession_id', 'profession_name', 'fight_point',
 ))
 
 
@@ -92,6 +92,7 @@ class GameState:
     level_extra: int = 0               # 括号内加成等级 (+XX)
     season_exp: int = 0                # 当前赛季/extraLevel EXP
     player_id: str = ''                # 玩家编号
+    fight_point: int = 0               # 战斗力
 
     # ── 生命值 ──
     hp_current: int = 0
