@@ -1440,14 +1440,18 @@ class SAOPlayerGUI:
 
             self._state_mgr = GameStateManager()
             cfg_settings = CfgSettings()
-
-            # 加载上次缓存的游戏状态 (立即显示)
-            self._state_mgr.load_cache(cfg_settings)
             self._cfg_settings_ref = cfg_settings
+
+            # v2.1.18: 必须先 subscribe 再 load_cache, 否则 load_cache 内部对订阅者
+            # 的初始通知会因为 _on_game_state_update 还没注册而被丢弃, 导致 entity 面板
+            # 启动时显示不出从 webview 切过来时持久化的角色名/等级/HP 等.
             try:
                 self._state_mgr.subscribe(self._on_game_state_update)
             except Exception:
                 pass
+
+            # 加载上次缓存的游戏状态 (立即显示)
+            self._state_mgr.load_cache(cfg_settings)
 
             # Restore sound settings
             try:

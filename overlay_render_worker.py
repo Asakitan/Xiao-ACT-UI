@@ -109,20 +109,70 @@ def _recommended_lane_count() -> int:
     cpu_total = max(1, os.cpu_count() or 1)
     if cpu_total <= 2:
         return 1
-    return max(2, min(4, cpu_total - 1))
+    if cpu_total <= 4:
+        return 2
+    if cpu_total <= 6:
+        return 3
+    if cpu_total <= 8:
+        return 4
+    # v2.1.16: high-core systems (≥12c) get up to 6 lanes so 5–6 panels +
+    # menu can compose in parallel instead of serializing on 4 lanes.
+    return min(6, cpu_total - 2)
 
 
 def _recommended_cpu_task_workers() -> int:
     cpu_total = max(1, os.cpu_count() or 1)
     if cpu_total <= 2:
         return 1
-    return max(2, min(6, cpu_total - 1))
+    if cpu_total <= 6:
+        return max(2, min(4, cpu_total - 1))
+    return min(8, cpu_total - 2)
+
+
+# v2.1.16: pin background render threads to specific CPU cores on Windows.
+# Reduces context-switch thrash + improves L1/L2 cache locality when several
+# panels compose in parallel during heavy combat (DPS+BossHP+Burst+menu).
+_AFFINITY_CURSOR = itertools.count(2)  # leave cores 0/1 for Tk + capture
+_AFFINITY_LOCK = threading.Lock()
+_AFFINITY_FAILED = False
+
+
+def _pin_current_thread_to_core(slot: int) -> None:
+    """Pin the calling thread to a single CPU core on Windows."""
+    global _AFFINITY_FAILED
+    if _AFFINITY_FAILED:
+        return
+    cpu_total = max(1, os.cpu_count() or 1)
+    if cpu_total <= 2:
+        return
+    core_id = slot % cpu_total
+    try:
+        kernel32 = ctypes.windll.kernel32
+        # SetThreadAffinityMask(HANDLE hThread, DWORD_PTR mask) -> DWORD_PTR
+        kernel32.SetThreadAffinityMask.restype = ctypes.c_size_t
+        kernel32.SetThreadAffinityMask.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        h_thread = kernel32.GetCurrentThread()
+        mask = ctypes.c_size_t(1 << core_id)
+        if kernel32.SetThreadAffinityMask(h_thread, mask) == 0:
+            _AFFINITY_FAILED = True
+    except Exception:
+        _AFFINITY_FAILED = True
+
+
+def _next_affinity_slot() -> int:
+    with _AFFINITY_LOCK:
+        return next(_AFFINITY_CURSOR)
+
+
+def _cpu_pool_initializer() -> None:
+    _pin_current_thread_to_core(_next_affinity_slot())
 
 
 _cpu_task_workers = _recommended_cpu_task_workers()
 _cpu_task_pool = ThreadPoolExecutor(
     max_workers=_cpu_task_workers,
     thread_name_prefix='overlay-layer',
+    initializer=_cpu_pool_initializer,
 )
 
 
@@ -206,6 +256,7 @@ class _RenderLane:
         self._results: Dict[int, FrameBuffer] = {}
         self._workers: list[int] = []
         self._cursor = 0
+        self._affinity_slot = _next_affinity_slot()
         self._thread = threading.Thread(
             target=self._loop,
             daemon=True,
@@ -267,6 +318,7 @@ class _RenderLane:
         return worker_id, job
 
     def _loop(self) -> None:
+        _pin_current_thread_to_core(self._affinity_slot)
         while True:
             with self._lock:
                 while not self._pending:

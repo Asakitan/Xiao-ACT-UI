@@ -25,14 +25,16 @@ _SLACK_SEC = 0.0015
 
 
 class _Job:
-    __slots__ = ('ident', 'tick_fn', 'animating_fn', 'phase')
+    __slots__ = ('ident', 'tick_fn', 'animating_fn', 'visibility_fn', 'phase')
 
     def __init__(self, ident: str,
                  tick_fn: Callable[[float], None],
-                 animating_fn: Callable[[], bool]):
+                 animating_fn: Callable[[], bool],
+                 visibility_fn: Optional[Callable[[], bool]] = None):
         self.ident = ident
         self.tick_fn = tick_fn
         self.animating_fn = animating_fn
+        self.visibility_fn = visibility_fn
         # Stagger idle ticks across overlays so they don't all pile onto
         # the same frame.
         self.phase = 0
@@ -40,6 +42,11 @@ class _Job:
 
 class OverlayScheduler:
     IDLE_EVERY_N = 3   # 60 Hz / 3 = 20 Hz when idle
+    # v2.1.16: when frames take longer than this, throttle idle panels harder
+    # so animating panels keep their 60 Hz budget instead of all 6+ overlays
+    # piling onto every frame during heavy combat.
+    OVERLOADED_FRAME_MS = 13.0
+    IDLE_EVERY_N_OVERLOADED = 6   # ~10 Hz for idle panels under load
 
     def __init__(self, root):
         self._root = root
@@ -76,9 +83,10 @@ class OverlayScheduler:
 
     def register(self, ident: str,
                  tick_fn: Callable[[float], None],
-                 animating_fn: Callable[[], bool]) -> None:
+                 animating_fn: Callable[[], bool],
+                 visibility_fn: Optional[Callable[[], bool]] = None) -> None:
         with self._jobs_lock:
-            job = _Job(ident, tick_fn, animating_fn)
+            job = _Job(ident, tick_fn, animating_fn, visibility_fn)
             job.phase = len(self._jobs) % self.IDLE_EVERY_N
             self._jobs[ident] = job
         if not self._running:
@@ -124,12 +132,26 @@ class OverlayScheduler:
             jobs = list(self._jobs.values())
 
         frame = self._frame_idx
+        # v2.1.16: pick idle skip period adaptively from recent frame cost.
+        # When we're consistently above ~13 ms (5+ overlays + recognition
+        # GIL contention), bump idle panels down to ~10 Hz so animating
+        # panels stay smooth.
+        idle_n = (
+            self.IDLE_EVERY_N_OVERLOADED
+            if self.avg_frame_ms >= self.OVERLOADED_FRAME_MS
+            else self.IDLE_EVERY_N
+        )
         for job in jobs:
+            try:
+                if job.visibility_fn is not None and not bool(job.visibility_fn()):
+                    continue
+            except Exception:
+                pass
             try:
                 animating = bool(job.animating_fn())
             except Exception:
                 animating = True
-            if not animating and ((frame + job.phase) % self.IDLE_EVERY_N) != 0:
+            if not animating and ((frame + job.phase) % idle_n) != 0:
                 continue
             try:
                 job.tick_fn(now)
