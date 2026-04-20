@@ -34,7 +34,7 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from overlay_scheduler import get_scheduler as _get_scheduler
-from overlay_render_worker import AsyncFrameWorker, ulw_commit
+from overlay_render_worker import AsyncFrameWorker, submit_ulw_commit
 from render_capture_sync import wait_until_capture_idle
 from config import FONTS_DIR
 
@@ -450,7 +450,7 @@ class DpsOverlay:
     FADE_IN = 0.28
     FADE_OUT = 0.26
 
-    TICK_MS = 16          # ~60 FPS while animating
+    TICK_MS = 16          # damping coefficient base; not scheduling rate (overlay_scheduler owns Hz)
     IDLE_TICK_MS = 60     # idle refresh still drives clock / fade-out
 
     def __init__(self, root: tk.Tk, settings: Any = None,
@@ -913,7 +913,7 @@ class DpsOverlay:
                         pass
                     self._last_rendered_size = sz
                 try:
-                    ulw_commit(self._hwnd, fb)
+                    submit_ulw_commit(self._hwnd, fb)
                 except Exception as e:
                     print(f'[DPS-OV] ulw error: {e}')
 

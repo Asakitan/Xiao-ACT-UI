@@ -42,7 +42,7 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from overlay_scheduler import get_scheduler as _get_scheduler
-from overlay_render_worker import AsyncFrameWorker, FrameBuffer, run_cpu_tasks, ulw_commit
+from overlay_render_worker import AsyncFrameWorker, FrameBuffer, run_cpu_tasks, submit_ulw_commit
 from overlay_subpixel import subpixel_alpha_composite
 from render_capture_sync import wait_until_capture_idle
 
@@ -163,7 +163,7 @@ class BurstReadyOverlay:
         # Tick
         self._tick_id: Optional[str] = None
         self._registered: bool = False
-        self._render_worker = AsyncFrameWorker()
+        self._render_worker = AsyncFrameWorker(prefer_isolation=True)
 
         # Static cache of caption panel (without alpha fade) for current size
         self._cap_static: Optional[Image.Image] = None
@@ -632,7 +632,7 @@ void main() {
         if not self._hwnd or fb is None:
             return False
         try:
-            return bool(ulw_commit(
+            return bool(submit_ulw_commit(
                 self._hwnd,
                 fb,
                 allow_during_capture=True,
@@ -770,12 +770,34 @@ void main() {
             if r_out > 8:
                 self._get_ring_layer(r_out, sample_pulse)
 
+    def _get_layer_buf(self, name: str, w: int, h: int) -> Image.Image:
+        """Get-or-allocate a recycled full-screen RGBA buffer.
+
+        v2.2.11 Phase 2: replaces the per-frame ``Image.new('RGBA', (W,H))``
+        in each of compose_frame's 4 layers, eliminating ~32 MB / frame
+        allocator churn at 1080p (≈2 GB/s at 60 Hz). The buffer is
+        alpha-zeroed in place before return; safe because each layer name
+        is rendered by a single task at a time.
+        """
+        cache = getattr(self, '_layer_bufs', None)
+        if cache is None:
+            cache = {}
+            self._layer_bufs = cache
+        img = cache.get(name)
+        if img is None or img.size != (w, h):
+            img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+            cache[name] = img
+            return img
+        # Zero in place (memset under the hood, ~0.05 ms for 1080p).
+        img.paste((0, 0, 0, 0), (0, 0, w, h))
+        return img
+
     def _render_ring_layer(
         self,
         now: float,
         sample_specs: Tuple[Tuple[float, float], ...],
     ) -> Optional[Image.Image]:
-        layer = Image.new('RGBA', (int(self._win_w), int(self._win_h)), (0, 0, 0, 0))
+        layer = self._get_layer_buf('ring', int(self._win_w), int(self._win_h))
         drew = False
         for sample_offset, sample_weight in sample_specs:
             sample_now = now - sample_offset
@@ -794,7 +816,7 @@ void main() {
         now: float,
         sample_specs: Tuple[Tuple[float, float], ...],
     ) -> Optional[Image.Image]:
-        layer = Image.new('RGBA', (int(self._win_w), int(self._win_h)), (0, 0, 0, 0))
+        layer = self._get_layer_buf('beam', int(self._win_w), int(self._win_h))
         drew = False
         for sample_offset, sample_weight in sample_specs:
             sample_now = now - sample_offset
@@ -813,7 +835,7 @@ void main() {
         now: float,
         sample_specs: Tuple[Tuple[float, float], ...],
     ) -> Optional[Image.Image]:
-        layer = Image.new('RGBA', (int(self._win_w), int(self._win_h)), (0, 0, 0, 0))
+        layer = self._get_layer_buf('caption', int(self._win_w), int(self._win_h))
         drew = False
         for sample_offset, sample_weight in sample_specs:
             sample_now = now - sample_offset
@@ -829,7 +851,7 @@ void main() {
 
     def compose_frame(self, now: float) -> Image.Image:
         W, H = int(self._win_w), int(self._win_h)
-        img = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+        img = self._get_layer_buf('main', W, H)
 
         enter_t, exit_t, alpha_mul, _pulse = self._frame_anim_state(now)
         if alpha_mul <= 0.01:
@@ -841,16 +863,16 @@ void main() {
         # 0) Webview-like GPU energy pass.
         self._draw_glfx(img, now, alpha_mul)
 
-        if len(sample_specs) <= 2:
-            ring_layer = self._render_ring_layer(now, sample_specs)
-            beam_layer = self._render_beam_layer(now, sample_specs)
-            caption_layer = self._render_caption_layer(now, sample_specs)
-        else:
-            ring_layer, beam_layer, caption_layer = run_cpu_tasks([
-                lambda: self._render_ring_layer(now, sample_specs),
-                lambda: self._render_beam_layer(now, sample_specs),
-                lambda: self._render_caption_layer(now, sample_specs),
-            ])
+        # v2.2.10: always fan out the three independent layers across the
+        # shared CPU pool — the prior `if len(sample_specs) <= 2` gate
+        # collapsed steady-state SkillFX into a single thread, so on multi-
+        # core boxes we were leaving 2 cores idle while compose blocked the
+        # render lane (visible as menu+SkillFX combat stutter).
+        ring_layer, beam_layer, caption_layer = run_cpu_tasks([
+            lambda: self._render_ring_layer(now, sample_specs),
+            lambda: self._render_beam_layer(now, sample_specs),
+            lambda: self._render_caption_layer(now, sample_specs),
+        ])
         for layer in (ring_layer, beam_layer, caption_layer):
             if layer is not None:
                 img.alpha_composite(layer)
