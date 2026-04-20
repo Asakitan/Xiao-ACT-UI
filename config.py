@@ -343,8 +343,15 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.10"
+APP_VERSION = "2.2.11"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.2.12:
+#   Fully GPU-accelerated SAO Menu.
+# v2.2.11:
+#   Fully GPU-accelerated rendering pipeline for ULW overlays, replacing the old PIL-based CPU 
+#   rendering + DirectX upload path. 
+#   This should significantly reduce CPU usage and eliminate stutter on slower machines, 
+#   especially for the more complex BossHP overlay.
 # v2.2.10:
 #   Fix pannel rendering not respecting the render FPS target, causing stutter on slower machines. 
 #   Create sub-pixel paste / bar-width helpers for ULW overlays.

@@ -251,6 +251,99 @@ def ulw_commit(hwnd: int, fb: FrameBuffer, alpha: int = 255,
     return True
 
 
+# ── v2.2.11 Phase 5: off-main-thread ULW commit queue ──
+#
+# UpdateLayeredWindow currently runs on the Tk main thread, costing
+# ~0.2-0.3 ms per panel × 5 panels per tick = ~1.5 ms of main-thread
+# overhead during heavy combat. Moving it to a single dedicated worker
+# thread (``ulw-commit``) frees that budget for Tk event pumping.
+#
+# Single-thread design: GDI itself is thread-safe across HWNDs, but two
+# threads racing the *same* HWND causes garbled output. With one queue
+# and per-HWND dedup (latest frame wins) we get the win without that
+# risk. Falling back to synchronous commit when the queue is disabled
+# keeps the rollback path trivial.
+#
+# Toggle via env var ``SAO_ASYNC_ULW=0`` to disable; default on.
+
+_ULW_QUEUE_ENABLED = os.environ.get('SAO_ASYNC_ULW', '1') != '0'
+
+# Per-HWND latest-pending FrameBuffer + its commit args.
+_ulw_pending: Dict[int, Tuple[FrameBuffer, int, bool]] = {}
+_ulw_lock = threading.Lock()
+_ulw_cond = threading.Condition(_ulw_lock)
+_ulw_thread: Optional[threading.Thread] = None
+_ulw_thread_started = False
+
+
+def _ulw_commit_worker() -> None:
+    while True:
+        with _ulw_cond:
+            while not _ulw_pending:
+                _ulw_cond.wait(timeout=0.5)
+            # Snapshot all pending hwnds in submission order, latest only.
+            jobs = list(_ulw_pending.items())
+            _ulw_pending.clear()
+        for hwnd, (fb, alpha, allow_during_capture) in jobs:
+            try:
+                ulw_commit(hwnd, fb, alpha=alpha,
+                           allow_during_capture=allow_during_capture)
+            except Exception as exc:
+                try:
+                    print(f'[ULW] commit error hwnd={hwnd}: {exc}')
+                except Exception:
+                    pass
+
+
+def _ensure_ulw_thread() -> None:
+    global _ulw_thread, _ulw_thread_started
+    if _ulw_thread_started:
+        return
+    with _ulw_lock:
+        if _ulw_thread_started:
+            return
+        _ulw_thread_started = True
+    _ulw_thread = threading.Thread(
+        target=_ulw_commit_worker,
+        daemon=True,
+        name='ulw-commit',
+    )
+    _ulw_thread.start()
+
+
+def submit_ulw_commit(hwnd: int, fb: FrameBuffer, alpha: int = 255,
+                      allow_during_capture: bool = False) -> bool:
+    """Enqueue a frame for the ulw-commit worker thread.
+
+    Drops any earlier-but-not-yet-committed frame for the same HWND so
+    the worker always presents the freshest content. When the async
+    queue is disabled (env ``SAO_ASYNC_ULW=0``) this falls through to
+    a synchronous commit on the calling thread.
+
+    Returns True when the frame was enqueued (or committed synchronously
+    successfully).
+    """
+    if not _ULW_QUEUE_ENABLED:
+        try:
+            return ulw_commit(hwnd, fb, alpha=alpha,
+                              allow_during_capture=allow_during_capture)
+        except Exception:
+            return False
+    _ensure_ulw_thread()
+    with _ulw_cond:
+        _ulw_pending[hwnd] = (fb, int(alpha), bool(allow_during_capture))
+        _ulw_cond.notify()
+    return True
+
+
+def drop_pending_ulw_for(hwnd: int) -> None:
+    """Discard any pending async ULW frame for ``hwnd`` (used on hide/destroy)."""
+    if not _ULW_QUEUE_ENABLED:
+        return
+    with _ulw_cond:
+        _ulw_pending.pop(hwnd, None)
+
+
 # ── Shared async compose backend ──
 
 _worker_id_counter = itertools.count(1)
@@ -328,6 +421,13 @@ class _RenderLane:
 
     def _loop(self) -> None:
         _pin_current_thread_to_core(self._affinity_slot)
+        # v2.2.11 Phase 0: warm up per-thread GL context up-front so the
+        # first frame doesn't pay 30-50 ms of lazy WGL init under load.
+        try:
+            from gpu_renderer import _try_init as _gpu_warmup
+            _gpu_warmup()
+        except Exception:
+            pass
         while True:
             with self._lock:
                 while not self._pending:
@@ -338,10 +438,22 @@ class _RenderLane:
             worker_id, job = picked
             compose_fn, now, hwnd, x, y = job
             try:
-                img = compose_fn(now)
-                w, h = img.size
-                bgra = _premultiply_to_bgra(img)
-                fb = FrameBuffer(bgra, w, h, x, y)
+                result = compose_fn(now)
+                # v2.2.11 Phase 1: panels that fully migrated to the GPU
+                # compositor may return a FrameBuffer directly, skipping
+                # the PIL → numpy → premultiply step entirely.
+                if isinstance(result, FrameBuffer):
+                    fb = result
+                    # Honor caller-supplied placement when overlay moved.
+                    if fb.x != x or fb.y != y:
+                        fb = FrameBuffer(
+                            fb.bgra_bytes, fb.width, fb.height, x, y,
+                        )
+                else:
+                    img = result
+                    w, h = img.size
+                    bgra = _premultiply_to_bgra(img)
+                    fb = FrameBuffer(bgra, w, h, x, y)
                 with self._lock:
                     if worker_id in self._workers:
                         self._results[worker_id] = fb
@@ -358,28 +470,65 @@ class _SharedRenderBackend:
         self._lock = threading.Lock()
         self._lanes = [_RenderLane(index) for index in range(lane_count)]
         self._worker_lanes: Dict[int, int] = {}
+        # v2.2.10: track lanes that have been claimed by a heavy panel
+        # (e.g. SkillFX). Other workers avoid those lanes when there is
+        # an empty lane available, so the menu/HP/DPS workers stop
+        # serialising behind a 33 ms SkillFX compose during combat.
+        self._heavy_lanes: set[int] = set()
 
-    def _pick_lane_locked(self) -> int:
-        lane_loads = [(lane.worker_count(), index) for index, lane in enumerate(self._lanes)]
+    def _pick_lane_locked(self, prefer_isolation: bool = False) -> int:
+        if prefer_isolation:
+            # 1st choice: an empty lane that is not already claimed heavy.
+            empty = [
+                index for index, lane in enumerate(self._lanes)
+                if lane.worker_count() == 0 and index not in self._heavy_lanes
+            ]
+            if empty:
+                return empty[0]
+            # 2nd: any empty lane (drop heavy filter).
+            empty_any = [
+                index for index, lane in enumerate(self._lanes)
+                if lane.worker_count() == 0
+            ]
+            if empty_any:
+                return empty_any[0]
+        # Default: lane with the fewest workers, but penalize heavy lanes
+        # so light panels avoid sharing with SkillFX whenever possible.
+        lane_loads = [
+            (lane.worker_count() + (4 if index in self._heavy_lanes else 0), index)
+            for index, lane in enumerate(self._lanes)
+        ]
         lane_loads.sort(key=lambda item: (item[0], item[1]))
         return lane_loads[0][1]
 
-    def _ensure_lane(self, worker_id: int) -> _RenderLane:
+    def _ensure_lane(self, worker_id: int,
+                     prefer_isolation: bool = False) -> _RenderLane:
         with self._lock:
             lane_index = self._worker_lanes.get(worker_id)
             if lane_index is None:
-                lane_index = self._pick_lane_locked()
+                lane_index = self._pick_lane_locked(prefer_isolation=prefer_isolation)
                 self._worker_lanes[worker_id] = lane_index
+                if prefer_isolation:
+                    self._heavy_lanes.add(lane_index)
             lane = self._lanes[lane_index]
         lane.register(worker_id)
         return lane
 
-    def register(self, worker_id: int) -> None:
-        self._ensure_lane(worker_id)
+    def register(self, worker_id: int, prefer_isolation: bool = False) -> None:
+        self._ensure_lane(worker_id, prefer_isolation=prefer_isolation)
 
     def unregister(self, worker_id: int) -> None:
         with self._lock:
             lane_index = self._worker_lanes.pop(worker_id, None)
+            if lane_index is not None:
+                # Only release the heavy claim if no other heavy worker
+                # still lives on the same lane.
+                still_heavy = any(
+                    self._worker_lanes.get(wid) == lane_index
+                    for wid in self._worker_lanes
+                )
+                if not still_heavy:
+                    self._heavy_lanes.discard(lane_index)
         if lane_index is None:
             return
         self._lanes[lane_index].unregister(worker_id)
@@ -422,10 +571,10 @@ class AsyncFrameWorker:
     and rendering stay on separate lanes.
     """
 
-    def __init__(self):
+    def __init__(self, prefer_isolation: bool = False):
         self._worker_id = next(_worker_id_counter)
         self._backend = _get_shared_backend()
-        self._backend.register(self._worker_id)
+        self._backend.register(self._worker_id, prefer_isolation=prefer_isolation)
         self._stopped = False
 
     def submit(self, compose_fn: Callable[[float], Image.Image],

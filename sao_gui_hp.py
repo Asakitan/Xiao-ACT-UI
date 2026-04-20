@@ -41,7 +41,7 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur, render_shell_rgba as _gpu_shell
 from overlay_scheduler import get_scheduler as _get_scheduler
-from overlay_render_worker import AsyncFrameWorker, ulw_commit
+from overlay_render_worker import AsyncFrameWorker, submit_ulw_commit
 from overlay_subpixel import subpixel_bar_width
 
 from sao_gui_dps import (
@@ -360,7 +360,7 @@ class HpOverlay:
     # Animation tuning
     HP_TWEEN = 0.32
     STA_TWEEN = 0.28
-    TICK_MS = 16          # ~60 FPS while animating
+    TICK_MS = 16          # damping coefficient base; not scheduling rate (overlay_scheduler owns Hz)
     IDLE_TICK_MS = 60
     FADE_IN = 0.60
     FADE_OUT = 0.28
@@ -746,7 +746,7 @@ class HpOverlay:
             fb = self._render_worker.take_result()
             if fb is not None:
                 try:
-                    ulw_commit(self._hwnd, fb)
+                    submit_ulw_commit(self._hwnd, fb)
                 except Exception as e:
                     print(f'[HP-OV] ulw error: {e}')
 
