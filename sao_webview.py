@@ -1583,6 +1583,7 @@ class SAOWebViewGUI:
 
         # 识别相关引用
         self._cfg_settings_ref = None
+        self._cache_loop_stop = threading.Event()
         self._auto_key_engine = None
         self._auto_key_picker_purpose = ''
         self._auto_key_last_menu_state = None
@@ -2400,6 +2401,9 @@ class SAOWebViewGUI:
             cache['season_exp'] = season_exp
         if uid:
             cache['player_id'] = uid
+        fight_point = int(getattr(gs, 'fight_point', 0) or 0) if gs is not None else 0
+        if fight_point > 0:
+            cache['fight_point'] = fight_point
         settings.set('game_cache', cache)
         if save_now:
             try:
@@ -4166,10 +4170,13 @@ class SAOWebViewGUI:
 
             # 启动定时缓存保存 (每30秒)
             import threading as _thr
+            _stop_evt = self._cache_loop_stop
             def _cache_loop():
                 import time as _t
-                while True:
-                    _t.sleep(30)
+                while not _stop_evt.is_set():
+                    _stop_evt.wait(30)
+                    if _stop_evt.is_set():
+                        break
                     try:
                         self._persist_cached_identity_state(save_now=False)
                         self._state_mgr.save_cache(self._cfg_settings_ref)
@@ -5454,6 +5461,9 @@ class SAOWebViewGUI:
         self._recognition_active = False
         self._stop_recognition_engines()
 
+        # 停止后台缓存保存线程, 防止退出后继续写入 stale 数据
+        self._cache_loop_stop.set()
+
         # 退出前保存缓存
         self._save_game_cache(quiet=False)
 
@@ -6506,6 +6516,8 @@ class SAOWebViewGUI:
         self._exit_animating = True
         self._recognition_active = False
         self._stop_recognition_engines()
+        # 停止后台缓存保存线程
+        self._cache_loop_stop.set()
         # 退出前保存缓存
         try:
             self._persist_cached_identity_state(save_now=False)

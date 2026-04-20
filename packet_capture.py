@@ -358,6 +358,36 @@ class TcpReassembler:
                 self._feed_tcp(seq, payload)
             return
 
+        # ─── 同服重连检测 ───
+        # 游戏重新登录到同一服务器时, TCP 连接重建, seq 号完全不同。
+        # 如果包含 c3SB 签名且 seq 与当前流不匹配, 说明是新连接。
+        # 立即重置 TCP 状态, 避免 gap-skip 延迟丢失 SyncContainerData。
+        with self._lock:
+            _seq_match = (self._next_seq == -1 or
+                          self._next_seq == seq or
+                          seq in self._cache)
+        if not _seq_match and self._try_identify(payload, addr):
+            with self._lock:
+                logger.info(
+                    f'[Capture] 同服重连检测: seq 不匹配 '
+                    f'(期望 {self._next_seq}, 收到 {seq}), '
+                    f'重置 TCP 流'
+                )
+                print(
+                    f'[Capture] ⚡ 检测到同服重连 — 重置 TCP 流',
+                    flush=True,
+                )
+                self._next_seq = -1
+                self._cache.clear()
+                self._buf = b''
+                self._gap_since = 0.0
+            # 通知上层: 等同于场景服务器切换
+            if self._on_server_change:
+                try:
+                    self._on_server_change()
+                except Exception as e:
+                    logger.error(f'[Capture] on_server_change callback error: {e}')
+
         # ─── TCP 重组 ───
         self._feed_tcp(seq, payload)
 

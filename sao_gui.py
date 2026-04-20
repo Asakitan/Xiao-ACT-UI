@@ -997,6 +997,7 @@ class SAOPlayerGUI:
         self._state_mgr = None
         self._game_state = None
         self._cfg_settings_ref = None
+        self._cache_loop_stop = threading.Event()
         self._recog_lock = threading.Lock()
 
         # ── AutoKey / BossRaid / DPS 引擎 ──
@@ -1594,10 +1595,12 @@ class SAOPlayerGUI:
 
             # 启动定时缓存保存 (每30秒)
             import threading as _thr
+            _stop_evt = self._cache_loop_stop
             def _cache_loop():
-                import time as _t
-                while True:
-                    _t.sleep(30)
+                while not _stop_evt.is_set():
+                    _stop_evt.wait(30)
+                    if _stop_evt.is_set():
+                        break
                     try:
                         self._persist_cached_identity_state(save_now=False)
                         self._state_mgr.save_cache(self._cfg_settings_ref)
@@ -1803,6 +1806,9 @@ class SAOPlayerGUI:
         uid = str(getattr(gs, 'player_id', '') or '').strip() if gs is not None else ''
         if uid:
             cache['player_id'] = uid
+        fight_point = int(getattr(gs, 'fight_point', 0) or 0) if gs is not None else 0
+        if fight_point > 0:
+            cache['fight_point'] = fight_point
         settings.set('game_cache', cache)
         if save_now:
             try:
@@ -5932,6 +5938,7 @@ void main() {
             pass
         # 停止识别引擎
         self._recognition_active = False
+        self._cache_loop_stop.set()
         self._stop_recognition_engines()
         # 保存缓存
         if self._state_mgr and self._cfg_settings_ref:

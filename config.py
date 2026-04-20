@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.13"
+APP_VERSION = "2.1.15"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.1.13:
 #   1) 抓包层回退至 v1.3.1 基底并补齐三处关键 TCP 重组缺陷：
