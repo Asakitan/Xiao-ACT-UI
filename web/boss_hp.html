@@ -12,17 +12,20 @@
 :root{
     --font-sao:'saoLatin','sao','Segoe UI',sans-serif;
     --font-ui:'saoLatin','sao','yuanJWDCJK','yuanJWD','Segoe UI',sans-serif;
-    --cover-a:rgba(188,190,178,1);
-    --cover-b:rgba(172,174,162,1);
-    --cover-edge:rgba(160,162,150,0.52);
-    --line:rgb(218,215,215);
-    --text-main:rgb(67,68,58);
-    --text-muted:rgba(97,98,86,0.78);
+    /* v2.2.0: SAO Alert flat hi-tech palette (透明度沿用各处自身 alpha) */
+    --cover-a:rgba(255,255,255,1);
+    --cover-b:rgba(234,233,233,1);
+    --cover-edge:rgba(178,180,182,0.50);
+    --line:rgb(220,220,220);
+    --text-main:rgb(100,99,100);
+    --text-muted:rgba(140,135,138,0.86);
     --cyan:rgba(104,228,255,0.62);
+    --cyan-edge:rgba(104,228,255,0.50);
+    --cyan-strong:rgba(104,228,255,0.95);
     --gold:rgba(212,156,23,0.74);
     --gold-strong:rgb(222,166,32);
     --red:rgb(239,104,78);
-    --shadow:rgba(20,24,10,0.26);
+    --shadow:rgba(20,24,40,0.22);
     --fx-pad-top:100px;
     --fx-pad-right:160px;
     --fx-pad-bottom:160px;
@@ -103,14 +106,21 @@ html,body{
     top:0;
     width:560px;
     height:88px;
-    background:linear-gradient(175deg,var(--cover-a) 0%,rgba(180,182,170,1) 48%,var(--cover-b) 100%);
-    border:1px solid var(--cover-edge);
-    border-radius:10px;
+    /* v2.2.0: white-gray flat hi-tech (sao_alert palette) */
+    background:linear-gradient(175deg,var(--cover-a) 0%,rgba(244,244,244,1) 48%,var(--cover-b) 100%);
+    border:1px solid var(--cyan-edge);
+    border-radius:2px;
+    /* BossHP 变体: 两边倒角 + 底部双切 */
+    clip-path:polygon(
+        14px 0, calc(100% - 14px) 0, 100% 14px,
+        100% calc(100% - 14px), calc(100% - 14px) 100%,
+        14px 100%, 0 calc(100% - 14px), 0 14px
+    );
     overflow:hidden;
     box-shadow:
         2px 4px 18px var(--shadow),
-        inset 0 0 22px rgba(255,255,255,0.10),
-        inset 0 1px 0 rgba(255,255,255,0.22);
+        inset 0 0 22px rgba(255,255,255,0.20),
+        inset 0 1px 0 rgba(255,255,255,0.55);
 }
 .boss-cover::before{
     content:'';
@@ -139,8 +149,8 @@ html,body{
     border-bottom:1.5px solid rgba(212,156,23,0.54);
 }
 .boss-box{
-    --bgColor:rgba(207,208,197,1);
-    --hover:rgba(220,222,212,1);
+    --bgColor:rgba(255,255,255,1);
+    --hover:rgba(244,244,244,1);
     position:absolute;
     left:16px;
     top:12px;
@@ -150,7 +160,7 @@ html,body{
     font-family:var(--font-ui);
     color:var(--text-main);
     letter-spacing:1px;
-    filter:drop-shadow(2px 4px 3px rgba(50,50,0,0.22));
+    filter:drop-shadow(2px 4px 3px rgba(60,60,80,0.20));
 }
 .xt_left,.xt_right,.number_xt{height:100%}
 .xt_left{
@@ -868,10 +878,11 @@ html,body{
 .additional-unit {
     width:156px;
     height:38px;
-    background:linear-gradient(175deg,var(--cover-a) 0%,rgba(180,182,170,1) 48%,var(--cover-b) 100%);
-    border:1px solid var(--cover-edge);
-    border-radius:6px;
-    box-shadow:2px 4px 18px var(--shadow),inset 0 0 12px rgba(255,255,255,0.08);
+    background:linear-gradient(175deg,var(--cover-a) 0%,rgba(244,244,244,1) 48%,var(--cover-b) 100%);
+    border:1px solid var(--cyan-edge);
+    border-radius:2px;
+    clip-path:polygon(8px 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    box-shadow:2px 4px 18px var(--shadow),inset 0 0 12px rgba(255,255,255,0.20);
     overflow:hidden;
     position:relative;
     pointer-events:none;

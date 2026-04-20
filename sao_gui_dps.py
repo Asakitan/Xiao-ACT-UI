@@ -404,28 +404,29 @@ class DpsOverlay:
     CLICK_DRAG_THRESHOLD = 6
 
     # Colors (parity with web/dps.html CSS vars, alpha 0-255)
-    PANEL_BG_A = (203, 205, 194, 255)   # opaque shell bg to avoid hollow panel body
-    PANEL_BG_B = (216, 218, 206, 255)   # opaque shell bg to avoid hollow panel body
-    PANEL_EDGE = (160, 162, 150, 255)   # opaque outline for ULW readability
+    # v2.2.0: SAO Alert flat hi-tech — 纯白+略灰, 透明度保持
+    PANEL_BG_A = (255, 255, 255, 255)   # opaque shell bg to avoid hollow panel body
+    PANEL_BG_B = (234, 233, 233, 255)   # opaque shell bg to avoid hollow panel body
+    PANEL_EDGE = (178, 180, 182, 255)   # opaque outline for ULW readability
     PANEL_LINE = (255, 255, 255, 255)   # opaque highlight line
     INNER_HIGHLIGHT = (255, 255, 255, 255)  # opaque inner border
-    HAIRLINE_LIGHT = (240, 242, 234, 255)
-    HAIRLINE_MID = (224, 226, 216, 255)
-    HAIRLINE_DARK = (102, 104, 92, 255)
+    HAIRLINE_LIGHT = (250, 250, 250, 255)
+    HAIRLINE_MID = (228, 228, 228, 255)
+    HAIRLINE_DARK = (140, 138, 138, 255)
     SCAN_LINE = (255, 255, 255, 14)         # ::before 0.055
-    TEXT_MAIN = (83, 84, 73, 255)
-    TEXT_MUTED = (139, 139, 130, 255)
+    TEXT_MAIN = (100, 99, 100, 255)
+    TEXT_MUTED = (140, 135, 138, 255)
     GOLD = (222, 166, 32, 255)
     GOLD_SOFT = (222, 166, 32, 56)
     CYAN = (104, 228, 255, 255)         # structural cyan lines stay opaque
-    DIVIDER = (160, 162, 150, 255)      # opaque section divider
+    DIVIDER = (178, 180, 182, 255)      # opaque section divider
     LIST_BG = (255, 255, 255, 46)       # list-frame bg 0.18
-    LIST_BORDER = (160, 162, 150, 255)  # opaque list border
+    LIST_BORDER = (178, 180, 182, 255)  # opaque list border
     ROW_BG = (255, 255, 255, 122)       # entity-row bg 0.48
-    ROW_BORDER = (160, 162, 150, 255)   # opaque row border
+    ROW_BORDER = (178, 180, 182, 255)   # opaque row border
     ROW_SELF_BAR = (222, 166, 32, 255)  # border-left on .self
     BTN_BG = (255, 255, 255, 112)       # .sao-btn bg 0.44
-    BTN_BORDER = (160, 162, 150, 255)   # opaque button border
+    BTN_BORDER = (178, 180, 182, 255)   # opaque button border
     BTN_LIVE_ACTIVE = (104, 228, 255, 31)    # secondary.active 0.12
     BTN_LIVE_BORDER = (104, 228, 255, 255)   # opaque live border
     BTN_LIVE_COLOR = (68, 144, 162, 255)     # secondary.active color

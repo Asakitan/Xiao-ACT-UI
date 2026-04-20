@@ -2028,9 +2028,12 @@ class SAOWebViewGUI:
             # Set flag synchronously so _sync_identity_alert
             # won't dismiss the alert even if engine.running isn't set yet.
             self._hide_seek_alert_active = True
-            # Show the initial alert with sound
+            # Show the initial alert with sound — kind='hide_seek' so the
+            # auto-dismiss timer in _hide_identity_alert_window will refuse
+            # to close it as long as the engine is still running.
             self._show_identity_alert_window(
-                "AUTO HIDE & SEEK", "Auto Hide'seek is on", duration_ms=60000)
+                "AUTO HIDE & SEEK", "Auto Hide'seek is on",
+                duration_ms=60000, alert_kind='hide_seek')
             # Start periodic refresh to keep the alert visible
             self._schedule_hide_seek_alert_refresh()
         except Exception as e:
@@ -2083,7 +2086,7 @@ class SAOWebViewGUI:
         # Re-show without sound — this resets the 60s auto-hide timer via nonce
         self._show_identity_alert_window(
             "AUTO HIDE & SEEK", "Auto Hide'seek is on",
-            duration_ms=60000, play_sound=False)
+            duration_ms=60000, play_sound=False, alert_kind='hide_seek')
         self._schedule_hide_seek_alert_refresh()
 
     def _hide_hide_seek_persistent_alert(self):
@@ -2447,9 +2450,18 @@ class SAOWebViewGUI:
         alert_title = str(getattr(gs, 'identity_alert_title', '') or '')
         alert_message = str(getattr(gs, 'identity_alert_message', '') or '')
 
+        # v2.2.0: 不要让普通 identity 通知打断 hide&seek 持续 alert.
+        # 之前 packet_parser 推一次 identity_alert (例如切场景/上线广播)
+        # 就会用 kind='identity' 覆盖 hide_seek alert 的 nonce, 9s 后
+        # auto-dismiss 把 hide_seek alert 一起拉黑 → 表现为 "过一会就消失".
+        # 现在 hide_seek active 时直接吞掉 identity 推送.
         if alert_serial > 0 and alert_serial != getattr(self, '_last_identity_alert_serial', 0):
             self._last_identity_alert_serial = alert_serial
-            self._show_identity_alert_window(alert_title, alert_message, 9000, alert_kind='identity')
+            if getattr(self, '_hide_seek_alert_active', False):
+                # 仅记账, 不弹窗, 避免覆盖 hide_seek alert
+                pass
+            else:
+                self._show_identity_alert_window(alert_title, alert_message, 9000, alert_kind='identity')
             return
 
         # Don't auto-dismiss when Hide & Seek persistent alert is active —
@@ -5054,6 +5066,13 @@ class SAOWebViewGUI:
             return
         current_nonce = int(getattr(self, '_identity_alert_nonce', 0) or 0)
         if expected_nonce is not None and expected_nonce != current_nonce:
+            return
+
+        # v2.2.0: Hide & Seek 持续 alert 期间, 任何外部/计时器请求关闭都先放行给
+        # _hide_hide_seek_persistent_alert 走 (它会清掉 _hide_seek_alert_active
+        # 再调本函数). 否则就是误关 — 直接拒绝, 让 50s 刷新器接住.
+        if (getattr(self, '_hide_seek_alert_active', False)
+                and str(getattr(self, '_identity_alert_kind', '') or '') == 'hide_seek'):
             return
 
         was_visible = bool(getattr(self, '_identity_alert_visible', False))

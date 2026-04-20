@@ -343,8 +343,26 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.20"
+APP_VERSION = "2.2.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.2.0:
+#   1) [继续修 Hide & Seek] webview 下持续 alert 之前会被普通 identity 通知
+#      或 9s auto-dismiss 计时器误关 → "过一会就消失". 现在 hide_seek
+#      alert 用 alert_kind='hide_seek' 标记, _hide_identity_alert_window
+#      在引擎仍 active 时直接拒绝关闭, _sync_identity_alert 也不再用
+#      identity 推送覆盖 hide_seek alert.
+#   2) [全面 UI 重设计] 把所有面板的 "灰绿" 配色 (rgb(207,208,197) /
+#      rgb(60,62,50) / rgb(188,190,178) ...) 全部换成 SAO Alert 的
+#      "纯白 + 略灰" 扁平高科技配色 (rgba(255,255,255,X) / rgb(100,99,100) /
+#      rgb(140,135,138)). 透明度 (alpha) 一律保留原面板设置, 没动.
+#      影响:
+#        - web/menu.html, dps.html, boss_hp.html, hp.html, commander.html,
+#          autokey_editor.html, raid_editor.html
+#        - sao_gui_dps.py, sao_gui_bosshp.py, sao_gui_hp.py (entity ULW 面板)
+#      DPS/BossHP 面板新增青色切角外框 (基于参考图):
+#        - DPS: 右上 + 左下 22px 切角, 顶部青色高亮 + 底部 cyan→amber 渐变线
+#        - BossHP: 八边形切角 (四角各切 14px), 主条 + 附属单位统一风格
+#      其他面板暂保留圆角, 后续轮次按反馈微调.
 # v2.1.20:
 #   修复"自动躲猫猫"两个回归 (检测算法本身一行未动):
 #     1) [entity / webview 共同] HideSeekEngine._assets_dir 之前用

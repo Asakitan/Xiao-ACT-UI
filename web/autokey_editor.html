@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8" />
@@ -12,7 +12,7 @@
     --font-sao:'saoLatin','sao','Segoe UI',sans-serif;
     --panel-bg:rgba(203,205,194,0.88);
     --panel-bg-2:rgba(216,218,206,0.88);
-    --panel-edge:rgba(160,162,150,0.62);
+    --panel-edge:rgba(178, 180, 182,0.62);
     --text-main:rgb(83,84,73);
     --text-muted:rgb(139,139,130);
     --gold:rgb(222,166,32);
@@ -179,14 +179,14 @@ body{padding:10px}
             <span class="badge off" id="state-badge">OFF</span>
         </div>
     </div>
-    <div class="burst-indicator" id="burst-indicator">✦ BURST READY ✦</div>
+    <div class="burst-indicator" id="burst-indicator">鉁?BURST READY 鉁?/div>
     <div class="content" id="content">
         <div class="section-title">Skill Slots</div>
         <div class="skill-grid" id="skill-grid">
             <!-- Populated by JS -->
         </div>
         <div class="section-title">Auto Actions</div>
-        <div class="recording-indicator" id="rec-indicator">● RECORDING — press slot to trigger when burst ready</div>
+        <div class="recording-indicator" id="rec-indicator">鈼?RECORDING 鈥?press slot to trigger when burst ready</div>
         <div id="action-list">
             <div class="record-row" style="color:var(--text-muted);font-size:10px;text-align:center;justify-content:center">
                 No auto-key actions recorded
@@ -199,15 +199,15 @@ body{padding:10px}
         <div class="action-btn accent" onclick="saveActions()">SAVE</div>
     </div>
     <div class="status-bar">
-        <span id="status-profession">—</span>
-        <span id="status-burst">Burst: —</span>
+        <span id="status-profession">鈥?/span>
+        <span id="status-burst">Burst: 鈥?/span>
     </div>
 </div>
 
 <script>
-/* ═══════════════════════════════════════ */
-/*  SAO AutoKey Editor — Live Overlay JS  */
-/* ═══════════════════════════════════════ */
+/* 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?*/
+/*  SAO AutoKey Editor 鈥?Live Overlay JS  */
+/* 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?*/
 var _slots = [];
 var _recording = false;
 var _recordingTriggerSlot = null;  // slot index that triggers the action
@@ -217,7 +217,7 @@ var _prevSlotStates = {};  // track ready-edge transitions
 var _burstReady = false;
 var _selectedSlot = null;
 
-// ── Skill slot grid rendering ──
+// 鈹€鈹€ Skill slot grid rendering 鈹€鈹€
 function updateSlots(slots) {
     _slots = slots || [];
     var grid = document.getElementById('skill-grid');
@@ -240,7 +240,7 @@ function updateSlots(slots) {
 
         html += '<div class="skill-card ' + stateClass + justReady + selected + '" '
             + 'data-index="' + s.index + '" onclick="onSlotClick(' + s.index + ')">'
-            + '<div class="skill-slot">Slot ' + s.index + (s.charge_count > 0 ? ' ×' + s.charge_count : '') + '</div>'
+            + '<div class="skill-slot">Slot ' + s.index + (s.charge_count > 0 ? ' 脳' + s.charge_count : '') + '</div>'
             + '<div class="skill-name">' + _esc(name) + '</div>'
             + '<div class="skill-state">'
             + '  <div class="skill-state-dot"></div>'
@@ -258,9 +258,9 @@ function onSlotClick(index) {
         if (_recordingTriggerSlot === null) {
             _recordingTriggerSlot = index;
             document.getElementById('rec-indicator').textContent =
-                '● Slot ' + index + ' = trigger. Now click the action slot to fire.';
+                '鈼?Slot ' + index + ' = trigger. Now click the action slot to fire.';
         } else {
-            // Record: when trigger slot is ready → press action slot key
+            // Record: when trigger slot is ready 鈫?press action slot key
             var triggerSlot = _findSlot(_recordingTriggerSlot);
             var actionSlot = _findSlot(index);
             if (triggerSlot && actionSlot) {
@@ -276,7 +276,7 @@ function onSlotClick(index) {
             }
             _recordingTriggerSlot = null;
             document.getElementById('rec-indicator').textContent =
-                '● RECORDING — press slot to set trigger condition';
+                '鈼?RECORDING 鈥?press slot to set trigger condition';
         }
         return;
     }
@@ -292,7 +292,7 @@ function _findSlot(index) {
     return null;
 }
 
-// ── Action list ──
+// 鈹€鈹€ Action list 鈹€鈹€
 function _renderActions() {
     var list = document.getElementById('action-list');
     if (!_actions.length) {
@@ -304,8 +304,8 @@ function _renderActions() {
         var a = _actions[i];
         html += '<div class="record-row">'
             + '<div class="record-trigger">When <b>' + _esc(a.trigger_name) + '</b> is <b>' + _condText(a.trigger_condition) + '</b></div>'
-            + '<div class="record-action">→ Press <b>' + _esc(a.action_name) + '</b></div>'
-            + '<div class="record-remove" onclick="removeAction(' + i + ')">×</div>'
+            + '<div class="record-action">鈫?Press <b>' + _esc(a.action_name) + '</b></div>'
+            + '<div class="record-remove" onclick="removeAction(' + i + ')">脳</div>'
             + '</div>';
     }
     list.innerHTML = html;
@@ -325,7 +325,7 @@ function removeAction(idx) {
     _renderActions();
 }
 
-// ── Recording ──
+// 鈹€鈹€ Recording 鈹€鈹€
 function toggleRecord() {
     _recording = !_recording;
     _recordingTriggerSlot = null;
@@ -333,9 +333,9 @@ function toggleRecord() {
     var indicator = document.getElementById('rec-indicator');
     if (_recording) {
         btn.classList.add('recording');
-        btn.textContent = '■ STOP';
+        btn.textContent = '鈻?STOP';
         indicator.classList.add('active');
-        indicator.textContent = '● RECORDING — click slot to set trigger condition';
+        indicator.textContent = '鈼?RECORDING 鈥?click slot to set trigger condition';
     } else {
         btn.classList.remove('recording');
         btn.textContent = 'RECORD';
@@ -354,7 +354,7 @@ function saveActions() {
     }
 }
 
-// ── Status updates ──
+// 鈹€鈹€ Status updates 鈹€鈹€
 function updateState(data) {
     var badge = document.getElementById('state-badge');
     var enabled = data.enabled || false;
@@ -367,8 +367,8 @@ function updateState(data) {
     burstEl.classList.toggle('active', _burstReady);
 
     // Profession display
-    document.getElementById('status-profession').textContent = data.profession || '—';
-    document.getElementById('status-burst').textContent = 'Burst: ' + (_burstReady ? 'Ready ✦' : 'Not Ready');
+    document.getElementById('status-profession').textContent = data.profession || '鈥?;
+    document.getElementById('status-burst').textContent = 'Burst: ' + (_burstReady ? 'Ready 鉁? : 'Not Ready');
 
     // Skill slots
     if (data.slots) updateSlots(data.slots);
@@ -380,7 +380,7 @@ function loadActions(actions) {
     _renderActions();
 }
 
-// ── Show/Hide ──
+// 鈹€鈹€ Show/Hide 鈹€鈹€
 function fadeIn(data) {
     var shell = document.getElementById('shell');
     shell.classList.remove('exiting');
@@ -393,12 +393,12 @@ function fadeOut() {
     shell.classList.remove('visible');
 }
 
-// ── Helpers ──
+// 鈹€鈹€ Helpers 鈹€鈹€
 function _esc(s) {
     var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML;
 }
 
-// ── Drag ──
+// 鈹€鈹€ Drag 鈹€鈹€
 (function() {
     var handle = document.getElementById('drag-handle');
     handle.addEventListener('mousedown', function(e) {
@@ -418,7 +418,7 @@ function _esc(s) {
     window.addEventListener('mouseup', function() { _dragStart = null; });
 })();
 
-// ── Public API ──
+// 鈹€鈹€ Public API 鈹€鈹€
 window.AutoKeyEditor = {
     updateSlots: updateSlots,
     updateState: updateState,
@@ -429,3 +429,4 @@ window.AutoKeyEditor = {
 </script>
 </body>
 </html>
+

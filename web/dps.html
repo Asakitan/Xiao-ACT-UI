@@ -10,20 +10,24 @@
 @font-face{font-family:'saoLatin';src:url('fonts/SAOWelcome.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
 :root{
     --font-sao:'saoLatin','sao','Segoe UI',sans-serif;
-    --panel-bg:rgba(203,205,194,0.90);
-    --panel-bg-2:rgba(216,218,206,0.90);
-    --panel-edge:rgba(160,162,150,0.62);
-    --panel-line:rgba(255,255,255,0.52);
-    --text-main:rgb(83,84,73);
-    --text-muted:rgb(139,139,130);
+    /* v2.2.0: SAO Alert flat hi-tech palette ── pure white + slight gray.
+       透明度沿用各面板自身 alpha (没动). */
+    --panel-bg:rgba(255,255,255,0.82);
+    --panel-bg-2:rgba(234,233,233,0.78);
+    --panel-edge:rgba(178,180,182,0.55);
+    --panel-line:rgba(255,255,255,0.62);
+    --text-main:rgb(100,99,100);
+    --text-muted:rgb(142,138,140);
     --gold:rgb(222,166,32);
     --gold-soft:rgba(222,166,32,0.22);
     --cyan:rgba(104,228,255,0.55);
+    --cyan-strong:rgba(104,228,255,0.92);
+    --cyan-edge:rgba(104,228,255,0.46);
     --green-a:rgb(211,234,124);
     --green-b:rgb(154,211,52);
     --heal-a:rgb(173,223,93);
     --heal-b:rgb(117,184,45);
-    --shadow:rgba(31,34,16,0.28);
+    --shadow:rgba(31,34,40,0.22);
     --danger:rgb(239,104,78);
 }
 html,body{
@@ -42,13 +46,20 @@ body{padding:10px}
     width:100%;
     height:100%;
     background:linear-gradient(180deg,var(--panel-bg) 0%,var(--panel-bg-2) 100%);
-    border:1px solid var(--panel-edge);
-    border-radius:6px;
+    /* v2.2.0: 切角 + 青色描边 (DPS 变体: 右上 + 左下小切角) */
+    border:1px solid var(--cyan-edge);
+    border-radius:2px;
+    clip-path:polygon(
+        0 0,
+        calc(100% - 22px) 0, 100% 22px,
+        100% 100%,
+        22px 100%, 0 calc(100% - 22px)
+    );
     overflow:hidden;
     box-shadow:
         2px 4px 18px var(--shadow),
-        inset 0 1px 0 rgba(255,255,255,0.42),
-        inset 0 0 18px rgba(255,255,255,0.10);
+        inset 0 1px 0 rgba(255,255,255,0.55),
+        inset 0 0 18px rgba(255,255,255,0.18);
     opacity:0;  /* hidden until fadeInDps() is called */
     transition:filter 150ms ease, box-shadow 150ms ease;
     will-change:opacity,transform,filter;
@@ -79,9 +90,13 @@ body{padding:10px}
     content:'';
     position:absolute;
     inset:0;
-    border:1px solid rgba(255,255,255,0.16);
-    border-radius:6px;
+    border:1px solid rgba(255,255,255,0.20);
+    border-radius:2px;
     pointer-events:none;
+    /* v2.2.0: 顶部细青色高亮 + 底部青-金渐变线 (sao_alert footer 风格) */
+    background:
+        linear-gradient(180deg, rgba(104,228,255,0.35) 0, rgba(104,228,255,0) 2px) top/100% 2px no-repeat,
+        linear-gradient(90deg, rgba(104,228,255,0) 0%, rgba(104,228,255,0.85) 30%, rgba(243,175,18,0.78) 70%, rgba(243,175,18,0) 100%) bottom/100% 1px no-repeat;
 }
 .panel-flash-layer{
     position:absolute;

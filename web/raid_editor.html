@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8" />
@@ -12,7 +12,7 @@
     --font-sao:'saoLatin','sao','Segoe UI',sans-serif;
     --panel-bg:rgba(203,205,194,0.88);
     --panel-bg-2:rgba(216,218,206,0.88);
-    --panel-edge:rgba(160,162,150,0.62);
+    --panel-edge:rgba(178, 180, 182,0.62);
     --panel-line:rgba(255,255,255,0.52);
     --text-main:rgb(83,84,73);
     --text-muted:rgb(139,139,130);
@@ -55,7 +55,7 @@ body{padding:10px}
     border-bottom:2px solid var(--gold);border-right:2px solid var(--gold);
     border-radius:0 0 6px 0;pointer-events:none;z-index:9;
 }
-/* Header — draggable */
+/* Header 鈥?draggable */
 .header{
     padding:10px 16px 8px;cursor:move;
     border-bottom:1px solid rgba(255,255,255,0.38);flex-shrink:0;
@@ -73,7 +73,7 @@ body{padding:10px}
 }
 .header .badge.idle{background:var(--text-muted)}
 .header .badge.running{background:var(--boss-accent)}
-/* ── Tabs ── */
+/* 鈹€鈹€ Tabs 鈹€鈹€ */
 .tab-bar{
     display:flex;gap:0;padding:0 12px;flex-shrink:0;
     border-bottom:1px solid rgba(0,0,0,0.06);
@@ -85,11 +85,11 @@ body{padding:10px}
 }
 .tab.active{color:var(--text-main);border-bottom-color:var(--gold)}
 .tab:hover{color:var(--text-main)}
-/* ── Content area ── */
+/* 鈹€鈹€ Content area 鈹€鈹€ */
 .content{flex:1;overflow-y:auto;padding:8px 12px}
 .content::-webkit-scrollbar{width:4px}
 .content::-webkit-scrollbar-thumb{background:rgba(0,0,0,0.12);border-radius:2px}
-/* ── Entity list ── */
+/* 鈹€鈹€ Entity list 鈹€鈹€ */
 .entity-card{
     display:flex;align-items:center;gap:10px;
     padding:8px 12px;margin-bottom:6px;
@@ -123,7 +123,7 @@ body{padding:10px}
 .entity-role-btn.boss{background:var(--boss-accent);color:#fff;border-color:var(--boss-accent)}
 .entity-role-btn.enemy{background:var(--enemy-accent);color:#fff;border-color:var(--enemy-accent)}
 .entity-role-btn:hover{filter:brightness(1.08)}
-/* ── Phase controls ── */
+/* 鈹€鈹€ Phase controls 鈹€鈹€ */
 .phase-section{margin-top:8px}
 .phase-header{
     font-size:10px;letter-spacing:1.6px;text-transform:uppercase;
@@ -145,7 +145,7 @@ body{padding:10px}
     clip-path:polygon(6px 0,100% 0,100% 100%,0 100%,0 6px);
 }
 .phase-btn:hover{filter:brightness(1.1)}
-/* ── Action buttons ── */
+/* 鈹€鈹€ Action buttons 鈹€鈹€ */
 .action-row{
     display:flex;gap:8px;padding:8px 12px;flex-shrink:0;
     border-top:1px solid rgba(255,255,255,0.38);
@@ -160,13 +160,13 @@ body{padding:10px}
 .action-btn:hover{background:rgba(255,255,255,0.62)}
 .action-btn.accent{background:var(--gold);color:#fff;border-color:var(--gold)}
 .action-btn.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
-/* ── Status bar ── */
+/* 鈹€鈹€ Status bar 鈹€鈹€ */
 .status-bar{
     padding:5px 14px;font-size:9px;letter-spacing:0.8px;
     color:var(--text-muted);border-top:1px solid rgba(0,0,0,0.04);
     display:flex;justify-content:space-between;flex-shrink:0;
 }
-/* ── Empty state ── */
+/* 鈹€鈹€ Empty state 鈹€鈹€ */
 .empty-state{
     text-align:center;padding:32px 16px;
     color:var(--text-muted);font-size:11px;letter-spacing:0.8px;line-height:1.8;
@@ -194,7 +194,7 @@ body{padding:10px}
         <div id="tab-entities">
             <div class="empty-state" id="entity-empty">
                 Waiting for combat data...<br/>
-                <span style="font-size:9px;color:rgba(139,139,130,0.7)">Attack a monster to begin tracking</span>
+                <span style="font-size:9px;color:rgba(140, 135, 138,0.7)">Attack a monster to begin tracking</span>
             </div>
             <div id="entity-list"></div>
         </div>
@@ -222,15 +222,15 @@ body{padding:10px}
 </div>
 
 <script>
-/* ═══════════════════════════════════════ */
-/*  SAO Raid Editor — Live Overlay JS     */
-/* ═══════════════════════════════════════ */
+/* 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?*/
+/*  SAO Raid Editor 鈥?Live Overlay JS     */
+/* 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺?*/
 var _currentTab = 'entities';
 var _lastEntities = [];
 var _lastStatus = {};
 var _dragStart = null;
 
-// ── Tab switching ──
+// 鈹€鈹€ Tab switching 鈹€鈹€
 function switchTab(tab) {
     _currentTab = tab;
     document.querySelectorAll('.tab').forEach(function(t) {
@@ -241,7 +241,7 @@ function switchTab(tab) {
     document.getElementById('tab-timeline').style.display = tab === 'timeline' ? '' : 'none';
 }
 
-// ── Entity list rendering ──
+// 鈹€鈹€ Entity list rendering 鈹€鈹€
 function updateEntities(entities) {
     _lastEntities = entities || [];
     var list = document.getElementById('entity-list');
@@ -266,10 +266,10 @@ function updateEntities(entities) {
             + '<div class="entity-rank">' + (i + 1) + '</div>'
             + '<div class="entity-info">'
             + '  <div class="entity-name">' + _esc(name) + '</div>'
-            + '  <div class="entity-sub">DMG: ' + dmgStr + ' · HP: ' + hpPct + '%'
-            + (e.shield_active ? ' · Shield' : '')
-            + (e.in_overdrive ? ' · OD' : '')
-            + (e.breaking_stage > 0 ? ' · Break' : '')
+            + '  <div class="entity-sub">DMG: ' + dmgStr + ' 路 HP: ' + hpPct + '%'
+            + (e.shield_active ? ' 路 Shield' : '')
+            + (e.in_overdrive ? ' 路 OD' : '')
+            + (e.breaking_stage > 0 ? ' 路 Break' : '')
             + '  </div>'
             + '  <div class="entity-hp-bar"><div class="entity-hp-fill" style="width:' + hpPct + '%"></div></div>'
             + '</div>'
@@ -293,7 +293,7 @@ function toggleRole(uuid) {
     }
 }
 
-// ── Phase list rendering ──
+// 鈹€鈹€ Phase list rendering 鈹€鈹€
 function updatePhases(phases, currentIdx) {
     var list = document.getElementById('phase-list');
     if (!phases || !phases.length) {
@@ -307,7 +307,7 @@ function updatePhases(phases, currentIdx) {
         html += '<div class="phase-card' + (isCurrent ? ' current' : '') + '">'
             + '<div class="phase-name">' + _esc(p.name || ('P' + (i + 1))) + '</div>'
             + '<div class="phase-trigger">' + _triggerText(p.trigger) + '</div>'
-            + (isCurrent ? '<div class="phase-btn" onclick="advancePhase()">→</div>' : '')
+            + (isCurrent ? '<div class="phase-btn" onclick="advancePhase()">鈫?/div>' : '')
             + '</div>';
     }
     list.innerHTML = html;
@@ -320,18 +320,18 @@ function _triggerText(trigger) {
     switch(t) {
         case 'manual': return 'Manual (F8)';
         case 'time': return v + 's elapsed';
-        case 'hp_pct': return 'HP ≤ ' + v + '%';
-        case 'dps_total': return 'DMG ≥ ' + _fmtNum(v);
+        case 'hp_pct': return 'HP 鈮?' + v + '%';
+        case 'dps_total': return 'DMG 鈮?' + _fmtNum(v);
         case 'breaking': return 'Break event';
         case 'shield_broken': return 'Shield broken';
         case 'overdrive': return 'Overdrive';
-        case 'extinction_pct': return 'Break bar ≥ ' + v + '%';
-        case 'breaking_stage': return 'Break stage ≥ ' + v;
+        case 'extinction_pct': return 'Break bar 鈮?' + v + '%';
+        case 'breaking_stage': return 'Break stage 鈮?' + v;
         default: return t + ': ' + v;
     }
 }
 
-// ── Status update ──
+// 鈹€鈹€ Status update 鈹€鈹€
 function updateStatus(status) {
     _lastStatus = status || {};
     var badge = document.getElementById('state-badge');
@@ -347,13 +347,13 @@ function updateStatus(status) {
     }
 }
 
-// ── Full state push (status + phases) ──
+// 鈹€鈹€ Full state push (status + phases) 鈹€鈹€
 function updateFull(data) {
     if (data.status) updateStatus(data.status);
     if (data.phases) updatePhases(data.phases, (data.status || {}).phase_idx || 0);
 }
 
-// ── Actions ──
+// 鈹€鈹€ Actions 鈹€鈹€
 function advancePhase() {
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.raid_next_phase();
@@ -365,7 +365,7 @@ function resetRaid() {
     }
 }
 
-// ── Show/Hide ──
+// 鈹€鈹€ Show/Hide 鈹€鈹€
 function fadeIn(data) {
     var shell = document.getElementById('shell');
     shell.classList.remove('exiting');
@@ -378,7 +378,7 @@ function fadeOut() {
     shell.classList.remove('visible');
 }
 
-// ── Helpers ──
+// 鈹€鈹€ Helpers 鈹€鈹€
 function _fmtNum(v) {
     if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
     if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
@@ -393,7 +393,7 @@ function _esc(s) {
     var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML;
 }
 
-// ── Drag ──
+// 鈹€鈹€ Drag 鈹€鈹€
 (function() {
     var handle = document.getElementById('drag-handle');
     handle.addEventListener('mousedown', function(e) {
@@ -413,7 +413,7 @@ function _esc(s) {
     window.addEventListener('mouseup', function() { _dragStart = null; });
 })();
 
-// ── Public API ──
+// 鈹€鈹€ Public API 鈹€鈹€
 window.RaidEditor = {
     updateEntities: updateEntities,
     updatePhases: updatePhases,
@@ -425,3 +425,4 @@ window.RaidEditor = {
 </script>
 </body>
 </html>
+
