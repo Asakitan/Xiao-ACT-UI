@@ -5,29 +5,29 @@ from tkinter import font as tkfont
 from typing import Callable, Dict, Optional, Tuple
 
 
-PANEL_BG = '#cfd3c8'
-PANEL_BG_ALT = '#d9ddd3'
-PANEL_EDGE = '#9ea395'
-PANEL_EDGE_STRONG = '#74786d'
-PANEL_HEADER = '#e3e6de'
-PANEL_HEADER_ALT = '#ecefe6'
-PANEL_CARD = '#e6e9e0'
-PANEL_CARD_ALT = '#f0f3ea'
-TEXT_MAIN = '#484b41'
-TEXT_MUTED = '#777a70'
-TEXT_DIM = '#a8a8a0'
+PANEL_BG = '#f6f7f7'
+PANEL_BG_ALT = '#eef0f1'
+PANEL_EDGE = '#bec4c8'
+PANEL_EDGE_STRONG = '#9ea7ad'
+PANEL_HEADER = '#f7f8f8'
+PANEL_HEADER_ALT = '#fbfbfb'
+PANEL_CARD = '#f0f2f3'
+PANEL_CARD_ALT = '#fafbfb'
+TEXT_MAIN = '#646364'
+TEXT_MUTED = '#8c878a'
+TEXT_DIM = '#b0adb0'
 GOLD = '#dea620'
 GOLD_STRONG = '#f3af12'
 CYAN = '#68e4ff'
-CYAN_SOFT = '#d8f8ff'
+CYAN_SOFT = '#e6f9fd'
 DANGER = '#ef684e'
-READY = '#68e49b'
-ACTIVE = '#68e4ff'
-COOLDOWN = '#c7b06c'
-LINE = '#fbfcf7'
-LINE_SOFT = '#f2f5ed'
-SHADOW = '#8a8c81'
-SHADOW_DEEP = '#5d6057'
+READY = '#8dcfaa'
+ACTIVE = '#81d9ec'
+COOLDOWN = '#d4b976'
+LINE = '#ffffff'
+LINE_SOFT = '#f3f5f6'
+SHADOW = '#c1c7cc'
+SHADOW_DEEP = '#959ea5'
 
 
 _FONT_CACHE: Dict[Tuple[int, bool, str], tkfont.Font] = {}
@@ -204,9 +204,9 @@ _BUTTON_STYLES = {
         'bg': PANEL_CARD_ALT,
         'fg': TEXT_MAIN,
         'border': PANEL_EDGE,
-        'hover_bg': PANEL_HEADER_ALT,
+        'hover_bg': '#edf6f8',
         'hover_fg': TEXT_MAIN,
-        'hover_border': PANEL_EDGE_STRONG,
+        'hover_border': '#a8dbe6',
     },
     'accent': {
         'bg': GOLD,
@@ -225,12 +225,12 @@ _BUTTON_STYLES = {
         'hover_border': DANGER,
     },
     'ready': {
-        'bg': READY,
+        'bg': '#e0f5e7',
         'fg': TEXT_MAIN,
-        'border': READY,
-        'hover_bg': '#81ebb0',
+        'border': '#97d8b0',
+        'hover_bg': '#d0efda',
         'hover_fg': TEXT_MAIN,
-        'hover_border': READY,
+        'hover_border': '#7fc49a',
     },
 }
 

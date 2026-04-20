@@ -856,7 +856,11 @@ class HpOverlay:
             self._static_sig = sig
         img = self._static_cache.copy()
         cover_rect = (COVER_X, COVER_Y + y_off, COVER_X + COVER_W, COVER_Y + COVER_H + y_off)
-        box_rect = (BOX_X, BOX_Y + y_off, BOX_X + BOX_W, BOX_Y + BOX_H + y_off)
+        # The XT shell extends outside the nominal 48px HP box: the left edge
+        # shadow bleeds a few pixels and the number_xt plate sits below the
+        # box baseline. Fade the expanded shell region so both side frames hide
+        # together with the HP group.
+        box_rect = (BOX_X - 4, BOX_Y - 4 + y_off, BOX_X + BOX_W + 4, BOX_Y + BOX_H + 18 + y_off)
         sta_rect = (STA_X, STA_Y + y_off, STA_X + STA_W, STA_Y + STA_H + y_off)
 
         hp_group_alpha = 1.0

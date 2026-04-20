@@ -343,8 +343,16 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.2.2"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.2.2:
+#   1) [菜单白板统一] 把 webview / entity 主菜单的圆形按钮、左侧信息板、
+#      子菜单卡片，以及 commander / autokey / boss raid 编辑器的灰绿底板
+#      统一收敛到 sao_alert 那套冷白 + 轻灰层次，降低纯白刺眼感，并把
+#      子菜单 hover 从整块金色改成更克制的浅金 / 冷青过渡。
+#   2) [entity HP fade 修复] 恢复 HP 组件隐藏时两侧 XT 外框壳层的
+#      fadeout。此前 group fade 只覆盖名义 48px HP box，number_xt 壳层
+#      底部超出 box_rect，隐藏时会留下外框残影；现在改为覆盖整个 XT shell.
 # v2.2.1:
 #   修复 entity 模式下 HP/BossHP/DPS overlay 隐藏后阴影残留:
 #     _apply_panel_style() 在设置面板里用 SetClassLongW(CS_DROPSHADOW)
