@@ -343,8 +343,19 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.11"
+APP_VERSION = "2.1.13"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.13:
+#   1) 抓包层回退至 v1.3.1 基底并补齐三处关键 TCP 重组缺陷：
+#      a) 识别首包不喂入 TCP 流 → SyncContainerData / SyncNearEntities 丢失；
+#      b) 无 TCP 重传段过滤 → 已消费 seq 重入缓存, 加速 300 条溢出；
+#      c) 无缺段跳跃 → pcap 丢失一段后 _next_seq 卡住, 所有后续段堆满缓存
+#         触发溢出, DPS 伤害事件与全量角色同步数据全部丢失;
+#   2) 新增 GAP_SKIP_SEC=2.0 缺段超时跳跃 (参考 C# SRDPS ForceResyncTo),
+#      缓存有段但 2 秒未消费时自动跳过间隙恢复后续数据；
+#   3) _extract_frames 新增帧对齐修复扫描, gap-skip 后自动重定位帧边界；
+#   4) 诊断行新增 gap_skip= / overflow= 计数便于排查 pcap 丢包；
+#   5) 本版以 full-package + force_update + minimum_version=2.1.13 推送。
 # v2.1.11:
 #   1) 抓包层回退到 v1.3.1 的源地址识别策略: 移除 _infer_server_endpoint
 #      方向推断 (私网/临时端口/小端口 启发式), 改为始终用包的源地址

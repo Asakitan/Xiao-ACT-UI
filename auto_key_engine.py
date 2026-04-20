@@ -263,6 +263,8 @@ def normalize_condition(raw: Any) -> Optional[Dict[str, Any]]:
         normalized["state"] = _string(raw.get("state")).lower() or "ready"
     elif condition_type in ("profession_is", "player_name_is"):
         normalized["value"] = _string(raw.get("value"))
+    elif condition_type == "in_combat_is":
+        normalized["value"] = _coerce_bool(raw.get("value"), True)
     else:
         return None
     return normalized
@@ -773,6 +775,9 @@ class AutoKeyEngine:
                     return False
             elif cond_type == "player_name_is":
                 if _string(getattr(gs, "player_name", "")) != _string(condition.get("value")):
+                    return False
+            elif cond_type == "in_combat_is":
+                if bool(getattr(gs, "in_combat", False)) != _coerce_bool(condition.get("value"), True):
                     return False
         return True
 
