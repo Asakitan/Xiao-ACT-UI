@@ -11,14 +11,11 @@ Supported features:
   - Lightweight protobuf field decoding for the sync messages we use
   - AttrCollection parsing
   - SyncContainerDirtyData stream parsing
-  
 """
 
 import math
 import struct
 import logging
-import importlib
-import importlib.util
 import os
 import json
 import sys
@@ -27,7 +24,6 @@ from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger('sao_auto.parser')
 _PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
-_PENDING_SELF_NOTIFY_LIMIT = 16
 
 # Lazy import for protobuf JSON conversion (used in full sync dump)
 _MessageToDict = None
@@ -38,7 +34,7 @@ _MessageToDict = None
 
 _zstd = None
 _pb = None
-_pb_last_error = ''
+_pb_loaded = False
 
 
 def _ensure_zstd():
@@ -53,160 +49,44 @@ def _ensure_zstd():
         raise RuntimeError('缺少 zstandard 模块，请运行: pip install zstandard')
 
 
-def _candidate_pb2_paths() -> list[str]:
-    """Return likely local star_resonance_pb2.py locations.
-
-    onedir builds lift proto/ to the exe top-level, while dev keeps it next to
-    the source tree. Resolve both layouts explicitly instead of relying on
-    `from proto import ...`, which can bind to an unrelated third-party package.
-    """
-    candidates = []
-    seen = set()
-
-    def _add(base_dir: Optional[str]):
-        if not base_dir:
-            return
-        try:
-            base_dir = os.path.abspath(base_dir)
-        except Exception:
-            return
-        pb2_path = os.path.join(base_dir, 'proto', 'star_resonance_pb2.py')
-        if pb2_path in seen:
-            return
-        seen.add(pb2_path)
-        if os.path.isfile(pb2_path):
-            candidates.append(pb2_path)
-
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    _add(current_dir)
-    _add(os.path.dirname(current_dir))
-    if getattr(sys, 'frozen', False):
-        _add(os.path.dirname(sys.executable))
-        _add(getattr(sys, '_MEIPASS', None))
-    return candidates
-
-
-def _import_local_pb_via_proto_package(pb2_path: str):
-    """Import the local protobuf module through the canonical proto package name."""
-    package_root = os.path.dirname(os.path.dirname(pb2_path))
-    expected_init = os.path.join(package_root, 'proto', '__init__.py')
-    expected_pb2 = os.path.abspath(pb2_path)
-    previous_proto = sys.modules.get('proto')
-    previous_pb = sys.modules.get('proto.star_resonance_pb2')
-    added_path = False
-
-    def _restore_previous():
-        if previous_proto is not None:
-            sys.modules['proto'] = previous_proto
-        else:
-            sys.modules.pop('proto', None)
-        if previous_pb is not None:
-            sys.modules['proto.star_resonance_pb2'] = previous_pb
-        else:
-            sys.modules.pop('proto.star_resonance_pb2', None)
-
-    try:
-        if package_root not in sys.path:
-            sys.path.insert(0, package_root)
-            added_path = True
-
-        proto_mod = sys.modules.get('proto')
-        if proto_mod is not None:
-            proto_file = os.path.abspath(getattr(proto_mod, '__file__', '') or '')
-            proto_paths = [os.path.abspath(p) for p in list(getattr(proto_mod, '__path__', []) or [])]
-            expected_dir = os.path.abspath(os.path.dirname(pb2_path))
-            is_local_proto = proto_file == os.path.abspath(expected_init) or expected_dir in proto_paths
-            if not is_local_proto:
-                sys.modules.pop('proto', None)
-
-        pb_mod = sys.modules.get('proto.star_resonance_pb2')
-        if pb_mod is not None:
-            loaded_pb2 = os.path.abspath(getattr(pb_mod, '__file__', '') or '')
-            if loaded_pb2 != expected_pb2:
-                sys.modules.pop('proto.star_resonance_pb2', None)
-
-        module = importlib.import_module('proto.star_resonance_pb2')
-        loaded_file = os.path.abspath(getattr(module, '__file__', '') or '')
-        if loaded_file != expected_pb2:
-            raise ImportError(f'proto.star_resonance_pb2 resolved to unexpected path: {loaded_file}')
-        return module
-    except Exception:
-        _restore_previous()
-        if added_path:
-            try:
-                sys.path.remove(package_root)
-            except ValueError:
-                pass
-        raise
-
-
-def _load_pb_from_path(pb2_path: str):
-    module_name = '_sao_star_resonance_pb2'
-    spec = importlib.util.spec_from_file_location(module_name, pb2_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f'无法构建 protobuf 模块 spec: {pb2_path}')
-    module = importlib.util.module_from_spec(spec)
-    previous = sys.modules.get(module_name)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        if previous is not None:
-            sys.modules[module_name] = previous
-        else:
-            sys.modules.pop(module_name, None)
-        raise
-    return module
-
-
 def _ensure_pb():
     """Load compiled protobuf module if available."""
-    global _pb, _MessageToDict, _pb_last_error
-    if _pb is not None:
+    global _pb, _pb_loaded, _MessageToDict
+    if _pb_loaded:
         return _pb
-
-    if _MessageToDict is None:
-        try:
-            from google.protobuf.json_format import MessageToDict
-            _MessageToDict = MessageToDict
-        except ImportError:
-            pass
-
-    last_error = None
-
-    for pb2_path in _candidate_pb2_paths():
-        try:
-            _pb = _import_local_pb_via_proto_package(pb2_path)
-            logger.info(f'[Parser] using compiled protobuf via proto package: {pb2_path}')
-            _pb_last_error = ''
-            return _pb
-        except Exception as exc:
-            last_error = exc
+    _pb_loaded = True
 
     try:
         from proto import star_resonance_pb2
         _pb = star_resonance_pb2
-        logger.info('[Parser] using compiled protobuf via import')
-        _pb_last_error = ''
-        return _pb
-    except Exception as exc:
-        last_error = exc
+        logger.info('[Parser] using compiled protobuf')
+    except ImportError:
+        pass
 
-    for pb2_path in _candidate_pb2_paths():
-        try:
-            _pb = _load_pb_from_path(pb2_path)
-            logger.info(f'[Parser] using compiled protobuf via direct file fallback: {pb2_path}')
-            _pb_last_error = ''
-            return _pb
-        except Exception as exc:
-            last_error = exc
+    try:
+        from google.protobuf.json_format import MessageToDict
+        _MessageToDict = MessageToDict
+    except ImportError:
+        pass
 
-    if last_error is not None:
-        err_text = str(last_error)
-        if err_text != _pb_last_error:
-            logger.debug(f'[Parser] protobuf module unavailable: {err_text}')
-            _pb_last_error = err_text
+    return _pb
 
+
+    try:
+        from google.protobuf import descriptor_pb2, descriptor_pool, symbol_database
+        from google.protobuf import reflection, descriptor
+        import google.protobuf.descriptor as _desc
+
+
+        proto_path = os.path.join(os.path.dirname(__file__), 'proto', 'star_resonance.proto')
+        if os.path.exists(proto_path):
+
+
+            pass
+    except ImportError:
+        pass
+
+    logger.info('[Parser] using built-in mini protobuf decoder')
     return None
 
 
@@ -320,29 +200,6 @@ def _decode_int32_from_raw(raw: bytes) -> int:
         return _varint_to_int32(val)
     except Exception:
         return 0
-
-
-def _decode_utf8_bytes(raw: Optional[bytes]) -> str:
-    if not raw:
-        return ''
-    try:
-        return bytes(raw).decode('utf-8', 'ignore')
-    except Exception:
-        return ''
-
-
-def _get_field_int(fields: Dict[int, list], field_num: int, default: int = 0) -> int:
-    for value in fields.get(field_num, []) or []:
-        if isinstance(value, int):
-            return int(value)
-    return int(default)
-
-
-def _get_field_bytes(fields: Dict[int, list], field_num: int) -> Optional[bytes]:
-    for value in fields.get(field_num, []) or []:
-        if isinstance(value, (bytes, bytearray)):
-            return bytes(value)
-    return None
 
 
 def _decode_float32_from_raw(raw: bytes) -> Optional[float]:
@@ -1062,7 +919,6 @@ class PlayerData:
     """Tracks one player's parsed data."""
     __slots__ = ('uid', 'name', 'level', 'rank_level', 'season_level',
                  'level_extra', 'level_extra_source',
-                 'season_exp', 'season_exp_source',
                  'level_extra_pending_source', 'level_extra_pending_value',
                  'level_extra_pending_hits',
                  'fight_point', 'season_strength',
@@ -1106,8 +962,6 @@ class PlayerData:
         self.season_level: int = 0   # Seasonal extra level shown as (+XX)
         self.level_extra: int = 0
         self.level_extra_source: str = ''
-        self.season_exp: int = 0
-        self.season_exp_source: str = ''
         self.level_extra_pending_source: str = ''
         self.level_extra_pending_value: int = 0
         self.level_extra_pending_hits: int = 0
@@ -1260,53 +1114,6 @@ def _decode_dirty_energy_value(raw_u32: int, raw_f32: float, stamina_max: int = 
     return None
 
 
-# ── Smart dirty-stream offset detection ──
-# Base level is capped at 60 in the current game version; use it as an anchor
-# to auto-detect correct parsing offsets when the binary format shifts.
-_KNOWN_BASE_LEVEL = 60
-_DIRTY_IDENT = 0xFFFFFFFE
-_SMART_SCAN_MAX = 64  # max leading bytes to scan
-
-
-def _smart_find_dirty_start(data: bytes) -> Optional[int]:
-    """Scan *data* for the ``0xFFFFFFFE`` identifier to recover the correct
-    starting offset when the dirty stream has unexpected leading bytes.
-
-    For ``RoleLevel`` (field 22) candidates the scan is validated against
-    the known base-level anchor (60) to avoid false positives.
-
-    Returns the byte offset of the first valid identifier, or ``None``.
-    """
-    limit = min(len(data) - 12, _SMART_SCAN_MAX)
-    best: Optional[int] = None
-    for off in range(1, limit):
-        if struct.unpack_from('<I', data, off)[0] != _DIRTY_IDENT:
-            continue
-        fi_pos = off + 8
-        if fi_pos + 4 > len(data):
-            continue
-        fi = struct.unpack_from('<I', data, fi_pos)[0]
-        if fi not in CHAR_FIELD_NAMES:
-            continue
-        # Extra validation for RoleLevel: nested value must equal 60
-        if fi == 22:
-            nested = fi_pos + 4
-            if nested + 12 <= len(data):
-                ident2 = struct.unpack_from('<I', data, nested)[0]
-                if ident2 == _DIRTY_IDENT:
-                    sf_pos = nested + 8
-                    sf = struct.unpack_from('<I', data, sf_pos)[0]
-                    val_pos = sf_pos + 4
-                    if sf == 1 and val_pos + 4 <= len(data):
-                        val = struct.unpack_from('<I', data, val_pos)[0]
-                        if val == _KNOWN_BASE_LEVEL:
-                            return off  # confirmed via anchor
-                        continue  # wrong value → skip this candidate
-        if best is None:
-            best = off
-    return best
-
-
 def _is_sane_attr_stamina_max(value: int) -> bool:
     # Current observed self STA caps stay around 1200. Values like 1350/1500
     # and the larger 2100/3100 spikes are not stable enough to trust.
@@ -1398,38 +1205,6 @@ def _set_level_extra_candidate(player: PlayerData, source: str, value: int) -> b
     return _commit_level_extra(player, source, value)
 
 
-def _set_season_exp_candidate(player: PlayerData, source: str, value: int) -> bool:
-    source = str(source or '')
-    if not source:
-        return False
-
-    value = max(0, int(value or 0))
-    current_value = int(getattr(player, 'season_exp', 0) or 0)
-    current_source = str(getattr(player, 'season_exp_source', '') or '')
-    bound_source = str(getattr(player, 'level_extra_source', '') or '')
-    current_priority = _source_priority(current_source)
-    candidate_priority = _source_priority(source)
-    bound_priority = _source_priority(bound_source)
-
-    if current_value == value and current_source == source:
-        return False
-
-    if source == bound_source:
-        player.season_exp = value
-        player.season_exp_source = source
-        return True
-
-    if current_source and current_priority > candidate_priority:
-        return False
-
-    if bound_source and bound_priority > candidate_priority:
-        return False
-
-    player.season_exp = value
-    player.season_exp_source = source
-    return True
-
-
 def _decode_resource_value_map(resource_ids, resources) -> Dict[int, int]:
     result: Dict[int, int] = {}
     count = min(len(resource_ids or []), len(resources or []))
@@ -1519,7 +1294,6 @@ class PacketParser:
         # from this cache.  Limited to 1024 entries.
         self._monster_hp_cache: Dict[int, int] = {}  # template_id -> max_hp
         self._profession_skill_cache: Dict[int, Dict[int, int]] = {}  # profession_id -> slot map
-        self._pending_self_notifies: list[tuple[int, bytes, str]] = []
         self._zstd = None
         self._server_time_offset_ms: Optional[float] = None
         self._last_dungeon_id: int = 0   # Track dungeon transitions
@@ -1538,7 +1312,6 @@ class PacketParser:
         }
         if self._current_uid > 0:
             logger.info(f'[Parser] bootstrap self UID from cache: {self._current_uid}')
-            self._prepopulate_from_cache(self._current_uid)
         try:
             debug_path = os.path.join(os.path.dirname(__file__), 'packet_debug.jsonl')
             if os.path.exists(debug_path):
@@ -1555,72 +1328,6 @@ class PacketParser:
         if uuid not in self._monsters:
             self._monsters[uuid] = MonsterData(uuid)
         return self._monsters[uuid]
-
-    def _remember_pending_self_notify(self, method_id: int, payload: bytes, reason: str):
-        if not payload:
-            return
-        self._pending_self_notifies.append((int(method_id), bytes(payload), str(reason or '')))
-        if len(self._pending_self_notifies) > _PENDING_SELF_NOTIFY_LIMIT:
-            del self._pending_self_notifies[:-_PENDING_SELF_NOTIFY_LIMIT]
-        pending_count = len(self._pending_self_notifies)
-        if pending_count <= 3 or pending_count == _PENDING_SELF_NOTIFY_LIMIT:
-            logger.info(
-                f'[Parser] buffered early self notify method=0x{method_id:X} '
-                f'count={pending_count} reason={reason}'
-            )
-
-    def _replay_pending_self_notifies(self, source: str):
-        if self._current_uid <= 0 or not self._pending_self_notifies:
-            return
-        pending = list(self._pending_self_notifies)
-        self._pending_self_notifies.clear()
-        logger.info(
-            f'[Parser] replaying {len(pending)} buffered self notifies '
-            f'after {source} uid={self._current_uid}'
-        )
-        for method_id, payload, reason in pending:
-            try:
-                if method_id == NotifyMethod.SYNC_CONTAINER_DIRTY_DATA:
-                    self._on_sync_container_dirty(payload)
-                elif method_id == NotifyMethod.SYNC_TO_ME_DELTA_INFO:
-                    self._on_sync_to_me_delta(payload)
-            except Exception as e:
-                logger.warning(
-                    f'[Parser] replay buffered notify failed method=0x{method_id:X} '
-                    f'source={source} reason={reason}: {e}'
-                )
-
-    def _prepopulate_from_cache(self, uid: int):
-        """Pre-populate player identity from player_cache.json so that the
-        first _notify_self() (from SyncToMeDelta) already carries name/level
-        instead of empty strings.  When SyncContainerData eventually arrives
-        (login / map change), it will overwrite with fresh data."""
-        import json as _json
-        cache_path = os.path.join(os.path.dirname(__file__), 'player_cache.json')
-        try:
-            if not os.path.isfile(cache_path):
-                return
-            with open(cache_path, 'r', encoding='utf-8') as f:
-                cache = _json.load(f)
-            entry = cache.get(str(uid))
-            if not entry:
-                return
-            player = self._get_player(uid)
-            if entry.get('name'):
-                player.name = entry['name']
-            if entry.get('level', 0) > 0:
-                player.level = entry['level']
-            if entry.get('profession'):
-                player.profession = entry['profession']
-            if entry.get('fight_point', 0) > 0:
-                player.fight_point = entry['fight_point']
-            print(
-                f'[Parser] 从缓存预填充: name={player.name!r} lv={player.level} '
-                f'prof={player.profession!r} uid={uid}',
-                flush=True,
-            )
-        except Exception as e:
-            logger.debug(f'[Parser] player cache pre-load failed: {e}')
 
     def reset_scene(self):
         """场景服务器切换时重置场景数据。
@@ -2358,13 +2065,9 @@ class PacketParser:
             _append_packet_debug('enter_game', {
                 'uid': uid, 'server_name': server_name,
             })
-            adopted_uid = False
             if uid > 0 and self._current_uid == 0:
                 self._current_uid = uid
-                adopted_uid = True
                 logger.info(f'[Parser] auto-adopt UID from EnterGame: {uid}')
-            if adopted_uid:
-                self._replay_pending_self_notifies('EnterGame')
         except Exception as e:
             logger.debug(f'[Parser] EnterGame decode error: {e}')
 
@@ -2434,173 +2137,11 @@ class PacketParser:
             # If not CharTeam, log what we can
             logger.info(f'[Parser] {notify_name}: not decodable as CharTeam, raw logged')
 
-    def _try_sync_container_data_fallback(self, data: bytes, reason: str = '') -> bool:
-        """Best-effort identity decode when compiled protobuf is unavailable.
-
-        This keeps the startup identity path alive in frozen builds even if the
-        generated pb2 module cannot import (missing/incompatible protobuf runtime).
-        """
-        try:
-            outer_fields = _decode_fields(data)
-            char_raw = _get_field_bytes(outer_fields, 1)
-            if not char_raw:
-                logger.error('[Parser] SyncContainerData fallback: missing CharSerialize payload')
-                return False
-            char_fields = _decode_fields(char_raw)
-            uid = _get_field_int(char_fields, CharField.CHAR_ID, 0)
-        except Exception as e:
-            logger.error(f'[Parser] SyncContainerData fallback decode failed: {e}')
-            return False
-
-        if uid <= 0:
-            logger.error('[Parser] SyncContainerData fallback: invalid uid=0')
-            return False
-
-        reason_text = f' ({reason})' if reason else ''
-        logger.warning(
-            f'[Parser] SyncContainerData fallback{reason_text}: '
-            f'uid={uid}, current_uid={self._current_uid}'
-        )
-        print(
-            f'[Parser] SyncContainerData fallback{reason_text}: '
-            f'uid={uid}, current_uid={self._current_uid}',
-            flush=True,
-        )
-
-        self._sync_container_count += 1
-
-        adopted_uid = False
-        if self._current_uid == 0:
-            self._current_uid = uid
-            adopted_uid = True
-            logger.info(f'[Parser] auto-adopt self UID from SyncContainerData fallback: {uid}')
-        elif self._sync_container_count > 1 and uid == self._current_uid:
-            print(
-                f'[Parser] SyncContainerData 重新同步 (第{self._sync_container_count}次), '
-                f'保留 {len(self._monsters)} 个怪物 (fallback, 不重置场景)',
-                flush=True,
-            )
-
-        player = self._get_player(uid)
-        changed = False
-        fallback_debug = {
-            'uid': uid,
-            'reason': reason,
-            'field_count': len(char_fields),
-        }
-
-        char_base_raw = _get_field_bytes(char_fields, CharField.CHAR_BASE)
-        if char_base_raw:
-            char_base_fields = _decode_fields(char_base_raw)
-            name = _decode_utf8_bytes(_get_field_bytes(char_base_fields, 5)).strip()
-            if name:
-                fallback_debug['name'] = name
-                if name != player.name:
-                    player.name = name
-                    changed = True
-            fight_point = _get_field_int(char_base_fields, 35, 0)
-            if fight_point > 0:
-                fallback_debug['fight_point'] = fight_point
-                if fight_point != int(getattr(player, 'fight_point', 0) or 0):
-                    player.fight_point = fight_point
-                    changed = True
-
-        role_level_raw = _get_field_bytes(char_fields, CharField.ROLE_LEVEL)
-        if role_level_raw:
-            role_level_fields = _decode_fields(role_level_raw)
-            role_level = _get_field_int(role_level_fields, 1, 0)
-            if role_level > 0:
-                fallback_debug['role_level'] = role_level
-                if role_level != player.level:
-                    player.level = role_level
-                    changed = True
-
-        season_center_raw = _get_field_bytes(char_fields, CharField.SEASON_CENTER)
-        if season_center_raw:
-            season_center_fields = _decode_fields(season_center_raw)
-            battlepass_raw = _get_field_bytes(season_center_fields, 2)
-            if battlepass_raw:
-                battlepass_fields = _decode_fields(battlepass_raw)
-                battlepass_level = _get_field_int(battlepass_fields, 2, 0)
-                if battlepass_level > 0:
-                    player.battlepass_level = battlepass_level
-                    fallback_debug['battlepass_level'] = battlepass_level
-                    if _set_level_extra_candidate(player, 'battlepass', battlepass_level):
-                        changed = True
-
-        season_medal_raw = _get_field_bytes(char_fields, CharField.SEASON_MEDAL_INFO)
-        if season_medal_raw:
-            season_medal_fields = _decode_fields(season_medal_raw)
-            core_hole_raw = _get_field_bytes(season_medal_fields, 3)
-            if core_hole_raw:
-                core_hole_fields = _decode_fields(core_hole_raw)
-                season_medal_raw_level = _get_field_int(core_hole_fields, 2, 0)
-                season_medal_level = _normalize_season_medal_level(season_medal_raw_level)
-                if season_medal_level > 0:
-                    player.season_medal_level = season_medal_level
-                    player.season_level = max(int(getattr(player, 'season_level', 0) or 0), season_medal_level)
-                    fallback_debug['season_medal_level'] = season_medal_level
-                    if _set_level_extra_candidate(player, 'season_medal', season_medal_level):
-                        changed = True
-
-        monster_hunt_raw = _get_field_bytes(char_fields, CharField.MONSTER_HUNT_INFO)
-        if monster_hunt_raw:
-            monster_hunt_fields = _decode_fields(monster_hunt_raw)
-            monster_hunt_level = _get_field_int(monster_hunt_fields, 2, 0)
-            monster_hunt_exp = _get_field_int(monster_hunt_fields, 3, 0)
-            if monster_hunt_level > 0:
-                player.monster_hunt_level = monster_hunt_level
-                player.season_level = max(int(getattr(player, 'season_level', 0) or 0), monster_hunt_level)
-                fallback_debug['monster_hunt_level'] = monster_hunt_level
-                if _set_level_extra_candidate(player, 'monster_hunt', monster_hunt_level):
-                    changed = True
-            if monster_hunt_exp > 0:
-                fallback_debug['monster_hunt_exp'] = monster_hunt_exp
-                if _set_season_exp_candidate(player, 'monster_hunt', monster_hunt_exp):
-                    changed = True
-
-        profession_list_raw = _get_field_bytes(char_fields, CharField.PROFESSION_LIST)
-        if profession_list_raw:
-            profession_fields = _decode_fields(profession_list_raw)
-            profession_id = _get_field_int(profession_fields, 1, 0)
-            if profession_id <= 0:
-                for entry_raw in profession_fields.get(4, []) or []:
-                    if not isinstance(entry_raw, (bytes, bytearray)):
-                        continue
-                    entry_fields = _decode_fields(bytes(entry_raw))
-                    profession_id = _get_field_int(entry_fields, 1, 0)
-                    if profession_id > 0:
-                        break
-            if profession_id > 0:
-                fallback_debug['profession_id'] = profession_id
-                profession_name = PROFESSION_NAMES.get(profession_id, '')
-                if profession_id != player.profession_id or profession_name != player.profession:
-                    player.profession_id = profession_id
-                    player.profession = profession_name
-                    changed = True
-                if self._apply_cached_profession_slots(player):
-                    changed = True
-
-        _append_packet_debug('sync_container_data_fallback', fallback_debug)
-
-        if changed and uid == self._current_uid:
-            self._notify_self()
-
-        print(
-            f'[Parser] SyncContainerData fallback 完成: uid={uid} Lv.{player.level} '
-            f'职业={player.profession!r}({player.profession_id})',
-            flush=True,
-        )
-        if adopted_uid:
-            self._replay_pending_self_notifies('SyncContainerData fallback')
-        return True
-
     def _on_sync_container_data(self, data: bytes):
         """SyncContainerData { CharSerialize VData = 1 } — 纯 pb2 解析."""
         pb = _ensure_pb()
         if not pb:
             logger.error('[Parser] SyncContainerData: pb2 模块未加载，跳过')
-            self._try_sync_container_data_fallback(data, reason='pb2 unavailable')
             return
 
         try:
@@ -2609,7 +2150,6 @@ class PacketParser:
             char = msg.VData
         except Exception as e:
             logger.error(f'[Parser] SyncContainerData pb2 解析失败: {e}')
-            self._try_sync_container_data_fallback(data, reason='pb2 parse failed')
             return
 
         uid = char.CharId
@@ -2624,10 +2164,8 @@ class PacketParser:
         self._sync_container_count += 1
 
         # SyncContainerData 是登录时的完整同步, 如果当前 UID 未知则自动采纳
-        adopted_uid = False
         if self._current_uid == 0:
             self._current_uid = uid
-            adopted_uid = True
             logger.info(f'[Parser] auto-adopt self UID from SyncContainerData: {uid}')
         elif self._sync_container_count > 1 and uid == self._current_uid:
             # NOTE: Do NOT call reset_scene() here!
@@ -2805,12 +2343,10 @@ class PacketParser:
                     f'[Parser] SeasonMedalInfo core_raw={raw_level} '
                     f'core_norm={season_medal_level}'
                 )
-        # MonsterHuntInfo (field 56) → CurLevel / CurExp
+        # MonsterHuntInfo (field 56) → CurLevel
         monster_hunt_level = 0
-        monster_hunt_exp = 0
         if char.HasField('MonsterHuntInfo'):
             monster_hunt_level = char.MonsterHuntInfo.CurLevel
-            monster_hunt_exp = max(0, int(char.MonsterHuntInfo.CurExp or 0))
         # BattlePassData (field 86) → max BattlePass.Level across entries
         battlepass_data_level = 0
         if char.HasField('BattlePassData'):
@@ -2838,16 +2374,12 @@ class PacketParser:
             changed = True
         if _set_level_extra_candidate(player, 'monster_hunt', monster_hunt_level):
             changed = True
-        if _set_season_exp_candidate(player, 'monster_hunt', monster_hunt_exp):
-            changed = True
         if _set_level_extra_candidate(player, 'battlepass', battlepass_level):
             changed = True
         if _set_level_extra_candidate(player, 'battlepass_data', battlepass_data_level):
             changed = True
         if deep_sleep_level > 0:
             if _set_level_extra_candidate(player, 'deep_sleep', deep_sleep_level):
-                changed = True
-            if _set_season_exp_candidate(player, 'deep_sleep', deep_sleep_exp):
                 changed = True
             print(
                 f'[Parser] SyncContainerData: 深眠心相仪等级 Lv.{deep_sleep_level} '
@@ -3187,9 +2719,6 @@ class PacketParser:
                 flush=True,
             )
 
-        if adopted_uid:
-            self._replay_pending_self_notifies('SyncContainerData')
-
 
     # SyncContainerDirtyData (incremental updates)
 
@@ -3197,11 +2726,6 @@ class PacketParser:
     def _on_sync_container_dirty(self, data: bytes):
         """Handle the custom dirty-data stream wrapper."""
         if self._current_uid == 0:
-            self._remember_pending_self_notify(
-                NotifyMethod.SYNC_CONTAINER_DIRTY_DATA,
-                data,
-                'current_uid=0',
-            )
             logger.debug('[Parser] _on_sync_container_dirty: skipped (no current_uid)')
             return
 
@@ -3227,20 +2751,8 @@ class PacketParser:
         if pos + 8 > len(data):
             return
         ident = struct.unpack_from('<I', data, pos)[0]
-        if ident != _DIRTY_IDENT:
-            # ── Smart offset detection: scan for identifier ──
-            smart_pos = _smart_find_dirty_start(data)
-            if smart_pos is None:
-                logger.debug(
-                    f'[Parser] DirtyData: no 0xFFFFFFFE at pos=0 and smart scan failed '
-                    f'(len={len(data)}, head={data[:16].hex()})'
-                )
-                return
-            logger.warning(
-                f'[Parser] DirtyData smart offset correction: '
-                f'found identifier at pos={smart_pos} (skipped {smart_pos} leading bytes)'
-            )
-            pos = smart_pos
+        if ident != 0xFFFFFFFE:
+            return
         pos += 4
         # skip validation int32BE
         pos += 4
@@ -3270,7 +2782,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != _DIRTY_IDENT:
+            if ident2 != 0xFFFFFFFE:
                 return
             pos += 8  # skip identifier + validation
             if pos + 4 > len(data):
@@ -3411,7 +2923,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != _DIRTY_IDENT:
+            if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3473,7 +2985,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != _DIRTY_IDENT:
+            if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3487,11 +2999,6 @@ class PacketParser:
                 lv = struct.unpack_from('<I', data, pos)[0]
                 debug_info['u32'] = lv
                 if lv > 0:
-                    if lv != _KNOWN_BASE_LEVEL:
-                        logger.warning(
-                            f'[Parser] DirtyData RoleLevel: expected {_KNOWN_BASE_LEVEL}, '
-                            f'got {lv}. Possible offset error or game-cap change.'
-                        )
                     player.level = lv
                     changed = True
                     debug_info['role_level'] = lv
@@ -3504,7 +3011,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != _DIRTY_IDENT:
+            if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3516,7 +3023,7 @@ class PacketParser:
                 if pos + 8 > len(data):
                     return
                 ident3 = struct.unpack_from('<I', data, pos)[0]
-                if ident3 != _DIRTY_IDENT:
+                if ident3 != 0xFFFFFFFE:
                     return
                 pos += 8
                 if pos + 4 > len(data):
@@ -3542,7 +3049,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != _DIRTY_IDENT:
+            if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3554,7 +3061,7 @@ class PacketParser:
                 if pos + 8 > len(data):
                     return
                 ident3 = struct.unpack_from('<I', data, pos)[0]
-                if ident3 != _DIRTY_IDENT:
+                if ident3 != 0xFFFFFFFE:
                     return
                 pos += 8
                 if pos + 4 > len(data):
@@ -3586,7 +3093,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != _DIRTY_IDENT:
+            if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3604,13 +3111,6 @@ class PacketParser:
                     logger.info(f'[Parser] DirtyData MonsterHuntInfo.CurLevel -> {hunt_lv}')
                     if _set_level_extra_candidate(player, 'monster_hunt', hunt_lv):
                         changed = True
-            elif sub_field == 3 and pos + 4 <= len(data):  # CurExp
-                hunt_exp = struct.unpack_from('<I', data, pos)[0]
-                debug_info['u32'] = hunt_exp
-                debug_info['monster_hunt_exp'] = hunt_exp
-                logger.info(f'[Parser] DirtyData MonsterHuntInfo.CurExp -> {hunt_exp}')
-                if _set_season_exp_candidate(player, 'monster_hunt', hunt_exp):
-                    changed = True
             else:
                 debug_info['raw_hex'] = data[pos:].hex()[:128]
 
@@ -3620,10 +3120,10 @@ class PacketParser:
         elif field_index == 102:  # 深眠心相仪等级 (Deep Sleep Resonance Level)
             debug_info['field_name'] = 'DEEP_SLEEP_LEVEL'
             debug_info['full_raw_hex'] = data[pos:].hex()[:256]
-            # Binary dirty format: _DIRTY_IDENT + validation + sub_field + nested data
+            # Binary dirty format: 0xFFFFFFFE + validation + sub_field + nested data
             if pos + 8 <= len(data):
                 ident2 = struct.unpack_from('<I', data, pos)[0]
-                if ident2 == _DIRTY_IDENT:
+                if ident2 == 0xFFFFFFFE:
                     pos += 8  # skip identifier + validation
                     if pos + 4 <= len(data):
                         sub_field = struct.unpack_from('<I', data, pos)[0]
@@ -3646,8 +3146,6 @@ class PacketParser:
                                         if sub_field == 3:
                                             if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
                                                 changed = True
-                                            if _set_season_exp_candidate(player, 'deep_sleep', ds_exp):
-                                                changed = True
                                             print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
                                 else:
                                     # fallback to manual decode
@@ -3663,8 +3161,6 @@ class PacketParser:
                                             if sub_field == 3:
                                                 if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
                                                     changed = True
-                                                if _set_season_exp_candidate(player, 'deep_sleep', ds_exp):
-                                                    changed = True
                                                 print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
                             except Exception:
                                 debug_info['nested_hex'] = remaining.hex()[:128]
@@ -3673,7 +3169,7 @@ class PacketParser:
             if pos + 8 > len(data):
                 return
             ident2 = struct.unpack_from('<I', data, pos)[0]
-            if ident2 != _DIRTY_IDENT:
+            if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
@@ -3753,9 +3249,6 @@ class PacketParser:
             if _is_player(uuid):
                 uid = _uuid_to_uid(uuid)
                 player_uids_appeared.append(uid)
-                if uid == self._current_uid and self._current_uuid != uuid:
-                    self._current_uuid = uuid
-                    logger.info(f'[Parser] matched self entity from SyncNearEntities: uuid={uuid} uid={uid}')
                 if has_attrs:
                     self._process_attr_collection(uid, entity.Attrs)
                     # Debug: log what attrs were present for this player
@@ -3853,7 +3346,6 @@ class PacketParser:
             return
         di = msg.DeltaInfo  # AoiSyncToMeDelta
         player = None
-        adopted_uid = False
 
         # UUID from AoiSyncToMeDelta.Uuid (field 5)
         uuid = di.Uuid
@@ -3863,7 +3355,6 @@ class PacketParser:
                 player = self._get_player(new_uid)
                 if self._current_uuid != uuid:
                     self._current_uuid = uuid
-                    adopted_uid = self._current_uid == 0 and new_uid > 0
                     self._current_uid = new_uid
                     logger.info(f'[Parser] confirmed self UUID={uuid}, UID={new_uid}')
                     if new_uid in self._players:
@@ -3876,7 +3367,6 @@ class PacketParser:
                 player = self._get_player(fallback_uid)
                 if self._current_uuid != base_uuid:
                     self._current_uuid = base_uuid
-                    adopted_uid = self._current_uid == 0 and fallback_uid > 0
                     self._current_uid = fallback_uid
                     logger.info(f'[Parser] confirmed self UUID={base_uuid} (from BaseDelta), UID={fallback_uid}')
                     if fallback_uid in self._players:
@@ -3895,17 +3385,6 @@ class PacketParser:
                 f'skill_cds={n_cds} fight_res_cds={n_fres} has_base={has_base} '
                 f'current_uid={self._current_uid}'
             )
-        if player is None and self._current_uid == 0 and (n_cds > 0 or n_fres > 0 or has_base):
-            self._remember_pending_self_notify(
-                NotifyMethod.SYNC_TO_ME_DELTA_INFO,
-                data,
-                'current_uid=0',
-            )
-            logger.info(
-                f'[Parser] SyncToMeDelta buffered until self uid is known '
-                f'skill_cds={n_cds} fight_res_cds={n_fres} has_base={has_base}'
-            )
-            return
 
         skill_cd_changed = False
         sync_skill_cds = []
@@ -3973,8 +3452,6 @@ class PacketParser:
             self._process_aoi_sync_delta(di.BaseDelta)
         if skill_cd_changed and player is not None and player.uid == self._current_uid:
             self._notify_self()
-        if adopted_uid:
-            self._replay_pending_self_notifies('SyncToMeDelta')
 
 
     #  SyncNearDeltaInfo (0x2D)

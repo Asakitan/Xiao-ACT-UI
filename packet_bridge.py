@@ -13,7 +13,6 @@ PacketBridge 与 RecognitionEngine 接口一致，可直接替换。
     bridge = PacketBridge(mgr)
     bridge.start()   # 后台抓包 + 解析 + 推送
     bridge.stop()
-
 """
 
 import threading
@@ -45,28 +44,19 @@ def _load_skill_names() -> dict:
     global _SKILL_NAMES
     if _SKILL_NAMES:
         return _SKILL_NAMES
-    candidates: list[str] = []
     try:
         if getattr(sys, 'frozen', False):
-            # onedir 模块化布局 (build_release.bat) 把 assets/ 提升到 EXE
-            # 所在顶层目录, runtime/ 里已不再有 assets/. 因此先查 EXE dir,
-            # 再退回 _MEIPASS, 最后退回源码目录.
-            exe_dir = os.path.dirname(sys.executable)
-            candidates.append(os.path.join(exe_dir, 'assets', 'skill_names.json'))
-            mei = getattr(sys, '_MEIPASS', '')
-            if mei:
-                candidates.append(os.path.join(mei, 'assets', 'skill_names.json'))
-                candidates.append(os.path.join(os.path.dirname(mei), 'assets', 'skill_names.json'))
-        candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                       'assets', 'skill_names.json'))
-        path = next((p for p in candidates if os.path.exists(p)), '')
-        if not path:
-            logger.warning(f'[Bridge] skill_names.json not found, tried: {candidates}')
+            base = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(base, 'assets', 'skill_names.json')
+        if not os.path.exists(path):
+            logger.warning(f'[Bridge] skill_names.json not found at {path}')
             return {}
         with open(path, 'r', encoding='utf-8') as f:
             raw = json.load(f)
         _SKILL_NAMES = {int(k): str(v) for k, v in raw.items() if str(k).isdigit()}
-        logger.info(f'[Bridge] loaded {len(_SKILL_NAMES)} skill names from {path}')
+        logger.info(f'[Bridge] loaded {len(_SKILL_NAMES)} skill names')
         return _SKILL_NAMES
     except Exception as e:
         logger.warning(f'[Bridge] failed to load skill names: {e}')
@@ -875,7 +865,7 @@ class PacketBridge:
             print(tb, flush=True)
             try:
                 self._state_mgr.update(
-                    packet_active=False,
+                    recognition_ok=False,
                     error_msg=f'数据桥崩溃: {e}',
                 )
             except Exception:
@@ -884,22 +874,12 @@ class PacketBridge:
     def _run_inner(self):
         """主运行流程 (实际逻辑)"""
         logger.info('[Bridge] 启动网络抓包数据桥...')
-        # v2.1.2-f: 把启动诊断信息打到 stdout, 方便用户排查 onedir 模块化打包
-        # 引发的"DPS/BossHP/BurstReady 不弹出"问题.
-        try:
-            print(f'[Bridge] start: frozen={getattr(sys, "frozen", False)} '
-                  f'exe_dir={os.path.dirname(sys.executable)} '
-                  f'meipass={getattr(sys, "_MEIPASS", "")} '
-                  f'cwd={os.getcwd()}', flush=True)
-        except Exception:
-            pass
 
         # ── Npcap 自动安装 ──
         try:
             from install_npcap import ensure_npcap, is_npcap_installed
             if not is_npcap_installed():
-                print('[Bridge] Npcap 未安装, 触发自动安装...', flush=True)
-                self._state_mgr.update(packet_active=False,
+                self._state_mgr.update(recognition_ok=False,
                                        error_msg='正在自动安装 Npcap...')
                 ok, msg = ensure_npcap(silent=True)
                 if not ok:
@@ -970,11 +950,8 @@ class PacketBridge:
         )
 
         self._npcap_ok = True
-        # 注意: 不再覆写 recognition_ok。该字段由 vision (RecognitionEngine)
-        # 根据是否检测到游戏窗口来维护。packet bridge 只更新 error_msg,
-        # 避免在 vision 已经识别到游戏窗口时被强制翻成 False (导致 webview
-        # STA 一直显示 OFFLINE)。
-        self._state_mgr.update(error_msg='等待游戏服务器连接...')
+        self._state_mgr.update(recognition_ok=False,
+                               error_msg='等待游戏服务器连接...')
 
         # 启动抓包
         self._capture.start()
@@ -1005,26 +982,21 @@ class PacketBridge:
                 if not getattr(self, '_server_found_printed', False):
                     self._server_found_printed = True
                     print('[Bridge] 已识别游戏服务器', flush=True)
-                # 服务器已识别。即使还没有任何玩家数据包到达，也先把 packet_active
-                # 设为 True，避免 DPS / Boss HP 叠层因为远程/锁屏中过间断发玩家数据
-                # 而一直不弹出。
-                # 检查数据超时 — 仅更新 error_msg, 不覆写 recognition_ok
-                # (该字段由 vision 引擎维护)
+                # 检查数据超时
                 with self._lock:
                     if self._last_update_t > 0:
                         idle = time.time() - self._last_update_t
                         if idle > 10:
                             self._state_mgr.update(
-                                packet_active=True,
+                                recognition_ok=False,
                                 error_msg=f'数据超时 ({idle:.0f}s)')
-                        else:
-                            self._state_mgr.update(packet_active=True)
                     else:
                         self._state_mgr.update(
-                            packet_active=True,
+                            recognition_ok=False,
                             error_msg='已连接服务器，等待角色数据...')
             else:
-                self._state_mgr.update(error_msg='搜索游戏服务器中...')
+                self._state_mgr.update(recognition_ok=False,
+                                       error_msg='搜索游戏服务器中...')
             # 每 5 秒打印一次诊断统计
             if self._parser and int(now) % 5 == 0:
                 ps = self._parser.stats
@@ -1035,10 +1007,13 @@ class PacketBridge:
                 cap_raw = cap_stats.get('raw_frames', '?')
                 cap_tcp = cap_stats.get('tcp_segments', '?')
                 cap_game = cap_stats.get('complete_game_frames', '?')
+                gap_skips = cap_stats.get('gap_skips', 0)
+                cache_of = cap_stats.get('cache_overflows', 0)
                 thr_alive = cap._thread.is_alive() if cap and cap._thread else '?'
                 print(
                     f'[Bridge] 诊断: thread_alive={thr_alive} server={srv} '
-                    f'cap_raw={cap_raw} cap_tcp={cap_tcp} cap_game={cap_game} | '
+                    f'cap_raw={cap_raw} cap_tcp={cap_tcp} cap_game={cap_game} '
+                    f'gap_skip={gap_skips} overflow={cache_of} | '
                     f'parser_raw={ps["raw_frames"]} parser_game={ps["game_frames"]} '
                     f'unknown_msg={ps["unknown_message_types"]} '
                     f'unknown_notify={ps["unknown_notify_methods"]} '
@@ -1189,7 +1164,7 @@ class PacketBridge:
 
     def _publish_player_update(self, player: PlayerData, from_tick: bool = False):
         updates = {
-            'packet_active': True,
+            'recognition_ok': True,
             'error_msg': '',
         }
 
@@ -1234,14 +1209,6 @@ class PacketBridge:
                 f'(source={getattr(player, "level_extra_source", "")}, '
                 f'medal={player.season_medal_level}, hunt={player.monster_hunt_level}, '
                 f'bp={player.battlepass_level}, bp_data={player.battlepass_data_level})'
-            )
-        _season_exp_src = str(getattr(player, 'season_exp_source', '') or '')
-        if self._use_packet_source('level') and _season_exp_src:
-            _season_exp = max(0, int(getattr(player, 'season_exp', 0) or 0))
-            updates['season_exp'] = _season_exp
-            logger.info(
-                f'[Bridge] season_exp={_season_exp} '
-                f'(source={_season_exp_src})'
             )
         if player.profession_id > 0 and self._use_packet_source('identity'):
             updates['profession_id'] = player.profession_id
@@ -1389,7 +1356,7 @@ class PacketBridge:
 
     def _error(self, msg: str):
         logger.error(f'[Bridge] {msg}')
-        self._state_mgr.update(packet_active=False, error_msg=msg)
+        self._state_mgr.update(recognition_ok=False, error_msg=msg)
 
     def _stabilize_packet_stamina(self, current: int, stamina_max: int, energy_priority: int) -> int:
         """Hold packet-only STA spikes until they repeat, instead of showing instant jumps."""

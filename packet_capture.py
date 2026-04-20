@@ -4,7 +4,6 @@ SAO Auto — Npcap 网络抓包 + TCP 流重组
 
 通过 ctypes 调用 wpcap.dll (Npcap/WinPcap)，抓取以太网帧，
 解析 IP/TCP 层，按序列号重组 TCP 流，输出完整的游戏协议帧。
-
 """
 
 import struct
@@ -250,18 +249,6 @@ class TcpReassembler:
     支持场景服务器切换检测 (切换地图/副本时游戏连接新的场景服务器)。
     """
 
-    # 当前已识别服务器连续多少秒无数据后, 允许重新识别新的场景服务器.
-    # 切换地图/副本时, 游戏会断开旧连接并连上新的场景服务器. 若 pcap 缓冲
-    # 错过了新服务器的首个 c3SB 登录包, 我们必须在旧服务器静默后释放锁定,
-    # 让新服务器的框架包 (game-frame 回退识别) 可以被采用, 否则 DPS /
-    # Boss HP 条会一直停留在旧场景的数据上.
-    SERVER_IDLE_RESET_SEC = 6.0
-    # 回退识别: 某个新地址连续发出多少个疑似游戏帧才视为新场景服务器.
-    CANDIDATE_FRAME_THRESHOLD = 3
-    # 在识别出服务器之前, 先缓冲少量候选下行帧, 识别成功后回放,
-    # 避免丢掉最早的 0x15/0x16 身份同步包.
-    CANDIDATE_PACKET_BUFFER_LIMIT = 8
-
     def __init__(self, on_game_packet: Callable[[bytes], None],
                  on_server_change: Optional[Callable[[], None]] = None):
         self._on_pkt = on_game_packet  # 回调: 一个完整游戏帧
@@ -274,13 +261,7 @@ class TcpReassembler:
         self._cache: Dict[int, bytes] = {}
         self._buf = b''
         self._last_t: float = 0
-
-        # 最后一次收到 _server_addr 报文的时间戳. 用于检测旧服务器静默.
-        self._last_server_pkt_t: float = 0.0
-        # 候选地址 addr → (first_seen_ts, game_frame_count). 当前服务器静默
-        # 期间若某地址持续发出疑似游戏帧, 则可以回退识别为新场景服务器.
-        self._candidate_addrs: Dict[str, Tuple[float, int]] = {}
-        self._candidate_packets: Dict[str, List[Tuple[float, int, bytes]]] = {}
+        self._gap_since: float = 0.0  # 首次检测到缺段间隙的时间戳
 
         # IP 分片
         self.stats = {
@@ -289,9 +270,8 @@ class TcpReassembler:
             'complete_game_frames': 0,
             'seq_resets': 0,
             'cache_overflows': 0,
+            'gap_skips': 0,
             'server_changes': 0,
-            'idle_reidentify': 0,
-            'fallback_identify': 0,
         }
         self._frag = _IpFragmentCache()
 
@@ -306,19 +286,11 @@ class TcpReassembler:
             self._cache.clear()
             self._buf = b''
             self._last_t = 0
-            self._last_server_pkt_t = 0.0
-            self._candidate_addrs.clear()
-            self._candidate_packets.clear()
+            self._gap_since = 0.0
 
     # ─── 主入口 ───
     def feed_raw_frame(self, raw: bytes):
-        """接收一个原始以太网帧
-
-        v1.3.1 兼容路径: 始终使用 **源地址** (src_ip:sport) 标识服务器.
-        c3SB 签名只出现在服务器→客户端的下行包中, 因此含有 c3SB 的包的源
-        地址一定是服务器. 这比猜测方向 (ephemeral port / private IP) 更可靠,
-        避免 VPN/加速器等双私网场景下方向推断出错导致所有下行包被丢弃.
-        """
+        """接收一个原始以太网帧"""
         self.stats['raw_frames'] += 1
         parsed = _parse_eth_ip_tcp(raw)
         if parsed is None:
@@ -342,85 +314,52 @@ class TcpReassembler:
         if not payload:
             return
 
-        # 与 v1.3.1 一致: 仅用源地址标识, 不做方向推断.
         addr = f'{src_ip.hex()}:{sport}'
-        now = time.time()
 
         # ─── 服务器识别 ───
         if self._server_addr is None:
-            # 缓冲疑似游戏帧 (识别成功后回放, 避免丢掉最早的同步包)
-            self._remember_candidate_packet(addr, seq, payload, now)
             if self._try_identify(payload, addr):
                 logger.info(f'[Capture] 识别到游戏服务器: {_fmt_ip(src_ip)}:{sport}')
-                self._last_server_pkt_t = now
-                self._candidate_addrs.clear()
-                if self._replay_candidate_packets(addr) == 0:
-                    self._feed_tcp(seq, payload)
-                return
-            # c3SB 未命中: 记作候选. 若同一源地址持续发出游戏帧, 则回退识别.
-            self._track_candidate(addr, payload, now)
-            if self._candidate_addrs.get(addr, (0, 0))[1] >= self.CANDIDATE_FRAME_THRESHOLD:
-                if self._adopt_new_server(payload, addr, seq, src_ip, sport,
-                                           reason='initial_game_frame_fallback',
-                                           force=True):
-                    self.stats['fallback_identify'] += 1
+                # 首包也要喂入 TCP 重组, 可能含 SyncContainerData 等关键数据
+                self._feed_tcp(seq, payload)
             return
 
-        if addr == self._server_addr:
-            # ─── 当前服务器的下行包 → TCP 重组 ───
-            self._last_server_pkt_t = now
-            self._feed_tcp(seq, payload)
+        if addr != self._server_addr:
+            # ─── 场景服务器切换检测 ───
+            # 切换地图/副本时，游戏会连接新的场景服务器。
+            # 检查来自不同地址的包中是否含有 c3SB 签名，
+            # 若有则切换到新服务器。(参考 SRDC: clearDataOnServerChange)
+            if self._try_identify(payload, addr):
+                old_addr = self._server_addr
+                self._server_addr = addr
+                # 重置 TCP 重组状态
+                with self._lock:
+                    self._next_seq = -1
+                    self._cache.clear()
+                    self._buf = b''
+                    self._gap_since = 0.0
+                self.stats['server_changes'] += 1
+                logger.info(
+                    f'[Capture] 场景服务器切换: {old_addr} → {addr} '
+                    f'({_fmt_ip(src_ip)}:{sport})'
+                )
+                print(
+                    f'[Capture] ⚡ 场景服务器切换 → {_fmt_ip(src_ip)}:{sport} '
+                    f'(第 {self.stats["server_changes"]} 次)',
+                    flush=True,
+                )
+                # 通知上层: 场景已切换，需要清理旧数据
+                if self._on_server_change:
+                    try:
+                        self._on_server_change()
+                    except Exception as e:
+                        logger.error(f'[Capture] on_server_change callback error: {e}')
+                # 继续处理新服务器的首个包
+                self._feed_tcp(seq, payload)
             return
 
-        # addr != self._server_addr: 来自其他地址 (客户端上行, 或新场景服务器)
-        # 缓冲疑似游戏帧 (供潜在的服务器切换后回放)
-        self._remember_candidate_packet(addr, seq, payload, now)
-
-        # ─── 旧服务器静默 → 允许重新识别 ───
-        # 切地图/副本后, 新场景服务器的 c3SB 登录包可能被 pcap 缓冲错过,
-        # 导致所有新服务器报文因 addr 不匹配而被丢弃, DPS / Boss HP 冻结.
-        # 因此当 _server_addr 连续 N 秒无数据时, 主动释放识别锁.
-        if (self._last_server_pkt_t > 0
-                and now - self._last_server_pkt_t > self.SERVER_IDLE_RESET_SEC):
-            old_addr = self._server_addr
-            idle = now - self._last_server_pkt_t
-            logger.info(
-                f'[Capture] 服务器 {old_addr} 空闲 {idle:.1f}s, 释放识别锁'
-            )
-            print(
-                f'[Capture] ⚠ 服务器空闲 {idle:.1f}s, 重新识别新场景服务器',
-                flush=True,
-            )
-            with self._lock:
-                self._server_addr = None
-                self._next_seq = -1
-                self._cache.clear()
-                self._buf = b''
-            self._last_server_pkt_t = 0.0
-            self.stats['idle_reidentify'] += 1
-            # 立即尝试以当前包识别新服务器
-            if self._adopt_new_server(payload, addr, seq, src_ip, sport,
-                                       reason='idle_timeout',
-                                       treat_as_switch=True):
-                return
-            # 未能识别: 记作候选, 等下一个包
-            self._track_candidate(addr, payload, now)
-            return
-
-        # ─── 场景服务器切换检测 ───
-        # 切换地图/副本时, 游戏会连接新的场景服务器.
-        # 检查来自不同源地址的包中是否含有 c3SB 签名,
-        # 若有则切换到新服务器. (参考 SRDC: clearDataOnServerChange)
-        if self._adopt_new_server(payload, addr, seq, src_ip, sport,
-                                   reason='c3SB_switch'):
-            return
-        # 未命中 c3SB: 记作候选, 若连续出现大量游戏帧则视为新服务器.
-        self._track_candidate(addr, payload, now)
-        if self._candidate_addrs.get(addr, (0, 0))[1] >= self.CANDIDATE_FRAME_THRESHOLD:
-            if self._adopt_new_server(payload, addr, seq, src_ip, sport,
-                                       reason='game_frame_fallback',
-                                       force=True):
-                self.stats['fallback_identify'] += 1
+        # ─── TCP 重组 ───
+        self._feed_tcp(seq, payload)
 
     # ─── 服务器识别 ───
     def _try_identify(self, data: bytes, addr: str) -> bool:
@@ -465,137 +404,9 @@ class TcpReassembler:
             offset = end
         return False
 
-    # ─── 候选地址跟踪 + 回退识别 ───
-    @staticmethod
-    def _looks_like_game_frame(payload: bytes) -> bool:
-        """启发式: 判断 payload 是否以 [4B-size][2B-msg-type] 游戏帧头开始.
+    # ─── TCP 重组 (参考 C# SRDPS TcpStreamProcessor) ───
+    GAP_SKIP_SEC = 2.0  # 缺段等待超时后跳跃 (C# 用 2 秒)
 
-        用作 c3SB 登录签名被 pcap 错过时的回退识别手段. 合法的消息类型
-        来自 packet_parser.MessageType: NOTIFY=2, RETURN=3, ECHO=4, FRAME_DOWN=6.
-        """
-        if len(payload) < 6:
-            return False
-        try:
-            size = struct.unpack_from('>I', payload, 0)[0]
-            msg_type = struct.unpack_from('>H', payload, 4)[0]
-        except struct.error:
-            return False
-        if size < 6 or size > 0xFFFFF:
-            return False
-        return msg_type in (2, 3, 4, 6)
-
-    def _track_candidate(self, addr: str, payload: bytes, now: float):
-        """记录发出疑似游戏帧的候选地址, 供静默重识别 / 回退识别使用."""
-        if not self._looks_like_game_frame(payload):
-            return
-        first_ts, count = self._candidate_addrs.get(addr, (now, 0))
-        self._candidate_addrs[addr] = (first_ts, count + 1)
-        # 防止无限增长: 清理 60 秒前的旧候选.
-        if len(self._candidate_addrs) > 32:
-            kept = {
-                a: v for a, v in self._candidate_addrs.items()
-                if now - v[0] < 60.0
-            }
-            self._candidate_addrs = kept
-            self._candidate_packets = {
-                a: packets for a, packets in self._candidate_packets.items()
-                if a in kept
-            }
-
-    def _remember_candidate_packet(self, addr: str, seq: int, payload: bytes, now: float):
-        """Keep early downlink packets so server identification does not drop them."""
-        if not self._looks_like_game_frame(payload):
-            return
-        packets = self._candidate_packets.setdefault(addr, [])
-        for _ts, existing_seq, existing_payload in packets:
-            if existing_seq == seq and existing_payload == payload:
-                return
-        packets.append((now, seq, bytes(payload)))
-        packets.sort(key=lambda item: item[1])
-        if len(packets) > self.CANDIDATE_PACKET_BUFFER_LIMIT:
-            del packets[:-self.CANDIDATE_PACKET_BUFFER_LIMIT]
-
-        if len(self._candidate_packets) > 32:
-            self._candidate_packets = {
-                a: buffered for a, buffered in self._candidate_packets.items()
-                if now - buffered[-1][0] < 60.0
-            }
-
-    def _replay_candidate_packets(self, addr: str) -> int:
-        """Replay buffered packets for a newly identified/adopted server."""
-        packets = self._candidate_packets.pop(addr, [])
-        replay_count = 0
-        for _ts, seq, payload in packets:
-            self._feed_tcp(seq, payload)
-            replay_count += 1
-        if replay_count > 1:
-            logger.info(f'[Capture] replayed {replay_count} buffered candidate packets for {addr}')
-        self._candidate_packets.clear()
-        return replay_count
-
-    def _adopt_new_server(self, payload: bytes, addr: str, seq: int,
-                          server_ip: bytes, server_port: int, reason: str,
-                          force: bool = False,
-                          treat_as_switch: bool = False) -> bool:
-        """尝试将 addr 采纳为当前游戏服务器地址.
-
-        优先使用 c3SB 签名识别. 若 force=True (例如 game-frame 回退路径), 
-        即使没有 c3SB 也会采纳. 返回 True 表示采纳成功, 并已完成状态重置、
-        回调触发与首包投喂.
-
-        addr 始终是包的 **源地址** (src_ip:sport). 含有 c3SB 的包一定是
-        服务器→客户端方向, 因此 addr 即为新服务器.
-
-        treat_as_switch=True 时, 即使 _server_addr 已为 None, 也把本次采纳
-        当作场景切换 (触发 on_server_change 回调). 用于空闲重识别路径 —
-        _server_addr 已被主调清为 None, 但业务上属于切场景.
-        """
-        old_addr = self._server_addr
-        identified = self._try_identify(payload, addr)
-        if not identified and not force:
-            return False
-        self._server_addr = addr
-        now = time.time()
-        self._last_server_pkt_t = now
-        # 重置 TCP 重组状态
-        with self._lock:
-            self._next_seq = -1
-            self._cache.clear()
-            self._buf = b''
-        self._candidate_addrs.clear()
-        is_switch = (old_addr is not None) or treat_as_switch
-        if is_switch:
-            self.stats['server_changes'] += 1
-            logger.info(
-                f'[Capture] 场景服务器切换 ({reason}): {old_addr} → {addr} '
-                f'({_fmt_ip(server_ip)}:{server_port})'
-            )
-            print(
-                f'[Capture] ⚡ 场景服务器切换 → {_fmt_ip(server_ip)}:{server_port} '
-                f'[{reason}] (第 {self.stats["server_changes"]} 次)',
-                flush=True,
-            )
-            if self._on_server_change:
-                try:
-                    self._on_server_change()
-                except Exception as e:
-                    logger.error(f'[Capture] on_server_change callback error: {e}')
-        else:
-            logger.info(
-                f'[Capture] 识别到游戏服务器 ({reason}): '
-                f'{_fmt_ip(server_ip)}:{server_port}'
-            )
-            print(
-                f'[Capture] 识别到游戏服务器 → {_fmt_ip(server_ip)}:{server_port} '
-                f'[{reason}]',
-                flush=True,
-            )
-        # 回放缓冲的候选包; 若无缓冲则直接喂当前包.
-        if self._replay_candidate_packets(addr) == 0:
-            self._feed_tcp(seq, payload)
-        return True
-
-    # ─── TCP 重组 ───
     def _feed_tcp(self, seq: int, data: bytes):
         with self._lock:
             now = time.time()
@@ -606,6 +417,7 @@ class TcpReassembler:
                 self._next_seq = -1
                 self._cache.clear()
                 self._buf = b''
+                self._gap_since = 0.0
                 self.stats['seq_resets'] += 1
 
             # 初始化
@@ -616,22 +428,53 @@ class TcpReassembler:
                 self._next_seq = seq
 
             # ── 丢弃已消费的 TCP 重传段 ──
-            # TCP seq 是 32-bit 循环空间; 当 seq 在 _next_seq "之前" 时
-            # (考虑 wraparound), 该段已被消费, 不需要再缓存.
             diff = (seq - self._next_seq) & 0xFFFFFFFF
             if diff > 0x80000000:
-                # seq 在 _next_seq 之前 (wraparound-safe 判断)
-                return
+                return  # seq 在 _next_seq 之前 (wraparound-safe)
 
             # 缓存
             self._cache[seq] = data
 
             # 顺序拼接
+            consumed = False
             while self._next_seq in self._cache:
                 chunk = self._cache.pop(self._next_seq)
                 self._buf += chunk
                 self._next_seq = (self._next_seq + len(chunk)) & 0xFFFFFFFF
                 self._last_t = now
+                consumed = True
+
+            # ── TCP 缺段跳跃 (参考 C# SRDPS ForceResyncTo) ──
+            # 当 pcap 丢失一个段时, _next_seq 卡住, 后续段全进缓存.
+            # 等待 GAP_SKIP_SEC 后放弃缺失段, 跳到最低缓存 seq 继续重组.
+            if self._cache:
+                if consumed:
+                    self._gap_since = 0.0
+                elif self._gap_since == 0.0:
+                    self._gap_since = now
+                elif now - self._gap_since >= self.GAP_SKIP_SEC:
+                    min_seq = min(self._cache.keys())
+                    logger.warning(
+                        f'[Capture] TCP gap skip: {len(self._cache)} cached '
+                        f'segments, advancing seq'
+                    )
+                    print(
+                        f'[Capture] TCP gap skip: recovering '
+                        f'{len(self._cache)} cached segments',
+                        flush=True,
+                    )
+                    self._buf = b''  # 跨间隙的部分帧不可恢复
+                    self._next_seq = min_seq
+                    self._gap_since = 0.0
+                    self.stats['gap_skips'] += 1
+                    # 重新消费缓存
+                    while self._next_seq in self._cache:
+                        chunk = self._cache.pop(self._next_seq)
+                        self._buf += chunk
+                        self._next_seq = (self._next_seq + len(chunk)) & 0xFFFFFFFF
+                        self._last_t = now
+            else:
+                self._gap_since = 0.0
 
             # 缓存过大保护
             if len(self._cache) > 300:
@@ -639,6 +482,7 @@ class TcpReassembler:
                 self._next_seq = -1
                 self._cache.clear()
                 self._buf = b''
+                self._gap_since = 0.0
                 self.stats['cache_overflows'] += 1
                 return
 
@@ -652,11 +496,27 @@ class TcpReassembler:
                 if len(self._buf) < 6:
                     break
                 pkt_size = struct.unpack_from('>I', self._buf, 0)[0]
-                if pkt_size > 999999:
-                    logger.error(f'[Capture] 无效帧长度 {pkt_size}, 清空流')
-                    self._buf = b''
-                    self._next_seq = -1
-                    self._cache.clear()
+                if pkt_size < 6 or pkt_size > 999999:
+                    # 帧头损坏 — 尝试扫描下一个有效帧头
+                    found = False
+                    for i in range(1, min(len(self._buf) - 5, 65536)):
+                        sz = struct.unpack_from('>I', self._buf, i)[0]
+                        if 6 <= sz <= 999999:
+                            tp = struct.unpack_from('>H', self._buf, i + 4)[0]
+                            msg = tp & 0x7FFF
+                            if msg in (2, 3, 4, 5, 6):
+                                logger.warning(
+                                    f'[Capture] 帧对齐修复: 跳过 {i} 字节 '
+                                    f'(bad pkt_size={pkt_size})'
+                                )
+                                self._buf = self._buf[i:]
+                                found = True
+                                break
+                    if not found:
+                        logger.error(f'[Capture] 无效帧长度 {pkt_size}, 清空流')
+                        self._buf = b''
+                        self._next_seq = -1
+                        self._cache.clear()
                     break
                 if len(self._buf) < pkt_size:
                     break  # 不够一帧

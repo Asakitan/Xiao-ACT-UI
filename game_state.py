@@ -123,6 +123,9 @@ class GameState:
     profession_id: int = 0             # 职业 ID (来自抓包)
     profession_name: str = ''          # 职业名称
 
+    # ── 战斗状态 ──
+    in_combat: bool = False            # AttrCombatState (104) — 是否在战斗中
+
     # ── 窗口信息 ──
     window_rect: Optional[tuple] = None    # (left, top, right, bottom)
     window_width: int = 0

@@ -2313,8 +2313,20 @@ message CharSerialize {
     FightPoint FightPoint = 96;
     SignInfo Sign = 97;
     CharStatisticsData CharStatisticsData = 98;
-    // Fields 99-101: unknown / not yet discovered
-    DeepSleepResonanceData DeepSleepResonance = 102; // Season Resonance Level, shown as +XX
+    CommonTargetActivityList CommonTargetActivityList = 99;
+    ItemCounterList ItemCounterList = 100;
+    SeasonCultivateLineData SeasonCultivateLineData = 101;
+    DeepSleepResonanceData DeepSleepResonance = 102; // Season Resonance Level = SeasonRoleLevelData in SRDPS
+    ReputationList ReputationList = 103;
+    int64 SaveSerial = 104;
+    UserUnionTarget UserUnionTarget = 105;
+    CurrentProfessionProjectIdInfo CurProjectIdInfo = 106;
+    DutyList DutyList = 107;
+    ActionGroupSaveData ActionGroupData = 108;
+    RogueData RogueData = 109;
+    LifeProfessionEntrustInfo LifeProfessionEntrust = 110;
+    BackflowData BackflowData = 111;
+    NewbieBackflowPublicData NewBackPublicData = 112;
 }
 
 message CharStatisticsData {
@@ -2335,6 +2347,20 @@ message DeepSleepLevelInfo {
     int32 Level = 1;           // Current season resonance level (the +XX)
     int64 CurExp = 2;          // Current experience points
 }
+
+// ── CharSerialize fields 99-112 (from SRDPS zproto) ──
+message CommonTargetActivityList {}
+message ItemCounterList {}
+message SeasonCultivateLineData {}
+message ReputationList {}
+message UserUnionTarget {}
+message CurrentProfessionProjectIdInfo {}
+message DutyList {}
+message ActionGroupSaveData {}
+message RogueData {}
+message LifeProfessionEntrustInfo {}
+message BackflowData {}
+message NewbieBackflowPublicData {}
 
 message CharTeam {
     int64 TeamId = 1;
