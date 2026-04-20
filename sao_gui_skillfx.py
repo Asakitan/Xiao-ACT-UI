@@ -71,7 +71,6 @@ TEXT_MAIN = (227, 251, 255, 255)
 TEXT_TAG = (124, 235, 255, 255)
 TEXT_SUB = (164, 239, 255, 255)
 TEXT_STROKE = (182, 247, 255, 66)
-TEXT_BURST = (218, 225, 232, 255)
 
 # Caption panel dimensions (CSS fixed values)
 CAP_W = 460
@@ -492,19 +491,25 @@ void main() {
             vao = glfx['vao']
             ctx = glfx['ctx']
             moderngl = glfx['moderngl']
-            fbo.use()
-            ctx.viewport = (0, 0, width, height)
-            ctx.clear(0.0, 0.0, 0.0, 0.0)
-            prog['u_resolution'].value = (float(width), float(height))
-            prog['u_origin'].value = (float(box_x), float(box_y))
-            prog['u_time'].value = float(max(0.0, now - self._show_t))
-            prog['u_anchor'].value = (float(self._gl_anchor[0]), float(self._gl_anchor[1]))
-            prog['u_label'].value = (float(self._gl_label[0]), float(self._gl_label[1]))
-            prog['u_panel_size'].value = (float(self._gl_panel_size[0]), float(self._gl_panel_size[1]))
-            prog['u_intensity'].value = float(max(0.0, min(1.0, alpha_mul)))
-            prog['u_seed'].value = float(self._gl_seed)
-            vao.render(mode=moderngl.TRIANGLES, vertices=3)
-            raw = fbo.read(components=4, alignment=1)
+            # Re-bind our own standalone GL context as current for this
+            # thread. The shared gpu_renderer owns a separate standalone
+            # context on the same worker thread, and whoever was used last
+            # is the one currently bound on Windows WGL. Without this, our
+            # fbo/vao calls may execute against the wrong context.
+            with ctx:
+                fbo.use()
+                ctx.viewport = (0, 0, width, height)
+                ctx.clear(0.0, 0.0, 0.0, 0.0)
+                prog['u_resolution'].value = (float(width), float(height))
+                prog['u_origin'].value = (float(box_x), float(box_y))
+                prog['u_time'].value = float(max(0.0, now - self._show_t))
+                prog['u_anchor'].value = (float(self._gl_anchor[0]), float(self._gl_anchor[1]))
+                prog['u_label'].value = (float(self._gl_label[0]), float(self._gl_label[1]))
+                prog['u_panel_size'].value = (float(self._gl_panel_size[0]), float(self._gl_panel_size[1]))
+                prog['u_intensity'].value = float(max(0.0, min(1.0, alpha_mul)))
+                prog['u_seed'].value = float(self._gl_seed)
+                vao.render(mode=moderngl.TRIANGLES, vertices=3)
+                raw = fbo.read(components=4, alignment=1)
             gl_img = Image.frombuffer('RGBA', (width, height), raw, 'raw', 'RGBA', 0, -1)
             img.alpha_composite(gl_img, (box_x, box_y))
         except Exception:
@@ -990,16 +995,16 @@ void main() {
             fill=TEXT_SUB,
         )
 
-        title_text = 'BURST MODE READY'
+        title_text = 'BRUST MODE READY'
         tx = 30
         ty = 36
-        draw_title.text((tx, ty), title_text, font=f_main, fill=TEXT_BURST)
+        draw_title.text((tx, ty), title_text, font=f_main, fill=TEXT_MAIN)
         for sdx, sdy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
             draw_title.text(
                 (tx + sdx, ty + sdy),
                 title_text,
                 font=f_main,
-                fill=(200, 208, 216, 50),
+                fill=TEXT_STROKE,
             )
 
         bar_max_widths = [78, 122, 158]

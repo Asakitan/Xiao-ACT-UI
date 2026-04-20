@@ -318,37 +318,40 @@ def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
         h, w, _ = arr.shape
         radius = min(64, max(1, int(round(sigma * 3.0))))
 
-        src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
-        src_tex.filter = (0x2601, 0x2601)  # GL_LINEAR
-        src_tex.repeat_x = False
-        src_tex.repeat_y = False
+        # Re-bind our context in case another standalone GL context (e.g.
+        # skillfx Burst overlay) was made current on this thread.
+        with ctx:
+            src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
+            src_tex.filter = (0x2601, 0x2601)  # GL_LINEAR
+            src_tex.repeat_x = False
+            src_tex.repeat_y = False
 
-        fbo_h = _get_fbo(w, h, 'blurH')
-        fbo_v = _get_fbo(w, h, 'blurV')
+            fbo_h = _get_fbo(w, h, 'blurH')
+            fbo_v = _get_fbo(w, h, 'blurV')
 
-        blur_prog['u_sigma'].value = float(sigma)
-        blur_prog['u_radius'].value = int(radius)
-        blur_prog['u_tex'].value = 0
+            blur_prog['u_sigma'].value = float(sigma)
+            blur_prog['u_radius'].value = int(radius)
+            blur_prog['u_tex'].value = 0
 
-        # Horizontal pass
-        fbo_h.use()
-        ctx.clear(0.0, 0.0, 0.0, 0.0)
-        src_tex.use(0)
-        blur_prog['u_dir'].value = (1.0 / w, 0.0)
-        blur_quad.render()
+            # Horizontal pass
+            fbo_h.use()
+            ctx.clear(0.0, 0.0, 0.0, 0.0)
+            src_tex.use(0)
+            blur_prog['u_dir'].value = (1.0 / w, 0.0)
+            blur_quad.render()
 
-        # Vertical pass
-        fbo_v.use()
-        ctx.clear(0.0, 0.0, 0.0, 0.0)
-        fbo_h.color_attachments[0].use(0)
-        blur_prog['u_dir'].value = (0.0, 1.0 / h)
-        blur_quad.render()
+            # Vertical pass
+            fbo_v.use()
+            ctx.clear(0.0, 0.0, 0.0, 0.0)
+            fbo_h.color_attachments[0].use(0)
+            blur_prog['u_dir'].value = (0.0, 1.0 / h)
+            blur_quad.render()
 
-        data = fbo_v.read(components=4, alignment=1)
-        out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
-        out = np.flipud(out).copy()
+            data = fbo_v.read(components=4, alignment=1)
+            out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
+            out = np.flipud(out).copy()
 
-        src_tex.release()
+            src_tex.release()
         return Image.fromarray(out, 'RGBA')
     except Exception as exc:
         try:
@@ -387,33 +390,34 @@ def render_shell_rgba(
         return None
     try:
         ctx = _tls.ctx
-        fbo = _get_fbo(w, h, 'shell')
-        fbo.use()
-        ctx.viewport = (0, 0, w, h)
-        ctx.clear(0.0, 0.0, 0.0, 0.0)
-        p = _tls.shell_prog
-        p['u_size'].value = (float(w), float(h))
-        p['u_body_min'].value = (float(body_pad), float(body_pad))
-        p['u_body_max'].value = (float(w - body_pad), float(h - body_pad))
-        p['u_radius'].value = float(radius)
-        p['u_color_a'].value = tuple(c / 255.0 for c in color_a)
-        p['u_color_b'].value = tuple(c / 255.0 for c in color_b)
-        p['u_edge'].value = tuple(c / 255.0 for c in edge)
-        p['u_inner'].value = tuple(c / 255.0 for c in inner)
-        p['u_scan'].value = tuple(c / 255.0 for c in scan)
-        p['u_scan_period'].value = float(scan_period)
-        p['u_shadow_color'].value = tuple(c / 255.0 for c in shadow)
-        p['u_shadow_dx'].value = float(shadow_dx)
-        p['u_shadow_dy'].value = float(shadow_dy)
-        p['u_shadow_sigma'].value = float(shadow_sigma) if shadow_sigma > 0 else 1.0
-        p['u_shadow_radius'].value = float(
-            shadow_radius if shadow_radius is not None else radius,
-        )
-        _tls.shell_quad.render()
+        with ctx:
+            fbo = _get_fbo(w, h, 'shell')
+            fbo.use()
+            ctx.viewport = (0, 0, w, h)
+            ctx.clear(0.0, 0.0, 0.0, 0.0)
+            p = _tls.shell_prog
+            p['u_size'].value = (float(w), float(h))
+            p['u_body_min'].value = (float(body_pad), float(body_pad))
+            p['u_body_max'].value = (float(w - body_pad), float(h - body_pad))
+            p['u_radius'].value = float(radius)
+            p['u_color_a'].value = tuple(c / 255.0 for c in color_a)
+            p['u_color_b'].value = tuple(c / 255.0 for c in color_b)
+            p['u_edge'].value = tuple(c / 255.0 for c in edge)
+            p['u_inner'].value = tuple(c / 255.0 for c in inner)
+            p['u_scan'].value = tuple(c / 255.0 for c in scan)
+            p['u_scan_period'].value = float(scan_period)
+            p['u_shadow_color'].value = tuple(c / 255.0 for c in shadow)
+            p['u_shadow_dx'].value = float(shadow_dx)
+            p['u_shadow_dy'].value = float(shadow_dy)
+            p['u_shadow_sigma'].value = float(shadow_sigma) if shadow_sigma > 0 else 1.0
+            p['u_shadow_radius'].value = float(
+                shadow_radius if shadow_radius is not None else radius,
+            )
+            _tls.shell_quad.render()
 
-        data = fbo.read(components=4, alignment=1)
-        arr = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
-        arr = np.flipud(arr).copy()
+            data = fbo.read(components=4, alignment=1)
+            arr = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
+            arr = np.flipud(arr).copy()
         return Image.fromarray(arr, 'RGBA')
     except Exception as exc:
         try:
@@ -438,23 +442,29 @@ def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
         return None
     try:
         ctx = _tls.ctx
-        arr = _to_rgba_np(rgba)
-        h, w, _ = arr.shape
-        src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
-        src_tex.filter = (0x2600, 0x2600)
-        fbo = _get_fbo(w, h, 'prem')
-        fbo.use()
-        ctx.viewport = (0, 0, w, h)
-        ctx.clear(0.0, 0.0, 0.0, 0.0)
-        src_tex.use(0)
-        _tls.prem_prog['u_tex'].value = 0
-        _tls.prem_quad.render()
-        data = fbo.read(components=4, alignment=1)
-        # UpdateLayeredWindow uses a top-down DIB (negative biHeight), and the
-        # CPU premultiply path already writes rows in top-down order. Do not
-        # flip again here or every async ULW overlay ends up vertically mirrored.
-        out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4).copy()
-        src_tex.release()
+        # Re-bind this context current for the calling thread. If another
+        # standalone ModernGL context lives on the same thread (e.g. skillfx
+        # Burst overlay), the most recently created one is current on Windows
+        # WGL; without this guard its FBO operations would silently clobber
+        # ours (and vice-versa), producing garbage or flipped output.
+        with ctx:
+            arr = _to_rgba_np(rgba)
+            h, w, _ = arr.shape
+            src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
+            src_tex.filter = (0x2600, 0x2600)
+            fbo = _get_fbo(w, h, 'prem')
+            fbo.use()
+            ctx.viewport = (0, 0, w, h)
+            ctx.clear(0.0, 0.0, 0.0, 0.0)
+            src_tex.use(0)
+            _tls.prem_prog['u_tex'].value = 0
+            _tls.prem_quad.render()
+            data = fbo.read(components=4, alignment=1)
+            # UpdateLayeredWindow uses a top-down DIB (negative biHeight), and
+            # the CPU premultiply path already writes rows in top-down order.
+            # Do not flip here or every async ULW overlay ends up mirrored.
+            out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4).copy()
+            src_tex.release()
         return out.tobytes()
     except Exception as exc:
         try:

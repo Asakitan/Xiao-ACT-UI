@@ -343,10 +343,12 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.6"
+APP_VERSION = "2.2.7"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.2.7:
+#   Fix GL Cache caused upside-down rendering in skillfx.
 # v2.2.6:
-#   Fix GPU Cache caused upside-down rendering.
+#   Fix GPU Cache caused upside-down rendering in menu pannels.
 # v2.2.5:
 #   GPU Cache masks/overlay GPU rendering.
 # v2.2.4:
