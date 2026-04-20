@@ -42,6 +42,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur, render_shell_rgba as _gpu_shell
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, ulw_commit
+from overlay_subpixel import subpixel_bar_width
 
 from sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
@@ -1770,13 +1771,16 @@ class HpOverlay:
             return HP_YELLOW
         return HP_RED
 
-    def _hp_fill_width_px(self, pct: float) -> int:
+    def _hp_fill_width_px(self, pct: float) -> float:
+        # v2.2.10: returns float so subpixel_bar_width can fade the trailing
+        # column instead of snapping the bar 1 px at a time during slow HP
+        # drains/regens.
         value = max(0.0, min(1.0, float(pct or 0.0)))
         if value <= 0.0:
-            return 0
+            return 0.0
         if value >= 0.997:
-            return int(round(350 + 6.0))
-        return int(round(350 * value + 8.0))
+            return 350.0 + 6.0
+        return 350.0 * value + 8.0
 
     def _draw_hp_fill(self, img: Image.Image, y_off: int,
                       now: float) -> None:
@@ -1785,17 +1789,19 @@ class HpOverlay:
             return
         # Web width math: 0 → 0, full → 100% + 6px, otherwise % + 8px.
         fill_w = self._hp_fill_width_px(pct)
-        if fill_w <= 0:
+        if fill_w <= 0.0:
             return
+        fw_int = max(1, int(math.ceil(fill_w)))
         ca, cb = self._hp_gradient(pct)
-        bar = _make_hgrad_bar(fill_w, 25, ca, cb)
+        bar = _make_hgrad_bar(fw_int, 25, ca, cb)
+        bar = subpixel_bar_width(bar, fill_w) or bar
         cap = _make_skew_cap(25, cb, skew_px=7, extra=7)
         canvas = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
         canvas.paste(bar, (BOX_X + 114 + 1, BOX_Y + 10 + 1 + y_off))
         if pct < 0.995:
             canvas.paste(
                 cap,
-                (BOX_X + 114 + fill_w - 7, BOX_Y + 10 + 1 + y_off),
+                (BOX_X + 114 + fw_int - 7, BOX_Y + 10 + 1 + y_off),
                 cap,
             )
         img.alpha_composite(_clip_alpha(canvas, self._hp_bar_mask(y_off)))
@@ -1910,18 +1916,22 @@ class HpOverlay:
         tx0 = STA_X + 50
         ty0 = STA_Y + (STA_H - 6) // 2 + y_off
         tx1 = STA_X + STA_W - 60
-        fw = int(round((tx1 - tx0) * pct))
-        if fw <= 0:
+        # v2.1.17: float width + subpixel trailing column so STA drain looks
+        # continuous instead of stepping 1 px every few ticks.
+        fw = (tx1 - tx0) * pct
+        if fw <= 0.0:
             return
-        bar = _make_hgrad_bar(fw - 2, 4, STA_A, STA_B)
+        fw_int = max(1, int(math.ceil(fw)))
+        bar = _make_hgrad_bar(max(1, fw_int - 2), 4, STA_A, STA_B)
+        bar = subpixel_bar_width(bar, max(0.0, fw - 2.0)) or bar
         img.alpha_composite(bar, (tx0 + 1, ty0 + 1))
-        highlight = Image.new('RGBA', (max(1, fw - 2), 1), (255, 242, 202, 72))
+        highlight = Image.new('RGBA', (max(1, fw_int - 2), 1), (255, 242, 202, 72))
         img.alpha_composite(highlight, (tx0 + 1, ty0 + 1))
         # Soft glow above bar (box-shadow: 0 0 6px gold)
         glow = Image.new('RGBA',
-                         (fw + 12, 14), (0, 0, 0, 0))
+                         (fw_int + 12, 14), (0, 0, 0, 0))
         ImageDraw.Draw(glow).rectangle(
-            (6, 4, fw + 6, 10), fill=(243, 175, 18, 60),
+            (6, 4, fw_int + 6, 10), fill=(243, 175, 18, 60),
         )
         glow = _gpu_blur(glow, 3)
         img.alpha_composite(glow, (tx0 - 6, ty0 - 4))

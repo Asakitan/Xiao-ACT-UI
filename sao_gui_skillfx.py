@@ -43,6 +43,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, FrameBuffer, run_cpu_tasks, ulw_commit
+from overlay_subpixel import subpixel_alpha_composite
 from render_capture_sync import wait_until_capture_idle
 
 from sao_gui_dps import (
@@ -1069,7 +1070,10 @@ void main() {
         dx, dy = self._caption_offset(now, enter_t, exit_t)
 
         panel_alpha_mul = alpha_mul * (1.0 if exit_t <= 0.0 else max(0.0, 1.0 - exit_t))
-        img.alpha_composite(_scale_alpha_image(base, panel_alpha_mul), (cx + dx, cy + dy))
+        subpixel_alpha_composite(
+            img, _scale_alpha_image(base, panel_alpha_mul),
+            cx + dx, cy + dy,
+        )
 
         if (not self._exiting and shine is not None and age >= 1.10
                 and alpha_mul > 0.12):
@@ -1080,50 +1084,60 @@ void main() {
                 shine_opacity = max(0.0, 1.0 - (shine_phase - 0.20) / 0.80)
             if shine_opacity > 0.01:
                 shine_layer = Image.new('RGBA', base.size, (0, 0, 0, 0))
-                shine_x = int(round(-80.0 + (cw + 152.0) * shine_phase))
-                shine_layer.alpha_composite(
+                shine_x = -80.0 + (cw + 152.0) * shine_phase
+                subpixel_alpha_composite(
+                    shine_layer,
                     _scale_alpha_image(shine, alpha_mul * shine_opacity),
-                    (shine_x, -10),
+                    shine_x, -10.0,
                 )
                 shine_clip = Image.new('RGBA', base.size, (0, 0, 0, 0))
                 shine_clip.paste(shine_layer, (0, 0), mask)
-                img.alpha_composite(shine_clip, (cx + dx, cy + dy))
+                subpixel_alpha_composite(img, shine_clip, cx + dx, cy + dy)
 
         title_glow = 0.5 + 0.5 * math.sin((now - self._show_t) * 2.2)
         if alpha_mul > 0.2:
             glow_mul = alpha_mul * ((100.0 + 60.0 * title_glow) / 160.0)
-            img.alpha_composite(
+            subpixel_alpha_composite(
+                img,
                 _scale_alpha_image(glow, glow_mul),
-                (cx + dx + self._cap_glow_offset[0], cy + dy + self._cap_glow_offset[1]),
+                cx + dx + self._cap_glow_offset[0],
+                cy + dy + self._cap_glow_offset[1],
             )
-        img.alpha_composite(_scale_alpha_image(title, alpha_mul), (cx + dx, cy + dy))
+        subpixel_alpha_composite(
+            img, _scale_alpha_image(title, alpha_mul), cx + dx, cy + dy,
+        )
 
     def _caption_offset(self, now: float, enter_t: float,
-                        exit_t: float) -> Tuple[int, int]:
+                        exit_t: float) -> Tuple[float, float]:
+        # v2.2.10: keep dx/dy as floats so subpixel_alpha_composite can
+        # bilinear-shift the caption layer between integer pixels. The
+        # previous int(round(...)) snap turned a 60-frame drift across
+        # 52 px into a visibly stair-stepped slide because most ticks saw
+        # zero pixel change.
         age = max(0.0, now - self._show_t)
 
         if enter_t < 1.0:
             if enter_t < 0.54:
                 t_mid = enter_t / 0.54
-                dx = int(round(_lerp(46.0, -6.0, t_mid)))
-                dy = int(round(_lerp(-24.0, 2.0, t_mid)))
+                dx = _lerp(46.0, -6.0, t_mid)
+                dy = _lerp(-24.0, 2.0, t_mid)
             else:
                 t_settle = (enter_t - 0.54) / 0.46
-                dx = int(round(_lerp(-6.0, 0.0, t_settle)))
-                dy = int(round(_lerp(2.0, 0.0, t_settle)))
+                dx = _lerp(-6.0, 0.0, t_settle)
+                dy = _lerp(2.0, 0.0, t_settle)
         else:
-            dx = 0
-            dy = 0
+            dx = 0.0
+            dy = 0.0
 
         if not self._exiting and age >= 1.35:
             float_phase = ((age - 1.35) / 2.8) % 2.0
             float_t = float_phase if float_phase <= 1.0 else 2.0 - float_phase
-            dx += int(round(_lerp(0.0, -4.0, float_t)))
-            dy += int(round(_lerp(0.0, 4.0, float_t)))
+            dx += _lerp(0.0, -4.0, float_t)
+            dy += _lerp(0.0, 4.0, float_t)
 
         if exit_t > 0:
-            dx += int(exit_t * 50)
-            dy += int(exit_t * -12)
+            dx += exit_t * 50.0
+            dy += exit_t * -12.0
 
         return dx, dy
 
@@ -1235,8 +1249,11 @@ void main() {
         box = r_out * 2 + pad * 2
         layer = _scale_alpha_image(self._get_ring_layer(r_out, pulse), alpha_mul)
 
-        img.alpha_composite(layer,
-                            (int(ax - box // 2), int(ay - box // 2)))
+        # v2.2.10: subpixel composite so the ring tracks the smoothly
+        # interpolated _gl_anchor (lerp 0.18 per frame) instead of snapping
+        # to whole pixels each tick.
+        subpixel_alpha_composite(img, layer,
+                                 ax - box / 2.0, ay - box / 2.0)
 
         if not self._exiting:
             sweep_t = _smoothstep(0.10, 1.35, now - self._show_t)
@@ -1289,10 +1306,10 @@ void main() {
         }
 
     def _get_rotated_beam(self, now: float, enter_t: float,
-                          exit_t: float, ring_scale: float) -> Tuple[Optional[Image.Image], Tuple[int, int]]:
+                          exit_t: float, ring_scale: float) -> Tuple[Optional[Image.Image], Tuple[float, float]]:
         geom = self._get_beam_geometry(now, enter_t, exit_t, ring_scale)
         if geom is None:
-            return None, (0, 0)
+            return None, (0.0, 0.0)
         start_x = geom['start_x']
         start_y = geom['start_y']
         end_x = geom['end_x']
@@ -1313,7 +1330,8 @@ void main() {
         rdy = -L / 2.0 * math.sin(angle)
         sx_in_rot = rw / 2.0 + rdx
         sy_in_rot = rh / 2.0 + rdy
-        pos = (int(round(start_x - sx_in_rot)), int(round(start_y - sy_in_rot)))
+        # v2.1.17: keep float position for subpixel composite.
+        pos = (start_x - sx_in_rot, start_y - sy_in_rot)
 
         self._beam_cache_sig = sig
         self._beam_cache_img = rot
@@ -1350,7 +1368,9 @@ void main() {
         geom = self._get_beam_geometry(now, enter_t, exit_t, ring_scale)
         if rot is None or geom is None:
             return
-        img.alpha_composite(_scale_alpha_image(rot, alpha_mul), pos)
+        # v2.2.10: subpixel composite so the beam slides smoothly.
+        subpixel_alpha_composite(
+            img, _scale_alpha_image(rot, alpha_mul), pos[0], pos[1])
 
         draw = ImageDraw.Draw(img)
         trace_wave = 0.5 + 0.5 * math.sin(max(0.0, now - self._show_t - 0.9) * (math.tau / 2.45))
@@ -1380,9 +1400,10 @@ void main() {
                     cy = geom['start_y'] + (geom['end_y'] - geom['start_y']) * frac
                     tail = self._get_rotated_tail(geom['angle'])
                     tw, th = tail.size
-                    img.alpha_composite(
+                    subpixel_alpha_composite(
+                        img,
                         _scale_alpha_image(tail, alpha_mul * tail_opacity),
-                        (int(round(cx - tw / 2.0)), int(round(cy - th / 2.0))),
+                        cx - tw / 2.0, cy - th / 2.0,
                     )
 
     def _fast_beam(self, L: int, H: int) -> Image.Image:
