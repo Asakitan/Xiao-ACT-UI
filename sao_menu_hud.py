@@ -210,6 +210,56 @@ class MenuHudSpriteRenderer:
             stamp_font=_tk_font_spec('sao', 10),
         )
 
+    def render_pil(self, content_w: int, content_h: int,
+                   screen_w: int, screen_h: int,
+                   phase: float) -> Tuple[Image.Image, Tuple[int, int]]:
+        """v2.2.12: compose the entire HUD into a single RGBA PIL.Image.
+
+        Used by ``MenuHudOverlay`` (sao_gui_menu_hud) to drive a layered
+        per-pixel-alpha window from a worker thread instead of the
+        ``Toplevel(-transparentcolor) + Canvas`` chroma-key path. Touches
+        no Tk objects so it is safe to call off the main thread.
+
+        Returns ``(image, sprite_origin_offset)`` where the offset is the
+        sprite's top-left relative to the content frame's top-left
+        (``-PLATE_PAD, -PLATE_PAD``). The caller adds it to the desired
+        on-screen position before submitting via ``ulw_commit``.
+        """
+        content_w = max(260, int(content_w))
+        content_h = max(180, int(content_h))
+        screen_w = max(1, int(screen_w))
+        screen_h = max(1, int(screen_h))
+
+        static = self._get_static_layer(
+            content_w, content_h, screen_w, screen_h)
+        # Always copy: the static layer is reused next call, can't draw
+        # dynamic primitives directly into it.
+        frame = static.copy()
+
+        cx1 = self._PLATE_PAD - self._HUD_MARGIN
+        cy1 = self._PLATE_PAD - self._HUD_MARGIN
+        cx2 = self._PLATE_PAD + content_w + self._HUD_MARGIN
+        cy2 = self._PLATE_PAD + content_h + self._HUD_MARGIN
+        scan_period = 6.0
+        scan_pos = (phase % scan_period) / scan_period
+        scan_y = int(cy1 + (cy2 - cy1) * scan_pos)
+        dot_travel = max(1, cy2 - cy1 - self._BRACKET_LEN * 2)
+        dot_y_l = cy1 + self._BRACKET_LEN + int(
+            dot_travel * ((math.sin(phase * 0.8) + 1.0) * 0.5))
+        dot_y_r = cy1 + self._BRACKET_LEN + int(
+            dot_travel * ((math.sin(phase * 0.8 + math.pi) + 1.0) * 0.5))
+
+        now = _dt.datetime.now()
+        now_second = int(now.timestamp())
+        if self._stamp_second != now_second:
+            self._stamp_second = now_second
+            self._stamp_text = now.strftime('%H:%M:%S')
+
+        self._draw_dynamic(frame, cx1, cy1, cx2, cy2,
+                           scan_y, dot_y_l, dot_y_r,
+                           self._stamp_text)
+        return frame, (-self._PLATE_PAD, -self._PLATE_PAD)
+
     def _get_static_photo(self, content_w: int, content_h: int,
                           screen_w: int, screen_h: int) -> ImageTk.PhotoImage:
         key = (content_w, content_h, screen_w, screen_h)

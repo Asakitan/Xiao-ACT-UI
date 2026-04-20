@@ -343,10 +343,21 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.11"
+APP_VERSION = "2.2.12"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+
+# v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
+# (UpdateLayeredWindow) composed off-thread on the heavy render lane,
+# replacing the legacy chroma-key Toplevel + per-tick `geometry()` move
+# (which forced un-vsync'd DWM region recomposites and was the dominant
+# tearing source). Set `SAO_GPU_MENU_HUD=0` to fall back to the legacy
+# canvas-native path for diagnostics.
+USE_GPU_MENU_HUD = True
 # v2.2.12:
-#   Fully GPU-accelerated SAO Menu.
+#   Fully GPU-accelerated SAO Menu HUD via per-pixel-alpha layered window.
+#   Eliminates fullscreen chroma-key recomposites and tearing on the
+#   floating menu. Off-thread compose on the heavy render lane keeps the
+#   Tk main thread free of HUD draw work.
 # v2.2.11:
 #   Fully GPU-accelerated rendering pipeline for ULW overlays, replacing the old PIL-based CPU 
 #   rendering + DirectX upload path. 

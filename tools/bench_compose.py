@@ -216,12 +216,42 @@ def _bench_inset_shadow() -> None:
     _print_row('inset_shadow_cpu_baseline', body_cpu())
 
 
+def _bench_menu_hud() -> None:
+    """v2.2.12: time MenuHudSpriteRenderer.render_pil end-to-end on the
+    same isolated worker lane the live ULW path uses.
+
+    Targets (1080p, 320×220 content frame):
+       avg < 1.5 ms, p95 < 3 ms.
+    """
+    print('\n[4] MenuHudSpriteRenderer.render_pil — full HUD compose')
+
+    def body() -> List[float]:
+        from sao_menu_hud import MenuHudSpriteRenderer
+
+        r = MenuHudSpriteRenderer()
+        cw, ch = 320, 220
+        sw, sh = 1920, 1080
+        # Warm up (LRU caches, font loads, palette).
+        for _ in range(5):
+            r.render_pil(cw, ch, sw, sh, 0.0)
+        samples: List[float] = []
+        for i in range(1000):
+            phase = i * 0.016
+            t0 = time.perf_counter()
+            r.render_pil(cw, ch, sw, sh, phase)
+            samples.append(time.perf_counter() - t0)
+        return samples
+
+    _print_row('render_pil 320x220 → 1920x1080', _run_on_worker(body))
+
+
 def main() -> int:
-    print('SAO compose microbench (v2.2.11 Phase 6)')
+    print('SAO compose microbench (v2.2.12 Phase A)')
     print('=' * 70)
     _bench_compositor()
     _bench_blur_tex()
     _bench_inset_shadow()
+    _bench_menu_hud()
     print('\nDone.')
     return 0
 

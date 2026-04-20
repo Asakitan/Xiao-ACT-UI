@@ -31,6 +31,14 @@ from sao_menu_hud import (
     MenuHudSpriteRenderer,
     MenuLeftInfoRenderer,
 )
+try:
+    # v2.2.12: per-pixel-alpha layered window for the HUD layer.
+    # Optional: falls back to canvas-native chroma-key path if unavailable.
+    from sao_gui_menu_hud import MenuHudOverlay, gpu_menu_hud_enabled
+except Exception:
+    MenuHudOverlay = None  # type: ignore[assignment]
+    def gpu_menu_hud_enabled() -> bool:  # type: ignore[no-redef]
+        return False
 from overlay_scheduler import get_scheduler as _get_scheduler
 
 try:
@@ -1322,6 +1330,12 @@ class SAOPopUpMenu:
         self._menu_hud_renderer = MenuHudSpriteRenderer()
         self._menu_hud_backdrop = None
         self._menu_hud_backdrop_key = None
+        # v2.2.12: optional per-pixel-alpha layered HUD overlay. When
+        # active, the canvas-native HUD items (`_menu_hud_items`) are
+        # left empty and the HUD is composed off-thread on the heavy
+        # render lane and committed via `submit_ulw_commit`.
+        self._gpu_hud_enabled = bool(MenuHudOverlay) and gpu_menu_hud_enabled()
+        self._hud_overlay: Optional[object] = None
         self._content_place_sig = None
         self._overlay_size_part = ''
         self._overlay_drift_sig = None
@@ -1463,6 +1477,16 @@ class SAOPopUpMenu:
         self._menu_hud_cv = tk.Canvas(
             self._overlay, bg=self._TRANSPARENT_KEY, highlightthickness=0, bd=0)
         self._menu_hud_cv.place(x=0, y=0, relwidth=1, relheight=1)
+
+        # v2.2.12: when the GPU HUD path is enabled, spawn a sibling
+        # ULW Toplevel that owns the visual HUD layer (brackets, rails,
+        # scan, dots, stamp). The legacy canvas remains in place and
+        # empty so the chroma-key window still hosts widgets only.
+        if self._gpu_hud_enabled and MenuHudOverlay is not None:
+            try:
+                self._hud_overlay = MenuHudOverlay(self.root)
+            except Exception:
+                self._hud_overlay = None
 
         # 在 root 窗口层检测点击 → 实现 "点击外部关闭" (透明区域点击穿透到 root)
         self._root_click_id = self.root.bind('<Button-1>',
@@ -1671,11 +1695,41 @@ class SAOPopUpMenu:
             sw, sh, cw, ch = cached
 
         if self._content_x is not None and self._content_y is not None:
-            left = self._content.winfo_x()
-            top = self._content.winfo_y()
+            # v2.2.12: anchored-mode breathing — apply dx/dy to HUD sprite
+            # only (NOT to the content frame). The widgets stay still and
+            # only the brackets/rails/scan visibly drift, which is what
+            # users perceive as the SAO HUD breathing. Earlier code moved
+            # the entire fullscreen chroma-key Toplevel via geometry()
+            # every tick, which forces DWM to recomposite the whole
+            # desktop region behind it and is the dominant tearing source.
+            left = self._content.winfo_x() + dx
+            top = self._content.winfo_y() + dy
         else:
             left = (sw - cw) // 2 + dx
             top = (sh - ch) // 2 + dy
+
+        # v2.2.12: GPU HUD path — route the entire frame through the
+        # off-thread layered window, leaving the chroma-key canvas
+        # untouched. The widget Toplevel below stays still; only the
+        # visual HUD's brackets/rails/scan move with breathing.
+        if self._hud_overlay is not None:
+            try:
+                # MenuHudOverlay.set_geometry expects the content top-left
+                # in *screen* coordinates; convert from overlay-local.
+                ox_screen = self._overlay.winfo_rootx() + left
+                oy_screen = self._overlay.winfo_rooty() + top
+                self._hud_overlay.set_geometry(
+                    ox_screen, oy_screen,
+                    max(120, cw), max(120, ch),
+                    sw, sh,
+                )
+                self._hud_overlay.tick(time.time(), dx, dy, phase)
+                self._menu_hud_origin = (left, top)
+                return
+            except Exception:
+                # Fall through to legacy canvas path on any error so the
+                # menu always renders something.
+                pass
 
         cv = self._menu_hud_cv
         frame = self._menu_hud_renderer.render(
@@ -2038,6 +2092,14 @@ class SAOPopUpMenu:
 
     def _destroy_overlay(self, invoke_callback: bool = True):
         self._visible = False
+        # v2.2.12: tear down the layered HUD window before the parent
+        # Toplevel goes away so its async render lane stops cleanly.
+        if self._hud_overlay is not None:
+            try:
+                self._hud_overlay.destroy()
+            except Exception:
+                pass
+            self._hud_overlay = None
         if self._overlay and self._overlay.winfo_exists():
             try:
                 self._overlay.destroy()
@@ -2095,27 +2157,16 @@ class SAOPopUpMenu:
         else:
             dx = int(round(raw_dx / 2.0) * 2)
             dy = int(round(raw_dy / 2.0) * 2)
-        # Apply quantized breathing as an OVERLAY-window offset.
-        # This moves every child together with zero Tk re-layout, so
-        # the menu drifts visibly without tearing or right-edge clip.
-        try:
-            base_x = getattr(self, '_overlay_base_x', 0)
-            base_y = getattr(self, '_overlay_base_y', 0)
-            new_x = base_x + dx
-            new_y = base_y + dy
-            sig = (new_x, new_y)
-            if getattr(self, '_overlay_drift_sig', None) != sig:
-                self._overlay_drift_sig = sig
-                size_part = getattr(self, '_overlay_size_part', '')
-                if not size_part:
-                    size_part = self._overlay.geometry().split('+', 1)[0]
-                    self._overlay_size_part = size_part
-                self._overlay.geometry(f'{size_part}+{new_x}+{new_y}')
-        except Exception:
-            pass
-        # IMPORTANT: do not re-.place() the content frame on every tick.
-        # The HUD sprite already absorbs (dx, dy) below to express the
-        # breathing motion visually without retriggering layout.
+        # v2.2.12: do NOT call overlay.geometry() per tick. Moving a
+        # fullscreen chroma-key Toplevel forces DWM to recomposite the
+        # entire desktop region under it on every frame, which is the
+        # dominant tearing source. Instead the breathing offset is
+        # applied purely to the HUD sprite below via _draw_menu_hud(dx,
+        # dy, ...), so the chroma-key window stays stationary and DWM
+        # only refreshes the small HUD region.
+        # IMPORTANT: do not re-.place() the content frame on every tick
+        # either — that re-runs Tk's geometry pass on the whole menu and
+        # also tears.
         self._draw_menu_hud(dx, dy, elapsed)
 
 
