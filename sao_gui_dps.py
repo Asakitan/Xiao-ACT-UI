@@ -551,6 +551,9 @@ class DpsOverlay:
         # work during heavy fights.
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
 
+        # v2.2.14: idle short-circuit (see BossHpOverlay).
+        self._idle_committed = False
+
     # ──────────────────────────────────────────
     #  Lifecycle
     # ──────────────────────────────────────────
@@ -921,8 +924,16 @@ class DpsOverlay:
                 except Exception as e:
                     print(f'[DPS-OV] ulw error: {e}')
 
+            # v2.2.14: idle short-circuit. DPS rows tween toward target
+            # values; once disp == target across all rows + totals,
+            # ``_is_animating()`` returns False and we skip compose+
+            # submit until new packet data arrives.
+            is_anim = self._is_animating()
+            if not is_anim and self._idle_committed:
+                return
             self._render_worker.submit(
                 self.compose_frame, now, self._hwnd, self._x, self._y)
+            self._idle_committed = (not is_anim)
 
         if self._hide_after_fade and self._fade_alpha <= 0.01:
             self.hide()

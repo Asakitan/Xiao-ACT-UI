@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.13"
+APP_VERSION = "2.2.14"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
@@ -353,6 +353,17 @@ APP_VERSION_LABEL = f"v{APP_VERSION}"
 # tearing source). Set `SAO_GPU_MENU_HUD=0` to fall back to the legacy
 # canvas-native path for diagnostics.
 USE_GPU_MENU_HUD = True
+# v2.2.14:
+#   Idle CPU reduction (target webview parity ~2-3% on i9-14900HX).
+#   - Fix BossHP._is_animating() (was hard-coded `return True`, forcing 60 Hz
+#     compose+commit on a steady boss bar at full HP — biggest single drain).
+#   - Add per-panel idle short-circuit in HP / DPS / BossHP _tick(): once a
+#     steady frame is committed and nothing is animating, skip compose+submit
+#     until state changes again. Combat / fades / tweens unaffected.
+#   - Scheduler: lower idle-downsample threshold 70% → 30% of frame budget AND
+#     unconditionally throttle non-animating panels to ~10–20 Hz regardless of
+#     CPU headroom. Animating panels keep full 60 Hz.
+#   No visual effects removed.
 # v2.2.13:
 #   Add HP pannel and BossHP to GPU-accelerated.
 # v2.2.12:

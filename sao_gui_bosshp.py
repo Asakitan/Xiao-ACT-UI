@@ -465,6 +465,12 @@ class BossHpOverlay:
         # Async render worker — compose + premult off main thread.
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
 
+        # v2.2.14: idle short-circuit. Once a steady frame has been
+        # composed and committed (no animation in flight) we skip both
+        # compose and submit until ``_is_animating()`` flips back to
+        # True. Drives idle CPU back toward webview parity.
+        self._idle_committed = False
+
     # ──────────────────────────────────────────
     #  Lifecycle
     # ──────────────────────────────────────────
@@ -982,9 +988,43 @@ class BossHpOverlay:
             self._registered = False
 
     def _is_animating(self) -> bool:
-        # Boss HP runs constant scanlines, overdrive pulses, shield sweep →
-        # always animating while visible.
-        return True
+        # v2.2.14: real animation check (was hard-coded ``return True``,
+        # which forced 60 Hz compose + commit even on a steady boss bar
+        # at full HP — the single biggest idle-CPU drain).
+        if not self._visible:
+            return False
+        # Fade in/out
+        if abs(self._fade_alpha - self._fade_target) > 1e-3:
+            return True
+        # Tweens
+        if abs(self._disp_hp_pct - self._target_hp_pct) > 4e-4:
+            return True
+        if abs(self._disp_trail_pct - self._target_trail_pct) > 4e-4:
+            return True
+        if abs(self._disp_shield_pct - self._target_shield_pct) > 4e-4:
+            return True
+        if abs(self._disp_break_pct - self._target_break_pct) > 4e-4:
+            return True
+        # Continuous animations only while their state is active.
+        if self._shield_active and self._disp_shield_pct > 0.01:
+            return True  # shield light sweep
+        if self._in_overdrive:
+            return True  # overdrive pulse
+        if self._breaking_stage > 0:
+            return True  # break-row scanline / bar
+        # Time-bound FX windows.
+        now = time.time()
+        if self._damage_flash_start and (now - self._damage_flash_start) < self.DAMAGE_FLASH:
+            return True
+        if self._break_burst_start and (now - self._break_burst_start) < self.BREAK_BURST_FX_S:
+            return True
+        if self._shield_break_start and (now - self._shield_break_start) < self.SHIELD_VFX_BREAK_S:
+            return True
+        if self._shield_vfx_mode and (now - self._shield_vfx_start) < self._shield_vfx_duration:
+            return True
+        if self._root_pulse_mode and (now - self._root_pulse_start) < self._root_pulse_duration:
+            return True
+        return False
 
     def _tick(self, now: Optional[float] = None) -> None:
         if not self._visible or self._win is None:
@@ -1005,8 +1045,17 @@ class BossHpOverlay:
                 except Exception as e:
                     print(f'[BOSSHP-OV] ulw error: {e}')
 
+            # v2.2.14: idle short-circuit — once we've committed a
+            # steady frame, stop composing/submitting until something
+            # animates again. Drains-only path keeps the worker queue
+            # unblocked.
+            is_anim = self._is_animating()
+            if not is_anim and self._idle_committed:
+                return
+
             self._render_worker.submit(
                 self.compose_frame, now, self._hwnd, self._x, self._y)
+            self._idle_committed = (not is_anim)
 
         if self._hide_after_exit and self._fade_alpha <= 0.01:
             self.destroy()

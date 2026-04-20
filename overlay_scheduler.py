@@ -206,17 +206,20 @@ class OverlayScheduler:
         with self._jobs_lock:
             jobs = list(self._jobs.values())
 
-        # v2.2.10: respect the render FPS target on slower machines.
-        # When the average frame already eats more than ~70% of the frame
-        # budget, idle (non-animating) panels get downsampled to roughly
-        # 20 Hz so the actively-animating panels (SkillFX burst, BossHP
-        # break row, menu fisheye) keep their full per-frame budget.
-        # Without this every panel ticks every frame, the main thread
-        # falls further behind, and the user sees the panels appear to
-        # lock at ~10–15 fps during heavy combat with the menu open.
+        # v2.2.10/v2.2.14: idle downsampling for non-animating panels.
+        # Originally only triggered above 70% of the frame budget, which
+        # never happened during normal play and let idle entity panels
+        # tick at full 60 Hz with no visible state change. v2.2.14 lowers
+        # the overload threshold to 30% AND adds an unconditional 6×
+        # downsample for non-animating panels so they tick at ~10 Hz
+        # regardless of CPU headroom. Animating panels (boss break,
+        # skill burst, menu HUD) remain at full Hz.
         budget_sec = self._frame_sec
-        overloaded = self.avg_frame_ms > 0.7 * budget_sec * 1000.0
-        idle_skip_n = 5 if overloaded else 0
+        overloaded = self.avg_frame_ms > 0.3 * budget_sec * 1000.0
+        # 6 → ~10 Hz for idle panels at 60 Hz target; 3 → ~20 Hz when
+        # the host already has headroom and we want quicker idle
+        # response (e.g. fade-in cue).
+        idle_skip_n = 6 if overloaded else 3
         frame_idx = self._frame_idx
 
         for job in jobs:
