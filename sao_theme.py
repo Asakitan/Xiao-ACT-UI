@@ -47,38 +47,39 @@ class SAOColors:
     OVERLAY_ALPHA = 0.70
 
     # 圆形按钮
-    CIRCLE_BORDER = '#c9c6c6'
-    CIRCLE_BG = '#ffffffd9'
-    CIRCLE_ICON = '#b9b7b7'
+    CIRCLE_BORDER = '#bcc4ca'
+    CIRCLE_BG = '#f7f8f8'
+    CIRCLE_ICON = '#959aa0'
 
     # 激活态 (金色)
     ACTIVE_BORDER = '#f3af12'
-    ACTIVE_BG = '#f3af12'
-    ACTIVE_ICON = '#ffffff'
+    ACTIVE_BG = '#f4ebd7'
+    ACTIVE_ICON = '#6d5d40'
 
     # 悬停
-    HOVER_BG = '#f3af12'
-    HOVER_ICON = '#ffffff'
+    HOVER_BG = '#edf7fa'
+    HOVER_ICON = '#718995'
 
     # 子菜单
-    CHILD_BG = '#ffffffd9'
-    CHILD_HOVER = '#dea620'
-    CHILD_HOVER_FG = '#fbf5e7'
-    CHILD_TEXT = '#333333'
-    CHILD_LINE = '#7c7c7c'
+    CHILD_BG = '#f8f8f8'
+    CHILD_HOVER = '#f4eee1'
+    CHILD_HOVER_FG = '#625846'
+    CHILD_TEXT = '#646364'
+    CHILD_LINE = '#bcc4ca'
+    CHILD_ICON = '#8f959b'
 
     # 左侧信息面板
-    INFO_BG = '#ffffffd9'
-    INFO_BOTTOM = '#e5e3e3cc'
-    INFO_TITLE_BORDER = '#aaaaaa'
-    INFO_TRIANGLE = '#ffffff99'
+    INFO_BG = '#fbfbfb'
+    INFO_BOTTOM = '#ecebea'
+    INFO_TITLE_BORDER = '#c7ccd0'
+    INFO_TRIANGLE = '#f4f4f4'
 
     # Alert 对话框
-    ALERT_BG = '#ffffffcc'
-    ALERT_PANEL = '#eae9e9b3'
+    ALERT_BG = '#ffffffe6'
+    ALERT_PANEL = '#ecebeac9'
     ALERT_TITLE_FG = '#646364'
     ALERT_CONTENT_FG = '#646060'
-    ALERT_SHADOW = '#00000033'
+    ALERT_SHADOW = '#00000022'
     CLOSE_RED = '#d13d4f'
     OK_BLUE = '#428ce6'
 
@@ -119,12 +120,12 @@ class SAOColors:
     APP_GOLD = '#ffd700'
 
     # ── Frosted-Glass 磨砂玻璃设计令牌 (SAO 身份面板 / HUD) ──
-    SURFACE_LIGHT = (207, 208, 197)       # rgba(207,208,197) — 主面板底色
-    SURFACE_LIGHT_HEX = '#cfd0c5'
-    TEXT_PRIMARY = (60, 62, 50)           # 主要文字 — 深橄榄色
-    TEXT_PRIMARY_HEX = '#3c3e32'
-    TEXT_SECONDARY = (97, 98, 86)         # 次要 / 标签文字
-    TEXT_SECONDARY_HEX = '#616256'
+    SURFACE_LIGHT = (248, 248, 248)
+    SURFACE_LIGHT_HEX = '#f8f8f8'
+    TEXT_PRIMARY = (100, 99, 100)
+    TEXT_PRIMARY_HEX = '#646364'
+    TEXT_SECONDARY = (140, 135, 138)
+    TEXT_SECONDARY_HEX = '#8c878a'
     ACCENT_GOLD_WARM = (212, 156, 23)     # 金色强调 (等级 / STA)
     ACCENT_GOLD_WARM_HEX = '#d49c17'
     ACCENT_CYAN_SOFT = (88, 152, 190)     # 青蓝柔和 (NErVGear / HP 值)
@@ -324,7 +325,7 @@ class SAOCircleButton(tk.Canvas):
             icon_color = SAOColors.ACTIVE_ICON
         else:
             border_color = lerp_color(SAOColors.CIRCLE_BORDER, SAOColors.ACTIVE_BORDER, t)
-            inner_fill = lerp_color('#ffffff', SAOColors.HOVER_BG, t)
+            inner_fill = lerp_color(SAOColors.CIRCLE_BG, SAOColors.HOVER_BG, t)
             icon_color = lerp_color(SAOColors.CIRCLE_ICON, SAOColors.HOVER_ICON, t)
 
         bg_key = self.cget('bg') or '#010101'
@@ -1153,29 +1154,29 @@ class SAOChildBar(tk.Frame):
         outer = tk.Frame(parent, bg=self.cget('bg'), highlightthickness=0)
         outer.pack(fill=tk.X, pady=(0, 3))
 
-        row = tk.Frame(outer, bg='#ffffff', highlightthickness=0,
+        row = tk.Frame(outer, bg=SAOColors.CHILD_BG, highlightthickness=0,
                        width=240, height=44)
         row.pack(fill=tk.X)
         row.pack_propagate(False)
         outer._row_body = row
 
         # 左侧激活指示条 (2px, 初始透明)
-        indicator = tk.Frame(row, bg='#ffffff', width=2, height=44)
+        indicator = tk.Frame(row, bg=SAOColors.CHILD_BG, width=2, height=44)
         indicator.pack(side=tk.LEFT, fill=tk.Y)
         indicator.pack_propagate(False)
 
         icon_lbl = tk.Label(row, text=item.get('icon', ''),
-                            bg='#ffffff', fg='#555555',
+                    bg=SAOColors.CHILD_BG, fg=SAOColors.CHILD_ICON,
                             font=_sao_font(12))
         icon_lbl.pack(side=tk.LEFT, padx=(8, 5))
 
         text_lbl = tk.Label(row, text=item.get('label', ''),
-                            bg='#ffffff', fg=SAOColors.CHILD_TEXT,
+                    bg=SAOColors.CHILD_BG, fg=SAOColors.CHILD_TEXT,
                             font=_cjk_font(10), anchor='w')
         text_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # 右侧箭头 (hover 时显示)
-        arrow_lbl = tk.Label(row, text='›', bg='#ffffff', fg='#ffffff',
+        arrow_lbl = tk.Label(row, text='›', bg=SAOColors.CHILD_BG, fg=SAOColors.CHILD_BG,
                              font=('Consolas', 14))
         arrow_lbl.pack(side=tk.RIGHT, padx=(0, 8))
 
@@ -1187,11 +1188,11 @@ class SAOChildBar(tk.Frame):
         def _update_hover(t, r=row, il=icon_lbl, tl=text_lbl,
                           ind=indicator, arr=arrow_lbl):
             _hover_state['t'] = t
-            bg = lerp_color('#ffffff', SAOColors.CHILD_HOVER, t)
+            bg = lerp_color(SAOColors.CHILD_BG, SAOColors.CHILD_HOVER, t)
             fg = lerp_color(SAOColors.CHILD_TEXT, SAOColors.CHILD_HOVER_FG, t)
-            icon_fg = lerp_color('#555555', SAOColors.CHILD_HOVER_FG, t)
-            ind_color = lerp_color('#ffffff', SAOColors.ACTIVE_BORDER, t)
-            arr_fg = lerp_color('#ffffff', SAOColors.CHILD_HOVER_FG, t)
+            icon_fg = lerp_color(SAOColors.CHILD_ICON, SAOColors.CHILD_HOVER_FG, t)
+            ind_color = lerp_color(SAOColors.CHILD_BG, SAOColors.ACTIVE_BORDER, t)
+            arr_fg = lerp_color(SAOColors.CHILD_BG, SAOColors.CHILD_HOVER_FG, t)
             r.configure(bg=bg)
             il.configure(bg=bg, fg=icon_fg)
             tl.configure(bg=bg, fg=fg)
@@ -1202,11 +1203,11 @@ class SAOChildBar(tk.Frame):
                                ind=indicator, arr=arrow_lbl):
             fade_t = max(0.0, min(1.0, fade_t))
             ht = _hover_state['t']
-            bg_now = lerp_color('#ffffff', SAOColors.CHILD_HOVER, ht)
+            bg_now = lerp_color(SAOColors.CHILD_BG, SAOColors.CHILD_HOVER, ht)
             fg_now = lerp_color(SAOColors.CHILD_TEXT, SAOColors.CHILD_HOVER_FG, ht)
-            icon_now = lerp_color('#555555', SAOColors.CHILD_HOVER_FG, ht)
-            ind_now = lerp_color('#ffffff', SAOColors.ACTIVE_BORDER, ht)
-            arr_now = lerp_color('#ffffff', SAOColors.CHILD_HOVER_FG, ht)
+            icon_now = lerp_color(SAOColors.CHILD_ICON, SAOColors.CHILD_HOVER_FG, ht)
+            ind_now = lerp_color(SAOColors.CHILD_BG, SAOColors.ACTIVE_BORDER, ht)
+            arr_now = lerp_color(SAOColors.CHILD_BG, SAOColors.CHILD_HOVER_FG, ht)
             bg = lerp_color(bg_now, fade_bg, fade_t)
             fg = lerp_color(fg_now, fade_bg, fade_t)
             icon_fg = lerp_color(icon_now, fade_bg, fade_t)

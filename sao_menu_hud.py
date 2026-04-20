@@ -634,10 +634,10 @@ class MenuCircleButtonRenderer:
 
 
 class MenuLeftInfoRenderer:
-    _TOP_BG = (255, 255, 255, 255)
-    _BOTTOM_BG = (229, 227, 227, 255)
-    _TEXT_MAIN = (51, 51, 51, 255)
-    _TEXT_SUB = (85, 85, 85, 255)
+    _TOP_BG = (251, 251, 251, 255)
+    _BOTTOM_BG = (236, 235, 234, 255)
+    _TEXT_MAIN = (100, 99, 100, 255)
+    _TEXT_SUB = (140, 135, 138, 255)
 
     def __init__(self) -> None:
         self._font_cache: Dict[Tuple[str, int], ImageFont.FreeTypeFont] = {}
