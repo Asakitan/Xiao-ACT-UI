@@ -553,9 +553,6 @@ class HpOverlay:
         # work during heavy fights.
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
 
-        # v2.2.14: idle short-circuit (see BossHpOverlay).
-        self._idle_committed = False
-
     def _default_panel_pos(self) -> Tuple[int, int]:
         sw, sh = _get_screen_metrics()
         # Webview HP window sits at `sw * HUD_WINDOW_LEFT_PCT`; the hud-stage
@@ -864,15 +861,14 @@ class HpOverlay:
                     pass
 
             # 2. Submit next frame for off-thread composition.
-            #    v2.2.14: idle short-circuit. Once a steady frame is
-            #    committed and nothing is animating, skip until
-            #    ``_is_animating()`` flips back to True.
-            is_anim = self._is_animating()
-            if not is_anim and self._idle_committed:
-                return
+            #    v2.2.15: no per-tick idle short-circuit — the HP
+            #    overlay always has continuous content (system clock
+            #    HH:MM:SS, NErVGear LINK OK pulse) when the boss timer
+            #    is empty. Scheduler idle downsampling (≤10–20 Hz when
+            #    _is_animating() is False) carries the CPU savings;
+            #    gating here would freeze the clock and pulse.
             self._render_worker.submit(
                 self.compose_frame, now, self._hwnd, self._x, self._y)
-            self._idle_committed = (not is_anim)
 
         if self._hide_after_exit and self._fade_alpha <= 0.01:
             self.destroy()
