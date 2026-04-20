@@ -46,7 +46,7 @@ class OverlayScheduler:
     # so animating panels keep their 60 Hz budget instead of all 6+ overlays
     # piling onto every frame during heavy combat.
     OVERLOADED_FRAME_MS = 13.0
-    IDLE_EVERY_N_OVERLOADED = 6   # ~10 Hz for idle panels under load
+    IDLE_EVERY_N_OVERLOADED = 1   # ~60 Hz for idle panels under load
 
     def __init__(self, root):
         self._root = root
