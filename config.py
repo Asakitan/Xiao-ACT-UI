@@ -343,8 +343,25 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.19"
+APP_VERSION = "2.1.20"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.20:
+#   修复"自动躲猫猫"两个回归 (检测算法本身一行未动):
+#     1) [entity / webview 共同] HideSeekEngine._assets_dir 之前用
+#        os.path.dirname(__file__) 拼接 'assets', 在 PyInstaller onedir
+#        打包 (runtime/ 子目录) 下永远落到 runtime/assets/ — 此目录在
+#        build_release.bat 把 assets/ 提升到 exe 顶层后并不存在, 导致
+#        5 个 template (1.png ~ 5.png) 全部 cv2.imread 失败 → 引擎线程
+#        正常运行但 _match_template 永远没结果, 表现为 "启动了不会有效果".
+#        改为优先 config.BASE_DIR/assets, 再 fallback 模块同级 assets,
+#        兼容源码 / onedir / 旧 onefile 三种布局.
+#     2) [webview] JS 桥 toggle_hide_seek 之前会再 spawn 一个 daemon
+#        thread 去跑 _toggle_hide_seek, 而 pywebview 的 JS callback 本身
+#        就在 worker thread; 嵌套两层非主线程后, _show_identity_alert_window
+#        内部的 alert_win.show() / pythonnet form.Invoke 与 evaluate_js
+#        会在两个不同的非 GUI 线程并发触达 WebView2 → 部分机器上 native
+#        crash, 表现为 "启动一下会自己闪退". 改为直接同步调用, engine
+#        自己的后台线程不变.
 # v2.1.19:
 #   同 v2.1.18, 版本号补丁升级.
 # v2.1.18:

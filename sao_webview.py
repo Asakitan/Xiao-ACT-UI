@@ -1129,8 +1129,19 @@ class SAOWebAPI:
 
     # ── Hide & Seek toggle ──
     def toggle_hide_seek(self):
-        """Toggle the Hide & Seek automation on/off."""
-        threading.Thread(target=self._g._toggle_hide_seek, daemon=True).start()
+        """Toggle the Hide & Seek automation on/off.
+
+        v2.1.20: 不再额外 spawn daemon thread. JS 桥本身就在 pywebview 的 worker
+        线程被调用, 再嵌套一层 thread 会让 _show_identity_alert_window 内部的
+        alert_win.show() / pythonnet form.Invoke 与 alert_win 自身的 evaluate_js
+        在两个不同的非主线程上并发, 在某些机器上会触发 WebView2 native crash.
+        engine.start() 自己会创建后台线程, 直接同步调用即可。
+        """
+        try:
+            self._g._toggle_hide_seek()
+        except Exception as e:
+            print(f'[SAO-WV] toggle_hide_seek failed: {e}')
+            import traceback; traceback.print_exc()
 
     def get_hide_seek_active(self):
         engine = getattr(self._g, '_hide_seek_engine', None)

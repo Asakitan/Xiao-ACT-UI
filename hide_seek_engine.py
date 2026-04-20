@@ -162,7 +162,22 @@ class HideSeekEngine:
         self._current_step = 0
         self._templates: Dict[str, Optional[np.ndarray]] = {}
         self._lock = threading.Lock()
-        self._assets_dir = os.path.join(os.path.dirname(__file__), 'assets')
+        # v2.1.20: 在 PyInstaller onedir 打包下, __file__ 位于 runtime/ 子目录,
+        # 但 assets/ 被 build_release.bat 移到 exe 根目录, 因此用 module-dir
+        # 拼出来的 runtime/assets/ 永远不存在 → 5 个 template 全部加载失败 →
+        # 引擎线程能跑但 _match_template 永远没结果 → "启动了不会有效果".
+        # 改为优先使用 config.BASE_DIR (= exe 顶层目录), 再 fallback 到模块目
+        # 录, 兼容源码运行 / onedir / 旧 onefile 三种布局.
+        try:
+            from config import BASE_DIR as _BASE_DIR
+        except Exception:
+            _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            os.path.join(_BASE_DIR, 'assets'),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets'),
+        ]
+        self._assets_dir = next(
+            (p for p in candidates if os.path.isdir(p)), candidates[0])
         # Track the step we just clicked + when, so we can skip fallback
         # to that SAME step briefly (its UI may still linger on screen).
         self._last_executed_step: int = -1
