@@ -43,6 +43,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, ulw_commit
+from overlay_subpixel import subpixel_bar_width
 
 # Reuse ULW glue + font helpers from sao_gui_dps so we keep the same
 # premultiply path and font cache.
@@ -1480,26 +1481,52 @@ class BossHpOverlay:
         img.alpha_composite(_clip_alpha(track, mask))
 
     def _pct_width_px(self, pct: float, width: Optional[int] = None) -> int:
+        return int(math.ceil(self._pct_width_px_f(pct, width)))
+
+    def _pct_width_px_f(self, pct: float, width: Optional[int] = None) -> float:
+        # v2.2.10: float variant so HP/trail/shield/break fills can fade
+        # their trailing column via subpixel_bar_width instead of stepping
+        # 1 px every several frames during slow tweens.
         span = float(width or self.BAR_W)
         value = max(0.0, min(1.0, float(pct or 0.0)))
         if value <= 0.0:
-            return 0
+            return 0.0
         if value >= 0.997:
-            return int(round(span + 6.0))
-        return int(round(span * value + 8.0))
+            return span + 6.0
+        return span * value + 8.0
 
     def _draw_hp_trail(self, img: Image.Image, y_off: int) -> None:
         pct = max(0.0, min(1.0, self._disp_trail_pct))
         if pct <= 0:
             return
         trail = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
+        # v2.2.10: anti-aliased trailing edge so the trail bar slides
+        # smoothly behind the HP fill instead of jittering.
+        tw_f = self._pct_width_px_f(pct)
+        tw_int = max(1, int(math.ceil(tw_f)))
+        frac = tw_f - math.floor(tw_f)
         td = ImageDraw.Draw(trail)
-        tw = self._pct_width_px(pct)
-        td.rectangle(
-            (self.BAR_X, self.BAR_Y + y_off,
-             self.BAR_X + tw, self.BAR_Y + self.BAR_H + y_off),
-            fill=self.TRAIL_COLOR,
-        )
+        if tw_int > 1:
+            td.rectangle(
+                (self.BAR_X, self.BAR_Y + y_off,
+                 self.BAR_X + tw_int - 1, self.BAR_Y + self.BAR_H + y_off),
+                fill=self.TRAIL_COLOR,
+            )
+        if frac > 1.0 / 512.0:
+            edge_a = int(round(self.TRAIL_COLOR[3] * frac))
+            if edge_a > 0:
+                td.line(
+                    (self.BAR_X + tw_int - 1, self.BAR_Y + y_off,
+                     self.BAR_X + tw_int - 1, self.BAR_Y + self.BAR_H - 1 + y_off),
+                    fill=(self.TRAIL_COLOR[0], self.TRAIL_COLOR[1],
+                          self.TRAIL_COLOR[2], edge_a),
+                )
+        else:
+            td.line(
+                (self.BAR_X + tw_int - 1, self.BAR_Y + y_off,
+                 self.BAR_X + tw_int - 1, self.BAR_Y + self.BAR_H - 1 + y_off),
+                fill=self.TRAIL_COLOR,
+            )
         mask = self._bar_mask()
         if y_off:
             mask = mask.transform(mask.size, Image.AFFINE,
@@ -1522,16 +1549,19 @@ class BossHpOverlay:
         pct = max(0.0, min(1.0, self._disp_hp_pct))
         if pct <= 0:
             return
-        fill_w = self._pct_width_px(pct)
-        if fill_w <= 0:
+        # v2.1.17: float width + subpixel trailing column.
+        fill_w = self._pct_width_px_f(pct)
+        if fill_w <= 0.0:
             return
+        fw_int = max(1, int(math.ceil(fill_w)))
         ca, cb = self._hp_gradient(pct)
-        bar = _make_gradient_bar(fill_w, self.BAR_H, ca, cb)
+        bar = _make_gradient_bar(fw_int, self.BAR_H, ca, cb)
+        bar = subpixel_bar_width(bar, fill_w) or bar
         edge = _make_skew_cap(self.BAR_H, ca, cb, skew_px=7)
         canvas = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
         canvas.paste(bar, (self.BAR_X, self.BAR_Y + y_off))
         if pct < 0.997:
-            canvas.paste(edge, (self.BAR_X + fill_w - 7, self.BAR_Y + y_off),
+            canvas.paste(edge, (self.BAR_X + fw_int - 7, self.BAR_Y + y_off),
                          edge)
         mask = self._bar_mask()
         if y_off:
@@ -1544,7 +1574,8 @@ class BossHpOverlay:
         pct = max(0.0, min(1.0, self._disp_shield_pct))
         if pct <= 0.005:
             return
-        sw = self._pct_width_px(pct)
+        sw_f = self._pct_width_px_f(pct)
+        sw = max(1, int(math.ceil(sw_f)))
         shield = _make_gradient_bar(
             sw, self.BAR_H, self.SHIELD_A, self.SHIELD_B, cc=self.SHIELD_C)
         edge = _make_skew_cap(self.BAR_H, self.SHIELD_B, self.SHIELD_C,
@@ -1559,6 +1590,8 @@ class BossHpOverlay:
         for yy in range(2, self.BAR_H, 5):
             sd.line((0, yy, sw - 1, yy), fill=(212, 248, 255, 20), width=1)
         shield.alpha_composite(scan)
+        # v2.1.17: fade trailing column for subpixel-smooth shield growth.
+        shield = subpixel_bar_width(shield, sw_f) or shield
 
         canvas = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
         canvas.paste(shield, (self.BAR_X, self.BAR_Y + y_off))
@@ -1837,7 +1870,11 @@ class BossHpOverlay:
             )
         pct = max(0.0, min(1.0, self._disp_break_pct))
         if pct > 0:
-            fw = max(1, int((x1 - x0) * pct))
+            # v2.1.17: float fw, integer ceil for sprite sizing, fade the
+            # trailing column on the base fill so slow refills/decays move
+            # smoothly between pixels.
+            fw_f = (x1 - x0) * pct
+            fw = max(1, int(math.ceil(fw_f)))
 
             if bs == 'recovering':
                 # Recovering fill: pulsing gradient + shimmer scan
@@ -1849,6 +1886,7 @@ class BossHpOverlay:
                     (178, 138, 40, a), (222, 172, 58, a),
                     cc=(255, 232, 126, a),
                 )
+                bar = subpixel_bar_width(bar, fw_f) or bar
                 img.alpha_composite(bar, (x0, ty))
                 # Shimmer highlight scan (webview break-recover-scan)
                 shimmer_phase = (now % 1.05) / 1.05
@@ -1877,6 +1915,7 @@ class BossHpOverlay:
                     fw, track_h,
                     (255, 215, 98, 255), (255, 240, 132, 255),
                 )
+                bar = subpixel_bar_width(bar, fw_f) or bar
                 img.alpha_composite(bar, (x0, ty))
                 glow_layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
                 ImageDraw.Draw(glow_layer).rounded_rectangle(
@@ -1890,6 +1929,7 @@ class BossHpOverlay:
                     fw, track_h,
                     (212, 170, 50, 255), (243, 195, 72, 255),
                 )
+                bar = subpixel_bar_width(bar, fw_f) or bar
                 img.alpha_composite(bar, (x0, ty))
 
         # Percent text on the right

@@ -21,6 +21,7 @@ import sys
 import ctypes
 import struct
 from PIL import Image, ImageDraw, ImageFilter, ImageTk, ImageEnhance, ImageChops, ImageFont
+from overlay_subpixel import subpixel_alpha_composite
 from typing import Optional, Callable, List, Dict, Tuple
 import numpy as np
 from config import APP_VERSION_LABEL, FONTS_DIR
@@ -316,7 +317,13 @@ class SAOCircleButton(tk.Canvas):
         self._draw()
 
     def _draw(self):
-        size = max(1, min(self.MAX_SIZE, int(self._size)))
+        # v2.2.10: subpixel fisheye. Render the sprite at the next-larger
+        # integer size (so the renderer cache can still hit on each int
+        # bucket) but composite it onto the canvas using the fractional
+        # `_size` so smooth fisheye scaling no longer snaps to whole-pixel
+        # parity flips (the visual "half-pixel tear" the user reported).
+        size_f = max(1.0, min(float(self.MAX_SIZE), float(self._size)))
+        size = max(1, int(math.ceil(size_f)))
         t = self._hover_t
 
         if self._active:
@@ -329,7 +336,11 @@ class SAOCircleButton(tk.Canvas):
             icon_color = lerp_color(SAOColors.CIRCLE_ICON, SAOColors.HOVER_ICON, t)
 
         bg_key = self.cget('bg') or '#010101'
-        sig = (size, self.icon_text, border_color, inner_fill, icon_color, bg_key)
+        # Quantize the floating size to 1/4 px so we still skip duplicate
+        # paints when the animation has settled but redraw smoothly while
+        # it's in motion.
+        size_q = round(size_f * 4.0) / 4.0
+        sig = (size_q, self.icon_text, border_color, inner_fill, icon_color, bg_key)
         if sig == self._visual_sig and self._bg_item is not None:
             return
 
@@ -342,18 +353,14 @@ class SAOCircleButton(tk.Canvas):
             bg_key,
         )
 
-        # Clear only the region previously covered, then paste the new sprite
-        # centered. This keeps the PhotoImage size constant (MAX_SIZE) so we
-        # never reallocate during the growth / fisheye animation.
+        # Full-clear is cheap on a 70x70 canvas; required because the
+        # subpixel composite samples neighbouring pixels.
         canvas_img = self._bg_canvas_image
-        prev = self._last_pasted_size
-        if prev is not None and prev != size:
-            po = (self.MAX_SIZE - prev) // 2
-            canvas_img.paste((0, 0, 0, 0), (po, po, po + prev, po + prev))
-        elif prev is None:
-            canvas_img.paste((0, 0, 0, 0), (0, 0, self.MAX_SIZE, self.MAX_SIZE))
-        off = (self.MAX_SIZE - size) // 2
-        canvas_img.paste(image, (off, off))
+        canvas_img.paste((0, 0, 0, 0), (0, 0, self.MAX_SIZE, self.MAX_SIZE))
+        # Center the (possibly oversized by ≤1 px) sprite at the float
+        # _size so motion is continuous instead of stepping by 1 px.
+        off = (self.MAX_SIZE - size_f) / 2.0
+        subpixel_alpha_composite(canvas_img, image, off, off)
         self._last_pasted_size = size
 
         if self._bg_photo is None:
@@ -588,8 +595,13 @@ class SAOMenuBar(tk.Frame):
                     btn._size = target
             s = max(1, int(round(btn._size)))
             prev_s = getattr(btn, '_float_prev_s', None)
-            if prev_s != s:
+            # v2.1.17: trigger redraw on 1/4 px changes for subpixel-smooth
+            # fisheye motion (the actual paint dedup happens via _visual_sig).
+            sq = round(float(btn._size) * 4.0) / 4.0
+            prev_q = getattr(btn, '_float_prev_q', None)
+            if prev_q != sq:
                 btn._draw()
+                btn._float_prev_q = sq
                 btn._float_prev_s = s
         if self._enter_active and not keep_animating:
             self._enter_active = False

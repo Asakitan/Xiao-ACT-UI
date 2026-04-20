@@ -343,8 +343,11 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.9"
+APP_VERSION = "2.2.10"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.2.10:
+#   Fix pannel rendering not respecting the render FPS target, causing stutter on slower machines. 
+#   Create sub-pixel paste / bar-width helpers for ULW overlays.
 # v2.2.9:
 #   Profiled compose_frame on a worker thread 
 #   — it averaged 33 ms steady, 80+ ms during ENTER, with cold-start spikes to 200 ms. 
