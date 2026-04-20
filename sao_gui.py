@@ -1349,6 +1349,23 @@ class SAOPlayerGUI:
         # DPS Tracker
         try:
             self._dps_tracker = DpsTracker()
+            # Load skill name mapping (same as webview path)
+            _skill_json = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                'assets', 'skill_names.json',
+            )
+            if os.path.isfile(_skill_json):
+                try:
+                    with open(_skill_json, 'r', encoding='utf-8') as _sf:
+                        _raw = json.load(_sf)
+                    if isinstance(_raw, dict):
+                        self._dps_tracker.set_skill_names(
+                            {int(k): v for k, v in _raw.items()
+                             if str(k).isdigit()}
+                        )
+                        print(f'[SAO Entity] Loaded {len(_raw)} skill names')
+                except Exception as e:
+                    print(f'[SAO Entity] skill_names.json load error: {e}')
             print('[SAO Entity] DPS tracker initialized')
         except Exception as e:
             print(f'[SAO Entity] DPS tracker init failed: {e}')

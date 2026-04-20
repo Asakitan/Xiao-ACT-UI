@@ -926,10 +926,13 @@ class HpOverlay:
             self._draw_root_outer_pulse(img, y_off, now, hp_group_alpha)
             self._draw_root_cover_pulse(img, y_off, now, hp_group_alpha)
 
-        # Text shadows — between panels and shell (above panel bg,
-        # below bar-shell content).
-        self._draw_id_plate_text(img, y_off, now, mode='shadow')
-        self._draw_hp_text(img, y_off, mode='shadow')
+        # Text shadows — batched onto one layer, one blur, composited
+        # between panels and shell (above panel bg, below bar-shell).
+        shadow_layer = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        self._draw_id_plate_text(shadow_layer, y_off, now, mode='shadow')
+        self._draw_hp_text(shadow_layer, y_off, mode='shadow')
+        shadow_layer = _gpu_blur(shadow_layer, 2)
+        img.alpha_composite(shadow_layer)
 
         # Shell on top of shadows
         img.alpha_composite(self._shell_cache)
@@ -1159,13 +1162,18 @@ class HpOverlay:
     # ── identity plate background ───────────────────────────────────
 
     def _id_plate_mask(self, y_off: int) -> Image.Image:
-        """Rounded-rect mask for id-plate."""
+        """Rounded-rect mask for id-plate (cached per y_off)."""
+        c = getattr(self, '_id_plate_mask_cache', {})
+        if y_off in c:
+            return c[y_off]
         m = Image.new('L', (self.WIDTH, self.HEIGHT), 0)
         ImageDraw.Draw(m).rounded_rectangle(
             (ID_X, ID_Y + y_off,
              ID_X + ID_W - 1, ID_Y + ID_H - 1 + y_off),
             radius=6, fill=255,
         )
+        c[y_off] = m
+        self._id_plate_mask_cache = c
         return m
 
     def _all_content_mask(self, y_off: int) -> Image.Image:
@@ -1173,8 +1181,11 @@ class HpOverlay:
 
         Used for shadow clipping so that *no* drop shadow composites on top
         of *any* content surface, even when one element's shadow blur extends
-        into a neighbouring element's region.
+        into a neighbouring element's region.  Cached per y_off.
         """
+        c = getattr(self, '_all_content_mask_cache', {})
+        if y_off in c:
+            return c[y_off]
         m = Image.new('L', (self.WIDTH, self.HEIGHT), 0)
         d = ImageDraw.Draw(m)
         d.rounded_rectangle(
@@ -1187,6 +1198,8 @@ class HpOverlay:
              COVER_X + COVER_W - 1, COVER_Y + COVER_H - 1 + y_off),
             radius=6, fill=255,
         )
+        c[y_off] = m
+        self._all_content_mask_cache = c
         return m
 
     def _draw_id_plate_bg(self, img: Image.Image, y_off: int) -> None:
@@ -1360,10 +1373,9 @@ class HpOverlay:
                 draw, self._profession, prof_font, ID_W // 2)
             # web: text-shadow 0 0 6px rgba(243,175,18,0.3)
             if draw_shadow:
-                _draw_text_shadow(
-                    img, (ID_X + 78, ID_Y + 6 + y_off),
-                    prof_text, prof_font,
-                    shadow_color=(243, 175, 18, 38), blur=2,
+                draw.text(
+                    (ID_X + 78, ID_Y + 6 + y_off),
+                    prof_text, fill=(243, 175, 18, 38), font=prof_font,
                 )
             if draw_content:
                 _draw_tracked(
@@ -1405,12 +1417,10 @@ class HpOverlay:
             bx = ID_X + (ID_W - tw) // 2
             by = ID_Y + 26 + y_off
             if draw_shadow:
-                g = Image.new('RGBA', img.size, (0, 0, 0, 0))
-                ImageDraw.Draw(g).text(
+                draw.text(
                     (bx, by), txt,
                     fill=(col[0], col[1], col[2], 70), font=bt_font,
                 )
-                img.alpha_composite(_gpu_blur(g, 2))
             if draw_content:
                 draw.text((bx, by), txt, fill=col, font=bt_font)
         elif draw_content:
@@ -1444,10 +1454,9 @@ class HpOverlay:
         name = _truncate(draw, self._name, name_font, max(32, ID_W - 190))
         # web: text-shadow 0 0 6px rgba(255,255,255,0.2)
         if draw_shadow:
-            _draw_text_shadow(
-                img, (ID_X + 18, ID_Y + ID_H - 34 + y_off),
-                name, name_font,
-                shadow_color=(255, 255, 255, 22), blur=2,
+            draw.text(
+                (ID_X + 18, ID_Y + ID_H - 34 + y_off),
+                name, fill=(255, 255, 255, 22), font=name_font,
             )
         if draw_content:
             draw.text(
@@ -1507,12 +1516,17 @@ class HpOverlay:
     # ── hp-bg-cover ─────────────────────────────────────────────────
 
     def _cover_mask(self, y_off: int) -> Image.Image:
+        c = getattr(self, '_cover_mask_cache', {})
+        if y_off in c:
+            return c[y_off]
         m = Image.new('L', (self.WIDTH, self.HEIGHT), 0)
         ImageDraw.Draw(m).rounded_rectangle(
             (COVER_X, COVER_Y + y_off,
              COVER_X + COVER_W - 1, COVER_Y + COVER_H - 1 + y_off),
             radius=6, fill=255,
         )
+        c[y_off] = m
+        self._cover_mask_cache = c
         return m
 
     def _draw_hp_cover_bg(self, img: Image.Image, y_off: int) -> None:
@@ -1729,6 +1743,9 @@ class HpOverlay:
         img.alpha_composite(_clip_alpha(plate, mask))
 
     def _hp_bar_mask(self, y_off: int) -> Image.Image:
+        c = getattr(self, '_hp_bar_mask_cache', {})
+        if y_off in c:
+            return c[y_off]
         m = Image.new('L', (self.WIDTH, self.HEIGHT), 0)
         bx = BOX_X + 114
         by = BOX_Y + 10 + y_off
@@ -1742,6 +1759,8 @@ class HpOverlay:
             (bx + 1, by + 26),
         ]
         ImageDraw.Draw(m).polygon(poly, fill=255)
+        c[y_off] = m
+        self._hp_bar_mask_cache = c
         return m
 
     def _hp_gradient(self, pct: float) -> Tuple[Tuple, Tuple]:
@@ -1814,9 +1833,9 @@ class HpOverlay:
         # Centre on box vertical mid-line (name font ≈ 18px tall)
         ny = BOX_Y + (BOX_H - 18) // 2 + y_off
         if draw_shadow:
-            _draw_text_shadow(
-                img, (nx + 1, ny + 1), name, name_font,
-                shadow_color=(28, 34, 42, 58), blur=2,
+            draw.text(
+                (nx + 1, ny + 1), name,
+                fill=(28, 34, 42, 58), font=name_font,
             )
         if draw_content:
             draw.text((nx, ny), name, fill=TEXT_MAIN, font=name_font)
@@ -1832,9 +1851,9 @@ class HpOverlay:
         # right aligned inside first cell (55% of 220px)
         cell_w = int(220 * 0.55)
         if draw_shadow:
-            _draw_text_shadow(
-                img, (nx0 + cell_w - vw - 5, ny0 + 1), val_txt, val_font,
-                shadow_color=(28, 34, 42, 54), blur=2,
+            draw.text(
+                (nx0 + cell_w - vw - 5, ny0 + 1), val_txt,
+                fill=(28, 34, 42, 54), font=val_font,
             )
         if draw_content:
             draw.text((nx0 + cell_w - vw - 6, ny0), val_txt,
@@ -1843,9 +1862,9 @@ class HpOverlay:
         lv_font = _load_font('sao', 12)
         lv_txt = f'lv.{self._level}'
         if draw_shadow:
-            _draw_text_shadow(
-                img, (nx0 + cell_w + 7, ny0 + 2), lv_txt, lv_font,
-                shadow_color=(28, 34, 42, 48), blur=2,
+            draw.text(
+                (nx0 + cell_w + 7, ny0 + 2), lv_txt,
+                fill=(28, 34, 42, 48), font=lv_font,
             )
         if draw_content:
             draw.text((nx0 + cell_w + 6, ny0 + 1), lv_txt,

@@ -1185,6 +1185,8 @@ class BossHpOverlay:
     # ── cover ───────────────────────────────────────────────────────
 
     def _build_cover_mask(self) -> Image.Image:
+        if hasattr(self, '_cover_mask_cached'):
+            return self._cover_mask_cached
         mask = Image.new('L', (self.WIDTH, self.HEIGHT), 0)
         ImageDraw.Draw(mask).rounded_rectangle(
             (self.PANEL_X, self.PANEL_Y,
@@ -1192,6 +1194,7 @@ class BossHpOverlay:
              self.PANEL_Y + self.PANEL_H - 1),
             radius=10, fill=255,
         )
+        self._cover_mask_cached = mask
         return mask
 
     def _draw_cover(self, img: Image.Image, y_off: int) -> None:
