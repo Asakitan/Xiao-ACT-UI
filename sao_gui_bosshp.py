@@ -361,6 +361,15 @@ class BossHpOverlay:
             _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
         except Exception:
             pass
+        # Disable DWM non-client rendering (incl. system drop shadow) so the
+        # shadow does not linger while the ULW bitmap fades to transparent.
+        try:
+            _ncr_disabled = ctypes.c_int(1)   # DWMNCRP_DISABLED
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(self._hwnd), 2,
+                ctypes.byref(_ncr_disabled), ctypes.sizeof(_ncr_disabled))
+        except Exception:
+            pass
 
         self._win.bind('<Button-1>', self._on_drag_start)
         self._win.bind('<B1-Motion>', self._on_drag_move)

@@ -343,8 +343,17 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.2.1"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.2.1:
+#   修复 entity 模式下 HP/BossHP/DPS overlay 隐藏后阴影残留:
+#     _apply_panel_style() 在设置面板里用 SetClassLongW(CS_DROPSHADOW)
+#     修改了整个 Tk 进程的窗口类, 导致同进程所有 Toplevel (包括 ULW
+#     overlay) 都被 DWM 加上系统阴影矩形. ULW bitmap 淡出到透明后窗口
+#     尚未 destroy, DWM 阴影仍可见. 修复: HpOverlay / BossHpOverlay /
+#     DpsOverlay.show() 创建窗口后立即调用
+#     DwmSetWindowAttribute(DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED)
+#     让 DWM 对这三个 overlay 窗口不渲染非客户区 (含阴影).
 # v2.2.0:
 #   1) [继续修 Hide & Seek] webview 下持续 alert 之前会被普通 identity 通知
 #      或 9s auto-dismiss 计时器误关 → "过一会就消失". 现在 hide_seek
