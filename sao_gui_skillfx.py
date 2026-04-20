@@ -71,6 +71,7 @@ TEXT_MAIN = (227, 251, 255, 255)
 TEXT_TAG = (124, 235, 255, 255)
 TEXT_SUB = (164, 239, 255, 255)
 TEXT_STROKE = (182, 247, 255, 66)
+TEXT_BURST = (218, 225, 232, 255)
 
 # Caption panel dimensions (CSS fixed values)
 CAP_W = 460
@@ -989,16 +990,16 @@ void main() {
             fill=TEXT_SUB,
         )
 
-        title_text = 'BRUST MODE READY'
+        title_text = 'BURST MODE READY'
         tx = 30
         ty = 36
-        draw_title.text((tx, ty), title_text, font=f_main, fill=TEXT_MAIN)
+        draw_title.text((tx, ty), title_text, font=f_main, fill=TEXT_BURST)
         for sdx, sdy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
             draw_title.text(
                 (tx + sdx, ty + sdy),
                 title_text,
                 font=f_main,
-                fill=TEXT_STROKE,
+                fill=(200, 208, 216, 50),
             )
 
         bar_max_widths = [78, 122, 158]

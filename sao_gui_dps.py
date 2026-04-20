@@ -1976,6 +1976,11 @@ class DpsOverlay:
                   is_self: bool, is_heal: bool) -> Image.Image:
         if bw <= 0 or bh <= 0:
             return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+        # Cache key: (bw, bh, is_self, is_heal)
+        key = (bw, bh, is_self, is_heal)
+        cache = getattr(self, '_bar_cache', {})
+        if key in cache:
+            return cache[key].copy()
         if is_heal:
             ca, cb = self.BAR_HEAL_A, self.BAR_HEAL_B
         elif is_self:
@@ -2023,7 +2028,9 @@ class DpsOverlay:
             fill=(255, 240, 200, 26 if is_self else 14),
         )
         out.alpha_composite(leading)
-        return out
+        cache[key] = out
+        self._bar_cache = cache
+        return out.copy()
 
     def _truncate(self, text: str, font, max_w: int,
                   draw: ImageDraw.ImageDraw) -> str:

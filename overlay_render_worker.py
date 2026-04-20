@@ -93,7 +93,16 @@ class FrameBuffer:
 
 
 def _premultiply_to_bgra(img: Image.Image) -> bytes:
-    """RGBA PIL → premultiplied BGRA bytes.  Pure numpy, releases GIL."""
+    """RGBA PIL → premultiplied BGRA bytes.
+
+    Tries the GPU shader first (already on the render-lane thread that
+    owns a GL context); falls back to numpy on failure.
+    """
+    from gpu_renderer import premultiply_bgra_bytes
+    gpu_result = premultiply_bgra_bytes(np.asarray(img, dtype=np.uint8))
+    if gpu_result is not None:
+        return gpu_result
+    # CPU fallback — pure numpy, releases GIL.
     rgba = np.asarray(img, dtype=np.uint8)
     a = rgba[:, :, 3:4].astype(np.uint16)
     rgb = (rgba[:, :, :3].astype(np.uint16) * a + 127) // 255

@@ -1,9 +1,9 @@
 """gpu_renderer.py — Shared moderngl-backed GPU acceleration for overlays.
 
 Goal: offload the expensive per-frame CPU pixel ops to the GPU while keeping
-the existing ULW + PIL pipeline intact. The single standalone moderngl
-context is created lazily on first use and reused by all overlays (DPS /
-HP / BossHP / SkillFX / Alert).
+the existing ULW + PIL pipeline intact.  Each render-lane thread lazily
+creates its own standalone moderngl context on first use (WGL contexts are
+thread-affine).  FBOs and shader programs are cached per-thread.
 
 Public entry points (all fall back to CPU if the GPU context fails):
     gpu_available()                              → bool
@@ -11,9 +11,8 @@ Public entry points (all fall back to CPU if the GPU context fails):
     render_shell_rgba(params)                    → PIL.Image
     premultiply_bgra_bytes(rgba_np)              → bytes   (BGRA, premult'd)
 
-Threading: OpenGL contexts are thread-affine. Overlays schedule frame
-composition via Tk ``after()``, so all calls happen on the Tk main thread.
-Do not call these from background threads.
+Threading: Each thread that calls these functions gets its own GL context
+lazily.  Safe to call from any render-lane thread or the Tk main thread.
 
 """
 
@@ -29,73 +28,79 @@ from PIL import Image, ImageFilter
 
 _DISABLED = os.environ.get('SAO_GPU_DISABLE', '') == '1'
 
-_ctx_lock = threading.Lock()
-_ctx = None                    # moderngl.Context | None
-_ctx_failed = False            # flipped once a real init attempt fails
-_ctx_thread_id: Optional[int] = None   # thread that owns the GL context
+# ── Per-thread GL state ──────────────────────────────────────────
+# Each render-lane thread (and the Tk main thread) gets its own
+# standalone moderngl context.  WGL contexts are thread-affine, so
+# this is the only safe way to share GPU acceleration across lanes.
 
-_blur_prog = None
-_blur_quad = None
-_shell_prog = None
-_prem_prog = None
+_global_failed = False   # set once if the *first* init attempt fails
+_global_lock = threading.Lock()
 
-# Cached FBOs keyed by (w, h)
-_fbo_cache: Dict[Tuple[int, int, str], Any] = {}
-
-
-def _on_owner_thread() -> bool:
-    """Return True iff called from the thread that owns the GL context.
-
-    GL contexts on Windows (WGL) are thread-affine. Callers on worker
-    threads must fall back to CPU paths to avoid driver crashes.
-    """
-    return (_ctx_thread_id is None
-            or threading.get_ident() == _ctx_thread_id)
+_tls = threading.local()  # per-thread: .ctx, .blur_prog, .blur_quad,
+                           #              .shell_prog, .prem_prog,
+                           #              .fbo_cache, .failed
 
 
 # ---------------------------------------------------------------------------
-# Context lifecycle
+# Context lifecycle (per-thread)
 # ---------------------------------------------------------------------------
 
 def _try_init() -> bool:
-    """Create a standalone moderngl context. Returns True on success."""
-    global _ctx, _ctx_failed, _ctx_thread_id
-    if _DISABLED:
-        _ctx_failed = True
+    """Ensure the current thread has its own moderngl context.
+
+    Returns True when the thread-local context is ready.
+    """
+    global _global_failed
+    if _DISABLED or _global_failed:
         return False
-    if _ctx is not None:
-        # Already initialised; only the owning thread may actually *use* it.
-        return _on_owner_thread()
-    if _ctx_failed:
+
+    ctx = getattr(_tls, 'ctx', None)
+    if ctx is not None:
+        return True
+    if getattr(_tls, 'failed', False):
         return False
-    with _ctx_lock:
-        if _ctx is not None:
-            return _on_owner_thread()
-        if _ctx_failed:
+
+    with _global_lock:
+        # Recheck inside lock (another thread might have set _global_failed)
+        if _global_failed:
             return False
         try:
             import moderngl  # type: ignore
             if os.name == 'nt':
-                _ctx = moderngl.create_standalone_context(require=330)
+                ctx = moderngl.create_standalone_context(require=330)
             else:
-                _ctx = moderngl.create_standalone_context(
+                ctx = moderngl.create_standalone_context(
                     require=330, backend='egl',
                 )
-            _ctx_thread_id = threading.get_ident()
-            _build_programs()
-            return True
         except Exception as exc:
             try:
-                print(f'[GPU] init failed, falling back to CPU: {exc}')
+                print(f'[GPU] init failed on thread '
+                      f'{threading.current_thread().name}, '
+                      f'falling back to CPU: {exc}')
             except Exception:
                 pass
-            _ctx = None
-            _ctx_failed = True
+            _global_failed = True
+            _tls.failed = True
             return False
+
+    # Build shader programs for this thread's context
+    _tls.ctx = ctx
+    _tls.fbo_cache = {}
+    try:
+        _build_programs_tls()
+    except Exception as exc:
+        try:
+            print(f'[GPU] program build failed: {exc}')
+        except Exception:
+            pass
+        _tls.ctx = None
+        _tls.failed = True
+        return False
+    return True
 
 
 def gpu_available() -> bool:
-    return _try_init() and _on_owner_thread()
+    return _try_init()
 
 
 # ---------------------------------------------------------------------------
@@ -232,42 +237,45 @@ void main() {
 """
 
 
-def _build_programs() -> None:
-    global _blur_prog, _blur_quad, _shell_prog, _prem_prog
-    assert _ctx is not None
+def _build_programs_tls() -> None:
+    """Build shader programs for the current thread's GL context."""
+    ctx = _tls.ctx
+    assert ctx is not None
     quad = np.array([-1, -1,  1, -1, -1,  1,
                       1, -1,  1,  1, -1,  1], dtype='f4')
-    vbo = _ctx.buffer(quad.tobytes())
+    vbo = ctx.buffer(quad.tobytes())
 
-    _blur_prog = _ctx.program(
+    _tls.blur_prog = ctx.program(
         vertex_shader=_VS_FULLSCREEN, fragment_shader=_FS_BLUR,
     )
-    _blur_quad = _ctx.vertex_array(_blur_prog, [(vbo, '2f', 'in_pos')])
+    _tls.blur_quad = ctx.vertex_array(_tls.blur_prog, [(vbo, '2f', 'in_pos')])
 
-    _shell_prog = _ctx.program(
+    _tls.shell_prog = ctx.program(
         vertex_shader=_VS_FULLSCREEN, fragment_shader=_FS_SHELL,
     )
-    _ctx._shell_quad = _ctx.vertex_array(
-        _shell_prog, [(vbo, '2f', 'in_pos')],
+    _tls.shell_quad = ctx.vertex_array(
+        _tls.shell_prog, [(vbo, '2f', 'in_pos')],
     )
 
-    _prem_prog = _ctx.program(
+    _tls.prem_prog = ctx.program(
         vertex_shader=_VS_FULLSCREEN, fragment_shader=_FS_PREMULT,
     )
-    _ctx._prem_quad = _ctx.vertex_array(
-        _prem_prog, [(vbo, '2f', 'in_pos')],
+    _tls.prem_quad = ctx.vertex_array(
+        _tls.prem_prog, [(vbo, '2f', 'in_pos')],
     )
 
 
 def _get_fbo(w: int, h: int, tag: str = 'rgba'):
+    cache = _tls.fbo_cache
     key = (w, h, tag)
-    fbo = _fbo_cache.get(key)
+    fbo = cache.get(key)
     if fbo is not None:
         return fbo
-    tex = _ctx.texture((w, h), 4, dtype='f1')
+    ctx = _tls.ctx
+    tex = ctx.texture((w, h), 4, dtype='f1')
     tex.filter = (0x2600, 0x2600)  # GL_NEAREST
-    fbo = _ctx.framebuffer(color_attachments=[tex])
-    _fbo_cache[key] = fbo
+    fbo = ctx.framebuffer(color_attachments=[tex])
+    cache[key] = fbo
     return fbo
 
 
@@ -303,11 +311,14 @@ def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
         return pil_in.filter(ImageFilter.GaussianBlur(sigma))
 
     try:
+        ctx = _tls.ctx
+        blur_prog = _tls.blur_prog
+        blur_quad = _tls.blur_quad
         arr = _to_rgba_np(img)
         h, w, _ = arr.shape
         radius = min(64, max(1, int(round(sigma * 3.0))))
 
-        src_tex = _ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
+        src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
         src_tex.filter = (0x2601, 0x2601)  # GL_LINEAR
         src_tex.repeat_x = False
         src_tex.repeat_y = False
@@ -315,23 +326,23 @@ def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
         fbo_h = _get_fbo(w, h, 'blurH')
         fbo_v = _get_fbo(w, h, 'blurV')
 
-        _blur_prog['u_sigma'].value = float(sigma)
-        _blur_prog['u_radius'].value = int(radius)
-        _blur_prog['u_tex'].value = 0
+        blur_prog['u_sigma'].value = float(sigma)
+        blur_prog['u_radius'].value = int(radius)
+        blur_prog['u_tex'].value = 0
 
         # Horizontal pass
         fbo_h.use()
-        _ctx.clear(0.0, 0.0, 0.0, 0.0)
+        ctx.clear(0.0, 0.0, 0.0, 0.0)
         src_tex.use(0)
-        _blur_prog['u_dir'].value = (1.0 / w, 0.0)
-        _blur_quad.render()
+        blur_prog['u_dir'].value = (1.0 / w, 0.0)
+        blur_quad.render()
 
         # Vertical pass
         fbo_v.use()
-        _ctx.clear(0.0, 0.0, 0.0, 0.0)
+        ctx.clear(0.0, 0.0, 0.0, 0.0)
         fbo_h.color_attachments[0].use(0)
-        _blur_prog['u_dir'].value = (0.0, 1.0 / h)
-        _blur_quad.render()
+        blur_prog['u_dir'].value = (0.0, 1.0 / h)
+        blur_quad.render()
 
         data = fbo_v.read(components=4, alignment=1)
         out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
@@ -375,11 +386,12 @@ def render_shell_rgba(
     if not _try_init():
         return None
     try:
+        ctx = _tls.ctx
         fbo = _get_fbo(w, h, 'shell')
         fbo.use()
-        _ctx.viewport = (0, 0, w, h)
-        _ctx.clear(0.0, 0.0, 0.0, 0.0)
-        p = _shell_prog
+        ctx.viewport = (0, 0, w, h)
+        ctx.clear(0.0, 0.0, 0.0, 0.0)
+        p = _tls.shell_prog
         p['u_size'].value = (float(w), float(h))
         p['u_body_min'].value = (float(body_pad), float(body_pad))
         p['u_body_max'].value = (float(w - body_pad), float(h - body_pad))
@@ -397,7 +409,7 @@ def render_shell_rgba(
         p['u_shadow_radius'].value = float(
             shadow_radius if shadow_radius is not None else radius,
         )
-        _ctx._shell_quad.render()
+        _tls.shell_quad.render()
 
         data = fbo.read(components=4, alignment=1)
         arr = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
@@ -425,17 +437,18 @@ def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
     if not _try_init():
         return None
     try:
+        ctx = _tls.ctx
         arr = _to_rgba_np(rgba)
         h, w, _ = arr.shape
-        src_tex = _ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
+        src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
         src_tex.filter = (0x2600, 0x2600)
         fbo = _get_fbo(w, h, 'prem')
         fbo.use()
-        _ctx.viewport = (0, 0, w, h)
-        _ctx.clear(0.0, 0.0, 0.0, 0.0)
+        ctx.viewport = (0, 0, w, h)
+        ctx.clear(0.0, 0.0, 0.0, 0.0)
         src_tex.use(0)
-        _prem_prog['u_tex'].value = 0
-        _ctx._prem_quad.render()
+        _tls.prem_prog['u_tex'].value = 0
+        _tls.prem_quad.render()
         data = fbo.read(components=4, alignment=1)
         out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
         out = np.flipud(out).copy()
