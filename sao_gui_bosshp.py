@@ -136,26 +136,26 @@ class BossHpOverlay:
 
     # ── Palette (matches CSS :root) ────────────────────────────────
     # v2.2.0: SAO Alert flat hi-tech — 纯白+略灰 (alpha 沿用)
-    COVER_A = (255, 255, 255, 255)
-    COVER_MID = (244, 244, 244, 255)
-    COVER_B = (234, 233, 233, 255)
-    COVER_EDGE = (178, 180, 182, 255)
-    COVER_EDGE_DEEP = (140, 142, 145, 255)
-    LINE = (220, 220, 220, 255)
-    LINE_SOFT = (250, 250, 250, 255)
-    HAIRLINE_LIGHT = (250, 250, 250, 255)
-    HAIRLINE_MID = (228, 228, 228, 255)
-    HAIRLINE_DARK = (140, 138, 138, 255)
-    TEXT_SHADOW = (192, 190, 192, 255)
+    COVER_A = (244, 246, 247, 255)
+    COVER_MID = (232, 235, 238, 255)
+    COVER_B = (223, 227, 231, 255)
+    COVER_EDGE = (186, 190, 196, 255)
+    COVER_EDGE_DEEP = (160, 165, 171, 255)
+    LINE = (214, 216, 219, 255)
+    LINE_SOFT = (246, 247, 248, 255)
+    HAIRLINE_LIGHT = (248, 249, 250, 255)
+    HAIRLINE_MID = (226, 229, 232, 255)
+    HAIRLINE_DARK = (160, 165, 171, 255)
+    TEXT_SHADOW = (190, 192, 195, 255)
     TEXT_MAIN = (100, 99, 100, 255)
     TEXT_MUTED = (140, 135, 138, 255)
     CYAN = (104, 228, 255, 255)
     GOLD_CORNER = (212, 156, 23, 255)
     GOLD_STRONG = (222, 166, 32, 255)
     RED = (239, 104, 78, 255)
-    BOX_BG = (255, 255, 255, 255)
-    BAR_TRACK = (180, 182, 184, 46)
-    TRAIL_COLOR = (255, 255, 255, 66)
+    BOX_BG = (248, 249, 250, 255)
+    BAR_TRACK = (172, 176, 182, 42)
+    TRAIL_COLOR = (255, 255, 255, 58)
 
     # HP gradients (left → right) — fully opaque, matching CSS rgb()
     HP_GREEN = ((211, 234, 124, 255), (154, 211, 52, 255))
@@ -1183,13 +1183,13 @@ class BossHpOverlay:
             (self.PANEL_X + 6, self.PANEL_Y + 11 + y_off,
              self.PANEL_X + self.PANEL_W + 3,
              self.PANEL_Y + self.PANEL_H + 5 + y_off),
-            radius=12, fill=(16, 20, 10, 44),
+            radius=12, fill=(18, 24, 32, 34),
         )
         sd.rounded_rectangle(
             (self.PANEL_X + 2, self.PANEL_Y + 6 + y_off,
              self.PANEL_X + self.PANEL_W - 1,
              self.PANEL_Y + self.PANEL_H - 1 + y_off),
-            radius=10, fill=(20, 24, 10, 90),
+            radius=10, fill=(0, 0, 0, 62),
         )
         shadow = _gpu_blur(shadow, 5)
         img.alpha_composite(shadow)
@@ -1210,7 +1210,7 @@ class BossHpOverlay:
             (self.PANEL_X + 10, self.PANEL_Y + self.PANEL_H // 2 + y_off,
              self.PANEL_X + self.PANEL_W - 10,
              self.PANEL_Y + self.PANEL_H - 7 + y_off),
-            radius=8, fill=(24, 26, 18, 10),
+            radius=8, fill=(74, 80, 90, 8),
         )
         # 1 px scanline every 3 px, matching the CSS repeating-linear-gradient.
         for yy in range(
