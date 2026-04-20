@@ -36,6 +36,8 @@ import ctypes
 import math
 from typing import Any, Callable, Dict, Optional, Tuple
 
+import threading
+
 import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -244,12 +246,103 @@ def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
     return Image.fromarray(a, 'RGBA')
 
 
+# v2.2.12 — Per-thread compositor handle for HP. Mirrors BossHP's
+# `_inset_tls` so the GPU inset-shadow shader (single-pass blur +
+# clip + composite) is reachable from the render-lane thread that
+# owns its own GL context.
+_inset_tls = threading.local()
+
+
+def _get_thread_compositor():
+    comp = getattr(_inset_tls, 'compositor', None)
+    if comp is not None:
+        return comp
+    try:
+        from gpu_compositor import LayerCompositor
+        comp = LayerCompositor('hp')
+    except Exception:
+        comp = None
+    _inset_tls.compositor = comp
+    return comp
+
+
+def _apply_inset_shadow_gpu(img: Image.Image, mask: Image.Image,
+                            color: Tuple[int, int, int],
+                            alpha: int, blur_radius: float) -> bool:
+    """v2.2.12: single-pass GPU inset shadow.
+
+    Mirrors `sao_gui_bosshp._apply_inset_shadow_gpu` exactly — keeps the
+    entire inverted-mask → blur → clip → composite chain on the GPU,
+    eliminating two PIL↔numpy roundtrips per call. Returns False to let
+    the CPU path take over on any failure.
+    """
+    try:
+        from gpu_compositor import LayerCompositor  # noqa: F401
+    except Exception:
+        return False
+    try:
+        comp = _get_thread_compositor()
+        if comp is None or not comp.available:
+            return False
+        w, h = img.size
+        mask_arr = np.asarray(mask, dtype=np.uint8)
+        if mask_arr.shape != (h, w):
+            return False
+        # 1) Inverted-mask RGBA → upload.
+        inv_rgba = np.empty((h, w, 4), dtype=np.uint8)
+        inv_rgba[:, :, 0] = color[0]
+        inv_rgba[:, :, 1] = color[1]
+        inv_rgba[:, :, 2] = color[2]
+        inv_rgba[:, :, 3] = 255 - mask_arr
+        inv_tex = comp.upload('__hp_inset_inv', inv_rgba)
+        if inv_tex is None:
+            return False
+        # 2) GPU-resident two-pass separable blur.
+        blurred_tex = comp.blur_tex(inv_tex, blur_radius,
+                                    out_tag='__hp_inset_blur')
+        if blurred_tex is None:
+            return False
+        # 3) Shape mask + fused inset_shadow shader.
+        shape_rgba = np.empty((h, w, 4), dtype=np.uint8)
+        shape_rgba[:, :, 0] = color[0]
+        shape_rgba[:, :, 1] = color[1]
+        shape_rgba[:, :, 2] = color[2]
+        shape_rgba[:, :, 3] = mask_arr
+        shape_tex = comp.upload('__hp_inset_shape', shape_rgba)
+        out_tex = comp.tex('__hp_inset_out', w, h, clear=True)
+        if shape_tex is None or out_tex is None:
+            return False
+        comp.render(
+            'inset_shadow', out_tex,
+            uniforms={
+                'u_color': (color[0] / 255.0, color[1] / 255.0,
+                            color[2] / 255.0, 1.0),
+                'u_intensity': max(0.0, min(1.0, alpha / 255.0)),
+            },
+            inputs={'u_blurred_inv': blurred_tex,
+                    'u_shape': shape_tex},
+        )
+        glow = comp.to_pil(out_tex)
+        if glow is None:
+            return False
+        img.alpha_composite(glow)
+        return True
+    except Exception:
+        return False
+
+
 def _apply_inset_shadow(img: Image.Image, mask: Image.Image,
                         color: Tuple[int, int, int],
                         alpha: int, blur_radius: float) -> None:
     """CSS-style `inset 0 0 Npx rgba(color, alpha)` glow on `img`,
-    clipped by `mask`. Blur the inverted mask so brightness leaks from
-    outside the shape inward, then clip to the original mask."""
+    clipped by `mask`.
+
+    v2.2.12: tries the fused GPU shader first (saves 2 PIL roundtrips
+    + numpy mask invert + numpy alpha multiply); falls back to the
+    original CPU/PIL pipeline on any error so the panel always renders.
+    """
+    if _apply_inset_shadow_gpu(img, mask, color, alpha, blur_radius):
+        return
     inv = Image.eval(mask, lambda v: 255 - v)
     rgba = np.zeros((img.size[1], img.size[0], 4), dtype=np.uint8)
     rgba[:, :, 0] = color[0]
@@ -454,7 +547,11 @@ class HpOverlay:
         self._shell_sig: tuple = ()
 
         # Async render worker — compose + premult off main thread.
-        self._render_worker = AsyncFrameWorker()
+        # v2.2.12: prefer_isolation so HP gets a dedicated heavy lane,
+        # matching BossHP / Burst / MenuHud. Without it, HP shared a
+        # lane with idle panels and got serialized behind their compose
+        # work during heavy fights.
+        self._render_worker = AsyncFrameWorker(prefer_isolation=True)
 
     def _default_panel_pos(self) -> Tuple[int, int]:
         sw, sh = _get_screen_metrics()

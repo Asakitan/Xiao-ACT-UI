@@ -545,7 +545,11 @@ class DpsOverlay:
         self._shell_cache_size: tuple = (0, 0)
 
         # Async render worker — compose + premult off main thread.
-        self._render_worker = AsyncFrameWorker()
+        # v2.2.12: prefer_isolation so DPS gets a dedicated heavy lane,
+        # matching BossHP / Burst / MenuHud / HP. Without it, DPS shared
+        # a lane with idle panels and got serialized behind their compose
+        # work during heavy fights.
+        self._render_worker = AsyncFrameWorker(prefer_isolation=True)
 
     # ──────────────────────────────────────────
     #  Lifecycle
