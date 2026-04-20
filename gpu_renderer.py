@@ -450,8 +450,10 @@ def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
         _tls.prem_prog['u_tex'].value = 0
         _tls.prem_quad.render()
         data = fbo.read(components=4, alignment=1)
-        out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4)
-        out = np.flipud(out).copy()
+        # UpdateLayeredWindow uses a top-down DIB (negative biHeight), and the
+        # CPU premultiply path already writes rows in top-down order. Do not
+        # flip again here or every async ULW overlay ends up vertically mirrored.
+        out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4).copy()
         src_tex.release()
         return out.tobytes()
     except Exception as exc:

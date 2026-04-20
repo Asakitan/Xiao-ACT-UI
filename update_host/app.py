@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import sys
+import zipfile
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -184,23 +185,80 @@ def _normalize_url(url: str, base_url: str) -> str:
 def _parse_version(v: str) -> tuple:
     raw = (v or "").strip().lstrip("vV")
     if not raw:
-        return (0, 0, 0, 0)
+        return (0, 0, 0, 0), ()
+
+    core_text = ""
+    suffix_text = raw
+    for idx, ch in enumerate(raw):
+        if not (ch.isdigit() or ch == "."):
+            core_text = raw[:idx]
+            suffix_text = raw[idx:].lstrip("-+_.")
+            break
+    else:
+        core_text = raw
+        suffix_text = ""
+
     parts = []
-    for chunk in raw.split(".")[:4]:
+    for chunk in core_text.split(".") if core_text else []:
         try:
             parts.append(int(chunk))
-        except ValueError:
+        except Exception:
             parts.append(0)
     while len(parts) < 4:
         parts.append(0)
-    return tuple(parts[:4])
+
+    suffix_tokens = []
+    token = []
+    for ch in suffix_text:
+        if ch.isalnum():
+            token.append(ch)
+            continue
+        if token:
+            text = "".join(token)
+            if text.isdigit():
+                suffix_tokens.append((1, int(text)))
+            else:
+                suffix_tokens.append((0, text.lower()))
+            token = []
+    if token:
+        text = "".join(token)
+        if text.isdigit():
+            suffix_tokens.append((1, int(text)))
+        else:
+            suffix_tokens.append((0, text.lower()))
+
+    return tuple(parts[:4]), tuple(suffix_tokens)
 
 
 def compare_versions(a: str, b: str) -> int:
     pa, pb = _parse_version(a), _parse_version(b)
-    if pa < pb:
+    core_a, suffix_a = pa
+    core_b, suffix_b = pb
+    if core_a < core_b:
         return -1
-    if pa > pb:
+    if core_a > core_b:
+        return 1
+
+    if not suffix_a and not suffix_b:
+        return 0
+    if suffix_a and not suffix_b:
+        return 1
+    if suffix_b and not suffix_a:
+        return -1
+
+    for token_a, token_b in zip(suffix_a, suffix_b):
+        if token_a == token_b:
+            continue
+        if token_a[0] != token_b[0]:
+            return -1 if token_a[0] < token_b[0] else 1
+        if token_a[1] < token_b[1]:
+            return -1
+        if token_a[1] > token_b[1]:
+            return 1
+
+    if len(suffix_a) < len(suffix_b):
+        return -1
+    if len(suffix_a) > len(suffix_b):
         return 1
     return 0
 
@@ -262,6 +320,160 @@ def _find_next_version(versions: list, current: str) -> str:
         if compare_versions(v, current) > 0:
             return v
     return ""
+
+
+def _safe_version_tag(version: str) -> str:
+    return "".join(c for c in (version or "") if c.isalnum() or c in ".-") or "0.0.0"
+
+
+def _release_target_dir(channel: str, target: str) -> str:
+    safe_ch, safe_tg = _safe_channel_target(channel, target)
+    return os.path.join(DEFAULT_RELEASE_DIR, safe_ch, safe_tg)
+
+
+def _manifest_zip_path(channel: str, target: str, manifest: dict) -> str:
+    safe_ch, safe_tg = _safe_channel_target(channel, target)
+    target_dir = _release_target_dir(safe_ch, safe_tg)
+    download_url = str(manifest.get("download_url") or "").strip()
+    prefix = f"/downloads/{safe_ch}/{safe_tg}/"
+    if download_url.startswith(prefix):
+        rel = download_url[len(prefix):].lstrip("/")
+        rel = rel.replace("/", os.sep)
+        path = os.path.normpath(os.path.join(target_dir, rel))
+        target_root = os.path.normpath(target_dir)
+        if path == target_root or path.startswith(target_root + os.sep):
+            return path
+    safe_ver = _safe_version_tag(str(manifest.get("version") or ""))
+    safe_type = str(manifest.get("package_type") or "runtime-delta")
+    return os.path.join(target_dir, f"update-{safe_ver}-{safe_type}.zip")
+
+
+def _sha256_file(path: str) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(64 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def _build_cumulative_delta_manifest(
+    channel: str,
+    target: str,
+    current: str,
+    latest_manifest: dict,
+) -> Optional[dict]:
+    safe_ch, safe_tg = _safe_channel_target(channel, target)
+    latest_ver = str(latest_manifest.get("version") or "").strip()
+    if not current or not latest_ver:
+        return None
+
+    versions = _load_versions_index(safe_ch, safe_tg)
+    if latest_ver not in versions:
+        versions.append(latest_ver)
+        versions = sorted(set(versions), key=_parse_version)
+
+    chain_versions = [
+        v for v in versions
+        if compare_versions(v, current) > 0 and compare_versions(v, latest_ver) <= 0
+    ]
+    if len(chain_versions) <= 1:
+        return None
+
+    chain_manifests = []
+    merged_min_version = ""
+    merged_force_update = bool(latest_manifest.get("force_update"))
+    for ver in chain_versions:
+        manifest = latest_manifest if ver == latest_ver else _load_versioned_manifest(safe_ch, safe_tg, ver)
+        if not isinstance(manifest, dict):
+            return None
+        if str(manifest.get("package_type") or "") != "runtime-delta":
+            return None
+        min_ver = str(manifest.get("minimum_version") or "").strip()
+        if min_ver:
+            if compare_versions(current, min_ver) < 0:
+                return None
+            if (not merged_min_version) or compare_versions(min_ver, merged_min_version) > 0:
+                merged_min_version = min_ver
+        if bool(manifest.get("force_update")):
+            merged_force_update = True
+        zip_path = _manifest_zip_path(safe_ch, safe_tg, manifest)
+        if not os.path.isfile(zip_path):
+            return None
+        chain_manifests.append(manifest)
+
+    chain_sig = hashlib.sha256(
+        json.dumps(
+            [
+                {
+                    "version": str(item.get("version") or ""),
+                    "sha256": str(item.get("sha256") or ""),
+                    "size": int(item.get("size") or 0),
+                    "package_type": str(item.get("package_type") or ""),
+                }
+                for item in chain_manifests
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:12]
+
+    merged_dir = os.path.join(_release_target_dir(safe_ch, safe_tg), "_merged")
+    os.makedirs(merged_dir, exist_ok=True)
+    merged_name = (
+        f"update-{_safe_version_tag(current)}-to-{_safe_version_tag(latest_ver)}"
+        f"-runtime-delta-{chain_sig}.zip"
+    )
+    merged_path = os.path.join(merged_dir, merged_name)
+
+    if not os.path.isfile(merged_path):
+        tmp_path = merged_path + ".tmp"
+        entries: dict[str, bytes] = {}
+        try:
+            for manifest in chain_manifests:
+                zip_path = _manifest_zip_path(safe_ch, safe_tg, manifest)
+                with zipfile.ZipFile(zip_path, "r") as src:
+                    for info in src.infolist():
+                        if info.is_dir():
+                            continue
+                        entries[info.filename] = src.read(info.filename)
+
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as dst:
+                for arcname in sorted(entries):
+                    dst.writestr(arcname, entries[arcname])
+            os.replace(tmp_path, merged_path)
+        except Exception as exc:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            try:
+                print(f"[update_host] cumulative delta build failed: {exc}")
+            except Exception:
+                pass
+            return None
+
+    digest, size = _sha256_file(merged_path)
+    merged_manifest = dict(latest_manifest)
+    merged_manifest.update({
+        "version": latest_ver,
+        "minimum_version": merged_min_version,
+        "force_update": merged_force_update,
+        "package_type": "runtime-delta",
+        "target": safe_tg,
+        "channel": safe_ch,
+        "download_url": f"/downloads/{safe_ch}/{safe_tg}/_merged/{merged_name}",
+        "sha256": digest,
+        "size": size,
+        "merged_from": current,
+        "merged_versions": chain_versions,
+    })
+    return merged_manifest
 
 
 def _empty_manifest_response(channel: str, target: str, current: Optional[str] = None) -> dict:
@@ -346,6 +558,15 @@ def latest(
     min_ver = (latest_manifest.get("minimum_version") or "").strip()
     if min_ver and compare_versions(current_ver, min_ver) < 0:
         return _finalize(latest_manifest)
+
+    # If every version between current -> latest is a runtime-delta and none
+    # of them requires a newer minimum_version than the client already has,
+    # collapse the whole chain into one cumulative delta zip.
+    cumulative_manifest = _build_cumulative_delta_manifest(
+        safe_ch, safe_tg, current_ver, latest_manifest,
+    )
+    if cumulative_manifest:
+        return _finalize(cumulative_manifest)
 
     # (4) Sequential: find next version after current
     versions = _load_versions_index(safe_ch, safe_tg)
