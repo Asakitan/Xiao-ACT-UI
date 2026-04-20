@@ -343,8 +343,10 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.18"
+APP_VERSION = "2.1.19"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.19:
+#   同 v2.1.18, 版本号补丁升级.
 # v2.1.18:
 #   1) [核心] 修复切换场景服务器后 DPS / boss 血条 / 全量同步全部失效的根因:
 #      a) packet_parser.reset_scene 之前保留了 _current_uuid (旧场景的 entity
