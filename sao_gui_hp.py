@@ -899,13 +899,17 @@ class HpOverlay:
             self._shell_sig = sig
 
         img = self._panels_cache.copy()
-        cover_rect = (COVER_X, COVER_Y + y_off, COVER_X + COVER_W, COVER_Y + COVER_H + y_off)
-        # The XT shell extends outside the nominal 48px HP box: the left edge
-        # shadow bleeds a few pixels and the number_xt plate sits below the
-        # box baseline. Fade the expanded shell region so both side frames hide
-        # together with the HP group.
-        box_rect = (BOX_X - 4, BOX_Y - 4 + y_off, BOX_X + BOX_W + 4, BOX_Y + BOX_H + 18 + y_off)
-        sta_rect = (STA_X, STA_Y + y_off, STA_X + STA_W, STA_Y + STA_H + y_off)
+        # Unified HP-group fade region: covers cover panel, XT box, STA
+        # track AND all shadow bleed (outer drop-shadow, content shadows,
+        # text shadows).  One rect avoids double-multiplication where the
+        # old separate rects overlapped.
+        sg = PANEL_SHADOW_GUTTER          # 18 — matches blur bleed
+        hp_fade_rect = (
+            COVER_X - sg,
+            min(COVER_Y, BOX_Y) - sg + y_off,
+            max(COVER_X + COVER_W, BOX_X + BOX_W, STA_X + STA_W) + sg,
+            max(COVER_Y + COVER_H, STA_Y + STA_H) + PANEL_SHADOW_BOTTOM + y_off,
+        )
 
         hp_group_alpha = 1.0
         if self._hp_group_hidden:
@@ -942,12 +946,14 @@ class HpOverlay:
             self._draw_hp_flash(img, y_off, now)
 
         if self._sta_offline:
+            sta_rect = (STA_X, STA_Y + y_off,
+                        STA_X + STA_W, STA_Y + STA_H + y_off)
             img = _multiply_alpha_regions(img, (sta_rect,), 0.35)
 
         # HP group auto-hide opacity (web: _setHPGroupHidden — 500ms
         # fade / 180ms restore on cover + XTBox + STA, id-plate stays)
         if hp_group_alpha < 0.999:
-            img = _multiply_alpha_regions(img, (cover_rect, box_rect, sta_rect), hp_group_alpha)
+            img = _multiply_alpha_regions(img, (hp_fade_rect,), hp_group_alpha)
 
         # Global fade
         if self._fade_alpha < 0.999:
