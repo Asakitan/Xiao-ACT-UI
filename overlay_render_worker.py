@@ -138,9 +138,13 @@ def _recommended_cpu_task_workers() -> int:
     return min(8, cpu_total - 2)
 
 
-# v2.1.16: pin background render threads to specific CPU cores on Windows.
-# Reduces context-switch thrash + improves L1/L2 cache locality when several
-# panels compose in parallel during heavy combat (DPS+BossHP+Burst+menu).
+# v2.1.16 / v2.2.16: pin background render threads to specific CPU cores on
+# Windows. Originally always-on for cache locality, but on hybrid CPUs
+# (Intel 12th-gen+ P-core/E-core, 14900HX etc.) pinning a lane to a fixed
+# core often parks SkillFX on a 2.5 GHz E-core instead of letting the
+# Windows scheduler migrate it to a 5 GHz P-core under turbo. v2.2.16
+# makes pinning opt-in via ``SAO_RENDER_AFFINITY=1``; default OFF.
+_RENDER_AFFINITY_ENABLED = (os.environ.get('SAO_RENDER_AFFINITY', '0') == '1')
 _AFFINITY_CURSOR = itertools.count(2)  # leave cores 0/1 for Tk + capture
 _AFFINITY_LOCK = threading.Lock()
 _AFFINITY_FAILED = False
@@ -149,6 +153,8 @@ _AFFINITY_FAILED = False
 def _pin_current_thread_to_core(slot: int) -> None:
     """Pin the calling thread to a single CPU core on Windows."""
     global _AFFINITY_FAILED
+    if not _RENDER_AFFINITY_ENABLED:
+        return
     if _AFFINITY_FAILED:
         return
     cpu_total = max(1, os.cpu_count() or 1)

@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.15"
+APP_VERSION = "2.2.16"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -352,6 +352,23 @@ APP_VERSION_LABEL = f"v{APP_VERSION}"
 # tearing source). Set `SAO_GPU_MENU_HUD=0` to fall back to the legacy
 # canvas-native path for diagnostics.
 USE_GPU_MENU_HUD = True
+# v2.2.16:
+#   Combat-CPU + SkillFX framerate. Two changes:
+#   1. CPU-affinity pinning of render lanes is now opt-in via
+#      SAO_RENDER_AFFINITY=1 (default OFF). On hybrid CPUs (12th-gen+ /
+#      14900HX P-core+E-core) the always-on pin parked SkillFX on a
+#      2.5 GHz E-core and capped its compose at ~30 fps; letting Windows
+#      scheduler migrate it to a P-core under turbo restores 60 fps.
+#   2. Scheduler combat-load tier: while SkillFX (or any heavy panel)
+#      is active, idle entity panels throttle from ≈10 Hz to ≈6 Hz so
+#      the burst animation and the menu open animation get the spare
+#      CPU/render-lane bandwidth. Animating panels still tick every
+#      frame.
+#   Note: the floating menu button tearing during fisheye is structural
+#   to Tk widgets on a chroma-key transparentcolor Toplevel (DWM does
+#   not vsync those composites). A real fix requires moving the menu
+#   buttons into the ULW HUD as PIL sprites — deferred (would lose Tk
+#   focus / IME / native click).
 # v2.2.15:
 #   Fix HP/DPS clock + NErVGear pulse + ELAPSED counter freezing on idle.
 #   v2.2.14's per-tick `_idle_committed` short-circuit assumed every panel

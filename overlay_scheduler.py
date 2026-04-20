@@ -127,6 +127,12 @@ class OverlayScheduler:
         self.last_frame_ms = 0.0
         self.avg_frame_ms = 0.0
         self.frame_count = 0
+        # v2.2.16: combat-load signal. SkillFX (or any heavy short-lived
+        # panel) flips this on while it's actively composing so idle
+        # entity panels (HP/DPS) throttle even more aggressively, freeing
+        # render-lane and CPU cycles for the burst animation that the
+        # player is actually looking at.
+        self._combat_load = False
 
     # lifecycle
 
@@ -168,6 +174,13 @@ class OverlayScheduler:
         if should_stop:
             self.stop()
 
+    def set_combat_load(self, active: bool) -> None:
+        """Hint that a heavy short-lived panel (e.g. SkillFX burst) is
+        currently composing. v2.2.16 uses this to throttle idle panels
+        from ≈ 10 Hz down to ≈ 6 Hz so SkillFX gets the lane bandwidth
+        and the menu open animation keeps full 60 Hz mid-combat."""
+        self._combat_load = bool(active)
+
     @property
     def target_hz(self) -> int:
         return self._target_hz
@@ -206,20 +219,23 @@ class OverlayScheduler:
         with self._jobs_lock:
             jobs = list(self._jobs.values())
 
-        # v2.2.10/v2.2.14: idle downsampling for non-animating panels.
-        # Originally only triggered above 70% of the frame budget, which
-        # never happened during normal play and let idle entity panels
-        # tick at full 60 Hz with no visible state change. v2.2.14 lowers
-        # the overload threshold to 30% AND adds an unconditional 6×
-        # downsample for non-animating panels so they tick at ~10 Hz
-        # regardless of CPU headroom. Animating panels (boss break,
-        # skill burst, menu HUD) remain at full Hz.
+        # v2.2.10/v2.2.14/v2.2.16: idle downsampling for non-animating
+        # panels. v2.2.14 set the floor at ≈10 Hz (skip_n=6) when busy
+        # and ≈20 Hz (skip_n=3) when idle. v2.2.16 adds a combat tier:
+        # while SkillFX (or any heavy panel) is active, bump skip_n to
+        # 10 → ≈6 Hz for idle panels, freeing render-lane and CPU
+        # bandwidth for the burst the player is actually watching and
+        # for the menu open animation when the player opens the menu
+        # mid-fight. Animating panels (boss break, skill burst, menu HUD
+        # itself) still tick every frame.
         budget_sec = self._frame_sec
         overloaded = self.avg_frame_ms > 0.3 * budget_sec * 1000.0
-        # 6 → ~10 Hz for idle panels at 60 Hz target; 3 → ~20 Hz when
-        # the host already has headroom and we want quicker idle
-        # response (e.g. fade-in cue).
-        idle_skip_n = 6 if overloaded else 3
+        if self._combat_load:
+            idle_skip_n = 10
+        elif overloaded:
+            idle_skip_n = 6
+        else:
+            idle_skip_n = 3
         frame_idx = self._frame_idx
 
         for job in jobs:

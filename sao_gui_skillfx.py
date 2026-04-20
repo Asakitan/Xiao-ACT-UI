@@ -593,6 +593,13 @@ void main() {
         self._exiting = False
         self._clear_pending_frames = 0
         self._show_t = now
+        # v2.2.16: signal combat load so the scheduler throttles idle
+        # entity panels harder, freeing render-lane / CPU bandwidth for
+        # the burst animation and the menu open animation.
+        try:
+            _get_scheduler(self.root).set_combat_load(True)
+        except Exception:
+            pass
         self._sync_gl_targets(reset=True)
         try:
             from sao_sound import play_sound as _play_sound
@@ -609,6 +616,13 @@ void main() {
                 return
         self._exiting = True
         self._exit_t = time.time()
+        # v2.2.16: clear combat load when burst finishes (also cleared
+        # in _tick_sched when the exit animation actually completes,
+        # so a re-trigger mid-exit keeps it on).
+        try:
+            _get_scheduler(self.root).set_combat_load(False)
+        except Exception:
+            pass
         self._schedule_tick(immediate=True)
 
     def _try_clear_window(self) -> bool:
