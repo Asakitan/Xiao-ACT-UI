@@ -878,11 +878,17 @@ class DpsOverlay:
                abs(row.disp_damage - row.target_damage) > 0.5 or \
                abs(row.disp_hps - row.target_hps) > 0.5 or \
                abs(row.disp_heal - row.target_heal) > 0.5 or \
-               abs(row.disp_bar_pct - row.target_bar_pct) > 1e-3:
+               abs(row.disp_bar_pct - row.target_bar_pct) > 1e-3 or \
+               abs(row.disp_y - row.target_y) > 5e-4 or \
+               bool(row.fx_tier):
                 return True
         if abs(self._disp_total_damage - self._target_total_damage) > 0.5:
             return True
         if abs(self._disp_total_dps - self._target_total_dps) > 0.5:
+            return True
+        if abs(self._disp_total_heal - self._target_total_heal) > 0.5:
+            return True
+        if abs(self._disp_total_hps - self._target_total_hps) > 0.5:
             return True
         return False
 
@@ -956,11 +962,16 @@ class DpsOverlay:
         prev = (self._disp_total_damage, self._disp_total_dps,
                 self._disp_total_heal, self._disp_total_hps,
                 self._disp_elapsed)
-        # Web dps.html updates totals immediately; do not ease these values.
-        self._disp_total_damage = self._target_total_damage
-        self._disp_total_dps = self._target_total_dps
-        self._disp_total_heal = self._target_total_heal
-        self._disp_total_hps = self._target_total_hps
+        # Smoothly tween totals so the header counters slide instead of
+        # snapping every snapshot. Elapsed is a clock and stays linear.
+        self._disp_total_damage = self._decay_toward(
+            self._disp_total_damage, self._target_total_damage, self.NUM_TWEEN)
+        self._disp_total_dps = self._decay_toward(
+            self._disp_total_dps, self._target_total_dps, self.NUM_TWEEN)
+        self._disp_total_heal = self._decay_toward(
+            self._disp_total_heal, self._target_total_heal, self.NUM_TWEEN)
+        self._disp_total_hps = self._decay_toward(
+            self._disp_total_hps, self._target_total_hps, self.NUM_TWEEN)
         self._disp_elapsed = self._target_elapsed
         return prev != (self._disp_total_damage, self._disp_total_dps,
                         self._disp_total_heal, self._disp_total_hps,
@@ -969,13 +980,31 @@ class DpsOverlay:
     def _step_row(self, row: _RowState, now: float) -> bool:
         before = (row.disp_damage, row.disp_dps, row.disp_heal, row.disp_hps,
                   row.disp_bar_pct, row.disp_y)
-        # Web dps.html applies row text, widths, and ordering immediately.
-        row.disp_damage = row.target_damage
-        row.disp_dps = row.target_dps
-        row.disp_heal = row.target_heal
-        row.disp_hps = row.target_hps
-        row.disp_bar_pct = row.target_bar_pct
-        row.disp_y = row.target_y
+        # Tween numeric values, bar fill, and slot Y so reorders/value
+        # changes visibly slide instead of snapping each frame.
+        row.disp_damage = self._decay_toward(
+            row.disp_damage, row.target_damage, self.NUM_TWEEN)
+        row.disp_dps = self._decay_toward(
+            row.disp_dps, row.target_dps, self.NUM_TWEEN)
+        row.disp_heal = self._decay_toward(
+            row.disp_heal, row.target_heal, self.NUM_TWEEN)
+        row.disp_hps = self._decay_toward(
+            row.disp_hps, row.target_hps, self.NUM_TWEEN)
+        # Bar percent uses a tighter epsilon than the 0.5-absolute one
+        # baked into _decay_toward; clamp manually.
+        if abs(row.disp_bar_pct - row.target_bar_pct) < 5e-4:
+            row.disp_bar_pct = row.target_bar_pct
+        else:
+            k = 1.0 - pow(0.05, self.TICK_MS / 1000.0
+                          / max(0.05, self.BAR_TWEEN))
+            row.disp_bar_pct = (row.disp_bar_pct
+                                + (row.target_bar_pct - row.disp_bar_pct) * k)
+        if abs(row.disp_y - row.target_y) < 5e-4:
+            row.disp_y = row.target_y
+        else:
+            k = 1.0 - pow(0.05, self.TICK_MS / 1000.0
+                          / max(0.05, self.ROW_TWEEN))
+            row.disp_y = row.disp_y + (row.target_y - row.disp_y) * k
         if row.fx_tier:
             dur = _HIT_FX_TIERS.get(row.fx_tier, (0,))[0]
             if now - row.fx_start > dur:

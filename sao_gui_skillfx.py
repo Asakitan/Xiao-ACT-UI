@@ -92,9 +92,14 @@ EXIT_DUR = 0.98
 DISPLAY_MS = 4300
 TICK_MS = 16
 IDLE_TICK_MS = 40
-MOTION_SAMPLES_ENTER = ((0.0, 1.0), (0.018, 0.30), (0.036, 0.15))
-MOTION_SAMPLES_EXIT = ((0.0, 1.0), (0.014, 0.24), (0.028, 0.11))
-MOTION_SAMPLES_STEADY = ((0.0, 0.90), (0.010, 0.10))
+# v2.1.17: motion-blur sample count was the dominant cost in compose_frame.
+# Each extra sample reruns the ring/beam/caption inner draw loops AND a
+# `_get_ring_layer` cache lookup, which often missed during enter/exit
+# because `r_out` changed every pixel. Trimming to 2 samples for enter/exit
+# and 1 for steady halves the compose cost without visible quality loss.
+MOTION_SAMPLES_ENTER = ((0.0, 1.0), (0.022, 0.35))
+MOTION_SAMPLES_EXIT = ((0.0, 1.0), (0.018, 0.28))
+MOTION_SAMPLES_STEADY = ((0.0, 1.0),)
 
 
 def _lerp_color(ca, cb, t):
@@ -1145,13 +1150,22 @@ void main() {
         return cached
 
     def _get_ring_layer(self, r_out: int, pulse: float) -> Image.Image:
-        pulse_bucket = int(round(max(0.0, min(1.0, pulse)) * 20.0))
-        key = (r_out, pulse_bucket)
+        # v2.1.17: r_out changes by ~1 px per frame during the 0.6s ENTER
+        # transition (scale 0.66 -> 1.00). The previous unit-quantized cache
+        # missed on EVERY enter/exit frame, so each frame rebuilt the ring
+        # via numpy + ImageDraw + a synchronous GPU blur (~5-15 ms per build,
+        # times the motion-sample count). Quantizing r_out to 4 px buckets
+        # and pulse to 8 levels caps cache size while keeping animation
+        # smooth (the quantization step is well below pixel-snapping noise).
+        r_bucket = max(8, (int(r_out) + 2) // 4 * 4)
+        pulse_bucket = int(round(max(0.0, min(1.0, pulse)) * 8.0))
+        key = (r_bucket, pulse_bucket)
         cached = self._ring_layer_cache.get(key)
         if cached is not None:
             return cached
 
-        pulse_q = pulse_bucket / 20.0
+        r_out = r_bucket
+        pulse_q = pulse_bucket / 8.0
         pad = 28
         box = r_out * 2 + pad * 2
         dist, cc = self._get_ring_field(box)
