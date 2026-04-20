@@ -343,9 +343,8 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.14"
+APP_VERSION = "2.2.15"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
-
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
 # replacing the legacy chroma-key Toplevel + per-tick `geometry()` move
@@ -353,6 +352,14 @@ APP_VERSION_LABEL = f"v{APP_VERSION}"
 # tearing source). Set `SAO_GPU_MENU_HUD=0` to fall back to the legacy
 # canvas-native path for diagnostics.
 USE_GPU_MENU_HUD = True
+# v2.2.15:
+#   Fix HP/DPS clock + NErVGear pulse + ELAPSED counter freezing on idle.
+#   v2.2.14's per-tick `_idle_committed` short-circuit assumed every panel
+#   stops drawing once tweens settle, but HP renders a system clock and
+#   id-pulse continuously and DPS renders an elapsed counter every second.
+#   The scheduler's idle downsampling (~10–20 Hz when `_is_animating()` is
+#   False) keeps the CPU savings; only BossHP — which truly is static at
+#   full HP — keeps the per-tick gate.
 # v2.2.14:
 #   Idle CPU reduction (target webview parity ~2-3% on i9-14900HX).
 #   - Fix BossHP._is_animating() (was hard-coded `return True`, forcing 60 Hz
