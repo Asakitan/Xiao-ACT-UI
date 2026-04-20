@@ -2382,16 +2382,22 @@ class SAOWebViewGUI:
         if not settings:
             return
         cache = dict(settings.get('game_cache', {}) or {})
-        name = str(getattr(self, '_username', '') or '').strip()
-        profession = str(getattr(self, '_profession', '') or '').strip()
-        level_base = int(getattr(self, '_level', 0) or 0)
-        if name:
+        gs = getattr(self, '_game_state', None)
+        # v2.1.18: 实例变量 self._username/_profession/_level 只在菜单刷新或
+        # recognition_loop 中显式同步, 切换 UI 时往往是 stale 的. 优先用 GameState
+        # 上的实时数据 (gs.player_name/profession_name/level_base), 实例变量作为兜底.
+        gs_name = str(getattr(gs, 'player_name', '') or '').strip() if gs is not None else ''
+        gs_prof = str(getattr(gs, 'profession_name', '') or '').strip() if gs is not None else ''
+        gs_level = int(getattr(gs, 'level_base', 0) or 0) if gs is not None else 0
+        name = gs_name or str(getattr(self, '_username', '') or '').strip()
+        profession = gs_prof or str(getattr(self, '_profession', '') or '').strip()
+        level_base = gs_level if gs_level > 0 else int(getattr(self, '_level', 0) or 0)
+        if name and name.lower() != 'player':
             cache['player_name'] = name
         if profession:
             cache['profession_name'] = profession
         if level_base > 0:
             cache['level_base'] = level_base
-        gs = getattr(self, '_game_state', None)
         level_extra = int(getattr(gs, 'level_extra', 0) or 0) if gs is not None else 0
         season_exp = int(getattr(gs, 'season_exp', 0) or 0) if gs is not None else 0
         uid = str(getattr(gs, 'player_id', '') or '').strip() if gs is not None else ''
@@ -2404,6 +2410,15 @@ class SAOWebViewGUI:
         fight_point = int(getattr(gs, 'fight_point', 0) or 0) if gs is not None else 0
         if fight_point > 0:
             cache['fight_point'] = fight_point
+        # v2.1.18: HP/MP 也立即写入, 切到 entity 后能直接显示上次的血量条
+        if gs is not None:
+            for fld in ('hp_current', 'hp_max', 'hp_pct',
+                        'stamina_current', 'stamina_max', 'stamina_pct',
+                        'profession_id'):
+                v = getattr(gs, fld, None)
+                if v is not None and (isinstance(v, (int, float)) and v > 0 or
+                                       (isinstance(v, str) and v)):
+                    cache[fld] = v
         settings.set('game_cache', cache)
         if save_now:
             try:
@@ -4004,6 +4019,29 @@ class SAOWebViewGUI:
                     pass
             threading.Timer(12.0, _late_hp_recovery).start()
             threading.Timer(20.0, _late_hp_recovery).start()
+            # v2.1.17: onedir 冷启动 BossHP / DPS 面板恢复. 第一次 PyInstaller
+            # 解包 + WebView2 初始化可能比 _init 内部的同步 show() 慢, 导致
+            # boss_hp_win.show() / dps_win 准备工作生效前窗口仍处于不可见状态.
+            # 在 4s/10s/16s 处补做一遍, 不会重复 show 已可见窗口.
+            def _late_panel_recovery():
+                try:
+                    if self.boss_hp_win and not self._boss_hp_visible:
+                        self._setup_boss_hp_click_through()
+                        self._set_window_alpha('SAO-BossHP', 1.0)
+                        try:
+                            self.boss_hp_win.show()
+                            self._boss_hp_visible = True
+                            self._setup_boss_hp_click_through()
+                        except Exception:
+                            pass
+                    if self.dps_win:
+                        self._wait_and_apply_click_through('SAO-DPS', timeout=0.5)
+                        self._make_dps_unclickable()
+                except Exception:
+                    pass
+            threading.Timer(4.0, _late_panel_recovery).start()
+            threading.Timer(10.0, _late_panel_recovery).start()
+            threading.Timer(16.0, _late_panel_recovery).start()
             # 任务栏图标
             self._set_window_icon('SAO-HP')
             self._set_window_icon('SAO Menu')
@@ -4152,7 +4190,12 @@ class SAOWebViewGUI:
             )
 
             def _on_boss_alert_with_linkage(title, message):
-                self._show_identity_alert_window(title, message)
+                # v2.1.17: BossRaidEngine separately calls on_sound("boss_alert")
+                # which maps to the same Popup.SAO.Alert.mp3 file as 'alert'.
+                # Suppress the alert window's built-in sound to avoid playing
+                # the same clip twice.
+                self._show_identity_alert_window(
+                    title, message, play_sound=False, alert_kind='boss_raid')
                 if self._boss_autokey_linkage:
                     try:
                         self._boss_autokey_linkage.on_boss_raid_alert(title, message)
@@ -5463,6 +5506,39 @@ class SAOWebViewGUI:
 
         # 停止后台缓存保存线程, 防止退出后继续写入 stale 数据
         self._cache_loop_stop.set()
+
+        # v2.1.18: 在销毁 webview 之前先把 ui_mode 与最新 game_cache 同步到磁盘.
+        # 1) 必须用 _cfg_settings_ref (与 game_cache 同一个 SettingsManager 实例) 写入,
+        #    否则 self.settings 和 _cfg_settings_ref 是两个独立实例 → 各自持有不同的内存
+        #    快照, 后写入的实例会用 stale 数据覆盖前一次写入 (例如 ui_mode='entity' 会被
+        #    _cfg_settings_ref 残留的 ui_mode='webview' 覆盖, 或 game_cache 会被
+        #    self.settings 中没有 game_cache 的快照覆盖).
+        # 2) save_now=True 让 player_name / level / profession / fight_point 立刻
+        #    持久化, 切换到 entity 后能直接看到角色信息而不用再等一次抓包.
+        try:
+            target_mode = 'entity' if self._pending_switch == 'entity' else 'webview'
+            settings_ref = getattr(self, '_cfg_settings_ref', None)
+            if settings_ref is not None:
+                settings_ref.set('ui_mode', target_mode)
+                # 同步到 self.settings 内存, 防止后续逻辑读取到 stale 值
+                if hasattr(self, 'settings') and self.settings is not None and \
+                        self.settings is not settings_ref:
+                    try:
+                        self.settings.set('ui_mode', target_mode)
+                    except Exception:
+                        pass
+            elif hasattr(self, 'settings') and self.settings:
+                # 兜底: 万一 _cfg_settings_ref 还没构建完成, 至少写到 self.settings
+                self.settings.set('ui_mode', target_mode)
+                self.settings.save()
+        except Exception as e:
+            print(f'[SAO-WV] ui_mode pre-save failed: {e}')
+        try:
+            # _persist_cached_identity_state 内部会写到 _cfg_settings_ref 并 save();
+            # 把 ui_mode 也合并到同一次 save 中, 保证 ui_mode 与 game_cache 一起落盘.
+            self._persist_cached_identity_state(save_now=True)
+        except Exception as e:
+            print(f'[SAO-WV] identity pre-save failed: {e}')
 
         # 退出前保存缓存
         self._save_game_cache(quiet=False)

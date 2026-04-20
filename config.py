@@ -343,8 +343,73 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.1.15"
+APP_VERSION = "2.1.18"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.1.18:
+#   1) [核心] 修复切换场景服务器后 DPS / boss 血条 / 全量同步全部失效的根因:
+#      a) packet_parser.reset_scene 之前保留了 _current_uuid (旧场景的 entity
+#         UUID), 但游戏在新场景里给玩家分配的是新 UUID, 导致后续 SCDeltaInfo 里
+#         attacker_uuid != _current_uuid → attacker_is_self 永远 False →
+#         DPS tracker 把自己的伤害全部当成"别人的", 自己的条不出, boss bar
+#         target 也永远不会被采纳. 现在 reset_scene 会清零 _current_uuid,
+#         由下一个 SyncToMeDeltaInfo 自然重新填充;
+#      b) packet_capture 之前在 server-change / 同服重连的瞬间会把切换前后
+#         几个 TCP 段直接丢弃 (旧 addr 的被短路过滤, 新 addr 的在 _try_identify
+#         成功之前也被过滤), 这正好把关键的 SyncContainerData / SyncToMeDelta
+#         首包丢掉, 导致 "切场景/重新上线触发不了 full sync". 现在维护一个
+#         24-pkt 环形缓冲, 任何 server-change / reconnect / 首次识别成功后
+#         都会按 seq 升序回放属于该 addr 的缓存包.
+#   2) 修复 v2.1.17 webview→entity 持久化仍失效的根因: SettingsManager 在
+#      sao_webview 内同时存在两个独立实例 (self.settings 与 _cfg_settings_ref),
+#      各自持有不同的内存快照. v2.1.17 的预存逻辑先用 self.settings 写入
+#      ui_mode='entity' 后, 紧接着 _persist_cached_identity_state 又通过
+#      _cfg_settings_ref.save() 把 stale 的 ui_mode='webview' 覆写回磁盘.
+#      现在统一通过 _cfg_settings_ref 写 ui_mode + game_cache, 一次性 save();
+#   3) _persist_cached_identity_state 改为优先读取 GameState 上的实时字段
+#      (gs.player_name / profession_name / level_base / hp_* / stamina_*),
+#      实例变量仅作兜底. 之前实例变量在菜单未打开/recognition 未跑完时是
+#      stale 的, 导致即使 webview 内 GameState 已经收到 SyncContainerData,
+#      切到 entity 时仍然只能写出空名/0 级;
+#   4) entity (sao_gui) 必须先 subscribe(_on_game_state_update) 再 load_cache,
+#      否则 GameState.load_cache 内部对订阅者的初始通知会被丢弃,
+#      entity 面板启动时无法显示 webview 切过来时持久化的角色名/等级/HP.
+# v2.1.17:
+#   1) 修复 webview 模式下 sao_alert 弹窗"跳两次"的视觉故障:
+#      _show_identity_alert_window 出于冷启动 WebView2 竞态考虑会立即 +
+#      350ms 各 push 一次, 但 alert.html 的 showAlert 每次都会重新触发
+#      show 动画. 现在 JS 端基于 (title, body) 签名去重, 同一条 alert
+#      仅播放一次入场动画;
+#   2) 修复 boss raid 告警声音播放两次的问题: BossRaidEngine 通过
+#      on_sound("boss_alert") 已经播了一次 Popup.SAO.Alert.mp3, 而
+#      _show_identity_alert_window 默认还会再播 'alert' (同一个文件).
+#      现在 _on_boss_alert_with_linkage 调用时显式 play_sound=False;
+#   3) 修复 onedir 冷启动时 BossHP / DPS 面板不出现的问题: 在
+#      _on_webview_started 内追加 4s/10s/16s 的延迟兜底, 若 boss_hp_win
+#      仍未可见就重新 show 并补做 click-through 设置, 同时 DPS 重新
+#      套用穿透样式;
+#   4) 修复 webview→entity 热切换时角色信息丢失 + 退出后菜单模式没写回
+#      的问题: _transition_with_animation 在销毁 webview 之前先把
+#      ui_mode 同步到磁盘 (切换到 entity 时立刻写 'entity'), 同时调用
+#      _persist_cached_identity_state(save_now=True) 把 player_name /
+#      level / profession / fight_point 立刻持久化, entity 启动后能直接
+#      读取到, 即使后续 entity __init__ 因任何原因没保存 ui_mode 也能
+#      在下次启动正确进入 entity 菜单.
+# v2.1.16:
+#   1) 多核渲染优化: overlay_render_worker.py 提高高核心系统的渲染通道数
+#      (8 核以上系统从 4 通道提升至最多 6 通道), 多面板 (DPS+BossHP+Burst+
+#      menu) 可真正并行 compose 而非排队;
+#   2) Windows 线程亲和: 渲染通道线程 + CPU 任务池线程通过
+#      SetThreadAffinityMask 固定到 cores 2.., 减少 context-switch 抖动,
+#      改善 L1/L2 cache 命中, 让 Tk 主线程独占核心 0/1;
+#   3) 调度器自适应限速: overlay_scheduler.py 在 avg_frame_ms ≥ 13ms 时
+#      把空闲面板的 tick 频率从 20 Hz 降到 10 Hz (IDLE_EVERY_N_OVERLOADED=6),
+#      保护动画中的面板 60 Hz 预算;
+#   4) 调度器新增可选 visibility_fn (向下兼容): 隐藏面板可直接被跳过,
+#      避免 winfo 检查与 GIL 抢占;
+#   5) 进程优先级: main.py 启动时把进程提升到 ABOVE_NORMAL,
+#      防止重战斗时被后台程序抢占时间片导致掉帧;
+#   6) dev_publish 工具: 本地发布改为可选 (CLI --no-local-publish + GUI 复选框),
+#      并修复 GUI 全量包构建未刷新 release 布局导致 SHA256 与上版相同的问题.
 # v2.1.13:
 #   1) 抓包层回退至 v1.3.1 基底并补齐三处关键 TCP 重组缺陷：
 #      a) 识别首包不喂入 TCP 流 → SyncContainerData / SyncNearEntities 丢失；

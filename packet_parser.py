@@ -1341,8 +1341,14 @@ class PacketParser:
 
         保留:
         - 玩家数据 (player identity/profession 跨场景不变)
-        - 玩家 UUID/UID (保持身份连续)
+        - 玩家 UID (CharId, 跨场景不变)
         - 职业技能缓存 (profession_skill_cache 跨场景不变)
+
+        v2.1.18: 必须清空 _current_uuid (entity UUID), 因为它是 scene-server-scoped:
+        新场景里玩家的 entity UUID 会变, 旧 UUID 与新 SCDeltaInfo 中的 attacker_uuid
+        永远对不上, 导致 attacker_is_self=False → DPS tracker 永远不会把自己的伤害
+        累计 → 整个 DPS / boss 血条都失效. 清零后 _decode_sync_damage_info 会走
+        UID-based fallback, 直到下一个 SyncToMeDeltaInfo 重新确认 _current_uuid.
         """
         old_count = len(self._monsters)
         # Save template_id → max_hp to cache before clearing
@@ -1365,11 +1371,19 @@ class PacketParser:
         self._sync_container_count = 0
         # 重置场景 ID: 新服务器/地图的场景 ID 需要重新识别
         self._last_scene_id = 0
+        # v2.1.18: entity UUID 在新场景里会变 (scene-server-scoped),
+        # 旧 UUID 必须清空, 否则 _decode_sync_damage_info 中
+        # `attacker_uuid == self._current_uuid` 永远 False, fallback 路径里的
+        # `_uuid_to_uid(attacker_uuid) == self._current_uid` 又被外层 if 屏蔽,
+        # 导致自己的伤害无法识别 → DPS=0 / boss 血条不出.
+        old_uuid = self._current_uuid
+        self._current_uuid = 0
         self.stats['scene_changes'] += 1
         logger.info(
             f'[Parser] 场景重置: 清除 {old_count} 个怪物, '
             f'保留 {len(self._players)} 个玩家, '
-            f'current_uid={self._current_uid}'
+            f'current_uid={self._current_uid}, '
+            f'cleared current_uuid={old_uuid}'
         )
         print(
             f'[Parser] 场景切换重置: 清除 {old_count} 个旧怪物, '

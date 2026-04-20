@@ -272,8 +272,17 @@ class TcpReassembler:
             'cache_overflows': 0,
             'gap_skips': 0,
             'server_changes': 0,
+            'replayed_after_change': 0,
         }
         self._frag = _IpFragmentCache()
+        # v2.1.18: 同 (addr) 入站 payload 的近端环形缓冲, 用于在
+        # 检测到 server change / 同服重连时回放最近几个未被消费的包.
+        # 切场景时游戏会先发若干 TCP 段, 直到出现含 c3SB 的关键帧后我们才识别出新
+        # server, 之前的段如果 (1) 来自旧 server addr → 直接被 `addr != server_addr`
+        # 短路丢弃, (2) 来自新 server addr 但还没识别 → 被 `_try_identify` False 丢弃.
+        # 缓存最近的 (addr,seq,payload) 让识别成功后能补喂.
+        self._recent_pkts: list = []  # list[(addr, seq, payload)]
+        self._RECENT_PKT_LIMIT = 24
 
     @property
     def server_identified(self) -> bool:
@@ -316,10 +325,24 @@ class TcpReassembler:
 
         addr = f'{src_ip.hex()}:{sport}'
 
+        # v2.1.18: 缓存最近的入站包, 供 server-change / 同服重连后回放.
+        # 必须在所有早返回路径之前记录, 这样未被消费的包才能在重连后被找回.
+        self._recent_pkts.append((addr, seq, payload))
+        if len(self._recent_pkts) > self._RECENT_PKT_LIMIT:
+            self._recent_pkts.pop(0)
+
         # ─── 服务器识别 ───
         if self._server_addr is None:
             if self._try_identify(payload, addr):
                 logger.info(f'[Capture] 识别到游戏服务器: {_fmt_ip(src_ip)}:{sport}')
+                # v2.1.18: 回放在识别成功之前缓存的同 addr 包,
+                # 拿回首个 SyncContainerData / EnterGame 等关键登录帧.
+                replayed = self._replay_recent_for_addr(addr, exclude_seq=seq)
+                if replayed:
+                    print(
+                        f'[Capture] 回放 {replayed} 个识别前缓存包 (initial)',
+                        flush=True,
+                    )
                 # 首包也要喂入 TCP 重组, 可能含 SyncContainerData 等关键数据
                 self._feed_tcp(seq, payload)
             return
@@ -354,6 +377,14 @@ class TcpReassembler:
                         self._on_server_change()
                     except Exception as e:
                         logger.error(f'[Capture] on_server_change callback error: {e}')
+                # v2.1.18: 回放最近缓存的来自新 server 的包 (按 seq 升序),
+                # 找回切换瞬间被丢掉的 SyncContainerData / SyncToMeDelta.
+                replayed = self._replay_recent_for_addr(addr, exclude_seq=seq)
+                if replayed:
+                    print(
+                        f'[Capture] 回放 {replayed} 个新场景缓存包 (server change)',
+                        flush=True,
+                    )
                 # 继续处理新服务器的首个包
                 self._feed_tcp(seq, payload)
             return
@@ -387,9 +418,45 @@ class TcpReassembler:
                     self._on_server_change()
                 except Exception as e:
                     logger.error(f'[Capture] on_server_change callback error: {e}')
+            # v2.1.18: 同服重连后也要回放, 重连瞬间被 _seq_match 短路丢掉的
+            # SyncContainerData (relogin full sync) 必须在这里追回, 否则
+            # _current_uid / 角色装备 / dungeon 等依赖 full sync 的状态
+            # 永远停留在 stale 缓存上.
+            replayed = self._replay_recent_for_addr(addr, exclude_seq=seq)
+            if replayed:
+                print(
+                    f'[Capture] 回放 {replayed} 个缓存包 (same-server reconnect)',
+                    flush=True,
+                )
 
         # ─── TCP 重组 ───
         self._feed_tcp(seq, payload)
+
+    def _replay_recent_for_addr(self, addr: str, exclude_seq: int) -> int:
+        """v2.1.18: 把 _recent_pkts 里属于该 addr、seq 不等于 exclude_seq 的包按 seq
+        升序回放给 _feed_tcp, 用于 server-change / 同服重连后追回切换瞬间被丢的包.
+        返回回放的包数量.
+        """
+        try:
+            candidates = [(s, p) for (a, s, p) in self._recent_pkts
+                          if a == addr and s != exclude_seq]
+        except Exception:
+            return 0
+        if not candidates:
+            return 0
+        candidates.sort(key=lambda sp: sp[0])
+        replayed = 0
+        for s, p in candidates:
+            try:
+                self._feed_tcp(s, p)
+                replayed += 1
+            except Exception as e:
+                logger.debug(f'[Capture] replay seq={s} failed: {e}')
+        if replayed:
+            self.stats['replayed_after_change'] += replayed
+        self._recent_pkts = [(a, s, p) for (a, s, p) in self._recent_pkts
+                             if a != addr]
+        return replayed
 
     # ─── 服务器识别 ───
     def _try_identify(self, data: bytes, addr: str) -> bool:

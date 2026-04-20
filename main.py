@@ -262,8 +262,25 @@ def run_ui():
     run_headless()
 
 
+def _elevate_process_priority():
+    """v2.1.16: nudge process to ABOVE_NORMAL on Windows.
+
+    Helps the Tk main loop + render lanes keep timeslices when many panels
+    are active and recognition/packet threads compete for CPU. ABOVE_NORMAL
+    is conservative — it doesn't starve background apps the way HIGH would.
+    """
+    try:
+        import ctypes
+        ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS)
+    except Exception:
+        pass
+
+
 def main():
     _set_dpi_aware()
+    _elevate_process_priority()
     _register_apply_on_exit()
 
     parser = argparse.ArgumentParser(description='SAO Auto — 游戏 HUD 与自动化')

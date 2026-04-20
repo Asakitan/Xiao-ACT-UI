@@ -189,9 +189,26 @@ body.closing .alert-shell {
     </div>
 
 <script>
+let _alertLastSig = '';
+let _alertShowing = false;
+
 function showAlert(title, body) {
-    document.getElementById('alert-title').textContent = title || '提示';
-    document.getElementById('alert-body').textContent = body || '';
+    const t = title || '提示';
+    const b = body || '';
+    const sig = t + '\u0001' + b;
+    document.getElementById('alert-title').textContent = t;
+    document.getElementById('alert-body').textContent = b;
+    // v2.1.17: dedup back-to-back showAlert() with identical content while
+    // the alert is still on screen. Python pushes the same payload twice
+    // (immediate + 350 ms safety net) to survive cold-start WebView2 races;
+    // without this guard the animation would replay and look like a
+    // double pop.
+    if (_alertShowing && sig === _alertLastSig
+            && !document.body.classList.contains('closing')) {
+        return;
+    }
+    _alertLastSig = sig;
+    _alertShowing = true;
     document.body.classList.remove('closing');
     document.body.classList.remove('show');
     void document.body.offsetWidth;
@@ -200,6 +217,8 @@ function showAlert(title, body) {
 
 function beginClose() {
     if (!document.body.classList.contains('show')) return;
+    _alertShowing = false;
+    _alertLastSig = '';
     document.body.classList.add('closing');
 }
 
