@@ -147,20 +147,21 @@ _recompute_layout()
 
 # Palette (RGB from hp.html CSS)
 # v2.2.0: SAO Alert flat hi-tech — 纯白+略灰 (alpha 沿用)
-COVER_A = (255, 255, 255, 255)
-COVER_B = (234, 233, 233, 255)
-COVER_BORDER = (178, 180, 182, 255)
-COVER_BORDER_DEEP = (140, 142, 145, 255)
-BOX_BG = (255, 255, 255, 255)
+COVER_A = (247, 248, 249, 255)
+COVER_MID = (236, 238, 240, 255)
+COVER_B = (226, 229, 232, 255)
+COVER_BORDER = (186, 190, 196, 255)
+COVER_BORDER_DEEP = (160, 165, 171, 255)
+BOX_BG = (249, 249, 250, 255)
 TEXT_MAIN = (100, 99, 100, 255)
 TEXT_MUTED = (140, 135, 138, 255)
 TEXT_UID = (140, 135, 138, 255)
 TEXT_STA = (140, 135, 138, 255)
-LINE = (220, 220, 220, 255)
-LINE_SOFT = (250, 250, 250, 255)
-HAIRLINE_LIGHT = (250, 250, 250, 255)
-HAIRLINE_MID = (228, 228, 228, 255)
-HAIRLINE_DARK = (140, 138, 138, 255)
+LINE = (214, 216, 219, 255)
+LINE_SOFT = (246, 247, 248, 255)
+HAIRLINE_LIGHT = (248, 249, 250, 255)
+HAIRLINE_MID = (226, 229, 232, 255)
+HAIRLINE_DARK = (160, 165, 171, 255)
 CYAN = (104, 228, 255, 255)
 CYAN_SOFT = (104, 228, 255, 255)
 GOLD = (212, 156, 23, 255)
@@ -1022,7 +1023,7 @@ class HpOverlay:
         ys = np.linspace(0, 1, h)
         mid = np.clip((ys - 0.0) / 0.45, 0, 1)
         # Three-stop gradient: A (0%) → mid (45%) → B (100%)
-        MID = (178, 180, 168, 255)
+        MID = COVER_MID
         r = np.where(ys < 0.45,
                      COVER_A[0] + (MID[0] - COVER_A[0]) * (ys / 0.45),
                      MID[0] + (COVER_B[0] - MID[0]) *
@@ -1051,12 +1052,12 @@ class HpOverlay:
         sd.rounded_rectangle(
             (ID_X + 5, ID_Y + 10 + y_off,
              ID_X + ID_W + 2, ID_Y + ID_H + 3 + y_off),
-            radius=8, fill=(12, 14, 10, 46),
+            radius=8, fill=(18, 24, 32, 38),
         )
         sd.rounded_rectangle(
             (ID_X + 2, ID_Y + 5 + y_off,
              ID_X + ID_W - 1, ID_Y + ID_H - 1 + y_off),
-            radius=6, fill=(0, 0, 0, 82),
+            radius=6, fill=(0, 0, 0, 72),
         )
         shadow = _gpu_blur(shadow, 7)
         # Zero out everything above the plate's top edge so the blurred
@@ -1081,7 +1082,7 @@ class HpOverlay:
         od.rounded_rectangle(
             (ID_X + 8, ID_Y + ID_H // 2 + y_off,
              ID_X + ID_W - 8, ID_Y + ID_H - 6 + y_off),
-            radius=5, fill=(24, 26, 18, 10),
+            radius=5, fill=(74, 80, 90, 8),
         )
         img.alpha_composite(_clip_alpha(ov, mask))
 
@@ -1347,7 +1348,7 @@ class HpOverlay:
         w, h = self.WIDTH, self.HEIGHT
         grad = np.zeros((h, 1, 4), dtype=np.uint8)
         ys = np.linspace(0, 1, h)
-        MID = (178, 180, 168, 255)
+        MID = COVER_MID
         r = np.where(ys < 0.45,
                      COVER_A[0] + (MID[0] - COVER_A[0]) * (ys / 0.45),
                      MID[0] + (COVER_B[0] - MID[0]) *
@@ -1375,12 +1376,12 @@ class HpOverlay:
         sd.rounded_rectangle(
             (COVER_X + 6, COVER_Y + 10 + y_off,
              COVER_X + COVER_W + 2, COVER_Y + COVER_H + 5 + y_off),
-            radius=8, fill=(18, 20, 14, 40),
+            radius=8, fill=(18, 24, 32, 34),
         )
         sd.rounded_rectangle(
             (COVER_X + 2, COVER_Y + 5 + y_off,
              COVER_X + COVER_W - 1, COVER_Y + COVER_H - 1 + y_off),
-            radius=6, fill=(0, 0, 0, 60),
+            radius=6, fill=(0, 0, 0, 54),
         )
         shadow = _gpu_blur(shadow, 6)
         clip_top = max(0, COVER_Y + y_off)
@@ -1402,7 +1403,7 @@ class HpOverlay:
         od.rounded_rectangle(
             (COVER_X + 8, COVER_Y + COVER_H // 2 + y_off,
              COVER_X + COVER_W - 8, COVER_Y + COVER_H - 6 + y_off),
-            radius=5, fill=(24, 26, 18, 10),
+            radius=5, fill=(74, 80, 90, 8),
         )
         img.alpha_composite(_clip_alpha(ov, mask))
 
@@ -1467,15 +1468,18 @@ class HpOverlay:
         # Build polygon mask
         shape_mask = Image.new('L', (w, h), 0)
         ImageDraw.Draw(shape_mask).polygon(clip_poly, fill=255)
-        # Horizontal shell fill: keep the XT box opaque so the HUD never
-        # shows desktop/game pixels through the panel body.
+        # Web parity: xt_right keeps a solid left half, then fades away on the
+        # right so the hp-bg-cover shell shows through under the number plate.
         grad = np.zeros((h, w, 4), dtype=np.uint8)
         xs = np.arange(rw, dtype=np.float32) / max(1, rw - 1)
-        shade = (1.0 - 0.06 * xs).astype(np.float32)
+        shade = (1.0 - 0.03 * np.clip(xs, 0.0, 1.0)).astype(np.float32)
+        alpha_profile = np.ones(rw, dtype=np.float32)
+        fade_mask = xs > 0.50
+        alpha_profile[fade_mask] = np.clip(1.0 - (xs[fade_mask] - 0.50) / 0.50, 0.0, 1.0)
         grad[:, rx0:rx0 + rw, 0] = np.clip(BOX_BG[0] * shade, 0, 255).astype(np.uint8)
         grad[:, rx0:rx0 + rw, 1] = np.clip(BOX_BG[1] * shade, 0, 255).astype(np.uint8)
         grad[:, rx0:rx0 + rw, 2] = np.clip(BOX_BG[2] * shade, 0, 255).astype(np.uint8)
-        grad[:, rx0:rx0 + rw, 3] = 255
+        grad[:, rx0:rx0 + rw, 3] = np.clip(alpha_profile * 255.0, 0, 255).astype(np.uint8)
         # Multiply gradient alpha by polygon mask
         m_arr = np.asarray(shape_mask, dtype=np.uint16)
         grad[:, :, 3] = (grad[:, :, 3].astype(np.uint16)
@@ -1512,6 +1516,62 @@ class HpOverlay:
                    border_x + 350, border_y + 1), fill=LINE)
         draw.line((border_x, border_y + 25,
                    border_x + 340, border_y + 25), fill=LINE)
+
+        self._draw_hp_number_shell(img, y_off)
+
+    def _number_plate_mask(self, y_off: int) -> Image.Image:
+        mask = Image.new('L', (self.WIDTH, self.HEIGHT), 0)
+        num_x = BOX_X + int(BOX_W * 0.58) + 4
+        num_y = BOX_Y + int(BOX_H * 0.82) - 3 + y_off
+        num_w = 220
+        num_h = 20
+        poly = [
+            (num_x + 14, num_y),
+            (num_x + num_w, num_y),
+            (num_x + num_w, num_y + num_h),
+            (num_x, num_y + num_h),
+            (num_x, num_y + int(num_h * 0.58)),
+        ]
+        ImageDraw.Draw(mask).polygon(poly, fill=255)
+        return mask
+
+    def _draw_hp_number_shell(self, img: Image.Image, y_off: int) -> None:
+        num_x = BOX_X + int(BOX_W * 0.58) + 4
+        num_y = BOX_Y + int(BOX_H * 0.82) - 3 + y_off
+        num_h = 20
+        left_w = int(220 * 0.55)
+        gap = 3
+        right_w = 220 - left_w - gap
+        right_x = num_x + left_w + gap
+        mask = self._number_plate_mask(y_off)
+
+        shadow = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shadow, 'RGBA')
+        sd.rectangle(
+            (num_x - 4, num_y + 2, num_x + left_w - 1, num_y + num_h - 1),
+            fill=(0, 0, 0, 22),
+        )
+        sd.rectangle(
+            (right_x - 4, num_y + 2, right_x + right_w - 1, num_y + num_h - 1),
+            fill=(0, 0, 0, 20),
+        )
+        img.alpha_composite(_clip_alpha(_gpu_blur(shadow, 6), mask))
+
+        plate = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
+        pd = ImageDraw.Draw(plate, 'RGBA')
+        pd.rectangle(
+            (num_x, num_y, num_x + left_w - 1, num_y + num_h - 1),
+            fill=BOX_BG,
+        )
+        pd.rectangle(
+            (right_x, num_y, right_x + right_w - 1, num_y + num_h - 1),
+            fill=BOX_BG,
+        )
+        pd.line((num_x + 1, num_y, num_x + left_w - 3, num_y), fill=(255, 255, 255, 150))
+        pd.line((right_x + 1, num_y, right_x + right_w - 3, num_y), fill=(255, 255, 255, 150))
+        pd.line((num_x + 2, num_y + num_h - 1, num_x + left_w - 2, num_y + num_h - 1), fill=(220, 220, 220, 120))
+        pd.line((right_x + 2, num_y + num_h - 1, right_x + right_w - 2, num_y + num_h - 1), fill=(220, 220, 220, 120))
+        img.alpha_composite(_clip_alpha(plate, mask))
 
     def _hp_bar_mask(self, y_off: int) -> Image.Image:
         m = Image.new('L', (self.WIDTH, self.HEIGHT), 0)

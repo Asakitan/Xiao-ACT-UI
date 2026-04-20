@@ -42,6 +42,14 @@
 :root {
     --font-sao: 'saoLatin', 'sao', 'Segoe UI', sans-serif;
     --font-ui: 'saoLatin', 'sao', 'yuanJWDCJK', 'yuanJWD', 'Segoe UI', sans-serif;
+    --panel-a: rgba(247, 248, 249, 1);
+    --panel-mid: rgba(236, 238, 240, 1);
+    --panel-b: rgba(226, 229, 232, 1);
+    --panel-edge: rgba(186, 190, 196, 0.52);
+    --panel-shadow: rgba(18, 24, 32, 0.20);
+    --box-bg: rgba(249, 249, 250, 1);
+    --box-hover: rgba(243, 245, 247, 1);
+    --line: rgb(214, 216, 219);
 }
 
 /* ═══ Body — native pywebview transparency ═══
@@ -114,19 +122,19 @@ body {
 /* ═══ Idle Float REMOVED — fixed position ═══ */
 
 .XTBox {
-    --bgColor: rgba(255, 255, 255, 1.0);
+    --bgColor: var(--box-bg);
     --fontcolor: rgba(100, 99, 100, 1);
-    --hover: rgba(244, 244, 244, 1.0);
+    --hover: var(--box-hover);
     position: absolute;
     bottom: 22px;
     left: calc(47% + 25px);
     width: 518px;
     height: 48px;
     display: flex;
-    filter: drop-shadow(2px 4px 3px rgba(50, 50, 0, 0.28));
+    filter: drop-shadow(2px 4px 3px rgba(18, 24, 32, 0.20));
     font-family: var(--font-ui);
     letter-spacing: 1px;
-    color: rgba(60, 62, 50, 1);
+    color: var(--fontcolor);
     font-size: 14px;
     cursor: pointer;
     z-index: 2;
@@ -161,7 +169,7 @@ body {
 .xt_right {
     flex: 1;
     clip-path: polygon(85px 22%, 100% 22%, 100% 0%, 0% 0%, 0 100%, 228px 100%, 234px 77%, 100% 77%, 100% 60%, 233px 60%, 228px 77%, 85px 77%);
-    background: linear-gradient(to right, var(--bgColor) 50%, rgba(255, 255, 255, 0));
+    background: linear-gradient(to right, var(--bgColor) 50%, rgba(249, 249, 250, 0));
     display: flex;
     align-items: center;
     user-select: none;
@@ -210,7 +218,7 @@ body {
     background: var(--hover);
 }
 .XTBox:hover .xt_right {
-    background: linear-gradient(to right, var(--hover) 50%, rgba(244, 244, 244, 0));
+    background: linear-gradient(to right, var(--hover) 50%, rgba(243, 245, 247, 0));
 }
 .XTBox:hover .xt_border { opacity: .8; }
 
@@ -240,7 +248,7 @@ body {
     top: 0;
     width: 1.5px;
     height: 100%;
-    background: rgb(218, 215, 215);
+    background: var(--line);
     z-index: 3;
 }
 
@@ -253,7 +261,7 @@ body {
 .tb_line {
     width: 100%;
     height: 1px;
-    background: rgb(218, 215, 215);
+    background: var(--line);
 }
 
 .xt_in {
@@ -299,18 +307,18 @@ body {
     height: 74px;
     background: linear-gradient(
         175deg,
-        rgba(188, 190, 178, 1.0) 0%,
-        rgba(178, 180, 168, 1.0) 45%,
-        rgba(172, 174, 162, 1.0) 100%
+        var(--panel-a) 0%,
+        var(--panel-mid) 45%,
+        var(--panel-b) 100%
     );
     z-index: 0;
     pointer-events: none;
     border-radius: 6px 6px 2px 2px;
     box-shadow:
-        2px 3px 18px rgba(0, 0, 0, 0.22),
-        inset 0 0 22px rgba(255, 255, 255, 0.10),
-        inset 0 1px 0 rgba(255, 255, 255, 0.25);
-    border: 1px solid rgba(160, 162, 150, 0.50);
+        2px 3px 18px var(--panel-shadow),
+        inset 0 0 22px rgba(255, 255, 255, 0.14),
+        inset 0 1px 0 rgba(255, 255, 255, 0.38);
+    border: 1px solid var(--panel-edge);
     overflow: hidden;
 }
 .hp-bg-corner {
@@ -736,27 +744,27 @@ body {
     height: 74px;
     background: linear-gradient(
         175deg,
-        rgba(188, 190, 178, 1.0) 0%,
-        rgba(178, 180, 168, 1.0) 45%,
-        rgba(172, 174, 162, 1.0) 100%);
+        var(--panel-a) 0%,
+        var(--panel-mid) 45%,
+        var(--panel-b) 100%);
     clip-path: none;
     display: flex;
     flex-direction: column;
     justify-content: center;
     padding: 9px 32px 8px 24px;
     font-family: var(--font-ui);
-    color: rgba(97, 98, 86, 1);
+    color: rgba(100, 99, 100, 1);
     letter-spacing: 1.5px;
     pointer-events: auto;
     cursor: pointer;
     /* box-shadow 被 clip-path 裁剪, 用 filter:drop-shadow 代替 —
        drop-shadow 在 clip-path 裁剪后应用, 因此右侧斜角也有阴影/描边效果 */
-    filter: drop-shadow(2px 3px 14px rgba(0, 0, 0, 0.32))
-            drop-shadow(0 0 1px rgba(160, 162, 150, 0.70));
+    filter: drop-shadow(2px 3px 14px rgba(18, 24, 32, 0.22))
+            drop-shadow(0 0 1px rgba(186, 190, 196, 0.42));
     box-shadow:
-        inset 0 0 22px rgba(255, 255, 255, 0.10),
-        inset 0 1px 0 rgba(255, 255, 255, 0.25);
-    border: 1px solid rgba(160, 162, 150, 0.50);
+        inset 0 0 22px rgba(255, 255, 255, 0.14),
+        inset 0 1px 0 rgba(255, 255, 255, 0.38);
+    border: 1px solid var(--panel-edge);
     z-index: 1;
     border-radius: 6px;
     overflow: hidden;

@@ -343,8 +343,15 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.2"
+APP_VERSION = "2.2.3"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.2.3:
+#   [entity HP 右侧外观修正] 把 HP 条右侧壳层改回接近 webview 的结构:
+#   xt_right 不再整块实心铺满，而是左半实体、右半渐隐到底层 cover；
+#   同时恢复 number_xt 独立数值底板，避免右侧视觉发闷、发厚。
+#   [HP / BossHP 底板统一] 把 webview / entity 的 ID plate、HP cover、
+#   BossHP cover 底板统一到同一套冷灰白层级；普通 HP 去掉残留灰绿色，
+#   BossHP 下调纯白度并拉开 cover / box 层次，避免整片白成一体。
 # v2.2.2:
 #   1) [菜单白板统一] 把 webview / entity 主菜单的圆形按钮、左侧信息板、
 #      子菜单卡片，以及 commander / autokey / boss raid 编辑器的灰绿底板
