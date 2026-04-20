@@ -343,8 +343,12 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.8"
+APP_VERSION = "2.2.9"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v2.2.9:
+#   Profiled compose_frame on a worker thread 
+#   — it averaged 33 ms steady, 80+ ms during ENTER, with cold-start spikes to 200 ms. 
+#   That maps directly to the user's "only 3 frames" symptom on slower machines.
 # v2.2.8:
 #   使用显示器刷新率而非固定 60 Hz 作为调度器默认频率, 让高刷显示器的动画更流畅。
 # v2.2.7:
