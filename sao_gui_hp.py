@@ -74,6 +74,7 @@ STAGE_WIDTH_PCT = 0.75         # hud-stage width within viewport: 75vw
 STAGE_H = 520                  # reference stage height (hud-stage)
 
 PANEL_SHADOW_GUTTER = 18
+PANEL_SHADOW_BOTTOM = 24       # vertical gutter below content for downward drop shadow
 PANEL_H = 96                   # covers cover-top (y=446 of stage) ~ bottom
 MARGIN = 8
 
@@ -229,6 +230,10 @@ def _draw_text_shadow(img: Image.Image, xy, text: str, font,
     img.alpha_composite(_gpu_blur(g, blur))
 
 
+def _offset_poly(points, dx: int, dy: int):
+    return [(x + dx, y + dy) for x, y in points]
+
+
 def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
     if img.size != mask.size:
         mask = mask.resize(img.size)
@@ -236,6 +241,29 @@ def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
     m = np.asarray(mask, dtype=np.uint16)
     a[:, :, 3] = (a[:, :, 3].astype(np.uint16) * m // 255).astype(np.uint8)
     return Image.fromarray(a, 'RGBA')
+
+
+def _apply_inset_shadow(img: Image.Image, mask: Image.Image,
+                        color: Tuple[int, int, int],
+                        alpha: int, blur_radius: float) -> None:
+    """CSS-style `inset 0 0 Npx rgba(color, alpha)` glow on `img`,
+    clipped by `mask`. Blur the inverted mask so brightness leaks from
+    outside the shape inward, then clip to the original mask."""
+    inv = Image.eval(mask, lambda v: 255 - v)
+    rgba = np.zeros((img.size[1], img.size[0], 4), dtype=np.uint8)
+    rgba[:, :, 0] = color[0]
+    rgba[:, :, 1] = color[1]
+    rgba[:, :, 2] = color[2]
+    rgba[:, :, 3] = np.asarray(inv, dtype=np.uint8)
+    blurred = _gpu_blur(Image.fromarray(rgba, 'RGBA'), blur_radius)
+    glow_alpha = np.asarray(blurred, dtype=np.uint16)[:, :, 3]
+    glow_alpha = (glow_alpha * alpha // 255).astype(np.uint8)
+    out = np.zeros((img.size[1], img.size[0], 4), dtype=np.uint8)
+    out[:, :, 0] = color[0]
+    out[:, :, 1] = color[1]
+    out[:, :, 2] = color[2]
+    out[:, :, 3] = glow_alpha
+    img.alpha_composite(_clip_alpha(Image.fromarray(out, 'RGBA'), mask))
 
 
 def _multiply_alpha_regions(img: Image.Image,
@@ -418,9 +446,11 @@ class HpOverlay:
         self._hp_group_fade_duration = 0.50
         self._hp_group_restore_duration = 0.18
 
-        # Static layer cache: cover + id-plate background (expensive).
-        self._static_cache: Optional[Image.Image] = None
-        self._static_sig: tuple = ()
+        # Static layer caches (panels + shell, split for shadow z-order).
+        self._panels_cache: Optional[Image.Image] = None
+        self._panels_sig: tuple = ()
+        self._shell_cache: Optional[Image.Image] = None
+        self._shell_sig: tuple = ()
 
         # Async render worker — compose + premult off main thread.
         self._render_worker = AsyncFrameWorker()
@@ -432,7 +462,7 @@ class HpOverlay:
         # from that window's left edge. Match it on screen exactly.
         stage_screen_x = int(round(sw * HUD_WINDOW_LEFT_PCT
                                    + sw * HUD_VW_PCT * STAGE_LEFT_PCT))
-        return stage_screen_x, max(0, sh - self.HEIGHT)
+        return stage_screen_x, max(0, sh - PANEL_H)
 
     def _sync_layout(self) -> None:
         """Keep the entity overlay geometry in lockstep with webview CSS."""
@@ -449,22 +479,24 @@ class HpOverlay:
                                       + prev_sig[0] * HUD_VW_PCT * STAGE_LEFT_PCT))
             prev_default = (
                 prev_stage_x,
-                max(0, prev_sig[1] - prev_size[1]),
+                max(0, prev_sig[1] - PANEL_H),
             )
 
         _recompute_layout(sw)
         self.WIDTH = PANEL_W
-        self.HEIGHT = PANEL_H
+        self.HEIGHT = PANEL_H + PANEL_SHADOW_BOTTOM
         new_stage_x = int(round(sw * HUD_WINDOW_LEFT_PCT
                                  + sw * HUD_VW_PCT * STAGE_LEFT_PCT))
-        new_default = (new_stage_x, max(0, sh - self.HEIGHT))
+        new_default = (new_stage_x, max(0, sh - PANEL_H))
 
         if prev_sig is None or (getattr(self, '_x', None), getattr(self, '_y', None)) == prev_default:
             self._x, self._y = new_default
 
         self._screen_sig = sig
-        self._static_cache = None
-        self._static_sig = ()
+        self._panels_cache = None
+        self._panels_sig = ()
+        self._shell_cache = None
+        self._shell_sig = ()
 
         if self._win is not None and self._win.winfo_exists():
             try:
@@ -843,19 +875,30 @@ class HpOverlay:
             now = time.time()
         w, h = self.WIDTH, self.HEIGHT
 
-        # Static layer cache — cover + id-plate shell + bar masks.
+        # Static layer caches.
         # Signature depends only on the entry-translate offset.
         y_off = int(round(8 * (1.0 - self._enter_scale_t)))
         sig = (y_off,)
-        if self._static_cache is None or self._static_sig != sig:
+
+        # Cache A: outer panel shadows → panel backgrounds → content shadows
+        if self._panels_cache is None or self._panels_sig != sig:
             base = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+            self._draw_panel_shadows(base, y_off)
             self._draw_id_plate_bg(base, y_off)
             self._draw_hp_cover_bg(base, y_off)
-            self._draw_hp_bar_shell(base, y_off)
-            self._draw_sta_track(base, y_off)
-            self._static_cache = base
-            self._static_sig = sig
-        img = self._static_cache.copy()
+            self._draw_content_shadows(base, y_off)
+            self._panels_cache = base
+            self._panels_sig = sig
+
+        # Cache B: bar shell + STA track (composited ABOVE text shadows)
+        if self._shell_cache is None or self._shell_sig != sig:
+            shell = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+            self._draw_hp_bar_shell(shell, y_off)
+            self._draw_sta_track(shell, y_off)
+            self._shell_cache = shell
+            self._shell_sig = sig
+
+        img = self._panels_cache.copy()
         cover_rect = (COVER_X, COVER_Y + y_off, COVER_X + COVER_W, COVER_Y + COVER_H + y_off)
         # The XT shell extends outside the nominal 48px HP box: the left edge
         # shadow bleeds a few pixels and the number_xt plate sits below the
@@ -879,12 +922,20 @@ class HpOverlay:
             self._draw_root_outer_pulse(img, y_off, now, hp_group_alpha)
             self._draw_root_cover_pulse(img, y_off, now, hp_group_alpha)
 
-        # Dynamic layers
+        # Text shadows — between panels and shell (above panel bg,
+        # below bar-shell content).
+        self._draw_id_plate_text(img, y_off, now, mode='shadow')
+        self._draw_hp_text(img, y_off, mode='shadow')
+
+        # Shell on top of shadows
+        img.alpha_composite(self._shell_cache)
+
+        # Dynamic layers — text content (no shadows), fills, etc.
         self._draw_brackets(img, y_off, now)
-        self._draw_id_plate_text(img, y_off, now)
+        self._draw_id_plate_text(img, y_off, now, mode='content')
         self._draw_id_plate_scanline(img, y_off, now)
         self._draw_hp_fill(img, y_off, now)
-        self._draw_hp_text(img, y_off)
+        self._draw_hp_text(img, y_off, mode='content')
         self._draw_sta_fill(img, y_off)
         self._draw_sta_text(img, y_off)
         if self._hp_flash_start and now - self._hp_flash_start < 0.45:
@@ -1004,6 +1055,101 @@ class HpOverlay:
         cover_glow = _gpu_blur(cover_glow, 5)
         img.alpha_composite(_clip_alpha(cover_glow, self._cover_mask(y_off)))
 
+    # ── panel drop shadows (drawn BEFORE any content) ─────────────
+
+    def _draw_panel_shadows(self, img: Image.Image, y_off: int) -> None:
+        """Draw drop shadows for both id-plate and cover panels.
+
+        Must be called BEFORE any panel content is composited so that
+        shadows always sit below content in the z-order.
+        """
+        w, h = self.WIDTH, self.HEIGHT
+        all_mask = self._all_content_mask(y_off)
+        inv_mask = 255 - np.asarray(all_mask, dtype=np.uint8)
+
+        shadows = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shadows)
+
+        # Id-plate: CSS drop-shadow(2px 3px 14px rgba(18,24,32,0.22))
+        sd.rounded_rectangle(
+            (ID_X + 2, ID_Y + 3 + y_off,
+             ID_X + ID_W + 2, ID_Y + ID_H + 3 + y_off),
+            radius=6, fill=(18, 24, 32, 56),
+        )
+        # Cover: CSS 2px 3px 18px rgba(18,24,32,0.20)
+        sd.rounded_rectangle(
+            (COVER_X + 2, COVER_Y + 3 + y_off,
+             COVER_X + COVER_W + 2, COVER_Y + COVER_H + 3 + y_off),
+            radius=6, fill=(18, 24, 32, 51),
+        )
+
+        shadows = _gpu_blur(shadows, 6)
+
+        # Zero shadow alpha wherever any panel content will be drawn.
+        sh_arr = np.array(shadows, dtype=np.uint8)
+        sh_arr[:, :, 3] = (sh_arr[:, :, 3].astype(np.uint16)
+                           * inv_mask.astype(np.uint16)
+                           // 255).astype(np.uint8)
+        img.alpha_composite(Image.fromarray(sh_arr, 'RGBA'))
+
+    # ── content-element shadows (between panel bg and bar shell) ──
+
+    def _draw_content_shadows(self, img: Image.Image, y_off: int) -> None:
+        """Bar-shell + number-plate shadows.  Drawn ABOVE panel bg but
+        BELOW bar-shell content so they sit on the cover surface without
+        darkening through the bar-shell polygons."""
+        w, h = self.WIDTH, self.HEIGHT
+        shadows = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shadows)
+
+        # Bar-shell (XT box) shadow
+        bx = BOX_X
+        by = BOX_Y + y_off
+        lh = BOX_H
+        left_poly = [
+            (bx, by), (bx + 26, by), (bx + 26, by + lh), (bx, by + lh),
+            (bx, by + int(lh * 0.75)), (bx + 13, by + int(lh * 0.75)),
+            (bx + 13, by + int(lh * 0.25)), (bx, by + int(lh * 0.25)),
+        ]
+        rx0 = bx + 29
+        rw = BOX_W - 29
+        clip_poly = [
+            (rx0 + 85,  by + int(lh * 0.22)),
+            (rx0 + rw,  by + int(lh * 0.22)),
+            (rx0 + rw,  by),
+            (rx0,       by),
+            (rx0,       by + lh),
+            (rx0 + 228, by + lh),
+            (rx0 + 234, by + int(lh * 0.77)),
+            (rx0 + rw,  by + int(lh * 0.77)),
+            (rx0 + rw,  by + int(lh * 0.60)),
+            (rx0 + 233, by + int(lh * 0.60)),
+            (rx0 + 228, by + int(lh * 0.77)),
+            (rx0 + 85,  by + int(lh * 0.77)),
+        ]
+        sd.polygon(_offset_poly(left_poly, 2, 4), fill=(22, 28, 38, 34))
+        sd.polygon(_offset_poly(clip_poly, 2, 4), fill=(22, 28, 38, 32))
+
+        # Number-plate shadow
+        num_x = BOX_X + int(BOX_W * 0.58) + 4
+        num_y = BOX_Y + int(BOX_H * 0.82) - 3 + y_off
+        num_h = 20
+        left_w = int(220 * 0.55)
+        gap_n = 3
+        right_w = 220 - left_w - gap_n
+        right_x = num_x + left_w + gap_n
+        sd.rectangle(
+            (num_x - 4, num_y + 2, num_x + left_w - 1, num_y + num_h - 1),
+            fill=(0, 0, 0, 22),
+        )
+        sd.rectangle(
+            (right_x - 4, num_y + 2, right_x + right_w - 1, num_y + num_h - 1),
+            fill=(0, 0, 0, 20),
+        )
+
+        shadows = _gpu_blur(shadows, 6)
+        img.alpha_composite(shadows)
+
     # ── identity plate background ───────────────────────────────────
 
     def _id_plate_mask(self, y_off: int) -> Image.Image:
@@ -1012,6 +1158,27 @@ class HpOverlay:
         ImageDraw.Draw(m).rounded_rectangle(
             (ID_X, ID_Y + y_off,
              ID_X + ID_W - 1, ID_Y + ID_H - 1 + y_off),
+            radius=6, fill=255,
+        )
+        return m
+
+    def _all_content_mask(self, y_off: int) -> Image.Image:
+        """Combined mask of all HP panel content areas (id-plate + cover).
+
+        Used for shadow clipping so that *no* drop shadow composites on top
+        of *any* content surface, even when one element's shadow blur extends
+        into a neighbouring element's region.
+        """
+        m = Image.new('L', (self.WIDTH, self.HEIGHT), 0)
+        d = ImageDraw.Draw(m)
+        d.rounded_rectangle(
+            (ID_X, ID_Y + y_off,
+             ID_X + ID_W - 1, ID_Y + ID_H - 1 + y_off),
+            radius=6, fill=255,
+        )
+        d.rounded_rectangle(
+            (COVER_X, COVER_Y + y_off,
+             COVER_X + COVER_W - 1, COVER_Y + COVER_H - 1 + y_off),
             radius=6, fill=255,
         )
         return m
@@ -1043,42 +1210,28 @@ class HpOverlay:
         plate = Image.fromarray(grad, 'RGBA').resize((w, h))
         mask = self._id_plate_mask(y_off)
 
-        # Shadow — clipped to plate-and-below so blur cannot leak upward
-        # into the area above the panel where it would (a) be visible as a
-        # halo above the ID plate and (b) capture clicks that should pass
-        # through to the game window.
-        shadow = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        sd = ImageDraw.Draw(shadow)
-        sd.rounded_rectangle(
-            (ID_X + 5, ID_Y + 10 + y_off,
-             ID_X + ID_W + 2, ID_Y + ID_H + 3 + y_off),
-            radius=8, fill=(18, 24, 32, 38),
-        )
-        sd.rounded_rectangle(
-            (ID_X + 2, ID_Y + 5 + y_off,
-             ID_X + ID_W - 1, ID_Y + ID_H - 1 + y_off),
-            radius=6, fill=(0, 0, 0, 72),
-        )
-        shadow = _gpu_blur(shadow, 7)
-        # Zero out everything above the plate's top edge so the blurred
-        # halo cannot leak upward beyond the panel content.
-        clip_top = max(0, ID_Y + y_off)
-        if clip_top > 0:
-            sh_arr = np.array(shadow, dtype=np.uint8)
-            sh_arr[:clip_top, :, 3] = 0
-            shadow = Image.fromarray(sh_arr, 'RGBA')
-        img.alpha_composite(shadow)
+        # Shadow is drawn earlier by _draw_panel_shadows().
+        # Build content layer: keep RGB at full intensity, set alpha = mask.
+        # (paste-with-mask would halve RGB at AA edges, leaking shadow.)
+        plate_arr = np.array(plate, dtype=np.uint8)
+        plate_arr[:, :, 3] = np.array(mask, dtype=np.uint8)
+        img.alpha_composite(Image.fromarray(plate_arr, 'RGBA'))
 
-        img.paste(plate, (0, 0), mask)
+        # CSS inset 0 0 22px rgba(255,255,255,0.14) — soft inner glow.
+        _apply_inset_shadow(
+            img, mask, (255, 255, 255), alpha=36, blur_radius=11.0,
+        )
+        # CSS inset 0 1px 0 rgba(255,255,255,0.38) — crisp 1px top hi-lite.
+        top_hi = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(top_hi).rectangle(
+            (ID_X, ID_Y + y_off, ID_X + ID_W - 1, ID_Y + y_off),
+            fill=(255, 255, 255, 97),
+        )
+        img.alpha_composite(_clip_alpha(top_hi, mask))
 
-        # Inset highlight (top 1 px line)
+        # Inset highlight (top 1 px line) — kept for the lower mid wash
         ov = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         od = ImageDraw.Draw(ov)
-        od.rounded_rectangle(
-            (ID_X + 3, ID_Y + 3 + y_off,
-             ID_X + ID_W - 4, ID_Y + 18 + y_off),
-            radius=5, fill=(255, 255, 255, 16),
-        )
         od.rounded_rectangle(
             (ID_X + 8, ID_Y + ID_H // 2 + y_off,
              ID_X + ID_W - 8, ID_Y + ID_H - 6 + y_off),
@@ -1183,39 +1336,45 @@ class HpOverlay:
         img.alpha_composite(_clip_alpha(canvas, self._id_plate_mask(y_off)))
 
     def _draw_id_plate_text(self, img: Image.Image, y_off: int,
-                            now: float) -> None:
+                            now: float, mode: str = 'both') -> None:
+        draw_shadow = mode != 'content'
+        draw_content = mode != 'shadow'
         draw = ImageDraw.Draw(img, 'RGBA')
         # Top row: "SYSTEM" + profession
-        sys_font = _load_font('sao', 10)
-        _draw_tracked(
-            draw, (ID_X + 20, ID_Y + 8 + y_off),
-            'SYSTEM', font=sys_font, fill=TEXT_MUTED,
-            spacing=3,  # web: letter-spacing 3px
-        )
+        if draw_content:
+            sys_font = _load_font('sao', 10)
+            _draw_tracked(
+                draw, (ID_X + 20, ID_Y + 8 + y_off),
+                'SYSTEM', font=sys_font, fill=TEXT_MUTED,
+                spacing=3,  # web: letter-spacing 3px
+            )
         if self._profession:
             prof_font = _pick_font(self._profession, 13)
             prof_text = _truncate(
                 draw, self._profession, prof_font, ID_W // 2)
             # web: text-shadow 0 0 6px rgba(243,175,18,0.3)
-            _draw_text_shadow(
-                img, (ID_X + 78, ID_Y + 6 + y_off),
-                prof_text, prof_font,
-                shadow_color=(243, 175, 18, 38), blur=2,
-            )
-            _draw_tracked(
-                draw, (ID_X + 78, ID_Y + 6 + y_off),
-                prof_text, font=prof_font, fill=PROF_GOLD,
-                spacing=1.5,  # web: letter-spacing 1.5px
-            )
+            if draw_shadow:
+                _draw_text_shadow(
+                    img, (ID_X + 78, ID_Y + 6 + y_off),
+                    prof_text, prof_font,
+                    shadow_color=(243, 175, 18, 38), blur=2,
+                )
+            if draw_content:
+                _draw_tracked(
+                    draw, (ID_X + 78, ID_Y + 6 + y_off),
+                    prof_text, font=prof_font, fill=PROF_GOLD,
+                    spacing=1.5,  # web: letter-spacing 1.5px
+                )
         # Lv.X (top-right, gold)  — web: 16px, letter-spacing 2px
-        lv_font = _load_font('sao', 16)
-        lv_txt = f'Lv.{self._level}'
-        lv_w = _tracked_width(draw, lv_txt, lv_font, spacing=2)
-        _draw_tracked(
-            draw, (ID_X + ID_W - 22 - lv_w, ID_Y + 6 + y_off),
-            lv_txt, font=lv_font, fill=(212, 156, 23, 255),
-            spacing=2,
-        )
+        if draw_content:
+            lv_font = _load_font('sao', 16)
+            lv_txt = f'Lv.{self._level}'
+            lv_w = _tracked_width(draw, lv_txt, lv_font, spacing=2)
+            _draw_tracked(
+                draw, (ID_X + ID_W - 22 - lv_w, ID_Y + 6 + y_off),
+                lv_txt, font=lv_font, fill=(212, 156, 23, 255),
+                spacing=2,
+            )
 
         # ── Boss timer / clock (upper-center, above Name) ──
         # Web: 30px clock with em-dashes "─ HH:MM:SS ─", color muted olive.
@@ -1239,14 +1398,16 @@ class HpOverlay:
             tw = _text_width(draw, txt, bt_font)
             bx = ID_X + (ID_W - tw) // 2
             by = ID_Y + 26 + y_off
-            g = Image.new('RGBA', img.size, (0, 0, 0, 0))
-            ImageDraw.Draw(g).text(
-                (bx, by), txt,
-                fill=(col[0], col[1], col[2], 70), font=bt_font,
-            )
-            img.alpha_composite(_gpu_blur(g, 2))
-            draw.text((bx, by), txt, fill=col, font=bt_font)
-        else:
+            if draw_shadow:
+                g = Image.new('RGBA', img.size, (0, 0, 0, 0))
+                ImageDraw.Draw(g).text(
+                    (bx, by), txt,
+                    fill=(col[0], col[1], col[2], 70), font=bt_font,
+                )
+                img.alpha_composite(_gpu_blur(g, 2))
+            if draw_content:
+                draw.text((bx, by), txt, fill=col, font=bt_font)
+        elif draw_content:
             # Clock — web renders at 30px with em-dash decorators on
             # either side. The SAO font lacks U+2500 glyphs so we draw
             # the dashes as actual line strokes to match the web visual.
@@ -1276,16 +1437,20 @@ class HpOverlay:
         name_font = _pick_font(self._name, 24)
         name = _truncate(draw, self._name, name_font, max(32, ID_W - 190))
         # web: text-shadow 0 0 6px rgba(255,255,255,0.2)
-        _draw_text_shadow(
-            img, (ID_X + 18, ID_Y + ID_H - 34 + y_off),
-            name, name_font,
-            shadow_color=(255, 255, 255, 22), blur=2,
-        )
-        draw.text(
-            (ID_X + 18, ID_Y + ID_H - 34 + y_off),
-            name, fill=TEXT_MAIN, font=name_font,
-        )
+        if draw_shadow:
+            _draw_text_shadow(
+                img, (ID_X + 18, ID_Y + ID_H - 34 + y_off),
+                name, name_font,
+                shadow_color=(255, 255, 255, 22), blur=2,
+            )
+        if draw_content:
+            draw.text(
+                (ID_X + 18, ID_Y + ID_H - 34 + y_off),
+                name, fill=TEXT_MAIN, font=name_font,
+            )
 
+        if not draw_content:
+            return
         # UID (right column, top:34 of id-plate, muted olive, tiny)
         if self._uid:
             uid_font = _load_font('sao', 11)
@@ -1368,38 +1533,27 @@ class HpOverlay:
         cover = Image.fromarray(grad, 'RGBA').resize((w, h))
         mask = self._cover_mask(y_off)
 
-        # Shadow — clipped above the cover so blur halo cannot leak past
-        # the panel boundary into the area above (which would be visible
-        # as a halo and capture mouse clicks).
-        shadow = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        sd = ImageDraw.Draw(shadow)
-        sd.rounded_rectangle(
-            (COVER_X + 6, COVER_Y + 10 + y_off,
-             COVER_X + COVER_W + 2, COVER_Y + COVER_H + 5 + y_off),
-            radius=8, fill=(18, 24, 32, 34),
-        )
-        sd.rounded_rectangle(
-            (COVER_X + 2, COVER_Y + 5 + y_off,
-             COVER_X + COVER_W - 1, COVER_Y + COVER_H - 1 + y_off),
-            radius=6, fill=(0, 0, 0, 54),
-        )
-        shadow = _gpu_blur(shadow, 6)
-        clip_top = max(0, COVER_Y + y_off)
-        if clip_top > 0:
-            sh_arr = np.array(shadow, dtype=np.uint8)
-            sh_arr[:clip_top, :, 3] = 0
-            shadow = Image.fromarray(sh_arr, 'RGBA')
-        img.alpha_composite(shadow)
+        # Shadow is drawn earlier by _draw_panel_shadows().
+        # Build content layer: keep RGB at full intensity, set alpha = mask.
+        cover_arr = np.array(cover, dtype=np.uint8)
+        cover_arr[:, :, 3] = np.array(mask, dtype=np.uint8)
+        img.alpha_composite(Image.fromarray(cover_arr, 'RGBA'))
 
-        img.paste(cover, (0, 0), mask)
+        # CSS inset 0 0 22px rgba(255,255,255,0.14) — soft inner glow.
+        _apply_inset_shadow(
+            img, mask, (255, 255, 255), alpha=36, blur_radius=11.0,
+        )
+        # CSS inset 0 1px 0 rgba(255,255,255,0.38) — crisp 1px top hi-lite.
+        top_hi = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(top_hi).rectangle(
+            (COVER_X, COVER_Y + y_off,
+             COVER_X + COVER_W - 1, COVER_Y + y_off),
+            fill=(255, 255, 255, 97),
+        )
+        img.alpha_composite(_clip_alpha(top_hi, mask))
 
         ov = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         od = ImageDraw.Draw(ov)
-        od.rounded_rectangle(
-            (COVER_X + 3, COVER_Y + 3 + y_off,
-             COVER_X + COVER_W - 4, COVER_Y + 18 + y_off),
-            radius=5, fill=(255, 255, 255, 14),
-        )
         od.rounded_rectangle(
             (COVER_X + 8, COVER_Y + COVER_H // 2 + y_off,
              COVER_X + COVER_W - 8, COVER_Y + COVER_H - 6 + y_off),
@@ -1465,6 +1619,10 @@ class HpOverlay:
             (rx0 + 228, by + int(lh * 0.77)),
             (rx0 + 85,  by + int(lh * 0.77)),
         ]
+
+        # Bar shell shadow is drawn in _draw_panel_shadows() (below
+        # all panel content) to avoid darkening the cover surface.
+
         # Build polygon mask
         shape_mask = Image.new('L', (w, h), 0)
         ImageDraw.Draw(shape_mask).polygon(clip_poly, fill=255)
@@ -1545,17 +1703,8 @@ class HpOverlay:
         right_x = num_x + left_w + gap
         mask = self._number_plate_mask(y_off)
 
-        shadow = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
-        sd = ImageDraw.Draw(shadow, 'RGBA')
-        sd.rectangle(
-            (num_x - 4, num_y + 2, num_x + left_w - 1, num_y + num_h - 1),
-            fill=(0, 0, 0, 22),
-        )
-        sd.rectangle(
-            (right_x - 4, num_y + 2, right_x + right_w - 1, num_y + num_h - 1),
-            fill=(0, 0, 0, 20),
-        )
-        img.alpha_composite(_clip_alpha(_gpu_blur(shadow, 6), mask))
+        # Number plate shadow is drawn in _draw_panel_shadows()
+        # (below all panel content) to avoid darkening the cover surface.
 
         plate = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
         pd = ImageDraw.Draw(plate, 'RGBA')
@@ -1644,7 +1793,10 @@ class HpOverlay:
         )
         img.alpha_composite(_clip_alpha(fx, self._hp_bar_mask(y_off)))
 
-    def _draw_hp_text(self, img: Image.Image, y_off: int) -> None:
+    def _draw_hp_text(self, img: Image.Image, y_off: int,
+                      mode: str = 'both') -> None:
+        draw_shadow = mode != 'content'
+        draw_content = mode != 'shadow'
         draw = ImageDraw.Draw(img, 'RGBA')
         # username — inside xt_right, vertically centred (CSS: flex
         # align-items:center, font-size:14px inherited from .XTBox).
@@ -1655,7 +1807,13 @@ class HpOverlay:
         nx = BOX_X + 39
         # Centre on box vertical mid-line (name font ≈ 18px tall)
         ny = BOX_Y + (BOX_H - 18) // 2 + y_off
-        draw.text((nx, ny), name, fill=TEXT_MAIN, font=name_font)
+        if draw_shadow:
+            _draw_text_shadow(
+                img, (nx + 1, ny + 1), name, name_font,
+                shadow_color=(28, 34, 42, 58), blur=2,
+            )
+        if draw_content:
+            draw.text((nx, ny), name, fill=TEXT_MAIN, font=name_font)
 
         # number_xt — HP cur/total (big) + Lv (small) below
         cur = self._hp_max * self._hp_pct_disp if self._hp_max > 0 else 0
@@ -1667,13 +1825,25 @@ class HpOverlay:
         ny0 = BOX_Y + int(BOX_H * 0.82) - 3 + y_off
         # right aligned inside first cell (55% of 220px)
         cell_w = int(220 * 0.55)
-        draw.text((nx0 + cell_w - vw - 6, ny0), val_txt,
-                  fill=TEXT_MAIN, font=val_font)
+        if draw_shadow:
+            _draw_text_shadow(
+                img, (nx0 + cell_w - vw - 5, ny0 + 1), val_txt, val_font,
+                shadow_color=(28, 34, 42, 54), blur=2,
+            )
+        if draw_content:
+            draw.text((nx0 + cell_w - vw - 6, ny0), val_txt,
+                      fill=TEXT_MAIN, font=val_font)
         # Lv in second cell
         lv_font = _load_font('sao', 12)
         lv_txt = f'lv.{self._level}'
-        draw.text((nx0 + cell_w + 6, ny0 + 1), lv_txt,
-                  fill=TEXT_MAIN, font=lv_font)
+        if draw_shadow:
+            _draw_text_shadow(
+                img, (nx0 + cell_w + 7, ny0 + 2), lv_txt, lv_font,
+                shadow_color=(28, 34, 42, 48), blur=2,
+            )
+        if draw_content:
+            draw.text((nx0 + cell_w + 6, ny0 + 1), lv_txt,
+                      fill=TEXT_MAIN, font=lv_font)
 
     # ── STA row ─────────────────────────────────────────────────────
 

@@ -90,6 +90,48 @@ def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
     return Image.fromarray(a, 'RGBA')
 
 
+def _draw_text_shadow(img: Image.Image, xy, text: str, font,
+                      shadow_color: Tuple[int, int, int, int],
+                      blur: int = 3) -> None:
+    layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(layer).text(xy, text, fill=shadow_color, font=font)
+    img.alpha_composite(_gpu_blur(layer, blur))
+
+
+def _offset_poly(points, dx: int, dy: int):
+    return [(x + dx, y + dy) for x, y in points]
+
+
+def _apply_inset_shadow(img: Image.Image, mask: Image.Image,
+                        color: Tuple[int, int, int],
+                        alpha: int, blur_radius: float) -> None:
+    """Composite a CSS-style `inset 0 0 Npx rgba(color, alpha)` glow
+    onto `img`, clipped by `mask`. The glow is bright at the rim of the
+    shape and fades inward, exactly like a CSS inset box-shadow.
+
+    Implementation: blur the *inverted* mask (so brightness leaks from
+    outside into the shape) and clip back to the original mask.
+    """
+    inv = Image.eval(mask, lambda v: 255 - v)
+    # Build an RGBA whose alpha = inverted mask so the GPU blur acts on
+    # the rim/leak channel. RGB stays at the target color.
+    rgba = np.zeros((img.size[1], img.size[0], 4), dtype=np.uint8)
+    rgba[:, :, 0] = color[0]
+    rgba[:, :, 1] = color[1]
+    rgba[:, :, 2] = color[2]
+    rgba[:, :, 3] = np.asarray(inv, dtype=np.uint8)
+    blurred = _gpu_blur(Image.fromarray(rgba, 'RGBA'), blur_radius)
+    glow_alpha = np.asarray(blurred, dtype=np.uint16)[:, :, 3]
+    glow_alpha = (glow_alpha * alpha // 255).astype(np.uint8)
+    out = np.zeros((img.size[1], img.size[0], 4), dtype=np.uint8)
+    out[:, :, 0] = color[0]
+    out[:, :, 1] = color[1]
+    out[:, :, 2] = color[2]
+    out[:, :, 3] = glow_alpha
+    glow_img = Image.fromarray(out, 'RGBA')
+    img.alpha_composite(_clip_alpha(glow_img, mask))
+
+
 # ═══════════════════════════════════════════════
 #  Overlay
 # ═══════════════════════════════════════════════
@@ -1176,42 +1218,45 @@ class BossHpOverlay:
                 fillcolor=0,
             )
 
-        # Shadow (soft blur behind the cover)
+        # CSS 2px 4px 18px rgba(20, 24, 40, 0.18):
+        # offset (2, 3) down-right, blur-radius 18 → sigma ≈ 9.
         shadow = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         sd = ImageDraw.Draw(shadow)
         sd.rounded_rectangle(
-            (self.PANEL_X + 6, self.PANEL_Y + 11 + y_off,
-             self.PANEL_X + self.PANEL_W + 3,
-             self.PANEL_Y + self.PANEL_H + 5 + y_off),
-            radius=12, fill=(18, 24, 32, 34),
+            (self.PANEL_X + 2, self.PANEL_Y + 3 + y_off,
+             self.PANEL_X + self.PANEL_W + 2,
+             self.PANEL_Y + self.PANEL_H + 3 + y_off),
+            radius=10, fill=(20, 24, 40, 46),
         )
-        sd.rounded_rectangle(
-            (self.PANEL_X + 2, self.PANEL_Y + 6 + y_off,
-             self.PANEL_X + self.PANEL_W - 1,
-             self.PANEL_Y + self.PANEL_H - 1 + y_off),
-            radius=10, fill=(0, 0, 0, 62),
-        )
-        shadow = _gpu_blur(shadow, 5)
-        img.alpha_composite(shadow)
+        shadow = _gpu_blur(shadow, 6)
+        # Clip shadow where content mask is opaque so shadow never
+        # darkens the panel surface.
+        sh_arr = np.array(shadow, dtype=np.uint8)
+        sh_arr[:, :, 3] = (sh_arr[:, :, 3].astype(np.uint16)
+                           * (255 - np.asarray(mask, dtype=np.uint8))
+                           // 255).astype(np.uint8)
+        img.alpha_composite(Image.fromarray(sh_arr, 'RGBA'))
 
         # Paste clipped gradient
         img.paste(cover, (0, 0), mask)
 
-        # Inner highlight (top edge) + subtle scan lines
+        # CSS inset 0 0 22px rgba(255,255,255,0.12) — soft inner glow
+        # leaking from the rim toward the centre.
+        _apply_inset_shadow(
+            img, mask, (255, 255, 255), alpha=31, blur_radius=11.0,
+        )
+        # CSS inset 0 1px 0 rgba(255,255,255,0.34) — crisp 1px top hi-lite.
+        top_hi = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(top_hi).rectangle(
+            (self.PANEL_X, self.PANEL_Y + y_off,
+             self.PANEL_X + self.PANEL_W - 1, self.PANEL_Y + y_off),
+            fill=(255, 255, 255, 87),
+        )
+        img.alpha_composite(_clip_alpha(top_hi, mask))
+
+        # Subtle scan lines (CSS repeating-linear-gradient, white alpha 0.04).
         overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         od = ImageDraw.Draw(overlay)
-        od.rounded_rectangle(
-            (self.PANEL_X + 4, self.PANEL_Y + 4 + y_off,
-             self.PANEL_X + self.PANEL_W - 5,
-             self.PANEL_Y + 22 + y_off),
-            radius=8, fill=(255, 255, 255, 14),
-        )
-        od.rounded_rectangle(
-            (self.PANEL_X + 10, self.PANEL_Y + self.PANEL_H // 2 + y_off,
-             self.PANEL_X + self.PANEL_W - 10,
-             self.PANEL_Y + self.PANEL_H - 7 + y_off),
-            radius=8, fill=(74, 80, 90, 8),
-        )
         # 1 px scanline every 3 px, matching the CSS repeating-linear-gradient.
         for yy in range(
             self.PANEL_Y + y_off, self.PANEL_Y + self.PANEL_H + y_off, 3):
@@ -1270,13 +1315,36 @@ class BossHpOverlay:
             (bx + 13, by + int(self.BOX_H * 0.25)),
             (bx, by + int(self.BOX_H * 0.25)),
         ]
-        draw.polygon(left_poly, fill=self.BOX_BG)
 
-        # xt_right
         rx0 = bx + 29
         rx1 = bx + self.BOX_W
         rw = rx1 - rx0
         rh = self.BOX_H
+
+        right_poly_abs = [
+            (rx0 + 85, by + int(round(rh * 0.22))),
+            (rx0 + rw, by + int(round(rh * 0.22))),
+            (rx0 + rw, by),
+            (rx0, by),
+            (rx0, by + rh),
+            (rx0 + 228, by + rh),
+            (rx0 + 234, by + int(round(rh * 0.77))),
+            (rx0 + rw, by + int(round(rh * 0.77))),
+            (rx0 + rw, by + int(round(rh * 0.60))),
+            (rx0 + 233, by + int(round(rh * 0.60))),
+            (rx0 + 228, by + int(round(rh * 0.77))),
+            (rx0 + 85, by + int(round(rh * 0.77))),
+        ]
+
+        shell_shadow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        ssd = ImageDraw.Draw(shell_shadow, 'RGBA')
+        ssd.polygon(_offset_poly(left_poly, 2, 4), fill=(24, 30, 42, 32))
+        ssd.polygon(_offset_poly(right_poly_abs, 2, 4), fill=(24, 30, 42, 30))
+        img.alpha_composite(_gpu_blur(shell_shadow, 4))
+
+        draw.polygon(left_poly, fill=self.BOX_BG)
+
+        # xt_right
         right_fill = np.zeros((rh, rw, 4), dtype=np.uint8)
         xs = np.linspace(0.0, 1.0, rw)
         alpha = np.where(xs <= 0.5, 255.0, (1.0 - xs) / 0.5 * 255.0)
@@ -1357,7 +1425,10 @@ class BossHpOverlay:
         max_w = 85
         name = _truncate(draw, name, font, max_w)
         tx = self.BOX_X + 29 + 10 + max(0, (85 - _text_width(draw, name, font)) // 2)
-        draw.text((tx, ty + 1), name, fill=self.TEXT_SHADOW, font=font)
+        _draw_text_shadow(
+            img, (tx + 1, ty + 1), name, font,
+            shadow_color=(28, 34, 42, 56), blur=2,
+        )
         draw.text((tx, ty), name, fill=color, font=font)
 
     # ── HP bar ──────────────────────────────────────────────────────
@@ -1601,6 +1672,10 @@ class BossHpOverlay:
         tw = _text_width(draw, text, font)
         col = ((130, 130, 130, 255) if self._invincible
                else self.TEXT_MAIN)
+        _draw_text_shadow(
+            img, (tx - tw + 1, ty + 1), text, font,
+            shadow_color=(28, 34, 42, 54), blur=2,
+        )
         draw.text((tx - tw, ty), text, fill=col, font=font)
 
         # Source tag is left-aligned inside the fill-wrap in webview.
@@ -1609,6 +1684,13 @@ class BossHpOverlay:
                else '')
         if tag:
             tfont = _load_font('sao', 9)
+            _draw_text_shadow(
+                img,
+                (self.BAR_X + 9,
+                 self.BAR_Y + y_off + (self.BAR_H - 9) // 2),
+                tag, tfont,
+                shadow_color=(28, 34, 42, 42), blur=2,
+            )
             draw.text(
                 (self.BAR_X + 8,
                  self.BAR_Y + y_off + (self.BAR_H - 9) // 2 - 1),
