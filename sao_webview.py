@@ -196,10 +196,6 @@ def _invoke_dotnet_transparency(win_obj, _retries_left=60):
         form.Invoke(Action(lambda: _setup_dotnet_transparency(form)))
     except Exception as e:
         print(f"[SAO] invoke dotnet transparency: {e}")
-
-
-# ════════════════════════════════════════════════
-#  鱼眼特效 (截图 → barrel distortion → base64)
 # ════════════════════════════════════════════════
 def _capture_fisheye_base64(strength: float = 0.25, quality: int = 60) -> Optional[str]:
     try:
@@ -3111,15 +3107,46 @@ class SAOWebViewGUI:
 
             done = threading.Event()
 
+            try:
+                from gpu_overlay_window import (
+                    suspend_gpu_overlay_creation as _suspend_gpu_overlays,
+                    resume_gpu_overlay_creation as _resume_gpu_overlays,
+                )
+            except Exception:
+                _suspend_gpu_overlays = None  # type: ignore[assignment]
+                _resume_gpu_overlays = None  # type: ignore[assignment]
+            _gpu_overlays_suspended = False
+            if _suspend_gpu_overlays is not None:
+                try:
+                    _suspend_gpu_overlays()
+                    _gpu_overlays_suspended = True
+                except Exception:
+                    _gpu_overlays_suspended = False
+
+            def _resume_overlay_creation():
+                nonlocal _gpu_overlays_suspended
+                if not _gpu_overlays_suspended or _resume_gpu_overlays is None:
+                    return
+                _gpu_overlays_suspended = False
+                try:
+                    _resume_gpu_overlays()
+                except Exception:
+                    pass
+
             def on_done():
                 done.set()
+                _resume_overlay_creation()
                 try:
                     ls_root.after(50, ls_root.destroy)
                 except Exception:
                     pass
 
-            ls = SAOLinkStart(ls_root, on_done=on_done)
-            ls.play()
+            try:
+                ls = SAOLinkStart(ls_root, on_done=on_done)
+                ls.play()
+            except Exception:
+                _resume_overlay_creation()
+                raise
             ls_root.mainloop()
         except Exception as e:
             print(f"[SAO] LinkStart skipped: {e}")

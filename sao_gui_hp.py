@@ -46,6 +46,31 @@ from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, submit_ulw_commit
 from overlay_subpixel import subpixel_bar_width
 
+# v2.3.x: optional GPU presenter (mirrors SkillFX/MenuHud pattern).
+# Env-gated via SAO_GPU_HP (defaults to SAO_GPU_OVERLAY). Falls back to
+# the original ULW path if GLFW is unavailable. NOTE: GPU mode uses a
+# borderless click_through GLFW window, so drag-to-move and right-click
+# context menu on this overlay are disabled in GPU mode (use
+# SAO_GPU_HP=0 to keep the legacy interactive ULW path).
+try:
+    import gpu_overlay_window as _gow  # type: ignore[import-untyped]
+except Exception:
+    _gow = None  # type: ignore[assignment]
+
+
+def _gpu_hp_enabled() -> bool:
+    if _gow is None or not _gow.glfw_supported():
+        return False
+    try:
+        import os as _os
+        flag = _os.environ.get('SAO_GPU_HP', '0')
+        # Default-OFF: GPU path is click-through, but the legacy ULW
+        # path supports drag-to-move + right-click context menu, which
+        # users expect on this panel. Set SAO_GPU_HP=1 to opt in.
+        return str(flag).strip() not in ('', '0', 'false', 'False')
+    except Exception:
+        return False
+
 from perf_probe import probe as _probe
 
 from sao_gui_dps import (
@@ -471,6 +496,12 @@ class HpOverlay:
         self._hwnd: int = 0
         self._visible = False
         self._screen_sig: Optional[Tuple[int, int]] = None
+        # v2.3.x GPU presenter fields. _gpu_managed=True swaps the
+        # ULW commit/destroy/geometry sites to GLFW equivalents and
+        # `self._win` becomes the BurstReadyOverlay-style self sentinel.
+        self._gpu_window: Optional[Any] = None
+        self._gpu_presenter: Optional[Any] = None
+        self._gpu_managed: bool = False
         self._sync_layout()
 
         # Default position — matches web: hud-stage left:4vw, bottom:0.
@@ -635,7 +666,14 @@ class HpOverlay:
         self._frame_cache = None
         self._frame_sig = ()
 
-        if self._win is not None and self._win.winfo_exists():
+        if self._gpu_managed and self._gpu_window is not None:
+            try:
+                self._gpu_window.set_geometry(
+                    self._x, self._y, self.WIDTH, self.HEIGHT)
+            except Exception:
+                pass
+        elif self._win is not None and self._win is not self \
+                and self._win.winfo_exists():
             try:
                 self._win.geometry(f'{self.WIDTH}x{self.HEIGHT}+{self._x}+{self._y}')
             except Exception:
@@ -649,6 +687,41 @@ class HpOverlay:
         self._sync_layout()
         if self._win is not None:
             return
+        # v2.3.x: try GPU presenter path first when env-enabled.
+        if _gpu_hp_enabled():
+            try:
+                pump = _gow.get_glfw_pump(self.root)
+                presenter = _gow.BgraPresenter()
+                gpu_win = _gow.GpuOverlayWindow(
+                    pump,
+                    w=int(self.WIDTH), h=int(self.HEIGHT),
+                    x=int(self._x), y=int(self._y),
+                    render_fn=presenter.render,
+                    click_through=True,
+                    title='sao_hp_gpu',
+                )
+                gpu_win.show()
+                self._gpu_window = gpu_win
+                self._gpu_presenter = presenter
+                self._gpu_managed = True
+                self._win = self  # type: ignore[assignment]  # sentinel
+                self._hwnd = 0
+                self._visible = True
+                self._spawn_time = time.time()
+                self._fade_from = 0.0
+                self._fade_alpha = 0.0
+                self._fade_target = 1.0
+                self._fade_start = time.time()
+                self._fade_duration = self.FADE_IN
+                self._enter_scale_t = 0.0
+                self._exiting = False
+                self._hide_after_exit = False
+                self._schedule_tick(immediate=True)
+                return
+            except Exception:
+                self._gpu_window = None
+                self._gpu_presenter = None
+                self._gpu_managed = False
         self._win = tk.Toplevel(self.root)
         self._win.overrideredirect(True)
         self._win.attributes('-topmost', True)
@@ -733,13 +806,27 @@ class HpOverlay:
                 self._render_worker.stop()
             except Exception:
                 pass
-        if self._win is not None:
+        # GPU presenter teardown first (mirrors SkillFX pattern).
+        if self._gpu_presenter is not None:
+            try:
+                self._gpu_presenter.release()
+            except Exception:
+                pass
+            self._gpu_presenter = None
+        if self._gpu_window is not None:
+            try:
+                self._gpu_window.destroy()
+            except Exception:
+                pass
+            self._gpu_window = None
+        if self._win is not None and self._win is not self:
             try:
                 self._win.destroy()
             except Exception:
                 pass
         self._win = None
         self._hwnd = 0
+        self._gpu_managed = False
         self._visible = False
         self._exiting = False
         self._hide_after_exit = False
@@ -838,6 +925,7 @@ class HpOverlay:
     def _schedule_tick(self, immediate: bool = False) -> None:
         if not self._visible or self._win is None:
             return
+        # v2.3.x: in GPU mode `_win` is the self sentinel; treat as live.
         if not self._registered:
             try:
                 _get_scheduler(self.root).register(
@@ -890,20 +978,35 @@ class HpOverlay:
 
         # ── Async render pipeline ──
         # 1. Commit the most recent off-thread frame (if ready).
-        if self._hwnd:
+        if self._hwnd or self._gpu_managed:
             # v2.2.23: allow_during_capture=True so vision PrintWindow
             # ticks (10 Hz × 30-60 ms each) don't drop our commits — the
             # async ulw queue is per-HWND and can't conflict with the
             # game-window capture.
             fb = self._render_worker.take_result(allow_during_capture=True)
             if fb is not None:
-                try:
-                    submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
-                except Exception as e:
-                    print(f'[HP-OV] ulw error: {e}')
+                if self._gpu_managed and self._gpu_presenter is not None \
+                        and self._gpu_window is not None:
+                    try:
+                        # Track moves the user made via set_position too.
+                        if (fb.x, fb.y) != (self._x, self._y):
+                            self._gpu_window.set_geometry(
+                                self._x, self._y,
+                                self.WIDTH, self.HEIGHT)
+                        self._gpu_presenter.set_frame(
+                            fb.bgra_bytes, fb.width, fb.height)
+                        self._gpu_window.request_redraw()
+                    except Exception as e:
+                        print(f'[HP-OV] gpu present error: {e}')
+                elif self._hwnd:
+                    try:
+                        submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
+                    except Exception as e:
+                        print(f'[HP-OV] ulw error: {e}')
 
-            # Periodic topmost enforcement
-            if now - self._last_topmost_t > _TOPMOST_INTERVAL:
+            # Periodic topmost enforcement (HWND only — GLFW window is
+            # already TOPMOST via WS_EX_TOPMOST in gpu_overlay_window).
+            if self._hwnd and now - self._last_topmost_t > _TOPMOST_INTERVAL:
                 self._last_topmost_t = now
                 try:
                     _user32.SetWindowPos(
@@ -2347,7 +2450,13 @@ class HpOverlay:
                 self._drag_moved = True
             self._x = int(ev.x_root - self._drag_ox)
             self._y = int(ev.y_root - self._drag_oy)
-            if self._win is not None:
+            if self._gpu_managed and self._gpu_window is not None:
+                try:
+                    self._gpu_window.set_geometry(
+                        self._x, self._y, self.WIDTH, self.HEIGHT)
+                except Exception:
+                    pass
+            elif self._win is not None and self._win is not self:
                 self._win.geometry(f'+{self._x}+{self._y}')
             self._schedule_tick(immediate=True)
         except Exception:
@@ -2412,7 +2521,13 @@ class HpOverlay:
         """Reset panel to its default (web-matching) location."""
         self._sync_layout()
         self._x, self._y = self._default_panel_pos()
-        if self._win is not None:
+        if self._gpu_managed and self._gpu_window is not None:
+            try:
+                self._gpu_window.set_geometry(
+                    self._x, self._y, self.WIDTH, self.HEIGHT)
+            except Exception:
+                pass
+        elif self._win is not None and self._win is not self:
             try:
                 self._win.geometry(f'+{self._x}+{self._y}')
             except Exception:

@@ -107,6 +107,10 @@ class SkillFXShaderPipeline:
                 p['u_exiting'].value = 1.0 if params.get('exiting') else 0.0
                 p['u_glfx_intensity'].value = float(params.get('glfx_intensity', 0.0))
                 p['u_seed'].value = float(params.get('seed', 1.0))
+                # v2.3.0 (2026-04 fix): legacy lerped GLFX uniforms.
+                p['u_gl_anchor'].value = tuple(map(float, params.get('gl_anchor', (0.0, 0.0))))
+                p['u_gl_label'].value = tuple(map(float, params.get('gl_label', (0.0, 0.0))))
+                p['u_gl_panel_size'].value = tuple(map(float, params.get('gl_panel_size', (0.0, 0.0))))
 
                 self._vao.render()
                 data = fbo.read(components=4, alignment=1)
@@ -155,6 +159,9 @@ class SkillFXShaderPipeline:
                 p['u_exiting'].value = 1.0 if params.get('exiting') else 0.0
                 p['u_glfx_intensity'].value = float(params.get('glfx_intensity', 0.0))
                 p['u_seed'].value = float(params.get('seed', 1.0))
+                p['u_gl_anchor'].value = tuple(map(float, params.get('gl_anchor', (0.0, 0.0))))
+                p['u_gl_label'].value = tuple(map(float, params.get('gl_label', (0.0, 0.0))))
+                p['u_gl_panel_size'].value = tuple(map(float, params.get('gl_panel_size', (0.0, 0.0))))
                 self._vao.render()
                 # GL bottom-up; for ULW (top-down) need flip.
                 data = fbo.read(components=4, alignment=1)

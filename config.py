@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,11 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.3.2:
+#   Fix Gil compound deadlock when the GPU render thread tries to acquire the GIL,
+#   while the main thread is waiting for the render thread to join during shutdown.
+#   Fix packet reconnection logic that could cause the DPS and HP won't update in 
+#   same dungeon.
 # v2.3.0: 
 #   GPU-accelerated rendering pipeline for all ULW overlays, replacing the old 
 #   PIL-based CPU rendering + DirectX upload path. 

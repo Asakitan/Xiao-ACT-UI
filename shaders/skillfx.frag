@@ -46,6 +46,16 @@ uniform float u_show_age;
 uniform float u_exiting;
 uniform float u_glfx_intensity;
 uniform float u_seed;
+// v2.3.0 (2026-04 fix): the legacy `_draw_glfx` shader used the
+// breath-lerp'd anchor/label/panel-size for the energy field so the
+// scan band, panel glow and grid lines tracked the SAO menu plate
+// independently of the instantaneous beam endpoints. The consolidated
+// pipeline lost those uniforms (collapsed onto u_anchor/u_beam_b),
+// which made the panel + horizontal grid lines disappear after the
+// GPU path was enabled by default. Restore them as separate inputs.
+uniform vec2  u_gl_anchor;
+uniform vec2  u_gl_label;
+uniform vec2  u_gl_panel_size;
 
 in vec2 v_uv;
 out vec4 fragColor;
@@ -300,19 +310,39 @@ void main() {
     // ──────────────────────────────────────────────
     if (u_glfx_intensity > 0.005) {
         vec2 uv = p;
-        float lineDist = sdSegment(uv, u_anchor, u_beam_b);
+        vec2 fx_a = u_gl_anchor;
+        vec2 fx_b = u_gl_label;
+        vec2 panel_sz = u_gl_panel_size;
+        // Fall back to instantaneous anchor / beam endpoint when the
+        // host hasn't supplied lerped values yet (panel size <= 0).
+        if (panel_sz.x <= 1.0 || panel_sz.y <= 1.0) {
+            fx_a = u_anchor;
+            fx_b = u_beam_b;
+            panel_sz = vec2(220.0, 80.0);
+        }
+        float lineDist = sdSegment(uv, fx_a, fx_b);
         float lineGlow = exp(-lineDist * 0.052);
-        float radial = exp(-length(uv - u_anchor) * 0.030);
-        float terminal = exp(-length(uv - u_beam_b) * 0.020);
+        float radial = exp(-length(uv - fx_a) * 0.030);
+        float terminal = exp(-length(uv - fx_b) * 0.020);
+        // Box glow around the caption panel (matches legacy _draw_glfx).
+        vec2 panel_c = fx_b + vec2(panel_sz.x * 0.15, 0.0);
+        vec2 d = abs(uv - panel_c) - panel_sz * 0.5;
+        float outside = length(max(d, vec2(0.0)));
+        float inside  = min(max(d.x, d.y), 0.0);
+        float panel = exp(-(outside + abs(inside) * 0.2) * 0.035);
         float scan = 0.5 + 0.5 * sin(u_time * 7.2 + lineDist * 0.15 + uv.x * 0.010 + u_seed);
         float wave = 0.5 + 0.5 * sin((uv.x + uv.y) * 0.016 - u_time * 2.6 + u_seed * 1.7);
-        float pulse = 0.5 + 0.5 * sin(u_time * 4.6 + length(uv - u_anchor) * 0.032);
+        // Horizontal scan-grid lines that sweep down the panel glow.
+        float grid = 0.5 + 0.5 * sin(uv.y * 0.18 - u_time * 14.0);
+        float pulse = 0.5 + 0.5 * sin(u_time * 4.6 + length(uv - fx_a) * 0.032);
         float blend = clamp(0.32 + scan * 0.42 + wave * 0.24, 0.0, 1.0);
         vec3 beamColor = mix(CYAN_MID, GOLD_MID, blend);
         vec3 col = beamColor * lineGlow * (0.36 + 0.54 * pulse)
                  + CYAN_MID * radial * (1.05 + 0.28 * scan)
-                 + GOLD_MID * terminal * (0.82 + 0.26 * wave);
-        float alpha = clamp((lineGlow * 0.82 + radial * 0.96 + terminal * 0.72) * u_glfx_intensity, 0.0, 0.96);
+                 + GOLD_MID * terminal * (0.82 + 0.26 * wave)
+                 + mix(CYAN_MID, GOLD_MID, 0.28) * panel * (0.22 + 0.18 * grid);
+        float alpha = clamp((lineGlow * 0.82 + radial * 0.96 + terminal * 0.72
+                             + panel * 0.34) * u_glfx_intensity, 0.0, 0.96);
         acc = over(vec4(col * alpha, alpha), acc);
     }
 

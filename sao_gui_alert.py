@@ -36,13 +36,37 @@ def _load_font(kind: str, size: int):
     cached = _FONT_CACHE.get(key)
     if cached is not None:
         return cached
-    filename = 'SAOUI.ttf' if kind == 'sao' else 'ZhuZiAYuanJWD.ttf'
-    path = os.path.join(_FONT_DIR, filename)
-    font = None
     try:
-        font = ImageFont.truetype(path, size)
+        from sao_sound import load_sao_fonts as _load_sao_fonts
+        _load_sao_fonts()
     except Exception:
-        for sysname in ('segoeui.ttf', 'msyh.ttc', 'arial.ttf'):
+        pass
+    font = None
+    candidates = []
+    if kind == 'sao':
+        candidates.extend([
+            os.path.join(_FONT_DIR, 'SAOUI.ttf'),
+            'segoeui.ttf', 'arial.ttf',
+            os.path.join(_FONT_DIR, 'ZhuZiAYuanJWD.ttf'),
+            'msyh.ttc', 'msyhbd.ttc', 'simhei.ttf',
+        ])
+    else:
+        candidates.extend([
+            os.path.join(_FONT_DIR, 'ZhuZiAYuanJWD.ttf'),
+            'msyh.ttc', 'msyhbd.ttc', 'simhei.ttf', 'simsun.ttc',
+            'segoeui.ttf', 'arial.ttf',
+            os.path.join(_FONT_DIR, 'SAOUI.ttf'),
+        ])
+    for path in candidates:
+        if os.path.isabs(path) and not os.path.exists(path):
+            continue
+        try:
+            font = ImageFont.truetype(path, size)
+            break
+        except Exception:
+            continue
+    if font is None:
+        for sysname in ('msyh.ttc', 'msyhbd.ttc', 'simhei.ttf', 'segoeui.ttf', 'arial.ttf'):
             try:
                 font = ImageFont.truetype(sysname, size)
                 break

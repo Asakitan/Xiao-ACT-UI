@@ -612,6 +612,10 @@ class SAOMenuBar(tk.Frame):
                 self.winfo_toplevel(),
                 slot_px=self._SLOT,
                 max_size=SAOCircleButton.MAX_SIZE,
+                hover_cb=self.dispatch_gpu_hover,
+                leave_cb=self.dispatch_gpu_leave,
+                click_cb=self.dispatch_gpu_click,
+                scroll_cb=self.dispatch_gpu_scroll,
             )
             for btn in self._buttons:
                 btn._gpu_managed = True
@@ -630,6 +634,20 @@ class SAOMenuBar(tk.Frame):
             self._gpu_color_fns = None
             for btn in self._buttons:
                 btn._gpu_managed = False
+            return
+        # Force Tk to lay out the menu bar before the first dispatch
+        # fires from `_tick_float`. Without this the painter's first
+        # tick can race the popup mapping and read rootx/rooty == 0,
+        # leaving the GPU window stuck at the monitor top-left until
+        # something else triggers a recompose.
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+        try:
+            self.after_idle(self._dispatch_gpu_paint)
+        except Exception:
+            pass
 
     def bind_all_recursive(self, event, handler):
         self.bind(event, handler)
@@ -659,17 +677,75 @@ class SAOMenuBar(tk.Frame):
         if self.on_activate:
             self.on_activate(item)
 
-    def _on_scroll(self, e):
+    def _root_hit_test_item(self, x_root: int, y_root: int):
+        """Return the visible menu item under a root-level click.
+
+        In GPU mode the button canvases are intentionally visually empty
+        under a transparent-color popup, so Windows can deliver the click
+        straight to the root window instead of the Tk canvas. Hit-testing
+        the fixed 70x70 slot rect restores the original interaction model.
+        """
+        if not self._buttons or not self.winfo_exists() or not self.winfo_ismapped():
+            return None
+        visible_items = self.icon_arr[:len(self._buttons)]
+        for idx, (btn, item) in enumerate(zip(self._buttons, visible_items)):
+            try:
+                bx = int(btn.winfo_rootx())
+                by = int(btn.winfo_rooty())
+                bw = int(btn.winfo_width() or btn.winfo_reqwidth() or self._SLOT)
+                bh = int(btn.winfo_height() or btn.winfo_reqheight() or self._SLOT)
+            except Exception:
+                continue
+            if bx <= x_root <= (bx + bw) and by <= y_root <= (by + bh):
+                return idx, item
+        return None
+
+    def dispatch_root_click(self, x_root: int, y_root: int) -> bool:
+        hit = self._root_hit_test_item(int(x_root), int(y_root))
+        if hit is None:
+            return False
+        idx, item = hit
+        self._on_fisheye(idx)
+        self._on_item_click(item)
+        return True
+
+    def dispatch_gpu_hover(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self._buttons):
+            return
+        self._on_fisheye(int(idx))
+
+    def dispatch_gpu_leave(self) -> None:
+        self._off_fisheye()
+
+    def dispatch_gpu_click(self, idx: int) -> None:
+        visible_items = self.icon_arr[:len(self._buttons)]
+        if idx < 0 or idx >= len(visible_items):
+            return
+        self._on_fisheye(int(idx))
+        self._on_item_click(visible_items[idx])
+
+    def _scroll_by_delta(self, delta: float) -> None:
         if not self.icon_arr or len(self.icon_arr) <= self._MAX_VISIBLE:
             return
-        if e.delta > 0:
+        if delta > 0:
             self.icon_arr.insert(0, self.icon_arr.pop())
-        else:
+        elif delta < 0:
             self.icon_arr.append(self.icon_arr.pop(0))
+        else:
+            return
         self._active_item = None
         if self.on_activate:
             self.on_activate(None)
         self._build()
+
+    def dispatch_gpu_scroll(self, delta_y: float) -> None:
+        if delta_y > 0:
+            self._scroll_by_delta(120)
+        elif delta_y < 0:
+            self._scroll_by_delta(-120)
+
+    def _on_scroll(self, e):
+        self._scroll_by_delta(getattr(e, 'delta', 0))
 
     def play_enter_animation(self):
         """下落入场: 单时间轴动画，避免 5 路 after 同时抢帧。"""
@@ -796,14 +872,21 @@ class SAOMenuBar(tk.Frame):
             return
         if not self.winfo_exists() or not self.winfo_ismapped():
             return
-        cached = self._cached_screen_xy
-        if cached is None:
-            try:
-                cached = (self.winfo_rootx(), self.winfo_rooty())
-            except Exception:
-                return
-            self._cached_screen_xy = cached
-        sx, sy = cached
+        # Defer the dispatch until Tk has actually laid out the menu
+        # bar. Without this the very first tick after a popup opens
+        # can fire before geometry is realised, returning rootx=0/
+        # rooty=0 (or a 1-px wide frame) — the GPU window then lands
+        # at the monitor top-left and the buttons appear missing /
+        # misaligned until the user moves the mouse over them.
+        if self.winfo_width() <= 1 or self.winfo_height() <= 1:
+            return
+        try:
+            sx, sy = self.winfo_rootx(), self.winfo_rooty()
+        except Exception:
+            return
+        if sx <= 0 and sy <= 0:
+            # Tk has not yet positioned the popup; try again next tick.
+            return
         max_sz = SAOCircleButton.MAX_SIZE
         slot = self._SLOT
         n = len(self._buttons)
@@ -1841,6 +1924,7 @@ class SAOPopUpMenu:
         self._overlay_drift_sig = None
         self._hud_cached_dims: Optional[Tuple[int, int, int, int]] = None
         self._menu_force_60_until = 0.0
+        self._menu_open_grace_until = 0.0
         self._root_click_id = None
         self._first_y = 0
         self._first_time = 0
@@ -1923,12 +2007,14 @@ class SAOPopUpMenu:
             return
         self._visible = True
         self._external_close_prepared = False
+        self._menu_open_grace_until = time.time() + 0.65
         self._create_overlay()
 
     def close(self):
         if not self._visible:
             return
         self._visible = False
+        self._menu_open_grace_until = 0.0
         self._fade_out_and_destroy()
 
     def toggle(self):
@@ -2391,6 +2477,8 @@ class SAOPopUpMenu:
         try:
             bounds = self._get_visual_bounds()
             if bounds is None:
+                if time.time() < self._menu_open_grace_until:
+                    return
                 self.close()
                 return
             x1, y1, x2, y2 = bounds
@@ -2399,6 +2487,13 @@ class SAOPopUpMenu:
             cx1, cy1 = ox + x1 - 12, oy + y1 - 12
             cx2, cy2 = ox + x2 + 12, oy + y2 + 12
             if cx1 <= e.x_root <= cx2 and cy1 <= e.y_root <= cy2:
+                if self._menu_bar is not None:
+                    try:
+                        if self._menu_bar.dispatch_root_click(
+                                int(e.x_root), int(e.y_root)):
+                            return
+                    except Exception:
+                        pass
                 return  # 点击在内容区内, 不关闭
         except Exception:
             pass
@@ -2411,12 +2506,33 @@ class SAOPopUpMenu:
         def _check():
             if not self._visible or not self._overlay or not self._overlay.winfo_exists():
                 return
+            now = time.time()
             try:
                 focus = self._overlay.focus_displayof()
                 if focus is None or str(focus) == 'None':
+                    if now < self._menu_open_grace_until:
+                        delay_ms = max(
+                            20,
+                            int((self._menu_open_grace_until - now) * 1000.0) + 10,
+                        )
+                        try:
+                            self._overlay.after(delay_ms, _check)
+                        except Exception:
+                            pass
+                        return
                     self.close()
                     return
             except Exception:
+                if now < self._menu_open_grace_until:
+                    delay_ms = max(
+                        20,
+                        int((self._menu_open_grace_until - now) * 1000.0) + 10,
+                    )
+                    try:
+                        self._overlay.after(delay_ms, _check)
+                    except Exception:
+                        pass
+                    return
                 self.close()
 
         try:
@@ -3620,6 +3736,7 @@ void main() {
         # ── OpenGL 3D 渲染初始化 ──
         self._gl_ctx = None
         self._gl_photo = None     # 保持 PhotoImage 引用
+        self._gl_photo_size = None  # 当前 PhotoImage 像素尺寸 (sw, sh) — 仅当尺寸变化时重新分配
         self._prev_gl_arr = None  # 运动模糊前帧帧缓存 (numpy uint8 HxWx3)
         self._gl_fx_energy = 0.0
         self._gl_fx_flash = 0.0
@@ -4010,10 +4127,19 @@ void main() {
         ctx.enable(moderngl.DEPTH_TEST)
 
         raw = self._gl_fbo.read(components=3)
-        arr = np.frombuffer(raw, dtype=np.uint8).reshape(sh, sw, 3)
-        photo = ImageTk.PhotoImage(Image.fromarray(arr[::-1], 'RGB'))
-        self._gl_photo = photo
-        cv.create_image(0, 0, image=photo, anchor='nw')
+        # v2.3.x perf fix: reuse a single PhotoImage and use
+        # Image.frombuffer with a -1 raw stride to do the OpenGL
+        # vertical flip during PIL decode (zero numpy copy). The old
+        # path (Image.fromarray(arr[::-1]) + new ImageTk.PhotoImage
+        # every frame) was burning ~30-50ms per 1080p present and
+        # capping the animation at ~16fps.
+        img = Image.frombuffer('RGB', (sw, sh), raw, 'raw', 'RGB', 0, -1)
+        if self._gl_photo is None or self._gl_photo_size != (sw, sh):
+            self._gl_photo = ImageTk.PhotoImage(image=img)
+            self._gl_photo_size = (sw, sh)
+        else:
+            self._gl_photo.paste(img)
+        cv.create_image(0, 0, image=self._gl_photo, anchor='nw')
 
     def _draw_tunnel_gl(self, cv: tk.Canvas, particles: list,
                         cam_z: float, bg: str, fade: float = 1.0,
@@ -4141,11 +4267,15 @@ void main() {
         self._gl_pframe = pf + 1
 
         # ── 读回后处理结果: 已含色差+模糊, 无需 CPU 运算 ──
+        # See _draw_startup_gl for why we use frombuffer + reused PhotoImage.
         raw = write_fbo.read(components=3)
-        arr = np.frombuffer(raw, dtype=np.uint8).reshape(sh, sw, 3)
-        photo = ImageTk.PhotoImage(Image.fromarray(arr[::-1], 'RGB'))
-        self._gl_photo = photo   # 防止 GC
-        cv.create_image(0, 0, image=photo, anchor='nw')
+        img = Image.frombuffer('RGB', (sw, sh), raw, 'raw', 'RGB', 0, -1)
+        if self._gl_photo is None or self._gl_photo_size != (sw, sh):
+            self._gl_photo = ImageTk.PhotoImage(image=img)
+            self._gl_photo_size = (sw, sh)
+        else:
+            self._gl_photo.paste(img)
+        cv.create_image(0, 0, image=self._gl_photo, anchor='nw')
 
     # ════════════════════════════════════════════════════════
     #  Canvas 2D 回退渲染
@@ -6154,3 +6284,20 @@ class SAOTitleBar(tk.Frame):
             self.root.state('normal')
         else:
             self.root.state('zoomed')
+
+# v2.3.x: GPU-native popup menu rewrite. Overrides the legacy
+# `SAOPopUpMenu` class defined above with the new
+# `ui_gpu.popup.SAOPopUpMenu` so all callers automatically pick up
+# the new implementation via `from sao_theme import SAOPopUpMenu`.
+# Legacy SAOMenuBar / SAOLeftInfo / SAOChildBar / SAOCircleButton
+# classes remain defined above for binary backward-compat but are no
+# longer instantiated by SAOPopUpMenu.
+try:
+    from ui_gpu import SAOPopUpMenu  # type: ignore[assignment]  # noqa: F811
+except Exception as _e:
+    import warnings as _warnings
+    _warnings.warn(
+        f'ui_gpu.SAOPopUpMenu unavailable, falling back to legacy: {_e}',
+        RuntimeWarning,
+        stacklevel=2,
+    )

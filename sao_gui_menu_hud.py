@@ -106,6 +106,14 @@ class MenuHudOverlay:
         # Track last submitted commit position so we don't enqueue
         # duplicates when nothing moved.
         self._last_commit_xy: Optional[Tuple[int, int]] = None
+        # v2.3.0: phase-quantized submit dedup. The breathing animation
+        # advances continuously (math.sin), so naive submit-every-tick
+        # pumps a fresh fullscreen PIL compose every 16.7 ms even though
+        # the visual difference between adjacent 60 Hz phases is
+        # invisible to the eye. We quantize the compose key to 30 Hz
+        # (q_phase = round(phase * 30) / 30) and skip submit when the
+        # key is unchanged. Halves worker load with zero visible change.
+        self._last_submit_sig: Optional[Tuple[Any, ...]] = None
         # First-tick anchor so phase math is stable across calls.
         self._phase_t0: float = 0.0
         self._destroyed = False
@@ -263,6 +271,16 @@ class MenuHudOverlay:
         #    via x/y so the FrameBuffer carries the right position.
         sprite_x = self._anchor_x + dx + self._sprite_off[0]
         sprite_y = self._anchor_y + dy + self._sprite_off[1]
+        # v2.3.0: phase-quantized dedup. q_phase ticks at 30 Hz; below
+        # that quantum, every other 60 Hz tick reuses the previous
+        # composed frame (presenter keeps it on the GL surface).
+        q_phase = round(phase * 30.0) / 30.0
+        sig = (int(sprite_x), int(sprite_y),
+               self._content_w, self._content_h,
+               self._screen_w, self._screen_h, q_phase)
+        if sig == self._last_submit_sig:
+            return
+        self._last_submit_sig = sig
         # We need the renderer's sprite_off, which is set inside
         # compose_frame on the worker thread. Use the cached value from
         # the previous compose; on the very first frame it's (0, 0)
@@ -324,3 +342,4 @@ class MenuHudOverlay:
         self._visible = False
         self._renderer.reset()
         self._last_commit_xy = None
+        self._last_submit_sig = None
