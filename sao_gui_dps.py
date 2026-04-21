@@ -38,6 +38,29 @@ from overlay_render_worker import AsyncFrameWorker, submit_ulw_commit
 from render_capture_sync import wait_until_capture_idle
 from config import FONTS_DIR
 
+# v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_DPS
+# (defaults to SAO_GPU_OVERLAY). NOTE: GLFW path is click_through, so
+# drag-to-move and tab clicks on this overlay are disabled in GPU
+# mode — use SAO_GPU_DPS=0 for the legacy interactive ULW path.
+try:
+    import gpu_overlay_window as _gow  # type: ignore[import-untyped]
+except Exception:
+    _gow = None  # type: ignore[assignment]
+
+
+def _gpu_dps_enabled() -> bool:
+    if _gow is None or not _gow.glfw_supported():
+        return False
+    try:
+        import os as _os
+        flag = _os.environ.get('SAO_GPU_DPS', '0')
+        # Default-OFF: GPU path is click-through, but the legacy ULW
+        # path supports drag-to-move + right-click context menu, which
+        # users expect on this panel. Set SAO_GPU_DPS=1 to opt in.
+        return str(flag).strip() not in ('', '0', 'false', 'False')
+    except Exception:
+        return False
+
 from perf_probe import probe as _probe
 
 # ═══════════════════════════════════════════════
@@ -166,20 +189,44 @@ def _load_font(kind: str, size: int):
     cached = _FONT_CACHE.get(key)
     if cached is not None:
         return cached
-    filename = 'SAOUI.ttf' if kind == 'sao' else 'ZhuZiAYuanJWD.ttf'
-    path = os.path.join(_FONT_DIR, filename)
-    font = None
     try:
-        font = ImageFont.truetype(path, size)
+        from sao_sound import load_sao_fonts as _load_sao_fonts
+        _load_sao_fonts()
     except Exception:
-        for sysname in ('segoeui.ttf', 'msyh.ttc', 'arial.ttf'):
+        pass
+    font = None
+    candidates = []
+    if kind == 'sao':
+        candidates.extend([
+            os.path.join(_FONT_DIR, 'SAOUI.ttf'),
+            'segoeui.ttf', 'arial.ttf',
+            os.path.join(_FONT_DIR, 'ZhuZiAYuanJWD.ttf'),
+            'msyh.ttc', 'msyhbd.ttc', 'simhei.ttf',
+        ])
+    else:
+        candidates.extend([
+            os.path.join(_FONT_DIR, 'ZhuZiAYuanJWD.ttf'),
+            'msyh.ttc', 'msyhbd.ttc', 'simhei.ttf', 'simsun.ttc',
+            'segoeui.ttf', 'arial.ttf',
+            os.path.join(_FONT_DIR, 'SAOUI.ttf'),
+        ])
+    for path in candidates:
+        if os.path.isabs(path) and not os.path.exists(path):
+            continue
+        try:
+            font = ImageFont.truetype(path, size)
+            break
+        except Exception:
+            continue
+    if font is None:
+        for sysname in ('msyh.ttc', 'msyhbd.ttc', 'simhei.ttf', 'segoeui.ttf', 'arial.ttf'):
             try:
                 font = ImageFont.truetype(sysname, size)
                 break
             except Exception:
                 continue
-        if font is None:
-            font = ImageFont.load_default()
+    if font is None:
+        font = ImageFont.load_default()
     _FONT_CACHE[key] = font
     return font
 
@@ -474,6 +521,14 @@ class DpsOverlay:
         self._win: Optional[tk.Toplevel] = None
         self._hwnd: int = 0
         self._visible = False
+        # v2.3.x GPU presenter fields.
+        self._gpu_window: Optional[Any] = None
+        self._gpu_presenter: Optional[Any] = None
+        self._gpu_managed: bool = False
+        # v2.3.x dirty-skip: store last submitted compose signature so
+        # the unconditional 60 Hz submit collapses to value-changed
+        # frames only. The displayed clock signature ticks 1 Hz.
+        self._last_compose_sig: Optional[tuple] = None
         self._last_snapshot: Optional[dict] = None
         self._last_report: Optional[dict] = None
         self._self_uid = 0
@@ -561,6 +616,40 @@ class DpsOverlay:
     def show(self) -> None:
         if self._win is not None:
             return
+        # v2.3.x: GPU presenter path (env-gated).
+        if _gpu_dps_enabled():
+            try:
+                pump = _gow.get_glfw_pump(self.root)
+                presenter = _gow.BgraPresenter()
+                # Initial 1×1 placeholder; tick will resize to compose dims.
+                gpu_win = _gow.GpuOverlayWindow(
+                    pump,
+                    w=1, h=1,
+                    x=int(self._x), y=int(self._y),
+                    render_fn=presenter.render,
+                    click_through=True,
+                    title='sao_dps_gpu',
+                )
+                gpu_win.show()
+                self._gpu_window = gpu_win
+                self._gpu_presenter = presenter
+                self._gpu_managed = True
+                self._win = self  # type: ignore[assignment]  # sentinel
+                self._hwnd = 0
+                self._visible = True
+                self._faded_out = False
+                self._hide_after_fade = False
+                self._fade_from = 0.0
+                self._fade_alpha = 0.0
+                self._fade_target = 1.0
+                self._fade_start = time.time()
+                self._fade_duration = self.FADE_IN
+                self._schedule_tick(immediate=True)
+                return
+            except Exception:
+                self._gpu_window = None
+                self._gpu_presenter = None
+                self._gpu_managed = False
         self._win = tk.Toplevel(self.root)
         self._win.overrideredirect(True)
         self._win.attributes('-topmost', True)
@@ -611,14 +700,29 @@ class DpsOverlay:
     def hide(self) -> None:
         self._hide_after_fade = False
         self._cancel_tick()
-        if self._win is not None:
+        # v2.3.x: tear down GPU presenter if active.
+        if self._gpu_presenter is not None:
+            try:
+                self._gpu_presenter.release()
+            except Exception:
+                pass
+            self._gpu_presenter = None
+        if self._gpu_window is not None:
+            try:
+                self._gpu_window.destroy()
+            except Exception:
+                pass
+            self._gpu_window = None
+        if self._win is not None and self._win is not self:
             try:
                 self._win.destroy()
             except Exception:
                 pass
         self._win = None
         self._hwnd = 0
+        self._gpu_managed = False
         self._visible = False
+        self._last_compose_sig = None
 
     # Idle fade target: fully fade the panel out, then destroy the ULW window.
     FADE_IDLE_ALPHA = 0.0
@@ -901,6 +1005,41 @@ class DpsOverlay:
             return True
         return False
 
+    def _compose_signature(self, now: float) -> Optional[tuple]:
+        """v2.3.x: coarse fingerprint of frame inputs. Returns None
+        when an animation is in flight (forces every-tick submit so
+        tweens look smooth). Otherwise returns a tuple covering all
+        observable state — if it equals the previous signature, the
+        compose+ULW pass can be skipped entirely."""
+        if self._is_animating():
+            return None
+        try:
+            row_sig = tuple(
+                (uid,
+                 int(row.target_damage),
+                 int(row.target_dps),
+                 int(row.target_heal),
+                 int(row.target_hps),
+                 round(float(row.target_bar_pct), 4),
+                 int(row.target_y * 1000))
+                for uid, row in self._rows.items()
+            )
+            return (
+                int(self._disp_elapsed),  # 1 Hz tick
+                int(self._target_total_damage),
+                int(self._target_total_dps),
+                int(self._target_total_heal),
+                int(self._target_total_hps),
+                self._view_mode,
+                self._current_tab,
+                bool(self._detail_visible),
+                int(self._detail_uid),
+                round(float(self._fade_alpha), 3),
+                row_sig,
+            )
+        except Exception:
+            return None
+
     @_probe.decorate('ui.dps.tick')
     def _tick(self, now: Optional[float] = None) -> None:
         if not self._visible or self._win is None:
@@ -910,32 +1049,54 @@ class DpsOverlay:
         self._advance_animations(now)
 
         # ── Async render pipeline ──
-        if self._hwnd:
+        if self._hwnd or self._gpu_managed:
             # v2.2.23: don't let vision capture starve our commits.
             fb = self._render_worker.take_result(allow_during_capture=True)
             if fb is not None:
-                # Resize Tk window if panel dimensions changed.
                 sz = (fb.width, fb.height)
-                if self._win is not None and sz != self._last_rendered_size:
+                if self._gpu_managed and self._gpu_presenter is not None \
+                        and self._gpu_window is not None:
                     try:
-                        self._win.geometry(
-                            f'{fb.width}x{fb.height}+{self._x}+{self._y}')
-                    except Exception:
-                        pass
-                    self._last_rendered_size = sz
-                try:
-                    submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
-                except Exception as e:
-                    print(f'[DPS-OV] ulw error: {e}')
+                        if sz != self._last_rendered_size \
+                                or (fb.x, fb.y) != (self._x, self._y):
+                            self._gpu_window.set_geometry(
+                                self._x, self._y, fb.width, fb.height)
+                            self._last_rendered_size = sz
+                        self._gpu_presenter.set_frame(
+                            fb.bgra_bytes, fb.width, fb.height)
+                        self._gpu_window.request_redraw()
+                    except Exception as e:
+                        print(f'[DPS-OV] gpu present error: {e}')
+                elif self._hwnd:
+                    # Resize Tk window if panel dimensions changed.
+                    if self._win is not None and self._win is not self \
+                            and sz != self._last_rendered_size:
+                        try:
+                            self._win.geometry(
+                                f'{fb.width}x{fb.height}+{self._x}+{self._y}')
+                        except Exception:
+                            pass
+                        self._last_rendered_size = sz
+                    try:
+                        submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
+                    except Exception as e:
+                        print(f'[DPS-OV] ulw error: {e}')
 
-            # v2.2.15: no per-tick idle short-circuit — the DPS panel
-            # shows an ELAPSED clock that ticks every second and a
-            # fade-in/out cue when the report opens. Scheduler idle
-            # downsampling (10–20 Hz when _is_animating() is False)
-            # carries the CPU savings; gating here would freeze the
-            # elapsed counter between value changes.
-            self._render_worker.submit(
-                self.compose_frame, now, self._hwnd, self._x, self._y)
+            # v2.3.x dirty-skip: previously this submitted compose_frame
+            # every tick (60 Hz when animating, 10-20 Hz idle). Most
+            # ticks produce visually identical output — the elapsed
+            # clock only changes once a second and disp_total_* tweens
+            # quantize at sub-pixel level. Build a coarse signature
+            # and skip the submit when nothing changed since the last
+            # one. Saves ~60-80% of compose_frame CPU during steady
+            # state.
+            sig = self._compose_signature(now)
+            if sig is None or sig != self._last_compose_sig:
+                self._last_compose_sig = sig
+                self._render_worker.submit(
+                    self.compose_frame, now,
+                    self._hwnd if self._hwnd else 0,
+                    self._x, self._y)
 
         if self._hide_after_fade and self._fade_alpha <= 0.01:
             self.hide()
@@ -1855,7 +2016,6 @@ class DpsOverlay:
         ) or 1.0
         sk_row_h = 22
         max_rows = max(1, sk_h // (sk_row_h + 2))
-        sk_font_name = _load_font('sao', 10)
         sk_font_extra = _load_font('sao', 8)
         sk_font_val = _load_font('sao', 11)
         for i, sk in enumerate(skills_sorted[:max_rows]):
@@ -1883,8 +2043,14 @@ class DpsOverlay:
                     img, (lx + 6, ry, lx + 6 + bar_w, ry + sk_row_h - 1),
                     radius=2, fill=bar_color,
                 )
+            # Pick font based on the actual skill name text so CJK skill
+            # names (Chinese skill names like 星辉剑制, 岚刃 etc.) use
+            # ZhuZiAYuanJWD instead of SAOUI.ttf which has no CJK glyphs
+            # and renders them as boxes.
+            sk_name_raw = str(sk.get('skill_name') or sk.get('skill_id') or 'Unknown')
+            sk_font_name = _pick_font(sk_name_raw, 10)
             sk_name = self._truncate(
-                str(sk.get('skill_name') or sk.get('skill_id') or 'Unknown'),
+                sk_name_raw,
                 sk_font_name, int((lw - 14) * 0.55), draw,
             )
             self._draw_tracked(draw, (lx + 12, ry + 2), sk_name,
@@ -2281,7 +2447,15 @@ class DpsOverlay:
             self._drag_moved = True
             self._x = int(ev.x_root - self._drag_ox)
             self._y = int(ev.y_root - self._drag_oy)
-            if self._win is not None:
+            if self._gpu_managed and self._gpu_window is not None:
+                try:
+                    w, h = self._last_rendered_size or (0, 0)
+                    if w > 0 and h > 0:
+                        self._gpu_window.set_geometry(
+                            self._x, self._y, w, h)
+                except Exception:
+                    pass
+            elif self._win is not None and self._win is not self:
                 self._win.geometry(f'+{self._x}+{self._y}')
             self._schedule_tick(immediate=True)
         except Exception:

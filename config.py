@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.1"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -352,6 +352,26 @@ APP_VERSION_LABEL = f"v{APP_VERSION}"
 # tearing source). Set `SAO_GPU_MENU_HUD=0` to fall back to the legacy
 # canvas-native path for diagnostics.
 USE_GPU_MENU_HUD = True
+# v2.3.0 (2026-04 fix): The whole GLFW-backed GPU overlay family
+# (menu bar fisheye painter, left info painter, menu HUD GPU window,
+# child bar painter, skillfx GPU pump) used to be opt-in via
+# `SAO_GPU_OVERLAY=1`. With that gate off, every GPU-window code path
+# silently fell back to the Tk Canvas main-thread paint loop — which
+# is exactly what the v2.2.16 → v2.3.0 "compose on the worker, present
+# on GPU" rewrite was trying to fix. Default-ON so the per-tick
+# fisheye / left info paint cost lands on the worker thread instead
+# of the main loop. Set `SAO_GPU_OVERLAY=0` to force the legacy
+# Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
+# refuses GLFW transparent windows).
+USE_GPU_OVERLAY = True
+# v2.3.0: GPU SDF shader pipeline for SkillFX (ring + beam + glow as a
+# single fragment-shader pass). Replaces the old PIL/numpy compose that
+# cost 60-90 ms per frame on the render worker; the GPU path runs the
+# whole layer set in ~2-5 ms on the integrated GPU. Caption sprites
+# still PIL (cached statically). Falls back to the CPU path on any
+# pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
+# path for diagnostics.
+USE_GPU_SKILLFX = True
 # v2.3.0: 
 #   GPU-accelerated rendering pipeline for all ULW overlays, replacing the old 
 #   PIL-based CPU rendering + DirectX upload path. 

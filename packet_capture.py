@@ -391,18 +391,46 @@ class TcpReassembler:
 
         # ─── 同服重连检测 ───
         # 游戏重新登录到同一服务器时, TCP 连接重建, seq 号完全不同。
-        # 如果包含 c3SB 签名且 seq 与当前流不匹配, 说明是新连接。
-        # 立即重置 TCP 状态, 避免 gap-skip 延迟丢失 SyncContainerData。
+        # 之前: 必须含 c3SB 签名且 seq 不匹配才触发. 但快速反复进入同一
+        # 地图 (例如爬塔) 时, 重连首包不一定带 c3SB —— 我们就丢了重连
+        # 检测, 后续 SyncContainerData 被旧 _next_seq 顶到 cache 等 2 秒
+        # gap-skip 才恢复, 期间解析器 _current_uuid stale → DPS=0 / 伤害
+        # 不计算. 修复: 放宽到 "seq 偏差异常大 + 数据看起来像新游戏帧
+        # 起点" 也算重连, 不再强求 c3SB.
+        #
+        # TCP 接收窗口典型 64KB-1MB, 任何 seq 偏差远大于该量级
+        # (双向都 > 1MB) 必为新 ISN, 不可能是合法的乱序/重传/窗口移动.
         with self._lock:
             _seq_match = (self._next_seq == -1 or
                           self._next_seq == seq or
                           seq in self._cache)
-        if not _seq_match and self._try_identify(payload, addr):
+            _seq_anomalous = False
+            if not _seq_match and self._next_seq != -1:
+                _diff_fwd = (seq - self._next_seq) & 0xFFFFFFFF
+                _diff_bwd = (self._next_seq - seq) & 0xFFFFFFFF
+                # 双向都远超 TCP 窗口 → 必为新连接的 ISN.
+                _seq_anomalous = (_diff_fwd > 1_000_000
+                                  and _diff_bwd > 1_000_000)
+        # 数据起头是不是合法的游戏帧 size 头 (4B big-endian, 6..999999)?
+        # 同时含 c3SB 也算 (覆盖 _try_identify 已能识别的所有情况).
+        _looks_like_frame_start = False
+        if len(payload) >= 4:
+            try:
+                _hd = struct.unpack_from('>I', payload, 0)[0]
+                _looks_like_frame_start = 6 <= _hd <= 999_999
+            except struct.error:
+                pass
+        _is_reconnect = (
+            (not _seq_match)
+            and (self._try_identify(payload, addr)
+                 or (_seq_anomalous and _looks_like_frame_start))
+        )
+        if _is_reconnect:
             with self._lock:
                 logger.info(
                     f'[Capture] 同服重连检测: seq 不匹配 '
-                    f'(期望 {self._next_seq}, 收到 {seq}), '
-                    f'重置 TCP 流'
+                    f'(期望 {self._next_seq}, 收到 {seq}, '
+                    f'anomalous={_seq_anomalous}), 重置 TCP 流'
                 )
                 print(
                     f'[Capture] ⚡ 检测到同服重连 — 重置 TCP 流',

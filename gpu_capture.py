@@ -86,14 +86,23 @@ _session_hwnd = 0
 _session_started_t = 0.0
 _session_failed = False                    # one-shot kill once we know WGC won't work
 
-# Latest frame ring (single slot, latest wins). The capture callback writes
-# the BGR buffer + dimensions; readers grab a snapshot under the frame lock.
-_frame_lock = threading.Lock()
-_frame_bgr: Optional[np.ndarray] = None
-_frame_t: float = 0.0
-_frame_w: int = 0
-_frame_h: int = 0
+# Latest frame slot. We use a one-element list because list[0] = ... is a
+# single STORE_SUBSCR / mp_ass_subscript call that does NO memory
+# allocation and NO Py_BEGIN_ALLOW_THREADS — critical for the WGC pyo3
+# callback thread which intermittently runs with _PyThreadState_Current ==
+# NULL (see _SafeWindowsCapture.on_frame_arrived for the full root cause
+# analysis).
+#
+# Tuple shape: (raw_bgra_bytes, timestamp_s, width, height, row_pitch)
+_frame_slot: list = [None]
 _frame_count: int = 0
+
+# Pause gate: set during glfw.create_window() / moderngl init so the pyo3
+# capture thread doesn't try to run Python callbacks while the main thread
+# holds the GIL released for a long WGL / D3D ctypes call (the race that
+# triggers the "PyEval_RestoreThread: NULL tstate" fatal crash).
+_session_paused: bool = False
+_resume_hwnd: int = 0
 
 
 def _import_wgc():
@@ -106,35 +115,9 @@ def _import_wgc():
         return None
 
 
-def _on_frame(frame, control) -> None:
-    """WGC callback — runs on the dedicated capture thread.
-
-    ``frame.frame_buffer`` is a numpy view into a Rust-owned native buffer
-    that becomes invalid the instant we return.  We therefore copy the BGR
-    bytes out into our own array before storing it.
-    """
-    global _frame_bgr, _frame_t, _frame_w, _frame_h, _frame_count
-    try:
-        # Convert in-place from BGRA → BGR (drop alpha). Doing it via numpy
-        # slicing then .copy() keeps the data alive past the callback return
-        # without an extra cv2 dependency hop.
-        buf = frame.frame_buffer
-        if buf is None or buf.size == 0:
-            return
-        if buf.ndim != 3 or buf.shape[2] != 4:
-            return
-        h, w = int(buf.shape[0]), int(buf.shape[1])
-        bgr = np.ascontiguousarray(buf[:, :, :3])  # forces a fresh copy
-        with _frame_lock:
-            _frame_bgr = bgr
-            _frame_t = time.time()
-            _frame_w = w
-            _frame_h = h
-            _frame_count += 1
-    except Exception:
-        # Never let a Python exception propagate back into the Rust callback;
-        # the next frame arrival will retry naturally.
-        pass
+# Frame processing lives inside _SafeWindowsCapture.on_frame_arrived
+# (defined below in _start_locked) which OVERRIDES the library wrapper
+# and bypasses numpy entirely on the pyo3 callback thread.
 
 
 def _on_closed() -> None:
@@ -150,8 +133,111 @@ def _start_locked(hwnd: int) -> bool:
     if wgc is None:
         _session_failed = True
         return False
+
+    # ===================================================================
+    # ROOT CAUSE & FIX
+    # ===================================================================
+    # Crash signature:
+    #   Fatal Python error: PyEval_RestoreThread: ... GIL is released
+    #   (the current Python thread state is NULL)
+    #   Thread N (most recent call first):
+    #     File "gpu_capture.py", line 127 in _on_frame      [old code]
+    #     File "gpu_capture.py", line 172 in on_frame_arrived
+    #
+    # Why: ``windows_capture.WindowsCapture.on_frame_arrived`` (the
+    # library's wrapper) is invoked by the pyo3 capture thread.  BEFORE
+    # calling our Python handler it executes:
+    #     ndarray = numpy.ctypeslib.as_array(
+    #         ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint8)),
+    #         shape=(height, width, 4))
+    # ``numpy.ctypeslib.as_array`` walks the buffer protocol and during
+    # buffer setup CPython hits ``Py_BEGIN_ALLOW_THREADS`` checkpoints.
+    # On some pyo3 builds the capture thread holds the GIL via
+    # ``Python::assume_gil_acquired()`` which leaves
+    # ``_PyThreadState_Current`` NULL.  ``Py_BEGIN_ALLOW_THREADS`` then
+    # saves NULL and ``Py_END_ALLOW_THREADS`` calls
+    # ``PyEval_RestoreThread(NULL)`` → fatal abort.  The race window is
+    # widest while the Tk main thread is in a long GIL-released ctypes
+    # call (``glfw.create_window``, ``glfw.swap_buffers`` with vsync,
+    # ``moderngl.create_context``).  Hence the user-visible pattern:
+    # "crashes immediately after startup or right after opening a menu;
+    # waiting 1–2 s for things to settle avoids the crash".
+    #
+    # Fix: subclass ``WindowsCapture`` and override ``on_frame_arrived``.
+    # Python MRO ensures pyo3's stored callable resolves to OUR override,
+    # so the library's numpy code path is bypassed entirely.  Our
+    # override does only:
+    #   - ``ctypes.string_at(addr, n)``  (PYFUNCTYPE →
+    #     PyBytes_FromStringAndSize, a single C memcpy with NO
+    #     Py_BEGIN/END_ALLOW_THREADS)
+    #   - module-global list slot assignment (STORE_SUBSCR → list
+    #     mp_ass_subscript, no allocation, no GIL release)
+    # Nothing else.  No numpy, no Lock, no time.time() (uses
+    # time.monotonic via a cached function reference — a single C call
+    # returning a Python int).
+    # ===================================================================
+    _slot = _frame_slot      # close over module-level list
+    _string_at = ctypes.string_at
+    _cast = ctypes.cast
+    _c_void_p = ctypes.c_void_p
+    _now = time.time
+
+    class _SafeWindowsCapture(wgc.WindowsCapture):  # type: ignore[misc]
+        """Override the library wrapper to bypass numpy on the pyo3 thread."""
+
+        def __init__(self, **kwargs):  # type: ignore[override]
+            super().__init__(**kwargs)
+            # ``start_free_threaded()`` validates that frame_handler /
+            # closed_handler are non-None.  We override the methods that
+            # actually use those handlers (on_frame_arrived / on_closed),
+            # but the validation still runs, so install no-op stubs.
+            def _noop_frame(_frame, _ctrl) -> None:
+                pass
+            _noop_frame.__name__ = 'on_frame_arrived'
+
+            def _noop_closed() -> None:
+                pass
+            _noop_closed.__name__ = 'on_closed'
+
+            self.frame_handler = _noop_frame
+            self.closed_handler = _noop_closed
+
+        def on_frame_arrived(  # type: ignore[override]
+                self, buf, buf_len, width, height, stop_list, timespan):
+            # CRITICAL: this method runs on the pyo3 capture thread which
+            # may have a NULL _PyThreadState_Current.  Do NOT use any
+            # operation that can trigger Py_BEGIN_ALLOW_THREADS:
+            #   - no numpy / PIL / cv2
+            #   - no blocking Lock.acquire (waiting releases GIL)
+            #   - no print() (file I/O releases GIL)
+            #   - no large object creation (allocator may release GIL)
+            global _frame_count
+            try:
+                n = buf_len
+                h = height
+                w = width
+                if n <= 0 or h <= 0 or w <= 0:
+                    return
+                addr = _cast(buf, _c_void_p).value
+                if not addr:
+                    return
+                # PYFUNCTYPE call → PyBytes_FromStringAndSize. Pure C
+                # memcpy. NO Py_BEGIN_ALLOW_THREADS.
+                raw = _string_at(addr, n)
+                # list[0] = ... → STORE_SUBSCR → PyList_SetItem-equivalent.
+                # Atomic, no allocation, no GIL release.
+                _slot[0] = (raw, _now(), w, h, n // h if h else n)
+                _frame_count += 1
+            except BaseException:
+                # Never let an exception propagate back to Rust.
+                pass
+
+        def on_closed(self) -> None:  # type: ignore[override]
+            _on_closed()
+    # ===================================================================
+
     try:
-        cap = wgc.WindowsCapture(
+        cap = _SafeWindowsCapture(
             cursor_capture=False,
             draw_border=False,
             window_hwnd=int(hwnd),
@@ -166,18 +252,6 @@ def _start_locked(hwnd: int) -> bool:
         except Exception:
             pass
         return False
-
-    # Bind callbacks (the library inspects __name__).
-    def on_frame_arrived(frame, control):  # noqa: ANN001
-        _on_frame(frame, control)
-    on_frame_arrived.__name__ = 'on_frame_arrived'
-
-    def on_closed():
-        _on_closed()
-    on_closed.__name__ = 'on_closed'
-
-    cap.event(on_frame_arrived)
-    cap.event(on_closed)
 
     try:
         ctrl = cap.start_free_threaded()
@@ -219,20 +293,24 @@ def ensure_session(hwnd: int) -> bool:
     when WGC is unavailable on this machine — the caller should fall back to
     PrintWindow.  Cheap to call every recognition tick.
     """
+    global _resume_hwnd
     if _DISABLED or _session_failed or hwnd <= 0:
         return False
     with _session_lock:
+        if _session_paused:
+            # Capture is suspended (a long GIL-released ctypes call is in
+            # progress on the main thread).  Remember the desired hwnd so
+            # resume_capture() can restart the session for it.
+            _resume_hwnd = hwnd
+            return False
         if _session is not None and _session_hwnd == hwnd:
             return True
         # HWND changed (window relaunched, or first ever call) — restart.
         if _session is not None and _session_hwnd != hwnd:
             _stop_locked()
-            # Reset frame state so we don't return a stale frame from the
+            # Reset the slot so we don't return a stale frame from the
             # previous window.
-            with _frame_lock:
-                global _frame_bgr, _frame_t
-                _frame_bgr = None
-                _frame_t = 0.0
+            _frame_slot[0] = None
         return _start_locked(hwnd)
 
 
@@ -241,8 +319,9 @@ def get_latest_bgr(hwnd: int,
     """Return the most recent BGR frame for ``hwnd`` cropped to its client
     area, if it's fresh enough.
 
-    The returned array is owned by us (capture thread already deep-copied
-    out of the Rust buffer); callers may slice / .copy() it freely.
+    The returned array is owned by us (we deep-copy out of the slot so the
+    bytes object can be replaced by the next callback safely); callers may
+    slice / .copy() it freely.
     """
     if _DISABLED or _session_failed:
         return None
@@ -250,12 +329,26 @@ def get_latest_bgr(hwnd: int,
         return None
     if _session is None or _session_hwnd != hwnd:
         return None
-    with _frame_lock:
-        bgr = _frame_bgr
-        ts = _frame_t
-    if bgr is None:
+    # Atomic read of the slot reference (single Python operation, never
+    # torn).  The bytes object the slot points to is immutable so the
+    # callback can replace the slot at any time without affecting us.
+    snap = _frame_slot[0]
+    if snap is None:
         return None
+    raw, ts, w, h, rp = snap
     if max_age_s > 0 and (time.time() - ts) > max_age_s:
+        return None
+    # Convert raw BGRA bytes → BGR numpy on the CALLER's thread (Tk main
+    # / recognition lane) where _PyThreadState_Current is always valid.
+    try:
+        flat = np.frombuffer(raw, dtype=np.uint8)
+        if rp == w * 4 or rp == 0:
+            bgr = flat.reshape(h, w, 4)[:, :, :3].copy()
+        else:
+            # GPU-padded rows: each row is rp bytes, only w*4 are valid.
+            bgr = flat.reshape(h, rp)[:, :w * 4].reshape(
+                h, w, 4)[:, :, :3].copy()
+    except Exception:
         return None
     # WGC frames cover the actual window swap-chain content. On modern
     # DWM-composed windows this is *typically* the client area only — the
@@ -283,22 +376,67 @@ def get_latest_bgr(hwnd: int,
 
 
 def stop() -> None:
+    global _session_paused, _resume_hwnd
     with _session_lock:
+        _session_paused = False
+        _resume_hwnd = 0
         _stop_locked()
-    with _frame_lock:
-        global _frame_bgr, _frame_t
-        _frame_bgr = None
-        _frame_t = 0.0
+    _frame_slot[0] = None
+
+
+def pause_capture() -> None:
+    """Suspend the WGC session before a long GIL-releasing ctypes call
+    (``glfw.create_window``, ``moderngl.create_context``) on the main
+    thread.  This eliminates the race window for the
+    "PyEval_RestoreThread: NULL tstate" pyo3 crash.  Pair with
+    :func:`resume_capture`.  Idempotent and fast when no session is
+    running.
+    """
+    global _session_paused, _resume_hwnd
+    with _session_lock:
+        if _session_paused:
+            return
+        _session_paused = True
+        # Save the active hwnd BEFORE _stop_locked clears it.
+        _resume_hwnd = _session_hwnd
+        if _session is not None:
+            _stop_locked()
+
+
+def resume_capture() -> None:
+    """Restart the WGC session after the long ctypes call completes.
+    Pairs with :func:`pause_capture`.
+    """
+    global _session_paused, _resume_hwnd
+    with _session_lock:
+        if not _session_paused:
+            return
+        _session_paused = False
+        hwnd = _resume_hwnd
+        _resume_hwnd = 0
+        if hwnd > 0 and _session is None and not _session_failed:
+            _start_locked(hwnd)
 
 
 def stats() -> dict:
-    with _frame_lock:
+    snap = _frame_slot[0]
+    if snap is None:
         return {
             'session': _session is not None,
             'hwnd': _session_hwnd,
             'frame_count': _frame_count,
-            'last_frame_age': (time.time() - _frame_t) if _frame_t else None,
-            'width': _frame_w,
-            'height': _frame_h,
+            'last_frame_age': None,
+            'width': 0,
+            'height': 0,
             'failed': _session_failed,
         }
+    _, ts, w, h, _rp = snap
+    return {
+        'session': _session is not None,
+        'hwnd': _session_hwnd,
+        'frame_count': _frame_count,
+        'last_frame_age': (time.time() - ts) if ts else None,
+        'width': w,
+        'height': h,
+        'failed': _session_failed,
+    }
