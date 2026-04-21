@@ -31,18 +31,29 @@ _EPS = 1.0 / 512.0
 
 
 def subpixel_alpha_composite(dst: Image.Image, src: Image.Image,
-                             x: float, y: float) -> None:
+                             x: float, y: float,
+                             eps: float = _EPS) -> None:
     """Composite `src` into `dst` at fractional position (x, y).
 
     Falls back to a plain integer composite when the fractional part is
-    negligible (< 1/512 px) so cached layouts that happen to land on an
-    integer don't pay the transform cost.
+    smaller than ``eps`` (default 1/512 px) so cached layouts that happen
+    to land on an integer don't pay the transform cost. v2.2.27: callers
+    rendering large sprites (e.g. SkillFX 700+ px beam) can pass a larger
+    threshold like 0.15 px since the perceptual cost of snapping a sub-
+    pixel shift on a big sprite is below the eye's discrimination limit
+    while the AFFINE BILINEAR transform on the same sprite costs ~30 ms.
     """
     ix = int(math.floor(x))
     iy = int(math.floor(y))
     fx = x - ix
     fy = y - iy
-    if fx < _EPS and fy < _EPS:
+    # Treat shifts within `eps` of either an integer or +1 as snap-to-int
+    # (the latter handles negative-rounding corner cases).
+    if (fx < eps or fx > 1.0 - eps) and (fy < eps or fy > 1.0 - eps):
+        if fx > 0.5:
+            ix += 1
+        if fy > 0.5:
+            iy += 1
         dst.alpha_composite(src, (ix, iy))
         return
     w, h = src.size

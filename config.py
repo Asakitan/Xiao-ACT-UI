@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.2.16"
+APP_VERSION = "2.3.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -352,6 +352,11 @@ APP_VERSION_LABEL = f"v{APP_VERSION}"
 # tearing source). Set `SAO_GPU_MENU_HUD=0` to fall back to the legacy
 # canvas-native path for diagnostics.
 USE_GPU_MENU_HUD = True
+# v2.3.0: 
+#   GPU-accelerated rendering pipeline for all ULW overlays, replacing the old 
+#   PIL-based CPU rendering + DirectX upload path. 
+#   This should significantly reduce CPU usage and eliminate stutter on slower machines, 
+#   especially for the more complex BossHP overlay.
 # v2.2.16:
 #   Combat-CPU + SkillFX framerate. Two changes:
 #   1. CPU-affinity pinning of render lanes is now opt-in via
@@ -693,6 +698,13 @@ def _union_base_boxes(spec_names: List[str]) -> Dict[str, float]:
 _SKILL_SLOT_NAMES = [f"skill_slot_{idx}" for idx in range(1, 10)]
 _SKILL_BAR_ROI = _union_base_boxes(_SKILL_SLOT_NAMES)
 
+# Skill-slot positions are pure functions of the game-client geometry, so we
+# compute once per (client_rect / client_w x client_h) and reuse on every UI /
+# vision tick. Bounded to a handful of entries because client geometry only
+# changes when the game window is moved or resized.
+_SKILL_SLOT_BBOX_CACHE: Dict[Tuple[int, int, int, int], List[Dict[str, Any]]] = {}
+_SKILL_SLOT_CLIENT_CACHE: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
+
 DEFAULT_ROI = {
     "identity": {"x": 0.010, "y": 0.910, "w": 0.200, "h": 0.060},
     "level": {"x": 0.010, "y": 0.925, "w": 0.100, "h": 0.040},
@@ -788,6 +800,14 @@ def get_visual_rect_client_rect(name: str, client_w: int, client_h: int):
 def get_skill_slot_rects(client_rect: Tuple[int, int, int, int]) -> List[Dict[str, Any]]:
     if not client_rect:
         return []
+    cached = _SKILL_SLOT_BBOX_CACHE.get(tuple(client_rect))
+    if cached is None:
+        cached = _build_skill_slot_rects(client_rect)
+        _SKILL_SLOT_BBOX_CACHE[tuple(client_rect)] = cached
+    return [dict(item) for item in cached]
+
+
+def _build_skill_slot_rects(client_rect: Tuple[int, int, int, int]) -> List[Dict[str, Any]]:
     rects: List[Dict[str, Any]] = []
     for idx in range(1, 10):
         visual_idx = get_skill_slot_visual_index(idx)
@@ -805,6 +825,14 @@ def get_skill_slot_rects(client_rect: Tuple[int, int, int, int]) -> List[Dict[st
 
 
 def get_skill_slot_client_rects(client_w: int, client_h: int) -> List[Dict[str, Any]]:
+    cached = _SKILL_SLOT_CLIENT_CACHE.get((client_w, client_h))
+    if cached is None:
+        cached = _build_skill_slot_client_rects(client_w, client_h)
+        _SKILL_SLOT_CLIENT_CACHE[(client_w, client_h)] = cached
+    return [dict(item) for item in cached]
+
+
+def _build_skill_slot_client_rects(client_w: int, client_h: int) -> List[Dict[str, Any]]:
     rects: List[Dict[str, Any]] = []
     for idx in range(1, 10):
         visual_idx = get_skill_slot_visual_index(idx)

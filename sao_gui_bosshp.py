@@ -46,6 +46,8 @@ from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, submit_ulw_commit
 from overlay_subpixel import subpixel_bar_width
 
+from perf_probe import probe as _probe
+
 # Reuse ULW glue + font helpers from sao_gui_dps so we keep the same
 # premultiply path and font cache.
 from sao_gui_dps import (  # noqa: F401
@@ -461,6 +463,21 @@ class BossHpOverlay:
         # Composited static base (cover + corners + boss box + bar track).
         self._static_cache: Optional[Image.Image] = None
         self._static_y_off: int = -9999
+        # v2.2.18 (Phase 3a): per-frame text layer cache. Name plate +
+        # HP digits + source tag are content-driven (no animation), but
+        # were redrawn every frame including a _gpu_blur(2) per shadow
+        # call. Cache by (y_off, boss_name, hp_source, current_hp,
+        # total_hp, disp_hp_pct quantized, invincible).
+        self._text_layer_cache: Optional[Image.Image] = None
+        self._text_layer_sig: tuple = ()
+        # v2.3.0 Phase 1: full-frame cache. compose_frame is called at
+        # 60 Hz on the BOSSHP render lane and most consecutive frames
+        # only differ by quantizable animation phase. When the
+        # signature matches the previous compose, return the same
+        # Image instance — the worker only reads it (premultiply path).
+        self._frame_cache: Optional[Image.Image] = None
+        self._frame_sig: tuple = ()
+        self._frame_version: int = 0
 
         # Async render worker — compose + premult off main thread.
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
@@ -564,6 +581,7 @@ class BossHpOverlay:
         self._exiting = False
         self._hide_after_exit = False
 
+    @_probe.decorate('ui.bosshp.update')
     def update(self, data: dict) -> None:
         """Ingest a snapshot; drive the animation loop."""
         if data is None:
@@ -1026,6 +1044,7 @@ class BossHpOverlay:
             return True
         return False
 
+    @_probe.decorate('ui.bosshp.tick')
     def _tick(self, now: Optional[float] = None) -> None:
         if not self._visible or self._win is None:
             return
@@ -1038,10 +1057,11 @@ class BossHpOverlay:
 
         # ── Async render pipeline ──
         if self._hwnd:
-            fb = self._render_worker.take_result()
+            # v2.2.23: don't let vision capture starve our commits.
+            fb = self._render_worker.take_result(allow_during_capture=True)
             if fb is not None:
                 try:
-                    submit_ulw_commit(self._hwnd, fb)
+                    submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
                 except Exception as e:
                     print(f'[BOSSHP-OV] ulw error: {e}')
 
@@ -1140,6 +1160,7 @@ class BossHpOverlay:
     #  Rendering
     # ──────────────────────────────────────────
 
+    @_probe.decorate('ui.bosshp.render')
     def _render(self, now: float) -> None:
         if not self._hwnd:
             return
@@ -1149,6 +1170,7 @@ class BossHpOverlay:
         except Exception as e:
             print(f'[BOSSHP-OV] ulw error: {e}')
 
+    @_probe.decorate('ui.bosshp.compose')
     def compose_frame(self, now: Optional[float] = None) -> Image.Image:
         """Render one boss-HP frame to an RGBA PIL image without touching Win32."""
         if now is None:
@@ -1157,6 +1179,12 @@ class BossHpOverlay:
 
         # Global Y-translate for entry animation.
         y_off = int(round(-self._enter_translate))
+
+        # ── v2.3.0 Phase 1: full-frame cache ──────────────────────────
+        frame_sig = self._compute_frame_sig(now, y_off)
+        if frame_sig is not None and self._frame_cache is not None \
+                and self._frame_sig == frame_sig:
+            return self._frame_cache
 
         # ── static-layer cache (cover + corners + boss box + bar track) ──
         # Rebuild only when the translate offset changes (i.e. enter/exit
@@ -1194,8 +1222,35 @@ class BossHpOverlay:
             self._draw_shield_break(img, y_off, now)
         # Flash overlay (webview-parity 5-type system)
         self._draw_flash_overlay(img, y_off, now)
-        self._draw_name_plate_text(img, y_off)
-        self._draw_hp_text(img, y_off)
+        # v2.2.18 (Phase 3a): cache name-plate + HP text + source tag.
+        # Each previously triggered _draw_text_shadow which builds an
+        # off-screen RGBA + _gpu_blur(2) every frame; combined ~2-4 ms
+        # per BOSSHP compose. With cache, steady frames just paste back.
+        # v2.2.19: keep cur_q exact (the displayed digits MUST match
+        # reality when hp_source=='packet'); coarsen pct-only path to
+        # 100 buckets (matches the displayed `{int(pct*100)}%` text).
+        if self._hp_source == 'packet' and self._total_hp > 0:
+            cur_q = int(self._current_hp)
+            hp_q = 0  # text is digits-driven, pct doesn't matter
+        else:
+            cur_q = 0
+            hp_q = int(round(self._disp_hp_pct * 100))
+        text_sig = (
+            y_off,
+            self._boss_name,
+            self._hp_source,
+            cur_q,
+            int(self._total_hp),
+            hp_q,
+            bool(self._invincible),
+        )
+        if self._text_layer_cache is None or self._text_layer_sig != text_sig:
+            tl = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+            self._draw_name_plate_text(tl, y_off)
+            self._draw_hp_text(tl, y_off)
+            self._text_layer_cache = tl
+            self._text_layer_sig = text_sig
+        img.alpha_composite(self._text_layer_cache)
         if self._shield_vfx_mode and self._shield_vfx_start and \
            now - self._shield_vfx_start < self._shield_vfx_duration:
             self._draw_shield_vfx(img, y_off, now)
@@ -1220,7 +1275,83 @@ class BossHpOverlay:
                           ).astype(np.uint8)
             img = Image.fromarray(a, 'RGBA')
 
+        if frame_sig is not None:
+            self._frame_cache = img
+            self._frame_sig = frame_sig
+            self._frame_version += 1
+            try:
+                img._sao_premult_safe = True  # type: ignore[attr-defined]
+                img._sao_content_version = self._frame_version  # type: ignore[attr-defined]
+            except Exception:
+                pass
         return img
+
+    def _compute_frame_sig(self, now: float,
+                            y_off: int) -> Optional[tuple]:
+        """Quantized signature of all per-frame pixel inputs for BossHP.
+
+        Returns None when caching would be unsafe. Quantization buckets
+        are sized below the perceptual threshold so visual quality is
+        unaffected.
+        """
+        if not self._visible:
+            return None
+        if self.WIDTH <= 0 or self.HEIGHT <= 0:
+            return None
+        # HP/trail/shield/break tweens — 200 buckets (Δ 0.5 % of bar width).
+        hp_q = int(round(self._disp_hp_pct * 200))
+        trail_q = int(round(self._disp_trail_pct * 200))
+        shield_q = int(round(self._disp_shield_pct * 200))
+        break_q = int(round(self._disp_break_pct * 200))
+        # Time-bound FX windows — bucket their age to ~30 ms (60 Hz → ≤ 2 frames).
+        def _age_q(start: float, dur: float) -> int:
+            if not start:
+                return -1
+            age = now - start
+            if age < 0 or age >= dur:
+                return -1
+            return int(age * 33.3)
+        damage_q = _age_q(self._damage_flash_start, self.DAMAGE_FLASH)
+        burst_q = _age_q(self._break_burst_start, self.BREAK_BURST_FX_S)
+        sbreak_q = _age_q(self._shield_break_start, self.SHIELD_BREAK)
+        svfx_q = _age_q(self._shield_vfx_start,
+                         self._shield_vfx_duration) if self._shield_vfx_mode else -1
+        bvfx_q = _age_q(self._break_vfx_start,
+                         self._break_vfx_duration) if self._break_vfx_mode else -1
+        rpulse_q = _age_q(self._root_pulse_start,
+                          self._root_pulse_duration) if self._root_pulse_mode else -1
+        # Continuous animation phases.
+        # Shield sweep cycles ~1.4 s; quantize to 28 buckets (Δ 50 ms,
+        # below the eye’s ability to track a soft moving highlight).
+        if self._shield_active and self._disp_shield_pct > 0.01:
+            shield_sweep_q = int(((now * 0.71) % 1.0) * 28)
+        else:
+            shield_sweep_q = -1
+        # Overdrive pulse ~ sin at 4 Hz → quantize to 32 phase buckets.
+        if self._in_overdrive:
+            od_q = int(((now * 4.0) % 1.0) * 32)
+        else:
+            od_q = -1
+        # Break-row scanline / bar (driven internally by stage > 0).
+        if self._breaking_stage > 0:
+            br_phase_q = int(((now * 1.6) % 1.0) * 24)
+        else:
+            br_phase_q = -1
+        return (
+            int(self.WIDTH), int(self.HEIGHT), y_off,
+            self._boss_name, self._hp_source,
+            int(self._current_hp), int(self._total_hp),
+            hp_q, trail_q, shield_q, break_q,
+            bool(self._shield_active),
+            int(self._breaking_stage),
+            bool(self._in_overdrive),
+            bool(self._invincible),
+            int(round(self._fade_alpha * 100)),
+            damage_q, burst_q, sbreak_q,
+            svfx_q, bvfx_q, rpulse_q,
+            self._shield_vfx_mode, self._break_vfx_mode, self._root_pulse_mode,
+            shield_sweep_q, od_q, br_phase_q,
+        )
 
     def _draw_root_outer_pulse(self, img: Image.Image, y_off: int,
                                now: float) -> None:

@@ -6,10 +6,16 @@ pywebview>=4.0                  # 透明 WebView HUD (EdgeChromium/WebView2)
 numpy>=1.20                     # 图像处理 / 鱼眼变换
 Pillow>=9.0                     # 截图回退 (PIL.ImageGrab)
 mss>=9.0                        # 高性能截图 (优先)
+windows-capture>=1.4.3          # Windows.Graphics.Capture (DXGI / GPU) — 异步免阻塞抓取游戏窗口，规避 PrintWindow 卡顿
 pythonnet>=3.0                  # .NET WinForms 透明 (clr, System.Drawing)
 
-# ═══ 特效 ═══
-moderngl>=5.8                   # LinkStart 3D 粒子隧道 (OpenGL)
+# ═══ 特效 / GPU 渲染 (v2.3.0 GUI 渲染链路重置) ═══
+moderngl>=5.12                  # LinkStart 3D 粒子隧道 + SkillFX SDF shader (OpenGL)
+moderngl-window>=2.5            # 透明 borderless overlay 窗口 (替代 Tk Toplevel + ULW 路径)
+glfw>=2.7                       # moderngl-window GLFW backend (Win32 borderless transparent overlay)
+skia-python>=144                # GPU 2D 矢量 / 文字 atlas 烘焙 (BSD-3, Skia m144)
+numba>=0.61                     # CPU 数学热路径 JIT (_fast_beam 等)
+# numpy 受 numba 约束在 < 2.3, requirements 中无显式 numpy 上限 (numba 自身 metadata 限制)
 
 # ═══ 识图 ═══
 opencv-python>=4.5              # 颜色过滤、固定 ROI 条形/技能状态检测

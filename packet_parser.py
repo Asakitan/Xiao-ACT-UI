@@ -25,6 +25,8 @@ from typing import Optional, Callable, Dict, Any
 logger = logging.getLogger('sao_auto.parser')
 _PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
 
+from perf_probe import probe as _probe
+
 # Lazy import for protobuf JSON conversion (used in full sync dump)
 _MessageToDict = None
 
@@ -1694,6 +1696,7 @@ class PacketParser:
 
 
 
+    @_probe.decorate('parser.process_packet')
     def process_packet(self, frame: bytes):
         """Process one framed packet: `[4B size][2B type][payload]`."""
         if len(frame) < 6:
@@ -2784,6 +2787,7 @@ class PacketParser:
 
         self._parse_dirty_stream(buf_bytes)
 
+    @_probe.decorate('parser._parse_dirty_stream')
     def _parse_dirty_stream(self, data: bytes):
         """Parse the custom dirty-data binary stream used by V3.3.6."""
         pos = 0
@@ -3518,6 +3522,7 @@ class PacketParser:
     # AoiSyncDelta handling
 
 
+    @_probe.decorate('parser._process_aoi_sync_delta')
     def _process_aoi_sync_delta(self, delta):
         """Process an AoiSyncDelta pb2 object."""
         uuid = delta.Uuid
@@ -3565,6 +3570,7 @@ class PacketParser:
         if delta.HasField('SkillEffects'):
             self._process_skill_effect(uuid, target_is_player, target_is_monster, delta.SkillEffects)
 
+    @_probe.decorate('parser._process_skill_effect')
     def _process_skill_effect(self, target_uuid: int, target_is_player: bool,
                               target_is_monster: bool, se):
         """Decode SkillEffect (AoiSyncDelta field 7) and emit damage events.
@@ -3669,6 +3675,7 @@ class PacketParser:
     # AttrCollection parsing — Monster
 
 
+    @_probe.decorate('parser._process_monster_attr_collection')
     def _process_monster_attr_collection(self, uuid: int, ac):
         """Decode AttrCollection pb2 object from a monster delta and update MonsterData."""
         if not ac.Attrs:
@@ -4293,6 +4300,7 @@ class PacketParser:
     # AttrCollection parsing — Player
 
 
+    @_probe.decorate('parser._process_attr_collection')
     def _process_attr_collection(self, uid: int, ac):
         """Process AttrCollection pb2 object for player attrs."""
         if not ac.Attrs:

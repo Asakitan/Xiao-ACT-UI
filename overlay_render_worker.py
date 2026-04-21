@@ -30,8 +30,9 @@ import ctypes
 import itertools
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
 
 import numpy as np
 from PIL import Image
@@ -444,6 +445,10 @@ class _RenderLane:
             worker_id, job = picked
             compose_fn, now, hwnd, x, y = job
             try:
+                # v2.2.21: wall-time tracking feeds scheduler.set_wall_pressure
+                # so HP/DPS idle ticks back off when SkillFX/BOSSHP composes
+                # blow past the frame budget without any FX reduction.
+                _t0 = time.perf_counter()
                 result = compose_fn(now)
                 # v2.2.11 Phase 1: panels that fully migrated to the GPU
                 # compositor may return a FrameBuffer directly, skipping
@@ -460,6 +465,8 @@ class _RenderLane:
                     w, h = img.size
                     bgra = _premultiply_to_bgra(img)
                     fb = FrameBuffer(bgra, w, h, x, y)
+                _wall_ms = (time.perf_counter() - _t0) * 1000.0
+                _record_worker_wall(worker_id, _wall_ms)
                 with self._lock:
                     if worker_id in self._workers:
                         self._results[worker_id] = fb
@@ -559,6 +566,44 @@ class _SharedRenderBackend:
 
 _shared_backend: Optional[_SharedRenderBackend] = None
 _shared_backend_lock = threading.Lock()
+
+# v2.2.21: per-worker compose-wall EWMA + decay-on-read so the scheduler
+# can throttle idle panels when any worker exceeds the frame budget. The
+# walls live at module scope (cheap dict + Lock) so the scheduler can
+# poll without taking the backend lock.
+_worker_walls_lock = threading.Lock()
+_worker_walls: Dict[int, float] = {}
+_worker_walls_last_t: Dict[int, float] = {}
+
+
+def _record_worker_wall(worker_id: int, wall_ms: float) -> None:
+    now = time.perf_counter()
+    with _worker_walls_lock:
+        prev = _worker_walls.get(worker_id, 0.0)
+        # EWMA α=0.4 — fast enough to react to a SkillFX burst within
+        # ~3 frames, slow enough that a single 80 ms outlier doesn't
+        # immediately collapse HP/DPS to 4 Hz.
+        _worker_walls[worker_id] = prev * 0.6 + wall_ms * 0.4
+        _worker_walls_last_t[worker_id] = now
+
+
+def peak_recent_worker_wall_ms(window_sec: float = 0.75) -> float:
+    """Return the highest recent compose wall (EWMA) across all lanes.
+
+    Walls older than ``window_sec`` are ignored so an idle worker doesn't
+    keep the pressure pinned after a burst ends. Returns 0.0 when no
+    fresh sample is available.
+    """
+    cutoff = time.perf_counter() - window_sec
+    peak = 0.0
+    with _worker_walls_lock:
+        for wid, wall in _worker_walls.items():
+            t = _worker_walls_last_t.get(wid, 0.0)
+            if t < cutoff:
+                continue
+            if wall > peak:
+                peak = wall
+    return peak
 
 
 def _get_shared_backend() -> _SharedRenderBackend:
