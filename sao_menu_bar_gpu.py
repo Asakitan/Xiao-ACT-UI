@@ -88,10 +88,18 @@ class MenuBarGpuPainter:
     own no-op deduping based on the snapshot signature.
     """
 
-    def __init__(self, root: tk.Tk, slot_px: int, max_size: int):
+    def __init__(self, root: tk.Tk, slot_px: int, max_size: int,
+                 hover_cb: Optional[Callable[[int], None]] = None,
+                 leave_cb: Optional[Callable[[], None]] = None,
+                 click_cb: Optional[Callable[[int], None]] = None,
+                 scroll_cb: Optional[Callable[[float], None]] = None):
         self._root = root
         self._slot = int(slot_px)
         self._max_size = int(max_size)
+        self._hover_cb = hover_cb
+        self._leave_cb = leave_cb
+        self._click_cb = click_cb
+        self._scroll_cb = scroll_cb
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
         self._renderer = MenuCircleButtonRenderer()
         self._gpu_window: Optional[Any] = None
@@ -103,6 +111,13 @@ class MenuBarGpuPainter:
         self._last_sig: Optional[tuple] = None
         # Cached strip dims so we only call set_geometry on real moves.
         self._last_geom: Optional[Tuple[int, int, int, int]] = None
+        # Latest requested onscreen geometry. We must track this
+        # independently from the last presented framebuffer geometry
+        # because the menu content itself animates during open; using
+        # fb.x/fb.y can lag one or more frames behind the live Tk rect.
+        self._target_geom: Optional[Tuple[int, int, int, int]] = None
+        self._button_count = 0
+        self._hover_idx: Optional[int] = None
         # Lock protects the small caches above; tick() is main-thread
         # only so this is mainly defensive against future async usage.
         self._lock = threading.Lock()
@@ -119,14 +134,26 @@ class MenuBarGpuPainter:
         try:
             pump = _gow.get_glfw_pump(self._root)
             self._presenter = _gow.BgraPresenter()
+            interactive = any(
+                cb is not None
+                for cb in (self._hover_cb, self._leave_cb,
+                           self._click_cb, self._scroll_cb)
+            )
             self._gpu_window = _gow.GpuOverlayWindow(
                 pump,
                 w=max(1, int(w)), h=max(1, int(h)),
                 x=int(x), y=int(y),
                 render_fn=self._presenter.render,
-                click_through=True,
+                click_through=not interactive,
                 title='sao_menu_bar_gpu',
             )
+            if interactive:
+                self._gpu_window.set_input_callbacks(
+                    cursor_pos_fn=self._handle_cursor_pos,
+                    cursor_leave_fn=self._handle_cursor_leave,
+                    mouse_button_fn=self._handle_mouse_button,
+                    scroll_fn=self._handle_scroll,
+                )
             self._gpu_window.show()
             return True
         except Exception:
@@ -134,10 +161,57 @@ class MenuBarGpuPainter:
             self._gpu_window = None
             return False
 
+    def _slot_index(self, x: float, y: float) -> Optional[int]:
+        if self._button_count <= 0:
+            return None
+        if x < 0 or y < 0 or x >= float(self._max_size):
+            return None
+        idx = int(y // float(self._slot))
+        if idx < 0 or idx >= self._button_count:
+            return None
+        return idx
+
+    def _handle_cursor_pos(self, x: float, y: float) -> None:
+        idx = self._slot_index(x, y)
+        if idx is None:
+            self._handle_cursor_leave()
+            return
+        if idx == self._hover_idx:
+            return
+        self._hover_idx = idx
+        if self._hover_cb is not None:
+            self._hover_cb(idx)
+
+    def _handle_cursor_leave(self) -> None:
+        if self._hover_idx is None:
+            return
+        self._hover_idx = None
+        if self._leave_cb is not None:
+            self._leave_cb()
+
+    def _handle_mouse_button(self, button: int, action: int,
+                             _mods: int, x: float, y: float) -> None:
+        if button != 0 or action != 1:
+            return
+        idx = self._slot_index(x, y)
+        if idx is None:
+            return
+        self._hover_idx = idx
+        if self._hover_cb is not None:
+            self._hover_cb(idx)
+        if self._click_cb is not None:
+            self._click_cb(idx)
+
+    def _handle_scroll(self, _xoff: float, yoff: float) -> None:
+        if self._scroll_cb is None or abs(yoff) <= 1e-6:
+            return
+        self._scroll_cb(yoff)
+
     def destroy(self) -> None:
         if self._destroyed:
             return
         self._destroyed = True
+        self._handle_cursor_leave()
         try:
             self._render_worker.stop()
         except Exception:
@@ -154,6 +228,7 @@ class MenuBarGpuPainter:
             except Exception:
                 pass
             self._gpu_window = None
+        self._target_geom = None
 
     # ──────────────────────────────────────────
     #  Per-tick entry (main thread)
@@ -171,14 +246,25 @@ class MenuBarGpuPainter:
         """
         if self._destroyed or not snapshots:
             return
+        # Defer window creation until Tk has reported a real screen
+        # origin. On the very first tick after a popup opens, Tk can
+        # report (0, 0) for winfo_rootx/y before the popup is fully
+        # mapped — creating the GLFW window with that placeholder
+        # geometry leaves it stuck at the monitor top-left until the
+        # next compose result lands.
+        if self._gpu_window is None and (screen_x <= 0 and screen_y <= 0):
+            return
         if not self._ensure_window(strip_w, strip_h, screen_x, screen_y):
             return
+        self._button_count = len(snapshots)
+        self._target_geom = (
+            int(screen_x), int(screen_y), int(strip_w), int(strip_h))
 
         # 1) Drain previous frame and present it.
         fb = self._render_worker.take_result(allow_during_capture=True)
         if fb is not None and self._gpu_window is not None and self._presenter is not None:
             try:
-                geom = (fb.x, fb.y, fb.width, fb.height)
+                geom = self._target_geom or (fb.x, fb.y, fb.width, fb.height)
                 if geom != self._last_geom:
                     self._gpu_window.set_geometry(*geom)
                     self._last_geom = geom
@@ -201,10 +287,19 @@ class MenuBarGpuPainter:
         with self._lock:
             if sig == self._last_sig:
                 # Position can still drift even when visuals are static
-                # (popup breathing). Update geometry only.
-                if (screen_x, screen_y) != (self._last_geom[0], self._last_geom[1]) \
-                        if self._last_geom else True:
-                    pass  # presented frame above already moved it
+                # (popup breathing). Reposition the existing GLFW window
+                # without resubmitting a new compose. The previous
+                # `pass` branch was a no-op so the window stayed at the
+                # last presented (sx, sy) until something else triggered
+                # a recompose — visible as the menu strip lagging when
+                # the popup itself moves.
+                if self._gpu_window is not None and self._target_geom is not None:
+                    if self._target_geom != self._last_geom:
+                        try:
+                            self._gpu_window.set_geometry(*self._target_geom)
+                            self._last_geom = self._target_geom
+                        except Exception:
+                            pass
                 return
             self._last_sig = sig
 

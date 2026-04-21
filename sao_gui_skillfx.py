@@ -132,6 +132,19 @@ MOTION_SAMPLES_EXIT = ((0.0, 1.0), (0.018, 0.28))
 MOTION_SAMPLES_STEADY = ((0.0, 1.0),)
 
 
+def _skillfx_gpu_enabled() -> bool:
+    """Honour ``SAO_SKILLFX_GPU`` env override; otherwise consult
+    ``config.USE_GPU_SKILLFX`` (default True in v2.3.0)."""
+    env = os.environ.get('SAO_SKILLFX_GPU')
+    if env is not None:
+        return env != '0'
+    try:
+        from config import USE_GPU_SKILLFX  # type: ignore
+        return bool(USE_GPU_SKILLFX)
+    except Exception:
+        return True
+
+
 def _lerp_color(ca, cb, t):
     t = max(0.0, min(1.0, t))
     return tuple(int(ca[i] + (cb[i] - ca[i]) * t) for i in range(4))
@@ -243,6 +256,14 @@ class BurstReadyOverlay:
         self._ring_layer_cache: Dict[Tuple[int, int], Image.Image] = {}
         self._clear_pending_frames: int = 0
         self._pending_fb: Optional[FrameBuffer] = None
+        # v2.3.0: phase-quantized submit dedup. The burst animation
+        # advances continuously, so naive submit-every-tick pumps a
+        # fresh ring/sweep/caption compose every 16.7 ms even though
+        # the visual difference between adjacent 60 Hz phases is below
+        # the perception floor. Quantize to 30 Hz; presenter keeps the
+        # last texture so the GL surface still updates at 60 Hz with
+        # zero compose work on the in-between ticks.
+        self._last_submit_phase_q: float = -1.0
         self._warm_sig: tuple = ()
         # v2.3.0 Phase 2c: optional GPU overlay presentation. When
         # SAO_GPU_OVERLAY=1 we replace the tk.Toplevel + ULW commit
@@ -709,6 +730,7 @@ void main() {
         except Exception:
             pass
         self._pending_fb = None
+        self._last_submit_phase_q = -1.0
         self._active = True
         self._exiting = False
         self._clear_pending_frames = 0
@@ -736,6 +758,7 @@ void main() {
                 return
         self._exiting = True
         self._exit_t = time.time()
+        self._last_submit_phase_q = -1.0
         # v2.2.16: clear combat load when burst finishes (also cleared
         # in _tick_sched when the exit animation actually completes,
         # so a re-trigger mid-exit keeps it on).
@@ -852,8 +875,18 @@ void main() {
                 self._pending_fb = latest_fb
             if self._pending_fb is not None and self._try_present_frame(self._pending_fb):
                 self._pending_fb = None
-            self._render_worker.submit(
-                self.compose_frame, now, self._hwnd, self._win_x, self._win_y)
+            # v2.3.0: phase-quantized dedup. q ticks at 30 Hz; below
+            # that quantum we skip the compose submit entirely.
+            # Always submit at least once per (show_t / exit_t) reset
+            # so the very first frame after a state change isn't held
+            # back. Exit phase also gets a fresh submit because
+            # exit_t shifts the phase reference.
+            phase_ref = self._exit_t if self._exiting else self._show_t
+            phase_q = round((now - phase_ref) * 30.0) / 30.0
+            if phase_q != self._last_submit_phase_q:
+                self._last_submit_phase_q = phase_q
+                self._render_worker.submit(
+                    self.compose_frame, now, self._hwnd, self._win_x, self._win_y)
 
         # Finished exit?
         if self._exiting and (now - self._exit_t) >= EXIT_DUR:
@@ -1013,10 +1046,11 @@ void main() {
 
     @_probe.decorate('ui.skillfx.compose.gpu')
     def _compose_frame_gpu(self, now: float) -> Optional[Image.Image]:
-        """Phase 1 SDF-shader compose path. Replaces ring + beam + glfx
-        with a single GPU pass; caption still PIL (Phase 1.4 will atlas
-        it via skia). Returns None if the pipeline can't render — caller
-        must fall back to the PIL path.
+        """Phase 1 SDF-shader compose path. Keeps ring + beam on the
+        consolidated shader, then overlays the legacy GLFX energy layer
+        for visual parity. Caption still PIL (Phase 1.4 will atlas it via
+        skia). Returns None if the pipeline can't render — caller must
+        fall back to the PIL path.
         """
         try:
             from skillfx_pipeline import get_skillfx_pipeline
@@ -1044,6 +1078,12 @@ void main() {
         self._gl_label = (
             _lerp(self._gl_label[0], label_target[0], 0.18),
             _lerp(self._gl_label[1], label_target[1], 0.18),
+        )
+        # v2.3.0 (2026-04 fix): legacy _draw_glfx also lerped the panel
+        # size so the box-glow + grid lines settle smoothly into place.
+        self._gl_panel_size = (
+            _lerp(self._gl_panel_size[0], self._gl_target_panel_size[0], 0.16),
+            _lerp(self._gl_panel_size[1], self._gl_target_panel_size[1], 0.16),
         )
 
         ax, ay = self._anchor
@@ -1074,8 +1114,19 @@ void main() {
             beam_h=float(BEAM_H),
             show_age=float(show_age),
             exiting=bool(self._exiting),
-            glfx_intensity=float(alpha_mul),
+            # Keep the SDF shader focused on ring + beam. The legacy
+            # GLFX pass below is still the parity reference for the
+            # panel glow / grid / energy layer the user watches for.
+            glfx_intensity=0.0,
             seed=float(self._gl_seed),
+            # v2.3.0 (2026-04 fix): hand the lerp'd glfx anchor / label /
+            # panel size to the shader so the energy field's panel glow
+            # and horizontal scan-grid lines render (they were silently
+            # missing after the GPU path went default-on).
+            gl_anchor=(float(self._gl_anchor[0]), float(self._gl_anchor[1])),
+            gl_label=(float(self._gl_label[0]), float(self._gl_label[1])),
+            gl_panel_size=(float(self._gl_panel_size[0]),
+                           float(self._gl_panel_size[1])),
         )
 
         with _probe('ui.skillfx.compose.gpu.shader'):
@@ -1083,6 +1134,13 @@ void main() {
         if sdf_img is None:
             return None
 
+        # v2.3.x layer order fix: GLFX energy field (panel glow / scan
+        # grid) MUST sit UNDER the caption text + hex frame, otherwise
+        # the grid lines + glow occlude the title strokes and outer
+        # border. Final on-screen stack (bottom→top):
+        #   sdf(ring+beam) → glfx → caption.
+        with _probe('ui.skillfx.compose.gpu.glfx'):
+            self._draw_glfx(sdf_img, now, float(alpha_mul))
         # Caption: draw directly onto sdf_img (no full-screen layer buffer,
         # no per-sample motion blur — caption sprites are already cached
         # statically and barely move; the per-frame shine_layer/shine_clip
@@ -1096,10 +1154,11 @@ void main() {
 
     @_probe.decorate('ui.skillfx.compose')
     def compose_frame(self, now: float) -> Image.Image:
-        # v2.3.0 Phase 1: opt-in GPU SDF path. Off by default; set
-        # SAO_SKILLFX_GPU=1 to enable. Falls back to PIL on any failure.
-        if os.environ.get('SAO_SKILLFX_GPU') == '1' \
-                and not getattr(self, '_skillfx_gpu_disabled', False):
+        # v2.3.0 Phase 1: GPU SDF compose path. Defaults ON via
+        # config.USE_GPU_SKILLFX (set SAO_SKILLFX_GPU=0 to force CPU).
+        # Falls back to PIL on any pipeline failure.
+        if not getattr(self, '_skillfx_gpu_disabled', False) \
+                and _skillfx_gpu_enabled():
             try:
                 gpu_img = self._compose_frame_gpu(now)
             except Exception as exc:

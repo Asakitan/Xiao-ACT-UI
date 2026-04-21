@@ -135,76 +135,173 @@ LIST_X = LINE_COL_W + LINE_COL_PAD_R + ARROW_COL_W + ARROW_COL_PAD_R  # 27
 
 
 _font_tls = threading.local()
-_FONT_SAO_PATH: Optional[str] = None
-_FONT_CJK_PATH: Optional[str] = None
+_FONT_PATH_CACHE: dict = {}
+_MISSING_GLYPH_PROBES = ('\u0378', '\u0380', '\ufdd0', '\U000f0000')
 
 
-def _resolve_sao_path() -> str:
-    global _FONT_SAO_PATH
-    if _FONT_SAO_PATH is not None:
-        return _FONT_SAO_PATH
+def _resolve_font_path(filename: str) -> Optional[str]:
+    """Resolve a font filename to an absolute path under FONTS_DIR or
+    a Windows system font path. Returns None if not found."""
+    cached = _FONT_PATH_CACHE.get(filename)
+    if cached is not None:
+        return cached if cached else None
+    # Try project FONTS_DIR first
     try:
-        from sao_sound import get_sao_font as _gs
-        path = _gs()
-        if path:
-            _FONT_SAO_PATH = path
+        from config import FONTS_DIR as _fonts_dir
+        path = os.path.join(_fonts_dir, filename)
+        if os.path.exists(path):
+            _FONT_PATH_CACHE[filename] = path
             return path
     except Exception:
         pass
-    _FONT_SAO_PATH = 'segoeui.ttf'
-    return _FONT_SAO_PATH
-
-
-def _resolve_cjk_path() -> str:
-    global _FONT_CJK_PATH
-    if _FONT_CJK_PATH is not None:
-        return _FONT_CJK_PATH
+    # Try Windows system fonts
     try:
-        from sao_sound import get_cjk_font as _gc
-        path = _gc()
-        if path:
-            _FONT_CJK_PATH = path
+        win_dir = os.environ.get('WINDIR', r'C:\Windows')
+        path = os.path.join(win_dir, 'Fonts', filename)
+        if os.path.exists(path):
+            _FONT_PATH_CACHE[filename] = path
             return path
     except Exception:
         pass
-    _FONT_CJK_PATH = 'msyh.ttc'
-    return _FONT_CJK_PATH
+    # Last-ditch: hand the filename to PIL and let it resolve via OS
+    try:
+        ImageFont.truetype(filename, size=10)
+        _FONT_PATH_CACHE[filename] = filename
+        return filename
+    except Exception:
+        _FONT_PATH_CACHE[filename] = ''
+        return None
+
+
+# Fallback chains: primary → progressively wider coverage → bitmap.
+# Both icon and label chains include the CJK font (ZhuZiAYuanJWD) and
+# Microsoft YaHei so codepoints missing from SAOUI render correctly.
+_ICON_FALLBACK_FILES = (
+    'SAOUI.ttf', 'ZhuZiAYuanJWD.ttf',
+    'msyh.ttc', 'msyhbd.ttc', 'simhei.ttf',
+    'seguisym.ttf', 'seguiemj.ttf', 'segoeui.ttf', 'arial.ttf',
+)
+_LABEL_FALLBACK_FILES = (
+    'ZhuZiAYuanJWD.ttf', 'msyh.ttc', 'msyhbd.ttc', 'simhei.ttf',
+    'seguisym.ttf', 'seguiemj.ttf', 'SAOUI.ttf', 'segoeui.ttf', 'arial.ttf',
+)
+
+
+def _build_font_chain(size: int, filenames) -> list:
+    fonts = []
+    for fn in filenames:
+        path = _resolve_font_path(fn)
+        if not path:
+            continue
+        try:
+            fonts.append(ImageFont.truetype(path, size=size))
+        except Exception:
+            continue
+    if not fonts:
+        try:
+            fonts.append(ImageFont.load_default())
+        except Exception:
+            pass
+    return fonts
+
+
+def _icon_font_chain(size: int) -> list:
+    cache = getattr(_font_tls, 'icon_chain', None)
+    if cache is None:
+        cache = {}
+        _font_tls.icon_chain = cache
+    chain = cache.get(size)
+    if chain is None:
+        chain = _build_font_chain(size, _ICON_FALLBACK_FILES)
+        cache[size] = chain
+    return chain
+
+
+def _label_font_chain(size: int) -> list:
+    cache = getattr(_font_tls, 'label_chain', None)
+    if cache is None:
+        cache = {}
+        _font_tls.label_chain = cache
+    chain = cache.get(size)
+    if chain is None:
+        chain = _build_font_chain(size, _LABEL_FALLBACK_FILES)
+        cache[size] = chain
+    return chain
 
 
 def _icon_font_cached(size: int) -> ImageFont.FreeTypeFont:
-    cache = getattr(_font_tls, 'icon', None)
-    if cache is None:
-        cache = {}
-        _font_tls.icon = cache
-    f = cache.get(size)
-    if f is None:
-        try:
-            f = ImageFont.truetype(_resolve_sao_path(), size=size)
-        except Exception:
-            try:
-                f = ImageFont.truetype('segoeui.ttf', size=size)
-            except Exception:
-                f = ImageFont.load_default()
-        cache[size] = f
-    return f
+    chain = _icon_font_chain(size)
+    return chain[0]
 
 
 def _label_font_cached(size: int) -> ImageFont.FreeTypeFont:
-    cache = getattr(_font_tls, 'label', None)
+    chain = _label_font_chain(size)
+    return chain[0]
+
+
+def _glyph_signature(font: ImageFont.FreeTypeFont, ch: str):
+    mask = font.getmask(ch)
+    return (mask.size, bytes(mask))
+
+
+def _missing_glyph_signatures(font: ImageFont.FreeTypeFont) -> set:
+    cache = getattr(_font_tls, 'missing_sig', None)
     if cache is None:
         cache = {}
-        _font_tls.label = cache
-    f = cache.get(size)
-    if f is None:
-        try:
-            f = ImageFont.truetype(_resolve_cjk_path(), size=size)
-        except Exception:
+        _font_tls.missing_sig = cache
+    key = (id(font), getattr(font, 'size', 0))
+    sigs = cache.get(key)
+    if sigs is None:
+        sigs = set()
+        for probe in _MISSING_GLYPH_PROBES:
             try:
-                f = ImageFont.truetype('arial.ttf', size=size)
+                sigs.add(_glyph_signature(font, probe))
             except Exception:
-                f = ImageFont.load_default()
-        cache[size] = f
-    return f
+                pass
+        cache[key] = sigs
+    return sigs
+
+
+def _glyph_supported(font: ImageFont.FreeTypeFont, ch: str) -> bool:
+    """Return True if the font has a real glyph for `ch` (not tofu)."""
+    if not ch or ch.isspace():
+        return True
+    try:
+        mask = font.getmask(ch)
+        bbox = mask.getbbox()
+        if bbox is None or (bbox[2] - bbox[0]) <= 0 or (bbox[3] - bbox[1]) <= 0:
+            return False
+        return (mask.size, bytes(mask)) not in _missing_glyph_signatures(font)
+    except Exception:
+        return False
+
+
+def _draw_text_with_fallback(draw: ImageDraw.ImageDraw, xy, text: str,
+                             chain: list, fill) -> int:
+    """Draw `text` left-to-right; per character pick the first font in
+    `chain` that has a glyph. Whitespace is always allowed via the
+    primary font. Returns the advanced x offset from the starting xy."""
+    if not text or not chain:
+        return 0
+    primary = chain[0]
+    x, y = xy
+    x0 = x
+    for ch in text:
+        chosen = primary
+        if ch != ' ' and not _glyph_supported(primary, ch):
+            for fb in chain[1:]:
+                if _glyph_supported(fb, ch):
+                    chosen = fb
+                    break
+        try:
+            draw.text((x, y), ch, fill=fill, font=chosen)
+        except Exception:
+            pass
+        try:
+            x += int(draw.textlength(ch, font=chosen))
+        except Exception:
+            x += chosen.size if hasattr(chosen, 'size') else 8
+    return x - x0
 
 
 # ═══════════════════════════════════════════════
@@ -257,8 +354,10 @@ def _compose_child_bar(snap: _ChildBarSnapshot, total_w: int, total_h: int) -> I
                      fill=core_fill, outline=core_outline)
 
     # Rows
-    icon_font = _icon_font_cached(ICON_FONT_SIZE)
-    label_font = _label_font_cached(LABEL_FONT_SIZE)
+    icon_chain = _icon_font_chain(ICON_FONT_SIZE)
+    label_chain = _label_font_chain(LABEL_FONT_SIZE)
+    icon_font = icon_chain[0] if icon_chain else _icon_font_cached(ICON_FONT_SIZE)
+    label_font = label_chain[0] if label_chain else _label_font_cached(LABEL_FONT_SIZE)
 
     for idx, row in enumerate(snap.rows):
         row_y = idx * ROW_STRIDE
@@ -282,32 +381,28 @@ def _compose_child_bar(snap: _ChildBarSnapshot, total_w: int, total_h: int) -> I
 
         ic_x = LIST_X + ROW_X_INDICATOR_W + ROW_X_PAD_L
         ic_y = row_y + (ROW_H - ICON_FONT_SIZE) // 2 - 2
+        ic_w = 0
         if row.icon:
-            try:
-                draw.text((ic_x, ic_y), row.icon, fill=icon_blend, font=icon_font)
-            except Exception:
-                pass
-        try:
-            ic_w = int(draw.textlength(row.icon or '', font=icon_font))
-        except Exception:
+            ic_w = _draw_text_with_fallback(
+                draw, (ic_x, ic_y), row.icon, icon_chain, icon_blend,
+            )
+        if ic_w <= 0:
             ic_w = ICON_FONT_SIZE
         lbl_x = ic_x + ic_w + ROW_X_ICON_GAP
         lbl_y = row_y + (ROW_H - LABEL_FONT_SIZE) // 2 - 2
         max_lbl_w = max(0, LIST_X + rw - lbl_x - ROW_X_PAD_R - 6)
         if row.label and max_lbl_w > 4:
-            try:
-                draw.text((lbl_x, lbl_y), row.label, fill=fg_blend, font=label_font)
-            except Exception:
-                pass
+            _draw_text_with_fallback(
+                draw, (lbl_x, lbl_y), row.label, label_chain, fg_blend,
+            )
         if ht > 0.05:
             arr_x = LIST_X + rw - ROW_X_PAD_R - 6
             arr_y = row_y + (ROW_H - 14) // 2 - 1
             arr_color = colors.lerp(colors.child_bg, colors.child_hover_fg, ht)
             arr_blend = colors.lerp(arr_color, bg, fade_t)
-            try:
-                draw.text((arr_x, arr_y), '\u203a', fill=arr_blend, font=label_font)
-            except Exception:
-                pass
+            _draw_text_with_fallback(
+                draw, (arr_x, arr_y), '\u203a', label_chain, arr_blend,
+            )
 
     return img
 

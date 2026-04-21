@@ -46,6 +46,29 @@ from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, submit_ulw_commit
 from overlay_subpixel import subpixel_bar_width
 
+# v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_BOSSHP
+# (defaults to SAO_GPU_OVERLAY). Falls back to ULW if GLFW is
+# unavailable. NOTE: GLFW path is click_through, so drag-to-move on
+# this overlay is disabled in GPU mode.
+try:
+    import gpu_overlay_window as _gow  # type: ignore[import-untyped]
+except Exception:
+    _gow = None  # type: ignore[assignment]
+
+
+def _gpu_bosshp_enabled() -> bool:
+    if _gow is None or not _gow.glfw_supported():
+        return False
+    try:
+        import os as _os
+        flag = _os.environ.get('SAO_GPU_BOSSHP', '0')
+        # Default-OFF: GPU path is click-through, but the legacy ULW
+        # path supports drag-to-move + right-click context menu, which
+        # users expect on this panel. Set SAO_GPU_BOSSHP=1 to opt in.
+        return str(flag).strip() not in ('', '0', 'false', 'False')
+    except Exception:
+        return False
+
 from perf_probe import probe as _probe
 
 # Reuse ULW glue + font helpers from sao_gui_dps so we keep the same
@@ -348,6 +371,10 @@ class BossHpOverlay:
         self.root = root
         self.settings = settings
         self._win: Optional[tk.Toplevel] = None
+        # v2.3.x GPU presenter fields.
+        self._gpu_window: Optional[Any] = None
+        self._gpu_presenter: Optional[Any] = None
+        self._gpu_managed: bool = False
         self._hwnd: int = 0
         self._visible = False
         self._destroying = False
@@ -495,6 +522,41 @@ class BossHpOverlay:
     def show(self) -> None:
         if self._win is not None:
             return
+        # v2.3.x: GPU presenter path (env-gated).
+        if _gpu_bosshp_enabled():
+            try:
+                pump = _gow.get_glfw_pump(self.root)
+                presenter = _gow.BgraPresenter()
+                gpu_win = _gow.GpuOverlayWindow(
+                    pump,
+                    w=int(self.WIDTH), h=int(self.HEIGHT),
+                    x=int(self._x), y=int(self._y),
+                    render_fn=presenter.render,
+                    click_through=True,
+                    title='sao_bosshp_gpu',
+                )
+                gpu_win.show()
+                self._gpu_window = gpu_win
+                self._gpu_presenter = presenter
+                self._gpu_managed = True
+                self._win = self  # type: ignore[assignment]  # sentinel
+                self._hwnd = 0
+                self._visible = True
+                self._destroying = False
+                self._fade_from = 0.0
+                self._fade_alpha = 0.0
+                self._fade_target = 1.0
+                self._fade_start = time.time()
+                self._fade_duration = self.FADE_IN
+                self._enter_translate = 10.0
+                self._exiting = False
+                self._hide_after_exit = False
+                self._schedule_tick(immediate=True)
+                return
+            except Exception:
+                self._gpu_window = None
+                self._gpu_presenter = None
+                self._gpu_managed = False
         self._win = tk.Toplevel(self.root)
         # Black bg + 1x1 initial geometry prevents any default-bg white flash
         # before the first UpdateLayeredWindow call commits real pixels.
@@ -570,13 +632,27 @@ class BossHpOverlay:
                 self._render_worker.stop()
             except Exception:
                 pass
-        if self._win is not None:
+        # GPU presenter teardown first (mirrors SkillFX/HP pattern).
+        if self._gpu_presenter is not None:
+            try:
+                self._gpu_presenter.release()
+            except Exception:
+                pass
+            self._gpu_presenter = None
+        if self._gpu_window is not None:
+            try:
+                self._gpu_window.destroy()
+            except Exception:
+                pass
+            self._gpu_window = None
+        if self._win is not None and self._win is not self:
             try:
                 self._win.destroy()
             except Exception:
                 pass
         self._win = None
         self._hwnd = 0
+        self._gpu_managed = False
         self._visible = False
         self._exiting = False
         self._hide_after_exit = False
@@ -1056,14 +1132,27 @@ class BossHpOverlay:
         self._advance(now, dt)
 
         # ── Async render pipeline ──
-        if self._hwnd:
+        if self._hwnd or self._gpu_managed:
             # v2.2.23: don't let vision capture starve our commits.
             fb = self._render_worker.take_result(allow_during_capture=True)
             if fb is not None:
-                try:
-                    submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
-                except Exception as e:
-                    print(f'[BOSSHP-OV] ulw error: {e}')
+                if self._gpu_managed and self._gpu_presenter is not None \
+                        and self._gpu_window is not None:
+                    try:
+                        if (fb.x, fb.y) != (self._x, self._y):
+                            self._gpu_window.set_geometry(
+                                self._x, self._y,
+                                self.WIDTH, self.HEIGHT)
+                        self._gpu_presenter.set_frame(
+                            fb.bgra_bytes, fb.width, fb.height)
+                        self._gpu_window.request_redraw()
+                    except Exception as e:
+                        print(f'[BOSSHP-OV] gpu present error: {e}')
+                elif self._hwnd:
+                    try:
+                        submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
+                    except Exception as e:
+                        print(f'[BOSSHP-OV] ulw error: {e}')
 
             # v2.2.14: idle short-circuit — once we've committed a
             # steady frame, stop composing/submitting until something
@@ -1073,8 +1162,12 @@ class BossHpOverlay:
             if not is_anim and self._idle_committed:
                 return
 
+            # In GPU mode there's no _hwnd to pass; compose still uses
+            # _x/_y for FrameBuffer origin so the present-side moves.
             self._render_worker.submit(
-                self.compose_frame, now, self._hwnd, self._x, self._y)
+                self.compose_frame, now,
+                self._hwnd if self._hwnd else 0,
+                self._x, self._y)
             self._idle_committed = (not is_anim)
 
         if self._hide_after_exit and self._fade_alpha <= 0.01:
@@ -2501,7 +2594,13 @@ class BossHpOverlay:
         try:
             self._x = int(ev.x_root - self._drag_ox)
             self._y = int(ev.y_root - self._drag_oy)
-            if self._win is not None:
+            if self._gpu_managed and self._gpu_window is not None:
+                try:
+                    self._gpu_window.set_geometry(
+                        self._x, self._y, self.WIDTH, self.HEIGHT)
+                except Exception:
+                    pass
+            elif self._win is not None and self._win is not self:
                 self._win.geometry(f'+{self._x}+{self._y}')
             self._schedule_tick(immediate=True)
         except Exception:
