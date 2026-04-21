@@ -17,14 +17,15 @@ Why bother:
 
 Constraints:
 - GLFW init / window create / poll_events / swap_buffers must all run
-  on the same thread. We pin everything to the Tk main thread by
-  driving ``glfw.poll_events`` from a ``root.after`` pump and demanding
-  callers schedule render from the same thread.
-- Off-by-default. Set ``SAO_GPU_OVERLAY=1`` to enable. Without that
-  env var the module imports cleanly but ``glfw_supported()`` returns
-  ``False`` and overlays fall back to their ULW path.
+    on the same thread. We pin everything to the Tk main thread by
+    driving ``glfw.poll_events`` from a ``root.after`` pump and demanding
+    callers schedule render from the same thread.
+- Master-gated via ``config.USE_GPU_OVERLAY`` / ``SAO_GPU_OVERLAY``.
+    Callers may temporarily suspend *window creation* during startup
+    animations (for example LinkStart) via
+    ``suspend_gpu_overlay_creation()`` / ``resume_gpu_overlay_creation()``.
 - Each window owns its own moderngl context; resource sharing across
-  windows is a Phase 2c concern (atlas, shared blur kernel).
+    windows is a Phase 2c concern (atlas, shared blur kernel).
 
 Public API:
     glfw_supported() -> bool
@@ -73,11 +74,21 @@ def _try_imports() -> bool:
 def glfw_supported() -> bool:
     """True if GPU overlay path is available AND opted in.
 
-    Opt-in via ``SAO_GPU_OVERLAY=1``. Without that flag we never touch
-    GLFW at all — keeps the existing ULW path the default.
+    Default-ON in v2.3.0 (2026-04 fix). Set ``SAO_GPU_OVERLAY=0`` to
+    force the legacy Tk Canvas / ULW path (e.g. drivers that reject
+    GLFW transparent click-through windows).
     """
-    if not os.environ.get('SAO_GPU_OVERLAY'):
-        return False
+    env = os.environ.get('SAO_GPU_OVERLAY')
+    if env is not None:
+        if env == '0':
+            return False
+    else:
+        try:
+            from config import USE_GPU_OVERLAY  # type: ignore
+            if not USE_GPU_OVERLAY:
+                return False
+        except Exception:
+            pass
     if sys.platform != 'win32':
         return False
     return _try_imports()
@@ -111,6 +122,11 @@ if sys.platform == 'win32':
     _user32.SetWindowPos.argtypes = [
         wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
         ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    _user32.ShowWindow.restype = wintypes.BOOL
+    _user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+
+SW_HIDE = 0
+SW_SHOWNOACTIVATE = 4
 
 
 def _apply_click_through(hwnd: int) -> None:
@@ -125,6 +141,45 @@ def _apply_click_through(hwnd: int) -> None:
            | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE)
     _user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new)
     _user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
+    _user32.SetWindowPos(
+        hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+
+
+_overlay_creation_lock = threading.Lock()
+_overlay_creation_suspended = 0
+
+
+def suspend_gpu_overlay_creation() -> None:
+    """Temporarily block new GLFW overlay windows from being created.
+
+    Existing windows keep rendering; only *new* window creation is
+    deferred. Used to keep startup animations such as LinkStart from
+    paying GLFW/ModernGL init cost on the Tk main thread.
+    """
+    global _overlay_creation_suspended
+    with _overlay_creation_lock:
+        _overlay_creation_suspended += 1
+
+
+def resume_gpu_overlay_creation() -> None:
+    """Release one startup-time creation block."""
+    global _overlay_creation_suspended
+    with _overlay_creation_lock:
+        if _overlay_creation_suspended > 0:
+            _overlay_creation_suspended -= 1
+
+
+def gpu_overlay_creation_allowed() -> bool:
+    """True when new GLFW overlay windows may be created."""
+    with _overlay_creation_lock:
+        return _overlay_creation_suspended <= 0
+
+
+def _show_no_activate(hwnd: int) -> None:
+    if sys.platform != 'win32' or not hwnd:
+        return
+    _user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
     _user32.SetWindowPos(
         hwnd, HWND_TOPMOST, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
@@ -184,6 +239,26 @@ class GlfwPump:
         # Schedule first tick immediately. After-loop handles rescheduling.
         self._after_id = self._root.after(0, self._tick)
 
+    def kick_redraw(self) -> None:
+        """Wake the pump out of its idle (16 Hz) cadence so a freshly
+        marked-dirty window is rendered on the very next event-loop
+        turn instead of waiting up to ~60 ms. Safe to call from the Tk
+        main thread only.
+        """
+        if not self._running:
+            self._kick()
+            return
+        if self._after_id is None:
+            return
+        try:
+            self._root.after_cancel(self._after_id)
+        except Exception:
+            return
+        try:
+            self._after_id = self._root.after(0, self._tick)
+        except Exception:
+            self._running = False
+
     def _tick(self) -> None:
         self._after_id = None
         if not self._running:
@@ -197,10 +272,13 @@ class GlfwPump:
         with self._lock:
             wins = list(self._windows)
         any_visible = False
+        any_dirty = False
         for w in wins:
             if not w._visible:
                 continue
             any_visible = True
+            if w._dirty:
+                any_dirty = True
             try:
                 w._render_once(t)
             except Exception:
@@ -211,9 +289,15 @@ class GlfwPump:
             # Nobody to draw → suspend the loop until something registers.
             self._running = False
             return
-        # Compute next deadline at fixed 60 Hz cadence (DWM caps anyway).
+        # v2.3.0: when nothing was dirty this tick, fall back to a slower
+        # poll cadence (~16 Hz). Painters that have a new frame ready
+        # call request_redraw() which sets _dirty=True; we still want to
+        # respond promptly, so we keep polling — just not at 60 Hz.
+        # poll_events() on Windows costs ~5-30 µs so this is essentially
+        # free at 16 Hz, but cuts pump CPU by ~75 % when idle.
+        target_ms = self._tick_ms if any_dirty else 60
         elapsed_ms = (time.perf_counter() - now) * 1000.0
-        delay_ms = max(1, int(round(self._tick_ms - elapsed_ms)))
+        delay_ms = max(1, int(round(target_ms - elapsed_ms)))
         try:
             self._after_id = self._root.after(delay_ms, self._tick)
         except Exception:
@@ -289,16 +373,73 @@ class GpuOverlayWindow:
         self._title = title
         self._win = None  # GLFW window handle
         self._ctx: Any = None  # moderngl.Context
+        self._hwnd = 0
         self._visible = False
         self._dirty = True
         self._created = False
+        self._shown = False
+        self._show_pending = False
+        self._cursor_pos_fn: Optional[Callable[[float, float], None]] = None
+        self._cursor_leave_fn: Optional[Callable[[], None]] = None
+        self._mouse_button_fn: Optional[
+            Callable[[int, int, int, float, float], None]] = None
+        self._scroll_fn: Optional[Callable[[float, float], None]] = None
 
     # ---- lifecycle ----
 
     def _create(self) -> None:
         if self._created:
             return
+        if not gpu_overlay_creation_allowed():
+            raise RuntimeError('gpu overlay creation suspended')
         self._pump._ensure_init()
+        # ============================================================
+        # WGC pyo3 race avoidance — pause for the WHOLE _create() body.
+        # ============================================================
+        # Every GLFW / WGL / moderngl call below goes through ctypes
+        # (pyglfw + moderngl both use ctypes.CDLL), which RELEASES the
+        # Python GIL for the duration of the foreign call.  The biggest
+        # offenders are:
+        #   * glfw.create_window  → wglCreateContext (100–500 ms first time)
+        #   * moderngl.create_context() → GL driver init, shader cache,
+        #     program object setup (tens of ms)
+        #   * glfw.make_context_current → wglMakeCurrent
+        # During ANY of those GIL-released windows the windows_capture
+        # pyo3 callback thread can fire.  Due to a pyo3
+        # ``assume_gil_acquired()`` corner case the callback thread
+        # sometimes runs with ``_PyThreadState_Current == NULL`` — the
+        # very next ``Py_BEGIN_ALLOW_THREADS`` checkpoint then aborts
+        # with "PyEval_RestoreThread: NULL tstate" (fatal).
+        #
+        # User-visible pattern: clicking a child-row that opens a NEW
+        # overlay window (HP / DPS / BOSS / fisheye panel) crashes
+        # because that ``cmd()`` synchronously runs ``_create()`` here
+        # → moderngl init → long GIL release → WGC race fires.
+        # Clicking a top-level menu icon does NOT crash because it only
+        # toggles child_rows visibility — no new GLFW window is built.
+        #
+        # Fix: stop WGC for the whole _create() (it's idempotent / fast
+        # to restart), so no pyo3 callback can fire while we're inside
+        # any of these foreign calls.
+        try:
+            import gpu_capture as _gc
+        except Exception:
+            _gc = None  # type: ignore[assignment]
+        if _gc is not None:
+            try:
+                _gc.pause_capture()
+            except Exception:
+                pass
+        try:
+            self._create_inner()
+        finally:
+            if _gc is not None:
+                try:
+                    _gc.resume_capture()
+                except Exception:
+                    pass
+
+    def _create_inner(self) -> None:
         glfw = _glfw
         glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)  # type: ignore[union-attr]
         glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)  # type: ignore[union-attr]
@@ -315,18 +456,42 @@ class GpuOverlayWindow:
             except Exception:
                 # Older GLFW (<3.4): fall back to Win32 ex-style only.
                 pass
+        else:
+            # CRITICAL: glfw.window_hint() values are sticky across
+            # create_window() calls. If a previous click_through=True
+            # window (e.g. fisheye / HP / DPS panel) set
+            # MOUSE_PASSTHROUGH=TRUE, that hint persists until we
+            # explicitly clear it. Without this reset, an interactive
+            # window (popup / saomenu) created AFTER any click-through
+            # window inherits MOUSE_PASSTHROUGH and silently swallows
+            # all clicks (they pass through to the window below). This
+            # caused "second saomenu open can't be clicked" once the
+            # fisheye GLFW window had been instantiated.
+            try:
+                glfw.window_hint(glfw.MOUSE_PASSTHROUGH, glfw.FALSE)  # type: ignore[union-attr]
+            except Exception:
+                pass
         win = glfw.create_window(  # type: ignore[union-attr]
             self._w, self._h, self._title, None, None)
         if not win:
             raise RuntimeError('glfw.create_window failed for GpuOverlayWindow')
         glfw.set_window_pos(win, self._x, self._y)  # type: ignore[union-attr]
         glfw.make_context_current(win)  # type: ignore[union-attr]
-        glfw.swap_interval(1)  # type: ignore[union-attr]
+        # swap_interval(0): do NOT wait for vsync inside swap_buffers.
+        # The GlfwPump already paces at monitor-refresh via root.after(),
+        # so vsync inside swap_buffers is redundant.  More importantly,
+        # pyglfw's ctypes.CDLL binding RELEASES the Python GIL for the
+        # entire foreign-function call.  With swap_interval(1) that means
+        # the GIL is released for ~16 ms per swap_buffers per window —
+        # the same GIL-release window that lets the WGC pyo3 callback
+        # thread fire and corrupt ``_PyThreadState_Current``.
+        glfw.swap_interval(0)  # type: ignore[union-attr]
 
-        if self._click_through and sys.platform == 'win32':
+        if sys.platform == 'win32':
             try:
-                hwnd = glfw.get_win32_window(win)  # type: ignore[union-attr]
-                _apply_click_through(hwnd)
+                self._hwnd = int(glfw.get_win32_window(win) or 0)  # type: ignore[union-attr]
+                if self._click_through and self._hwnd:
+                    _apply_click_through(self._hwnd)
             except Exception:
                 pass
 
@@ -338,22 +503,27 @@ class GpuOverlayWindow:
 
         self._win = win
         self._created = True
+        self._install_input_callbacks()
 
     def show(self) -> None:
         if not self._created:
             self._create()
         if self._win is None:
             return
-        try:
-            _glfw.show_window(self._win)  # type: ignore[union-attr]
-        except Exception:
-            pass
         self._visible = True
-        self._dirty = True
+        self._show_pending = True
+        self._shown = False
+        # Hidden-first: don't render/show until the caller actually
+        # stages a frame and calls request_redraw(). This avoids a
+        # blank transparent GLFW window flashing into existence and
+        # removes focus churn during menu open.
+        self._dirty = False
         self._pump.register(self)
 
     def hide(self) -> None:
         self._visible = False
+        self._show_pending = False
+        self._shown = False
         if self._win is not None:
             try:
                 _glfw.hide_window(self._win)  # type: ignore[union-attr]
@@ -363,6 +533,8 @@ class GpuOverlayWindow:
 
     def destroy(self) -> None:
         self._visible = False
+        self._show_pending = False
+        self._shown = False
         self._pump.unregister(self)
         if self._win is None:
             return
@@ -381,6 +553,7 @@ class GpuOverlayWindow:
         except Exception:
             pass
         self._win = None
+        self._hwnd = 0
         self._created = False
 
     # ---- mutators ----
@@ -403,15 +576,115 @@ class GpuOverlayWindow:
         self._render_fn = fn
         self._dirty = True
 
+    def set_input_callbacks(
+            self,
+            cursor_pos_fn: Optional[Callable[[float, float], None]] = None,
+            cursor_leave_fn: Optional[Callable[[], None]] = None,
+            mouse_button_fn: Optional[
+                Callable[[int, int, int, float, float], None]] = None,
+            scroll_fn: Optional[Callable[[float, float], None]] = None) -> None:
+        """Attach optional GLFW input callbacks.
+
+        Used by interactive GPU overlays such as the SAO menu bar. The
+        callbacks run on the Tk main thread because the pump drives
+        ``glfw.poll_events()`` from ``root.after``.
+        """
+        self._cursor_pos_fn = cursor_pos_fn
+        self._cursor_leave_fn = cursor_leave_fn
+        self._mouse_button_fn = mouse_button_fn
+        self._scroll_fn = scroll_fn
+        self._install_input_callbacks()
+
     def request_redraw(self) -> None:
         """Thread-safe: mark dirty so next pump tick draws even if the
         scheduler has been throttling idle frames."""
         self._dirty = True
+        # Wake pump if it has fallen into the 16 Hz idle cadence.
+        # kick_redraw is a no-op when a tick is already imminent.
+        try:
+            self._pump.kick_redraw()
+        except Exception:
+            pass
+
+    def _install_input_callbacks(self) -> None:
+        if self._win is None or _glfw is None:
+            return
+        try:
+            _glfw.set_cursor_pos_callback(self._win, self._on_cursor_pos)  # type: ignore[union-attr]
+        except Exception:
+            pass
+        try:
+            _glfw.set_cursor_enter_callback(self._win, self._on_cursor_enter)  # type: ignore[union-attr]
+        except Exception:
+            pass
+        try:
+            _glfw.set_mouse_button_callback(self._win, self._on_mouse_button)  # type: ignore[union-attr]
+        except Exception:
+            pass
+        try:
+            _glfw.set_scroll_callback(self._win, self._on_scroll)  # type: ignore[union-attr]
+        except Exception:
+            pass
+
+    def _cursor_pos(self) -> tuple[float, float]:
+        if self._win is None or _glfw is None:
+            return (0.0, 0.0)
+        try:
+            x, y = _glfw.get_cursor_pos(self._win)  # type: ignore[union-attr]
+            return (float(x), float(y))
+        except Exception:
+            return (0.0, 0.0)
+
+    def _on_cursor_pos(self, _win, x: float, y: float) -> None:
+        cb = self._cursor_pos_fn
+        if cb is None:
+            return
+        try:
+            cb(float(x), float(y))
+        except Exception:
+            pass
+
+    def _on_cursor_enter(self, _win, entered: bool) -> None:
+        if entered:
+            return
+        cb = self._cursor_leave_fn
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception:
+            pass
+
+    def _on_mouse_button(self, _win, button: int, action: int, mods: int) -> None:
+        cb = self._mouse_button_fn
+        if cb is None:
+            return
+        x, y = self._cursor_pos()
+        try:
+            cb(int(button), int(action), int(mods), x, y)
+        except Exception:
+            pass
+
+    def _on_scroll(self, _win, xoff: float, yoff: float) -> None:
+        cb = self._scroll_fn
+        if cb is None:
+            return
+        try:
+            cb(float(xoff), float(yoff))
+        except Exception:
+            pass
 
     # ---- internal ----
 
     def _render_once(self, t: float) -> None:
         if self._win is None or self._ctx is None or self._render_fn is None:
+            return
+        # v2.3.0: dirty-gate. Double-buffered GL keeps showing the last
+        # swapped frame indefinitely under DWM, so we can skip the entire
+        # make-current → clear → render → swap chain whenever nothing
+        # changed. Painters call request_redraw() (which sets _dirty=True)
+        # whenever they have a new bitmap to upload.
+        if not self._dirty:
             return
         glfw = _glfw
         try:
@@ -426,12 +699,23 @@ class GpuOverlayWindow:
             # frame doesn't bleed through under DWM transparency.
             ctx.clear(0.0, 0.0, 0.0, 0.0)
             self._render_fn(ctx, t)
+            rendered = True
         except Exception:
-            pass
+            rendered = False
         try:
             glfw.swap_buffers(self._win)  # type: ignore[union-attr]
         except Exception:
-            pass
+            rendered = False
+        if rendered and self._show_pending and not self._shown:
+            try:
+                if sys.platform == 'win32' and self._hwnd:
+                    _show_no_activate(self._hwnd)
+                else:
+                    glfw.show_window(self._win)  # type: ignore[union-attr]
+                self._shown = True
+                self._show_pending = False
+            except Exception:
+                pass
         self._dirty = False
 
 
@@ -467,10 +751,13 @@ _BGRA_FS = """
 in vec2 v_uv;
 out vec4 fragColor;
 uniform sampler2D u_tex;
+uniform float u_alpha;
 void main() {
     vec4 c = texture(u_tex, v_uv);
     // Bytes packed as BGRA — swizzle to (R, G, B, A). Already premult.
-    fragColor = c.bgra;
+    // u_alpha (default 1.0) lets callers fade the whole frame without
+    // re-premultiplying the BGRA bytes on every frame.
+    fragColor = c.bgra * u_alpha;
 }
 """
 
@@ -507,6 +794,13 @@ class BgraPresenter:
         self._frame_w = 0
         self._frame_h = 0
         self._dirty = False
+        self._alpha = 1.0
+
+    def set_alpha(self, alpha: float) -> None:
+        """Optional global alpha multiplier (0..1) applied during
+        ``render``. Default 1.0 = no change. Used for cheap fades
+        without re-premultiplying the staged BGRA bytes."""
+        self._alpha = max(0.0, min(1.0, float(alpha)))
 
     def set_frame(self, bgra: bytes, w: int, h: int) -> None:
         """Stage a frame for the next render. Cheap (just stores refs).
@@ -540,11 +834,19 @@ class BgraPresenter:
             self._prog = ctx.program(
                 vertex_shader=_BGRA_VS, fragment_shader=_BGRA_FS)
             self._prog['u_tex'].value = 0
+            try:
+                self._prog['u_alpha'].value = 1.0
+            except Exception:
+                pass
             import numpy as _np
             quad = _np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype='f4')
             self._vbo = ctx.buffer(quad.tobytes())
             self._vao = ctx.vertex_array(
                 self._prog, [(self._vbo, '2f', 'in_pos')])
+        try:
+            self._prog['u_alpha'].value = float(self._alpha)
+        except Exception:
+            pass
         if bgra is not None and w > 0 and h > 0:
             if self._tex is None or self._tex_w != w or self._tex_h != h:
                 if self._tex is not None:
