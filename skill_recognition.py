@@ -17,6 +17,8 @@ from config import (
 )
 from vision_accel import cvt_color, gaussian_blur
 
+from perf_probe import probe as _probe
+
 _DEFAULT_BASELINE = {
     "inner_v_mean": 150.0,
     "inner_s_mean": 150.0,
@@ -54,6 +56,7 @@ def _prepare_hsv(img_bgr: Optional[np.ndarray]) -> Optional[np.ndarray]:
     return cvt_color(gaussian_blur(img_bgr, (3, 3), 0), cv2.COLOR_BGR2HSV)
 
 
+@_probe.decorate('vision.skill_measure_slot')
 def _measure_slot(img_bgr: Optional[np.ndarray]) -> Optional[Dict[str, float]]:
     hsv = _prepare_hsv(img_bgr)
     if hsv is None:
@@ -298,6 +301,7 @@ class SkillVisualTracker:
         except Exception:
             pass
 
+    @_probe.decorate('vision.skill_analyze')
     def analyze(self, client_rect, capture_region) -> List[Dict[str, Any]]:
         if not client_rect:
             return []

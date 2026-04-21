@@ -36,6 +36,17 @@ _DISABLED = os.environ.get('SAO_GPU_DISABLE', '') == '1'
 _global_failed = False   # set once if the *first* init attempt fails
 _global_lock = threading.Lock()
 
+# v2.2.23: Single device-render lock.
+# WGL standalone contexts are per-thread, but they all share one underlying
+# GPU device. When 3-4 worker threads concurrently issue
+# render+glReadPixels() the driver serializes them with poor scheduling and
+# tail-latency cascades (skillfx compose wall: 80-180 ms with cpu_p95
+# 15-30 ms — almost all in GPU readback contention). Serialize at the
+# Python level so each readback finishes cleanly before the next starts;
+# total wall stays the same in the steady state but the worst-case
+# pipeline collapse goes away.
+_render_lock = threading.Lock()
+
 _tls = threading.local()  # per-thread: .ctx, .blur_prog, .blur_quad,
                            #              .shell_prog, .prem_prog,
                            #              .fbo_cache, .failed
@@ -320,7 +331,7 @@ def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
 
         # Re-bind our context in case another standalone GL context (e.g.
         # skillfx Burst overlay) was made current on this thread.
-        with ctx:
+        with _render_lock, ctx:
             src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
             src_tex.filter = (0x2601, 0x2601)  # GL_LINEAR
             src_tex.repeat_x = False
@@ -390,7 +401,7 @@ def render_shell_rgba(
         return None
     try:
         ctx = _tls.ctx
-        with ctx:
+        with _render_lock, ctx:
             fbo = _get_fbo(w, h, 'shell')
             fbo.use()
             ctx.viewport = (0, 0, w, h)
@@ -447,7 +458,7 @@ def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
         # Burst overlay), the most recently created one is current on Windows
         # WGL; without this guard its FBO operations would silently clobber
         # ours (and vice-versa), producing garbage or flipped output.
-        with ctx:
+        with _render_lock, ctx:
             arr = _to_rgba_np(rgba)
             h, w, _ = arr.shape
             src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')

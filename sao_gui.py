@@ -1799,8 +1799,19 @@ class SAOPlayerGUI:
     def _should_show_sta_offline(self, gs) -> bool:
         if gs is None:
             return False
-        # STA OFFLINE 仅由 vision 驱动。packet 活动不会抹除该状态，
-        # 但也不会因为 vision recognition_ok 闪动到 False 而误报。
+        # v2.2.23: packet-driven STA wins. When the packet bridge has a
+        # valid stamina_max, the bar IS in the game world — even if the
+        # vision capture transiently fails (skill FX overlays the STA
+        # bar, capture frame goes blank under heavy load, etc.). The
+        # previous logic reported offline based purely on vision, which
+        # caused the entire HP panel to auto-hide after combat bursts
+        # even though packets kept streaming valid STA values.
+        try:
+            if int(getattr(gs, 'stamina_max', 0) or 0) > 0:
+                return False
+        except Exception:
+            pass
+        # No packet STA available — fall back to vision-driven offline.
         return bool(getattr(gs, 'stamina_offline', False))
 
     def _persist_cached_identity_state(self, save_now: bool = False):
@@ -2713,6 +2724,11 @@ class SAOPlayerGUI:
             menu = getattr(self, '_sao_menu', None)
             if menu is not None and getattr(menu, 'visible', False):
                 menu.close()
+                try:
+                    from overlay_scheduler import get_scheduler as _get_sched
+                    _get_sched(self.root).set_menu_open(False)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -2922,6 +2938,11 @@ class SAOPlayerGUI:
                 pass
             self._play_motion_blur(closing=True)
             self._sao_menu.close()
+            try:
+                from overlay_scheduler import get_scheduler as _get_sched
+                _get_sched(self.root).set_menu_open(False)
+            except Exception:
+                pass
         else:
             self._stop_float_breath()
             try:
@@ -2938,6 +2959,11 @@ class SAOPlayerGUI:
             self._play_motion_blur(closing=False)
             self._sao_menu.child_menus = self._get_menu_children_cached(force=True)
             self._sao_menu.open()
+            try:
+                from overlay_scheduler import get_scheduler as _get_sched
+                _get_sched(self.root).set_menu_open(True)
+            except Exception:
+                pass
             # 立即将悬浮按钮浮到 overlay 之上 (避免撕裂)
             self._float.lift()
 

@@ -41,10 +41,39 @@ import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
+from gpu_renderer import _render_lock as _gpu_render_lock
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, FrameBuffer, run_cpu_tasks, submit_ulw_commit
+try:
+    import gpu_overlay_window as _gow
+except Exception:
+    _gow = None  # type: ignore[assignment]
 from overlay_subpixel import subpixel_alpha_composite
 from render_capture_sync import wait_until_capture_idle
+try:
+    # v2.3.0 Phase 4: numba-JIT'd beam gradient kernel (~6-14x faster on long
+    # beams). Pixel-identical to the numpy path; falls back transparently if
+    # numba is missing or the JIT compile fails.
+    from skillfx_jit import fast_beam_rgba as _jit_fast_beam_rgba
+    from skillfx_jit import fast_ring_layer_rgba as _jit_fast_ring_rgba
+    from skillfx_jit import fast_ring_sweep_rgba as _jit_fast_sweep_rgba
+    from skillfx_jit import warmup as _jit_warmup
+except Exception:  # pragma: no cover - defensive
+    _jit_fast_beam_rgba = None  # type: ignore[assignment]
+    _jit_fast_ring_rgba = None  # type: ignore[assignment]
+    _jit_fast_sweep_rgba = None  # type: ignore[assignment]
+    _jit_warmup = None  # type: ignore[assignment]
+
+# Kick the JIT compile in a daemon thread so the first burst doesn't pay
+# the ~1s numba cold-start cost on the UI thread.
+if _jit_warmup is not None:
+    try:
+        threading.Thread(target=_jit_warmup, name='skillfx-jit-warmup',
+                         daemon=True).start()
+    except Exception:
+        pass
+
+from perf_probe import probe as _probe
 
 from sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
@@ -120,10 +149,41 @@ def _scale_alpha_image(img: Image.Image, alpha_mul: float) -> Image.Image:
     alpha_mul = max(0.0, min(1.0, float(alpha_mul)))
     if alpha_mul >= 0.999:
         return img
-    mul = int(round(alpha_mul * 255.0))
+    # v2.3.0 Phase 1.4: quantized-alpha LRU cache. The caption sprites
+    # (≈ 380×130 RGBA) are alpha-scaled 3-4 times per frame; without
+    # the cache each call is a full numpy round-trip (≈ 0.6 ms on a
+    # 380×130 layer, ~2 ms total per caption draw). Quantize alpha to
+    # 50 buckets (Δ ≈ 5/255 max on the source alpha, below the eye’s
+    # ability to discriminate on a soft glow / panel). Per-source LRU
+    # so different sprites don’t evict each other.
+    mul = int(round(alpha_mul * 50.0))
+    if mul <= 0:
+        return Image.new('RGBA', img.size, (0, 0, 0, 0))
+    if mul >= 50:
+        return img
+    cache = getattr(img, '_sao_alpha_cache', None)
+    if cache is None:
+        cache = {}
+        try:
+            img._sao_alpha_cache = cache  # type: ignore[attr-defined]
+        except Exception:
+            cache = None
+    if cache is not None:
+        out = cache.get(mul)
+        if out is not None:
+            return out
+    mul255 = int(round(alpha_mul * 255.0))
     arr = np.asarray(img, dtype=np.uint8).copy()
-    arr[:, :, 3] = (arr[:, :, 3].astype(np.uint16) * mul // 255).astype(np.uint8)
-    return Image.fromarray(arr, 'RGBA')
+    arr[:, :, 3] = (arr[:, :, 3].astype(np.uint16) * mul255 // 255).astype(np.uint8)
+    out = Image.fromarray(arr, 'RGBA')
+    if cache is not None:
+        # Bound the cache: 50 buckets max per sprite → worst case ~9 MB
+        # for the largest caption layer; usually only 5-10 buckets in
+        # use during the enter/exit fade.
+        if len(cache) >= 56:
+            cache.pop(next(iter(cache)))
+        cache[mul] = out
+    return out
 
 
 # ═══════════════════════════════════════════════
@@ -184,6 +244,13 @@ class BurstReadyOverlay:
         self._clear_pending_frames: int = 0
         self._pending_fb: Optional[FrameBuffer] = None
         self._warm_sig: tuple = ()
+        # v2.3.0 Phase 2c: optional GPU overlay presentation. When
+        # SAO_GPU_OVERLAY=1 we replace the tk.Toplevel + ULW commit
+        # path with a GpuOverlayWindow + BgraPresenter; the worker
+        # still composes PIL→BGRA exactly as before, only the present
+        # step changes (~1–2 ms ULW commit → 0.01 ms texture upload).
+        self._gpu_window: Optional[Any] = None
+        self._gpu_presenter: Optional[Any] = None
 
         # Web-style GPU callout energy layer.
         self._glfx = None
@@ -205,6 +272,35 @@ class BurstReadyOverlay:
     def _ensure_window(self) -> None:
         if self._win is not None:
             return
+        # v2.3.0 Phase 2c: GPU overlay presentation path (env-gated).
+        # Builds a borderless transparent click-through GLFW window
+        # instead of a tk.Toplevel + ULW. The Toplevel is skipped
+        # entirely; we use the BurstReadyOverlay instance itself as
+        # the `_win` truthy sentinel so existing `if self._win is not
+        # None` guards keep working.
+        if _gow is not None and _gow.glfw_supported():
+            try:
+                pump = _gow.get_glfw_pump(self.root)
+                presenter = _gow.BgraPresenter()
+                gpu_win = _gow.GpuOverlayWindow(
+                    pump,
+                    w=int(self._win_w), h=int(self._win_h),
+                    x=int(self._win_x), y=int(self._win_y),
+                    render_fn=presenter.render,
+                    click_through=True,
+                    title='sao_skillfx_gpu',
+                )
+                gpu_win.show()
+                self._gpu_window = gpu_win
+                self._gpu_presenter = presenter
+                self._win = self  # type: ignore[assignment]  # sentinel
+                self._hwnd = 0   # ULW path stays disabled in GPU mode
+                self._visible = True
+                return
+            except Exception:
+                # Fall through to ULW path on any GLFW failure.
+                self._gpu_window = None
+                self._gpu_presenter = None
         self._win = tk.Toplevel(self.root)
         self._win.overrideredirect(True)
         self._win.attributes('-topmost', True)
@@ -239,7 +335,20 @@ class BurstReadyOverlay:
             self._render_worker.stop()
         except Exception:
             pass
-        if self._win is not None:
+        # v2.3.0 Phase 2c: tear down GPU presenter + window first.
+        if self._gpu_presenter is not None:
+            try:
+                self._gpu_presenter.release()
+            except Exception:
+                pass
+            self._gpu_presenter = None
+        if self._gpu_window is not None:
+            try:
+                self._gpu_window.destroy()
+            except Exception:
+                pass
+            self._gpu_window = None
+        if self._win is not None and self._win is not self:
             try:
                 self._win.destroy()
             except Exception:
@@ -502,7 +611,10 @@ void main() {
             # context on the same worker thread, and whoever was used last
             # is the one currently bound on Windows WGL. Without this, our
             # fbo/vao calls may execute against the wrong context.
-            with ctx:
+            # v2.2.23: also acquire the gpu device lock so concurrent
+            # blurs/premult on sibling worker threads don't thrash the
+            # underlying device queue while we're mid-readback.
+            with _gpu_render_lock, ctx:
                 fbo.use()
                 ctx.viewport = (0, 0, width, height)
                 ctx.clear(0.0, 0.0, 0.0, 0.0)
@@ -556,12 +668,20 @@ void main() {
             for s in slots if isinstance(s, dict)
         ]
         if self._win is not None and (moved or resized):
-            try:
-                self._win.geometry(
-                    f'{self._win_w}x{self._win_h}+'
-                    f'{self._win_x}+{self._win_y}')
-            except Exception:
-                pass
+            if self._gpu_window is not None:
+                try:
+                    self._gpu_window.set_geometry(
+                        self._win_x, self._win_y,
+                        self._win_w, self._win_h)
+                except Exception:
+                    pass
+            elif self._win is not self:
+                try:
+                    self._win.geometry(
+                        f'{self._win_w}x{self._win_h}+'
+                        f'{self._win_x}+{self._win_y}')
+                except Exception:
+                    pass
             self._cap_static = None
             self._cap_sig = ()
             if resized:
@@ -626,6 +746,19 @@ void main() {
         self._schedule_tick(immediate=True)
 
     def _try_clear_window(self) -> bool:
+        # v2.3.0 Phase 2c: GPU path — just stage an empty frame.
+        if self._gpu_presenter is not None and self._gpu_window is not None:
+            try:
+                self._render_worker.reset()
+            except Exception:
+                pass
+            self._pending_fb = None
+            try:
+                self._gpu_presenter.clear()
+                self._gpu_window.request_redraw()
+                return True
+            except Exception:
+                return False
         if not self._hwnd:
             return False
         if not wait_until_capture_idle(0.0):
@@ -643,7 +776,18 @@ void main() {
             return False
 
     def _try_present_frame(self, fb: Optional[FrameBuffer]) -> bool:
-        if not self._hwnd or fb is None:
+        if fb is None:
+            return False
+        # v2.3.0 Phase 2c: GPU path — upload BGRA to texture + redraw.
+        if self._gpu_presenter is not None and self._gpu_window is not None:
+            try:
+                self._gpu_presenter.set_frame(
+                    fb.bgra_bytes, fb.width, fb.height)
+                self._gpu_window.request_redraw()
+                return True
+            except Exception:
+                return False
+        if not self._hwnd:
             return False
         try:
             return bool(submit_ulw_commit(
@@ -681,6 +825,7 @@ void main() {
     def _is_animating(self) -> bool:
         return self._active or self._clear_pending_frames > 0
 
+    @_probe.decorate('ui.skillfx.tick')
     def _tick_sched(self, now: float) -> None:
         """Called by overlay_scheduler at 60 FPS."""
         if self._win is None:
@@ -699,7 +844,7 @@ void main() {
             self.hide_burst()
             return
 
-        if self._hwnd:
+        if self._hwnd or self._gpu_window is not None:
             latest_fb = self._render_worker.take_result(
                 allow_during_capture=True,
             )
@@ -806,6 +951,7 @@ void main() {
         img.paste((0, 0, 0, 0), (0, 0, w, h))
         return img
 
+    @_probe.decorate('ui.skillfx.compose.ring')
     def _render_ring_layer(
         self,
         now: float,
@@ -825,6 +971,7 @@ void main() {
             drew = True
         return layer if drew else None
 
+    @_probe.decorate('ui.skillfx.compose.beam')
     def _render_beam_layer(
         self,
         now: float,
@@ -844,6 +991,7 @@ void main() {
             drew = True
         return layer if drew else None
 
+    @_probe.decorate('ui.skillfx.compose.caption')
     def _render_caption_layer(
         self,
         now: float,
@@ -863,7 +1011,107 @@ void main() {
             drew = True
         return layer if drew else None
 
+    @_probe.decorate('ui.skillfx.compose.gpu')
+    def _compose_frame_gpu(self, now: float) -> Optional[Image.Image]:
+        """Phase 1 SDF-shader compose path. Replaces ring + beam + glfx
+        with a single GPU pass; caption still PIL (Phase 1.4 will atlas
+        it via skia). Returns None if the pipeline can't render — caller
+        must fall back to the PIL path.
+        """
+        try:
+            from skillfx_pipeline import get_skillfx_pipeline
+        except Exception:
+            return None
+        pipe = get_skillfx_pipeline()
+        if pipe is None:
+            return None
+
+        W, H = int(self._win_w), int(self._win_h)
+        if W <= 0 or H <= 0:
+            return None
+
+        enter_t, exit_t, alpha_mul, pulse = self._frame_anim_state(now)
+        if alpha_mul <= 0.01:
+            return self._get_layer_buf('main', W, H)
+
+        # Mirror _draw_glfx's tracking so the energy field follows the
+        # same lerp'd anchor / label as the existing CPU path.
+        label_target = self._caption_target_point(now, enter_t, exit_t)
+        self._gl_anchor = (
+            _lerp(self._gl_anchor[0], self._anchor[0], 0.18),
+            _lerp(self._gl_anchor[1], self._anchor[1], 0.18),
+        )
+        self._gl_label = (
+            _lerp(self._gl_label[0], label_target[0], 0.18),
+            _lerp(self._gl_label[1], label_target[1], 0.18),
+        )
+
+        ax, ay = self._anchor
+        scale_enter = 0.66 + 0.34 * enter_t
+        scale = scale_enter * (1.0 + 0.20 * max(0.0, exit_t))
+        r_out = max(8.0, self._ring_size * 0.5 * scale)
+        r_in = max(2.0, r_out - 16.0)
+        r_core = max(2.0, r_out - 38.0)
+
+        geom = self._get_beam_geometry(now, enter_t, exit_t, scale)
+        if geom is not None:
+            beam_a = (geom['start_x'], geom['start_y'])
+            beam_b = (geom['end_x'], geom['end_y'])
+        else:
+            beam_a = (ax, ay)
+            beam_b = label_target
+
+        show_age = max(0.0, now - self._show_t)
+
+        params = dict(
+            time=show_age,
+            alpha_mul=float(alpha_mul),
+            anchor=(float(ax), float(ay)),
+            r_out=float(r_out), r_in=float(r_in), r_core=float(r_core),
+            pulse=float(pulse),
+            beam_a=(float(beam_a[0]), float(beam_a[1])),
+            beam_b=(float(beam_b[0]), float(beam_b[1])),
+            beam_h=float(BEAM_H),
+            show_age=float(show_age),
+            exiting=bool(self._exiting),
+            glfx_intensity=float(alpha_mul),
+            seed=float(self._gl_seed),
+        )
+
+        with _probe('ui.skillfx.compose.gpu.shader'):
+            sdf_img = pipe.render(W, H, params)
+        if sdf_img is None:
+            return None
+
+        # Caption: draw directly onto sdf_img (no full-screen layer buffer,
+        # no per-sample motion blur — caption sprites are already cached
+        # statically and barely move; the per-frame shine_layer/shine_clip
+        # allocs are also avoided by Phase 1.4 follow-up). This collapses
+        # the legacy `_render_caption_layer` 56 ms p50 → ~2 ms direct draw.
+        with _probe('ui.skillfx.compose.gpu.caption'):
+            self._ensure_caption_layers()
+            self._draw_caption(sdf_img, float(alpha_mul),
+                               enter_t, exit_t, now)
+        return sdf_img
+
+    @_probe.decorate('ui.skillfx.compose')
     def compose_frame(self, now: float) -> Image.Image:
+        # v2.3.0 Phase 1: opt-in GPU SDF path. Off by default; set
+        # SAO_SKILLFX_GPU=1 to enable. Falls back to PIL on any failure.
+        if os.environ.get('SAO_SKILLFX_GPU') == '1' \
+                and not getattr(self, '_skillfx_gpu_disabled', False):
+            try:
+                gpu_img = self._compose_frame_gpu(now)
+            except Exception as exc:
+                try:
+                    print(f'[skillfx] GPU compose failed, disabling: {exc}')
+                except Exception:
+                    pass
+                self._skillfx_gpu_disabled = True
+                gpu_img = None
+            if gpu_img is not None:
+                return gpu_img
+
         W, H = int(self._win_w), int(self._win_h)
         img = self._get_layer_buf('main', W, H)
 
@@ -872,24 +1120,28 @@ void main() {
             return img
 
         sample_specs = self._motion_sample_specs(now, enter_t, exit_t)
-        self._prime_render_caches(now, sample_specs)
+        with _probe('ui.skillfx.compose.prime_caches'):
+            self._prime_render_caches(now, sample_specs)
 
         # 0) Webview-like GPU energy pass.
-        self._draw_glfx(img, now, alpha_mul)
+        with _probe('ui.skillfx.compose.glfx'):
+            self._draw_glfx(img, now, alpha_mul)
 
         # v2.2.10: always fan out the three independent layers across the
         # shared CPU pool — the prior `if len(sample_specs) <= 2` gate
         # collapsed steady-state SkillFX into a single thread, so on multi-
         # core boxes we were leaving 2 cores idle while compose blocked the
         # render lane (visible as menu+SkillFX combat stutter).
-        ring_layer, beam_layer, caption_layer = run_cpu_tasks([
-            lambda: self._render_ring_layer(now, sample_specs),
-            lambda: self._render_beam_layer(now, sample_specs),
-            lambda: self._render_caption_layer(now, sample_specs),
-        ])
-        for layer in (ring_layer, beam_layer, caption_layer):
-            if layer is not None:
-                img.alpha_composite(layer)
+        with _probe('ui.skillfx.compose.layers'):
+            ring_layer, beam_layer, caption_layer = run_cpu_tasks([
+                lambda: self._render_ring_layer(now, sample_specs),
+                lambda: self._render_beam_layer(now, sample_specs),
+                lambda: self._render_caption_layer(now, sample_specs),
+            ])
+        with _probe('ui.skillfx.compose.composite'):
+            for layer in (ring_layer, beam_layer, caption_layer):
+                if layer is not None:
+                    img.alpha_composite(layer)
 
         return img
 
@@ -1106,9 +1358,11 @@ void main() {
         dx, dy = self._caption_offset(now, enter_t, exit_t)
 
         panel_alpha_mul = alpha_mul * (1.0 if exit_t <= 0.0 else max(0.0, 1.0 - exit_t))
+        # v2.2.27: caption sprites are 380+ px wide; snap shifts <0.15 px
+        # to integer to skip the 5-15 ms BILINEAR transform per call.
         subpixel_alpha_composite(
             img, _scale_alpha_image(base, panel_alpha_mul),
-            cx + dx, cy + dy,
+            cx + dx, cy + dy, eps=0.15,
         )
 
         if (not self._exiting and shine is not None and age >= 1.10
@@ -1119,14 +1373,18 @@ void main() {
             else:
                 shine_opacity = max(0.0, 1.0 - (shine_phase - 0.20) / 0.80)
             if shine_opacity > 0.01:
-                shine_layer = Image.new('RGBA', base.size, (0, 0, 0, 0))
+                # v2.3.0 Phase 1.4: reuse the recycled `cap_shine_layer`
+                # / `cap_shine_clip` buffers so the shine sweep doesn\u2019t
+                # alloc two fresh ~380\u00d7130 RGBAs every other frame.
+                bw, bh = base.size
+                shine_layer = self._get_layer_buf('cap_shine_layer', bw, bh)
                 shine_x = -80.0 + (cw + 152.0) * shine_phase
                 subpixel_alpha_composite(
                     shine_layer,
                     _scale_alpha_image(shine, alpha_mul * shine_opacity),
                     shine_x, -10.0,
                 )
-                shine_clip = Image.new('RGBA', base.size, (0, 0, 0, 0))
+                shine_clip = self._get_layer_buf('cap_shine_clip', bw, bh)
                 shine_clip.paste(shine_layer, (0, 0), mask)
                 subpixel_alpha_composite(img, shine_clip, cx + dx, cy + dy)
 
@@ -1138,9 +1396,11 @@ void main() {
                 _scale_alpha_image(glow, glow_mul),
                 cx + dx + self._cap_glow_offset[0],
                 cy + dy + self._cap_glow_offset[1],
+                eps=0.15,
             )
         subpixel_alpha_composite(
             img, _scale_alpha_image(title, alpha_mul), cx + dx, cy + dy,
+            eps=0.15,
         )
 
     def _caption_offset(self, now: float, enter_t: float,
@@ -1220,29 +1480,42 @@ void main() {
         box = r_out * 2 + pad * 2
         dist, cc = self._get_ring_field(box)
 
-        halo_breath = 0.52 + 0.40 * pulse_q
-        halo_a = 46.0 * halo_breath * np.exp(
-            -((dist - r_out) ** 2) / (28.0 * 28.0))
-        halo_a = np.clip(halo_a, 0, 255)
-        arr = np.zeros((box, box, 4), dtype=np.float32)
-        arr[:, :, 0] = 97
-        arr[:, :, 1] = 232
-        arr[:, :, 2] = 255
-        arr[:, :, 3] = halo_a
-
         r_core = max(2, r_out - 38)
-        core_a = 70.0 * (0.6 + 0.4 * pulse_q) * np.clip(
-            1.0 - dist / max(1.0, r_core), 0.0, 1.0)
-        core_mask = dist < r_core + 2
-        src_a = (core_a * core_mask) / 255.0
-        inv = 1.0 - src_a
-        arr[:, :, 0] = arr[:, :, 0] * inv + 176 * src_a
-        arr[:, :, 1] = arr[:, :, 1] * inv + 247 * src_a
-        arr[:, :, 2] = arr[:, :, 2] * inv + 255 * src_a
-        arr[:, :, 3] = np.maximum(arr[:, :, 3], core_a * core_mask)
+        # v2.3.0 Phase B1: numba-JIT halo + core blending. Pixel-parity
+        # within ±1 LSB of the original numpy path (rounding only,
+        # imperceptible on the alpha-blended ring); 8-28x faster on
+        # ring-cache misses (the entire ENTER transition rebuilds 6+
+        # buckets at 0.5-6 ms each on the legacy numpy path).
+        layer_arr = None
+        if _jit_fast_ring_rgba is not None:
+            try:
+                layer_arr = _jit_fast_ring_rgba(
+                    box, float(r_out), float(pulse_q), float(r_core))
+            except Exception:
+                layer_arr = None
+        if layer_arr is None:
+            halo_breath = 0.52 + 0.40 * pulse_q
+            halo_a = 46.0 * halo_breath * np.exp(
+                -((dist - r_out) ** 2) / (28.0 * 28.0))
+            halo_a = np.clip(halo_a, 0, 255)
+            arr = np.zeros((box, box, 4), dtype=np.float32)
+            arr[:, :, 0] = 97
+            arr[:, :, 1] = 232
+            arr[:, :, 2] = 255
+            arr[:, :, 3] = halo_a
 
-        layer = Image.fromarray(
-            np.clip(arr, 0, 255).astype(np.uint8), 'RGBA')
+            core_a = 70.0 * (0.6 + 0.4 * pulse_q) * np.clip(
+                1.0 - dist / max(1.0, r_core), 0.0, 1.0)
+            core_mask = dist < r_core + 2
+            src_a = (core_a * core_mask) / 255.0
+            inv = 1.0 - src_a
+            arr[:, :, 0] = arr[:, :, 0] * inv + 176 * src_a
+            arr[:, :, 1] = arr[:, :, 1] * inv + 247 * src_a
+            arr[:, :, 2] = arr[:, :, 2] * inv + 255 * src_a
+            arr[:, :, 3] = np.maximum(arr[:, :, 3], core_a * core_mask)
+            layer_arr = np.clip(arr, 0, 255).astype(np.uint8)
+
+        layer = Image.fromarray(layer_arr, 'RGBA')
         layer = _gpu_blur(layer, 3.0)
 
         d = ImageDraw.Draw(layer)
@@ -1288,25 +1561,41 @@ void main() {
         # v2.2.10: subpixel composite so the ring tracks the smoothly
         # interpolated _gl_anchor (lerp 0.18 per frame) instead of snapping
         # to whole pixels each tick.
+        # v2.2.27: 0.15 px snap on a ~120-300 px ring sprite is below eye
+        # discrimination at typical motion speeds.
         subpixel_alpha_composite(img, layer,
-                                 ax - box / 2.0, ay - box / 2.0)
+                                 ax - box / 2.0, ay - box / 2.0, eps=0.15)
 
         if not self._exiting:
             sweep_t = _smoothstep(0.10, 1.35, now - self._show_t)
             if 0.0 < sweep_t < 1.0:
-                dist, _ = self._get_ring_field(box)
                 clip_r = max(8.0, box * 0.5 - 12.0)
                 band_x = -box * 0.18 + (box * 1.30) * sweep_t
-                xs = np.arange(box, dtype=np.float32)[None, :]
-                band = np.exp(-((xs - band_x) / 8.5) ** 2) * 210.0
-                band = np.broadcast_to(band, (box, box))
-                mask = (dist <= clip_r).astype(np.float32)
-                arr = np.zeros((box, box, 4), dtype=np.uint8)
-                arr[:, :, 0] = 114
-                arr[:, :, 1] = 238
-                arr[:, :, 2] = 255
-                arr[:, :, 3] = np.clip(band * mask * alpha_mul, 0, 255).astype(np.uint8)
-                sweep = Image.fromarray(arr, 'RGBA')
+                # v2.3.0 Phase B1: numba-JIT sweep band. Pixel-identical;
+                # 3-33x faster on the per-frame band build (was a fresh
+                # numpy mgrid + exp + broadcast + clip every motion
+                # sample, ~0.2-3 ms per call on box=160-340).
+                sweep_arr = None
+                if _jit_fast_sweep_rgba is not None:
+                    try:
+                        sweep_arr = _jit_fast_sweep_rgba(
+                            box, float(band_x), float(clip_r),
+                            float(alpha_mul))
+                    except Exception:
+                        sweep_arr = None
+                if sweep_arr is None:
+                    dist, _ = self._get_ring_field(box)
+                    xs = np.arange(box, dtype=np.float32)[None, :]
+                    band = np.exp(-((xs - band_x) / 8.5) ** 2) * 210.0
+                    band = np.broadcast_to(band, (box, box))
+                    mask = (dist <= clip_r).astype(np.float32)
+                    sweep_arr = np.zeros((box, box, 4), dtype=np.uint8)
+                    sweep_arr[:, :, 0] = 114
+                    sweep_arr[:, :, 1] = 238
+                    sweep_arr[:, :, 2] = 255
+                    sweep_arr[:, :, 3] = np.clip(
+                        band * mask * alpha_mul, 0, 255).astype(np.uint8)
+                sweep = Image.fromarray(sweep_arr, 'RGBA')
                 img.alpha_composite(sweep,
                                     (int(ax - box // 2), int(ay - box // 2)))
 
@@ -1353,17 +1642,22 @@ void main() {
         length = geom['length']
         angle = geom['angle']
         L = int(length)
+        # v2.2.27: bucket length to 4 px so motion-sample variations within
+        # a small window all share the cached rotated beam (otherwise each
+        # of the 2-5 motion samples per frame missed the cache during ENTER
+        # and rebuilt the full _fast_beam + BILINEAR rotate, ~10-20 ms each).
+        L_q = max(8, (L + 2) // 4 * 4)
         sig = (
-            int(round(length)), int(round(angle * 1000.0)),
+            L_q, int(round(angle * 1000.0)),
         )
         if self._beam_cache_img is not None and self._beam_cache_sig == sig:
             return self._beam_cache_img, self._beam_cache_pos
 
-        beam = self._fast_beam(L, BEAM_H)
+        beam = self._fast_beam(L_q, BEAM_H)
         rot = beam.rotate(-math.degrees(angle), resample=Image.BILINEAR, expand=True)
         rw, rh = rot.size
-        rdx = -L / 2.0 * math.cos(angle)
-        rdy = -L / 2.0 * math.sin(angle)
+        rdx = -L_q / 2.0 * math.cos(angle)
+        rdy = -L_q / 2.0 * math.sin(angle)
         sx_in_rot = rw / 2.0 + rdx
         sy_in_rot = rh / 2.0 + rdy
         # v2.1.17: keep float position for subpixel composite.
@@ -1405,8 +1699,11 @@ void main() {
         if rot is None or geom is None:
             return
         # v2.2.10: subpixel composite so the beam slides smoothly.
+        # v2.2.27: snap threshold 0.15 px on a ~700 px sprite skips the
+        # AFFINE BILINEAR transform whenever pos is near-integer (the lerp
+        # quickly settles into sub-eps drift). Cost: ~30 ms → ~0.5 ms.
         subpixel_alpha_composite(
-            img, _scale_alpha_image(rot, alpha_mul), pos[0], pos[1])
+            img, _scale_alpha_image(rot, alpha_mul), pos[0], pos[1], eps=0.15)
 
         draw = ImageDraw.Draw(img)
         trace_wave = 0.5 + 0.5 * math.sin(max(0.0, now - self._show_t - 0.9) * (math.tau / 2.45))
@@ -1440,10 +1737,17 @@ void main() {
                         img,
                         _scale_alpha_image(tail, alpha_mul * tail_opacity),
                         cx - tw / 2.0, cy - th / 2.0,
+                        eps=0.15,
                     )
 
     def _fast_beam(self, L: int, H: int) -> Image.Image:
         """Vectorized linear-gradient beam with vertical glow falloff."""
+        if _jit_fast_beam_rgba is not None:
+            try:
+                arr = _jit_fast_beam_rgba(L, H)
+                return Image.fromarray(arr, 'RGBA')
+            except Exception:
+                pass
         xs = np.arange(L, dtype=np.float32) / max(1, L - 1)
         ys = (np.arange(H, dtype=np.float32) - H / 2.0) / (H / 2.0)
         # Vertical falloff (gaussian-ish)

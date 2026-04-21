@@ -8,7 +8,7 @@ PyInstaller spec — 咲 ACT UI (Xiao ACT UI)
 import os
 import sys
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_dynamic_libs, collect_data_files
 
 block_cipher = None
 
@@ -50,6 +50,7 @@ LOCAL_HIDDENIMPORTS = [
     'window_locator',
     'vision_accel',
     'game_state',
+    'gpu_capture',
     # proto 包 — packet_parser 内 `from proto import star_resonance_pb2`
     'proto',
     'proto.star_resonance_pb2',
@@ -59,10 +60,23 @@ WEBVIEW_PLATFORM_HIDDENIMPORTS = collect_submodules('webview.platforms')
 PROTOBUF_HIDDENIMPORTS = collect_submodules('google.protobuf')
 CLR_LOADER_HIDDENIMPORTS = collect_submodules('clr_loader')
 
+# v2.3.0 GUI 链路重置 — 收集 skia / numba / llvmlite / moderngl-window 原生二进制
+GPU_RENDER_BINARIES = (
+    collect_dynamic_libs('skia')
+    + collect_dynamic_libs('numba')
+    + collect_dynamic_libs('llvmlite')
+    + collect_dynamic_libs('glfw')
+)
+GPU_RENDER_DATAS = (
+    collect_data_files('skia')
+    + collect_data_files('moderngl_window')
+    + collect_data_files('glfw')
+)
+
 a = Analysis(
     ['main.py'],
     pathex=[HERE],
-    binaries=[],
+    binaries=GPU_RENDER_BINARIES,
     datas=[
         # Web UI (HTML + 字体)
         ('web', 'web'),
@@ -72,7 +86,7 @@ a = Analysis(
         ('proto', 'proto'),
         # 图标
         ('icon.ico', '.'),
-    ],
+    ] + GPU_RENDER_DATAS,
     hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
         'clr',
@@ -95,14 +109,28 @@ a = Analysis(
         # 截图
         'mss',
         'mss.windows',
+        # GPU/WGC 异步抓帧 (recognition.py lazy-imports gpu_capture)
+        'windows_capture',
         # 热键
         'pynput',
         'pynput.keyboard',
         'pynput.keyboard._win32',
         'pynput.mouse',
         'pynput.mouse._win32',
-        # OpenGL 特效
+        # OpenGL 特效 / GPU 渲染 (v2.3.0 GUI 链路重置)
         'moderngl',
+        'moderngl_window',
+        'moderngl_window.context.glfw',
+        'moderngl_window.context.headless',
+        'glfw',
+        'skia',  # skia-python: GPU 2D + 文字 atlas
+        'numba',
+        'numba.core',
+        'numba.core.runtime',
+        'numba.cpython',
+        'numba.np',
+        'llvmlite',
+        'llvmlite.binding',
         # 压缩
         'zstandard',
         # 标准库 (PyInstaller 有时遗漏)

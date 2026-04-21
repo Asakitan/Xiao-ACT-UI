@@ -11,6 +11,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional, List, Callable
 
+from perf_probe import probe as _probe
+
 # 缓存字段名列表
 _CACHE_FIELDS = (
     'player_name', 'level_base', 'level_extra', 'player_id',
@@ -234,6 +236,7 @@ class GameStateManager:
         with self._lock:
             return self._state
 
+    @_probe.decorate('state.update')
     def update(self, **kwargs):
         """部分更新状态字段并通知所有监听器 (含范围校验)"""
         with self._lock:

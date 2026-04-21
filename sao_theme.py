@@ -22,7 +22,7 @@ import ctypes
 import struct
 from PIL import Image, ImageDraw, ImageFilter, ImageTk, ImageEnhance, ImageChops, ImageFont
 from overlay_subpixel import subpixel_alpha_composite
-from typing import Optional, Callable, List, Dict, Tuple
+from typing import Any, Optional, Callable, List, Dict, Tuple
 import numpy as np
 from config import APP_VERSION_LABEL, FONTS_DIR
 from sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font
@@ -39,7 +39,55 @@ except Exception:
     MenuHudOverlay = None  # type: ignore[assignment]
     def gpu_menu_hud_enabled() -> bool:  # type: ignore[no-redef]
         return False
+try:
+    # v2.3.0 Phase 3+: GPU-presented fisheye sidebar. Off-thread
+    # composes the whole 8-button strip into one BGRA frame on a
+    # GLFW-backed overlay window; SAOCircleButton stays as an
+    # invisible hit-test rectangle when this is active.
+    from sao_menu_bar_gpu import (
+        MenuBarGpuPainter,
+        BarColorFns,
+        _ButtonSnapshot,
+        gpu_menu_bar_enabled,
+    )
+except Exception:
+    MenuBarGpuPainter = None  # type: ignore[assignment]
+    BarColorFns = None  # type: ignore[assignment]
+    _ButtonSnapshot = None  # type: ignore[assignment]
+    def gpu_menu_bar_enabled() -> bool:  # type: ignore[no-redef]
+        return False
+try:
+    # v2.3.0 Phase 3+: GPU-presented left info panel. Same pattern as
+    # MenuBar: Tk Canvases stay invisible at chroma key, painter owns
+    # one GLFW window covering the panel's bounding box.
+    from sao_left_info_gpu import (
+        LeftInfoGpuPainter,
+        _LeftInfoSnapshot,
+        gpu_left_info_enabled,
+    )
+except Exception:
+    LeftInfoGpuPainter = None  # type: ignore[assignment]
+    _LeftInfoSnapshot = None  # type: ignore[assignment]
+    def gpu_left_info_enabled() -> bool:  # type: ignore[no-redef]
+        return False
+try:
+    # v2.3.0 Phase 3+++: GPU-presented child (popup submenu) bar.
+    from sao_child_bar_gpu import (
+        ChildBarGpuPainter,
+        _ChildBarSnapshot,
+        _RowSnapshot as _ChildRowSnapshot,
+        BarColors as _ChildBarColors,
+        gpu_child_bar_enabled,
+    )
+except Exception:
+    ChildBarGpuPainter = None  # type: ignore[assignment]
+    _ChildBarSnapshot = None  # type: ignore[assignment]
+    _ChildRowSnapshot = None  # type: ignore[assignment]
+    _ChildBarColors = None  # type: ignore[assignment]
+    def gpu_child_bar_enabled() -> bool:  # type: ignore[no-redef]
+        return False
 from overlay_scheduler import get_scheduler as _get_scheduler
+from perf_probe import probe as _probe
 
 try:
     import moderngl
@@ -309,6 +357,10 @@ class SAOCircleButton(tk.Canvas):
             'RGBA', (self.MAX_SIZE, self.MAX_SIZE), (0, 0, 0, 0))
         self._visual_sig = None
         self._last_pasted_size: Optional[int] = None
+        # v2.3.0 Phase 3+: when True, _draw becomes a no-op; the
+        # painting is delegated to MenuBarGpuPainter on a GPU overlay
+        # underneath. The Canvas widget remains for hit-testing only.
+        self._gpu_managed: bool = False
 
         self._draw()
         self.bind('<Enter>', self._on_enter)
@@ -325,6 +377,13 @@ class SAOCircleButton(tk.Canvas):
         self._draw()
 
     def _draw(self):
+        # v2.3.0 Phase 3+: when a MenuBarGpuPainter owns this button's
+        # visual layer, skip ALL Tk-side paint work. The Canvas remains
+        # at chroma-key bg so the GPU layer underneath shows through,
+        # and hit-test geometry is unchanged so click/Enter/Leave
+        # bindings continue to fire.
+        if self._gpu_managed:
+            return
         # v2.2.10: subpixel fisheye. Render the sprite at the next-larger
         # integer size (so the renderer cache can still hit on each int
         # bucket) but composite it onto the canvas using the fractional
@@ -347,8 +406,18 @@ class SAOCircleButton(tk.Canvas):
         # Quantize the floating size to 1/4 px so we still skip duplicate
         # paints when the animation has settled but redraw smoothly while
         # it's in motion.
+        # v2.2.27: dedup by integer-snapped offset bucket as well, since
+        # the renderer cache is keyed on int-size and the v2.2.26+ snap
+        # path produces identical pixel output for any size_f within ±0.25
+        # of the same integer offset. Without this, fisheye redrew every
+        # frame because size_q kept ticking while the actual composite
+        # was identical.
         size_q = round(size_f * 4.0) / 4.0
-        sig = (size_q, self.icon_text, border_color, inner_fill, icon_color, bg_key)
+        off_pre = (self.MAX_SIZE - size_f) / 2.0
+        ioff_pre = round(off_pre)
+        snap_pre = abs(off_pre - ioff_pre) < 0.25
+        sig_pos = (size, ioff_pre, True) if snap_pre else (size_q, off_pre, False)
+        sig = (sig_pos, self.icon_text, border_color, inner_fill, icon_color, bg_key)
         if sig == self._visual_sig and self._bg_item is not None:
             return
 
@@ -368,7 +437,24 @@ class SAOCircleButton(tk.Canvas):
         # Center the (possibly oversized by ≤1 px) sprite at the float
         # _size so motion is continuous instead of stepping by 1 px.
         off = (self.MAX_SIZE - size_f) / 2.0
-        subpixel_alpha_composite(canvas_img, image, off, off)
+        # v2.2.26: use the cheap integer-composite path whenever the
+        # fractional offset is within 0.10 px of an integer. On a 70 px
+        # sprite that's a sub-perceptual shift but it skips PIL's BILINEAR
+        # AFFINE transform (~0.17 ms → ~0.03 ms per button × 8 buttons).
+        # Without this, the size_q quantization to 1/4 px still routed
+        # 3 of every 4 frames through the slow subpixel path during
+        # fisheye hover.
+        # v2.2.27: bumped to 0.25 px. On a 70 px button at 60 fps, a
+        # quarter-pixel snap is invisible (well below the 1 minute-of-arc
+        # vernier acuity threshold at typical viewing distance), but it
+        # catches ~50% of fisheye frames vs ~20% with the 0.10 threshold,
+        # cutting per-tick wall from ~1.25 ms → ~0.6 ms per button (×8
+        # buttons = ~5 ms saved per tick on Tk main thread).
+        ioff = round(off)
+        if abs(off - ioff) < 0.25:
+            canvas_img.alpha_composite(image, (int(ioff), int(ioff)))
+        else:
+            subpixel_alpha_composite(canvas_img, image, off, off)
         self._last_pasted_size = size
 
         if self._bg_photo is None:
@@ -447,7 +533,19 @@ class SAOMenuBar(tk.Frame):
         self._enter_duration_s = 0.28
         self._float_phases: List[float] = []
         self._anim = Animator(self)
-        self.bind('<Destroy>', lambda e: self._stop_float())
+        # v2.3.0 Phase 3+: optional GPU painter for the fisheye strip.
+        # Built lazily in _build() once the slot/button geometry is
+        # known; torn down in _stop_float on widget destroy.
+        self._gpu_painter: Optional[Any] = None
+        self._gpu_color_fns: Optional[Any] = None
+        # v2.3.0 Phase A3: cache screen origin so _dispatch_gpu_paint
+        # doesn't pay 0.1-0.5ms of OS window queries per frame. Tk
+        # <Configure> on self fires only when geometry changes.
+        self._cached_screen_xy: Optional[Tuple[int, int]] = None
+        self.bind('<Configure>',
+                  lambda e: setattr(self, '_cached_screen_xy', None),
+                  add='+')
+        self.bind('<Destroy>', lambda e: self._on_destroy())
         self._build()
 
     _SLOT = 70  # 按钮槽尺寸(px) — 大于 SIZE=54 以容纳鱼眼放大后的按钮
@@ -481,6 +579,57 @@ class SAOMenuBar(tk.Frame):
             btn.bind('<Leave>', lambda e: self._off_fisheye(),         add='+')
         self.bind_all_recursive('<MouseWheel>', self._on_scroll)
         self._float_phases = [i * 1.57 for i in range(len(self._buttons))]
+        # v2.3.0 Phase 3+: bring up the GPU painter if available.
+        # Done after buttons exist so we can flip _gpu_managed and
+        # clear the per-button Canvas paint state.
+        self._setup_gpu_painter()
+
+    def _setup_gpu_painter(self) -> None:
+        # Tear down any prior painter (e.g. on _build re-entry from scroll).
+        if self._gpu_painter is not None:
+            try:
+                self._gpu_painter.destroy()
+            except Exception:
+                pass
+            self._gpu_painter = None
+        if MenuBarGpuPainter is None or not gpu_menu_bar_enabled():
+            return
+        if not self._buttons:
+            return
+        try:
+            palette = {
+                'border': SAOColors.CIRCLE_BORDER,
+                'bg': SAOColors.CIRCLE_BG,
+                'icon': SAOColors.CIRCLE_ICON,
+                'active_border': SAOColors.ACTIVE_BORDER,
+                'active_bg': SAOColors.ACTIVE_BG,
+                'active_icon': SAOColors.ACTIVE_ICON,
+                'hover_bg': SAOColors.HOVER_BG,
+                'hover_icon': SAOColors.HOVER_ICON,
+            }
+            self._gpu_color_fns = BarColorFns(palette, lerp_color)
+            self._gpu_painter = MenuBarGpuPainter(
+                self.winfo_toplevel(),
+                slot_px=self._SLOT,
+                max_size=SAOCircleButton.MAX_SIZE,
+            )
+            for btn in self._buttons:
+                btn._gpu_managed = True
+                # Drop any pre-existing PhotoImage so the Canvas is
+                # pure chroma-keyed bg (invisible) under the GPU layer.
+                if btn._bg_item is not None:
+                    try:
+                        btn.delete(btn._bg_item)
+                    except Exception:
+                        pass
+                    btn._bg_item = None
+                btn._bg_photo = None
+                btn._visual_sig = None
+        except Exception:
+            self._gpu_painter = None
+            self._gpu_color_fns = None
+            for btn in self._buttons:
+                btn._gpu_managed = False
 
     def bind_all_recursive(self, event, handler):
         self.bind(event, handler)
@@ -558,6 +707,20 @@ class SAOMenuBar(tk.Frame):
             except Exception:
                 pass
             self._float_registered = False
+        # NOTE: GPU painter teardown lives in _on_destroy, not here.
+        # _stop_float fires every time the fisheye settles; the painter
+        # must persist across rest ↔ hover transitions.
+
+    def _on_destroy(self) -> None:
+        """Bound to <Destroy>; releases the float scheduler AND any
+        long-lived resources (the GPU painter)."""
+        self._stop_float()
+        if self._gpu_painter is not None:
+            try:
+                self._gpu_painter.destroy()
+            except Exception:
+                pass
+            self._gpu_painter = None
 
     def _float_animating(self) -> bool:
         if not self.winfo_exists() or not self._buttons:
@@ -571,6 +734,7 @@ class SAOMenuBar(tk.Frame):
                 return True
         return False
 
+    @_probe.decorate('ui.menu.fisheye_tick')
     def _tick_float(self, _now: float):
         if not self.winfo_exists() or not self._buttons:
             return
@@ -611,10 +775,46 @@ class SAOMenuBar(tk.Frame):
                 btn._draw()
                 btn._float_prev_q = sq
                 btn._float_prev_s = s
+        # v2.3.0 Phase 3+: feed the GPU painter once per tick after all
+        # button states have settled. The painter snapshots state by
+        # value and dedupes internally so calling every tick is cheap.
+        if self._gpu_painter is not None and self._gpu_color_fns is not None:
+            try:
+                self._dispatch_gpu_paint()
+            except Exception:
+                pass
         if self._enter_active and not keep_animating:
             self._enter_active = False
         if not keep_animating and self._hover_idx is None:
             self._stop_float()
+
+    def _dispatch_gpu_paint(self) -> None:
+        """Snapshot all button visual states and feed them to the GPU
+        painter. Runs on the Tk main thread; reads winfo for screen
+        position. The painter's worker does the PIL composite."""
+        if not self._buttons or _ButtonSnapshot is None:
+            return
+        if not self.winfo_exists() or not self.winfo_ismapped():
+            return
+        cached = self._cached_screen_xy
+        if cached is None:
+            try:
+                cached = (self.winfo_rootx(), self.winfo_rooty())
+            except Exception:
+                return
+            self._cached_screen_xy = cached
+        sx, sy = cached
+        max_sz = SAOCircleButton.MAX_SIZE
+        slot = self._SLOT
+        n = len(self._buttons)
+        strip_w = max_sz
+        strip_h = slot * n
+        snaps = [
+            _ButtonSnapshot(b._size, b._hover_t, b._active, b.icon_text)
+            for b in self._buttons
+        ]
+        self._gpu_painter.tick(sx, sy, strip_w, strip_h, snaps,
+                               self._gpu_color_fns)
 
     def _on_fisheye(self, idx: int):
         self._hover_idx = idx
@@ -655,8 +855,40 @@ class SAOLeftInfo(tk.Frame):
         self._bottom_photo = None
         self._sweep_phase = 0.0
         self._sweep_strength = 0.0
+        # v2.3.0 Phase 3+: optional GPU painter for the left info panel.
+        # When attached, _redraw_top/_redraw_bottom skip the Tk
+        # PhotoImage upload and dispatch a snapshot to the painter
+        # instead. Tk Canvases stay in place at chroma-key bg so the
+        # GPU layer underneath shows through.
+        # GPU painter: when attached we set Tk canvases to FINAL size
+        # once (so the parent layout settles correctly) and never
+        # configure them again per animation frame. The painter
+        # receives the animated sizes via snapshot.
+        self._gpu_painter: Optional[Any] = None
+        self._gpu_managed: bool = False
+        self._gpu_tk_sized: bool = False
+        self._cached_screen_xy: Optional[Tuple[int, int]] = None
 
         self._build()
+        self._setup_gpu_painter()
+
+    def _setup_gpu_painter(self) -> None:
+        if LeftInfoGpuPainter is None or not gpu_left_info_enabled():
+            return
+        try:
+            self._gpu_painter = LeftInfoGpuPainter(self.winfo_toplevel())
+            self._gpu_managed = True
+        except Exception:
+            self._gpu_painter = None
+            self._gpu_managed = False
+
+    def _on_destroy(self) -> None:
+        if self._gpu_painter is not None:
+            try:
+                self._gpu_painter.destroy()
+            except Exception:
+                pass
+            self._gpu_painter = None
 
     def _build(self):
         bg = self.cget('bg')
@@ -667,6 +899,12 @@ class SAOLeftInfo(tk.Frame):
         self._bottom = tk.Canvas(self, width=0, height=0,
                                  bg=bg, highlightthickness=0)
         self._bottom.pack(anchor='nw')
+        self.bind('<Destroy>', lambda e: self._on_destroy(), add='+')
+        # v2.3.0 Phase A2: invalidate cached screen origin on layout
+        # change. <Configure> fires only when geometry actually moves.
+        self.bind('<Configure>',
+                  lambda e: setattr(self, '_cached_screen_xy', None),
+                  add='+')
 
     def set_active(self, active: bool):
         if active == self._active:
@@ -722,6 +960,7 @@ class SAOLeftInfo(tk.Frame):
 
         self._apply_panel_progresses(top_t, bottom_t)
 
+    @_probe.decorate('ui.menu.left_panel_apply')
     def _apply_panel_progresses(self, top_t: float, bottom_t: float,
                                 sweep_phase: float = 0.0, sweep_strength: float = 0.0):
         top_t = max(0.0, min(1.0, top_t))
@@ -733,10 +972,49 @@ class SAOLeftInfo(tk.Frame):
         bottom_w = max(1, int(round(self._target_w * max(top_t, bottom_t * 0.94))))
         bottom_h = max(1, int(round(self._bottom_h * bottom_t)))
 
-        self._top.configure(width=top_w, height=top_h)
-        self._bottom.configure(width=bottom_w, height=bottom_h)
-        self._redraw_top(top_w, top_h)
-        self._redraw_bottom(bottom_w, bottom_h)
+        if self._gpu_managed and self._gpu_painter is not None \
+                and _LeftInfoSnapshot is not None:
+            # GPU path: resize Tk canvases ONCE to final/full target so
+            # layout managers see a stable bounding box, then leave
+            # them alone. The animated sizes only feed the painter.
+            if not self._gpu_tk_sized:
+                try:
+                    self._top.configure(width=self._target_w,
+                                        height=self._top_h)
+                    self._bottom.configure(width=self._target_w,
+                                           height=self._bottom_h)
+                    self._gpu_tk_sized = True
+                    self._cached_screen_xy = None
+                except Exception:
+                    pass
+            self._dispatch_gpu_paint(top_w, top_h, bottom_w, bottom_h)
+        else:
+            self._top.configure(width=top_w, height=top_h)
+            self._bottom.configure(width=bottom_w, height=bottom_h)
+            self._redraw_top(top_w, top_h)
+            self._redraw_bottom(bottom_w, bottom_h)
+
+    def _dispatch_gpu_paint(self, top_w: int, top_h: int,
+                            bottom_w: int, bottom_h: int) -> None:
+        if not self.winfo_exists() or not self.winfo_ismapped():
+            return
+        cached = self._cached_screen_xy
+        if cached is None:
+            try:
+                cached = (self.winfo_rootx(), self.winfo_rooty())
+            except Exception:
+                return
+            self._cached_screen_xy = cached
+        sx, sy = cached
+        snap = _LeftInfoSnapshot(
+            self.username, self.description,
+            top_w, top_h, bottom_w, bottom_h,
+            self._sweep_phase, self._sweep_strength,
+        )
+        try:
+            self._gpu_painter.tick(sx, sy, snap)
+        except Exception:
+            pass
 
     def _redraw_top(self, w, h):
         if w < 20 or h < 20:
@@ -809,7 +1087,23 @@ class SAOChildBar(tk.Frame):
         self._locked_size: Optional[Tuple[int, int]] = None
         self._size_anim_active = False
         self._anim = Animator(self)
-        self.bind('<Destroy>', lambda e: self._stop_row_anim())
+        self._gpu_painter: Optional[Any] = None
+        self._gpu_managed: bool = False
+        self._gpu_colors: Optional[Any] = None
+        self._gpu_chroma_bg: str = '#010101'
+        self._gpu_fade_t: float = 0.0
+        # v2.3.0 Phase A1: cached painter inputs so the per-frame
+        # tick stays Tk-free in GPU mode. Widths are populated by
+        # animation step closures; screen_xy is invalidated on
+        # <Configure> of self or _content_wrap.
+        self._cached_screen_xy: Optional[Tuple[int, int]] = None
+        self._anim_line_w: Optional[int] = None
+        self._anim_arrow_w: Optional[int] = None
+        self._setup_gpu_painter()
+        self.bind('<Destroy>', lambda e: self._on_destroy(), add='+')
+        self.bind('<Configure>',
+                  lambda e: setattr(self, '_cached_screen_xy', None),
+                  add='+')
 
     @staticmethod
     def _menu_signature(items: List[Dict]) -> Tuple:
@@ -909,19 +1203,30 @@ class SAOChildBar(tk.Frame):
             pass
 
         def _step(t: float):
-            for row, start_w in zip(rows, start_widths):
-                if row.winfo_exists():
-                    row.configure(width=max(1, int(round(lerp(start_w, 1, t)))))
+            gpu = self._gpu_managed
+            for outer, row, start_w in zip(self._items, rows, start_widths):
+                w = max(1, int(round(lerp(start_w, 1, t))))
+                if gpu:
+                    outer._anim_row_w = w
+                elif row.winfo_exists():
+                    row.configure(width=w)
             fade_t = ease_in_out(t)
             self._apply_line_arrow_fade(fade_t)
             for outer in self._items:
                 apply_visual = getattr(outer, '_apply_fade_visual', None)
                 if apply_visual:
                     apply_visual(fade_t)
-            if self._line_cv is not None and self._line_cv.winfo_exists():
-                self._line_cv.configure(width=max(1, int(round(lerp(line_start, 1, t)))))
-            if self._arrow_cv is not None and self._arrow_cv.winfo_exists():
-                self._arrow_cv.configure(width=max(1, int(round(lerp(arrow_start, 1, t)))))
+            line_w = max(1, int(round(lerp(line_start, 1, t))))
+            arrow_w = max(1, int(round(lerp(arrow_start, 1, t))))
+            if gpu:
+                self._anim_line_w = line_w
+                self._anim_arrow_w = arrow_w
+                self._dispatch_gpu_paint()
+            else:
+                if self._line_cv is not None and self._line_cv.winfo_exists():
+                    self._line_cv.configure(width=line_w)
+                if self._arrow_cv is not None and self._arrow_cv.winfo_exists():
+                    self._arrow_cv.configure(width=arrow_w)
 
         def _finish():
             for w in self.winfo_children():
@@ -941,6 +1246,10 @@ class SAOChildBar(tk.Frame):
 
     def _apply_line_arrow_fade(self, fade_t: float):
         fade_t = max(0.0, min(1.0, fade_t))
+        self._gpu_fade_t = fade_t
+        if self._gpu_managed:
+            self._dispatch_gpu_paint()
+            return
         bg = self.cget('bg')
         if self._line_cv is not None and self._line_cv.winfo_exists():
             for item_id, base_color in self._line_item_specs:
@@ -957,6 +1266,10 @@ class SAOChildBar(tk.Frame):
 
     def _rebuild(self, items: List[Dict], animate_rows: bool = True):
         self._stop_row_anim()
+        # Reset anim-driven painter inputs; new items will populate.
+        self._anim_line_w = None
+        self._anim_arrow_w = None
+        self._cached_screen_xy = None
         old_w = max(0, self.winfo_width(), self.winfo_reqwidth()) if self.winfo_exists() else 0
         old_h = max(0, self.winfo_height(), self.winfo_reqheight()) if self.winfo_exists() else 0
         if old_w > 1 or old_h > 1:
@@ -979,6 +1292,11 @@ class SAOChildBar(tk.Frame):
             self._anim.cancel('size_shift')
             self._size_anim_active = False
             self._locked_size = None
+            if self._gpu_managed and self._gpu_painter is not None:
+                try:
+                    self._gpu_painter.clear()
+                except Exception:
+                    pass
             try:
                 self.configure(width=0, height=0)
             except Exception:
@@ -1067,7 +1385,14 @@ class SAOChildBar(tk.Frame):
             for outer in self._items:
                 row = getattr(outer, '_row_body', None)
                 if row is not None and row.winfo_exists():
-                    row.configure(width=240)
+                    if self._gpu_managed:
+                        outer._anim_row_w = 240
+                    else:
+                        row.configure(width=240)
+        # GPU mode: blank every Tk widget so only the painter draws.
+        if self._gpu_managed:
+            self._gpu_force_chroma()
+            self._dispatch_gpu_paint()
 
     def _start_row_anim(self):
         if not self._items:
@@ -1098,11 +1423,13 @@ class SAOChildBar(tk.Frame):
     def _row_animating(self) -> bool:
         return self._row_anim_active and self.winfo_exists()
 
+    @_probe.decorate('ui.menu.child_row_anim')
     def _tick_row_anim(self, now: float):
         if not self.winfo_exists() or not self._items:
             self._stop_row_anim()
             return
         keep_animating = False
+        gpu = self._gpu_managed
         for idx, outer in enumerate(self._items):
             row = getattr(outer, '_row_body', None)
             if row is None or not row.winfo_exists():
@@ -1111,10 +1438,19 @@ class SAOChildBar(tk.Frame):
             local_t = max(0.0, min(1.0, local_t))
             start_w = max(1, int(getattr(outer, '_row_start_w', 72)))
             width = max(1, int(round(lerp(start_w, 240, ease_out(local_t)))))
-            if int(row.cget('width')) != width:
-                row.configure(width=width)
+            if gpu:
+                # GPU path: stash the animated width on outer; Tk row
+                # frame is invisible (chroma keyed) and its inner
+                # width doesn't drive any hit-testing, so skip the
+                # expensive .configure entirely.
+                outer._anim_row_w = width
+            else:
+                if int(row.cget('width')) != width:
+                    row.configure(width=width)
             if local_t < 1.0:
                 keep_animating = True
+        if gpu:
+            self._dispatch_gpu_paint()
         if not keep_animating:
             try:
                 self.update_idletasks()
@@ -1158,6 +1494,8 @@ class SAOChildBar(tk.Frame):
                 )
             except Exception:
                 pass
+            if self._gpu_managed:
+                self._dispatch_gpu_paint()
 
         def _finish():
             self._size_anim_active = False
@@ -1208,6 +1546,9 @@ class SAOChildBar(tk.Frame):
         def _update_hover(t, r=row, il=icon_lbl, tl=text_lbl,
                           ind=indicator, arr=arrow_lbl):
             _hover_state['t'] = t
+            if self._gpu_managed:
+                self._dispatch_gpu_paint()
+                return
             bg = lerp_color(SAOColors.CHILD_BG, SAOColors.CHILD_HOVER, t)
             fg = lerp_color(SAOColors.CHILD_TEXT, SAOColors.CHILD_HOVER_FG, t)
             icon_fg = lerp_color(SAOColors.CHILD_ICON, SAOColors.CHILD_HOVER_FG, t)
@@ -1222,6 +1563,11 @@ class SAOChildBar(tk.Frame):
         def _apply_fade_visual(fade_t, r=row, il=icon_lbl, tl=text_lbl,
                                ind=indicator, arr=arrow_lbl):
             fade_t = max(0.0, min(1.0, fade_t))
+            if self._gpu_managed:
+                # GPU path: fade is global to the bar (handled by
+                # _apply_line_arrow_fade which already dispatched).
+                # We only need to keep _hover_state coherent — no-op.
+                return
             ht = _hover_state['t']
             bg_now = lerp_color(SAOColors.CHILD_BG, SAOColors.CHILD_HOVER, ht)
             fg_now = lerp_color(SAOColors.CHILD_TEXT, SAOColors.CHILD_HOVER_FG, ht)
@@ -1268,9 +1614,163 @@ class SAOChildBar(tk.Frame):
         # 入场动画: 从右侧滑入
         outer._apply_fade_visual = _apply_fade_visual
         outer._row_start_w = 88
+        outer._hover_state = _hover_state
+        outer._icon_text = item.get('icon', '') or ''
+        outer._label_text = item.get('label', '') or ''
+        outer._anim_row_w = outer._row_start_w
         row.configure(width=outer._row_start_w)
 
         return outer
+
+    # ── v2.3.0 Phase 3+++: GPU painter wiring ─────────────────────
+    def _setup_gpu_painter(self):
+        if ChildBarGpuPainter is None or not gpu_child_bar_enabled():
+            return
+        try:
+            top = self.winfo_toplevel()
+            self._gpu_painter = ChildBarGpuPainter(top)
+            if _ChildBarColors is not None:
+                self._gpu_colors = _ChildBarColors(
+                    SAOColors.CHILD_BG, SAOColors.CHILD_HOVER,
+                    SAOColors.CHILD_TEXT, SAOColors.CHILD_HOVER_FG,
+                    SAOColors.CHILD_ICON, SAOColors.ACTIVE_BORDER,
+                    lerp_color,
+                )
+            self._gpu_managed = True
+            self._gpu_chroma_bg = self.cget('bg') or '#010101'
+        except Exception:
+            self._gpu_painter = None
+            self._gpu_managed = False
+
+    def _on_destroy(self):
+        self._stop_row_anim()
+        if self._gpu_painter is not None:
+            try:
+                self._gpu_painter.destroy()
+            except Exception:
+                pass
+            self._gpu_painter = None
+        self._gpu_managed = False
+
+    def _gpu_force_chroma(self):
+        """Repaint every Tk widget in the bar with chroma-key bg/fg so
+        Tk renders nothing visible. Painter draws on top."""
+        if not self._gpu_managed:
+            return
+        chroma = self._gpu_chroma_bg
+        wrap = self._content_wrap
+        if wrap is None or not wrap.winfo_exists():
+            return
+
+        def _walk(w):
+            try:
+                w.configure(bg=chroma)
+            except Exception:
+                pass
+            if isinstance(w, tk.Label):
+                try:
+                    w.configure(fg=chroma)
+                except Exception:
+                    pass
+            for child in w.winfo_children():
+                _walk(child)
+
+        _walk(wrap)
+        # Canvases: force every drawn item to chroma fill so the
+        # itemconfigure calls in _apply_line_arrow_fade don't matter.
+        if self._line_cv is not None and self._line_cv.winfo_exists():
+            for item_id, _base in self._line_item_specs:
+                try:
+                    self._line_cv.itemconfigure(item_id, fill=chroma)
+                except Exception:
+                    pass
+        if self._arrow_cv is not None and self._arrow_cv.winfo_exists():
+            for item_id, _base, channel in self._arrow_item_specs:
+                try:
+                    self._arrow_cv.itemconfigure(item_id, **{channel: chroma})
+                except Exception:
+                    pass
+
+    def _dispatch_gpu_paint(self):
+        if not self._gpu_managed or self._gpu_painter is None:
+            return
+        if not self.winfo_exists() or not self._items:
+            try:
+                self._gpu_painter.clear()
+            except Exception:
+                pass
+            return
+        if _ChildBarSnapshot is None or _ChildRowSnapshot is None:
+            return
+        try:
+            wrap = self._content_wrap
+            if wrap is None or not wrap.winfo_exists():
+                return
+            cached = self._cached_screen_xy
+            if cached is None:
+                try:
+                    cached = (wrap.winfo_rootx(), wrap.winfo_rooty())
+                except Exception:
+                    return
+                self._cached_screen_xy = cached
+            sx, sy = cached
+            line_w = 1
+            line_h = 1
+            arrow_w = 1
+            if self._anim_line_w is not None:
+                line_w = max(1, int(self._anim_line_w))
+                # line_h is fixed per rebuild; still need it from canvas
+                if self._line_cv is not None and self._line_cv.winfo_exists():
+                    try:
+                        line_h = max(1, int(self._line_cv.cget('height')))
+                    except Exception:
+                        pass
+            elif self._line_cv is not None and self._line_cv.winfo_exists():
+                try:
+                    line_w = max(1, int(self._line_cv.cget('width')))
+                    line_h = max(1, int(self._line_cv.cget('height')))
+                except Exception:
+                    pass
+            if self._anim_arrow_w is not None:
+                arrow_w = max(1, int(self._anim_arrow_w))
+            elif self._arrow_cv is not None and self._arrow_cv.winfo_exists():
+                try:
+                    arrow_w = max(1, int(self._arrow_cv.cget('width')))
+                except Exception:
+                    pass
+            rows: List[Any] = []
+            for outer in self._items:
+                row = getattr(outer, '_row_body', None)
+                if row is None or not row.winfo_exists():
+                    continue
+                anim_w = getattr(outer, '_anim_row_w', None)
+                if anim_w is not None:
+                    rw = max(1, int(anim_w))
+                else:
+                    try:
+                        rw = max(1, int(row.cget('width')))
+                    except Exception:
+                        rw = 240
+                hs = getattr(outer, '_hover_state', None)
+                ht = float(hs['t']) if hs else 0.0
+                rows.append(_ChildRowSnapshot(
+                    getattr(outer, '_icon_text', ''),
+                    getattr(outer, '_label_text', ''),
+                    ht, rw,
+                ))
+            if not rows:
+                self._gpu_painter.clear()
+                return
+            snap = _ChildBarSnapshot(
+                line_w=line_w, line_h=line_h, arrow_w=arrow_w,
+                fade_t=self._gpu_fade_t,
+                rows=rows,
+                bg_hex=self._gpu_chroma_bg,
+                colors=self._gpu_colors,
+            )
+            self._gpu_painter.tick(sx, sy, snap)
+        except Exception:
+            pass
 
 
 # ──────────────────── 弹出菜单容器 (PopUpMenu) ────────────────────
@@ -1671,6 +2171,7 @@ class SAOPopUpMenu:
         self._menu_hud_backdrop_key = key
         return self._menu_hud_backdrop
 
+    @_probe.decorate('ui.menu.draw_main')
     def _draw_menu_hud(self, dx: int = 0, dy: int = 0, phase: float = 0.0):
         if not self._menu_hud_cv or not self._overlay or not self._overlay.winfo_exists():
             return
@@ -2139,6 +2640,7 @@ class SAOPopUpMenu:
             return False
         return True
 
+    @_probe.decorate('ui.menu.tick_main')
     def _tick_menu_overlay(self, now: float) -> None:
         if not self._visible or not self._overlay or not self._overlay.winfo_exists():
             return

@@ -38,6 +38,8 @@ from overlay_render_worker import AsyncFrameWorker, submit_ulw_commit
 from render_capture_sync import wait_until_capture_idle
 from config import FONTS_DIR
 
+from perf_probe import probe as _probe
+
 # ═══════════════════════════════════════════════
 #  Win32 / ULW glue
 # ═══════════════════════════════════════════════
@@ -304,6 +306,7 @@ class _RowState:
         self.fx_tier = ''
         self.fx_start = 0.0
 
+    @_probe.decorate('ui.dps.update_targets')
     def update_targets(self, data: dict) -> None:
         self.name = str(data.get('name') or self.name)
         self.profession = str(data.get('profession') or '')
@@ -714,6 +717,7 @@ class DpsOverlay:
         self._detail_uid = 0
         self._schedule_tick(immediate=True)
 
+    @_probe.decorate('ui.dps.update_detail')
     def update_detail(self, data: Optional[dict]) -> None:
         """Push fresh per-entity skill breakdown (called by controller)."""
         if not isinstance(data, dict):
@@ -836,6 +840,7 @@ class DpsOverlay:
     #  Snapshot ingestion
     # ──────────────────────────────────────────
 
+    @_probe.decorate('ui.dps.update')
     def update(self, snapshot: dict) -> None:
         if snapshot is None:
             return
@@ -896,6 +901,7 @@ class DpsOverlay:
             return True
         return False
 
+    @_probe.decorate('ui.dps.tick')
     def _tick(self, now: Optional[float] = None) -> None:
         if not self._visible or self._win is None:
             return
@@ -905,7 +911,8 @@ class DpsOverlay:
 
         # ── Async render pipeline ──
         if self._hwnd:
-            fb = self._render_worker.take_result()
+            # v2.2.23: don't let vision capture starve our commits.
+            fb = self._render_worker.take_result(allow_during_capture=True)
             if fb is not None:
                 # Resize Tk window if panel dimensions changed.
                 sz = (fb.width, fb.height)
@@ -917,7 +924,7 @@ class DpsOverlay:
                         pass
                     self._last_rendered_size = sz
                 try:
-                    submit_ulw_commit(self._hwnd, fb)
+                    submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
                 except Exception as e:
                     print(f'[DPS-OV] ulw error: {e}')
 
@@ -1127,6 +1134,7 @@ class DpsOverlay:
         total = min(self.MAX_HEIGHT, max(self.DEFAULT_HEIGHT, total))
         return (self.WIDTH, total)
 
+    @_probe.decorate('ui.dps.render')
     def _render(self, now: float) -> None:
         if not self._hwnd:
             return

@@ -33,6 +33,8 @@ from packet_parser import (PacketParser, PlayerData, MonsterData,
                            _PROFESSION_PREFIX, _ALL_PROFESSION_PREFIXES)
 from packet_capture import PacketCapture, list_devices, auto_select_device
 
+from perf_probe import probe as _probe
+
 logger = logging.getLogger('sao_auto.bridge')
 
 # ── Skill name table (from SRDC skill_names_new.json) ──
@@ -1162,6 +1164,7 @@ class PacketBridge:
             self._last_publish_t = now
             self._publish_player_update(player, from_tick=False)
 
+    @_probe.decorate('bridge._publish_player_update')
     def _publish_player_update(self, player: PlayerData, from_tick: bool = False):
         updates = {
             'recognition_ok': True,
@@ -1344,17 +1347,25 @@ class PacketBridge:
                     _should_save = True
         if _should_save:
             self._last_save_t = time.time()
-            try:
-                self._state_mgr.save_cache(self._settings)
-                # 也持久化职业技能缓存
-                if self._parser and self._parser._profession_skill_cache:
-                    serializable = {}
-                    for pid, smap in self._parser._profession_skill_cache.items():
-                        serializable[str(pid)] = {str(k): int(v) for k, v in smap.items()}
-                    self._settings.set('profession_skill_cache', serializable)
-                    self._settings.save()
-            except Exception:
-                pass
+            # Atomic JSON write occasionally costs 5–10 ms on slow disks; do
+            # it on a daemon thread so the parser/packet path never stalls.
+            threading.Thread(
+                target=self._save_cache_async,
+                name='sao-bridge-save',
+                daemon=True,
+            ).start()
+
+    def _save_cache_async(self) -> None:
+        try:
+            self._state_mgr.save_cache(self._settings)
+            if self._parser and self._parser._profession_skill_cache:
+                serializable = {}
+                for pid, smap in self._parser._profession_skill_cache.items():
+                    serializable[str(pid)] = {str(k): int(v) for k, v in smap.items()}
+                self._settings.set('profession_skill_cache', serializable)
+                self._settings.save()
+        except Exception:
+            pass
 
     def _error(self, msg: str):
         logger.error(f'[Bridge] {msg}')

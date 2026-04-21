@@ -14,6 +14,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import BASE_DIR
 
+from perf_probe import probe as _probe
+
 BOSS_RAID_SCHEMA_VERSION = 1
 DEFAULT_BOSS_RAID_SERVER_URL = "http://47.82.157.220:9320"
 BOSS_RAID_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "boss_raids")
@@ -740,6 +742,7 @@ class BossRaidEngine:
             except Exception:
                 pass
 
+    @_probe.decorate('boss.on_damage_event')
     def on_damage_event(self, event: Dict[str, Any]):
         """Called from packet_parser damage callback. Accumulates boss damage and detects invincibility.
 
@@ -820,6 +823,7 @@ class BossRaidEngine:
                 # Notify visual editor of entity list change
                 self._fire_entity_update_locked()
 
+    @_probe.decorate('boss.on_monster_update')
     def on_monster_update(self, monster_data: Dict[str, Any]):
         """Called from packet_parser monster update callback. Updates real boss HP/shield/breaking.
 

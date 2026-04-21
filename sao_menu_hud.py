@@ -16,6 +16,8 @@ except Exception:
     _gpu_blur = None
     _gpu_shell = None
 
+from perf_probe import probe as _probe
+
 
 _BASE = (
     getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
@@ -132,6 +134,16 @@ class MenuHudSpriteRenderer:
         # Per-frame dedup: if nothing visible would change, return the
         # cached PhotoImage without copying the static layer or repainting.
         self._frame_sig: Optional[Tuple[int, ...]] = None
+        # v2.2.25: reusable scratch buffer for render_pil. Avoids a
+        # ~840 KB Image alloc + memcpy per frame at 60 Hz; we re-blit
+        # the cached static into it via the C-implemented Image.paste.
+        self._scratch: Optional[Image.Image] = None
+        self._scratch_size: Optional[Tuple[int, int]] = None
+        # v2.2.25: pre-rendered stamp sprite (text only), invalidated when
+        # the second changes. Avoids font rasterization every frame.
+        self._stamp_sprite: Optional[Image.Image] = None
+        self._stamp_sprite_text: Optional[str] = None
+        self._stamp_sprite_size: Tuple[int, int] = (0, 0)
 
     def reset(self) -> None:
         self._static_key = None
@@ -143,7 +155,13 @@ class MenuHudSpriteRenderer:
         self._stamp_second = None
         self._stamp_text = ''
         self._frame_sig = None
+        self._scratch = None
+        self._scratch_size = None
+        self._stamp_sprite = None
+        self._stamp_sprite_text = None
+        self._stamp_sprite_size = (0, 0)
 
+    @_probe.decorate('ui.menu.render_canvas')
     def render(self, content_w: int, content_h: int,
                screen_w: int, screen_h: int,
                phase: float) -> 'MenuHudFrame':
@@ -210,6 +228,7 @@ class MenuHudSpriteRenderer:
             stamp_font=_tk_font_spec('sao', 10),
         )
 
+    @_probe.decorate('ui.menu.render_pil')
     def render_pil(self, content_w: int, content_h: int,
                    screen_w: int, screen_h: int,
                    phase: float) -> Tuple[Image.Image, Tuple[int, int]]:
@@ -232,9 +251,20 @@ class MenuHudSpriteRenderer:
 
         static = self._get_static_layer(
             content_w, content_h, screen_w, screen_h)
-        # Always copy: the static layer is reused next call, can't draw
-        # dynamic primitives directly into it.
-        frame = static.copy()
+        # v2.2.25: reuse a single scratch RGBA image across frames. The
+        # previous `static.copy()` allocated a fresh PIL Image (~840 KB
+        # for a typical 480×440 menu HUD) every tick; at 60 Hz that's
+        # 50 MB/s of pure allocation churn for the menu alone, on top of
+        # the actual memcpy. We now keep one scratch buffer and re-blit
+        # the cached static into it via the C-implemented Image.paste,
+        # which is a straight memcpy with no Python-level allocation.
+        sw_size = static.size
+        if self._scratch is None or self._scratch_size != sw_size:
+            self._scratch = Image.new('RGBA', sw_size, (0, 0, 0, 0))
+            self._scratch_size = sw_size
+        scratch = self._scratch
+        scratch.paste(static, (0, 0))
+        frame = scratch
 
         cx1 = self._PLATE_PAD - self._HUD_MARGIN
         cy1 = self._PLATE_PAD - self._HUD_MARGIN
@@ -326,11 +356,34 @@ class MenuHudSpriteRenderer:
         self._alpha_dot(frame, rail_x_l, dot_y_l, self._CYAN)
         self._alpha_dot(frame, rail_x_r, dot_y_r, self._GOLD)
 
+        # v2.2.25: stamp text changes only once per second. Cache it as
+        # a tiny sprite and paste it each frame, avoiding the FreeType
+        # rasterization + textbbox + ImageDraw.text path on every tick.
+        sprite = self._get_stamp_sprite(stamp)
+        if sprite is not None:
+            sx = cx2 - 4 - self._stamp_sprite_size[0]
+            sy = cy2 + 4
+            frame.alpha_composite(sprite, dest=(sx, sy))
+
+    def _get_stamp_sprite(self, stamp: str) -> Optional[Image.Image]:
+        if not stamp:
+            return None
+        if (self._stamp_sprite is not None
+                and self._stamp_sprite_text == stamp):
+            return self._stamp_sprite
         font = self._font('sao', 10)
-        bbox = self._text_bbox(draw, stamp, font)
-        stamp_w = bbox[2] - bbox[0]
-        draw.text((cx2 - 4 - stamp_w, cy2 + 4), stamp,
-                  font=font, fill=self._DIM_GOLD)
+        # Use a throwaway image to measure first.
+        probe = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+        bbox = self._text_bbox(ImageDraw.Draw(probe), stamp, font)
+        w = max(1, bbox[2] - bbox[0])
+        h = max(1, bbox[3] - bbox[1])
+        sprite = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(sprite).text(
+            (-bbox[0], -bbox[1]), stamp, font=font, fill=self._DIM_GOLD)
+        self._stamp_sprite = sprite
+        self._stamp_sprite_text = stamp
+        self._stamp_sprite_size = (w, h)
+        return sprite
 
     def _build_shell(self, img_w: int, img_h: int) -> Image.Image:
         if _gpu_shell is not None:
@@ -695,17 +748,88 @@ class MenuLeftInfoRenderer:
         self._top_size: Optional[Tuple[int, int]] = None
         self._bottom_photo: Optional[ImageTk.PhotoImage] = None
         self._bottom_size: Optional[Tuple[int, int]] = None
+        # v2.2.26: static plate cache (no sweep). Open/close + sync_pulse
+        # animations vary the panel size every frame; without caching the
+        # body, every frame re-runs ImageDraw.rectangle/lines/text/triangle
+        # plus a fresh PIL alloc. Now we keep one body per (username,w,h)
+        # and a separate sig-keyed scratch for sweep composites so steady
+        # frames return the cached PhotoImage immediately.
+        self._top_body_cache: Dict[Tuple[str, int, int], Image.Image] = {}
+        self._bottom_body_cache: Dict[Tuple[str, int, int], Image.Image] = {}
+        self._top_sig: Optional[Tuple] = None
+        self._bottom_sig: Optional[Tuple] = None
 
     def reset(self) -> None:
         self._top_photo = None
         self._top_size = None
         self._bottom_photo = None
         self._bottom_size = None
+        self._top_body_cache.clear()
+        self._bottom_body_cache.clear()
+        self._top_sig = None
+        self._bottom_sig = None
 
+    @_probe.decorate('ui.menu.plate_top')
     def render_top(self, username: str, width: int, height: int,
                    sweep_phase: float = 0.0, sweep_strength: float = 0.0) -> ImageTk.PhotoImage:
         width = max(1, int(width))
         height = max(1, int(height))
+        # v2.2.26: quantize sweep params so steady frames + several frames
+        # near the apex of the sin pulse hit the cache. Without this, even
+        # static (sweep_strength=0) ticks rebuilt the entire plate.
+        if sweep_strength > 0.005:
+            sp_q = round(float(sweep_phase) * 16.0) / 16.0
+            ss_q = round(float(sweep_strength) * 16.0) / 16.0
+        else:
+            sp_q = 0.0
+            ss_q = 0.0
+        sig = (username, width, height, sp_q, ss_q)
+        if sig == self._top_sig and self._top_photo is not None:
+            return self._top_photo
+
+        image = self._compose_top_image(username, width, height, sp_q, ss_q)
+        self._top_sig = sig
+        return self._to_photo(image, slot='top')
+
+    def render_top_pil(self, username: str, width: int, height: int,
+                       sweep_phase: float = 0.0,
+                       sweep_strength: float = 0.0) -> Image.Image:
+        """Worker-safe variant of :meth:`render_top` returning a raw
+        PIL Image. Does not touch Tk — safe to call from any thread.
+        Bypasses the Tk PhotoImage cache; the GPU path keeps its own
+        signature dedup."""
+        width = max(1, int(width))
+        height = max(1, int(height))
+        if sweep_strength > 0.005:
+            sp_q = round(float(sweep_phase) * 16.0) / 16.0
+            ss_q = round(float(sweep_strength) * 16.0) / 16.0
+        else:
+            sp_q = 0.0
+            ss_q = 0.0
+        return self._compose_top_image(username, width, height, sp_q, ss_q)
+
+    def _compose_top_image(self, username: str, width: int, height: int,
+                           sp_q: float, ss_q: float) -> Image.Image:
+        body = self._get_top_body(username, width, height)
+        if ss_q <= 0.005:
+            return body
+        image = body.copy()
+        self._apply_sweep(
+            image, width, height,
+            sweep_phase=sp_q,
+            sweep_strength=ss_q,
+            tint=(220, 246, 255),
+            alpha_scale=48,
+            blur_radius=max(5, width * 0.030),
+            slant=0.34,
+        )
+        return image
+
+    def _get_top_body(self, username: str, width: int, height: int) -> Image.Image:
+        key = (username, width, height)
+        cached = self._top_body_cache.get(key)
+        if cached is not None:
+            return cached
         image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
         if width >= 20 and height >= 20:
             draw = ImageDraw.Draw(image)
@@ -742,21 +866,70 @@ class MenuLeftInfoRenderer:
                         fill=(level, level, level, 255),
                         width=1,
                     )
-            self._apply_sweep(
-                image, width, height,
-                sweep_phase=sweep_phase,
-                sweep_strength=sweep_strength,
-                tint=(220, 246, 255),
-                alpha_scale=48,
-                blur_radius=max(5, width * 0.030),
-                slant=0.34,
-            )
-        return self._to_photo(image, slot='top')
+        # Cap cache: open/sync animations sweep through ~16 distinct sizes;
+        # bound at 64 to defend against unexpected size storms.
+        if len(self._top_body_cache) > 64:
+            self._top_body_cache.clear()
+        self._top_body_cache[key] = image
+        return image
 
+    @_probe.decorate('ui.menu.plate_bottom')
     def render_bottom(self, description: str, width: int, height: int,
                       sweep_phase: float = 0.0, sweep_strength: float = 0.0) -> ImageTk.PhotoImage:
         width = max(1, int(width))
         height = max(1, int(height))
+        if sweep_strength > 0.005:
+            sp_q = round(float(sweep_phase) * 16.0) / 16.0
+            # bottom plate gets a softer sweep than top (preserve old 0.82)
+            ss_q = round(float(sweep_strength) * 0.82 * 16.0) / 16.0
+        else:
+            sp_q = 0.0
+            ss_q = 0.0
+        sig = (description, width, height, sp_q, ss_q)
+        if sig == self._bottom_sig and self._bottom_photo is not None:
+            return self._bottom_photo
+
+        image = self._compose_bottom_image(description, width, height, sp_q, ss_q)
+        self._bottom_sig = sig
+        return self._to_photo(image, slot='bottom')
+
+    def render_bottom_pil(self, description: str, width: int, height: int,
+                          sweep_phase: float = 0.0,
+                          sweep_strength: float = 0.0) -> Image.Image:
+        """Worker-safe variant of :meth:`render_bottom`. See
+        :meth:`render_top_pil`."""
+        width = max(1, int(width))
+        height = max(1, int(height))
+        if sweep_strength > 0.005:
+            sp_q = round(float(sweep_phase) * 16.0) / 16.0
+            ss_q = round(float(sweep_strength) * 0.82 * 16.0) / 16.0
+        else:
+            sp_q = 0.0
+            ss_q = 0.0
+        return self._compose_bottom_image(description, width, height, sp_q, ss_q)
+
+    def _compose_bottom_image(self, description: str, width: int, height: int,
+                              sp_q: float, ss_q: float) -> Image.Image:
+        body = self._get_bottom_body(description, width, height)
+        if ss_q <= 0.005:
+            return body
+        image = body.copy()
+        self._apply_sweep(
+            image, width, height,
+            sweep_phase=sp_q,
+            sweep_strength=ss_q,
+            tint=(255, 236, 196),
+            alpha_scale=32,
+            blur_radius=max(4, width * 0.024),
+            slant=0.26,
+        )
+        return image
+
+    def _get_bottom_body(self, description: str, width: int, height: int) -> Image.Image:
+        key = (description, width, height)
+        cached = self._bottom_body_cache.get(key)
+        if cached is not None:
+            return cached
         image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
         if width >= 20 and height >= 15:
             draw = ImageDraw.Draw(image)
@@ -776,16 +949,10 @@ class MenuLeftInfoRenderer:
             lines = self._wrap_text(draw, description or '', font, max(8, width - 20))
             draw.multiline_text((10, 15), '\n'.join(lines), font=font,
                                 fill=self._TEXT_SUB, spacing=2)
-            self._apply_sweep(
-                image, width, height,
-                sweep_phase=sweep_phase,
-                sweep_strength=sweep_strength * 0.82,
-                tint=(255, 236, 196),
-                alpha_scale=32,
-                blur_radius=max(4, width * 0.024),
-                slant=0.26,
-            )
-        return self._to_photo(image, slot='bottom')
+        if len(self._bottom_body_cache) > 64:
+            self._bottom_body_cache.clear()
+        self._bottom_body_cache[key] = image
+        return image
 
     def _apply_sweep(self, image: Image.Image, width: int, height: int,
                      sweep_phase: float, sweep_strength: float,
@@ -810,6 +977,10 @@ class MenuLeftInfoRenderer:
             ),
             fill=(tint[0], tint[1], tint[2], alpha),
         )
+        # v2.2.26: PIL GaussianBlur is fastest for the small (≤240 px wide)
+        # side panels. Tried _gpu_blur but the upload/download overhead
+        # dwarfs the PIL CPU cost at this size; the cached-sig path below
+        # makes most frames a no-op anyway.
         overlay = overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
         image.alpha_composite(overlay)
 

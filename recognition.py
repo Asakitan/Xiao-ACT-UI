@@ -24,6 +24,13 @@ from render_capture_sync import capture_section
 from vision_accel import cvt_color, gaussian_blur
 from window_locator import WindowLocator
 
+try:
+    import gpu_capture as _gpu_capture  # type: ignore
+except Exception:
+    _gpu_capture = None  # type: ignore
+
+from perf_probe import probe as _probe
+
 _capture_local = threading.local()
 
 
@@ -32,11 +39,10 @@ def _set_capture_target(hwnd: int, rect: Optional[Tuple[int, int, int, int]]):
     _capture_local.rect = tuple(rect) if rect else None
 
 
-def _bitmap_to_bgr(hdc_mem, hbmp, width: int, height: int) -> Optional[np.ndarray]:
+def _bitmap_to_bgr(ctx: '_GDICaptureContext', width: int, height: int) -> Optional[np.ndarray]:
     if width <= 0 or height <= 0:
         return None
     gdi32 = ctypes.windll.gdi32
-    user32 = ctypes.windll.user32
     BI_RGB = 0
     DIB_RGB_COLORS = 0
 
@@ -62,26 +68,36 @@ def _bitmap_to_bgr(hdc_mem, hbmp, width: int, height: int) -> Optional[np.ndarra
         ]
 
     try:
-        bmi = BITMAPINFO()
+        # Reuse the buffer + BITMAPINFO across ticks: re-allocating a 4 MB
+        # ctypes.string_buffer on every recognition tick is itself a
+        # measurable contributor to the wall time, and the buffer shape is
+        # only a function of (width, height).
+        needed = width * height * 4
+        if ctx.buffer is None or ctx.buffer_size != needed:
+            ctx.buffer = ctypes.create_string_buffer(needed)
+            ctx.buffer_size = needed
+        if ctx.bmi is None:
+            ctx.bmi = BITMAPINFO()
+        bmi = ctx.bmi
         bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
         bmi.bmiHeader.biWidth = width
         bmi.bmiHeader.biHeight = -height
         bmi.bmiHeader.biPlanes = 1
         bmi.bmiHeader.biBitCount = 32
         bmi.bmiHeader.biCompression = BI_RGB
-        buffer = ctypes.create_string_buffer(width * height * 4)
         rows = gdi32.GetDIBits(
-            hdc_mem,
-            hbmp,
+            ctx.hdc_mem,
+            ctx.hbmp,
             0,
             height,
-            buffer,
+            ctx.buffer,
             ctypes.byref(bmi),
             DIB_RGB_COLORS,
         )
         if rows != height:
             return None
-        arr = np.frombuffer(buffer, dtype=np.uint8).reshape((height, width, 4))
+        arr = np.frombuffer(ctx.buffer, dtype=np.uint8, count=needed).reshape(
+            (height, width, 4))
         return arr[:, :, :3].copy()
     except Exception:
         return None
@@ -124,6 +140,114 @@ def _dwm_flush() -> None:
 _preferred_pw_flags: Optional[int] = None
 
 
+class _GDICaptureContext:
+    """Thread-local cache of GDI resources used by PrintWindow capture.
+
+    Re-creating GetWindowDC / CompatibleDC / CompatibleBitmap / pixel buffer
+    every tick costs ~1–2 ms on its own and contributes to the per-tick wall
+    time on top of the PrintWindow render. We keep the same handles around
+    until the (hwnd, width, height) signature changes.
+    """
+
+    __slots__ = (
+        'hwnd', 'width', 'height',
+        'hdc_window', 'hdc_mem', 'hbmp', 'old_obj',
+        'buffer', 'buffer_size', 'bmi',
+    )
+
+    def __init__(self):
+        self.hwnd = 0
+        self.width = 0
+        self.height = 0
+        self.hdc_window = None
+        self.hdc_mem = None
+        self.hbmp = None
+        self.old_obj = None
+        self.buffer = None
+        self.buffer_size = 0
+        self.bmi = None
+
+    def release(self) -> None:
+        gdi32 = ctypes.windll.gdi32
+        user32 = ctypes.windll.user32
+        try:
+            if self.hdc_mem and self.old_obj:
+                gdi32.SelectObject(self.hdc_mem, self.old_obj)
+        except Exception:
+            pass
+        try:
+            if self.hbmp:
+                gdi32.DeleteObject(self.hbmp)
+        except Exception:
+            pass
+        try:
+            if self.hdc_mem:
+                gdi32.DeleteDC(self.hdc_mem)
+        except Exception:
+            pass
+        try:
+            if self.hwnd and self.hdc_window:
+                user32.ReleaseDC(self.hwnd, self.hdc_window)
+        except Exception:
+            pass
+        self.hwnd = 0
+        self.width = 0
+        self.height = 0
+        self.hdc_window = None
+        self.hdc_mem = None
+        self.hbmp = None
+        self.old_obj = None
+
+    def acquire(self, hwnd: int, width: int, height: int) -> bool:
+        if (self.hwnd == hwnd and self.width == width and self.height == height
+                and self.hdc_window and self.hdc_mem and self.hbmp):
+            return True
+        self.release()
+        gdi32 = ctypes.windll.gdi32
+        user32 = ctypes.windll.user32
+        hdc_window = user32.GetWindowDC(hwnd)
+        if not hdc_window:
+            return False
+        hdc_mem = gdi32.CreateCompatibleDC(hdc_window)
+        hbmp = gdi32.CreateCompatibleBitmap(hdc_window, width, height)
+        if not hdc_mem or not hbmp:
+            try:
+                if hbmp:
+                    gdi32.DeleteObject(hbmp)
+            except Exception:
+                pass
+            try:
+                if hdc_mem:
+                    gdi32.DeleteDC(hdc_mem)
+            except Exception:
+                pass
+            try:
+                user32.ReleaseDC(hwnd, hdc_window)
+            except Exception:
+                pass
+            return False
+        old_obj = gdi32.SelectObject(hdc_mem, hbmp)
+        self.hwnd = hwnd
+        self.width = width
+        self.height = height
+        self.hdc_window = hdc_window
+        self.hdc_mem = hdc_mem
+        self.hbmp = hbmp
+        self.old_obj = old_obj
+        return True
+
+
+_capture_ctx_local = threading.local()
+
+
+def _get_capture_ctx() -> _GDICaptureContext:
+    ctx = getattr(_capture_ctx_local, 'ctx', None)
+    if ctx is None:
+        ctx = _GDICaptureContext()
+        _capture_ctx_local.ctx = ctx
+    return ctx
+
+
 def _capture_hwnd_client_printwindow(
     hwnd: int,
     client_rect: Tuple[int, int, int, int],
@@ -138,12 +262,10 @@ def _capture_hwnd_client_printwindow(
         return None
 
     user32 = ctypes.windll.user32
-    gdi32 = ctypes.windll.gdi32
     PW_CLIENTONLY = 0x00000001
     PW_RENDERFULLCONTENT = 0x00000002
     ALL_FLAGS = (PW_CLIENTONLY | PW_RENDERFULLCONTENT, PW_CLIENTONLY, 0)
 
-    # Try the last-known-good flags first to skip unnecessary combos.
     if _preferred_pw_flags is not None:
         order = (_preferred_pw_flags,) + tuple(
             f for f in ALL_FLAGS if f != _preferred_pw_flags
@@ -151,67 +273,67 @@ def _capture_hwnd_client_printwindow(
     else:
         order = ALL_FLAGS
 
-    hdc_window = user32.GetWindowDC(hwnd)
-    if not hdc_window:
+    ctx = _get_capture_ctx()
+    if not ctx.acquire(hwnd, width, height):
         return None
-    hdc_mem = gdi32.CreateCompatibleDC(hdc_window)
-    hbmp = gdi32.CreateCompatibleBitmap(hdc_window, width, height)
-    old_obj = None
-    try:
-        if not hdc_mem or not hbmp:
-            return None
-        old_obj = gdi32.SelectObject(hdc_mem, hbmp)
-        for flags in order:
-            try:
-                ok = user32.PrintWindow(hwnd, hdc_mem, flags)
-            except Exception:
-                ok = 0
-            if ok:
-                img = _bitmap_to_bgr(hdc_mem, hbmp, width, height)
-                if not _capture_looks_blank(img):
-                    _preferred_pw_flags = flags
-                    return img
-        return None
-    except Exception:
-        return None
-    finally:
+
+    for flags in order:
         try:
-            if old_obj:
-                gdi32.SelectObject(hdc_mem, old_obj)
+            ok = user32.PrintWindow(hwnd, ctx.hdc_mem, flags)
         except Exception:
-            pass
-        try:
-            if hbmp:
-                gdi32.DeleteObject(hbmp)
-        except Exception:
-            pass
-        try:
-            if hdc_mem:
-                gdi32.DeleteDC(hdc_mem)
-        except Exception:
-            pass
-        try:
-            user32.ReleaseDC(hwnd, hdc_window)
-        except Exception:
-            pass
+            ok = 0
+        if ok:
+            img = _bitmap_to_bgr(ctx, width, height)
+            if not _capture_looks_blank(img):
+                _preferred_pw_flags = flags
+                return img
+    return None
 
 
 def _capture_hwnd_client(
     hwnd: int,
     client_rect: Tuple[int, int, int, int],
 ) -> Tuple[Optional[np.ndarray], str]:
+    # ── v2.2.24: GPU path (Windows.Graphics.Capture) ──────────────
+    # Asynchronous, GPU-accelerated, never blocks the caller. Crucially we
+    # DO NOT enter ``capture_section()`` here — there is no PrintWindow GDI
+    # race for ULW commits to wait on, so the menu / HP / DPS overlay
+    # commits stop being starved at every recognition tick. The legacy
+    # path below is kept as a safety net for hosts where WGC is unavail.
+    if _gpu_capture is not None and hwnd > 0:
+        try:
+            if _gpu_capture.ensure_session(hwnd):
+                gpu_frame = _gpu_capture.get_latest_bgr(hwnd, max_age_s=0.5)
+                if gpu_frame is not None and gpu_frame.size > 0:
+                    cl, ct, cr, cb = client_rect
+                    cw = max(1, int(cr - cl))
+                    ch = max(1, int(cb - ct))
+                    fh, fw = int(gpu_frame.shape[0]), int(gpu_frame.shape[1])
+                    # gpu_capture.get_latest_bgr already crops to the
+                    # client area (off_x/off_y inset computed via
+                    # ClientToScreen + GetClientRect). Verify dimensions
+                    # before trusting it; the client_rect may have just
+                    # changed and the next WGC frame hasn't landed.
+                    if fw == cw and fh == ch:
+                        if not _capture_looks_blank(gpu_frame):
+                            return gpu_frame, "wgc"
+        except Exception:
+            # Any error → silent fallback to PrintWindow this tick.
+            pass
+
     with capture_section():
         # PrintWindow targets the game HWND directly. Do not fall back to
         # BitBlt / mss / ImageGrab here, because those can observe desktop
         # pixels or overlay layers instead of the game's own surface.
-        _dwm_flush()
+        # The first attempt skips DwmFlush — PrintWindow itself drives a
+        # frame compose for the target HWND, and DwmFlush is a synchronous
+        # vsync wait (~5–16 ms at 60 Hz) that we only need when the HWND's
+        # back buffer was actually stale.
         img = _capture_hwnd_client_printwindow(hwnd, client_rect)
         if not _capture_looks_blank(img):
             return img, "printwindow"
 
-        # Retry PrintWindow once after another compositor flush before we
-        # give up. This keeps capture game-layer-only while tolerating short
-        # composition races.
+        # Stale / blank — wait for the compositor to finish and try again.
         _dwm_flush()
         img = _capture_hwnd_client_printwindow(hwnd, client_rect)
         if not _capture_looks_blank(img):
@@ -360,6 +482,7 @@ _STA_COL_FILL_THRESHOLD = 0.18  # min fraction of rows matching per column
 _STA_COL_FILL_NEAR_FULL = 0.07  # relaxed threshold for rightmost columns near 100%
 
 
+@_probe.decorate('vision._detect_stamina_pct')
 def _detect_stamina_pct(img: np.ndarray) -> Tuple[float, float]:
     """Detect STA bar fill % by exact BGR colour matching.
 
@@ -642,6 +765,20 @@ class RecognitionEngine:
         self._settings = settings
         self._locator = WindowLocator()
         self._fps = CAPTURE_FPS_FAST
+        self._fps_idle = max(1, int(CAPTURE_FPS_FAST // 4) or 1)  # idle floor
+        self._fps_active = CAPTURE_FPS_FAST                       # active ceiling
+        self._fps_idle_after_s = 4.0  # seconds of no STA motion before slowing down
+        # v2.2.21: disabled — adaptive throttle dropped vision tick to 2Hz
+        # when STA was stable, but the HP overlay's STA bar fill and the
+        # `stamina_offline` auto-hide both feed off the vision-driven
+        # `gs.stamina_pct` / `gs.stamina_offline`. At 2Hz, STA bar appears
+        # frozen and offline detection takes >0.5s to fire (debounce 0.10s
+        # × multi-tick). Tabled until we either move STA solely to packet
+        # source or add a separate fast-path for STA detection inside the
+        # throttled tick.
+        self._fps_idle_until_change = False
+        self._last_sta_change_t = 0.0
+        self._last_sta_value_for_fps: Optional[float] = None
         self._running = False
         self._thread = None
         self._no_window_logged = False
@@ -739,6 +876,13 @@ class RecognitionEngine:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
         self._thread = None
+        # Tear down the WGC session so we don't leak the capture worker
+        # thread / D3D device into the next process lifetime.
+        if _gpu_capture is not None:
+            try:
+                _gpu_capture.stop()
+            except Exception:
+                pass
         self._sta_filtered_pct = None
         self._sta_pending_pct = None
         self._sta_pending_since = 0.0
@@ -773,8 +917,30 @@ class RecognitionEngine:
             except Exception as exc:
                 self._state_mgr.update(recognition_ok=False, error_msg=str(exc))
             elapsed = time.time() - start
-            time.sleep(max(0.01, (1.0 / self._fps) - elapsed))
+            time.sleep(max(0.01, (1.0 / self._current_fps()) - elapsed))
 
+    def _current_fps(self) -> float:
+        """Adaptive cap: drop tick rate when STA hasn't moved for a while.
+
+        PrintWindow + DwmFlush dominate this thread's wall time; running them
+        at 10 Hz when nothing on screen is changing wastes CPU/GPU and DWM
+        bandwidth. We keep ramp-up free — any change in STA value resets us
+        immediately back to the fast tier.
+        """
+        if not self._fps_idle_until_change:
+            return float(self._fps_active)
+        cur = self._sta_filtered_pct
+        if cur is None:
+            return float(self._fps_active)
+        if cur != self._last_sta_value_for_fps:
+            self._last_sta_value_for_fps = cur
+            self._last_sta_change_t = time.time()
+            return float(self._fps_active)
+        if (time.time() - self._last_sta_change_t) >= self._fps_idle_after_s:
+            return float(self._fps_idle)
+        return float(self._fps_active)
+
+    @_probe.decorate('vision.recognition_tick')
     def _tick(self):
         result = self._locator.find_game_window()
         if result is None:

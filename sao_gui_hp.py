@@ -46,6 +46,8 @@ from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, submit_ulw_commit
 from overlay_subpixel import subpixel_bar_width
 
+from perf_probe import probe as _probe
+
 from sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
     _has_cjk, _ease_out_cubic, _lerp,
@@ -529,6 +531,7 @@ class HpOverlay:
         self._drag_ox = 0
         self._drag_oy = 0
         self._last_topmost_t = 0.0  # last SetWindowPos topmost call
+        self._idle_submit_q = -1     # quantized idle submit gate (perf)
 
         # HP group auto-hide on offline (web parity: debounce + fade)
         self._offline_debounce_t = 0.0   # when offline first detected
@@ -545,6 +548,34 @@ class HpOverlay:
         self._panels_sig: tuple = ()
         self._shell_cache: Optional[Image.Image] = None
         self._shell_sig: tuple = ()
+        # v2.2.17: cache the text-shadow layer (was rebuilt + reblurred
+        # every frame). Sig captures every input that influences the
+        # shadow pixels: y_off, ID-plate text/state, HP digits, boss
+        # timer text + quantized urgent-pulse phase.
+        self._shadow_cache: Optional[Image.Image] = None
+        self._shadow_sig: tuple = ()
+        # v2.2.20: pulse glow caches. _draw_root_outer_pulse +
+        # _draw_root_cover_pulse each allocate a full-screen RGBA layer
+        # and run an 8/5px GPU blur EVERY frame. Strength is the only
+        # input that varies smoothly with time; quantizing it to ~50
+        # buckets keeps the visual breathing identical (alpha delta
+        # 0.02 invisible at the underlying glow opacities) and lets
+        # ~70-90% of frames hit the cache.
+        self._outer_pulse_cache: Optional[Image.Image] = None
+        self._outer_pulse_sig: tuple = ()
+        self._cover_pulse_cache: Optional[Image.Image] = None
+        self._cover_pulse_sig: tuple = ()
+        # v2.3.0 Phase 1: full-frame cache. The HP panel runs at 60 Hz
+        # but most consecutive frames differ only in animation phase
+        # (bracket pulse, scanline sweep) and continuous tween (root
+        # outer/cover pulse). Quantize each animation source to a
+        # perceptually invisible bucket and reuse the previous compose
+        # output when the resulting signature matches. The result is
+        # consumed read-only by _premultiply_to_bgra in the worker, so
+        # the same Image instance is safe to return across frames.
+        self._frame_cache: Optional[Image.Image] = None
+        self._frame_sig: tuple = ()
+        self._frame_version: int = 0
 
         # Async render worker — compose + premult off main thread.
         # v2.2.12: prefer_isolation so HP gets a dedicated heavy lane,
@@ -595,6 +626,14 @@ class HpOverlay:
         self._panels_sig = ()
         self._shell_cache = None
         self._shell_sig = ()
+        self._shadow_cache = None
+        self._shadow_sig = ()
+        self._outer_pulse_cache = None
+        self._outer_pulse_sig = ()
+        self._cover_pulse_cache = None
+        self._cover_pulse_sig = ()
+        self._frame_cache = None
+        self._frame_sig = ()
 
         if self._win is not None and self._win.winfo_exists():
             try:
@@ -613,6 +652,11 @@ class HpOverlay:
         self._win = tk.Toplevel(self.root)
         self._win.overrideredirect(True)
         self._win.attributes('-topmost', True)
+        # v2.3.0: keep the Toplevel hidden until the layered ex-style is
+        # applied. Without withdraw(), tk creates a default-bg (white)
+        # opaque window for a few ms before WS_EX_LAYERED is set, which
+        # the user perceives as a white flash next to the ID plate.
+        self._win.withdraw()
         self._win.geometry(
             f'{self.WIDTH}x{self.HEIGHT}+{self._x}+{self._y}')
         self._win.update_idletasks()
@@ -628,6 +672,12 @@ class HpOverlay:
             ctypes.c_void_p(self._hwnd), GWL_EXSTYLE,
             ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         )
+        # v2.3.0: now that WS_EX_LAYERED is in effect (the very next
+        # ULW commit drives the per-pixel alpha), it's safe to show.
+        try:
+            self._win.deiconify()
+        except Exception:
+            pass
         # Exclude from screen capture so vision engine never sees this overlay
         try:
             _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
@@ -827,6 +877,7 @@ class HpOverlay:
             return True
         return False
 
+    @_probe.decorate('ui.hp.tick')
     def _tick(self, now: Optional[float] = None) -> None:
         if not self._visible or self._win is None:
             return
@@ -840,10 +891,14 @@ class HpOverlay:
         # ── Async render pipeline ──
         # 1. Commit the most recent off-thread frame (if ready).
         if self._hwnd:
-            fb = self._render_worker.take_result()
+            # v2.2.23: allow_during_capture=True so vision PrintWindow
+            # ticks (10 Hz × 30-60 ms each) don't drop our commits — the
+            # async ulw queue is per-HWND and can't conflict with the
+            # game-window capture.
+            fb = self._render_worker.take_result(allow_during_capture=True)
             if fb is not None:
                 try:
-                    submit_ulw_commit(self._hwnd, fb)
+                    submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
                 except Exception as e:
                     print(f'[HP-OV] ulw error: {e}')
 
@@ -861,14 +916,23 @@ class HpOverlay:
                     pass
 
             # 2. Submit next frame for off-thread composition.
-            #    v2.2.15: no per-tick idle short-circuit — the HP
-            #    overlay always has continuous content (system clock
-            #    HH:MM:SS, NErVGear LINK OK pulse) when the boss timer
-            #    is empty. Scheduler idle downsampling (≤10–20 Hz when
-            #    _is_animating() is False) carries the CPU savings;
-            #    gating here would freeze the clock and pulse.
-            self._render_worker.submit(
-                self.compose_frame, now, self._hwnd, self._x, self._y)
+            #    v2.2.16: idle rate cap — when nothing is animating, the
+            #    HP panel only needs ~10 Hz to keep the HH:MM:SS clock
+            #    and the slow NErVGear LINK pulse smooth. The previous
+            #    20 Hz idle cadence was burning ~one full CPU core in
+            #    compose_frame (~40 ms each). Animating frames pass
+            #    through unchanged so combat HP/shield tweens stay 60 Hz.
+            if self._is_animating():
+                self._idle_submit_q = -1
+                submit_now = True
+            else:
+                q = int(now * 10.0)
+                submit_now = q != self._idle_submit_q
+                if submit_now:
+                    self._idle_submit_q = q
+            if submit_now:
+                self._render_worker.submit(
+                    self.compose_frame, now, self._hwnd, self._x, self._y)
 
         if self._hide_after_exit and self._fade_alpha <= 0.01:
             self.destroy()
@@ -969,6 +1033,7 @@ class HpOverlay:
         except Exception as e:
             print(f'[HP-OV] ulw error: {e}')
 
+    @_probe.decorate('ui.hp.compose')
     def compose_frame(self, now: Optional[float] = None) -> Image.Image:
         """Render one HP frame to an RGBA PIL image without touching Win32.
 
@@ -983,6 +1048,17 @@ class HpOverlay:
         # Signature depends only on the entry-translate offset.
         y_off = int(round(8 * (1.0 - self._enter_scale_t)))
         sig = (y_off,)
+
+        # ── v2.3.0 Phase 1: full-frame cache ──────────────────────────
+        # Build a quantized signature of EVERYTHING that affects the
+        # output pixels. If it matches the previous compose, we can skip
+        # the entire 30 ms PIL/numpy pipeline and reuse the prior image.
+        # Quantization buckets are sized below the perceptual threshold
+        # so visual quality is unaffected (\u201c\u4e0d\u80fd\u7ed9\u7279\u6548\u505a\u51cf\u6cd5\u201d).
+        frame_sig = self._compute_frame_sig(now, y_off)
+        if frame_sig is not None and self._frame_cache is not None \
+                and self._frame_sig == frame_sig:
+            return self._frame_cache
 
         # Cache A: outer panel shadows → panel backgrounds → content shadows
         if self._panels_cache is None or self._panels_sig != sig:
@@ -1032,11 +1108,42 @@ class HpOverlay:
 
         # Text shadows — batched onto one layer, one blur, composited
         # between panels and shell (above panel bg, below bar-shell).
-        shadow_layer = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        self._draw_id_plate_text(shadow_layer, y_off, now, mode='shadow')
-        self._draw_hp_text(shadow_layer, y_off, mode='shadow')
-        shadow_layer = _gpu_blur(shadow_layer, 2)
-        img.alpha_composite(shadow_layer)
+        # v2.2.17: cache by content sig. shadow pixels depend only on
+        # y_off, profession, name, level, HP digits and boss timer
+        # state (with quantized urgent pulse). Idle / steady combat
+        # frames now skip Image.new + 2 draw_text + _gpu_blur entirely.
+        # v2.2.19: quantize hp_int into ~1000 buckets so the shadow
+        # cache hits during HP tweens (previously every tween frame
+        # missed). The shadow uses 2px blur, so 0.1% HP differences
+        # are invisible; the exact value still draws into the
+        # unblurred content layer drawn AFTER the shadow composite.
+        max_int = int(round(self._hp_max))
+        hp_int_raw = int(round(self._hp_max * self._hp_pct_disp)) if self._hp_max > 0 else 0
+        bucket = max(1, max_int // 1000) if max_int > 0 else 1
+        hp_int = (hp_int_raw // bucket) * bucket
+        if self._boss_timer_text and self._boss_timer_urgent:
+            urgent_q = int((now % 0.8) * 12.5)  # ~10 buckets / 0.8s
+        else:
+            urgent_q = 0
+        shadow_sig = (
+            y_off,
+            self._profession,
+            self._name,
+            self._level,
+            hp_int,
+            max_int,
+            self._boss_timer_text,
+            self._boss_timer_urgent,
+            urgent_q,
+        )
+        if self._shadow_cache is None or self._shadow_sig != shadow_sig:
+            shadow_layer = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+            self._draw_id_plate_text(shadow_layer, y_off, now, mode='shadow')
+            self._draw_hp_text(shadow_layer, y_off, mode='shadow')
+            shadow_layer = _gpu_blur(shadow_layer, 2)
+            self._shadow_cache = shadow_layer
+            self._shadow_sig = shadow_sig
+        img.alpha_composite(self._shadow_cache)
 
         # Shell on top of shadows
         img.alpha_composite(self._shell_cache)
@@ -1069,7 +1176,138 @@ class HpOverlay:
             a[:, :, 3] = (a[:, :, 3].astype(np.uint16) * mul // 255
                           ).astype(np.uint8)
             img = Image.fromarray(a, 'RGBA')
+        # v2.3.0 Phase 1: store frame for cache reuse on next call.
+        if frame_sig is not None:
+            self._frame_cache = img
+            self._frame_sig = frame_sig
+            self._frame_version += 1
+            try:
+                img._sao_premult_safe = True  # type: ignore[attr-defined]
+                img._sao_content_version = self._frame_version  # type: ignore[attr-defined]
+            except Exception:
+                pass
         return img
+
+    def _compute_frame_sig(self, now: float, y_off: int) -> Optional[tuple]:
+        """Build a quantized signature of all per-frame pixel inputs.
+
+        Returns None if any input is in a regime where caching would be
+        unsafe (e.g. no spawn time, freshly resized).  Otherwise returns
+        a hashable tuple suitable for self._frame_sig comparison.
+
+        Quantization rationale:
+        - Animation phases (bracket/scanline/root pulses) bucket to
+          intervals where 1-bucket alpha/position deltas are below the
+          ~1 / 255 luminance step on already-soft glow primitives.
+        - HP and STA fills quantize to integer pixel widths because the
+          underlying bar is rendered with subpixel_bar_width \u2014 sub-pixel
+          changes within the same integer width are lost in the cap blit.
+        - Continuous tweens (hp_pct_disp, sta_pct_disp) become integers
+          so steady-state combat doesn't churn the cache on every micro-
+          tween step.
+        """
+        if self.WIDTH <= 0 or self.HEIGHT <= 0:
+            return None
+        if self._spawn_time <= 0:
+            return None
+
+        hp_pct = max(0.0, min(1.0, self._hp_pct_disp))
+        max_int = int(round(self._hp_max))
+        bucket = max(1, max_int // 1000) if max_int > 0 else 1
+        hp_int = (int(round(self._hp_max * hp_pct)) // bucket) * bucket
+        # HP fill bucket = 1/2 px (subpixel_bar_width fades trailing
+        # column; 0.5 px alpha delta on ~64-alpha gradient stays \u2264 8/255).
+        try:
+            hp_fill_q = int(round(self._hp_fill_width_px(hp_pct) * 2.0))
+        except Exception:
+            hp_fill_q = int(round(hp_pct * 700))
+
+        sta_pct_q = int(round(self._sta_pct_disp * 200))  # 0.5 % buckets
+
+        # Bracket pulse \u2014 16 buckets per 2.5 s cycle (each ~156 ms).
+        # Gain delta per bucket: 0.4 / 16 = 0.025 \u2192 alpha delta ~ 6/255 on
+        # CYAN_SOFT/GOLD_SOFT base; multiplied by 0.62..1.0 stays \u2264 6.
+        tl_pulse_q = int(((now % 2.5) / 2.5) * 16)
+        br_pulse_q = int((((now + 1.3) % 2.5) / 2.5) * 16)
+
+        # Scanline sweep \u2014 quantize band_y to 4-px buckets (band is
+        # 14 px tall on a 96-px plate; 4-px steps of a soft gradient
+        # are below visual discrimination during the 3.5 s sweep).
+        scan_t = ((now - self._spawn_time) / 3.5) % 1.0
+        scan_q = int(scan_t * (PANEL_H // 4))
+
+        # Root outer pulse strength quantized identically to its own
+        # cache (50 buckets).  Same for root cover pulse + sweep_q.
+        outer_strength = self._root_outer_pulse_strength(now)
+        outer_q = int(outer_strength * 50)
+        cover_q, cover_sweep_q = self._root_cover_pulse_keys(now)
+
+        # HP flash window \u2014 bucket age to ~30 ms (compose runs at
+        # 60 Hz, so we cache the flash phase for ~2 frames at most).
+        flash_age = -1.0
+        if self._hp_flash_start:
+            age = now - self._hp_flash_start
+            if 0 <= age < 0.45:
+                flash_age = int(age * 33.3)  # 30 ms buckets
+        # HP-group fade & restore: bucket alpha to 50 buckets.
+        hp_group_alpha_q = int(self._hp_group_alpha_now(now) * 50)
+
+        # Boss timer urgent quantization (mirrors shadow cache).
+        if self._boss_timer_text and self._boss_timer_urgent:
+            urgent_q = int((now % 0.8) * 12.5)
+        else:
+            urgent_q = 0
+
+        return (
+            int(self.WIDTH), int(self.HEIGHT), y_off,
+            self._profession, self._name, self._level,
+            hp_int, max_int, hp_fill_q, sta_pct_q,
+            self._boss_timer_text, self._boss_timer_urgent, urgent_q,
+            tl_pulse_q, br_pulse_q, scan_q,
+            outer_q, cover_q, cover_sweep_q,
+            flash_age, hp_group_alpha_q,
+            int(round(self._fade_alpha * 100)),
+            bool(self._sta_offline),
+        )
+
+    def _root_outer_pulse_strength(self, now: float) -> float:
+        pulse = (now - self._spawn_time) / 3.2
+        env = 0.5 - 0.5 * math.cos((pulse % 1.0) * 2 * math.pi)
+        low_hp = max(0.0, min(1.0, (0.42 - self._hp_pct_disp) / 0.42))
+        flash = 0.0
+        if self._hp_flash_start:
+            flash_age = now - self._hp_flash_start
+            if flash_age < 0.45:
+                flash = (1.0 - flash_age / 0.45) ** 2
+        alpha_scale = self._hp_group_alpha_now(now)
+        return (0.10 + 0.10 * env + 0.18 * low_hp + 0.22 * flash) * alpha_scale
+
+    def _root_cover_pulse_keys(self, now: float) -> Tuple[int, int]:
+        pulse = ((now - self._spawn_time + 0.45) % 2.8) / 2.8
+        env = 0.5 - 0.5 * math.cos(pulse * 2 * math.pi)
+        low_hp = max(0.0, min(1.0, (0.48 - self._hp_pct_disp) / 0.48))
+        flash = 0.0
+        if self._hp_flash_start:
+            flash_age = now - self._hp_flash_start
+            if flash_age < 0.45:
+                flash = (1.0 - flash_age / 0.45) ** 2
+        alpha_scale = self._hp_group_alpha_now(now)
+        strength = (0.08 + 0.10 * env + 0.14 * low_hp + 0.18 * flash) * alpha_scale
+        s_q = int(strength * 50)
+        sweep_raw = COVER_X - 42 + int((COVER_W + 84) * (((now - self._spawn_time) * 0.22) % 1.0))
+        sweep_q = sweep_raw & ~3
+        return s_q, sweep_q
+
+    def _hp_group_alpha_now(self, now: float) -> float:
+        if self._hp_group_hidden:
+            if self._hp_group_fade_t > 0:
+                t = min(1.0, (now - self._hp_group_fade_t) / self._hp_group_fade_duration)
+                return max(0.0, 1.0 - _ease_out_cubic(t))
+            return 0.0
+        if self._hp_group_restore_t > 0:
+            t = min(1.0, (now - self._hp_group_restore_t) / self._hp_group_restore_duration)
+            return min(1.0, _ease_out_cubic(t))
+        return 1.0
 
     def _draw_root_outer_pulse(self, img: Image.Image, y_off: int,
                                now: float, alpha_scale: float = 1.0) -> None:
@@ -1085,46 +1323,57 @@ class HpOverlay:
         if strength <= 0.01:
             return
 
-        layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        ld = ImageDraw.Draw(layer, 'RGBA')
-        ld.rounded_rectangle(
-            (ID_X - 18, ID_Y - 8 + y_off,
-             ID_X + ID_W + 10, ID_Y + ID_H + 8 + y_off),
-            radius=12,
-            fill=(104, 228, 255, int(34 * strength)),
-        )
-        ld.rounded_rectangle(
-            (COVER_X - 14, COVER_Y - 8 + y_off,
-             COVER_X + COVER_W + 18, COVER_Y + COVER_H + 10 + y_off),
-            radius=10,
-            fill=(243, 175, 18, int(26 * strength)),
-        )
-        ld.rounded_rectangle(
-            (STA_X - 8, STA_Y - 4 + y_off,
-             STA_X + STA_W + 10, STA_Y + STA_H + 6 + y_off),
-            radius=8,
-            fill=(212, 156, 23, int(18 * strength)),
-        )
-        layer = _gpu_blur(layer, 8)
-        img.alpha_composite(layer)
+        # v2.2.20: quantize strength to 50 buckets (Δ=0.02 alpha steps).
+        # Below the perceptual threshold for these underlying glow
+        # alphas (max contribution 34*0.02 ≈ 1/255), but lets cache hit
+        # on most idle/steady frames.
+        s_q = int(strength * 50)
+        sig = (img.size, y_off, s_q)
+        if self._outer_pulse_cache is None or self._outer_pulse_sig != sig:
+            strength_q = s_q / 50.0
+            layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            ld = ImageDraw.Draw(layer, 'RGBA')
+            ld.rounded_rectangle(
+                (ID_X - 18, ID_Y - 8 + y_off,
+                 ID_X + ID_W + 10, ID_Y + ID_H + 8 + y_off),
+                radius=12,
+                fill=(104, 228, 255, int(34 * strength_q)),
+            )
+            ld.rounded_rectangle(
+                (COVER_X - 14, COVER_Y - 8 + y_off,
+                 COVER_X + COVER_W + 18, COVER_Y + COVER_H + 10 + y_off),
+                radius=10,
+                fill=(243, 175, 18, int(26 * strength_q)),
+            )
+            ld.rounded_rectangle(
+                (STA_X - 8, STA_Y - 4 + y_off,
+                 STA_X + STA_W + 10, STA_Y + STA_H + 6 + y_off),
+                radius=8,
+                fill=(212, 156, 23, int(18 * strength_q)),
+            )
+            layer = _gpu_blur(layer, 8)
 
-        ring = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        rd = ImageDraw.Draw(ring, 'RGBA')
-        rd.rounded_rectangle(
-            (COVER_X - 6, COVER_Y - 4 + y_off,
-             COVER_X + COVER_W + 6, COVER_Y + COVER_H + 4 + y_off),
-            radius=9,
-            outline=(208, 244, 255, int(52 * strength)),
-            width=1,
-        )
-        rd.rounded_rectangle(
-            (ID_X - 4, ID_Y - 3 + y_off,
-             ID_X + ID_W + 4, ID_Y + ID_H + 3 + y_off),
-            radius=8,
-            outline=(255, 226, 154, int(38 * strength)),
-            width=1,
-        )
-        img.alpha_composite(ring)
+            ring = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            rd = ImageDraw.Draw(ring, 'RGBA')
+            rd.rounded_rectangle(
+                (COVER_X - 6, COVER_Y - 4 + y_off,
+                 COVER_X + COVER_W + 6, COVER_Y + COVER_H + 4 + y_off),
+                radius=9,
+                outline=(208, 244, 255, int(52 * strength_q)),
+                width=1,
+            )
+            rd.rounded_rectangle(
+                (ID_X - 4, ID_Y - 3 + y_off,
+                 ID_X + ID_W + 4, ID_Y + ID_H + 3 + y_off),
+                radius=8,
+                outline=(255, 226, 154, int(38 * strength_q)),
+                width=1,
+            )
+            layer.alpha_composite(ring)
+            self._outer_pulse_cache = layer
+            self._outer_pulse_sig = sig
+
+        img.alpha_composite(self._outer_pulse_cache)
 
     def _draw_root_cover_pulse(self, img: Image.Image, y_off: int,
                                now: float, alpha_scale: float = 1.0) -> None:
@@ -1140,33 +1389,50 @@ class HpOverlay:
         if strength <= 0.01:
             return
 
-        id_glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        idd = ImageDraw.Draw(id_glow, 'RGBA')
-        idd.rounded_rectangle(
-            (ID_X + 2, ID_Y + 2 + y_off,
-             ID_X + ID_W - 3, ID_Y + ID_H - 3 + y_off),
-            radius=6,
-            fill=(104, 228, 255, int(26 * strength)),
-        )
-        id_glow = _gpu_blur(id_glow, 5)
-        img.alpha_composite(_clip_alpha(id_glow, self._id_plate_mask(y_off)))
+        # v2.2.20: cache by quantized strength (50 buckets) +
+        # quantized sweep_x (4 px). Δalpha 0.02 invisible at the
+        # underlying glow opacities; 4 px sweep granularity is below
+        # the perceived motion of a 5px-blurred rectangle. ~30-50%
+        # cache hit ratio in steady state.
+        s_q = int(strength * 50)
+        sweep_raw = COVER_X - 42 + int((COVER_W + 84) * (((now - self._spawn_time) * 0.22) % 1.0))
+        sweep_q = sweep_raw & ~3
+        sig = (img.size, y_off, s_q, sweep_q)
+        if self._cover_pulse_cache is None or self._cover_pulse_sig != sig:
+            strength_q = s_q / 50.0
+            combined = Image.new('RGBA', img.size, (0, 0, 0, 0))
 
-        cover_glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        cgd = ImageDraw.Draw(cover_glow, 'RGBA')
-        cgd.rounded_rectangle(
-            (COVER_X + 2, COVER_Y + 2 + y_off,
-             COVER_X + COVER_W - 3, COVER_Y + COVER_H - 3 + y_off),
-            radius=6,
-            fill=(255, 220, 132, int(24 * strength)),
-        )
-        sweep_x = COVER_X - 42 + int((COVER_W + 84) * (((now - self._spawn_time) * 0.22) % 1.0))
-        cgd.rectangle(
-            (sweep_x, COVER_Y + 4 + y_off,
-             sweep_x + 54, COVER_Y + COVER_H - 4 + y_off),
-            fill=(255, 255, 255, int(10 + 12 * strength)),
-        )
-        cover_glow = _gpu_blur(cover_glow, 5)
-        img.alpha_composite(_clip_alpha(cover_glow, self._cover_mask(y_off)))
+            id_glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            idd = ImageDraw.Draw(id_glow, 'RGBA')
+            idd.rounded_rectangle(
+                (ID_X + 2, ID_Y + 2 + y_off,
+                 ID_X + ID_W - 3, ID_Y + ID_H - 3 + y_off),
+                radius=6,
+                fill=(104, 228, 255, int(26 * strength_q)),
+            )
+            id_glow = _gpu_blur(id_glow, 5)
+            combined.alpha_composite(_clip_alpha(id_glow, self._id_plate_mask(y_off)))
+
+            cover_glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            cgd = ImageDraw.Draw(cover_glow, 'RGBA')
+            cgd.rounded_rectangle(
+                (COVER_X + 2, COVER_Y + 2 + y_off,
+                 COVER_X + COVER_W - 3, COVER_Y + COVER_H - 3 + y_off),
+                radius=6,
+                fill=(255, 220, 132, int(24 * strength_q)),
+            )
+            cgd.rectangle(
+                (sweep_q, COVER_Y + 4 + y_off,
+                 sweep_q + 54, COVER_Y + COVER_H - 4 + y_off),
+                fill=(255, 255, 255, int(10 + 12 * strength_q)),
+            )
+            cover_glow = _gpu_blur(cover_glow, 5)
+            combined.alpha_composite(_clip_alpha(cover_glow, self._cover_mask(y_off)))
+
+            self._cover_pulse_cache = combined
+            self._cover_pulse_sig = sig
+
+        img.alpha_composite(self._cover_pulse_cache)
 
     # ── panel drop shadows (drawn BEFORE any content) ─────────────
 

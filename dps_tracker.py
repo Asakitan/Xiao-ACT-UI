@@ -10,6 +10,8 @@ import time
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from perf_probe import probe as _probe
+
 
 # ═══════════════════════════════════════════════
 #  Player cache path
@@ -333,6 +335,7 @@ class DpsTracker:
         with self._lock:
             self._skill_names.update(names)
 
+    @_probe.decorate('dps.on_damage_event')
     def on_damage_event(self, event: Dict[str, Any]):
         """Called for each damage/heal event from packet_parser."""
         if not event:
@@ -587,6 +590,7 @@ class DpsTracker:
             self._reset_locked()
             return finalized
 
+    @_probe.decorate('dps.get_snapshot')
     def get_snapshot(self, include_skills: bool = False) -> Dict[str, Any]:
         """Return a snapshot of the current encounter for UI rendering."""
         with self._lock:

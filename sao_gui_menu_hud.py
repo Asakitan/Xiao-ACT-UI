@@ -38,7 +38,7 @@ import os
 import threading
 import time
 import tkinter as tk
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from PIL import Image
 
@@ -48,7 +48,12 @@ from overlay_render_worker import (
     submit_ulw_commit,
     drop_pending_ulw_for,
 )
+from perf_probe import probe as _probe
 from sao_menu_hud import MenuHudSpriteRenderer
+try:
+    import gpu_overlay_window as _gow
+except Exception:
+    _gow = None  # type: ignore[assignment]
 
 _user32 = ctypes.windll.user32
 
@@ -104,6 +109,13 @@ class MenuHudOverlay:
         # First-tick anchor so phase math is stable across calls.
         self._phase_t0: float = 0.0
         self._destroyed = False
+        # v2.3.0 Phase 3: optional GPU overlay presentation. When
+        # SAO_GPU_OVERLAY=1 the per-frame ULW commit (~1-2 ms GDI
+        # bitmap copy) is replaced with a moderngl texture upload +
+        # quad draw (~0.01 ms). Worker still composes PIL→BGRA the
+        # same way; only the present transport changes.
+        self._gpu_window: Optional[Any] = None
+        self._gpu_presenter: Optional[Any] = None
 
     # ──────────────────────────────────────────
     #  Lifecycle
@@ -112,6 +124,31 @@ class MenuHudOverlay:
     def _ensure_window(self) -> None:
         if self._win is not None:
             return
+        # v2.3.0 Phase 3: GPU overlay presentation path (env-gated).
+        if _gow is not None and _gow.glfw_supported():
+            try:
+                pump = _gow.get_glfw_pump(self.root)
+                presenter = _gow.BgraPresenter()
+                # Initial 1x1; tick will resize via set_geometry once
+                # the first compose result lands.
+                gpu_win = _gow.GpuOverlayWindow(
+                    pump,
+                    w=1, h=1,
+                    x=int(self._anchor_x), y=int(self._anchor_y),
+                    render_fn=presenter.render,
+                    click_through=True,
+                    title='sao_menu_hud_gpu',
+                )
+                gpu_win.show()
+                self._gpu_window = gpu_win
+                self._gpu_presenter = presenter
+                self._win = self  # type: ignore[assignment]  # sentinel
+                self._hwnd = 0
+                self._visible = True
+                return
+            except Exception:
+                self._gpu_window = None
+                self._gpu_presenter = None
         # Initial size is a placeholder; set_geometry resizes on first tick.
         self._win = tk.Toplevel(self.root)
         self._win.overrideredirect(True)
@@ -159,6 +196,7 @@ class MenuHudOverlay:
     #  Compose (called on render lane)
     # ──────────────────────────────────────────
 
+    @_probe.decorate('ui.menu.compose')
     def compose_frame(self, now: float, phase: float) -> Image.Image:
         """Worker-thread entry point. Returns a fresh RGBA PIL Image."""
         img, off = self._renderer.render_pil(
@@ -175,6 +213,7 @@ class MenuHudOverlay:
     #  Tick (main thread)
     # ──────────────────────────────────────────
 
+    @_probe.decorate('ui.menu.tick')
     def tick(self, now: float, dx: int, dy: int, phase: float) -> None:
         """Drain the previous frame (if ready) and submit a new compose.
 
@@ -186,7 +225,9 @@ class MenuHudOverlay:
             return
         if self._win is None:
             self._ensure_window()
-        if not self._hwnd:
+        # In GPU mode there's no hwnd; presence of _gpu_window is the
+        # gate. ULW path keeps the legacy hwnd gate.
+        if not self._hwnd and self._gpu_window is None:
             return
 
         # 1) Take any frame the worker finished and commit it. The
@@ -194,13 +235,29 @@ class MenuHudOverlay:
         #    to submit() last tick, so submit_ulw_commit will move the
         #    layered window atomically with the new bitmap inside
         #    UpdateLayeredWindow — no separate geometry call needed.
-        fb = self._render_worker.take_result()
+        # v2.2.23: bypass capture-idle gate; vision PrintWindow on the
+        # game HWND can't conflict with our ulw commits and would
+        # otherwise drop ~30-100% of menu HUD frames during combat.
+        fb = self._render_worker.take_result(allow_during_capture=True)
         if fb is not None:
-            try:
-                submit_ulw_commit(self._hwnd, fb)
-                self._last_commit_xy = (fb.x, fb.y)
-            except Exception:
-                pass
+            if self._gpu_presenter is not None and self._gpu_window is not None:
+                # GPU path: move window + upload BGRA texture + redraw.
+                # set_geometry is cheap (no realloc when size matches).
+                try:
+                    self._gpu_window.set_geometry(
+                        fb.x, fb.y, fb.width, fb.height)
+                    self._gpu_presenter.set_frame(
+                        fb.bgra_bytes, fb.width, fb.height)
+                    self._gpu_window.request_redraw()
+                    self._last_commit_xy = (fb.x, fb.y)
+                except Exception:
+                    pass
+            else:
+                try:
+                    submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
+                    self._last_commit_xy = (fb.x, fb.y)
+                except Exception:
+                    pass
 
         # 2) Submit a new compose. We pass the on-screen sprite top-left
         #    via x/y so the FrameBuffer carries the right position.
@@ -244,7 +301,20 @@ class MenuHudOverlay:
             self._render_worker.stop()
         except Exception:
             pass
-        if self._win is not None:
+        # v2.3.0 Phase 3: tear down GPU resources first.
+        if self._gpu_presenter is not None:
+            try:
+                self._gpu_presenter.release()
+            except Exception:
+                pass
+            self._gpu_presenter = None
+        if self._gpu_window is not None:
+            try:
+                self._gpu_window.destroy()
+            except Exception:
+                pass
+            self._gpu_window = None
+        if self._win is not None and self._win is not self:
             try:
                 self._win.destroy()
             except Exception:

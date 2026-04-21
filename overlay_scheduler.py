@@ -23,6 +23,8 @@ import threading
 import time
 from typing import Callable, Dict, Optional
 
+from perf_probe import probe as _probe
+
 
 _DEFAULT_HZ = 60
 _MIN_HZ = 60
@@ -133,6 +135,22 @@ class OverlayScheduler:
         # render-lane and CPU cycles for the burst animation that the
         # player is actually looking at.
         self._combat_load = False
+        # v2.2.18 (Phase 3a): menu-open signal. SAO menu webview eats the
+        # Tk main thread when its open animation runs; we drop idle
+        # overlay rate hard for the duration so the menu hits 60 FPS.
+        self._menu_open = False
+        # v2.2.18: explicit render-pressure level (0..3) overrides
+        # auto-detection if set. Worker walls or external probes write
+        # here; reset to None to let avg_frame_ms drive overload.
+        self._render_pressure: Optional[int] = None
+        # v2.2.21: closed-loop wall floor. The scheduler polls
+        # overlay_render_worker.peak_recent_worker_wall_ms() and lifts
+        # the auto pressure tier here so HP/DPS idle panels back off when
+        # SkillFX/BOSSHP composes exceed the frame budget. This is only a
+        # FLOOR — set_render_pressure() still wins as a hard override,
+        # and combat/menu hints continue to OR in.
+        self._wall_pressure_floor: int = 0
+        self._wall_poll_frame_idx: int = 0
 
     # lifecycle
 
@@ -181,6 +199,58 @@ class OverlayScheduler:
         and the menu open animation keeps full 60 Hz mid-combat."""
         self._combat_load = bool(active)
 
+    def set_menu_open(self, active: bool) -> None:
+        """v2.2.18: SAO menu open/close hook. While the menu is open the
+        webview animation owns the Tk main thread; idle entity panels
+        drop to ~4–7 Hz to free up bandwidth so the menu hits its 60 Hz
+        target. Animating panels (boss HP tween, SkillFX burst) still
+        tick every frame."""
+        self._menu_open = bool(active)
+
+    def set_render_pressure(self, level: Optional[int]) -> None:
+        """v2.2.18: explicit pressure level. ``None`` means auto.
+        0=normal, 1=combat-equivalent, 2=menu-equivalent, 3=combat+menu.
+        Workers can write here based on observed wall time."""
+        self._render_pressure = level if level is None else int(level)
+
+    def _poll_worker_wall_pressure(self) -> None:
+        """v2.2.21: closed loop — read worker compose wall and lift the
+        wall-pressure floor when any panel blows past the frame budget.
+
+        Mapping (per 60 Hz frame_sec=16.7 ms):
+          peak <= 12 ms    → floor 0  (everything fits)
+          peak <= 25 ms    → floor 1  (one panel pushed past budget)
+          peak <= 50 ms    → floor 2  (sustained 30 fps composes)
+          peak  > 50 ms    → floor 3  (SkillFX burst + boss combo)
+
+        We only POLL once every 6 frames (~100 ms at 60 Hz) so the poll
+        itself stays cheap, and we use a slow decay (max-of(prev, new)
+        with -1 step on miss) so the floor doesn't ping-pong.
+        """
+        self._wall_poll_frame_idx += 1
+        if (self._wall_poll_frame_idx % 6) != 0:
+            return
+        try:
+            from overlay_render_worker import peak_recent_worker_wall_ms
+            peak = peak_recent_worker_wall_ms(window_sec=0.75)
+        except Exception:
+            return
+        if peak <= 12.0:
+            target = 0
+        elif peak <= 25.0:
+            target = 1
+        elif peak <= 50.0:
+            target = 2
+        else:
+            target = 3
+        prev = self._wall_pressure_floor
+        if target >= prev:
+            self._wall_pressure_floor = target
+        else:
+            # Decay one step at a time so a single quiet frame doesn't
+            # wipe the floor mid-burst.
+            self._wall_pressure_floor = max(target, prev - 1)
+
     @property
     def target_hz(self) -> int:
         return self._target_hz
@@ -208,6 +278,7 @@ class OverlayScheduler:
         except Exception:
             self._tick_after_id = None
 
+    @_probe.decorate('overlay.scheduler.tick')
     def _tick(self) -> None:
         self._tick_after_id = None
         if not self._running:
@@ -230,8 +301,29 @@ class OverlayScheduler:
         # itself) still tick every frame.
         budget_sec = self._frame_sec
         overloaded = self.avg_frame_ms > 0.3 * budget_sec * 1000.0
-        if self._combat_load:
-            idle_skip_n = 10
+        # v2.2.18: pressure tier picks the idle skip_n. menu_open+combat
+        # is the worst case (boss + SAO menu = the user's “卡” report).
+        if self._render_pressure is not None:
+            pressure = self._render_pressure
+        else:
+            pressure = 0
+            if self._combat_load:
+                pressure |= 1
+            if self._menu_open:
+                pressure |= 2
+            # v2.3.0: wall-pressure floor REVERTED — was reacting to
+            # cold-start compose walls (SkillFX init / first HP draw),
+            # forcing all idle entity panels to 4-7 Hz during the
+            # LinkStart intro and HP overlay reveal, causing visible
+            # stutter and a longer white-window gap before the first
+            # ULW commit. Pressure now driven only by explicit
+            # set_combat_load / set_menu_open hooks.
+        if pressure >= 3:
+            idle_skip_n = 14   # ~4 Hz idle  (combat + menu)
+        elif pressure == 2:
+            idle_skip_n = 8    # ~7 Hz idle  (menu only)
+        elif pressure == 1:
+            idle_skip_n = 10   # ~6 Hz idle  (combat only)
         elif overloaded:
             idle_skip_n = 6
         else:
