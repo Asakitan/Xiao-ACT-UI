@@ -283,6 +283,13 @@ class TcpReassembler:
         # 缓存最近的 (addr,seq,payload) 让识别成功后能补喂.
         self._recent_pkts: list = []  # list[(addr, seq, payload)]
         self._RECENT_PKT_LIMIT = 24
+        # v2.3.7: 同服重连冷却 — 真实重连是单次事件, 不可能几秒内连发.
+        # 旧版本只要 _seq_anomalous + (loose c3SB 或 _looks_like_frame_start)
+        # 就触发, 误识率不为零, 一旦在繁忙流上误中, _next_seq 被重置 -1, 下一
+        # 个被缓存的乱序包又落入异常区间, 又触发, 形成"⚡ 检测到同服重连"刷屏
+        # → BossHP 目标被反复清掉. 这里加最小间隔, 真重连漏不了, 误触发被吃掉.
+        self._last_reconnect_ts: float = 0.0
+        self._RECONNECT_COOLDOWN = 3.0
 
     @property
     def server_identified(self) -> bool:
@@ -424,22 +431,23 @@ class TcpReassembler:
                 # 双向都远超 TCP 窗口 → 必为新连接的 ISN.
                 _seq_anomalous = (_diff_fwd > 1_000_000
                                   and _diff_bwd > 1_000_000)
-        # 数据起头是不是合法的游戏帧 size 头 (4B big-endian, 6..999999)?
-        _looks_like_frame_start = False
-        if len(payload) >= 4:
-            try:
-                _hd = struct.unpack_from('>I', payload, 0)[0]
-                _looks_like_frame_start = 6 <= _hd <= 999_999
-            except struct.error:
-                pass
-        # v2.3.4: 必须 seq 异常 + (含 c3SB 或 看起来是新帧起点).
-        # 单独 c3SB 已被证明会在 mid-fight 误触发 (用户报告: 打着打着
-        # BossHP 突然消失). 真正的同服重连 ISN 必然双向 > 1MB.
+        # v2.3.7: 收紧重连判定 — 必须 *严格* 识别 (FrameDown 嵌套 c3SB 或
+        #   Login Return), 不再接受松散 c3SB 字面量, 也不再单凭 4B BE 帧头
+        #   ([6,999999], 误中率 ≈0.023%/包, busy stream 上每秒就能误触发,
+        #   把 BossHP 反复清掉).
+        # v2.3.4: 必须 seq 异常 + 严格游戏签名.
         _is_reconnect = (
             (not _seq_match)
             and _seq_anomalous
-            and (self._try_identify(payload, addr) or _looks_like_frame_start)
+            and self._identify_strict(payload)
         )
+        # v2.3.7: 冷却窗口 — 真实重连是单次事件, N 秒内重复触发一律视为误识.
+        if _is_reconnect:
+            _now = time.time()
+            if (_now - self._last_reconnect_ts) < self._RECONNECT_COOLDOWN:
+                _is_reconnect = False
+            else:
+                self._last_reconnect_ts = _now
         if _is_reconnect:
             with self._lock:
                 logger.info(
