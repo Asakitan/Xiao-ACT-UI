@@ -450,7 +450,11 @@ class TcpReassembler:
             # SyncContainerData (relogin full sync) 必须在这里追回, 否则
             # _current_uid / 角色装备 / dungeon 等依赖 full sync 的状态
             # 永远停留在 stale 缓存上.
-            replayed = self._replay_recent_for_addr(addr, exclude_seq=seq)
+            # v2.3.3: 限定回放窗口为新 ISN 附近 1MB, 排除重连前的旧 ISN 包.
+            # 否则旧 seq 会污染 _next_seq, 导致后续真新包再次触发"重连",
+            # 形成无限循环.
+            replayed = self._replay_recent_for_addr(
+                addr, exclude_seq=seq, seq_window=1_000_000)
             if replayed:
                 print(
                     f'[Capture] 回放 {replayed} 个缓存包 (same-server reconnect)',
@@ -460,9 +464,21 @@ class TcpReassembler:
         # ─── TCP 重组 ───
         self._feed_tcp(seq, payload)
 
-    def _replay_recent_for_addr(self, addr: str, exclude_seq: int) -> int:
+    def _replay_recent_for_addr(self, addr: str, exclude_seq: int,
+                                 seq_window: int = 0) -> int:
         """v2.1.18: 把 _recent_pkts 里属于该 addr、seq 不等于 exclude_seq 的包按 seq
         升序回放给 _feed_tcp, 用于 server-change / 同服重连后追回切换瞬间被丢的包.
+
+        v2.3.3: 新增 ``seq_window`` 参数. 同服重连场景中, ``_recent_pkts``
+        会同时包含**重连前**(旧 ISN seq) 和**重连后**(新 ISN seq) 的包,
+        addr 完全相同无法区分. 若不过滤, replay 会把旧 ISN seq 喂入
+        ``_feed_tcp``, ``_next_seq`` 落到旧 ISN 区域, 后续真正的新 ISN 包
+        立即触发 ``_seq_anomalous`` 又被识别为重连, 形成无限重连循环
+        (用户报告: 反复刷"⚡ 检测到同服重连").
+        当 ``seq_window > 0`` 时, 只回放与 ``exclude_seq`` 距离不超过
+        ``seq_window`` 的包 (双向, 处理 wraparound). 服务器切换 (新 addr)
+        不需要过滤, 用 ``seq_window=0`` 表示全量回放.
+
         返回回放的包数量.
         """
         try:
@@ -470,7 +486,20 @@ class TcpReassembler:
                           if a == addr and s != exclude_seq]
         except Exception:
             return 0
+        if seq_window > 0:
+            mask = 0xFFFFFFFF
+            filtered = []
+            for s, p in candidates:
+                fwd = (s - exclude_seq) & mask
+                bwd = (exclude_seq - s) & mask
+                if min(fwd, bwd) <= seq_window:
+                    filtered.append((s, p))
+            candidates = filtered
         if not candidates:
+            # 仍要清理旧 addr 缓存, 否则旧 ISN 包永远留在环形缓冲, 下次真重连
+            # 又会被翻出来.
+            self._recent_pkts = [(a, s, p) for (a, s, p) in self._recent_pkts
+                                 if a != addr]
             return 0
         candidates.sort(key=lambda sp: sp[0])
         replayed = 0

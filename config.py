@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.3.2"
+APP_VERSION = "2.3.3"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,21 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.3.3:
+#   Fix GPU SAO popup menu hard crash (PyEval_RestoreThread NULL tstate
+#   fast-fail) on the second click. Tk's Tcl mainloop on Windows runs an
+#   implicit PeekMessage(NULL,...)+DispatchMessage pump that captured
+#   GLFW window messages and dispatched them to GLFW's WndProc, firing
+#   our mouse callback in a re-entrant context where touching any Tk API
+#   (root.after_idle) corrupts Tcl interpreter state mid-dispatch and
+#   crashes the next mainloop checkpoint. Cb now only enqueues hits to
+#   a deque; a polled drainer on a top-level Tk after() callback runs
+#   the actual handlers safely.
+#   Fix infinite same-server-reconnect loop that locked DPS/HP at zero.
+#   Replay window after reconnect now filters out pre-reconnect packets
+#   (old TCP ISN seqs) which previously polluted _next_seq and made the
+#   next live packet trigger another reconnect. Replay only packets
+#   within ±1MB of the new ISN.
 # v2.3.2:
 #   Fix Gil compound deadlock when the GPU render thread tries to acquire the GIL,
 #   while the main thread is waiting for the render thread to join during shutdown.

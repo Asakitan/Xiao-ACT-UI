@@ -14,10 +14,12 @@ from __future__ import annotations
 import sys
 import time
 import tkinter as tk
-from typing import Callable, Dict, List, Optional
+from collections import deque
+from typing import Callable, Deque, Dict, List, Optional, Tuple
 
 import gpu_overlay_window as _gow
 from overlay_scheduler import get_scheduler as _get_scheduler
+from perf_probe import phase as _phase_trace
 
 from .state import PopupState
 from . import composer, menu_bar_layout, child_bar_layout, hud_layout
@@ -82,6 +84,16 @@ class SAOPopUpMenu:
         self._last_tick_t = 0.0
         self._external_close_prepared = False
         self._skip_close_callback = False
+        self._click_guard_resume: Optional[Callable[[], None]] = None
+        # Toggle debounce: alt-key auto-repeat fires multiple
+        # <Alt-KeyPress> events while the user is still pressing the
+        # combo. Without a debounce, open() (which now does a slow
+        # WGC pause_capture for the click guard) can be sandwiched by
+        # a queued repeat-event that immediately fires close(). Result:
+        # popup pops up and instantly closes. Ignore toggle requests
+        # landing inside this debounce window.
+        self._last_toggle_t: float = 0.0
+        self._toggle_debounce_s: float = 0.35
 
         # Slide-down gesture state
         self._first_y = 0
@@ -94,6 +106,27 @@ class SAOPopUpMenu:
         self._focus_poll_job = None
         self._had_foreground_once = False
         self._last_raise_t = 0.0
+
+        # Re-entrancy guard for GLFW mouse callbacks: any user cmd may tear
+        # down this very GPU window (close menu / switch UI / quit). Defer
+        # via after_idle and gate rapid clicks so we don't queue multiple
+        # daemon threads (sao_sound) from one poll_events call which can
+        # blow up the GIL with NULL tstate. See popup_glfw_callback_reentrancy.
+        self._click_pending = False
+
+        # CRITICAL: Tk's Tcl mainloop runs its own ``PeekMessage(NULL,...)``
+        # message pump on Windows. It will pick up GLFW window messages
+        # from the thread queue and ``DispatchMessage`` them to GLFW's
+        # WndProc, which calls our ``_on_mouse_button`` cb. If the cb
+        # touches ANY Tk API (``after_idle``, ``after``, widget ops) from
+        # this re-entrant context, Tcl's interpreter state is mutated
+        # mid-dispatch and the next Tcl checkpoint inside ``mainloop``
+        # fast-fails with ``PyEval_RestoreThread: NULL tstate``.
+        # Solution: cb only appends to a deque; a polling drainer on a
+        # plain Tk ``after()`` schedule (always top-level Tk context)
+        # consumes the queue and runs the actual handlers safely.
+        self._click_queue: Deque[Tuple[str, int]] = deque()
+        self._click_drain_job: Optional[str] = None
 
         # Public alias for legacy compat (sao_gui caches `_left_widget`)
         # exposed via property below.
@@ -126,6 +159,10 @@ class SAOPopUpMenu:
     def open(self) -> None:
         if self._state.is_open:
             return
+        # Click guard (WGC pause_capture) is acquired inside
+        # _create_window, AFTER is_open is set, so a held alt-key's
+        # auto-repeat <Alt-KeyPress> event delivered while pause_capture
+        # is blocking can't sandwich a close() before is_open flips.
         self._state.is_open = True
         self._closing = False
         self._external_close_prepared = False
@@ -157,6 +194,10 @@ class SAOPopUpMenu:
     def close(self) -> None:
         if not self._state.is_open or self._closing:
             return
+        # NOTE: do NOT release the click guard here; popup is still
+        # visible during fade-out and any pending after_idle activate /
+        # row callbacks must remain protected. Guard is released in
+        # _destroy_window after the popup is actually torn down.
         self._closing = True
         self._fading = True
         self._fade_target = 0.0
@@ -164,12 +205,20 @@ class SAOPopUpMenu:
         self._fade_t0 = time.monotonic()
 
     def toggle(self) -> None:
+        # Debounce against alt-key auto-repeat (which would otherwise
+        # open-then-close in rapid succession because pause_capture in
+        # open() can stall the main thread for several ms).
+        now = time.monotonic()
+        if now - self._last_toggle_t < self._toggle_debounce_s:
+            return
+        self._last_toggle_t = now
         if self._state.is_open:
             self.close()
         else:
             self.open()
 
     def force_destroy_overlay(self, invoke_callback: bool = False) -> None:
+        self._release_click_guard()
         self._closing = True
         self._destroy_window()
         if invoke_callback and self.on_close_callback:
@@ -226,6 +275,14 @@ class SAOPopUpMenu:
     # ── internal: window lifecycle ────────────────────────────────
 
     def _create_window(self) -> None:
+        # Acquire WGC click guard NOW (before any GLFW window create or
+        # moderngl context init). is_open has already been set in open()
+        # so a queued alt-key auto-repeat fires close() (which is then
+        # honoured normally) instead of re-entering open().
+        self._acquire_click_guard()
+        # Start polled drainer for GLFW click events. Must be started
+        # before any GLFW window can receive clicks.
+        self._start_click_drainer()
         # Make sure SAO + CJK fonts are registered with the OS so the
         # Tk left-widget (and any PIL composer falling back to family
         # names) can resolve them on first paint.
@@ -362,6 +419,9 @@ class SAOPopUpMenu:
         self._raise_to_top()
 
     def _destroy_window(self) -> None:
+        # Stop click drainer first so no more queued clicks fire after
+        # widgets are gone.
+        self._stop_click_drainer()
         if self._sched_registered:
             try:
                 _get_scheduler(self.root).unregister(self._sched_ident)
@@ -410,6 +470,8 @@ class SAOPopUpMenu:
         self._last_tick_t = 0.0
         self._external_close_prepared = False
         self._skip_close_callback = False
+        # Popup fully torn down — safe to resume WGC capture.
+        self._release_click_guard()
 
     # ── ticking + rendering ───────────────────────────────────────
 
@@ -538,11 +600,128 @@ class SAOPopUpMenu:
         hit = self._hit.pick(x, y)
         if hit is None:
             return
+        if self._click_pending:
+            return
         kind, idx = hit
+        # Re-entrance safety: this cb can fire from Tk's hidden Win32
+        # message pump (PeekMessage(NULL)→DispatchMessage→GLFW WndProc).
+        # Touching ANY Tk API here would corrupt Tcl state mid-dispatch
+        # and crash the next mainloop iteration with a NULL tstate. So
+        # we ONLY append to a thread-safe deque (deque.append + popleft
+        # are atomic under the GIL) and let the polled drainer run on a
+        # top-level Tk context.
         if kind == KIND_MENU_BTN:
-            self._activate_menu(idx)
+            self._click_pending = True
+            self._click_queue.append(('menu', int(idx)))
+            _phase_trace('popup.click.enqueue', f'menu:{idx}')
         elif kind == KIND_CHILD_ROW:
-            self._invoke_row(idx)
+            self._click_pending = True
+            self._click_queue.append(('row', int(idx)))
+            _phase_trace('popup.click.enqueue', f'row:{idx}')
+
+    def _drain_click_queue(self) -> None:
+        """Drain queued GLFW clicks. Always invoked from a top-level Tk
+        ``after()`` callback so calling Tk APIs is safe here."""
+        self._click_drain_job = None
+        try:
+            while self._click_queue:
+                kind, idx = self._click_queue.popleft()
+                _phase_trace('popup.click.drain', f'{kind}:{idx}')
+                try:
+                    if kind == 'menu':
+                        self._fire_activate_menu(idx)
+                    elif kind == 'row':
+                        self._fire_invoke_row(idx)
+                except Exception:
+                    pass
+        finally:
+            # Reschedule while popup is open so we keep polling.
+            if self._state.is_open and not self._closing:
+                try:
+                    self._click_drain_job = self.root.after(
+                        16, self._drain_click_queue)
+                except Exception:
+                    self._click_drain_job = None
+
+    def _start_click_drainer(self) -> None:
+        if self._click_drain_job is not None:
+            return
+        try:
+            self._click_drain_job = self.root.after(16, self._drain_click_queue)
+        except Exception:
+            self._click_drain_job = None
+
+    def _stop_click_drainer(self) -> None:
+        job = self._click_drain_job
+        self._click_drain_job = None
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._click_queue.clear()
+
+
+    def _acquire_click_guard(self) -> None:
+        if self._click_guard_resume is not None:
+            return
+        try:
+            from gpu_capture import pause_capture as _wgc_pause
+            from gpu_capture import resume_capture as _wgc_resume
+        except Exception:
+            return
+        try:
+            _wgc_pause()
+            self._click_guard_resume = _wgc_resume
+            _phase_trace('popup.click.guard.on')
+        except Exception:
+            self._click_guard_resume = None
+
+    def _release_click_guard(self) -> None:
+        resume = self._click_guard_resume
+        self._click_guard_resume = None
+        if resume is None:
+            return
+        try:
+            resume()
+            _phase_trace('popup.click.guard.off')
+        except Exception:
+            pass
+
+    def _fire_activate_menu(self, idx: int) -> None:
+        _phase_trace('popup.activate.begin', f'idx={idx}')
+        try:
+            try:
+                _phase_trace('popup.activate.cb', f'idx={idx}')
+                self._activate_menu(idx)
+            except Exception:
+                pass
+        finally:
+            pass
+        _phase_trace('popup.activate.end', f'idx={idx}')
+        try:
+            self.root.after(120, self._clear_click_pending)
+        except Exception:
+            self._click_pending = False
+
+    def _fire_invoke_row(self, idx: int) -> None:
+        _phase_trace('popup.row.begin', f'idx={idx}')
+        try:
+            try:
+                _phase_trace('popup.row.cb', f'idx={idx}')
+                self._invoke_row(idx)
+            except Exception:
+                pass
+        finally:
+            pass
+        _phase_trace('popup.row.end', f'idx={idx}')
+        try:
+            self.root.after(120, self._clear_click_pending)
+        except Exception:
+            self._click_pending = False
+
+    def _clear_click_pending(self) -> None:
+        self._click_pending = False
 
     def _on_scroll_gpu(self, dx: float, dy: float) -> None:
         if not self._state.is_open or not self._state.menu_items:
@@ -567,37 +746,54 @@ class SAOPopUpMenu:
         self._state.row_hover_t = []
 
     def _activate_menu(self, idx: int) -> None:
+        _phase_trace('popup.act.enter', f'idx={idx}')
         if idx < 0 or idx >= len(self._state.menu_items):
+            _phase_trace('popup.act.bad_idx', f'idx={idx}')
             return
         item = self._state.menu_items[idx]
         if not item.get('can_active', True):
+            _phase_trace('popup.act.no_active', f'idx={idx}')
             return
+        _phase_trace('popup.act.sound.begin', f'idx={idx}')
         try:
             from sao_sound import play_sound as _ps
             _ps('click', volume=0.5)
         except Exception:
             pass
+        _phase_trace('popup.act.sound.end', f'idx={idx}')
         if self._state.active_menu_idx == idx:
+            _phase_trace('popup.act.deactivate', f'idx={idx}')
             self._state.active_menu_idx = None
             # Collapse the left player panel back to 0×0.
             lw = self._left_widget
             if lw is not None and hasattr(lw, 'set_active'):
+                _phase_trace('popup.act.lw_off.begin')
                 try:
                     lw.set_active(False)
                 except Exception:
                     pass
+                _phase_trace('popup.act.lw_off.end')
+            _phase_trace('popup.act.transition.begin', 'rows=0')
             self._begin_child_transition([])
+            _phase_trace('popup.act.transition.end')
         else:
+            _phase_trace('popup.act.activate', f'idx={idx}')
             self._state.active_menu_idx = idx
             name = item.get('name', '')
-            self._begin_child_transition(self.child_menus.get(name, []))
+            rows = self.child_menus.get(name, [])
+            _phase_trace('popup.act.transition.begin', f'name={name} rows={len(rows)}')
+            self._begin_child_transition(rows)
+            _phase_trace('popup.act.transition.end')
             # Animate the left player panel in, mirroring legacy.
             lw = self._left_widget
             if lw is not None and hasattr(lw, 'set_active'):
+                _phase_trace('popup.act.lw_on.begin')
                 try:
                     lw.set_active(True)
                 except Exception:
                     pass
+                _phase_trace('popup.act.lw_on.end')
+        _phase_trace('popup.act.exit', f'idx={idx}')
 
     def _invoke_row(self, idx: int) -> None:
         if idx < 0 or idx >= len(self._state.child_rows):
