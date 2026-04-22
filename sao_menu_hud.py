@@ -4,10 +4,44 @@ import datetime as _dt
 import math
 import os
 import sys
+import threading
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk
+
+
+# v2.3.3 GIL-safety fix.
+#
+# PIL._imagingft (FreeType) is NOT internally re-entrant: when two
+# overlay-compose worker threads concurrently call ImageDraw.text()
+# / textbbox() / ImageFont.truetype(), the C-level FT_Library state
+# corrupts and the main thread's tstate is NULLed at the next
+# Tcl_DoOneEvent reacquire ("Fatal Python error: PyEval_RestoreThread:
+# the function must be called with the GIL held, but the GIL is
+# released (the current Python thread state is NULL)").
+#
+# The trigger that the user reports — clicking a floating menu bar
+# button → menu re-layout (resize) → crash — is exactly this race:
+# the click changes the menu HUD content_w/content_h, MenuHudOverlay
+# enqueues a fresh render_pil() compose with the new size on its
+# overlay-compose lane (rebuilds the static layer with FreeType-rendered
+# 'SYS:MENU' / 'ACTIVE' labels + stamp text), AND the SAO menu bar
+# painter on a different lane is mid-recompose for the fisheye animation
+# (FreeType for icon glyphs).  Two lanes in PIL FreeType simultaneously
+# corrupt FT state.
+#
+# Fix: a single module-level RLock serializes every renderer entry point
+# that may rasterize text / build a draw context.  Held across entire
+# render(), render_pil(), and MenuCircleButtonRenderer.render() calls
+# so the FreeType native code never overlaps across threads.  The lock
+# is held during GIL-released PIL ops; that's intentional — other Python
+# threads can still acquire the GIL while we wait for FreeType, and the
+# wait time is bounded by one compose (≈3-30 ms).
+#
+# RLock so that a renderer entry point can call its own helpers that
+# also acquire the lock without deadlocking.
+_PIL_DRAW_LOCK: threading.RLock = threading.RLock()
 
 try:
     from gpu_renderer import gaussian_blur_rgba as _gpu_blur
@@ -174,7 +208,18 @@ class MenuHudSpriteRenderer:
         the static background from the dynamic scan/dot/clock elements
         and letting Tk's Canvas animate them natively, we keep the exact
         visual output while cutting the per-frame cost ~>25x.
+
+        Held under :data:`_PIL_DRAW_LOCK`: this entry point can be
+        reached from the Tk main thread (Canvas fallback) while another
+        worker is mid-render_pil — without the lock the two collide in
+        FreeType.
         """
+        with _PIL_DRAW_LOCK:
+            return self._render_locked(content_w, content_h, screen_w, screen_h, phase)
+
+    def _render_locked(self, content_w: int, content_h: int,
+                       screen_w: int, screen_h: int,
+                       phase: float) -> 'MenuHudFrame':
         content_w = max(260, int(content_w))
         content_h = max(180, int(content_h))
         screen_w = max(1, int(screen_w))
@@ -243,7 +288,15 @@ class MenuHudSpriteRenderer:
         sprite's top-left relative to the content frame's top-left
         (``-PLATE_PAD, -PLATE_PAD``). The caller adds it to the desired
         on-screen position before submitting via ``ulw_commit``.
+
+        Held under :data:`_PIL_DRAW_LOCK` — see module docstring.
         """
+        with _PIL_DRAW_LOCK:
+            return self._render_pil_locked(content_w, content_h, screen_w, screen_h, phase)
+
+    def _render_pil_locked(self, content_w: int, content_h: int,
+                           screen_w: int, screen_h: int,
+                           phase: float) -> Tuple[Image.Image, Tuple[int, int]]:
         content_w = max(260, int(content_w))
         content_h = max(180, int(content_h))
         screen_w = max(1, int(screen_w))
@@ -559,6 +612,16 @@ class MenuCircleButtonRenderer:
     def render(self, size: int, icon_text: str,
                border_hex: str, fill_hex: str, icon_hex: str,
                bg_hex: str) -> Image.Image:
+        # Held under module-level :data:`_PIL_DRAW_LOCK` so the icon's
+        # FreeType rasterization (draw.text inside the !cache-miss
+        # branch) doesn't race the menu HUD overlay-compose worker also
+        # in FreeType. Cache hits skip the lock cost (single attr read).
+        with _PIL_DRAW_LOCK:
+            return self._render_locked(size, icon_text, border_hex, fill_hex, icon_hex, bg_hex)
+
+    def _render_locked(self, size: int, icon_text: str,
+                       border_hex: str, fill_hex: str, icon_hex: str,
+                       bg_hex: str) -> Image.Image:
         size = max(1, int(size))
         bg_hex = bg_hex or '#010101'
         key = (size, icon_text, border_hex, fill_hex, icon_hex, bg_hex)
@@ -772,6 +835,12 @@ class MenuLeftInfoRenderer:
     @_probe.decorate('ui.menu.plate_top')
     def render_top(self, username: str, width: int, height: int,
                    sweep_phase: float = 0.0, sweep_strength: float = 0.0) -> ImageTk.PhotoImage:
+        with _PIL_DRAW_LOCK:
+            return self._render_top_locked(username, width, height,
+                                            sweep_phase, sweep_strength)
+
+    def _render_top_locked(self, username: str, width: int, height: int,
+                           sweep_phase: float, sweep_strength: float) -> ImageTk.PhotoImage:
         width = max(1, int(width))
         height = max(1, int(height))
         # v2.2.26: quantize sweep params so steady frames + several frames
@@ -798,6 +867,12 @@ class MenuLeftInfoRenderer:
         PIL Image. Does not touch Tk — safe to call from any thread.
         Bypasses the Tk PhotoImage cache; the GPU path keeps its own
         signature dedup."""
+        with _PIL_DRAW_LOCK:
+            return self._render_top_pil_locked(username, width, height,
+                                                sweep_phase, sweep_strength)
+
+    def _render_top_pil_locked(self, username: str, width: int, height: int,
+                               sweep_phase: float, sweep_strength: float) -> Image.Image:
         width = max(1, int(width))
         height = max(1, int(height))
         if sweep_strength > 0.005:
@@ -876,6 +951,12 @@ class MenuLeftInfoRenderer:
     @_probe.decorate('ui.menu.plate_bottom')
     def render_bottom(self, description: str, width: int, height: int,
                       sweep_phase: float = 0.0, sweep_strength: float = 0.0) -> ImageTk.PhotoImage:
+        with _PIL_DRAW_LOCK:
+            return self._render_bottom_locked(description, width, height,
+                                               sweep_phase, sweep_strength)
+
+    def _render_bottom_locked(self, description: str, width: int, height: int,
+                              sweep_phase: float, sweep_strength: float) -> ImageTk.PhotoImage:
         width = max(1, int(width))
         height = max(1, int(height))
         if sweep_strength > 0.005:
@@ -898,6 +979,12 @@ class MenuLeftInfoRenderer:
                           sweep_strength: float = 0.0) -> Image.Image:
         """Worker-safe variant of :meth:`render_bottom`. See
         :meth:`render_top_pil`."""
+        with _PIL_DRAW_LOCK:
+            return self._render_bottom_pil_locked(description, width, height,
+                                                   sweep_phase, sweep_strength)
+
+    def _render_bottom_pil_locked(self, description: str, width: int, height: int,
+                                  sweep_phase: float, sweep_strength: float) -> Image.Image:
         width = max(1, int(width))
         height = max(1, int(height))
         if sweep_strength > 0.005:

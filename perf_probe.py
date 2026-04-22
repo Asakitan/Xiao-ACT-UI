@@ -37,12 +37,13 @@ The dump runs on a daemon thread; it is started lazily on first use.
 
 from __future__ import annotations
 
+import faulthandler
 import sys
 import threading
 import time
 from collections import deque
 from contextlib import contextmanager
-from typing import Callable, Deque, Dict, Optional, TypeVar
+from typing import Callable, Deque, Dict, List, Optional, Tuple, TypeVar
 
 # ── config (read lazily from settings.json on first use) ─────────────────────
 # Keys recognised in settings.json:
@@ -50,11 +51,19 @@ from typing import Callable, Deque, Dict, Optional, TypeVar
 #   perf_probe_dump_sec  : float  (default 5.0)
 #   perf_probe_window    : int    (default 4096)
 #   perf_probe_log       : str    (default "" → stdout)
+#   perf_probe_phase_window : int (default 512)
+#   perf_probe_phase_immediate : bool (default false)
+#   perf_probe_phase_log  : str    (default perf_probe_log)
+#   perf_probe_faulthandler_log : str (default "" = disabled)
 
 _ENABLED: Optional[bool] = None   # None = not yet loaded
 _DUMP_SEC: float = 5.0
 _WINDOW: int = 4096
 _LOG_PATH: str = ''
+_PHASE_WINDOW: int = 512
+_PHASE_IMMEDIATE = False
+_PHASE_LOG_PATH: str = ''
+_FAULT_LOG_PATH: str = ''
 
 
 def _load_config() -> None:
@@ -65,7 +74,8 @@ def _load_config() -> None:
     Calling this on first probe/gauge use instead of at module load time keeps
     the import graph clean.
     """
-    global _ENABLED, _DUMP_SEC, _WINDOW, _LOG_PATH
+    global _ENABLED, _DUMP_SEC, _WINDOW, _LOG_PATH, _PHASE_WINDOW
+    global _PHASE_IMMEDIATE, _PHASE_LOG_PATH, _FAULT_LOG_PATH
     if _ENABLED is not None:
         return
     try:
@@ -81,6 +91,18 @@ def _load_config() -> None:
         except (TypeError, ValueError):
             _WINDOW = 4096
         _LOG_PATH = str(_sm.get('perf_probe_log', '') or '')
+        try:
+            _PHASE_WINDOW = max(
+                64,
+                int(_sm.get('perf_probe_phase_window', 512) or 512),
+            )
+        except (TypeError, ValueError):
+            _PHASE_WINDOW = 512
+        _PHASE_IMMEDIATE = bool(_sm.get('perf_probe_phase_immediate', False))
+        _PHASE_LOG_PATH = str(_sm.get('perf_probe_phase_log', '') or '')
+        if not _PHASE_LOG_PATH:
+            _PHASE_LOG_PATH = _LOG_PATH
+        _FAULT_LOG_PATH = str(_sm.get('perf_probe_faulthandler_log', '') or '')
     except Exception:
         _ENABLED = False
 
@@ -192,6 +214,20 @@ _sections: Dict[str, _Section] = {}
 _gauges: Dict[str, _Gauge] = {}
 _registry_lock = threading.Lock()
 _dumper_started = False
+_phase_lock = threading.Lock()
+_phase_events: Optional[Deque[Tuple[int, int, int, str, str]]] = None
+_phase_seq = 0
+_phase_dump_seq = 0
+_emit_lock = threading.Lock()
+_fault_handler_enabled = False
+_fault_handler_file = None
+
+
+def _phase_buffer() -> Deque[Tuple[int, int, int, str, str]]:
+    global _phase_events
+    if _phase_events is None:
+        _phase_events = deque(maxlen=_PHASE_WINDOW)
+    return _phase_events
 
 
 def _section(name: str) -> _Section:
@@ -225,6 +261,32 @@ def gauge(name: str, value: float) -> None:
         return
     _ensure_dumper()
     _gauge_obj(name).set(value)
+
+
+def phase(name: str, detail: str = '') -> None:
+    """Record a low-overhead phase marker into an in-memory ring buffer.
+
+    Intended for crash diagnosis around state transitions and native
+    boundaries (click dispatch, worker submit, GL init, present path).
+    The marker is dumped by :func:`dump_now` when probing is enabled.
+    """
+    global _phase_seq
+    if _ENABLED is None:
+        _load_config()
+    if not _ENABLED:
+        return
+    _ensure_dumper()
+    safe_name = str(name or '')[:80]
+    safe_detail = str(detail or '').replace('\n', ' ')[:160]
+    now_ns = time.perf_counter_ns()
+    thread_name = threading.current_thread().name[:40]
+    with _phase_lock:
+        _phase_seq += 1
+        event = (_phase_seq, now_ns, threading.get_ident(), thread_name,
+                 f'{safe_name}|{safe_detail}')
+        _phase_buffer().append(event)
+    if _PHASE_IMMEDIATE:
+        _emit(_format_phase_event(event), path=_PHASE_LOG_PATH)
 
 
 @contextmanager
@@ -303,24 +365,82 @@ def _format_dump(sections, gauges) -> str:
     return '\n'.join(parts)
 
 
-def _emit(text: str) -> None:
-    if _LOG_PATH:
+def _phase_snapshot_since(last_seq: int,
+                          limit: int = 96) -> Tuple[int, List[Tuple[int, int, int, str, str]]]:
+    with _phase_lock:
+        events = list(_phase_buffer())
+        newest_seq = events[-1][0] if events else last_seq
+    if not events:
+        return newest_seq, []
+    out = [ev for ev in events if ev[0] > last_seq]
+    if len(out) > limit:
+        out = out[-limit:]
+    return newest_seq, out
+
+
+def _format_phase_dump(events: List[Tuple[int, int, int, str, str]]) -> str:
+    parts = ['[perf] ── recent phases ──']
+    for event in events:
+        parts.append('  ' + _format_phase_event(event, prefix='').lstrip())
+    return '\n'.join(parts)
+
+
+def _format_phase_event(event: Tuple[int, int, int, str, str],
+                        prefix: str = '[perf][phase] ') -> str:
+    seq, now_ns, tid, thread_name, payload = event
+    name, _, detail = payload.partition('|')
+    return (
+        f'{prefix}#{seq:>5}  t={now_ns / 1_000_000.0:>12.3f}ms  '
+        f'tid={tid:>8}  thr={thread_name:<20}  '
+        f'{name:<32}  {detail}'
+    )
+
+
+def dump_recent_phases(limit: int = 96) -> None:
+    if _ENABLED is None:
+        _load_config()
+    if not _ENABLED:
+        return
+    _latest_seq, events = _phase_snapshot_since(0, limit=limit)
+    if not events:
+        return
+    _emit(_format_phase_dump(events))
+
+
+def _emit(text: str, path: Optional[str] = None) -> None:
+    target_path = _LOG_PATH if path is None else str(path or '')
+    with _emit_lock:
+        if target_path:
+            try:
+                with open(target_path, 'a', encoding='utf-8') as fh:
+                    fh.write(text)
+                    fh.write('\n')
+                return
+            except Exception:
+                pass
         try:
-            with open(_LOG_PATH, 'a', encoding='utf-8') as fh:
-                fh.write(text)
-                fh.write('\n')
-            return
+            sys.stdout.write(text + '\n')
+            sys.stdout.flush()
         except Exception:
             pass
+
+
+def _ensure_fault_handler() -> None:
+    global _fault_handler_enabled, _fault_handler_file
+    if _fault_handler_enabled or not _FAULT_LOG_PATH:
+        return
     try:
-        sys.stdout.write(text + '\n')
-        sys.stdout.flush()
-    except Exception:
-        pass
+        _fault_handler_file = open(_FAULT_LOG_PATH, 'a', encoding='utf-8')
+        faulthandler.enable(_fault_handler_file, all_threads=True)
+        _fault_handler_enabled = True
+        _emit(f'[perf] faulthandler enabled -> {_FAULT_LOG_PATH}')
+    except Exception as exc:
+        _emit(f'[perf] faulthandler enable failed: {exc}')
 
 
 def dump_now() -> None:
     """Force a snapshot dump (also used by the periodic thread)."""
+    global _phase_dump_seq
     if _ENABLED is None:
         _load_config()
     if not _ENABLED:
@@ -338,9 +458,16 @@ def dump_now() -> None:
         snap = g.snapshot()
         if snap is not None:
             gauge_snaps.append(snap)
-    if not sec_snaps and not gauge_snaps:
+    phase_latest_seq, phase_events = _phase_snapshot_since(_phase_dump_seq)
+    if not sec_snaps and not gauge_snaps and not phase_events:
         return
-    _emit(_format_dump(sec_snaps, gauge_snaps))
+    parts = []
+    if sec_snaps or gauge_snaps:
+        parts.append(_format_dump(sec_snaps, gauge_snaps))
+    if phase_events:
+        parts.append(_format_phase_dump(phase_events))
+        _phase_dump_seq = phase_latest_seq
+    _emit('\n'.join(parts))
 
 
 def _dumper_loop() -> None:
@@ -366,7 +493,11 @@ def _ensure_dumper() -> None:
                              daemon=True)
         t.start()
         _dumper_started = True
+        _ensure_fault_handler()
         _emit(f'[perf] enabled (dump every {_DUMP_SEC:.1f}s, '
               f'window={_WINDOW}, log={_LOG_PATH or "stdout"})')
         _emit('[perf] settings keys: perf_probe_enabled, perf_probe_dump_sec, '
-              'perf_probe_window, perf_probe_log (in settings.json)')
+              'perf_probe_window, perf_probe_phase_window, '
+              'perf_probe_phase_immediate, perf_probe_phase_log, '
+              'perf_probe_faulthandler_log, perf_probe_log '
+              '(in settings.json)')

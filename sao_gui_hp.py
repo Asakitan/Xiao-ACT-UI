@@ -71,7 +71,7 @@ def _gpu_hp_enabled() -> bool:
     except Exception:
         return False
 
-from perf_probe import probe as _probe
+from perf_probe import phase as _phase_trace, probe as _probe
 
 from sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
@@ -684,6 +684,7 @@ class HpOverlay:
     # ──────────────────────────────────────────
 
     def show(self) -> None:
+        _phase_trace('hp.overlay.show.begin', f'gpu={int(bool(_gpu_hp_enabled()))}')
         self._sync_layout()
         if self._win is not None:
             return
@@ -716,6 +717,7 @@ class HpOverlay:
                 self._enter_scale_t = 0.0
                 self._exiting = False
                 self._hide_after_exit = False
+                _phase_trace('hp.overlay.show.gpu', f'xy={self._x},{self._y}')
                 self._schedule_tick(immediate=True)
                 return
             except Exception:
@@ -784,6 +786,7 @@ class HpOverlay:
         self._enter_scale_t = 0.0
         self._exiting = False
         self._hide_after_exit = False
+        _phase_trace('hp.overlay.show.ulw', f'hwnd={self._hwnd} xy={self._x},{self._y}')
         self._schedule_tick(immediate=True)
 
     def hide(self) -> None:
@@ -791,6 +794,7 @@ class HpOverlay:
             return
         if self._exiting:
             return
+        _phase_trace('hp.overlay.hide.begin', f'alpha={self._fade_alpha:.3f}')
         self._exiting = True
         self._fade_from = self._fade_alpha
         self._fade_target = 0.0
@@ -800,6 +804,7 @@ class HpOverlay:
         self._schedule_tick(immediate=True)
 
     def destroy(self) -> None:
+        _phase_trace('hp.overlay.destroy', f'gpu={int(bool(self._gpu_managed))} hwnd={self._hwnd}')
         self._cancel_tick()
         if hasattr(self, '_render_worker') and self._render_worker is not None:
             try:
@@ -895,15 +900,18 @@ class HpOverlay:
         if offline:
             if self._sta_offline or self._sta_offline_pending:
                 return
+            _phase_trace('hp.sta_offline.set', 'offline=1')
             self._sta_offline_pending = True
             self._offline_debounce_t = now
             if not self._hp_group_hidden and self._hp_group_fade_t <= 0.0:
                 self._offline_hide_t = now
+                _phase_trace('hp.group.hide_arm', f'fade_t={self._hp_group_fade_t:.3f}')
         else:
             if (not self._sta_offline and not self._sta_offline_pending
                     and not self._hp_group_hidden and self._hp_group_fade_t <= 0.0):
                 self._sta_text = self._format_sta_text()
                 return
+            _phase_trace('hp.sta_offline.set', 'offline=0')
             self._sta_offline_pending = False
             self._offline_debounce_t = 0.0
             self._offline_hide_t = 0.0
@@ -916,6 +924,7 @@ class HpOverlay:
                 self._hp_group_hidden = False
                 self._hp_group_restore_t = now
                 self._hp_group_fade_t = 0.0
+                _phase_trace('hp.group.restore', f't={now:.3f}')
         self._schedule_tick(immediate=True)
 
     # ──────────────────────────────────────────
@@ -1078,6 +1087,7 @@ class HpOverlay:
                 if not self._sta_offline:
                     self._sta_offline = True
                     self._sta_text = 'OFFLINE'
+                    _phase_trace('hp.sta_offline.commit', f't={now:.3f}')
             else:
                 animating = True
 
@@ -1090,6 +1100,10 @@ class HpOverlay:
                     self._hp_group_hidden = True
                     self._hp_group_fade_t = now
                     self._hp_group_restore_t = 0.0
+                    _phase_trace(
+                        'hp.group.hidden',
+                        f'offline={int(bool(self._sta_offline))} pending={int(bool(self._sta_offline_pending))}',
+                    )
             else:
                 animating = True
 

@@ -42,6 +42,7 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from gpu_renderer import _render_lock as _gpu_render_lock
+from gpu_renderer import _get_wgl_serialize_lock as _gpu_wgl_lock
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, FrameBuffer, run_cpu_tasks, submit_ulw_commit
 try:
@@ -635,7 +636,7 @@ void main() {
             # v2.2.23: also acquire the gpu device lock so concurrent
             # blurs/premult on sibling worker threads don't thrash the
             # underlying device queue while we're mid-readback.
-            with _gpu_render_lock, ctx:
+            with _gpu_wgl_lock(), _gpu_render_lock, ctx:
                 fbo.use()
                 ctx.viewport = (0, 0, width, height)
                 ctx.clear(0.0, 0.0, 0.0, 0.0)

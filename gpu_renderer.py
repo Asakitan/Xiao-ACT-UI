@@ -25,8 +25,11 @@ from typing import Optional, Tuple, Dict, Any
 import numpy as np
 from PIL import Image, ImageFilter
 
+from perf_probe import phase as _phase_trace
+
 
 _DISABLED = os.environ.get('SAO_GPU_DISABLE', '') == '1'
+_PREMULT_DISABLED = os.environ.get('SAO_GPU_PREMULT_DISABLE', '') == '1'
 
 # ── Per-thread GL state ──────────────────────────────────────────
 # Each render-lane thread (and the Tk main thread) gets its own
@@ -46,6 +49,37 @@ _global_lock = threading.Lock()
 # total wall stays the same in the steady state but the worst-case
 # pipeline collapse goes away.
 _render_lock = threading.Lock()
+
+# v2.3.x: cross-driver WGL serialization.
+# `_render_lock` above only protects worker threads from each other. The
+# main-thread GLFW pump (gpu_overlay_window.GlfwPump._tick) does its own
+# poll_events / make_context_current / swap_buffers under a different lock
+# (`_wgl_serialize_lock`, an RLock). When a worker's premultiply / blur /
+# shell render runs concurrently with poll_events on the main thread,
+# both sides release the GIL inside ctypes and the Windows WGL driver
+# corrupts the main thread's PyThreadState restoration on
+# Py_END_ALLOW_THREADS — manifests as a hard native abort during the
+# next user-input glfw callback (popup click), with no Python traceback
+# and no faulthandler output.
+#
+# Acquire the WGL serialize RLock around every block of GL work in this
+# module so worker GL ops and the main-thread pump cannot overlap on
+# the driver. Lazy-imported to avoid an import cycle at startup.
+_wgl_serialize_lock_ref: Any = None
+
+
+def _get_wgl_serialize_lock() -> Any:
+    global _wgl_serialize_lock_ref
+    if _wgl_serialize_lock_ref is not None:
+        return _wgl_serialize_lock_ref
+    try:
+        from gpu_overlay_window import get_wgl_serialize_lock as _g
+        _wgl_serialize_lock_ref = _g()
+    except Exception:
+        # Fall back to a private RLock so the `with` statement still works.
+        _wgl_serialize_lock_ref = threading.RLock()
+    return _wgl_serialize_lock_ref
+
 
 _tls = threading.local()  # per-thread: .ctx, .blur_prog, .blur_quad,
                            #              .shell_prog, .prem_prog,
@@ -76,6 +110,7 @@ def _try_init() -> bool:
         if _global_failed:
             return False
         try:
+            _phase_trace('gpu.init.begin', threading.current_thread().name)
             import moderngl  # type: ignore
             if os.name == 'nt':
                 ctx = moderngl.create_standalone_context(require=330)
@@ -90,6 +125,7 @@ def _try_init() -> bool:
                       f'falling back to CPU: {exc}')
             except Exception:
                 pass
+            _phase_trace('gpu.init.fail', f'{threading.current_thread().name}: {exc}')
             _global_failed = True
             _tls.failed = True
             return False
@@ -107,6 +143,7 @@ def _try_init() -> bool:
         _tls.ctx = None
         _tls.failed = True
         return False
+    _phase_trace('gpu.init.ok', threading.current_thread().name)
     return True
 
 
@@ -331,7 +368,7 @@ def gaussian_blur_rgba(img, sigma: float) -> Image.Image:
 
         # Re-bind our context in case another standalone GL context (e.g.
         # skillfx Burst overlay) was made current on this thread.
-        with _render_lock, ctx:
+        with _get_wgl_serialize_lock(), _render_lock, ctx:
             src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
             src_tex.filter = (0x2601, 0x2601)  # GL_LINEAR
             src_tex.repeat_x = False
@@ -401,7 +438,7 @@ def render_shell_rgba(
         return None
     try:
         ctx = _tls.ctx
-        with _render_lock, ctx:
+        with _get_wgl_serialize_lock(), _render_lock, ctx:
             fbo = _get_fbo(w, h, 'shell')
             fbo.use()
             ctx.viewport = (0, 0, w, h)
@@ -449,6 +486,9 @@ def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
     None if the GPU path is unavailable. Only worth calling for larger
     surfaces; for ~260×220 panels numpy is already fast enough.
     """
+    if _PREMULT_DISABLED:
+        _phase_trace('gpu.premult.disabled')
+        return None
     if not _try_init():
         return None
     try:
@@ -458,24 +498,30 @@ def premultiply_bgra_bytes(rgba: np.ndarray) -> Optional[bytes]:
         # Burst overlay), the most recently created one is current on Windows
         # WGL; without this guard its FBO operations would silently clobber
         # ours (and vice-versa), producing garbage or flipped output.
-        with _render_lock, ctx:
-            arr = _to_rgba_np(rgba)
-            h, w, _ = arr.shape
-            src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
-            src_tex.filter = (0x2600, 0x2600)
-            fbo = _get_fbo(w, h, 'prem')
-            fbo.use()
-            ctx.viewport = (0, 0, w, h)
-            ctx.clear(0.0, 0.0, 0.0, 0.0)
-            src_tex.use(0)
-            _tls.prem_prog['u_tex'].value = 0
-            _tls.prem_quad.render()
-            data = fbo.read(components=4, alignment=1)
-            # UpdateLayeredWindow uses a top-down DIB (negative biHeight), and
-            # the CPU premultiply path already writes rows in top-down order.
-            # Do not flip here or every async ULW overlay ends up mirrored.
-            out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4).copy()
-            src_tex.release()
+        arr = _to_rgba_np(rgba)
+        h, w, _ = arr.shape
+        _phase_trace('gpu.premult.lock.wait', f'{w}x{h}')
+        with _get_wgl_serialize_lock(), _render_lock:
+            _phase_trace('gpu.premult.lock.acquired', f'{w}x{h}')
+            with ctx:
+                src_tex = ctx.texture((w, h), 4, arr.tobytes(), dtype='f1')
+                src_tex.filter = (0x2600, 0x2600)
+                fbo = _get_fbo(w, h, 'prem')
+                fbo.use()
+                ctx.viewport = (0, 0, w, h)
+                ctx.clear(0.0, 0.0, 0.0, 0.0)
+                src_tex.use(0)
+                _tls.prem_prog['u_tex'].value = 0
+                _tls.prem_quad.render()
+                _phase_trace('gpu.premult.read.begin', f'{w}x{h}')
+                data = fbo.read(components=4, alignment=1)
+                _phase_trace('gpu.premult.read.end', f'{w}x{h}')
+                # UpdateLayeredWindow uses a top-down DIB (negative biHeight), and
+                # the CPU premultiply path already writes rows in top-down order.
+                # Do not flip here or every async ULW overlay ends up mirrored.
+                out = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 4).copy()
+                src_tex.release()
+        _phase_trace('gpu.premult.end', f'{w}x{h}')
         return out.tobytes()
     except Exception as exc:
         try:

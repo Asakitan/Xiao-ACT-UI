@@ -37,6 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
 import numpy as np
 from PIL import Image
 
+from perf_probe import phase as _phase_trace
 from render_capture_sync import wait_until_capture_idle
 
 # ── Win32 structures (mirrored from sao_gui_dps for independence) ──
@@ -99,9 +100,11 @@ def _premultiply_to_bgra(img: Image.Image) -> bytes:
     Tries the GPU shader first (already on the render-lane thread that
     owns a GL context); falls back to numpy on failure.
     """
+    _phase_trace('render.premultiply.begin', f'{img.size[0]}x{img.size[1]}')
     from gpu_renderer import premultiply_bgra_bytes
     gpu_result = premultiply_bgra_bytes(np.asarray(img, dtype=np.uint8))
     if gpu_result is not None:
+        _phase_trace('render.premultiply.gpu', f'{img.size[0]}x{img.size[1]}')
         return gpu_result
     # CPU fallback — pure numpy, releases GIL.
     rgba = np.asarray(img, dtype=np.uint8)
@@ -112,6 +115,7 @@ def _premultiply_to_bgra(img: Image.Image) -> bytes:
     bgra[:, :, 1] = rgb[:, :, 1]  # G
     bgra[:, :, 2] = rgb[:, :, 0]  # R
     bgra[:, :, 3] = rgba[:, :, 3]  # A
+    _phase_trace('render.premultiply.cpu', f'{img.size[0]}x{img.size[1]}')
     return bgra.tobytes()
 
 
@@ -445,6 +449,10 @@ class _RenderLane:
             worker_id, job = picked
             compose_fn, now, hwnd, x, y = job
             try:
+                _phase_trace(
+                    'render.lane.compose.begin',
+                    f'worker={worker_id} hwnd={hwnd} fn={getattr(compose_fn, "__name__", compose_fn.__class__.__name__)}',
+                )
                 # v2.2.21: wall-time tracking feeds scheduler.set_wall_pressure
                 # so HP/DPS idle ticks back off when SkillFX/BOSSHP composes
                 # blow past the frame budget without any FX reduction.
@@ -467,6 +475,10 @@ class _RenderLane:
                     fb = FrameBuffer(bgra, w, h, x, y)
                 _wall_ms = (time.perf_counter() - _t0) * 1000.0
                 _record_worker_wall(worker_id, _wall_ms)
+                _phase_trace(
+                    'render.lane.compose.end',
+                    f'worker={worker_id} hwnd={hwnd} ms={_wall_ms:.2f}',
+                )
                 with self._lock:
                     if worker_id in self._workers:
                         self._results[worker_id] = fb

@@ -4171,6 +4171,22 @@ class SAOPlayerGUI:
         def _worker():
             """后台线程: 全部重活在此, 主线程仅 set_frame/set_alpha."""
             import time as _time
+            # WGL driver serialization: this worker owns a private moderngl
+            # standalone context. Without this lock its WGL ctypes calls
+            # (texture upload, framebuffer use, clear, render, readback)
+            # race the main-thread GLFW pump's poll_events / make_current /
+            # swap_buffers / set_window_pos / set_window_size, which on
+            # Windows GL drivers corrupts the main thread's saved Python
+            # tstate during a click-triggered menu reflow and aborts with
+            # "Fatal Python error: PyEval_RestoreThread ... GIL is released
+            # (the current Python thread state is NULL)". Acquired only
+            # around the actual GL calls; the heavy PIL.resize / numpy
+            # storm runs without the lock so the pump never blocks long.
+            try:
+                from gpu_overlay_window import get_wgl_serialize_lock
+                _wgl_lock = get_wgl_serialize_lock()
+            except Exception:
+                _wgl_lock = None
 
             # ── 优先 mss 快速截屏 (DXGI), fallback ImageGrab ──
             _cap_fn = None
@@ -4202,42 +4218,48 @@ class SAOPlayerGUI:
             _ctx = _prog = _vbo = _vao = _tex = _fbo = None
             try:
                 import moderngl
-                _ctx = moderngl.create_standalone_context()
-                _prog = _ctx.program(
-                    vertex_shader='''
-                        #version 330
-                        in vec2 in_pos;
-                        out vec2 uv;
-                        void main() {
-                            gl_Position = vec4(in_pos, 0.0, 1.0);
-                            uv = in_pos * 0.5 + 0.5;
-                        }
-                    ''',
-                    fragment_shader='''
-                        #version 330
-                        uniform sampler2D tex;
-                        uniform float strength;
-                        in vec2 uv;
-                        out vec4 fragColor;
-                        void main() {
-                            vec2 c = uv - 0.5;
-                            float r2 = dot(c, c);
-                            vec2 d = uv + c * strength * r2;
-                            fragColor = texture(tex, d);
-                        }
-                    '''
-                )
-                import numpy as _np
-                _verts = _np.array([-1, -1, 3, -1, -1, 3], dtype='f4')
-                _vbo = _ctx.buffer(_verts)
-                _vao = _ctx.simple_vertex_array(_prog, _vbo, 'in_pos')
-                _tex = _ctx.texture((hw, hh), 3)
-                _tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
-                _fbo = _ctx.framebuffer(
-                    color_attachments=[_ctx.texture((hw, hh), 3)])
-                _prog['strength'].value = 0.55
-                _prog['tex'].value = 0
-                _gl_ok = True
+                import contextlib as _ctxlib
+                # Hold the WGL serialization lock across context+resource
+                # creation so init does not race the main-thread GLFW pump.
+                _init_cm = (_wgl_lock if _wgl_lock is not None
+                            else _ctxlib.nullcontext())
+                with _init_cm:
+                    _ctx = moderngl.create_standalone_context()
+                    _prog = _ctx.program(
+                        vertex_shader='''
+                            #version 330
+                            in vec2 in_pos;
+                            out vec2 uv;
+                            void main() {
+                                gl_Position = vec4(in_pos, 0.0, 1.0);
+                                uv = in_pos * 0.5 + 0.5;
+                            }
+                        ''',
+                        fragment_shader='''
+                            #version 330
+                            uniform sampler2D tex;
+                            uniform float strength;
+                            in vec2 uv;
+                            out vec4 fragColor;
+                            void main() {
+                                vec2 c = uv - 0.5;
+                                float r2 = dot(c, c);
+                                vec2 d = uv + c * strength * r2;
+                                fragColor = texture(tex, d);
+                            }
+                        '''
+                    )
+                    import numpy as _np
+                    _verts = _np.array([-1, -1, 3, -1, -1, 3], dtype='f4')
+                    _vbo = _ctx.buffer(_verts)
+                    _vao = _ctx.simple_vertex_array(_prog, _vbo, 'in_pos')
+                    _tex = _ctx.texture((hw, hh), 3)
+                    _tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+                    _fbo = _ctx.framebuffer(
+                        color_attachments=[_ctx.texture((hw, hh), 3)])
+                    _prog['strength'].value = 0.55
+                    _prog['tex'].value = 0
+                    _gl_ok = True
             except Exception:
                 _ctx = None
 
@@ -4318,12 +4340,37 @@ class SAOPlayerGUI:
                 try:
                     if _gl_ok:
                         small = shot.resize((hw, hh), Image.BILINEAR)
-                        _tex.write(small.tobytes())
-                        _fbo.use()
-                        _ctx.clear()
-                        _tex.use(0)
-                        _vao.render(moderngl.TRIANGLES)
-                        raw = _fbo.color_attachments[0].read()
+                        # Serialize the WGL block against the main-thread
+                        # GLFW pump. Lock is reentrant; held only across
+                        # the GL calls themselves so the pump can't race
+                        # us on the driver, but the pump is never blocked
+                        # for more than a single GL frame's worth of work.
+                        if _wgl_lock is not None:
+                            try:
+                                from perf_probe import phase as _ph
+                                _ph('fisheye.gl.wait')
+                            except Exception:
+                                _ph = None  # type: ignore[assignment]
+                            with _wgl_lock:
+                                if _ph is not None:
+                                    try: _ph('fisheye.gl.acquired')
+                                    except Exception: pass
+                                _tex.write(small.tobytes())
+                                _fbo.use()
+                                _ctx.clear()
+                                _tex.use(0)
+                                _vao.render(moderngl.TRIANGLES)
+                                raw = _fbo.color_attachments[0].read()
+                                if _ph is not None:
+                                    try: _ph('fisheye.gl.end')
+                                    except Exception: pass
+                        else:
+                            _tex.write(small.tobytes())
+                            _fbo.use()
+                            _ctx.clear()
+                            _tex.use(0)
+                            _vao.render(moderngl.TRIANGLES)
+                            raw = _fbo.color_attachments[0].read()
                         dist = Image.frombytes('RGB', (hw, hh), raw)
                     else:
                         tiny = shot.resize((qw, qh), Image.BILINEAR)

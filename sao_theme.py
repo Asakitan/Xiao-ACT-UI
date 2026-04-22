@@ -87,7 +87,7 @@ except Exception:
     def gpu_child_bar_enabled() -> bool:  # type: ignore[no-redef]
         return False
 from overlay_scheduler import get_scheduler as _get_scheduler
-from perf_probe import probe as _probe
+from perf_probe import phase as _phase_trace, probe as _probe
 
 try:
     import moderngl
@@ -1169,6 +1169,7 @@ class SAOChildBar(tk.Frame):
         self._row_anim_sched_ident = f'sao_child_bar_{id(self)}'
         self._locked_size: Optional[Tuple[int, int]] = None
         self._size_anim_active = False
+        self._layout_commit_job = None
         self._anim = Animator(self)
         self._gpu_painter: Optional[Any] = None
         self._gpu_managed: bool = False
@@ -1216,6 +1217,7 @@ class SAOChildBar(tk.Frame):
         self._menu_signatures.pop(name, None)
 
     def show_menu(self, name: str, force: bool = False):
+        _phase_trace('menu.child.show_menu', f'name={name} force={int(bool(force))}')
         target_sig = self._menu_signatures.get(name)
         current_sig = self._menu_signatures.get(self._current_name) if self._current_name else None
         if not force and name == self._current_name and self._items and current_sig == target_sig:
@@ -1235,6 +1237,10 @@ class SAOChildBar(tk.Frame):
         return True
 
     def _transition_to(self, name: Optional[str], items: List[Dict]):
+        _phase_trace(
+            'menu.child.transition',
+            f'name={name or "<none>"} has_items={int(bool(self._items))} n={len(items)}',
+        )
         self._transition_serial += 1
         serial = self._transition_serial
 
@@ -1250,6 +1256,7 @@ class SAOChildBar(tk.Frame):
             _swap_in()
 
     def _animate_out_current(self, on_done: Callable[[], None]):
+        _phase_trace('menu.child.animate_out', f'rows={len(self._items)}')
         self._stop_row_anim()
         rows = [getattr(outer, '_row_body', None) for outer in self._items]
         rows = [row for row in rows if row is not None and row.winfo_exists()]
@@ -1348,7 +1355,12 @@ class SAOChildBar(tk.Frame):
                     pass
 
     def _rebuild(self, items: List[Dict], animate_rows: bool = True):
+        _phase_trace(
+            'menu.child.rebuild',
+            f'n={len(items)} animate={int(bool(animate_rows))}',
+        )
         self._stop_row_anim()
+        self._cancel_layout_commit()
         # Reset anim-driven painter inputs; new items will populate.
         self._anim_line_w = None
         self._anim_arrow_w = None
@@ -1452,16 +1464,7 @@ class SAOChildBar(tk.Frame):
                     row.configure(width=240)
                 except Exception:
                     pass
-        try:
-            self.update_idletasks()
-            target_w = max(1, content.winfo_reqwidth())
-            target_h = max(1, content.winfo_reqheight())
-            start_w = self._locked_size[0] if self._locked_size is not None else target_w
-            start_h = self._locked_size[1] if self._locked_size is not None else target_h
-            self.configure(width=start_w, height=start_h)
-            self._animate_size_to(target_w, target_h)
-        except Exception:
-            pass
+        self._schedule_rebuild_layout(content)
         if animate_rows:
             self._start_row_anim()
         else:
@@ -1503,6 +1506,40 @@ class SAOChildBar(tk.Frame):
                 pass
             self._row_anim_registered = False
 
+    def _cancel_layout_commit(self) -> None:
+        if self._layout_commit_job is None:
+            return
+        try:
+            self.after_cancel(self._layout_commit_job)
+        except Exception:
+            pass
+        self._layout_commit_job = None
+
+    def _commit_rebuild_layout(self, content: Optional[tk.Frame]) -> None:
+        self._layout_commit_job = None
+        if not self.winfo_exists() or content is None:
+            return
+        if content is not self._content_wrap or not content.winfo_exists():
+            return
+        try:
+            target_w = max(1, content.winfo_reqwidth())
+            target_h = max(1, content.winfo_reqheight())
+            start_w = self._locked_size[0] if self._locked_size is not None else target_w
+            start_h = self._locked_size[1] if self._locked_size is not None else target_h
+            self.configure(width=start_w, height=start_h)
+            self._animate_size_to(target_w, target_h)
+        except Exception:
+            pass
+
+    def _schedule_rebuild_layout(self, content: Optional[tk.Frame]) -> None:
+        self._cancel_layout_commit()
+        try:
+            self._layout_commit_job = self.after_idle(
+                lambda c=content: self._commit_rebuild_layout(c))
+        except Exception:
+            self._layout_commit_job = None
+            self._commit_rebuild_layout(content)
+
     def _row_animating(self) -> bool:
         return self._row_anim_active and self.winfo_exists()
 
@@ -1536,7 +1573,6 @@ class SAOChildBar(tk.Frame):
             self._dispatch_gpu_paint()
         if not keep_animating:
             try:
-                self.update_idletasks()
                 if (not self._size_anim_active and
                         self._content_wrap is not None and self._content_wrap.winfo_exists()):
                     self.configure(
@@ -1685,13 +1721,22 @@ class SAOChildBar(tk.Frame):
             widget.bind('<Leave>', leave)
             cmd = item.get('command')
             if cmd:
-                def _click_with_sound(e, c=cmd):
+                row_label = getattr(outer, '_label_text', '')
+
+                def _click_with_sound(e, c=cmd, label=row_label):
                     try:
                         from sao_sound import play_sound as _ps
                         _ps('click', volume=0.5)
                     except Exception:
                         pass
-                    c()
+                    _phase_trace('menu.child.row.schedule', label)
+                    try:
+                        self.after_idle(
+                            lambda cb=c, row_name=label:
+                            (_phase_trace('menu.child.row.cb', row_name), cb())
+                        )
+                    except Exception:
+                        c()
                 widget.bind('<Button-1>', _click_with_sound)
 
         # 入场动画: 从右侧滑入
@@ -1726,6 +1771,7 @@ class SAOChildBar(tk.Frame):
             self._gpu_managed = False
 
     def _on_destroy(self):
+        self._cancel_layout_commit()
         self._stop_row_anim()
         if self._gpu_painter is not None:
             try:
@@ -1938,7 +1984,6 @@ class SAOPopUpMenu:
         try:
             if not self._overlay.winfo_exists() or not self._content.winfo_exists():
                 return
-            self._overlay.update_idletasks()
             sw = max(1, self._overlay.winfo_width() or self.root.winfo_screenwidth())
             sh = max(1, self._overlay.winfo_height() or self.root.winfo_screenheight())
             cw = max(120, self._content.winfo_reqwidth())
@@ -1963,6 +2008,51 @@ class SAOPopUpMenu:
             self._hud_cached_dims = None
         except Exception:
             pass
+
+    def _cancel_menu_layout_refresh(self) -> None:
+        if self._menu_hud_job is None:
+            return
+        try:
+            if self._overlay is not None and self._overlay.winfo_exists():
+                self._overlay.after_cancel(self._menu_hud_job)
+        except Exception:
+            pass
+        self._menu_hud_job = None
+
+    def _run_menu_layout_refresh(self) -> None:
+        self._menu_hud_job = None
+        if not self._visible or not self._overlay or not self._content:
+            return
+        try:
+            if not self._overlay.winfo_exists() or not self._content.winfo_exists():
+                return
+            # Clicking a menu or child-bar item that changes layout used
+            # to do update_idletasks() + anchor refresh + HUD redraw
+            # inline inside the click callback. That re-entered Tk and the
+            # GLFW pump while resize-triggered GPU windows were still in
+            # the originating event stack, which is the exact crash path
+            # the user reports: any button that causes a resize aborts.
+            # Coalesce those updates into one idle turn after the click
+            # callback returns, so the resize happens outside the active
+            # mouse callback / poll_events stack.
+            self._overlay.update_idletasks()
+            self._refresh_anchor_layout()
+            self._draw_menu_hud(
+                0, 0, max(0.0, time.time() - self._menu_anim_t0))
+        except Exception:
+            pass
+
+    def _schedule_menu_layout_refresh(self) -> None:
+        if not self._overlay or not self._content:
+            return
+        if self._menu_hud_job is not None:
+            return
+        try:
+            self._menu_hud_job = self._overlay.after_idle(
+                self._run_menu_layout_refresh)
+        except Exception:
+            self._menu_hud_job = None
+            self._run_menu_layout_refresh()
 
     def bind_events(self):
         self.root.bind_all('<Alt-KeyPress>', self._on_alt_key)
@@ -2541,6 +2631,7 @@ class SAOPopUpMenu:
             self.close()
 
     def _on_menu_activate(self, item):
+        _phase_trace('menu.activate.begin', str(getattr(item, 'get', lambda *_: None)('name', '<none>') if item is not None else '<none>'))
         self._menu_force_60_until = time.time() + 0.95
         lw = self._left_widget
         layout_changed = False
@@ -2552,12 +2643,7 @@ class SAOPopUpMenu:
                 self._hud_cached_dims = None
                 self._content_place_sig = None
                 self._menu_hud_renderer.reset()
-                try:
-                    self._overlay.update_idletasks()
-                    self._refresh_anchor_layout()
-                    self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
-                except Exception:
-                    pass
+                self._schedule_menu_layout_refresh()
             return
         if lw and hasattr(lw, 'set_active'):
             was_active = bool(getattr(lw, '_active', False))
@@ -2580,16 +2666,12 @@ class SAOPopUpMenu:
             layout_changed = bool(self._child_bar.show_menu(name))
         else:
             layout_changed = bool(self._child_bar.hide_menu())
+        _phase_trace('menu.activate.layout', f'changed={int(bool(layout_changed))}')
         if layout_changed:
             self._hud_cached_dims = None
             self._content_place_sig = None
             self._menu_hud_renderer.reset()
-            try:
-                self._overlay.update_idletasks()
-                self._refresh_anchor_layout()
-                self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
-            except Exception:
-                pass
+            self._schedule_menu_layout_refresh()
 
     def refresh_child_menus(self, menus: Dict[str, List[Dict]], force: bool = False):
         """Batch-refresh child menus and redraw HUD only if the visible menu changed."""
@@ -2616,12 +2698,7 @@ class SAOPopUpMenu:
         self._hud_cached_dims = None
         self._content_place_sig = None
         self._menu_hud_renderer.reset()
-        try:
-            self._overlay.update_idletasks()
-            self._refresh_anchor_layout()
-            self._draw_menu_hud(0, 0, max(0.0, time.time() - self._menu_anim_t0))
-        except Exception:
-            pass
+        self._schedule_menu_layout_refresh()
         return True
 
     def refresh_child_menu(self, name: str, items: List[Dict]):
@@ -2749,7 +2826,7 @@ class SAOPopUpMenu:
             self._menu_anim_registered = False
         self._menu_force_60_until = 0.0
         self._breath_job = None
-        self._menu_hud_job = None
+        self._cancel_menu_layout_refresh()
 
     def _menu_overlay_animating(self) -> bool:
         if not self._visible or not self._overlay or not self._overlay.winfo_exists():
