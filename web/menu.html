@@ -5326,45 +5326,112 @@ function _saoEnsureUpdaterBanner() {
         later: document.getElementById('sao-updater-later'),
         skip: document.getElementById('sao-updater-skip')
     };
+    // v2.3.5: 防止快速连点造成 onedir 打包模式下的闪退。
+    // 根因: pywebview JS 桥的 download_update / apply_update / skip_update
+    //   首次调用时, Python 端会执行 `from sao_updater import get_manager`。
+    //   在 onedir 解冻模块时这一步可能花 200-500ms。期间用户连点会让多个
+    //   JS-bridge 调用并发进入 EdgeWebView2 COM apartment, 在 onedir 下偶发
+    //   崩进程。所以必须在 JS 端做硬性防抖, 一旦点过就完全不再派发, 直到
+    //   Python 把 state 推回来 (会自动重新启用按钮)。
+    function _saoLockUpdaterButtons(ui, actionLabel) {
+        ui.__sao_busy = true;
+        ui.action.disabled = true;
+        ui.later.disabled = true;
+        ui.skip.disabled = true;
+        ui.action.style.pointerEvents = 'none';
+        ui.later.style.pointerEvents = 'none';
+        ui.skip.style.pointerEvents = 'none';
+        if (actionLabel) ui.action.textContent = actionLabel;
+        // 兜底解锁: 万一 Python 端没有及时推送新 state, 1.5s 后恢复点击,
+        // 避免按钮永久卡死。下载/重启分支自身有更长的 UI 锁 (见下), 不会
+        // 被这个 timeout 误解锁。
+        if (ui.__sao_busy_timer) {
+            clearTimeout(ui.__sao_busy_timer);
+        }
+        ui.__sao_busy_timer = setTimeout(function() {
+            _saoUnlockUpdaterButtons(ui);
+        }, 1500);
+    }
+    function _saoUnlockUpdaterButtons(ui) {
+        ui.__sao_busy = false;
+        if (ui.__sao_busy_timer) {
+            clearTimeout(ui.__sao_busy_timer);
+            ui.__sao_busy_timer = null;
+        }
+        ui.action.disabled = false;
+        ui.later.disabled = false;
+        ui.skip.disabled = false;
+        ui.action.style.pointerEvents = '';
+        ui.later.style.pointerEvents = '';
+        ui.skip.style.pointerEvents = '';
+    }
+    // 暴露给 updateUpdaterState 用 (state 推送后强制解锁)
+    window.__saoUnlockUpdaterButtons = function() {
+        var u = window.__SAO_UPDATER_UI;
+        if (u) _saoUnlockUpdaterButtons(u);
+    };
+
     ui.action.onclick = function() {
+        if (ui.__sao_busy) return;
         var s = __SAO_UPDATER_STATE || {};
         if (s.state === 'ready') {
+            _saoLockUpdaterButtons(ui, '切换中...');
             ui.headline.textContent = '正在切换到更新器';
             ui.version.textContent = '主程序退出后继续替换文件';
             _saoSetUpdaterBadge(ui, 'HANDOFF', 'ready');
             _saoSetUpdaterNotes(ui, '独立 updater 已接管本次更新，接下来会继续完成模块替换、启动器更新与应用重启。');
             _saoSetUpdaterProgress(ui, 100, true);
             ui.meta.textContent = '请稍候…';
-            ui.action.disabled = true;
-            ui.action.textContent = '切换中...';
             ui.later.style.display = 'none';
             ui.skip.style.display = 'none';
             if (window.pywebview && window.pywebview.api && window.pywebview.api.apply_update) {
                 Promise.resolve(window.pywebview.api.apply_update())
                     .then(function(ok) {
                         if (ok) return;
+                        _saoUnlockUpdaterButtons(ui);
                         _saoRestoreUpdaterState(s);
                         showToast('启动 updater 失败', 3200);
                     })
                     .catch(function() {
+                        _saoUnlockUpdaterButtons(ui);
                         _saoRestoreUpdaterState(s);
                         showToast('启动 updater 失败', 3200);
                     });
             } else {
+                _saoUnlockUpdaterButtons(ui);
                 _saoRestoreUpdaterState(s);
                 showToast('更新器接口不可用', 3200);
             }
         } else {
-            if (window.pywebview && window.pywebview.api && window.pywebview.api.download_update)
-                window.pywebview.api.download_update();
+            _saoLockUpdaterButtons(ui, '请求中...');
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.download_update) {
+                try {
+                    Promise.resolve(window.pywebview.api.download_update())
+                        .catch(function() { _saoUnlockUpdaterButtons(ui); });
+                } catch (e) {
+                    _saoUnlockUpdaterButtons(ui);
+                }
+            } else {
+                _saoUnlockUpdaterButtons(ui);
+            }
         }
     };
     ui.later.onclick = function() {
+        if (ui.__sao_busy) return;
+        _saoLockUpdaterButtons(ui, ui.action.textContent);
         _saoShowUpdaterPanel(false);
+        // later 不会触发 state 推送, 短延迟后自解锁 (面板已隐藏, 无影响)
+        setTimeout(function() { _saoUnlockUpdaterButtons(ui); }, 400);
     };
     ui.skip.onclick = function() {
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.skip_update)
-            window.pywebview.api.skip_update();
+        if (ui.__sao_busy) return;
+        _saoLockUpdaterButtons(ui, ui.action.textContent);
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.skip_update) {
+            try {
+                Promise.resolve(window.pywebview.api.skip_update())
+                    .catch(function() {});
+            } catch (e) { }
+        }
         _saoShowUpdaterPanel(false);
     };
     window.__SAO_UPDATER_UI = ui;
@@ -5410,6 +5477,12 @@ function updateUpdaterState(data) {
     var s = __SAO_UPDATER_STATE;
     var ui = _saoEnsureUpdaterBanner();
     if (!ui) return;
+    // v2.3.5: Python 推回新 state 即代表上一次点击的请求已被处理 (或被
+    // is_busy 拒绝), JS-side 防抖锁可以安全释放, 让用户可以继续操作。
+    // downloading / 切换中 状态下不解锁, 因为下面的分支会自己再禁用。
+    if (s.state !== 'downloading' && typeof window.__saoUnlockUpdaterButtons === 'function') {
+        window.__saoUnlockUpdaterButtons();
+    }
 
     if (!s.state || s.state === 'idle' || s.state === 'up_to_date') {
         __SAO_UPDATER_PROMPTED = '';
