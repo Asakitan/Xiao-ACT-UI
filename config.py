@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.3.4"
+APP_VERSION = "2.3.5"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,16 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.3.5:
+#   Fix updater modal hard-crashing the app on rapid clicks (especially
+#   in onedir packaged mode). The 立即更新/重启应用/稍后/跳过 buttons in
+#   the menu webview updater banner had no debounce: a fast double-click
+#   could fire multiple concurrent pywebview JS-bridge calls into the
+#   EdgeWebView2 COM apartment while the first call was still importing
+#   sao_updater (cold import in onedir takes 200-500ms), occasionally
+#   crashing the WebView2 process. Added a hard JS-side busy-lock with
+#   pointer-events:none + disabled flags + 1.5s safety timeout; lock is
+#   released either by the next state push from Python or the timeout.
 # v2.3.4:
 #   Fix BossHP overlay randomly disappearing mid-fight. The same-server
 #   reconnect detector accepted any out-of-order TCP packet whose payload
