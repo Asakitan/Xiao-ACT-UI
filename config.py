@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.3.7"
+APP_VERSION = "2.3.8"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,20 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.3.8:
+#   Fix SkillFX silently falling back to CPU/PIL in onedir packaged build.
+#   Root cause: XiaoACTUI.spec 从未将 ``shaders/`` 目录加入 datas 清单,
+#   所以打包后 ``shaders/skillfx.frag`` 不存在. 首个调用 SkillFX 的
+#   渲染线程调 ``get_skillfx_pipeline`` → ``_load_fragment`` 抛
+#   FileNotFoundError → ``_tls.failed = True`` (永久标记) → 后续所有
+#   compose_frame 都走 PIL fallback. 开发环境下 __file__/项目根下存在
+#   shaders/ 所以看不出问题 — 仅冻结后才现.
+#   Fix:
+#     1) XiaoACTUI.spec 加 ('shaders', 'shaders') 进 datas.
+#     2) skillfx_pipeline._resolve_shader_path 增加 PyInstaller 感知 —
+#        依次检查 HERE/, sys._MEIPASS/, exe 同级、exe/_internal/.
+#     3) get_skillfx_pipeline 单独捕获 FileNotFoundError, 打印出期望
+#        路径, 下次丢包能从 stdout 直接看出是资源问题还是 GL 问题.
 # v2.3.7:
 #   Continuation of v2.3.6: BossHP 反复刷/最后消失 (重连路径误识).
 #   v2.3.6 关住了跨 addr 服务器切换路径, 但同服重连路径仍然接受
