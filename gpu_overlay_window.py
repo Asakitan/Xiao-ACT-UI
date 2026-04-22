@@ -47,6 +47,119 @@ import time
 from ctypes import wintypes
 from typing import Any, Callable, Dict, List, Optional
 
+try:
+    from perf_probe import phase as _phase_trace  # type: ignore
+except Exception:  # pragma: no cover
+    def _phase_trace(_name: str, _detail: str = '') -> None:  # type: ignore
+        return
+
+
+# Set to True from popup so the next pump tick emits per-line markers.
+# Auto-resets after one tick. Kept module-global so it can be toggled
+# without touching any class instance.
+_trace_pump_armed = False
+_trace_pump_remaining_ticks = 0
+
+
+def arm_pump_trace() -> None:
+    """Arm one-shot fine-grained tracing for the next pump tick."""
+    global _trace_pump_armed, _trace_pump_remaining_ticks
+    _trace_pump_armed = True
+    _trace_pump_remaining_ticks = 8
+
+
+# ─── Win32 hwnd-filtered message pump ────────────────────────────
+# CRITICAL: glfw.poll_events() on Windows calls
+# ``PeekMessage(NULL, NULL, 0, 0, PM_REMOVE)`` in a loop. Passing
+# NULL for the hwnd filter drains EVERY message destined for ANY
+# window owned by the current thread — including Tk's window handles.
+# DispatchMessage then routes those messages to Tk's WndProc, which
+# fires queued ``after()`` / ``WM_TIMER`` callbacks INSIDE the GLFW
+# message-pump call. Because our pump tick is itself driven by Tk's
+# ``root.after(N, _tick)``, the next ``_tick`` reentrantly executes
+# inside the current tick's poll_events. Reentrant ``_tick`` →
+# reentrant ``moderngl`` context switching + reentrant
+# ``glfw.poll_events`` → tstate corruption →
+#   Fatal Python error: PyEval_RestoreThread: ... GIL is released,
+#   the current Python thread state is NULL
+# at the next Tcl checkpoint inside ``mainloop``.
+#
+# We replace ``glfw.poll_events()`` with a pump that calls
+# ``PeekMessage(hwnd, ...)`` for ONLY our GLFW window handles, so
+# Tk's WM_TIMER messages stay queued and only fire in Tk's own
+# mainloop iteration between our ``after`` ticks.
+class _PUMP_MSG(ctypes.Structure):
+    _fields_ = [
+        ('hwnd', wintypes.HWND),
+        ('message', wintypes.UINT),
+        ('wParam', wintypes.WPARAM),
+        ('lParam', wintypes.LPARAM),
+        ('time', wintypes.DWORD),
+        ('pt_x', wintypes.LONG),
+        ('pt_y', wintypes.LONG),
+    ]
+
+
+_PM_REMOVE = 0x0001
+try:
+    _u32 = ctypes.windll.user32  # type: ignore[attr-defined]
+    _PeekMessageW = _u32.PeekMessageW
+    _PeekMessageW.argtypes = [ctypes.POINTER(_PUMP_MSG), wintypes.HWND,
+                              wintypes.UINT, wintypes.UINT, wintypes.UINT]
+    _PeekMessageW.restype = wintypes.BOOL
+    _TranslateMessage = _u32.TranslateMessage
+    _TranslateMessage.argtypes = [ctypes.POINTER(_PUMP_MSG)]
+    _TranslateMessage.restype = wintypes.BOOL
+    _DispatchMessageW = _u32.DispatchMessageW
+    _DispatchMessageW.argtypes = [ctypes.POINTER(_PUMP_MSG)]
+    _DispatchMessageW.restype = ctypes.c_long
+    _WIN32_PUMP_AVAILABLE = True
+except Exception:  # pragma: no cover - non-Windows build
+    _WIN32_PUMP_AVAILABLE = False
+
+
+def _pump_glfw_messages(hwnds: List[int]) -> None:
+    """Drain pending Win32 messages ONLY for the given GLFW HWNDs.
+
+    Runs at most 64 messages per hwnd to bound work per tick.
+    Falls back to ``glfw.poll_events()`` if PeekMessage isn't
+    available (non-Windows test runs).
+    """
+    if not _WIN32_PUMP_AVAILABLE or _glfw is None:
+        try:
+            _glfw.poll_events()  # type: ignore[union-attr]
+        except Exception:
+            pass
+        return
+    msg = _PUMP_MSG()
+    armed_local = _trace_pump_armed
+    for hwnd in hwnds:
+        if not hwnd:
+            continue
+        hwnd_w = wintypes.HWND(hwnd)
+        # 64 messages per hwnd is plenty: GLFW posts at most a few
+        # input messages per frame per window.
+        for _ in range(64):
+            if not _PeekMessageW(ctypes.byref(msg), hwnd_w, 0, 0, _PM_REMOVE):
+                break
+            if armed_local or _trace_pump_armed:
+                _phase_trace(
+                    'gow.pump.peek.dispatch',
+                    f'hwnd={int(msg.hwnd) if msg.hwnd else 0} msg=0x{msg.message:04X} wp={int(msg.wParam)} lp={int(msg.lParam)}',
+                )
+            _TranslateMessage(ctypes.byref(msg))
+            _DispatchMessageW(ctypes.byref(msg))
+            if armed_local or _trace_pump_armed:
+                _phase_trace(
+                    'gow.pump.peek.done',
+                    f'hwnd={int(msg.hwnd) if msg.hwnd else 0} msg=0x{msg.message:04X}',
+                )
+    # Also drain thread messages (hwnd == NULL in queue, posted via
+    # PostThreadMessage) by passing -1 as the hwnd filter — but ONLY
+    # if absolutely necessary. GLFW doesn't use thread messages, so
+    # we skip this entirely to avoid pulling Tk's queue.
+
+
 # Lazy imports — keep module import cost zero when GPU overlay disabled.
 _glfw = None  # type: ignore[assignment]
 _moderngl = None  # type: ignore[assignment]
@@ -263,27 +376,72 @@ class GlfwPump:
         self._after_id = None
         if not self._running:
             return
-        try:
-            _glfw.poll_events()  # type: ignore[union-attr]
-        except Exception:
-            pass
-        now = time.perf_counter()
-        t = now - self._t0
-        with self._lock:
-            wins = list(self._windows)
-        any_visible = False
-        any_dirty = False
-        for w in wins:
-            if not w._visible:
-                continue
-            any_visible = True
-            if w._dirty:
-                any_dirty = True
+        # Hold the WGL serialization RLock across the entire pump tick
+        # (poll_events + per-window _render_once). Worker threads with
+        # their own moderngl context (fisheye, gpu_renderer worker GL)
+        # acquire the same lock around their GL block so they cannot
+        # race the pump's GIL-released ctypes calls into the WGL driver.
+        # RLock is reentrant so per-window render's own GL acquisition
+        # can re-enter safely.
+        with _wgl_serialize_lock:
+            global _trace_pump_armed, _trace_pump_remaining_ticks
+            if _trace_pump_remaining_ticks > 0:
+                _trace_pump_armed = True
+                _trace_pump_remaining_ticks -= 1
+            armed_at_start = _trace_pump_armed
+            if armed_at_start:
+                _phase_trace('gow.pump.poll.begin', f'remaining={_trace_pump_remaining_ticks}')
+            # Snapshot hwnds first so we only pump messages for OUR
+            # windows (Tk's WM_TIMER must NOT be dispatched here or
+            # we re-enter _tick → tstate corruption → fast-fail).
+            with self._lock:
+                hwnds_for_pump = [w._hwnd for w in self._windows
+                                  if w._hwnd and w._visible]
             try:
-                w._render_once(t)
+                _pump_glfw_messages(hwnds_for_pump)
             except Exception:
-                # Per-window render failure shouldn't kill the pump.
                 pass
+            # Re-read in case _on_mouse_button armed it during poll.
+            armed = _trace_pump_armed
+            if armed or armed_at_start:
+                _phase_trace('gow.pump.poll.end', f'armed={int(armed)} start={int(armed_at_start)}')
+            cb_fired_this_tick = (not armed_at_start) and armed
+            now = time.perf_counter()
+            t = now - self._t0
+            with self._lock:
+                wins = list(self._windows)
+            any_visible = False
+            any_dirty = False
+            for w in wins:
+                if not w._visible:
+                    continue
+                any_visible = True
+                if w._dirty:
+                    any_dirty = True
+                if armed:
+                    _phase_trace(
+                        'gow.pump.render.begin',
+                        f'hwnd={getattr(w, "_hwnd", 0)} dirty={int(bool(w._dirty))}',
+                    )
+                try:
+                    w._render_once(t)
+                except Exception:
+                    # Per-window render failure shouldn't kill the pump.
+                    pass
+                if armed:
+                    _phase_trace(
+                        'gow.pump.render.end',
+                        f'hwnd={getattr(w, "_hwnd", 0)}',
+                    )
+            if armed:
+                _phase_trace('gow.pump.tick.end')
+                # Don't clear _trace_pump_armed here; the per-tick counter
+                # in the next iteration controls it. Just leave the flag
+                # off for the next tick if the counter ran out.
+                if _trace_pump_remaining_ticks <= 0:
+                    _trace_pump_armed = False
+        if armed_at_start or cb_fired_this_tick or armed:
+            _phase_trace('gow.pump.lock.released')
         self._last_tick_t = now
         if not any_visible:
             # Nobody to draw → suspend the loop until something registers.
@@ -329,6 +487,34 @@ class GlfwPump:
 
 _pump_lock = threading.Lock()
 _pump: Optional[GlfwPump] = None
+
+# ── WGL driver serialization ────────────────────────────────────────────────
+# Process-wide RLock that any thread doing native WGL/moderngl work must
+# acquire briefly. Required to keep worker threads with their own moderngl
+# context (e.g. fisheye standalone context, gpu_renderer worker GL blocks)
+# from racing the main-thread GLFW pump's poll_events / make_context_current /
+# swap_buffers / set_window_pos / set_window_size ctypes calls.
+#
+# All those calls release the GIL via Py_BEGIN_ALLOW_THREADS. When two
+# threads issue concurrent GIL-released WGL ops on the same GPU driver,
+# Windows GL drivers corrupt the Py_END_ALLOW_THREADS thread-state
+# restoration on the main thread, producing:
+#     Fatal Python error: PyEval_RestoreThread: ... GIL is released
+#     (the current Python thread state is NULL)
+# RLock so the pump's _tick (poll_events) and per-window _render_once
+# (make_context_current/swap_buffers) can both nest safely.
+_wgl_serialize_lock = threading.RLock()
+
+
+def get_wgl_serialize_lock() -> threading.RLock:
+    """Return the process-wide WGL/moderngl serialization RLock.
+
+    Worker threads owning a private moderngl context (e.g. fisheye
+    full-screen overlay worker, gpu_renderer worker GL blocks) must
+    acquire this lock around every block of GL calls they issue, so
+    the main-thread GLFW pump cannot race them on the WGL driver.
+    """
+    return _wgl_serialize_lock
 
 
 def get_glfw_pump(root: Any) -> GlfwPump:
@@ -639,12 +825,19 @@ class GpuOverlayWindow:
         cb = self._cursor_pos_fn
         if cb is None:
             return
+        if _trace_pump_armed:
+            _phase_trace('gow.cursor.pos.begin', f'hwnd={self._hwnd} x={x:.0f} y={y:.0f}')
         try:
             cb(float(x), float(y))
         except Exception:
-            pass
+            if _trace_pump_armed:
+                _phase_trace('gow.cursor.pos.exc', f'hwnd={self._hwnd}')
+        if _trace_pump_armed:
+            _phase_trace('gow.cursor.pos.end', f'hwnd={self._hwnd}')
 
     def _on_cursor_enter(self, _win, entered: bool) -> None:
+        if _trace_pump_armed:
+            _phase_trace('gow.cursor.enter', f'hwnd={self._hwnd} entered={int(bool(entered))}')
         if entered:
             return
         cb = self._cursor_leave_fn
@@ -660,12 +853,27 @@ class GpuOverlayWindow:
         if cb is None:
             return
         x, y = self._cursor_pos()
+        # Arm fine-grained tracing for the rest of THIS pump tick so we
+        # can see exactly which line crashes when the post-click message
+        # dispatch / render path corrupts main-thread tstate.
+        global _trace_pump_armed, _trace_pump_remaining_ticks
+        _trace_pump_armed = True
+        # Also bump remaining so the next few ticks emit markers — the
+        # crash may be deferred to a tick AFTER the cb returns.
+        _trace_pump_remaining_ticks = 6
+        _phase_trace(
+            'gow.mouse.cb.begin',
+            f'hwnd={self._hwnd} btn={button} act={action} x={x:.1f} y={y:.1f}',
+        )
         try:
             cb(int(button), int(action), int(mods), x, y)
         except Exception:
-            pass
+            _phase_trace('gow.mouse.cb.exc', f'hwnd={self._hwnd}')
+        _phase_trace('gow.mouse.cb.return', f'hwnd={self._hwnd}')
 
     def _on_scroll(self, _win, xoff: float, yoff: float) -> None:
+        if _trace_pump_armed:
+            _phase_trace('gow.scroll', f'hwnd={self._hwnd} x={xoff:.2f} y={yoff:.2f}')
         cb = self._scroll_fn
         if cb is None:
             return
@@ -687,22 +895,35 @@ class GpuOverlayWindow:
         if not self._dirty:
             return
         glfw = _glfw
+        armed = _trace_pump_armed
         try:
+            if armed:
+                _phase_trace('gow.render.makecur', f'hwnd={self._hwnd}')
             glfw.make_context_current(self._win)  # type: ignore[union-attr]
         except Exception:
             return
         ctx = self._ctx
         try:
+            if armed:
+                _phase_trace('gow.render.use', f'hwnd={self._hwnd}')
             ctx.screen.use()
             ctx.viewport = (0, 0, self._w, self._h)
             # Always clear to fully transparent before user draws so old
             # frame doesn't bleed through under DWM transparency.
+            if armed:
+                _phase_trace('gow.render.clear', f'hwnd={self._hwnd}')
             ctx.clear(0.0, 0.0, 0.0, 0.0)
+            if armed:
+                _phase_trace('gow.render.fn.begin', f'hwnd={self._hwnd}')
             self._render_fn(ctx, t)
+            if armed:
+                _phase_trace('gow.render.fn.end', f'hwnd={self._hwnd}')
             rendered = True
         except Exception:
             rendered = False
         try:
+            if armed:
+                _phase_trace('gow.render.swap', f'hwnd={self._hwnd}')
             glfw.swap_buffers(self._win)  # type: ignore[union-attr]
         except Exception:
             rendered = False
