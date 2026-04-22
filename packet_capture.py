@@ -333,7 +333,9 @@ class TcpReassembler:
 
         # ─── 服务器识别 ───
         if self._server_addr is None:
+            # 初次识别允许松散 c3SB (无锚点, 必须接受首个候选).
             if self._try_identify(payload, addr):
+                self._server_addr = addr
                 logger.info(f'[Capture] 识别到游戏服务器: {_fmt_ip(src_ip)}:{sport}')
                 # v2.1.18: 回放在识别成功之前缓存的同 addr 包,
                 # 拿回首个 SyncContainerData / EnterGame 等关键登录帧.
@@ -350,9 +352,13 @@ class TcpReassembler:
         if addr != self._server_addr:
             # ─── 场景服务器切换检测 ───
             # 切换地图/副本时，游戏会连接新的场景服务器。
-            # 检查来自不同地址的包中是否含有 c3SB 签名，
-            # 若有则切换到新服务器。(参考 SRDC: clearDataOnServerChange)
-            if self._try_identify(payload, addr):
+            # v2.3.6: 必须用 *严格* 识别 (FrameDown 嵌套 c3SB 或 Login Return).
+            #   松散 c3SB 字面量在非游戏 TCP 流 (聊天/社交/CDN/语音) 中随机
+            #   命中概率不低, 旧逻辑会把 _server_addr 偷换到误识别地址 →
+            #   _on_scene_change → 清掉 BossHP 目标 → 下一个真游戏包又被
+            #   判为 "跨 addr c3SB" 切回去, 形成 ping-pong, 用户看到 BossHP
+            #   反复刷新最终失踪.
+            if self._identify_strict(payload):
                 old_addr = self._server_addr
                 self._server_addr = addr
                 # 重置 TCP 重组状态
@@ -526,26 +532,46 @@ class TcpReassembler:
 
     # ─── 服务器识别 ───
     def _try_identify(self, data: bytes, addr: str) -> bool:
-        """检查包中是否有 c3SB 签名来识别游戏服务器"""
-        # 方法 1: FrameDown (type=6)
+        """包是否携带任意 c3SB 证据 (含松散方法). 兼容旧调用点.
+
+        v2.3.6: 不再有副作用 — 旧版本会直接 ``self._server_addr = addr``,
+        导致跨 addr 调用时即便上层判定逻辑想拒绝, addr 也已经被偷换.
+        现在统一返回 bool, 由调用方决定是否切换 ``_server_addr``.
+        """
+        return self._identify_strict(data) or self._identify_loose(data)
+
+    def _identify_strict(self, data: bytes) -> bool:
+        """严格识别: FrameDown(type=6) 嵌套含 c3SB 签名, 或 Login Return.
+
+        这两条路径都对 packet 结构有强约束 (头部固定字段 + 嵌套帧长度合法),
+        几乎不可能在普通业务流量 (聊天/社交/语音/CDN) 中误中. 用于跨 addr
+        的场景服务器切换判定 — 任何 ``addr != _server_addr`` 的入站包都必须
+        通过严格识别才允许切换 ``_server_addr``.
+        """
+        # 方法 1: FrameDown (type=6) 嵌套含 c3SB
         if len(data) > 10 and data[4] == 0 and data[5] == 6:
             nested = data[10:]
             if self._scan_c3sb(nested):
-                self._server_addr = addr
                 return True
-
-        # 方法 2: Login Return (0x62 bytes)
+        # 方法 2: Login Return (0x62 bytes, type=3)
         if (len(data) >= 0x62 and data[:4] == b'\x00\x00\x00\x62'
                 and data[4:6] == b'\x00\x03'):
-            self._server_addr = addr
             return True
-
-        # 方法 3: 宽松 — 任何包含 c3SB 签名
-        if C3SB_SHORT in data:
-            self._server_addr = addr
-            return True
-
         return False
+
+    def _identify_loose(self, data: bytes) -> bool:
+        """松散识别: payload 中包含 4 字节字面量 ``c3SB``.
+
+        4 字节字面量在大流量下随机命中概率不可忽略 (ZSTD 字典 / 玩家名 /
+        buff icon ID 都可能含). 仅用于:
+          (1) 初始识别 (``_server_addr is None``) — 此时没有锚点, 必须接受
+              松散信号才能完成首次绑定;
+          (2) 同服重连判定 — 已经被 v2.3.4 的 ``_seq_anomalous`` (双向
+              seq > 1MB) 过滤, 不会被乱序 mid-stream 段误触发.
+        **绝不可用于跨 addr 的服务器切换判定**, 否则任何带 c3SB 的非游戏
+        TCP 流都会把 ``_server_addr`` 偷换走 → BossHP 反复刷新最后失踪.
+        """
+        return C3SB_SHORT in data
 
     def _scan_c3sb(self, data: bytes) -> bool:
         """在嵌套帧数据中扫描 c3SB 签名"""
