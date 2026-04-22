@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.3.5"
+APP_VERSION = "2.3.6"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,24 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.3.6:
+#   Fix BossHP overlay rapidly flickering / popping then disappearing.
+#   Root cause: the cross-addr server-switch detector at packet_capture
+#   line 350 reused the LOOSE _try_identify (which returns True for any
+#   payload containing the 4-byte literal 'c3SB'). Any non-game TCP
+#   stream from the client (chat, social, voice, CDN) whose payload
+#   happened to contain those bytes hijacked _server_addr -> fired
+#   _on_scene_change -> wiped _bb_last_target_uuid -> BossHP hidden.
+#   The next real game packet then had addr != _server_addr again ->
+#   flipped back -> ping-pong, eventually stuck on a non-game socket
+#   ('过一会不出来了'). Now _try_identify is split into _identify_strict
+#   (FrameDown[type=6] nested c3SB or LoginReturn[0x62/type=3]) and
+#   _identify_loose (c3SB literal). Server switch path requires strict;
+#   initial identification still uses loose (no anchor exists yet);
+#   same-server reconnect keeps loose since v2.3.4's _seq_anomalous
+#   gate already rules out mid-stream segments.
+#   Also: surface SkillFX compose path on first frame (GPU vs CPU/PIL
+#   fallback) so '是不是返回CPU了' can be verified from stdout.
 # v2.3.5:
 #   Fix updater modal hard-crashing the app on rapid clicks (especially
 #   in onedir packaged mode). The 立即更新/重启应用/稍后/跳过 buttons in

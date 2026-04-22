@@ -1158,6 +1158,8 @@ void main() {
         # v2.3.0 Phase 1: GPU SDF compose path. Defaults ON via
         # config.USE_GPU_SKILLFX (set SAO_SKILLFX_GPU=0 to force CPU).
         # Falls back to PIL on any pipeline failure.
+        # v2.3.6: log the path actually taken on first compose so the user
+        # can grep stdout to verify GPU is live (instead of silently CPU).
         if not getattr(self, '_skillfx_gpu_disabled', False) \
                 and _skillfx_gpu_enabled():
             try:
@@ -1170,7 +1172,21 @@ void main() {
                 self._skillfx_gpu_disabled = True
                 gpu_img = None
             if gpu_img is not None:
+                if not getattr(self, '_skillfx_gpu_path_logged', False):
+                    self._skillfx_gpu_path_logged = True
+                    try:
+                        print('[skillfx] compose path: GPU (SDF shader pipeline)', flush=True)
+                    except Exception:
+                        pass
                 return gpu_img
+        if not getattr(self, '_skillfx_cpu_path_logged', False):
+            self._skillfx_cpu_path_logged = True
+            try:
+                _reason = 'disabled' if getattr(self, '_skillfx_gpu_disabled', False) else (
+                    'env/config' if not _skillfx_gpu_enabled() else 'gpu_returned_none')
+                print(f'[skillfx] compose path: CPU/PIL fallback (reason={_reason})', flush=True)
+            except Exception:
+                pass
 
         W, H = int(self._win_w), int(self._win_h)
         img = self._get_layer_buf('main', W, H)
