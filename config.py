@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.3.6"
+APP_VERSION = "2.3.7"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,17 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.3.7:
+#   Continuation of v2.3.6: BossHP 反复刷/最后消失 (重连路径误识).
+#   v2.3.6 关住了跨 addr 服务器切换路径, 但同服重连路径仍然接受
+#   `_try_identify` (含松散 c3SB) 或 `_looks_like_frame_start`
+#   (4 字节 BE 头 ∈ [6, 999999]) 作为重连签名. 后者误中率约
+#   0.023%/包, 繁忙连接上每秒就能误触发, 每次都重置 _next_seq=-1
+#   并调用 _on_server_change → 清掉 BossHP 目标. 修复:
+#     1) 重连路径改为仅接受 _identify_strict (FrameDown 嵌套 c3SB
+#        或 LoginReturn 0x62), 丢弃松散 c3SB 和 帧头启发式判定.
+#     2) 增加 3 秒冷却窗口 — 真重连是单次事件, N 秒内重复触发
+#        一律视为误识, 避免任何残留误识路径造成刷屏循环.
 # v2.3.6:
 #   Fix BossHP overlay rapidly flickering / popping then disappearing.
 #   Root cause: the cross-addr server-switch detector at packet_capture
