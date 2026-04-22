@@ -47,6 +47,7 @@ except Exception:
 
 from overlay_render_worker import AsyncFrameWorker
 from perf_probe import probe as _probe
+from sao_menu_hud import _PIL_DRAW_LOCK
 
 
 # ═══════════════════════════════════════════════
@@ -309,102 +310,107 @@ def _draw_text_with_fallback(draw: ImageDraw.ImageDraw, xy, text: str,
 # ═══════════════════════════════════════════════
 
 def _compose_child_bar(snap: _ChildBarSnapshot, total_w: int, total_h: int) -> Image.Image:
-    img = Image.new('RGBA', (total_w, total_h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    colors = snap.colors
-    bg = snap.bg_hex
-    fade_t = snap.fade_t
+    # Shares the same menu overlay worker race as sao_menu_hud.py:
+    # first fast submenu-open and every second submenu switch can
+    # schedule child-bar GPU compose concurrently with the HUD/menu-bar
+    # workers. Serialize the entire child-bar PIL/FreeType entry point
+    # under the existing process-wide RLock so Image.new/ImageDraw/
+    # getmask/truetype never overlap across threads.
+    with _PIL_DRAW_LOCK:
+        img = Image.new('RGBA', (total_w, total_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        colors = snap.colors
+        bg = snap.bg_hex
+        fade_t = snap.fade_t
 
-    # Line column
-    line_h = snap.line_h
-    line_w = max(1, snap.line_w)
-    if line_w > 1 and line_h > 5:
-        glow_color = colors.lerp('#d4d0d0', bg, fade_t)
-        main_color = colors.lerp('#9c9999', bg, fade_t)
-        dot_color = colors.lerp('#b0b0b0', bg, fade_t)
-        cx = LINE_COL_W // 2
-        ly = LINE_TOP_PAD
-        draw.line((cx, ly + 5, cx, ly + line_h - 5), fill=glow_color, width=4)
-        draw.line((cx, ly + 5, cx, ly + line_h - 5), fill=main_color, width=2)
-        draw.ellipse((cx - 2, ly + 3, cx + 2, ly + 7), fill=dot_color)
-        draw.ellipse((cx - 2, ly + line_h - 7, cx + 2, ly + line_h - 3),
-                     fill=dot_color)
+        # Line column
+        line_h = snap.line_h
+        line_w = max(1, snap.line_w)
+        if line_w > 1 and line_h > 5:
+            glow_color = colors.lerp('#d4d0d0', bg, fade_t)
+            main_color = colors.lerp('#9c9999', bg, fade_t)
+            dot_color = colors.lerp('#b0b0b0', bg, fade_t)
+            cx = LINE_COL_W // 2
+            ly = LINE_TOP_PAD
+            draw.line((cx, ly + 5, cx, ly + line_h - 5), fill=glow_color, width=4)
+            draw.line((cx, ly + 5, cx, ly + line_h - 5), fill=main_color, width=2)
+            draw.ellipse((cx - 2, ly + 3, cx + 2, ly + 7), fill=dot_color)
+            draw.ellipse((cx - 2, ly + line_h - 7, cx + 2, ly + line_h - 3),
+                         fill=dot_color)
 
-    # Arrow column
-    arrow_x = LINE_COL_W + LINE_COL_PAD_R
-    arrow_w = max(1, snap.arrow_w)
-    if arrow_w > 1 and line_h > 5:
-        ay = ARROW_TOP_PAD
-        cx = 6
-        cy = ay + line_h // 2
-        for gr in range(6, 0, -2):
-            ga = int(15 * (1 - gr / 6))
-            base_hex = '#%02x%02x%02x' % (
-                int(ga * 3.5) & 0xFF,
-                int(ga * 2.2) & 0xFF,
-                int(ga * 0.3) & 0xFF,
-            )
-            faded = colors.lerp(base_hex, bg, fade_t)
-            draw.ellipse((arrow_x + cx - gr, cy - gr,
-                          arrow_x + cx + gr, cy + gr),
-                         fill=faded)
-        core_fill = colors.lerp('#c9b896', bg, fade_t)
-        core_outline = colors.lerp('#d4c8a8', bg, fade_t)
-        draw.ellipse((arrow_x + 4, cy - 2, arrow_x + 9, cy + 3),
-                     fill=core_fill, outline=core_outline)
+        # Arrow column
+        arrow_x = LINE_COL_W + LINE_COL_PAD_R
+        arrow_w = max(1, snap.arrow_w)
+        if arrow_w > 1 and line_h > 5:
+            ay = ARROW_TOP_PAD
+            cx = 6
+            cy = ay + line_h // 2
+            for gr in range(6, 0, -2):
+                ga = int(15 * (1 - gr / 6))
+                base_hex = '#%02x%02x%02x' % (
+                    int(ga * 3.5) & 0xFF,
+                    int(ga * 2.2) & 0xFF,
+                    int(ga * 0.3) & 0xFF,
+                )
+                faded = colors.lerp(base_hex, bg, fade_t)
+                draw.ellipse((arrow_x + cx - gr, cy - gr,
+                              arrow_x + cx + gr, cy + gr),
+                             fill=faded)
+            core_fill = colors.lerp('#c9b896', bg, fade_t)
+            core_outline = colors.lerp('#d4c8a8', bg, fade_t)
+            draw.ellipse((arrow_x + 4, cy - 2, arrow_x + 9, cy + 3),
+                         fill=core_fill, outline=core_outline)
 
-    # Rows
-    icon_chain = _icon_font_chain(ICON_FONT_SIZE)
-    label_chain = _label_font_chain(LABEL_FONT_SIZE)
-    icon_font = icon_chain[0] if icon_chain else _icon_font_cached(ICON_FONT_SIZE)
-    label_font = label_chain[0] if label_chain else _label_font_cached(LABEL_FONT_SIZE)
+        # Rows
+        icon_chain = _icon_font_chain(ICON_FONT_SIZE)
+        label_chain = _label_font_chain(LABEL_FONT_SIZE)
 
-    for idx, row in enumerate(snap.rows):
-        row_y = idx * ROW_STRIDE
-        ht = row.hover_t
-        rw = row.row_w
-        if rw <= 1:
-            continue
-        bg_now = colors.lerp(colors.child_bg, colors.child_hover, ht)
-        fg_now = colors.lerp(colors.child_text, colors.child_hover_fg, ht)
-        icon_now = colors.lerp(colors.child_icon, colors.child_hover_fg, ht)
-        ind_now = colors.lerp(colors.child_bg, colors.active_border, ht)
-        bg_blend = colors.lerp(bg_now, bg, fade_t)
-        fg_blend = colors.lerp(fg_now, bg, fade_t)
-        icon_blend = colors.lerp(icon_now, bg, fade_t)
-        ind_blend = colors.lerp(ind_now, bg, fade_t)
+        for idx, row in enumerate(snap.rows):
+            row_y = idx * ROW_STRIDE
+            ht = row.hover_t
+            rw = row.row_w
+            if rw <= 1:
+                continue
+            bg_now = colors.lerp(colors.child_bg, colors.child_hover, ht)
+            fg_now = colors.lerp(colors.child_text, colors.child_hover_fg, ht)
+            icon_now = colors.lerp(colors.child_icon, colors.child_hover_fg, ht)
+            ind_now = colors.lerp(colors.child_bg, colors.active_border, ht)
+            bg_blend = colors.lerp(bg_now, bg, fade_t)
+            fg_blend = colors.lerp(fg_now, bg, fade_t)
+            icon_blend = colors.lerp(icon_now, bg, fade_t)
+            ind_blend = colors.lerp(ind_now, bg, fade_t)
 
-        draw.rectangle((LIST_X, row_y, LIST_X + rw, row_y + ROW_H),
-                       fill=bg_blend)
-        draw.rectangle((LIST_X, row_y, LIST_X + ROW_X_INDICATOR_W, row_y + ROW_H),
-                       fill=ind_blend)
+            draw.rectangle((LIST_X, row_y, LIST_X + rw, row_y + ROW_H),
+                           fill=bg_blend)
+            draw.rectangle((LIST_X, row_y, LIST_X + ROW_X_INDICATOR_W, row_y + ROW_H),
+                           fill=ind_blend)
 
-        ic_x = LIST_X + ROW_X_INDICATOR_W + ROW_X_PAD_L
-        ic_y = row_y + (ROW_H - ICON_FONT_SIZE) // 2 - 2
-        ic_w = 0
-        if row.icon:
-            ic_w = _draw_text_with_fallback(
-                draw, (ic_x, ic_y), row.icon, icon_chain, icon_blend,
-            )
-        if ic_w <= 0:
-            ic_w = ICON_FONT_SIZE
-        lbl_x = ic_x + ic_w + ROW_X_ICON_GAP
-        lbl_y = row_y + (ROW_H - LABEL_FONT_SIZE) // 2 - 2
-        max_lbl_w = max(0, LIST_X + rw - lbl_x - ROW_X_PAD_R - 6)
-        if row.label and max_lbl_w > 4:
-            _draw_text_with_fallback(
-                draw, (lbl_x, lbl_y), row.label, label_chain, fg_blend,
-            )
-        if ht > 0.05:
-            arr_x = LIST_X + rw - ROW_X_PAD_R - 6
-            arr_y = row_y + (ROW_H - 14) // 2 - 1
-            arr_color = colors.lerp(colors.child_bg, colors.child_hover_fg, ht)
-            arr_blend = colors.lerp(arr_color, bg, fade_t)
-            _draw_text_with_fallback(
-                draw, (arr_x, arr_y), '\u203a', label_chain, arr_blend,
-            )
+            ic_x = LIST_X + ROW_X_INDICATOR_W + ROW_X_PAD_L
+            ic_y = row_y + (ROW_H - ICON_FONT_SIZE) // 2 - 2
+            ic_w = 0
+            if row.icon:
+                ic_w = _draw_text_with_fallback(
+                    draw, (ic_x, ic_y), row.icon, icon_chain, icon_blend,
+                )
+            if ic_w <= 0:
+                ic_w = ICON_FONT_SIZE
+            lbl_x = ic_x + ic_w + ROW_X_ICON_GAP
+            lbl_y = row_y + (ROW_H - LABEL_FONT_SIZE) // 2 - 2
+            max_lbl_w = max(0, LIST_X + rw - lbl_x - ROW_X_PAD_R - 6)
+            if row.label and max_lbl_w > 4:
+                _draw_text_with_fallback(
+                    draw, (lbl_x, lbl_y), row.label, label_chain, fg_blend,
+                )
+            if ht > 0.05:
+                arr_x = LIST_X + rw - ROW_X_PAD_R - 6
+                arr_y = row_y + (ROW_H - 14) // 2 - 1
+                arr_color = colors.lerp(colors.child_bg, colors.child_hover_fg, ht)
+                arr_blend = colors.lerp(arr_color, bg, fade_t)
+                _draw_text_with_fallback(
+                    draw, (arr_x, arr_y), '\u203a', label_chain, arr_blend,
+                )
 
-    return img
+        return img
 
 
 # ═══════════════════════════════════════════════

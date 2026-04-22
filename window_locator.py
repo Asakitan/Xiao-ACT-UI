@@ -7,6 +7,7 @@ SAO Auto — 游戏窗口定位
 
 import ctypes
 import ctypes.wintypes
+import threading
 from typing import Optional, Tuple, List
 
 from config import GAME_WINDOW_KEYWORDS, GAME_PROCESS_NAMES
@@ -16,6 +17,48 @@ from config import GAME_WINDOW_KEYWORDS, GAME_PROCESS_NAMES
 #  Win32 API
 # ═══════════════════════════════════════════════
 user32 = ctypes.windll.user32
+
+
+# Per-thread results bucket so concurrent callers (recognition /
+# auto_key / hide_seek workers + Tk main thread) don't trample each
+# other's lists.  ``threading.local`` is lock-free.
+_enum_tls = threading.local()
+
+
+# Module-level cached WINFUNCTYPE callback.  Recreated-per-call thunks
+# allocate a fresh native trampoline every time and trigger the
+# NULL-tstate race documented in ``_enum_windows`` below.
+#
+# Correct lparam type is LPARAM (signed pointer-size int) — the
+# original code used ``POINTER(c_int)`` which works on 64-bit Windows
+# only by accident.
+_ENUM_PROC = ctypes.WINFUNCTYPE(
+    ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+
+
+def _enum_windows_cb(hwnd, _lparam):
+    bucket = _enum_tls.__dict__.get('results')
+    if bucket is None:
+        return True
+    try:
+        if user32.IsWindowVisible(hwnd):
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, buf, 256)
+            title = buf.value
+            if title:
+                cr = _get_client_rect_screen(hwnd)
+                if cr is not None:
+                    w = cr[2] - cr[0]
+                    h = cr[3] - cr[1]
+                    if w > 200 and h > 200:
+                        bucket.append((hwnd, title, cr))
+    except Exception:
+        pass
+    return True
+
+
+# Hold a strong ref so ctypes does not GC the trampoline.
+_ENUM_CB = _ENUM_PROC(_enum_windows_cb)
 
 
 def _get_client_rect_screen(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
@@ -36,26 +79,33 @@ def _get_client_rect_screen(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
 
 def _enum_windows() -> List[Tuple[int, str, tuple]]:
     """枚举所有可见窗口: [(hwnd, title, (l,t,r,b)), ...]
-    返回的 rect 是 **客户区** 的屏幕坐标 (不含标题栏/边框)。"""
-    results = []
+    返回的 rect 是 **客户区** 的屏幕坐标 (不含标题栏/边框)。
 
-    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int))
-    def _cb(hwnd, _):
-        if user32.IsWindowVisible(hwnd):
-            buf = ctypes.create_unicode_buffer(256)
-            user32.GetWindowTextW(hwnd, buf, 256)
-            title = buf.value
-            if title:
-                cr = _get_client_rect_screen(hwnd)
-                if cr is not None:
-                    w = cr[2] - cr[0]
-                    h = cr[3] - cr[1]
-                    if w > 200 and h > 200:
-                        results.append((hwnd, title, cr))
-        return True
+    NOTE: callback thunk + results bucket are CACHED at module level
+    (not recreated per call). Recreating a ``ctypes.WINFUNCTYPE``
+    callback on every recognition tick (10 Hz) allocates a fresh
+    native trampoline each time and pumps ctypes' callback registry,
+    which churns gilstate-related globals.  When that 10 Hz churn
+    overlaps a GIL-released window on the main thread (Tk
+    ``update_idletasks`` reentry inside the menu-click cb dispatching
+    GLFW pump ticks → ``glfw.swap_buffers`` / ``make_context_current``
+    ctypes calls), the result is the
+    ``Fatal Python error: PyEval_RestoreThread: ... NULL tstate``
+    crash on the next ``Py_END_ALLOW_THREADS`` checkpoint in Tcl.
 
-    user32.EnumWindows(_cb, 0)
-    return results
+    DO NOT add a ``threading.Lock`` around the EnumWindows call.
+    EnumWindows synchronously dispatches ``GetWindowTextW`` →
+    ``WM_GETTEXT`` to every visible top-level window, including
+    Tk-owned HWNDs.  WM_GETTEXT blocks on the owning thread's message
+    pump, so locking from a worker thread while the Tk main thread
+    is also locator-bound deadlocks the entire app at startup.
+    Thread isolation is achieved instead via ``threading.local()``
+    for the results bucket — no lock needed.
+    """
+    bucket = _enum_tls.__dict__.setdefault('results', [])
+    bucket.clear()
+    user32.EnumWindows(_ENUM_CB, 0)
+    return list(bucket)
 
 
 # ═══════════════════════════════════════════════

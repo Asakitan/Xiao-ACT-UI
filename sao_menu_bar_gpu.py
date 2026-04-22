@@ -39,7 +39,7 @@ from typing import Any, Callable, List, Optional, Tuple
 from PIL import Image
 
 from overlay_render_worker import AsyncFrameWorker, FrameBuffer
-from perf_probe import probe as _probe
+from perf_probe import phase as _phase_trace, probe as _probe
 from sao_menu_hud import MenuCircleButtonRenderer
 
 try:
@@ -105,6 +105,13 @@ class MenuBarGpuPainter:
         self._gpu_window: Optional[Any] = None
         self._presenter: Optional[Any] = None
         self._destroyed = False
+        # Re-entrancy guard for GLFW mouse callbacks. The click_cb may
+        # invoke menu commands that destroy this very GPU window
+        # (panel toggles, switch UI, exit), and running them inline
+        # inside glfw.poll_events tears down the window we're still
+        # dispatching from → crash. Defer via after_idle and gate
+        # rapid clicks. See popup_glfw_callback_reentrancy memory.
+        self._click_pending = False
         # Latest signature of the snapshot we already submitted; stops
         # us from re-rendering 60 Hz of identical frames once the bar
         # settles back to rest size.
@@ -199,8 +206,75 @@ class MenuBarGpuPainter:
         self._hover_idx = idx
         if self._hover_cb is not None:
             self._hover_cb(idx)
-        if self._click_cb is not None:
-            self._click_cb(idx)
+        if self._click_cb is None:
+            return
+        if self._click_pending:
+            return
+        self._click_pending = True
+        _phase_trace('menu.bar.click.schedule', f'idx={idx}')
+        try:
+            self._root.after_idle(self._fire_click, idx)
+        except Exception:
+            self._click_pending = False
+            try:
+                self._click_cb(idx)
+            except Exception:
+                pass
+
+    def _fire_click(self, idx: int) -> None:
+        cb = self._click_cb
+        if cb is None:
+            self._click_pending = False
+            return
+        _phase_trace('menu.bar.click.begin', f'idx={idx}')
+        # WGC pyo3 callback race avoidance: the click cb's transitive
+        # work (Tk update_idletasks reentry → pump _tick → glfw
+        # make_context_current/swap_buffers, plus possible new GPU
+        # window _create()) opens many GIL-released ctypes windows on
+        # the main thread. windows_capture's pyo3 callback firing in
+        # any of those windows triggers the assume_gil_acquired() bug
+        # → corrupts _PyThreadState_Current → next Tcl
+        # Py_BEGIN_ALLOW_THREADS aborts with NULL tstate. Pause WGC
+        # for the WHOLE cb. Reference-counted so nested _create()
+        # pauses still nest correctly. See gpu_capture.pause_capture.
+        try:
+            from gpu_capture import pause_capture as _wgc_pause
+            from gpu_capture import resume_capture as _wgc_resume
+        except Exception:
+            _wgc_pause = None
+            _wgc_resume = None
+        if _wgc_pause is not None:
+            try:
+                _wgc_pause()
+            except Exception:
+                _wgc_resume = None  # don't try to resume what didn't pause
+        try:
+            try:
+                _phase_trace('menu.bar.click.cb', f'idx={idx}')
+                cb(idx)
+            except Exception:
+                pass
+        finally:
+            if _wgc_resume is not None:
+                try:
+                    _wgc_resume()
+                except Exception:
+                    pass
+        _phase_trace('menu.bar.click.end', f'idx={idx}')
+        # Hold the guard for a short cooldown so a fast second click
+        # cannot queue another after_idle while sao_sound daemon threads
+        # spawned by this cb are still warming up. Without the cooldown
+        # rapid clicks pile up concurrent C-extension work and trigger
+        # PyEval_RestoreThread NULL-tstate crashes (popup_glfw_callback
+        # _reentrancy memory). 120 ms ≈ 2 frames at 60 Hz.
+        try:
+            self._root.after(120, self._clear_click_pending)
+        except Exception:
+            self._click_pending = False
+
+    def _clear_click_pending(self) -> None:
+        _phase_trace('menu.bar.click.cooldown_clear')
+        self._click_pending = False
 
     def _handle_scroll(self, _xoff: float, yoff: float) -> None:
         if self._scroll_cb is None or abs(yoff) <= 1e-6:

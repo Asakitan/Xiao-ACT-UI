@@ -55,6 +55,74 @@ _burst_tts_lock = threading.Lock()
 _burst_tts_ready = None
 _burst_tts_fail = False
 
+# ─── Single dedicated player thread ──────────────────────────────
+# pygame.mixer is NOT thread-safe: concurrent Sound() construction
+# and play() from multiple daemon threads (one per click) randomly
+# corrupts mixer state and triggers `PyEval_RestoreThread NULL
+# tstate` crashes when the user rapid-clicks SAO menu / panel
+# buttons. Funnel everything through one worker thread + a small
+# queue, and cache the Sound objects so we don't re-read the file
+# on every click.
+import queue as _queue_mod
+_play_queue: '_queue_mod.Queue' = _queue_mod.Queue(maxsize=32)
+_play_thread = None
+_play_thread_lock = threading.Lock()
+_sound_cache_lock = threading.Lock()
+_sound_cache: dict = {}
+_winsound_fallback_lock = threading.Lock()
+
+
+def _ensure_player_thread():
+    global _play_thread
+    if _play_thread is not None and _play_thread.is_alive():
+        return
+    with _play_thread_lock:
+        if _play_thread is not None and _play_thread.is_alive():
+            return
+        t = threading.Thread(target=_player_loop, name='sao-sound-player',
+                             daemon=True)
+        t.start()
+        _play_thread = t
+
+
+def _player_loop():
+    while True:
+        try:
+            item = _play_queue.get()
+        except Exception:
+            return
+        if item is None:
+            return
+        path, volume = item
+        try:
+            _play_one_sync(path, volume)
+        except Exception:
+            pass
+
+
+def _play_one_sync(path: str, volume: float) -> None:
+    if _init_pygame():
+        try:
+            import pygame
+            with _sound_cache_lock:
+                snd = _sound_cache.get(path)
+                if snd is None:
+                    snd = pygame.mixer.Sound(path)
+                    _sound_cache[path] = snd
+            snd.set_volume(float(volume))
+            snd.play()
+            return
+        except Exception:
+            pass
+    # 回退: winsound (仅支持 .wav, mp3 不支持)
+    try:
+        import winsound
+        if path.lower().endswith('.wav'):
+            with _winsound_fallback_lock:
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+    except Exception:
+        pass
+
 _BURST_TTS_TEXT = 'Burst Mode Ready'
 _BURST_TTS_DIR = os.path.join(tempfile.gettempdir(), 'sao_auto_tts')
 _BURST_TTS_RAW = os.path.join(_BURST_TTS_DIR, 'burst_ready_raw.wav')
@@ -224,26 +292,14 @@ def play_sound(name: str, volume: float = 0.7):
         return
     # Apply global volume
     effective_volume = min(volume, _sound_volume)
-
-    def _play():
-        try:
-            if _init_pygame():
-                import pygame
-                snd = pygame.mixer.Sound(path)
-                snd.set_volume(effective_volume)
-                snd.play()
-                return
-        except Exception:
-            pass
-        # 回退: winsound (仅支持 .wav, mp3 不支持)
-        try:
-            import winsound
-            if path.lower().endswith('.wav'):
-                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-        except Exception:
-            pass
-
-    threading.Thread(target=_play, daemon=True).start()
+    _ensure_player_thread()
+    try:
+        _play_queue.put_nowait((path, effective_volume))
+    except _queue_mod.Full:
+        # Queue saturated under storms of clicks: drop the request
+        # rather than block the caller (we are usually on the Tk
+        # main thread or a GLFW after_idle deferred handler).
+        pass
 
 
 # ═══════════════════════════════════════════════
