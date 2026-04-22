@@ -84,6 +84,10 @@ a = Analysis(
         ('assets', 'assets'),
         # Protobuf / schema
         ('proto', 'proto'),
+        # GPU SkillFX SDF 片段着色器 (v2.3.8: 之前未打包 → onedir 启动后
+        # skillfx_pipeline._load_fragment FileNotFoundError → _tls.failed=True
+        # → SkillFX 永远走 CPU/PIL fallback)
+        ('shaders', 'shaders'),
         # 图标
         ('icon.ico', '.'),
     ] + GPU_RENDER_DATAS,

@@ -20,6 +20,7 @@ validated, the consumer can switch to direct moderngl-window blit
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from typing import Any, Dict, Optional, Tuple
 
@@ -30,7 +31,30 @@ import gpu_renderer as _gr
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_SHADER_PATH = os.path.join(HERE, 'shaders', 'skillfx.frag')
+
+
+def _resolve_shader_path() -> str:
+    """v2.3.8: PyInstaller 下 __file__ 位于 _internal/, 但 ('shaders','shaders')
+    打包后一般也落在 _internal/shaders/, 所以 HERE 依然能匹配. 但为防
+    某些 PyInstaller 版本 / onefile 下 __file__ 被重定向到临时目录, 额外
+    检查 sys._MEIPASS 和 可执行文件同级目录. 首个存在的路径作为返回值.
+    """
+    candidates = [os.path.join(HERE, 'shaders', 'skillfx.frag')]
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        candidates.append(os.path.join(meipass, 'shaders', 'skillfx.frag'))
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        candidates.append(os.path.join(exe_dir, 'shaders', 'skillfx.frag'))
+        candidates.append(os.path.join(exe_dir, '_internal', 'shaders', 'skillfx.frag'))
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    # 返回默认 (让 _load_fragment 报 FileNotFoundError 以暴露问题)
+    return candidates[0]
+
+
+_SHADER_PATH = _resolve_shader_path()
 
 _VS = """
 #version 330
@@ -205,6 +229,18 @@ def get_skillfx_pipeline() -> Optional[SkillFXShaderPipeline]:
         pipe = SkillFXShaderPipeline(ctx)
         _tls.pipe = pipe
         return pipe
+    except FileNotFoundError as exc:
+        # v2.3.8: 区分资源缺失 (打包问题) 与 GL 初始化失败.
+        try:
+            print(
+                f'[GPU] skillfx pipeline init failed: shader missing ({exc}); '
+                f'expected at {_SHADER_PATH}',
+                flush=True,
+            )
+        except Exception:
+            pass
+        _tls.failed = True
+        return None
     except Exception as exc:
         try:
             print(f'[GPU] skillfx pipeline init failed: {exc}')
