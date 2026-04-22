@@ -400,6 +400,13 @@ class TcpReassembler:
         #
         # TCP 接收窗口典型 64KB-1MB, 任何 seq 偏差远大于该量级
         # (双向都 > 1MB) 必为新 ISN, 不可能是合法的乱序/重传/窗口移动.
+        #
+        # v2.3.4: 关键修复 — 之前只要 c3SB 签名出现在乱序 TCP 包里
+        # 就触发重连, 误杀严重. mid-fight 任何包含 4 字节 'c3SB' 的
+        # ZSTD 数据 / 玩家名 / buff icon ID 都会让 BossHP 浮窗瞬间消失
+        # (_on_scene_change → _bb_last_target_uuid=0 → BossHP hide).
+        # 现在所有触发路径都强制要求 ``_seq_anomalous`` (双向 > 1MB).
+        # 这样 mid-stream 乱序段 (TCP 窗口内 ≤ 1MB) 不会再触发误重连.
         with self._lock:
             _seq_match = (self._next_seq == -1 or
                           self._next_seq == seq or
@@ -412,7 +419,6 @@ class TcpReassembler:
                 _seq_anomalous = (_diff_fwd > 1_000_000
                                   and _diff_bwd > 1_000_000)
         # 数据起头是不是合法的游戏帧 size 头 (4B big-endian, 6..999999)?
-        # 同时含 c3SB 也算 (覆盖 _try_identify 已能识别的所有情况).
         _looks_like_frame_start = False
         if len(payload) >= 4:
             try:
@@ -420,10 +426,13 @@ class TcpReassembler:
                 _looks_like_frame_start = 6 <= _hd <= 999_999
             except struct.error:
                 pass
+        # v2.3.4: 必须 seq 异常 + (含 c3SB 或 看起来是新帧起点).
+        # 单独 c3SB 已被证明会在 mid-fight 误触发 (用户报告: 打着打着
+        # BossHP 突然消失). 真正的同服重连 ISN 必然双向 > 1MB.
         _is_reconnect = (
             (not _seq_match)
-            and (self._try_identify(payload, addr)
-                 or (_seq_anomalous and _looks_like_frame_start))
+            and _seq_anomalous
+            and (self._try_identify(payload, addr) or _looks_like_frame_start)
         )
         if _is_reconnect:
             with self._lock:

@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.3.3"
+APP_VERSION = "2.3.4"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,15 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.3.4:
+#   Fix BossHP overlay randomly disappearing mid-fight. The same-server
+#   reconnect detector accepted any out-of-order TCP packet whose payload
+#   contained the 4-byte 'c3SB' literal (common in ZSTD'd game data /
+#   names / buff IDs) as a 'reconnect', triggering scene-change cleanup
+#   that hides BossHP and resets _bb_last_target_uuid. Now require the
+#   strong seq-anomaly signal (>1MB both directions = guaranteed new
+#   ISN) for ALL reconnect paths; mid-stream reorder packets within the
+#   TCP window can never falsely trigger again.
 # v2.3.3:
 #   Fix GPU SAO popup menu hard crash (PyEval_RestoreThread NULL tstate
 #   fast-fail) on the second click. Tk's Tcl mainloop on Windows runs an
