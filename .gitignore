@@ -51,3 +51,6 @@ staging/
 backup/
 update_apply.log
 update_host/releases/
+
+# ── Memory probe research (local only, IL2CPP dumps) ───
+tools/mem_probe/
