@@ -479,7 +479,7 @@ class HpOverlay:
 
     # Animation tuning
     HP_TWEEN = 0.32
-    STA_TWEEN = 0.28
+    STA_TWEEN = 0.22
     TICK_MS = 16          # damping coefficient base; not scheduling rate (overlay_scheduler owns Hz)
     IDLE_TICK_MS = 60
     FADE_IN = 0.60
@@ -2871,19 +2871,27 @@ class HpOverlay:
         if fw <= 0.0:
             return
         fw_int = max(1, int(math.ceil(fw)))
-        bar = _make_hgrad_bar(max(1, fw_int - 2), 4, STA_A, STA_B)
-        bar = subpixel_bar_width(bar, max(0.0, fw - 2.0)) or bar
-        img.alpha_composite(bar, (tx0 + 1, ty0 + 1))
-        highlight = Image.new('RGBA', (max(1, fw_int - 2), 1), (255, 242, 202, 72))
-        img.alpha_composite(highlight, (tx0 + 1, ty0 + 1))
-        # Soft glow above bar (box-shadow: 0 0 6px gold)
-        glow = Image.new('RGBA',
-                         (fw_int + 12, 14), (0, 0, 0, 0))
-        ImageDraw.Draw(glow).rectangle(
-            (6, 4, fw_int + 6, 10), fill=(243, 175, 18, 60),
-        )
-        glow = _gpu_blur(glow, 3)
-        img.alpha_composite(glow, (tx0 - 6, ty0 - 4))
+        fill_q = int(round(fw * 2.0))
+        cache = getattr(self, '_sta_fill_cache', {})
+        asset = cache.get(fill_q)
+        if asset is None:
+            bar = _make_hgrad_bar(max(1, fw_int - 2), 4, STA_A, STA_B)
+            bar = subpixel_bar_width(bar, max(0.0, fw - 2.0)) or bar
+            highlight = Image.new('RGBA', (max(1, fw_int - 2), 1), (255, 242, 202, 72))
+            glow = Image.new('RGBA', (fw_int + 12, 14), (0, 0, 0, 0))
+            ImageDraw.Draw(glow).rectangle(
+                (6, 4, fw_int + 6, 10), fill=(243, 175, 18, 60),
+            )
+            glow = _gpu_blur(glow, 3)
+            layer_w = max(bar.size[0], glow.size[0])
+            layer_h = max(5, glow.size[1])
+            asset = Image.new('RGBA', (layer_w, layer_h), (0, 0, 0, 0))
+            asset.alpha_composite(glow, (0, 0))
+            asset.alpha_composite(bar, (6 if glow.size[0] >= bar.size[0] + 12 else 0, 5))
+            asset.alpha_composite(highlight, (6 if glow.size[0] >= highlight.size[0] + 12 else 0, 5))
+            cache[fill_q] = asset
+            self._sta_fill_cache = cache
+        img.alpha_composite(asset, (tx0 - 6, ty0 - 4))
 
     def _draw_sta_text(self, img: Image.Image, y_off: int) -> None:
         draw = ImageDraw.Draw(img, 'RGBA')
