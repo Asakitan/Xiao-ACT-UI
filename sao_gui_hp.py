@@ -568,6 +568,8 @@ class HpOverlay:
         self._press_zone: Optional[str] = None
         self._press_t = {'id': 0.0, 'hp': 0.0}
         self._press_flash_t = {'id': 0.0, 'hp': 0.0}
+        self._hover_sound_zone: Optional[str] = None
+        self._last_interaction_sound_t = 0.0
 
         # HP group auto-hide on offline (web parity: debounce + fade)
         self._offline_debounce_t = 0.0   # when offline first detected
@@ -601,6 +603,8 @@ class HpOverlay:
         self._outer_pulse_sig: tuple = ()
         self._cover_pulse_cache: Optional[Image.Image] = None
         self._cover_pulse_sig: tuple = ()
+        self._interaction_fx_cache: Optional[Image.Image] = None
+        self._interaction_fx_sig: tuple = ()
         # v2.3.0 Phase 1: full-frame cache. The HP panel runs at 60 Hz
         # but most consecutive frames differ only in animation phase
         # (bracket pulse, scanline sweep) and continuous tween (root
@@ -668,6 +672,8 @@ class HpOverlay:
         self._outer_pulse_sig = ()
         self._cover_pulse_cache = None
         self._cover_pulse_sig = ()
+        self._interaction_fx_cache = None
+        self._interaction_fx_sig = ()
         self._frame_cache = None
         self._frame_sig = ()
 
@@ -1131,12 +1137,16 @@ class HpOverlay:
             animating = True
         for zone in ('id', 'hp'):
             hover_target = 1.0 if self._hover_zone == zone else 0.0
-            next_hover = self._decay(self._hover_t.get(zone, 0.0), hover_target, 0.14)
+            hover_cur = self._hover_t.get(zone, 0.0)
+            hover_tween = 0.25 if hover_target > hover_cur else 0.45
+            next_hover = self._decay(hover_cur, hover_target, hover_tween)
             if abs(next_hover - self._hover_t.get(zone, 0.0)) > 1e-4:
                 self._hover_t[zone] = next_hover
                 animating = True
             press_target = 1.0 if self._press_zone == zone else 0.0
-            next_press = self._decay(self._press_t.get(zone, 0.0), press_target, 0.08)
+            press_cur = self._press_t.get(zone, 0.0)
+            press_tween = 0.07 if press_target > press_cur else 0.16
+            next_press = self._decay(press_cur, press_target, press_tween)
             if abs(next_press - self._press_t.get(zone, 0.0)) > 1e-4:
                 self._press_t[zone] = next_press
                 animating = True
@@ -1855,21 +1865,23 @@ class HpOverlay:
         t = t % 1.0
         band_y = int(ID_H * t) + ID_Y + y_off
         band_h = max(6, int(ID_H * 0.14))
-        # Build a vertical gradient the full width of id-plate
-        ov = Image.new('RGBA', (ID_W, band_h), (0, 0, 0, 0))
-        arr = np.zeros((band_h, ID_W, 4), dtype=np.uint8)
-        ys = np.linspace(0, 1, band_h)
-        # peak mid of band — keep it subtle
-        a_env = np.sin(ys * math.pi) * 18
-        arr[:, :, 0] = 104
-        arr[:, :, 1] = 228
-        arr[:, :, 2] = 255
-        arr[:, :, 3] = a_env[:, None].astype(np.uint8)
-        band = Image.fromarray(arr, 'RGBA')
-        # composite onto a temp that matches panel size then clip
-        canvas = Image.new('RGBA', (self.WIDTH, self.HEIGHT), (0, 0, 0, 0))
-        canvas.paste(band, (ID_X, band_y - band_h // 2), band)
-        img.alpha_composite(_clip_alpha(canvas, self._id_plate_mask(y_off)))
+        cache = getattr(self, '_id_scanline_band_cache', {})
+        band = cache.get(band_h)
+        if band is None:
+            arr = np.zeros((band_h, ID_W, 4), dtype=np.uint8)
+            ys = np.linspace(0, 1, band_h)
+            a_env = np.sin(ys * math.pi) * 18
+            arr[:, :, 0] = 104
+            arr[:, :, 1] = 228
+            arr[:, :, 2] = 255
+            arr[:, :, 3] = a_env[:, None].astype(np.uint8)
+            band = Image.fromarray(arr, 'RGBA')
+            cache[band_h] = band
+            self._id_scanline_band_cache = cache
+        bx = ID_X
+        by = band_y - band_h // 2
+        mask = self._id_plate_mask(y_off).crop((bx, by, bx + ID_W, by + band_h))
+        img.alpha_composite(_clip_alpha(band, mask), (bx, by))
 
     def _draw_id_plate_text(self, img: Image.Image, y_off: int,
                             now: float, mode: str = 'both') -> None:
@@ -2215,6 +2227,9 @@ class HpOverlay:
         self._draw_hp_number_shell(img, y_off)
 
     def _number_plate_mask(self, y_off: int) -> Image.Image:
+        c = getattr(self, '_number_plate_mask_cache', {})
+        if y_off in c:
+            return c[y_off]
         mask = Image.new('L', (self.WIDTH, self.HEIGHT), 0)
         num_x = BOX_X + int(BOX_W * 0.58) + 4
         num_y = BOX_Y + int(BOX_H * 0.82) - 3 + y_off
@@ -2228,6 +2243,8 @@ class HpOverlay:
             (num_x, num_y + int(num_h * 0.58)),
         ]
         ImageDraw.Draw(mask).polygon(poly, fill=255)
+        c[y_off] = mask
+        self._number_plate_mask_cache = c
         return mask
 
     def _draw_hp_number_shell(self, img: Image.Image, y_off: int) -> None:
@@ -2356,27 +2373,235 @@ class HpOverlay:
             flash = max(0.0, min(1.0, (flash_until - now) / 0.22))
         return hover, max(press, flash)
 
+    def _click_flash_progress(self, zone: str, now: float) -> float:
+        flash_until = float(self._press_flash_t.get(zone, 0.0) or 0.0)
+        if flash_until <= now:
+            return 0.0
+        return max(0.0, min(1.0, 1.0 - ((flash_until - now) / 0.22)))
+
+    def _draw_rounded_outline_fade(
+        self,
+        img: Image.Image,
+        rect: Tuple[int, int, int, int],
+        radius: int,
+        color: Tuple[int, int, int],
+        alpha: int,
+    ) -> None:
+        a = max(0, min(255, int(alpha)))
+        if a <= 0:
+            return
+        layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer, 'RGBA')
+        for inset, gain, width in ((2, 0.22, 1), (1, 0.52, 1), (0, 1.0, 2)):
+            x0, y0, x1, y1 = rect
+            d.rounded_rectangle(
+                (x0 - inset, y0 - inset, x1 + inset, y1 + inset),
+                radius=max(1, radius + inset),
+                outline=(color[0], color[1], color[2], int(a * gain)),
+                width=width,
+            )
+        img.alpha_composite(layer)
+
+    def _draw_polygon_outline_fade(
+        self,
+        img: Image.Image,
+        points,
+        color: Tuple[int, int, int],
+        alpha: int,
+    ) -> None:
+        a = max(0, min(255, int(alpha)))
+        if a <= 0:
+            return
+        layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer, 'RGBA')
+        for gain, width in ((0.22, 4), (0.52, 3), (1.0, 2)):
+            d.polygon(points, outline=(color[0], color[1], color[2], int(a * gain)), width=width)
+        img.alpha_composite(layer)
+
+    def _zone_bbox(self, zone: str, y_off: int) -> Tuple[int, int, int, int]:
+        if zone == 'id':
+            return (ID_X, ID_Y + y_off, ID_X + ID_W, ID_Y + ID_H + y_off)
+        num_x = BOX_X + int(BOX_W * 0.58) + 4
+        num_y = BOX_Y + int(BOX_H * 0.82) - 3 + y_off
+        return (
+            BOX_X - 2,
+            BOX_Y + y_off - 2,
+            max(BOX_X + BOX_W + 2, num_x + 220 + 4),
+            max(BOX_Y + BOX_H + y_off + 2, num_y + 20 + 4),
+        )
+
+    def _zone_center(self, zone: str, y_off: int) -> Tuple[float, float]:
+        x0, y0, x1, y1 = self._zone_bbox(zone, y_off)
+        return ((x0 + x1) * 0.5, (y0 + y1) * 0.5)
+
+    def _scale_region_overlay(
+        self,
+        src: Image.Image,
+        zone: str,
+        y_off: int,
+        scale: float,
+        alpha: float,
+    ) -> Optional[Tuple[Image.Image, Tuple[int, int]]]:
+        if scale <= 1.001 or alpha <= 0.001:
+            return None
+        x0, y0, x1, y1 = self._zone_bbox(zone, y_off)
+        x0 = max(0, min(self.WIDTH, int(x0)))
+        y0 = max(0, min(self.HEIGHT, int(y0)))
+        x1 = max(x0 + 1, min(self.WIDTH, int(x1)))
+        y1 = max(y0 + 1, min(self.HEIGHT, int(y1)))
+        region = src.crop((x0, y0, x1, y1))
+        rw, rh = region.size
+        tw = max(1, int(round(rw * scale)))
+        th = max(1, int(round(rh * scale)))
+        enlarged = region.resize((tw, th), Image.LANCZOS)
+        if alpha < 0.999:
+            arr = np.asarray(enlarged, dtype=np.uint8).copy()
+            mul = int(max(0, min(255, alpha * 255)))
+            arr[:, :, 3] = (arr[:, :, 3].astype(np.uint16) * mul // 255).astype(np.uint8)
+            enlarged = Image.fromarray(arr, 'RGBA')
+        dx = x0 - (tw - rw) // 2
+        dy = y0 - (th - rh) // 2
+        return enlarged, (dx, dy)
+
+    def _draw_click_sweep(self, fx: Image.Image, zone: str, y_off: int, now: float) -> None:
+        prog = self._click_flash_progress(zone, now)
+        if prog <= 0.0:
+            return
+        x0, y0, x1, y1 = self._zone_bbox(zone, y_off)
+        x0 = max(0, min(self.WIDTH, int(x0)))
+        y0 = max(0, min(self.HEIGHT, int(y0)))
+        x1 = max(x0 + 1, min(self.WIDTH, int(x1)))
+        y1 = max(y0 + 1, min(self.HEIGHT, int(y1)))
+        rw = max(1, x1 - x0)
+        rh = max(1, y1 - y0)
+        arr = np.zeros((rh, rw, 4), dtype=np.uint8)
+        xs = np.arange(rw, dtype=np.float32)[None, :]
+        ys = np.arange(rh, dtype=np.float32)[:, None]
+        band_x = (-0.22 + 1.44 * prog) * rw
+        skew = (ys - rh * 0.5) * 0.20
+        sigma = max(10.0, rw * 0.055)
+        env = np.exp(-((xs - (band_x + skew)) ** 2) / (2.0 * sigma * sigma))
+        alpha = np.clip(env * (70.0 * (1.0 - prog) + 38.0), 0, 255).astype(np.uint8)
+        arr[:, :, 0] = 243
+        arr[:, :, 1] = 175
+        arr[:, :, 2] = 18
+        arr[:, :, 3] = alpha
+        sweep = Image.fromarray(arr, 'RGBA')
+        if zone == 'id':
+            mask = self._id_plate_mask(y_off).crop((x0, y0, x1, y1))
+        else:
+            mask_cache = getattr(self, '_hp_interaction_mask_cache', {})
+            mask = mask_cache.get(y_off)
+            if mask is None:
+                mask = Image.new('L', (self.WIDTH, self.HEIGHT), 0)
+                md = ImageDraw.Draw(mask)
+                bx = BOX_X
+                by = BOX_Y + y_off
+                lh = BOX_H
+                left_poly = [
+                    (bx, by), (bx + 26, by), (bx + 26, by + lh), (bx, by + lh),
+                    (bx, by + int(lh * 0.75)), (bx + 13, by + int(lh * 0.75)),
+                    (bx + 13, by + int(lh * 0.25)), (bx, by + int(lh * 0.25)),
+                ]
+                rx0 = bx + 29
+                rw2 = BOX_W - 29
+                clip_poly = [
+                    (rx0 + 85, by + int(lh * 0.22)),
+                    (rx0 + rw2, by + int(lh * 0.22)),
+                    (rx0 + rw2, by),
+                    (rx0, by),
+                    (rx0, by + lh),
+                    (rx0 + 228, by + lh),
+                    (rx0 + 234, by + int(lh * 0.77)),
+                    (rx0 + rw2, by + int(lh * 0.77)),
+                    (rx0 + rw2, by + int(lh * 0.60)),
+                    (rx0 + 233, by + int(lh * 0.60)),
+                    (rx0 + 228, by + int(lh * 0.77)),
+                    (rx0 + 85, by + int(lh * 0.77)),
+                ]
+                md.polygon(left_poly, fill=255)
+                md.polygon(clip_poly, fill=255)
+                num_x = BOX_X + int(BOX_W * 0.58) + 4
+                num_y = BOX_Y + int(BOX_H * 0.82) - 3 + y_off
+                left_w = int(220 * 0.55)
+                gap = 3
+                right_w = 220 - left_w - gap
+                right_x = num_x + left_w + gap
+                md.rectangle((num_x, num_y, num_x + left_w - 1, num_y + 19), fill=255)
+                md.rectangle((right_x, num_y, right_x + right_w - 1, num_y + 19), fill=255)
+                mask_cache[y_off] = mask
+                self._hp_interaction_mask_cache = mask_cache
+            mask = mask.crop((x0, y0, x1, y1))
+        fx.alpha_composite(_clip_alpha(sweep, mask), (x0, y0))
+
     def _draw_interaction_fx(self, img: Image.Image, y_off: int, now: float) -> None:
         id_hover, id_press = self._interaction_strength('id', now)
         hp_hover, hp_press = self._interaction_strength('hp', now)
         if id_hover <= 0.001 and id_press <= 0.001 and hp_hover <= 0.001 and hp_press <= 0.001:
             return
+        def _q(v: float, steps: int = 64) -> int:
+            v = max(0.0, min(1.0, float(v or 0.0)))
+            if v <= 0.001:
+                return 0
+            return max(1, int(math.ceil(v * steps - 1e-6)))
+        sig = (
+            y_off,
+            _q(id_hover),
+            _q(id_press),
+            _q(hp_hover),
+            _q(hp_press),
+            _q(self._click_flash_progress('id', now), 72),
+            _q(self._click_flash_progress('hp', now), 72),
+        )
+        if self._interaction_fx_cache is not None and self._interaction_fx_sig == sig:
+            img.alpha_composite(self._interaction_fx_cache)
+            return
 
         w, h = self.WIDTH, self.HEIGHT
         fx = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(fx, 'RGBA')
+        scale_layers = []
+
+        id_scale = 1.0 + 0.060 * id_press
+        id_overlay = self._scale_region_overlay(
+            img, 'id', y_off, id_scale, 0.20 * id_press)
+        if id_overlay is not None:
+            scale_layers.append(id_overlay)
+
+        hp_scale = 1.0 + 0.072 * hp_press
+        hp_overlay = self._scale_region_overlay(
+            img, 'hp', y_off, hp_scale, 0.22 * hp_press)
+        if hp_overlay is not None:
+            scale_layers.append(hp_overlay)
+
+        for layer, pos in scale_layers:
+            fx.alpha_composite(layer, pos)
 
         if id_hover > 0.001 or id_press > 0.001:
             mask = self._id_plate_mask(y_off)
-            alpha = int(10 + 22 * id_hover + 26 * id_press)
-            shade = Image.new('RGBA', (w, h), (244, 247, 250, max(0, min(72, alpha))))
+            alpha = int(40 * id_hover + 64 * id_press)
+            shade = Image.new('RGBA', (w, h), (246, 248, 250, max(0, min(84, alpha))))
             fx.alpha_composite(_clip_alpha(shade, mask))
-            draw.rounded_rectangle(
+            x0, y0, x1, y1 = self._zone_bbox('id', y_off)
+            ring_alpha = int(92 * id_hover + 132 * id_press)
+            halo = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+            hd = ImageDraw.Draw(halo, 'RGBA')
+            hd.rounded_rectangle(
+                (x0 - 5, y0 - 5, x1 + 5, y1 + 5),
+                radius=10,
+                outline=(243, 175, 18, max(0, min(255, ring_alpha))),
+                width=2,
+            )
+            halo = _gpu_blur(halo, 3)
+            fx.alpha_composite(halo)
+            self._draw_rounded_outline_fade(
+                fx,
                 (ID_X, ID_Y + y_off, ID_X + ID_W - 1, ID_Y + ID_H - 1 + y_off),
                 radius=6,
-                outline=(104, 228, 255, int(12 + 54 * id_hover + 64 * id_press)),
-                width=1,
+                color=(243, 175, 18),
+                alpha=int(84 * id_hover + 126 * id_press),
             )
+            self._draw_click_sweep(fx, 'id', y_off, now)
 
         if hp_hover > 0.001 or hp_press > 0.001:
             bx = BOX_X
@@ -2419,10 +2644,24 @@ class HpOverlay:
             sd.rectangle((num_x, num_y, num_x + left_w - 1, num_y + num_h - 1), fill=plate_fill)
             sd.rectangle((right_x, num_y, right_x + right_w - 1, num_y + num_h - 1), fill=plate_fill)
             fx.alpha_composite(shell_overlay)
-            border_alpha = int(30 + 70 * hp_hover + 86 * hp_press)
-            bar_border_alpha = int(48 + 84 * hp_hover + 92 * hp_press)
-            draw.polygon(left_poly, outline=(214, 216, 219, border_alpha), width=1)
-            draw.polygon(clip_poly, outline=(214, 216, 219, border_alpha), width=1)
+            x0, y0, x1, y1 = self._zone_bbox('hp', y_off)
+            ring_alpha = int(88 * hp_hover + 136 * hp_press)
+            halo = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+            hd = ImageDraw.Draw(halo, 'RGBA')
+            hd.rounded_rectangle(
+                (x0 - 6, y0 - 6, x1 + 6, y1 + 6),
+                radius=10,
+                outline=(243, 175, 18, max(0, min(255, ring_alpha))),
+                width=2,
+            )
+            halo = _gpu_blur(halo, 3)
+            fx.alpha_composite(halo)
+            border_alpha = int(90 * hp_hover + 132 * hp_press)
+            bar_border_alpha = int(110 * hp_hover + 152 * hp_press)
+            self._draw_polygon_outline_fade(
+                fx, left_poly, (243, 175, 18), border_alpha)
+            self._draw_polygon_outline_fade(
+                fx, clip_poly, (243, 175, 18), border_alpha)
             border_x = bx + 114
             border_y = by + 10
             poly = [
@@ -2433,9 +2672,24 @@ class HpOverlay:
                 (border_x + 141, border_y + 27),
                 (border_x, border_y + 27),
             ]
-            draw.polygon(poly, outline=(104, 228, 255, bar_border_alpha), width=1)
+            self._draw_polygon_outline_fade(
+                fx, poly, (243, 175, 18), bar_border_alpha)
+            self._draw_click_sweep(fx, 'hp', y_off, now)
 
+        self._interaction_fx_cache = fx
+        self._interaction_fx_sig = sig
         img.alpha_composite(fx)
+
+    def _play_interaction_sound(self, volume: float) -> None:
+        now = time.time()
+        if now - self._last_interaction_sound_t < 0.05:
+            return
+        self._last_interaction_sound_t = now
+        try:
+            from sao_sound import play_sound as _ps
+            _ps('click', volume=volume)
+        except Exception:
+            pass
 
     def _draw_hp_text(self, img: Image.Image, y_off: int,
                       mode: str = 'both') -> None:
@@ -2623,13 +2877,20 @@ class HpOverlay:
 
     def _on_pointer_move(self, ev) -> None:
         try:
-            self._hover_zone = self._interaction_zone_at(int(ev.x), int(ev.y))
+            zone = self._interaction_zone_at(int(ev.x), int(ev.y))
+            if zone and zone != self._hover_sound_zone:
+                self._hover_sound_zone = zone
+                self._play_interaction_sound(0.3)
+            elif zone is None:
+                self._hover_sound_zone = None
+            self._hover_zone = zone
             self._schedule_tick(immediate=True)
         except Exception:
             pass
 
     def _on_pointer_leave(self, _ev) -> None:
         self._hover_zone = None
+        self._hover_sound_zone = None
         if self._press_zone is None:
             self._schedule_tick(immediate=True)
 
@@ -2661,6 +2922,7 @@ class HpOverlay:
             self._schedule_tick(immediate=True)
             return
         self._press_flash_t[zone] = time.time() + 0.22
+        self._play_interaction_sound(0.5)
         self._schedule_tick(immediate=True)
         cb = self._on_click
         if callable(cb):

@@ -15,7 +15,7 @@ import ctypes
 import math
 import time
 import threading
-from typing import Optional
+from typing import Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont
 import numpy as np
@@ -639,8 +639,38 @@ class SAOPlayerPanel(tk.Frame):
     """
 
     def __init__(self, parent, username='Player', profession='', **kw):
-        # 不继承 parent bg (#010101 = 透明色键), 用实际可见色
-        super().__init__(parent, bg='#ffffff', highlightthickness=0, **kw)
+        # GPU mode flag — when on, the visible pixels come from
+        # PlayerPanelGpuPainter. The Tk widgets stay sized to the
+        # final target with bg=chroma (#010101) so the parent shell's
+        # ``-transparentcolor`` makes them invisible.
+        try:
+            from sao_left_info_gpu import (
+                PlayerPanelGpuPainter as _PPGP,
+                _PlayerPanelSnapshot as _PPSnap,
+                gpu_player_panel_enabled as _gppen,
+            )
+        except Exception:
+            _PPGP = None
+            _PPSnap = None
+            def _gppen():  # type: ignore[no-redef]
+                return False
+        self._PPGP_cls = _PPGP
+        self._PPSnap_cls = _PPSnap
+        self._gpu_managed = bool(_PPGP is not None and _gppen())
+        self._gpu_chroma = '#010101'
+        self._gpu_painter = None
+        # Animated geometry stash (snapshot fields). Tk widget sizes
+        # stay at the final target.
+        self._anim_top_w = 0
+        self._anim_top_h = 0
+        self._anim_bot_w = 0
+        self._anim_bot_h = 0
+        # winfo_rootx/y caching (Phase A pattern from
+        # v2_3_0_phase2_gpu_overlay).
+        self._cached_screen_xy: Optional[Tuple[int, int]] = None
+
+        bg_color = self._gpu_chroma if self._gpu_managed else '#ffffff'
+        super().__init__(parent, bg=bg_color, highlightthickness=0, **kw)
         self._active = False
         self._anim = Animator(self)
         self._target_w = 240
@@ -661,14 +691,33 @@ class SAOPlayerPanel(tk.Frame):
         self._on_mode_change = None  # callback(mode_text) 供外部持久化
 
         self._build()
+        if self._gpu_managed:
+            self._setup_gpu_painter()
 
     def _build(self):
-        self._top = tk.Canvas(self, width=0, height=0,
-                              bg='#ffffff', highlightthickness=0)
-        self._top.pack(anchor='nw')
-        self._bottom = tk.Canvas(self, width=0, height=0,
-                                 bg='#e5e3e3', highlightthickness=0)
-        self._bottom.pack(anchor='nw')
+        # In GPU mode the canvases are sized ONCE to the final target
+        # so the parent shell reserves the right area; their bg is
+        # the chroma key so they are invisible. The animated visuals
+        # live entirely in the GPU painter. In CPU mode we keep the
+        # legacy 0×0-then-grow behaviour.
+        if self._gpu_managed:
+            top_w = self._target_w
+            top_h = self._top_h
+            bot_w = self._target_w
+            bot_h = self._bottom_h
+            self._top = tk.Canvas(self, width=top_w, height=top_h,
+                                  bg=self._gpu_chroma, highlightthickness=0)
+            self._top.pack(anchor='nw')
+            self._bottom = tk.Canvas(self, width=bot_w, height=bot_h,
+                                     bg=self._gpu_chroma, highlightthickness=0)
+            self._bottom.pack(anchor='nw')
+        else:
+            self._top = tk.Canvas(self, width=0, height=0,
+                                  bg='#ffffff', highlightthickness=0)
+            self._top.pack(anchor='nw')
+            self._bottom = tk.Canvas(self, width=0, height=0,
+                                     bg='#e5e3e3', highlightthickness=0)
+            self._bottom.pack(anchor='nw')
 
     def set_active(self, active: bool):
         if active == self._active:
@@ -682,7 +731,10 @@ class SAOPlayerPanel(tk.Frame):
     def update_shift_mode(self, mode_text: str):
         self._shift_mode = mode_text
         if self._active:
-            self._redraw_bottom(self._target_w, self._bottom_h)
+            if self._gpu_managed:
+                self._dispatch_gpu_paint()
+            else:
+                self._redraw_bottom(self._target_w, self._bottom_h)
         if self._on_mode_change:
             try:
                 self._on_mode_change(mode_text)
@@ -705,9 +757,30 @@ class SAOPlayerPanel(tk.Frame):
         self._level_extra = level_extra
         self._season_exp = next_exp
         if self._active:
-            self._redraw_top(self._target_w, self._top_h)
+            if self._gpu_managed:
+                self._dispatch_gpu_paint()
+            else:
+                self._redraw_top(self._target_w, self._top_h)
 
     def _animate_open(self):
+        if self._gpu_managed:
+            def phase1(t):
+                w = max(1, int(self._target_w * t))
+                h = max(1, int(self._top_h * t))
+                self._anim_top_w = w
+                self._anim_top_h = h
+                self._dispatch_gpu_paint()
+
+            def phase2(t):
+                h = max(1, int(self._bottom_h * t))
+                self._anim_bot_w = self._target_w
+                self._anim_bot_h = h
+                self._dispatch_gpu_paint()
+
+            self._anim.animate('top_open', 500, phase1,
+                               on_done=lambda: self._anim.animate('bottom_open', 400, phase2))
+            return
+
         def phase1(t):
             w = max(1, int(self._target_w * t))
             h = max(1, int(self._top_h * t))
@@ -723,6 +796,19 @@ class SAOPlayerPanel(tk.Frame):
                            on_done=lambda: self._anim.animate('bottom_open', 400, phase2))
 
     def _animate_close(self):
+        if self._gpu_managed:
+            def fade(t):
+                inv = 1 - t
+                w = max(1, int(self._target_w * inv))
+                self._anim_top_w = w
+                self._anim_top_h = max(1, int(self._top_h * inv))
+                self._anim_bot_w = w
+                self._anim_bot_h = max(1, int(self._bottom_h * inv))
+                self._dispatch_gpu_paint()
+
+            self._anim.animate('close', 200, fade)
+            return
+
         def fade(t):
             inv = 1 - t
             w = max(1, int(self._target_w * inv))
@@ -733,6 +819,14 @@ class SAOPlayerPanel(tk.Frame):
 
     def _redraw_top(self, w, h):
         """SAO 系统信息面板 .top — HUD 风格"""
+        if self._gpu_managed:
+            # External callers (e.g. sao_gui's profile pull) might call
+            # this with the final target size. In GPU mode just push a
+            # snapshot; never paint to Tk.
+            self._anim_top_w = max(self._anim_top_w, int(w))
+            self._anim_top_h = max(self._anim_top_h, int(h))
+            self._dispatch_gpu_paint()
+            return
         self._top.delete('all')
         if w < 40 or h < 40:
             return
@@ -861,6 +955,11 @@ class SAOPlayerPanel(tk.Frame):
 
     def _redraw_bottom(self, w, h):
         """SAO 系统信息面板 .bottom — 状态描述区"""
+        if self._gpu_managed:
+            self._anim_bot_w = max(self._anim_bot_w, int(w))
+            self._anim_bot_h = max(self._anim_bot_h, int(h))
+            self._dispatch_gpu_paint()
+            return
         self._bottom.delete('all')
         if w < 40 or h < 15:
             return
@@ -899,6 +998,70 @@ class SAOPlayerPanel(tk.Frame):
         if h > 50:
             self._bottom.create_text(w - 8, h - 10, text='SAO://SYSTEM',
                                      anchor='e', font=get_sao_font(5), fill='#c8c8c8')
+
+    # ── GPU painter wiring (active when SAO_GPU_PLAYER_PANEL on) ─
+
+    def _setup_gpu_painter(self) -> None:
+        if self._PPGP_cls is None:
+            return
+        try:
+            self._gpu_painter = self._PPGP_cls(self.winfo_toplevel())
+        except Exception:
+            self._gpu_painter = None
+            self._gpu_managed = False
+            return
+        # winfo_rootx/y is expensive; cache and invalidate on
+        # <Configure> (matches Phase A pattern).
+        self.bind('<Configure>',
+                  lambda e: setattr(self, '_cached_screen_xy', None),
+                  add='+')
+        self.bind('<Destroy>', lambda e: self._on_gpu_destroy(), add='+')
+
+    def _on_gpu_destroy(self) -> None:
+        if self._gpu_painter is not None:
+            try:
+                self._gpu_painter.destroy()
+            except Exception:
+                pass
+            self._gpu_painter = None
+
+    def _dispatch_gpu_paint(self) -> None:
+        painter = self._gpu_painter
+        snap_cls = self._PPSnap_cls
+        if painter is None or snap_cls is None:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        # Animated sizes: fall back to final target if not yet set
+        # (e.g. external _redraw_top call before any animation tick).
+        top_w = self._anim_top_w if self._anim_top_w > 0 else self._target_w
+        top_h = self._anim_top_h if self._anim_top_h > 0 else self._top_h
+        bot_w = self._anim_bot_w if self._anim_bot_w > 0 else self._target_w
+        bot_h = self._anim_bot_h if self._anim_bot_h > 0 else self._bottom_h
+        # Match Tk: scan dot uses time.time()*1.5 sin → [0,1] phase
+        scan_phase = (math.sin(time.time() * 1.5) + 1.0) / 2.0
+        snap = snap_cls(
+            self._username,
+            self._level, self._level_extra, self._season_exp,
+            self._sta_hp, self._sta_sta,
+            self._shift_mode,
+            top_w, top_h, bot_w, bot_h, scan_phase,
+        )
+        if self._cached_screen_xy is None:
+            try:
+                sx = self.winfo_rootx()
+                sy = self.winfo_rooty()
+                self._cached_screen_xy = (sx, sy)
+            except Exception:
+                self._cached_screen_xy = (0, 0)
+        sx, sy = self._cached_screen_xy
+        try:
+            painter.tick(sx, sy, snap)
+        except Exception:
+            pass
 
 
 
@@ -4286,50 +4449,68 @@ class SAOPlayerGUI:
             _frame_interval = 0.033  # ~30fps capture
 
             # ── 预生成 HUD 叠加 (RGBA premultiplied, 一次性) ──
-            _hud_bgra_premult = None  # numpy uint8 (sh, sw, 4) BGRA premult
+            # v2.3.10: 改在 (out_w, out_h) 分辨率合成 (而不是 sw×sh)，
+            # GPU presenter 把这个纹理 bilinear 拉伸到全屏窗口，零 CPU
+            # 开销。HUD 像素几何按相同比例缩放；视觉一致。
+            out_w, out_h = qw, qh
+            _hud_bgra_premult = None  # numpy uint8 (out_h, out_w, 4) BGRA premult
+            _hud_inv_a_u16 = None     # numpy uint16 (out_h, out_w, 1) 255 - alpha
             try:
                 from PIL import ImageDraw as _IDraw
-                _hud = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+                _hud_w, _hud_h = out_w, out_h
+                _hud = Image.new('RGBA', (_hud_w, _hud_h), (0, 0, 0, 0))
                 _hd = _IDraw.Draw(_hud)
-                _hd.rectangle((0, 0, sw, sh), fill=(0, 0, 0, 115))
-                for _sy2 in range(0, sh, 3):
-                    _hd.line([(0, _sy2), (sw, _sy2)], fill=(0, 0, 0, 18))
+                _hd.rectangle((0, 0, _hud_w, _hud_h), fill=(0, 0, 0, 115))
+                for _sy2 in range(0, _hud_h, 3):
+                    _hd.line([(0, _sy2), (_hud_w, _sy2)], fill=(0, 0, 0, 18))
                 _line_positions = [
-                    int(sh * 0.08), int(sh * 0.15),
-                    int(sh * 0.85), int(sh * 0.92),
+                    int(_hud_h * 0.08), int(_hud_h * 0.15),
+                    int(_hud_h * 0.85), int(_hud_h * 0.92),
                 ]
                 for _ly in _line_positions:
-                    _hd.line([(int(sw * 0.05), _ly), (int(sw * 0.95), _ly)],
+                    _hd.line([(int(_hud_w * 0.05), _ly),
+                              (int(_hud_w * 0.95), _ly)],
                              fill=(156, 236, 255, 35), width=1)
-                _cx2, _cy2 = sw // 2, sh // 2
+                _cx2, _cy2 = _hud_w // 2, _hud_h // 2
                 _hd.line([(_cx2 - 40, _cy2), (_cx2 - 12, _cy2)], fill=(156, 236, 255, 45), width=1)
                 _hd.line([(_cx2 + 12, _cy2), (_cx2 + 40, _cy2)], fill=(156, 236, 255, 45), width=1)
                 _hd.line([(_cx2, _cy2 - 40), (_cx2, _cy2 - 12)], fill=(156, 236, 255, 45), width=1)
                 _hd.line([(_cx2, _cy2 + 12), (_cx2, _cy2 + 40)], fill=(156, 236, 255, 45), width=1)
                 _blen = 50
-                _bpad = int(sw * 0.04)
-                _bpad_y = int(sh * 0.05)
+                _bpad = int(_hud_w * 0.04)
+                _bpad_y = int(_hud_h * 0.05)
                 _bc = (156, 236, 255, 55)
                 _hd.line([(_bpad, _bpad_y), (_bpad + _blen, _bpad_y)], fill=_bc, width=1)
                 _hd.line([(_bpad, _bpad_y), (_bpad, _bpad_y + _blen)], fill=_bc, width=1)
-                _hd.line([(sw - _bpad, _bpad_y), (sw - _bpad - _blen, _bpad_y)], fill=_bc, width=1)
-                _hd.line([(sw - _bpad, _bpad_y), (sw - _bpad, _bpad_y + _blen)], fill=_bc, width=1)
-                _hd.line([(_bpad, sh - _bpad_y), (_bpad + _blen, sh - _bpad_y)], fill=_bc, width=1)
-                _hd.line([(_bpad, sh - _bpad_y), (_bpad, sh - _bpad_y - _blen)], fill=_bc, width=1)
-                _hd.line([(sw - _bpad, sh - _bpad_y), (sw - _bpad - _blen, sh - _bpad_y)], fill=_bc, width=1)
-                _hd.line([(sw - _bpad, sh - _bpad_y), (sw - _bpad, sh - _bpad_y - _blen)], fill=_bc, width=1)
+                _hd.line([(_hud_w - _bpad, _bpad_y), (_hud_w - _bpad - _blen, _bpad_y)], fill=_bc, width=1)
+                _hd.line([(_hud_w - _bpad, _bpad_y), (_hud_w - _bpad, _bpad_y + _blen)], fill=_bc, width=1)
+                _hd.line([(_bpad, _hud_h - _bpad_y), (_bpad + _blen, _hud_h - _bpad_y)], fill=_bc, width=1)
+                _hd.line([(_bpad, _hud_h - _bpad_y), (_bpad, _hud_h - _bpad_y - _blen)], fill=_bc, width=1)
+                _hd.line([(_hud_w - _bpad, _hud_h - _bpad_y), (_hud_w - _bpad - _blen, _hud_h - _bpad_y)], fill=_bc, width=1)
+                _hd.line([(_hud_w - _bpad, _hud_h - _bpad_y), (_hud_w - _bpad, _hud_h - _bpad_y - _blen)], fill=_bc, width=1)
                 hud_arr = _np.array(_hud, dtype=_np.uint8)  # RGBA, top-down
-                # 转 BGRA 并预乘 alpha (只做一次)
-                a = hud_arr[..., 3:4].astype(_np.float32) / 255.0
-                rgb = hud_arr[..., :3].astype(_np.float32) * a
+                # 转 BGRA premult (uint8) — 一次性，循环里直接复用
+                a_u8 = hud_arr[..., 3:4]
+                a_f = a_u8.astype(_np.float32) / 255.0
+                rgb_pre = (hud_arr[..., :3].astype(_np.float32) * a_f
+                           ).astype(_np.uint8)
                 bgra = _np.empty_like(hud_arr)
-                bgra[..., 0] = rgb[..., 2].astype(_np.uint8)  # B
-                bgra[..., 1] = rgb[..., 1].astype(_np.uint8)  # G
-                bgra[..., 2] = rgb[..., 0].astype(_np.uint8)  # R
-                bgra[..., 3] = hud_arr[..., 3]
+                bgra[..., 0] = rgb_pre[..., 2]   # B
+                bgra[..., 1] = rgb_pre[..., 1]   # G
+                bgra[..., 2] = rgb_pre[..., 0]   # R
+                bgra[..., 3] = a_u8[..., 0]
                 _hud_bgra_premult = bgra
+                # 预算 (255 - alpha) 的 uint16 形式，循环内整数乘法用
+                _hud_inv_a_u16 = (255 - a_u8.astype(_np.uint16))  # (h,w,1)
             except Exception:
                 _hud_bgra_premult = None
+                _hud_inv_a_u16 = None
+
+            # 复用缓冲：循环内 _np.array(...) 与 alpha 临时数组的分配
+            # 是主要 GIL 占用点；预分配到 (out_h, out_w, 4) 后用切片赋值替代。
+            # bgra_buf 既是工作区也是最终输出。
+            _bgra_buf = _np.empty((out_h, out_w, 4), dtype=_np.uint8)
+            _bgra_buf[..., 3] = 255  # 全不透明
 
             while _running[0]:
                 _t_start = _time.time()
@@ -4386,21 +4567,27 @@ class SAOPlayerGUI:
                     continue
                 if not _running[0]:
                     break
-                # 缩到全屏 + 转 BGRA premult, 再叠 HUD
-                full_rgb = shot if False else dist.resize((sw, sh), Image.BILINEAR)
-                rgb_arr = _np.array(full_rgb, dtype=_np.uint8)  # (sh, sw, 3)
-                bgra_arr = _np.empty((sh, sw, 4), dtype=_np.uint8)
-                bgra_arr[..., 0] = rgb_arr[..., 2]  # B
-                bgra_arr[..., 1] = rgb_arr[..., 1]  # G
-                bgra_arr[..., 2] = rgb_arr[..., 0]  # R
-                bgra_arr[..., 3] = 255
-                if _hud_bgra_premult is not None:
-                    # over: out = src + dst * (1 - src.a)
-                    inv_a = 1.0 - _hud_bgra_premult[..., 3:4].astype(_np.float32) / 255.0
-                    base = bgra_arr.astype(_np.float32) * inv_a
-                    bgra_arr = (base + _hud_bgra_premult.astype(_np.float32)
-                                ).clip(0, 255).astype(_np.uint8)
-                _latest_frame[0] = (bgra_arr.tobytes(), sw, sh)
+                # v2.3.10: 不再 PIL 放大到 (sw,sh)。直接在 (hw,hh)
+                # 出帧；GPU presenter 把纹理 bilinear 拉伸到全屏窗口。
+                # 这一步去掉了一个全屏 PIL.resize + 一个 sw×sh 的
+                # numpy 数组 + 三个全屏 float32 临时数组（每帧 ~33MB
+                # × 3）。1080p 下每帧分配从 ~130MB 降到 ~6MB。
+                rgb_arr = _np.asarray(dist, dtype=_np.uint8)  # (out_h, out_w, 3)
+                # 写入 BGRA 工作缓冲：用 slice 反转通道，避免逐通道写
+                _bgra_buf[..., :3] = rgb_arr[..., ::-1]
+                # alpha 通道初始化时已设为 255；HUD 合成不会改它
+                if (_hud_bgra_premult is not None
+                        and _hud_inv_a_u16 is not None):
+                    # over: out = src + dst * (255 - src.a) / 255
+                    # 用 uint16 整数乘法 + // 255 替代 float32，
+                    # 避免每帧 3 个 (h,w,4) float32 临时数组。
+                    tmp = _bgra_buf.astype(_np.uint16)
+                    tmp *= _hud_inv_a_u16          # 广播到 (h,w,4)
+                    tmp //= 255
+                    tmp += _hud_bgra_premult       # uint16 + uint8 → uint16
+                    _np.clip(tmp, 0, 255, out=tmp)
+                    _bgra_buf[:] = tmp.astype(_np.uint8)
+                _latest_frame[0] = (_bgra_buf.tobytes(), out_w, out_h)
                 _elapsed = _time.time() - _t_start
                 _sleep = max(0.001, _frame_interval - _elapsed)
                 _time.sleep(_sleep)
