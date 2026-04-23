@@ -388,70 +388,71 @@ class GlfwPump:
         self._after_id = None
         if not self._running:
             return
-        # Hold the WGL serialization RLock across the entire pump tick
-        # (poll_events + per-window _render_once). Worker threads with
-        # their own moderngl context (fisheye, gpu_renderer worker GL)
-        # acquire the same lock around their GL block so they cannot
-        # race the pump's GIL-released ctypes calls into the WGL driver.
-        # RLock is reentrant so per-window render's own GL acquisition
-        # can re-enter safely.
+        # v2.3.12: Split the global WGL lock into (a) a single hold
+        # around poll_events (still needs to serialize with worker
+        # contexts because PeekMessage can dispatch WM_PAINT etc.) and
+        # (b) per-window holds around each _render_once. This releases
+        # the lock between windows so worker threads (fisheye GL ctx,
+        # player panel compose worker, etc.) can run during the pump
+        # tick instead of queuing up behind all N windows. RLock is
+        # reentrant so per-window render's own GL acquisition nests
+        # safely inside the outer hold.
+        global _trace_pump_armed, _trace_pump_remaining_ticks
+        if _trace_pump_remaining_ticks > 0:
+            _trace_pump_armed = True
+            _trace_pump_remaining_ticks -= 1
+        armed_at_start = _trace_pump_armed
+        if armed_at_start:
+            _phase_trace('gow.pump.poll.begin', f'remaining={_trace_pump_remaining_ticks}')
+        # Snapshot hwnds first so we only pump messages for OUR
+        # windows (Tk's WM_TIMER must NOT be dispatched here or
+        # we re-enter _tick → tstate corruption → fast-fail).
+        with self._lock:
+            hwnds_for_pump = [w._hwnd for w in self._windows
+                              if w._hwnd and w._visible]
         with _wgl_serialize_lock:
-            global _trace_pump_armed, _trace_pump_remaining_ticks
-            if _trace_pump_remaining_ticks > 0:
-                _trace_pump_armed = True
-                _trace_pump_remaining_ticks -= 1
-            armed_at_start = _trace_pump_armed
-            if armed_at_start:
-                _phase_trace('gow.pump.poll.begin', f'remaining={_trace_pump_remaining_ticks}')
-            # Snapshot hwnds first so we only pump messages for OUR
-            # windows (Tk's WM_TIMER must NOT be dispatched here or
-            # we re-enter _tick → tstate corruption → fast-fail).
-            with self._lock:
-                hwnds_for_pump = [w._hwnd for w in self._windows
-                                  if w._hwnd and w._visible]
             try:
                 _pump_glfw_messages(hwnds_for_pump)
             except Exception:
                 pass
-            # Re-read in case _on_mouse_button armed it during poll.
-            armed = _trace_pump_armed
-            if armed or armed_at_start:
-                _phase_trace('gow.pump.poll.end', f'armed={int(armed)} start={int(armed_at_start)}')
-            cb_fired_this_tick = (not armed_at_start) and armed
-            now = time.perf_counter()
-            t = now - self._t0
-            with self._lock:
-                wins = list(self._windows)
-            any_visible = False
-            any_dirty = False
-            for w in wins:
-                if not w._visible:
-                    continue
-                any_visible = True
-                if w._dirty:
-                    any_dirty = True
-                if armed:
-                    _phase_trace(
-                        'gow.pump.render.begin',
-                        f'hwnd={getattr(w, "_hwnd", 0)} dirty={int(bool(w._dirty))}',
-                    )
-                try:
-                    w._render_once(t)
-                except Exception:
-                    # Per-window render failure shouldn't kill the pump.
-                    pass
-                if armed:
-                    _phase_trace(
-                        'gow.pump.render.end',
-                        f'hwnd={getattr(w, "_hwnd", 0)}',
-                    )
+        # Re-read in case _on_mouse_button armed it during poll.
+        armed = _trace_pump_armed
+        if armed or armed_at_start:
+            _phase_trace('gow.pump.poll.end', f'armed={int(armed)} start={int(armed_at_start)}')
+        cb_fired_this_tick = (not armed_at_start) and armed
+        now = time.perf_counter()
+        t = now - self._t0
+        with self._lock:
+            wins = list(self._windows)
+        any_visible = False
+        any_dirty = False
+        for w in wins:
+            if not w._visible:
+                continue
+            any_visible = True
+            if w._dirty:
+                any_dirty = True
             if armed:
-                _phase_trace('gow.pump.tick.end')
-                # Don't clear _trace_pump_armed here; the per-tick counter
-                # in the next iteration controls it. Just leave the flag
-                # off for the next tick if the counter ran out.
-                if _trace_pump_remaining_ticks <= 0:
-                    _trace_pump_armed = False
+                _phase_trace(
+                    'gow.pump.render.begin',
+                    f'hwnd={getattr(w, "_hwnd", 0)} dirty={int(bool(w._dirty))}',
+                )
+            # Per-window lock: workers can interleave between windows.
+            try:
+                with _wgl_serialize_lock:
+                    w._render_once(t)
+            except Exception:
+                # Per-window render failure shouldn't kill the pump.
+                pass
+            if armed:
+                _phase_trace(
+                    'gow.pump.render.end',
+                    f'hwnd={getattr(w, "_hwnd", 0)}',
+                )
+        if armed:
+            _phase_trace('gow.pump.tick.end')
+            if _trace_pump_remaining_ticks <= 0:
+                _trace_pump_armed = False
         if armed_at_start or cb_fired_this_tick or armed:
             _phase_trace('gow.pump.lock.released')
         self._last_tick_t = now
@@ -1028,6 +1029,11 @@ class BgraPresenter:
         self._frame_h = 0
         self._dirty = False
         self._alpha = 1.0
+        # v2.3.12: id of the bytes object last uploaded to the GPU texture.
+        # Used to dedup glTexSubImage2D when alpha-only ticks trigger a
+        # redraw without changing frame content.
+        self._last_uploaded_id = 0
+        self._frame_dirty_id = 0
 
     def set_alpha(self, alpha: float) -> None:
         """Optional global alpha multiplier (0..1) applied during
@@ -1041,9 +1047,16 @@ class BgraPresenter:
         Safe to call from any thread, but typically called from the
         same thread as ``render`` (Tk main).
         """
+        # v2.3.12: only mark dirty if the frame actually changed.
+        # This prevents alpha-only fade ticks (which also call
+        # request_redraw) from re-uploading identical bytes.
+        prev_id = id(self._frame_bytes) if self._frame_bytes is not None else 0
+        new_id = id(bgra) if bgra is not None else 0
         self._frame_bytes = bgra
         self._frame_w = int(w)
         self._frame_h = int(h)
+        if new_id != prev_id:
+            self._frame_dirty_id = new_id
         self._dirty = True
 
     def clear(self) -> None:
@@ -1090,19 +1103,26 @@ class BgraPresenter:
                 self._tex = ctx.texture((w, h), 4, bgra)
                 self._tex_w = w
                 self._tex_h = h
+                self._last_uploaded_id = id(bgra)
             else:
-                # Fast path: realloc-free upload of BGRA bytes.
-                try:
-                    self._tex.write(bgra)
-                except Exception:
-                    # Size mismatch fallback — recreate texture.
+                # v2.3.12: skip glTexSubImage2D upload when the same
+                # bytes object is already on the GPU. Alpha-only ticks
+                # (fisheye fade, menu fade) re-render but keep frame
+                # identity, saving ~200–800 KB CPU→GPU copy per panel.
+                cur_id = id(bgra)
+                if cur_id != getattr(self, '_last_uploaded_id', 0):
                     try:
-                        self._tex.release()
+                        self._tex.write(bgra)
+                        self._last_uploaded_id = cur_id
                     except Exception:
-                        pass
-                    self._tex = ctx.texture((w, h), 4, bgra)
-                    self._tex_w = w
-                    self._tex_h = h
+                        try:
+                            self._tex.release()
+                        except Exception:
+                            pass
+                        self._tex = ctx.texture((w, h), 4, bgra)
+                        self._tex_w = w
+                        self._tex_h = h
+                        self._last_uploaded_id = cur_id
             self._tex.use(location=0)
             self._vao.render(_moderngl.TRIANGLE_STRIP)  # type: ignore[union-attr]
         # If no frame staged: ctx.clear in GpuOverlayWindow already
