@@ -620,7 +620,10 @@ class TcpReassembler:
             # 初始化
             if self._next_seq == -1:
                 pkt_size = struct.unpack_from('>I', data, 0)[0] if len(data) >= 4 else 0
-                if pkt_size < 6 or pkt_size > 999999:
+                # v2.3.9: 与 SRDC / SRDPS 一致, 使用 0x0FFFFF (1048575) 作为
+                # 合法帧大小上限. 拥挤地图 SyncNearEntities / SyncContainerData
+                # 可超过 1MB, 原先 999999 限制会丢帧.
+                if pkt_size < 6 or pkt_size > 0x0FFFFF:
                     return  # 不像有效游戏帧开头
                 self._next_seq = seq
 
@@ -633,13 +636,19 @@ class TcpReassembler:
             self._cache[seq] = data
 
             # 顺序拼接
+            # v2.3.9: 改为本地 list + 一次 join / extend, 避免 busy stream
+            # 下 bytes += chunk 触发的 O(n²) 累积复制 (大地图 SyncNearEntities
+            # 尤其明显, 会拖慢解析并导致后续段排队丢帧).
             consumed = False
+            _new_chunks = []
             while self._next_seq in self._cache:
                 chunk = self._cache.pop(self._next_seq)
-                self._buf += chunk
+                _new_chunks.append(chunk)
                 self._next_seq = (self._next_seq + len(chunk)) & 0xFFFFFFFF
                 self._last_t = now
                 consumed = True
+            if _new_chunks:
+                self._buf = self._buf + b''.join(_new_chunks) if self._buf else b''.join(_new_chunks)
 
             # ── TCP 缺段跳跃 (参考 C# SRDPS ForceResyncTo) ──
             # 当 pcap 丢失一个段时, _next_seq 卡住, 后续段全进缓存.
@@ -664,17 +673,23 @@ class TcpReassembler:
                     self._next_seq = min_seq
                     self._gap_since = 0.0
                     self.stats['gap_skips'] += 1
-                    # 重新消费缓存
+                    # 重新消费缓存 (批量 join, 同上避免 O(n²))
+                    _skip_chunks = []
                     while self._next_seq in self._cache:
                         chunk = self._cache.pop(self._next_seq)
-                        self._buf += chunk
+                        _skip_chunks.append(chunk)
                         self._next_seq = (self._next_seq + len(chunk)) & 0xFFFFFFFF
                         self._last_t = now
+                    if _skip_chunks:
+                        self._buf = b''.join(_skip_chunks)
             else:
                 self._gap_since = 0.0
 
             # 缓存过大保护
-            if len(self._cache) > 300:
+            # v2.3.9: 提高到 2000 段. 大地图拥挤时单次 SyncNearEntities 可
+            # 拆成数百 TCP 段, 原先 300 阈值会在 gap skip 尚未触发前就
+            # 清空重置, 导致几秒数据全部丢失.
+            if len(self._cache) > 2000:
                 logger.warning(f'[Capture] TCP cache overflow ({len(self._cache)}), reset')
                 self._next_seq = -1
                 self._cache.clear()
@@ -687,46 +702,75 @@ class TcpReassembler:
         self._extract_frames()
 
     def _extract_frames(self):
-        """从 _buf 中切出完整 [4B-size] 帧"""
+        """从 _buf 中切出完整 [4B-size] 帧
+
+        v2.3.9: 使用 offset 指针一次性前进, 一批抽取完所有可用帧, 最后才切片,
+        避免 busy map 下每帧一次 self._buf[pkt_size:] 的 O(n) 复制.
+        """
         while True:
+            frames: list = []
             with self._lock:
-                if len(self._buf) < 6:
-                    break
-                pkt_size = struct.unpack_from('>I', self._buf, 0)[0]
-                if pkt_size < 6 or pkt_size > 999999:
-                    # 帧头损坏 — 尝试扫描下一个有效帧头
+                buf = self._buf
+                buf_len = len(buf)
+                offset = 0
+                need_realign = False
+                bad_size = 0
+                while buf_len - offset >= 6:
+                    pkt_size = struct.unpack_from('>I', buf, offset)[0]
+                    if pkt_size < 6 or pkt_size > 0x0FFFFF:
+                        need_realign = True
+                        bad_size = pkt_size
+                        break
+                    if buf_len - offset < pkt_size:
+                        break  # 不够一帧
+                    frames.append(bytes(buf[offset:offset + pkt_size]))
+                    offset += pkt_size
+                # 统一前进一次
+                if offset > 0:
+                    self._buf = buf[offset:]
+                    buf = self._buf
+                    buf_len = len(buf)
+                if need_realign:
+                    # 帧头损坏 — 扫描下一个有效帧头
                     found = False
-                    for i in range(1, min(len(self._buf) - 5, 65536)):
-                        sz = struct.unpack_from('>I', self._buf, i)[0]
-                        if 6 <= sz <= 999999:
-                            tp = struct.unpack_from('>H', self._buf, i + 4)[0]
-                            msg = tp & 0x7FFF
-                            if msg in (2, 3, 4, 5, 6):
-                                logger.warning(
-                                    f'[Capture] 帧对齐修复: 跳过 {i} 字节 '
-                                    f'(bad pkt_size={pkt_size})'
-                                )
-                                self._buf = self._buf[i:]
-                                found = True
-                                break
-                    if not found:
-                        logger.error(f'[Capture] 无效帧长度 {pkt_size}, 清空流')
+                    scan_end = min(buf_len - 5, 65536)
+                    _buf_mv = memoryview(buf)
+                    try:
+                        for i in range(1, scan_end):
+                            sz = struct.unpack_from('>I', _buf_mv, i)[0]
+                            if 6 <= sz <= 0x0FFFFF:
+                                tp = struct.unpack_from('>H', _buf_mv, i + 4)[0]
+                                msg = tp & 0x7FFF
+                                if msg in (2, 3, 4, 5, 6):
+                                    logger.warning(
+                                        f'[Capture] 帧对齐修复: 跳过 {i} 字节 '
+                                        f'(bad pkt_size={bad_size})'
+                                    )
+                                    found = True
+                                    realign_i = i
+                                    break
+                    finally:
+                        _buf_mv.release()
+                    if found:
+                        self._buf = self._buf[realign_i:]
+                    else:
+                        logger.error(f'[Capture] 无效帧长度 {bad_size}, 清空流')
                         self._buf = b''
                         self._next_seq = -1
                         self._cache.clear()
-                    break
-                if len(self._buf) < pkt_size:
-                    break  # 不够一帧
-                frame = self._buf[:pkt_size]
-                self._buf = self._buf[pkt_size:]
 
             # 回调在锁外执行
-            try:
-                self._on_pkt(frame)
-                self.stats['complete_game_frames'] += 1
-            except Exception as e:
-                import traceback
-                logger.error(f'[Capture] 帧处理错误: {e}\n{traceback.format_exc()}')
+            for frame in frames:
+                try:
+                    self._on_pkt(frame)
+                    self.stats['complete_game_frames'] += 1
+                except Exception as e:
+                    import traceback
+                    logger.error(f'[Capture] 帧处理错误: {e}\n{traceback.format_exc()}')
+
+            # 若本轮未取出任何帧且无需重新对齐, 退出循环等待更多数据
+            if not frames and not need_realign:
+                break
 
 
 # ═══════════════════════════════════════════════
