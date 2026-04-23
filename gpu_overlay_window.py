@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import queue
 import sys
 import threading
 import time
@@ -299,30 +300,92 @@ def _show_no_activate(hwnd: int) -> None:
 
 
 # ── GlfwPump ────────────────────────────────────────────────────────────────
-class GlfwPump:
-    """Single shared ``glfw.poll_events`` driver, ticked from a Tk
-    ``after`` loop. One pump per process. Owns a registry of visible
-    overlay windows and renders each one in order on every tick.
+class _PumpCmd:
+    """Command queued from any thread to be executed on the pump thread.
 
-    The pump only runs while at least one window is visible; when the
-    last window hides, the after-loop self-terminates so we don't spin
-    in the background.
+    The pump thread drains its command queue between poll_events and
+    render. Commands carry a callable (with bound args) and an optional
+    Event for blocking callers; result/exception are stored on the
+    instance so the caller can re-raise after wait().
+    """
+    __slots__ = ('fn', 'done', 'result', 'exc')
+
+    def __init__(self, fn: Callable[[], Any], blocking: bool):
+        self.fn = fn
+        self.done: Optional[threading.Event] = (
+            threading.Event() if blocking else None)
+        self.result: Any = None
+        self.exc: Optional[BaseException] = None
+
+
+class GlfwPump:
+    """Dedicated GLFW pump running on its own thread (v2.3.14).
+
+    Previously the pump was driven by ``root.after`` on the Tk main
+    thread, which meant every GL upload + render + swap_buffers for N
+    visible overlay windows was serialized on the same thread that
+    runs the SAO scheduler, HP STA tween, SkillFX scheduler tick, etc.
+    Heavy multi-panel combat scenes blocked Tk for tens of milliseconds
+    per frame.
+    
+    v2.3.14: pump now owns a single ``threading.Thread`` that:
+    - calls ``glfw.init()`` from this thread (required: WGL contexts
+      have thread affinity)
+    - drains a ``queue.Queue`` of commands (window create/destroy/
+      geometry/show/hide/input-callback installation) so all GLFW calls
+      happen on this same thread
+    - pumps Win32 messages for all GLFW hwnds + renders dirty windows
+    - sleeps on a ``threading.Event`` (``_wake``) when idle so
+      ``request_redraw`` from any thread reacts immediately
+
+    Tk main thread → pump: enqueue commands via ``exec_on_pump`` /
+    fire-and-forget via ``post_cmd``.
+    Pump → Tk main thread: marshal user callbacks via ``post_to_tk``
+    (uses ``root.after(0, fn)``).
     """
 
     def __init__(self, root: Any):
         self._root = root
         self._lock = threading.Lock()
         self._windows: List['GpuOverlayWindow'] = []
-        self._after_id: Optional[str] = None
-        self._running = False
         self._tick_hz = 60
         self._tick_ms = max(1, int(round(1000.0 / self._tick_hz)))
+        self._idle_ms = 60
         self._t0 = time.perf_counter()
-        self._last_tick_t = self._t0
-        # Init GLFW exactly once.
         self._inited = False
+        # Thread + sync primitives.
+        self._thread: Optional[threading.Thread] = None
+        self._wake = threading.Event()
+        self._cmd_q: 'queue.Queue[_PumpCmd]' = queue.Queue()
+        self._running = False
+        self._stopping = False
+        # Tk-side dispatch queue (v2.3.14): pump → Tk callbacks via
+        # ``post_to_tk`` are appended here and drained by
+        # ``_drain_tk_q`` running under Tk's after loop. Direct
+        # ``root.after(0, ...)`` from a non-Tk thread is NOT
+        # thread-safe (Tcl_Eval re-entrancy → fast crash).
+        self._tk_q: 'queue.Queue[Callable[[], Any]]' = queue.Queue()
+        self._tk_poller_id: Optional[str] = None
+        self._tk_poller_ms = 8  # ~125 Hz dispatch latency
+        self._start_tk_poller()
+
+    # ── Thread lifecycle ────────────────────────────────────────────
+    def _start_thread(self) -> None:
+        """Lazy-start the pump thread. Idempotent + thread-safe."""
+        if self._running:
+            return
+        with self._lock:
+            if self._running:
+                return
+            if self._stopping:
+                return
+            self._running = True
+            self._thread = threading.Thread(
+                target=self._run, name='GlfwPump', daemon=True)
+            self._thread.start()
 
     def _ensure_init(self) -> None:
+        """Initialize GLFW. MUST be called from the pump thread."""
         if self._inited:
             return
         if not _try_imports():
@@ -332,11 +395,89 @@ class GlfwPump:
             raise RuntimeError('glfw.init() failed')
         self._inited = True
 
+    # ── Command marshaling (Tk → pump) ─────────────────────────────
+    def exec_on_pump(self, fn: Callable[[], Any], timeout: float = 5.0) -> Any:
+        """Run ``fn`` on the pump thread, blocking the caller until
+        completion or timeout. Re-raises any exception ``fn`` produced.
+        Safe from any thread, including the pump thread itself (in
+        which case ``fn`` is invoked inline).
+        """
+        if threading.current_thread() is self._thread:
+            return fn()
+        self._start_thread()
+        cmd = _PumpCmd(fn, blocking=True)
+        self._cmd_q.put(cmd)
+        self._wake.set()
+        if not cmd.done.wait(timeout):  # type: ignore[union-attr]
+            raise TimeoutError(f'pump cmd timed out after {timeout}s')
+        if cmd.exc is not None:
+            raise cmd.exc
+        return cmd.result
+
+    def post_cmd(self, fn: Callable[[], Any]) -> None:
+        """Fire-and-forget: queue ``fn`` to run on the pump thread."""
+        if threading.current_thread() is self._thread:
+            try:
+                fn()
+            except Exception:
+                pass
+            return
+        self._start_thread()
+        cmd = _PumpCmd(fn, blocking=False)
+        self._cmd_q.put(cmd)
+        self._wake.set()
+
+    def post_to_tk(self, fn: Callable[[], Any]) -> None:
+        """Marshal ``fn`` to the Tk main thread.
+
+        Pushes onto a thread-safe queue drained by ``_drain_tk_q``
+        running under Tk's ``after`` loop. Direct ``root.after(0, fn)``
+        from a non-Tk thread is NOT thread-safe (Tcl interp Eval is
+        single-threaded; cross-thread calls cause hard crashes / NULL
+        tstate). Latency: ``_tk_poller_ms`` (~8ms typical).
+        """
+        self._tk_q.put(fn)
+
+    def _start_tk_poller(self) -> None:
+        """Schedule the Tk-main-thread queue drainer. Idempotent.
+        MUST be called from the Tk thread (it is — pump __init__ runs
+        on Tk thread via ``get_glfw_pump``)."""
+        if self._tk_poller_id is not None:
+            return
+        try:
+            self._tk_poller_id = self._root.after(
+                self._tk_poller_ms, self._drain_tk_q)
+        except Exception:
+            self._tk_poller_id = None
+
+    def _drain_tk_q(self) -> None:
+        """Run all pending Tk callbacks queued by ``post_to_tk``.
+        Bounded per tick so a callback storm cannot starve other Tk
+        events."""
+        self._tk_poller_id = None
+        for _ in range(64):
+            try:
+                fn = self._tk_q.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                fn()
+            except Exception:
+                pass
+        if not self._stopping:
+            try:
+                self._tk_poller_id = self._root.after(
+                    self._tk_poller_ms, self._drain_tk_q)
+            except Exception:
+                self._tk_poller_id = None
+
+    # ── Window registry ────────────────────────────────────────────
     def register(self, win: 'GpuOverlayWindow') -> None:
         with self._lock:
             if win not in self._windows:
                 self._windows.append(win)
-        self._kick()
+        self._wake.set()
+        self._start_thread()
 
     def unregister(self, win: 'GpuOverlayWindow') -> None:
         with self._lock:
@@ -344,144 +485,131 @@ class GlfwPump:
                 self._windows.remove(win)
             except ValueError:
                 pass
-
-    def _kick(self) -> None:
-        if self._running:
-            return
-        self._running = True
-        # Schedule first tick immediately. After-loop handles rescheduling.
-        self._after_id = self._root.after(0, self._tick)
+        self._wake.set()
 
     def kick_redraw(self) -> None:
-        """Wake the pump out of its idle (16 Hz) cadence so a freshly
-        marked-dirty window is rendered on the very next event-loop
-        turn instead of waiting up to ~60 ms. Safe to call from the Tk
-        main thread only.
-
-        v2.3.12: coalesce — if a tick was recently scheduled (< tick_ms
-        since last tick), skip reschedule. Avoids N cancel+after(0)
-        round-trips when N panels call request_redraw in the same frame.
+        """Wake the pump immediately so a freshly marked-dirty window
+        is rendered on the next loop iteration. Safe from any thread.
         """
-        if not self._running:
-            self._kick()
-            return
-        if self._after_id is None:
-            return
-        # Coalesce: if we're already in fast (dirty) cadence, the next
-        # tick will come within _tick_ms ms. No need to cancel/reschedule.
+        self._wake.set()
+
+    # ── Pump loop body ─────────────────────────────────────────────
+    def _drain_commands(self) -> None:
+        """Run all queued commands on the pump thread."""
+        while True:
+            try:
+                cmd = self._cmd_q.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                cmd.result = cmd.fn()
+            except BaseException as exc:  # noqa: BLE001 - propagate verbatim
+                cmd.exc = exc
+            if cmd.done is not None:
+                cmd.done.set()
+
+    def _run(self) -> None:
+        """Pump thread entry point."""
         try:
-            since_last = (time.perf_counter() - self._last_tick_t) * 1000.0
-        except Exception:
-            since_last = 0.0
-        if since_last < self._tick_ms:
-            return  # already scheduled imminently
-        try:
-            self._root.after_cancel(self._after_id)
-        except Exception:
-            return
-        try:
-            self._after_id = self._root.after(0, self._tick)
+            self._ensure_init()
         except Exception:
             self._running = False
-
-    def _tick(self) -> None:
-        self._after_id = None
-        if not self._running:
             return
-        # v2.3.12: Split the global WGL lock into (a) a single hold
-        # around poll_events (still needs to serialize with worker
-        # contexts because PeekMessage can dispatch WM_PAINT etc.) and
-        # (b) per-window holds around each _render_once. This releases
-        # the lock between windows so worker threads (fisheye GL ctx,
-        # player panel compose worker, etc.) can run during the pump
-        # tick instead of queuing up behind all N windows. RLock is
-        # reentrant so per-window render's own GL acquisition nests
-        # safely inside the outer hold.
-        global _trace_pump_armed, _trace_pump_remaining_ticks
-        if _trace_pump_remaining_ticks > 0:
-            _trace_pump_armed = True
-            _trace_pump_remaining_ticks -= 1
-        armed_at_start = _trace_pump_armed
-        if armed_at_start:
-            _phase_trace('gow.pump.poll.begin', f'remaining={_trace_pump_remaining_ticks}')
-        # Snapshot hwnds first so we only pump messages for OUR
-        # windows (Tk's WM_TIMER must NOT be dispatched here or
-        # we re-enter _tick → tstate corruption → fast-fail).
-        with self._lock:
-            hwnds_for_pump = [w._hwnd for w in self._windows
-                              if w._hwnd and w._visible]
-        with _wgl_serialize_lock:
+        while self._running:
+            # Drain any pending commands (window create/destroy/etc.).
+            self._drain_commands()
+            global _trace_pump_armed, _trace_pump_remaining_ticks
+            if _trace_pump_remaining_ticks > 0:
+                _trace_pump_armed = True
+                _trace_pump_remaining_ticks -= 1
+            armed_at_start = _trace_pump_armed
+            if armed_at_start:
+                _phase_trace('gow.pump.poll.begin',
+                             f'remaining={_trace_pump_remaining_ticks}')
+            with self._lock:
+                hwnds_for_pump = [w._hwnd for w in self._windows
+                                  if w._hwnd and w._visible]
             try:
                 _pump_glfw_messages(hwnds_for_pump)
             except Exception:
                 pass
-        # Re-read in case _on_mouse_button armed it during poll.
-        armed = _trace_pump_armed
-        if armed or armed_at_start:
-            _phase_trace('gow.pump.poll.end', f'armed={int(armed)} start={int(armed_at_start)}')
-        cb_fired_this_tick = (not armed_at_start) and armed
-        now = time.perf_counter()
-        t = now - self._t0
-        with self._lock:
-            wins = list(self._windows)
-        any_visible = False
-        any_dirty = False
-        for w in wins:
-            if not w._visible:
-                continue
-            any_visible = True
-            if w._dirty:
-                any_dirty = True
+            armed = _trace_pump_armed
+            if armed or armed_at_start:
+                _phase_trace('gow.pump.poll.end',
+                             f'armed={int(armed)} start={int(armed_at_start)}')
+            cb_fired_this_tick = (not armed_at_start) and armed
+            now = time.perf_counter()
+            t = now - self._t0
+            with self._lock:
+                wins = list(self._windows)
+            any_visible = False
+            any_dirty = False
+            for w in wins:
+                if not w._visible:
+                    continue
+                any_visible = True
+                if w._dirty:
+                    any_dirty = True
+                if armed:
+                    _phase_trace(
+                        'gow.pump.render.begin',
+                        f'hwnd={getattr(w, "_hwnd", 0)} '
+                        f'dirty={int(bool(w._dirty))}',
+                    )
+                # Pump owns the WGL context but worker threads may have
+                # private moderngl contexts; serialize against them.
+                try:
+                    with _wgl_serialize_lock:
+                        w._render_once(t)
+                except Exception:
+                    pass
+                if armed:
+                    _phase_trace(
+                        'gow.pump.render.end',
+                        f'hwnd={getattr(w, "_hwnd", 0)}',
+                    )
             if armed:
-                _phase_trace(
-                    'gow.pump.render.begin',
-                    f'hwnd={getattr(w, "_hwnd", 0)} dirty={int(bool(w._dirty))}',
-                )
-            # Per-window lock: workers can interleave between windows.
+                _phase_trace('gow.pump.tick.end')
+                if _trace_pump_remaining_ticks <= 0:
+                    _trace_pump_armed = False
+            if armed_at_start or cb_fired_this_tick or armed:
+                _phase_trace('gow.pump.lock.released')
+            # Wait for next tick (or wake) — animating panels run at
+            # tick_hz, idle pumps at ~16 Hz.
+            target_ms = self._tick_ms if any_dirty else self._idle_ms
+            if not any_visible:
+                # Nobody to draw — long idle until a register/wake.
+                target_ms = 250
+            elapsed_ms = (time.perf_counter() - now) * 1000.0
+            wait_s = max(0.001, (target_ms - elapsed_ms) / 1000.0)
+            self._wake.wait(timeout=wait_s)
+            self._wake.clear()
+        # Loop exited — drain any pending commands so blocking callers
+        # don't hang during shutdown, then terminate GLFW.
+        self._drain_commands()
+        if self._inited:
             try:
-                with _wgl_serialize_lock:
-                    w._render_once(t)
+                _glfw.terminate()  # type: ignore[union-attr]
             except Exception:
-                # Per-window render failure shouldn't kill the pump.
                 pass
-            if armed:
-                _phase_trace(
-                    'gow.pump.render.end',
-                    f'hwnd={getattr(w, "_hwnd", 0)}',
-                )
-        if armed:
-            _phase_trace('gow.pump.tick.end')
-            if _trace_pump_remaining_ticks <= 0:
-                _trace_pump_armed = False
-        if armed_at_start or cb_fired_this_tick or armed:
-            _phase_trace('gow.pump.lock.released')
-        self._last_tick_t = now
-        if not any_visible:
-            # Nobody to draw → suspend the loop until something registers.
-            self._running = False
-            return
-        # v2.3.0: when nothing was dirty this tick, fall back to a slower
-        # poll cadence (~16 Hz). Painters that have a new frame ready
-        # call request_redraw() which sets _dirty=True; we still want to
-        # respond promptly, so we keep polling — just not at 60 Hz.
-        # poll_events() on Windows costs ~5-30 µs so this is essentially
-        # free at 16 Hz, but cuts pump CPU by ~75 % when idle.
-        target_ms = self._tick_ms if any_dirty else 60
-        elapsed_ms = (time.perf_counter() - now) * 1000.0
-        delay_ms = max(1, int(round(target_ms - elapsed_ms)))
-        try:
-            self._after_id = self._root.after(delay_ms, self._tick)
-        except Exception:
-            self._running = False
+            self._inited = False
 
     def shutdown(self) -> None:
-        self._running = False
-        if self._after_id is not None:
+        """Stop the pump thread and tear down all windows.
+
+        Must be called from a thread other than the pump thread (e.g.
+        Tk main during application shutdown). Marshals destruction of
+        every registered window onto the pump thread first, then signals
+        the pump to exit and joins.
+        """
+        self._stopping = True
+        # Cancel Tk-side poller (we're on Tk main during shutdown).
+        if self._tk_poller_id is not None:
             try:
-                self._root.after_cancel(self._after_id)
+                self._root.after_cancel(self._tk_poller_id)
             except Exception:
                 pass
-            self._after_id = None
+            self._tk_poller_id = None
         with self._lock:
             wins = list(self._windows)
             self._windows.clear()
@@ -490,12 +618,15 @@ class GlfwPump:
                 w.destroy()
             except Exception:
                 pass
-        if self._inited:
+        self._running = False
+        self._wake.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
             try:
-                _glfw.terminate()  # type: ignore[union-attr]
+                thread.join(timeout=2.0)
             except Exception:
                 pass
-            self._inited = False
+        self._thread = None
 
 
 _pump_lock = threading.Lock()
@@ -587,10 +718,25 @@ class GpuOverlayWindow:
     # ---- lifecycle ----
 
     def _create(self) -> None:
+        """Marshal window creation to the pump thread (v2.3.14).
+
+        All GLFW calls have thread affinity to the pump thread; this
+        method blocks the caller until creation completes (or raises).
+        Safe to call from Tk main; if already on pump thread, runs
+        inline.
+        """
         if self._created:
             return
         if not gpu_overlay_creation_allowed():
             raise RuntimeError('gpu overlay creation suspended')
+        self._pump.exec_on_pump(self._create_on_pump, timeout=10.0)
+
+    def _create_on_pump(self) -> None:
+        """Pump-thread half of _create. Wraps WGC pause/resume around
+        the GIL-releasing ctypes calls so the WGC pyo3 callback can't
+        race ``_PyThreadState_Current``."""
+        if self._created:
+            return
         self._pump._ensure_init()
         # ============================================================
         # WGC pyo3 race avoidance — pause for the WHOLE _create() body.
@@ -609,17 +755,6 @@ class GpuOverlayWindow:
         # sometimes runs with ``_PyThreadState_Current == NULL`` — the
         # very next ``Py_BEGIN_ALLOW_THREADS`` checkpoint then aborts
         # with "PyEval_RestoreThread: NULL tstate" (fatal).
-        #
-        # User-visible pattern: clicking a child-row that opens a NEW
-        # overlay window (HP / DPS / BOSS / fisheye panel) crashes
-        # because that ``cmd()`` synchronously runs ``_create()`` here
-        # → moderngl init → long GIL release → WGC race fires.
-        # Clicking a top-level menu icon does NOT crash because it only
-        # toggles child_rows visibility — no new GLFW window is built.
-        #
-        # Fix: stop WGC for the whole _create() (it's idempotent / fast
-        # to restart), so no pyo3 callback can fire while we're inside
-        # any of these foreign calls.
         try:
             import gpu_capture as _gc
         except Exception:
@@ -724,17 +859,35 @@ class GpuOverlayWindow:
         self._show_pending = False
         self._shown = False
         if self._win is not None:
-            try:
-                _glfw.hide_window(self._win)  # type: ignore[union-attr]
-            except Exception:
-                pass
+            win = self._win
+            self._pump.post_cmd(lambda: self._safe_hide_window(win))
         self._pump.unregister(self)
+
+    @staticmethod
+    def _safe_hide_window(win: Any) -> None:
+        try:
+            _glfw.hide_window(win)  # type: ignore[union-attr]
+        except Exception:
+            pass
 
     def destroy(self) -> None:
         self._visible = False
         self._show_pending = False
         self._shown = False
         self._pump.unregister(self)
+        if self._win is None:
+            return
+        # Marshal teardown to pump thread; it owns the GL context.
+        try:
+            self._pump.exec_on_pump(self._destroy_on_pump, timeout=5.0)
+        except Exception:
+            # Best-effort: drop refs so GC can reclaim.
+            self._win = None
+            self._hwnd = 0
+            self._created = False
+            self._ctx = None
+
+    def _destroy_on_pump(self) -> None:
         if self._win is None:
             return
         with _wgl_serialize_lock:
@@ -767,13 +920,18 @@ class GpuOverlayWindow:
         nw, nh = max(1, int(w)), max(1, int(h))
         size_changed = (nw, nh) != (self._w, self._h)
         self._w, self._h = nw, nh
-        if self._win is not None:
-            try:
-                _glfw.set_window_pos(self._win, self._x, self._y)  # type: ignore[union-attr]
-                if size_changed:
-                    _glfw.set_window_size(self._win, self._w, self._h)  # type: ignore[union-attr]
-            except Exception:
-                pass
+        win = self._win
+        if win is not None:
+            new_x, new_y, new_w, new_h = self._x, self._y, self._w, self._h
+
+            def _apply() -> None:
+                try:
+                    _glfw.set_window_pos(win, new_x, new_y)  # type: ignore[union-attr]
+                    if size_changed:
+                        _glfw.set_window_size(win, new_w, new_h)  # type: ignore[union-attr]
+                except Exception:
+                    pass
+            self._pump.post_cmd(_apply)
         self._dirty = True
 
     def set_render_fn(self, fn: Callable[[Any, float], None]) -> None:
@@ -790,21 +948,20 @@ class GpuOverlayWindow:
         """Attach optional GLFW input callbacks.
 
         Used by interactive GPU overlays such as the SAO menu bar. The
-        callbacks run on the Tk main thread because the pump drives
-        ``glfw.poll_events()`` from ``root.after``.
+        GLFW callbacks fire on the pump thread and are marshaled to
+        the Tk main thread before user code runs (see ``_on_*`` below).
         """
         self._cursor_pos_fn = cursor_pos_fn
         self._cursor_leave_fn = cursor_leave_fn
         self._mouse_button_fn = mouse_button_fn
         self._scroll_fn = scroll_fn
-        self._install_input_callbacks()
+        if self._win is not None:
+            self._pump.post_cmd(self._install_input_callbacks)
 
     def request_redraw(self) -> None:
         """Thread-safe: mark dirty so next pump tick draws even if the
         scheduler has been throttling idle frames."""
         self._dirty = True
-        # Wake pump if it has fallen into the 16 Hz idle cadence.
-        # kick_redraw is a no-op when a tick is already imminent.
         try:
             self._pump.kick_redraw()
         except Exception:
@@ -845,11 +1002,9 @@ class GpuOverlayWindow:
             return
         if _trace_pump_armed:
             _phase_trace('gow.cursor.pos.begin', f'hwnd={self._hwnd} x={x:.0f} y={y:.0f}')
-        try:
-            cb(float(x), float(y))
-        except Exception:
-            if _trace_pump_armed:
-                _phase_trace('gow.cursor.pos.exc', f'hwnd={self._hwnd}')
+        # Marshal to Tk main: cb may touch tk widgets.
+        fx, fy = float(x), float(y)
+        self._pump.post_to_tk(lambda: cb(fx, fy))
         if _trace_pump_armed:
             _phase_trace('gow.cursor.pos.end', f'hwnd={self._hwnd}')
 
@@ -861,32 +1016,25 @@ class GpuOverlayWindow:
         cb = self._cursor_leave_fn
         if cb is None:
             return
-        try:
-            cb()
-        except Exception:
-            pass
+        self._pump.post_to_tk(cb)
 
     def _on_mouse_button(self, _win, button: int, action: int, mods: int) -> None:
         cb = self._mouse_button_fn
         if cb is None:
             return
+        # _cursor_pos() calls _glfw.get_cursor_pos — must run on pump
+        # thread, which is exactly where this callback already fires.
         x, y = self._cursor_pos()
-        # Arm fine-grained tracing for the rest of THIS pump tick so we
-        # can see exactly which line crashes when the post-click message
-        # dispatch / render path corrupts main-thread tstate.
         global _trace_pump_armed, _trace_pump_remaining_ticks
         _trace_pump_armed = True
-        # Also bump remaining so the next few ticks emit markers — the
-        # crash may be deferred to a tick AFTER the cb returns.
         _trace_pump_remaining_ticks = 6
         _phase_trace(
             'gow.mouse.cb.begin',
             f'hwnd={self._hwnd} btn={button} act={action} x={x:.1f} y={y:.1f}',
         )
-        try:
-            cb(int(button), int(action), int(mods), x, y)
-        except Exception:
-            _phase_trace('gow.mouse.cb.exc', f'hwnd={self._hwnd}')
+        b, a, m = int(button), int(action), int(mods)
+        # Marshal to Tk main: user click handlers touch widgets.
+        self._pump.post_to_tk(lambda: cb(b, a, m, x, y))
         _phase_trace('gow.mouse.cb.return', f'hwnd={self._hwnd}')
 
     def _on_scroll(self, _win, xoff: float, yoff: float) -> None:
@@ -895,10 +1043,8 @@ class GpuOverlayWindow:
         cb = self._scroll_fn
         if cb is None:
             return
-        try:
-            cb(float(xoff), float(yoff))
-        except Exception:
-            pass
+        fx, fy = float(xoff), float(yoff)
+        self._pump.post_to_tk(lambda: cb(fx, fy))
 
     # ---- internal ----
 
