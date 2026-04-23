@@ -737,20 +737,25 @@ class GpuOverlayWindow:
         self._pump.unregister(self)
         if self._win is None:
             return
-        try:
-            _glfw.make_context_current(self._win)  # type: ignore[union-attr]
-        except Exception:
-            pass
-        if self._ctx is not None:
+        with _wgl_serialize_lock:
             try:
-                self._ctx.release()
+                _glfw.make_context_current(self._win)  # type: ignore[union-attr]
             except Exception:
                 pass
-            self._ctx = None
-        try:
-            _glfw.destroy_window(self._win)  # type: ignore[union-attr]
-        except Exception:
-            pass
+            if self._ctx is not None:
+                try:
+                    self._ctx.release()
+                except Exception:
+                    pass
+                self._ctx = None
+            try:
+                _glfw.make_context_current(None)  # type: ignore[union-attr]
+            except Exception:
+                pass
+            try:
+                _glfw.destroy_window(self._win)  # type: ignore[union-attr]
+            except Exception:
+                pass
         self._win = None
         self._hwnd = 0
         self._created = False

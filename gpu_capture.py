@@ -39,7 +39,7 @@ import ctypes
 import os
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -54,6 +54,15 @@ class _RECT(ctypes.Structure):
 
 class _POINT(ctypes.Structure):
     _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
+
+
+_MONITORENUMPROC = ctypes.WINFUNCTYPE(
+    ctypes.c_int,
+    ctypes.c_ulonglong,
+    ctypes.c_ulonglong,
+    ctypes.POINTER(_RECT),
+    ctypes.c_longlong,
+)
 
 
 def _client_inset(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
@@ -103,6 +112,7 @@ _frame_count: int = 0
 # triggers the "PyEval_RestoreThread: NULL tstate" fatal crash).
 _session_paused: bool = False
 _resume_hwnd: int = 0
+_dxgi_local = threading.local()
 
 
 def _import_wgc():
@@ -113,6 +123,139 @@ def _import_wgc():
         return windows_capture
     except Exception:
         return None
+
+
+def _get_dxgi_state() -> Tuple[Dict[int, object], Dict[int, Tuple[float, np.ndarray]]]:
+    sessions = getattr(_dxgi_local, 'sessions', None)
+    if sessions is None:
+        sessions = {}
+        _dxgi_local.sessions = sessions
+    last_frames = getattr(_dxgi_local, 'last_frames', None)
+    if last_frames is None:
+        last_frames = {}
+        _dxgi_local.last_frames = last_frames
+    return sessions, last_frames
+
+
+def list_monitors() -> List[Dict[str, int]]:
+    """Return monitors in EnumDisplayMonitors order."""
+    monitors: List[Dict[str, int]] = []
+
+    @_MONITORENUMPROC
+    def _callback(hmonitor, _hdc, rect_ptr, _lparam):
+        rect = rect_ptr.contents
+        monitors.append({
+            'index': len(monitors),
+            'left': int(rect.left),
+            'top': int(rect.top),
+            'right': int(rect.right),
+            'bottom': int(rect.bottom),
+            'width': int(rect.right - rect.left),
+            'height': int(rect.bottom - rect.top),
+            'hmonitor': int(hmonitor),
+        })
+        return 1
+
+    try:
+        _user32.EnumDisplayMonitors(0, 0, _callback, 0)
+    except Exception:
+        return []
+    return monitors
+
+
+def _monitor_from_point(x: int, y: int) -> Optional[Dict[str, int]]:
+    try:
+        pt = _POINT(int(x), int(y))
+        hmonitor = int(_user32.MonitorFromPoint(pt, 2) or 0)  # MONITOR_DEFAULTTONEAREST
+    except Exception:
+        hmonitor = 0
+    monitors = list_monitors()
+    if hmonitor:
+        for mon in monitors:
+            if int(mon.get('hmonitor', 0)) == hmonitor:
+                return mon
+    if not monitors:
+        return None
+    for mon in monitors:
+        if mon['left'] <= x < mon['right'] and mon['top'] <= y < mon['bottom']:
+            return mon
+    return monitors[0]
+
+
+def _pick_monitor_index_for_point(x: int, y: int) -> Optional[int]:
+    mon = _monitor_from_point(x, y)
+    if mon is None:
+        return None
+    return int(mon['index'])
+
+
+def _get_dxgi_session(monitor_index: int):
+    wgc = _import_wgc()
+    if wgc is None:
+        return None
+    sessions, _last_frames = _get_dxgi_state()
+    sess = sessions.get(monitor_index)
+    if sess is not None:
+        return sess
+    try:
+        sess = wgc.DxgiDuplicationSession(monitor_index=monitor_index)
+    except Exception:
+        return None
+    sessions[monitor_index] = sess
+    return sess
+
+
+def capture_monitor_bgr(
+    monitor_index: Optional[int],
+    timeout_ms: int = 16,
+    max_age_s: float = 0.25,
+) -> Optional[np.ndarray]:
+    """Return the latest DXGI BGR frame for a monitor, if available."""
+    if _DISABLED:
+        return None
+    idx = int(monitor_index or 0)
+    _sessions, last_frames = _get_dxgi_state()
+    sess = _get_dxgi_session(idx)
+    if sess is None:
+        return None
+    try:
+        try:
+            frame = sess.acquire_frame(timeout_ms=timeout_ms)
+        except BaseException:
+            try:
+                sess.recreate()
+                frame = sess.acquire_frame(timeout_ms=timeout_ms)
+            except BaseException:
+                frame = None
+        if frame is not None:
+            try:
+                bgr = frame.to_bgr(copy=True)
+            except BaseException:
+                bgr = None
+            if bgr is not None and getattr(bgr, 'size', 0) > 0:
+                last_frames[idx] = (time.time(), bgr)
+                return bgr
+    except BaseException:
+        return None
+    cached = last_frames.get(idx)
+    if cached is None:
+        return None
+    ts, img = cached
+    if max_age_s > 0 and (time.time() - ts) > max_age_s:
+        return None
+    return img.copy()
+
+
+def capture_monitor_bgr_for_point(
+    x: int,
+    y: int,
+    timeout_ms: int = 16,
+    max_age_s: float = 0.25,
+) -> Optional[np.ndarray]:
+    idx = _pick_monitor_index_for_point(int(x), int(y))
+    if idx is None:
+        return None
+    return capture_monitor_bgr(idx, timeout_ms=timeout_ms, max_age_s=max_age_s)
 
 
 # Frame processing lives inside _SafeWindowsCapture.on_frame_arrived
