@@ -4259,102 +4259,84 @@ class SAOPlayerGUI:
         except Exception:
             pass
 
-        # ── Fade state machine (time-based, coalesced single redraw/tick) ──
-        # v2.3.11: time-based fade (perf_counter) instead of step-count so
-        # fade duration is independent of actual tick rate (stays 500ms
-        # fade-in / 400ms fade-out even when main thread is busy and
-        # ticks arrive late). Single coalesced request_redraw per tick.
-        import time as _t
-        _ALPHA_MAX = 1.0
+        # ── Pump-driven fade + low-rate state monitor ──
+        # v2.3.13: fade alpha is now driven by BgraPresenter.start_fade()
+        # which animates inside the GLFW pump's render path (60 Hz, real
+        # perf_counter time). Tk after-queue starvation no longer affects
+        # fade smoothness. The remaining after() loop only:
+        #   - pushes new frames from worker (dedup'd)
+        #   - watches for menu close → triggers fade-out
+        # so it can run at a leisurely 32 ms.
         _FADEIN_DUR = 0.5        # 500ms fade-in
         _FADEOUT_DUR = 0.4       # 400ms fade-out
-        _alpha_cur = [0.0]
-        _fadein_t0 = [0.0]
-        _fadeout_t0 = [0.0]
         _running = [True]
         _latest_frame = [None]   # (bgra_bytes, w, h) tuple
         _last_pushed = [None]    # dedup: do not re-set same frame
         _state = ['init']        # init → fadein → active → fadeout → destroy
+        _fade_started = [False]
+        _fadeout_started = [False]
         ov._running_ref = _running
+
+        def _on_fadeout_done():
+            try:
+                self._stop_fisheye_overlay()
+            except Exception:
+                pass
 
         def _tick():
             if self._fisheye_ov is None:
                 return
             s = _state[0]
-            frame_changed = False
-            alpha_changed = False
 
-            # Frame push (dedup to avoid wasting texture uploads)
-            if s != 'init' or _latest_frame[0] is not None:
-                f = _latest_frame[0]
-                if f is not None and f is not _last_pushed[0]:
-                    try:
-                        presenter.set_frame(f[0], f[1], f[2])
-                        _last_pushed[0] = f
-                        frame_changed = True
-                    except Exception:
-                        pass
-
-            # State transitions + alpha computation
-            if s == 'init':
-                if _latest_frame[0] is not None:
-                    _alpha_cur[0] = 0.0
-                    try:
-                        presenter.set_alpha(0.0)
-                        alpha_changed = True
-                    except Exception:
-                        pass
-                    _fadein_t0[0] = _t.perf_counter()
-                    _state[0] = 'fadein'
-            elif s == 'fadein':
-                if not self._sao_menu.visible:
-                    _fadeout_t0[0] = _t.perf_counter()
-                    _state[0] = 'fadeout'
-                    _running[0] = False
-                else:
-                    elapsed = _t.perf_counter() - _fadein_t0[0]
-                    new_a = min(_ALPHA_MAX, elapsed / _FADEIN_DUR)
-                    if new_a != _alpha_cur[0]:
-                        _alpha_cur[0] = new_a
-                        try:
-                            presenter.set_alpha(new_a)
-                            alpha_changed = True
-                        except Exception:
-                            pass
-                    if new_a >= _ALPHA_MAX:
-                        _state[0] = 'active'
-            elif s == 'active':
-                if not self._sao_menu.visible:
-                    _fadeout_t0[0] = _t.perf_counter()
-                    _state[0] = 'fadeout'
-                    _running[0] = False
-            elif s == 'fadeout':
-                elapsed = _t.perf_counter() - _fadeout_t0[0]
-                new_a = max(0.0, _ALPHA_MAX - elapsed / _FADEOUT_DUR)
-                if new_a != _alpha_cur[0]:
-                    _alpha_cur[0] = new_a
-                    try:
-                        presenter.set_alpha(new_a)
-                        alpha_changed = True
-                    except Exception:
-                        pass
-                if new_a <= 0.0:
-                    self._stop_fisheye_overlay()
-                    return
-
-            # Coalesced redraw (was 2/tick; now 1/tick)
-            if frame_changed or alpha_changed:
+            # Push the freshest worker frame (dedup'd by BgraPresenter).
+            f = _latest_frame[0]
+            if f is not None and f is not _last_pushed[0]:
                 try:
+                    presenter.set_frame(f[0], f[1], f[2])
+                    _last_pushed[0] = f
                     gpu_win.request_redraw()
                 except Exception:
                     pass
 
-            # Faster tick during fade (smoothness matters); slower in active
+            # State machine — kicks off pump-driven fades.
+            if s == 'init':
+                if _latest_frame[0] is not None:
+                    try:
+                        presenter.set_alpha(0.0)
+                        presenter.start_fade(1.0, _FADEIN_DUR)
+                        _fade_started[0] = True
+                        gpu_win.request_redraw()
+                    except Exception:
+                        pass
+                    _state[0] = 'fadein'
+            elif s == 'fadein':
+                if not self._sao_menu.visible:
+                    try:
+                        presenter.start_fade(0.0, _FADEOUT_DUR, _on_fadeout_done)
+                        _fadeout_started[0] = True
+                        gpu_win.request_redraw()
+                    except Exception:
+                        pass
+                    _state[0] = 'fadeout'
+                    _running[0] = False
+                elif not presenter.is_fading():
+                    _state[0] = 'active'
+            elif s == 'active':
+                if not self._sao_menu.visible:
+                    try:
+                        presenter.start_fade(0.0, _FADEOUT_DUR, _on_fadeout_done)
+                        _fadeout_started[0] = True
+                        gpu_win.request_redraw()
+                    except Exception:
+                        pass
+                    _state[0] = 'fadeout'
+                    _running[0] = False
+            elif s == 'fadeout':
+                # Pump fires _on_fadeout_done when alpha hits 0; nothing to do.
+                pass
+
             try:
-                if _state[0] in ('fadein', 'fadeout', 'init'):
-                    self.root.after(16, _tick)   # ~60 Hz during fade
-                else:
-                    self.root.after(32, _tick)   # ~30 Hz in active (just dedup-pushes frames)
+                self.root.after(32, _tick)  # ~30 Hz monitor; fade itself runs at pump rate
             except Exception:
                 pass
 
