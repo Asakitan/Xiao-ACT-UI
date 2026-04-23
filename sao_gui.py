@@ -1599,6 +1599,24 @@ class SAOPlayerGUI:
             target_uuid = event.get('target_uuid', 0)
             if target_uuid:
                 import time as _t
+                # ── Duplicate-UUID revive (v2.3.14) ─────────────────────
+                # When a server reuses a monster UUID (mob respawn in
+                # the same dungeon, or monster instance churn without a
+                # NotifyStartPlayingDungeon), the parser still has the
+                # old MonsterData with ``is_dead=True``. The recognition
+                # loop filter below (``not getattr(_m, 'is_dead', False)``)
+                # excludes it → BossHP panel never pops up. Damage
+                # arriving for a UUID is proof that a live unit holds
+                # that UUID right now, so clear the stale flag.
+                _bridge = getattr(self, '_packet_engine', None)
+                if _bridge is not None:
+                    try:
+                        _m = _bridge.get_monster(target_uuid)
+                        if _m is not None and getattr(_m, 'is_dead', False):
+                            _m.is_dead = False
+                            _m.last_update = _t.time()
+                    except Exception:
+                        pass
                 self._bb_recent_targets[target_uuid] = _t.time()
                 self._bb_last_target_uuid = target_uuid
                 self._bb_last_damage_ts = _t.time()
@@ -6596,7 +6614,16 @@ void main() {
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.mainloop()
-        # mainloop 已退出 — 清理 root 并处理热切换
+        # mainloop 已退出 — 先停 GLFW pump 线程（v2.3.14 解耦后 pump 在独立线程
+        # 上跑 GL；必须在 root.destroy() 之前 join，否则 daemon 线程会被强杀，
+        # 留下未释放的 WGL 上下文。
+        try:
+            import gpu_overlay_window as _gow
+            if _gow._pump is not None:
+                _gow._pump.shutdown()
+        except Exception:
+            pass
+        # 清理 root 并处理热切换
         try:
             self.root.destroy()
         except Exception:

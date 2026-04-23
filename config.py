@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.3.13"
+APP_VERSION = "2.3.14"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,9 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.3.14: 
+#   Entity mode HUD panels decoupling, try to make render FPS
+#   more stable by isolating the heavy works in a separate lane.
 # v2.3.13:
 #   Fiseye now use DXGI screenshot instead of mss.
 # v2.3.10+:
