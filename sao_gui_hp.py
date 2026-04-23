@@ -563,6 +563,11 @@ class HpOverlay:
         self._drag_oy = 0
         self._last_topmost_t = 0.0  # last SetWindowPos topmost call
         self._idle_submit_q = -1     # quantized idle submit gate (perf)
+        self._hover_zone: Optional[str] = None
+        self._hover_t = {'id': 0.0, 'hp': 0.0}
+        self._press_zone: Optional[str] = None
+        self._press_t = {'id': 0.0, 'hp': 0.0}
+        self._press_flash_t = {'id': 0.0, 'hp': 0.0}
 
         # HP group auto-hide on offline (web parity: debounce + fade)
         self._offline_debounce_t = 0.0   # when offline first detected
@@ -775,6 +780,8 @@ class HpOverlay:
         self._win.bind('<B1-Motion>', self._on_drag_move)
         self._win.bind('<ButtonRelease-1>', self._on_drag_end)
         self._win.bind('<Button-3>', self._on_context_menu)
+        self._win.bind('<Motion>', self._on_pointer_move)
+        self._win.bind('<Leave>', self._on_pointer_leave)
 
         self._visible = True
         self._spawn_time = time.time()
@@ -1122,6 +1129,22 @@ class HpOverlay:
         # FX timers
         if self._hp_flash_start and now - self._hp_flash_start < 0.45:
             animating = True
+        for zone in ('id', 'hp'):
+            hover_target = 1.0 if self._hover_zone == zone else 0.0
+            next_hover = self._decay(self._hover_t.get(zone, 0.0), hover_target, 0.14)
+            if abs(next_hover - self._hover_t.get(zone, 0.0)) > 1e-4:
+                self._hover_t[zone] = next_hover
+                animating = True
+            press_target = 1.0 if self._press_zone == zone else 0.0
+            next_press = self._decay(self._press_t.get(zone, 0.0), press_target, 0.08)
+            if abs(next_press - self._press_t.get(zone, 0.0)) > 1e-4:
+                self._press_t[zone] = next_press
+                animating = True
+            flash_until = float(self._press_flash_t.get(zone, 0.0) or 0.0)
+            if flash_until > now:
+                animating = True
+            elif flash_until:
+                self._press_flash_t[zone] = 0.0
 
         return animating
 
@@ -1273,6 +1296,7 @@ class HpOverlay:
         self._draw_hp_text(img, y_off, mode='content')
         self._draw_sta_fill(img, y_off)
         self._draw_sta_text(img, y_off)
+        self._draw_interaction_fx(img, y_off, now)
         if self._hp_flash_start and now - self._hp_flash_start < 0.45:
             self._draw_hp_flash(img, y_off, now)
 
@@ -1385,6 +1409,12 @@ class HpOverlay:
             flash_age, hp_group_alpha_q,
             int(round(self._fade_alpha * 100)),
             bool(self._sta_offline),
+            int(round(self._hover_t.get('id', 0.0) * 20)),
+            int(round(self._hover_t.get('hp', 0.0) * 20)),
+            int(round(self._press_t.get('id', 0.0) * 20)),
+            int(round(self._press_t.get('hp', 0.0) * 20)),
+            int(max(0.0, min(0.25, (self._press_flash_t.get('id', 0.0) or 0.0) - now)) * 40),
+            int(max(0.0, min(0.25, (self._press_flash_t.get('hp', 0.0) or 0.0) - now)) * 40),
         )
 
     def _root_outer_pulse_strength(self, now: float) -> float:
@@ -2310,6 +2340,103 @@ class HpOverlay:
         )
         img.alpha_composite(_clip_alpha(fx, self._hp_bar_mask(y_off)))
 
+    def _interaction_zone_at(self, lx: int, ly: int) -> Optional[str]:
+        if ID_X <= lx <= ID_X + ID_W and ID_Y <= ly <= ID_Y + ID_H:
+            return 'id'
+        if BOX_X <= lx <= BOX_X + BOX_W and BOX_Y <= ly <= BOX_Y + BOX_H:
+            return 'hp'
+        return None
+
+    def _interaction_strength(self, zone: str, now: float) -> Tuple[float, float]:
+        hover = max(0.0, min(1.0, float(self._hover_t.get(zone, 0.0) or 0.0)))
+        press = max(0.0, min(1.0, float(self._press_t.get(zone, 0.0) or 0.0)))
+        flash_until = float(self._press_flash_t.get(zone, 0.0) or 0.0)
+        flash = 0.0
+        if flash_until > now:
+            flash = max(0.0, min(1.0, (flash_until - now) / 0.22))
+        return hover, max(press, flash)
+
+    def _draw_interaction_fx(self, img: Image.Image, y_off: int, now: float) -> None:
+        id_hover, id_press = self._interaction_strength('id', now)
+        hp_hover, hp_press = self._interaction_strength('hp', now)
+        if id_hover <= 0.001 and id_press <= 0.001 and hp_hover <= 0.001 and hp_press <= 0.001:
+            return
+
+        w, h = self.WIDTH, self.HEIGHT
+        fx = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(fx, 'RGBA')
+
+        if id_hover > 0.001 or id_press > 0.001:
+            mask = self._id_plate_mask(y_off)
+            alpha = int(10 + 22 * id_hover + 26 * id_press)
+            shade = Image.new('RGBA', (w, h), (244, 247, 250, max(0, min(72, alpha))))
+            fx.alpha_composite(_clip_alpha(shade, mask))
+            draw.rounded_rectangle(
+                (ID_X, ID_Y + y_off, ID_X + ID_W - 1, ID_Y + ID_H - 1 + y_off),
+                radius=6,
+                outline=(104, 228, 255, int(12 + 54 * id_hover + 64 * id_press)),
+                width=1,
+            )
+
+        if hp_hover > 0.001 or hp_press > 0.001:
+            bx = BOX_X
+            by = BOX_Y + y_off
+            lh = BOX_H
+            left_poly = [
+                (bx, by), (bx + 26, by), (bx + 26, by + lh), (bx, by + lh),
+                (bx, by + int(lh * 0.75)), (bx + 13, by + int(lh * 0.75)),
+                (bx + 13, by + int(lh * 0.25)), (bx, by + int(lh * 0.25)),
+            ]
+            rx0 = bx + 29
+            rw = BOX_W - 29
+            clip_poly = [
+                (rx0 + 85, by + int(lh * 0.22)),
+                (rx0 + rw, by + int(lh * 0.22)),
+                (rx0 + rw, by),
+                (rx0, by),
+                (rx0, by + lh),
+                (rx0 + 228, by + lh),
+                (rx0 + 234, by + int(lh * 0.77)),
+                (rx0 + rw, by + int(lh * 0.77)),
+                (rx0 + rw, by + int(lh * 0.60)),
+                (rx0 + 233, by + int(lh * 0.60)),
+                (rx0 + 228, by + int(lh * 0.77)),
+                (rx0 + 85, by + int(lh * 0.77)),
+            ]
+            shell_overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+            sd = ImageDraw.Draw(shell_overlay, 'RGBA')
+            shell_fill = (243, 245, 247, int(12 + 24 * hp_hover + 20 * hp_press))
+            sd.polygon(left_poly, fill=shell_fill)
+            sd.polygon(clip_poly, fill=shell_fill)
+            num_x = BOX_X + int(BOX_W * 0.58) + 4
+            num_y = BOX_Y + int(BOX_H * 0.82) - 3 + y_off
+            num_h = 20
+            left_w = int(220 * 0.55)
+            gap = 3
+            right_w = 220 - left_w - gap
+            right_x = num_x + left_w + gap
+            plate_fill = (243, 245, 247, int(14 + 26 * hp_hover + 24 * hp_press))
+            sd.rectangle((num_x, num_y, num_x + left_w - 1, num_y + num_h - 1), fill=plate_fill)
+            sd.rectangle((right_x, num_y, right_x + right_w - 1, num_y + num_h - 1), fill=plate_fill)
+            fx.alpha_composite(shell_overlay)
+            border_alpha = int(30 + 70 * hp_hover + 86 * hp_press)
+            bar_border_alpha = int(48 + 84 * hp_hover + 92 * hp_press)
+            draw.polygon(left_poly, outline=(214, 216, 219, border_alpha), width=1)
+            draw.polygon(clip_poly, outline=(214, 216, 219, border_alpha), width=1)
+            border_x = bx + 114
+            border_y = by + 10
+            poly = [
+                (border_x, border_y),
+                (border_x + 350, border_y),
+                (border_x + 345, border_y + 19),
+                (border_x + 145, border_y + 19),
+                (border_x + 141, border_y + 27),
+                (border_x, border_y + 27),
+            ]
+            draw.polygon(poly, outline=(104, 228, 255, bar_border_alpha), width=1)
+
+        img.alpha_composite(fx)
+
     def _draw_hp_text(self, img: Image.Image, y_off: int,
                       mode: str = 'both') -> None:
         draw_shadow = mode != 'content'
@@ -2448,11 +2575,17 @@ class HpOverlay:
             self._drag_oy = ev.y_root - self._y
             self._drag_origin = (ev.x_root, ev.y_root)
             self._drag_moved = False
+            lx = int(ev.x_root - self._x)
+            ly = int(ev.y_root - self._y)
+            self._press_zone = self._interaction_zone_at(lx, ly)
+            self._hover_zone = self._press_zone
+            self._schedule_tick(immediate=True)
         except Exception:
             self._drag_ox = 0
             self._drag_oy = 0
             self._drag_origin = (0, 0)
             self._drag_moved = False
+            self._press_zone = None
 
     def _on_drag_move(self, ev) -> None:
         try:
@@ -2460,8 +2593,11 @@ class HpOverlay:
             if not self._drag_moved:
                 if (abs(ev.x_root - ox) < self._TAP_THRESHOLD_PX and
                         abs(ev.y_root - oy) < self._TAP_THRESHOLD_PX):
+                    self._hover_zone = self._interaction_zone_at(
+                        int(ev.x_root - self._x), int(ev.y_root - self._y))
                     return
                 self._drag_moved = True
+                self._press_zone = None
             self._x = int(ev.x_root - self._drag_ox)
             self._y = int(ev.y_root - self._drag_oy)
             if self._gpu_managed and self._gpu_window is not None:
@@ -2485,8 +2621,21 @@ class HpOverlay:
             return True
         return False
 
+    def _on_pointer_move(self, ev) -> None:
+        try:
+            self._hover_zone = self._interaction_zone_at(int(ev.x), int(ev.y))
+            self._schedule_tick(immediate=True)
+        except Exception:
+            pass
+
+    def _on_pointer_leave(self, _ev) -> None:
+        self._hover_zone = None
+        if self._press_zone is None:
+            self._schedule_tick(immediate=True)
+
     def _on_drag_end(self, ev) -> None:
         moved = getattr(self, '_drag_moved', False)
+        self._press_zone = None
         if moved:
             # Persist new position only when actually dragged.
             if self.settings is not None:
@@ -2506,8 +2655,13 @@ class HpOverlay:
             ly = int(ev.y_root - self._y)
         except Exception:
             return
-        if not self._point_in_click_zones(lx, ly):
+        zone = self._interaction_zone_at(lx, ly)
+        self._hover_zone = zone
+        if zone is None:
+            self._schedule_tick(immediate=True)
             return
+        self._press_flash_t[zone] = time.time() + 0.22
+        self._schedule_tick(immediate=True)
         cb = self._on_click
         if callable(cb):
             try:
