@@ -20,6 +20,12 @@ from typing import Optional, Tuple
 from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont
 import numpy as np
 from render_capture_sync import wait_until_capture_idle
+try:
+    from gpu_capture import capture_monitor_bgr_for_point, ensure_session, get_latest_bgr
+except Exception:
+    capture_monitor_bgr_for_point = None  # type: ignore
+    ensure_session = None  # type: ignore
+    get_latest_bgr = None  # type: ignore
 
 from config import (
     APP_VERSION_LABEL, WINDOW_TITLE, WINDOW_SIZE,
@@ -1890,6 +1896,57 @@ class SAOPlayerGUI:
             },
             'slots': payload_slots,
         }
+
+    def _get_game_window_rect(self):
+        rect = None
+        try:
+            gs = self._state_mgr.state if getattr(self, '_state_mgr', None) is not None else None
+            window_rect = getattr(gs, 'window_rect', None) if gs else None
+            if isinstance(window_rect, (list, tuple)) and len(window_rect) == 4:
+                rect = tuple(int(v) for v in window_rect)
+        except Exception:
+            rect = None
+
+        try:
+            from window_locator import WindowLocator
+            locator = getattr(self, '_locator', None)
+            if locator is None:
+                locator = WindowLocator()
+                self._locator = locator
+            result = locator.find_game_window()
+            if result:
+                _hwnd, _title, found_rect = result
+                return tuple(int(v) for v in found_rect)
+        except Exception:
+            pass
+
+        return rect
+
+    def _get_game_window_context(self):
+        rect = None
+        hwnd = 0
+        try:
+            gs = self._state_mgr.state if getattr(self, '_state_mgr', None) is not None else None
+            window_rect = getattr(gs, 'window_rect', None) if gs else None
+            if isinstance(window_rect, (list, tuple)) and len(window_rect) == 4:
+                rect = tuple(int(v) for v in window_rect)
+        except Exception:
+            rect = None
+
+        try:
+            from window_locator import WindowLocator
+            locator = getattr(self, '_locator', None)
+            if locator is None:
+                locator = WindowLocator()
+                self._locator = locator
+            result = locator.find_game_window()
+            if result:
+                hwnd, _title, found_rect = result
+                return int(hwnd or 0), tuple(int(v) for v in found_rect)
+        except Exception:
+            pass
+
+        return int(hwnd or 0), rect
 
     def _pick_burst_trigger_slot(self, gs):
         watched = self._get_setting(
@@ -4196,10 +4253,11 @@ class SAOPlayerGUI:
 
         # 用一个轻量对象承载状态 (兼容 _stop 通过 _running_ref 关闭)
         class _FisheyeHandle:
-            __slots__ = ('gpu_win', 'presenter', '_running_ref')
+            __slots__ = ('gpu_win', 'presenter', '_running_ref', '_worker_thread')
         ov = _FisheyeHandle()
         ov.gpu_win = gpu_win
         ov.presenter = presenter
+        ov._worker_thread = None
         self._fisheye_ov = ov
 
         # WDA_EXCLUDEFROMCAPTURE: 让 mss 抓屏看不到这个叠加层本身,
@@ -4368,14 +4426,49 @@ class SAOPlayerGUI:
 
             # ── 优先 mss 快速截屏 (DXGI), fallback ImageGrab ──
             _cap_fn = None
+            if ensure_session is not None and get_latest_bgr is not None:
+                def _cap_dxgi_window():
+                    hwnd, _game_rect = self._get_game_window_context()
+                    hwnd = int(hwnd or 0)
+                    if hwnd <= 0:
+                        return None
+                    try:
+                        if not ensure_session(hwnd):
+                            return None
+                        frame = get_latest_bgr(hwnd, max_age_s=0.2)
+                    except Exception:
+                        return None
+                    if frame is None or frame.size == 0:
+                        return None
+                    return Image.fromarray(frame[:, :, ::-1])
+                _cap_fn = _cap_dxgi_window
+            if _cap_fn is None and capture_monitor_bgr_for_point is not None:
+                def _cap_dxgi():
+                    px = sw // 2
+                    py = sh // 2
+                    try:
+                        game_rect = self._get_game_window_rect()
+                        if game_rect and len(game_rect) == 4:
+                            gl, gt, gr, gb = [int(v) for v in game_rect]
+                            px = (gl + gr) // 2
+                            py = (gt + gb) // 2
+                    except Exception:
+                        pass
+                    frame = capture_monitor_bgr_for_point(
+                        px, py, timeout_ms=16, max_age_s=0.2)
+                    if frame is None or frame.size == 0:
+                        return None
+                    return Image.fromarray(frame[:, :, ::-1])
+                _cap_fn = _cap_dxgi
             try:
-                import mss as _mss_mod
-                _sct = _mss_mod.mss()
-                _mon = {"top": 0, "left": 0, "width": sw, "height": sh}
-                def _cap_mss():
-                    s = _sct.grab(_mon)
-                    return Image.frombytes('RGB', s.size, s.rgb)
-                _cap_fn = _cap_mss
+                if _cap_fn is None:
+                    import mss as _mss_mod
+                    _sct = _mss_mod.mss()
+                    _mon = {"top": 0, "left": 0, "width": sw, "height": sh}
+                    def _cap_mss():
+                        s = _sct.grab(_mon)
+                        return Image.frombytes('RGB', s.size, s.rgb)
+                    _cap_fn = _cap_mss
             except Exception:
                 pass
             if _cap_fn is None:
@@ -4612,7 +4705,9 @@ class SAOPlayerGUI:
                 except Exception: pass
 
         import threading as _th
-        _th.Thread(target=_worker, daemon=True).start()
+        _worker_thread = _th.Thread(target=_worker, daemon=True)
+        ov._worker_thread = _worker_thread
+        _worker_thread.start()
 
     def _stop_fisheye_overlay(self):
         """销毁持久鱼眼叠加层 (GPU 由后台线程自行释放)."""
@@ -4622,6 +4717,12 @@ class SAOPlayerGUI:
             running = getattr(ov, '_running_ref', None)
             if running:
                 running[0] = False
+            worker_thread = getattr(ov, '_worker_thread', None)
+            if worker_thread is not None:
+                try:
+                    worker_thread.join(timeout=0.25)
+                except Exception:
+                    pass
             # GPU window + presenter cleanup
             gpu_win = getattr(ov, 'gpu_win', None)
             if gpu_win is not None:

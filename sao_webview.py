@@ -68,6 +68,12 @@ from config import (
     WEB_DIR,
     resource_path,
 )
+try:
+    from gpu_capture import capture_monitor_bgr_for_point, ensure_session, get_latest_bgr
+except Exception:
+    capture_monitor_bgr_for_point = None  # type: ignore
+    ensure_session = None  # type: ignore
+    get_latest_bgr = None  # type: ignore
 
 # ── 延迟导入 pywebview ──
 webview = None
@@ -5706,36 +5712,64 @@ class SAOWebViewGUI:
         self._transition_with_animation()
 
     # ─── 鱼眼截屏 ───
-    def _capture_current_monitor_b64(self, quality=55):
+    def _capture_current_monitor_b64(self, quality=82):
         """快速截屏 → 低分辨率 JPEG base64，用于 WebGL 鱼眼纹理 (目标 <10ms)"""
         try:
             import base64 as b64mod, io
             from PIL import Image
 
+            hwnd = 0
             hx, hy = 0, 0
             try:
-                if self.hp_win and hasattr(self.hp_win, 'x'):
+                _hwnd, game_rect = self._get_game_window_context()
+                hwnd = int(_hwnd or 0)
+                if game_rect and len(game_rect) == 4:
+                    gl, gt, gr, gb = [int(v) for v in game_rect]
+                    hx = (gl + gr) // 2
+                    hy = (gt + gb) // 2
+            except Exception:
+                pass
+            try:
+                if hx == 0 and hy == 0 and self.hp_win and hasattr(self.hp_win, 'x'):
                     hx = self.hp_win.x or 0
                     hy = self.hp_win.y or 0
             except Exception:
                 pass
 
             img = None
+            if ensure_session is not None and get_latest_bgr is not None and hwnd > 0:
+                try:
+                    if ensure_session(hwnd):
+                        frame = get_latest_bgr(hwnd, max_age_s=0.2)
+                        if frame is not None and frame.size > 0:
+                            img = Image.fromarray(frame[:, :, ::-1])
+                except Exception:
+                    img = None
+            if capture_monitor_bgr_for_point is not None:
+                try:
+                    if img is None:
+                        frame = capture_monitor_bgr_for_point(
+                            hx, hy, timeout_ms=16, max_age_s=0.2)
+                        if frame is not None and frame.size > 0:
+                            img = Image.fromarray(frame[:, :, ::-1])
+                except Exception:
+                    img = None
             try:
-                import mss
-                with mss.mss() as sct:
-                    if not sct.monitors or len(sct.monitors) < 2:
-                        raise RuntimeError('no monitors')
-                    target = sct.monitors[1]
-                    for m in sct.monitors[1:]:
-                        if (m['left'] <= hx < m['left'] + m['width'] and
-                                m['top'] <= hy < m['top'] + m['height']):
-                            target = m
-                            break
-                    raw = sct.grab(target)
-                    if raw is None:
-                        raise RuntimeError('grab returned None')
-                    img = Image.frombytes('RGB', raw.size, raw.rgb)
+                if img is None:
+                    import mss
+                    with mss.mss() as sct:
+                        if not sct.monitors or len(sct.monitors) < 2:
+                            raise RuntimeError('no monitors')
+                        target = sct.monitors[1]
+                        for m in sct.monitors[1:]:
+                            if (m['left'] <= hx < m['left'] + m['width'] and
+                                    m['top'] <= hy < m['top'] + m['height']):
+                                target = m
+                                break
+                        raw = sct.grab(target)
+                        if raw is None:
+                            raise RuntimeError('grab returned None')
+                        img = Image.frombytes('RGB', raw.size, raw.rgb)
             except Exception:
                 try:
                     from PIL import ImageGrab
@@ -5748,9 +5782,10 @@ class SAOWebViewGUI:
 
             # 低分辨率以达到 16ms 帧时间 — WebGL 会放大+鱼眼扭曲
             w, h = img.size
-            tw, th = 480, int(480 * h / max(1, w))
+            tw = min(1920, w)
+            th = int(tw * h / max(1, w))
             if tw < w:
-                img = img.resize((tw, th), Image.BILINEAR)
+                img = img.resize((tw, th), Image.LANCZOS)
 
             buf = io.BytesIO()
             img.save(buf, format='JPEG', quality=quality)

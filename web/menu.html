@@ -3818,8 +3818,9 @@ function _initFisheyeGL() {
     if (!gl) return false;
     _feGl = gl;
 
-    _feCanvas.width = Math.min(window.innerWidth, 1280);
-    _feCanvas.height = Math.min(window.innerHeight, 720);
+    var dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+    _feCanvas.width = Math.min(Math.round(window.innerWidth * dpr), 1920);
+    _feCanvas.height = Math.min(Math.round(window.innerHeight * dpr), 1080);
 
     /* Shaders */
     var vs = gl.createShader(gl.VERTEX_SHADER);
@@ -3833,7 +3834,7 @@ function _initFisheyeGL() {
         '  vec2 c=uv-0.5;float r2=dot(c,c);' +
         '  float s=str*(1.0+0.28*sin(t*0.82));' +
         '  vec2 drift=vec2(0.008*sin(t*0.5),0.006*cos(t*0.45));' +
-        '  vec2 d=uv+c*s*r2+drift;' +
+        '  vec2 d=uv-c*s*r2+drift;' +
         '  vec2 dir=normalize(c+vec2(0.0001))* (0.012 + r2*0.038);' +
         '  vec3 b0=texture2D(tex, d-dir*2.4).rgb;' +
         '  vec3 b1=texture2D(tex, d-dir*1.2).rgb;' +
@@ -3874,6 +3875,7 @@ function _initFisheyeGL() {
     /* Texture */
     _feTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, _feTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
