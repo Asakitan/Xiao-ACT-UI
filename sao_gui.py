@@ -4259,69 +4259,102 @@ class SAOPlayerGUI:
         except Exception:
             pass
 
-        # ── 60fps 状态机 (只跑 fade alpha + presenter.set_frame/set_alpha) ──
+        # ── Fade state machine (time-based, coalesced single redraw/tick) ──
+        # v2.3.11: time-based fade (perf_counter) instead of step-count so
+        # fade duration is independent of actual tick rate (stays 500ms
+        # fade-in / 400ms fade-out even when main thread is busy and
+        # ticks arrive late). Single coalesced request_redraw per tick.
+        import time as _t
         _ALPHA_MAX = 1.0
+        _FADEIN_DUR = 0.5        # 500ms fade-in
+        _FADEOUT_DUR = 0.4       # 400ms fade-out
         _alpha_cur = [0.0]
-        _FADEIN_STEP = _ALPHA_MAX / 38.0     # ≈600ms 渐显
-        _FADEOUT_STEP = _ALPHA_MAX / 25.0    # ≈400ms 渐隐
+        _fadein_t0 = [0.0]
+        _fadeout_t0 = [0.0]
         _running = [True]
         _latest_frame = [None]   # (bgra_bytes, w, h) tuple
-        _last_pushed = [None]    # 去重: 同一帧不重复 set_frame
-        _state = ['init']        # init → fadein → active → fadeout → 销毁
+        _last_pushed = [None]    # dedup: do not re-set same frame
+        _state = ['init']        # init → fadein → active → fadeout → destroy
         ov._running_ref = _running
-
-        def _push_latest():
-            f = _latest_frame[0]
-            if f is None or f is _last_pushed[0]:
-                return
-            _last_pushed[0] = f
-            try:
-                presenter.set_frame(f[0], f[1], f[2])
-                gpu_win.request_redraw()
-            except Exception:
-                pass
-
-        def _set_alpha_a(a):
-            try:
-                presenter.set_alpha(max(0.0, min(1.0, a)))
-                gpu_win.request_redraw()
-            except Exception:
-                pass
 
         def _tick():
             if self._fisheye_ov is None:
                 return
             s = _state[0]
+            frame_changed = False
+            alpha_changed = False
+
+            # Frame push (dedup to avoid wasting texture uploads)
+            if s != 'init' or _latest_frame[0] is not None:
+                f = _latest_frame[0]
+                if f is not None and f is not _last_pushed[0]:
+                    try:
+                        presenter.set_frame(f[0], f[1], f[2])
+                        _last_pushed[0] = f
+                        frame_changed = True
+                    except Exception:
+                        pass
+
+            # State transitions + alpha computation
             if s == 'init':
                 if _latest_frame[0] is not None:
-                    _push_latest()
-                    _set_alpha_a(0.0)
+                    _alpha_cur[0] = 0.0
+                    try:
+                        presenter.set_alpha(0.0)
+                        alpha_changed = True
+                    except Exception:
+                        pass
+                    _fadein_t0[0] = _t.perf_counter()
                     _state[0] = 'fadein'
             elif s == 'fadein':
                 if not self._sao_menu.visible:
+                    _fadeout_t0[0] = _t.perf_counter()
                     _state[0] = 'fadeout'
                     _running[0] = False
                 else:
-                    _alpha_cur[0] = min(_ALPHA_MAX,
-                                        _alpha_cur[0] + _FADEIN_STEP)
-                    _set_alpha_a(_alpha_cur[0])
-                    _push_latest()
-                    if _alpha_cur[0] >= _ALPHA_MAX:
+                    elapsed = _t.perf_counter() - _fadein_t0[0]
+                    new_a = min(_ALPHA_MAX, elapsed / _FADEIN_DUR)
+                    if new_a != _alpha_cur[0]:
+                        _alpha_cur[0] = new_a
+                        try:
+                            presenter.set_alpha(new_a)
+                            alpha_changed = True
+                        except Exception:
+                            pass
+                    if new_a >= _ALPHA_MAX:
                         _state[0] = 'active'
             elif s == 'active':
                 if not self._sao_menu.visible:
+                    _fadeout_t0[0] = _t.perf_counter()
                     _state[0] = 'fadeout'
                     _running[0] = False
-                else:
-                    _push_latest()
             elif s == 'fadeout':
-                _alpha_cur[0] = max(0.0, _alpha_cur[0] - _FADEOUT_STEP)
-                _set_alpha_a(_alpha_cur[0])
-                if _alpha_cur[0] <= 0.0:
+                elapsed = _t.perf_counter() - _fadeout_t0[0]
+                new_a = max(0.0, _ALPHA_MAX - elapsed / _FADEOUT_DUR)
+                if new_a != _alpha_cur[0]:
+                    _alpha_cur[0] = new_a
+                    try:
+                        presenter.set_alpha(new_a)
+                        alpha_changed = True
+                    except Exception:
+                        pass
+                if new_a <= 0.0:
                     self._stop_fisheye_overlay()
                     return
+
+            # Coalesced redraw (was 2/tick; now 1/tick)
+            if frame_changed or alpha_changed:
+                try:
+                    gpu_win.request_redraw()
+                except Exception:
+                    pass
+
+            # Faster tick during fade (smoothness matters); slower in active
             try:
-                self.root.after(16, _tick)
+                if _state[0] in ('fadein', 'fadeout', 'init'):
+                    self.root.after(16, _tick)   # ~60 Hz during fade
+                else:
+                    self.root.after(32, _tick)   # ~30 Hz in active (just dedup-pushes frames)
             except Exception:
                 pass
 
