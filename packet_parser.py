@@ -11,6 +11,7 @@ Supported features:
   - Lightweight protobuf field decoding for the sync messages we use
   - AttrCollection parsing
   - SyncContainerDirtyData stream parsing
+  
 """
 
 import math
