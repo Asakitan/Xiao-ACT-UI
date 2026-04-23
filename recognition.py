@@ -787,6 +787,9 @@ class RecognitionEngine:
         self._sta_pending_pct: Optional[float] = None
         self._sta_pending_since: float = 0.0
         self._sta_drop_lock_until: float = 0.0
+        self._sta_large_delta_threshold: float = 0.20
+        self._sta_large_delta_confirm_s: float = 0.10
+        self._sta_large_delta_stable_epsilon: float = 0.08
         self._capture_error_logged = False
         self._capture_backend = ""
         self._capture_fail_count = 0
@@ -840,19 +843,19 @@ class RecognitionEngine:
             return float(stable)
 
         delta = raw_pct - stable
-        if abs(delta) > 0.20:
+        if abs(delta) > self._sta_large_delta_threshold:
             if self._sta_pending_pct is None:
                 self._sta_pending_pct = raw_pct
                 self._sta_pending_since = now
                 return float(stable)
 
             pending_delta = raw_pct - self._sta_pending_pct
-            if abs(pending_delta) <= 0.08:
-                if (now - self._sta_pending_since) >= 0.20:
+            if abs(pending_delta) <= self._sta_large_delta_stable_epsilon:
+                if (now - self._sta_pending_since) >= self._sta_large_delta_confirm_s:
                     return self._accept_stamina_pct(raw_pct, now)
                 return float(stable)
 
-            if abs(raw_pct - stable) <= 0.08:
+            if abs(raw_pct - stable) <= self._sta_large_delta_stable_epsilon:
                 self._sta_pending_pct = None
                 self._sta_pending_since = 0.0
                 return float(stable)
