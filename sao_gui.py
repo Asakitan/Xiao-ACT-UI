@@ -4215,16 +4215,13 @@ class SAOPlayerGUI:
         except Exception:
             pass
 
-        # v2.3.x: 把鱼眼 GPU 窗口从 HWND_TOPMOST 栈降级。
+        # v2.3.x+: 把鱼眼 GPU 窗口从 HWND_TOPMOST 栈降级 (有限次)。
         # GpuOverlayWindow 默认是 WS_EX_TOPMOST，并且在首次实际渲染时
         # 会调用 _show_no_activate(HWND_TOPMOST) 再次提权;同时 GLFW
         # set_window_size 等调用也可能恢复 topmost。鱼眼若停留在
-        # topmost 栈，会:
-        #   - 盖住左侧用户信息栏 / HP / ID / saomenu 等 SAO overlay
-        #   - 第二次打开 saomenu 时点击落到鱼眼 (它是 click-through)
-        #     再穿透到游戏窗口，导致 saomenu 收不到鼠标事件
-        # 因此用一个轻量 demoter 周期性 SetWindowPos(NOTOPMOST)，直到
-        # 鱼眼销毁。每 250ms 一次，开销忽略不计。
+        # topmost 栈，会盖住 SAO overlay 或导致点击穿透。
+        # v2.3.10: 改为有限 8 次 (~2s) demote，避免无限 after(250)
+        # 回调堆积导致主线程阻塞和鱼眼启用时间变长。
         try:
             import ctypes as _ct2
             _u32b = _ct2.windll.user32
@@ -4233,9 +4230,10 @@ class SAOPlayerGUI:
             _SWP_NOSIZE = 0x0001
             _SWP_NOACTIVATE = 0x0010
             _SWP_NOOWNERZORDER = 0x0200
+            _demote_count = [8]  # finite demotions
 
             def _demote_fisheye():
-                if self._fisheye_ov is None:
+                if self._fisheye_ov is None or _demote_count[0] <= 0:
                     return
                 try:
                     _hwnd_d = int(getattr(gpu_win, '_hwnd', 0) or 0)
@@ -4249,10 +4247,12 @@ class SAOPlayerGUI:
                         )
                 except Exception:
                     pass
-                try:
-                    self.root.after(250, _demote_fisheye)
-                except Exception:
-                    pass
+                _demote_count[0] -= 1
+                if _demote_count[0] > 0:
+                    try:
+                        self.root.after(250, _demote_fisheye)
+                    except Exception:
+                        pass
 
             # 第一次延迟 50ms,等 GLFW 完成首次 _show_no_activate 之后再降级。
             self.root.after(50, _demote_fisheye)

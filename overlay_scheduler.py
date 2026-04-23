@@ -1,6 +1,6 @@
 """overlay_scheduler.py - Shared display-synced frame pacer for Tk ULW overlays.
 
-Design (v2.3.10):
+Design (v2.3.10+):
 - One ``root.after`` loop ticks at the monitor's refresh rate (auto-detected
   on Windows; clamps to 60-240 Hz). Uses a high-resolution perf-counter
   deadline so the cadence does not drift.
@@ -10,12 +10,12 @@ Design (v2.3.10):
   sleep/after resolution is ~1 ms, which is what a 60/120/144 Hz cadence
   actually needs.
 - Each overlay registers ``tick_fn(now)``; scheduler calls it on the Tk main
-  thread every frame. The previous busy-time idle-panel guardian
-  (idle_skip_n = 3..14 when combat_load/menu_open) that reduced non-
-  animating panels to ~4-16 Hz has been **disabled**. All panels now run
-  at full refresh rate. GPU migration removed the original motivation for
-  this throttle. The set_combat_load / set_menu_open hooks remain for
-  API compatibility but no longer affect scheduling.
+  thread every frame. The previous aggressive busy-time idle-panel guardian
+  (idle_skip_n up to 14 → ~4 Hz) has been replaced with milder tiers
+  (max idle_skip_n=4 → ~25 Hz under heavy load). This prevents main-thread
+  blockage during GPU fisheye enable and keeps HP panel animation smooth.
+  Full-rate for animating panels; idle panels adapt based on combat/menu
+  pressure. GPU migration made the old aggressive throttle unnecessary.
 """
 from __future__ import annotations
 
@@ -190,14 +190,15 @@ class OverlayScheduler:
 
     def set_combat_load(self, active: bool) -> None:
         """Hint that a heavy short-lived panel (e.g. SkillFX burst) is
-        currently composing. (v2.3.10: throttling disabled — kept for
-        API compatibility only; no longer affects tick rate.)"""
+        currently composing. v2.3.10+: now uses milder idle_skip_n=3~4
+        (instead of 10/14) so main thread stays responsive while still
+        prioritizing burst/menu."""
         self._combat_load = bool(active)
 
     def set_menu_open(self, active: bool) -> None:
-        """v2.2.18: SAO menu open/close hook. (v2.3.10: throttling
-        disabled — kept for API compatibility only; no longer affects
-        tick rate.)"""
+        """v2.2.18: SAO menu open/close hook. v2.3.10+: now uses milder
+        idle_skip_n=3~4 (instead of 8/14) to prevent main-thread blockage
+        during fisheye enable and HP animation."""
         self._menu_open = bool(active)
 
     def set_render_pressure(self, level: Optional[int]) -> None:
@@ -283,15 +284,32 @@ class OverlayScheduler:
         with self._jobs_lock:
             jobs = list(self._jobs.values())
 
-        # v2.3.10: The busy-time idle-panel guardian (idle_skip_n > 1)
-        # that reduced non-animating panels to ~4-16 Hz under combat/menu
-        # load has been DISABLED. It was causing the entire SAO panel
-        # (menu + left info + HP bars) to feel laggy. All panels now
-        # tick at full refresh rate (idle_skip_n=1). The set_combat_load()
-        # / set_menu_open() hooks are kept for API compatibility but no
-        # longer affect tick rate. GPU migration removed the original
-        # motivation for this throttle.
-        idle_skip_n = 1
+        # v2.3.10+: Restored milder tiered throttling (max idle_skip_n=4
+        # → ~25 Hz idle under heavy load). Full disable caused main-thread
+        # overload (too many tick_fn calls when menu + many panels open),
+        # leading to long fisheye enable latency and HP animation drops.
+        # Animating panels always tick every frame; idle panels adapt.
+        # set_combat_load/set_menu_open still influence pressure but with
+        # gentler skips. GPU migration + this change eliminates the "卡"
+        # while keeping main thread responsive.
+        budget_sec = self._frame_sec
+        overloaded = self.avg_frame_ms > 0.5 * budget_sec * 1000.0  # raised threshold
+        if self._render_pressure is not None:
+            pressure = self._render_pressure
+        else:
+            pressure = 0
+            if self._combat_load:
+                pressure |= 1
+            if self._menu_open:
+                pressure |= 2
+        if pressure >= 3:
+            idle_skip_n = 4   # ~25 Hz idle (combat + menu)
+        elif pressure == 2:
+            idle_skip_n = 3   # ~33 Hz idle (menu only)
+        elif pressure == 1 or overloaded:
+            idle_skip_n = 3   # ~33 Hz idle (combat or overloaded)
+        else:
+            idle_skip_n = 1
         frame_idx = self._frame_idx
 
         for job in jobs:
