@@ -357,12 +357,24 @@ class GlfwPump:
         marked-dirty window is rendered on the very next event-loop
         turn instead of waiting up to ~60 ms. Safe to call from the Tk
         main thread only.
+
+        v2.3.12: coalesce — if a tick was recently scheduled (< tick_ms
+        since last tick), skip reschedule. Avoids N cancel+after(0)
+        round-trips when N panels call request_redraw in the same frame.
         """
         if not self._running:
             self._kick()
             return
         if self._after_id is None:
             return
+        # Coalesce: if we're already in fast (dirty) cadence, the next
+        # tick will come within _tick_ms ms. No need to cancel/reschedule.
+        try:
+            since_last = (time.perf_counter() - self._last_tick_t) * 1000.0
+        except Exception:
+            since_last = 0.0
+        if since_last < self._tick_ms:
+            return  # already scheduled imminently
         try:
             self._root.after_cancel(self._after_id)
         except Exception:

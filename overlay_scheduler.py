@@ -284,16 +284,14 @@ class OverlayScheduler:
         with self._jobs_lock:
             jobs = list(self._jobs.values())
 
-        # v2.3.10+: Restored milder tiered throttling (max idle_skip_n=4
-        # → ~25 Hz idle under heavy load). Full disable caused main-thread
-        # overload (too many tick_fn calls when menu + many panels open),
-        # leading to long fisheye enable latency and HP animation drops.
-        # Animating panels always tick every frame; idle panels adapt.
-        # set_combat_load/set_menu_open still influence pressure but with
-        # gentler skips. GPU migration + this change eliminates the "卡"
-        # while keeping main thread responsive.
+        # v2.3.10+: Milder throttling + job-count pressure. When >5 panels
+        # active (common in menu + HP + left-info + commander + fisheye),
+        # force higher idle_skip_n to prevent main-thread overload. GPU
+        # windows stay responsive; HP/fisheye animation preserved via
+        # animating_fn. Probe measures per-tick cost.
         budget_sec = self._frame_sec
-        overloaded = self.avg_frame_ms > 0.5 * budget_sec * 1000.0  # raised threshold
+        overloaded = self.avg_frame_ms > 0.5 * budget_sec * 1000.0
+        num_jobs = len(jobs)
         if self._render_pressure is not None:
             pressure = self._render_pressure
         else:
@@ -302,8 +300,10 @@ class OverlayScheduler:
                 pressure |= 1
             if self._menu_open:
                 pressure |= 2
+        if num_jobs > 5:
+            pressure = max(pressure, 3)  # multi-panel guard
         if pressure >= 3:
-            idle_skip_n = 4   # ~25 Hz idle (combat + menu)
+            idle_skip_n = 4   # ~25 Hz idle (combat + menu + many panels)
         elif pressure == 2:
             idle_skip_n = 3   # ~33 Hz idle (menu only)
         elif pressure == 1 or overloaded:
@@ -312,19 +312,23 @@ class OverlayScheduler:
             idle_skip_n = 1
         frame_idx = self._frame_idx
 
+        # v2.3.12: Animating panels ALWAYS tick every frame (no frame-rate
+        # cut). Only non-animating panels are throttled via idle_skip_n.
+        # Main-thread relief comes from kick_redraw coalescing + fewer
+        # render_worker submits (see per-painter dedup) — not from skipping
+        # animation ticks.
         for job in jobs:
             try:
                 if job.visibility_fn is not None and not bool(job.visibility_fn()):
                     continue
             except Exception:
                 pass
-            if idle_skip_n > 0:
-                try:
-                    is_animating = bool(job.animating_fn())
-                except Exception:
-                    is_animating = True
-                if not is_animating and (frame_idx % idle_skip_n) != 0:
-                    continue
+            try:
+                is_animating = bool(job.animating_fn())
+            except Exception:
+                is_animating = True
+            if not is_animating and idle_skip_n > 1 and (frame_idx % idle_skip_n) != 0:
+                continue
             try:
                 job.tick_fn(now)
             except Exception as exc:

@@ -2539,6 +2539,7 @@ class HpOverlay:
         hp_hover, hp_press = self._interaction_strength('hp', now)
         if id_hover <= 0.001 and id_press <= 0.001 and hp_hover <= 0.001 and hp_press <= 0.001:
             return
+        hp_alpha_scale = self._hp_group_alpha_now(now)
         def _q(v: float, steps: int = 64) -> int:
             v = max(0.0, min(1.0, float(v or 0.0)))
             if v <= 0.001:
@@ -2550,6 +2551,7 @@ class HpOverlay:
             _q(id_press),
             _q(hp_hover),
             _q(hp_press),
+            _q(hp_alpha_scale, 72),
             _q(self._click_flash_progress('id', now), 72),
             _q(self._click_flash_progress('hp', now), 72),
         )
@@ -2645,7 +2647,7 @@ class HpOverlay:
             sd.rectangle((right_x, num_y, right_x + right_w - 1, num_y + num_h - 1), fill=plate_fill)
             fx.alpha_composite(shell_overlay)
             x0, y0, x1, y1 = self._zone_bbox('hp', y_off)
-            ring_alpha = int(88 * hp_hover + 136 * hp_press)
+            ring_alpha = int((88 * hp_hover + 136 * hp_press) * hp_alpha_scale)
             halo = Image.new('RGBA', (w, h), (0, 0, 0, 0))
             hd = ImageDraw.Draw(halo, 'RGBA')
             hd.rounded_rectangle(
@@ -2656,8 +2658,8 @@ class HpOverlay:
             )
             halo = _gpu_blur(halo, 3)
             fx.alpha_composite(halo)
-            border_alpha = int(90 * hp_hover + 132 * hp_press)
-            bar_border_alpha = int(110 * hp_hover + 152 * hp_press)
+            border_alpha = int((90 * hp_hover + 132 * hp_press) * hp_alpha_scale)
+            bar_border_alpha = int((110 * hp_hover + 152 * hp_press) * hp_alpha_scale)
             self._draw_polygon_outline_fade(
                 fx, left_poly, (243, 175, 18), border_alpha)
             self._draw_polygon_outline_fade(
