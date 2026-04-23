@@ -100,8 +100,16 @@ TARGET_HZ = _detect_refresh_hz()
 FRAME_SEC = 1.0 / TARGET_HZ
 
 
+def _stable_phase_offset(ident: str) -> int:
+    text = str(ident or '')
+    acc = 0
+    for idx, ch in enumerate(text):
+        acc = (acc + (idx + 1) * ord(ch)) & 0x7FFFFFFF
+    return acc
+
+
 class _Job:
-    __slots__ = ('ident', 'tick_fn', 'animating_fn', 'visibility_fn')
+    __slots__ = ('ident', 'tick_fn', 'animating_fn', 'visibility_fn', 'phase_offset')
 
     def __init__(self, ident: str,
                  tick_fn: Callable[[float], None],
@@ -111,6 +119,7 @@ class _Job:
         self.tick_fn = tick_fn
         self.animating_fn = animating_fn
         self.visibility_fn = visibility_fn
+        self.phase_offset = _stable_phase_offset(ident)
 
 
 class OverlayScheduler:
@@ -284,6 +293,8 @@ class OverlayScheduler:
         with self._jobs_lock:
             jobs = list(self._jobs.values())
 
+        self._poll_worker_wall_pressure()
+
         # v2.3.10+: Milder throttling + job-count pressure. When >5 panels
         # active (common in menu + HP + left-info + commander + fisheye),
         # force higher idle_skip_n to prevent main-thread overload. GPU
@@ -291,7 +302,6 @@ class OverlayScheduler:
         # animating_fn. Probe measures per-tick cost.
         budget_sec = self._frame_sec
         overloaded = self.avg_frame_ms > 0.5 * budget_sec * 1000.0
-        num_jobs = len(jobs)
         if self._render_pressure is not None:
             pressure = self._render_pressure
         else:
@@ -300,13 +310,14 @@ class OverlayScheduler:
                 pressure |= 1
             if self._menu_open:
                 pressure |= 2
-        if num_jobs > 5:
-            pressure = max(pressure, 3)  # multi-panel guard
+        pressure = max(pressure, self._wall_pressure_floor)
+        if overloaded:
+            pressure = max(pressure, 1)
         if pressure >= 3:
             idle_skip_n = 4   # ~25 Hz idle (combat + menu + many panels)
         elif pressure == 2:
             idle_skip_n = 3   # ~33 Hz idle (menu only)
-        elif pressure == 1 or overloaded:
+        elif pressure == 1:
             idle_skip_n = 3   # ~33 Hz idle (combat or overloaded)
         else:
             idle_skip_n = 1
@@ -327,7 +338,8 @@ class OverlayScheduler:
                 is_animating = bool(job.animating_fn())
             except Exception:
                 is_animating = True
-            if not is_animating and idle_skip_n > 1 and (frame_idx % idle_skip_n) != 0:
+            if (not is_animating and idle_skip_n > 1
+                    and ((frame_idx + job.phase_offset) % idle_skip_n) != 0):
                 continue
             try:
                 job.tick_fn(now)

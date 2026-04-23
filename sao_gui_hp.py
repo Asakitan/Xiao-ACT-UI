@@ -616,6 +616,7 @@ class HpOverlay:
         self._frame_cache: Optional[Image.Image] = None
         self._frame_sig: tuple = ()
         self._frame_version: int = 0
+        self._last_compose_sig: Optional[tuple] = None
 
         # Async render worker — compose + premult off main thread.
         # v2.2.12: prefer_isolation so HP gets a dedicated heavy lane,
@@ -676,6 +677,7 @@ class HpOverlay:
         self._interaction_fx_sig = ()
         self._frame_cache = None
         self._frame_sig = ()
+        self._last_compose_sig = None
 
         if self._gpu_managed and self._gpu_window is not None:
             try:
@@ -728,6 +730,7 @@ class HpOverlay:
                 self._enter_scale_t = 0.0
                 self._exiting = False
                 self._hide_after_exit = False
+                self._last_compose_sig = None
                 _phase_trace('hp.overlay.show.gpu', f'xy={self._x},{self._y}')
                 self._schedule_tick(immediate=True)
                 return
@@ -799,6 +802,7 @@ class HpOverlay:
         self._enter_scale_t = 0.0
         self._exiting = False
         self._hide_after_exit = False
+        self._last_compose_sig = None
         _phase_trace('hp.overlay.show.ulw', f'hwnd={self._hwnd} xy={self._x},{self._y}')
         self._schedule_tick(immediate=True)
 
@@ -983,9 +987,74 @@ class HpOverlay:
             return True
         if self._hp_flash_start and (now - self._hp_flash_start) < 0.45:
             return True
+        for zone in ('id', 'hp'):
+            hover_target = 1.0 if self._hover_zone == zone else 0.0
+            press_target = 1.0 if self._press_zone == zone else 0.0
+            if abs(float(self._hover_t.get(zone, 0.0) or 0.0) - hover_target) > 1e-3:
+                return True
+            if abs(float(self._press_t.get(zone, 0.0) or 0.0) - press_target) > 1e-3:
+                return True
+            if float(self._press_flash_t.get(zone, 0.0) or 0.0) > now:
+                return True
         if self._fade_target >= 1.0 and self._enter_scale_t < 0.999:
             return True
         return False
+
+    def _compose_signature(self, now: float, is_animating: Optional[bool] = None) -> Optional[tuple]:
+        """Coarse output fingerprint for pre-submit dirty-skip.
+
+        Returns None while an animation is actively moving, which forces
+        a normal submit path. In steady state we quantize all visible
+        idle effects so unchanged output does not re-run compose,
+        premultiply, or ULW enqueue.
+        """
+        if is_animating is None:
+            is_animating = self._is_animating()
+        if is_animating:
+            return None
+        if self.WIDTH <= 0 or self.HEIGHT <= 0 or self._spawn_time <= 0:
+            return None
+        try:
+            y_off = int(round(8 * (1.0 - self._enter_scale_t)))
+            hp_pct = max(0.0, min(1.0, self._hp_pct_disp))
+            max_int = int(round(self._hp_max))
+            bucket = max(1, max_int // 1000) if max_int > 0 else 1
+            hp_int = (int(round(self._hp_max * hp_pct)) // bucket) * bucket
+            sta_pct_q = int(round(self._sta_pct_disp * 100))
+            hp_group_alpha_q = int(self._hp_group_alpha_now(now) * 24)
+            tl_pulse_q = int(((now % 2.5) / 2.5) * 8)
+            br_pulse_q = int((((now + 1.3) % 2.5) / 2.5) * 8)
+            scan_q = int((((now - self._spawn_time) / 3.5) % 1.0) * 10)
+            outer_q = int(self._root_outer_pulse_strength(now) * 16)
+            cover_q, cover_sweep_q = self._root_cover_pulse_keys(now)
+            cover_q = int((cover_q / 50.0) * 16)
+            cover_sweep_q = int(cover_sweep_q // 12)
+            if self._boss_timer_text:
+                clock_q = 0
+                link_q = 0
+            else:
+                clock_q = int(now)
+                link_q = int((((now - self._spawn_time + 0.5) % 4.0) / 4.0) * 10)
+            return (
+                y_off,
+                int(round(self._fade_alpha * 100)),
+                hp_group_alpha_q,
+                self._profession, self._name, self._uid, self._level,
+                hp_int, max_int, sta_pct_q, self._sta_text,
+                bool(self._sta_offline),
+                self._boss_timer_text, self._boss_timer_urgent,
+                clock_q, link_q,
+                tl_pulse_q, br_pulse_q, scan_q,
+                outer_q, cover_q, cover_sweep_q,
+                int(round(self._hover_t.get('id', 0.0) * 32)),
+                int(round(self._hover_t.get('hp', 0.0) * 32)),
+                int(round(self._press_t.get('id', 0.0) * 32)),
+                int(round(self._press_t.get('hp', 0.0) * 32)),
+                int(max(0.0, min(0.25, (self._press_flash_t.get('id', 0.0) or 0.0) - now)) * 48),
+                int(max(0.0, min(0.25, (self._press_flash_t.get('hp', 0.0) or 0.0) - now)) * 48),
+            )
+        except Exception:
+            return None
 
     @_probe.decorate('ui.hp.tick')
     def _tick(self, now: Optional[float] = None) -> None:
@@ -1047,7 +1116,8 @@ class HpOverlay:
             #    20 Hz idle cadence was burning ~one full CPU core in
             #    compose_frame (~40 ms each). Animating frames pass
             #    through unchanged so combat HP/shield tweens stay 60 Hz.
-            if self._is_animating():
+            is_animating = self._is_animating()
+            if is_animating:
                 self._idle_submit_q = -1
                 submit_now = True
             else:
@@ -1056,8 +1126,11 @@ class HpOverlay:
                 if submit_now:
                     self._idle_submit_q = q
             if submit_now:
-                self._render_worker.submit(
-                    self.compose_frame, now, self._hwnd, self._x, self._y)
+                sig = self._compose_signature(now, is_animating=is_animating)
+                if sig is None or sig != self._last_compose_sig:
+                    self._last_compose_sig = sig
+                    self._render_worker.submit(
+                        self.compose_frame, now, self._hwnd, self._x, self._y)
 
         if self._hide_after_exit and self._fade_alpha <= 0.01:
             self.destroy()
@@ -1310,7 +1383,7 @@ class HpOverlay:
         if self._hp_flash_start and now - self._hp_flash_start < 0.45:
             self._draw_hp_flash(img, y_off, now)
 
-        if self._sta_offline:
+        if self._sta_offline and hp_group_alpha >= 0.999:
             sta_rect = (STA_X, STA_Y + y_off,
                         STA_X + STA_W, STA_Y + STA_H + y_off)
             img = _multiply_alpha_regions(img, (sta_rect,), 0.35)
@@ -2481,7 +2554,8 @@ class HpOverlay:
         skew = (ys - rh * 0.5) * 0.20
         sigma = max(10.0, rw * 0.055)
         env = np.exp(-((xs - (band_x + skew)) ** 2) / (2.0 * sigma * sigma))
-        alpha = np.clip(env * (70.0 * (1.0 - prog) + 38.0), 0, 255).astype(np.uint8)
+        alpha_scale = self._hp_group_alpha_now(now) if zone == 'hp' else 1.0
+        alpha = np.clip(env * (70.0 * (1.0 - prog) + 38.0) * alpha_scale, 0, 255).astype(np.uint8)
         arr[:, :, 0] = 243
         arr[:, :, 1] = 175
         arr[:, :, 2] = 18
@@ -2572,7 +2646,7 @@ class HpOverlay:
 
         hp_scale = 1.0 + 0.072 * hp_press
         hp_overlay = self._scale_region_overlay(
-            img, 'hp', y_off, hp_scale, 0.22 * hp_press)
+            img, 'hp', y_off, hp_scale, 0.22 * hp_press * hp_alpha_scale)
         if hp_overlay is not None:
             scale_layers.append(hp_overlay)
 
@@ -2632,7 +2706,10 @@ class HpOverlay:
             ]
             shell_overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
             sd = ImageDraw.Draw(shell_overlay, 'RGBA')
-            shell_fill = (243, 245, 247, int(12 + 24 * hp_hover + 20 * hp_press))
+            shell_fill = (
+                243, 245, 247,
+                int((12 + 24 * hp_hover + 20 * hp_press) * hp_alpha_scale),
+            )
             sd.polygon(left_poly, fill=shell_fill)
             sd.polygon(clip_poly, fill=shell_fill)
             num_x = BOX_X + int(BOX_W * 0.58) + 4
@@ -2642,7 +2719,10 @@ class HpOverlay:
             gap = 3
             right_w = 220 - left_w - gap
             right_x = num_x + left_w + gap
-            plate_fill = (243, 245, 247, int(14 + 26 * hp_hover + 24 * hp_press))
+            plate_fill = (
+                243, 245, 247,
+                int((14 + 26 * hp_hover + 24 * hp_press) * hp_alpha_scale),
+            )
             sd.rectangle((num_x, num_y, num_x + left_w - 1, num_y + num_h - 1), fill=plate_fill)
             sd.rectangle((right_x, num_y, right_x + right_w - 1, num_y + num_h - 1), fill=plate_fill)
             fx.alpha_composite(shell_overlay)
