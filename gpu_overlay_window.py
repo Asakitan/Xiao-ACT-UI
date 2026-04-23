@@ -1034,11 +1034,41 @@ class BgraPresenter:
         # redraw without changing frame content.
         self._last_uploaded_id = 0
         self._frame_dirty_id = 0
+        # v2.3.13: pump-driven time-based fade. Eliminates Tk after(16)
+        # for fade animation — the GLFW pump (which runs independently
+        # of Tk's main after queue) drives alpha smoothly even when
+        # main thread is busy. Set with start_fade(); render() computes
+        # alpha based on perf_counter elapsed.
+        self._fade_active = False
+        self._fade_t0 = 0.0
+        self._fade_dur = 0.0
+        self._fade_from = 1.0
+        self._fade_to = 1.0
+        self._fade_done_cb: Optional[Callable[[], None]] = None
+
+    def start_fade(self, target_alpha: float, duration_s: float,
+                   on_done: Optional[Callable[[], None]] = None) -> None:
+        """Begin a time-based fade from current alpha to ``target_alpha``
+        over ``duration_s``. Driven by ``render`` (pump) timestamps so it
+        stays smooth even if Tk is busy. Cancels any previous fade.
+        """
+        self._fade_from = float(self._alpha)
+        self._fade_to = max(0.0, min(1.0, float(target_alpha)))
+        self._fade_dur = max(0.001, float(duration_s))
+        self._fade_t0 = time.perf_counter()
+        self._fade_active = True
+        self._fade_done_cb = on_done
+        # Mark dirty so pump renders next tick.
+        self._dirty = True
+
+    def is_fading(self) -> bool:
+        return self._fade_active
 
     def set_alpha(self, alpha: float) -> None:
         """Optional global alpha multiplier (0..1) applied during
         ``render``. Default 1.0 = no change. Used for cheap fades
         without re-premultiplying the staged BGRA bytes."""
+        self._fade_active = False  # cancel any in-flight fade
         self._alpha = max(0.0, min(1.0, float(alpha)))
 
     def set_frame(self, bgra: bytes, w: int, h: int) -> None:
@@ -1073,6 +1103,24 @@ class BgraPresenter:
         """
         if _moderngl is None:
             return
+        # v2.3.13: pump-driven fade. Compute alpha from elapsed time.
+        if self._fade_active:
+            elapsed = time.perf_counter() - self._fade_t0
+            if elapsed >= self._fade_dur:
+                self._alpha = self._fade_to
+                self._fade_active = False
+                cb = self._fade_done_cb
+                self._fade_done_cb = None
+                if cb is not None:
+                    try:
+                        cb()
+                    except Exception:
+                        pass
+            else:
+                k = elapsed / self._fade_dur
+                self._alpha = self._fade_from + (self._fade_to - self._fade_from) * k
+                # Keep dirty so pump re-renders next tick to advance fade.
+                self._dirty = True
         bgra = self._frame_bytes
         w = self._frame_w
         h = self._frame_h
