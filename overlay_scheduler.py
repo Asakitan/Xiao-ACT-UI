@@ -1,6 +1,6 @@
-﻿"""overlay_scheduler.py - Shared display-synced frame pacer for Tk ULW overlays.
+"""overlay_scheduler.py - Shared display-synced frame pacer for Tk ULW overlays.
 
-Design:
+Design (v2.3.10):
 - One ``root.after`` loop ticks at the monitor's refresh rate (auto-detected
   on Windows; clamps to 60-240 Hz). Uses a high-resolution perf-counter
   deadline so the cadence does not drift.
@@ -10,10 +10,12 @@ Design:
   sleep/after resolution is ~1 ms, which is what a 60/120/144 Hz cadence
   actually needs.
 - Each overlay registers ``tick_fn(now)``; scheduler calls it on the Tk main
-  thread every frame. Heavy compose + premultiply work is already offloaded
-  to worker threads (see overlay_render_worker.py), so all panels — idle or
-  animating — now tick every frame. GPU composition has removed the CPU
-  bottleneck that originally motivated per-overlay idle downsampling.
+  thread every frame. The previous busy-time idle-panel guardian
+  (idle_skip_n = 3..14 when combat_load/menu_open) that reduced non-
+  animating panels to ~4-16 Hz has been **disabled**. All panels now run
+  at full refresh rate. GPU migration removed the original motivation for
+  this throttle. The set_combat_load / set_menu_open hooks remain for
+  API compatibility but no longer affect scheduling.
 """
 from __future__ import annotations
 
@@ -136,19 +138,13 @@ class OverlayScheduler:
         # player is actually looking at.
         self._combat_load = False
         # v2.2.18 (Phase 3a): menu-open signal. SAO menu webview eats the
-        # Tk main thread when its open animation runs; we drop idle
-        # overlay rate hard for the duration so the menu hits 60 FPS.
+        # Tk main thread when its open animation runs.
         self._menu_open = False
         # v2.2.18: explicit render-pressure level (0..3) overrides
-        # auto-detection if set. Worker walls or external probes write
-        # here; reset to None to let avg_frame_ms drive overload.
+        # auto-detection if set. (v2.3.10: throttling logic disabled)
         self._render_pressure: Optional[int] = None
-        # v2.2.21: closed-loop wall floor. The scheduler polls
-        # overlay_render_worker.peak_recent_worker_wall_ms() and lifts
-        # the auto pressure tier here so HP/DPS idle panels back off when
-        # SkillFX/BOSSHP composes exceed the frame budget. This is only a
-        # FLOOR — set_render_pressure() still wins as a hard override,
-        # and combat/menu hints continue to OR in.
+        # v2.2.21: closed-loop wall floor (kept but no longer used for
+        # idle_skip_n after v2.3.10 disable).
         self._wall_pressure_floor: int = 0
         self._wall_poll_frame_idx: int = 0
 
@@ -194,17 +190,14 @@ class OverlayScheduler:
 
     def set_combat_load(self, active: bool) -> None:
         """Hint that a heavy short-lived panel (e.g. SkillFX burst) is
-        currently composing. v2.2.16 uses this to throttle idle panels
-        from ≈ 10 Hz down to ≈ 6 Hz so SkillFX gets the lane bandwidth
-        and the menu open animation keeps full 60 Hz mid-combat."""
+        currently composing. (v2.3.10: throttling disabled — kept for
+        API compatibility only; no longer affects tick rate.)"""
         self._combat_load = bool(active)
 
     def set_menu_open(self, active: bool) -> None:
-        """v2.2.18: SAO menu open/close hook. While the menu is open the
-        webview animation owns the Tk main thread; idle entity panels
-        drop to ~4–7 Hz to free up bandwidth so the menu hits its 60 Hz
-        target. Animating panels (boss HP tween, SkillFX burst) still
-        tick every frame."""
+        """v2.2.18: SAO menu open/close hook. (v2.3.10: throttling
+        disabled — kept for API compatibility only; no longer affects
+        tick rate.)"""
         self._menu_open = bool(active)
 
     def set_render_pressure(self, level: Optional[int]) -> None:
@@ -290,44 +283,15 @@ class OverlayScheduler:
         with self._jobs_lock:
             jobs = list(self._jobs.values())
 
-        # v2.2.10/v2.2.14/v2.2.16: idle downsampling for non-animating
-        # panels. v2.2.14 set the floor at ≈10 Hz (skip_n=6) when busy
-        # and ≈20 Hz (skip_n=3) when idle. v2.2.16 adds a combat tier:
-        # while SkillFX (or any heavy panel) is active, bump skip_n to
-        # 10 → ≈6 Hz for idle panels, freeing render-lane and CPU
-        # bandwidth for the burst the player is actually watching and
-        # for the menu open animation when the player opens the menu
-        # mid-fight. Animating panels (boss break, skill burst, menu HUD
-        # itself) still tick every frame.
-        budget_sec = self._frame_sec
-        overloaded = self.avg_frame_ms > 0.3 * budget_sec * 1000.0
-        # v2.2.18: pressure tier picks the idle skip_n. menu_open+combat
-        # is the worst case (boss + SAO menu = the user's “卡” report).
-        if self._render_pressure is not None:
-            pressure = self._render_pressure
-        else:
-            pressure = 0
-            if self._combat_load:
-                pressure |= 1
-            if self._menu_open:
-                pressure |= 2
-            # v2.3.0: wall-pressure floor REVERTED — was reacting to
-            # cold-start compose walls (SkillFX init / first HP draw),
-            # forcing all idle entity panels to 4-7 Hz during the
-            # LinkStart intro and HP overlay reveal, causing visible
-            # stutter and a longer white-window gap before the first
-            # ULW commit. Pressure now driven only by explicit
-            # set_combat_load / set_menu_open hooks.
-        if pressure >= 3:
-            idle_skip_n = 14   # ~4 Hz idle  (combat + menu)
-        elif pressure == 2:
-            idle_skip_n = 8    # ~7 Hz idle  (menu only)
-        elif pressure == 1:
-            idle_skip_n = 10   # ~6 Hz idle  (combat only)
-        elif overloaded:
-            idle_skip_n = 6
-        else:
-            idle_skip_n = 3
+        # v2.3.10: The busy-time idle-panel guardian (idle_skip_n > 1)
+        # that reduced non-animating panels to ~4-16 Hz under combat/menu
+        # load has been DISABLED. It was causing the entire SAO panel
+        # (menu + left info + HP bars) to feel laggy. All panels now
+        # tick at full refresh rate (idle_skip_n=1). The set_combat_load()
+        # / set_menu_open() hooks are kept for API compatibility but no
+        # longer affect tick rate. GPU migration removed the original
+        # motivation for this throttle.
+        idle_skip_n = 1
         frame_idx = self._frame_idx
 
         for job in jobs:
