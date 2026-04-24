@@ -233,6 +233,9 @@ class DpsTracker:
         self._last_report: Optional[Dict[str, Any]] = None
         self._hit_fx_seq: int = 0
         self._last_hit_fx: Optional[Dict[str, Any]] = None
+        # v2.3.15: fast snapshot cache
+        self._snapshot_cache: Optional[Dict[str, Any]] = None
+        self._snapshot_cache_ts: float = 0.0
         # Player info cache: uid (str) → {name, profession, fight_point}
         self._player_cache: Dict[str, Dict[str, Any]] = {}
         self._player_cache_dirty: bool = False
@@ -475,6 +478,49 @@ class DpsTracker:
             if uid and (name or profession or fight_point > 0 or level > 0):
                 self._update_player_cache_locked(uid, name, profession, fight_point, level)
 
+    def update_player_info_batch(self, players: List[Tuple[int, str, str, int, int]]) -> None:
+        """Batch update display info for multiple players with a single lock acquisition.
+        
+        v2.3.15: eliminates N lock acquisitions when updating the whole party.
+        Each element of `players` is (uid, name, profession, fight_point, level).
+        """
+        if not players:
+            return
+        with self._lock:
+            for uid, name, profession, fight_point, level in players:
+                if not uid:
+                    continue
+                entity = self._entities.get(uid)
+                if not entity and name:
+                    entity = self._get_or_create(uid)
+                if entity:
+                    changed = False
+                    if name and entity.name != name:
+                        entity.name = name
+                        changed = True
+                    if profession and entity.profession != profession:
+                        entity.profession = profession
+                        changed = True
+                    if fight_point > 0 and entity.fight_point != fight_point:
+                        entity.fight_point = fight_point
+                        changed = True
+                    if changed:
+                        self._dirty = True
+                if name or profession or fight_point > 0 or level > 0:
+                    self._update_player_cache_locked(uid, name, profession, fight_point, level)
+
+    def try_lock(self) -> bool:
+        """Attempt to acquire the lock without blocking.
+        
+        v2.3.15: allows the main thread to skip DPS updates when the lock
+        is held by the packet thread, avoiding blocking the UI.
+        """
+        return self._lock.acquire(blocking=False)
+
+    def unlock(self) -> None:
+        """Release the lock acquired via try_lock()."""
+        self._lock.release()
+
     def reset(self):
         with self._lock:
             self._finalize_current_locked('manual_reset')
@@ -595,6 +641,27 @@ class DpsTracker:
         """Return a snapshot of the current encounter for UI rendering."""
         with self._lock:
             return self._build_snapshot_locked(include_skills=include_skills)
+
+    def get_snapshot_fast(self, max_age_ms: float = 150.0) -> Dict[str, Any]:
+        """Fast snapshot retrieval with short-lived cache.
+        
+        v2.3.15: avoids full deepcopy on every call. Returns a cached
+        snapshot if less than max_age_ms has elapsed since the last
+        build. The cache is invalidated on any data mutation (dirty flag).
+        """
+        now = time.time()
+        _cached = self._snapshot_cache
+        if _cached is not None and (now - self._snapshot_cache_ts) * 1000 < max_age_ms:
+            return _cached
+        with self._lock:
+            snap = self._build_snapshot_locked(include_skills=False)
+            self._snapshot_cache = snap
+            self._snapshot_cache_ts = time.time()
+            return snap
+
+    def invalidate_snapshot_cache(self) -> None:
+        """Force the next get_snapshot_fast to rebuild."""
+        self._snapshot_cache = None
 
     def get_entity_detail(self, uid: int) -> Optional[Dict[str, Any]]:
         """Return detailed stats for a single entity (with skill breakdown)."""

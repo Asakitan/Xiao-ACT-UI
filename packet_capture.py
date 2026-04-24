@@ -366,6 +366,16 @@ class TcpReassembler:
             #   判为 "跨 addr c3SB" 切回去, 形成 ping-pong, 用户看到 BossHP
             #   反复刷新最终失踪.
             if self._identify_strict(payload):
+                # v2.3.15: 数据流没有断的时候，不触发场景切换。
+                # 如果旧服务器在最近 3 秒内还在持续提供有效游戏帧，
+                # 那说明旧连接仍然活跃，这个新 addr 的包很可能是干扰
+                # 流量 (聊天/社交/语音等其他 TCP 连接碰巧带了 c3SB 特征)。
+                # 只有旧服务器真的停了 (超时无数据) 才切换。
+                _now = time.time()
+                _old_still_alive = (_now - self._last_t) < 3.0
+                if _old_still_alive:
+                    # 旧流仍在活跃, 不切换 — 直接丢弃新 addr 的包
+                    return
                 old_addr = self._server_addr
                 self._server_addr = addr
                 # 重置 TCP 重组状态
@@ -549,18 +559,33 @@ class TcpReassembler:
         return self._identify_strict(data) or self._identify_loose(data)
 
     def _identify_strict(self, data: bytes) -> bool:
-        """严格识别: FrameDown(type=6) 嵌套含 c3SB 签名, 或 Login Return.
+        """严格识别: FrameDown(type=6) 嵌套含 c3SB 签名, Login Return,
+        或 zstd-wrapped FrameDown.
 
-        这两条路径都对 packet 结构有强约束 (头部固定字段 + 嵌套帧长度合法),
-        几乎不可能在普通业务流量 (聊天/社交/语音/CDN) 中误中. 用于跨 addr
-        的场景服务器切换判定 — 任何 ``addr != _server_addr`` 的入站包都必须
-        通过严格识别才允许切换 ``_server_addr``.
+        v2.3.15: 修复某些地下城场景服务器切换时首包不被识别的问题.
+        原版只检查 data[4]==0 && data[5]==6 (非压缩 FrameDown), 但
+        某些场景切换首包的 type=0x8006 (zstd 压缩的 FrameDown),
+        此时 data[4]=0x80, data[5]=0x06, 旧判断 data[4]==0 失败.
+        修复: 提取 msg_type 并检查 & 0x7FFF == 6.
+        对于 zstd FrameDown, 嵌套帧被压缩, 无法扫描 c3SB 字面量,
+        但 zstd + FrameDown 组合在非游戏流量中几乎不可能出现, 视为
+        足够严格.
         """
-        # 方法 1: FrameDown (type=6) 嵌套含 c3SB
-        if len(data) > 10 and data[4] == 0 and data[5] == 6:
-            nested = data[10:]
-            if self._scan_c3sb(nested):
-                return True
+        # 方法 1: FrameDown (type=6, zstd or plain) 嵌套含 c3SB
+        if len(data) > 6:
+            _pkt_type_raw = struct.unpack_from('>H', data, 4)[0]
+            _is_zstd = bool(_pkt_type_raw & 0x8000)
+            _msg_type = _pkt_type_raw & 0x7FFF
+            if _msg_type == 6:  # FrameDown
+                if _is_zstd:
+                    # zstd-wrapped FrameDown: cannot scan c3SB in
+                    # compressed data, but zstd+FrameDown combo is
+                    # already extremely unlikely in non-game traffic.
+                    return True
+                # Plain FrameDown: scan nested frames for c3SB
+                nested = data[6:]
+                if self._scan_c3sb(nested):
+                    return True
         # 方法 2: Login Return (0x62 bytes, type=3)
         if (len(data) >= 0x62 and data[:4] == b'\x00\x00\x00\x62'
                 and data[4:6] == b'\x00\x03'):
