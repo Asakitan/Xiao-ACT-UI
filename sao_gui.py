@@ -2256,13 +2256,19 @@ class SAOPlayerGUI:
     def _push_packet_overlays(self, gs):
         """始终运行的 DPS / Boss HP 覆盖板推送 — 数据完全由 packet on_damage 回调驱动,
         与 recognition_ok / packet_active 闸门解耦, 避免抓包链路里任何一处中断都拖累弹出.
+
+        v2.3.16: consolidated DPS tracker access into a single lock acquisition
+        via poll_overlay_state() to reduce lock contention from 9 → 1.
         """
         # ── DPS tracker: 更新自身玩家信息 ──
         if self._dps_tracker and gs is not None and getattr(gs, 'player_id', ''):
             try:
                 _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
                 if _p_uid:
-                    self._dps_tracker.set_self_uid(_p_uid)
+                    # v2.3.16: skip set_self_uid if unchanged (avoids lock)
+                    if _p_uid != getattr(self, '_last_self_uid_pushed', 0):
+                        self._last_self_uid_pushed = _p_uid
+                        self._dps_tracker.set_self_uid(_p_uid)
                     if self._dps_overlay:
                         self._dps_overlay.set_self_uid(_p_uid)
                     _self_fp = 0
@@ -2272,18 +2278,23 @@ class SAOPlayerGUI:
                         _sp = _all_p.get(_p_uid)
                         if _sp:
                             _self_fp = getattr(_sp, 'fight_point', 0) or 0
-                    self._dps_tracker.update_player_info(
-                        _p_uid,
-                        gs.player_name or '',
-                        gs.profession_name or '',
-                        _self_fp,
-                        int(gs.level_base or 0),
-                    )
+                    # v2.3.16: skip update_player_info if sig unchanged
+                    _pi_sig = (_p_uid, gs.player_name or '',
+                               gs.profession_name or '', _self_fp,
+                               int(gs.level_base or 0))
+                    if _pi_sig != getattr(self, '_last_self_pi_sig', None):
+                        self._last_self_pi_sig = _pi_sig
+                        self._dps_tracker.update_player_info(
+                            _p_uid,
+                            gs.player_name or '',
+                            gs.profession_name or '',
+                            _self_fp,
+                            int(gs.level_base or 0),
+                        )
             except Exception:
                 pass
 
-        # ── 同步队伍中所有玩家信息 (batch) ──
-        # v2.3.15: collect all players first, then single lock acquisition
+        # ── 同步队伍中所有玩家信息 (batch, 1 lock) ──
         if self._dps_tracker:
             _bridge = getattr(self, '_packet_engine', None)
             if _bridge:
@@ -2298,30 +2309,44 @@ class SAOPlayerGUI:
                                 getattr(_pd, 'fight_point', 0) or 0,
                                 getattr(_pd, 'level', 0) or 0,
                             ))
-                    if _batch:
+                    # v2.3.16: skip batch update if player roster unchanged
+                    _batch_sig = tuple(sorted(
+                        (uid, name, prof, fp, lv)
+                        for uid, name, prof, fp, lv in _batch
+                    ))
+                    if _batch_sig != getattr(self, '_last_batch_pi_sig', None):
+                        self._last_batch_pi_sig = _batch_sig
                         self._dps_tracker.update_player_info_batch(_batch)
                 except Exception:
                     pass
 
-        # ── DPS Overlay push ──
+        # ── DPS Overlay push (single lock acquisition via poll_overlay_state) ──
         if self._dps_tracker:
             try:
                 _dps_enabled = bool(self._get_setting('dps_enabled', True))
                 _dps_fade_timeout = float(self._get_setting('dps_fade_timeout_s', 15) or 15)
                 _dps_fade_timeout = max(5.0, _dps_fade_timeout)
-                self._dps_tracker.finalize_if_idle(_dps_fade_timeout, 'idle_timeout')
-                self._sync_dps_report_availability()
-                if self._dps_tracker.is_dirty():
-                    # v2.3.15: use fast path with 150ms cache to avoid
-                    # full deepcopy every 200ms loop iteration
-                    _dps_snap = self._dps_tracker.get_snapshot_fast(max_age_ms=150)
-                    _dps_has_live = bool(
-                        int(_dps_snap.get('total_damage') or 0) > 0
-                        and self._dps_tracker.has_recent_damage(_dps_fade_timeout)
-                    )
-                    if self._dps_overlay:
-                        self._dps_overlay.set_report_available(
-                            self._get_dps_last_report_available())
+
+                # Single lock acquisition for all DPS queries
+                _detail_uid = 0
+                if (self._dps_overlay
+                        and getattr(self._dps_overlay, '_detail_visible', False)):
+                    _detail_uid = int(getattr(self._dps_overlay, '_detail_uid', 0) or 0)
+
+                _poll = self._dps_tracker.poll_overlay_state(
+                    max_age_ms=150,
+                    idle_timeout_s=_dps_fade_timeout,
+                    detail_uid=_detail_uid,
+                )
+
+                if self._dps_overlay:
+                    self._dps_overlay.set_report_available(_poll['has_report'])
+
+                _dps_snap = _poll['snapshot']
+                _dps_has_live = _poll['has_live']
+                _dirty = _poll['dirty']
+
+                if _dirty and _dps_snap:
                     if _dps_enabled and _dps_has_live and self._dps_overlay and self._dps_mode != 'report':
                         if not self._dps_visible:
                             self._dps_visible = True
@@ -2331,26 +2356,23 @@ class SAOPlayerGUI:
                         self._dps_overlay.update(_dps_snap)
                     elif self._dps_overlay and (self._dps_visible or self._dps_mode == 'report'):
                         self._dps_overlay.update(_dps_snap)
-                if (self._dps_overlay
-                        and getattr(self._dps_overlay, '_detail_visible', False)
-                        and self._dps_mode == 'live'):
-                    _detail_uid = int(getattr(self._dps_overlay,
-                                              '_detail_uid', 0) or 0)
-                    if _detail_uid > 0:
-                        try:
-                            _det = self._dps_tracker.get_entity_detail(_detail_uid)
-                            if _det:
-                                self._dps_overlay.update_detail(_det)
-                        except Exception:
-                            pass
+
+                # Entity detail popup
+                if _detail_uid > 0 and _poll['detail'] and self._dps_overlay:
+                    try:
+                        self._dps_overlay.update_detail(_poll['detail'])
+                    except Exception:
+                        pass
+
+                # Fade management
                 if self._dps_overlay and self._dps_visible and self._dps_mode != 'report':
-                    if not self._dps_tracker.has_recent_damage(_dps_fade_timeout):
+                    if _poll['should_fade_out']:
                         if not self._dps_faded:
                             self._dps_overlay.fade_out()
                             self._dps_faded = True
                         self._dps_visible = False
                         self._dps_mode = 'hidden'
-                    elif self._dps_faded:
+                    elif self._dps_faded and _dps_has_live:
                         self._dps_overlay.fade_in()
                         self._dps_faded = False
             except Exception:
@@ -2530,8 +2552,14 @@ class SAOPlayerGUI:
                                 _lv_text = f'{_lv}(+{_lv_extra})'
                             else:
                                 _lv_text = str(_lv)
-                            self._hp_overlay.update_hp(hp, hp_max, _lv_text)
-                            self._hp_overlay.update_sta(sta, sta_max)
+                            # v2.3.16: skip HP overlay update if data unchanged
+                            # (also pushed by _apply_fast_state_update via listener)
+                            _hp_sig = (int(hp), int(hp_max), _lv_text,
+                                       int(sta), int(sta_max))
+                            if _hp_sig != getattr(self, '_last_recog_hp_sig', None):
+                                self._last_recog_hp_sig = _hp_sig
+                                self._hp_overlay.update_hp(hp, hp_max, _lv_text)
+                                self._hp_overlay.update_sta(sta, sta_max)
                             _sta_offline = self._should_show_sta_offline(gs)
                             self._hp_overlay.set_sta_offline(
                                 _sta_offline)
