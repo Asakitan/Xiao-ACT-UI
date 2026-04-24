@@ -515,6 +515,36 @@ class BossHpOverlay:
         # True. Drives idle CPU back toward webview parity.
         self._idle_committed = False
 
+        # Theme: load saved preference
+        self._theme_name: str = 'light'
+        if settings is not None:
+            try:
+                saved = settings.get('panel_themes', {}).get('bosshp', 'light')
+                if saved in ('light', 'dark'):
+                    self._apply_theme(saved)
+            except Exception:
+                pass
+
+    # ── Theme ──
+
+    def _apply_theme(self, theme_name: str) -> None:
+        """切换 BossHP 面板主题并清除所有渲染缓存。"""
+        from sao_theme import get_panel_theme
+        theme = get_panel_theme('bosshp', theme_name)
+        if not theme:
+            return
+        for key, value in theme.items():
+            setattr(self, key, value)
+        self._theme_name = theme_name
+        self._cache_cover = None
+        self._cache_cover_mask = None
+        self._cache_bar_mask = None
+        self._cache_panel_mask = None
+        self._static_cache = None; self._static_y_off = -9999
+        self._text_layer_cache = None; self._text_layer_sig = ()
+        self._frame_cache = None; self._frame_sig = ()
+        self._frame_version += 1
+
     # ──────────────────────────────────────────
     #  Lifecycle
     # ──────────────────────────────────────────
@@ -580,6 +610,15 @@ class BossHpOverlay:
             ctypes.c_void_p(self._hwnd), GWL_EXSTYLE,
             ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         )
+        # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
+        try:
+            _GCL_STYLE, _CS_DS = -26, 0x00020000
+            _cls = ctypes.windll.user32.GetClassLongW(self._hwnd, _GCL_STYLE)
+            if _cls & _CS_DS:
+                ctypes.windll.user32.SetClassLongW(
+                    self._hwnd, _GCL_STYLE, _cls & ~_CS_DS)
+        except Exception:
+            pass
         try:
             _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
         except Exception:
@@ -2756,3 +2795,48 @@ def _truncate(draw: ImageDraw.ImageDraw, text: str, font,
         else:
             hi = mid
     return text[: max(0, lo - 1)] + ell
+
+
+# ────────────────────────────────────────────────────────────
+# Theme dictionaries & registration
+# ────────────────────────────────────────────────────────────
+
+BOSS_THEME_LIGHT = {
+    'COVER_A':         (244, 246, 247, 255),
+    'COVER_MID':       (232, 235, 238, 255),
+    'COVER_B':         (223, 227, 231, 255),
+    'COVER_EDGE':      (186, 190, 196, 255),
+    'COVER_EDGE_DEEP': (160, 165, 171, 255),
+    'LINE':            (214, 216, 219, 255),
+    'LINE_SOFT':       (246, 247, 248, 255),
+    'HAIRLINE_LIGHT':  (248, 249, 250, 255),
+    'HAIRLINE_MID':    (226, 229, 232, 255),
+    'HAIRLINE_DARK':   (160, 165, 171, 255),
+    'TEXT_SHADOW':     (190, 192, 195, 255),
+    'TEXT_MAIN':       (100, 99, 100, 255),
+    'TEXT_MUTED':      (140, 135, 138, 255),
+    'BOX_BG':          (248, 249, 250, 255),
+    'BAR_TRACK':       (172, 176, 182, 42),
+}
+
+BOSS_THEME_DARK = {
+    'COVER_A':         (20, 26, 36, 255),
+    'COVER_MID':       (16, 20, 30, 255),
+    'COVER_B':         (12, 16, 24, 255),
+    'COVER_EDGE':      (50, 80, 110, 200),
+    'COVER_EDGE_DEEP': (40, 65, 90, 200),
+    'LINE':            (50, 70, 90, 255),
+    'LINE_SOFT':       (30, 42, 58, 255),
+    'HAIRLINE_LIGHT':  (35, 50, 70, 255),
+    'HAIRLINE_MID':    (45, 62, 82, 255),
+    'HAIRLINE_DARK':   (60, 85, 110, 255),
+    'TEXT_SHADOW':     (0, 0, 0, 120),
+    'TEXT_MAIN':       (210, 220, 230, 255),
+    'TEXT_MUTED':      (120, 140, 160, 255),
+    'BOX_BG':          (22, 30, 42, 255),
+    'BAR_TRACK':       (40, 60, 80, 50),
+}
+
+from sao_theme import register_panel_theme
+register_panel_theme('bosshp', 'light', BOSS_THEME_LIGHT)
+register_panel_theme('bosshp', 'dark', BOSS_THEME_DARK)

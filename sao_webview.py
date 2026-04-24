@@ -266,6 +266,18 @@ class SettingsManager:
         self._load()
 
     def _load(self):
+        # Clean up stale temp files from interrupted atomic saves
+        try:
+            base = os.path.dirname(self._path)
+            if base:
+                for f in os.listdir(base):
+                    if f.endswith(".tmp.json") and f.startswith("tmp"):
+                        try:
+                            os.remove(os.path.join(base, f))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         try:
             if os.path.exists(self._path):
                 with open(self._path, 'r', encoding='utf-8') as f:
@@ -297,6 +309,12 @@ class SettingsManager:
                 tmp_path = tmp.name
             os.replace(tmp_path, self._path)
         except Exception:
+            # Clean up orphaned temp file if os.replace failed
+            try:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
             # fallback to direct write
             try:
                 with open(self._path, 'w', encoding='utf-8') as f:
@@ -382,6 +400,41 @@ class SAOWebAPI:
         try:
             from sao_updater import get_manager
             get_manager().skip_current()
+            return True
+        except Exception:
+            return False
+
+    # ---- 面板主题 ----
+    def get_panel_themes(self):
+        """返回当前面板主题设置 (JS 调用获取初始主题)."""
+        try:
+            cfg = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
+            return cfg.get('panel_themes', {})
+        except Exception:
+            return {}
+
+    def set_panel_theme(self, panel: str, theme: str):
+        """从 JS 端设置面板主题并保存."""
+        try:
+            cfg = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
+            themes = dict(cfg.get('panel_themes', {}))
+            themes[panel] = theme
+            cfg.set('panel_themes', themes)
+            cfg.save()
+            # 即时推送到对应 webview 面板窗口
+            _win_map = {
+                'dps': getattr(self._g, 'dps_win', None),
+                'hp': getattr(self._g, 'hp_win', None),
+                'bosshp': getattr(self._g, 'boss_hp_win', None),
+                'skillfx': getattr(self._g, 'skillfx_win', None),
+                'alert': getattr(self._g, 'alert_win', None),
+            }
+            w = _win_map.get(panel)
+            if w:
+                try:
+                    w.evaluate_js(f'window._applyPanelTheme&&window._applyPanelTheme("{theme}")')
+                except Exception:
+                    pass
             return True
         except Exception:
             return False

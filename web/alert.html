@@ -41,6 +41,20 @@
 
 :root {
     --font-ui: 'saoLatin', 'sao', 'yuanJWDCJK', 'yuanJWD', 'Segoe UI', sans-serif;
+    --title-bg: rgba(255, 255, 255, 0.82);
+    --body-bg: rgba(234, 233, 233, 0.76);
+    --footer-bg: rgba(255, 255, 255, 0.80);
+    --title-fg: rgb(100, 99, 100);
+    --body-fg: rgb(100, 96, 96);
+    --alert-shadow: rgba(0, 0, 0, 0.30);
+}
+.theme-dark {
+    --title-bg: rgba(18, 24, 34, 0.90);
+    --body-bg: rgba(14, 18, 28, 0.85);
+    --footer-bg: rgba(20, 26, 36, 0.88);
+    --title-fg: rgb(200, 215, 230);
+    --body-fg: rgb(180, 195, 210);
+    --alert-shadow: rgba(0, 0, 0, 0.45);
 }
 
 html, body {
@@ -89,13 +103,13 @@ body.closing .alert-shell {
 .alert-box {
     overflow: hidden;
     border-radius: 2px;
-    box-shadow: 0 0 32px 4px rgba(0, 0, 0, 0.30);
+    box-shadow: 0 0 32px 4px var(--alert-shadow);
 }
 
 .alert-title {
     height: 68px;
-    background: rgba(255, 255, 255, 0.82);
-    box-shadow: rgba(0, 0, 0, .3) 0 13px 12px 0, rgba(0, 0, 0, .1) 0 13px 15px 15px;
+    background: var(--title-bg);
+    box-shadow: var(--alert-shadow) 0 13px 12px 0, rgba(0, 0, 0, .1) 0 13px 15px 15px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -110,7 +124,7 @@ body.closing .alert-shell {
     font-weight: 800;
     font-size: 18px;
     letter-spacing: 1px;
-    color: rgb(100, 99, 100);
+    color: var(--title-fg);
 }
 
 .alert-body {
@@ -119,8 +133,8 @@ body.closing .alert-shell {
     align-items: center;
     justify-content: center;
     padding: 18px 22px;
-    background: rgba(234, 233, 233, 0.76);
-    color: rgb(100, 96, 96);
+    background: var(--body-bg);
+    color: var(--body-fg);
     font-family: var(--font-ui);
     font-size: 14px;
     line-height: 1.7;
@@ -132,7 +146,7 @@ body.closing .alert-shell {
     height: 20px;
     position: relative;
     overflow: hidden;
-    background: rgba(255, 255, 255, 0.80);
+    background: var(--footer-bg);
     box-shadow: rgba(0, 0, 0, .07) 0 -10px 12px 0, rgba(0, 0, 0, .08) 0 -2px 12px 0;
 }
 
@@ -226,6 +240,21 @@ window.AlertPanel = {
     showAlert: showAlert,
     beginClose: beginClose
 };
+</script>
+<script>
+// Theme initialization
+(function(){
+    var panel='alert', darkCls='theme-dark', fallback='light';
+    function apply(t){document.documentElement.classList.toggle(darkCls,t==='dark')}
+    try{
+        if(window.pywebview&&window.pywebview.api){
+            window.pywebview.api.get_panel_themes().then(function(themes){
+                apply((themes&&themes[panel])||fallback);
+            }).catch(function(){apply(fallback)});
+        }
+    }catch(e){}
+    window._applyPanelTheme=function(t){apply(t)};
+})();
 </script>
 </body>
 </html>

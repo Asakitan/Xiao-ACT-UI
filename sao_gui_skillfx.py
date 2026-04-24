@@ -287,6 +287,35 @@ class BurstReadyOverlay:
         # SkillFX renders on a pinned worker lane, so the GL energy pass can
         # stay enabled without touching the Tk thread.
 
+        # Theme: SkillFX defaults to dark (its natural aesthetic).
+        self._theme_name: str = 'dark'
+        if settings is not None:
+            try:
+                saved = settings.get('panel_themes', {}).get('skillfx', 'dark')
+                if saved in ('light', 'dark'):
+                    self._apply_theme(saved)
+            except Exception:
+                pass
+
+    # ── Theme ──
+
+    def _apply_theme(self, theme_name: str) -> None:
+        """切换 SkillFX 面板主题并清除所有渲染缓存。"""
+        from sao_theme import get_panel_theme
+        theme = get_panel_theme('skillfx', theme_name)
+        if not theme:
+            return
+        # SkillFX uses module-level constants → mutate the module
+        import sao_gui_skillfx as _mod
+        for key, value in theme.items():
+            setattr(_mod, key, value)
+        self._theme_name = theme_name
+        # Clear caches
+        self._cap_static = None; self._cap_sig = ()
+        self._cap_base_static = None; self._cap_base_sig = ()
+        self._beam_cache = None; self._beam_cache_sig = ()
+        self._warm_sig = ()
+
     # ──────────────────────────────────────────
     #  Lifecycle
     # ──────────────────────────────────────────
@@ -343,6 +372,15 @@ class BurstReadyOverlay:
             ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW
             | WS_EX_TOPMOST | WS_EX_TRANSPARENT,
         )
+        # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
+        try:
+            _GCL_STYLE, _CS_DS = -26, 0x00020000
+            _cls = ctypes.windll.user32.GetClassLongW(self._hwnd, _GCL_STYLE)
+            if _cls & _CS_DS:
+                ctypes.windll.user32.SetClassLongW(
+                    self._hwnd, _GCL_STYLE, _cls & ~_CS_DS)
+        except Exception:
+            pass
         try:
             _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
         except Exception:
@@ -1861,3 +1899,45 @@ void main() {
             np.clip(alpha, 0, 255),
         ], axis=-1).astype(np.uint8)
         return Image.fromarray(arr, 'RGBA')
+
+
+# ────────────────────────────────────────────────────────────
+# Theme dictionaries & registration
+# ────────────────────────────────────────────────────────────
+
+# SkillFX 默认就是深色发光风格, dark = 当前值, light = 降对比度变体
+FX_THEME_DARK = {
+    'CYAN_HI':     (113, 238, 255, 250),
+    'CYAN_MID':    (97, 232, 255, 235),
+    'CYAN_SOFT':   (97, 232, 255, 110),
+    'CYAN_GLOW':   (97, 232, 255, 70),
+    'GOLD_HI':     (255, 189, 70, 245),
+    'GOLD_MID':    (255, 188, 66, 210),
+    'GOLD_SOFT':   (255, 188, 66, 95),
+    'BG_DARK':     (6, 18, 38, 255),
+    'BG_MID':      (12, 32, 62, 180),
+    'TEXT_MAIN':   (227, 251, 255, 255),
+    'TEXT_TAG':    (124, 235, 255, 255),
+    'TEXT_SUB':    (164, 239, 255, 255),
+    'TEXT_STROKE': (182, 247, 255, 66),
+}
+
+FX_THEME_LIGHT = {
+    'CYAN_HI':     (40, 160, 200, 245),
+    'CYAN_MID':    (35, 150, 190, 230),
+    'CYAN_SOFT':   (35, 150, 190, 80),
+    'CYAN_GLOW':   (35, 150, 190, 45),
+    'GOLD_HI':     (200, 145, 30, 240),
+    'GOLD_MID':    (195, 140, 28, 200),
+    'GOLD_SOFT':   (195, 140, 28, 70),
+    'BG_DARK':     (240, 242, 245, 255),
+    'BG_MID':      (248, 249, 252, 200),
+    'TEXT_MAIN':   (50, 80, 100, 255),
+    'TEXT_TAG':    (60, 140, 170, 255),
+    'TEXT_SUB':    (80, 120, 150, 255),
+    'TEXT_STROKE': (255, 255, 255, 50),
+}
+
+from sao_theme import register_panel_theme
+register_panel_theme('skillfx', 'dark', FX_THEME_DARK)
+register_panel_theme('skillfx', 'light', FX_THEME_LIGHT)

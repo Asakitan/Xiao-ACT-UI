@@ -22,6 +22,21 @@
 }
 :root {
     --font-sao: 'saoLatin', 'sao', 'Segoe UI', sans-serif;
+    /* SkillFX default = dark */
+    --fx-cyan-hi: rgba(113,238,255,0.98);
+    --fx-cyan-mid: rgba(97,232,255,0.92);
+    --fx-gold-hi: rgba(255,189,70,0.96);
+    --fx-bg: rgba(6,18,38,1);
+    --fx-text: rgb(227,251,255);
+    --fx-text-sub: rgb(164,239,255);
+}
+.theme-light {
+    --fx-cyan-hi: rgba(40,160,200,0.95);
+    --fx-cyan-mid: rgba(35,150,190,0.90);
+    --fx-gold-hi: rgba(200,145,30,0.94);
+    --fx-bg: rgba(240,242,245,1);
+    --fx-text: rgb(50,80,100);
+    --fx-text-sub: rgb(80,120,150);
 }
 html, body {
     width: 100%;
@@ -957,6 +972,21 @@ window.addEventListener('load', function() {
     }
     _initGL();
 });
+</script>
+<script>
+// Theme initialization — SkillFX defaults to dark; light is the variant
+(function(){
+    var panel='skillfx', darkCls='theme-light', fallback='dark';
+    function apply(t){document.documentElement.classList.toggle(darkCls,t==='light')}
+    try{
+        if(window.pywebview&&window.pywebview.api){
+            window.pywebview.api.get_panel_themes().then(function(themes){
+                apply((themes&&themes[panel])||fallback);
+            }).catch(function(){apply(fallback)});
+        }
+    }catch(e){}
+    window._applyPanelTheme=function(t){apply(t)};
+})();
 </script>
 </body>
 </html>

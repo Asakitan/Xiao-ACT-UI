@@ -614,6 +614,49 @@ html, body {
     opacity: 0.65;
 }
 
+.sao-icon-theme {
+    border: 2px solid currentColor;
+    border-radius: 50%;
+}
+.sao-icon-theme::before {
+    inset: 4px;
+    border: 2px solid currentColor;
+    border-radius: 50%;
+}
+.sao-icon-theme::after {
+    left: 50%;
+    top: 60%;
+    width: 5px;
+    height: 5px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow:
+        -6px -6px 0 0 currentColor,
+        5px -4px 0 0 currentColor;
+}
+
+.sao-icon-about {
+}
+.sao-icon-about::before {
+    left: 50%;
+    top: 3px;
+    width: 4px;
+    height: 4px;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: currentColor;
+}
+.sao-icon-about::after {
+    left: 50%;
+    top: 10px;
+    width: 4px;
+    height: 12px;
+    transform: translateX(-50%);
+    border-radius: 2px;
+    background: currentColor;
+}
+
 /* ═══ Custom sub-menu widgets ═══ */
 .child-menu li.widget-row {
     height: auto;
@@ -3146,6 +3189,12 @@ html, body {
             <li class="item" data-name="panels" data-idx="4">
                 <div class="in-circle"><span class="sao-icon sao-icon-settings"></span></div>
             </li>
+            <li class="item" data-name="theme" data-idx="5">
+                <div class="in-circle"><span class="sao-icon sao-icon-theme"></span></div>
+            </li>
+            <li class="item" data-name="about" data-idx="6">
+                <div class="in-circle"><span class="sao-icon sao-icon-about"></span></div>
+            </li>
         </ul>
 
         <!-- ChildBar -->
@@ -3573,10 +3622,30 @@ html, body {
                         <div class="mode-btn active" id="open-data-source-panel">CONFIGURE</div>
                     </div>
                 </li>
-                <li class="sep"></li>
+            </ul>
+            <!-- About / System sub-menu -->
+            <ul class="child-menu" id="sub-about" data-group="about">
                 <li data-action="switch_to_entity"><i class="menu-glyph mi-ent"></i><span>切换到 Entity UI</span></li>
                 <li class="sep"></li>
                 <li data-action="exit"><i class="menu-glyph mi-exit"></i><span>退出</span></li>
+            </ul>
+            <!-- Theme sub-menu (accessed via the theme circle button) -->
+            <ul class="child-menu" id="sub-theme" data-group="theme">
+                <li class="widget-row">
+                    <div class="widget-label">PANEL THEME 面板皮肤</div>
+                    <div class="widget-note">每个面板可独立切换 Light / Dark 主题，即时生效。点击下方按钮切换。</div>
+                    <div class="boss-bar-mode-group" style="margin-top:4px;">
+                        <button class="boss-bar-mode-btn" id="theme-all-light" type="button" onclick="_setAllThemes('light')">全部 Light</button>
+                        <button class="boss-bar-mode-btn" id="theme-all-dark" type="button" onclick="_setAllThemes('dark')">全部 Dark</button>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-top:6px;font-size:12px;">
+                        <div class="mode-btn" id="theme-dps" onclick="_toggleTheme('dps')" style="cursor:pointer;text-align:center;padding:3px 6px;">DPS: Light</div>
+                        <div class="mode-btn" id="theme-hp" onclick="_toggleTheme('hp')" style="cursor:pointer;text-align:center;padding:3px 6px;">HP: Light</div>
+                        <div class="mode-btn" id="theme-bosshp" onclick="_toggleTheme('bosshp')" style="cursor:pointer;text-align:center;padding:3px 6px;">BossHP: Light</div>
+                        <div class="mode-btn" id="theme-skillfx" onclick="_toggleTheme('skillfx')" style="cursor:pointer;text-align:center;padding:3px 6px;">SkillFX: Dark</div>
+                        <div class="mode-btn" id="theme-alert" onclick="_toggleTheme('alert')" style="cursor:pointer;text-align:center;padding:3px 6px;">Alert: Light</div>
+                    </div>
+                </li>
             </ul>
         </div>
     </div>
@@ -5186,6 +5255,60 @@ document.getElementById('ak-engine-pause-on-death').addEventListener('change', f
     _akDraftEngineField('pause_on_death', this.checked, 'bool');
 });
 
+/* ═══ Panel Theme toggles ═══ */
+var _panelThemes = {};
+var _themeDefaultDark = { skillfx: true };
+
+function _refreshThemeButtons() {
+    var panels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert'];
+    var allLight = true, allDark = true;
+    panels.forEach(function(p) {
+        var el = document.getElementById('theme-' + p);
+        if (!el) return;
+        var t = _panelThemes[p] || (_themeDefaultDark[p] ? 'dark' : 'light');
+        el.textContent = el.textContent.split(':')[0] + ': ' + t.toUpperCase();
+        el.classList.toggle('active', t === 'dark');
+        if (t !== 'light') allLight = false;
+        if (t !== 'dark') allDark = false;
+    });
+    var bl = document.getElementById('theme-all-light');
+    var bd = document.getElementById('theme-all-dark');
+    if (bl) bl.classList.toggle('active', !!allLight);
+    if (bd) bd.classList.toggle('active', !!allDark);
+}
+
+function _toggleTheme(panel) {
+    var cur = _panelThemes[panel] || (_themeDefaultDark[panel] ? 'dark' : 'light');
+    var next = cur === 'light' ? 'dark' : 'light';
+    _panelThemes[panel] = next;
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_panel_theme) {
+        window.pywebview.api.set_panel_theme(panel, next);
+    }
+    _refreshThemeButtons();
+}
+
+function _setAllThemes(theme) {
+    var panels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert'];
+    panels.forEach(function(p) {
+        _panelThemes[p] = theme;
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_panel_theme) {
+            window.pywebview.api.set_panel_theme(p, theme);
+        }
+    });
+    _refreshThemeButtons();
+}
+
+function _initPanelThemes() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.get_panel_themes) {
+        window.pywebview.api.get_panel_themes().then(function(themes) {
+            if (themes && typeof themes === 'object') {
+                _panelThemes = themes;
+            }
+            _refreshThemeButtons();
+        }).catch(function() { _refreshThemeButtons(); });
+    }
+}
+
 function restoreMenuSettings(cfg) {
     if (!cfg) return;
     /* Watched slots */
@@ -6614,6 +6737,7 @@ window.SAO = {
 };
 
 setTimeout(function() {
+    _initPanelThemes();
     if (window.pywebview && window.pywebview.api && window.pywebview.api.get_auto_key_state) {
         window.pywebview.api.get_auto_key_state().then(function(result) {
             var data = _akParseApiResult(result);

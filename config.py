@@ -1005,6 +1005,17 @@ class SettingsManager:
         self._load()
 
     def _load(self):
+        # Clean up stale temp files from interrupted atomic saves
+        try:
+            dir_name = os.path.dirname(self._path) or os.getcwd()
+            for f in os.listdir(dir_name):
+                if f.endswith(".tmp.json") and f.startswith("tmp"):
+                    try:
+                        os.remove(os.path.join(dir_name, f))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         try:
             if os.path.exists(self._path):
                 with open(self._path, "r", encoding="utf-8") as handle:
@@ -1034,6 +1045,12 @@ class SettingsManager:
             os.replace(tmp_path, self._path)
         except Exception as e:
             print(f"[Settings] Save failed: {e} (path={self._path})")
+            # Clean up orphaned temp file if os.replace failed
+            try:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
             # fallback to direct write
             try:
                 with open(self._path, "w", encoding="utf-8") as handle:
