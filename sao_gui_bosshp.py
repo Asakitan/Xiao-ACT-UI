@@ -709,6 +709,28 @@ class BossHpOverlay:
 
         shield_active = bool(data.get('shield_active', False))
         shield_pct = max(0.0, min(1.0, float(data.get('shield_pct') or 0)))
+
+        # ── Shield liveness heuristic ──
+        # If shield_active is True but shield_pct is 0 and the boss HP has been
+        # decreasing, the server likely stopped sending ShieldList updates after
+        # the shield was depleted. Force shield_active = False so the overlay
+        # correctly hides the shield bar.
+        if shield_active and shield_pct < 0.001:
+            _now_sh = time.time()
+            if not hasattr(self, '_shield_zero_ts'):
+                self._shield_zero_ts: float = 0.0
+            if self._prev_hp_for_break > 0 and hp_pct < self._prev_hp_for_break - 0.001:
+                # Boss HP is actively decreasing while shield reports 0% —
+                # the shield was likely consumed. If this has been the case
+                # for more than 0.8s, force-clear the active flag.
+                if self._shield_zero_ts == 0.0:
+                    self._shield_zero_ts = _now_sh
+                elif _now_sh - self._shield_zero_ts > 0.8:
+                    shield_active = False
+            else:
+                # Reset timer when HP is stable or increasing
+                self._shield_zero_ts = 0.0
+
         if self._last_shield_active and not shield_active:
             # Shield just broke → retain a ghost shell and fire the full
             # shield break FX stack (cover pulse + outer bloom + bar flash).

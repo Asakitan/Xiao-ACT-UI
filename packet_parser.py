@@ -910,7 +910,7 @@ class MonsterData:
             'max_stunned': self.max_stunned,
             'in_overdrive': self.in_overdrive,
             'stop_breaking_ticking': self.stop_breaking_ticking,
-            'shield_active': self.shield_active,
+            'shield_active': self.shield_active and self.shield_total > 0,
             'shield_total': self.shield_total,
             'shield_max_total': self.shield_max_total,
             'shield_pct': (self.shield_total / self.shield_max_total) if self.shield_max_total > 0 else 0.0,
@@ -4165,6 +4165,11 @@ class PacketParser:
         # ShieldInfo: uuid=1(int32), shield_type=2(int32), value=3(int64),
         #             initial_value=4(int64), max_value=5(int64)
         try:
+            if not raw_data:
+                monster.shield_total = 0
+                monster.shield_max_total = 0
+                monster.shield_active = False
+                return
             shields = _decode_fields(raw_data)
             total_value = 0
             total_max = 0
@@ -4190,7 +4195,12 @@ class PacketParser:
             monster.shield_active = total_value > 0
             logger.debug(f'[Parser] Monster shield: {total_value}/{total_max} uuid={monster.uuid}')
         except Exception as e:
+            # On decode failure, do NOT silently leave stale shield_active.
+            # If the server sent an AttrShieldList update, treat it as
+            # shield data being refreshed — force-clear if we can't parse.
             logger.debug(f'[Parser] shield list decode error: {e}')
+            monster.shield_total = 0
+            monster.shield_active = False
 
 
     # BuffEffectSync parsing
