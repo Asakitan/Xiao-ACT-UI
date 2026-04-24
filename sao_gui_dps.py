@@ -455,38 +455,38 @@ class DpsOverlay:
 
     # Colors (parity with web/dps.html CSS vars, alpha 0-255)
     # v2.2.0: SAO Alert flat hi-tech — 纯白+略灰, 透明度保持
-    PANEL_BG_A = (20, 24, 32, 245)     # deep dark blue-black shell bg
-    PANEL_BG_B = (16, 18, 26, 250)     # slightly darker bottom
-    PANEL_EDGE = (60, 180, 220, 200)   # cyan-tinted border
-    PANEL_LINE = (104, 228, 255, 120)  # cyan highlight line
-    INNER_HIGHLIGHT = (80, 200, 240, 80)  # subtle inner glow
-    HAIRLINE_LIGHT = (40, 60, 80, 255)
-    HAIRLINE_MID = (50, 70, 90, 255)
-    HAIRLINE_DARK = (80, 100, 120, 255)
-    SCAN_LINE = (104, 228, 255, 10)    # faint cyan scanlines
-    TEXT_MAIN = (220, 225, 230, 255)   # bright text on dark bg
-    TEXT_MUTED = (120, 135, 150, 255)  # muted blue-gray text
-    GOLD = (222, 190, 80, 255)         # warm gold for emphasis
-    GOLD_SOFT = (222, 190, 80, 40)
-    CYAN = (104, 228, 255, 255)        # structural cyan lines
-    DIVIDER = (60, 180, 220, 120)      # cyan-tinted divider
-    LIST_BG = (10, 14, 22, 180)        # dark list background
-    LIST_BORDER = (50, 140, 180, 140)  # cyan-tinted list border
-    ROW_BG = (30, 38, 52, 160)         # darker row background
-    ROW_BORDER = (60, 120, 160, 100)   # subtle row border
-    ROW_SELF_BAR = (222, 190, 80, 255) # gold self-indicator
-    BTN_BG = (40, 55, 75, 180)         # dark button bg
-    BTN_BORDER = (70, 150, 190, 160)   # cyan button border
-    BTN_LIVE_ACTIVE = (104, 228, 255, 40)     # active live button tint
-    BTN_LIVE_BORDER = (104, 228, 255, 255)    # bright cyan border
-    BTN_LIVE_COLOR = (180, 235, 255, 255)     # bright text for active
+    PANEL_BG_A = (255, 255, 255, 255)
+    PANEL_BG_B = (234, 233, 233, 255)
+    PANEL_EDGE = (178, 180, 182, 255)
+    PANEL_LINE = (255, 255, 255, 255)
+    INNER_HIGHLIGHT = (255, 255, 255, 255)
+    HAIRLINE_LIGHT = (250, 250, 250, 255)
+    HAIRLINE_MID = (228, 228, 228, 255)
+    HAIRLINE_DARK = (140, 138, 138, 255)
+    SCAN_LINE = (255, 255, 255, 14)
+    TEXT_MAIN = (100, 99, 100, 255)
+    TEXT_MUTED = (140, 135, 138, 255)
+    GOLD = (222, 166, 32, 255)
+    GOLD_SOFT = (222, 166, 32, 56)
+    CYAN = (104, 228, 255, 255)
+    DIVIDER = (178, 180, 182, 255)
+    LIST_BG = (255, 255, 255, 46)
+    LIST_BORDER = (178, 180, 182, 255)
+    ROW_BG = (255, 255, 255, 122)
+    ROW_BORDER = (178, 180, 182, 255)
+    ROW_SELF_BAR = (222, 166, 32, 255)
+    BTN_BG = (255, 255, 255, 112)
+    BTN_BORDER = (178, 180, 182, 255)
+    BTN_LIVE_ACTIVE = (104, 228, 255, 31)
+    BTN_LIVE_BORDER = (104, 228, 255, 255)
+    BTN_LIVE_COLOR = (68, 144, 162, 255)
     BTN_DANGER = (239, 104, 78, 255)
-    BAR_OTHER_A = (222, 190, 80, 70)   # gold damage bar gradient
-    BAR_OTHER_B = (222, 190, 80, 15)
-    BAR_HEAL_A = (80, 200, 120, 70)
-    BAR_HEAL_B = (80, 200, 120, 15)
-    BADGE_LIVE = (104, 228, 255, 255)  # cyan badge
-    BADGE_REPORT = (222, 190, 80, 255) # gold badge
+    BAR_OTHER_A = (222, 166, 32, 51)
+    BAR_OTHER_B = (222, 166, 32, 8)
+    BAR_HEAL_A = (154, 211, 52, 61)
+    BAR_HEAL_B = (154, 211, 52, 8)
+    BADGE_LIVE = (82, 140, 48, 255)
+    BADGE_REPORT = (222, 166, 32, 255)
     RANK_COLORS = {
         0: (222, 190, 80),             # gold for #1
         1: (160, 170, 185),            # silver for #2
@@ -613,6 +613,16 @@ class DpsOverlay:
         # work during heavy fights.
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
 
+        # Theme: load saved preference, apply before first compose
+        self._theme_name: str = 'light'
+        if settings is not None:
+            try:
+                saved = settings.get('panel_themes', {}).get('dps', 'light')
+                if saved in ('light', 'dark'):
+                    self._apply_theme(saved)
+            except Exception:
+                pass
+
     # ──────────────────────────────────────────
     #  Lifecycle
     # ──────────────────────────────────────────
@@ -672,6 +682,15 @@ class DpsOverlay:
             GWL_EXSTYLE,
             ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         )
+        # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
+        try:
+            _GCL_STYLE, _CS_DS = -26, 0x00020000
+            _cls = ctypes.windll.user32.GetClassLongW(self._hwnd, _GCL_STYLE)
+            if _cls & _CS_DS:
+                ctypes.windll.user32.SetClassLongW(
+                    self._hwnd, _GCL_STYLE, _cls & ~_CS_DS)
+        except Exception:
+            pass
         try:
             _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
         except Exception:
@@ -951,6 +970,30 @@ class DpsOverlay:
                     row.fx_tier = tier
                     row.fx_start = self._panel_fx_start
 
+        self._schedule_tick(immediate=True)
+
+    # ── Theme ──
+
+    def _apply_theme(self, theme_name: str) -> None:
+        """切换 DPS 面板主题并清除所有渲染缓存。
+
+        Args:
+            theme_name: 'light' 或 'dark'
+        """
+        from sao_theme import get_panel_theme
+        theme = get_panel_theme('dps', theme_name)
+        if not theme:
+            return
+        for key, value in theme.items():
+            setattr(self, key, value)
+        self._theme_name = theme_name
+        # 清除所有缓存 → 下次 compose 时用新主题重建
+        self._shell_cache = None
+        self._shell_cache_size = (0, 0)
+        if hasattr(self, '_bar_cache'):
+            self._bar_cache = {}
+        # 强制下一帧重绘
+        self._last_compose_sig = None
         self._schedule_tick(immediate=True)
 
     # ──────────────────────────────────────────
@@ -2536,3 +2579,82 @@ class DpsOverlay:
             setattr(self, offset_attr, new)
             # Reset row positions so they animate smoothly
             self._schedule_tick(immediate=True)
+
+
+# ────────────────────────────────────────────────────────────
+# Theme dictionaries & registration
+# ────────────────────────────────────────────────────────────
+
+DPS_THEME_LIGHT = {
+    'PANEL_BG_A':      (255, 255, 255, 255),
+    'PANEL_BG_B':      (234, 233, 233, 255),
+    'PANEL_EDGE':      (178, 180, 182, 255),
+    'PANEL_LINE':      (255, 255, 255, 255),
+    'INNER_HIGHLIGHT': (255, 255, 255, 255),
+    'HAIRLINE_LIGHT':  (250, 250, 250, 255),
+    'HAIRLINE_MID':    (228, 228, 228, 255),
+    'HAIRLINE_DARK':   (140, 138, 138, 255),
+    'SCAN_LINE':       (255, 255, 255, 14),
+    'TEXT_MAIN':       (100, 99, 100, 255),
+    'TEXT_MUTED':      (140, 135, 138, 255),
+    'GOLD':            (222, 166, 32, 255),
+    'GOLD_SOFT':       (222, 166, 32, 56),
+    'CYAN':            (104, 228, 255, 255),
+    'DIVIDER':         (178, 180, 182, 255),
+    'LIST_BG':         (255, 255, 255, 46),
+    'LIST_BORDER':     (178, 180, 182, 255),
+    'ROW_BG':          (255, 255, 255, 122),
+    'ROW_BORDER':      (178, 180, 182, 255),
+    'ROW_SELF_BAR':    (222, 166, 32, 255),
+    'BTN_BG':          (255, 255, 255, 112),
+    'BTN_BORDER':      (178, 180, 182, 255),
+    'BTN_LIVE_ACTIVE': (104, 228, 255, 31),
+    'BTN_LIVE_BORDER': (104, 228, 255, 255),
+    'BTN_LIVE_COLOR':  (68, 144, 162, 255),
+    'BTN_DANGER':      (239, 104, 78, 255),
+    'BAR_OTHER_A':     (222, 166, 32, 51),
+    'BAR_OTHER_B':     (222, 166, 32, 8),
+    'BAR_HEAL_A':      (154, 211, 52, 61),
+    'BAR_HEAL_B':      (154, 211, 52, 8),
+    'BADGE_LIVE':      (82, 140, 48, 255),
+    'BADGE_REPORT':    (222, 166, 32, 255),
+}
+
+DPS_THEME_DARK = {
+    'PANEL_BG_A':      (20, 24, 32, 245),
+    'PANEL_BG_B':      (16, 18, 26, 250),
+    'PANEL_EDGE':      (60, 180, 220, 200),
+    'PANEL_LINE':      (104, 228, 255, 120),
+    'INNER_HIGHLIGHT': (80, 200, 240, 80),
+    'HAIRLINE_LIGHT':  (40, 60, 80, 255),
+    'HAIRLINE_MID':    (50, 70, 90, 255),
+    'HAIRLINE_DARK':   (80, 100, 120, 255),
+    'SCAN_LINE':       (104, 228, 255, 10),
+    'TEXT_MAIN':       (220, 225, 230, 255),
+    'TEXT_MUTED':      (120, 135, 150, 255),
+    'GOLD':            (222, 190, 80, 255),
+    'GOLD_SOFT':       (222, 190, 80, 40),
+    'CYAN':            (104, 228, 255, 255),
+    'DIVIDER':         (60, 180, 220, 120),
+    'LIST_BG':         (10, 14, 22, 180),
+    'LIST_BORDER':     (50, 140, 180, 140),
+    'ROW_BG':          (30, 38, 52, 160),
+    'ROW_BORDER':      (60, 120, 160, 100),
+    'ROW_SELF_BAR':    (222, 190, 80, 255),
+    'BTN_BG':          (40, 55, 75, 180),
+    'BTN_BORDER':      (70, 150, 190, 160),
+    'BTN_LIVE_ACTIVE': (104, 228, 255, 40),
+    'BTN_LIVE_BORDER': (104, 228, 255, 255),
+    'BTN_LIVE_COLOR':  (180, 235, 255, 255),
+    'BTN_DANGER':      (239, 104, 78, 255),
+    'BAR_OTHER_A':     (222, 190, 80, 70),
+    'BAR_OTHER_B':     (222, 190, 80, 15),
+    'BAR_HEAL_A':      (80, 200, 120, 70),
+    'BAR_HEAL_B':      (80, 200, 120, 15),
+    'BADGE_LIVE':      (104, 228, 255, 255),
+    'BADGE_REPORT':    (222, 190, 80, 255),
+}
+
+from sao_theme import register_panel_theme
+register_panel_theme('dps', 'light', DPS_THEME_LIGHT)
+register_panel_theme('dps', 'dark', DPS_THEME_DARK)

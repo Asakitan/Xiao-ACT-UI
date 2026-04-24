@@ -260,18 +260,15 @@ def _apply_window_icon(win):
 
 
 def _apply_panel_style(panel):
-    """为浮动 Toplevel 面板添加 DWM 圆角 + 系统阴影 — 增强浮动质感"""
+    """为浮动 Toplevel 面板添加 DWM 圆角 — 增强浮动质感"""
     try:
         panel.update_idletasks()
         hwnd = int(_user32.GetParent(ctypes.c_void_p(panel.winfo_id())))
         # DWM 圆角 (Win11+)
         val = ctypes.c_int(2)
         ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(val), 4)
-        # 系统阴影 (CS_DROPSHADOW)
-        GCL_STYLE = -26
-        CS_DROPSHADOW = 0x00020000
-        cls = ctypes.windll.user32.GetClassLongW(hwnd, GCL_STYLE)
-        ctypes.windll.user32.SetClassLongW(hwnd, GCL_STYLE, cls | CS_DROPSHADOW)
+        # 注：不再设置 CS_DROPSHADOW — 它修改窗口类样式，会污染同进程所有
+        # Toplevel（包括 ULW overlay），导致与 PIL 自绘 shadow 双重叠加偏移。
     except Exception:
         pass
 
@@ -3123,7 +3120,7 @@ class SAOPlayerGUI:
         self._update_float_status()
 
     def _build_menu_children(self):
-        """动态构建子菜单 (支持状态反映) — SAO Auto (6 categories)"""
+        """动态构建子菜单 (支持状态反映) — SAO Auto (7 categories)"""
         hk = self.settings.get('hotkeys', DEFAULT_HOTKEYS)
 
         def _k(key_id):
@@ -3190,6 +3187,30 @@ class SAOPlayerGUI:
             {'icon': '◉', 'label': '状态面板', 'command': self._toggle_status_panel},
             {'icon': '◈', 'label': '一键隐藏面板' + (' ✓' if self._panels_hidden else ''), 'command': self._toggle_hide_all_panels},
             {'icon': '─', 'label': '──────────'},
+        ]
+
+        # ── 面板皮肤子菜单 ──
+        _theme_settings = (self._cfg_settings_ref or {}).get('panel_themes', {})
+        _overlay_map = {
+            'dps': ('◆', 'DPS'),
+            'hp': ('♥', 'HP'),
+            'bosshp': ('⚔', 'BossHP'),
+            'skillfx': ('✦', 'SkillFX'),
+            'alert': ('!', 'Alert'),
+        }
+        skin_items = []
+        skin_items.append({'icon': '🎨', 'label': '全部 Light', 'command': lambda: self._set_all_themes('light')})
+        skin_items.append({'icon': '🌙', 'label': '全部 Dark', 'command': lambda: self._set_all_themes('dark')})
+        skin_items.append({'icon': '─', 'label': '──────────'})
+        for _key, (_ico, _lbl) in _overlay_map.items():
+            _cur = _theme_settings.get(_key, 'light')
+            skin_items.append({
+                'icon': _ico,
+                'label': f'{_lbl}: {_cur.upper()}',
+                'command': lambda k=_key: self._toggle_panel_theme(k),
+            })
+
+        panel_items.extend([
             {'icon': '♪', 'label': f'音效: {"ON" if snd_on else "OFF"}', 'command': self._toggle_sound_enabled},
             {'icon': '♪', 'label': '音量+', 'command': lambda: self._adj_sound_volume(10)},
             {'icon': '♪', 'label': '音量-', 'command': lambda: self._adj_sound_volume(-10)},
@@ -3198,7 +3219,7 @@ class SAOPlayerGUI:
              'label': '查看上次战斗DPS' + (' ✓' if dps_report_available else ' (暂无)'),
              'command': self._show_last_dps_report_menu},
             {'icon': '◇', 'label': f'Boss血条: {boss_bar_disp}', 'command': self._cycle_boss_bar_mode},
-        ]
+        ])
 
         return {
             '控制': [
@@ -3210,6 +3231,7 @@ class SAOPlayerGUI:
             'Boss': boss_items,
             'Burst': burst_items,
             '面板': panel_items,
+            '皮肤': skin_items,
             '关于': [
                 {'icon': '◇', 'label': '关于本程序', 'command': self._show_about},
                 {'icon': '⬇', 'label': self._build_update_menu_label(), 'command': self._check_for_updates_interactive},
@@ -3372,13 +3394,14 @@ class SAOPlayerGUI:
             pass
 
     def _setup_sao_menu(self):
-        """构建 SAO PopUpMenu 菜单 = 主界面 (6 categories)"""
+        """构建 SAO PopUpMenu 菜单 = 主界面 (7 categories)"""
         self._menu_icons = [
             {'name': '控制', 'icon': '⚙', 'can_active': True},
             {'name': '自动', 'icon': '⚡', 'can_active': True},
             {'name': 'Boss', 'icon': '⚔', 'can_active': True},
             {'name': 'Burst', 'icon': 'B', 'can_active': True},
             {'name': '面板', 'icon': '◆', 'can_active': True},
+            {'name': '皮肤', 'icon': 'P', 'can_active': True},
             {'name': '关于', 'icon': 'ℹ', 'can_active': True},
         ]
 
@@ -4284,6 +4307,51 @@ class SAOPlayerGUI:
                 self.root.after(100, self._start_fisheye_overlay)
 
         self._refresh_menu_if_open()
+
+    # ── Panel Theme ──
+
+    _THEME_OVERLAY_MAP = {
+        'dps':     '_dps_overlay',
+        'hp':      '_hp_overlay',
+        'bosshp':  '_boss_hp_overlay',
+        'skillfx': '_skillfx_overlay',
+        'alert':   '_alert_overlay',
+    }
+
+    def _toggle_panel_theme(self, key: str) -> None:
+        """切换某个面板的 Light/Dark 主题。"""
+        if not self._cfg_settings_ref:
+            return
+        themes = dict(self._cfg_settings_ref.get('panel_themes', {}))
+        current = themes.get(key, 'light')
+        new_theme = 'dark' if current == 'light' else 'light'
+        self._apply_theme_to_overlay(key, new_theme)
+        themes[key] = new_theme
+        self._cfg_settings_ref.set('panel_themes', themes)
+        self._cfg_settings_ref.save()
+        self._refresh_menu_if_open()
+
+    def _set_all_themes(self, theme: str) -> None:
+        """将所有面板设置为同一主题。"""
+        if not self._cfg_settings_ref:
+            return
+        themes = {}
+        for key in self._THEME_OVERLAY_MAP:
+            themes[key] = theme
+            self._apply_theme_to_overlay(key, theme)
+        self._cfg_settings_ref.set('panel_themes', themes)
+        self._cfg_settings_ref.save()
+        self._refresh_menu_if_open()
+
+    def _apply_theme_to_overlay(self, key: str, theme: str) -> None:
+        """将主题应用到 overlay 实例（如果已创建）。"""
+        attr = self._THEME_OVERLAY_MAP.get(key, '')
+        ov = getattr(self, attr, None)
+        if ov is not None and hasattr(ov, '_apply_theme'):
+            try:
+                ov._apply_theme(theme)
+            except Exception:
+                pass
 
     def _restore_panels(self):
         """恢复上次会话中打开的浮动面板"""

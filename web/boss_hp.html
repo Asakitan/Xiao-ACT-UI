@@ -35,6 +35,24 @@
     --fx-pad-left:160px;
     --multi-extra-h: 240px;
 }
+.theme-dark{
+    --cover-a:rgba(20,26,36,1);
+    --cover-mid:rgba(16,20,30,1);
+    --cover-b:rgba(12,16,24,1);
+    --cover-edge:rgba(50,80,110,0.52);
+    --line:rgb(50,70,90);
+    --text-main:rgb(210,220,230);
+    --text-muted:rgba(120,140,160,0.86);
+    --cyan:rgba(104,228,255,0.62);
+    --cyan-edge:rgba(60,180,220,0.50);
+    --cyan-strong:rgba(104,228,255,0.95);
+    --gold:rgba(222,190,80,0.74);
+    --gold-strong:rgb(222,190,80);
+    --red:rgb(239,104,78);
+    --shadow:rgba(0,0,0,0.30);
+    --box-bg:rgba(22,30,42,1);
+    --box-hover:rgba(30,40,55,1);
+}
 html,body{
     width:100%;
     height:100%;
@@ -1938,6 +1956,21 @@ window.BossHP = {
         }
     }
 };
+</script>
+<script>
+// Theme initialization
+(function(){
+    var panel='bosshp', darkCls='theme-dark', fallback='light';
+    function apply(t){document.documentElement.classList.toggle(darkCls,t==='dark')}
+    try{
+        if(window.pywebview&&window.pywebview.api){
+            window.pywebview.api.get_panel_themes().then(function(themes){
+                apply((themes&&themes[panel])||fallback);
+            }).catch(function(){apply(fallback)});
+        }
+    }catch(e){}
+    window._applyPanelTheme=function(t){apply(t)};
+})();
 </script>
 </body>
 </html>

@@ -17,7 +17,7 @@ from sao_menu_hud import MenuCircleButtonRenderer
 SIZE = 54
 MAX_SIZE = 70
 SLOT = 70                       # vertical slot per button (= MAX_SIZE)
-MAX_VISIBLE = 6
+MAX_VISIBLE = 7
 WIDTH = MAX_SIZE                # column width
 
 # Animation tuning

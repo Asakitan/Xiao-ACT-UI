@@ -775,6 +775,33 @@ class MenuCircleButtonRenderer:
                        cx + canvas * 0.02, cy - canvas * 0.15),
                       fill=color, width=guard)
             return True
+        # Palette / theme icon: ellipse body with thumb hole + 3 dots
+        if icon_text == 'P':
+            r = canvas * 0.20
+            # Main palette body (offset slightly left-up)
+            px = cx - canvas * 0.01
+            py = cy + canvas * 0.01
+            draw.ellipse((px - r, py - r, px + r, py + r), fill=color)
+            # Thumb hole
+            hr = r * 0.32
+            draw.ellipse((px - hr, py + r * 0.25 - hr,
+                          px + hr, py + r * 0.25 + hr),
+                         fill=(0, 0, 0, 0))
+            # Color dots
+            dr = max(scale * 1.1, 2)
+            draw.ellipse((cx - r * 0.50 - dr, cy - r * 0.55 - dr,
+                          cx - r * 0.50 + dr, cy - r * 0.55 + dr),
+                         fill=(255, 255, 255, 0))  # negative space
+            draw.ellipse((cx - r * 0.50 - dr, cy - r * 0.55 - dr,
+                          cx - r * 0.50 + dr, cy - r * 0.55 + dr),
+                         outline=color, width=max(scale, 1))
+            draw.ellipse((cx + r * 0.20 - dr, cy - r * 0.65 - dr,
+                          cx + r * 0.20 + dr, cy - r * 0.65 + dr),
+                         outline=color, width=max(scale, 1))
+            draw.ellipse((cx + r * 0.45 - dr, cy + r * 0.10 - dr,
+                          cx + r * 0.45 + dr, cy + r * 0.10 + dr),
+                         outline=color, width=max(scale, 1))
+            return True
         return False
 
     def _icon_font(self, size: int):

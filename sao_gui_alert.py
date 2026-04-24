@@ -129,6 +129,16 @@ class AlertOverlay:
         self._center_x = (sw - self.WIDTH) // 2
         self._center_y = (sh - self.HEIGHT) // 2
 
+        # Theme: load saved preference
+        self._theme_name: str = 'light'
+        if settings is not None:
+            try:
+                saved = settings.get('panel_themes', {}).get('alert', 'light')
+                if saved in ('light', 'dark'):
+                    self._apply_theme(saved)
+            except Exception:
+                pass
+
     def show_alert(self, title: str, message: str = '', display_time: float | None = None):
         try:
             self.root.after(0, lambda: self._create_alert(title, message, display_time))
@@ -171,6 +181,14 @@ class AlertOverlay:
         ex = _user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
         _user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE,
                                ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT)
+        # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
+        try:
+            _GCL_STYLE, _CS_DS = -26, 0x00020000
+            _cls = ctypes.windll.user32.GetClassLongW(hwnd, _GCL_STYLE)
+            if _cls & _CS_DS:
+                ctypes.windll.user32.SetClassLongW(hwnd, _GCL_STYLE, _cls & ~_CS_DS)
+        except Exception:
+            pass
         try:
             _user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x00000011)
         except Exception:
@@ -186,6 +204,18 @@ class AlertOverlay:
             self._active = entry
 
         self._animate_open(entry)
+
+    # ── Theme ──
+
+    def _apply_theme(self, theme_name: str) -> None:
+        """切换 Alert 面板主题。"""
+        from sao_theme import get_panel_theme
+        theme = get_panel_theme('alert', theme_name)
+        if not theme:
+            return
+        for key, value in theme.items():
+            setattr(self, key, value)
+        self._theme_name = theme_name
 
     def _render_frame(self, title: str, message: str):
         W, H = self.WIDTH, self.HEIGHT
@@ -398,3 +428,30 @@ class AlertOverlay:
                 except Exception:
                     pass
                 self._active = None
+
+
+# ────────────────────────────────────────────────────────────
+# Theme dictionaries & registration
+# ────────────────────────────────────────────────────────────
+
+ALERT_THEME_LIGHT = {
+    'TITLE_BG':     (255, 255, 255, 209),
+    'BODY_BG':      (234, 233, 233, 194),
+    'FOOTER_BG':    (255, 255, 255, 204),
+    'TITLE_COLOR':  (100, 99, 100, 255),
+    'BODY_COLOR':   (100, 96, 96, 255),
+    'SHADOW_COLOR': (0, 0, 0, 77),
+}
+
+ALERT_THEME_DARK = {
+    'TITLE_BG':     (18, 24, 34, 235),
+    'BODY_BG':      (14, 18, 28, 220),
+    'FOOTER_BG':    (20, 26, 36, 230),
+    'TITLE_COLOR':  (200, 215, 230, 255),
+    'BODY_COLOR':   (180, 195, 210, 255),
+    'SHADOW_COLOR': (0, 0, 0, 100),
+}
+
+from sao_theme import register_panel_theme
+register_panel_theme('alert', 'light', ALERT_THEME_LIGHT)
+register_panel_theme('alert', 'dark', ALERT_THEME_DARK)

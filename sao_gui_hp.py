@@ -625,6 +625,40 @@ class HpOverlay:
         # work during heavy fights.
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
 
+        # Theme: load saved preference
+        self._theme_name: str = 'light'
+        if settings is not None:
+            try:
+                saved = settings.get('panel_themes', {}).get('hp', 'light')
+                if saved in ('light', 'dark'):
+                    self._apply_theme(saved)
+            except Exception:
+                pass
+
+    # ── Theme ──
+
+    def _apply_theme(self, theme_name: str) -> None:
+        """切换 HP 面板主题并清除所有渲染缓存。"""
+        from sao_theme import get_panel_theme
+        theme = get_panel_theme('hp', theme_name)
+        if not theme:
+            return
+        # HP 用模块级常量，直接 setattr 本模块
+        import sao_gui_hp as _mod
+        for key, value in theme.items():
+            setattr(_mod, key, value)
+        self._theme_name = theme_name
+        # 清除所有缓存
+        self._panels_cache = None; self._panels_sig = ()
+        self._shell_cache = None; self._shell_sig = ()
+        self._shadow_cache = None; self._shadow_sig = ()
+        self._outer_pulse_cache = None; self._outer_pulse_sig = ()
+        self._cover_pulse_cache = None; self._cover_pulse_sig = ()
+        self._interaction_fx_cache = None; self._interaction_fx_sig = ()
+        self._frame_cache = None; self._frame_sig = ()
+        self._last_compose_sig = None
+        self._frame_version += 1
+
     def _default_panel_pos(self) -> Tuple[int, int]:
         sw, sh = _get_screen_metrics()
         # Webview HP window sits at `sw * HUD_WINDOW_LEFT_PCT`; the hud-stage
@@ -761,6 +795,15 @@ class HpOverlay:
             ctypes.c_void_p(self._hwnd), GWL_EXSTYLE,
             ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         )
+        # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
+        try:
+            _GCL_STYLE, _CS_DS = -26, 0x00020000
+            _cls = ctypes.windll.user32.GetClassLongW(self._hwnd, _GCL_STYLE)
+            if _cls & _CS_DS:
+                ctypes.windll.user32.SetClassLongW(
+                    self._hwnd, _GCL_STYLE, _cls & ~_CS_DS)
+        except Exception:
+            pass
         # v2.3.0: now that WS_EX_LAYERED is in effect (the very next
         # ULW commit drives the per-pixel alpha), it's safe to show.
         try:

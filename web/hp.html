@@ -51,6 +51,16 @@
     --box-hover: rgba(243, 245, 247, 1);
     --line: rgb(214, 216, 219);
 }
+.theme-dark {
+    --panel-a: rgba(20, 26, 36, 1);
+    --panel-mid: rgba(16, 22, 32, 1);
+    --panel-b: rgba(12, 18, 28, 1);
+    --panel-edge: rgba(50, 80, 110, 0.52);
+    --panel-shadow: rgba(0, 0, 0, 0.35);
+    --box-bg: rgba(22, 30, 42, 1);
+    --box-hover: rgba(30, 40, 55, 1);
+    --line: rgb(50, 70, 90);
+}
 
 /* ═══ Body — native pywebview transparency ═══
    transparent=True 已由 pywebview 设置 WebView2 透明背景.
@@ -1785,6 +1795,21 @@ window.HP = {
     preExit: preExit,
     exitApp: exitApplication,
 };
+</script>
+<script>
+// Theme initialization
+(function(){
+    var panel='hp', darkCls='theme-dark', fallback='light';
+    function apply(t){document.documentElement.classList.toggle(darkCls,t==='dark')}
+    try{
+        if(window.pywebview&&window.pywebview.api){
+            window.pywebview.api.get_panel_themes().then(function(themes){
+                apply((themes&&themes[panel])||fallback);
+            }).catch(function(){apply(fallback)});
+        }
+    }catch(e){}
+    window._applyPanelTheme=function(t){apply(t)};
+})();
 </script>
 </body>
 </html>
