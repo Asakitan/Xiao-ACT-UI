@@ -687,3 +687,74 @@ class DpsTracker:
                 self._dirty = False
                 return True
             return False
+
+    def poll_overlay_state(self, max_age_ms: float = 150.0,
+                           idle_timeout_s: float = 15.0,
+                           detail_uid: int = 0) -> Dict[str, Any]:
+        """Single-lock acquisition for all data the DPS overlay needs.
+
+        Combines: finalize_if_idle + is_dirty + get_snapshot_fast +
+                  has_recent_damage + has_last_report + get_entity_detail.
+
+        Returns dict with keys:
+            snapshot, has_live, has_report, detail, dirty,
+            should_fade_out, should_show
+        """
+        now = time.time()
+        result: Dict[str, Any] = {
+            'snapshot': None,
+            'has_live': False,
+            'has_report': False,
+            'detail': None,
+            'dirty': False,
+            'should_fade_out': False,
+        }
+        with self._lock:
+            # 1) Finalize if idle
+            if idle_timeout_s > 0 and self._encounter_start and self._last_event_time:
+                if (now - self._last_event_time) >= idle_timeout_s:
+                    self._finalize_current_locked('idle_timeout')
+                    self._reset_locked()
+
+            # 2) Dirty check
+            dirty = bool(self._dirty)
+            if dirty:
+                self._dirty = False
+            result['dirty'] = dirty
+
+            # 3) Snapshot (with cache)
+            _cached = self._snapshot_cache
+            if _cached is not None and (now - self._snapshot_cache_ts) * 1000 < max_age_ms:
+                snap = _cached
+            else:
+                snap = self._build_snapshot_locked(include_skills=False)
+                self._snapshot_cache = snap
+                self._snapshot_cache_ts = now
+            result['snapshot'] = snap
+
+            # 4) Has live data
+            total_damage = int(snap.get('total_damage') or 0)
+            if total_damage > 0 and self._last_damage_time:
+                result['has_live'] = (now - self._last_damage_time) < idle_timeout_s
+            else:
+                result['has_live'] = False
+
+            # 5) Should fade out
+            if total_damage > 0 and self._last_damage_time:
+                result['should_fade_out'] = (now - self._last_damage_time) >= idle_timeout_s
+            else:
+                result['should_fade_out'] = False
+
+            # 6) Has report
+            result['has_report'] = self._last_report is not None
+
+            # 7) Entity detail (for detail popup)
+            if detail_uid > 0:
+                entity = self._entities.get(detail_uid)
+                if entity:
+                    d = entity.to_dict(include_skills=True)
+                    d['damage_pct'] = round(
+                        entity.damage_total / max(self._total_damage, 1), 3)
+                    result['detail'] = d
+
+        return result
