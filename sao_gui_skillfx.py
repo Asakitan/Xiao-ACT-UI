@@ -315,6 +315,8 @@ class BurstReadyOverlay:
         self._cap_base_static = None; self._cap_base_sig = ()
         self._beam_cache = None; self._beam_cache_sig = ()
         self._warm_sig = ()
+        # Force redraw if active
+        self._schedule_tick(immediate=True)
 
     # ──────────────────────────────────────────
     #  Lifecycle
