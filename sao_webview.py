@@ -251,6 +251,11 @@ def _capture_fisheye_base64(strength: float = 0.25, quality: int = 60) -> Option
 #  Settings (共用)
 # ════════════════════════════════════════════════
 class SettingsManager:
+    """Lightweight settings manager for webview mode.
+
+    Uses atomic write (write-to-temp + os.replace) to prevent data loss
+    when the process is killed via os._exit() during shutdown.
+    """
     def __init__(self):
         if getattr(sys, 'frozen', False):
             base = os.path.dirname(sys.executable)
@@ -275,11 +280,31 @@ class SettingsManager:
         self._data[key] = value
 
     def save(self):
+        """Atomic write: write to temp file, then os.replace to target.
+
+        Prevents truncation when os._exit() kills the process mid-write.
+        """
         try:
-            with open(self._path, 'w', encoding='utf-8') as f:
-                json.dump(self._data, f, indent=2, ensure_ascii=False)
+            import tempfile
+            dir_name = os.path.dirname(self._path) or os.getcwd()
+            with tempfile.NamedTemporaryFile(
+                mode='w', dir=dir_name, delete=False,
+                encoding='utf-8', suffix='.tmp.json'
+            ) as tmp:
+                json.dump(self._data, tmp, indent=2, ensure_ascii=False)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp_path = tmp.name
+            os.replace(tmp_path, self._path)
         except Exception:
-            pass
+            # fallback to direct write
+            try:
+                with open(self._path, 'w', encoding='utf-8') as f:
+                    json.dump(self._data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except Exception:
+                pass
 
 
 # ════════════════════════════════════════════════
@@ -5702,6 +5727,18 @@ class SAOWebViewGUI:
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
         # 热切换时不强杀: _do_hot_switch 需要在 webview.start() 返回后运行
         if not self._pending_switch:
+            # Final synchronous settings save before os._exit — ensure
+            # all settings (including those written during panel destroy
+            # callbacks) are persisted before the process dies.
+            try:
+                settings_ref = getattr(self, '_cfg_settings_ref', None)
+                if settings_ref is not None:
+                    settings_ref.save()
+                elif hasattr(self, 'settings') and self.settings is not None:
+                    self.settings.save()
+            except Exception:
+                pass
+
             def _force_exit():
                 time.sleep(0.5)
                 os._exit(0)

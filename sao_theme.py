@@ -2878,19 +2878,19 @@ class SAODialog:
 
     @staticmethod
     def showinfo(parent, title, message, on_ok=None):
-        SAODialog._show(parent, title, message, show_icon=True, on_ok=on_ok)
+        return SAODialog._show(parent, title, message, show_icon=True, on_ok=on_ok)
 
     @staticmethod
     def showwarning(parent, title, message, on_ok=None):
-        SAODialog._show(parent, title, message, show_icon=True, on_ok=on_ok)
+        return SAODialog._show(parent, title, message, show_icon=True, on_ok=on_ok)
 
     @staticmethod
     def showerror(parent, title, message, on_ok=None):
-        SAODialog._show(parent, title, message, show_icon=True, on_ok=on_ok)
+        return SAODialog._show(parent, title, message, show_icon=True, on_ok=on_ok)
 
     @staticmethod
     def ask(parent, title, message, on_ok=None, on_cancel=None):
-        SAODialog._show(parent, title, message, show_icon=True,
+        return SAODialog._show(parent, title, message, show_icon=True,
                         on_ok=on_ok, on_cancel=on_cancel)
 
     @staticmethod
@@ -3015,6 +3015,7 @@ class SAODialog:
         # overrideredirect Toplevel 的 grab_set 在 Windows 上经常静默失败
         # 并导致 wait_window 永久挂起 (假性卡死)
         dlg.focus_force()
+        return dlg
 
 
 def _clip_reveal(label: tk.Label, full_text: str, dlg: tk.Toplevel,

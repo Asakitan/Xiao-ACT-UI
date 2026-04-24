@@ -455,42 +455,42 @@ class DpsOverlay:
 
     # Colors (parity with web/dps.html CSS vars, alpha 0-255)
     # v2.2.0: SAO Alert flat hi-tech — 纯白+略灰, 透明度保持
-    PANEL_BG_A = (255, 255, 255, 255)   # opaque shell bg to avoid hollow panel body
-    PANEL_BG_B = (234, 233, 233, 255)   # opaque shell bg to avoid hollow panel body
-    PANEL_EDGE = (178, 180, 182, 255)   # opaque outline for ULW readability
-    PANEL_LINE = (255, 255, 255, 255)   # opaque highlight line
-    INNER_HIGHLIGHT = (255, 255, 255, 255)  # opaque inner border
-    HAIRLINE_LIGHT = (250, 250, 250, 255)
-    HAIRLINE_MID = (228, 228, 228, 255)
-    HAIRLINE_DARK = (140, 138, 138, 255)
-    SCAN_LINE = (255, 255, 255, 14)         # ::before 0.055
-    TEXT_MAIN = (100, 99, 100, 255)
-    TEXT_MUTED = (140, 135, 138, 255)
-    GOLD = (222, 166, 32, 255)
-    GOLD_SOFT = (222, 166, 32, 56)
-    CYAN = (104, 228, 255, 255)         # structural cyan lines stay opaque
-    DIVIDER = (178, 180, 182, 255)      # opaque section divider
-    LIST_BG = (255, 255, 255, 46)       # list-frame bg 0.18
-    LIST_BORDER = (178, 180, 182, 255)  # opaque list border
-    ROW_BG = (255, 255, 255, 122)       # entity-row bg 0.48
-    ROW_BORDER = (178, 180, 182, 255)   # opaque row border
-    ROW_SELF_BAR = (222, 166, 32, 255)  # border-left on .self
-    BTN_BG = (255, 255, 255, 112)       # .sao-btn bg 0.44
-    BTN_BORDER = (178, 180, 182, 255)   # opaque button border
-    BTN_LIVE_ACTIVE = (104, 228, 255, 31)    # secondary.active 0.12
-    BTN_LIVE_BORDER = (104, 228, 255, 255)   # opaque live border
-    BTN_LIVE_COLOR = (68, 144, 162, 255)     # secondary.active color
-    BTN_DANGER = (239, 104, 78, 255)         # --danger
-    BAR_OTHER_A = (222, 166, 32, 51)    # entity-bar gradient 0.20→0.03
-    BAR_OTHER_B = (222, 166, 32, 8)
-    BAR_HEAL_A = (154, 211, 52, 61)
-    BAR_HEAL_B = (154, 211, 52, 8)
-    BADGE_LIVE = (82, 140, 48, 255)     # mode-badge.live
-    BADGE_REPORT = (222, 166, 32, 255)  # mode-badge.report
+    PANEL_BG_A = (20, 24, 32, 245)     # deep dark blue-black shell bg
+    PANEL_BG_B = (16, 18, 26, 250)     # slightly darker bottom
+    PANEL_EDGE = (60, 180, 220, 200)   # cyan-tinted border
+    PANEL_LINE = (104, 228, 255, 120)  # cyan highlight line
+    INNER_HIGHLIGHT = (80, 200, 240, 80)  # subtle inner glow
+    HAIRLINE_LIGHT = (40, 60, 80, 255)
+    HAIRLINE_MID = (50, 70, 90, 255)
+    HAIRLINE_DARK = (80, 100, 120, 255)
+    SCAN_LINE = (104, 228, 255, 10)    # faint cyan scanlines
+    TEXT_MAIN = (220, 225, 230, 255)   # bright text on dark bg
+    TEXT_MUTED = (120, 135, 150, 255)  # muted blue-gray text
+    GOLD = (222, 190, 80, 255)         # warm gold for emphasis
+    GOLD_SOFT = (222, 190, 80, 40)
+    CYAN = (104, 228, 255, 255)        # structural cyan lines
+    DIVIDER = (60, 180, 220, 120)      # cyan-tinted divider
+    LIST_BG = (10, 14, 22, 180)        # dark list background
+    LIST_BORDER = (50, 140, 180, 140)  # cyan-tinted list border
+    ROW_BG = (30, 38, 52, 160)         # darker row background
+    ROW_BORDER = (60, 120, 160, 100)   # subtle row border
+    ROW_SELF_BAR = (222, 190, 80, 255) # gold self-indicator
+    BTN_BG = (40, 55, 75, 180)         # dark button bg
+    BTN_BORDER = (70, 150, 190, 160)   # cyan button border
+    BTN_LIVE_ACTIVE = (104, 228, 255, 40)     # active live button tint
+    BTN_LIVE_BORDER = (104, 228, 255, 255)    # bright cyan border
+    BTN_LIVE_COLOR = (180, 235, 255, 255)     # bright text for active
+    BTN_DANGER = (239, 104, 78, 255)
+    BAR_OTHER_A = (222, 190, 80, 70)   # gold damage bar gradient
+    BAR_OTHER_B = (222, 190, 80, 15)
+    BAR_HEAL_A = (80, 200, 120, 70)
+    BAR_HEAL_B = (80, 200, 120, 15)
+    BADGE_LIVE = (104, 228, 255, 255)  # cyan badge
+    BADGE_REPORT = (222, 190, 80, 255) # gold badge
     RANK_COLORS = {
-        0: (222, 166, 32),              # --gold
-        1: (130, 132, 140),             # .rank.r2
-        2: (177, 132, 74),              # .rank.r3
+        0: (222, 190, 80),             # gold for #1
+        1: (160, 170, 185),            # silver for #2
+        2: (180, 140, 90),             # bronze for #3
     }
 
     # Animation timings (seconds)
@@ -1421,7 +1421,7 @@ class DpsOverlay:
 
     def _draw_shell(self, img: Image.Image,
                     sx: int, sy: int, sw: int, sh: int) -> None:
-        # Vertical gradient A→B
+        # Vertical gradient A→B (dark blue-black)
         grad = np.zeros((sh, 1, 4), dtype=np.uint8)
         ys = np.linspace(0, 1, sh)
         for i in range(4):
@@ -1435,42 +1435,43 @@ class DpsOverlay:
         )
         img.paste(grad_img, (sx, sy), mask)
 
+        # Top-cyan sheen (glow effect at the top edge)
         sheen = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
         sd_sheen = ImageDraw.Draw(sheen, 'RGBA')
         sd_sheen.rounded_rectangle(
-            (1, 1, sw - 2, max(12, int(sh * 0.22))),
-            radius=6, fill=(255, 255, 255, 22),
+            (1, 1, sw - 2, max(16, int(sh * 0.18))),
+            radius=6, fill=(104, 228, 255, 18),
         )
         sd_sheen.rounded_rectangle(
-            (2, max(10, int(sh * 0.38)), sw - 3, sh - 3),
-            radius=6, fill=(28, 31, 23, 14),
+            (2, max(12, int(sh * 0.42)), sw - 3, sh - 3),
+            radius=6, fill=(0, 0, 0, 25),
         )
-        sheen = _gpu_blur(sheen, 3)
+        sheen = _gpu_blur(sheen, 4)
         sheen_masked = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
         sheen_masked.paste(sheen, (0, 0), mask)
         img.alpha_composite(sheen_masked, (sx, sy))
 
-        # ::before repeating horizontal scanlines (every 4px, rgba .055)
+        # Subtle horizontal scanlines (every 3px, faint cyan)
         scan = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
         sd = ImageDraw.Draw(scan)
-        for y in range(0, sh, 4):
+        for y in range(0, sh, 3):
             sd.line((0, y, sw, y), fill=self.SCAN_LINE)
         scan_masked = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
         scan_masked.paste(scan, (0, 0), mask)
         img.alpha_composite(scan_masked, (sx, sy))
 
         draw = ImageDraw.Draw(img, 'RGBA')
-        # Outer border
+        # Outer border (cyan-tinted)
         draw.rounded_rectangle(
             (sx, sy, sx + sw - 1, sy + sh - 1),
             radius=6, outline=self.PANEL_EDGE, width=1,
         )
-        # Inner highlight (::after rgba 0.16 inside)
+        # Inner glow border
         draw.rounded_rectangle(
             (sx + 1, sy + 1, sx + sw - 2, sy + sh - 2),
             radius=6, outline=self.INNER_HIGHLIGHT, width=1,
         )
-        # Top-edge highlight (box-shadow inset 0 1px 0 rgba(255,255,255,0.42))
+        # Top-edge cyan highlight
         draw.line(
             (sx + 1, sy + 2, sx + sw - 2, sy + 2),
             fill=self.PANEL_LINE, width=1,
@@ -1479,14 +1480,20 @@ class DpsOverlay:
     def _draw_corners(self, draw: ImageDraw.ImageDraw,
                       sx: int, sy: int, sw: int, sh: int) -> None:
         cs = self.CORNER_SIZE
-        # top-left: cyan
+        # top-left: bright cyan
         cyan = self.CYAN
         draw.line((sx + 2, sy + 2, sx + 2 + cs, sy + 2),
                   fill=cyan, width=2)
         draw.line((sx + 2, sy + 2, sx + 2, sy + 2 + cs),
                   fill=cyan, width=2)
-        # bottom-right: gold-ish
-        gold_c = (212, 156, 23, 255)
+        # top-right: faint cyan accent
+        draw.line((sx + sw - 2 - cs, sy + 2, sx + sw - 2, sy + 2),
+                  fill=(104, 228, 255, 120), width=1)
+        # bottom-left: faint gold accent
+        draw.line((sx + 2, sy + sh - 2, sx + 2 + cs, sy + sh - 2),
+                  fill=(222, 190, 80, 120), width=1)
+        # bottom-right: gold
+        gold_c = (222, 190, 80, 255)
         bx = sx + sw - 2
         by = sy + sh - 2
         draw.line((bx - cs, by, bx, by), fill=gold_c, width=2)
@@ -1528,8 +1535,8 @@ class DpsOverlay:
         bw = bw_text + 16
         bh_ = 20
         self._draw_clip_rect(draw, bx, by, bw, bh_,
-                             fill=(255, 255, 255, 107),
-                             outline=self.BTN_BORDER)
+                             fill=(30, 45, 65, 180),
+                             outline=(60, 140, 180, 160))
         self._draw_tracked(draw, (bx + 8, by + 4), badge_label,
                            font_badge, badge_color, 1.1)
         y += self.TITLE_H
@@ -1584,16 +1591,16 @@ class DpsOverlay:
                      bw: int, bh: int, text: str, active: bool,
                      kind: str, font, enabled: bool = True) -> None:
         if not enabled:
-            fill = (255, 255, 255, 58)
-            border = (160, 162, 150, 148)
-            fg = (139, 139, 130, 180)
+            fill = (30, 35, 45, 120)
+            border = (50, 60, 70, 100)
+            fg = (80, 85, 95, 180)
         elif kind == 'live' and active:
             fill = self.BTN_LIVE_ACTIVE
             border = self.BTN_LIVE_BORDER
             fg = self.BTN_LIVE_COLOR
         elif active:
-            fill = (222, 166, 32, 46)
-            border = (222, 166, 32, 255)
+            fill = (222, 190, 80, 40)
+            border = (222, 190, 80, 220)
             fg = self.GOLD
         else:
             fill = self.BTN_BG
@@ -1620,12 +1627,12 @@ class DpsOverlay:
         for i, (label, active) in enumerate(tabs):
             tx = x0 + i * (tab_w + gap)
             if active:
-                fill = (222, 166, 32, 33)       # 0.13
-                border = (222, 166, 32, 255)
+                fill = (222, 190, 80, 35)
+                border = (222, 190, 80, 220)
                 fg = self.GOLD
             else:
-                fill = (255, 255, 255, 66)      # 0.26
-                border = self.BTN_BORDER
+                fill = (40, 55, 75, 120)
+                border = (50, 100, 130, 100)
                 fg = self.TEXT_MUTED
             self._draw_clip_rect(draw, tx, y, tab_w, self.TAB_H,
                                  fill=fill, outline=border, bevel=10)
@@ -1638,17 +1645,17 @@ class DpsOverlay:
 
     def _draw_list_frame(self, draw: ImageDraw.ImageDraw, img: Image.Image,
                          lx: int, ly: int, lw: int, lh: int) -> None:
-        # Frame background
+        # Frame background (dark)
         self._fill_rounded_rect(
             img, (lx, ly, lx + lw - 1, ly + lh - 1), radius=4, fill=self.LIST_BG
         )
         self._fill_rounded_rect(
             img, (lx + 2, ly + 2, lx + lw - 3, ly + min(lh // 3, 18)),
-            radius=4, fill=(255, 255, 255, 14),
+            radius=4, fill=(104, 228, 255, 6),
         )
         self._fill_rounded_rect(
             img, (lx + 3, ly + max(14, lh // 2), lx + lw - 4, ly + lh - 4),
-            radius=4, fill=(22, 24, 18, 8),
+            radius=4, fill=(0, 0, 0, 15),
         )
         draw.rounded_rectangle(
             (lx, ly, lx + lw - 1, ly + lh - 1),
@@ -1692,7 +1699,7 @@ class DpsOverlay:
             (x + 2, y + min(h // 3 + 1, h - 4)),
             (x + 1, y + bevel),
         ]
-        self._fill_polygon(img, top_sheen, (255, 255, 255, 12))
+        self._fill_polygon(img, top_sheen, (104, 228, 255, 8))
         self._fill_polygon(
             img,
             [
@@ -1702,7 +1709,7 @@ class DpsOverlay:
                 (x, y + h - 2),
                 (x, y + bevel),
             ],
-            (20, 20, 14, 9),
+            (0, 0, 0, 20),
         )
         # Self highlight: left gold border
         if row['is_self']:
@@ -1718,7 +1725,7 @@ class DpsOverlay:
             )
             self._draw_clip_rect(
                 draw, x, y, w, h,
-                outline=(222, 166, 32, 255),
+                outline=(222, 190, 80, 220),
                 bevel=bevel,
             )
             self._fill_polygon(
@@ -1730,7 +1737,7 @@ class DpsOverlay:
                     (x, y + h - 2),
                     (x, y + bevel),
                 ],
-                (222, 166, 32, 8),
+                (222, 190, 80, 12),
             )
 
         # Animated bar fill (within clip)
@@ -1824,23 +1831,23 @@ class DpsOverlay:
 
     def _draw_footer(self, draw: ImageDraw.ImageDraw,
                      sx: int, fy: int, sw: int, fh: int) -> None:
-        # Top divider
+        # Top divider (cyan-tinted)
         draw.line((sx, fy, sx + sw - 1, fy), fill=self.DIVIDER, width=1)
-        # Footer bg (rgba 0.30)
+        # Footer bg (dark tint)
         self._fill_rect(
             draw._image,
             (sx + 1, fy + 1, sx + sw - 2, fy + fh - 2),
-            fill=(255, 255, 255, 76),
+            fill=(15, 20, 30, 140),
         )
         self._fill_rect(
             draw._image,
             (sx + 2, fy + 2, sx + sw - 3, fy + min(fh // 2, 16)),
-            fill=(255, 255, 255, 12),
+            fill=(104, 228, 255, 6),
         )
         self._fill_rect(
             draw._image,
             (sx + 2, fy + max(14, fh // 2), sx + sw - 3, fy + fh - 3),
-            fill=(22, 24, 18, 8),
+            fill=(0, 0, 0, 18),
         )
         font = _load_font('sao', 10)
         x_left = sx + self.HEADER_PAD_X
@@ -1998,7 +2005,7 @@ class DpsOverlay:
             cy = body_y + r * (card_h + card_gap)
             self._fill_rounded_rect(
                 img, (cx, cy, cx + col_w - 1, cy + card_h - 1),
-                radius=3, fill=(255, 255, 255, 90),
+                radius=3, fill=(35, 45, 60, 160),
             )
             draw.rounded_rectangle(
                 (cx, cy, cx + col_w - 1, cy + card_h - 1),
@@ -2055,12 +2062,12 @@ class DpsOverlay:
             # Background bar
             self._fill_rounded_rect(
                 img, (lx + 6, ry, lx + lw - 7, ry + sk_row_h - 1),
-                radius=2, fill=(255, 255, 255, 64),
+                radius=2, fill=(30, 40, 55, 140),
             )
             bar_w = int((lw - 14) * bar_pct)
             if bar_w > 0:
                 bar_color = ((154, 211, 52, 70) if is_heal
-                             else (222, 166, 32, 70))
+                             else (222, 190, 80, 60))
                 self._fill_rounded_rect(
                     img, (lx + 6, ry, lx + 6 + bar_w, ry + sk_row_h - 1),
                     radius=2, fill=bar_color,
@@ -2219,7 +2226,7 @@ class DpsOverlay:
         if is_heal:
             ca, cb = self.BAR_HEAL_A, self.BAR_HEAL_B
         elif is_self:
-            ca, cb = (255, 215, 132, 104), (222, 166, 32, 14)
+            ca, cb = (255, 215, 132, 104), (222, 190, 80, 14)
         else:
             ca, cb = self.BAR_OTHER_A, self.BAR_OTHER_B
 
@@ -2246,7 +2253,7 @@ class DpsOverlay:
         hd.rounded_rectangle(
             (0, 0, bw - 1, max(2, bh // 3)),
             radius=min(3, max(1, bh // 2)),
-            fill=(255, 255, 255, 22 if is_self else 16),
+            fill=(80, 140, 180, 16 if is_self else 10),
         )
         hd.line(
             (1, max(1, bh - 2), max(1, bw - 2), max(1, bh - 2)),
