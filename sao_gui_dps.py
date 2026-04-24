@@ -597,6 +597,10 @@ class DpsOverlay:
         self._last_rendered_size: tuple = (0, 0)
         self._registered: bool = False
 
+        # Scroll offset for entity list (mouse wheel support)
+        self._scroll_offset: int = 0
+        self._scroll_offset_report: int = 0
+
         # Static shell layer cache (shadow + shell + corners).
         # Only depends on (w, h); reused as long as panel size is stable.
         self._shell_cache: Optional[Image.Image] = None
@@ -686,6 +690,7 @@ class DpsOverlay:
         self._win.bind('<Button-1>', self._on_drag_start)
         self._win.bind('<B1-Motion>', self._on_drag_move)
         self._win.bind('<ButtonRelease-1>', self._on_drag_end)
+        self._win.bind('<MouseWheel>', self._on_mouse_wheel)
 
         self._visible = True
         self._faded_out = False
@@ -893,7 +898,10 @@ class DpsOverlay:
         self._encounter_active = bool(snapshot.get('encounter_active'))
 
         seen_uids: List[int] = []
-        for idx, ent in enumerate(entities[: self.MAX_ROWS]):
+        # Apply scroll offset to the entity list
+        scroll = max(0, min(self._scroll_offset, max(0, len(entities) - self.MAX_ROWS)))
+        self._scroll_offset = scroll
+        for idx, ent in enumerate(entities[scroll: scroll + self.MAX_ROWS]):
             try:
                 uid = int(ent.get('uid') or 0)
             except Exception:
@@ -915,6 +923,11 @@ class DpsOverlay:
 
         for stale_uid in [u for u in self._rows if u not in seen_uids]:
             self._rows.pop(stale_uid, None)
+
+        # Clamp scroll offset to the current entity count
+        max_off = max(0, len(entities) - self.MAX_ROWS)
+        if self._scroll_offset > max_off:
+            self._scroll_offset = max_off
 
         self._row_order = seen_uids
 
@@ -1215,6 +1228,13 @@ class DpsOverlay:
             return min(len(self._report_entities()), self.MAX_ROWS)
         return min(len(self._rows), self.MAX_ROWS)
 
+    def _clamped_scroll(self) -> int:
+        """Return the scroll offset clamped to current data bounds."""
+        if self._view_mode == 'report':
+            total = len(self._report_entities())
+            return max(0, min(self._scroll_offset_report, max(0, total - self.MAX_ROWS)))
+        return max(0, min(self._scroll_offset, max(0, len(self._rows) - self.MAX_ROWS)))
+
     def _build_view_rows(self) -> List[dict]:
         is_heal = self._current_tab == 'heal'
         rows: List[dict] = []
@@ -1225,6 +1245,8 @@ class DpsOverlay:
                 key=lambda ent: float(ent.get('heal_total' if is_heal else 'damage_total') or 0),
                 reverse=True,
             )
+            scroll = max(0, min(self._scroll_offset_report, max(0, len(entities) - self.MAX_ROWS)))
+            self._scroll_offset_report = scroll
             total = float((self._last_report or {}).get(
                 'total_heal' if is_heal else 'total_damage'
             ) or 0)
@@ -1233,7 +1255,7 @@ class DpsOverlay:
                  for ent in entities],
                 default=0.0,
             )
-            for ent in entities[: self.MAX_ROWS]:
+            for ent in entities[scroll: scroll + self.MAX_ROWS]:
                 uid = int(ent.get('uid') or 0)
                 amount = float(ent.get('heal_total' if is_heal else 'damage_total') or 0)
                 rows.append({
@@ -2477,3 +2499,33 @@ class DpsOverlay:
                     save()
             except Exception:
                 pass
+
+    # ──────────────────────────────────────────
+    #  Mouse wheel scroll
+    # ──────────────────────────────────────────
+
+    def _on_mouse_wheel(self, ev) -> None:
+        """Handle mouse wheel to scroll the entity list."""
+        # ev.delta is positive = scroll up, negative = scroll down on Windows
+        delta = getattr(ev, 'delta', 0)
+        if delta > 0:
+            self._scroll(-1)
+        elif delta < 0:
+            self._scroll(1)
+
+    def _scroll(self, direction: int) -> None:
+        """Scroll the entity list by one row in the given direction (+1 down, -1 up)."""
+        is_report = self._view_mode == 'report'
+        if is_report:
+            total = len(self._report_entities())
+            offset_attr = '_scroll_offset_report'
+        else:
+            total = len(self._rows)
+            offset_attr = '_scroll_offset'
+        max_offset = max(0, total - self.MAX_ROWS)
+        old = getattr(self, offset_attr)
+        new = max(0, min(max_offset, old + direction))
+        if new != old:
+            setattr(self, offset_attr, new)
+            # Reset row positions so they animate smoothly
+            self._schedule_tick(immediate=True)
