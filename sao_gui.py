@@ -40,7 +40,8 @@ from sao_theme import (
     SAOLeaderboardDialog,
     SAOStatusPill, SAOResizeGrip, SAOFilePicker, SAOSeparator,
     SAOPopUpMenu, SAOHPBar, SAOLinkStart, SAOCircleButton,
-    Animator, lerp, lerp_color, ease_out, ease_in_out
+    Animator, lerp, lerp_color, ease_out, ease_in_out,
+    _close_alert as _sao_close_dialog,
 )
 from character_profile import (
     load_profile, save_profile, get_or_ask_profile,
@@ -77,6 +78,7 @@ from sao_gui_autokey import AutoKeyPanel
 from sao_gui_bossraid import BossRaidPanel
 from sao_gui_commander import CommanderPanel
 from sao_gui_profile_editors import AutoKeyDetailPanel, BossRaidDetailPanel
+from perf_probe import probe as _probe, phase as _phase_trace, gauge as _perf_gauge
 
 try:
     import pynput.keyboard as pynput_kb
@@ -1197,6 +1199,14 @@ class SAOPlayerGUI:
         self._last_gs_prof = ''
         self._last_gs_uid = ''
         self._last_fast_state_sig = None
+        self._last_player_panel_level_sig = None
+        self._last_hp_overlay_hp_sig = None
+        self._last_hp_overlay_sta_sig = None
+        self._last_hp_sta_offline = None
+        self._last_boss_hp_push_sig = None
+        self._last_commander_push_sig = None
+        self._panel_float_entries = {}
+        self._panel_float_after_id = None
 
         # ── Boss bar target tracking (mirrors webview) ──
         self._bb_last_target_uuid = 0
@@ -1312,43 +1322,69 @@ class SAOPlayerGUI:
 
         # 签名缓存: 上次绘制的坐标元组, 不变时跳过
         panel._sao_fx_last_sig = None
+        cyan = '#86dfff'
+        gold = '#f3af12'
+        panel._sao_fx_items = {
+            'lines': [
+                body_cv.create_line(0, 0, 0, 0, fill=cyan, width=1),
+                body_cv.create_line(0, 0, 0, 0, fill=gold, width=1),
+                body_cv.create_line(0, 0, 0, 0, fill=cyan, width=1),
+                body_cv.create_line(0, 0, 0, 0, fill=gold, width=1),
+            ],
+            'ticks': [
+                (
+                    body_cv.create_line(0, 0, 0, 0, fill=cyan, width=1),
+                    body_cv.create_line(0, 0, 0, 0, fill=gold, width=1),
+                )
+                for _ in range(5)
+            ],
+            'rects': [
+                body_cv.create_rectangle(0, 0, 0, 0, outline=cyan, width=1),
+                body_cv.create_rectangle(0, 0, 0, 0, outline=gold, width=1),
+            ],
+        }
 
         # 注册到共享列表
-        SAOSimilarUI._sao_fx_panels.append((panel, body_cv, pw, ph))
+        SAOPlayerGUI._sao_fx_panels.append((panel, body_cv, pw, ph))
 
         # 面板销毁时自动移除
         def _on_destroy(event=None):
-            SAOSimilarUI._sao_fx_panels[:] = [
-                (p, cv, w, h) for p, cv, w, h in SAOSimilarUI._sao_fx_panels
+            SAOPlayerGUI._sao_fx_panels[:] = [
+                (p, cv, w, h) for p, cv, w, h in SAOPlayerGUI._sao_fx_panels
                 if p is not panel
             ]
         panel.bind('<Destroy>', _on_destroy, add='+')
 
         # 启动共享调度 (仅当首次注册时)
-        if SAOSimilarUI._sao_fx_after_id is None:
-            SAOSimilarUI._sao_fx_shared_tick(self)
+        if SAOPlayerGUI._sao_fx_after_id is None:
+            SAOPlayerGUI._sao_fx_shared_tick(self)
 
     @staticmethod
+    @_probe.decorate('ui.sao_fx_shared_tick')
     def _sao_fx_shared_tick(self_ref):
         """共享 HUD 装饰 tick — 66ms 一次驱动所有面板.
 
         比旧方案 (每面板独立 after(33)) 省 N-1 个 after 回调.
         签名缓存确保仅坐标变化时才执行 Canvas 操作.
         """
-        if self_ref._destroyed or not SAOSimilarUI._sao_fx_panels:
-            SAOSimilarUI._sao_fx_after_id = None
+        if self_ref._destroyed or not SAOPlayerGUI._sao_fx_panels:
+            SAOPlayerGUI._sao_fx_after_id = None
             return
 
         tt = time.time()
         cyan = '#86dfff'
         gold = '#f3af12'
+        active_count = 0
 
-        for panel, body_cv, pw, ph in SAOSimilarUI._sao_fx_panels:
+        for panel, body_cv, pw, ph in SAOPlayerGUI._sao_fx_panels:
             try:
-                if not panel.winfo_exists():
+                if (not panel.winfo_exists()
+                        or not panel.winfo_viewable()
+                        or not body_cv.winfo_exists()):
                     continue
             except Exception:
                 continue
+            active_count += 1
 
             # 每面板加一个相位偏移避免完全同步
             t = tt + (id(panel) % 17) * 0.13
@@ -1365,25 +1401,40 @@ class SAOPlayerGUI:
                 continue  # 没有变化, 跳过 Canvas 操作
             panel._sao_fx_last_sig = sig
 
-            # 有变化才 delete + rebuild
-            body_cv.delete('all')
-            body_cv.create_line(left_far, 30, left_far + 78, 30, fill=cyan, width=1)
-            body_cv.create_line(left_near, ph - 44, left_near + 102, ph - 44, fill=gold, width=1)
-            body_cv.create_line(right_far - 88, 42, right_far, 42, fill=cyan, width=1)
-            body_cv.create_line(right_near - 110, ph - 58, right_near, ph - 58, fill=gold, width=1)
-            for i in range(5):
-                lx = left_far + i * 12
-                rx2 = right_far - i * 13
-                body_cv.create_line(lx, 48, lx, 54 + (i % 2) * 3, fill=cyan, width=1)
-                body_cv.create_line(rx2, ph - 74, rx2, ph - 68 - (i % 2) * 3, fill=gold, width=1)
-            body_cv.create_rectangle(left_near + 8, ph - 36, left_near + 66, ph - 24, outline=cyan, width=1)
-            body_cv.create_rectangle(right_near - 74, 22, right_near - 12, 34, outline=gold, width=1)
+            # 有变化才移动现有 Canvas items，避免 delete + rebuild。
+            items = getattr(panel, '_sao_fx_items', None)
+            if not items:
+                continue
+            lines = items.get('lines') or []
+            ticks = items.get('ticks') or []
+            rects = items.get('rects') or []
+            try:
+                body_cv.coords(lines[0], left_far, 30, left_far + 78, 30)
+                body_cv.coords(lines[1], left_near, ph - 44,
+                               left_near + 102, ph - 44)
+                body_cv.coords(lines[2], right_far - 88, 42, right_far, 42)
+                body_cv.coords(lines[3], right_near - 110, ph - 58,
+                               right_near, ph - 58)
+                for i, pair in enumerate(ticks):
+                    lx = left_far + i * 12
+                    rx2 = right_far - i * 13
+                    body_cv.coords(pair[0], lx, 48, lx, 54 + (i % 2) * 3)
+                    body_cv.coords(pair[1], rx2, ph - 74,
+                                   rx2, ph - 68 - (i % 2) * 3)
+                body_cv.coords(rects[0], left_near + 8, ph - 36,
+                               left_near + 66, ph - 24)
+                body_cv.coords(rects[1], right_near - 74, 22,
+                               right_near - 12, 34)
+            except Exception:
+                pass
 
+        _perf_gauge('ui.sao_fx.active_panels', active_count)
         try:
-            SAOSimilarUI._sao_fx_after_id = self_ref.root.after(
-                66, lambda: SAOSimilarUI._sao_fx_shared_tick(self_ref))
+            delay_ms = 90 if active_count > 0 else 250
+            SAOPlayerGUI._sao_fx_after_id = self_ref.root.after(
+                delay_ms, lambda: SAOPlayerGUI._sao_fx_shared_tick(self_ref))
         except Exception:
-            SAOSimilarUI._sao_fx_after_id = None
+            SAOPlayerGUI._sao_fx_after_id = None
 
     # ══════════════════════════════════════════════
     #  悬浮触发按钮 — 纯 SAO-UI HP 组件 (对标 HP/src/index.vue)
@@ -2231,7 +2282,10 @@ class SAOPlayerGUI:
             panel = getattr(self, '_player_panel', None)
             if panel:
                 try:
-                    panel.update_level(self._level, self._level_extra, self._season_exp)
+                    _level_sig = (self._level, self._level_extra, self._season_exp)
+                    if _level_sig != self._last_player_panel_level_sig:
+                        self._last_player_panel_level_sig = _level_sig
+                        panel.update_level(self._level, self._level_extra, self._season_exp)
                 except Exception:
                     pass
 
@@ -2240,19 +2294,29 @@ class SAOPlayerGUI:
                 hp_max = int(getattr(gs, 'hp_max', 0) or 0)
                 if hp_max <= 0:
                     hp, hp_max = getattr(self, '_sta_hp', (0, 1))
-                self._hp_overlay.update_hp(
-                    int(hp), max(1, int(hp_max)),
-                    self._format_level_text(self._level, self._level_extra),
-                )
+                _lv_text = self._format_level_text(self._level, self._level_extra)
+                _hp_sig = (int(hp), max(1, int(hp_max)), _lv_text)
+                if _hp_sig != self._last_hp_overlay_hp_sig:
+                    self._last_hp_overlay_hp_sig = _hp_sig
+                    self._hp_overlay.update_hp(
+                        int(hp), max(1, int(hp_max)), _lv_text)
                 if player_name or profession or uid:
-                    self._hp_overlay.set_player_info({
-                        'name': player_name or self._username or '',
-                        'profession': profession or self._profession or '',
-                        'uid': uid,
-                    })
+                    _pi_sig = (
+                        player_name or self._username or '',
+                        profession or self._profession or '',
+                        uid,
+                    )
+                    if _pi_sig != getattr(self, '_last_hp_player_info_sig', None):
+                        self._last_hp_player_info_sig = _pi_sig
+                        self._hp_overlay.set_player_info({
+                            'name': _pi_sig[0],
+                            'profession': _pi_sig[1],
+                            'uid': _pi_sig[2],
+                        })
         except Exception:
             pass
 
+    @_probe.decorate('ui.push_packet_overlays')
     def _push_packet_overlays(self, gs):
         """始终运行的 DPS / Boss HP 覆盖板推送 — 数据完全由 packet on_damage 回调驱动,
         与 recognition_ok / packet_active 闸门解耦, 避免抓包链路里任何一处中断都拖累弹出.
@@ -2261,6 +2325,7 @@ class SAOPlayerGUI:
         via poll_overlay_state() to reduce lock contention from 9 → 1.
         """
         # ── DPS tracker: 更新自身玩家信息 ──
+        _pp_now = time.time()
         if self._dps_tracker and gs is not None and getattr(gs, 'player_id', ''):
             try:
                 _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
@@ -2270,7 +2335,9 @@ class SAOPlayerGUI:
                         self._last_self_uid_pushed = _p_uid
                         self._dps_tracker.set_self_uid(_p_uid)
                     if self._dps_overlay:
-                        self._dps_overlay.set_self_uid(_p_uid)
+                        if _p_uid != getattr(self, '_last_dps_overlay_self_uid', 0):
+                            self._last_dps_overlay_self_uid = _p_uid
+                            self._dps_overlay.set_self_uid(_p_uid)
                     _self_fp = 0
                     _bridge = getattr(self, '_packet_engine', None)
                     if _bridge:
@@ -2297,7 +2364,10 @@ class SAOPlayerGUI:
         # ── 同步队伍中所有玩家信息 (batch, 1 lock) ──
         if self._dps_tracker:
             _bridge = getattr(self, '_packet_engine', None)
-            if _bridge:
+            if (_bridge and (
+                    _pp_now - getattr(self, '_last_batch_pi_scan_ts', 0.0) >= 1.0
+                    or getattr(self, '_last_batch_pi_sig', None) is None)):
+                self._last_batch_pi_scan_ts = _pp_now
                 try:
                     _batch = []
                     for _pu, _pd in _bridge.get_players().items():
@@ -2340,7 +2410,10 @@ class SAOPlayerGUI:
                 )
 
                 if self._dps_overlay:
-                    self._dps_overlay.set_report_available(_poll['has_report'])
+                    _has_report = bool(_poll['has_report'])
+                    if _has_report != self._dps_last_report_available:
+                        self._dps_last_report_available = _has_report
+                        self._dps_overlay.set_report_available(_has_report)
 
                 _dps_snap = _poll['snapshot']
                 _dps_has_live = _poll['has_live']
@@ -2476,10 +2549,31 @@ class SAOPlayerGUI:
                         'invincible': getattr(gs, 'boss_invincible', False),
                         'boss_name': '',
                     }
-                self._boss_hp_overlay.update(_bb_data)
+                _bb_sig = (
+                    bool(_bb_data.get('active', False)),
+                    _bb_data.get('hp_pct'),
+                    _bb_data.get('hp_source'),
+                    int(_bb_data.get('current_hp') or 0),
+                    int(_bb_data.get('total_hp') or 0),
+                    bool(_bb_data.get('shield_active', False)),
+                    _bb_data.get('shield_pct'),
+                    int(_bb_data.get('breaking_stage') or 0),
+                    bool(_bb_data.get('has_break_data', False)),
+                    _bb_data.get('extinction_pct'),
+                    int(_bb_data.get('extinction') or 0),
+                    int(_bb_data.get('max_extinction') or 0),
+                    bool(_bb_data.get('stop_breaking_ticking', False)),
+                    bool(_bb_data.get('in_overdrive', False)),
+                    bool(_bb_data.get('invincible', False)),
+                    str(_bb_data.get('boss_name') or ''),
+                )
+                if _bb_sig != self._last_boss_hp_push_sig:
+                    self._last_boss_hp_push_sig = _bb_sig
+                    self._boss_hp_overlay.update(_bb_data)
             except Exception:
                 pass
 
+    @_probe.decorate('ui.recognition_loop')
     def _recognition_loop(self):
         """后台识别循环 — 读取 GameStateManager 并更新 HP 条 + 体力覆盖板 + DPS + Boss.
 
@@ -2539,7 +2633,10 @@ class SAOPlayerGUI:
                     if _pp:
                         _pp._sta_hp = (hp, hp_max)
                         _pp._sta_sta = (sta, sta_max)
-                        _pp.update_level(menu_level, menu_level_extra, menu_season_exp)
+                        _level_sig = (menu_level, menu_level_extra, menu_season_exp)
+                        if _level_sig != self._last_player_panel_level_sig:
+                            self._last_player_panel_level_sig = _level_sig
+                            _pp.update_level(menu_level, menu_level_extra, menu_season_exp)
 
                     # DPS / Boss HP 推送已迁移到 _push_packet_overlays (在闸门外执行)
 
@@ -2552,17 +2649,21 @@ class SAOPlayerGUI:
                                 _lv_text = f'{_lv}(+{_lv_extra})'
                             else:
                                 _lv_text = str(_lv)
-                            # v2.3.16: skip HP overlay update if data unchanged
-                            # (also pushed by _apply_fast_state_update via listener)
-                            _hp_sig = (int(hp), int(hp_max), _lv_text,
-                                       int(sta), int(sta_max))
-                            if _hp_sig != getattr(self, '_last_recog_hp_sig', None):
-                                self._last_recog_hp_sig = _hp_sig
+                            # v2.3.17: HP and STA signatures are split so
+                            # packet fast-path HP pushes do not suppress a
+                            # later STA-only update from recognition.
+                            _hp_sig = (int(hp), int(hp_max), _lv_text)
+                            if _hp_sig != self._last_hp_overlay_hp_sig:
+                                self._last_hp_overlay_hp_sig = _hp_sig
                                 self._hp_overlay.update_hp(hp, hp_max, _lv_text)
+                            _sta_sig = (int(sta), int(sta_max))
+                            if _sta_sig != self._last_hp_overlay_sta_sig:
+                                self._last_hp_overlay_sta_sig = _sta_sig
                                 self._hp_overlay.update_sta(sta, sta_max)
                             _sta_offline = self._should_show_sta_offline(gs)
-                            self._hp_overlay.set_sta_offline(
-                                _sta_offline)
+                            if _sta_offline != self._last_hp_sta_offline:
+                                self._last_hp_sta_offline = _sta_offline
+                                self._hp_overlay.set_sta_offline(_sta_offline)
                             if gs.player_name:
                                 _pi_sig = (
                                     str(gs.player_name),
@@ -2699,40 +2800,98 @@ class SAOPlayerGUI:
 
     def _attach_panel_float(self, panel, phase: float = 0.0, amp: float = 2.5):
         """给浮动面板附加轻微漂浮动画，且不再叠加额外 HUD 小条。"""
-        t0 = time.time()
+        key = id(panel)
+        if key in self._panel_float_entries:
+            return
+        entry = {
+            'panel': panel,
+            'phase': float(phase or 0.0),
+            'amp': float(amp or 0.0),
+            't0': time.time(),
+            'base_x': None,
+            'base_y': None,
+            'dx': 0,
+            'dy': 0,
+        }
+        self._panel_float_entries[key] = entry
+        panel._fdx = 0
+        panel._fdy = 0
 
-        def _step():
-            if self._destroyed:
-                return
+        def _on_destroy(event=None, _key=key):
+            self._panel_float_entries.pop(_key, None)
+
+        panel.bind('<Destroy>', _on_destroy, add='+')
+        if self._panel_float_after_id is None:
+            self._panel_float_shared_tick()
+
+    @_probe.decorate('ui.panel_float.tick')
+    def _panel_float_shared_tick(self):
+        self._panel_float_after_id = None
+        if self._destroyed:
+            self._panel_float_entries.clear()
+            return
+        if not self._panel_float_entries:
+            return
+
+        now_abs = time.time()
+        active_count = 0
+        for key, entry in list(self._panel_float_entries.items()):
+            panel = entry.get('panel')
             try:
-                if not panel.winfo_exists():
-                    return
+                if panel is None or not panel.winfo_exists():
+                    self._panel_float_entries.pop(key, None)
+                    continue
+                if not panel.winfo_viewable():
+                    continue
+                cur_x = int(panel.winfo_x())
+                cur_y = int(panel.winfo_y())
             except Exception:
-                return
+                self._panel_float_entries.pop(key, None)
+                continue
 
-            now = time.time() - t0
-            new_dx = int(amp * math.sin(now * 0.82 + phase))
-            new_dy = int(amp * math.sin(now * 0.61 + phase + 1.2))
-            old_dx = getattr(panel, '_fdx', 0)
-            old_dy = getattr(panel, '_fdy', 0)
-            dd_x, dd_y = new_dx - old_dx, new_dy - old_dy
-            if dd_x != 0 or dd_y != 0:
+            active_count += 1
+            old_dx = int(entry.get('dx') or 0)
+            old_dy = int(entry.get('dy') or 0)
+            base_x = entry.get('base_x')
+            base_y = entry.get('base_y')
+            if base_x is None or base_y is None:
+                base_x = cur_x - old_dx
+                base_y = cur_y - old_dy
+            else:
+                expected_x = int(base_x) + old_dx
+                expected_y = int(base_y) + old_dy
+                if abs(cur_x - expected_x) > 2 or abs(cur_y - expected_y) > 2:
+                    base_x = cur_x - old_dx
+                    base_y = cur_y - old_dy
+
+            t = now_abs - float(entry.get('t0') or now_abs)
+            phase = float(entry.get('phase') or 0.0)
+            amp = float(entry.get('amp') or 0.0)
+            new_dx = int(amp * math.sin(t * 0.82 + phase))
+            new_dy = int(amp * math.sin(t * 0.61 + phase + 1.2))
+            if new_dx != old_dx or new_dy != old_dy:
                 try:
-                    cx = panel.winfo_x()
-                    cy = panel.winfo_y()
-                    panel.geometry(f'+{cx + dd_x}+{cy + dd_y}')
+                    panel.geometry(f'+{int(base_x) + new_dx}+{int(base_y) + new_dy}')
                 except Exception:
                     pass
-            panel._fdx = new_dx
-            panel._fdy = new_dy
+            entry['base_x'] = int(base_x)
+            entry['base_y'] = int(base_y)
+            entry['dx'] = new_dx
+            entry['dy'] = new_dy
             try:
-                self.root.after(16, _step)
+                panel._fdx = new_dx
+                panel._fdy = new_dy
             except Exception:
                 pass
 
-        panel._fdx = 0
-        panel._fdy = 0
-        _step()
+        _perf_gauge('ui.panel_float.active_panels', active_count)
+        if self._panel_float_entries:
+            try:
+                delay_ms = 33 if active_count > 0 else 250
+                self._panel_float_after_id = self.root.after(
+                    delay_ms, self._panel_float_shared_tick)
+            except Exception:
+                self._panel_float_after_id = None
 
     def _float_click(self, e):
         self._drag['x'] = e.x_root
@@ -3164,6 +3323,7 @@ class SAOPlayerGUI:
             self._push_commander_data()
             self.root.after(120, lambda: self._raise_panel_window(self._commander_panel))
 
+    @_probe.decorate('ui.commander_push')
     def _push_commander_data(self):
         """Build + push a snapshot to the Commander panel."""
         if not self._commander_panel or not self._commander_panel.is_visible():
@@ -3175,7 +3335,39 @@ class SAOPlayerGUI:
             else:
                 data = {'members': [], 'team_id': 0,
                         'leader_uid': 0, 'dungeon_id': 0}
-            self._commander_panel.update(data)
+            _members = []
+            for _m in list(data.get('members') or []):
+                _slots = tuple(
+                    (
+                        int(_s.get('index') or 0),
+                        str(_s.get('state') or ''),
+                        round(float(_s.get('cooldown_pct') or 0.0), 3),
+                        int(_s.get('remaining_ms') or 0),
+                    )
+                    for _s in list(_m.get('skill_slots') or [])
+                )
+                _members.append((
+                    int(_m.get('uid') or 0),
+                    str(_m.get('name') or ''),
+                    str(_m.get('profession') or ''),
+                    int(_m.get('fight_point') or 0),
+                    int(_m.get('level') or 0),
+                    bool(_m.get('is_self')),
+                    bool(_m.get('is_leader')),
+                    int(_m.get('hp') or 0),
+                    int(_m.get('max_hp') or 0),
+                    _slots,
+                ))
+            _sig = (
+                int(data.get('team_id') or 0),
+                int(data.get('leader_uid') or 0),
+                int(data.get('dungeon_id') or 0),
+                int(data.get('self_uid') or 0),
+                tuple(_members),
+            )
+            if _sig != self._last_commander_push_sig:
+                self._last_commander_push_sig = _sig
+                self._commander_panel.update(data)
         except Exception:
             pass
 
@@ -4327,6 +4519,7 @@ class SAOPlayerGUI:
     # ══════════════════════════════════════════════════════════════
     #  持久鱼眼叠加层 (菜单开启时常驻, 关闭时销毁)
     # ══════════════════════════════════════════════════════════════
+    @_probe.decorate('ui.fisheye.start')
     def _start_fisheye_overlay(self):
         """
         SAO 菜单开启期间的持久鱼眼叠加层 (GPU 渲染).
@@ -4456,12 +4649,12 @@ class SAOPlayerGUI:
         _FADEIN_DUR = 0.5        # 500ms fade-in
         _FADEOUT_DUR = 0.4       # 400ms fade-out
         _running = [True]
-        _latest_frame = [None]   # (bgra_bytes, w, h) tuple
-        _last_pushed = [None]    # dedup: do not re-set same frame
+        _latest_frame = [None]   # (frame_id, bgra_bytes, w, h) tuple
+        _last_pushed_frame_id = [0]
         _state = ['init']        # init → fadein → active → fadeout → destroy
         _fade_started = [False]
         _fadeout_started = [False]
-        _frame_crc = [0]         # v2.3.15: CRC32 signature for frame dedup
+        _frame_seq = [0]
         ov._running_ref = _running
 
         def _on_fadeout_done():
@@ -4471,6 +4664,7 @@ class SAOPlayerGUI:
                 pass
 
         def _tick():
+            _tick_t0 = time.perf_counter()
             if self._fisheye_ov is None:
                 return
             s = _state[0]
@@ -4482,21 +4676,21 @@ class SAOPlayerGUI:
             f = _latest_frame[0]
             if f is not None:
                 try:
-                    import zlib as _zlib
-                    _new_crc = _zlib.crc32(f[0]) & 0xFFFFFFFF
-                    if _new_crc != _frame_crc[0]:
-                        _frame_crc[0] = _new_crc
-                        presenter.set_frame(f[0], f[1], f[2])
-                        _last_pushed[0] = f
+                    _frame_id, _bgra, _fw, _fh = f
+                    if _frame_id != _last_pushed_frame_id[0]:
+                        _last_pushed_frame_id[0] = _frame_id
+                        presenter.set_frame(_bgra, _fw, _fh)
                         gpu_win.request_redraw()
                 except Exception:
-                    # Fallback: always push if zlib missing
-                    if f is not _last_pushed[0]:
-                        presenter.set_frame(f[0], f[1], f[2])
-                        _last_pushed[0] = f
-                        gpu_win.request_redraw()
+                    pass
 
             # State machine — kicks off pump-driven fades.
+            try:
+                _fisheye_should_run = bool(
+                    self._sao_menu.visible or self._any_panel_open())
+            except Exception:
+                _fisheye_should_run = False
+
             if s == 'init':
                 if _latest_frame[0] is not None:
                     try:
@@ -4508,7 +4702,7 @@ class SAOPlayerGUI:
                         pass
                     _state[0] = 'fadein'
             elif s == 'fadein':
-                if not self._sao_menu.visible:
+                if not _fisheye_should_run:
                     try:
                         presenter.start_fade(0.0, _FADEOUT_DUR, _on_fadeout_done)
                         _fadeout_started[0] = True
@@ -4520,7 +4714,7 @@ class SAOPlayerGUI:
                 elif not presenter.is_fading():
                     _state[0] = 'active'
             elif s == 'active':
-                if not self._sao_menu.visible:
+                if not _fisheye_should_run:
                     try:
                         presenter.start_fade(0.0, _FADEOUT_DUR, _on_fadeout_done)
                         _fadeout_started[0] = True
@@ -4533,8 +4727,10 @@ class SAOPlayerGUI:
                 # Pump fires _on_fadeout_done when alpha hits 0; nothing to do.
                 pass
 
+            _perf_gauge('fisheye.tk_tick_ms',
+                        (time.perf_counter() - _tick_t0) * 1000.0)
             try:
-                self.root.after(16, _tick)  # v2.3.15: ~60 Hz frame push to match pump rate
+                self.root.after(32, _tick)
             except Exception:
                 pass
 
@@ -4706,7 +4902,7 @@ class SAOPlayerGUI:
                 _wfy = (_sy - _y0).astype(_np.float32)[..., _np.newaxis]
                 _np_maps = (_x0, _x1, _y0, _y1, _wfx, _wfy)
 
-            _frame_interval = 0.016  # v2.3.15: ~60fps target (was 30fps)
+            _frame_interval = 1.0 / 30.0
 
             # ── 预生成 HUD 叠加 (RGBA premultiplied, 一次性) ──
             # v2.3.10: 改在 (out_w, out_h) 分辨率合成 (而不是 sw×sh)，
@@ -4797,16 +4993,24 @@ class SAOPlayerGUI:
                         # All GL calls (including texture rebuild) must
                         # happen inside _wgl_lock to avoid racing the
                         # GLFW pump's WGL context on the same driver.
+                        # v2.3.17: retry up to 3× (2 ms each) so the worker
+                        # doesn't starve when the pump holds the lock briefly.
                         if _wgl_lock is not None:
+                            _wait_t0 = _time.perf_counter()
+                            _acquired = False
+                            for _retry in range(3):
+                                if _wgl_lock.acquire(blocking=False):
+                                    _acquired = True
+                                    break
+                                _time.sleep(0.002)
+                            if not _acquired:
+                                _phase_trace('fisheye.gl.skip', 'wgl_lock_busy')
+                                _time.sleep(0.006)
+                                continue
                             try:
-                                from perf_probe import phase as _ph
-                                _ph('fisheye.gl.wait')
-                            except Exception:
-                                _ph = None  # type: ignore[assignment]
-                            with _wgl_lock:
-                                if _ph is not None:
-                                    try: _ph('fisheye.gl.acquired')
-                                    except Exception: pass
+                                _wait_ms = (_time.perf_counter() - _wait_t0) * 1000.0
+                                _perf_gauge('fisheye.gl.wait_ms', _wait_ms)
+                                _phase_trace('fisheye.gl.acquired')
                                 if _need_rebuild:
                                     try:
                                         _tex.release()
@@ -4821,9 +5025,12 @@ class SAOPlayerGUI:
                                 _tex.use(0)
                                 _vao.render(moderngl.TRIANGLES)
                                 raw = _fbo.color_attachments[0].read()
-                                if _ph is not None:
-                                    try: _ph('fisheye.gl.end')
-                                    except Exception: pass
+                                _phase_trace('fisheye.gl.end')
+                            finally:
+                                try:
+                                    _wgl_lock.release()
+                                except Exception:
+                                    pass
                         else:
                             if _need_rebuild:
                                 try:
@@ -4880,8 +5087,10 @@ class SAOPlayerGUI:
                     tmp += _hud_bgra_premult       # uint16 + uint8 → uint16
                     _np.clip(tmp, 0, 255, out=tmp)
                     _bgra_buf[:] = tmp.astype(_np.uint8)
-                _latest_frame[0] = (_bgra_buf.tobytes(), out_w, out_h)
+                _frame_seq[0] += 1
+                _latest_frame[0] = (_frame_seq[0], _bgra_buf.tobytes(), out_w, out_h)
                 _elapsed = _time.time() - _t_start
+                _perf_gauge('fisheye.worker.frame_ms', _elapsed * 1000.0)
                 _sleep = max(0.001, _frame_interval - _elapsed)
                 _time.sleep(_sleep)
 
@@ -4894,6 +5103,7 @@ class SAOPlayerGUI:
         ov._worker_thread = _worker_thread
         _worker_thread.start()
 
+    @_probe.decorate('ui.fisheye.stop')
     def _stop_fisheye_overlay(self):
         """销毁持久鱼眼叠加层 (GPU 由后台线程自行释放)."""
         ov = self._fisheye_ov
@@ -4905,7 +5115,9 @@ class SAOPlayerGUI:
             worker_thread = getattr(ov, '_worker_thread', None)
             if worker_thread is not None:
                 try:
-                    worker_thread.join(timeout=0.25)
+                    if worker_thread.is_alive():
+                        _phase_trace('fisheye.stop.no_join',
+                                     getattr(worker_thread, 'name', 'worker'))
                 except Exception:
                     pass
             # GPU window + presenter cleanup
@@ -5663,27 +5875,52 @@ class SAOPlayerGUI:
             SAODialog.showinfo(self._float, '更新', f'正在下载 ({int(st.progress * 100)}%)...')
             return
 
-        # 否则发起一次检查
-        SAODialog.showinfo(self._float, '更新', '正在检查更新...')
+        # 否则发起一次检查 — 先显示"正在检查..."对话框, 检查完成后
+        # 自动关闭它, 再弹出结果对话框.
+        _checking_dlg_ref = [None]
+        _checking_dlg_ref[0] = SAODialog.showinfo(self._float, '更新', '正在检查更新...')
+
+        def _close_checking_dlg():
+            dlg = _checking_dlg_ref[0]
+            if dlg is not None:
+                try:
+                    _sao_close_dialog(dlg)
+                except Exception:
+                    try:
+                        dlg.destroy()
+                    except Exception:
+                        pass
+                _checking_dlg_ref[0] = None
 
         def _on_status(snapshot):
             if snapshot.state == STATE_AVAILABLE:
                 try:
-                    self.root.after(0, lambda: self._prompt_update_available(snapshot))
+                    self.root.after(0, lambda: (
+                        _close_checking_dlg(),
+                        self._prompt_update_available(snapshot),
+                    ))
                 except Exception:
                     pass
                 mgr.remove_listener(_on_status)
             elif snapshot.state == STATE_UP_TO_DATE:
                 try:
-                    self.root.after(0, lambda: SAODialog.showinfo(
-                        self._float, '更新', f'已是最新版本 ({APP_VERSION_LABEL})'))
+                    self.root.after(0, lambda: (
+                        _close_checking_dlg(),
+                        SAODialog.showinfo(
+                            self._float, '更新',
+                            f'已是最新版本 ({APP_VERSION_LABEL})'),
+                    ))
                 except Exception:
                     pass
                 mgr.remove_listener(_on_status)
             elif snapshot.state == STATE_ERROR:
                 try:
-                    self.root.after(0, lambda: SAODialog.showinfo(
-                        self._float, '更新', f'检查失败: {snapshot.error}'))
+                    self.root.after(0, lambda: (
+                        _close_checking_dlg(),
+                        SAODialog.showinfo(
+                            self._float, '更新',
+                            f'检查失败: {snapshot.error}'),
+                    ))
                 except Exception:
                     pass
                 mgr.remove_listener(_on_status)

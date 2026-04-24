@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.3.14"
+APP_VERSION = "2.3.17"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,12 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.3.17:
+#   Fisheye worker: retry up to 3× (2 ms each) to acquire WGL lock, preventing worker starvation.
+# v2.3.16:
+#   Minor bug fixes and performance improvements.
+# v2.3.15:
+#   Entity GUI General fix.
 # v2.3.14: 
 #   Entity mode HUD panels decoupling, try to make render FPS
 #   more stable by isolating the heavy works in a separate lane.
@@ -1022,6 +1028,8 @@ class SettingsManager:
                 mode="w", dir=dir_name, delete=False, encoding="utf-8", suffix=".tmp.json"
             ) as tmp:
                 json.dump(self._data, tmp, indent=2, ensure_ascii=False)
+                tmp.flush()
+                os.fsync(tmp.fileno())
                 tmp_path = tmp.name
             os.replace(tmp_path, self._path)
         except Exception as e:
@@ -1030,6 +1038,8 @@ class SettingsManager:
             try:
                 with open(self._path, "w", encoding="utf-8") as handle:
                     json.dump(self._data, handle, indent=2, ensure_ascii=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
             except Exception:
                 pass
 

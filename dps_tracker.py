@@ -722,9 +722,12 @@ class DpsTracker:
                 self._dirty = False
             result['dirty'] = dirty
 
-            # 3) Snapshot (with cache)
+            # 3) Snapshot (with cache).  A dirty poll must rebuild before
+            # clearing the event path; otherwise a fresh damage tick can be
+            # acknowledged while callers still receive the previous snapshot.
             _cached = self._snapshot_cache
-            if _cached is not None and (now - self._snapshot_cache_ts) * 1000 < max_age_ms:
+            if (not dirty and _cached is not None
+                    and (now - self._snapshot_cache_ts) * 1000 < max_age_ms):
                 snap = _cached
             else:
                 snap = self._build_snapshot_locked(include_skills=False)
