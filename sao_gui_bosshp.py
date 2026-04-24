@@ -544,6 +544,9 @@ class BossHpOverlay:
         self._text_layer_cache = None; self._text_layer_sig = ()
         self._frame_cache = None; self._frame_sig = ()
         self._frame_version += 1
+        # Break idle-commit guard so the next _tick submits a frame.
+        self._idle_committed = False
+        self._schedule_tick(immediate=True)
 
     # ──────────────────────────────────────────
     #  Lifecycle

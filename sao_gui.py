@@ -3190,7 +3190,8 @@ class SAOPlayerGUI:
         ]
 
         # ── 面板皮肤子菜单 ──
-        _theme_settings = (self._cfg_settings_ref or {}).get('panel_themes', {})
+        _cfg = self._cfg_settings_ref or self.settings
+        _theme_settings = _cfg.get('panel_themes', {})
         _overlay_map = {
             'dps': ('◆', 'DPS'),
             'hp': ('♥', 'HP'),
@@ -3617,6 +3618,22 @@ class SAOPlayerGUI:
             self._menu_refresh_after_id = self.root.after(100, self._apply_menu_refresh_if_open)
         except Exception:
             self._apply_menu_refresh_if_open()
+
+    def _refresh_menu_immediate(self):
+        """Refresh menu child-bar without debounce (used for theme switch)."""
+        menu = getattr(self, '_sao_menu', None)
+        if self._destroyed or not (menu and menu.visible):
+            return
+        self._menu_refresh_force = True
+        # Cancel any pending debounced refresh
+        aid = self._menu_refresh_after_id
+        if aid:
+            try:
+                self.root.after_cancel(aid)
+            except Exception:
+                pass
+            self._menu_refresh_after_id = None
+        self._apply_menu_refresh_if_open()
 
     # ══════════════════════════════════════════════
     #  浮动面板: 钢琴 / 可视化
@@ -4320,28 +4337,26 @@ class SAOPlayerGUI:
 
     def _toggle_panel_theme(self, key: str) -> None:
         """切换某个面板的 Light/Dark 主题。"""
-        if not self._cfg_settings_ref:
-            return
-        themes = dict(self._cfg_settings_ref.get('panel_themes', {}))
+        cfg = self._cfg_settings_ref or self.settings
+        themes = dict(cfg.get('panel_themes', {}))
         current = themes.get(key, 'light')
         new_theme = 'dark' if current == 'light' else 'light'
         self._apply_theme_to_overlay(key, new_theme)
         themes[key] = new_theme
-        self._cfg_settings_ref.set('panel_themes', themes)
-        self._cfg_settings_ref.save()
-        self._refresh_menu_if_open()
+        cfg.set('panel_themes', themes)
+        cfg.save()
+        self._refresh_menu_immediate()
 
     def _set_all_themes(self, theme: str) -> None:
         """将所有面板设置为同一主题。"""
-        if not self._cfg_settings_ref:
-            return
+        cfg = self._cfg_settings_ref or self.settings
         themes = {}
         for key in self._THEME_OVERLAY_MAP:
             themes[key] = theme
             self._apply_theme_to_overlay(key, theme)
-        self._cfg_settings_ref.set('panel_themes', themes)
-        self._cfg_settings_ref.save()
-        self._refresh_menu_if_open()
+        cfg.set('panel_themes', themes)
+        cfg.save()
+        self._refresh_menu_immediate()
 
     def _apply_theme_to_overlay(self, key: str, theme: str) -> None:
         """将主题应用到 overlay 实例（如果已创建）。"""
@@ -4350,8 +4365,8 @@ class SAOPlayerGUI:
         if ov is not None and hasattr(ov, '_apply_theme'):
             try:
                 ov._apply_theme(theme)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f'[THEME] apply_to_overlay FAILED: key={key} err={e}')
 
     def _restore_panels(self):
         """恢复上次会话中打开的浮动面板"""

@@ -467,6 +467,49 @@ def _truncate(draw: ImageDraw.ImageDraw, text: str, font,
     return text[: max(0, lo - 1)] + ell
 
 
+# ── Theme definitions ──────────────────────────────────────────
+# Light theme = current default palette values
+HP_THEME_LIGHT = {
+    'COVER_A':          (247, 248, 249, 255),
+    'COVER_MID':        (236, 238, 240, 255),
+    'COVER_B':          (226, 229, 232, 255),
+    'COVER_BORDER':     (186, 190, 196, 255),
+    'COVER_BORDER_DEEP':(160, 165, 171, 255),
+    'BOX_BG':           (249, 249, 250, 255),
+    'TEXT_MAIN':        (100, 99, 100, 255),
+    'TEXT_MUTED':       (140, 135, 138, 255),
+    'TEXT_UID':         (140, 135, 138, 255),
+    'TEXT_STA':         (140, 135, 138, 255),
+    'LINE':             (214, 216, 219, 255),
+    'LINE_SOFT':        (246, 247, 248, 255),
+    'HAIRLINE_LIGHT':   (248, 249, 250, 255),
+    'HAIRLINE_MID':     (226, 229, 232, 255),
+    'HAIRLINE_DARK':    (160, 165, 171, 255),
+}
+
+HP_THEME_DARK = {
+    'COVER_A':          (20, 26, 36, 255),
+    'COVER_MID':        (16, 20, 30, 255),
+    'COVER_B':          (12, 16, 24, 255),
+    'COVER_BORDER':     (50, 80, 110, 200),
+    'COVER_BORDER_DEEP':(40, 65, 90, 200),
+    'BOX_BG':           (22, 30, 42, 255),
+    'TEXT_MAIN':        (210, 220, 230, 255),
+    'TEXT_MUTED':       (120, 140, 160, 255),
+    'TEXT_UID':         (120, 140, 160, 255),
+    'TEXT_STA':         (120, 140, 160, 255),
+    'LINE':             (50, 70, 90, 255),
+    'LINE_SOFT':        (30, 42, 58, 255),
+    'HAIRLINE_LIGHT':   (35, 50, 70, 255),
+    'HAIRLINE_MID':     (45, 62, 82, 255),
+    'HAIRLINE_DARK':    (60, 85, 110, 255),
+}
+
+from sao_theme import register_panel_theme
+register_panel_theme('hp', 'light', HP_THEME_LIGHT)
+register_panel_theme('hp', 'dark', HP_THEME_DARK)
+
+
 # ═══════════════════════════════════════════════
 #  Overlay
 # ═══════════════════════════════════════════════
@@ -658,6 +701,8 @@ class HpOverlay:
         self._frame_cache = None; self._frame_sig = ()
         self._last_compose_sig = None
         self._frame_version += 1
+        # Force next compose — visible panels re-render immediately.
+        self._schedule_tick(immediate=True)
 
     def _default_panel_pos(self) -> Tuple[int, int]:
         sw, sh = _get_screen_metrics()
