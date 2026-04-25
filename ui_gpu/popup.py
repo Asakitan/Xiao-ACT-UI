@@ -7,6 +7,7 @@ Lifecycle:
 
 Threading: every tk/glfw call happens on the Tk main thread (driven by
 the existing GLFW pump installed on root via overlay_scheduler).
+
 """
 
 from __future__ import annotations

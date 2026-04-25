@@ -1,6 +1,7 @@
 """Composes the full popup frame from layout sub-images.
 
 Produces premultiplied BGRA bytes ready for ``BgraPresenter``.
+
 """
 
 from __future__ import annotations
