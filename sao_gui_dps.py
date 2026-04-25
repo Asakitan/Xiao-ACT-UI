@@ -487,6 +487,41 @@ class DpsOverlay:
     BAR_HEAL_B = (154, 211, 52, 8)
     BADGE_LIVE = (82, 140, 48, 255)
     BADGE_REPORT = (222, 166, 32, 255)
+    # v2.3.x: previously hardcoded dark colors — now themeable
+    FOOTER_BG = (15, 20, 30, 140)
+    FOOTER_CYAN_TINT = (104, 228, 255, 6)
+    FOOTER_SHADOW = (0, 0, 0, 18)
+    TAB_ACTIVE_FILL = (222, 190, 80, 35)
+    TAB_ACTIVE_BORDER = (222, 190, 80, 220)
+    TAB_INACTIVE_FILL = (40, 55, 75, 120)
+    TAB_INACTIVE_BORDER = (50, 100, 130, 100)
+    BTN_ACTIVE_FILL = (222, 190, 80, 40)
+    BTN_ACTIVE_BORDER = (222, 190, 80, 220)
+    BTN_DISABLED_FILL = (30, 35, 45, 120)
+    BTN_DISABLED_BORDER = (50, 60, 70, 100)
+    BTN_DISABLED_FG = (80, 85, 95, 180)
+    HEADER_BADGE_FILL = (30, 45, 65, 180)
+    HEADER_BADGE_BORDER = (60, 140, 180, 160)
+    LIST_CYAN_TINT = (104, 228, 255, 6)
+    LIST_SHADOW = (0, 0, 0, 15)
+    ROW_SHEEN_CYAN = (104, 228, 255, 8)
+    ROW_LOWER_SHADOW = (0, 0, 0, 20)
+    ROW_SELF_OUTLINE = (222, 190, 80, 220)
+    ROW_SELF_TINT = (222, 190, 80, 12)
+    DETAIL_CARD_BG = (35, 45, 60, 160)
+    SKILL_ROW_BG = (30, 40, 55, 140)
+    STAT_HEAL_GREEN = (92, 150, 44, 255)
+    SKILL_BAR_HEAL = (154, 211, 52, 70)
+    SKILL_BAR_DAMAGE = (222, 190, 80, 60)
+    VAL_HEAL_GREEN = (92, 150, 44, 255)
+    # Shell layer
+    SHELL_AMBIENT_SHADOW = (22, 24, 18, 62)
+    SHELL_CONTACT_SHADOW = (31, 34, 16, 88)
+    SHELL_SHEEN_CYAN = (104, 228, 255, 18)
+    SHELL_SHEEN_SHADOW = (0, 0, 0, 25)
+    CORNER_CYAN_ACCENT = (104, 228, 255, 120)
+    CORNER_GOLD_ACCENT = (222, 190, 80, 120)
+    CORNER_GOLD = (222, 190, 80, 255)
     RANK_COLORS = {
         0: (222, 190, 80),             # gold for #1
         1: (160, 170, 185),            # silver for #2
@@ -1386,7 +1421,7 @@ class DpsOverlay:
         ImageDraw.Draw(ambient).rounded_rectangle(
             (self.BODY_PAD + 4, self.BODY_PAD + 8,
              w - self.BODY_PAD + 1, h - self.BODY_PAD + 4),
-            radius=10, fill=(22, 24, 18, 62),
+            radius=10, fill=self.SHELL_AMBIENT_SHADOW,
         )
         ambient = _gpu_blur(ambient, 8)
         layer.alpha_composite(ambient)
@@ -1395,7 +1430,7 @@ class DpsOverlay:
         ImageDraw.Draw(contact).rounded_rectangle(
             (self.BODY_PAD + 2, self.BODY_PAD + 4,
              w - self.BODY_PAD, h - self.BODY_PAD + 1),
-            radius=8, fill=(31, 34, 16, 88),
+            radius=8, fill=self.SHELL_CONTACT_SHADOW,
         )
         contact = _gpu_blur(contact, 3)
         layer.alpha_composite(contact)
@@ -1483,11 +1518,11 @@ class DpsOverlay:
         sd_sheen = ImageDraw.Draw(sheen, 'RGBA')
         sd_sheen.rounded_rectangle(
             (1, 1, sw - 2, max(16, int(sh * 0.18))),
-            radius=6, fill=(104, 228, 255, 18),
+            radius=6, fill=self.SHELL_SHEEN_CYAN,
         )
         sd_sheen.rounded_rectangle(
             (2, max(12, int(sh * 0.42)), sw - 3, sh - 3),
-            radius=6, fill=(0, 0, 0, 25),
+            radius=6, fill=self.SHELL_SHEEN_SHADOW,
         )
         sheen = _gpu_blur(sheen, 4)
         sheen_masked = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
@@ -1531,12 +1566,12 @@ class DpsOverlay:
                   fill=cyan, width=2)
         # top-right: faint cyan accent
         draw.line((sx + sw - 2 - cs, sy + 2, sx + sw - 2, sy + 2),
-                  fill=(104, 228, 255, 120), width=1)
+                  fill=self.CORNER_CYAN_ACCENT, width=1)
         # bottom-left: faint gold accent
         draw.line((sx + 2, sy + sh - 2, sx + 2 + cs, sy + sh - 2),
-                  fill=(222, 190, 80, 120), width=1)
+                  fill=self.CORNER_GOLD_ACCENT, width=1)
         # bottom-right: gold
-        gold_c = (222, 190, 80, 255)
+        gold_c = self.CORNER_GOLD
         bx = sx + sw - 2
         by = sy + sh - 2
         draw.line((bx - cs, by, bx, by), fill=gold_c, width=2)
@@ -1578,8 +1613,8 @@ class DpsOverlay:
         bw = bw_text + 16
         bh_ = 20
         self._draw_clip_rect(draw, bx, by, bw, bh_,
-                             fill=(30, 45, 65, 180),
-                             outline=(60, 140, 180, 160))
+                             fill=self.HEADER_BADGE_FILL,
+                             outline=self.HEADER_BADGE_BORDER)
         self._draw_tracked(draw, (bx + 8, by + 4), badge_label,
                            font_badge, badge_color, 1.1)
         y += self.TITLE_H
@@ -1634,16 +1669,16 @@ class DpsOverlay:
                      bw: int, bh: int, text: str, active: bool,
                      kind: str, font, enabled: bool = True) -> None:
         if not enabled:
-            fill = (30, 35, 45, 120)
-            border = (50, 60, 70, 100)
-            fg = (80, 85, 95, 180)
+            fill = self.BTN_DISABLED_FILL
+            border = self.BTN_DISABLED_BORDER
+            fg = self.BTN_DISABLED_FG
         elif kind == 'live' and active:
             fill = self.BTN_LIVE_ACTIVE
             border = self.BTN_LIVE_BORDER
             fg = self.BTN_LIVE_COLOR
         elif active:
-            fill = (222, 190, 80, 40)
-            border = (222, 190, 80, 220)
+            fill = self.BTN_ACTIVE_FILL
+            border = self.BTN_ACTIVE_BORDER
             fg = self.GOLD
         else:
             fill = self.BTN_BG
@@ -1670,12 +1705,12 @@ class DpsOverlay:
         for i, (label, active) in enumerate(tabs):
             tx = x0 + i * (tab_w + gap)
             if active:
-                fill = (222, 190, 80, 35)
-                border = (222, 190, 80, 220)
+                fill = self.TAB_ACTIVE_FILL
+                border = self.TAB_ACTIVE_BORDER
                 fg = self.GOLD
             else:
-                fill = (40, 55, 75, 120)
-                border = (50, 100, 130, 100)
+                fill = self.TAB_INACTIVE_FILL
+                border = self.TAB_INACTIVE_BORDER
                 fg = self.TEXT_MUTED
             self._draw_clip_rect(draw, tx, y, tab_w, self.TAB_H,
                                  fill=fill, outline=border, bevel=10)
@@ -1694,11 +1729,11 @@ class DpsOverlay:
         )
         self._fill_rounded_rect(
             img, (lx + 2, ly + 2, lx + lw - 3, ly + min(lh // 3, 18)),
-            radius=4, fill=(104, 228, 255, 6),
+            radius=4, fill=self.LIST_CYAN_TINT,
         )
         self._fill_rounded_rect(
             img, (lx + 3, ly + max(14, lh // 2), lx + lw - 4, ly + lh - 4),
-            radius=4, fill=(0, 0, 0, 15),
+            radius=4, fill=self.LIST_SHADOW,
         )
         draw.rounded_rectangle(
             (lx, ly, lx + lw - 1, ly + lh - 1),
@@ -1742,7 +1777,7 @@ class DpsOverlay:
             (x + 2, y + min(h // 3 + 1, h - 4)),
             (x + 1, y + bevel),
         ]
-        self._fill_polygon(img, top_sheen, (104, 228, 255, 8))
+        self._fill_polygon(img, top_sheen, self.ROW_SHEEN_CYAN)
         self._fill_polygon(
             img,
             [
@@ -1752,7 +1787,7 @@ class DpsOverlay:
                 (x, y + h - 2),
                 (x, y + bevel),
             ],
-            (0, 0, 0, 20),
+            self.ROW_LOWER_SHADOW,
         )
         # Self highlight: left gold border
         if row['is_self']:
@@ -1768,7 +1803,7 @@ class DpsOverlay:
             )
             self._draw_clip_rect(
                 draw, x, y, w, h,
-                outline=(222, 190, 80, 220),
+                outline=self.ROW_SELF_OUTLINE,
                 bevel=bevel,
             )
             self._fill_polygon(
@@ -1780,7 +1815,7 @@ class DpsOverlay:
                     (x, y + h - 2),
                     (x, y + bevel),
                 ],
-                (222, 190, 80, 12),
+                self.ROW_SELF_TINT,
             )
 
         # Animated bar fill (within clip)
@@ -1880,17 +1915,17 @@ class DpsOverlay:
         self._fill_rect(
             draw._image,
             (sx + 1, fy + 1, sx + sw - 2, fy + fh - 2),
-            fill=(15, 20, 30, 140),
+            fill=self.FOOTER_BG,
         )
         self._fill_rect(
             draw._image,
             (sx + 2, fy + 2, sx + sw - 3, fy + min(fh // 2, 16)),
-            fill=(104, 228, 255, 6),
+            fill=self.FOOTER_CYAN_TINT,
         )
         self._fill_rect(
             draw._image,
             (sx + 2, fy + max(14, fh // 2), sx + sw - 3, fy + fh - 3),
-            fill=(0, 0, 0, 18),
+            fill=self.FOOTER_SHADOW,
         )
         font = _load_font('sao', 10)
         x_left = sx + self.HEADER_PAD_X
@@ -2032,7 +2067,7 @@ class DpsOverlay:
         stats = [
             ('DAMAGE', _fmt_num(entity.get('damage_total') or 0), self.GOLD),
             ('DPS', _fmt_num(entity.get('dps') or 0), self.TEXT_MAIN),
-            ('HEALING', _fmt_num(entity.get('heal_total') or 0), (92, 150, 44, 255)),
+            ('HEALING', _fmt_num(entity.get('heal_total') or 0), self.STAT_HEAL_GREEN),
             ('HPS', _fmt_num(entity.get('hps') or 0), self.TEXT_MAIN),
             ('CRIT', f"{int(round(float(entity.get('crit_rate') or 0) * 100))}%", self.TEXT_MAIN),
             ('MAX HIT', _fmt_num(entity.get('max_hit') or 0), self.GOLD),
@@ -2048,7 +2083,7 @@ class DpsOverlay:
             cy = body_y + r * (card_h + card_gap)
             self._fill_rounded_rect(
                 img, (cx, cy, cx + col_w - 1, cy + card_h - 1),
-                radius=3, fill=(35, 45, 60, 160),
+                radius=3, fill=self.DETAIL_CARD_BG,
             )
             draw.rounded_rectangle(
                 (cx, cy, cx + col_w - 1, cy + card_h - 1),
@@ -2105,12 +2140,12 @@ class DpsOverlay:
             # Background bar
             self._fill_rounded_rect(
                 img, (lx + 6, ry, lx + lw - 7, ry + sk_row_h - 1),
-                radius=2, fill=(30, 40, 55, 140),
+                radius=2, fill=self.SKILL_ROW_BG,
             )
             bar_w = int((lw - 14) * bar_pct)
             if bar_w > 0:
-                bar_color = ((154, 211, 52, 70) if is_heal
-                             else (222, 190, 80, 60))
+                bar_color = (self.SKILL_BAR_HEAL if is_heal
+                             else self.SKILL_BAR_DAMAGE)
                 self._fill_rounded_rect(
                     img, (lx + 6, ry, lx + 6 + bar_w, ry + sk_row_h - 1),
                     radius=2, fill=bar_color,
@@ -2136,7 +2171,7 @@ class DpsOverlay:
                                self.TEXT_MUTED, 0.6)
             val_text = _fmt_num(amount)
             vw = self._tracked_text_width(draw, val_text, sk_font_val, 0.6)
-            val_color = ((92, 150, 44, 255) if is_heal else self.GOLD)
+            val_color = (self.VAL_HEAL_GREEN if is_heal else self.GOLD)
             self._draw_tracked(draw, (lx + lw - 12 - vw, ry + 4),
                                val_text, sk_font_val, val_color, 0.6)
 
@@ -2618,6 +2653,40 @@ DPS_THEME_LIGHT = {
     'BAR_HEAL_B':      (154, 211, 52, 8),
     'BADGE_LIVE':      (82, 140, 48, 255),
     'BADGE_REPORT':    (222, 166, 32, 255),
+    # v2.3.x: previously hardcoded dark colors that broke light-theme
+    'FOOTER_BG':       (15, 20, 30, 140),
+    'FOOTER_CYAN_TINT':(104, 228, 255, 6),
+    'FOOTER_SHADOW':   (0, 0, 0, 18),
+    'TAB_ACTIVE_FILL': (222, 190, 80, 35),
+    'TAB_ACTIVE_BORDER':(222, 190, 80, 220),
+    'TAB_INACTIVE_FILL':(40, 55, 75, 120),
+    'TAB_INACTIVE_BORDER':(50, 100, 130, 100),
+    'BTN_ACTIVE_FILL': (222, 190, 80, 40),
+    'BTN_ACTIVE_BORDER':(222, 190, 80, 220),
+    'BTN_DISABLED_FILL':(30, 35, 45, 120),
+    'BTN_DISABLED_BORDER':(50, 60, 70, 100),
+    'BTN_DISABLED_FG': (80, 85, 95, 180),
+    'HEADER_BADGE_FILL':(30, 45, 65, 180),
+    'HEADER_BADGE_BORDER':(60, 140, 180, 160),
+    'LIST_CYAN_TINT':  (104, 228, 255, 6),
+    'LIST_SHADOW':     (0, 0, 0, 15),
+    'ROW_SHEEN_CYAN':  (104, 228, 255, 8),
+    'ROW_LOWER_SHADOW':(0, 0, 0, 20),
+    'ROW_SELF_OUTLINE':(222, 190, 80, 220),
+    'ROW_SELF_TINT':   (222, 190, 80, 12),
+    'DETAIL_CARD_BG':  (35, 45, 60, 160),
+    'SKILL_ROW_BG':    (30, 40, 55, 140),
+    'STAT_HEAL_GREEN': (92, 150, 44, 255),
+    'SKILL_BAR_HEAL':  (154, 211, 52, 70),
+    'SKILL_BAR_DAMAGE':(222, 190, 80, 60),
+    'VAL_HEAL_GREEN':  (92, 150, 44, 255),
+    'SHELL_AMBIENT_SHADOW': (22, 24, 18, 62),
+    'SHELL_CONTACT_SHADOW': (31, 34, 16, 88),
+    'SHELL_SHEEN_CYAN': (104, 228, 255, 18),
+    'SHELL_SHEEN_SHADOW': (0, 0, 0, 25),
+    'CORNER_CYAN_ACCENT': (104, 228, 255, 120),
+    'CORNER_GOLD_ACCENT': (222, 190, 80, 120),
+    'CORNER_GOLD': (222, 190, 80, 255),
 }
 
 DPS_THEME_DARK = {
@@ -2653,6 +2722,40 @@ DPS_THEME_DARK = {
     'BAR_HEAL_B':      (80, 200, 120, 15),
     'BADGE_LIVE':      (104, 228, 255, 255),
     'BADGE_REPORT':    (222, 190, 80, 255),
+    # v2.3.x: dark-mode counterparts
+    'FOOTER_BG':       (8, 10, 16, 160),
+    'FOOTER_CYAN_TINT':(104, 228, 255, 10),
+    'FOOTER_SHADOW':   (0, 0, 0, 30),
+    'TAB_ACTIVE_FILL': (222, 190, 80, 50),
+    'TAB_ACTIVE_BORDER':(222, 190, 80, 240),
+    'TAB_INACTIVE_FILL':(25, 35, 50, 140),
+    'TAB_INACTIVE_BORDER':(40, 80, 110, 120),
+    'BTN_ACTIVE_FILL': (222, 190, 80, 50),
+    'BTN_ACTIVE_BORDER':(222, 190, 80, 240),
+    'BTN_DISABLED_FILL':(20, 25, 35, 140),
+    'BTN_DISABLED_BORDER':(40, 50, 60, 120),
+    'BTN_DISABLED_FG': (70, 75, 85, 200),
+    'HEADER_BADGE_FILL':(20, 30, 45, 200),
+    'HEADER_BADGE_BORDER':(50, 120, 160, 180),
+    'LIST_CYAN_TINT':  (104, 228, 255, 10),
+    'LIST_SHADOW':     (0, 0, 0, 25),
+    'ROW_SHEEN_CYAN':  (104, 228, 255, 12),
+    'ROW_LOWER_SHADOW':(0, 0, 0, 30),
+    'ROW_SELF_OUTLINE':(222, 190, 80, 240),
+    'ROW_SELF_TINT':   (222, 190, 80, 18),
+    'DETAIL_CARD_BG':  (20, 28, 40, 180),
+    'SKILL_ROW_BG':    (18, 24, 36, 160),
+    'STAT_HEAL_GREEN': (110, 200, 80, 255),
+    'SKILL_BAR_HEAL':  (80, 200, 120, 80),
+    'SKILL_BAR_DAMAGE':(222, 190, 80, 70),
+    'VAL_HEAL_GREEN':  (110, 200, 80, 255),
+    'SHELL_AMBIENT_SHADOW': (12, 14, 10, 50),
+    'SHELL_CONTACT_SHADOW': (18, 20, 14, 70),
+    'SHELL_SHEEN_CYAN': (104, 228, 255, 24),
+    'SHELL_SHEEN_SHADOW': (0, 0, 0, 40),
+    'CORNER_CYAN_ACCENT': (104, 228, 255, 160),
+    'CORNER_GOLD_ACCENT': (222, 190, 80, 160),
+    'CORNER_GOLD': (222, 190, 80, 255),
 }
 
 from sao_theme import register_panel_theme

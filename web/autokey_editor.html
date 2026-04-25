@@ -368,8 +368,8 @@ function updateState(data) {
     burstEl.classList.toggle('active', _burstReady);
 
     // Profession display
-    document.getElementById('status-profession').textContent = data.profession || '鈥?;
-    document.getElementById('status-burst').textContent = 'Burst: ' + (_burstReady ? 'Ready 鉁? : 'Not Ready');
+    document.getElementById('status-profession').textContent = data.profession || 'Unknown';
+    document.getElementById('status-burst').textContent = 'Burst: ' + (_burstReady ? 'Ready' : 'Not Ready');
 
     // Skill slots
     if (data.slots) updateSlots(data.slots);
@@ -399,7 +399,6 @@ function _esc(s) {
     var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML;
 }
 
-// 鈹€鈹€ Drag 鈹€鈹€
 (function() {
     var handle = document.getElementById('drag-handle');
     handle.addEventListener('mousedown', function(e) {
