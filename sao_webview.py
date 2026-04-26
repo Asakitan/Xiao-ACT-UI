@@ -474,20 +474,21 @@ class SAOWebAPI:
                 sane.append(rect)
             return sane
 
-        if isinstance(regions, dict):
+        got_region_payload = isinstance(regions, dict)
+        if got_region_payload:
             display_regions = _sanitize(regions.get('display_regions', []))
             click_regions = _sanitize(regions.get('click_regions', []))
         else:
             display_regions = _sanitize(regions if isinstance(regions, list) else [])
             click_regions = list(display_regions)
 
-        if display_regions:
+        if got_region_payload or display_regions:
             self._g._hp_display_regions = display_regions
             self._g._hp_hit_regions = list(display_regions)
         elif not getattr(self._g, '_hp_display_regions', None):
             self._g._hp_display_regions = []
 
-        if click_regions:
+        if got_region_payload or click_regions:
             self._g._hp_click_regions = click_regions
         elif not getattr(self._g, '_hp_click_regions', None):
             self._g._hp_click_regions = []
@@ -496,7 +497,8 @@ class SAOWebAPI:
             self._g._hp_hit_regions_ready = True
             self._g._hp_last_hit_region_ts = time.time()
 
-        if not display_regions and not click_regions and getattr(self._g, '_hp_hit_regions', None):
+        if (not got_region_payload and not display_regions and not click_regions
+                and getattr(self._g, '_hp_hit_regions', None)):
             return
         if not getattr(self._g, '_hp_hit_regions', None):
             self._g._hp_hit_regions = []
@@ -2189,6 +2191,17 @@ class SAOWebViewGUI:
         if event.get('attacker_is_self') and event.get('target_is_monster'):
             target_uuid = event.get('target_uuid', 0)
             if target_uuid:
+                # Same-map retry / monster UUID reuse: parser state may still
+                # carry the previous unit's dead flag, which would make the
+                # boss bar filter drop this live target.
+                try:
+                    _bridge = getattr(self, '_packet_engine', None)
+                    _m = _bridge.get_monster(target_uuid) if _bridge else None
+                    if _m is not None and getattr(_m, 'is_dead', False):
+                        _m.is_dead = False
+                        _m.last_update = time.time()
+                except Exception:
+                    pass
                 self._bb_recent_targets[target_uuid] = time.time()
                 self._bb_last_target_uuid = target_uuid
                 self._bb_last_damage_ts = time.time()
@@ -3700,8 +3713,22 @@ class SAOWebViewGUI:
             rel_y = int(pt.y - rc.top - int(getattr(self, '_hp_viewport_offset_y', 0) or 0))
             if rel_x < 0 or rel_y < 0 or rel_x > (rc.right - rc.left) or rel_y > (rc.bottom - rc.top):
                 return False
+            if self._ctx_menu_active and isinstance(self._ctx_menu_bounds, dict):
+                try:
+                    left = int(float(self._ctx_menu_bounds.get('left', 0)) * dpi_s)
+                    top = int(float(self._ctx_menu_bounds.get('top', 0)) * dpi_s)
+                    width = int(float(self._ctx_menu_bounds.get('width', 0)) * dpi_s)
+                    height = int(float(self._ctx_menu_bounds.get('height', 0)) * dpi_s)
+                    pad = int(18 * dpi_s)
+                    if (left - pad) <= rel_x <= (left + width + pad) and (top - pad) <= rel_y <= (top + height + pad):
+                        return True
+                except Exception:
+                    pass
             regions = getattr(self, '_hp_click_regions', []) or []
             if not regions:
+                if (getattr(self, '_hp_js_hit_regions_ready', False)
+                        or getattr(self, '_hp_hit_regions_ready', False)):
+                    return False
                 regions = self._default_hp_hot_regions()
             for rect in regions:
                 if not isinstance(rect, dict):
@@ -3717,17 +3744,6 @@ class SAOWebViewGUI:
                     continue
                 if left <= rel_x <= left + width and top <= rel_y <= top + height:
                     return True
-            if self._ctx_menu_active and isinstance(self._ctx_menu_bounds, dict):
-                try:
-                    left = int(float(self._ctx_menu_bounds.get('left', 0)) * dpi_s)
-                    top = int(float(self._ctx_menu_bounds.get('top', 0)) * dpi_s)
-                    width = int(float(self._ctx_menu_bounds.get('width', 0)) * dpi_s)
-                    height = int(float(self._ctx_menu_bounds.get('height', 0)) * dpi_s)
-                    pad = int(18 * dpi_s)
-                    if (left - pad) <= rel_x <= (left + width + pad) and (top - pad) <= rel_y <= (top + height + pad):
-                        return True
-                except Exception:
-                    pass
         except Exception:
             return False
         return False
@@ -3746,6 +3762,7 @@ class SAOWebViewGUI:
                     # JS 未报告 hit regions 且无缓存 click regions 时,
                     # 保持窗口可点击, 让 JS 有机会接收事件并注册区域
                     if (not getattr(self, '_hp_js_hit_regions_ready', False)
+                            and not getattr(self, '_hp_hit_regions_ready', False)
                             and not getattr(self, '_hp_click_regions', None)):
                         self._set_hp_mouse_passthrough(False)
                         continue
@@ -3792,7 +3809,7 @@ class SAOWebViewGUI:
             off_x = int(getattr(self, '_hp_viewport_offset_x', 0) or 0)
             off_y = int(getattr(self, '_hp_viewport_offset_y', 0) or 0)
             regions = getattr(self, '_hp_display_regions', []) or []
-            if not regions:
+            if not regions and not js_ready:
                 regions = self._default_hp_display_regions()
             for rect in regions:
                 if not isinstance(rect, dict):
@@ -3837,6 +3854,10 @@ class SAOWebViewGUI:
                     gdi32.CombineRgn(hrgn, hrgn, rect_rgn, RGN_OR)
                     gdi32.DeleteObject(rect_rgn)
             else:
+                if js_ready:
+                    empty = gdi32.CreateRectRgn(0, 0, 0, 0)
+                    user32.SetWindowRgn(self._hp_hwnd, empty, True)
+                    return
                 # 无精确区域 — 全窗口有效, 依赖 COLORKEY 穿透
                 user32.SetWindowRgn(self._hp_hwnd, 0, True)
                 return

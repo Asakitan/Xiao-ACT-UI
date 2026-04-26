@@ -1302,6 +1302,7 @@ class PacketParser:
         self._last_dungeon_id: int = 0   # Track dungeon transitions
         self._last_scene_id: int = 0     # Track scene/map transitions
         self._sync_container_count: int = 0  # Count SyncContainerData receives
+        self._last_soft_scene_restart_ts: float = 0.0
         self.stats = {
             'raw_frames': 0,
             'game_frames': 0,
@@ -1394,6 +1395,30 @@ class PacketParser:
             flush=True,
         )
         # 通知上层 (bridge/webview) 场景已切换
+        if self._on_scene_change:
+            try:
+                self._on_scene_change()
+            except Exception as e:
+                logger.error(f'[Parser] on_scene_change callback error: {e}')
+
+    def _notify_soft_scene_restart(self, reason: str):
+        """Notify UI layers about a new encounter without clearing monster cache.
+
+        Used for same-map / same-dungeon restarts where resetting _monsters would
+        lose HP estimates, but DPS/BossHP UI state still must be cleared.
+        """
+        now = time.time()
+        if now - self._last_soft_scene_restart_ts < 1.5:
+            logger.info(f'[Parser] Soft scene restart suppressed: {reason}')
+            return
+        self._last_soft_scene_restart_ts = now
+        old_uuid = self._current_uuid
+        self._current_uuid = 0
+        logger.info(f'[Parser] Soft scene restart: {reason}, cleared current_uuid={old_uuid}')
+        print(
+            f'[Parser] ♻ 同场景重开: {reason}, 重置 DPS/BossHP 状态',
+            flush=True,
+        )
         if self._on_scene_change:
             try:
                 self._on_scene_change()
@@ -2044,6 +2069,8 @@ class PacketParser:
                 # Same dungeon retry (刷本): UUID 不变, 需要重置死亡状态
                 # 不调用 reset_scene() 以保留 max_hp 缓存,
                 # 仅清除 is_dead 让 boss HP 面板可以重新呼出。
+                # 但上层 DPS/BossHP 仍需软重置: 旧 boss_uuid / recent target
+                # 如果保留, 同场景再进时 DPS 可能一直按旧 boss 过滤为 0。
                 revived = 0
                 for m in self._monsters.values():
                     if m.is_dead:
@@ -2061,6 +2088,7 @@ class PacketParser:
                         f'[Parser] Same dungeon restart: reset {revived} dead monsters '
                         f'dungeon_id={dungeon_id}'
                     )
+                self._notify_soft_scene_restart(f'dungeon_id={dungeon_id}')
             self._last_dungeon_id = dungeon_id
             if self._current_uid and self._current_uid in self._players:
                 player = self._players[self._current_uid]
@@ -2222,6 +2250,7 @@ class PacketParser:
                 f'保留 {len(self._monsters)} 个怪物 (不重置场景)',
                 flush=True,
             )
+            self._notify_soft_scene_restart(f'sync_container_count={self._sync_container_count}')
 
         player = self._get_player(uid)
         changed = False
@@ -3647,6 +3676,23 @@ class PacketParser:
             'timestamp': time.time(),
         }
         self.stats['damage_events'] += 1
+
+        # Same-map / same-dungeon retries can reuse a monster UUID while our
+        # cached MonsterData still carries the previous run's dead flag. Any
+        # non-final damage event proves a live unit currently owns that UUID.
+        if target_is_monster:
+            monster = self._monsters.get(target_uuid)
+            if monster and monster.is_dead and not is_dead:
+                monster.is_dead = False
+                if monster.hp == 0 and monster.max_hp > 0:
+                    monster.hp = monster.max_hp
+                monster.last_update = time.time()
+                logger.info(
+                    f'[Parser] Monster REVIVED by damage event '
+                    f'uuid={target_uuid} name={monster.name!r}'
+                )
+                self._notify_monster(monster)
+                self._notify_soft_scene_restart(f'damage_revived_uuid={target_uuid}')
 
         # ── Track shield depletion via damage events ──
         # When ShieldLessenValue > 0, the target's shield absorbed that much damage.

@@ -2548,9 +2548,15 @@ class HpOverlay:
     def _interaction_zone_at(self, lx: int, ly: int) -> Optional[str]:
         if ID_X <= lx <= ID_X + ID_W and ID_Y <= ly <= ID_Y + ID_H:
             return 'id'
-        if BOX_X <= lx <= BOX_X + BOX_W and BOX_Y <= ly <= BOX_Y + BOX_H:
+        if (self._hp_group_clickable()
+                and BOX_X <= lx <= BOX_X + BOX_W
+                and BOX_Y <= ly <= BOX_Y + BOX_H):
             return 'hp'
         return None
+
+    def _hp_group_clickable(self) -> bool:
+        """Return whether the HP/STA group should accept pointer input."""
+        return not bool(self._hp_group_hidden or self._hp_group_fade_t > 0.0)
 
     def _interaction_strength(self, zone: str, now: float) -> Tuple[float, float]:
         hover = max(0.0, min(1.0, float(self._hover_t.get(zone, 0.0) or 0.0)))
@@ -3110,7 +3116,9 @@ class HpOverlay:
         clickable. Cover, STA row, and blank gutters are inert."""
         if ID_X <= lx <= ID_X + ID_W and ID_Y <= ly <= ID_Y + ID_H:
             return True
-        if BOX_X <= lx <= BOX_X + BOX_W and BOX_Y <= ly <= BOX_Y + BOX_H:
+        if (self._hp_group_clickable()
+                and BOX_X <= lx <= BOX_X + BOX_W
+                and BOX_Y <= ly <= BOX_Y + BOX_H):
             return True
         return False
 
