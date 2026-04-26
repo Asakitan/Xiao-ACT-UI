@@ -62,6 +62,14 @@ def _ref_alpha_floor(rgba: np.ndarray, alpha: float) -> bytes:
     return arr.tobytes()
 
 
+def _ref_mask_alpha_floor(rgba: np.ndarray, mask: np.ndarray) -> bytes:
+    arr = rgba.copy()
+    arr[:, :, 3] = (
+        arr[:, :, 3].astype(np.uint16) * mask.astype(np.uint16) // 255
+    ).astype(np.uint8)
+    return arr.tobytes()
+
+
 def _time_call(fn: Callable[[], object], loops: int) -> List[float]:
     samples: List[float] = []
     for _ in range(loops):
@@ -113,6 +121,15 @@ def _sizes() -> Iterable[Tuple[int, int, int]]:
     )
 
 
+def _gui_sizes() -> Iterable[Tuple[int, int, int]]:
+    return (
+        (60, 220, 2000),
+        (88, 560, 1200),
+        (128, 620, 800),
+        (340, 420, 300),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--assert-parity', action='store_true')
@@ -127,6 +144,7 @@ def main() -> int:
 
     for h, w, loops in _sizes():
         rgba = rng.integers(0, 256, size=(h, w, 4), dtype=np.uint8)
+        mask = rng.integers(0, 256, size=(h, w), dtype=np.uint8)
         data = rgba.tobytes()
 
         expected = _ref_overlay_round(rgba)
@@ -162,6 +180,39 @@ def main() -> int:
             _time_call(lambda: _ref_alpha_floor(rgba, 0.42), loops),
             _time_call(
                 lambda: cy_pixels.multiply_alpha_rgba_ndarray_floor(rgba, 0.42),
+                loops,
+            ),
+        )
+
+        expected = _ref_mask_alpha_floor(rgba, mask)
+        got = cy_pixels.multiply_alpha_mask_rgba_ndarray_floor(rgba, mask)
+        if args.assert_parity:
+            _parity_or_raise(f'mask alpha floor {w}x{h}', got, expected)
+        _print_result(
+            f'mask alpha floor {w}x{h}',
+            _time_call(lambda: _ref_mask_alpha_floor(rgba, mask), loops),
+            _time_call(
+                lambda: cy_pixels.multiply_alpha_mask_rgba_ndarray_floor(
+                    rgba, mask),
+                loops,
+            ),
+        )
+
+    print('\nGUI integration-sized microbench')
+    for h, w, loops in _gui_sizes():
+        rgba = rng.integers(0, 256, size=(h, w, 4), dtype=np.uint8)
+        mask = rng.integers(0, 256, size=(h, w), dtype=np.uint8)
+        _print_result(
+            f'_ulw_update premult {w}x{h}',
+            _time_call(lambda: _ref_overlay_round(rgba), loops),
+            _time_call(lambda: cy_pixels.premultiply_bgra_ndarray(rgba), loops),
+        )
+        _print_result(
+            f'_clip_alpha mask {w}x{h}',
+            _time_call(lambda: _ref_mask_alpha_floor(rgba, mask), loops),
+            _time_call(
+                lambda: cy_pixels.multiply_alpha_mask_rgba_ndarray_floor(
+                    rgba, mask),
                 loops,
             ),
         )

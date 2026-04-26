@@ -45,7 +45,8 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur, render_shell_rgba as _gpu_shell
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import (
-    AsyncFrameWorker, multiply_alpha_image, submit_ulw_commit,
+    AsyncFrameWorker, clip_alpha_image, multiply_alpha_image,
+    submit_ulw_commit,
 )
 from overlay_subpixel import subpixel_bar_width
 
@@ -266,12 +267,7 @@ def _offset_poly(points, dx: int, dy: int):
 
 
 def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
-    if img.size != mask.size:
-        mask = mask.resize(img.size)
-    a = np.asarray(img, dtype=np.uint8).copy()
-    m = np.asarray(mask, dtype=np.uint16)
-    a[:, :, 3] = (a[:, :, 3].astype(np.uint16) * m // 255).astype(np.uint8)
-    return Image.fromarray(a, 'RGBA')
+    return clip_alpha_image(img, mask)
 
 
 # v2.2.12 — Per-thread compositor handle for HP. Mirrors BossHP's

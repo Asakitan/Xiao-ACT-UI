@@ -135,3 +135,39 @@ cpdef bytes multiply_alpha_rgba_ndarray_floor(object rgba, double alpha):
                 dst[i + 3] = <unsigned char>((<unsigned int>arr[y, x, 3] * mul) // 255)
                 i += 4
     return bytes(out)
+
+
+cpdef bytes multiply_alpha_mask_rgba_ndarray_floor(object rgba, object mask):
+    """RGBA ndarray-like object -> RGBA bytes clipped by an L mask.
+
+    Matches HP/BossHP _clip_alpha:
+    alpha_channel = alpha_channel * mask // 255
+    """
+    cdef const unsigned char[:, :, :] arr = rgba
+    cdef const unsigned char[:, :] m = mask
+    cdef Py_ssize_t h = arr.shape[0]
+    cdef Py_ssize_t w = arr.shape[1]
+    cdef Py_ssize_t y
+    cdef Py_ssize_t x
+    cdef Py_ssize_t i = 0
+    cdef unsigned int ma
+    cdef bytearray out
+    cdef unsigned char[:] dst
+
+    if arr.shape[2] < 4:
+        raise ValueError('expected RGBA input with at least 4 channels')
+    if m.shape[0] != h or m.shape[1] != w:
+        raise ValueError('mask shape must match RGBA height and width')
+
+    out = bytearray(h * w * 4)
+    dst = out
+    with nogil:
+        for y in range(h):
+            for x in range(w):
+                ma = m[y, x]
+                dst[i] = arr[y, x, 0]
+                dst[i + 1] = arr[y, x, 1]
+                dst[i + 2] = arr[y, x, 2]
+                dst[i + 3] = <unsigned char>((<unsigned int>arr[y, x, 3] * ma) // 255)
+                i += 4
+    return bytes(out)
