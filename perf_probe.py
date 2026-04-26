@@ -10,12 +10,7 @@ Goals
 
 Activation
 ----------
-Disabled by default.  Enable via environment variables:
-
-    SAO_PERF_PROBE=1          # turn the probe on
-    SAO_PERF_DUMP_SEC=5.0     # dump cadence (default 5 s)
-    SAO_PERF_WINDOW=4096      # ring-buffer size per section (default 4096)
-    SAO_PERF_LOG=<path>       # optional file path; otherwise stdout
+Disabled by default. 
 
 The instrumentation call sites stay in the code permanently; they collapse
 to a couple of attribute checks when the probe is disabled.
