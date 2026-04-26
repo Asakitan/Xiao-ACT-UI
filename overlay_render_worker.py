@@ -60,6 +60,8 @@ _CY_PREMULT_MAX_PIXELS = max(
     0, _env_int('SAO_CYTHON_PREMULT_MAX_PIXELS', 600_000))
 _CY_ALPHA_MIN_PIXELS = max(
     0, _env_int('SAO_CYTHON_ALPHA_MIN_PIXELS', 250_000))
+_CY_MASK_MIN_PIXELS = max(
+    0, _env_int('SAO_CYTHON_MASK_MIN_PIXELS', 30_000))
 
 # ── Win32 structures (mirrored from sao_gui_dps for independence) ──
 _user32 = ctypes.windll.user32
@@ -193,6 +195,29 @@ def multiply_alpha_image(img: Image.Image, alpha: float) -> Image.Image:
     mul = int(max(0, min(255, value * 255)))
     arr[:, :, 3] = (
         arr[:, :, 3].astype(np.uint16) * mul // 255
+    ).astype(np.uint8)
+    return Image.fromarray(arr, 'RGBA')
+
+
+def clip_alpha_image(img: Image.Image, mask: Image.Image) -> Image.Image:
+    """Return RGBA ``img`` with its alpha channel multiplied by ``mask``."""
+    if img.size != mask.size:
+        mask = mask.resize(img.size)
+    pixels = int(img.size[0]) * int(img.size[1])
+    if _CY_PIXELS is not None and pixels >= _CY_MASK_MIN_PIXELS:
+        try:
+            rgba = np.asarray(img, dtype=np.uint8)
+            mask_arr = np.asarray(mask, dtype=np.uint8)
+            if mask_arr.ndim == 2:
+                out = _CY_PIXELS.multiply_alpha_mask_rgba_ndarray_floor(
+                    rgba, mask_arr)
+                return Image.frombytes('RGBA', img.size, out)
+        except Exception:
+            pass
+    arr = np.asarray(img, dtype=np.uint8).copy()
+    mask_arr = np.asarray(mask, dtype=np.uint16)
+    arr[:, :, 3] = (
+        arr[:, :, 3].astype(np.uint16) * mask_arr // 255
     ).astype(np.uint8)
     return Image.fromarray(arr, 'RGBA')
 
