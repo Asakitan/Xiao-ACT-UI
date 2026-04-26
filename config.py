@@ -372,6 +372,10 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.1:
+#   Add more Cython annotations and optimizations to the hotspots, 
+#   further reducing CPU usage and improving frame stability, 
+#   especially on lower-end machines.
 # v2.4.0:
 #   New Cython style for CPU optimized hotspots.
 # v2.3.22:
