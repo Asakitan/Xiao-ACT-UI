@@ -20,7 +20,8 @@ from typing import Callable, Deque, Dict, List, Optional, Tuple
 
 import gpu_overlay_window as _gow
 from overlay_scheduler import get_scheduler as _get_scheduler
-from perf_probe import phase as _phase_trace
+from overlay_render_worker import AsyncFrameWorker, FrameBuffer
+from perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _probe
 
 from .state import PopupState
 from . import composer, menu_bar_layout, child_bar_layout, hud_layout
@@ -69,6 +70,8 @@ class SAOPopUpMenu:
 
         self._gpu_win: Optional[_gow.GpuOverlayWindow] = None
         self._presenter: Optional[_gow.BgraPresenter] = None
+        self._render_worker = AsyncFrameWorker(prefer_isolation=True)
+        self._last_presented_size: Tuple[int, int] = (0, 0)
         self._hit = HitTester()
 
         self._shell: Optional[tk.Toplevel] = None
@@ -131,6 +134,46 @@ class SAOPopUpMenu:
 
         # Public alias for legacy compat (sao_gui caches `_left_widget`)
         # exposed via property below.
+
+    def _snapshot_state(self) -> PopupState:
+        """Copy render inputs so the worker never reads live Tk state."""
+        src = self._state
+        snap = PopupState()
+        snap.is_open = bool(src.is_open)
+        snap.fade_alpha = float(src.fade_alpha)
+        snap.open_t0 = float(src.open_t0)
+        snap.menu_items = [dict(item) for item in src.menu_items]
+        snap.btn_size = [float(v) for v in src.btn_size]
+        snap.btn_hover_t = [float(v) for v in src.btn_hover_t]
+        snap.hover_btn_idx = src.hover_btn_idx
+        snap.active_menu_idx = src.active_menu_idx
+        # composer only needs the currently visible rows; copying the whole
+        # child-menu registry every 60 Hz would move avoidable work back onto
+        # the Tk thread.
+        snap.child_menus = {}
+        snap.child_rows = [dict(item) for item in src.child_rows]
+        snap.pending_child_rows = [dict(item) for item in src.pending_child_rows]
+        snap.row_hover_t = [float(v) for v in src.row_hover_t]
+        snap.row_anim_w = [int(v) for v in src.row_anim_w]
+        snap.row_anim_t0 = float(src.row_anim_t0)
+        snap.child_fade_t = float(src.child_fade_t)
+        snap.child_phase = str(src.child_phase)
+        snap.hover_row_idx = src.hover_row_idx
+        snap.line_h = int(src.line_h)
+        snap.hud_phase = float(src.hud_phase)
+        snap.hud_dx = int(src.hud_dx)
+        snap.hud_dy = int(src.hud_dy)
+        return snap
+
+    @_probe.decorate('ui.popup.compose_worker')
+    def _compose_framebuffer(self, payload: Tuple[PopupState, float, int, int, int]) -> FrameBuffer:
+        state, hud_phase, screen_w, screen_h, reserved_rows = payload
+        rgba = composer.compose_rgba(
+            state, hud_phase, screen_w, screen_h,
+            reserved_rows=reserved_rows,
+        )
+        bgra = composer.to_premultiplied_bgra(rgba, state.fade_alpha)
+        return FrameBuffer(bgra, rgba.width, rgba.height, 0, 0)
 
     # ── public API ────────────────────────────────────────────────
 
@@ -447,6 +490,10 @@ class SAOPopUpMenu:
             except Exception:
                 pass
             self._presenter = None
+        try:
+            self._render_worker.reset()
+        except Exception:
+            pass
         if self._shell is not None:
             try:
                 self._shell.destroy()
@@ -552,19 +599,40 @@ class SAOPopUpMenu:
     def _render_once(self) -> None:
         if self._gpu_win is None or self._presenter is None:
             return
+        fb = None
+        try:
+            fb = self._render_worker.take_result(allow_during_capture=True)
+        except Exception:
+            fb = None
+        presented = False
+        if fb is not None:
+            try:
+                self._last_presented_size = (fb.width, fb.height)
+                self._presenter.set_frame(fb.bgra_bytes, fb.width, fb.height)
+                presented = True
+                _perf_gauge('ui.popup.presented', 1)
+            except Exception:
+                pass
+        else:
+            _perf_gauge('ui.popup.presented', 0)
+        # Update hit-test geometry after layouts settle
+        self._hit.update(self._state)
         try:
             sw = self.root.winfo_screenwidth()
             sh = self.root.winfo_screenheight()
-            rgba = composer.compose_rgba(
-                self._state, self._state.hud_phase, sw, sh,
-                reserved_rows=getattr(self, '_reserved_rows', 0))
-            bgra = composer.to_premultiplied_bgra(rgba, self._state.fade_alpha)
-            self._presenter.set_frame(bgra, rgba.width, rgba.height)
+            payload = (
+                self._snapshot_state(),
+                float(self._state.hud_phase),
+                int(sw),
+                int(sh),
+                int(getattr(self, '_reserved_rows', 0)),
+            )
+            self._render_worker.submit(self._compose_framebuffer, payload, 0, 0, 0)
+            _perf_gauge('ui.popup.submitted', 1)
         except Exception:
-            return
-        # Update hit-test geometry after layouts settle
-        self._hit.update(self._state)
-        self._gpu_win.request_redraw()
+            _perf_gauge('ui.popup.submitted', 0)
+        if presented:
+            self._gpu_win.request_redraw()
 
     # ── input callbacks (called on Tk main thread by GLFW pump) ───
 

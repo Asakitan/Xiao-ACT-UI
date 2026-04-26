@@ -25,7 +25,7 @@ import threading
 import time
 from typing import Callable, Dict, Optional
 
-from perf_probe import probe as _probe
+from perf_probe import gauge as _perf_gauge, probe as _probe
 
 
 _DEFAULT_HZ = 60
@@ -358,6 +358,9 @@ class OverlayScheduler:
         self.last_frame_ms = (time.perf_counter() - t_start) * 1000.0
         self.avg_frame_ms = self.avg_frame_ms * 0.9 + self.last_frame_ms * 0.1
         self.frame_count += 1
+        _perf_gauge('overlay.scheduler.frame_ms', self.last_frame_ms)
+        _perf_gauge('overlay.scheduler.jobs', len(jobs))
+        _perf_gauge('overlay.scheduler.idle_skip_n', idle_skip_n)
 
         self._schedule_next()
 

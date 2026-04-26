@@ -26,6 +26,7 @@ import os
 import sys
 import time
 import ctypes
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -53,15 +54,14 @@ def _gpu_dps_enabled() -> bool:
         return False
     try:
         import os as _os
-        flag = _os.environ.get('SAO_GPU_DPS', '0')
-        # Default-OFF: GPU path is click-through, but the legacy ULW
-        # path supports drag-to-move + right-click context menu, which
-        # users expect on this panel. Set SAO_GPU_DPS=1 to opt in.
+        flag = _os.environ.get('SAO_GPU_DPS')
+        if flag is None:
+            return True
         return str(flag).strip() not in ('', '0', 'false', 'False')
     except Exception:
         return False
 
-from perf_probe import probe as _probe
+from perf_probe import gauge as _perf_gauge, probe as _probe
 
 # ═══════════════════════════════════════════════
 #  Win32 / ULW glue
@@ -627,6 +627,7 @@ class DpsOverlay:
         self._drag_oy = 0
         self._drag_start_root = (0, 0)
         self._drag_moved = False
+        self._gpu_drag_active = False
 
         self._tick_after_id: Optional[str] = None
         self._last_rendered_size: tuple = (0, 0)
@@ -676,8 +677,13 @@ class DpsOverlay:
                     w=1, h=1,
                     x=int(self._x), y=int(self._y),
                     render_fn=presenter.render,
-                    click_through=True,
+                    click_through=False,
                     title='sao_dps_gpu',
+                )
+                gpu_win.set_input_callbacks(
+                    cursor_pos_fn=self._on_gpu_cursor_pos,
+                    mouse_button_fn=self._on_gpu_mouse_button,
+                    scroll_fn=self._on_gpu_scroll,
                 )
                 gpu_win.show()
                 self._gpu_window = gpu_win
@@ -780,8 +786,12 @@ class DpsOverlay:
         self._win = None
         self._hwnd = 0
         self._gpu_managed = False
+        self._gpu_drag_active = False
         self._visible = False
         self._last_compose_sig = None
+
+    def _window_ready(self) -> bool:
+        return bool(self._gpu_managed or self._hwnd)
 
     # Idle fade target: fully fade the panel out, then destroy the ULW window.
     FADE_IDLE_ALPHA = 0.0
@@ -846,7 +856,7 @@ class DpsOverlay:
         self._view_mode = 'report'
         self._detail_visible = False
         self._detail_uid = 0
-        if not self._visible or not self._hwnd:
+        if not self._visible or not self._window_ready():
             self.show()
         self.fade_in()
         self._schedule_tick(immediate=True)
@@ -929,7 +939,7 @@ class DpsOverlay:
             or int(snapshot.get('total_damage') or 0) > 0
             or int(snapshot.get('total_heal') or 0) > 0
         )
-        if (not self._visible or not self._hwnd) and not has_content and not force_show:
+        if (not self._visible or not self._window_ready()) and not has_content and not force_show:
             self._last_snapshot = snapshot
             self._target_total_damage = float(snapshot.get('total_damage') or 0)
             self._target_total_dps = float(snapshot.get('total_dps') or 0)
@@ -938,9 +948,9 @@ class DpsOverlay:
             self._target_elapsed = float(snapshot.get('elapsed_s') or 0)
             self._encounter_active = bool(snapshot.get('encounter_active'))
             return
-        if (not self._visible or not self._hwnd) and force_show:
+        if (not self._visible or not self._window_ready()) and force_show:
             self.show()
-        elif not self._visible or not self._hwnd:
+        elif not self._visible or not self._window_ready():
             self.show()
         self._last_snapshot = snapshot
 
@@ -1156,6 +1166,7 @@ class DpsOverlay:
                         self._gpu_presenter.set_frame(
                             fb.bgra_bytes, fb.width, fb.height)
                         self._gpu_window.request_redraw()
+                        _perf_gauge('ui.dps.presented', 1)
                     except Exception as e:
                         print(f'[DPS-OV] gpu present error: {e}')
                 elif self._hwnd:
@@ -1170,8 +1181,11 @@ class DpsOverlay:
                         self._last_rendered_size = sz
                     try:
                         submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
+                        _perf_gauge('ui.dps.presented', 1)
                     except Exception as e:
                         print(f'[DPS-OV] ulw error: {e}')
+            else:
+                _perf_gauge('ui.dps.presented', 0)
 
             # v2.3.x dirty-skip: previously this submitted compose_frame
             # every tick (60 Hz when animating, 10-20 Hz idle). Most
@@ -1188,6 +1202,9 @@ class DpsOverlay:
                     self.compose_frame, now,
                     self._hwnd if self._hwnd else 0,
                     self._x, self._y)
+                _perf_gauge('ui.dps.submitted', 1)
+            else:
+                _perf_gauge('ui.dps.skipped_sig', 1)
 
         if self._hide_after_fade and self._fade_alpha <= 0.01:
             self.hide()
@@ -2530,6 +2547,39 @@ class DpsOverlay:
     # ──────────────────────────────────────────
     #  Dragging
     # ──────────────────────────────────────────
+
+    def _gpu_event(self, x: float, y: float, delta: int = 0):
+        lx = int(round(x))
+        ly = int(round(y))
+        return SimpleNamespace(
+            x=lx, y=ly,
+            x_root=int(self._x + lx),
+            y_root=int(self._y + ly),
+            delta=int(delta),
+        )
+
+    def _on_gpu_cursor_pos(self, x: float, y: float) -> None:
+        if self._gpu_drag_active:
+            self._on_drag_move(self._gpu_event(x, y))
+
+    def _on_gpu_mouse_button(self, button: int, action: int,
+                             _mods: int, x: float, y: float) -> None:
+        if button != 0:
+            return
+        ev = self._gpu_event(x, y)
+        if action == 1:
+            self._gpu_drag_active = True
+            self._on_drag_start(ev)
+        elif action == 0:
+            self._gpu_drag_active = False
+            self._on_drag_end(ev)
+
+    def _on_gpu_scroll(self, _xoff: float, yoff: float) -> None:
+        if abs(yoff) <= 1e-6:
+            return
+        self._on_mouse_wheel(
+            self._gpu_event(0, 0, delta=120 if yoff > 0 else -120)
+        )
 
     def _on_drag_start(self, ev) -> None:
         try:

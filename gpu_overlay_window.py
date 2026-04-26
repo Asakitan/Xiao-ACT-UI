@@ -50,8 +50,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 try:
     from perf_probe import phase as _phase_trace  # type: ignore
+    from perf_probe import gauge as _perf_gauge  # type: ignore
 except Exception:  # pragma: no cover
     def _phase_trace(_name: str, _detail: str = '') -> None:  # type: ignore
+        return
+    def _perf_gauge(_name: str, _value: float) -> None:  # type: ignore
         return
 
 
@@ -559,8 +562,11 @@ class GlfwPump:
                 # Pump owns the WGL context but worker threads may have
                 # private moderngl contexts; serialize against them.
                 try:
+                    _rt0 = time.perf_counter()
                     with _wgl_serialize_lock:
                         w._render_once(t)
+                    _perf_gauge('gow.window.render_ms',
+                                (time.perf_counter() - _rt0) * 1000.0)
                 except Exception:
                     pass
                 if armed:

@@ -34,6 +34,7 @@ import os
 import time
 import ctypes
 import math
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import threading
@@ -48,10 +49,9 @@ from overlay_subpixel import subpixel_bar_width
 
 # v2.3.x: optional GPU presenter (mirrors SkillFX/MenuHud pattern).
 # Env-gated via SAO_GPU_HP (defaults to SAO_GPU_OVERLAY). Falls back to
-# the original ULW path if GLFW is unavailable. NOTE: GPU mode uses a
-# borderless click_through GLFW window, so drag-to-move and right-click
-# context menu on this overlay are disabled in GPU mode (use
-# SAO_GPU_HP=0 to keep the legacy interactive ULW path).
+# the original ULW path if GLFW is unavailable. GPU mode now owns input
+# callbacks, preserving drag/tap/context menu while keeping presentation
+# off the ULW path.
 try:
     import gpu_overlay_window as _gow  # type: ignore[import-untyped]
 except Exception:
@@ -63,15 +63,14 @@ def _gpu_hp_enabled() -> bool:
         return False
     try:
         import os as _os
-        flag = _os.environ.get('SAO_GPU_HP', '0')
-        # Default-OFF: GPU path is click-through, but the legacy ULW
-        # path supports drag-to-move + right-click context menu, which
-        # users expect on this panel. Set SAO_GPU_HP=1 to opt in.
+        flag = _os.environ.get('SAO_GPU_HP')
+        if flag is None:
+            return True
         return str(flag).strip() not in ('', '0', 'false', 'False')
     except Exception:
         return False
 
-from perf_probe import phase as _phase_trace, probe as _probe
+from perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _probe
 
 from sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
@@ -573,11 +572,13 @@ class HpOverlay:
         self._hp_max = 0.0
         self._hp_pct_target = 1.0
         self._hp_pct_disp = 1.0
+        self._hp_last_update_t = 0.0
         self._sta_cur = 100.0
         self._sta_max = 100.0
         self._sta_text = '100%'
         self._sta_pct_target = 1.0
         self._sta_pct_disp = 1.0
+        self._sta_last_update_t = 0.0
         self._sta_offline = False
         self._sta_offline_pending = False
         self._hp_group_hidden = False
@@ -604,6 +605,7 @@ class HpOverlay:
         self._registered: bool = False
         self._drag_ox = 0
         self._drag_oy = 0
+        self._gpu_drag_active = False
         self._last_topmost_t = 0.0  # last SetWindowPos topmost call
         self._idle_submit_q = -1     # quantized idle submit gate (perf)
         self._hover_zone: Optional[str] = None
@@ -790,8 +792,13 @@ class HpOverlay:
                     w=int(self.WIDTH), h=int(self.HEIGHT),
                     x=int(self._x), y=int(self._y),
                     render_fn=presenter.render,
-                    click_through=True,
+                    click_through=False,
                     title='sao_hp_gpu',
+                )
+                gpu_win.set_input_callbacks(
+                    cursor_pos_fn=self._on_gpu_cursor_pos,
+                    cursor_leave_fn=self._on_gpu_cursor_leave,
+                    mouse_button_fn=self._on_gpu_mouse_button,
                 )
                 gpu_win.show()
                 self._gpu_window = gpu_win
@@ -937,6 +944,7 @@ class HpOverlay:
         self._win = None
         self._hwnd = 0
         self._gpu_managed = False
+        self._gpu_drag_active = False
         self._visible = False
         self._exiting = False
         self._hide_after_exit = False
@@ -956,6 +964,8 @@ class HpOverlay:
         if pct < self._hp_pct_target - 0.002:
             self._hp_flash_start = time.time()
         self._hp_pct_target = pct
+        self._hp_last_update_t = time.time()
+        self._idle_submit_q = -1
         if level is not None:
             self._level = str(level)
         self._schedule_tick(immediate=True)
@@ -997,6 +1007,8 @@ class HpOverlay:
         self._sta_max = tot
         if not self._sta_offline and not self._sta_offline_pending:
             self._sta_text = self._format_sta_text()
+        self._sta_last_update_t = time.time()
+        self._idle_submit_q = -1
         self._schedule_tick(immediate=True)
 
     def set_sta_offline(self, offline: bool) -> None:
@@ -1075,6 +1087,10 @@ class HpOverlay:
             return True
         if self._hp_flash_start and (now - self._hp_flash_start) < 0.45:
             return True
+        if self._hp_last_update_t and (now - self._hp_last_update_t) < 0.55:
+            return True
+        if self._sta_last_update_t and (now - self._sta_last_update_t) < 0.55:
+            return True
         for zone in ('id', 'hp'):
             hover_target = 1.0 if self._hover_zone == zone else 0.0
             press_target = 1.0 if self._press_zone == zone else 0.0
@@ -1085,6 +1101,8 @@ class HpOverlay:
             if float(self._press_flash_t.get(zone, 0.0) or 0.0) > now:
                 return True
         if self._fade_target >= 1.0 and self._enter_scale_t < 0.999:
+            return True
+        if self._visible and self._fade_target >= 1.0 and not self._exiting:
             return True
         return False
 
@@ -1175,13 +1193,17 @@ class HpOverlay:
                         self._gpu_presenter.set_frame(
                             fb.bgra_bytes, fb.width, fb.height)
                         self._gpu_window.request_redraw()
+                        _perf_gauge('ui.hp.presented', 1)
                     except Exception as e:
                         print(f'[HP-OV] gpu present error: {e}')
                 elif self._hwnd:
                     try:
                         submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
+                        _perf_gauge('ui.hp.presented', 1)
                     except Exception as e:
                         print(f'[HP-OV] ulw error: {e}')
+            else:
+                _perf_gauge('ui.hp.presented', 0)
 
             # Periodic topmost enforcement (HWND only — GLFW window is
             # already TOPMOST via WS_EX_TOPMOST in gpu_overlay_window).
@@ -1219,6 +1241,11 @@ class HpOverlay:
                     self._last_compose_sig = sig
                     self._render_worker.submit(
                         self.compose_frame, now, self._hwnd, self._x, self._y)
+                    _perf_gauge('ui.hp.submitted', 1)
+                else:
+                    _perf_gauge('ui.hp.skipped_sig', 1)
+            else:
+                _perf_gauge('ui.hp.skipped_idle', 1)
 
         if self._hide_after_exit and self._fade_alpha <= 0.01:
             self.destroy()
@@ -3000,6 +3027,40 @@ class HpOverlay:
     # Click-vs-drag threshold: pointer movement in px before a
     # Button-1 sequence is considered a drag rather than a tap.
     _TAP_THRESHOLD_PX = 4
+
+    def _gpu_event(self, x: float, y: float, delta: int = 0):
+        lx = int(round(x))
+        ly = int(round(y))
+        return SimpleNamespace(
+            x=lx, y=ly,
+            x_root=int(self._x + lx),
+            y_root=int(self._y + ly),
+            delta=int(delta),
+        )
+
+    def _on_gpu_cursor_pos(self, x: float, y: float) -> None:
+        ev = self._gpu_event(x, y)
+        if self._gpu_drag_active:
+            self._on_drag_move(ev)
+        else:
+            self._on_pointer_move(ev)
+
+    def _on_gpu_cursor_leave(self) -> None:
+        if not self._gpu_drag_active:
+            self._on_pointer_leave(None)
+
+    def _on_gpu_mouse_button(self, button: int, action: int,
+                             _mods: int, x: float, y: float) -> None:
+        ev = self._gpu_event(x, y)
+        if button == 0:
+            if action == 1:
+                self._gpu_drag_active = True
+                self._on_drag_start(ev)
+            elif action == 0:
+                self._gpu_drag_active = False
+                self._on_drag_end(ev)
+        elif button == 1 and action == 1:
+            self._on_context_menu(ev)
 
     def _on_drag_start(self, ev) -> None:
         try:
