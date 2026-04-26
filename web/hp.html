@@ -1359,6 +1359,19 @@ function _setHPGroupHidden(hidden) {
     scheduleHitRegionReport();
 }
 
+function _hpGroupAcceptsInput() {
+    var cover = document.querySelector('.hp-bg-cover');
+    var hp = document.getElementById('hp');
+    var sta = document.getElementById('sta-row');
+    if (_hpGroupHidden || _hpGroupFadeTimer) return false;
+    if ((cover && (cover.classList.contains('hp-hidden') || cover.classList.contains('hp-fadeout'))) ||
+        (hp && (hp.classList.contains('hp-hidden') || hp.classList.contains('hp-exit'))) ||
+        (sta && (sta.classList.contains('hp-hidden') || sta.classList.contains('hp-fadeout')))) {
+        return false;
+    }
+    return true;
+}
+
 function updateSTA(current, total) {
     var pct = total > 0 ? Math.round(current / total * 100) : 100;
     document.getElementById('sta-fill').style.width = pct + '%';
@@ -1547,7 +1560,7 @@ function _collectRegions(selectors) {
 function collectHitRegions() {
     var dispSel = ['.id-plate', '#ctx-menu'];
     var clkSel  = ['.id-plate', '#ctx-menu'];
-    if (!_hpGroupHidden) {
+    if (_hpGroupAcceptsInput()) {
         dispSel.push('.hp-bg-cover', '#hp', '#sta-row');
         clkSel.push('#hp');
     }
@@ -1713,6 +1726,7 @@ function _registerHpClickHandlers() {
     hp._saoClickBound = true;
 
     hp.addEventListener('click', function(e) {
+        if (!_hpGroupAcceptsInput()) return;
         if (ctxMenu && ctxMenu.contains(e.target)) return;
         snd('click');
         if (window.pywebview && window.pywebview.api) {
@@ -1723,6 +1737,7 @@ function _registerHpClickHandlers() {
     hp.addEventListener('contextmenu', function(e) {
         e.preventDefault();
         e.stopPropagation();
+        if (!_hpGroupAcceptsInput()) return;
         snd('click');
         showCtxMenu(e.clientX + 4, e.clientY - 26);
     });

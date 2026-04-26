@@ -1698,9 +1698,6 @@ class SAOPlayerGUI:
         if self._boss_raid_engine:
             try: self._boss_raid_engine.on_damage_event(event)
             except Exception: pass
-        if self._dps_tracker:
-            try: self._dps_tracker.on_damage_event(event)
-            except Exception: pass
         # Track self→monster damage for boss bar target (mirrors webview)
         if event.get('attacker_is_self') and event.get('target_is_monster'):
             target_uuid = event.get('target_uuid', 0)
@@ -1730,6 +1727,9 @@ class SAOPlayerGUI:
                 if self._dps_tracker:
                     try: self._dps_tracker.set_boss_uuid(target_uuid)
                     except Exception: pass
+        if self._dps_tracker:
+            try: self._dps_tracker.on_damage_event(event)
+            except Exception: pass
 
     def _on_monster_update(self, monster_data):
         """Monster update from packet_parser → boss raid engine."""

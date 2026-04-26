@@ -573,15 +573,19 @@ class DpsTracker:
                 if cached and cached.get('fight_point'):
                     e['fight_point'] = int(cached['fight_point'])
 
+        display_damage = self._total_damage_boss if (
+            self._boss_uuid and self._total_damage_boss > 0
+        ) else self._total_damage
+
         snapshot = {
             'encounter_active': bool(self._encounter_start and self._has_meaningful_data_locked()),
             'encounter_started_at': self._encounter_start,
             'encounter_ended_at': self._encounter_end,
             'elapsed_s': round(elapsed, 1),
-            'total_damage': self._total_damage_boss if self._boss_uuid else self._total_damage,
+            'total_damage': display_damage,
             'total_damage_all': self._total_damage,
             'total_heal': self._total_heal,
-            'total_dps': int((self._total_damage_boss if self._boss_uuid else self._total_damage) / elapsed),
+            'total_dps': int(display_damage / elapsed),
             'total_hps': int(self._total_heal / elapsed),
             'entities': entities,
         }
