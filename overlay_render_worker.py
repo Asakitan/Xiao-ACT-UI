@@ -40,6 +40,27 @@ from PIL import Image
 from perf_probe import gauge as _perf_gauge, phase as _phase_trace
 from render_capture_sync import wait_until_capture_idle
 
+_CY_PIXELS = None
+if os.environ.get('SAO_DISABLE_CYTHON', '').strip().lower() not in (
+        '1', 'true', 'yes', 'on'):
+    try:
+        import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
+    except Exception:
+        _CY_PIXELS = None
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+
+_CY_PREMULT_MAX_PIXELS = max(
+    0, _env_int('SAO_CYTHON_PREMULT_MAX_PIXELS', 600_000))
+_CY_ALPHA_MIN_PIXELS = max(
+    0, _env_int('SAO_CYTHON_ALPHA_MIN_PIXELS', 250_000))
+
 # ── Win32 structures (mirrored from sao_gui_dps for independence) ──
 _user32 = ctypes.windll.user32
 _gdi32 = ctypes.windll.gdi32
@@ -94,11 +115,23 @@ class FrameBuffer:
         self.y = y
 
 
+def _cache_premult_bgra(img: Image.Image, out: bytes) -> bytes:
+    if getattr(img, '_sao_premult_safe', False):
+        try:
+            img._sao_bgra_cache = out  # type: ignore[attr-defined]
+            img._sao_bgra_cache_version = getattr(  # type: ignore[attr-defined]
+                img, '_sao_content_version', None)
+        except Exception:
+            pass
+    return out
+
+
 def _premultiply_to_bgra(img: Image.Image) -> bytes:
     """RGBA PIL → premultiplied BGRA bytes.
 
-    Tries the GPU shader first (already on the render-lane thread that
-    owns a GL context); falls back to numpy on failure.
+    Tries the optional Cython pixel loop first for GUI-sized panels, then
+    the GPU shader (already on the render-lane thread that owns a GL
+    context), and finally numpy on failure.
     """
     if getattr(img, '_sao_premult_safe', False):
         try:
@@ -110,20 +143,24 @@ def _premultiply_to_bgra(img: Image.Image) -> bytes:
         except Exception:
             pass
     _phase_trace('render.premultiply.begin', f'{img.size[0]}x{img.size[1]}')
+    rgba = np.asarray(img, dtype=np.uint8)
+    pixels = int(img.size[0]) * int(img.size[1])
+    if (_CY_PIXELS is not None and
+            (_CY_PREMULT_MAX_PIXELS <= 0 or pixels <= _CY_PREMULT_MAX_PIXELS)):
+        try:
+            out = _CY_PIXELS.premultiply_bgra_ndarray(rgba)
+            _phase_trace('render.premultiply.cython',
+                         f'{img.size[0]}x{img.size[1]}')
+            return _cache_premult_bgra(img, out)
+        except Exception:
+            pass
+
     from gpu_renderer import premultiply_bgra_bytes
-    gpu_result = premultiply_bgra_bytes(np.asarray(img, dtype=np.uint8))
+    gpu_result = premultiply_bgra_bytes(rgba)
     if gpu_result is not None:
         _phase_trace('render.premultiply.gpu', f'{img.size[0]}x{img.size[1]}')
-        if getattr(img, '_sao_premult_safe', False):
-            try:
-                img._sao_bgra_cache = gpu_result  # type: ignore[attr-defined]
-                img._sao_bgra_cache_version = getattr(  # type: ignore[attr-defined]
-                    img, '_sao_content_version', None)
-            except Exception:
-                pass
-        return gpu_result
+        return _cache_premult_bgra(img, gpu_result)
     # CPU fallback — pure numpy, releases GIL.
-    rgba = np.asarray(img, dtype=np.uint8)
     a = rgba[:, :, 3:4].astype(np.uint16)
     rgb = (rgba[:, :, :3].astype(np.uint16) * a + 127) // 255
     bgra = np.empty_like(rgba)
@@ -133,14 +170,31 @@ def _premultiply_to_bgra(img: Image.Image) -> bytes:
     bgra[:, :, 3] = rgba[:, :, 3]  # A
     _phase_trace('render.premultiply.cpu', f'{img.size[0]}x{img.size[1]}')
     out = bgra.tobytes()
-    if getattr(img, '_sao_premult_safe', False):
+    return _cache_premult_bgra(img, out)
+
+
+def multiply_alpha_image(img: Image.Image, alpha: float) -> Image.Image:
+    """Return an RGBA image with only the alpha channel multiplied."""
+    try:
+        value = float(alpha)
+    except Exception:
+        value = 1.0
+    if not value == value or value >= 0.999:
+        return img
+    pixels = int(img.size[0]) * int(img.size[1])
+    if _CY_PIXELS is not None and pixels >= _CY_ALPHA_MIN_PIXELS:
         try:
-            img._sao_bgra_cache = out  # type: ignore[attr-defined]
-            img._sao_bgra_cache_version = getattr(  # type: ignore[attr-defined]
-                img, '_sao_content_version', None)
+            rgba = np.asarray(img, dtype=np.uint8)
+            out = _CY_PIXELS.multiply_alpha_rgba_ndarray_floor(rgba, value)
+            return Image.frombytes('RGBA', img.size, out)
         except Exception:
             pass
-    return out
+    arr = np.asarray(img, dtype=np.uint8).copy()
+    mul = int(max(0, min(255, value * 255)))
+    arr[:, :, 3] = (
+        arr[:, :, 3].astype(np.uint16) * mul // 255
+    ).astype(np.uint8)
+    return Image.fromarray(arr, 'RGBA')
 
 
 def _recommended_lane_count() -> int:
