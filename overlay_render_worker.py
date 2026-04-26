@@ -37,7 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
 import numpy as np
 from PIL import Image
 
-from perf_probe import phase as _phase_trace
+from perf_probe import gauge as _perf_gauge, phase as _phase_trace
 from render_capture_sync import wait_until_capture_idle
 
 # ── Win32 structures (mirrored from sao_gui_dps for independence) ──
@@ -100,11 +100,27 @@ def _premultiply_to_bgra(img: Image.Image) -> bytes:
     Tries the GPU shader first (already on the render-lane thread that
     owns a GL context); falls back to numpy on failure.
     """
+    if getattr(img, '_sao_premult_safe', False):
+        try:
+            version = getattr(img, '_sao_content_version', None)
+            if getattr(img, '_sao_bgra_cache_version', None) == version:
+                cached = getattr(img, '_sao_bgra_cache', None)
+                if isinstance(cached, bytes):
+                    return cached
+        except Exception:
+            pass
     _phase_trace('render.premultiply.begin', f'{img.size[0]}x{img.size[1]}')
     from gpu_renderer import premultiply_bgra_bytes
     gpu_result = premultiply_bgra_bytes(np.asarray(img, dtype=np.uint8))
     if gpu_result is not None:
         _phase_trace('render.premultiply.gpu', f'{img.size[0]}x{img.size[1]}')
+        if getattr(img, '_sao_premult_safe', False):
+            try:
+                img._sao_bgra_cache = gpu_result  # type: ignore[attr-defined]
+                img._sao_bgra_cache_version = getattr(  # type: ignore[attr-defined]
+                    img, '_sao_content_version', None)
+            except Exception:
+                pass
         return gpu_result
     # CPU fallback — pure numpy, releases GIL.
     rgba = np.asarray(img, dtype=np.uint8)
@@ -116,7 +132,15 @@ def _premultiply_to_bgra(img: Image.Image) -> bytes:
     bgra[:, :, 2] = rgb[:, :, 0]  # R
     bgra[:, :, 3] = rgba[:, :, 3]  # A
     _phase_trace('render.premultiply.cpu', f'{img.size[0]}x{img.size[1]}')
-    return bgra.tobytes()
+    out = bgra.tobytes()
+    if getattr(img, '_sao_premult_safe', False):
+        try:
+            img._sao_bgra_cache = out  # type: ignore[attr-defined]
+            img._sao_bgra_cache_version = getattr(  # type: ignore[attr-defined]
+                img, '_sao_content_version', None)
+        except Exception:
+            pass
+    return out
 
 
 def _recommended_lane_count() -> int:
@@ -343,6 +367,7 @@ def submit_ulw_commit(hwnd: int, fb: FrameBuffer, alpha: int = 255,
     _ensure_ulw_thread()
     with _ulw_cond:
         _ulw_pending[hwnd] = (fb, int(alpha), bool(allow_during_capture))
+        _perf_gauge('ulw.pending', len(_ulw_pending))
         _ulw_cond.notify()
     return True
 
@@ -404,6 +429,8 @@ class _RenderLane:
             if worker_id not in self._workers:
                 self._workers.append(worker_id)
             self._pending[worker_id] = (compose_fn, now, hwnd, x, y)
+            _perf_gauge(f'render.lane{self.index + 1}.pending', len(self._pending))
+            _perf_gauge(f'render.lane{self.index + 1}.results', len(self._results))
             self._cond.notify()
 
     def take_result(self, worker_id: int) -> Optional[FrameBuffer]:
@@ -482,6 +509,8 @@ class _RenderLane:
                 with self._lock:
                     if worker_id in self._workers:
                         self._results[worker_id] = fb
+                        _perf_gauge(f'render.lane{self.index + 1}.pending', len(self._pending))
+                        _perf_gauge(f'render.lane{self.index + 1}.results', len(self._results))
             except Exception as exc:
                 try:
                     print(f'[RenderWorker] compose error: {exc}')

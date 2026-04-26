@@ -36,6 +36,7 @@ import time
 import ctypes
 import math
 import threading
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -48,8 +49,7 @@ from overlay_subpixel import subpixel_bar_width
 
 # v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_BOSSHP
 # (defaults to SAO_GPU_OVERLAY). Falls back to ULW if GLFW is
-# unavailable. NOTE: GLFW path is click_through, so drag-to-move on
-# this overlay is disabled in GPU mode.
+# unavailable. GPU mode owns input callbacks, preserving drag-to-move.
 try:
     import gpu_overlay_window as _gow  # type: ignore[import-untyped]
 except Exception:
@@ -61,15 +61,14 @@ def _gpu_bosshp_enabled() -> bool:
         return False
     try:
         import os as _os
-        flag = _os.environ.get('SAO_GPU_BOSSHP', '0')
-        # Default-OFF: GPU path is click-through, but the legacy ULW
-        # path supports drag-to-move + right-click context menu, which
-        # users expect on this panel. Set SAO_GPU_BOSSHP=1 to opt in.
+        flag = _os.environ.get('SAO_GPU_BOSSHP')
+        if flag is None:
+            return True
         return str(flag).strip() not in ('', '0', 'false', 'False')
     except Exception:
         return False
 
-from perf_probe import probe as _probe
+from perf_probe import gauge as _perf_gauge, probe as _probe
 
 # Reuse ULW glue + font helpers from sao_gui_dps so we keep the same
 # premultiply path and font cache.
@@ -481,6 +480,7 @@ class BossHpOverlay:
         self._registered: bool = False
         self._drag_ox = 0
         self._drag_oy = 0
+        self._gpu_drag_active = False
 
         # Cached panel layers (expensive to redraw every frame).
         self._cache_cover: Optional[Image.Image] = None
@@ -565,8 +565,12 @@ class BossHpOverlay:
                     w=int(self.WIDTH), h=int(self.HEIGHT),
                     x=int(self._x), y=int(self._y),
                     render_fn=presenter.render,
-                    click_through=True,
+                    click_through=False,
                     title='sao_bosshp_gpu',
+                )
+                gpu_win.set_input_callbacks(
+                    cursor_pos_fn=self._on_gpu_cursor_pos,
+                    mouse_button_fn=self._on_gpu_mouse_button,
                 )
                 gpu_win.show()
                 self._gpu_window = gpu_win
@@ -695,9 +699,13 @@ class BossHpOverlay:
         self._win = None
         self._hwnd = 0
         self._gpu_managed = False
+        self._gpu_drag_active = False
         self._visible = False
         self._exiting = False
         self._hide_after_exit = False
+
+    def _window_ready(self) -> bool:
+        return bool(self._gpu_managed or self._hwnd)
 
     @_probe.decorate('ui.bosshp.update')
     def update(self, data: dict) -> None:
@@ -722,10 +730,11 @@ class BossHpOverlay:
             self._fade_start = time.time()
             self._fade_duration = self.FADE_IN
 
-        if not self._visible or not self._hwnd:
+        if not self._visible or not self._window_ready():
             self.show()
 
         self._last_data = data
+        self._idle_committed = False
 
         # ── targets ──
         name = str(data.get('boss_name') or 'Enemy').strip() or 'Enemy'
@@ -1210,13 +1219,17 @@ class BossHpOverlay:
                         self._gpu_presenter.set_frame(
                             fb.bgra_bytes, fb.width, fb.height)
                         self._gpu_window.request_redraw()
+                        _perf_gauge('ui.bosshp.presented', 1)
                     except Exception as e:
                         print(f'[BOSSHP-OV] gpu present error: {e}')
                 elif self._hwnd:
                     try:
                         submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
+                        _perf_gauge('ui.bosshp.presented', 1)
                     except Exception as e:
                         print(f'[BOSSHP-OV] ulw error: {e}')
+            else:
+                _perf_gauge('ui.bosshp.presented', 0)
 
             # v2.2.14: idle short-circuit — once we've committed a
             # steady frame, stop composing/submitting until something
@@ -1224,6 +1237,7 @@ class BossHpOverlay:
             # unblocked.
             is_anim = self._is_animating()
             if not is_anim and self._idle_committed:
+                _perf_gauge('ui.bosshp.skipped_idle', 1)
                 return
 
             # In GPU mode there's no _hwnd to pass; compose still uses
@@ -1232,6 +1246,7 @@ class BossHpOverlay:
                 self.compose_frame, now,
                 self._hwnd if self._hwnd else 0,
                 self._x, self._y)
+            _perf_gauge('ui.bosshp.submitted', 1)
             self._idle_committed = (not is_anim)
 
         if self._hide_after_exit and self._fade_alpha <= 0.01:
@@ -2645,6 +2660,31 @@ class BossHpOverlay:
     # ──────────────────────────────────────────
     #  Dragging
     # ──────────────────────────────────────────
+
+    def _gpu_event(self, x: float, y: float):
+        lx = int(round(x))
+        ly = int(round(y))
+        return SimpleNamespace(
+            x=lx, y=ly,
+            x_root=int(self._x + lx),
+            y_root=int(self._y + ly),
+        )
+
+    def _on_gpu_cursor_pos(self, x: float, y: float) -> None:
+        if self._gpu_drag_active:
+            self._on_drag_move(self._gpu_event(x, y))
+
+    def _on_gpu_mouse_button(self, button: int, action: int,
+                             _mods: int, x: float, y: float) -> None:
+        if button != 0:
+            return
+        ev = self._gpu_event(x, y)
+        if action == 1:
+            self._gpu_drag_active = True
+            self._on_drag_start(ev)
+        elif action == 0:
+            self._gpu_drag_active = False
+            self._on_drag_end(ev)
 
     def _on_drag_start(self, ev) -> None:
         try:
