@@ -7,6 +7,7 @@ PyInstaller spec — 咲 ACT UI (Xiao ACT UI)
 
 import os
 import sys
+from glob import glob
 
 from PyInstaller.utils.hooks import collect_submodules, collect_dynamic_libs, collect_data_files
 
@@ -32,6 +33,7 @@ LOCAL_HIDDENIMPORTS = [
     'gpu_renderer',
     'overlay_scheduler',
     'overlay_render_worker',
+    '_sao_cy_pixels',
     'window_effects',
     'install_npcap',
     'sao_updater',
@@ -67,6 +69,10 @@ GPU_RENDER_BINARIES = (
     + collect_dynamic_libs('llvmlite')
     + collect_dynamic_libs('glfw')
 )
+CYTHON_ACCEL_BINARIES = [
+    (path, '.')
+    for path in glob(os.path.join(HERE, '_sao_cy*.pyd'))
+]
 GPU_RENDER_DATAS = (
     collect_data_files('skia')
     + collect_data_files('moderngl_window')
@@ -76,7 +82,7 @@ GPU_RENDER_DATAS = (
 a = Analysis(
     ['main.py'],
     pathex=[HERE],
-    binaries=GPU_RENDER_BINARIES,
+    binaries=GPU_RENDER_BINARIES + CYTHON_ACCEL_BINARIES,
     datas=[
         # Web UI (HTML + 字体)
         ('web', 'web'),

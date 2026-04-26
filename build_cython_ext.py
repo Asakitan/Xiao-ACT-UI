@@ -1,0 +1,49 @@
+# -*- coding: utf-8 -*-
+"""Build local Cython accelerators in-place.
+
+Usage:
+    python build_cython_ext.py build_ext --inplace
+
+The generated .pyd is ABI-specific. The checked-in binary targets the
+current release environment; other Python versions should rebuild locally.
+"""
+from __future__ import annotations
+
+import os
+
+from setuptools import Extension, setup
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+try:
+    from Cython.Build import cythonize
+except Exception as exc:  # noqa: BLE001
+    raise SystemExit(
+        'Cython is required to build _sao_cy_pixels. '
+        'Install requirements.txt or run: python -m pip install Cython'
+    ) from exc
+
+
+extensions = [
+    Extension(
+        name='_sao_cy_pixels',
+        sources=[os.path.join(HERE, '_sao_cy_pixels.pyx')],
+    ),
+]
+
+
+setup(
+    name='sao-cython-accelerators',
+    ext_modules=cythonize(
+        extensions,
+        build_dir=os.path.join(HERE, 'build', 'cython'),
+        compiler_directives={
+            'language_level': '3',
+            'boundscheck': False,
+            'wraparound': False,
+            'initializedcheck': False,
+            'nonecheck': False,
+            'annotation_typing': False,
+        },
+    ),
+)

@@ -16,6 +16,7 @@ glfw>=2.7                       # moderngl-window GLFW backend (Win32 borderless
 skia-python>=144                # GPU 2D 矢量 / 文字 atlas 烘焙 (BSD-3, Skia m144)
 numba>=0.61                     # CPU 数学热路径 JIT (_fast_beam 等)
 # numpy 受 numba 约束在 < 2.3, requirements 中无显式 numpy 上限 (numba 自身 metadata 限制)
+Cython>=3.0                     # build-time only: optional _sao_cy*.pyd pixel accelerators
 
 # ═══ 识图 ═══
 opencv-python>=4.5              # 颜色过滤、固定 ROI 条形/技能状态检测

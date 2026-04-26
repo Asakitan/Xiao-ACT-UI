@@ -6,10 +6,20 @@ Produces premultiplied BGRA bytes ready for ``BgraPresenter``.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from PIL import Image
 
 from . import menu_bar_layout, child_bar_layout, hud_layout
+
+_CY_PIXELS = None
+if os.environ.get('SAO_DISABLE_CYTHON', '').strip().lower() not in (
+        '1', 'true', 'yes', 'on'):
+    try:
+        import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
+    except Exception:
+        _CY_PIXELS = None
 
 
 # Layout offsets within the GPU window.  The window covers the menu_bar
@@ -101,7 +111,14 @@ def compose_rgba(state, hud_phase: float, screen_w: int, screen_h: int,
 
 
 def to_premultiplied_bgra(rgba: Image.Image, master_alpha: float = 1.0) -> bytes:
-    arr = np.frombuffer(rgba.tobytes(), dtype=np.uint8)
+    data = rgba.tobytes()
+    if _CY_PIXELS is not None:
+        try:
+            return _CY_PIXELS.premultiply_bgra_bytes_floor(
+                data, rgba.height, rgba.width, master_alpha)
+        except Exception:
+            pass
+    arr = np.frombuffer(data, dtype=np.uint8)
     arr = arr.reshape((rgba.height, rgba.width, 4))   # RGBA
     r = arr[..., 0].astype(np.uint16)
     g = arr[..., 1].astype(np.uint16)

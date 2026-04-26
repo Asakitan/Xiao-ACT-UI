@@ -35,7 +35,9 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from overlay_scheduler import get_scheduler as _get_scheduler
-from overlay_render_worker import AsyncFrameWorker, submit_ulw_commit
+from overlay_render_worker import (
+    AsyncFrameWorker, multiply_alpha_image, submit_ulw_commit,
+)
 from render_capture_sync import wait_until_capture_idle
 from config import FONTS_DIR
 
@@ -1505,11 +1507,7 @@ class DpsOverlay:
 
         final_alpha = max(0.0, min(1.0, self.PANEL_OPACITY * self._fade_alpha))
         if final_alpha < 0.999:
-            a = np.asarray(img, dtype=np.uint8).copy()
-            mul = int(max(0, min(255, final_alpha * 255)))
-            a[:, :, 3] = (a[:, :, 3].astype(np.uint16) * mul // 255
-                          ).astype(np.uint8)
-            img = Image.fromarray(a, 'RGBA')
+            img = multiply_alpha_image(img, final_alpha)
         return img
 
     # --------  Shell (gradient + scanlines + borders)  --------

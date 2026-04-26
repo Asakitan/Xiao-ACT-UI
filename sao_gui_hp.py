@@ -44,7 +44,9 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur, render_shell_rgba as _gpu_shell
 from overlay_scheduler import get_scheduler as _get_scheduler
-from overlay_render_worker import AsyncFrameWorker, submit_ulw_commit
+from overlay_render_worker import (
+    AsyncFrameWorker, multiply_alpha_image, submit_ulw_commit,
+)
 from overlay_subpixel import subpixel_bar_width
 
 # v2.3.x: optional GPU presenter (mirrors SkillFX/MenuHud pattern).
@@ -1510,11 +1512,7 @@ class HpOverlay:
 
         # Global fade
         if self._fade_alpha < 0.999:
-            a = np.asarray(img, dtype=np.uint8).copy()
-            mul = int(max(0, min(255, self._fade_alpha * 255)))
-            a[:, :, 3] = (a[:, :, 3].astype(np.uint16) * mul // 255
-                          ).astype(np.uint8)
-            img = Image.fromarray(a, 'RGBA')
+            img = multiply_alpha_image(img, self._fade_alpha)
         # v2.3.0 Phase 1: store frame for cache reuse on next call.
         if frame_sig is not None:
             self._frame_cache = img
