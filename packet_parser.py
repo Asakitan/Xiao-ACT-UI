@@ -1491,10 +1491,11 @@ class PacketParser:
             logger.error(f'[Parser] on_scene_change callback error: {e}')
 
     def _notify_soft_scene_restart(self, reason: str):
-        """Notify UI layers about a new encounter without clearing monster cache.
+        """Notify UI layers about a likely new encounter without clearing monsters.
 
-        Used for same-map / same-dungeon restarts where resetting _monsters would
-        lose HP estimates, but DPS/BossHP UI state still must be cleared.
+        Upstream counters defer same-instance encounter resets until the next
+        damage packet. Doing the same here avoids wiping DPS/BossHP when a
+        dungeon emits restart-like packets during map/layer mechanics.
         """
         now = time.time()
         if now - self._last_soft_scene_restart_ts < 1.5:
@@ -1505,10 +1506,16 @@ class PacketParser:
         self._current_uuid = 0
         logger.info(f'[Parser] Soft scene restart: {reason}, cleared current_uuid={old_uuid}')
         print(
-            f'[Parser] ♻ 同场景重开: {reason}, 重置 DPS/BossHP 状态',
+            f'[Parser] ♻ 同场景重开: {reason}, 等下一次伤害再重置 DPS/BossHP',
             flush=True,
         )
-        self._emit_scene_change('restart', reason, preserve_combat=False)
+        self._emit_scene_change(
+            'restart',
+            reason,
+            preserve_combat=True,
+            reset_on_next_damage=True,
+            reset_delay_s=3.0,
+        )
 
     def _notify_soft_scene_transition(self, reason: str, old_scene_key=None,
                                       new_scene_key=None):

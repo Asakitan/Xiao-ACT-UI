@@ -212,8 +212,10 @@ class EntityStats:
 class DpsTracker:
     """Thread-safe DPS/HPS tracker for all combat entities."""
 
-    # Inactivity auto-reset (seconds)
-    INACTIVITY_TIMEOUT = 120.0
+    # Upstream counters do not reset encounters on short idle gaps. Keep the
+    # UI fade/report behavior, but let explicit scene/deferred resets own data
+    # lifetime so long boss mechanics do not split DPS.
+    INACTIVITY_TIMEOUT = 0.0
     HIT_FX_WINDOW_S = 9.0
     BIG_HIT_THRESHOLD = 1_000_000
     MEGA_HIT_THRESHOLD = 5_000_000
@@ -228,6 +230,7 @@ class DpsTracker:
         self._encounter_end: float = 0.0
         self._last_event_time: float = 0.0
         self._last_damage_time: float = 0.0
+        self._last_finalized_event_time: float = 0.0
         self._total_damage: int = 0
         self._total_heal: int = 0
         self._boss_uuid: int = 0
@@ -354,8 +357,11 @@ class DpsTracker:
     def _process_event(self, event: Dict[str, Any]):
         now = event.get('timestamp') or time.time()
 
-        # Auto-reset on long inactivity
-        if self._last_event_time and (now - self._last_event_time) > self.INACTIVITY_TIMEOUT:
+        # Optional legacy auto-reset. Disabled by default; scene packets and
+        # deferred next-damage resets are less likely to split long fights.
+        if (self.INACTIVITY_TIMEOUT > 0
+                and self._last_event_time
+                and (now - self._last_event_time) > self.INACTIVITY_TIMEOUT):
             self._finalize_current_locked('idle_timeout')
             self._reset_locked()
 
@@ -441,6 +447,7 @@ class DpsTracker:
 
         self._last_event_time = now
         self._encounter_end = now
+        self._last_finalized_event_time = 0.0
         self._dirty = True
 
     def _track_big_hit_fx_locked(self, entity: EntityStats, damage: int, timestamp: float):
@@ -556,6 +563,7 @@ class DpsTracker:
         self._encounter_end = 0.0
         self._last_event_time = 0.0
         self._last_damage_time = 0.0
+        self._last_finalized_event_time = 0.0
         self._total_damage = 0
         self._total_heal = 0
         self._boss_uuid = 0
@@ -660,8 +668,12 @@ class DpsTracker:
                 return False
             if (time.time() - self._last_event_time) < float(timeout_s):
                 return False
+            if self._last_finalized_event_time == self._last_event_time:
+                return False
             finalized = self._finalize_current_locked(reason) is not None
-            self._reset_locked()
+            if finalized:
+                self._last_finalized_event_time = self._last_event_time
+                self._dirty = True
             return finalized
 
     @_probe.decorate('dps.get_snapshot')
@@ -741,8 +753,10 @@ class DpsTracker:
             # 1) Finalize if idle
             if idle_timeout_s > 0 and self._encounter_start and self._last_event_time:
                 if (now - self._last_event_time) >= idle_timeout_s:
-                    self._finalize_current_locked('idle_timeout')
-                    self._reset_locked()
+                    if self._last_finalized_event_time != self._last_event_time:
+                        if self._finalize_current_locked('idle_timeout') is not None:
+                            self._last_finalized_event_time = self._last_event_time
+                            self._dirty = True
 
             # 2) Dirty check
             dirty = bool(self._dirty)
