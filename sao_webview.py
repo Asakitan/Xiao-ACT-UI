@@ -1591,7 +1591,7 @@ class SAOWebViewGUI:
         self._bb_last_target_uuid = 0     # UUID of last monster damaged by self
         self._bb_last_damage_ts = 0.0     # timestamp of last self→monster damage
         self._bb_recent_targets = {}      # uuid -> last_damage_ts for multi-unit secondary panels
-        self._bb_damage_timeout = 15.0    # seconds before boss bar fades out
+        self._bb_damage_timeout = 60.0    # seconds before boss bar fades out
 
         # DPS Meter
         self.dps_win = None
@@ -2323,7 +2323,7 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _on_scene_change(self):
+    def _on_scene_change(self, scene_event=None):
         """场景服务器切换回调 (切换地图/副本时由 packet_parser 触发)。
 
         清理:
@@ -2333,6 +2333,29 @@ class SAOWebViewGUI:
         - Boss raid engine: 如果不在 raid 中则重置
         - HP/Level: 强制重推当前值 (确保 webview 在新场景后及时刷新)
         """
+        _scene_kind = ''
+        _scene_reason = ''
+        _preserve_combat = False
+        if isinstance(scene_event, dict):
+            _scene_kind = str(scene_event.get('kind') or '')
+            _scene_reason = str(scene_event.get('reason') or '')
+            _preserve_combat = bool(scene_event.get('preserve_combat', False))
+        if _preserve_combat:
+            # Same-dungeon layer/map transitions can happen mid-fight. Do not
+            # wipe the live encounter; just invalidate the next boss-bar push.
+            print(
+                f'[SAO] ↔ 同副本软切换({ _scene_kind or "transition" }/{_scene_reason}) '
+                f'— 保留 boss bar 和 DPS 追踪',
+                flush=True,
+            )
+            self._last_boss_bar_sig = None
+            try:
+                if self._dps_tracker:
+                    self._dps_tracker.invalidate_snapshot_cache()
+            except Exception:
+                pass
+            return
+
         print('[SAO] ⚡ 场景切换 — 重置 boss bar 和 DPS 追踪', flush=True)
 
         # 1. Boss HP bar: 强制隐藏, 清除所有 boss 状态
@@ -4636,10 +4659,13 @@ class SAOWebViewGUI:
         # normal combat lulls (cast animations, mechanic phases, target swaps)
         # don't cause the DPS panel to disappear every few seconds.
         try:
-            v = int(self._get_setting('dps_fade_timeout_s', 15) or 15)
+            raw = self._get_setting('dps_fade_timeout_s', 60)
+            v = float(raw if raw is not None else 60)
         except Exception:
-            v = 15
-        return float(max(5, v))
+            v = 60.0
+        if v <= 0:
+            return 86400.0
+        return float(max(60.0, v))
 
     def _get_dps_last_report_available(self) -> bool:
         tracker = getattr(self, '_dps_tracker', None)
@@ -6249,7 +6275,7 @@ class SAOWebViewGUI:
             cfg['auto_key'] = self._get_auto_key_menu_state()
             cfg['boss_bar_mode'] = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
             cfg['dps_enabled'] = bool(self._get_setting('dps_enabled', True))
-            cfg['dps_fade_timeout_s'] = int(self._get_setting('dps_fade_timeout_s', 15))
+            cfg['dps_fade_timeout_s'] = int(self._get_setting('dps_fade_timeout_s', 60))
             cfg['dps_last_report_available'] = self._get_dps_last_report_available()
             cfg['raid_editor_visible'] = bool(self._raid_editor_visible)
             cfg['autokey_editor_visible'] = bool(self._autokey_editor_visible)
@@ -6410,11 +6436,12 @@ class SAOWebViewGUI:
                     _bb_direct_data = None
                     _bb_additional = []
                     _now = time.time()
-                    _has_recent_self_damage = (_now - self._bb_last_damage_ts) < self._bb_damage_timeout
+                    _bb_timeout = self._combat_damage_timeout_s()
+                    _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
 
                     # Cleanup stale recent targets (prevent accumulation)
                     for uuid in list(self._bb_recent_targets.keys()):
-                        if _now - self._bb_recent_targets.get(uuid, 0) > self._bb_damage_timeout * 3:
+                        if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout * 3:
                             self._bb_recent_targets.pop(uuid, None)
 
                     if not _bb_raid_active:
@@ -6423,7 +6450,7 @@ class SAOWebViewGUI:
                             # Collect all recently damaged monsters
                             _recent_monsters = []
                             for uuid, dmg_ts in list(self._bb_recent_targets.items()):
-                                if _now - dmg_ts < self._bb_damage_timeout * 1.5:
+                                if _now - dmg_ts < _bb_timeout * 1.5:
                                     m = _bridge.get_monster(uuid)
                                     if m and not getattr(m, 'is_dead', False) and (getattr(m, 'max_hp', 0) > 0 or getattr(m, 'hp', 0) > 0):
                                         _recent_monsters.append(m)
