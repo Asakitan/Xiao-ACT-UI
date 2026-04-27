@@ -31,10 +31,15 @@ INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_ABSOLUTE = 0x8000
+MOUSEEVENTF_VIRTUALDESK = 0x4000
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 KEYEVENTF_KEYUP = 0x0002
 VK_MENU = 0x12  # Alt key
+SM_XVIRTUALSCREEN = 76
+SM_YVIRTUALSCREEN = 77
+SM_CXVIRTUALSCREEN = 78
+SM_CYVIRTUALSCREEN = 79
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -268,6 +273,7 @@ class HideSeekEngine:
     # ── Main loop ──
 
     def _run(self):
+        self._set_thread_dpi_awareness()
         try:
             while self._running:
                 time.sleep(1.0)
@@ -666,27 +672,67 @@ class HideSeekEngine:
     # ── Input simulation ──
 
     @staticmethod
+    def _set_thread_dpi_awareness():
+        """Match recognition thread DPI behavior in packaged onedir builds."""
+        try:
+            user32 = ctypes.windll.user32
+            user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+            user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+            prev = user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
+            if prev:
+                print('[HideSeek] thread DPI context set to PerMonitorV2', flush=True)
+        except Exception as e:
+            print(f'[HideSeek] SetThreadDpiAwarenessContext failed: {e}', flush=True)
+
+    @staticmethod
     def _send_mouse_click(screen_x: int, screen_y: int):
         """Send a left mouse click at absolute screen coordinates via SendInput."""
         user32 = ctypes.windll.user32
-        sm_cx = user32.GetSystemMetrics(0)  # screen width
-        sm_cy = user32.GetSystemMetrics(1)  # screen height
-        # Normalize to 0-65535 range for MOUSEEVENTF_ABSOLUTE
-        abs_x = int(screen_x * 65535 / max(1, sm_cx - 1))
-        abs_y = int(screen_y * 65535 / max(1, sm_cy - 1))
-        extra = ctypes.c_ulong(0)
-        # Move + press
-        mi_down = MOUSEINPUT(
+        vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+        vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+        vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+        if vw <= 0 or vh <= 0:
+            vx, vy = 0, 0
+            vw = user32.GetSystemMetrics(0)
+            vh = user32.GetSystemMetrics(1)
+
+        x = max(vx, min(vx + max(1, vw) - 1, int(screen_x)))
+        y = max(vy, min(vy + max(1, vh) - 1, int(screen_y)))
+
+        # Move the visible cursor first. Frozen/windowed builds can be ignored
+        # by the game when move + down are collapsed into one absolute packet.
+        try:
+            user32.SetCursorPos(int(x), int(y))
+        except Exception:
+            pass
+
+        # Normalize to 0-65535 over the virtual desktop.
+        abs_x = int((x - vx) * 65535 / max(1, vw - 1))
+        abs_y = int((y - vy) * 65535 / max(1, vh - 1))
+
+        flags_base = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+        extra_move = ctypes.c_ulong(0)
+        mi_move = MOUSEINPUT(
             dx=abs_x, dy=abs_y, mouseData=0,
-            dwFlags=MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN,
-            time=0, dwExtraInfo=ctypes.pointer(extra),
+            dwFlags=flags_base | MOUSEEVENTF_MOVE,
+            time=0, dwExtraInfo=ctypes.pointer(extra_move),
         )
-        # Release
-        extra2 = ctypes.c_ulong(0)
+        evt_move = INPUT(type=INPUT_MOUSE, iu=_INPUT_UNION(mi=mi_move))
+        user32.SendInput(1, ctypes.byref(evt_move), ctypes.sizeof(INPUT))
+        time.sleep(0.03)
+
+        extra_down = ctypes.c_ulong(0)
+        mi_down = MOUSEINPUT(
+            dx=0, dy=0, mouseData=0,
+            dwFlags=MOUSEEVENTF_LEFTDOWN,
+            time=0, dwExtraInfo=ctypes.pointer(extra_down),
+        )
+        extra_up = ctypes.c_ulong(0)
         mi_up = MOUSEINPUT(
-            dx=abs_x, dy=abs_y, mouseData=0,
-            dwFlags=MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP,
-            time=0, dwExtraInfo=ctypes.pointer(extra2),
+            dx=0, dy=0, mouseData=0,
+            dwFlags=MOUSEEVENTF_LEFTUP,
+            time=0, dwExtraInfo=ctypes.pointer(extra_up),
         )
         evt_down = INPUT(type=INPUT_MOUSE, iu=_INPUT_UNION(mi=mi_down))
         evt_up = INPUT(type=INPUT_MOUSE, iu=_INPUT_UNION(mi=mi_up))
