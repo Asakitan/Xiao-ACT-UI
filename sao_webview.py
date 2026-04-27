@@ -2187,8 +2187,18 @@ class SAOWebViewGUI:
         This is the critical path: when the DPS panel shows data, damage events
         ARE flowing. We use this to also ensure the boss bar target is set.
         """
-        # Track last self→monster damage for boss bar target
-        if event.get('attacker_is_self') and event.get('target_is_monster'):
+        # Track last self -> non-player combat target damage for boss bar target.
+        # BossHP only displays later if packet_parser has usable HP data.
+        _is_self_combat_target = bool(
+            event.get('attacker_is_self')
+            and event.get('target_uuid', 0)
+            and (
+                event.get('target_is_combat_target', False)
+                or event.get('target_is_monster', False)
+                or ('target_is_player' in event and not event.get('target_is_player', False))
+            )
+        )
+        if _is_self_combat_target:
             target_uuid = event.get('target_uuid', 0)
             if target_uuid:
                 # Same-map retry / monster UUID reuse: parser state may still
