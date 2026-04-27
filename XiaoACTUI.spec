@@ -34,6 +34,7 @@ LOCAL_HIDDENIMPORTS = [
     'overlay_scheduler',
     'overlay_render_worker',
     '_sao_cy_pixels',
+    '_sao_cy_combat',
     'window_effects',
     'install_npcap',
     'sao_updater',

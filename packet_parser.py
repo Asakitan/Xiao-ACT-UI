@@ -28,6 +28,11 @@ _PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field co
 
 from perf_probe import probe as _probe
 
+try:
+    import _sao_cy_combat as _CY_COMBAT
+except Exception:  # noqa: BLE001
+    _CY_COMBAT = None
+
 # Lazy import for protobuf JSON conversion (used in full sync dump)
 _MessageToDict = None
 
@@ -799,10 +804,14 @@ def _compose_skill_level_id(skill_id: int, level: int = 0) -> int:
 
 
 def _is_player(uuid: int) -> bool:
+    if _CY_COMBAT is not None:
+        return bool(_CY_COMBAT.is_player_uuid(uuid))
     return (uuid & 0xFFFF) == 640
 
 
 def _is_monster(uuid: int) -> bool:
+    if _CY_COMBAT is not None:
+        return bool(_CY_COMBAT.is_monster_uuid(uuid))
     low = uuid & 0xFFFF
     return low == 64 or low == 32832  # 0x0040 or 0x8040
 
@@ -842,6 +851,9 @@ def _attrs_look_monster_like(ac) -> bool:
 
 def _combat_damage_amount(value, lucky_value, actual_value, hp_lessen, shield_lessen) -> int:
     """Resolve display/stat damage using the same broad fallbacks as upstream counters."""
+    if _CY_COMBAT is not None:
+        return int(_CY_COMBAT.combat_damage_amount(
+            value, lucky_value, actual_value, hp_lessen, shield_lessen))
     for raw in (value, lucky_value, actual_value):
         try:
             amount = int(raw or 0)
@@ -861,6 +873,8 @@ def _combat_damage_amount(value, lucky_value, actual_value, hp_lessen, shield_le
 
 
 def _uuid_to_uid(uuid: int) -> int:
+    if _CY_COMBAT is not None:
+        return int(_CY_COMBAT.uuid_to_uid(uuid))
     return uuid >> 16
 
 
@@ -3716,13 +3730,17 @@ class PacketParser:
                 return
 
         # Determine if this is self-outgoing damage (self attacks monster)
-        attacker_is_self = False
-        if self._current_uuid and attacker_uuid:
+        if _CY_COMBAT is not None:
+            attacker_is_self = bool(_CY_COMBAT.attacker_is_self(
+                attacker_uuid, self._current_uuid, self._current_uid))
+        else:
+            attacker_is_self = False
+        if _CY_COMBAT is None and self._current_uuid and attacker_uuid:
             if attacker_uuid == self._current_uuid:
                 attacker_is_self = True
             elif _is_player(attacker_uuid) and _uuid_to_uid(attacker_uuid) == self._current_uid:
                 attacker_is_self = True
-        elif self._current_uid and attacker_uuid and _is_player(attacker_uuid):
+        elif _CY_COMBAT is None and self._current_uid and attacker_uuid and _is_player(attacker_uuid):
             # Fallback: _current_uuid not yet known (SyncToMeDelta not received),
             # but _current_uid is available from SyncContainerData / cache.
             if _uuid_to_uid(attacker_uuid) == self._current_uid:

@@ -19,7 +19,7 @@ try:
     from Cython.Build import cythonize
 except Exception as exc:  # noqa: BLE001
     raise SystemExit(
-        'Cython is required to build _sao_cy_pixels. '
+        'Cython is required to build _sao_cy_pixels and _sao_cy_combat. '
         'Install requirements.txt or run: python -m pip install Cython'
     ) from exc
 
@@ -28,6 +28,10 @@ extensions = [
     Extension(
         name='_sao_cy_pixels',
         sources=[os.path.join(HERE, '_sao_cy_pixels.pyx')],
+    ),
+    Extension(
+        name='_sao_cy_combat',
+        sources=[os.path.join(HERE, '_sao_cy_combat.pyx')],
     ),
 ]
 
