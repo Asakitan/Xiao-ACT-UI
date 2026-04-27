@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.2"
+APP_VERSION = "2.4.3"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,12 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.3:
+#   Fix overworld / city-edge combat targets that only report HP loss or use
+#   non-standard entity suffixes: DPS now counts player damage to non-player
+#   combat targets, while BossHP only displays once usable packet HP exists.
+#   Keep the packet hot path allocation-light and verify the existing Cython
+#   pixel accelerator build stays healthy.
 # v2.4.2:
 #   Follow upstream DPS-counter behavior for broad-map combat targets:
 #   player damage to any non-player target now counts for DPS, and non-player

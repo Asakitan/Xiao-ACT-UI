@@ -356,7 +356,13 @@ class DpsTracker:
 
         target_uuid = _safe_int(event.get('target_uuid'))
         attacker_uuid = _safe_int(event.get('attacker_uuid'))
+        target_is_player = bool(event.get('target_is_player', False))
         target_is_monster = event.get('target_is_monster', False)
+        target_is_combat_target = bool(
+            event.get('target_is_combat_target', False)
+            or target_is_monster
+            or ('target_is_player' in event and target_uuid and not target_is_player)
+        )
         attacker_is_self = event.get('attacker_is_self', False)
         is_heal = event.get('is_heal', False)
         is_immune = event.get('is_immune', False)
@@ -389,8 +395,8 @@ class DpsTracker:
                 entity.add_heal(skill_id, damage, skill_name, now)
                 self._total_heal += damage
                 tracked = True
-        elif target_is_monster:
-            # Player→Monster damage: credit the attacker
+        elif target_is_combat_target:
+            # Player -> non-player combat target damage: credit the attacker
             if attacker_uid:
                 if not self._encounter_start:
                     self._encounter_start = now

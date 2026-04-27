@@ -807,34 +807,57 @@ def _is_monster(uuid: int) -> bool:
     return low == 64 or low == 32832  # 0x0040 or 0x8040
 
 
+_MONSTER_HINT_ATTR_IDS = (
+    frozenset({
+        AttrType.ID,
+        AttrType.HP,
+        AttrType.MAX_HP,
+        AttrType.MONSTER_SEASON_LEVEL,
+        AttrType.MAX_EXTINCTION,
+        AttrType.EXTINCTION,
+        AttrType.MAX_STUNNED,
+        AttrType.STUNNED,
+        AttrType.IN_OVERDRIVE,
+        AttrType.IS_LOCK_STUNNED,
+        AttrType.STOP_BREAKING_TICKING,
+        AttrType.BREAKING_STAGE,
+        AttrType.SHIELD_LIST,
+    })
+    | AttrType._MONSTER_EXTENDED_IDS
+)
+
+
 def _attrs_look_monster_like(ac) -> bool:
     """Return True for non-player entities carrying monster/combat HP attrs."""
     if not ac or not getattr(ac, 'Attrs', None):
         return False
-    monster_hint_ids = (
-        frozenset({
-            AttrType.HP,
-            AttrType.MAX_HP,
-            AttrType.MONSTER_SEASON_LEVEL,
-            AttrType.MAX_EXTINCTION,
-            AttrType.EXTINCTION,
-            AttrType.MAX_STUNNED,
-            AttrType.STUNNED,
-            AttrType.IN_OVERDRIVE,
-            AttrType.IS_LOCK_STUNNED,
-            AttrType.STOP_BREAKING_TICKING,
-            AttrType.BREAKING_STAGE,
-            AttrType.SHIELD_LIST,
-        })
-        | AttrType._MONSTER_EXTENDED_IDS
-    )
     for attr in ac.Attrs:
         try:
-            if int(attr.Id or 0) in monster_hint_ids:
+            if int(attr.Id or 0) in _MONSTER_HINT_ATTR_IDS:
                 return True
         except Exception:
             continue
     return False
+
+
+def _combat_damage_amount(value, lucky_value, actual_value, hp_lessen, shield_lessen) -> int:
+    """Resolve display/stat damage using the same broad fallbacks as upstream counters."""
+    for raw in (value, lucky_value, actual_value):
+        try:
+            amount = int(raw or 0)
+        except Exception:
+            amount = 0
+        if amount > 0:
+            return amount
+    try:
+        hp = max(0, int(hp_lessen or 0))
+    except Exception:
+        hp = 0
+    try:
+        shield = max(0, int(shield_lessen or 0))
+    except Exception:
+        shield = 0
+    return hp + shield
 
 
 def _uuid_to_uid(uuid: int) -> int:
@@ -3635,29 +3658,34 @@ class PacketParser:
         if delta.HasField('PassiveSkillEndInfos'):
             logger.debug(f'[Parser] AoiDelta PassiveSkillEndInfos uuid={uuid}')
 
-        # SkillEffect (field 7) — damage extraction.  Match the upstream DPS
-        # counter behavior: player damage to any non-player target should count,
-        # because some overworld / city-edge combat targets do not use the usual
-        # monster UUID suffix.
+        # SkillEffect (field 7) — damage extraction. Match upstream counters:
+        # player damage to any non-player target should count, because some
+        # overworld / city-edge combat targets do not use the usual monster
+        # UUID suffix.
         if delta.HasField('SkillEffects'):
-            combat_target_is_monster = target_is_monster or not target_is_player
-            self._process_skill_effect(uuid, target_is_player, combat_target_is_monster, delta.SkillEffects)
+            target_is_combat_target = not target_is_player
+            self._process_skill_effect(
+                uuid, target_is_player, target_is_monster,
+                target_is_combat_target, delta.SkillEffects)
 
     @_probe.decorate('parser._process_skill_effect')
     def _process_skill_effect(self, target_uuid: int, target_is_player: bool,
-                              target_is_monster: bool, se):
+                              target_is_monster: bool,
+                              target_is_combat_target: bool, se):
         """Decode SkillEffect (AoiSyncDelta field 7) and emit damage events.
         se is a pb2 SkillEffect object.
         """
         for dmg in se.Damages:
             try:
                 self._decode_sync_damage_info(target_uuid, target_is_player,
-                                              target_is_monster, dmg)
+                                              target_is_monster,
+                                              target_is_combat_target, dmg)
             except Exception as e:
                 logger.debug(f'[Parser] damage decode error: {e}')
 
     def _decode_sync_damage_info(self, target_uuid: int, target_is_player: bool,
-                                 target_is_monster: bool, dmg):
+                                 target_is_monster: bool,
+                                 target_is_combat_target: bool, dmg):
         """Decode a single SyncDamageInfo pb2 object and fire on_damage callback."""
         damage_type = int(dmg.Type)
         if damage_type in (DamageType.MISS, DamageType.FALL):
@@ -3679,11 +3707,12 @@ class PacketParser:
 
         # Use TopSummonerId as the real attacker if set (summon owner)
         attacker_uuid = top_summoner if top_summoner else attacker_uuid_raw
-        damage_amount = value if value else lucky_value
+        damage_amount = _combat_damage_amount(
+            value, lucky_value, actual_value, hp_lessen, shield_lessen)
 
         # For Immune/Absorbed events, allow zero-damage through (they signal invincibility)
         if not (is_immune or is_absorbed):
-            if damage_amount <= 0 and hp_lessen <= 0:
+            if damage_amount <= 0:
                 return
 
         # Determine if this is self-outgoing damage (self attacks monster)
@@ -3703,6 +3732,7 @@ class PacketParser:
             'target_uuid': target_uuid,
             'target_is_player': target_is_player,
             'target_is_monster': target_is_monster,
+            'target_is_combat_target': target_is_combat_target,
             'attacker_uuid': attacker_uuid,
             'attacker_is_self': attacker_is_self,
             'skill_id': _varint_to_int32(skill_id) if skill_id else 0,
