@@ -213,7 +213,7 @@ class DpsTracker:
     """Thread-safe DPS/HPS tracker for all combat entities."""
 
     # Inactivity auto-reset (seconds)
-    INACTIVITY_TIMEOUT = 30.0
+    INACTIVITY_TIMEOUT = 120.0
     HIT_FX_WINDOW_S = 9.0
     BIG_HIT_THRESHOLD = 1_000_000
     MEGA_HIT_THRESHOLD = 5_000_000

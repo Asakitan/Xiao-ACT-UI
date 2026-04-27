@@ -1209,7 +1209,7 @@ class SAOPlayerGUI:
         self._bb_last_target_uuid = 0
         self._bb_last_damage_ts = 0.0
         self._bb_recent_targets = {}
-        self._bb_damage_timeout = 15.0
+        self._bb_damage_timeout = 60.0
         self._hide_seek_engine = None
         self._hide_seek_alert_timer = None
         self._hide_seek_alert_active = False
@@ -1774,8 +1774,31 @@ class SAOPlayerGUI:
             try: self._boss_raid_engine.on_boss_event(event)
             except Exception: pass
 
-    def _on_scene_change(self):
+    def _on_scene_change(self, scene_event=None):
         """Packet parser scene/retry callback: clear DPS/BossHP encounter state."""
+        _scene_kind = ''
+        _scene_reason = ''
+        _preserve_combat = False
+        if isinstance(scene_event, dict):
+            _scene_kind = str(scene_event.get('kind') or '')
+            _scene_reason = str(scene_event.get('reason') or '')
+            _preserve_combat = bool(scene_event.get('preserve_combat', False))
+        if _preserve_combat:
+            # Same-dungeon layer/map transitions are common during long fights.
+            # Keep the live encounter; only force the next overlay tick to refresh.
+            print(
+                f'[SAO Entity] ↔ 同副本软切换({ _scene_kind or "transition" }/{_scene_reason}) '
+                f'— 保留 BossHP 与 DPS',
+                flush=True,
+            )
+            self._last_boss_hp_push_sig = None
+            try:
+                if self._dps_tracker:
+                    self._dps_tracker.invalidate_snapshot_cache()
+            except Exception:
+                pass
+            return
+
         _scene_change_ts = time.time()
         print('[SAO Entity] ⚡ 场景/同副本重开 — 重置 BossHP 与 DPS 追踪', flush=True)
         self._bb_last_target_uuid = 0
@@ -2492,8 +2515,7 @@ class SAOPlayerGUI:
         if self._dps_tracker:
             try:
                 _dps_enabled = bool(self._get_setting('dps_enabled', True))
-                _dps_fade_timeout = float(self._get_setting('dps_fade_timeout_s', 15) or 15)
-                _dps_fade_timeout = max(5.0, _dps_fade_timeout)
+                _dps_fade_timeout = self._combat_damage_timeout_s()
 
                 # Single lock acquisition for all DPS queries
                 _detail_uid = 0
@@ -2557,10 +2579,11 @@ class SAOPlayerGUI:
                 _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
 
                 _now = time.time()
-                _has_recent_self_damage = (_now - self._bb_last_damage_ts) < self._bb_damage_timeout
+                _bb_timeout = self._combat_damage_timeout_s()
+                _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
 
                 for uuid in list(self._bb_recent_targets.keys()):
-                    if _now - self._bb_recent_targets.get(uuid, 0) > self._bb_damage_timeout * 3:
+                    if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout * 3:
                         self._bb_recent_targets.pop(uuid, None)
 
                 _bb_direct_data = None
@@ -2571,7 +2594,7 @@ class SAOPlayerGUI:
                     if _bridge and _has_recent_self_damage and self._bb_recent_targets:
                         _recent_monsters = []
                         for uuid, dmg_ts in list(self._bb_recent_targets.items()):
-                            if _now - dmg_ts < self._bb_damage_timeout * 1.5:
+                            if _now - dmg_ts < _bb_timeout * 1.5:
                                 m = _bridge.get_monster(uuid)
                                 if m and not getattr(m, 'is_dead', False) and (getattr(m, 'max_hp', 0) > 0 or getattr(m, 'hp', 0) > 0):
                                     _recent_monsters.append(m)
@@ -5752,6 +5775,18 @@ class SAOPlayerGUI:
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
             return self._cfg_settings_ref.get(key, default)
         return default
+
+    def _combat_damage_timeout_s(self) -> float:
+        # Keep combat panels alive through boss mechanics, target swaps and
+        # same-dungeon layer transitions. User settings above the floor still win.
+        try:
+            raw = self._get_setting('dps_fade_timeout_s', 60)
+            v = float(raw if raw is not None else 60)
+        except Exception:
+            v = 60.0
+        if v <= 0:
+            return 86400.0
+        return float(max(60.0, v))
 
     @staticmethod
     def _empty_dps_snapshot():

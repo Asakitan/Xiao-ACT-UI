@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.4"
+APP_VERSION = "2.4.5"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,11 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.5:
+#   Preserve live DPS/BossHP during same-dungeon map/layer transitions and
+#   long boss mechanic gaps. Parser now distinguishes hard scene resets from
+#   soft in-instance transitions, while combat panels keep a longer idle
+#   window before fading/resetting.
 # v2.4.4:
 #   Add optional Cython combat helpers for UUID classification, damage fallback,
 #   self-attacker detection, and DPS target gating. Packet capture/protobuf

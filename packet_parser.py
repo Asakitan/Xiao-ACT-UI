@@ -1371,6 +1371,7 @@ class PacketParser:
         self._last_scene_key: Optional[tuple] = None  # MapId + channel/plane/layer, for instanced sub-maps
         self._sync_container_count: int = 0  # Count SyncContainerData receives
         self._last_soft_scene_restart_ts: float = 0.0
+        self._last_soft_scene_transition_ts: float = 0.0
         self.stats = {
             'raw_frames': 0,
             'game_frames': 0,
@@ -1464,11 +1465,30 @@ class PacketParser:
             flush=True,
         )
         # 通知上层 (bridge/webview) 场景已切换
-        if self._on_scene_change:
+        self._emit_scene_change('hard', 'reset_scene', preserve_combat=False)
+
+    def _emit_scene_change(self, kind: str, reason: str = '',
+                           preserve_combat: bool = False, **extra):
+        """Notify UI layers about scene transitions with backward compatibility."""
+        if not self._on_scene_change:
+            return
+        event = {
+            'kind': str(kind or 'hard'),
+            'reason': str(reason or ''),
+            'preserve_combat': bool(preserve_combat),
+            'timestamp': time.time(),
+        }
+        if extra:
+            event.update(extra)
+        try:
+            self._on_scene_change(event)
+        except TypeError:
             try:
                 self._on_scene_change()
             except Exception as e:
                 logger.error(f'[Parser] on_scene_change callback error: {e}')
+        except Exception as e:
+            logger.error(f'[Parser] on_scene_change callback error: {e}')
 
     def _notify_soft_scene_restart(self, reason: str):
         """Notify UI layers about a new encounter without clearing monster cache.
@@ -1488,11 +1508,33 @@ class PacketParser:
             f'[Parser] ♻ 同场景重开: {reason}, 重置 DPS/BossHP 状态',
             flush=True,
         )
-        if self._on_scene_change:
-            try:
-                self._on_scene_change()
-            except Exception as e:
-                logger.error(f'[Parser] on_scene_change callback error: {e}')
+        self._emit_scene_change('restart', reason, preserve_combat=False)
+
+    def _notify_soft_scene_transition(self, reason: str, old_scene_key=None,
+                                      new_scene_key=None):
+        """Handle same-instance map/layer changes without wiping live combat."""
+        now = time.time()
+        if now - self._last_soft_scene_transition_ts < 1.0:
+            logger.info(f'[Parser] Soft scene transition suppressed: {reason}')
+            return
+        self._last_soft_scene_transition_ts = now
+        old_uuid = self._current_uuid
+        self._current_uuid = 0
+        logger.info(
+            f'[Parser] Soft scene transition: {reason}, '
+            f'cleared current_uuid={old_uuid}, preserve combat'
+        )
+        print(
+            f'[Parser] ↔ 同副本小地图/分层切换: {reason}, 保留 DPS/BossHP 遭遇战',
+            flush=True,
+        )
+        self._emit_scene_change(
+            'transition',
+            reason,
+            preserve_combat=True,
+            old_scene_key=old_scene_key,
+            new_scene_key=new_scene_key,
+        )
 
     def get_monsters(self) -> Dict[int, MonsterData]:
         """Return the current monster tracking dict (uuid → MonsterData)."""
@@ -2773,14 +2815,15 @@ class PacketParser:
                         flush=True,
                     )
                     # 同服地图/副本分层切换: 不 reset_scene (SyncNearEntities 已填充新怪物),
-                    # 但需通知上层 UI 更新 (清理 Boss HP / DPS 等旧场景数据)。
+                    # 也不要硬清 UI DPS/BossHP。长副本里 layer/plane 变化可能发生在
+                    # Boss 机制/转阶段期间，硬 reset 会把输出和 BossHP 误收掉。
                     # 有些副本小地图 MapId 不变, 只变 channel/plane/layer;
                     # 仅看 MapId 会漏掉第二次进图的软重置。
-                    if self._on_scene_change:
-                        try:
-                            self._on_scene_change()
-                        except Exception as e:
-                            logger.error(f'[Parser] on_scene_change callback error: {e}')
+                    self._notify_soft_scene_transition(
+                        'scene_key_changed',
+                        old_scene_key=self._last_scene_key,
+                        new_scene_key=scene_key,
+                    )
                 self._last_scene_id = new_scene_id
                 self._last_scene_key = scene_key
             player.extended_data['SCENE_DATA'] = scene
