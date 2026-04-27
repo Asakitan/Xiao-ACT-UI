@@ -1210,6 +1210,8 @@ class SAOPlayerGUI:
         self._bb_last_damage_ts = 0.0
         self._bb_recent_targets = {}
         self._bb_damage_timeout = 60.0
+        self._pending_combat_reset_after = 0.0
+        self._pending_combat_reset_reason = ''
         self._hide_seek_engine = None
         self._hide_seek_alert_timer = None
         self._hide_seek_alert_active = False
@@ -1694,11 +1696,93 @@ class SAOPlayerGUI:
         except Exception as e:
             print(f"[Linkage] send_key error: {e}")
 
+    def _arm_pending_combat_reset(self, scene_event=None):
+        """Defer same-instance encounter reset until the next real damage."""
+        reason = 'restart'
+        delay_s = 3.0
+        if isinstance(scene_event, dict):
+            reason = str(scene_event.get('reason') or scene_event.get('kind') or reason)
+            try:
+                delay_s = float(scene_event.get('reset_delay_s', delay_s) or delay_s)
+            except Exception:
+                delay_s = 3.0
+        self._pending_combat_reset_after = time.time() + max(0.0, delay_s)
+        self._pending_combat_reset_reason = reason
+        self._last_boss_hp_push_sig = None
+        try:
+            if self._dps_tracker:
+                self._dps_tracker.invalidate_snapshot_cache()
+        except Exception:
+            pass
+        print(
+            f'[SAO Entity] ♻ 同副本重开候选({reason}) — 等下一次伤害再重置 DPS/BossHP',
+            flush=True,
+        )
+
+    def _maybe_apply_pending_combat_reset(self, event, is_self_combat_target: bool) -> bool:
+        """Apply deferred encounter reset immediately before the first new hit."""
+        try:
+            reset_after = float(getattr(self, '_pending_combat_reset_after', 0.0) or 0.0)
+        except Exception:
+            reset_after = 0.0
+        if reset_after <= 0.0 or time.time() < reset_after or not is_self_combat_target:
+            return False
+        try:
+            damage = int(event.get('damage') or 0)
+        except Exception:
+            damage = 0
+        if damage <= 0 or bool(event.get('is_heal', False)):
+            return False
+
+        reason = str(getattr(self, '_pending_combat_reset_reason', '') or 'restart')
+        self._pending_combat_reset_after = 0.0
+        self._pending_combat_reset_reason = ''
+        print(
+            f'[SAO Entity] ♻ 下一次伤害到达，执行延迟重置: {reason}',
+            flush=True,
+        )
+
+        self._bb_last_target_uuid = 0
+        self._bb_last_damage_ts = 0.0
+        self._bb_recent_targets = {}
+        self._last_boss_hp_push_sig = None
+        try:
+            if self._state_mgr:
+                self._state_mgr.update(
+                    boss_breaking_stage=-1,
+                    boss_extinction_pct=0.0,
+                    boss_current_hp=0,
+                    boss_total_hp=0,
+                    boss_hp_source='none',
+                    boss_hp_est_pct=1.0,
+                    boss_shield_active=False,
+                    boss_shield_pct=0.0,
+                    boss_in_overdrive=False,
+                    boss_invincible=False,
+                )
+        except Exception:
+            pass
+        if self._dps_tracker:
+            try:
+                if self._dps_tracker.has_active_encounter():
+                    self._dps_tracker.reset()
+                else:
+                    self._dps_tracker.invalidate_snapshot_cache()
+            except Exception:
+                pass
+        self._dps_visible = False
+        self._dps_faded = False
+        self._dps_mode = 'hidden'
+        if self._boss_raid_engine:
+            try:
+                if getattr(self._boss_raid_engine, '_state', '') != 'running':
+                    self._boss_raid_engine.reset()
+            except Exception:
+                pass
+        return True
+
     def _on_packet_damage(self, event):
         """Damage event callback from packet_parser → boss raid engine + DPS tracker."""
-        if self._boss_raid_engine:
-            try: self._boss_raid_engine.on_damage_event(event)
-            except Exception: pass
         # Track self -> non-player combat target damage for boss bar target.
         # BossHP only displays later if packet_parser has usable HP data.
         _is_self_combat_target = bool(
@@ -1710,6 +1794,10 @@ class SAOPlayerGUI:
                 or ('target_is_player' in event and not event.get('target_is_player', False))
             )
         )
+        self._maybe_apply_pending_combat_reset(event, _is_self_combat_target)
+        if self._boss_raid_engine:
+            try: self._boss_raid_engine.on_damage_event(event)
+            except Exception: pass
         if _is_self_combat_target:
             target_uuid = event.get('target_uuid', 0)
             if target_uuid:
@@ -1779,10 +1867,15 @@ class SAOPlayerGUI:
         _scene_kind = ''
         _scene_reason = ''
         _preserve_combat = False
+        _reset_on_next_damage = False
         if isinstance(scene_event, dict):
             _scene_kind = str(scene_event.get('kind') or '')
             _scene_reason = str(scene_event.get('reason') or '')
             _preserve_combat = bool(scene_event.get('preserve_combat', False))
+            _reset_on_next_damage = bool(scene_event.get('reset_on_next_damage', False))
+        if _reset_on_next_damage:
+            self._arm_pending_combat_reset(scene_event)
+            return
         if _preserve_combat:
             # Same-dungeon layer/map transitions are common during long fights.
             # Keep the live encounter; only force the next overlay tick to refresh.
@@ -1800,6 +1893,8 @@ class SAOPlayerGUI:
             return
 
         _scene_change_ts = time.time()
+        self._pending_combat_reset_after = 0.0
+        self._pending_combat_reset_reason = ''
         print('[SAO Entity] ⚡ 场景/同副本重开 — 重置 BossHP 与 DPS 追踪', flush=True)
         self._bb_last_target_uuid = 0
         self._bb_last_damage_ts = 0.0
