@@ -12,6 +12,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from perf_probe import probe as _probe
 
+try:
+    import _sao_cy_combat as _CY_COMBAT
+except Exception:  # noqa: BLE001
+    _CY_COMBAT = None
+
 
 # ═══════════════════════════════════════════════
 #  Player cache path
@@ -358,12 +363,21 @@ class DpsTracker:
         attacker_uuid = _safe_int(event.get('attacker_uuid'))
         target_is_player = bool(event.get('target_is_player', False))
         target_is_monster = event.get('target_is_monster', False)
-        target_is_combat_target = bool(
-            event.get('target_is_combat_target', False)
-            or target_is_monster
-            or ('target_is_player' in event and target_uuid and not target_is_player)
-        )
         attacker_is_self = event.get('attacker_is_self', False)
+        if _CY_COMBAT is not None:
+            target_is_combat_target = bool(_CY_COMBAT.dps_target_is_combat(
+                target_uuid,
+                'target_is_player' in event,
+                target_is_player,
+                bool(target_is_monster),
+                bool(event.get('target_is_combat_target', False)),
+            ))
+        else:
+            target_is_combat_target = bool(
+                event.get('target_is_combat_target', False)
+                or target_is_monster
+                or ('target_is_player' in event and target_uuid and not target_is_player)
+            )
         is_heal = event.get('is_heal', False)
         is_immune = event.get('is_immune', False)
         is_absorbed = event.get('is_absorbed', False)
@@ -372,8 +386,12 @@ class DpsTracker:
         is_crit = event.get('is_crit', False)
 
         # Derive attacker_uid from attacker_uuid (uuid >> 16 for player entities)
-        attacker_uid = 0
-        if attacker_uuid:
+        if _CY_COMBAT is not None:
+            attacker_uid = int(_CY_COMBAT.dps_attacker_uid(
+                attacker_uuid, bool(attacker_is_self), self._self_uid))
+        else:
+            attacker_uid = 0
+        if _CY_COMBAT is None and attacker_uuid:
             if (attacker_uuid & 0xFFFF) == 640:
                 attacker_uid = attacker_uuid >> 16
             elif attacker_is_self and self._self_uid:
