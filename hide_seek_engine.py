@@ -322,8 +322,9 @@ class HideSeekEngine:
 
         # Capture full client area
         screenshot = self._capture(hwnd, client_rect)
+        screenshot = self._coerce_bgr_array(screenshot)
         if screenshot is None:
-            self._fire_status('Screenshot failed', self._current_step)
+            self._fire_status('Screenshot failed or invalid', self._current_step)
             return
 
         cur = self._current_step
@@ -396,6 +397,13 @@ class HideSeekEngine:
 
         # Extract ROI from screenshot
         roi_img = screenshot[roi_y:roi_y2, roi_x:roi_x2]
+        roi_img = self._coerce_bgr_array(roi_img)
+        if roi_img is None:
+            self._log(
+                f'invalid roi step={step_idx} screenshot_type={type(screenshot)!r} '
+                f'roi=({roi_x},{roi_y},{roi_x2},{roi_y2})'
+            )
+            return None
         if roi_img.size == 0:
             return None
 
@@ -597,23 +605,34 @@ class HideSeekEngine:
     @staticmethod
     def _coerce_bgr_array(img) -> Optional[np.ndarray]:
         """Best-effort normalize capture output to a contiguous BGR ndarray."""
+        def _from_array(arr) -> Optional[np.ndarray]:
+            try:
+                arr = np.asarray(arr)
+            except Exception:
+                return None
+            if arr.size == 0:
+                return None
+            if not np.issubdtype(arr.dtype, np.number):
+                return None
+            if arr.dtype != np.uint8:
+                arr = np.clip(arr, 0, 255).astype(np.uint8, copy=False)
+            if arr.ndim == 2:
+                return cv2.cvtColor(np.ascontiguousarray(arr), cv2.COLOR_GRAY2BGR)
+            if arr.ndim == 3 and arr.shape[2] >= 3:
+                return np.ascontiguousarray(arr[:, :, :3])
+            return None
+
         if img is None:
             return None
         if isinstance(img, np.ndarray):
-            if img.size == 0:
-                return None
-            if img.ndim == 2:
-                return cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_GRAY2BGR)
-            if img.ndim == 3 and img.shape[2] >= 3:
-                return np.ascontiguousarray(img[:, :, :3])
-            return None
+            return _from_array(img)
         try:
             if hasattr(img, 'convert'):
                 rgb = np.array(img.convert('RGB'))
                 return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         except Exception:
             return None
-        return None
+        return _from_array(img)
 
     @staticmethod
     def _build_color_mask(

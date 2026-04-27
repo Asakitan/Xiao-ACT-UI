@@ -1021,6 +1021,8 @@ class PlayerData:
                  'buff_list',
                  # ── Scene / dungeon ──
                  'scene_id', 'dungeon_id',
+                 # ── Self identity guard ──
+                 'self_uid_confirmed', 'self_uid_source',
                  # ── Extended CharSerialize data (decoded generic) ──
                  'extended_data')
 
@@ -1101,6 +1103,8 @@ class PlayerData:
         # Scene / dungeon context
         self.scene_id: int = 0           # from CharSerialize.SceneData or SyncDungeonData
         self.dungeon_id: int = 0         # current dungeon ID
+        self.self_uid_confirmed: bool = False
+        self.self_uid_source: str = ''
         # Extended CharSerialize data — decoded but not actively used by overlay
         # Keys are CharField names, values are decoded field dicts
         self.extended_data: Dict[str, Any] = {}
@@ -1349,6 +1353,8 @@ class PacketParser:
         self._on_scene_change = on_scene_change      # callback() — 场景服务器切换时清理
         self._current_uuid: int = 0   # Current player UUID
         self._current_uid: int = max(0, int(preferred_uid))    # Current player UID (uuid >> 16)
+        self._current_uid_confirmed: bool = False
+        self._current_uid_source: str = 'cache' if self._current_uid > 0 else ''
         self._players: Dict[int, PlayerData] = {}  # uid -> PlayerData
         self._monsters: Dict[int, MonsterData] = {}  # uuid -> MonsterData
         # Team member cache: uid -> {uid, name, profession, profession_id,
@@ -1384,7 +1390,9 @@ class PacketParser:
             'scene_changes': 0,
         }
         if self._current_uid > 0:
-            logger.info(f'[Parser] bootstrap self UID from cache: {self._current_uid}')
+            logger.info(
+                f'[Parser] bootstrap tentative self UID from cache: {self._current_uid}'
+            )
         try:
             debug_path = os.path.join(os.path.dirname(__file__), 'packet_debug.jsonl')
             if os.path.exists(debug_path):
@@ -1396,6 +1404,37 @@ class PacketParser:
         if uid not in self._players:
             self._players[uid] = PlayerData(uid)
         return self._players[uid]
+
+    def _confirm_self_uid(self, uid: int, source: str, uuid: int = 0) -> bool:
+        """Mark current UID as server-confirmed, not just cache-guessed."""
+        uid = int(uid or 0)
+        if uid <= 0:
+            return False
+        previous_uid = self._current_uid
+        was_confirmed = self._current_uid_confirmed
+        if previous_uid and previous_uid != uid:
+            logger.info(
+                f'[Parser] confirmed self UID changed: {previous_uid} -> {uid} '
+                f'(source={source})'
+            )
+            if not uuid:
+                self._current_uuid = 0
+        self._current_uid = uid
+        if uuid:
+            self._current_uuid = int(uuid)
+        self._current_uid_confirmed = True
+        self._current_uid_source = str(source or 'confirmed')
+        player = self._get_player(uid)
+        player.self_uid_confirmed = True
+        player.self_uid_source = self._current_uid_source
+        return previous_uid != uid or not was_confirmed
+
+    def _is_confirmed_self_uid(self, uid: int) -> bool:
+        return bool(
+            self._current_uid_confirmed
+            and int(uid or 0) > 0
+            and int(uid or 0) == self._current_uid
+        )
 
     def _get_monster(self, uuid: int) -> MonsterData:
         if uuid not in self._monsters:
@@ -1587,6 +1626,8 @@ class PacketParser:
         """Notify callback for current player if available."""
         if self._current_uid and self._current_uid in self._players:
             p = self._players[self._current_uid]
+            p.self_uid_confirmed = bool(self._current_uid_confirmed)
+            p.self_uid_source = str(self._current_uid_source or '')
             self._apply_cached_profession_slots(p)
             p.server_time_offset_ms = self._server_time_offset_ms
             logger.debug(f'[Parser] notify_self: name={p.name!r} lv={p.level} rank_lv={p.rank_level} '
@@ -2243,14 +2284,9 @@ class PacketParser:
                     f'({self._sync_container_count} → 0)'
                 )
                 self._sync_container_count = 0
-            if uid > 0 and self._current_uid == 0:
-                self._current_uid = uid
-                logger.info(f'[Parser] auto-adopt UID from EnterGame: {uid}')
-            elif uid > 0 and uid != self._current_uid:
-                logger.info(
-                    f'[Parser] EnterGame UID 变更: {self._current_uid} → {uid} (切换角色?)'
-                )
-                self._current_uid = uid
+            if uid > 0:
+                self._confirm_self_uid(uid, 'enter_game')
+                logger.info(f'[Parser] confirmed self UID from EnterGame: {uid}')
         except Exception as e:
             logger.debug(f'[Parser] EnterGame decode error: {e}')
 
@@ -2275,7 +2311,7 @@ class PacketParser:
                 if uid in self._players:
                     player = self._players[uid]
                     player.hp = player.max_hp  # Assume full HP on revive
-                    if uid == self._current_uid:
+                    if self._is_confirmed_self_uid(uid):
                         self._notify_self()
         except Exception as e:
             logger.debug(f'[Parser] NotifyReviveUser decode error: {e}')
@@ -2346,11 +2382,12 @@ class PacketParser:
         # First one = login. Subsequent ones = scene/dungeon transition re-sync.
         self._sync_container_count += 1
 
-        # SyncContainerData 是登录时的完整同步, 如果当前 UID 未知则自动采纳
-        if self._current_uid == 0:
-            self._current_uid = uid
-            logger.info(f'[Parser] auto-adopt self UID from SyncContainerData: {uid}')
-        elif self._sync_container_count > 1 and uid == self._current_uid:
+        # SyncContainerData is self-scoped full sync; it confirms UID even when
+        # a cached tentative UID was wrong.
+        self._confirm_self_uid(uid, 'sync_container')
+        if self._current_uid == uid:
+            logger.info(f'[Parser] confirmed self UID from SyncContainerData: {uid}')
+        if self._sync_container_count > 1 and uid == self._current_uid:
             # NOTE: Do NOT call reset_scene() here!
             # SyncContainerData arrives AFTER SyncNearEntities has already populated
             # new monsters with full AttrCollection (including MAX_HP).
@@ -2911,7 +2948,7 @@ class PacketParser:
             })
 
         if changed:
-            if uid == self._current_uid:
+            if self._is_confirmed_self_uid(uid):
                 self._notify_self()
             print(
                 f'[Parser] SyncContainerData 完成: uid={uid} Lv.{player.level} '
@@ -2927,8 +2964,8 @@ class PacketParser:
 
     def _on_sync_container_dirty(self, data: bytes):
         """Handle the custom dirty-data stream wrapper."""
-        if self._current_uid == 0:
-            logger.debug('[Parser] _on_sync_container_dirty: skipped (no current_uid)')
+        if not self._current_uid_confirmed:
+            logger.debug('[Parser] _on_sync_container_dirty: skipped (self UID not confirmed)')
             return
 
         outer = _decode_fields(data)
@@ -3473,18 +3510,18 @@ class PacketParser:
                     if uid != self._current_uid:
                         print(f'[Parser] 其他玩家出现: uid={uid} NO attrs', flush=True)
                 if has_temp_attrs:
-                    if uid == self._current_uid or self._current_uid == 0:
+                    if self._is_confirmed_self_uid(uid):
                         self._process_temp_attr_collection(uid, entity.TempAttrs)
                 # Decode initial buff state from entity appear
                 if has_buffs:
-                    if uid == self._current_uid or self._current_uid == 0:
+                    if self._is_confirmed_self_uid(uid):
                         player = self._get_player(uid)
                         buffs = _decode_buff_info_sync_pb(entity.BuffInfos)
                         if buffs:
                             player.buff_list = buffs
                             logger.info(f'[Parser] Entity appear: {len(buffs)} buffs on player uid={uid}')
                 # Log player state after entity appear for debugging
-                if uid == self._current_uid or self._current_uid == 0:
+                if self._is_confirmed_self_uid(uid):
                     player = self._get_player(uid)
                     logger.info(
                         f'[Parser] Entity appear SELF: uid={uid} lv={player.level} '
@@ -3557,8 +3594,7 @@ class PacketParser:
                 new_uid = _uuid_to_uid(uuid)
                 player = self._get_player(new_uid)
                 if self._current_uuid != uuid:
-                    self._current_uuid = uuid
-                    self._current_uid = new_uid
+                    self._confirm_self_uid(new_uid, 'sync_to_me_uuid', uuid)
                     logger.info(f'[Parser] confirmed self UUID={uuid}, UID={new_uid}')
                     if new_uid in self._players:
                         self._notify_self()
@@ -3569,8 +3605,7 @@ class PacketParser:
                 fallback_uid = _uuid_to_uid(base_uuid)
                 player = self._get_player(fallback_uid)
                 if self._current_uuid != base_uuid:
-                    self._current_uuid = base_uuid
-                    self._current_uid = fallback_uid
+                    self._confirm_self_uid(fallback_uid, 'sync_to_me_base_uuid', base_uuid)
                     logger.info(f'[Parser] confirmed self UUID={base_uuid} (from BaseDelta), UID={fallback_uid}')
                     if fallback_uid in self._players:
                         self._notify_self()
@@ -3653,7 +3688,7 @@ class PacketParser:
         # AoiSyncDelta handling — BaseDelta (field 1)
         if di.HasField('BaseDelta'):
             self._process_aoi_sync_delta(di.BaseDelta)
-        if skill_cd_changed and player is not None and player.uid == self._current_uid:
+        if skill_cd_changed and player is not None and self._is_confirmed_self_uid(player.uid):
             self._notify_self()
 
 
@@ -3697,7 +3732,7 @@ class PacketParser:
 
         # TempAttrs (field 3) — buff-based temporary attributes (CD modifiers etc.)
         if delta.HasField('TempAttrs') and target_is_player:
-            if uid == self._current_uid or self._current_uid == 0:
+            if self._is_confirmed_self_uid(uid):
                 self._process_temp_attr_collection(uid, delta.TempAttrs)
 
         # BuffEffectSync (field 11) — boss buff events
@@ -4489,7 +4524,7 @@ class PacketParser:
                         'cd_accel': cd_accel,
                     }
                 )
-                if uid == self._current_uid:
+                if self._is_confirmed_self_uid(uid):
                     self._notify_self()
         except Exception as e:
             logger.debug(f'[Parser] TempAttrCollection decode error: {e}')
@@ -4516,7 +4551,7 @@ class PacketParser:
                 continue
             int_value = _decode_int32_from_raw(raw_data)
 
-            if uid == self._current_uid or self._current_uid == 0:
+            if self._is_confirmed_self_uid(uid):
                 _append_packet_debug(
                     'attr_collection',
                     {
@@ -4751,7 +4786,7 @@ class PacketParser:
         if _refresh_stamina_resource(player):
             changed = True
 
-        if changed and uid == self._current_uid:
+        if changed and self._is_confirmed_self_uid(uid):
             self._notify_self()
 
 
