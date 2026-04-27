@@ -1301,6 +1301,7 @@ class PacketParser:
         self._server_time_offset_ms: Optional[float] = None
         self._last_dungeon_id: int = 0   # Track dungeon transitions
         self._last_scene_id: int = 0     # Track scene/map transitions
+        self._last_scene_key: Optional[tuple] = None  # MapId + channel/plane/layer, for instanced sub-maps
         self._sync_container_count: int = 0  # Count SyncContainerData receives
         self._last_soft_scene_restart_ts: float = 0.0
         self.stats = {
@@ -1375,6 +1376,7 @@ class PacketParser:
         self._sync_container_count = 0
         # 重置场景 ID: 新服务器/地图的场景 ID 需要重新识别
         self._last_scene_id = 0
+        self._last_scene_key = None
         # v2.1.18: entity UUID 在新场景里会变 (scene-server-scoped),
         # 旧 UUID 必须清空, 否则 _decode_sync_damage_info 中
         # `attacker_uuid == self._current_uuid` 永远 False, fallback 路径里的
@@ -2683,6 +2685,8 @@ class PacketParser:
         if char.HasField('SceneData'):
             sd = char.SceneData
             new_scene_id = sd.MapId
+            scene_key = (int(sd.MapId or 0), int(sd.ChannelId or 0),
+                         int(sd.PlaneId or 0), int(sd.SceneLayer or 0))
             scene = {
                 'map_id': sd.MapId,
                 'channel_id': sd.ChannelId,
@@ -2692,22 +2696,26 @@ class PacketParser:
             if new_scene_id > 0:
                 player.scene_id = new_scene_id
                 changed = True
-                if self._last_scene_id != 0 and new_scene_id != self._last_scene_id:
+                if (self._last_scene_key is not None
+                        and scene_key != self._last_scene_key):
                     logger.info(
-                        f'[Parser] 场景ID变更: {self._last_scene_id} → {new_scene_id} uid={uid}'
+                        f'[Parser] 场景变更: {self._last_scene_key} → {scene_key} uid={uid}'
                     )
                     print(
-                        f'[Parser] ⚡ 地图切换: 场景 {self._last_scene_id} → {new_scene_id}',
+                        f'[Parser] ⚡ 地图/副本小地图切换: {self._last_scene_key} → {scene_key}',
                         flush=True,
                     )
-                    # 同服地图切换: 不 reset_scene (SyncNearEntities 已填充新怪物),
-                    # 但需通知上层 UI 更新 (清理 Boss HP / DPS 等旧场景数据)
+                    # 同服地图/副本分层切换: 不 reset_scene (SyncNearEntities 已填充新怪物),
+                    # 但需通知上层 UI 更新 (清理 Boss HP / DPS 等旧场景数据)。
+                    # 有些副本小地图 MapId 不变, 只变 channel/plane/layer;
+                    # 仅看 MapId 会漏掉第二次进图的软重置。
                     if self._on_scene_change:
                         try:
                             self._on_scene_change()
                         except Exception as e:
                             logger.error(f'[Parser] on_scene_change callback error: {e}')
                 self._last_scene_id = new_scene_id
+                self._last_scene_key = scene_key
             player.extended_data['SCENE_DATA'] = scene
             logger.info(f'[Parser] CharSerialize SceneData(pb2): {scene} uid={uid}')
 

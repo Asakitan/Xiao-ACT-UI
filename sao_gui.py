@@ -1611,7 +1611,8 @@ class SAOPlayerGUI:
             packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref,
                                          on_damage=self._on_packet_damage,
                                          on_monster_update=self._on_monster_update,
-                                         on_boss_event=self._on_boss_event)
+                                         on_boss_event=self._on_boss_event,
+                                         on_scene_change=self._on_scene_change)
             packet_engine.start()
             engines.append(packet_engine)
             self._packet_engine = packet_engine
@@ -1732,16 +1733,106 @@ class SAOPlayerGUI:
             except Exception: pass
 
     def _on_monster_update(self, monster_data):
-        """Monster update from packet_parser → boss raid engine."""
+        """Monster update from packet_parser → boss raid engine + BossHP pretrack."""
         if self._boss_raid_engine:
             try: self._boss_raid_engine.on_monster_update(monster_data)
             except Exception: pass
+        try:
+            _uuid = int(monster_data.get('uuid', 0) or 0)
+            _max_hp = int(monster_data.get('max_hp', 0) or 0)
+            _hp = int(monster_data.get('hp', 0) or 0)
+            _is_dead = bool(monster_data.get('is_dead', False))
+            if _uuid and (_max_hp > 0 or _hp > 0) and not _is_dead:
+                _should_adopt = not bool(self._bb_last_target_uuid)
+                if not _should_adopt:
+                    try:
+                        _bridge = getattr(self, '_packet_engine', None)
+                        _cur = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
+                        if (_cur is None or getattr(_cur, 'is_dead', False)
+                                or (getattr(_cur, 'max_hp', 0) == 0 and getattr(_cur, 'hp', 0) == 0)):
+                            _should_adopt = True
+                    except Exception:
+                        pass
+                if _should_adopt:
+                    self._bb_last_target_uuid = _uuid
+        except Exception:
+            pass
 
     def _on_boss_event(self, event):
         """Boss buff/event callback from packet_parser → boss raid engine."""
         if self._boss_raid_engine:
             try: self._boss_raid_engine.on_boss_event(event)
             except Exception: pass
+
+    def _on_scene_change(self):
+        """Packet parser scene/retry callback: clear DPS/BossHP encounter state."""
+        _scene_change_ts = time.time()
+        print('[SAO Entity] ⚡ 场景/同副本重开 — 重置 BossHP 与 DPS 追踪', flush=True)
+        self._bb_last_target_uuid = 0
+        self._bb_last_damage_ts = 0.0
+        self._bb_recent_targets = {}
+        self._last_boss_hp_push_sig = None
+
+        try:
+            if self._state_mgr:
+                self._state_mgr.update(
+                    boss_breaking_stage=-1,
+                    boss_extinction_pct=0.0,
+                    boss_current_hp=0,
+                    boss_total_hp=0,
+                    boss_hp_source='none',
+                    boss_hp_est_pct=1.0,
+                    boss_shield_active=False,
+                    boss_shield_pct=0.0,
+                    boss_in_overdrive=False,
+                    boss_invincible=False,
+                )
+        except Exception:
+            pass
+
+        if self._dps_tracker:
+            try:
+                self._dps_tracker.reset()
+                print('[SAO Entity] DPS tracker reset on scene change', flush=True)
+            except Exception:
+                pass
+        self._dps_visible = False
+        self._dps_faded = False
+        self._dps_mode = 'hidden'
+
+        if self._boss_raid_engine:
+            try:
+                if getattr(self._boss_raid_engine, '_state', '') != 'running':
+                    self._boss_raid_engine.reset()
+            except Exception:
+                pass
+
+        def _hide_overlays():
+            _has_new_self_damage = bool(self._bb_last_damage_ts > _scene_change_ts)
+            _has_new_dps = False
+            try:
+                _has_new_dps = bool(self._dps_tracker and self._dps_tracker.has_recent_damage(1.0))
+            except Exception:
+                _has_new_dps = False
+            try:
+                if self._boss_hp_overlay and not _has_new_self_damage:
+                    self._boss_hp_overlay.update({'active': False})
+            except Exception:
+                pass
+            try:
+                if self._dps_overlay and not _has_new_dps:
+                    self._dps_overlay.hide()
+            except Exception:
+                pass
+            try:
+                self._sync_dps_report_availability()
+            except Exception:
+                pass
+
+        try:
+            self.root.after(0, _hide_overlays)
+        except Exception:
+            pass
 
     def _start_recognition(self):
         """启动游戏数据引擎 (抓包 + 纯识图 + AutoKey + BossRaid)."""
