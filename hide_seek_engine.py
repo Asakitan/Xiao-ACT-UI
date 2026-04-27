@@ -21,6 +21,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
@@ -93,6 +94,12 @@ _LIGHT_GRAY = ((200, 200, 200), 55)  # widened tolerance 35→55
 _DEBUG_SAVE = not getattr(sys, 'frozen', False)
 _DEBUG_DIR = os.path.join(os.path.dirname(__file__), 'temp', 'debug_hs')
 _DEBUG_INTERVAL_S = 1.0  # minimum seconds between saves per step
+
+try:
+    from config import TEMP_DIR as _APP_TEMP_DIR
+except Exception:
+    _APP_TEMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp')
+_LOG_PATH = os.path.join(_APP_TEMP_DIR, 'hide_seek_engine.log')
 
 STEPS: List[Dict] = [
     {  # Step 0: accept invitation
@@ -194,6 +201,10 @@ class HideSeekEngine:
         self._debug_last_save: Dict[int, float] = {}
         if _DEBUG_SAVE:
             os.makedirs(_DEBUG_DIR, exist_ok=True)
+        self._log(
+            f'init frozen={getattr(sys, "frozen", False)} '
+            f'assets_dir={self._assets_dir} exists={os.path.isdir(self._assets_dir)}'
+        )
 
     # ── Public API ──
 
@@ -242,9 +253,11 @@ class HideSeekEngine:
                 tpl = cv2.imread(path, cv2.IMREAD_COLOR)
                 if tpl is not None:
                     self._templates[img_name] = tpl
+                    self._log(f'template loaded {img_name} shape={tpl.shape}')
                     continue
             self._templates[img_name] = None
             print(f'[HideSeek] WARNING: template not found: {path}')
+            self._log(f'template missing {img_name} path={path}')
 
     def resume(self):
         """Re-launch the worker thread WITHOUT resetting the current step.
@@ -283,14 +296,15 @@ class HideSeekEngine:
                     self._tick()
                 except Exception as e:
                     self._fire_status(f'Error: {e}', self._current_step)
-                    import traceback
+                    self._log(f'tick error: {e}\n{traceback.format_exc()}')
                     traceback.print_exc()
         except BaseException as e:
             print(f'[HideSeek] Thread fatal error: {e}')
-            import traceback
+            self._log(f'thread fatal: {e}\n{traceback.format_exc()}')
             traceback.print_exc()
         finally:
             self._running = False
+            self._log('thread exited')
             print('[HideSeek] Thread exited')
 
     def _tick(self):
@@ -554,9 +568,13 @@ class HideSeekEngine:
         try:
             from recognition import _capture_hwnd_client
             img, method = _capture_hwnd_client(hwnd, client_rect)
-            return img
-        except Exception:
-            pass
+            raw_type = type(img)
+            normalized = self._coerce_bgr_array(img)
+            if normalized is not None:
+                return normalized
+            self._log(f'capture invalid method={method} type={raw_type!r}')
+        except Exception as e:
+            self._log(f'capture via recognition failed: {e}\n{traceback.format_exc()}')
         # Fallback: mss screen grab of the client rect
         try:
             import mss
@@ -566,11 +584,35 @@ class HideSeekEngine:
                 raw = sct.grab(region)
                 img = np.frombuffer(raw.bgra, dtype=np.uint8).reshape(
                     raw.height, raw.width, 4)
-                return img[:, :, :3].copy()  # BGRA → BGR
-        except Exception:
+                img = img[:, :, :3].copy()  # BGRA → BGR
+                self._log(f'capture fallback=mss shape={img.shape}')
+                return img
+        except Exception as e:
+            self._log(f'capture via mss failed: {e}\n{traceback.format_exc()}')
             return None
 
     # ── Color filtering ──
+
+    @staticmethod
+    def _coerce_bgr_array(img) -> Optional[np.ndarray]:
+        """Best-effort normalize capture output to a contiguous BGR ndarray."""
+        if img is None:
+            return None
+        if isinstance(img, np.ndarray):
+            if img.size == 0:
+                return None
+            if img.ndim == 2:
+                return cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_GRAY2BGR)
+            if img.ndim == 3 and img.shape[2] >= 3:
+                return np.ascontiguousarray(img[:, :, :3])
+            return None
+        try:
+            if hasattr(img, 'convert'):
+                rgb = np.array(img.convert('RGB'))
+                return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        except Exception:
+            return None
+        return None
 
     @staticmethod
     def _build_color_mask(
@@ -703,9 +745,13 @@ class HideSeekEngine:
         # Move the visible cursor first. Frozen/windowed builds can be ignored
         # by the game when move + down are collapsed into one absolute packet.
         try:
-            user32.SetCursorPos(int(x), int(y))
-        except Exception:
-            pass
+            moved = user32.SetCursorPos(int(x), int(y))
+            HideSeekEngine._log(
+                f'mouse SetCursorPos target=({screen_x},{screen_y}) '
+                f'clamped=({x},{y}) moved={moved}'
+            )
+        except Exception as e:
+            HideSeekEngine._log(f'mouse SetCursorPos failed: {e}')
 
         # Normalize to 0-65535 over the virtual desktop.
         abs_x = int((x - vx) * 65535 / max(1, vw - 1))
@@ -719,7 +765,7 @@ class HideSeekEngine:
             time=0, dwExtraInfo=ctypes.pointer(extra_move),
         )
         evt_move = INPUT(type=INPUT_MOUSE, iu=_INPUT_UNION(mi=mi_move))
-        user32.SendInput(1, ctypes.byref(evt_move), ctypes.sizeof(INPUT))
+        sent_move = user32.SendInput(1, ctypes.byref(evt_move), ctypes.sizeof(INPUT))
         time.sleep(0.03)
 
         extra_down = ctypes.c_ulong(0)
@@ -736,9 +782,17 @@ class HideSeekEngine:
         )
         evt_down = INPUT(type=INPUT_MOUSE, iu=_INPUT_UNION(mi=mi_down))
         evt_up = INPUT(type=INPUT_MOUSE, iu=_INPUT_UNION(mi=mi_up))
-        user32.SendInput(1, ctypes.byref(evt_down), ctypes.sizeof(INPUT))
+        sent_down = user32.SendInput(1, ctypes.byref(evt_down), ctypes.sizeof(INPUT))
         time.sleep(0.05)
-        user32.SendInput(1, ctypes.byref(evt_up), ctypes.sizeof(INPUT))
+        sent_up = user32.SendInput(1, ctypes.byref(evt_up), ctypes.sizeof(INPUT))
+        try:
+            err = ctypes.get_last_error()
+        except Exception:
+            err = 0
+        HideSeekEngine._log(
+            f'mouse SendInput move={sent_move} down={sent_down} up={sent_up} '
+            f'abs=({abs_x},{abs_y}) last_error={err}'
+        )
 
     @staticmethod
     def _send_key(vk: int, up: bool = False):
@@ -767,8 +821,19 @@ class HideSeekEngine:
 
     # ── Status callback ──
 
+    @staticmethod
+    def _log(message: str):
+        try:
+            os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
+            ts = time.strftime('%Y-%m-%d %H:%M:%S')
+            with open(_LOG_PATH, 'a', encoding='utf-8') as f:
+                f.write(f'[{ts}] {message}\n')
+        except Exception:
+            pass
+
     def _fire_status(self, message: str, step: int):
         print(f'[HideSeek] {message}')
+        self._log(f'step={step} {message}')
         cb = self._on_status
         if cb:
             try:
