@@ -47,6 +47,7 @@ LOCAL_HIDDENIMPORTS = [
     'boss_raid_engine',
     'boss_autokey_linkage',
     'auto_key_engine',
+    'hide_seek_engine',
     'character_profile',
     'recognition',
     'skill_recognition',
