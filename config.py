@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.10"
+APP_VERSION = "2.4.11"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,12 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.11:
+#   Clean ABI-sensitive runtime dependency folders before applying full/runtime
+#   refresh updates so stale NumPy/OpenCV files cannot make cv2 reject ndarray.
+# v2.4.10:
+#   Harden packaged Hide & Seek OpenCV calls with array diagnostics/fallbacks
+#   while investigating onedir-only cv2/numpy runtime mismatches.
 # v2.4.9:
 #   Guard self-identity updates behind server-confirmed UID ownership so nearby
 #   players cannot overwrite the cached/player-panel UID, name, level, or job.

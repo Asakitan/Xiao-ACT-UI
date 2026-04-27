@@ -36,6 +36,26 @@ except Exception:  # pragma: no cover - 回退到无界面模式
 POLL_INTERVAL = 0.5
 WAIT_TIMEOUT = 60.0
 
+# Binary Python packages that must never be layered across versions.  A stale
+# NumPy/OpenCV file left behind by an older onedir update can make cv2 reject
+# perfectly valid ndarray objects at runtime.
+ABI_RUNTIME_REFRESH_MARKERS = {
+    "runtime/numpy/__init__.pyc",
+    "runtime/cv2/cv2.pyd",
+}
+ABI_RUNTIME_REFRESH_DIRS = (
+    "runtime/numpy",
+    "runtime/numpy.libs",
+    "runtime/cv2",
+    "runtime/opencv_python.libs",
+    "runtime/opencv_contrib_python.libs",
+)
+ABI_RUNTIME_DIST_INFO_PREFIXES = (
+    "runtime/numpy-",
+    "runtime/opencv_python-",
+    "runtime/opencv_contrib_python-",
+)
+
 UI_BG = "#0a0e14"
 UI_CARD = "#111820"
 UI_BORDER = "#1a3a4e"
@@ -198,6 +218,92 @@ def _collect_entries(zf: zipfile.ZipFile, base: str, allow_top_level_exe: bool) 
     return entries
 
 
+def _safe_remove_tree(path: str, base: str) -> bool:
+    try:
+        abs_base = os.path.abspath(base)
+        abs_path = os.path.abspath(path)
+        if abs_path == abs_base or not abs_path.startswith(abs_base + os.sep):
+            return False
+        if os.path.isdir(abs_path):
+            shutil.rmtree(abs_path, ignore_errors=True)
+            return True
+        if os.path.exists(abs_path):
+            os.remove(abs_path)
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _should_clean_abi_runtime(entries: List[Dict[str, object]], package_type: str) -> bool:
+    rels = {str(entry.get("rel") or "").replace("\\", "/").lower() for entry in entries}
+    if package_type == "full-package":
+        return any(
+            rel.startswith("runtime/numpy/") or rel.startswith("runtime/cv2/")
+            for rel in rels
+        )
+    if rels.intersection(ABI_RUNTIME_REFRESH_MARKERS):
+        return True
+    numpy_count = sum(1 for rel in rels if rel.startswith("runtime/numpy/"))
+    cv2_count = sum(1 for rel in rels if rel.startswith("runtime/cv2/"))
+    return numpy_count >= 20 or cv2_count >= 5
+
+
+def _cleanup_abi_runtime(base: str, entries: List[Dict[str, object]],
+                         package_type: str, progress_cb=None) -> List[str]:
+    if not _should_clean_abi_runtime(entries, package_type):
+        return []
+    removed: List[str] = []
+    rels = {str(entry.get("rel") or "").replace("\\", "/").lower() for entry in entries}
+    targets = set()
+    for rel_dir in ABI_RUNTIME_REFRESH_DIRS:
+        if any(rel == rel_dir or rel.startswith(rel_dir + "/") for rel in rels):
+            targets.add(rel_dir)
+    for rel in rels:
+        for prefix in ABI_RUNTIME_DIST_INFO_PREFIXES:
+            if rel.startswith(prefix) and ".dist-info/" in rel:
+                dist_name = rel.split("/", 2)[1]
+                targets.add(f"runtime/{dist_name}")
+    runtime_dir = os.path.join(base, "runtime")
+    try:
+        for name in os.listdir(runtime_dir):
+            lower = name.lower()
+            if not lower.endswith(".dist-info"):
+                continue
+            rel_name = f"runtime/{lower}"
+            if any(rel_name.startswith(prefix) for prefix in ABI_RUNTIME_DIST_INFO_PREFIXES):
+                targets.add(f"runtime/{name}")
+    except Exception:
+        pass
+    if not targets:
+        return []
+    _emit(
+        progress_cb,
+        phase="cleanup",
+        step=1,
+        headline="正在清理运行时依赖残留",
+        detail="准备移除旧版 NumPy/OpenCV 文件…",
+        progress=0.0,
+        indeterminate=False,
+    )
+    ordered = sorted(targets)
+    for index, rel_dir in enumerate(ordered, 1):
+        dst = os.path.join(base, rel_dir.replace("/", os.sep))
+        if _safe_remove_tree(dst, base):
+            removed.append(rel_dir)
+            _log(f"cleaned ABI runtime residue: {rel_dir}", base)
+        _emit(
+            progress_cb,
+            phase="cleanup",
+            step=1,
+            headline="正在清理运行时依赖残留",
+            detail=f"清理 {rel_dir}",
+            progress=float(index) / float(len(ordered)),
+            indeterminate=False,
+        )
+    return removed
+
+
 def _get_self_rel(base: str) -> str:
     try:
         current = sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__)
@@ -255,6 +361,13 @@ def _apply_zip_package(
                     progress=float(index) / float(total_backups),
                     indeterminate=False,
                 )
+
+        removed_abi = _cleanup_abi_runtime(base, entries, package_type, progress_cb)
+        if removed_abi:
+            _log(
+                "ABI runtime cleanup before apply: " + ", ".join(removed_abi),
+                base,
+            )
 
         total_files = len(entries)
         if total_files:
