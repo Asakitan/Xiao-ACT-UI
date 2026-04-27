@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.4.1"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -376,6 +376,9 @@ USE_GPU_SKILLFX = True
 #   Add more Cython annotations and optimizations to the hotspots, 
 #   further reducing CPU usage and improving frame stability, 
 #   especially on lower-end machines.
+#   Fix entity DPS/BossHP scene reset parity and dungeon sub-map detection:
+#   same-scene retries and instanced mini-map layer changes now clear stale
+#   BossHP/DPS state before accepting the next damage event.
 # v2.4.0:
 #   New Cython style for CPU optimized hotspots.
 # v2.3.22:
