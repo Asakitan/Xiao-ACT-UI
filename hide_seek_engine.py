@@ -410,7 +410,16 @@ class HideSeekEngine:
         # Color filter
         colors = step['colors']
         mask = self._build_color_mask(roi_img, colors)
-        filtered = cv2.bitwise_and(roi_img, roi_img, mask=mask)
+        try:
+            filtered = cv2.bitwise_and(roi_img, roi_img, mask=mask)
+        except Exception as e:
+            self._log(
+                f'roi bitwise_and failed step={step_idx} '
+                f'roi_type={type(roi_img)!r} shape={getattr(roi_img, "shape", None)} '
+                f'dtype={getattr(roi_img, "dtype", None)} '
+                f'mask_shape={getattr(mask, "shape", None)} err={e}'
+            )
+            return None
 
         # Resize template to fit ROI dimensions if needed
         tpl_resized = self._resize_template(tpl, roi_img.shape[:2])
@@ -419,7 +428,16 @@ class HideSeekEngine:
 
         # Color-filtered template matching
         tpl_mask = self._build_color_mask(tpl_resized, colors)
-        tpl_filtered = cv2.bitwise_and(tpl_resized, tpl_resized, mask=tpl_mask)
+        try:
+            tpl_filtered = cv2.bitwise_and(tpl_resized, tpl_resized, mask=tpl_mask)
+        except Exception as e:
+            self._log(
+                f'template bitwise_and failed step={step_idx} '
+                f'tpl_type={type(tpl_resized)!r} shape={getattr(tpl_resized, "shape", None)} '
+                f'dtype={getattr(tpl_resized, "dtype", None)} '
+                f'mask_shape={getattr(tpl_mask, "shape", None)} err={e}'
+            )
+            return None
         match_pos, confidence = self._template_match(filtered, tpl_filtered)
         match_method = 'color-filtered'
 
@@ -617,9 +635,10 @@ class HideSeekEngine:
             if arr.dtype != np.uint8:
                 arr = np.clip(arr, 0, 255).astype(np.uint8, copy=False)
             if arr.ndim == 2:
-                return cv2.cvtColor(np.ascontiguousarray(arr), cv2.COLOR_GRAY2BGR)
+                arr = np.array(arr, dtype=np.uint8, copy=True, order='C')
+                return cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
             if arr.ndim == 3 and arr.shape[2] >= 3:
-                return np.ascontiguousarray(arr[:, :, :3])
+                return np.array(arr[:, :, :3], dtype=np.uint8, copy=True, order='C')
             return None
 
         if img is None:
@@ -628,7 +647,7 @@ class HideSeekEngine:
             return _from_array(img)
         try:
             if hasattr(img, 'convert'):
-                rgb = np.array(img.convert('RGB'))
+                rgb = np.array(img.convert('RGB'), dtype=np.uint8, copy=True, order='C')
                 return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         except Exception:
             return None
@@ -643,6 +662,18 @@ class HideSeekEngine:
 
         Each color entry: ((B, G, R), tolerance)
         """
+        original_type = type(img)
+        img = HideSeekEngine._coerce_bgr_array(img)
+        if img is None:
+            HideSeekEngine._log(f'color mask invalid image type={original_type!r}')
+            return np.zeros((1, 1), dtype=np.uint8)
+        try:
+            img = np.array(img, dtype=np.uint8, copy=True, order='C')
+        except Exception as e:
+            HideSeekEngine._log(
+                f'color mask array copy failed type={original_type!r}: {e}'
+            )
+            return np.zeros((1, 1), dtype=np.uint8)
         h, w = img.shape[:2]
         combined = np.zeros((h, w), dtype=np.uint8)
         for (b, g, r), tol in colors:
@@ -650,7 +681,16 @@ class HideSeekEngine:
                              dtype=np.uint8)
             upper = np.array([min(255, b + tol), min(255, g + tol), min(255, r + tol)],
                              dtype=np.uint8)
-            mask = cv2.inRange(img, lower, upper)
+            try:
+                mask = cv2.inRange(img, lower, upper)
+            except Exception as e:
+                HideSeekEngine._log(
+                    f'cv2.inRange failed type={original_type!r} '
+                    f'coerced={type(img)!r} shape={getattr(img, "shape", None)} '
+                    f'dtype={getattr(img, "dtype", None)} flags={getattr(img, "flags", None)} '
+                    f'err={e}'
+                )
+                return np.zeros((h, w), dtype=np.uint8)
             combined = cv2.bitwise_or(combined, mask)
         # Dilate slightly to join nearby matching pixels
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
