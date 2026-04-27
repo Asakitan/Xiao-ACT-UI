@@ -807,6 +807,36 @@ def _is_monster(uuid: int) -> bool:
     return low == 64 or low == 32832  # 0x0040 or 0x8040
 
 
+def _attrs_look_monster_like(ac) -> bool:
+    """Return True for non-player entities carrying monster/combat HP attrs."""
+    if not ac or not getattr(ac, 'Attrs', None):
+        return False
+    monster_hint_ids = (
+        frozenset({
+            AttrType.HP,
+            AttrType.MAX_HP,
+            AttrType.MONSTER_SEASON_LEVEL,
+            AttrType.MAX_EXTINCTION,
+            AttrType.EXTINCTION,
+            AttrType.MAX_STUNNED,
+            AttrType.STUNNED,
+            AttrType.IN_OVERDRIVE,
+            AttrType.IS_LOCK_STUNNED,
+            AttrType.STOP_BREAKING_TICKING,
+            AttrType.BREAKING_STAGE,
+            AttrType.SHIELD_LIST,
+        })
+        | AttrType._MONSTER_EXTENDED_IDS
+    )
+    for attr in ac.Attrs:
+        try:
+            if int(attr.Id or 0) in monster_hint_ids:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _uuid_to_uid(uuid: int) -> int:
     return uuid >> 16
 
@@ -3380,7 +3410,7 @@ class PacketParser:
                         flush=True
                     )
                     self._notify_self()
-            elif _is_monster(uuid):
+            elif _is_monster(uuid) or (not _is_player(uuid) and has_attrs and _attrs_look_monster_like(entity.Attrs)):
                 monster_uuids_appeared.append(uuid)
                 monster = self._get_monster(uuid)
                 monster.is_dead = False
@@ -3567,14 +3597,15 @@ class PacketParser:
         if uuid == 0:
             return
         target_is_player = _is_player(uuid)
-        target_is_monster = _is_monster(uuid)
+        target_is_monster = _is_monster(uuid) or (not target_is_player and uuid in self._monsters)
         uid = _uuid_to_uid(uuid)
 
         # Attrs (field 2) — players and monsters
         if delta.HasField('Attrs'):
             if target_is_player:
                 self._process_attr_collection(uid, delta.Attrs)
-            elif target_is_monster:
+            elif target_is_monster or _attrs_look_monster_like(delta.Attrs):
+                target_is_monster = True
                 self._process_monster_attr_collection(uuid, delta.Attrs)
 
         # TempAttrs (field 3) — buff-based temporary attributes (CD modifiers etc.)
@@ -3604,9 +3635,13 @@ class PacketParser:
         if delta.HasField('PassiveSkillEndInfos'):
             logger.debug(f'[Parser] AoiDelta PassiveSkillEndInfos uuid={uuid}')
 
-        # SkillEffect (field 7) — damage extraction
+        # SkillEffect (field 7) — damage extraction.  Match the upstream DPS
+        # counter behavior: player damage to any non-player target should count,
+        # because some overworld / city-edge combat targets do not use the usual
+        # monster UUID suffix.
         if delta.HasField('SkillEffects'):
-            self._process_skill_effect(uuid, target_is_player, target_is_monster, delta.SkillEffects)
+            combat_target_is_monster = target_is_monster or not target_is_player
+            self._process_skill_effect(uuid, target_is_player, combat_target_is_monster, delta.SkillEffects)
 
     @_probe.decorate('parser._process_skill_effect')
     def _process_skill_effect(self, target_uuid: int, target_is_player: bool,
