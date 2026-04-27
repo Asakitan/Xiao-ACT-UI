@@ -5,6 +5,7 @@ Sequential image-detection flow with color-filtered template matching.
 All ROI coordinates are relative (0.0-1.0) for resolution independence.
 Reference resolution: 1920×1080 — positions converted at design time.
 
+
 Flow:
   Step 0 → detect 1.png (white area)    → Alt+Click → Step 1
   Step 1 → detect 2.png (gray buttons)  → Click     → Step 2
