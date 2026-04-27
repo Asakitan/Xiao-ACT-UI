@@ -1088,7 +1088,7 @@ class PacketBridge:
         team_id = parser._team_id
         leader_uid = parser._team_leader_uid
         team_members = dict(parser._team_members)  # snapshot
-        self_uid = parser._current_uid
+        self_uid = parser._current_uid if getattr(parser, '_current_uid_confirmed', False) else 0
 
         # Build member list with self always first
         members = []
@@ -1166,22 +1166,23 @@ class PacketBridge:
 
     @_probe.decorate('bridge._publish_player_update')
     def _publish_player_update(self, player: PlayerData, from_tick: bool = False):
+        identity_confirmed = bool(getattr(player, 'self_uid_confirmed', False))
         updates = {
             'recognition_ok': True,
             'error_msg': '',
         }
 
-        if player.name and self._use_packet_source('identity'):
+        if player.name and identity_confirmed and self._use_packet_source('identity'):
             updates['player_name'] = player.name
-        if player.uid and self._use_packet_source('identity'):
+        if player.uid and identity_confirmed and self._use_packet_source('identity'):
             updates['player_id'] = str(player.uid)
-        if getattr(player, 'fight_point', 0) > 0 and self._use_packet_source('identity'):
+        if getattr(player, 'fight_point', 0) > 0 and identity_confirmed and self._use_packet_source('identity'):
             updates['fight_point'] = player.fight_point
-        if player.level > 0 and self._use_packet_source('level'):
+        if player.level > 0 and identity_confirmed and self._use_packet_source('level'):
             updates['level_base'] = player.level
 
         # Log once when name/level are missing (tool started after login)
-        if not self._identity_warn_logged and player.uid:
+        if not self._identity_warn_logged and player.uid and identity_confirmed:
             if not player.name or player.level <= 0:
                 self._identity_warn_logged = True
                 logger.warning(
@@ -1192,6 +1193,7 @@ class PacketBridge:
         if (
             not self._identity_alert_sent
             and not self._identity_cache_available
+            and identity_confirmed
             and player.uid
             and (not player.name or player.level <= 0)
         ):
@@ -1207,7 +1209,7 @@ class PacketBridge:
         # Keep the larger recognized extra level to avoid stale packet values
         # overwriting OCR's newer result.
         _level_extra = max(0, int(getattr(player, 'level_extra', 0) or 0))
-        if self._use_packet_source('level') and _level_extra > 0:
+        if identity_confirmed and self._use_packet_source('level') and _level_extra > 0:
             updates['level_extra'] = _level_extra
             logger.info(
                 f'[Bridge] level_extra={_level_extra} '
@@ -1215,7 +1217,7 @@ class PacketBridge:
                 f'medal={player.season_medal_level}, hunt={player.monster_hunt_level}, '
                 f'bp={player.battlepass_level}, bp_data={player.battlepass_data_level})'
             )
-        if player.profession_id > 0 and self._use_packet_source('identity'):
+        if player.profession_id > 0 and identity_confirmed and self._use_packet_source('identity'):
             updates['profession_id'] = player.profession_id
             if player.profession:
                 updates['profession_name'] = player.profession
