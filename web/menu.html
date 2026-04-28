@@ -1607,9 +1607,17 @@ html, body {
     padding: 0 13px;
     background: rgba(236,240,244,0.95);
     color: #7a8792;
-    font-family: var(--font-sao);
+    font-family: var(--font-ui);
+    font-weight: 700;
     font-size: 10px;
-    letter-spacing: 1px;
+    letter-spacing: 0.4px;
+    line-height: 1;
+}
+.sp-columns span {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .sp-columns span:last-child { text-align: right; }
 .sp-list {
@@ -4144,11 +4152,7 @@ function showSessionPlayers(dataJson) {
 }
 
 function toggleSessionPlayers(dataJson) {
-    if (_sessionPlayersVisible) {
-        closeSessionPlayers(true);
-    } else {
-        showSessionPlayers(dataJson || _sessionPlayersPayload);
-    }
+    showSessionPlayers(dataJson || _sessionPlayersPayload);
 }
 
 function closeSessionPlayers(manual) {
@@ -4455,6 +4459,15 @@ function activateCircle(name) {
 
     /* Toggle if same circle */
     if (currentActive === name) {
+        if (name === 'userInfo') {
+            infoBox.classList.add('show');
+            cbLine.classList.remove('show');
+            cbArrow.classList.remove('show');
+            pos.classList.remove('auto-key-layout');
+            _syncSessionPlayersAnchor(false);
+            showSessionPlayers(_sessionPlayersPayload);
+            return;
+        }
         var items = menuBar.querySelectorAll('.item');
         var first = items[0];
         if (first.classList.contains('active')) {

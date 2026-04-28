@@ -1154,7 +1154,7 @@ class SAOSessionPlayersPanel(tk.Frame):
         for text, width, anchor in (
                 ('NAME', 16, 'w'), ('UID', 11, 'center'), ('POWER', 10, 'e')):
             tk.Label(self._head, text=text, bg='#eceff2', fg='#7a8792',
-                     font=get_sao_font(7, True), width=width,
+                     font=get_cjk_font(7, True), width=width,
                      anchor=anchor).pack(side=tk.LEFT, padx=(10 if text == 'NAME' else 0, 0))
 
         self._body = tk.Frame(self._box, bg='#eeeeee')
@@ -4103,13 +4103,28 @@ class SAOPlayerGUI:
 
     def _refresh_session_players_panel(self, force: bool = False):
         panel = getattr(self, '_session_players_panel', None)
+        stack = getattr(self, '_menu_left_stack', None)
+        if not panel and force and stack is not None:
+            try:
+                panel = stack.show_session_players(
+                    rows=self._get_session_player_rows(sync=True),
+                    force=True,
+                )
+                self._session_players_panel = panel
+            except Exception:
+                panel = None
         if not panel:
             return
-        stack = getattr(self, '_menu_left_stack', None)
         if stack is not None and hasattr(stack, 'is_session_players_visible'):
             try:
                 if not stack.is_session_players_visible():
-                    return
+                    if not force:
+                        return
+                    panel = stack.show_session_players(
+                        rows=self._get_session_player_rows(sync=True),
+                        force=True,
+                    )
+                    self._session_players_panel = panel
             except Exception:
                 pass
         self._sync_session_players_cache(getattr(self, '_game_state', None))
@@ -4128,24 +4143,20 @@ class SAOPlayerGUI:
             pass
 
     def _toggle_session_players_panel(self):
-        """Show/hide the in-session player list from the menu item."""
+        """Show/refresh the in-session player list from the menu item."""
         stack = getattr(self, '_menu_left_stack', None)
         if stack is None:
             return
         try:
-            if stack.is_session_players_visible():
-                stack.hide_session_players()
-                self._session_players_panel = None
-            else:
-                rows = self._get_session_player_rows(sync=True)
-                panel = stack.show_session_players(rows=rows, force=True)
-                self._session_players_panel = panel
-                self._last_session_players_panel_sig = (
-                    len(self._session_players),
-                    self._session_players_version,
-                    self._session_self_uid(),
-                )
-                self._last_session_players_panel_push_ts = time.time()
+            rows = self._get_session_player_rows(sync=True)
+            panel = stack.show_session_players(rows=rows, force=True)
+            self._session_players_panel = panel
+            self._last_session_players_panel_sig = (
+                len(self._session_players),
+                self._session_players_version,
+                self._session_self_uid(),
+            )
+            self._last_session_players_panel_push_ts = time.time()
         except Exception:
             pass
         self._refresh_menu_if_open(force=True)

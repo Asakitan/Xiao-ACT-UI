@@ -6549,7 +6549,7 @@ class SAOWebViewGUI:
         )
         self._session_players_last_push_ts = time.time()
         self._eval_menu(
-            f'if(window.SAO&&SAO.toggleSessionPlayers)SAO.toggleSessionPlayers({json.dumps(payload, ensure_ascii=False)})'
+            f'if(window.SAO&&SAO.showSessionPlayers)SAO.showSessionPlayers({json.dumps(payload, ensure_ascii=False)})'
         )
 
     def _sync_menu_info(self):
