@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from auto_key_engine import (
     AutoKeyCloudClient,
@@ -1577,6 +1577,10 @@ class SAOWebViewGUI:
         # 菜单
         self._sta_detector_started = False
         self._menu_visible = False
+        self._session_players = {}
+        self._session_players_self_uid = 0
+        self._session_players_last_sig = None
+        self._session_players_last_push_ts = 0.0
 
         # 窗口
         self.hp_win = None
@@ -2360,7 +2364,7 @@ class SAOWebViewGUI:
             _is_dead = monster_data.get('is_dead', False)
             # Accept monster if it has either max_hp or hp (server may not
             # send AttrMaxHp; packet_parser estimates max_hp from HP).
-            if _uuid and (_max_hp > 0 or _hp > 0) and not _is_dead:
+            if _uuid and (_max_hp > 0 or _hp > 0) and (not _is_dead or _hp > 0):
                 # Adopt this monster as the target if:
                 # 1. No target yet (first monster after scene change)
                 # 2. Current target is stale (dead, or no longer in monsters dict)
@@ -2372,7 +2376,7 @@ class SAOWebViewGUI:
                     try:
                         _bridge = getattr(self, '_packet_engine', None)
                         _cur = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
-                        if _cur is None or _cur.is_dead or (_cur.max_hp == 0 and _cur.hp == 0):
+                        if not self._boss_monster_usable(_cur):
                             _should_adopt = True
                     except Exception:
                         pass
@@ -2760,6 +2764,7 @@ class SAOWebViewGUI:
             return
         if getattr(self, '_vision_engine', None) is not None:
             self._vision_paused_for_death = False
+            self._bump_boss_hp_target_hold('revive')
             return
         if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
             return
@@ -2769,7 +2774,43 @@ class SAOWebViewGUI:
         self._vision_engine = vision_engine
         self._recognition_engines.append(vision_engine)
         self._vision_paused_for_death = False
+        self._bump_boss_hp_target_hold('revive')
         print('[SAO] Vision engine resumed (revive)')
+
+    def _bump_boss_hp_target_hold(self, reason: str = ''):
+        target_uuid = int(getattr(self, '_bb_last_target_uuid', 0) or 0)
+        if not target_uuid:
+            return
+        bridge = getattr(self, '_packet_engine', None)
+        if not bridge:
+            return
+        try:
+            monster = bridge.get_monster(target_uuid)
+            if not monster:
+                return
+            if not self._boss_monster_usable(monster):
+                return
+            now = time.time()
+            self._bb_recent_targets[target_uuid] = now
+            self._bb_last_damage_ts = now
+            self._last_boss_bar_sig = None
+        except Exception:
+            pass
+
+    def _boss_monster_usable(self, monster) -> bool:
+        if not monster:
+            return False
+        try:
+            hp = int(getattr(monster, 'hp', 0) or 0)
+            max_hp = int(getattr(monster, 'max_hp', 0) or 0)
+            is_dead = bool(getattr(monster, 'is_dead', False))
+            if is_dead and hp > 0:
+                monster.is_dead = False
+                monster.last_update = time.time()
+                is_dead = False
+            return (not is_dead) and (max_hp > 0 or hp > 0)
+        except Exception:
+            return False
 
     def _sync_vision_lifecycle(self, gs):
         dead_now = self._is_dead_state(gs)
@@ -2778,6 +2819,7 @@ class SAOWebViewGUI:
             self._pause_vision_for_death()
         elif (not dead_now) and dead_prev:
             self._resume_vision_after_revive()
+            self._bump_boss_hp_target_hold('revive')
         self._last_dead_state = dead_now
 
     def _pick_burst_trigger_slot(self, gs):
@@ -4763,6 +4805,17 @@ class SAOWebViewGUI:
             return 86400.0
         return float(max(60.0, v))
 
+    def _boss_hp_hold_timeout_s(self) -> float:
+        """BossHP gets a longer leash than DPS so revive/mechanics don't hide it."""
+        try:
+            raw = self._get_setting('boss_hp_hold_timeout_s', 300)
+            v = float(raw if raw is not None else 300)
+        except Exception:
+            v = 300.0
+        if v <= 0:
+            return 86400.0
+        return float(max(180.0, v, self._combat_damage_timeout_s()))
+
     def _get_dps_last_report_available(self) -> bool:
         tracker = getattr(self, '_dps_tracker', None)
         if not tracker:
@@ -5706,6 +5759,7 @@ class SAOWebViewGUI:
             time.sleep(0.12)
             self._eval_menu('SAO.openMenu()')
             time.sleep(0.04)
+            self._sync_session_players_menu(force=True)
             try:
                 hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO Menu')
                 if hwnd:
@@ -6194,6 +6248,146 @@ class SAOWebViewGUI:
         self._panel_origins.clear()
 
     # ─── 同步信息 ───
+    @staticmethod
+    def _session_int(value, default: int = 0) -> int:
+        try:
+            if value is None:
+                return default
+            return int(value)
+        except Exception:
+            try:
+                text = str(value).strip()
+                return int(text) if text.isdigit() else default
+            except Exception:
+                return default
+
+    def _session_self_uid(self) -> int:
+        for source in (
+                getattr(self, '_game_state', None),
+                getattr(getattr(self, '_state_mgr', None), 'state', None)):
+            uid = self._session_int(getattr(source, 'player_id', 0), 0)
+            if uid > 0:
+                return uid
+        return 0
+
+    def _merge_session_player(self, uid, name='', fight_point=0, is_self=False):
+        uid = self._session_int(uid, 0)
+        if uid <= 0:
+            return
+        now = time.time()
+        entry = self._session_players.get(uid)
+        if not entry:
+            entry = {
+                'uid': uid,
+                'name': '',
+                'fight_point': 0,
+                'first_seen': now,
+                'updated_at': now,
+                'is_self': False,
+            }
+            self._session_players[uid] = entry
+        name = str(name or '').strip()
+        fight_point = self._session_int(fight_point, 0)
+        if name:
+            entry['name'] = name
+        if fight_point > 0:
+            entry['fight_point'] = fight_point
+        entry['is_self'] = bool(entry.get('is_self') or is_self)
+        entry['updated_at'] = now
+
+    def _sync_session_players_cache(self, gs=None):
+        self_uid = self._session_self_uid()
+        if self_uid > 0 and self_uid != self._session_players_self_uid:
+            if self._session_players_self_uid:
+                self._session_players.clear()
+            self._session_players_self_uid = self_uid
+
+        if gs is None:
+            gs = getattr(self, '_game_state', None)
+        if gs is not None:
+            gs_uid = self._session_int(getattr(gs, 'player_id', 0), 0)
+            self._merge_session_player(
+                gs_uid,
+                getattr(gs, 'player_name', '') or self._username or '',
+                getattr(gs, 'fight_point', 0) or 0,
+                is_self=bool(gs_uid and gs_uid == self_uid),
+            )
+
+        bridge = getattr(self, '_packet_engine', None)
+        if not bridge:
+            return
+        try:
+            players = bridge.get_players() or {}
+        except Exception:
+            players = {}
+        for raw_uid, pdata in players.items():
+            uid = self._session_int(raw_uid, 0) or self._session_int(getattr(pdata, 'uid', 0), 0)
+            self._merge_session_player(
+                uid,
+                getattr(pdata, 'name', '') or '',
+                getattr(pdata, 'fight_point', 0) or 0,
+                is_self=bool(uid and uid == self_uid),
+            )
+
+    @staticmethod
+    def _format_session_power(value) -> str:
+        value = SAOWebViewGUI._session_int(value, 0)
+        return f'{value:,}' if value > 0 else '--'
+
+    def _get_session_player_rows(self) -> List[Dict[str, Any]]:
+        self._sync_session_players_cache(getattr(self, '_game_state', None))
+        self_uid = self._session_self_uid()
+        rows = []
+        for uid, entry in self._session_players.items():
+            fp = self._session_int(entry.get('fight_point'), 0)
+            is_self = bool(uid and uid == self_uid) or bool(entry.get('is_self'))
+            rows.append({
+                'uid': str(uid) if uid else '--',
+                'name': str(entry.get('name') or ''),
+                'fight_power': self._format_session_power(fp),
+                'fight_power_value': fp,
+                'is_self': is_self,
+                'first_seen': float(entry.get('first_seen') or 0.0),
+            })
+        rows.sort(key=lambda r: (
+            0 if r.get('is_self') else 1,
+            -int(r.get('fight_power_value') or 0),
+            str(r.get('name') or ''),
+            str(r.get('uid') or ''),
+        ))
+        return rows
+
+    def _build_session_players_payload(self):
+        rows = self._get_session_player_rows()
+        return {
+            'ok': True,
+            'count': len(rows),
+            'self_uid': str(self._session_self_uid() or ''),
+            'players': rows,
+            'generated_at': int(time.time()),
+        }
+
+    def _sync_session_players_menu(self, force: bool = False):
+        if not self.menu_win:
+            return
+        payload = self._build_session_players_payload()
+        sig = tuple((
+            r.get('uid'),
+            r.get('name'),
+            r.get('fight_power_value'),
+            r.get('is_self'),
+        ) for r in payload.get('players', []))
+        now = time.time()
+        if not force and sig == self._session_players_last_sig:
+            return
+        if not force and now - self._session_players_last_push_ts < 0.5:
+            return
+        self._session_players_last_sig = sig
+        self._session_players_last_push_ts = now
+        self._eval_menu(
+            f'if(window.SAO&&SAO.showSessionPlayers)SAO.showSessionPlayers({json.dumps(payload, ensure_ascii=False)})'
+        )
+
     def _sync_menu_info(self):
         gs = self._game_state
         gs_desc = 'VISION ACTIVE' if self._recognition_active else 'SAO Auto Idle'
@@ -6232,6 +6426,7 @@ class SAOWebViewGUI:
             'file': '',
         }
         self._eval_menu(f'SAO.updateInfo({json.dumps(info, ensure_ascii=False)})')
+        self._sync_session_players_menu(force=bool(self._menu_visible))
         # Sync menu settings (watched slots, sound, mode, etc.)
         self._sync_menu_settings()
         self._sync_all_panels()
@@ -6532,12 +6727,12 @@ class SAOWebViewGUI:
                     _bb_direct_data = None
                     _bb_additional = []
                     _now = time.time()
-                    _bb_timeout = self._combat_damage_timeout_s()
+                    _bb_timeout = self._boss_hp_hold_timeout_s()
                     _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
 
                     # Cleanup stale recent targets (prevent accumulation)
                     for uuid in list(self._bb_recent_targets.keys()):
-                        if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout * 3:
+                        if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout:
                             self._bb_recent_targets.pop(uuid, None)
 
                     if not _bb_raid_active:
@@ -6546,9 +6741,9 @@ class SAOWebViewGUI:
                             # Collect all recently damaged monsters
                             _recent_monsters = []
                             for uuid, dmg_ts in list(self._bb_recent_targets.items()):
-                                if _now - dmg_ts < _bb_timeout * 1.5:
+                                if _now - dmg_ts < _bb_timeout:
                                     m = _bridge.get_monster(uuid)
-                                    if m and not getattr(m, 'is_dead', False) and (getattr(m, 'max_hp', 0) > 0 or getattr(m, 'hp', 0) > 0):
+                                    if self._boss_monster_usable(m):
                                         _recent_monsters.append(m)
                             if _recent_monsters:
                                 # Sort: HP% desc (highest = primary/boss unit), then recent attack time desc
@@ -6582,7 +6777,7 @@ class SAOWebViewGUI:
                             # Pre-tracked boss: still fetch data for when damage arrives (single)
                             try:
                                 _m = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
-                                if _m and not getattr(_m, 'is_dead', False) and (getattr(_m, 'max_hp', 0) > 0 or getattr(_m, 'hp', 0) > 0):
+                                if self._boss_monster_usable(_m):
                                     _bb_direct_max = int(getattr(_m, 'max_hp', 0)) or int(getattr(_m, 'hp', 0))
                                     _bb_direct_hp = max(0, int(getattr(_m, 'hp', 0)))
                                     _bb_direct_data = _m.to_dict() if hasattr(_m, 'to_dict') else {}
@@ -6873,6 +7068,8 @@ class SAOWebViewGUI:
                 self._refresh_boss_hp_geometry()
                 self._sync_auto_key_menu()
                 self._sync_boss_raid_menu()
+                if self._menu_visible:
+                    self._sync_session_players_menu()
                 # Push commander data every ~0.5s when visible
                 if self._commander_visible:
                     try:
