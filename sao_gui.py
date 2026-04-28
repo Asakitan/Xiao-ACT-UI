@@ -1086,6 +1086,7 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._rows_data = []
         self._rendered_count = 0
         self._loading_footer = None
+        self._open_anim_after_id = None
 
         self._box = tk.Frame(self, bg='#f7f7f6', width=self.PANEL_W, height=self.PANEL_H,
                              highlightthickness=1, highlightbackground='#d4d0d0')
@@ -1273,6 +1274,41 @@ class SAOSessionPlayersPanel(tk.Frame):
         if last >= self.LOAD_MORE_THRESHOLD:
             self._append_row_batch(self.RENDER_BATCH_ROWS)
 
+    def play_open_animation(self):
+        """Tiny SAO-style slide/glint so the list follows menu open."""
+        try:
+            if self._open_anim_after_id:
+                self.after_cancel(self._open_anim_after_id)
+        except Exception:
+            pass
+        self._open_anim_after_id = None
+        start = time.perf_counter()
+        dur = 0.22
+
+        def _step():
+            try:
+                t = min(1.0, (time.perf_counter() - start) / dur)
+                ease = 1.0 - pow(1.0 - t, 3)
+                offset = int(round(14 * (1.0 - ease)))
+                self._box.pack_configure(pady=(offset, 0))
+                if t < 0.55:
+                    self._box.configure(highlightbackground='#f3af12')
+                    self._summary.configure(fg='#b89036')
+                else:
+                    self._box.configure(highlightbackground='#d4d0d0')
+                    self._summary.configure(fg='#aaaaaa')
+                if t < 1.0:
+                    self._open_anim_after_id = self.after(16, _step)
+                else:
+                    self._box.pack_configure(pady=(0, 0))
+                    self._box.configure(highlightbackground='#d4d0d0')
+                    self._summary.configure(fg='#aaaaaa')
+                    self._open_anim_after_id = None
+            except Exception:
+                self._open_anim_after_id = None
+
+        _step()
+
     def update_rows(self, rows=None, force: bool = False):
         if rows is None:
             try:
@@ -1337,6 +1373,11 @@ class SAOMenuLeftStack(tk.Frame):
     def set_active(self, active: bool):
         self._active = bool(active)
         self.session_panel.update_rows()
+        if active:
+            try:
+                self.session_panel.play_open_animation()
+            except Exception:
+                pass
         self.player_panel.set_active(active)
 
     def sync_pulse(self):
@@ -4370,6 +4411,14 @@ class SAOPlayerGUI:
             return
         if self._any_panel_open():
             return
+        ov = self._fisheye_ov
+        request_fadeout = getattr(ov, '_request_fadeout', None)
+        if callable(request_fadeout):
+            try:
+                request_fadeout()
+                return
+            except Exception:
+                pass
         self._stop_fisheye_overlay()
 
     def _on_sao_menu_close(self):
@@ -5516,9 +5565,14 @@ class SAOPlayerGUI:
                                 void main() {
                                     vec2 c = v_uv - 0.5;
                                     float r2 = dot(c, c);
-                                    float strength = 0.55 * (1.0 + 0.035 * sin(u_time * 0.8));
-                                    vec2 uv = v_uv + c * strength * r2;
-                                    vec2 dir = normalize(c + vec2(0.0001)) * (0.004 + r2 * 0.018);
+                                    float open = clamp(u_alpha, 0.0, 1.0);
+                                    float edge = 1.0 - open;
+                                    float pulse = 0.5 + 0.5 * sin(u_time * 1.35);
+                                    float strength = 0.44 + 0.18 * edge + 0.055 * pulse;
+                                    vec2 drift = vec2(0.006 * sin(u_time * 0.62),
+                                                      0.004 * cos(u_time * 0.51));
+                                    vec2 uv = v_uv + c * strength * r2 + drift * (0.25 + edge);
+                                    vec2 dir = normalize(c + vec2(0.0001)) * (0.006 + r2 * 0.026 + edge * 0.012);
                                     vec3 b0 = texture(u_tex, uv - dir * 2.0).rgb;
                                     vec3 b1 = texture(u_tex, uv - dir).rgb;
                                     vec3 b2 = texture(u_tex, uv).rgb;
@@ -5531,10 +5585,17 @@ class SAOPlayerGUI:
                                         texture(u_tex, uv).g,
                                         texture(u_tex, uv - vec2(ca, 0.0)).b
                                     ), 0.50);
-                                    float scan = 0.94 + 0.06 * sin((v_uv.y + u_time * 0.035) * 940.0);
-                                    float vignette = 0.88 - r2 * 0.42 + 0.035 * sin(u_time * 0.45);
+                                    float scan = 0.92 + 0.08 * sin((v_uv.y + u_time * 0.055) * 980.0);
+                                    float vignette = 0.86 - r2 * (0.38 + 0.28 * edge) + 0.055 * sin(u_time * 0.45);
                                     col *= scan * vignette;
-                                    col = mix(col, vec3(0.0), 0.38);
+                                    col = mix(col, vec3(0.0), 0.34 + 0.18 * edge);
+
+                                    float radial = length(c);
+                                    float ring_r = mix(0.18, 0.72, open);
+                                    float ring = 1.0 - smoothstep(0.0, 0.026, abs(radial - ring_r));
+                                    float ring2 = 1.0 - smoothstep(0.0, 0.016, abs(radial - mod(u_time * 0.13, 0.82)));
+                                    col += vec3(0.10, 0.42, 0.50) * ring * (0.12 + 0.26 * edge);
+                                    col += vec3(0.28, 0.20, 0.06) * ring2 * 0.05;
 
                                     float hud = 0.0;
                                     hud += line_band(v_uv.y, 0.08) * step(0.05, v_uv.x) * step(v_uv.x, 0.95);
@@ -5545,7 +5606,7 @@ class SAOPlayerGUI:
                                            * step(0.42, v_uv.y) * step(v_uv.y, 0.47);
                                     hud += (1.0 - smoothstep(0.0, 0.006, abs(v_uv.y - 0.5)))
                                            * step(0.42, v_uv.x) * step(v_uv.x, 0.47);
-                                    col += vec3(0.18, 0.48, 0.56) * min(hud, 1.0) * 0.16;
+                                    col += vec3(0.18, 0.48, 0.56) * min(hud, 1.0) * (0.16 + 0.08 * pulse);
                                     fragColor = vec4(col * u_alpha, u_alpha);
                                 }
                             ''')
@@ -5605,11 +5666,13 @@ class SAOPlayerGUI:
 
         # 用一个轻量对象承载状态 (兼容 _stop 通过 _running_ref 关闭)
         class _FisheyeHandle:
-            __slots__ = ('gpu_win', 'presenter', '_running_ref', '_worker_thread')
+            __slots__ = ('gpu_win', 'presenter', '_running_ref', '_worker_thread',
+                         '_request_fadeout')
         ov = _FisheyeHandle()
         ov.gpu_win = gpu_win
         ov.presenter = presenter
         ov._worker_thread = None
+        ov._request_fadeout = None
         self._fisheye_ov = ov
 
         _fisheye_capture_excluded = [False]
@@ -5693,8 +5756,18 @@ class SAOPlayerGUI:
         _state = ['init']        # init → fadein → active → fadeout → destroy
         _fade_started = [False]
         _fadeout_started = [False]
+        _stop_requested = [False]
         _frame_seq = [0]
         ov._running_ref = _running
+
+        def _request_fadeout():
+            _stop_requested[0] = True
+            try:
+                gpu_win.request_redraw()
+            except Exception:
+                pass
+
+        ov._request_fadeout = _request_fadeout
 
         def _on_fadeout_done():
             try:
@@ -5725,10 +5798,13 @@ class SAOPlayerGUI:
 
             # State machine — kicks off pump-driven fades.
             try:
-                _fisheye_should_run = bool(
+                _actual_should_run = bool(
                     self._sao_menu.visible or self._any_panel_open())
             except Exception:
-                _fisheye_should_run = False
+                _actual_should_run = False
+            if _actual_should_run:
+                _stop_requested[0] = False
+            _fisheye_should_run = bool(_actual_should_run and not _stop_requested[0])
 
             if s == 'init':
                 if _latest_frame[0] is not None:
@@ -5740,6 +5816,9 @@ class SAOPlayerGUI:
                     except Exception:
                         pass
                     _state[0] = 'fadein'
+                elif not _fisheye_should_run and _stop_requested[0]:
+                    self._stop_fisheye_overlay()
+                    return
             elif s == 'fadein':
                 if not _fisheye_should_run:
                     try:
@@ -5749,7 +5828,6 @@ class SAOPlayerGUI:
                     except Exception:
                         pass
                     _state[0] = 'fadeout'
-                    _running[0] = False
                 elif not presenter.is_fading():
                     _state[0] = 'active'
             elif s == 'active':
@@ -5761,10 +5839,15 @@ class SAOPlayerGUI:
                     except Exception:
                         pass
                     _state[0] = 'fadeout'
-                    _running[0] = False
             elif s == 'fadeout':
-                # Pump fires _on_fadeout_done when alpha hits 0; nothing to do.
-                pass
+                if _actual_should_run:
+                    try:
+                        presenter.start_fade(1.0, _FADEIN_DUR * 0.55)
+                        gpu_win.request_redraw()
+                    except Exception:
+                        pass
+                    _state[0] = 'fadein'
+                # Otherwise the pump fires _on_fadeout_done when alpha hits 0.
 
             if _latest_frame[0] is not None and s in ('fadein', 'active', 'fadeout'):
                 try:
@@ -5775,7 +5858,8 @@ class SAOPlayerGUI:
             _perf_gauge('fisheye.tk_tick_ms',
                         (time.perf_counter() - _tick_t0) * 1000.0)
             try:
-                self.root.after(32, _tick)
+                delay = 16 if _latest_frame[0] is not None and s in ('fadein', 'active', 'fadeout') else 32
+                self.root.after(delay, _tick)
             except Exception:
                 pass
 

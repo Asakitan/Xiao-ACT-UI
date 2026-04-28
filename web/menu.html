@@ -1547,6 +1547,7 @@ html, body {
     filter: blur(12px);
     transform: translateX(28px);
     transition: opacity 0.24s ease, transform 0.26s ease, filter 0.28s ease, left 0.20s ease;
+    will-change: opacity, transform, filter;
     z-index: 84;
 }
 .sessionPlayers.with-child {
@@ -1566,6 +1567,16 @@ html, body {
     border: 1px solid rgba(201,198,198,0.58);
     border-radius: 2px;
     box-shadow: 0 20px 42px rgba(31,34,40,0.20), inset 0 0 0 1px rgba(104,228,255,0.08);
+    transform-origin: 0 50%;
+    will-change: transform, filter;
+}
+.sessionPlayers.show .sessionPlayersBox {
+    animation: sp-panel-open 0.34s cubic-bezier(.18,.86,.22,1) both;
+}
+@keyframes sp-panel-open {
+    0%   { transform: translateX(34px) scale(0.985); filter: blur(10px); }
+    58%  { transform: translateX(-3px) scale(1.006); filter: blur(1px); }
+    100% { transform: translateX(0) scale(1); filter: blur(0); }
 }
 .sp-header {
     height: 58px;
@@ -1627,6 +1638,14 @@ html, body {
     box-shadow: inset 3px 0 0 rgba(134,223,255,0.72);
     color: #555;
     font-size: 12px;
+    animation: sp-row-open 0.28s cubic-bezier(.2,.84,.22,1) both;
+    animation-delay: var(--sp-delay, 0ms);
+    will-change: opacity, transform, filter;
+}
+@keyframes sp-row-open {
+    0%   { opacity: 0; transform: translateX(18px); filter: blur(5px); }
+    66%  { opacity: 1; transform: translateX(-2px); filter: blur(0.5px); }
+    100% { opacity: 1; transform: translateX(0); filter: blur(0); }
 }
 .sp-row:nth-child(even) {
     background: rgba(247,248,249,0.88);
@@ -1662,6 +1681,7 @@ html, body {
     color: #aaa;
     font-size: 12px;
     line-height: 1.6;
+    animation: sp-row-open 0.28s cubic-bezier(.2,.84,.22,1) both;
 }
 .sp-more {
     padding: 11px 10px 9px;
@@ -1670,6 +1690,7 @@ html, body {
     color: #9a8a68;
     font-size: 11px;
     letter-spacing: 0.3px;
+    animation: sp-row-open 0.24s cubic-bezier(.2,.84,.22,1) both;
 }
 
 /* LeftInfo panel animations */
@@ -4014,6 +4035,7 @@ function _syncSessionPlayersAnchor(withChild) {
 function _makeSessionPlayerRow(row, idx) {
     var el = document.createElement('div');
     el.className = 'sp-row' + (row.is_self ? ' self' : '');
+    el.style.setProperty('--sp-delay', (Math.max(0, idx || 0) % 12) * 18 + 'ms');
     var name = row.name || '--';
     if (row.is_self && name !== '--') name = '* ' + name;
     el.innerHTML =
@@ -4142,13 +4164,15 @@ function playSound(id) {
 /* ═══ Fisheye backdrop — WebGL 60fps barrel distortion ═══ */
 var _feCanvas, _feGl, _feProg, _feTex, _feRunning = false, _feTime = 0;
 var _feStrLoc, _feTimLoc;
+var _feStopTimer = null, _feStopping = false;
 
 function _initFisheyeGL() {
     if (_feGl) return true;
     var bgHost = document.getElementById('menu-bg-layer') || document.getElementById('popup-overlay');
     _feCanvas = document.createElement('canvas');
     _feCanvas.style.cssText = 'position:fixed;inset:-3%;width:106%;height:106%;z-index:-1;' +
-        'pointer-events:none;opacity:0;filter:blur(10px);transition:opacity 0.5s ease,filter 0.42s ease;';
+        'pointer-events:none;opacity:0;filter:blur(10px);transform:scale(1.055);' +
+        'transition:opacity 0.52s ease,filter 0.46s ease,transform 0.62s cubic-bezier(.2,.8,.18,1);';
     bgHost.prepend(_feCanvas);
 
     var gl = _feCanvas.getContext('webgl', {alpha:true, antialias:false, premultipliedAlpha:false});
@@ -4229,10 +4253,16 @@ function _fisheyeFrame(ts) {
     var gl = _feGl;
     gl.viewport(0, 0, _feCanvas.width, _feCanvas.height);
     gl.uniform1f(_feTimLoc, _feTime);
+    gl.uniform1f(_feStrLoc, _feStopping ? 0.32 : 0.24);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
 function setFisheyeBg(dataUrl) {
+    if (_feStopTimer) {
+        clearTimeout(_feStopTimer);
+        _feStopTimer = null;
+    }
+    _feStopping = false;
     if (!_initFisheyeGL()) {
         /* WebGL fallback — plain CSS */
         var el = document.getElementById('fisheye-bg-fallback');
@@ -4242,11 +4272,16 @@ function setFisheyeBg(dataUrl) {
             el.id = 'fisheye-bg-fallback';
             el.style.cssText = 'position:fixed;inset:-3%;width:106%;height:106%;z-index:-1;' +
                 'background-size:cover;background-position:center;opacity:0;' +
-                'transition:opacity 0.5s,filter 0.42s;pointer-events:none;filter:blur(10px);';
+                'transform:scale(1.055);transition:opacity 0.52s ease,filter 0.46s ease,' +
+                'transform 0.62s cubic-bezier(.2,.8,.18,1);pointer-events:none;filter:blur(10px);';
             bgHost.prepend(el);
         }
         el.style.backgroundImage = 'url(' + dataUrl + ')';
-        setTimeout(function(){ el.style.opacity = '0.54'; el.style.filter = 'blur(0.45px)'; }, 50);
+        setTimeout(function(){
+            el.style.opacity = '0.54';
+            el.style.filter = 'blur(0.45px)';
+            el.style.transform = 'scale(1.0)';
+        }, 50);
         return;
     }
 
@@ -4259,26 +4294,41 @@ function setFisheyeBg(dataUrl) {
         if (!_feRunning) {
             _feRunning = true;
             requestAnimationFrame(_fisheyeFrame);
-            setTimeout(function(){ _feCanvas.style.opacity = '0.50'; _feCanvas.style.filter = 'blur(0.4px)'; }, 50);
+            setTimeout(function(){
+                _feCanvas.style.opacity = '0.52';
+                _feCanvas.style.filter = 'blur(0.35px)';
+                _feCanvas.style.transform = 'scale(1.0)';
+            }, 50);
         } else {
-            _feCanvas.style.opacity = '0.50';
-            _feCanvas.style.filter = 'blur(0.4px)';
+            _feCanvas.style.opacity = '0.52';
+            _feCanvas.style.filter = 'blur(0.35px)';
+            _feCanvas.style.transform = 'scale(1.0)';
         }
     };
     img.src = dataUrl;
 }
 
 function stopFisheyeBg() {
-    _feRunning = false;
+    _feStopping = true;
+    if (_feStopTimer) {
+        clearTimeout(_feStopTimer);
+    }
     if (_feCanvas) {
         _feCanvas.style.opacity = '0';
         _feCanvas.style.filter = 'blur(10px)';
+        _feCanvas.style.transform = 'scale(1.075)';
     }
     var fb = document.getElementById('fisheye-bg-fallback');
     if (fb) {
         fb.style.opacity = '0';
         fb.style.filter = 'blur(10px)';
+        fb.style.transform = 'scale(1.075)';
     }
+    _feStopTimer = setTimeout(function() {
+        _feRunning = false;
+        _feStopping = false;
+        _feStopTimer = null;
+    }, 620);
 }
 
 /* ═══ Menu Open / Close ═══ */
