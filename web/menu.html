@@ -1570,7 +1570,7 @@ html, body {
     transform-origin: 0 50%;
     will-change: transform, filter;
 }
-.sessionPlayers.show .sessionPlayersBox {
+.sessionPlayers.session-open-anim .sessionPlayersBox {
     animation: sp-panel-open 0.34s cubic-bezier(.18,.86,.22,1) both;
 }
 @keyframes sp-panel-open {
@@ -3999,6 +3999,7 @@ var sessionPlayersEl = document.getElementById('session-players');
 var _sessionPlayersPayload = { ok: true, count: 0, self_uid: '', players: [] };
 var _sessionPlayersVisible = false;
 var _sessionPlayersManualHidden = false;
+var _sessionPlayersAnimTimer = null;
 var _spRenderRows = [];
 var _spRenderedCount = 0;
 var _spRenderToken = 0;
@@ -4139,7 +4140,32 @@ function _renderSessionPlayers(dataJson, reveal) {
     if (reveal && sessionPlayersEl && menuOpen) {
         _sessionPlayersVisible = true;
         sessionPlayersEl.classList.add('show');
+        _playSessionPlayersOpenAnimation();
     }
+}
+
+function _playSessionPlayersOpenAnimation() {
+    if (!sessionPlayersEl) return;
+    var box = sessionPlayersEl.querySelector('.sessionPlayersBox');
+    if (_sessionPlayersAnimTimer) {
+        clearTimeout(_sessionPlayersAnimTimer);
+        _sessionPlayersAnimTimer = null;
+    }
+    sessionPlayersEl.classList.remove('session-open-anim');
+    if (box) {
+        box.style.animation = 'none';
+        void box.offsetWidth;
+        box.style.animation = '';
+    } else {
+        void sessionPlayersEl.offsetWidth;
+    }
+    sessionPlayersEl.classList.add('session-open-anim');
+    _sessionPlayersAnimTimer = setTimeout(function() {
+        if (sessionPlayersEl) {
+            sessionPlayersEl.classList.remove('session-open-anim');
+        }
+        _sessionPlayersAnimTimer = null;
+    }, 430);
 }
 
 function setSessionPlayersPayload(dataJson) {
@@ -4160,6 +4186,7 @@ function closeSessionPlayers(manual) {
     _sessionPlayersManualHidden = !!manual;
     if (sessionPlayersEl) {
         sessionPlayersEl.classList.remove('show');
+        sessionPlayersEl.classList.remove('session-open-anim');
     }
 }
 
