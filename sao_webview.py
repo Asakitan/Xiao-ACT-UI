@@ -1595,6 +1595,7 @@ class SAOWebViewGUI:
         self._menu_visible = False
         self._session_players = {}
         self._session_players_self_uid = 0
+        self._session_players_version = 0
         self._session_players_last_sig = None
         self._session_players_last_push_ts = 0.0
 
@@ -6411,6 +6412,7 @@ class SAOWebViewGUI:
         if uid <= 0:
             return
         now = time.time()
+        changed = False
         entry = self._session_players.get(uid)
         if not entry:
             entry = {
@@ -6422,20 +6424,29 @@ class SAOWebViewGUI:
                 'is_self': False,
             }
             self._session_players[uid] = entry
+            changed = True
         name = str(name or '').strip()
         fight_point = self._session_int(fight_point, 0)
-        if name:
+        if name and entry.get('name') != name:
             entry['name'] = name
-        if fight_point > 0:
+            changed = True
+        if fight_point > 0 and entry.get('fight_point') != fight_point:
             entry['fight_point'] = fight_point
-        entry['is_self'] = bool(entry.get('is_self') or is_self)
+            changed = True
+        next_is_self = bool(entry.get('is_self') or is_self)
+        if bool(entry.get('is_self')) != next_is_self:
+            entry['is_self'] = next_is_self
+            changed = True
         entry['updated_at'] = now
+        if changed:
+            self._session_players_version += 1
 
     def _sync_session_players_cache(self, gs=None):
         self_uid = self._session_self_uid()
         if self_uid > 0 and self_uid != self._session_players_self_uid:
             if self._session_players_self_uid:
                 self._session_players.clear()
+                self._session_players_version += 1
             self._session_players_self_uid = self_uid
 
         if gs is None:
@@ -6470,8 +6481,9 @@ class SAOWebViewGUI:
         value = SAOWebViewGUI._session_int(value, 0)
         return f'{value:,}' if value > 0 else '--'
 
-    def _get_session_player_rows(self) -> List[Dict[str, Any]]:
-        self._sync_session_players_cache(getattr(self, '_game_state', None))
+    def _get_session_player_rows(self, sync: bool = True) -> List[Dict[str, Any]]:
+        if sync:
+            self._sync_session_players_cache(getattr(self, '_game_state', None))
         self_uid = self._session_self_uid()
         rows = []
         for uid, entry in self._session_players.items():
@@ -6493,8 +6505,8 @@ class SAOWebViewGUI:
         ))
         return rows
 
-    def _build_session_players_payload(self):
-        rows = self._get_session_player_rows()
+    def _build_session_players_payload(self, sync: bool = True):
+        rows = self._get_session_player_rows(sync=sync)
         return {
             'ok': True,
             'count': len(rows),
@@ -6506,18 +6518,18 @@ class SAOWebViewGUI:
     def _sync_session_players_menu(self, force: bool = False):
         if not self.menu_win:
             return
-        payload = self._build_session_players_payload()
-        sig = tuple((
-            r.get('uid'),
-            r.get('name'),
-            r.get('fight_power_value'),
-            r.get('is_self'),
-        ) for r in payload.get('players', []))
+        self._sync_session_players_cache(getattr(self, '_game_state', None))
+        sig = (
+            len(self._session_players),
+            self._session_players_version,
+            str(self._session_self_uid() or ''),
+        )
         now = time.time()
         if not force and sig == self._session_players_last_sig:
             return
         if not force and now - self._session_players_last_push_ts < 0.5:
             return
+        payload = self._build_session_players_payload(sync=False)
         self._session_players_last_sig = sig
         self._session_players_last_push_ts = now
         self._eval_menu(
@@ -6562,7 +6574,7 @@ class SAOWebViewGUI:
             'file': '',
         }
         self._eval_menu(f'SAO.updateInfo({json.dumps(info, ensure_ascii=False)})')
-        self._sync_session_players_menu(force=bool(self._menu_visible))
+        self._sync_session_players_menu(force=False)
         # Sync menu settings (watched slots, sound, mode, etc.)
         self._sync_menu_settings()
         self._sync_all_panels()

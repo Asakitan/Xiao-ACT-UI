@@ -618,6 +618,8 @@ class HpOverlay:
         self._input_passthrough_enabled: Optional[bool] = None
         self._input_passthrough_poller_started = False
         self._drag_input_ignored = False
+        self._input_region_mode: Optional[str] = None
+        self._input_region_supported = True
 
         # HP group auto-hide on offline (web parity: debounce + fade)
         self._offline_debounce_t = 0.0   # when offline first detected
@@ -951,6 +953,7 @@ class HpOverlay:
         self._gpu_managed = False
         self._gpu_drag_active = False
         self._input_passthrough_enabled = None
+        self._input_region_mode = None
         self._drag_input_ignored = False
         self._visible = False
         self._exiting = False
@@ -2582,13 +2585,53 @@ class HpOverlay:
                 ex |= WS_EX_TRANSPARENT
             else:
                 ex &= ~WS_EX_TRANSPARENT
+            extra = WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+            if not self._gpu_managed:
+                extra |= WS_EX_LAYERED
             _user32.SetWindowLongW(
                 ctypes.c_void_p(hwnd), GWL_EXSTYLE,
-                ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+                ex | extra,
             )
             self._input_passthrough_enabled = enabled
         except Exception:
             pass
+
+    def _set_input_region(self, mode: str) -> bool:
+        mode = 'id' if mode == 'id' else 'full'
+        if mode == self._input_region_mode:
+            return True
+        hwnd = self._input_hwnd()
+        if not hwnd:
+            return False
+        try:
+            if mode == 'full':
+                ok = bool(_user32.SetWindowRgn(ctypes.c_void_p(hwnd), None, True))
+            else:
+                y_off = int(round(8 * (1.0 - self._enter_scale_t)))
+                pad_x, pad_y = 18, 10
+                left = max(0, ID_X - pad_x)
+                top = max(0, ID_Y + y_off - pad_y)
+                right = min(int(self.WIDTH), ID_X + ID_W + pad_x)
+                bottom = min(int(self.HEIGHT), ID_Y + ID_H + y_off + pad_y)
+                hrgn = ctypes.windll.gdi32.CreateRectRgn(
+                    int(left), int(top), int(right), int(bottom))
+                if not hrgn:
+                    return False
+                ok = bool(_user32.SetWindowRgn(ctypes.c_void_p(hwnd), hrgn, True))
+                # SetWindowRgn owns hrgn on success; delete only on failure.
+                if not ok:
+                    try:
+                        ctypes.windll.gdi32.DeleteObject(hrgn)
+                    except Exception:
+                        pass
+            if ok:
+                self._input_region_mode = mode
+                self._input_region_supported = True
+                return True
+        except Exception:
+            pass
+        self._input_region_supported = False
+        return False
 
     def _cursor_over_id_plate(self) -> bool:
         hwnd = self._input_hwnd()
@@ -2619,12 +2662,25 @@ class HpOverlay:
             return False
         if self._exiting or self._fade_target <= 0.0:
             return True
-        if self._hp_group_clickable():
-            return False
-        return not self._cursor_over_id_plate()
+        return False
 
     def _refresh_input_passthrough(self) -> None:
-        self._set_input_passthrough(self._should_input_passthrough())
+        if not self._visible or self._win is None:
+            self._set_input_region('full')
+            self._set_input_passthrough(False)
+            return
+        if self._exiting or self._fade_target <= 0.0:
+            self._set_input_region('full')
+            self._set_input_passthrough(True)
+            return
+        if not self._hp_group_clickable():
+            if self._set_input_region('id'):
+                self._set_input_passthrough(False)
+            else:
+                self._set_input_passthrough(not self._cursor_over_id_plate())
+            return
+        self._set_input_region('full')
+        self._set_input_passthrough(False)
 
     def _start_input_passthrough_poller(self) -> None:
         if self._input_passthrough_poller_started:

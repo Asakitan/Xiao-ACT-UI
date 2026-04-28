@@ -1663,6 +1663,14 @@ html, body {
     font-size: 12px;
     line-height: 1.6;
 }
+.sp-more {
+    padding: 11px 10px 9px;
+    margin: 2px 0 4px;
+    text-align: center;
+    color: #9a8a68;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+}
 
 /* LeftInfo panel animations */
 @keyframes padding_open {
@@ -3959,6 +3967,12 @@ var cbLine = document.getElementById('cb-line');
 var cbArrow = document.getElementById('cb-arrow');
 var sessionPlayersEl = document.getElementById('session-players');
 var _sessionPlayersPayload = { ok: true, count: 0, self_uid: '', players: [] };
+var _spRenderRows = [];
+var _spRenderedCount = 0;
+var _spRenderToken = 0;
+var _spRenderPending = false;
+var _SP_INITIAL_ROWS = 80;
+var _SP_BATCH_ROWS = 120;
 
 var currentActive = 'userInfo';
 var menuOpen = false;
@@ -3997,6 +4011,65 @@ function _syncSessionPlayersAnchor(withChild) {
     sessionPlayersEl.classList.toggle('with-child', !!withChild);
 }
 
+function _makeSessionPlayerRow(row, idx) {
+    var el = document.createElement('div');
+    el.className = 'sp-row' + (row.is_self ? ' self' : '');
+    var name = row.name || '--';
+    if (row.is_self && name !== '--') name = '* ' + name;
+    el.innerHTML =
+        '<div class="sp-name" title="' + _escHtml(row.name || '') + '">' + _escHtml(name) + '</div>' +
+        '<div class="sp-uid">' + _escHtml(row.uid || '--') + '</div>' +
+        '<div class="sp-power">' + _escHtml(row.fight_power || '--') + '</div>';
+    return el;
+}
+
+function _syncSessionPlayersMore(list) {
+    var old = list.querySelector('.sp-more');
+    if (old) old.remove();
+    if (_spRenderedCount >= _spRenderRows.length) return;
+    var more = document.createElement('div');
+    more.className = 'sp-more';
+    more.textContent = '继续滚动加载 · 已载入 ' + _spRenderedCount + '/' + _spRenderRows.length;
+    list.appendChild(more);
+}
+
+function _renderSessionPlayersBatch(token, batchSize) {
+    var list = document.getElementById('sp-list');
+    if (!list || token !== _spRenderToken) return;
+    _spRenderPending = false;
+    var old = list.querySelector('.sp-more');
+    if (old) old.remove();
+    var start = _spRenderedCount;
+    var end = Math.min(_spRenderRows.length, start + Math.max(1, batchSize || _SP_BATCH_ROWS));
+    var frag = document.createDocumentFragment();
+    for (var i = start; i < end; i++) {
+        frag.appendChild(_makeSessionPlayerRow(_spRenderRows[i], i));
+    }
+    list.appendChild(frag);
+    _spRenderedCount = end;
+    _syncSessionPlayersMore(list);
+    if (_spRenderedCount < _spRenderRows.length && list.scrollHeight <= list.clientHeight + 8) {
+        _scheduleSessionPlayersBatch(_SP_BATCH_ROWS);
+    }
+}
+
+function _scheduleSessionPlayersBatch(batchSize) {
+    if (_spRenderPending || _spRenderedCount >= _spRenderRows.length) return;
+    _spRenderPending = true;
+    var token = _spRenderToken;
+    window.requestAnimationFrame(function() {
+        _renderSessionPlayersBatch(token, batchSize || _SP_BATCH_ROWS);
+    });
+}
+
+function _maybeRenderMoreSessionPlayers() {
+    var list = document.getElementById('sp-list');
+    if (!list || _spRenderedCount >= _spRenderRows.length) return;
+    if (list.scrollTop + list.clientHeight >= list.scrollHeight - 96) {
+        _scheduleSessionPlayersBatch(_SP_BATCH_ROWS);
+    }
+}
+
 function openSourceDialog() {
     playSound('snd-panel');
     _syncSourceButtons();
@@ -4014,25 +4087,21 @@ function showSessionPlayers(dataJson) {
     }
     _sessionPlayersPayload = data || { ok: true, count: 0, self_uid: '', players: [] };
     var rows = Array.isArray(_sessionPlayersPayload.players) ? _sessionPlayersPayload.players : [];
+    var total = Number(_sessionPlayersPayload.count || rows.length || 0);
     var summary = document.getElementById('sp-summary');
     var list = document.getElementById('sp-list');
-    summary.textContent = '本次登录出现过 ' + rows.length + ' 人' +
+    _spRenderToken += 1;
+    _spRenderPending = false;
+    _spRenderRows = rows;
+    _spRenderedCount = 0;
+    summary.textContent = '本次登录出现过 ' + total + ' 人' +
         (_sessionPlayersPayload.self_uid ? ' · SELF ' + _sessionPlayersPayload.self_uid : '');
-    list.innerHTML = '';
+    list.textContent = '';
+    list.scrollTop = 0;
     if (!rows.length) {
         list.innerHTML = '<div class="sp-empty">等待抓包识别玩家<br>NO SESSION PLAYERS YET</div>';
     } else {
-        rows.forEach(function(row) {
-            var el = document.createElement('div');
-            el.className = 'sp-row' + (row.is_self ? ' self' : '');
-            var name = row.name || '--';
-            if (row.is_self && name !== '--') name = '* ' + name;
-            el.innerHTML =
-                '<div class="sp-name" title="' + _escHtml(row.name || '') + '">' + _escHtml(name) + '</div>' +
-                '<div class="sp-uid">' + _escHtml(row.uid || '--') + '</div>' +
-                '<div class="sp-power">' + _escHtml(row.fight_power || '--') + '</div>';
-            list.appendChild(el);
-        });
+        _renderSessionPlayersBatch(_spRenderToken, _SP_INITIAL_ROWS);
     }
     if (sessionPlayersEl && menuOpen) {
         sessionPlayersEl.classList.add('show');
@@ -4044,6 +4113,13 @@ function closeSessionPlayers() {
         sessionPlayersEl.classList.remove('show');
     }
 }
+
+(function() {
+    var list = document.getElementById('sp-list');
+    if (list) {
+        list.addEventListener('scroll', _maybeRenderMoreSessionPlayers, { passive: true });
+    }
+})();
 
 /* ═══ Sound helpers — via Python bridge ═══ */
 var _sndMap = {
