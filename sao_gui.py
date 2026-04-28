@@ -1096,7 +1096,13 @@ class SAOSessionPlayersPanel(tk.Frame):
                 return False
         self._SPGP_cls = _SPGP
         self._SPSnap_cls = _SPSnap
-        self._gpu_managed = bool(_SPGP is not None and _spgen())
+        _session_gpu_env = os.environ.get('SAO_GPU_SESSION_PLAYERS')
+        self._gpu_managed = bool(
+            _SPGP is not None
+            and _session_gpu_env is not None
+            and str(_session_gpu_env).strip().lower() not in ('', '0', 'false', 'no', 'off')
+            and _spgen()
+        )
         self._gpu_chroma = '#010101'
         super().__init__(parent, bg='#010101', highlightthickness=0, **kw)
         self._rows_provider = rows_provider
@@ -4155,7 +4161,7 @@ class SAOPlayerGUI:
         panel = stack.player_panel
         self._menu_left_stack = stack
         self._player_panel = panel
-        self._session_players_panel = None
+        self._session_players_panel = stack.session_panel
 
         panel.update_level(self._level, self._level_extra, self._season_exp)
 
@@ -4171,6 +4177,7 @@ class SAOPlayerGUI:
         # 模式变更 → 自动保存
         panel._on_mode_change = lambda m: self._set_setting('shift_mode', m)
 
+        self._refresh_session_players_panel(force=True)
         return stack
 
     def _compute_menu_refresh_signature(self):
