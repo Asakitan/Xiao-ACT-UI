@@ -15,7 +15,7 @@ import ctypes
 import math
 import time
 import threading
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont
 import numpy as np
@@ -1069,6 +1069,195 @@ class SAOPlayerPanel(tk.Frame):
             pass
 
 
+class SAOSessionPlayersPanel(tk.Frame):
+    """SAO 菜单内的本次登录玩家列表。"""
+
+    def __init__(self, parent, rows_provider=None, **kw):
+        super().__init__(parent, bg='#010101', highlightthickness=0, **kw)
+        self._rows_provider = rows_provider
+        self._rows_sig = None
+        self._canvas_window = None
+
+        self._box = tk.Frame(self, bg='#f7f7f6', width=304, height=392,
+                             highlightthickness=1, highlightbackground='#d4d0d0')
+        self._box.pack_propagate(False)
+        self._box.pack(anchor='n')
+
+        self._header = tk.Frame(self._box, bg='#ffffff', height=54)
+        self._header.pack(fill=tk.X)
+        self._header.pack_propagate(False)
+        tk.Label(self._header, text='SESSION PLAYERS',
+                 bg='#ffffff', fg='#646364',
+                 font=get_sao_font(11, True)).pack(anchor='w', padx=14, pady=(8, 0))
+        self._summary = tk.Label(self._header, text='本次登录出现过 0 人',
+                                 bg='#ffffff', fg='#aaaaaa',
+                                 font=get_cjk_font(8))
+        self._summary.pack(anchor='w', padx=14, pady=(1, 0))
+
+        self._head = tk.Frame(self._box, bg='#eceff2', height=28)
+        self._head.pack(fill=tk.X)
+        self._head.pack_propagate(False)
+        for text, width, anchor in (
+                ('NAME', 16, 'w'), ('UID', 11, 'center'), ('POWER', 10, 'e')):
+            tk.Label(self._head, text=text, bg='#eceff2', fg='#7a8792',
+                     font=get_sao_font(7, True), width=width,
+                     anchor=anchor).pack(side=tk.LEFT, padx=(10 if text == 'NAME' else 0, 0))
+
+        self._body = tk.Frame(self._box, bg='#eeeeee')
+        self._body.pack(fill=tk.BOTH, expand=True)
+        self._canvas = tk.Canvas(self._body, bg='#eeeeee', highlightthickness=0,
+                                 bd=0, width=286, height=298)
+        self._scrollbar = tk.Scrollbar(self._body, orient=tk.VERTICAL,
+                                       command=self._canvas.yview,
+                                       width=8, bg='#eeeeee', troughcolor='#eeeeee',
+                                       activebackground='#f3af12')
+        self._canvas.configure(yscrollcommand=self._scrollbar.set)
+        self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self._rows_host = tk.Frame(self._canvas, bg='#eeeeee')
+        self._canvas_window = self._canvas.create_window(
+            (0, 0), window=self._rows_host, anchor='nw')
+        self._rows_host.bind('<Configure>', self._on_rows_configure)
+        self._canvas.bind('<Configure>', self._on_canvas_configure)
+        self._bind_wheel(self)
+        self.update_rows(force=True)
+
+    def _on_rows_configure(self, _event=None):
+        try:
+            self._canvas.configure(scrollregion=self._canvas.bbox('all'))
+        except Exception:
+            pass
+
+    def _on_canvas_configure(self, event):
+        try:
+            self._canvas.itemconfigure(self._canvas_window, width=event.width)
+        except Exception:
+            pass
+
+    def _bind_wheel(self, widget):
+        for seq in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            widget.bind(seq, self._on_mousewheel, add='+')
+
+    def _bind_wheel_tree(self, widget):
+        self._bind_wheel(widget)
+        try:
+            for child in widget.winfo_children():
+                self._bind_wheel_tree(child)
+        except Exception:
+            pass
+
+    def _on_mousewheel(self, event):
+        try:
+            if getattr(event, 'num', None) == 4:
+                delta = -3
+            elif getattr(event, 'num', None) == 5:
+                delta = 3
+            else:
+                delta = int(-1 * (event.delta / 120))
+                if delta == 0:
+                    delta = -1 if event.delta > 0 else 1
+            self._canvas.yview_scroll(delta, 'units')
+        except Exception:
+            pass
+        return 'break'
+
+    @staticmethod
+    def _short_name(name: str) -> str:
+        name = str(name or '').strip()
+        if not name:
+            return '--'
+        return name if len(name) <= 14 else name[:13] + '…'
+
+    def update_rows(self, rows=None, force: bool = False):
+        if rows is None:
+            try:
+                rows = self._rows_provider() if self._rows_provider else []
+            except Exception:
+                rows = []
+        rows = list(rows or [])
+        sig = tuple((
+            str(r.get('uid') or ''),
+            str(r.get('name') or ''),
+            int(r.get('fight_power_value') or 0),
+            bool(r.get('is_self')),
+        ) for r in rows)
+        if not force and sig == self._rows_sig:
+            return
+        self._rows_sig = sig
+        for child in self._rows_host.winfo_children():
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        self._summary.configure(text=f'本次登录出现过 {len(rows)} 人')
+        if not rows:
+            empty = tk.Label(
+                self._rows_host,
+                text='等待抓包识别玩家\nNo session players yet',
+                bg='#eeeeee', fg='#a0a0a0', justify=tk.CENTER,
+                font=get_cjk_font(9), pady=34)
+            empty.pack(fill=tk.X)
+            self._bind_wheel_tree(empty)
+            self._on_rows_configure()
+            return
+
+        for idx, row in enumerate(rows):
+            is_self = bool(row.get('is_self'))
+            bg = '#fffaf0' if is_self else ('#f8f8f8' if idx % 2 == 0 else '#f1f3f4')
+            fg = '#4f5962'
+            item = tk.Frame(self._rows_host, bg=bg, height=38,
+                            highlightthickness=0)
+            item.pack(fill=tk.X, padx=6, pady=(5 if idx == 0 else 0, 0))
+            item.pack_propagate(False)
+            tk.Frame(item, bg=('#f3af12' if is_self else '#86dfff'),
+                     width=3).pack(side=tk.LEFT, fill=tk.Y)
+            name_text = self._short_name(row.get('name') or '')
+            if is_self:
+                name_text = f'* {name_text}'
+            tk.Label(item, text=name_text, bg=bg, fg=fg,
+                     font=get_cjk_font(9, is_self), anchor='w',
+                     width=14).pack(side=tk.LEFT, padx=(8, 4), fill=tk.Y)
+            tk.Label(item, text=str(row.get('uid') or '--'), bg=bg, fg='#8a97a3',
+                     font=get_sao_font(7), anchor='center',
+                     width=11).pack(side=tk.LEFT, fill=tk.Y)
+            tk.Label(item, text=str(row.get('fight_power') or '--'), bg=bg,
+                     fg=('#d9980e' if is_self else '#6d7379'),
+                     font=get_sao_font(8, is_self), anchor='e',
+                     width=10).pack(side=tk.RIGHT, padx=(2, 8), fill=tk.Y)
+            self._bind_wheel_tree(item)
+        self._on_rows_configure()
+
+    def sync_pulse(self):
+        self.update_rows(force=True)
+
+
+class SAOMenuLeftStack(tk.Frame):
+    """左侧区域: 本次登录玩家列表 + 原玩家信息面板。"""
+
+    def __init__(self, parent, username='Player', profession='',
+                 rows_provider=None, **kw):
+        super().__init__(parent, bg='#010101', highlightthickness=0, **kw)
+        self.session_panel = SAOSessionPlayersPanel(self, rows_provider=rows_provider)
+        self.player_panel = SAOPlayerPanel(self, username=username, profession=profession)
+        self._active = False
+        self._top = getattr(self.player_panel, '_top', None)
+        self._target_w = getattr(self.player_panel, '_target_w', 0)
+        self.session_panel.pack(side=tk.LEFT, anchor='n', padx=(0, 18))
+        self.player_panel.pack(side=tk.LEFT, anchor='n')
+
+    def set_active(self, active: bool):
+        self._active = bool(active)
+        self.session_panel.update_rows()
+        self.player_panel.set_active(active)
+
+    def sync_pulse(self):
+        self.session_panel.sync_pulse()
+        if hasattr(self.player_panel, 'sync_pulse'):
+            try:
+                self.player_panel.sync_pulse()
+            except Exception:
+                pass
+
 
 # ══════════════════════════════════════════════════════════
 #  SAO Player GUI — 纯悬浮 SAO Menu 架构
@@ -1111,6 +1300,11 @@ class SAOPlayerGUI:
         self._panels_hidden = False  # 一键隐藏所有面板
         self._hidden_panels_snapshot = []  # 隐藏前记录哪些面板是开的
         self._player_panel = None  # 当 SAO 菜单打开时设置
+        self._session_players_panel = None
+        self._session_players = {}
+        self._session_players_self_uid = 0
+        self._last_session_players_panel_sig = None
+        self._last_session_players_panel_push_ts = 0.0
         self._picker = None        # SAOFilePicker 引用 (防止 GC)
         self._status_panel = None  # 浮动状态面板
         self._update_panel = None  # 浮动更新面板
@@ -1830,6 +2024,59 @@ class SAOPlayerGUI:
             try: self._dps_tracker.on_damage_event(event)
             except Exception: pass
 
+    def _is_dead_state(self, gs) -> bool:
+        if gs is None:
+            return False
+        try:
+            hp_max = int(getattr(gs, 'hp_max', 0) or 0)
+            hp_current = int(getattr(gs, 'hp_current', 0) or 0)
+            hp_pct = float(getattr(gs, 'hp_pct', 1.0) or 0.0)
+        except Exception:
+            return False
+        return hp_max > 0 and hp_current <= 0 and hp_pct <= 0.001
+
+    def _bump_boss_hp_target_hold(self, reason: str = ''):
+        target_uuid = int(getattr(self, '_bb_last_target_uuid', 0) or 0)
+        if not target_uuid:
+            return
+        bridge = getattr(self, '_packet_engine', None)
+        if not bridge:
+            return
+        try:
+            monster = bridge.get_monster(target_uuid)
+            if not monster:
+                return
+            if not self._boss_monster_usable(monster):
+                return
+            now = time.time()
+            self._bb_recent_targets[target_uuid] = now
+            self._bb_last_damage_ts = now
+            self._last_boss_hp_push_sig = None
+        except Exception:
+            pass
+
+    def _boss_monster_usable(self, monster) -> bool:
+        if not monster:
+            return False
+        try:
+            hp = int(getattr(monster, 'hp', 0) or 0)
+            max_hp = int(getattr(monster, 'max_hp', 0) or 0)
+            is_dead = bool(getattr(monster, 'is_dead', False))
+            if is_dead and hp > 0:
+                monster.is_dead = False
+                monster.last_update = time.time()
+                is_dead = False
+            return (not is_dead) and (max_hp > 0 or hp > 0)
+        except Exception:
+            return False
+
+    def _sync_boss_hp_revive_hold(self, gs):
+        dead_now = self._is_dead_state(gs)
+        dead_prev = bool(getattr(self, '_last_dead_state', False))
+        if (not dead_now) and dead_prev:
+            self._bump_boss_hp_target_hold('revive')
+        self._last_dead_state = dead_now
+
     def _on_monster_update(self, monster_data):
         """Monster update from packet_parser → boss raid engine + BossHP pretrack."""
         if self._boss_raid_engine:
@@ -1840,14 +2087,13 @@ class SAOPlayerGUI:
             _max_hp = int(monster_data.get('max_hp', 0) or 0)
             _hp = int(monster_data.get('hp', 0) or 0)
             _is_dead = bool(monster_data.get('is_dead', False))
-            if _uuid and (_max_hp > 0 or _hp > 0) and not _is_dead:
+            if _uuid and (_max_hp > 0 or _hp > 0) and (not _is_dead or _hp > 0):
                 _should_adopt = not bool(self._bb_last_target_uuid)
                 if not _should_adopt:
                     try:
                         _bridge = getattr(self, '_packet_engine', None)
                         _cur = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
-                        if (_cur is None or getattr(_cur, 'is_dead', False)
-                                or (getattr(_cur, 'max_hp', 0) == 0 and getattr(_cur, 'hp', 0) == 0)):
+                        if not self._boss_monster_usable(_cur):
                             _should_adopt = True
                     except Exception:
                         pass
@@ -2473,6 +2719,7 @@ class SAOPlayerGUI:
         if self._destroyed or gs is None:
             return
         try:
+            self._sync_session_players_cache(gs)
             level_base = int(getattr(gs, 'level_base', 0) or self._level or 1)
             level_extra = int(getattr(gs, 'level_extra', 0) or 0)
             season_exp = int(getattr(gs, 'season_exp', 0) or 0)
@@ -2504,6 +2751,7 @@ class SAOPlayerGUI:
                         panel.update_level(self._level, self._level_extra, self._season_exp)
                 except Exception:
                     pass
+            self._refresh_session_players_panel()
 
             if self._hp_overlay and getattr(self, '_hp_ov_visible', True):
                 hp = int(getattr(gs, 'hp_current', 0) or 0)
@@ -2542,6 +2790,11 @@ class SAOPlayerGUI:
         """
         # ── DPS tracker: 更新自身玩家信息 ──
         _pp_now = time.time()
+        self._sync_session_players_cache(gs)
+        self._sync_boss_hp_revive_hold(gs)
+        menu = getattr(self, '_sao_menu', None)
+        if menu and getattr(menu, 'visible', False):
+            self._refresh_session_players_panel()
         if self._dps_tracker and gs is not None and getattr(gs, 'player_id', ''):
             try:
                 _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
@@ -2674,24 +2927,25 @@ class SAOPlayerGUI:
                 _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
 
                 _now = time.time()
-                _bb_timeout = self._combat_damage_timeout_s()
+                _bb_timeout = self._boss_hp_hold_timeout_s()
                 _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
 
                 for uuid in list(self._bb_recent_targets.keys()):
-                    if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout * 3:
+                    if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout:
                         self._bb_recent_targets.pop(uuid, None)
 
                 _bb_direct_data = None
                 _bb_direct_hp = 0
                 _bb_direct_max = 0
+                _bb_additional = []
                 _bridge = getattr(self, '_packet_engine', None)
                 if not _bb_raid_active:
                     if _bridge and _has_recent_self_damage and self._bb_recent_targets:
                         _recent_monsters = []
                         for uuid, dmg_ts in list(self._bb_recent_targets.items()):
-                            if _now - dmg_ts < _bb_timeout * 1.5:
+                            if _now - dmg_ts < _bb_timeout:
                                 m = _bridge.get_monster(uuid)
-                                if m and not getattr(m, 'is_dead', False) and (getattr(m, 'max_hp', 0) > 0 or getattr(m, 'hp', 0) > 0):
+                                if self._boss_monster_usable(m):
                                     _recent_monsters.append(m)
                         if _recent_monsters:
                             def _sort_key(m):
@@ -2707,10 +2961,23 @@ class SAOPlayerGUI:
                             _bb_direct_hp = max(0, int(getattr(main_m, 'hp', 0)))
                             _bb_direct_data = main_m.to_dict() if hasattr(main_m, 'to_dict') else {}
                             _bb_src = 'packet'
+                            for m in _recent_monsters[1:]:
+                                if len(_bb_additional) >= 4:
+                                    break
+                                d = m.to_dict() if hasattr(m, 'to_dict') else {}
+                                _bb_additional.append({
+                                    'name': str(d.get('name', 'Unit'))[:20],
+                                    'hp_pct': round(float(d.get('hp_pct', 0.0)), 3),
+                                    'extinction_pct': round(float(d.get('extinction_pct', 0.0)), 3),
+                                    'has_break_data': bool(d.get('has_break_data', False)),
+                                    'breaking_stage': int(d.get('breaking_stage', -1)),
+                                    'shield_active': bool(d.get('shield_active', False)),
+                                    'shield_pct': round(float(d.get('shield_pct', 0.0)), 3),
+                                })
                     elif self._bb_last_target_uuid and not _has_recent_self_damage:
                         try:
                             _m = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
-                            if _m and not getattr(_m, 'is_dead', False) and (getattr(_m, 'max_hp', 0) > 0 or getattr(_m, 'hp', 0) > 0):
+                            if self._boss_monster_usable(_m):
                                 _bb_direct_max = int(getattr(_m, 'max_hp', 0)) or int(getattr(_m, 'hp', 0))
                                 _bb_direct_hp = max(0, int(getattr(_m, 'hp', 0)))
                                 _bb_direct_data = _m.to_dict() if hasattr(_m, 'to_dict') else {}
@@ -2782,9 +3049,19 @@ class SAOPlayerGUI:
                     bool(_bb_data.get('in_overdrive', False)),
                     bool(_bb_data.get('invincible', False)),
                     str(_bb_data.get('boss_name') or ''),
+                    tuple((
+                        str(u.get('name') or ''),
+                        round(float(u.get('hp_pct') or 0.0), 3),
+                        round(float(u.get('extinction_pct') or 0.0), 3),
+                        bool(u.get('has_break_data', False)),
+                        int(u.get('breaking_stage') or -1),
+                        bool(u.get('shield_active', False)),
+                        round(float(u.get('shield_pct') or 0.0), 3),
+                    ) for u in _bb_additional),
                 )
                 if _bb_sig != self._last_boss_hp_push_sig:
                     self._last_boss_hp_push_sig = _bb_sig
+                    _bb_data['additional'] = _bb_additional
                     self._boss_hp_overlay.update(_bb_data)
             except Exception:
                 pass
@@ -3216,12 +3493,144 @@ class SAOPlayerGUI:
     # ══════════════════════════════════════════════
     #  SAO 菜单 = 主界面
     # ══════════════════════════════════════════════
+    @staticmethod
+    def _session_int(value, default: int = 0) -> int:
+        try:
+            if value is None:
+                return default
+            return int(value)
+        except Exception:
+            try:
+                text = str(value).strip()
+                return int(text) if text.isdigit() else default
+            except Exception:
+                return default
+
+    def _session_self_uid(self) -> int:
+        for source in (
+                getattr(self, '_game_state', None),
+                getattr(getattr(self, '_state_mgr', None), 'state', None)):
+            uid = self._session_int(getattr(source, 'player_id', 0), 0)
+            if uid > 0:
+                return uid
+        return 0
+
+    def _merge_session_player(self, uid, name='', fight_point=0, is_self=False):
+        uid = self._session_int(uid, 0)
+        if uid <= 0:
+            return
+        now = time.time()
+        entry = self._session_players.get(uid)
+        if not entry:
+            entry = {
+                'uid': uid,
+                'name': '',
+                'fight_point': 0,
+                'first_seen': now,
+                'updated_at': now,
+                'is_self': False,
+            }
+            self._session_players[uid] = entry
+        name = str(name or '').strip()
+        fight_point = self._session_int(fight_point, 0)
+        if name:
+            entry['name'] = name
+        if fight_point > 0:
+            entry['fight_point'] = fight_point
+        entry['is_self'] = bool(entry.get('is_self') or is_self)
+        entry['updated_at'] = now
+
+    def _sync_session_players_cache(self, gs=None):
+        self_uid = self._session_self_uid()
+        if self_uid > 0 and self_uid != self._session_players_self_uid:
+            if self._session_players_self_uid:
+                self._session_players.clear()
+            self._session_players_self_uid = self_uid
+
+        if gs is None:
+            gs = getattr(self, '_game_state', None)
+        if gs is not None:
+            gs_uid = self._session_int(getattr(gs, 'player_id', 0), 0)
+            self._merge_session_player(
+                gs_uid,
+                getattr(gs, 'player_name', '') or self._username or '',
+                getattr(gs, 'fight_point', 0) or 0,
+                is_self=bool(gs_uid and gs_uid == self_uid),
+            )
+
+        bridge = getattr(self, '_packet_engine', None)
+        if not bridge:
+            return
+        try:
+            players = bridge.get_players() or {}
+        except Exception:
+            players = {}
+        for raw_uid, pdata in players.items():
+            uid = self._session_int(raw_uid, 0) or self._session_int(getattr(pdata, 'uid', 0), 0)
+            self._merge_session_player(
+                uid,
+                getattr(pdata, 'name', '') or '',
+                getattr(pdata, 'fight_point', 0) or 0,
+                is_self=bool(uid and uid == self_uid),
+            )
+
+    @staticmethod
+    def _format_session_power(value) -> str:
+        value = SAOPlayerGUI._session_int(value, 0)
+        return f'{value:,}' if value > 0 else '--'
+
+    def _get_session_player_rows(self) -> List[Dict[str, Any]]:
+        self._sync_session_players_cache(getattr(self, '_game_state', None))
+        rows = []
+        self_uid = self._session_self_uid()
+        for uid, entry in self._session_players.items():
+            fp = self._session_int(entry.get('fight_point'), 0)
+            is_self = bool(uid and uid == self_uid) or bool(entry.get('is_self'))
+            rows.append({
+                'uid': str(uid) if uid else '--',
+                'name': str(entry.get('name') or ''),
+                'fight_power': self._format_session_power(fp),
+                'fight_power_value': fp,
+                'is_self': is_self,
+                'first_seen': float(entry.get('first_seen') or 0.0),
+            })
+        rows.sort(key=lambda r: (
+            0 if r.get('is_self') else 1,
+            -int(r.get('fight_power_value') or 0),
+            str(r.get('name') or ''),
+            str(r.get('uid') or ''),
+        ))
+        return rows
+
+    def _refresh_session_players_panel(self, force: bool = False):
+        panel = getattr(self, '_session_players_panel', None)
+        if not panel:
+            return
+        rows = self._get_session_player_rows()
+        sig = tuple((r.get('uid'), r.get('name'), r.get('fight_power_value'), r.get('is_self')) for r in rows)
+        now = time.time()
+        if not force and sig == self._last_session_players_panel_sig:
+            return
+        if not force and now - self._last_session_players_panel_push_ts < 0.5:
+            return
+        self._last_session_players_panel_sig = sig
+        self._last_session_players_panel_push_ts = now
+        try:
+            panel.update_rows(rows, force=force)
+        except Exception:
+            pass
+
     def _make_player_panel(self, parent):
         """工厂: 为 SAO 菜单创建左侧信息面板"""
-        panel = SAOPlayerPanel(parent,
-                               username=self._username or 'Player',
-                               profession=self._profession or '')
+        stack = SAOMenuLeftStack(
+            parent,
+            username=self._username or 'Player',
+            profession=self._profession or '',
+            rows_provider=self._get_session_player_rows,
+        )
+        panel = stack.player_panel
         self._player_panel = panel
+        self._session_players_panel = stack.session_panel
 
         panel.update_level(self._level, self._level_extra, self._season_exp)
 
@@ -3237,7 +3646,8 @@ class SAOPlayerGUI:
         # 模式变更 → 自动保存
         panel._on_mode_change = lambda m: self._set_setting('shift_mode', m)
 
-        return panel
+        self._refresh_session_players_panel(force=True)
+        return stack
 
     def _compute_menu_refresh_signature(self):
         # v2.3.15: cache the signature for 200ms to avoid recomputing
@@ -3752,6 +4162,7 @@ class SAOPlayerGUI:
         self._lift_loop_active = False
         # 延迟启动鱼眼叠加 (等菜单渲染完再截图), 带重试确保首次也能生效
         self._start_fisheye_with_retry(retries=5, delay=80)
+        self._refresh_session_players_panel(force=True)
         try:
             self.root.after(90, self._restore_entity_menu_state)
         except Exception:
@@ -3811,6 +4222,7 @@ class SAOPlayerGUI:
         self._cancel_pending_menu_refresh()
         self._persist_entity_menu_state(save_now=False)
         self._player_panel = None
+        self._session_players_panel = None
         self._maybe_stop_fisheye()
         if not self._destroyed:
             pass  # 呼吸动画已禁用 (固定位置)
@@ -5882,6 +6294,17 @@ class SAOPlayerGUI:
         if v <= 0:
             return 86400.0
         return float(max(60.0, v))
+
+    def _boss_hp_hold_timeout_s(self) -> float:
+        """BossHP should survive death/revive and long mechanic downtime."""
+        try:
+            raw = self._get_setting('boss_hp_hold_timeout_s', 300)
+            v = float(raw if raw is not None else 300)
+        except Exception:
+            v = 300.0
+        if v <= 0:
+            return 86400.0
+        return float(max(180.0, v, self._combat_damage_timeout_s()))
 
     @staticmethod
     def _empty_dps_snapshot():

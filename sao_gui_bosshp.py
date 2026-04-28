@@ -260,7 +260,7 @@ class BossHpOverlay:
     # Canvas size: 560×88 root panel plus the same outer FX bleed used by
     # web/boss_hp.html (`break-burst-layer` is 620×108 at -30,-10).
     WIDTH = 620
-    HEIGHT = 128
+    HEIGHT = 184
 
     # Panel (the olive cover)
     PANEL_X = 30
@@ -293,6 +293,12 @@ class BossHpOverlay:
     BREAK_TRACK_W = 404
     BREAK_TRACK_H = 6
     BREAK_TEXT_X = BREAK_TRACK_X + BREAK_TRACK_W + 7
+
+    # Secondary unit mini panels (mirrors web/boss_hp.html additional-units).
+    ADD_Y = PANEL_Y + PANEL_H + 12
+    ADD_W = 136
+    ADD_H = 40
+    ADD_GAP = 8
 
     # ── Palette (matches CSS :root) ────────────────────────────────
     # v2.2.0: SAO Alert flat hi-tech — 纯白+略灰 (alpha 沿用)
@@ -444,6 +450,7 @@ class BossHpOverlay:
         self._current_hp = 0.0
         self._total_hp = 0.0
         self._hp_source = ''
+        self._additional_units: List[Dict[str, Any]] = []
 
         # FX state
         self._damage_flash_start = 0.0
@@ -711,6 +718,7 @@ class BossHpOverlay:
         if data is None:
             return
         if not data.get('active', False):
+            self._additional_units = []
             # Boss inactive → animate out.
             if self._visible and not self._exiting:
                 self.hide()
@@ -755,6 +763,8 @@ class BossHpOverlay:
         self._current_hp = float(data.get('current_hp') or 0)
         self._total_hp = float(data.get('total_hp') or 0)
         self._hp_source = str(data.get('hp_source') or '')
+        self._additional_units = self._normalize_additional_units(
+            data.get('additional') or [])
 
         shield_active = bool(data.get('shield_active', False))
         shield_pct = max(0.0, min(1.0, float(data.get('shield_pct') or 0)))
@@ -843,6 +853,36 @@ class BossHpOverlay:
         self._invincible = bool(data.get('invincible', False))
 
         self._schedule_tick(immediate=True)
+
+    def _normalize_additional_units(self, units: Any) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        if not isinstance(units, list):
+            return normalized
+        for raw in units[:4]:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                hp_pct = max(0.0, min(1.0, float(raw.get('hp_pct') or 0.0)))
+            except Exception:
+                hp_pct = 0.0
+            try:
+                ext_pct = max(0.0, min(1.0, float(raw.get('extinction_pct') or 0.0)))
+            except Exception:
+                ext_pct = 0.0
+            try:
+                shield_pct = max(0.0, min(1.0, float(raw.get('shield_pct') or 0.0)))
+            except Exception:
+                shield_pct = 0.0
+            normalized.append({
+                'name': str(raw.get('name') or 'Unit')[:20],
+                'hp_pct': hp_pct,
+                'extinction_pct': ext_pct,
+                'has_break_data': bool(raw.get('has_break_data', False)),
+                'breaking_stage': int(raw.get('breaking_stage') or -1),
+                'shield_active': bool(raw.get('shield_active', False)),
+                'shield_pct': shield_pct,
+            })
+        return normalized
 
     def _trigger_root_pulse(self, mode: str, duration: float) -> None:
         self._root_pulse_mode = str(mode or '')
@@ -1431,6 +1471,7 @@ class BossHpOverlay:
         if self._break_burst_start and \
            now - self._break_burst_start < self.BREAK_BURST_FX_S:
             self._draw_break_burst(img, y_off, now)
+        self._draw_additional_units(img, y_off)
         # Invincible: red inner glow. Overdrive: gold inner glow (if not invincible).
         if self._invincible:
             self._draw_invincible_glow(img, y_off, now)
@@ -1503,6 +1544,18 @@ class BossHpOverlay:
             br_phase_q = int(((now * 1.6) % 1.0) * 24)
         else:
             br_phase_q = -1
+        additional_sig = tuple(
+            (
+                str(u.get('name') or ''),
+                int(round(float(u.get('hp_pct') or 0.0) * 100)),
+                int(round(float(u.get('extinction_pct') or 0.0) * 100)),
+                bool(u.get('has_break_data', False)),
+                int(u.get('breaking_stage') or -1),
+                bool(u.get('shield_active', False)),
+                int(round(float(u.get('shield_pct') or 0.0) * 100)),
+            )
+            for u in self._additional_units
+        )
         return (
             int(self.WIDTH), int(self.HEIGHT), y_off,
             self._boss_name, self._hp_source,
@@ -1517,6 +1570,7 @@ class BossHpOverlay:
             svfx_q, bvfx_q, rpulse_q,
             self._shield_vfx_mode, self._break_vfx_mode, self._root_pulse_mode,
             shield_sweep_q, od_q, br_phase_q,
+            additional_sig,
         )
 
     def _draw_root_outer_pulse(self, img: Image.Image, y_off: int,
@@ -2614,6 +2668,107 @@ class BossHpOverlay:
 
         if fx:
             img.alpha_composite(_clip_alpha(fx, bar_mask))
+
+    def _draw_additional_units(self, img: Image.Image, y_off: int) -> None:
+        units = list(self._additional_units or [])[:4]
+        if not units:
+            return
+
+        n = len(units)
+        total_w = n * self.ADD_W + (n - 1) * self.ADD_GAP
+        start_x = int(round((self.WIDTH - total_w) / 2))
+        y = self.ADD_Y + y_off
+        shadow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shadow, 'RGBA')
+        for idx, unit in enumerate(units):
+            x = start_x + idx * (self.ADD_W + self.ADD_GAP)
+            poly = [
+                (x + 8, y), (x + self.ADD_W - 8, y),
+                (x + self.ADD_W, y + 8), (x + self.ADD_W, y + self.ADD_H),
+                (x + 8, y + self.ADD_H), (x, y + self.ADD_H - 8),
+            ]
+            sd.polygon(_offset_poly(poly, 2, 4), fill=(22, 28, 36, 46))
+        img.alpha_composite(_gpu_blur(shadow, 4))
+
+        draw = ImageDraw.Draw(img, 'RGBA')
+        for idx, unit in enumerate(units):
+            x = start_x + idx * (self.ADD_W + self.ADD_GAP)
+            poly = [
+                (x + 8, y), (x + self.ADD_W - 8, y),
+                (x + self.ADD_W, y + 8), (x + self.ADD_W, y + self.ADD_H),
+                (x + 8, y + self.ADD_H), (x, y + self.ADD_H - 8),
+            ]
+            mask = Image.new('L', (self.ADD_W, self.ADD_H), 0)
+            local_poly = [(px - x, py - y) for px, py in poly]
+            ImageDraw.Draw(mask).polygon(local_poly, fill=255)
+
+            bg = Image.new('RGBA', (self.ADD_W, self.ADD_H), (0, 0, 0, 0))
+            bg_arr = np.zeros((self.ADD_H, self.ADD_W, 4), dtype=np.uint8)
+            top = np.array(self.COVER_A, dtype=np.float32)
+            bot = np.array(self.COVER_B, dtype=np.float32)
+            for yy in range(self.ADD_H):
+                t = yy / max(1, self.ADD_H - 1)
+                bg_arr[yy, :, :] = (top * (1.0 - t) + bot * t).astype(np.uint8)
+            bg = Image.fromarray(bg_arr, 'RGBA')
+            img.alpha_composite(_clip_alpha(bg, mask), (x, y))
+
+            draw.line(poly + [poly[0]], fill=(104, 228, 255, 188), width=1)
+            draw.line((x + 4, y + 4, x + 18, y + 4), fill=(255, 255, 255, 92), width=1)
+            draw.line((x + self.ADD_W - 20, y + self.ADD_H - 4,
+                       x + self.ADD_W - 5, y + self.ADD_H - 4),
+                      fill=(243, 175, 18, 160), width=1)
+
+            hp_pct = max(0.0, min(1.0, float(unit.get('hp_pct') or 0.0)))
+            hp_x = x + 10
+            hp_y = y + 5
+            hp_w = self.ADD_W - 20
+            hp_h = 11
+            draw.rounded_rectangle((hp_x, hp_y, hp_x + hp_w, hp_y + hp_h),
+                                   radius=2, fill=(54, 70, 78, 56))
+            fill_w = int(round(hp_w * hp_pct))
+            if fill_w > 0:
+                bar = Image.new('RGBA', (fill_w, hp_h), (0, 0, 0, 0))
+                arr = np.zeros((hp_h, fill_w, 4), dtype=np.uint8)
+                for xx in range(fill_w):
+                    t = xx / max(1, fill_w - 1)
+                    arr[:, xx, 0] = int(94 * (1 - t) + 15 * t)
+                    arr[:, xx, 1] = int(220 * (1 - t) + 255 * t)
+                    arr[:, xx, 2] = int(255 * (1 - t) + 170 * t)
+                    arr[:, xx, 3] = 232
+                bar = Image.fromarray(arr, 'RGBA')
+                img.alpha_composite(bar, (hp_x, hp_y))
+            if bool(unit.get('shield_active')) and float(unit.get('shield_pct') or 0.0) > 0:
+                shield_w = int(round(hp_w * max(0.0, min(1.0, float(unit.get('shield_pct') or 0.0)))))
+                if shield_w > 0:
+                    draw.rounded_rectangle((hp_x, hp_y, hp_x + shield_w, hp_y + hp_h),
+                                           radius=2, fill=(98, 208, 255, 88))
+
+            name = str(unit.get('name') or 'Unit')
+            name_font = _pick_font(name, 10)
+            pct_font = _pick_font(str(int(round(hp_pct * 100))), 10)
+            name = _truncate(draw, name, name_font, self.ADD_W - 56)
+            draw.text((x + 12, y + 4), name, font=name_font, fill=self.TEXT_MAIN)
+            pct = f'{int(round(hp_pct * 100))}%'
+            draw.text((x + self.ADD_W - 10 - _text_width(draw, pct, pct_font), y + 4),
+                      pct, font=pct_font, fill=(80, 174, 216, 255))
+
+            break_y = y + 23
+            draw.rectangle((x + 1, break_y, x + self.ADD_W - 1, y + self.ADD_H - 1),
+                           fill=(35, 38, 45, 214))
+            if bool(unit.get('has_break_data', False)):
+                ext_pct = max(0.0, min(1.0, float(unit.get('extinction_pct') or 0.0)))
+                break_w = int(round((self.ADD_W - 20) * ext_pct))
+                if break_w > 0:
+                    fill = (255, 94, 94, 225)
+                    if int(unit.get('breaking_stage') or -1) > 0:
+                        fill = (243, 175, 18, 228)
+                    draw.rounded_rectangle((x + 10, break_y + 3,
+                                           x + 10 + break_w, break_y + 10),
+                                          radius=1, fill=fill)
+            else:
+                off_font = _pick_font('OFFLINE', 8)
+                draw.text((x + 11, break_y + 2), 'OFFLINE',
+                          font=off_font, fill=(120, 124, 130, 230))
 
     def _draw_invincible_glow(self, img: Image.Image, y_off: int,
                               now: float) -> None:

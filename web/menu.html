@@ -1536,6 +1536,131 @@ html, body {
     text-overflow: ellipsis;
 }
 
+/* ═══ Session Players — right-side Saomenu panel ═══ */
+.sessionPlayers {
+    position: absolute;
+    left: 388px;
+    top: -180px;
+    width: 336px;
+    opacity: 0;
+    pointer-events: none;
+    filter: blur(12px);
+    transform: translateX(28px);
+    transition: opacity 0.24s ease, transform 0.26s ease, filter 0.28s ease;
+    z-index: 84;
+}
+.sessionPlayers.show {
+    opacity: 1;
+    pointer-events: auto;
+    filter: blur(0);
+    transform: translateX(0);
+}
+.sessionPlayersBox {
+    width: 100%;
+    max-height: min(520px, calc(100vh - 92px));
+    overflow: hidden;
+    background: rgba(247, 247, 246, 0.96);
+    border: 1px solid rgba(201,198,198,0.58);
+    border-radius: 2px;
+    box-shadow: 0 20px 42px rgba(31,34,40,0.20), inset 0 0 0 1px rgba(104,228,255,0.08);
+}
+.sp-header {
+    height: 58px;
+    background: rgba(252,252,252,0.94);
+    border-bottom: 2px solid var(--menu-border-strong);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 15px;
+}
+.sp-title {
+    color: rgb(100,99,100);
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 2px;
+}
+.sp-subtitle {
+    color: rgb(154,154,154);
+    font-size: 11px;
+    margin-top: 2px;
+}
+.sp-columns {
+    height: 30px;
+    display: grid;
+    grid-template-columns: 1.3fr 92px 92px;
+    align-items: center;
+    gap: 8px;
+    padding: 0 13px;
+    background: rgba(236,240,244,0.95);
+    color: #7a8792;
+    font-family: var(--font-sao);
+    font-size: 10px;
+    letter-spacing: 1px;
+}
+.sp-columns span:last-child { text-align: right; }
+.sp-list {
+    max-height: min(404px, calc(100vh - 190px));
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    background: rgba(238,238,238,0.88);
+    padding: 6px 7px 8px;
+}
+.sp-list::-webkit-scrollbar { width: 5px; }
+.sp-list::-webkit-scrollbar-track { background: rgba(200,200,200,0.18); }
+.sp-list::-webkit-scrollbar-thumb {
+    background: rgba(243,175,18,0.42);
+    border-radius: 3px;
+}
+.sp-row {
+    min-height: 38px;
+    display: grid;
+    grid-template-columns: 1.3fr 92px 92px;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    margin-bottom: 5px;
+    background: rgba(255,255,255,0.84);
+    border: 1px solid rgba(201,198,198,0.34);
+    box-shadow: inset 3px 0 0 rgba(134,223,255,0.72);
+    color: #555;
+    font-size: 12px;
+}
+.sp-row:nth-child(even) {
+    background: rgba(247,248,249,0.88);
+}
+.sp-row.self {
+    background: rgba(255,250,240,0.94);
+    box-shadow: inset 3px 0 0 rgba(243,175,18,0.95);
+    font-weight: 700;
+}
+.sp-name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: #4f5962;
+}
+.sp-uid {
+    font-family: var(--font-sao);
+    color: #8a97a3;
+    text-align: center;
+    font-size: 10px;
+}
+.sp-power {
+    font-family: var(--font-sao);
+    color: #6d7379;
+    text-align: right;
+    font-size: 11px;
+}
+.sp-row.self .sp-power { color: #d9980e; }
+.sp-empty {
+    padding: 36px 12px;
+    text-align: center;
+    color: #aaa;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
 /* LeftInfo panel animations */
 @keyframes padding_open {
     0%   { padding-left: 240px; padding-top: 252px; padding-bottom: 54px; opacity: 0; }
@@ -3650,6 +3775,24 @@ html, body {
                 </li>
             </ul>
         </div>
+
+        <!-- Session Players Panel -->
+        <div class="sessionPlayers" id="session-players">
+            <div class="sessionPlayersBox">
+                <div class="sp-header">
+                    <div class="sp-title">SESSION PLAYERS</div>
+                    <div class="sp-subtitle" id="sp-summary">本次登录出现过 0 人</div>
+                </div>
+                <div class="sp-columns">
+                    <span>NAME</span>
+                    <span>UID</span>
+                    <span>POWER</span>
+                </div>
+                <div class="sp-list" id="sp-list">
+                    <div class="sp-empty">等待抓包识别玩家<br>NO SESSION PLAYERS YET</div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -3811,6 +3954,8 @@ var childBar = document.getElementById('child-bar');
 var infoBox = document.getElementById('info-box');
 var cbLine = document.getElementById('cb-line');
 var cbArrow = document.getElementById('cb-arrow');
+var sessionPlayersEl = document.getElementById('session-players');
+var _sessionPlayersPayload = { ok: true, count: 0, self_uid: '', players: [] };
 
 var currentActive = 'userInfo';
 var menuOpen = false;
@@ -3852,6 +3997,44 @@ function openSourceDialog() {
 
 function closeSourceDialog() {
     document.getElementById('source-dialog').classList.remove('show');
+}
+
+function showSessionPlayers(dataJson) {
+    var data = dataJson || _sessionPlayersPayload;
+    if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) { data = {}; }
+    }
+    _sessionPlayersPayload = data || { ok: true, count: 0, self_uid: '', players: [] };
+    var rows = Array.isArray(_sessionPlayersPayload.players) ? _sessionPlayersPayload.players : [];
+    var summary = document.getElementById('sp-summary');
+    var list = document.getElementById('sp-list');
+    summary.textContent = '本次登录出现过 ' + rows.length + ' 人' +
+        (_sessionPlayersPayload.self_uid ? ' · SELF ' + _sessionPlayersPayload.self_uid : '');
+    list.innerHTML = '';
+    if (!rows.length) {
+        list.innerHTML = '<div class="sp-empty">等待抓包识别玩家<br>NO SESSION PLAYERS YET</div>';
+    } else {
+        rows.forEach(function(row) {
+            var el = document.createElement('div');
+            el.className = 'sp-row' + (row.is_self ? ' self' : '');
+            var name = row.name || '--';
+            if (row.is_self && name !== '--') name = '* ' + name;
+            el.innerHTML =
+                '<div class="sp-name" title="' + _escHtml(row.name || '') + '">' + _escHtml(name) + '</div>' +
+                '<div class="sp-uid">' + _escHtml(row.uid || '--') + '</div>' +
+                '<div class="sp-power">' + _escHtml(row.fight_power || '--') + '</div>';
+            list.appendChild(el);
+        });
+    }
+    if (sessionPlayersEl && menuOpen) {
+        sessionPlayersEl.classList.add('show');
+    }
+}
+
+function closeSessionPlayers() {
+    if (sessionPlayersEl) {
+        sessionPlayersEl.classList.remove('show');
+    }
 }
 
 /* ═══ Sound helpers — via Python bridge ═══ */
@@ -4049,6 +4232,7 @@ function openMenu(x, y) {
     /* Show userInfo by default */
     currentActive = null;
     activateCircle('userInfo');
+    showSessionPlayers(_sessionPlayersPayload);
 }
 
 function closeMenu() {
@@ -4076,6 +4260,7 @@ function closeMenu() {
         tvoff.classList.remove('active');
         hideAllSubMenus();
         infoBox.classList.remove('show');
+        closeSessionPlayers();
     }, 550);
 }
 
@@ -6730,6 +6915,8 @@ window.SAO = {
     stopFisheyeBg: stopFisheyeBg,
     showFilePicker: showFilePicker,
     closeFilePicker: closeFilePicker,
+    showSessionPlayers: showSessionPlayers,
+    closeSessionPlayers: closeSessionPlayers,
     showLeaderboard: showLeaderboard,
     closeLeaderboard: closeLeaderboard,
     syncAutoKeyState: _syncAutoKeyState,
