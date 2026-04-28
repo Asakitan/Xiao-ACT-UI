@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.14"
+APP_VERSION = "2.4.15"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,13 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.15:
+#   Restore Saomenu fisheye enter/exit dynamics in both Entity and WebView:
+#   Entity now requests the GPU fade-out state instead of destroying the
+#   overlay immediately, while WebView keeps its WebGL loop alive through the
+#   close transition and animates blur/scale/distortion strength. Session
+#   player panels now follow the menu motion with lightweight panel/row
+#   animations.
 # v2.4.14:
 #   Fix Saomenu/session-player scalability and overlay input regressions.
 #   Entity and WebView session-player panels now render large login-session
