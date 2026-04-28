@@ -81,6 +81,8 @@ from sao_gui_dps import (
     GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 )
 
+WS_EX_TRANSPARENT = 0x00000020
+
 # Win32 SetWindowPos constants for periodic topmost enforcement
 HWND_TOPMOST = -1
 SWP_NOMOVE = 0x0002
@@ -613,6 +615,9 @@ class HpOverlay:
         self._press_flash_t = {'id': 0.0, 'hp': 0.0}
         self._hover_sound_zone: Optional[str] = None
         self._last_interaction_sound_t = 0.0
+        self._input_passthrough_enabled: Optional[bool] = None
+        self._input_passthrough_poller_started = False
+        self._drag_input_ignored = False
 
         # HP group auto-hide on offline (web parity: debounce + fade)
         self._offline_debounce_t = 0.0   # when offline first detected
@@ -815,6 +820,7 @@ class HpOverlay:
                 self._exiting = False
                 self._hide_after_exit = False
                 self._last_compose_sig = None
+                self._start_input_passthrough_poller()
                 _phase_trace('hp.overlay.show.gpu', f'xy={self._x},{self._y}')
                 self._schedule_tick(immediate=True)
                 return
@@ -896,6 +902,7 @@ class HpOverlay:
         self._exiting = False
         self._hide_after_exit = False
         self._last_compose_sig = None
+        self._start_input_passthrough_poller()
         _phase_trace('hp.overlay.show.ulw', f'hwnd={self._hwnd} xy={self._x},{self._y}')
         self._schedule_tick(immediate=True)
 
@@ -943,6 +950,8 @@ class HpOverlay:
         self._hwnd = 0
         self._gpu_managed = False
         self._gpu_drag_active = False
+        self._input_passthrough_enabled = None
+        self._drag_input_ignored = False
         self._visible = False
         self._exiting = False
         self._hide_after_exit = False
@@ -2552,6 +2561,104 @@ class HpOverlay:
         """Return whether the HP/STA group should accept pointer input."""
         return not bool(self._hp_group_hidden or self._hp_group_fade_t > 0.0)
 
+    def _input_hwnd(self) -> int:
+        if self._gpu_managed and self._gpu_window is not None:
+            try:
+                return int(getattr(self._gpu_window, '_hwnd', 0) or 0)
+            except Exception:
+                return 0
+        return int(self._hwnd or 0)
+
+    def _set_input_passthrough(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if enabled == self._input_passthrough_enabled:
+            return
+        hwnd = self._input_hwnd()
+        if not hwnd:
+            return
+        try:
+            ex = _user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
+            if enabled:
+                ex |= WS_EX_TRANSPARENT
+            else:
+                ex &= ~WS_EX_TRANSPARENT
+            _user32.SetWindowLongW(
+                ctypes.c_void_p(hwnd), GWL_EXSTYLE,
+                ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            )
+            self._input_passthrough_enabled = enabled
+        except Exception:
+            pass
+
+    def _cursor_over_id_plate(self) -> bool:
+        hwnd = self._input_hwnd()
+        if not hwnd:
+            return False
+        try:
+            class POINT(ctypes.Structure):
+                _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
+
+            class RECT(ctypes.Structure):
+                _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
+                            ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+
+            pt = POINT()
+            if not _user32.GetCursorPos(ctypes.byref(pt)):
+                return False
+            rc = RECT()
+            if not _user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rc)):
+                return False
+            lx = int(pt.x - rc.left)
+            ly = int(pt.y - rc.top)
+            return ID_X <= lx <= ID_X + ID_W and ID_Y <= ly <= ID_Y + ID_H
+        except Exception:
+            return False
+
+    def _should_input_passthrough(self) -> bool:
+        if not self._visible or self._win is None:
+            return False
+        if self._exiting or self._fade_target <= 0.0:
+            return True
+        if self._hp_group_clickable():
+            return False
+        return not self._cursor_over_id_plate()
+
+    def _refresh_input_passthrough(self) -> None:
+        self._set_input_passthrough(self._should_input_passthrough())
+
+    def _start_input_passthrough_poller(self) -> None:
+        if self._input_passthrough_poller_started:
+            return
+        self._input_passthrough_poller_started = True
+
+        def _loop():
+            while True:
+                time.sleep(0.025)
+                try:
+                    if not self._visible or self._win is None:
+                        if self._input_passthrough_enabled:
+                            self._set_input_passthrough(False)
+                        if self._win is None:
+                            break
+                        continue
+                    self._refresh_input_passthrough()
+                except Exception:
+                    pass
+            self._input_passthrough_poller_started = False
+
+        threading.Thread(target=_loop, daemon=True,
+                         name='hp_entity_passthrough').start()
+
+    def _event_should_passthrough(self, ev) -> bool:
+        if self._hp_group_clickable():
+            return False
+        try:
+            lx = int(ev.x_root - self._x)
+            ly = int(ev.y_root - self._y)
+        except Exception:
+            return True
+        return not (ID_X <= lx <= ID_X + ID_W and ID_Y <= ly <= ID_Y + ID_H)
+
     def _interaction_strength(self, zone: str, now: float) -> Tuple[float, float]:
         hover = max(0.0, min(1.0, float(self._hover_t.get(zone, 0.0) or 0.0)))
         press = max(0.0, min(1.0, float(self._press_t.get(zone, 0.0) or 0.0)))
@@ -3064,6 +3171,13 @@ class HpOverlay:
 
     def _on_drag_start(self, ev) -> None:
         try:
+            if self._event_should_passthrough(ev):
+                self._drag_input_ignored = True
+                self._press_zone = None
+                self._hover_zone = None
+                self._set_input_passthrough(True)
+                return
+            self._drag_input_ignored = False
             self._drag_ox = ev.x_root - self._x
             self._drag_oy = ev.y_root - self._y
             self._drag_origin = (ev.x_root, ev.y_root)
@@ -3079,8 +3193,11 @@ class HpOverlay:
             self._drag_origin = (0, 0)
             self._drag_moved = False
             self._press_zone = None
+            self._drag_input_ignored = False
 
     def _on_drag_move(self, ev) -> None:
+        if self._drag_input_ignored:
+            return
         try:
             ox, oy = self._drag_origin
             if not self._drag_moved:
@@ -3136,6 +3253,12 @@ class HpOverlay:
             self._schedule_tick(immediate=True)
 
     def _on_drag_end(self, ev) -> None:
+        if self._drag_input_ignored:
+            self._drag_input_ignored = False
+            self._press_zone = None
+            self._hover_zone = None
+            self._refresh_input_passthrough()
+            return
         moved = getattr(self, '_drag_moved', False)
         self._press_zone = None
         if moved:
@@ -3173,6 +3296,9 @@ class HpOverlay:
                 pass
 
     def _on_context_menu(self, ev) -> None:
+        if self._event_should_passthrough(ev):
+            self._set_input_passthrough(True)
+            return
         try:
             lx = int(ev.x_root - self._x)
             ly = int(ev.y_root - self._y)

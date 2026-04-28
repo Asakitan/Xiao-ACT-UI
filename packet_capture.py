@@ -17,6 +17,11 @@ from typing import Optional, Callable, List, Dict, Tuple
 
 logger = logging.getLogger('sao_auto.capture')
 
+try:
+    import _sao_cy_packet as _CY_PACKET
+except Exception:  # noqa: BLE001
+    _CY_PACKET = None
+
 # ═══════════════════════════════════════════════
 #  Npcap / WinPcap ctypes 绑定
 # ═══════════════════════════════════════════════
@@ -608,6 +613,11 @@ class TcpReassembler:
 
     def _scan_c3sb(self, data: bytes) -> bool:
         """在嵌套帧数据中扫描 c3SB 签名"""
+        if _CY_PACKET is not None:
+            try:
+                return bool(_CY_PACKET.scan_c3sb_nested(data))
+            except Exception:
+                pass
         offset = 0
         while offset + 4 < len(data):
             try:
@@ -759,24 +769,33 @@ class TcpReassembler:
                     # 帧头损坏 — 扫描下一个有效帧头
                     found = False
                     scan_end = min(buf_len - 5, 65536)
-                    _buf_mv = memoryview(buf)
-                    try:
-                        for i in range(1, scan_end):
-                            sz = struct.unpack_from('>I', _buf_mv, i)[0]
-                            if 6 <= sz <= 0x0FFFFF:
-                                tp = struct.unpack_from('>H', _buf_mv, i + 4)[0]
-                                msg = tp & 0x7FFF
-                                if msg in (2, 3, 4, 5, 6):
-                                    logger.warning(
-                                        f'[Capture] 帧对齐修复: 跳过 {i} 字节 '
-                                        f'(bad pkt_size={bad_size})'
-                                    )
-                                    found = True
-                                    realign_i = i
-                                    break
-                    finally:
-                        _buf_mv.release()
+                    realign_i = -1
+                    if _CY_PACKET is not None:
+                        try:
+                            realign_i = int(_CY_PACKET.find_frame_realign(buf, 65536))
+                        except Exception:
+                            realign_i = -1
+                    if realign_i > 0:
+                        found = True
+                    else:
+                        _buf_mv = memoryview(buf)
+                        try:
+                            for i in range(1, scan_end):
+                                sz = struct.unpack_from('>I', _buf_mv, i)[0]
+                                if 6 <= sz <= 0x0FFFFF:
+                                    tp = struct.unpack_from('>H', _buf_mv, i + 4)[0]
+                                    msg = tp & 0x7FFF
+                                    if msg in (2, 3, 4, 5, 6):
+                                        found = True
+                                        realign_i = i
+                                        break
+                        finally:
+                            _buf_mv.release()
                     if found:
+                        logger.warning(
+                            f'[Capture] 帧对齐修复: 跳过 {realign_i} 字节 '
+                            f'(bad pkt_size={bad_size})'
+                        )
                         self._buf = self._buf[realign_i:]
                     else:
                         logger.error(f'[Capture] 无效帧长度 {bad_size}, 清空流')

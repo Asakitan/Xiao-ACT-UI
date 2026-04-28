@@ -443,6 +443,13 @@ class DpsOverlay:
     WIDTH = 340
     DEFAULT_HEIGHT = 420
     MAX_HEIGHT = 700
+    DETAIL_DEFAULT_W = 760
+    DETAIL_DEFAULT_H = 560
+    DETAIL_MIN_W = 520
+    DETAIL_MIN_H = 420
+    DETAIL_MAX_W = 1180
+    DETAIL_MAX_H = 900
+    RESIZE_GRIP = 22
 
     # Body padding (web CSS: body{padding:10})
     BODY_PAD = 10
@@ -591,10 +598,12 @@ class DpsOverlay:
         # Detail view state (parity with web/dps.html _openDetail/_closeDetail)
         self._detail_visible = False
         self._detail_uid = 0
+        self._detail_mode = False
         self._live_detail_cache: Dict[int, dict] = {}
         # Hit-test regions captured during the most recent compose pass.
         self._row_click_regions: List[Tuple[int, Tuple[int, int, int, int]]] = []
         self._detail_back_rect: Optional[Tuple[int, int, int, int]] = None
+        self._resize_rect: Optional[Tuple[int, int, int, int]] = None
 
         sw = _user32.GetSystemMetrics(0)
         sh = _user32.GetSystemMetrics(1)
@@ -605,12 +614,20 @@ class DpsOverlay:
         dyn_h = max(self.DEFAULT_HEIGHT, int(min(sh, 1080) * 0.48))
         self.WIDTH = dyn_w
         self.DEFAULT_HEIGHT = max(self.DEFAULT_HEIGHT, dyn_h)
+        self._detail_w = max(self.DETAIL_DEFAULT_W, int(min(sw, 1920) * 0.40))
+        self._detail_h = max(self.DETAIL_DEFAULT_H, int(min(sh, 1080) * 0.56))
+        self._detail_w = max(self.DETAIL_MIN_W, min(self.DETAIL_MAX_W, self._detail_w))
+        self._detail_h = max(self.DETAIL_MIN_H, min(self.DETAIL_MAX_H, self._detail_h))
         self._x = max(0, sw - self.WIDTH - max(16, int(sw * 0.012)))
         self._y = max(0, int(sh * 0.18))
         if settings is not None:
             try:
                 self._x = int(settings.get('dps_ov_x', self._x))
                 self._y = int(settings.get('dps_ov_y', self._y))
+                self._detail_w = int(settings.get('dps_detail_w', self._detail_w))
+                self._detail_h = int(settings.get('dps_detail_h', self._detail_h))
+                self._detail_w = max(self.DETAIL_MIN_W, min(self.DETAIL_MAX_W, self._detail_w))
+                self._detail_h = max(self.DETAIL_MIN_H, min(self.DETAIL_MAX_H, self._detail_h))
             except Exception:
                 pass
 
@@ -646,6 +663,9 @@ class DpsOverlay:
         self._drag_start_root = (0, 0)
         self._drag_moved = False
         self._gpu_drag_active = False
+        self._resize_active = False
+        self._resize_start_root = (0, 0)
+        self._resize_start_size = (0, 0)
 
         self._tick_after_id: Optional[str] = None
         self._last_rendered_size: tuple = (0, 0)
@@ -856,6 +876,7 @@ class DpsOverlay:
         self._view_mode = 'live'
         self._detail_visible = False
         self._detail_uid = 0
+        self._detail_mode = False
         if snapshot is None and callable(self._request_live_snapshot):
             try:
                 snapshot = self._request_live_snapshot()
@@ -874,6 +895,7 @@ class DpsOverlay:
         self._view_mode = 'report'
         self._detail_visible = False
         self._detail_uid = 0
+        self._detail_mode = False
         if not self._visible or not self._window_ready():
             self.show()
         self.fade_in()
@@ -901,7 +923,73 @@ class DpsOverlay:
                 pass
         self._schedule_tick(immediate=True)
 
+    def _pick_detail_uid(self) -> int:
+        """Pick the most useful entity for the panel-wide detail mode."""
+        try:
+            if self._detail_uid:
+                return int(self._detail_uid)
+        except Exception:
+            pass
+        if self._view_mode == 'report':
+            entities = self._report_entities()
+            for ent in entities:
+                try:
+                    uid = int(ent.get('uid') or 0)
+                    if bool(ent.get('is_self')) or (self._self_uid and uid == self._self_uid):
+                        return uid
+                except Exception:
+                    pass
+            for ent in entities:
+                try:
+                    uid = int(ent.get('uid') or 0)
+                    if uid > 0:
+                        return uid
+                except Exception:
+                    pass
+            return 0
+        if self._self_uid and self._self_uid in self._rows:
+            return int(self._self_uid)
+        rows = self._build_view_rows()
+        if rows:
+            try:
+                return int(rows[0].get('uid') or 0)
+            except Exception:
+                return 0
+        return 0
+
+    def enter_detail_mode(self, uid: int = 0) -> None:
+        try:
+            uid = int(uid or 0)
+        except Exception:
+            uid = 0
+        if uid <= 0:
+            uid = self._pick_detail_uid()
+        self._detail_mode = True
+        self._detail_uid = max(0, int(uid or 0))
+        self._detail_visible = True
+        if self._detail_uid > 0 and self._view_mode == 'live' \
+                and callable(self._request_entity_detail_cb):
+            try:
+                detail = self._request_entity_detail_cb(self._detail_uid)
+                if isinstance(detail, dict):
+                    self._live_detail_cache[self._detail_uid] = detail
+            except Exception:
+                pass
+        self._last_compose_sig = None
+        self._schedule_tick(immediate=True)
+
+    def exit_detail_mode(self) -> None:
+        self._detail_mode = False
+        self._resize_active = False
+        self._detail_visible = False
+        self._detail_uid = 0
+        self._last_compose_sig = None
+        self._schedule_tick(immediate=True)
+
     def close_detail(self) -> None:
+        if self._detail_mode:
+            self.exit_detail_mode()
+            return
         if not self._detail_visible:
             return
         self._detail_visible = False
@@ -1143,6 +1231,28 @@ class DpsOverlay:
                  int(row.target_y * 1000))
                 for uid, row in self._rows.items()
             )
+            detail_sig = None
+            if self._detail_visible:
+                ent = self._get_detail_entity()
+                if isinstance(ent, dict):
+                    skills = ent.get('skills') or []
+                    skill_sig = tuple(
+                        (int(sk.get('skill_id') or 0),
+                         int(sk.get('total') or 0),
+                         int(sk.get('heal_total') or 0),
+                         int(sk.get('hits') or 0),
+                         int(sk.get('heal_hits') or 0))
+                        for sk in list(skills)[:16]
+                        if isinstance(sk, dict)
+                    )
+                    detail_sig = (
+                        int(ent.get('uid') or 0),
+                        int(ent.get('damage_total') or 0),
+                        int(ent.get('heal_total') or 0),
+                        int(ent.get('max_hit') or 0),
+                        len(skills),
+                        skill_sig,
+                    )
             return (
                 int(self._disp_elapsed),  # 1 Hz tick
                 int(self._target_total_damage),
@@ -1152,7 +1262,11 @@ class DpsOverlay:
                 self._view_mode,
                 self._current_tab,
                 bool(self._detail_visible),
+                bool(self._detail_mode),
                 int(self._detail_uid),
+                int(self._detail_w),
+                int(self._detail_h),
+                detail_sig,
                 round(float(self._fade_alpha), 3),
                 row_sig,
             )
@@ -1418,6 +1532,11 @@ class DpsOverlay:
         return rows
 
     def _compute_size(self) -> tuple:
+        if self._detail_mode:
+            w = max(self.DETAIL_MIN_W, min(self.DETAIL_MAX_W, int(self._detail_w)))
+            h = max(self.DETAIL_MIN_H, min(self.DETAIL_MAX_H, int(self._detail_h)))
+            self._detail_w, self._detail_h = w, h
+            return (w, h)
         rows = self._current_row_count()
         rows = max(rows, 3)      # reserve a minimum list area for empty state
         list_h = rows * self.ROW_H + self.ROW_MARGIN
@@ -1500,6 +1619,7 @@ class DpsOverlay:
         # Reset captured click regions for this frame.
         self._row_click_regions = []
         self._detail_back_rect = None
+        self._resize_rect = None
         if self._detail_visible:
             content_y = sy + hh
             footer_y = sy + sh - self.FOOTER_H
@@ -1520,6 +1640,9 @@ class DpsOverlay:
 
         if self._panel_fx_tier:
             self._overlay_panel_flash(img, sx, sy, sw, sh, now)
+
+        if self._detail_mode:
+            self._draw_resize_grip(draw, w, h)
 
         final_alpha = max(0.0, min(1.0, self.PANEL_OPACITY * self._fade_alpha))
         if final_alpha < 0.999:
@@ -1669,25 +1792,20 @@ class DpsOverlay:
                            summary, font_sum, self.TEXT_MUTED, 0.85)
         y += self.SUMMARY_H + 8
 
-        # Button row: LIVE | LAST REPORT | RESET (right-aligned, wrap-below)
-        buttons = [
-            ('LIVE', self._view_mode == 'live', 'live', True),
-            ('LAST REPORT', self._view_mode == 'report', 'normal',
-             self._report_available or self._has_report_data()),
-            ('RESET', False, 'danger', True),
-        ]
+        # Button row: LIVE | DETAIL | REPORT | RESET (right-aligned)
+        buttons = self._button_specs()
         btn_font = _load_font('sao', 10)
         # Measure and lay out right-aligned
         gap = self.BTN_GAP
         sizes = []
-        for text, _, _, _ in buttons:
+        for _name, text, _active, _kind, _enabled in buttons:
             tw = _text_width(draw, text, btn_font)
-            sizes.append(max(76, tw + 20))
+            sizes.append(max(62, tw + 18))
         total_w = sum(sizes) + gap * (len(sizes) - 1)
         start_x = x_right - total_w
         bx = start_x
         by = y
-        for (text, active, kind, enabled), bw2 in zip(buttons, sizes):
+        for (_name, text, active, kind, enabled), bw2 in zip(buttons, sizes):
             self._draw_button(draw, bx, by, bw2, self.BTN_H,
                               text, active, kind, btn_font, enabled)
             bx += bw2 + gap
@@ -1695,6 +1813,18 @@ class DpsOverlay:
         # Bottom border of header
         draw.line((sx, sy + hh, sx + sw - 1, sy + hh),
                   fill=self.DIVIDER, width=1)
+
+    def _button_specs(self) -> List[Tuple[str, str, bool, str, bool]]:
+        report_ok = self._report_available or self._has_report_data()
+        detail_label = 'NORMAL' if self._detail_mode else 'DETAIL'
+        return [
+            ('live', 'LIVE', self._view_mode == 'live' and not self._detail_mode,
+             'live', True),
+            ('detail', detail_label, bool(self._detail_mode), 'normal', True),
+            ('report', 'REPORT', self._view_mode == 'report' and not self._detail_mode,
+             'normal', report_ok),
+            ('reset', 'RESET', False, 'danger', True),
+        ]
 
     def _draw_button(self, draw: ImageDraw.ImageDraw, bx: int, by: int,
                      bw: int, bh: int, text: str, active: bool,
@@ -2033,7 +2163,8 @@ class DpsOverlay:
         head_y = ly + 6
         head_w = lw - 16
 
-        back_w = 56
+        back_label = 'NORMAL' if self._detail_mode else 'BACK'
+        back_w = 76 if self._detail_mode else 56
         back_rect = (head_x, head_y, head_x + back_w, head_y + head_h - 4)
         self._draw_clip_rect(draw, back_rect[0], back_rect[1],
                              back_rect[2] - back_rect[0],
@@ -2041,7 +2172,7 @@ class DpsOverlay:
                              fill=self.BTN_BG, outline=self.BTN_BORDER,
                              bevel=8)
         font_back = _load_font('sao', 10)
-        self._draw_tracked_centered(draw, 'BACK', font_back, self.TEXT_MAIN,
+        self._draw_tracked_centered(draw, back_label, font_back, self.TEXT_MAIN,
                                     (back_rect[0] + back_rect[2]) // 2,
                                     back_rect[1] + ((back_rect[3] - back_rect[1]) - 12) // 2,
                                     1.0)
@@ -2086,14 +2217,16 @@ class DpsOverlay:
                                         body_y + body_h // 2 - 6, 2)
             return
 
-        # Stats grid: 2 cols × 4 rows of small cards
+        # Stats grid: compact mode uses 2 cols; resizable detail mode spreads
+        # the same data into an SRDPS-like wider dashboard.
         grid_x = lx + 10
         grid_w = lw - 20
         col_gap = 6
-        col_w = (grid_w - col_gap) // 2
-        card_h = 30
+        cols = 4 if self._detail_mode and grid_w >= 520 else 2
+        col_w = (grid_w - col_gap * (cols - 1)) // cols
+        card_h = 44 if cols >= 4 else 30
         card_gap = 4
-        rows = 4
+        rows = (8 + cols - 1) // cols
         grid_h = rows * card_h + (rows - 1) * card_gap
         stats = [
             ('DAMAGE', _fmt_num(entity.get('damage_total') or 0), self.GOLD),
@@ -2108,8 +2241,8 @@ class DpsOverlay:
         lbl_font = _load_font('sao', 8)
         val_font = _load_font('sao', 13)
         for i, (label, value, color) in enumerate(stats):
-            r = i // 2
-            c = i % 2
+            r = i // cols
+            c = i % cols
             cx = grid_x + c * (col_w + col_gap)
             cy = body_y + r * (card_h + card_gap)
             self._fill_rounded_rect(
@@ -2123,7 +2256,8 @@ class DpsOverlay:
             self._draw_tracked(draw, (cx + 6, cy + 3), label,
                                lbl_font, self.TEXT_MUTED, 1.1)
             vw = self._tracked_text_width(draw, value, val_font, 0.7)
-            self._draw_tracked(draw, (cx + col_w - 6 - vw, cy + 13),
+            val_y = cy + (20 if cols >= 4 else 13)
+            self._draw_tracked(draw, (cx + col_w - 6 - vw, val_y),
                                value, val_font, color, 0.7)
 
         # Skill rows below the stats grid
@@ -2433,6 +2567,33 @@ class DpsOverlay:
             overlay, Image.new('RGBA', (sw, sh), (0, 0, 0, 0)), mask),
             (sx, sy))
 
+    def _resize_hit_rect(self, w: int = 0, h: int = 0) -> Tuple[int, int, int, int]:
+        if not w or not h:
+            w, h = self._last_rendered_size
+        if not w or not h:
+            w, h = self._compute_size()
+        grip = self.RESIZE_GRIP
+        return (w - self.BODY_PAD - grip,
+                h - self.BODY_PAD - grip,
+                w - self.BODY_PAD + 2,
+                h - self.BODY_PAD + 2)
+
+    def _draw_resize_grip(self, draw: ImageDraw.ImageDraw,
+                          w: int, h: int) -> None:
+        rect = self._resize_hit_rect(w, h)
+        self._resize_rect = rect
+        x0, y0, x1, y1 = rect
+        for i, a in enumerate((92, 150, 220)):
+            off = 5 + i * 5
+            draw.line(
+                (x1 - off - 8, y1 - 3, x1 - 3, y1 - off - 8),
+                fill=(222, 166, 32, a), width=1,
+            )
+        draw.line((x0 + 4, y1 - 2, x1 - 2, y1 - 2),
+                  fill=self.CORNER_GOLD, width=1)
+        draw.line((x1 - 2, y0 + 4, x1 - 2, y1 - 2),
+                  fill=self.CORNER_GOLD, width=1)
+
     def _control_regions(self) -> dict:
         w, h = self._last_rendered_size
         if not w or not h:
@@ -2443,9 +2604,9 @@ class DpsOverlay:
         dummy = ImageDraw.Draw(Image.new('RGBA', (1, 1), (0, 0, 0, 0)))
 
         btn_font = _load_font('sao', 10)
-        buttons = [('live', 'LIVE'), ('report', 'LAST REPORT'), ('reset', 'RESET')]
-        sizes = [max(76, _text_width(dummy, label, btn_font) + 20)
-                 for _, label in buttons]
+        buttons = self._button_specs()
+        sizes = [max(62, _text_width(dummy, label, btn_font) + 18)
+                 for _name, label, _active, _kind, _enabled in buttons]
         total_w = sum(sizes) + self.BTN_GAP * (len(sizes) - 1)
         start_x = sx + sw - self.HEADER_PAD_X - total_w
         start_y = (sy + self.HEADER_PAD_TOP + self.EYEBROW_H + 4
@@ -2453,7 +2614,7 @@ class DpsOverlay:
 
         button_regions = {}
         cur_x = start_x
-        for (name, _label), bw in zip(buttons, sizes):
+        for (name, _label, _active, _kind, _enabled), bw in zip(buttons, sizes):
             button_regions[name] = (cur_x, start_y, cur_x + bw, start_y + self.BTN_H)
             cur_x += bw + self.BTN_GAP
 
@@ -2537,6 +2698,11 @@ class DpsOverlay:
             if self._point_in_rect(x, y, rect):
                 if name == 'live':
                     self._activate_live()
+                elif name == 'detail':
+                    if self._detail_mode:
+                        self.exit_detail_mode()
+                    else:
+                        self.enter_detail_mode()
                 elif name == 'report':
                     if self._report_available or self._has_report_data():
                         self._activate_report()
@@ -2597,6 +2763,15 @@ class DpsOverlay:
 
     def _on_drag_start(self, ev) -> None:
         try:
+            self._resize_active = False
+            if self._detail_mode and self._point_in_rect(
+                    int(ev.x), int(ev.y), self._resize_hit_rect()):
+                self._resize_active = True
+                self._resize_start_root = (int(ev.x_root), int(ev.y_root))
+                self._resize_start_size = (int(self._detail_w), int(self._detail_h))
+                self._drag_start_root = self._resize_start_root
+                self._drag_moved = False
+                return
             self._drag_ox = ev.x_root - self._x
             self._drag_oy = ev.y_root - self._y
             self._drag_start_root = (int(ev.x_root), int(ev.y_root))
@@ -2609,6 +2784,41 @@ class DpsOverlay:
 
     def _on_drag_move(self, ev) -> None:
         try:
+            if self._resize_active:
+                dx = int(ev.x_root) - self._resize_start_root[0]
+                dy = int(ev.y_root) - self._resize_start_root[1]
+                if not self._drag_moved and \
+                   abs(dx) < self.CLICK_DRAG_THRESHOLD and \
+                   abs(dy) < self.CLICK_DRAG_THRESHOLD:
+                    return
+                self._drag_moved = True
+                old_size = (int(self._detail_w), int(self._detail_h))
+                self._detail_w = max(
+                    self.DETAIL_MIN_W,
+                    min(self.DETAIL_MAX_W, self._resize_start_size[0] + dx),
+                )
+                self._detail_h = max(
+                    self.DETAIL_MIN_H,
+                    min(self.DETAIL_MAX_H, self._resize_start_size[1] + dy),
+                )
+                if old_size != (int(self._detail_w), int(self._detail_h)):
+                    self._shell_cache = None
+                    self._last_compose_sig = None
+                    if self._gpu_managed and self._gpu_window is not None:
+                        try:
+                            self._gpu_window.set_geometry(
+                                self._x, self._y,
+                                int(self._detail_w), int(self._detail_h))
+                        except Exception:
+                            pass
+                    elif self._win is not None and self._win is not self:
+                        try:
+                            self._win.geometry(
+                                f'{int(self._detail_w)}x{int(self._detail_h)}+{self._x}+{self._y}')
+                        except Exception:
+                            pass
+                    self._schedule_tick(immediate=True)
+                return
             dx = int(ev.x_root) - self._drag_start_root[0]
             dy = int(ev.y_root) - self._drag_start_root[1]
             if not self._drag_moved and \
@@ -2633,6 +2843,20 @@ class DpsOverlay:
             pass
 
     def _on_drag_end(self, ev) -> None:
+        if self._resize_active:
+            moved = bool(self._drag_moved)
+            self._resize_active = False
+            if moved and self.settings is not None:
+                try:
+                    self.settings.set('dps_detail_w', int(self._detail_w))
+                    self.settings.set('dps_detail_h', int(self._detail_h))
+                    save = getattr(self.settings, 'save', None)
+                    if callable(save):
+                        save()
+                except Exception:
+                    pass
+            self._schedule_tick(immediate=True)
+            return
         if not self._drag_moved:
             try:
                 self._handle_click(int(ev.x), int(ev.y))

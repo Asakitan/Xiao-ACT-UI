@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.12"
+APP_VERSION = "2.4.13"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,20 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.13:
+#   Add in-panel DPS detail mode for both Entity and WebView UI. The detail
+#   view reuses live/report per-entity skill breakdowns, supports returning to
+#   the compact list, and persists the resizable detailed panel size.
+#   Saomenu now exposes an in-session player list sourced from the active
+#   packet session, with WebView right-side placement and Entity menu-column
+#   parity. BossHP/DPS packet display stability was hardened around revive /
+#   server-switch edge cases, hidden HP panels stop intercepting clicks, and
+#   Entity BossHP now mirrors the WebView main/secondary panel split.
+#   Packet parsing gained an optional _sao_cy_packet Cython helper for stable
+#   byte-level decode/scan hotspots with Python fallback, and dev_publish now
+#   makes smarter full-package vs incremental-package decisions when the spec
+#   changes. Skill names were refreshed from current SRDPS/SRLOGS Chinese
+#   short-name tables so DPS skill breakdowns no longer show stale placeholders.
 # v2.4.11:
 #   Clean ABI-sensitive runtime dependency folders before applying full/runtime
 #   refresh updates so stale NumPy/OpenCV files cannot make cv2 reject ndarray.

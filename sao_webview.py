@@ -1399,6 +1399,22 @@ class DpsWindowAPI:
                 pass
         threading.Thread(target=_fetch, daemon=True).start()
 
+    def set_detail_mode(self, active):
+        """Resize the DPS window between compact and detailed layouts."""
+        try:
+            self._g._set_dps_detail_mode(bool(active))
+            return json.dumps({'ok': True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def resize_dps(self, width, height, commit=False):
+        """Resize the detailed DPS panel; commit=True persists the size."""
+        try:
+            self._g._resize_dps_window(int(width), int(height), persist=bool(commit))
+            return json.dumps({'ok': True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
     def play_sound(self, name: str):
         threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
 
@@ -1598,6 +1614,7 @@ class SAOWebViewGUI:
         self._bb_damage_timeout = 60.0    # seconds before boss bar fades out
         self._pending_combat_reset_after = 0.0
         self._pending_combat_reset_reason = ''
+        self._damage_self_fallback_log_ts = 0.0
 
         # DPS Meter
         self.dps_win = None
@@ -1609,6 +1626,11 @@ class SAOWebViewGUI:
         self._dps_tracker = None
         self._dps_api = None
         self._dps_last_report_available = False
+        self._dps_base_w = 0
+        self._dps_base_h = 0
+        self._dps_detail_w = 760
+        self._dps_detail_h = 560
+        self._dps_detail_mode = False
 
         # Raid Editor overlay
         self.raid_editor_win = None
@@ -2273,12 +2295,62 @@ class SAOWebViewGUI:
                 pass
         return True
 
+    def _current_player_uid_int(self) -> int:
+        for source in (
+            getattr(self, '_game_state', None),
+            getattr(getattr(self, '_state_mgr', None), 'state', None),
+        ):
+            try:
+                uid = getattr(source, 'player_id', '') if source is not None else ''
+                if str(uid).isdigit():
+                    return int(uid)
+            except Exception:
+                pass
+        return 0
+
+    def _normalize_damage_event_for_self(self, event):
+        if not isinstance(event, dict) or event.get('attacker_is_self'):
+            return event
+        self_uid = self._current_player_uid_int()
+        if self_uid <= 0:
+            return event
+
+        def _event_int(name: str) -> int:
+            try:
+                return int(event.get(name) or 0)
+            except Exception:
+                return 0
+
+        candidate_uids = [_event_int('attacker_uid')]
+        for key in ('attacker_uuid', 'attacker_uuid_raw', 'top_summoner_id'):
+            raw = _event_int(key)
+            if raw and (raw & 0xFFFF) == 640:
+                candidate_uids.append(raw >> 16)
+            elif key == 'top_summoner_id' and raw:
+                candidate_uids.append(raw)
+        if self_uid not in candidate_uids:
+            return event
+
+        fixed = dict(event)
+        fixed['attacker_is_self'] = True
+        fixed['attacker_uid'] = self_uid
+        fixed.setdefault('self_uid', self_uid)
+        now = time.time()
+        if now - float(getattr(self, '_damage_self_fallback_log_ts', 0.0) or 0.0) > 10.0:
+            self._damage_self_fallback_log_ts = now
+            print(
+                f'[SAO] 修正伤害归属: attacker_uid -> self_uid={self_uid}',
+                flush=True,
+            )
+        return fixed
+
     def _on_packet_damage(self, event):
         """Damage event callback from packet_parser → boss raid engine + DPS tracker.
 
         This is the critical path: when the DPS panel shows data, damage events
         ARE flowing. We use this to also ensure the boss bar target is set.
         """
+        event = self._normalize_damage_event_for_self(event)
         # Track last self -> non-player combat target damage for boss bar target.
         # BossHP only displays later if packet_parser has usable HP data.
         _is_self_combat_target = bool(
@@ -3128,6 +3200,18 @@ class SAOWebViewGUI:
         dps_url = _web_file_uri('dps.html')
         _dps_w = max(320, int(min(_sw, 1920) * 0.19))
         _dps_h = max(420, int(min(_sh, 1080) * 0.48))
+        self._dps_base_w = int(_dps_w)
+        self._dps_base_h = int(_dps_h)
+        _detail_w_default = max(760, int(min(_sw, 1920) * 0.40))
+        _detail_h_default = max(560, int(min(_sh, 1080) * 0.56))
+        try:
+            self._dps_detail_w = int(self._get_setting('dps_detail_w', _detail_w_default))
+            self._dps_detail_h = int(self._get_setting('dps_detail_h', _detail_h_default))
+        except Exception:
+            self._dps_detail_w = _detail_w_default
+            self._dps_detail_h = _detail_h_default
+        self._dps_detail_w = max(520, min(1180, int(self._dps_detail_w)))
+        self._dps_detail_h = max(420, min(900, int(self._dps_detail_h)))
         _dps_x = max(0, _sw - _dps_w - max(16, int(_sw * 0.012)))
         _dps_y = max(0, int(_sh * 0.18))
         self._dps_api = DpsWindowAPI(self)
@@ -4792,6 +4876,49 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
+    def _resize_dps_window(self, width: int, height: int,
+                           persist: bool = False):
+        try:
+            width = max(520, min(1180, int(width)))
+            height = max(420, min(900, int(height)))
+        except Exception:
+            return
+        self._dps_detail_w = width
+        self._dps_detail_h = height
+        try:
+            if self.dps_win:
+                self.dps_win.resize(width, height)
+        except Exception:
+            pass
+        if persist:
+            try:
+                self._set_setting('dps_detail_w', width)
+                self._set_setting('dps_detail_h', height)
+            except Exception:
+                pass
+
+    def _set_dps_detail_mode(self, active: bool):
+        self._dps_detail_mode = bool(active)
+        try:
+            if self._dps_detail_mode:
+                self._resize_dps_window(
+                    int(getattr(self, '_dps_detail_w', 760) or 760),
+                    int(getattr(self, '_dps_detail_h', 560) or 560),
+                    persist=False,
+                )
+            else:
+                w = int(getattr(self, '_dps_base_w', 0) or 360)
+                h = int(getattr(self, '_dps_base_h', 0) or 520)
+                if self.dps_win:
+                    self.dps_win.resize(w, h)
+        except Exception:
+            pass
+        try:
+            if self._dps_visible:
+                self._ensure_dps_clickable()
+        except Exception:
+            pass
+
     def _combat_damage_timeout_s(self) -> float:
         # User-configurable fade timeout (seconds). Default large enough that
         # normal combat lulls (cast animations, mechanic phases, target swaps)
@@ -4856,8 +4983,17 @@ class SAOWebViewGUI:
         _fade_seq = self._dps_fade_seq
         # 立即设为鼠标穿透, 防止面板淡出期间及隐藏状态下接收误操作
         self._make_dps_unclickable()
+        self._dps_detail_mode = False
         try:
             if self.dps_win and self._dps_visible:
+                self._eval_dps('if (window.DpsMeter && DpsMeter.setDetailMode) DpsMeter.setDetailMode(false)')
+                try:
+                    self.dps_win.resize(
+                        int(getattr(self, '_dps_base_w', 360) or 360),
+                        int(getattr(self, '_dps_base_h', 520) or 520),
+                    )
+                except Exception:
+                    pass
                 self._eval_dps('if (window.DpsMeter && DpsMeter.fadeOut) DpsMeter.fadeOut()')
                 self._set_window_alpha('SAO-DPS', 1.0)
                 threading.Timer(

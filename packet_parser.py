@@ -33,6 +33,11 @@ try:
 except Exception:  # noqa: BLE001
     _CY_COMBAT = None
 
+try:
+    import _sao_cy_packet as _CY_PACKET
+except Exception:  # noqa: BLE001
+    _CY_PACKET = None
+
 # Lazy import for protobuf JSON conversion (used in full sync dump)
 _MessageToDict = None
 
@@ -105,6 +110,11 @@ def _ensure_pb():
 
 def _read_varint(data: bytes, pos: int):
     """Read a protobuf varint and return `(value, new_pos)`."""
+    if _CY_PACKET is not None:
+        try:
+            return _CY_PACKET.read_varint(data, pos)
+        except Exception:
+            pass
     result = 0
     shift = 0
     while pos < len(data):
@@ -135,6 +145,11 @@ def _decode_fields(data: bytes) -> Dict[int, list]:
       2 = length-delimited
       5 = 32-bit
     """
+    if _CY_PACKET is not None:
+        try:
+            return _CY_PACKET.decode_fields(data)
+        except Exception:
+            pass
     fields: Dict[int, list] = {}
     pos = 0
     length = len(data)
@@ -203,6 +218,11 @@ def _decode_int32_from_raw(raw: bytes) -> int:
     """Match protobufjs `reader.int32()` on a raw varint payload."""
     if not raw:
         return 0
+    if _CY_PACKET is not None:
+        try:
+            return int(_CY_PACKET.decode_int32_from_raw(raw))
+        except Exception:
+            pass
     try:
         val, _ = _read_varint(raw, 0)
         return _varint_to_int32(val)
@@ -213,6 +233,11 @@ def _decode_int32_from_raw(raw: bytes) -> int:
 def _decode_float32_from_raw(raw: bytes) -> Optional[float]:
     if not raw or len(raw) < 4:
         return None
+    if _CY_PACKET is not None:
+        try:
+            return _CY_PACKET.decode_float32_from_raw(raw)
+        except Exception:
+            pass
     try:
         return struct.unpack_from('<f', raw, 0)[0]
     except Exception:
@@ -1385,6 +1410,8 @@ class PacketParser:
             'unknown_notify_methods': 0,
             'zstd_failures': 0,
             'damage_events': 0,
+            'combat_damage_events': 0,
+            'self_damage_events': 0,
             'monster_updates': 0,
             'boss_events': 0,
             'scene_changes': 0,
@@ -3798,14 +3825,36 @@ class PacketParser:
         lucky_value = dmg.LuckyValue
         hp_lessen = dmg.HpLessenValue
         shield_lessen = dmg.ShieldLessenValue
-        attacker_uuid_raw = dmg.AttackerUuid
+        attacker_uuid_raw = int(dmg.AttackerUuid or 0)
         skill_id = dmg.OwnerId
         is_dead = dmg.IsDead
         element = int(dmg.Property)
-        top_summoner = dmg.TopSummonerId
+        top_summoner = int(dmg.TopSummonerId or 0)
 
-        # Use TopSummonerId as the real attacker if set (summon owner)
-        attacker_uuid = top_summoner if top_summoner else attacker_uuid_raw
+        # Use TopSummonerId as the real owner if set. Some server damage
+        # events send it as a player UUID, while summon / owner-routed hits
+        # can send the plain character UID. Keep both forms so downstream
+        # DPS/BossHP logic does not lose self damage on those packets.
+        attacker_uuid = attacker_uuid_raw
+        attacker_uid = 0
+        if top_summoner:
+            if _is_player(top_summoner):
+                attacker_uuid = top_summoner
+                attacker_uid = _uuid_to_uid(top_summoner)
+            else:
+                owner_uid = int(top_summoner)
+                if (
+                    owner_uid == self._current_uid
+                    or owner_uid in self._players
+                    or owner_uid in self._team_members
+                ):
+                    attacker_uid = owner_uid
+                if attacker_uuid_raw and _is_player(attacker_uuid_raw):
+                    attacker_uuid = attacker_uuid_raw
+                else:
+                    attacker_uuid = top_summoner
+        elif attacker_uuid and _is_player(attacker_uuid):
+            attacker_uid = _uuid_to_uid(attacker_uuid)
         damage_amount = _combat_damage_amount(
             value, lucky_value, actual_value, hp_lessen, shield_lessen)
 
@@ -3830,6 +3879,9 @@ class PacketParser:
             # but _current_uid is available from SyncContainerData / cache.
             if _uuid_to_uid(attacker_uuid) == self._current_uid:
                 attacker_is_self = True
+        if (not attacker_is_self) and attacker_uid and self._current_uid:
+            if int(attacker_uid) == int(self._current_uid):
+                attacker_is_self = True
 
         event = {
             'target_uuid': target_uuid,
@@ -3837,7 +3889,12 @@ class PacketParser:
             'target_is_monster': target_is_monster,
             'target_is_combat_target': target_is_combat_target,
             'attacker_uuid': attacker_uuid,
+            'attacker_uuid_raw': attacker_uuid_raw,
+            'attacker_uid': int(attacker_uid or 0),
             'attacker_is_self': attacker_is_self,
+            'top_summoner_id': top_summoner,
+            'self_uid': int(self._current_uid or 0),
+            'self_uuid': int(self._current_uuid or 0),
             'skill_id': _varint_to_int32(skill_id) if skill_id else 0,
             'damage': int(damage_amount),
             'hp_lessen': int(hp_lessen),
@@ -3852,6 +3909,10 @@ class PacketParser:
             'timestamp': time.time(),
         }
         self.stats['damage_events'] += 1
+        if target_is_combat_target:
+            self.stats['combat_damage_events'] += 1
+        if attacker_is_self:
+            self.stats['self_damage_events'] += 1
 
         # Same-map / same-dungeon retries can reuse a monster UUID while our
         # cached MonsterData still carries the previous run's dead flag. Any

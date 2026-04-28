@@ -83,6 +83,10 @@ body{padding:10px}
     transition:filter 150ms ease, box-shadow 150ms ease;
     will-change:opacity,transform,filter;
 }
+.dps-shell.detail-mode{
+    min-width:520px;
+    min-height:420px;
+}
 .dps-shell.impact-hit-blur{
     animation:dps-shell-impact-hit 2500ms cubic-bezier(.18,.88,.32,1) both;
 }
@@ -562,8 +566,8 @@ body{padding:10px}
     justify-content:flex-end;
 }
 .sao-btn{
-    min-width:76px;
-    padding:6px 10px;
+    min-width:56px;
+    padding:6px 7px;
     border:1px solid rgba(160,162,150,0.64);
     background:rgba(255,255,255,0.44);
     color:var(--text-main);
@@ -590,6 +594,11 @@ body{padding:10px}
     background:rgba(104,228,255,0.12);
     border-color:rgba(104,228,255,0.72);
     color:rgb(68,144,162);
+}
+.sao-btn.detail-toggle.active{
+    background:rgba(222,166,32,0.18);
+    border-color:rgba(222,166,32,0.72);
+    color:var(--gold);
 }
 .sao-btn.danger:hover{
     background:rgba(239,104,78,0.92);
@@ -1101,6 +1110,12 @@ body{padding:10px}
     gap:8px;
     margin-bottom:8px;
 }
+.dps-shell:not(.detail-mode) .detail-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+}
+.dps-shell.detail-mode .stat-card{
+    min-height:62px;
+}
 .stat-card{
     padding:8px 8px 7px;
     min-height:56px;
@@ -1196,6 +1211,35 @@ body{padding:10px}
     text-overflow:ellipsis;
 }
 .footer-line.right{text-align:right}
+.resize-grip{
+    position:absolute;
+    right:4px;
+    bottom:4px;
+    z-index:5;
+    width:24px;
+    height:24px;
+    display:none;
+    cursor:nwse-resize;
+}
+.dps-shell.detail-mode .resize-grip{display:block}
+.resize-grip::before,
+.resize-grip::after{
+    content:'';
+    position:absolute;
+    right:3px;
+    bottom:3px;
+    width:18px;
+    height:18px;
+    border-right:1px solid rgba(222,166,32,0.82);
+    border-bottom:1px solid rgba(222,166,32,0.82);
+}
+.resize-grip::after{
+    right:8px;
+    bottom:8px;
+    width:9px;
+    height:9px;
+    opacity:0.75;
+}
 </style>
 </head>
 <body>
@@ -1215,7 +1259,8 @@ body{padding:10px}
         </div>
         <div class="header-actions">
             <button class="sao-btn secondary active" id="btn-live" type="button" onclick="_activateLive()">LIVE</button>
-            <button class="sao-btn" id="btn-report" type="button" onclick="_activateReport()">LAST REPORT</button>
+            <button class="sao-btn detail-toggle" id="btn-detail" type="button" onclick="_toggleDetailMode()">DETAIL</button>
+            <button class="sao-btn" id="btn-report" type="button" onclick="_activateReport()">REPORT</button>
             <button class="sao-btn danger" id="btn-reset" type="button" onclick="_reset()">RESET</button>
         </div>
     </div>
@@ -1232,7 +1277,7 @@ body{padding:10px}
 
         <div class="detail-view" id="detail-view">
             <div class="detail-head">
-                <button class="sao-btn back-btn" type="button" onclick="_closeDetail()">BACK</button>
+                <button class="sao-btn back-btn" id="btn-detail-back" type="button" onclick="_closeDetail()">BACK</button>
                 <div class="detail-title" id="detail-title">Entity</div>
                 <div class="detail-badge" id="detail-badge">LIVE DETAIL</div>
             </div>
@@ -1245,6 +1290,7 @@ body{padding:10px}
         <div class="footer-line" id="footer-left">ELAPSED 00:00</div>
         <div class="footer-line right" id="footer-right">TOTAL 0</div>
     </div>
+    <div class="resize-grip" id="resize-grip"></div>
 </div>
 
 <script>
@@ -1254,6 +1300,7 @@ var _liveSnapshot = _emptySnapshot();
 var _lastReport = null;
 var _detailUid = 0;
 var _detailVisible = false;
+var _detailMode = false;
 var _liveDetailCache = {};
 var _lastHitFxSeq = 0;
 var _pendingHitFx = null;
@@ -1458,10 +1505,53 @@ function _findEntity(data, uid) {
     return null;
 }
 
+function _pickDetailUid() {
+    if (_detailUid) return Number(_detailUid || 0);
+    var entities = ((_currentData() && _currentData().entities) || []).slice();
+    for (var i = 0; i < entities.length; i++) {
+        if (entities[i].is_self && Number(entities[i].uid || 0)) {
+            return Number(entities[i].uid || 0);
+        }
+    }
+    if (_currentTab === 'heal') {
+        entities.sort(function(a, b) { return Number(b.heal_total || 0) - Number(a.heal_total || 0); });
+    } else {
+        entities.sort(function(a, b) { return Number(b.damage_total || 0) - Number(a.damage_total || 0); });
+    }
+    return entities.length ? Number(entities[0].uid || 0) : 0;
+}
+
+function _callDpsApi(name) {
+    try {
+        if (!window.pywebview || !window.pywebview.api || !window.pywebview.api[name]) return null;
+        var args = Array.prototype.slice.call(arguments, 1);
+        return window.pywebview.api[name].apply(window.pywebview.api, args);
+    } catch (e) {
+        return null;
+    }
+}
+
+function _syncDetailChrome() {
+    var shell = _dpsShell();
+    if (shell) shell.classList.toggle('detail-mode', !!_detailMode);
+    var btn = document.getElementById('btn-detail');
+    if (btn) {
+        btn.classList.toggle('active', !!_detailMode);
+        btn.textContent = _detailMode ? 'NORMAL' : 'DETAIL';
+    }
+    var back = document.getElementById('btn-detail-back');
+    if (back) back.textContent = _detailMode ? 'NORMAL' : 'BACK';
+}
+
+function _requestDetailWindowMode(active) {
+    _callDpsApi('set_detail_mode', !!active);
+}
+
 function _setMode(mode) {
     _viewMode = mode === 'report' ? 'report' : 'live';
-    document.getElementById('btn-live').classList.toggle('active', _viewMode === 'live');
-    document.getElementById('btn-report').classList.toggle('active', _viewMode === 'report');
+    document.getElementById('btn-live').classList.toggle('active', _viewMode === 'live' && !_detailMode);
+    document.getElementById('btn-report').classList.toggle('active', _viewMode === 'report' && !_detailMode);
+    _syncDetailChrome();
 
     var badge = document.getElementById('mode-badge');
     badge.textContent = _viewMode === 'report' ? 'LAST REPORT' : 'LIVE';
@@ -1670,6 +1760,15 @@ function showLive(data) {
     _liveSnapshot = data || _emptySnapshot();
     _viewMode = 'live';
     _captureHitFx(_liveSnapshot);
+    if (_detailVisible) {
+        if (!_detailUid) _detailUid = _pickDetailUid();
+        _syncDetailChrome();
+        _renderAll();
+        if (_detailUid && window.pywebview && window.pywebview.api && window.pywebview.api.get_entity_detail) {
+            window.pywebview.api.get_entity_detail(_detailUid);
+        }
+        return;
+    }
     _detailVisible = false;
     _detailUid = 0;
     _renderAll();
@@ -1690,8 +1789,11 @@ function showLastReport(report) {
     _lastReport = report || null;
     _clearTransientHitFx();
     _viewMode = 'report';
+    _detailMode = false;
     _detailVisible = false;
     _detailUid = 0;
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
     _renderAll();
 }
 
@@ -1703,9 +1805,11 @@ function updateDetail(data) {
     }
 }
 
-function _openDetail(uid) {
+function _openDetail(uid, keepPanelMode) {
     _detailUid = Number(uid || 0);
     _detailVisible = true;
+    if (keepPanelMode) _detailMode = true;
+    _syncDetailChrome();
     _switchDetailView();
     _renderDetail();
     if (_viewMode === 'live' && window.pywebview && window.pywebview.api && window.pywebview.api.get_entity_detail) {
@@ -1714,14 +1818,38 @@ function _openDetail(uid) {
 }
 
 function _closeDetail() {
+    if (_detailMode) {
+        _detailMode = false;
+        _detailVisible = false;
+        _detailUid = 0;
+        _syncDetailChrome();
+        _requestDetailWindowMode(false);
+        _switchListView();
+        _renderList();
+        return;
+    }
     _switchListView();
     _renderList();
 }
 
+function _toggleDetailMode() {
+    if (_detailMode) {
+        _closeDetail();
+        return;
+    }
+    var uid = _pickDetailUid();
+    _detailMode = true;
+    _requestDetailWindowMode(true);
+    _openDetail(uid, true);
+}
+
 function _activateLive() {
     _viewMode = 'live';
+    _detailMode = false;
     _detailVisible = false;
     _detailUid = 0;
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
     if (window.pywebview && window.pywebview.api && window.pywebview.api.request_live_snapshot) {
         window.pywebview.api.request_live_snapshot();
         return;
@@ -1730,6 +1858,11 @@ function _activateLive() {
 }
 
 function _activateReport() {
+    _detailMode = false;
+    _detailVisible = false;
+    _detailUid = 0;
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
     if (window.pywebview && window.pywebview.api && window.pywebview.api.show_last_report) {
         window.pywebview.api.show_last_report().then(function(result) {
             var data = (typeof result === 'string') ? JSON.parse(result) : result;
@@ -1749,8 +1882,11 @@ function _activateReport() {
         return;
     }
     _viewMode = 'report';
+    _detailMode = false;
     _detailVisible = false;
     _detailUid = 0;
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
     _renderAll();
 }
 
@@ -1760,8 +1896,11 @@ function _reset() {
     }
     _clearTransientHitFx();
     _viewMode = 'live';
+    _detailMode = false;
     _detailVisible = false;
     _detailUid = 0;
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
     _liveSnapshot = _emptySnapshot();
     _liveDetailCache = {};
     _renderAll();
@@ -1819,6 +1958,53 @@ document.getElementById('dps-tabs').addEventListener('click', function(e) {
     });
 })();
 
+(function() {
+    var grip = document.getElementById('resize-grip');
+    if (!grip) return;
+    var resizing = false;
+    var startX = 0;
+    var startY = 0;
+    var startW = 0;
+    var startH = 0;
+    var lastW = 0;
+    var lastH = 0;
+    var minW = 520;
+    var minH = 420;
+    var maxW = 1180;
+    var maxH = 900;
+
+    function clamp(v, lo, hi) {
+        return Math.max(lo, Math.min(hi, Math.round(Number(v || 0))));
+    }
+
+    grip.addEventListener('mousedown', function(e) {
+        if (!_detailMode) return;
+        resizing = true;
+        startX = e.screenX;
+        startY = e.screenY;
+        startW = window.innerWidth || document.documentElement.clientWidth || 760;
+        startH = window.innerHeight || document.documentElement.clientHeight || 560;
+        lastW = startW;
+        lastH = startH;
+        e.preventDefault();
+        e.stopPropagation();
+    });
+
+    document.addEventListener('mousemove', function(e) {
+        if (!resizing) return;
+        lastW = clamp(startW + (e.screenX - startX), minW, maxW);
+        lastH = clamp(startH + (e.screenY - startY), minH, maxH);
+        _callDpsApi('resize_dps', lastW, lastH, false);
+        e.preventDefault();
+    });
+
+    document.addEventListener('mouseup', function() {
+        if (!resizing) return;
+        resizing = false;
+        _callDpsApi('resize_dps', lastW, lastH, true);
+    });
+})();
+
 function snd(name) {
     try {
         if (window.pywebview && window.pywebview.api && window.pywebview.api.play_sound) {
@@ -1866,7 +2052,16 @@ window.DpsMeter = {
     showLive: showLive,
     showLastReport: showLastReport,
     fadeOut: fadeOutDps,
-    fadeIn: fadeInDps
+    fadeIn: fadeInDps,
+    setDetailMode: function(active) {
+        _detailMode = !!active;
+        if (!_detailMode) {
+            _detailVisible = false;
+            _detailUid = 0;
+        }
+        _syncDetailChrome();
+        _renderAll();
+    }
 };
 
 _renderAll();

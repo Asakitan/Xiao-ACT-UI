@@ -1539,15 +1539,18 @@ html, body {
 /* ═══ Session Players — right-side Saomenu panel ═══ */
 .sessionPlayers {
     position: absolute;
-    left: 388px;
+    left: 74px;
     top: -180px;
     width: 336px;
     opacity: 0;
     pointer-events: none;
     filter: blur(12px);
     transform: translateX(28px);
-    transition: opacity 0.24s ease, transform 0.26s ease, filter 0.28s ease;
+    transition: opacity 0.24s ease, transform 0.26s ease, filter 0.28s ease, left 0.20s ease;
     z-index: 84;
+}
+.sessionPlayers.with-child {
+    left: 346px;
 }
 .sessionPlayers.show {
     opacity: 1;
@@ -3989,6 +3992,11 @@ function _updateSourceSummary() {
     document.getElementById('data-source-summary').textContent = summary;
 }
 
+function _syncSessionPlayersAnchor(withChild) {
+    if (!sessionPlayersEl) return;
+    sessionPlayersEl.classList.toggle('with-child', !!withChild);
+}
+
 function openSourceDialog() {
     playSound('snd-panel');
     _syncSourceButtons();
@@ -4232,6 +4240,7 @@ function openMenu(x, y) {
     /* Show userInfo by default */
     currentActive = null;
     activateCircle('userInfo');
+    _syncSessionPlayersAnchor(false);
     showSessionPlayers(_sessionPlayersPayload);
 }
 
@@ -4305,6 +4314,7 @@ function activateCircle(name) {
             cbLine.classList.remove('show');
             cbArrow.classList.remove('show');
             pos.classList.remove('auto-key-layout');
+            _syncSessionPlayersAnchor(false);
             currentActive = null;
         }
         return;
@@ -4337,17 +4347,21 @@ function activateCircle(name) {
         playSound('snd-panel');
         cbLine.classList.remove('show');
         cbArrow.classList.remove('show');
+        _syncSessionPlayersAnchor(false);
     } else {
         infoBox.classList.remove('show');
         var sub = document.getElementById('sub-' + name);
         if (sub) {
             sub.classList.add('show');
+            _syncSessionPlayersAnchor(true);
             playSound('snd-menu');
             /* Update line height using rendered height so large panels also fit */
             var rect = sub.getBoundingClientRect();
             cbLine.style.height = Math.max(48, Math.round(rect.height - 18)) + 'px';
             cbLine.classList.add('show');
             cbArrow.classList.add('show');
+        } else {
+            _syncSessionPlayersAnchor(false);
         }
     }
 }
@@ -4357,6 +4371,7 @@ function hideAllSubMenus() {
         el.classList.remove('show');
     });
     document.getElementById('menu-position').classList.remove('auto-key-layout');
+    _syncSessionPlayersAnchor(false);
 }
 
 /* ═══ File Picker ═══ */
