@@ -4146,9 +4146,12 @@ function _renderSessionPlayers(dataJson, reveal) {
         _renderSessionPlayersBatch(_spRenderToken, _SP_INITIAL_ROWS);
     }
     if (reveal && sessionPlayersEl && menuOpen) {
+        var wasVisible = _sessionPlayersVisible && sessionPlayersEl.classList.contains('show');
         _sessionPlayersVisible = true;
         sessionPlayersEl.classList.add('show');
-        _playSessionPlayersOpenAnimation();
+        if (!wasVisible) {
+            _playSessionPlayersOpenAnimation();
+        }
     }
 }
 

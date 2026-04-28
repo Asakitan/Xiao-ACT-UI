@@ -1133,6 +1133,8 @@ class SAOSessionPlayersPanel(tk.Frame):
             self._setup_gpu_painter()
             return
 
+        self.configure(width=self.PANEL_W, height=self.PANEL_H)
+        self.pack_propagate(False)
         self._box = tk.Frame(self, bg='#f7f7f6', width=self.PANEL_W, height=self.PANEL_H,
                              highlightthickness=1, highlightbackground='#d4d0d0')
         self._box.pack_propagate(False)
@@ -1450,6 +1452,25 @@ class SAOSessionPlayersPanel(tk.Frame):
         if last >= self.LOAD_MORE_THRESHOLD:
             self._append_row_batch(self.RENDER_BATCH_ROWS)
 
+    def prepare_open_animation(self):
+        if self._gpu_managed:
+            self._open_reveal = 0.0
+            self._cached_screen_xy = None
+            return
+        try:
+            if self._open_anim_after_id:
+                self.after_cancel(self._open_anim_after_id)
+        except Exception:
+            pass
+        self._open_anim_after_id = None
+        try:
+            self.configure(width=self.PANEL_W, height=1)
+            self._box.pack_configure(pady=(64, 0))
+            self._box.configure(highlightbackground='#f3af12')
+            self._summary.configure(fg='#b89036')
+        except Exception:
+            pass
+
     def play_open_animation(self):
         """Tiny SAO-style slide/glint so the list follows menu open."""
         if self._gpu_managed:
@@ -1492,7 +1513,9 @@ class SAOSessionPlayersPanel(tk.Frame):
             try:
                 t = min(1.0, (time.perf_counter() - start) / dur)
                 ease = 1.0 - pow(1.0 - t, 3)
+                height = max(1, int(round(self.PANEL_H * ease)))
                 offset = int(round(64 * (1.0 - ease)))
+                self.configure(width=self.PANEL_W, height=height)
                 self._box.pack_configure(pady=(offset, 0))
                 if t < 0.55:
                     self._box.configure(highlightbackground='#f3af12')
@@ -1503,6 +1526,7 @@ class SAOSessionPlayersPanel(tk.Frame):
                 if t < 1.0:
                     self._open_anim_after_id = self.after(16, _step)
                 else:
+                    self.configure(width=self.PANEL_W, height=self.PANEL_H)
                     self._box.pack_configure(pady=(0, 0))
                     self._box.configure(highlightbackground='#d4d0d0')
                     self._summary.configure(fg='#aaaaaa')
@@ -1591,7 +1615,7 @@ class SAOMenuLeftStack(tk.Frame):
             pass
         self.session_panel = SAOSessionPlayersPanel(
             self, rows_provider=self._rows_provider)
-        self._session_visible = True
+        self._session_visible = False
         self._active = False
         self._top = getattr(self.player_panel, '_top', None)
         player_w = int(getattr(self.player_panel, '_target_w', 0) or 0)
@@ -1604,8 +1628,6 @@ class SAOMenuLeftStack(tk.Frame):
         self._top_h = player_h + self._stack_gap + SAOSessionPlayersPanel.PANEL_H
         self._bottom_h = 0
         self.player_panel.pack(side=tk.TOP, anchor='nw')
-        self.session_panel.pack(side=tk.TOP, anchor='nw',
-                                pady=(self._stack_gap, 0))
         try:
             self.session_panel.update_rows(force=True)
         except Exception:
@@ -1622,15 +1644,19 @@ class SAOMenuLeftStack(tk.Frame):
 
     def show_session_players(self, rows=None, force: bool = True):
         panel = self._ensure_session_panel()
-        if not self._session_visible:
+        was_visible = self.is_session_players_visible()
+        if not was_visible:
             try:
+                if hasattr(panel, 'prepare_open_animation'):
+                    panel.prepare_open_animation()
                 panel.pack(side=tk.TOP, anchor='nw', pady=(self._stack_gap, 0))
             except Exception:
                 pass
             self._session_visible = True
         try:
             panel.update_rows(rows, force=force)
-            panel.play_open_animation()
+            if not was_visible:
+                panel.play_open_animation()
         except Exception:
             pass
         return panel
@@ -1659,13 +1685,13 @@ class SAOMenuLeftStack(tk.Frame):
     def set_active(self, active: bool):
         self._active = bool(active)
         self.player_panel.set_active(active)
-        if self.is_session_players_visible():
-            try:
-                self.session_panel.update_rows(force=False)
-                if active:
-                    self.session_panel.play_open_animation()
-            except Exception:
-                pass
+        try:
+            if active:
+                self.show_session_players(rows=None, force=False)
+            elif self.is_session_players_visible():
+                self.hide_session_players()
+        except Exception:
+            pass
 
     def sync_pulse(self):
         if self.is_session_players_visible():
@@ -4105,7 +4131,8 @@ class SAOPlayerGUI:
     def _refresh_session_players_panel(self, force: bool = False):
         panel = getattr(self, '_session_players_panel', None)
         stack = getattr(self, '_menu_left_stack', None)
-        if not panel and force and stack is not None:
+        stack_active = bool(getattr(stack, '_active', False)) if stack is not None else False
+        if not panel and force and stack is not None and stack_active:
             try:
                 panel = stack.show_session_players(
                     rows=self._get_session_player_rows(sync=True),
@@ -4119,7 +4146,7 @@ class SAOPlayerGUI:
         if stack is not None and hasattr(stack, 'is_session_players_visible'):
             try:
                 if not stack.is_session_players_visible():
-                    if not force:
+                    if not force or not stack_active:
                         return
                     panel = stack.show_session_players(
                         rows=self._get_session_player_rows(sync=True),
