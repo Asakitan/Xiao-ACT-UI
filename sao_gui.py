@@ -1074,12 +1074,18 @@ class SAOSessionPlayersPanel(tk.Frame):
 
     PANEL_W = 304
     PANEL_H = 392
+    INITIAL_RENDER_ROWS = 48
+    RENDER_BATCH_ROWS = 64
+    LOAD_MORE_THRESHOLD = 0.78
 
     def __init__(self, parent, rows_provider=None, **kw):
         super().__init__(parent, bg='#010101', highlightthickness=0, **kw)
         self._rows_provider = rows_provider
         self._rows_sig = None
         self._canvas_window = None
+        self._rows_data = []
+        self._rendered_count = 0
+        self._loading_footer = None
 
         self._box = tk.Frame(self, bg='#f7f7f6', width=self.PANEL_W, height=self.PANEL_H,
                              highlightthickness=1, highlightbackground='#d4d0d0')
@@ -1111,7 +1117,7 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._canvas = tk.Canvas(self._body, bg='#eeeeee', highlightthickness=0,
                                  bd=0, width=286, height=298)
         self._scrollbar = tk.Scrollbar(self._body, orient=tk.VERTICAL,
-                                       command=self._canvas.yview,
+                                       command=self._on_scrollbar,
                                        width=8, bg='#eeeeee', troughcolor='#eeeeee',
                                        activebackground='#f3af12')
         self._canvas.configure(yscrollcommand=self._scrollbar.set)
@@ -1136,6 +1142,14 @@ class SAOSessionPlayersPanel(tk.Frame):
             self._canvas.itemconfigure(self._canvas_window, width=event.width)
         except Exception:
             pass
+        self._maybe_load_more()
+
+    def _on_scrollbar(self, *args):
+        try:
+            self._canvas.yview(*args)
+        except Exception:
+            pass
+        self._maybe_load_more()
 
     def _bind_wheel(self, widget):
         for seq in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
@@ -1162,6 +1176,7 @@ class SAOSessionPlayersPanel(tk.Frame):
             self._canvas.yview_scroll(delta, 'units')
         except Exception:
             pass
+        self._maybe_load_more()
         return 'break'
 
     @staticmethod
@@ -1170,6 +1185,93 @@ class SAOSessionPlayersPanel(tk.Frame):
         if not name:
             return '--'
         return name if len(name) <= 14 else name[:13] + '…'
+
+    def _destroy_rows(self):
+        self._loading_footer = None
+        for child in self._rows_host.winfo_children():
+            try:
+                child.destroy()
+            except Exception:
+                pass
+
+    def _clear_loading_footer(self):
+        footer = self._loading_footer
+        self._loading_footer = None
+        if footer is not None:
+            try:
+                footer.destroy()
+            except Exception:
+                pass
+
+    def _make_row_widget(self, row, idx: int):
+        is_self = bool(row.get('is_self'))
+        bg = '#fffaf0' if is_self else ('#f8f8f8' if idx % 2 == 0 else '#f1f3f4')
+        fg = '#4f5962'
+        item = tk.Frame(self._rows_host, bg=bg, height=38, highlightthickness=0)
+        item.pack(fill=tk.X, padx=6, pady=(5 if idx == 0 else 0, 0))
+        item.pack_propagate(False)
+        tk.Frame(item, bg=('#f3af12' if is_self else '#86dfff'),
+                 width=3).pack(side=tk.LEFT, fill=tk.Y)
+        name_text = self._short_name(row.get('name') or '')
+        if is_self:
+            name_text = f'* {name_text}'
+        tk.Label(item, text=name_text, bg=bg, fg=fg,
+                 font=get_cjk_font(9, is_self), anchor='w',
+                 width=14).pack(side=tk.LEFT, padx=(8, 4), fill=tk.Y)
+        tk.Label(item, text=str(row.get('uid') or '--'), bg=bg, fg='#8a97a3',
+                 font=get_sao_font(7), anchor='center',
+                 width=11).pack(side=tk.LEFT, fill=tk.Y)
+        tk.Label(item, text=str(row.get('fight_power') or '--'), bg=bg,
+                 fg=('#d9980e' if is_self else '#6d7379'),
+                 font=get_sao_font(8, is_self), anchor='e',
+                 width=10).pack(side=tk.RIGHT, padx=(2, 8), fill=tk.Y)
+        self._bind_wheel_tree(item)
+
+    def _update_loading_footer(self):
+        self._clear_loading_footer()
+        total = len(self._rows_data)
+        if self._rendered_count >= total:
+            return
+        remaining = total - self._rendered_count
+        footer = tk.Label(
+            self._rows_host,
+            text=f'继续滚动加载 · 已载入 {self._rendered_count}/{total} · 剩余 {remaining}',
+            bg='#eeeeee', fg='#9a8a68',
+            font=get_cjk_font(8),
+            pady=10,
+        )
+        footer.pack(fill=tk.X, padx=6, pady=(5, 4))
+        self._loading_footer = footer
+        self._bind_wheel_tree(footer)
+
+    def _append_row_batch(self, batch_size: int | None = None):
+        total = len(self._rows_data)
+        if self._rendered_count >= total:
+            self._update_loading_footer()
+            return
+        self._clear_loading_footer()
+        batch = int(batch_size or self.RENDER_BATCH_ROWS)
+        start = self._rendered_count
+        end = min(total, start + max(1, batch))
+        for idx in range(start, end):
+            self._make_row_widget(self._rows_data[idx], idx)
+        self._rendered_count = end
+        self._update_loading_footer()
+        self._summary.configure(
+            text=f'本次登录出现过 {total} 人 · 已载入 {self._rendered_count}'
+            if self._rendered_count < total else f'本次登录出现过 {total} 人'
+        )
+        self._on_rows_configure()
+
+    def _maybe_load_more(self):
+        if self._rendered_count >= len(self._rows_data):
+            return
+        try:
+            first, last = self._canvas.yview()
+        except Exception:
+            first, last = 0.0, 1.0
+        if last >= self.LOAD_MORE_THRESHOLD:
+            self._append_row_batch(self.RENDER_BATCH_ROWS)
 
     def update_rows(self, rows=None, force: bool = False):
         if rows is None:
@@ -1184,14 +1286,16 @@ class SAOSessionPlayersPanel(tk.Frame):
             int(r.get('fight_power_value') or 0),
             bool(r.get('is_self')),
         ) for r in rows)
-        if not force and sig == self._rows_sig:
+        if sig == self._rows_sig and (not force or self._rows_sig is not None):
             return
         self._rows_sig = sig
-        for child in self._rows_host.winfo_children():
-            try:
-                child.destroy()
-            except Exception:
-                pass
+        self._rows_data = rows
+        self._rendered_count = 0
+        self._destroy_rows()
+        try:
+            self._canvas.yview_moveto(0.0)
+        except Exception:
+            pass
         self._summary.configure(text=f'本次登录出现过 {len(rows)} 人')
         if not rows:
             empty = tk.Label(
@@ -1204,34 +1308,10 @@ class SAOSessionPlayersPanel(tk.Frame):
             self._on_rows_configure()
             return
 
-        for idx, row in enumerate(rows):
-            is_self = bool(row.get('is_self'))
-            bg = '#fffaf0' if is_self else ('#f8f8f8' if idx % 2 == 0 else '#f1f3f4')
-            fg = '#4f5962'
-            item = tk.Frame(self._rows_host, bg=bg, height=38,
-                            highlightthickness=0)
-            item.pack(fill=tk.X, padx=6, pady=(5 if idx == 0 else 0, 0))
-            item.pack_propagate(False)
-            tk.Frame(item, bg=('#f3af12' if is_self else '#86dfff'),
-                     width=3).pack(side=tk.LEFT, fill=tk.Y)
-            name_text = self._short_name(row.get('name') or '')
-            if is_self:
-                name_text = f'* {name_text}'
-            tk.Label(item, text=name_text, bg=bg, fg=fg,
-                     font=get_cjk_font(9, is_self), anchor='w',
-                     width=14).pack(side=tk.LEFT, padx=(8, 4), fill=tk.Y)
-            tk.Label(item, text=str(row.get('uid') or '--'), bg=bg, fg='#8a97a3',
-                     font=get_sao_font(7), anchor='center',
-                     width=11).pack(side=tk.LEFT, fill=tk.Y)
-            tk.Label(item, text=str(row.get('fight_power') or '--'), bg=bg,
-                     fg=('#d9980e' if is_self else '#6d7379'),
-                     font=get_sao_font(8, is_self), anchor='e',
-                     width=10).pack(side=tk.RIGHT, padx=(2, 8), fill=tk.Y)
-            self._bind_wheel_tree(item)
-        self._on_rows_configure()
+        self._append_row_batch(self.INITIAL_RENDER_ROWS)
 
     def sync_pulse(self):
-        self.update_rows(force=True)
+        self.update_rows(force=False)
 
 
 class SAOMenuLeftStack(tk.Frame):
@@ -1312,6 +1392,7 @@ class SAOPlayerGUI:
         self._session_players_panel = None
         self._session_players = {}
         self._session_players_self_uid = 0
+        self._session_players_version = 0
         self._last_session_players_panel_sig = None
         self._last_session_players_panel_push_ts = 0.0
         self._picker = None        # SAOFilePicker 引用 (防止 GC)
@@ -3583,6 +3664,7 @@ class SAOPlayerGUI:
         if uid <= 0:
             return
         now = time.time()
+        changed = False
         entry = self._session_players.get(uid)
         if not entry:
             entry = {
@@ -3594,20 +3676,29 @@ class SAOPlayerGUI:
                 'is_self': False,
             }
             self._session_players[uid] = entry
+            changed = True
         name = str(name or '').strip()
         fight_point = self._session_int(fight_point, 0)
-        if name:
+        if name and entry.get('name') != name:
             entry['name'] = name
-        if fight_point > 0:
+            changed = True
+        if fight_point > 0 and entry.get('fight_point') != fight_point:
             entry['fight_point'] = fight_point
-        entry['is_self'] = bool(entry.get('is_self') or is_self)
+            changed = True
+        next_is_self = bool(entry.get('is_self') or is_self)
+        if bool(entry.get('is_self')) != next_is_self:
+            entry['is_self'] = next_is_self
+            changed = True
         entry['updated_at'] = now
+        if changed:
+            self._session_players_version += 1
 
     def _sync_session_players_cache(self, gs=None):
         self_uid = self._session_self_uid()
         if self_uid > 0 and self_uid != self._session_players_self_uid:
             if self._session_players_self_uid:
                 self._session_players.clear()
+                self._session_players_version += 1
             self._session_players_self_uid = self_uid
 
         if gs is None:
@@ -3642,8 +3733,9 @@ class SAOPlayerGUI:
         value = SAOPlayerGUI._session_int(value, 0)
         return f'{value:,}' if value > 0 else '--'
 
-    def _get_session_player_rows(self) -> List[Dict[str, Any]]:
-        self._sync_session_players_cache(getattr(self, '_game_state', None))
+    def _get_session_player_rows(self, sync: bool = True) -> List[Dict[str, Any]]:
+        if sync:
+            self._sync_session_players_cache(getattr(self, '_game_state', None))
         rows = []
         self_uid = self._session_self_uid()
         for uid, entry in self._session_players.items():
@@ -3669,13 +3761,14 @@ class SAOPlayerGUI:
         panel = getattr(self, '_session_players_panel', None)
         if not panel:
             return
-        rows = self._get_session_player_rows()
-        sig = tuple((r.get('uid'), r.get('name'), r.get('fight_power_value'), r.get('is_self')) for r in rows)
+        self._sync_session_players_cache(getattr(self, '_game_state', None))
+        sig = (len(self._session_players), self._session_players_version, self._session_self_uid())
         now = time.time()
         if not force and sig == self._last_session_players_panel_sig:
             return
         if not force and now - self._last_session_players_panel_push_ts < 0.5:
             return
+        rows = self._get_session_player_rows(sync=False)
         self._last_session_players_panel_sig = sig
         self._last_session_players_panel_push_ts = now
         try:
@@ -5336,7 +5429,168 @@ class SAOPlayerGUI:
         # ── 创建 GPU 叠加窗口 (click-through, 自然位于 topmost UI 下方) ──
         try:
             pump = _gow.get_glfw_pump(self.root)
-            presenter = _gow.BgraPresenter()
+
+            class _FisheyeTexturePresenter:
+                gpu_distorts = True
+
+                def __init__(self):
+                    self._prog = None
+                    self._vbo = None
+                    self._vao = None
+                    self._tex = None
+                    self._tex_w = 0
+                    self._tex_h = 0
+                    self._rgb = None
+                    self._w = 0
+                    self._h = 0
+                    self._last_uploaded_id = 0
+                    self._alpha = 1.0
+                    self._fade_active = False
+                    self._fade_t0 = 0.0
+                    self._fade_dur = 0.0
+                    self._fade_from = 1.0
+                    self._fade_to = 1.0
+                    self._fade_done_cb = None
+
+                def set_frame(self, rgb_bytes, w, h):
+                    self._rgb = rgb_bytes
+                    self._w = int(w)
+                    self._h = int(h)
+
+                def set_alpha(self, alpha):
+                    self._fade_active = False
+                    self._alpha = max(0.0, min(1.0, float(alpha)))
+
+                def start_fade(self, target_alpha, duration_s, on_done=None):
+                    self._fade_from = float(self._alpha)
+                    self._fade_to = max(0.0, min(1.0, float(target_alpha)))
+                    self._fade_dur = max(0.001, float(duration_s))
+                    self._fade_t0 = time.perf_counter()
+                    self._fade_active = True
+                    self._fade_done_cb = on_done
+
+                def is_fading(self):
+                    return bool(self._fade_active)
+
+                def render(self, ctx, t):
+                    if self._fade_active:
+                        elapsed = time.perf_counter() - self._fade_t0
+                        if elapsed >= self._fade_dur:
+                            self._alpha = self._fade_to
+                            self._fade_active = False
+                            cb = self._fade_done_cb
+                            self._fade_done_cb = None
+                            if cb is not None:
+                                try:
+                                    cb()
+                                except Exception:
+                                    pass
+                        else:
+                            k = elapsed / self._fade_dur
+                            self._alpha = self._fade_from + (self._fade_to - self._fade_from) * k
+                    if self._prog is None:
+                        import numpy as _np
+                        self._prog = ctx.program(
+                            vertex_shader='''
+                                #version 330
+                                in vec2 in_pos;
+                                out vec2 v_uv;
+                                void main() {
+                                    v_uv = vec2(in_pos.x * 0.5 + 0.5,
+                                                1.0 - (in_pos.y * 0.5 + 0.5));
+                                    gl_Position = vec4(in_pos, 0.0, 1.0);
+                                }
+                            ''',
+                            fragment_shader='''
+                                #version 330
+                                uniform sampler2D u_tex;
+                                uniform float u_alpha;
+                                uniform float u_time;
+                                in vec2 v_uv;
+                                out vec4 fragColor;
+
+                                float line_band(float y, float center) {
+                                    return 1.0 - smoothstep(0.0, 0.006, abs(y - center));
+                                }
+
+                                void main() {
+                                    vec2 c = v_uv - 0.5;
+                                    float r2 = dot(c, c);
+                                    float strength = 0.55 * (1.0 + 0.035 * sin(u_time * 0.8));
+                                    vec2 uv = v_uv + c * strength * r2;
+                                    vec2 dir = normalize(c + vec2(0.0001)) * (0.004 + r2 * 0.018);
+                                    vec3 b0 = texture(u_tex, uv - dir * 2.0).rgb;
+                                    vec3 b1 = texture(u_tex, uv - dir).rgb;
+                                    vec3 b2 = texture(u_tex, uv).rgb;
+                                    vec3 b3 = texture(u_tex, uv + dir).rgb;
+                                    vec3 b4 = texture(u_tex, uv + dir * 2.0).rgb;
+                                    vec3 blur = b0 * 0.10 + b1 * 0.20 + b2 * 0.36 + b3 * 0.22 + b4 * 0.12;
+                                    float ca = 0.0015 + r2 * 0.004;
+                                    vec3 col = mix(blur, vec3(
+                                        texture(u_tex, uv + vec2(ca, 0.0)).r,
+                                        texture(u_tex, uv).g,
+                                        texture(u_tex, uv - vec2(ca, 0.0)).b
+                                    ), 0.50);
+                                    float scan = 0.94 + 0.06 * sin((v_uv.y + u_time * 0.035) * 940.0);
+                                    float vignette = 0.88 - r2 * 0.42 + 0.035 * sin(u_time * 0.45);
+                                    col *= scan * vignette;
+                                    col = mix(col, vec3(0.0), 0.38);
+
+                                    float hud = 0.0;
+                                    hud += line_band(v_uv.y, 0.08) * step(0.05, v_uv.x) * step(v_uv.x, 0.95);
+                                    hud += line_band(v_uv.y, 0.15) * step(0.05, v_uv.x) * step(v_uv.x, 0.95);
+                                    hud += line_band(v_uv.y, 0.85) * step(0.05, v_uv.x) * step(v_uv.x, 0.95);
+                                    hud += line_band(v_uv.y, 0.92) * step(0.05, v_uv.x) * step(v_uv.x, 0.95);
+                                    hud += (1.0 - smoothstep(0.0, 0.006, abs(v_uv.x - 0.5)))
+                                           * step(0.42, v_uv.y) * step(v_uv.y, 0.47);
+                                    hud += (1.0 - smoothstep(0.0, 0.006, abs(v_uv.y - 0.5)))
+                                           * step(0.42, v_uv.x) * step(v_uv.x, 0.47);
+                                    col += vec3(0.18, 0.48, 0.56) * min(hud, 1.0) * 0.16;
+                                    fragColor = vec4(col * u_alpha, u_alpha);
+                                }
+                            ''')
+                        self._prog['u_tex'].value = 0
+                        quad = _np.array([-1, -1, 1, -1, -1, 1, 1, 1], dtype='f4')
+                        self._vbo = ctx.buffer(quad.tobytes())
+                        self._vao = ctx.vertex_array(
+                            self._prog, [(self._vbo, '2f', 'in_pos')])
+                    try:
+                        self._prog['u_alpha'].value = float(self._alpha)
+                        self._prog['u_time'].value = float(t)
+                    except Exception:
+                        pass
+                    rgb = self._rgb
+                    if rgb is not None and self._w > 0 and self._h > 0:
+                        if self._tex is None or self._tex_w != self._w or self._tex_h != self._h:
+                            if self._tex is not None:
+                                try:
+                                    self._tex.release()
+                                except Exception:
+                                    pass
+                            self._tex = ctx.texture((self._w, self._h), 3, rgb)
+                            self._tex.filter = (_gow._moderngl.LINEAR, _gow._moderngl.LINEAR)
+                            self._tex_w = self._w
+                            self._tex_h = self._h
+                            self._last_uploaded_id = id(rgb)
+                        elif id(rgb) != self._last_uploaded_id:
+                            self._tex.write(rgb)
+                            self._last_uploaded_id = id(rgb)
+                    if self._tex is not None:
+                        self._tex.use(location=0)
+                        self._vao.render(_gow._moderngl.TRIANGLE_STRIP)
+
+                def release(self):
+                    for name in ('_tex', '_vao', '_vbo', '_prog'):
+                        obj = getattr(self, name, None)
+                        if obj is not None:
+                            try:
+                                obj.release()
+                            except Exception:
+                                pass
+                            setattr(self, name, None)
+                    self._rgb = None
+
+            presenter = _FisheyeTexturePresenter()
             gpu_win = _gow.GpuOverlayWindow(
                 pump,
                 w=int(sw), h=int(sh),
@@ -5358,18 +5612,26 @@ class SAOPlayerGUI:
         ov._worker_thread = None
         self._fisheye_ov = ov
 
-        # WDA_EXCLUDEFROMCAPTURE: 让 mss 抓屏看不到这个叠加层本身,
-        # 否则 worker 抓到自己再畸变会出现反馈雪花。
-        try:
-            import ctypes as _ct
-            _u32 = _ct.windll.user32
-            _u32.SetWindowDisplayAffinity.argtypes = [_ct.c_void_p, _ct.c_uint]
-            _u32.SetWindowDisplayAffinity.restype = _ct.c_int
-            _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
-            if _hwnd:
-                _u32.SetWindowDisplayAffinity(_hwnd, 0x00000011)  # WDA_EXCLUDEFROMCAPTURE
-        except Exception:
-            pass
+        _fisheye_capture_excluded = [False]
+
+        def _set_fisheye_capture_excluded(exclude: bool):
+            # Only exclude the fisheye window from capture when the capture
+            # source is the desktop itself. The preferred game-window DXGI
+            # source does not capture this overlay, so leaving affinity off
+            # lets normal screenshots include the visible Saomenu backdrop.
+            try:
+                import ctypes as _ct
+                _u32 = _ct.windll.user32
+                _u32.SetWindowDisplayAffinity.argtypes = [_ct.c_void_p, _ct.c_uint]
+                _u32.SetWindowDisplayAffinity.restype = _ct.c_int
+                _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
+                if not _hwnd:
+                    return
+                flag = 0x00000011 if exclude else 0x00000000
+                _u32.SetWindowDisplayAffinity(_ct.c_void_p(_hwnd), flag)
+                _fisheye_capture_excluded[0] = bool(exclude)
+            except Exception:
+                pass
 
         # v2.3.x+: 把鱼眼 GPU 窗口从 HWND_TOPMOST 栈降级 (有限次)。
         # GpuOverlayWindow 默认是 WS_EX_TOPMOST，并且在首次实际渲染时
@@ -5504,6 +5766,12 @@ class SAOPlayerGUI:
                 # Pump fires _on_fadeout_done when alpha hits 0; nothing to do.
                 pass
 
+            if _latest_frame[0] is not None and s in ('fadein', 'active', 'fadeout'):
+                try:
+                    gpu_win.request_redraw()
+                except Exception:
+                    pass
+
             _perf_gauge('fisheye.tk_tick_ms',
                         (time.perf_counter() - _tick_t0) * 1000.0)
             try:
@@ -5536,9 +5804,13 @@ class SAOPlayerGUI:
                 _wgl_lock = get_wgl_serialize_lock()
             except Exception:
                 _wgl_lock = None
+            _shader_gpu = bool(getattr(presenter, 'gpu_distorts', False))
+            _tex_w = 0
+            _tex_h = 0
 
             # ── 优先 mss 快速截屏 (DXGI), fallback ImageGrab ──
             _cap_fn = None
+            _cap_source = ''
             if ensure_session is not None and get_latest_bgr is not None:
                 def _cap_dxgi_window():
                     hwnd, _game_rect = self._get_game_window_context()
@@ -5555,6 +5827,7 @@ class SAOPlayerGUI:
                         return None
                     return Image.fromarray(frame[:, :, ::-1])
                 _cap_fn = _cap_dxgi_window
+                _cap_source = 'dxgi_window'
             if _cap_fn is None and capture_monitor_bgr_for_point is not None:
                 def _cap_dxgi():
                     px = sw // 2
@@ -5573,6 +5846,7 @@ class SAOPlayerGUI:
                         return None
                     return Image.fromarray(frame[:, :, ::-1])
                 _cap_fn = _cap_dxgi
+                _cap_source = 'dxgi_monitor'
             try:
                 if _cap_fn is None:
                     import mss as _mss_mod
@@ -5582,6 +5856,7 @@ class SAOPlayerGUI:
                         s = _sct.grab(_mon)
                         return Image.frombytes('RGB', s.size, s.rgb)
                     _cap_fn = _cap_mss
+                    _cap_source = 'mss'
             except Exception:
                 pass
             if _cap_fn is None:
@@ -5596,11 +5871,16 @@ class SAOPlayerGUI:
                         except Exception: continue
                     return None
                 _cap_fn = _cap_ig
+                _cap_source = 'imagegrab'
+
+            _set_fisheye_capture_excluded(_cap_source != 'dxgi_window')
 
             # ── moderngl 桶形畸变 (worker 私有 standalone context) ──
             _gl_ok = False
             _ctx = _prog = _vbo = _vao = _tex = _fbo = None
             try:
+                if _shader_gpu:
+                    raise RuntimeError('final-window shader path active')
                 import moderngl
                 import contextlib as _ctxlib
                 # v2.3.15: use _wgl_lock only for context init, then
@@ -5755,9 +6035,21 @@ class SAOPlayerGUI:
                 if not _fisheye_diag_logged[0]:
                     _fisheye_diag_logged[0] = True
                     print(f'[SAO-UI] fisheye worker: shot={shot.size}, '
+                          f'final_shader={int(_shader_gpu)}, '
                           f'gl_ok={_gl_ok}, tex=({_tex_w},{_tex_h}), '
                           f'fbo=({hw},{hh})')
                 try:
+                    if _shader_gpu:
+                        if getattr(shot, 'mode', 'RGB') != 'RGB':
+                            shot = shot.convert('RGB')
+                        _frame_seq[0] += 1
+                        _latest_frame[0] = (
+                            _frame_seq[0], shot.tobytes(), shot.size[0], shot.size[1])
+                        _elapsed = _time.time() - _t_start
+                        _perf_gauge('fisheye.worker.frame_ms', _elapsed * 1000.0)
+                        _sleep = max(0.001, _frame_interval - _elapsed)
+                        _time.sleep(_sleep)
+                        continue
                     if _gl_ok:
                         # v2.3.15: feed screenshot directly to GPU texture.
                         # The texture is rebuilt only when shot size changes

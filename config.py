@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.13"
+APP_VERSION = "2.4.14"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,18 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.14:
+#   Fix Saomenu/session-player scalability and overlay input regressions.
+#   Entity and WebView session-player panels now render large login-session
+#   player lists lazily, with light version signatures so unchanged player
+#   data no longer forces full sorting/DOM/Tk rebuilds when the menu is open.
+#   Entity HP auto-hide now clips the native input region to the ID plate
+#   instead of toggling whole-window click-through, keeping the ID panel
+#   visible/clickable while hidden HP/STA pixels pass mouse input through.
+#   Entity Saomenu fisheye now performs distortion/HUD shading in the final
+#   GLFW GPU window and avoids the old per-frame FBO readback/CPU composite
+#   path; normal screenshots can include the effect when the game-window
+#   DXGI capture source is available.
 # v2.4.13:
 #   Add in-panel DPS detail mode for both Entity and WebView UI. The detail
 #   view reuses live/report per-entity skill breakdowns, supports returning to
