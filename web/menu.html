@@ -1548,7 +1548,7 @@ html, body {
     transform: translateX(28px);
     transition: opacity 0.24s ease, transform 0.26s ease, filter 0.28s ease, left 0.20s ease;
     will-change: opacity, transform, filter;
-    z-index: 84;
+    z-index: 120;
 }
 .sessionPlayers.with-child {
     left: 346px;
@@ -3990,6 +3990,7 @@ var cbArrow = document.getElementById('cb-arrow');
 var sessionPlayersEl = document.getElementById('session-players');
 var _sessionPlayersPayload = { ok: true, count: 0, self_uid: '', players: [] };
 var _sessionPlayersVisible = false;
+var _sessionPlayersManualHidden = false;
 var _spRenderRows = [];
 var _spRenderedCount = 0;
 var _spRenderToken = 0;
@@ -4134,23 +4135,25 @@ function _renderSessionPlayers(dataJson, reveal) {
 }
 
 function setSessionPlayersPayload(dataJson) {
-    _renderSessionPlayers(dataJson, _sessionPlayersVisible);
+    _renderSessionPlayers(dataJson, _sessionPlayersVisible || (menuOpen && !_sessionPlayersManualHidden));
 }
 
 function showSessionPlayers(dataJson) {
+    _sessionPlayersManualHidden = false;
     _renderSessionPlayers(dataJson, true);
 }
 
 function toggleSessionPlayers(dataJson) {
     if (_sessionPlayersVisible) {
-        closeSessionPlayers();
+        closeSessionPlayers(true);
     } else {
         showSessionPlayers(dataJson || _sessionPlayersPayload);
     }
 }
 
-function closeSessionPlayers() {
+function closeSessionPlayers(manual) {
     _sessionPlayersVisible = false;
+    _sessionPlayersManualHidden = !!manual;
     if (sessionPlayersEl) {
         sessionPlayersEl.classList.remove('show');
     }
@@ -4387,6 +4390,7 @@ function openMenu(x, y) {
     currentActive = null;
     activateCircle('userInfo');
     _syncSessionPlayersAnchor(false);
+    _sessionPlayersManualHidden = false;
     showSessionPlayers(_sessionPlayersPayload);
 }
 
