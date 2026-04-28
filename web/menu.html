@@ -3732,6 +3732,7 @@ html, body {
                 <li data-action="toggle_recognition"><i class="menu-glyph mi-play"></i><span>识别 开/关</span><small class="shortcut">F5</small></li>
                 <li data-action="toggle_hide_seek"><i class="menu-glyph mi-play"></i><span>自动躲猫猫 Hide & Seek</span><small class="shortcut">F11</small></li>
                 <li data-action="toggle_commander"><i class="menu-glyph mi-play"></i><span>团本指挥 Commander</span></li>
+                <li data-action="toggle_session_players"><i class="menu-glyph mi-mid"></i><span>本次登录玩家 Session Players</span></li>
                 <li class="sep"></li>
                 <li class="widget-row">
                     <div class="widget-label">SOUND</div>
@@ -3988,6 +3989,7 @@ var cbLine = document.getElementById('cb-line');
 var cbArrow = document.getElementById('cb-arrow');
 var sessionPlayersEl = document.getElementById('session-players');
 var _sessionPlayersPayload = { ok: true, count: 0, self_uid: '', players: [] };
+var _sessionPlayersVisible = false;
 var _spRenderRows = [];
 var _spRenderedCount = 0;
 var _spRenderToken = 0;
@@ -4102,7 +4104,7 @@ function closeSourceDialog() {
     document.getElementById('source-dialog').classList.remove('show');
 }
 
-function showSessionPlayers(dataJson) {
+function _renderSessionPlayers(dataJson, reveal) {
     var data = dataJson || _sessionPlayersPayload;
     if (typeof data === 'string') {
         try { data = JSON.parse(data); } catch (e) { data = {}; }
@@ -4125,12 +4127,30 @@ function showSessionPlayers(dataJson) {
     } else {
         _renderSessionPlayersBatch(_spRenderToken, _SP_INITIAL_ROWS);
     }
-    if (sessionPlayersEl && menuOpen) {
+    if (reveal && sessionPlayersEl && menuOpen) {
+        _sessionPlayersVisible = true;
         sessionPlayersEl.classList.add('show');
     }
 }
 
+function setSessionPlayersPayload(dataJson) {
+    _renderSessionPlayers(dataJson, _sessionPlayersVisible);
+}
+
+function showSessionPlayers(dataJson) {
+    _renderSessionPlayers(dataJson, true);
+}
+
+function toggleSessionPlayers(dataJson) {
+    if (_sessionPlayersVisible) {
+        closeSessionPlayers();
+    } else {
+        showSessionPlayers(dataJson || _sessionPlayersPayload);
+    }
+}
+
 function closeSessionPlayers() {
+    _sessionPlayersVisible = false;
     if (sessionPlayersEl) {
         sessionPlayersEl.classList.remove('show');
     }
@@ -4367,7 +4387,7 @@ function openMenu(x, y) {
     currentActive = null;
     activateCircle('userInfo');
     _syncSessionPlayersAnchor(false);
-    showSessionPlayers(_sessionPlayersPayload);
+    closeSessionPlayers();
 }
 
 function closeMenu() {
@@ -4498,6 +4518,7 @@ function hideAllSubMenus() {
     });
     document.getElementById('menu-position').classList.remove('auto-key-layout');
     _syncSessionPlayersAnchor(false);
+    closeSessionPlayers();
 }
 
 /* ═══ File Picker ═══ */
@@ -7056,7 +7077,9 @@ window.SAO = {
     stopFisheyeBg: stopFisheyeBg,
     showFilePicker: showFilePicker,
     closeFilePicker: closeFilePicker,
+    setSessionPlayersPayload: setSessionPlayersPayload,
     showSessionPlayers: showSessionPlayers,
+    toggleSessionPlayers: toggleSessionPlayers,
     closeSessionPlayers: closeSessionPlayers,
     showLeaderboard: showLeaderboard,
     closeLeaderboard: closeLeaderboard,

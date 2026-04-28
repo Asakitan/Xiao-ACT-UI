@@ -6533,7 +6533,22 @@ class SAOWebViewGUI:
         self._session_players_last_sig = sig
         self._session_players_last_push_ts = now
         self._eval_menu(
-            f'if(window.SAO&&SAO.showSessionPlayers)SAO.showSessionPlayers({json.dumps(payload, ensure_ascii=False)})'
+            f'if(window.SAO&&SAO.setSessionPlayersPayload)SAO.setSessionPlayersPayload({json.dumps(payload, ensure_ascii=False)})'
+        )
+
+    def _toggle_session_players_menu(self):
+        if not self.menu_win:
+            return
+        self._sync_session_players_cache(getattr(self, '_game_state', None))
+        payload = self._build_session_players_payload(sync=False)
+        self._session_players_last_sig = (
+            len(self._session_players),
+            self._session_players_version,
+            str(self._session_self_uid() or ''),
+        )
+        self._session_players_last_push_ts = time.time()
+        self._eval_menu(
+            f'if(window.SAO&&SAO.toggleSessionPlayers)SAO.toggleSessionPlayers({json.dumps(payload, ensure_ascii=False)})'
         )
 
     def _sync_menu_info(self):
@@ -6747,6 +6762,7 @@ class SAOWebViewGUI:
             'toggle_raid_editor': lambda: (self._show_raid_editor() if not self._raid_editor_visible else self._hide_raid_editor()),
             'toggle_autokey_editor': lambda: (self._show_autokey_editor() if not self._autokey_editor_visible else self._hide_autokey_editor()),
             'toggle_commander': lambda: (self._show_commander() if not self._commander_visible else self._hide_commander()),
+            'toggle_session_players': self._toggle_session_players_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
         }

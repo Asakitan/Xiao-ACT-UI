@@ -643,7 +643,8 @@ class SAOPlayerPanel(tk.Frame):
     - 下三角装饰 (连接 top/bottom)
     """
 
-    def __init__(self, parent, username='Player', profession='', **kw):
+    def __init__(self, parent, username='Player', profession='',
+                 panel_width: int | None = None, **kw):
         # GPU mode flag — when on, the visible pixels come from
         # PlayerPanelGpuPainter. The Tk widgets stay sized to the
         # final target with bg=chroma (#010101) so the parent shell's
@@ -678,7 +679,10 @@ class SAOPlayerPanel(tk.Frame):
         super().__init__(parent, bg=bg_color, highlightthickness=0, **kw)
         self._active = False
         self._anim = Animator(self)
-        self._target_w = 240
+        try:
+            self._target_w = max(120, int(panel_width or 240))
+        except Exception:
+            self._target_w = 240
         self._top_h = 240
         self._bottom_h = 80
 
@@ -1079,6 +1083,21 @@ class SAOSessionPlayersPanel(tk.Frame):
     LOAD_MORE_THRESHOLD = 0.78
 
     def __init__(self, parent, rows_provider=None, **kw):
+        try:
+            from sao_left_info_gpu import (
+                SessionPlayersGpuPainter as _SPGP,
+                _SessionPlayersSnapshot as _SPSnap,
+                gpu_session_players_enabled as _spgen,
+            )
+        except Exception:
+            _SPGP = None
+            _SPSnap = None
+            def _spgen():  # type: ignore[no-redef]
+                return False
+        self._SPGP_cls = _SPGP
+        self._SPSnap_cls = _SPSnap
+        self._gpu_managed = bool(_SPGP is not None and _spgen())
+        self._gpu_chroma = '#010101'
         super().__init__(parent, bg='#010101', highlightthickness=0, **kw)
         self._rows_provider = rows_provider
         self._rows_sig = None
@@ -1087,6 +1106,25 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._rendered_count = 0
         self._loading_footer = None
         self._open_anim_after_id = None
+        self._gpu_painter = None
+        self._first_visible_row = 0
+        self._visible_row_count = 7
+        self._cached_screen_xy = None
+        self._open_reveal = 1.0
+        self._gpu_paint_after_id = None
+        self._gpu_drain_after_id = None
+        self._gpu_drain_retries = 0
+
+        if self._gpu_managed:
+            self.configure(width=self.PANEL_W, height=self.PANEL_H)
+            self.pack_propagate(False)
+            self._hit = tk.Frame(self, bg=self._gpu_chroma,
+                                 width=self.PANEL_W, height=self.PANEL_H)
+            self._hit.pack(fill=tk.BOTH, expand=True)
+            self._bind_wheel(self)
+            self._bind_wheel(self._hit)
+            self._setup_gpu_painter()
+            return
 
         self._box = tk.Frame(self, bg='#f7f7f6', width=self.PANEL_W, height=self.PANEL_H,
                              highlightthickness=1, highlightbackground='#d4d0d0')
@@ -1130,7 +1168,129 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._rows_host.bind('<Configure>', self._on_rows_configure)
         self._canvas.bind('<Configure>', self._on_canvas_configure)
         self._bind_wheel(self)
-        self.update_rows(force=True)
+
+    def _setup_gpu_painter(self):
+        if self._SPGP_cls is None:
+            self._gpu_managed = False
+            return
+        try:
+            self._gpu_painter = self._SPGP_cls(self.winfo_toplevel())
+        except Exception:
+            self._gpu_painter = None
+            self._gpu_managed = False
+            return
+        self.bind('<Configure>',
+                  lambda e: setattr(self, '_cached_screen_xy', None),
+                  add='+')
+        self.bind('<Destroy>', lambda e: self._on_gpu_destroy(), add='+')
+
+    def _on_gpu_destroy(self):
+        for attr in ('_gpu_paint_after_id', '_gpu_drain_after_id',
+                     '_open_anim_after_id'):
+            job = getattr(self, attr, None)
+            if job:
+                try:
+                    self.after_cancel(job)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        painter = getattr(self, '_gpu_painter', None)
+        if painter is not None:
+            try:
+                painter.destroy()
+            except Exception:
+                pass
+            self._gpu_painter = None
+
+    def _gpu_visible_rows(self):
+        total = len(self._rows_data)
+        max_first = max(0, total - self._visible_row_count)
+        self._first_visible_row = max(0, min(int(self._first_visible_row), max_first))
+        rows = []
+        for row in self._rows_data[self._first_visible_row:self._first_visible_row + self._visible_row_count]:
+            name = self._short_name(row.get('name') or '')
+            uid = str(row.get('uid') or '--')
+            power = str(row.get('fight_power') or '--')
+            rows.append((name, uid, power, bool(row.get('is_self'))))
+        return rows
+
+    def _dispatch_gpu_paint(self):
+        painter = getattr(self, '_gpu_painter', None)
+        snap_cls = getattr(self, '_SPSnap_cls', None)
+        if not self._gpu_managed or painter is None or snap_cls is None:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        if self._cached_screen_xy is None:
+            try:
+                self._cached_screen_xy = (self.winfo_rootx(), self.winfo_rooty())
+            except Exception:
+                self._cached_screen_xy = (0, 0)
+        sx, sy = self._cached_screen_xy
+        try:
+            self_uid = ''
+            for row in self._rows_data:
+                if row.get('is_self'):
+                    self_uid = str(row.get('uid') or '')
+                    break
+            if hasattr(painter, 'show'):
+                painter.show()
+            snap = snap_cls(
+                self._gpu_visible_rows(), len(self._rows_data),
+                self_uid, self._first_visible_row, self.PANEL_W,
+                self.PANEL_H, float(getattr(self, '_open_reveal', 1.0)))
+            painter.tick(sx, sy, snap)
+        except Exception:
+            pass
+
+    def _queue_gpu_drain(self, retries: int = 3, delay_ms: int = 16):
+        if not self._gpu_managed:
+            return
+        self._gpu_drain_retries = max(
+            int(getattr(self, '_gpu_drain_retries', 0) or 0),
+            max(1, int(retries or 1)),
+        )
+        if self._gpu_drain_after_id:
+            return
+
+        def _run():
+            self._gpu_drain_after_id = None
+            left = max(0, int(getattr(self, '_gpu_drain_retries', 0) or 0))
+            if left <= 0:
+                return
+            self._gpu_drain_retries = left - 1
+            self._dispatch_gpu_paint()
+            if self._gpu_drain_retries > 0:
+                try:
+                    self._gpu_drain_after_id = self.after(max(1, int(delay_ms)), _run)
+                except Exception:
+                    self._gpu_drain_after_id = None
+
+        try:
+            self._gpu_drain_after_id = self.after(max(1, int(delay_ms)), _run)
+        except Exception:
+            self._gpu_drain_after_id = None
+
+    def _queue_gpu_paint(self, delay_ms: int = 10):
+        if not self._gpu_managed:
+            return
+        if self._gpu_paint_after_id:
+            return
+
+        def _run():
+            self._gpu_paint_after_id = None
+            self._dispatch_gpu_paint()
+            self._queue_gpu_drain()
+
+        try:
+            self._gpu_paint_after_id = self.after(max(1, int(delay_ms)), _run)
+        except Exception:
+            self._gpu_paint_after_id = None
+            self._dispatch_gpu_paint()
+            self._queue_gpu_drain()
 
     def _on_rows_configure(self, _event=None):
         try:
@@ -1174,6 +1334,15 @@ class SAOSessionPlayersPanel(tk.Frame):
                 delta = int(-1 * (event.delta / 120))
                 if delta == 0:
                     delta = -1 if event.delta > 0 else 1
+            if self._gpu_managed:
+                total = len(self._rows_data)
+                max_first = max(0, total - self._visible_row_count)
+                old_first = int(self._first_visible_row)
+                self._first_visible_row = max(
+                    0, min(max_first, int(self._first_visible_row) + delta))
+                if self._first_visible_row != old_first:
+                    self._queue_gpu_paint(8)
+                return 'break'
             self._canvas.yview_scroll(delta, 'units')
         except Exception:
             pass
@@ -1276,6 +1445,33 @@ class SAOSessionPlayersPanel(tk.Frame):
 
     def play_open_animation(self):
         """Tiny SAO-style slide/glint so the list follows menu open."""
+        if self._gpu_managed:
+            self._cached_screen_xy = None
+            try:
+                if self._open_anim_after_id:
+                    self.after_cancel(self._open_anim_after_id)
+            except Exception:
+                pass
+            self._open_anim_after_id = None
+            start = time.perf_counter()
+            dur = 0.22
+
+            def _step():
+                try:
+                    t = min(1.0, (time.perf_counter() - start) / dur)
+                    self._open_reveal = 1.0 - pow(1.0 - t, 3)
+                    self._dispatch_gpu_paint()
+                    if t < 1.0:
+                        self._open_anim_after_id = self.after(16, _step)
+                    else:
+                        self._open_reveal = 1.0
+                        self._open_anim_after_id = None
+                except Exception:
+                    self._open_reveal = 1.0
+                    self._open_anim_after_id = None
+
+            _step()
+            return
         try:
             if self._open_anim_after_id:
                 self.after_cancel(self._open_anim_after_id)
@@ -1327,6 +1523,15 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._rows_sig = sig
         self._rows_data = rows
         self._rendered_count = 0
+        if self._gpu_managed:
+            max_first = max(0, len(self._rows_data) - self._visible_row_count)
+            self._first_visible_row = max(0, min(self._first_visible_row, max_first))
+            if force:
+                self._first_visible_row = 0
+            self._cached_screen_xy = None
+            self._dispatch_gpu_paint()
+            self._queue_gpu_drain()
+            return
         self._destroy_rows()
         try:
             self._canvas.yview_moveto(0.0)
@@ -1347,6 +1552,10 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._append_row_batch(self.INITIAL_RENDER_ROWS)
 
     def sync_pulse(self):
+        if self._gpu_managed:
+            self.update_rows(force=False)
+            self._dispatch_gpu_paint()
+            return
         self.update_rows(force=False)
 
 
@@ -1356,32 +1565,95 @@ class SAOMenuLeftStack(tk.Frame):
     def __init__(self, parent, username='Player', profession='',
                  rows_provider=None, **kw):
         super().__init__(parent, bg='#010101', highlightthickness=0, **kw)
-        self.player_panel = SAOPlayerPanel(self, username=username, profession=profession)
-        self.session_panel = SAOSessionPlayersPanel(self, rows_provider=rows_provider)
+        self._rows_provider = rows_provider
+        self.player_panel = SAOPlayerPanel(
+            self, username=username, profession=profession,
+            panel_width=SAOSessionPlayersPanel.PANEL_W,
+        )
+        try:
+            target_w = max(
+                int(getattr(self.player_panel, '_target_w', 0) or 0),
+                SAOSessionPlayersPanel.PANEL_W,
+            )
+            self.player_panel._target_w = target_w
+            self.player_panel.configure(width=target_w)
+            if getattr(self.player_panel, '_gpu_managed', False):
+                self.player_panel._top.configure(width=target_w)
+                self.player_panel._bottom.configure(width=target_w)
+        except Exception:
+            pass
+        self.session_panel = None
+        self._session_visible = False
         self._active = False
         self._top = getattr(self.player_panel, '_top', None)
         player_w = int(getattr(self.player_panel, '_target_w', 0) or 0)
         player_h = int(getattr(self.player_panel, '_top_h', 0) or 0) + \
             int(getattr(self.player_panel, '_bottom_h', 0) or 0)
         self._stack_gap = 14
-        self._target_w = max(player_w, self.session_panel.PANEL_W)
-        self._top_h = player_h + self._stack_gap + self.session_panel.PANEL_H
+        self._target_w = max(player_w, SAOSessionPlayersPanel.PANEL_W)
+        # Reserve transparent shell space so this on-demand panel can open
+        # without resizing/repositioning the GPU popup.
+        self._top_h = player_h + self._stack_gap + SAOSessionPlayersPanel.PANEL_H
         self._bottom_h = 0
         self.player_panel.pack(side=tk.TOP, anchor='nw')
-        self.session_panel.pack(side=tk.TOP, anchor='nw', pady=(self._stack_gap, 0))
+
+    def _ensure_session_panel(self):
+        if self.session_panel is None:
+            self.session_panel = SAOSessionPlayersPanel(
+                self, rows_provider=self._rows_provider)
+        return self.session_panel
+
+    def is_session_players_visible(self) -> bool:
+        return bool(self._session_visible and self.session_panel is not None)
+
+    def show_session_players(self, rows=None, force: bool = True):
+        panel = self._ensure_session_panel()
+        if not self._session_visible:
+            try:
+                panel.pack(side=tk.TOP, anchor='nw', pady=(self._stack_gap, 0))
+            except Exception:
+                pass
+            self._session_visible = True
+        try:
+            panel.update_rows(rows, force=force)
+            panel.play_open_animation()
+        except Exception:
+            pass
+        return panel
+
+    def hide_session_players(self):
+        self._session_visible = False
+        panel = self.session_panel
+        if panel is not None:
+            painter = getattr(panel, '_gpu_painter', None)
+            if painter is not None:
+                try:
+                    painter.hide()
+                except Exception:
+                    pass
+            try:
+                panel.pack_forget()
+            except Exception:
+                pass
+
+    def toggle_session_players(self, rows=None, force: bool = True):
+        if self.is_session_players_visible():
+            self.hide_session_players()
+            return None
+        return self.show_session_players(rows=rows, force=force)
 
     def set_active(self, active: bool):
         self._active = bool(active)
-        self.session_panel.update_rows()
-        if active:
-            try:
-                self.session_panel.play_open_animation()
-            except Exception:
-                pass
+        if not active:
+            self.hide_session_players()
         self.player_panel.set_active(active)
 
     def sync_pulse(self):
-        self.session_panel.sync_pulse()
+        if self.is_session_players_visible():
+            try:
+                self.session_panel.sync_pulse()
+            except Exception:
+                pass
         if hasattr(self.player_panel, 'sync_pulse'):
             try:
                 self.player_panel.sync_pulse()
@@ -1430,10 +1702,13 @@ class SAOPlayerGUI:
         self._panels_hidden = False  # 一键隐藏所有面板
         self._hidden_panels_snapshot = []  # 隐藏前记录哪些面板是开的
         self._player_panel = None  # 当 SAO 菜单打开时设置
+        self._menu_left_stack = None
         self._session_players_panel = None
         self._session_players = {}
         self._session_players_self_uid = 0
         self._session_players_version = 0
+        self._session_players_rows_cache_sig = None
+        self._session_players_rows_cache = []
         self._last_session_players_panel_sig = None
         self._last_session_players_panel_push_ts = 0.0
         self._picker = None        # SAOFilePicker 引用 (防止 GC)
@@ -3740,6 +4015,7 @@ class SAOPlayerGUI:
             if self._session_players_self_uid:
                 self._session_players.clear()
                 self._session_players_version += 1
+                self._session_players_rows_cache_sig = None
             self._session_players_self_uid = self_uid
 
         if gs is None:
@@ -3777,6 +4053,13 @@ class SAOPlayerGUI:
     def _get_session_player_rows(self, sync: bool = True) -> List[Dict[str, Any]]:
         if sync:
             self._sync_session_players_cache(getattr(self, '_game_state', None))
+        cache_sig = (
+            len(self._session_players),
+            self._session_players_version,
+            self._session_self_uid(),
+        )
+        if cache_sig == getattr(self, '_session_players_rows_cache_sig', None):
+            return list(getattr(self, '_session_players_rows_cache', []) or [])
         rows = []
         self_uid = self._session_self_uid()
         for uid, entry in self._session_players.items():
@@ -3796,12 +4079,21 @@ class SAOPlayerGUI:
             str(r.get('name') or ''),
             str(r.get('uid') or ''),
         ))
+        self._session_players_rows_cache_sig = cache_sig
+        self._session_players_rows_cache = list(rows)
         return rows
 
     def _refresh_session_players_panel(self, force: bool = False):
         panel = getattr(self, '_session_players_panel', None)
         if not panel:
             return
+        stack = getattr(self, '_menu_left_stack', None)
+        if stack is not None and hasattr(stack, 'is_session_players_visible'):
+            try:
+                if not stack.is_session_players_visible():
+                    return
+            except Exception:
+                pass
         self._sync_session_players_cache(getattr(self, '_game_state', None))
         sig = (len(self._session_players), self._session_players_version, self._session_self_uid())
         now = time.time()
@@ -3817,6 +4109,29 @@ class SAOPlayerGUI:
         except Exception:
             pass
 
+    def _toggle_session_players_panel(self):
+        """Show/hide the in-session player list from the menu item."""
+        stack = getattr(self, '_menu_left_stack', None)
+        if stack is None:
+            return
+        try:
+            if stack.is_session_players_visible():
+                stack.hide_session_players()
+                self._session_players_panel = None
+            else:
+                rows = self._get_session_player_rows(sync=True)
+                panel = stack.show_session_players(rows=rows, force=True)
+                self._session_players_panel = panel
+                self._last_session_players_panel_sig = (
+                    len(self._session_players),
+                    self._session_players_version,
+                    self._session_self_uid(),
+                )
+                self._last_session_players_panel_push_ts = time.time()
+        except Exception:
+            pass
+        self._refresh_menu_if_open(force=True)
+
     def _make_player_panel(self, parent):
         """工厂: 为 SAO 菜单创建左侧信息面板"""
         stack = SAOMenuLeftStack(
@@ -3826,8 +4141,9 @@ class SAOPlayerGUI:
             rows_provider=self._get_session_player_rows,
         )
         panel = stack.player_panel
+        self._menu_left_stack = stack
         self._player_panel = panel
-        self._session_players_panel = stack.session_panel
+        self._session_players_panel = None
 
         panel.update_level(self._level, self._level_extra, self._season_exp)
 
@@ -3843,7 +4159,6 @@ class SAOPlayerGUI:
         # 模式变更 → 自动保存
         panel._on_mode_change = lambda m: self._set_setting('shift_mode', m)
 
-        self._refresh_session_players_panel(force=True)
         return stack
 
     def _compute_menu_refresh_signature(self):
@@ -3886,6 +4201,16 @@ class SAOPlayerGUI:
             burst_slots = [1]
         boss_bar_mode = str(self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid')
         update_label = self._build_update_menu_label()
+        session_visible = False
+        session_count = 0
+        session_version = int(getattr(self, '_session_players_version', 0) or 0)
+        try:
+            stack = getattr(self, '_menu_left_stack', None)
+            session_visible = bool(stack and stack.is_session_players_visible())
+            session_count = len(getattr(self, '_session_players', {}) or {})
+        except Exception:
+            session_visible = False
+            session_count = 0
 
         sig = (
             hotkey_sig,
@@ -3902,6 +4227,9 @@ class SAOPlayerGUI:
             boss_bar_mode,
             bool(self._panels_hidden),
             update_label,
+            session_visible,
+            session_count,
+            session_version,
         )
         self._last_menu_refresh_sig = sig
         self._last_menu_refresh_sig_time = _now
@@ -3980,7 +4308,13 @@ class SAOPlayerGUI:
         boss_bar_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
         boss_bar_labels = {'always': '常显', 'boss_raid': 'Boss战', 'off': '关闭'}
         boss_bar_disp = boss_bar_labels.get(boss_bar_mode, boss_bar_mode)
-
+        session_visible = False
+        try:
+            stack = getattr(self, '_menu_left_stack', None)
+            session_visible = bool(stack and stack.is_session_players_visible())
+        except Exception:
+            session_visible = False
+        session_count = len(getattr(self, '_session_players', {}) or {})
         auto_items = [
             {'icon': '⚡', 'label': ak_label, 'command': self._toggle_auto_script},
             {'icon': '◈', 'label': hs_label, 'command': self._toggle_hide_seek},
@@ -4011,6 +4345,9 @@ class SAOPlayerGUI:
         panel_items = [
             {'icon': '◈', 'label': 'Commander', 'command': self._toggle_commander_panel},
             {'icon': '◉', 'label': '状态面板', 'command': self._toggle_status_panel},
+            {'icon': '◆' if session_visible else '◇',
+             'label': f'Session Players: {session_count}人' + (' ✓' if session_visible else ''),
+             'command': self._toggle_session_players_panel},
             {'icon': '◈', 'label': '一键隐藏面板' + (' ✓' if self._panels_hidden else ''), 'command': self._toggle_hide_all_panels},
             {'icon': '─', 'label': '──────────'},
         ]
@@ -4427,6 +4764,7 @@ class SAOPlayerGUI:
         self._cancel_pending_menu_refresh()
         self._persist_entity_menu_state(save_now=False)
         self._player_panel = None
+        self._menu_left_stack = None
         self._session_players_panel = None
         self._maybe_stop_fisheye()
         if not self._destroyed:
