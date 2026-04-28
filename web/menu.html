@@ -4387,7 +4387,7 @@ function openMenu(x, y) {
     currentActive = null;
     activateCircle('userInfo');
     _syncSessionPlayersAnchor(false);
-    closeSessionPlayers();
+    showSessionPlayers(_sessionPlayersPayload);
 }
 
 function closeMenu() {
@@ -4518,7 +4518,6 @@ function hideAllSubMenus() {
     });
     document.getElementById('menu-position').classList.remove('auto-key-layout');
     _syncSessionPlayersAnchor(false);
-    closeSessionPlayers();
 }
 
 /* ═══ File Picker ═══ */

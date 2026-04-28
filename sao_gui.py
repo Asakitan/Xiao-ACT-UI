@@ -1582,8 +1582,9 @@ class SAOMenuLeftStack(tk.Frame):
                 self.player_panel._bottom.configure(width=target_w)
         except Exception:
             pass
-        self.session_panel = None
-        self._session_visible = False
+        self.session_panel = SAOSessionPlayersPanel(
+            self, rows_provider=self._rows_provider)
+        self._session_visible = True
         self._active = False
         self._top = getattr(self.player_panel, '_top', None)
         player_w = int(getattr(self.player_panel, '_target_w', 0) or 0)
@@ -1596,6 +1597,12 @@ class SAOMenuLeftStack(tk.Frame):
         self._top_h = player_h + self._stack_gap + SAOSessionPlayersPanel.PANEL_H
         self._bottom_h = 0
         self.player_panel.pack(side=tk.TOP, anchor='nw')
+        self.session_panel.pack(side=tk.TOP, anchor='nw',
+                                pady=(self._stack_gap, 0))
+        try:
+            self.session_panel.update_rows(force=True)
+        except Exception:
+            pass
 
     def _ensure_session_panel(self):
         if self.session_panel is None:
@@ -1644,8 +1651,13 @@ class SAOMenuLeftStack(tk.Frame):
 
     def set_active(self, active: bool):
         self._active = bool(active)
-        if not active:
-            self.hide_session_players()
+        if self.is_session_players_visible():
+            try:
+                self.session_panel.update_rows(force=False)
+                if active:
+                    self.session_panel.play_open_animation()
+            except Exception:
+                pass
         self.player_panel.set_active(active)
 
     def sync_pulse(self):

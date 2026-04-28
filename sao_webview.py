@@ -6532,8 +6532,9 @@ class SAOWebViewGUI:
         payload = self._build_session_players_payload(sync=False)
         self._session_players_last_sig = sig
         self._session_players_last_push_ts = now
+        method = 'showSessionPlayers' if force else 'setSessionPlayersPayload'
         self._eval_menu(
-            f'if(window.SAO&&SAO.setSessionPlayersPayload)SAO.setSessionPlayersPayload({json.dumps(payload, ensure_ascii=False)})'
+            f'if(window.SAO&&SAO.{method})SAO.{method}({json.dumps(payload, ensure_ascii=False)})'
         )
 
     def _toggle_session_players_menu(self):
@@ -7270,17 +7271,34 @@ class SAOWebViewGUI:
         if target != 'entity':
             print(f'[SAO WebView] Unknown switch target: {target}')
             return
-        import gc; gc.collect()
-        import time as _t; _t.sleep(0.3)
         try:
-            from sao_gui import SAOPlayerGUI
-            app = SAOPlayerGUI()
-            app.run()
+            import subprocess
+            if getattr(sys, 'frozen', False):
+                args = [sys.executable]
+                cwd = os.path.dirname(os.path.abspath(sys.executable))
+            else:
+                app_dir = os.path.dirname(os.path.abspath(__file__))
+                args = [sys.executable, os.path.join(app_dir, 'main.py')]
+                cwd = app_dir
+            creationflags = 0
+            if os.name == 'nt':
+                creationflags = getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+            subprocess.Popen(
+                args,
+                cwd=cwd or None,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=creationflags,
+            )
         except Exception as e:
-            print(f"[SAO] Hot switch to Entity failed: {e}")
+            print(f"[SAO] Hot switch spawn Entity failed: {e}")
             import traceback; traceback.print_exc()
         finally:
-            # Entity UI 退出后, webview/.NET 残留线程仍阻塞进程, 强制终止
+            # WebView/.NET threads can leave window/font state behind; the
+            # entity UI is launched in a clean process above, then this host
+            # exits hard so stale WebView state cannot poison SAOMenu.
             os._exit(0)
 
     def _exit(self):
