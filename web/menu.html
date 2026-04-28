@@ -1546,7 +1546,7 @@ html, body {
     pointer-events: none;
     filter: blur(12px);
     transform: translateX(28px);
-    transition: opacity 0.24s ease, transform 0.26s ease, filter 0.28s ease, left 0.20s ease;
+    transition: opacity 0.4s ease, transform 0.52s cubic-bezier(0.16, 1, 0.3, 1), filter 0.42s ease, left 0.20s ease;
     will-change: opacity, transform, filter;
     z-index: 120;
 }
@@ -1558,6 +1558,9 @@ html, body {
     pointer-events: auto;
     filter: blur(0);
     transform: translateX(0);
+}
+.sessionPlayers.session-open-anim {
+    animation: session-panel-open 1s ease forwards;
 }
 .sessionPlayersBox {
     width: 100%;
@@ -1571,11 +1574,16 @@ html, body {
     will-change: transform, filter;
 }
 .sessionPlayers.session-open-anim .sessionPlayersBox {
-    animation: sp-panel-open 0.34s cubic-bezier(.18,.86,.22,1) both;
+    animation: sp-panel-open 1s ease forwards;
+}
+@keyframes session-panel-open {
+    0%   { opacity: 0; transform: translateX(64px) scale(0.985); filter: blur(14px); }
+    50%  { opacity: 1; transform: translateX(0) scale(1); filter: blur(0); }
+    100% { opacity: 1; transform: translateX(0) scale(1); filter: blur(0); }
 }
 @keyframes sp-panel-open {
     0%   { transform: translateX(34px) scale(0.985); filter: blur(10px); }
-    58%  { transform: translateX(-3px) scale(1.006); filter: blur(1px); }
+    50%  { transform: translateX(0) scale(1); filter: blur(0); }
     100% { transform: translateX(0) scale(1); filter: blur(0); }
 }
 .sp-header {
@@ -4152,20 +4160,23 @@ function _playSessionPlayersOpenAnimation() {
         _sessionPlayersAnimTimer = null;
     }
     sessionPlayersEl.classList.remove('session-open-anim');
+    sessionPlayersEl.style.animation = 'none';
     if (box) {
         box.style.animation = 'none';
+        void sessionPlayersEl.offsetWidth;
         void box.offsetWidth;
         box.style.animation = '';
     } else {
         void sessionPlayersEl.offsetWidth;
     }
+    sessionPlayersEl.style.animation = '';
     sessionPlayersEl.classList.add('session-open-anim');
     _sessionPlayersAnimTimer = setTimeout(function() {
         if (sessionPlayersEl) {
             sessionPlayersEl.classList.remove('session-open-anim');
         }
         _sessionPlayersAnimTimer = null;
-    }, 430);
+    }, 1040);
 }
 
 function setSessionPlayersPayload(dataJson) {

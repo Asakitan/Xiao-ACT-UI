@@ -1120,6 +1120,7 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._gpu_paint_after_id = None
         self._gpu_drain_after_id = None
         self._gpu_drain_retries = 0
+        self._open_anim_duration = 0.90
 
         if self._gpu_managed:
             self.configure(width=self.PANEL_W, height=self.PANEL_H)
@@ -1460,7 +1461,7 @@ class SAOSessionPlayersPanel(tk.Frame):
                 pass
             self._open_anim_after_id = None
             start = time.perf_counter()
-            dur = 0.22
+            dur = self._open_anim_duration
 
             def _step():
                 try:
@@ -1485,13 +1486,13 @@ class SAOSessionPlayersPanel(tk.Frame):
             pass
         self._open_anim_after_id = None
         start = time.perf_counter()
-        dur = 0.22
+        dur = self._open_anim_duration
 
         def _step():
             try:
                 t = min(1.0, (time.perf_counter() - start) / dur)
                 ease = 1.0 - pow(1.0 - t, 3)
-                offset = int(round(14 * (1.0 - ease)))
+                offset = int(round(64 * (1.0 - ease)))
                 self._box.pack_configure(pady=(offset, 0))
                 if t < 0.55:
                     self._box.configure(highlightbackground='#f3af12')
@@ -1657,6 +1658,7 @@ class SAOMenuLeftStack(tk.Frame):
 
     def set_active(self, active: bool):
         self._active = bool(active)
+        self.player_panel.set_active(active)
         if self.is_session_players_visible():
             try:
                 self.session_panel.update_rows(force=False)
@@ -1664,7 +1666,6 @@ class SAOMenuLeftStack(tk.Frame):
                     self.session_panel.play_open_animation()
             except Exception:
                 pass
-        self.player_panel.set_active(active)
 
     def sync_pulse(self):
         if self.is_session_players_visible():
