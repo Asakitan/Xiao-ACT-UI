@@ -1472,6 +1472,7 @@ class BossHpOverlay:
            now - self._break_burst_start < self.BREAK_BURST_FX_S:
             self._draw_break_burst(img, y_off, now)
         self._draw_additional_units(img, y_off)
+        self._clear_lower_stray_alpha(img, y_off)
         # Invincible: red inner glow. Overdrive: gold inner glow (if not invincible).
         if self._invincible:
             self._draw_invincible_glow(img, y_off, now)
@@ -1734,6 +1735,12 @@ class BossHpOverlay:
         sh_arr[:, :, 3] = (sh_arr[:, :, 3].astype(np.uint16)
                            * (255 - np.asarray(mask, dtype=np.uint8))
                            // 255).astype(np.uint8)
+        # The overlay canvas is taller than the main bar so mini unit panels
+        # can live below it. Keep the main-panel drop shadow from filling that
+        # added transparent area with a broad gray rectangle.
+        shadow_cut_y = max(0, min(h, int(self.ADD_Y + y_off - 6)))
+        if shadow_cut_y < h:
+            sh_arr[shadow_cut_y:, :, 3] = 0
         img.alpha_composite(Image.fromarray(sh_arr, 'RGBA'))
 
         # Paste clipped gradient
@@ -2668,6 +2675,35 @@ class BossHpOverlay:
 
         if fx:
             img.alpha_composite(_clip_alpha(fx, bar_mask))
+
+    def _clear_lower_stray_alpha(self, img: Image.Image, y_off: int) -> None:
+        """Trim wide blurred FX from the lower transparent mini-panel area."""
+        cut_y = int(self.PANEL_Y + self.PANEL_H + 2 + y_off)
+        cut_y = max(0, min(self.HEIGHT, cut_y))
+        if cut_y >= self.HEIGHT:
+            return
+        arr = np.array(img, dtype=np.uint8)
+        keep = np.zeros((self.HEIGHT - cut_y, self.WIDTH), dtype=bool)
+        units = list(self._additional_units or [])[:4]
+        if units:
+            n = len(units)
+            total_w = n * self.ADD_W + (n - 1) * self.ADD_GAP
+            start_x = int(round((self.WIDTH - total_w) / 2))
+            y0 = int(self.ADD_Y + y_off - 6)
+            y1 = int(self.ADD_Y + y_off + self.ADD_H + 8)
+            for idx, _unit in enumerate(units):
+                x0 = start_x + idx * (self.ADD_W + self.ADD_GAP) - 8
+                x1 = x0 + self.ADD_W + 16
+                ky0 = max(0, y0 - cut_y)
+                ky1 = min(keep.shape[0], y1 - cut_y)
+                kx0 = max(0, x0)
+                kx1 = min(self.WIDTH, x1)
+                if ky0 < ky1 and kx0 < kx1:
+                    keep[ky0:ky1, kx0:kx1] = True
+        lower_alpha = arr[cut_y:, :, 3]
+        lower_alpha[~keep] = 0
+        arr[cut_y:, :, 3] = lower_alpha
+        img.paste(Image.fromarray(arr, 'RGBA'))
 
     def _draw_additional_units(self, img: Image.Image, y_off: int) -> None:
         units = list(self._additional_units or [])[:4]

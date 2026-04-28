@@ -391,17 +391,20 @@ class DpsTracker:
         skill_id = _safe_int(event.get('skill_id'))
         is_crit = event.get('is_crit', False)
 
+        # Prefer parser-provided owner UID. Some damage events route through a
+        # summon/owner field where AttackerUuid is not a normal player UUID.
+        attacker_uid = _safe_int(event.get('attacker_uid'))
         # Derive attacker_uid from attacker_uuid (uuid >> 16 for player entities)
-        if _CY_COMBAT is not None:
+        if not attacker_uid and _CY_COMBAT is not None:
             attacker_uid = int(_CY_COMBAT.dps_attacker_uid(
                 attacker_uuid, bool(attacker_is_self), self._self_uid))
-        else:
-            attacker_uid = 0
-        if _CY_COMBAT is None and attacker_uuid:
+        if not attacker_uid and _CY_COMBAT is None and attacker_uuid:
             if (attacker_uuid & 0xFFFF) == 640:
                 attacker_uid = attacker_uuid >> 16
             elif attacker_is_self and self._self_uid:
                 attacker_uid = self._self_uid
+        if attacker_is_self and self._self_uid:
+            attacker_uid = self._self_uid
 
         # Skip immune/absorbed for DPS tracking
         if is_immune or is_absorbed or damage <= 0:

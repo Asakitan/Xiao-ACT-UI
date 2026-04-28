@@ -1020,6 +1020,9 @@ class PacketBridge:
                     f'unknown_msg={ps["unknown_message_types"]} '
                     f'unknown_notify={ps["unknown_notify_methods"]} '
                     f'zstd_fail={ps["zstd_failures"]} '
+                    f'dmg={ps.get("damage_events", 0)} '
+                    f'combat_dmg={ps.get("combat_damage_events", 0)} '
+                    f'self_dmg={ps.get("self_damage_events", 0)} '
                     f'last_update={"yes" if self._last_update_t > 0 else "no"}',
                     flush=True,
                 )

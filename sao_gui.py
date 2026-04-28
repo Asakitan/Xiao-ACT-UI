@@ -1072,13 +1072,16 @@ class SAOPlayerPanel(tk.Frame):
 class SAOSessionPlayersPanel(tk.Frame):
     """SAO 菜单内的本次登录玩家列表。"""
 
+    PANEL_W = 304
+    PANEL_H = 392
+
     def __init__(self, parent, rows_provider=None, **kw):
         super().__init__(parent, bg='#010101', highlightthickness=0, **kw)
         self._rows_provider = rows_provider
         self._rows_sig = None
         self._canvas_window = None
 
-        self._box = tk.Frame(self, bg='#f7f7f6', width=304, height=392,
+        self._box = tk.Frame(self, bg='#f7f7f6', width=self.PANEL_W, height=self.PANEL_H,
                              highlightthickness=1, highlightbackground='#d4d0d0')
         self._box.pack_propagate(False)
         self._box.pack(anchor='n')
@@ -1232,18 +1235,24 @@ class SAOSessionPlayersPanel(tk.Frame):
 
 
 class SAOMenuLeftStack(tk.Frame):
-    """左侧区域: 本次登录玩家列表 + 原玩家信息面板。"""
+    """左侧区域: 玩家信息面板 + 本次登录玩家列表同列排列。"""
 
     def __init__(self, parent, username='Player', profession='',
                  rows_provider=None, **kw):
         super().__init__(parent, bg='#010101', highlightthickness=0, **kw)
-        self.session_panel = SAOSessionPlayersPanel(self, rows_provider=rows_provider)
         self.player_panel = SAOPlayerPanel(self, username=username, profession=profession)
+        self.session_panel = SAOSessionPlayersPanel(self, rows_provider=rows_provider)
         self._active = False
         self._top = getattr(self.player_panel, '_top', None)
-        self._target_w = getattr(self.player_panel, '_target_w', 0)
-        self.session_panel.pack(side=tk.LEFT, anchor='n', padx=(0, 18))
-        self.player_panel.pack(side=tk.LEFT, anchor='n')
+        player_w = int(getattr(self.player_panel, '_target_w', 0) or 0)
+        player_h = int(getattr(self.player_panel, '_top_h', 0) or 0) + \
+            int(getattr(self.player_panel, '_bottom_h', 0) or 0)
+        self._stack_gap = 14
+        self._target_w = max(player_w, self.session_panel.PANEL_W)
+        self._top_h = player_h + self._stack_gap + self.session_panel.PANEL_H
+        self._bottom_h = 0
+        self.player_panel.pack(side=tk.TOP, anchor='nw')
+        self.session_panel.pack(side=tk.TOP, anchor='nw', pady=(self._stack_gap, 0))
 
     def set_active(self, active: bool):
         self._active = bool(active)
@@ -1406,6 +1415,7 @@ class SAOPlayerGUI:
         self._bb_damage_timeout = 60.0
         self._pending_combat_reset_after = 0.0
         self._pending_combat_reset_reason = ''
+        self._damage_self_fallback_log_ts = 0.0
         self._hide_seek_engine = None
         self._hide_seek_alert_timer = None
         self._hide_seek_alert_active = False
@@ -1975,8 +1985,61 @@ class SAOPlayerGUI:
                 pass
         return True
 
+    def _current_player_uid_int(self) -> int:
+        for source in (
+            getattr(self, '_game_state', None),
+            getattr(getattr(self, '_state_mgr', None), 'state', None),
+        ):
+            try:
+                uid = getattr(source, 'player_id', '') if source is not None else ''
+                if str(uid).isdigit():
+                    return int(uid)
+            except Exception:
+                pass
+        try:
+            return int(getattr(self, '_last_self_uid_pushed', 0) or 0)
+        except Exception:
+            return 0
+
+    def _normalize_damage_event_for_self(self, event):
+        if not isinstance(event, dict) or event.get('attacker_is_self'):
+            return event
+        self_uid = self._current_player_uid_int()
+        if self_uid <= 0:
+            return event
+
+        def _event_int(name: str) -> int:
+            try:
+                return int(event.get(name) or 0)
+            except Exception:
+                return 0
+
+        candidate_uids = [_event_int('attacker_uid')]
+        for key in ('attacker_uuid', 'attacker_uuid_raw', 'top_summoner_id'):
+            raw = _event_int(key)
+            if raw and (raw & 0xFFFF) == 640:
+                candidate_uids.append(raw >> 16)
+            elif key == 'top_summoner_id' and raw:
+                candidate_uids.append(raw)
+        if self_uid not in candidate_uids:
+            return event
+
+        fixed = dict(event)
+        fixed['attacker_is_self'] = True
+        fixed['attacker_uid'] = self_uid
+        fixed.setdefault('self_uid', self_uid)
+        now = time.time()
+        if now - float(getattr(self, '_damage_self_fallback_log_ts', 0.0) or 0.0) > 10.0:
+            self._damage_self_fallback_log_ts = now
+            print(
+                f'[SAO Entity] 修正伤害归属: attacker_uid -> self_uid={self_uid}',
+                flush=True,
+            )
+        return fixed
+
     def _on_packet_damage(self, event):
         """Damage event callback from packet_parser → boss raid engine + DPS tracker."""
+        event = self._normalize_damage_event_for_self(event)
         # Track self -> non-player combat target damage for boss bar target.
         # BossHP only displays later if packet_parser has usable HP data.
         _is_self_combat_target = bool(
