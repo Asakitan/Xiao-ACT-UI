@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.18"
+APP_VERSION = "2.4.19"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,11 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.19:
+#   Make Session Players a persistent show/refresh panel instead of a toggle in
+#   both Entity and WebView Saomenu, so it opens together with player info and
+#   cannot disappear on repeated clicks. Session Players column headers now use
+#   the normal UI font to avoid the small SAO-font stroke artifact near NAME.
 # v2.4.18:
 #   Keep WebView Session Players on its right-side Saomenu layout and reveal it
 #   whenever menu data syncs while the menu is open. Entity Session Players now
