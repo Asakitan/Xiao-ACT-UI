@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.21"
+APP_VERSION = "2.4.22"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,11 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.22:
+#   Smooth the Entity Session Players panel by opening it from a collapsed
+#   height only on first reveal. Repeated panel/menu button clicks now keep the
+#   already-visible Session Players panel steady and only refresh row data,
+#   matching the player info panel behavior in Entity and WebView.
 # v2.4.21:
 #   Align Session Players open timing with the player info panel in both
 #   WebView and Entity UI. The right-side WebView panel now uses the same
