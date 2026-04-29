@@ -51,8 +51,8 @@ from overlay_render_worker import (
 from overlay_subpixel import subpixel_bar_width
 
 # v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_BOSSHP
-# (defaults to SAO_GPU_OVERLAY). Falls back to ULW if GLFW is
-# unavailable. GPU mode owns input callbacks, preserving drag-to-move.
+# (defaults to SAO_GPU_OVERLAY). Falls back to ULW if GLFW is unavailable.
+# BossHP is intentionally fixed-position and click-through.
 try:
     import gpu_overlay_window as _gow  # type: ignore[import-untyped]
 except Exception:
@@ -79,6 +79,7 @@ from sao_gui_dps import (  # noqa: F401
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
     _has_cjk, _ease_out_cubic, _lerp,
     GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT,
 )
 
 
@@ -383,16 +384,7 @@ class BossHpOverlay:
         self._destroying = False
         self._last_data: Optional[dict] = None
 
-        # Default position: top-centre
-        sw = _user32.GetSystemMetrics(0)
-        self._x = (sw - self.PANEL_W) // 2 - self.PANEL_X
-        self._y = 12
-        if settings is not None:
-            try:
-                self._x = int(settings.get('boss_hp_ov_x', self._x))
-                self._y = int(settings.get('boss_hp_ov_y', self._y))
-            except Exception:
-                pass
+        self._x, self._y = self._fixed_position()
 
         # Animated state
         self._disp_hp_pct = 1.0
@@ -532,6 +524,15 @@ class BossHpOverlay:
 
     # ── Theme ──
 
+    @classmethod
+    def _fixed_position(cls) -> Tuple[int, int]:
+        # Center the visible 560px cover while keeping the wider FX canvas.
+        sw = _user32.GetSystemMetrics(0)
+        return (int((sw - cls.PANEL_W) // 2 - cls.PANEL_X), 12)
+
+    def _restore_fixed_position(self) -> None:
+        self._x, self._y = self._fixed_position()
+
     def _apply_theme(self, theme_name: str) -> None:
         """切换 BossHP 面板主题并清除所有渲染缓存。"""
         from sao_theme import get_panel_theme
@@ -560,6 +561,7 @@ class BossHpOverlay:
     def show(self) -> None:
         if self._win is not None:
             return
+        self._restore_fixed_position()
         # v2.3.x: GPU presenter path (env-gated).
         if _gpu_bosshp_enabled():
             try:
@@ -570,12 +572,8 @@ class BossHpOverlay:
                     w=int(self.WIDTH), h=int(self.HEIGHT),
                     x=int(self._x), y=int(self._y),
                     render_fn=presenter.render,
-                    click_through=False,
+                    click_through=True,
                     title='sao_bosshp_gpu',
-                )
-                gpu_win.set_input_callbacks(
-                    cursor_pos_fn=self._on_gpu_cursor_pos,
-                    mouse_button_fn=self._on_gpu_mouse_button,
                 )
                 gpu_win.show()
                 self._gpu_window = gpu_win
@@ -620,7 +618,8 @@ class BossHpOverlay:
         ex = _user32.GetWindowLongW(ctypes.c_void_p(self._hwnd), GWL_EXSTYLE)
         _user32.SetWindowLongW(
             ctypes.c_void_p(self._hwnd), GWL_EXSTYLE,
-            ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+            | WS_EX_TRANSPARENT,
         )
         # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
         try:
@@ -644,10 +643,6 @@ class BossHpOverlay:
                 ctypes.byref(_ncr_disabled), ctypes.sizeof(_ncr_disabled))
         except Exception:
             pass
-
-        self._win.bind('<Button-1>', self._on_drag_start)
-        self._win.bind('<B1-Motion>', self._on_drag_move)
-        self._win.bind('<ButtonRelease-1>', self._on_drag_end)
 
         self._visible = True
         self._destroying = False
@@ -2856,55 +2851,31 @@ class BossHpOverlay:
         )
 
     def _on_gpu_cursor_pos(self, x: float, y: float) -> None:
-        if self._gpu_drag_active:
-            self._on_drag_move(self._gpu_event(x, y))
+        return
 
     def _on_gpu_mouse_button(self, button: int, action: int,
                              _mods: int, x: float, y: float) -> None:
-        if button != 0:
-            return
-        ev = self._gpu_event(x, y)
-        if action == 1:
-            self._gpu_drag_active = True
-            self._on_drag_start(ev)
-        elif action == 0:
-            self._gpu_drag_active = False
-            self._on_drag_end(ev)
+        return
 
     def _on_drag_start(self, ev) -> None:
-        try:
-            self._drag_ox = ev.x_root - self._x
-            self._drag_oy = ev.y_root - self._y
-        except Exception:
-            self._drag_ox = 0
-            self._drag_oy = 0
+        self._restore_fixed_position()
 
     def _on_drag_move(self, ev) -> None:
-        try:
-            self._x = int(ev.x_root - self._drag_ox)
-            self._y = int(ev.y_root - self._drag_oy)
-            if self._gpu_managed and self._gpu_window is not None:
-                try:
-                    self._gpu_window.set_geometry(
-                        self._x, self._y, self.WIDTH, self.HEIGHT)
-                except Exception:
-                    pass
-            elif self._win is not None and self._win is not self:
-                self._win.geometry(f'+{self._x}+{self._y}')
-            self._schedule_tick(immediate=True)
-        except Exception:
-            pass
-
-    def _on_drag_end(self, _ev) -> None:
-        if self.settings is not None:
+        self._restore_fixed_position()
+        if self._gpu_managed and self._gpu_window is not None:
             try:
-                self.settings.set('boss_hp_ov_x', int(self._x))
-                self.settings.set('boss_hp_ov_y', int(self._y))
-                save = getattr(self.settings, 'save', None)
-                if callable(save):
-                    save()
+                self._gpu_window.set_geometry(
+                    self._x, self._y, self.WIDTH, self.HEIGHT)
             except Exception:
                 pass
+        elif self._win is not None and self._win is not self:
+            try:
+                self._win.geometry(f'+{self._x}+{self._y}')
+            except Exception:
+                pass
+
+    def _on_drag_end(self, _ev) -> None:
+        self._restore_fixed_position()
 
 
 # ═══════════════════════════════════════════════
