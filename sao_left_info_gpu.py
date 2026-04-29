@@ -39,6 +39,13 @@ _FONT_SAO = os.path.join(_FONTS_DIR, 'SAOUI.ttf')
 _FONT_CJK = os.path.join(_FONTS_DIR, 'ZhuZiAYuanJWD.ttf')
 
 
+def _env_flag(name: str) -> Optional[bool]:
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    return str(raw).strip().lower() not in ('', '0', 'false', 'no', 'off')
+
+
 def _pil_font(path: str, size: int):
     try:
         return ImageFont.truetype(path, max(6, int(size)))
@@ -50,9 +57,9 @@ def _pil_font(path: str, size: int):
 
 
 def gpu_left_info_enabled() -> bool:
-    env = os.environ.get('SAO_GPU_LEFT_INFO')
+    env = _env_flag('SAO_GPU_LEFT_INFO')
     if env is not None:
-        return env != '0'
+        return env
     if _gow is None:
         return False
     try:
@@ -227,12 +234,12 @@ class LeftInfoGpuPainter:
 # ══════════════════════════════════════════════════════════════════════
 
 def gpu_session_players_enabled() -> bool:
-    env = os.environ.get('SAO_GPU_SESSION_PLAYERS')
+    env = _env_flag('SAO_GPU_SESSION_PLAYERS')
     if env is not None:
-        return env != '0'
-    env2 = os.environ.get('SAO_GPU_LEFT_INFO')
+        return env
+    env2 = _env_flag('SAO_GPU_LEFT_INFO')
     if env2 is not None:
-        return env2 != '0'
+        return env2
     if _gow is None:
         return False
     try:
@@ -592,14 +599,14 @@ class SessionPlayersGpuPainter:
 def gpu_player_panel_enabled() -> bool:
     """``SAO_GPU_PLAYER_PANEL`` overrides; otherwise inherit
     ``SAO_GPU_OVERLAY``; otherwise enabled when GLFW is available."""
-    env = os.environ.get('SAO_GPU_PLAYER_PANEL')
+    env = _env_flag('SAO_GPU_PLAYER_PANEL')
     if env is not None:
-        return env != '0'
+        return env
     if _gow is None:
         return False
-    env2 = os.environ.get('SAO_GPU_OVERLAY')
+    env2 = _env_flag('SAO_GPU_OVERLAY')
     if env2 is not None:
-        return env2 != '0'
+        return env2
     try:
         return bool(_gow.glfw_supported())
     except Exception:

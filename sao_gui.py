@@ -1096,11 +1096,8 @@ class SAOSessionPlayersPanel(tk.Frame):
                 return False
         self._SPGP_cls = _SPGP
         self._SPSnap_cls = _SPSnap
-        _session_gpu_env = os.environ.get('SAO_GPU_SESSION_PLAYERS')
         self._gpu_managed = bool(
             _SPGP is not None
-            and _session_gpu_env is not None
-            and str(_session_gpu_env).strip().lower() not in ('', '0', 'false', 'no', 'off')
             and _spgen()
         )
         self._gpu_chroma = '#010101'
@@ -1128,10 +1125,16 @@ class SAOSessionPlayersPanel(tk.Frame):
             self._hit = tk.Frame(self, bg=self._gpu_chroma,
                                  width=self.PANEL_W, height=self.PANEL_H)
             self._hit.pack(fill=tk.BOTH, expand=True)
-            self._bind_wheel(self)
-            self._bind_wheel(self._hit)
             self._setup_gpu_painter()
-            return
+            if self._gpu_managed and self._gpu_painter is not None:
+                self._bind_wheel(self)
+                self._bind_wheel(self._hit)
+                return
+            try:
+                self._hit.destroy()
+            except Exception:
+                pass
+            self._hit = None
 
         self.configure(width=self.PANEL_W, height=self.PANEL_H)
         self.pack_propagate(False)
@@ -3434,6 +3437,10 @@ class SAOPlayerGUI:
                 _now = time.time()
                 _bb_timeout = self._boss_hp_hold_timeout_s()
                 _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
+                _bb_has_damage_target = bool(
+                    _has_recent_self_damage
+                    and (self._bb_recent_targets or self._bb_last_target_uuid)
+                )
 
                 for uuid in list(self._bb_recent_targets.keys()):
                     if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout:
@@ -3495,7 +3502,11 @@ class SAOPlayerGUI:
                 elif _bb_raid_active:
                     _bb_show = True
                 else:
-                    _bb_show = _has_recent_self_damage and (_bb_src != 'none' or _bb_direct_data is not None)
+                    _bb_show = (
+                        _has_recent_self_damage
+                        and (_bb_src != 'none' or _bb_direct_data is not None
+                             or _bb_has_damage_target)
+                    )
 
                 if _bb_direct_data and not _bb_raid_active:
                     _bb_hp_pct = _bb_direct_hp / _bb_direct_max if _bb_direct_max > 0 else 1.0
@@ -3516,6 +3527,34 @@ class SAOPlayerGUI:
                         'in_overdrive': bool(_bb_direct_data.get('in_overdrive')),
                         'invincible': False,
                         'boss_name': str(_bb_direct_data.get('name', ''))[:20] or '',
+                    }
+                elif _bb_show and not _bb_raid_active:
+                    _bb_target_uuid = int(self._bb_last_target_uuid or 0)
+                    if not _bb_target_uuid and self._bb_recent_targets:
+                        try:
+                            _bb_target_uuid = int(next(iter(self._bb_recent_targets.keys())) or 0)
+                        except Exception:
+                            _bb_target_uuid = 0
+                    _bb_target_label = ''
+                    if _bb_target_uuid:
+                        _bb_target_label = f'{_bb_target_uuid:X}'[-6:]
+                    _bb_data = {
+                        'active': True,
+                        'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
+                        'hp_source': 'estimate',
+                        'current_hp': 0,
+                        'total_hp': 0,
+                        'shield_active': False,
+                        'shield_pct': 0.0,
+                        'breaking_stage': -1,
+                        'has_break_data': False,
+                        'extinction_pct': 0.0,
+                        'extinction': 0,
+                        'max_extinction': 0,
+                        'stop_breaking_ticking': False,
+                        'in_overdrive': False,
+                        'invincible': False,
+                        'boss_name': f'Target {_bb_target_label}' if _bb_target_label else 'Target',
                     }
                 else:
                     _bb_breaking_stage_gs = getattr(gs, 'boss_breaking_stage', -1)
@@ -8489,17 +8528,26 @@ void main() {
                 self._sao_menu.prepare_external_fade()
         except Exception:
             pass
-        # ULW overlays (HP / BossHP / DPS) cannot be alpha-faded by
+        # ULW/GPU overlays (HP / BossHP / DPS) cannot be alpha-faded by
         # _collect_exit_windows() because their windows are layered. Ask
-        # them to self-fade so the panels do not snap off-screen.
+        # them to self-fade so the panels do not snap off-screen. DPS.hide()
+        # tears down the GPU window immediately, so prefer fade_out() when
+        # the overlay exposes it.
         for ov in (
             getattr(self, '_hp_overlay', None),
             getattr(self, '_boss_hp_overlay', None),
             getattr(self, '_dps_overlay', None),
         ):
             try:
-                if ov is not None and hasattr(ov, 'hide'):
-                    ov.hide()
+                if ov is None:
+                    continue
+                fade_out = getattr(ov, 'fade_out', None)
+                if callable(fade_out):
+                    fade_out()
+                    continue
+                hide = getattr(ov, 'hide', None)
+                if callable(hide):
+                    hide()
             except Exception:
                 pass
 
