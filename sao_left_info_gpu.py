@@ -303,6 +303,58 @@ class _SessionPlayersRenderer:
         return ell
 
     @staticmethod
+    def _uses_sao_font(ch: str) -> bool:
+        return bool(ch and ch.isascii())
+
+    def _mixed_segments(self, text: str, base_font, sao_font):
+        segments = []
+        cur = ''
+        cur_font = None
+        for ch in str(text or ''):
+            font = sao_font if self._uses_sao_font(ch) else base_font
+            if cur and font is not cur_font:
+                segments.append((cur, cur_font))
+                cur = ch
+            else:
+                cur += ch
+            cur_font = font
+        if cur:
+            segments.append((cur, cur_font or base_font))
+        return segments
+
+    def _text_w_mixed(self, draw: ImageDraw.ImageDraw, text: str,
+                      base_font, sao_font) -> int:
+        return sum(
+            self._text_w(draw, part, font)
+            for part, font in self._mixed_segments(text, base_font, sao_font)
+        )
+
+    def _fit_mixed(self, draw: ImageDraw.ImageDraw, text: str,
+                   base_font, sao_font, max_w: int) -> str:
+        text = str(text or '--')
+        if self._text_w_mixed(draw, text, base_font, sao_font) <= max_w:
+            return text
+        ell = '...'
+        base = text.strip()
+        for n in range(max(0, len(base) - 1), 0, -1):
+            candidate = base[:n] + ell
+            if self._text_w_mixed(draw, candidate, base_font, sao_font) <= max_w:
+                return candidate
+        return ell
+
+    def _draw_mixed(self, draw: ImageDraw.ImageDraw, xy, text: str,
+                    base_font, sao_font, fill, anchor: str = '') -> None:
+        text = str(text or '')
+        x, y = xy
+        if anchor and anchor[0] == 'r':
+            x -= self._text_w_mixed(draw, text, base_font, sao_font)
+        elif anchor and anchor[0] == 'm':
+            x -= self._text_w_mixed(draw, text, base_font, sao_font) // 2
+        for part, font in self._mixed_segments(text, base_font, sao_font):
+            draw.text((x, y), part, fill=fill, font=font)
+            x += self._text_w(draw, part, font)
+
+    @staticmethod
     def _alpha(img: Image.Image, value: float) -> Image.Image:
         value = max(0.0, min(1.0, float(value)))
         if value >= 0.999:
@@ -415,16 +467,25 @@ class _SessionPlayersRenderer:
         summary = f'本次登录出现过 {total} 人'
         if self_uid:
             summary += f' · SELF {self_uid}'
-        draw.text((16, 31), self._fit(draw, summary, self._font_cjk_small, w - 116),
-                  fill=(150, 150, 150, 255), font=self._font_cjk_small)
+        self._draw_mixed(
+            draw, (16, 31),
+            self._fit_mixed(draw, summary, self._font_cjk_small,
+                            self._font_sao_small, w - 116),
+            self._font_cjk_small, self._font_sao_small,
+            fill=(150, 150, 150, 255))
 
-        draw.rectangle((14, header_h + 11, 34, header_h + 14), fill=(122, 135, 146, 180))
-        draw.text((14, header_h + 8), 'NAME',
-                  fill=(103, 117, 128, 255), font=self._font_sao_small)
-        draw.text((w - 118, header_h + 8), 'UID',
-                  fill=(103, 117, 128, 255), font=self._font_sao_small)
-        draw.text((w - 52, header_h + 8), 'POWER',
-                  fill=(103, 117, 128, 255), font=self._font_sao_small)
+        self._draw_mixed(
+            draw, (14, header_h + 8), 'NAME',
+            self._font_cjk_small, self._font_sao_small,
+            fill=(103, 117, 128, 255))
+        self._draw_mixed(
+            draw, (w - 118, header_h + 8), 'UID',
+            self._font_cjk_small, self._font_sao_small,
+            fill=(103, 117, 128, 255))
+        self._draw_mixed(
+            draw, (w - 52, header_h + 8), 'POWER',
+            self._font_cjk_small, self._font_sao_small,
+            fill=(103, 117, 128, 255))
 
         if len(self._chrome_cache) > 16:
             self._chrome_cache.clear()
@@ -450,9 +511,13 @@ class _SessionPlayersRenderer:
             draw.rectangle((4, 0, w - 1, h - 1), outline=(243, 175, 18, 84), width=1)
             draw.ellipse((9, 14, 13, 18), fill=gold)
         name_font = self._font_cjk_bold if is_self else self._font_cjk
-        name_text = self._fit(draw, str(name or '--'), name_font, max(58, w - 150))
-        draw.text((18 if is_self else 12, 9), name_text,
-                  fill=(61, 73, 84, 255), font=name_font)
+        name_text = self._fit_mixed(
+            draw, str(name or '--'), name_font, self._font_sao_small,
+            max(58, w - 150))
+        self._draw_mixed(
+            draw, (18 if is_self else 12, 9), name_text,
+            name_font, self._font_sao_small,
+            fill=(61, 73, 84, 255))
         draw.text((w - 106, 11),
                   self._fit(draw, str(uid or '--'), self._font_sao_small, 60),
                   fill=(126, 142, 156, 255), font=self._font_sao_small)
