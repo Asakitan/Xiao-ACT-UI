@@ -1236,12 +1236,19 @@ class SAOSessionPlayersPanel(tk.Frame):
                 return
         except Exception:
             return
-        if self._cached_screen_xy is None:
-            try:
-                self._cached_screen_xy = (self.winfo_rootx(), self.winfo_rooty())
-            except Exception:
-                self._cached_screen_xy = (0, 0)
-        sx, sy = self._cached_screen_xy
+        try:
+            if not self.winfo_ismapped():
+                return
+        except Exception:
+            pass
+        # The SAO menu's transparent shell can settle after the GPU popup has
+        # already opened. Sample fresh root coords so this GPU panel stays
+        # attached to the menu instead of reusing an early off-menu position.
+        try:
+            sx, sy = self.winfo_rootx(), self.winfo_rooty()
+            self._cached_screen_xy = (sx, sy)
+        except Exception:
+            sx, sy = self._cached_screen_xy or (0, 0)
         try:
             self_uid = ''
             for row in self._rows_data:
@@ -1857,6 +1864,8 @@ class SAOPlayerGUI:
         self._bb_last_target_uuid = 0
         self._bb_last_damage_ts = 0.0
         self._bb_recent_targets = {}
+        self._bb_last_hp_motion_sig = None
+        self._bb_last_hp_motion_ts = 0.0
         self._bb_damage_timeout = 60.0
         self._pending_combat_reset_after = 0.0
         self._pending_combat_reset_reason = ''
@@ -2394,6 +2403,8 @@ class SAOPlayerGUI:
         self._bb_last_target_uuid = 0
         self._bb_last_damage_ts = 0.0
         self._bb_recent_targets = {}
+        self._bb_last_hp_motion_sig = None
+        self._bb_last_hp_motion_ts = 0.0
         self._last_boss_hp_push_sig = None
         try:
             if self._state_mgr:
@@ -2653,6 +2664,8 @@ class SAOPlayerGUI:
         self._bb_last_target_uuid = 0
         self._bb_last_damage_ts = 0.0
         self._bb_recent_targets = {}
+        self._bb_last_hp_motion_sig = None
+        self._bb_last_hp_motion_ts = 0.0
         self._last_boss_hp_push_sig = None
 
         try:
@@ -3576,6 +3589,44 @@ class SAOPlayerGUI:
                         'invincible': getattr(gs, 'boss_invincible', False),
                         'boss_name': '',
                     }
+                if _bb_show and not _bb_raid_active:
+                    _bb_hp_motion_sig = (
+                        int(self._bb_last_target_uuid or 0),
+                        str(_bb_data.get('hp_source') or ''),
+                        int(_bb_data.get('current_hp') or 0),
+                        int(_bb_data.get('total_hp') or 0),
+                        round(float(_bb_data.get('hp_pct') or 0.0), 4),
+                        round(float(_bb_data.get('shield_pct') or 0.0), 4),
+                        int(_bb_data.get('breaking_stage') or -1),
+                        round(float(_bb_data.get('extinction_pct') or 0.0), 4),
+                    )
+                    _bb_prev_motion_sig = getattr(self, '_bb_last_hp_motion_sig', None)
+                    _bb_is_new_target = (
+                        _bb_prev_motion_sig is None
+                        or _bb_prev_motion_sig[0] != _bb_hp_motion_sig[0]
+                    )
+                    if _bb_is_new_target:
+                        # First sight of a target is only a baseline. Do not
+                        # flash BossHP until the target's HP/shield/break data
+                        # actually moves on a later packet.
+                        self._bb_last_hp_motion_sig = _bb_hp_motion_sig
+                        _bb_data['active'] = False
+                    elif _bb_hp_motion_sig != _bb_prev_motion_sig:
+                        self._bb_last_hp_motion_sig = _bb_hp_motion_sig
+                        self._bb_last_hp_motion_ts = _now
+                    try:
+                        _bb_stable_hide_raw = self._get_setting(
+                            'boss_hp_stable_hide_s', 2.5)
+                        _bb_stable_hide_s = float(
+                            _bb_stable_hide_raw
+                            if _bb_stable_hide_raw is not None else 2.5)
+                    except Exception:
+                        _bb_stable_hide_s = 2.5
+                    if _bb_stable_hide_s > 0:
+                        _bb_motion_ts = float(
+                            getattr(self, '_bb_last_hp_motion_ts', 0.0) or 0.0)
+                        if _bb_motion_ts > 0.0 and (_now - _bb_motion_ts) >= _bb_stable_hide_s:
+                            _bb_data['active'] = False
                 _bb_sig = (
                     bool(_bb_data.get('active', False)),
                     _bb_data.get('hp_pct'),
