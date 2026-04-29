@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.22"
+APP_VERSION = "2.4.23"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,12 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.23:
+#   Default the Entity Session Players panel to the GPU painter when the
+#   shared GPU overlay gate is available, keep DPS/BossHP fade-out on exit,
+#   and classify service-declared or already-registered monsters before the
+#   player-like UUID fallback so repeated-instance and overworld targets keep
+#   driving DPS/BossHP panels.
 # v2.4.22:
 #   Smooth the Entity Session Players panel by opening it from a collapsed
 #   height only on first reveal. Repeated panel/menu button clicks now keep the

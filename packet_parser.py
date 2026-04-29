@@ -511,10 +511,16 @@ class DamageType:
 
 # Entity types in SyncNearEntities.Appear
 class EntityType:
-    CHAR = 1       # Player character
-    MONSTER = 3    # Monster entity
-    NPC = 5        # NPC
-    COLLECT = 7    # Collectible
+    MONSTER = 1    # Monster entity
+    NPC = 2        # NPC
+    SCENE_OBJECT = 3
+    CHAR = 10      # Player character
+    DUMMY = 11
+    DROP = 12
+    FIELD = 14
+    TRAP = 15
+    COLLECT = 16   # Collectible
+    STATIC_OBJECT = 18
 
 # EDisappearType enum (from star_resonance.proto)
 class DisappearType:
@@ -1467,6 +1473,20 @@ class PacketParser:
         if uuid not in self._monsters:
             self._monsters[uuid] = MonsterData(uuid)
         return self._monsters[uuid]
+
+    def _classify_entity_uuid(self, uuid: int) -> tuple[bool, bool]:
+        """Return (is_player, is_monster), preferring observed entity state.
+
+        Some overworld/repeated-instance combat targets reuse UUID layouts that
+        look player-like by suffix. Once SyncNearEntities has registered such a
+        UUID as a monster, keep treating later deltas/damage as monster traffic
+        so DPS/BossHP are not filtered out.
+        """
+        if not uuid:
+            return False, False
+        if uuid in self._monsters:
+            return False, True
+        return bool(_is_player(uuid)), bool(_is_monster(uuid))
 
     def reset_scene(self):
         """场景服务器切换时重置场景数据。
@@ -3490,7 +3510,7 @@ class PacketParser:
                 continue
             disappear_type = int(de.Type)
 
-            if _is_monster(uuid) and uuid in self._monsters:
+            if uuid in self._monsters:
                 monster = self._monsters[uuid]
                 if disappear_type == 1:  # EDisappearDead
                     monster.is_dead = True
@@ -3513,7 +3533,37 @@ class PacketParser:
             has_temp_attrs = entity.HasField('TempAttrs')
             has_buffs = entity.HasField('BuffInfos')
 
-            if _is_player(uuid):
+            ent_type = int(getattr(entity, 'EntType', 0) or 0)
+            ent_type_player = ent_type == EntityType.CHAR
+            ent_type_monster = ent_type == EntityType.MONSTER
+
+            if (
+                    ent_type_monster
+                    or _is_monster(uuid)
+                    or (not ent_type_player and has_attrs
+                        and _attrs_look_monster_like(entity.Attrs))):
+                monster_uuids_appeared.append(uuid)
+                monster = self._get_monster(uuid)
+                monster.is_dead = False
+                if has_attrs:
+                    self._process_monster_attr_collection(uuid, entity.Attrs)
+                if monster.max_hp == 0 and monster.template_id > 0:
+                    cached_max = self._monster_hp_cache.get(monster.template_id)
+                    if cached_max and cached_max > 0:
+                        monster.max_hp = cached_max
+                        logger.info(
+                            f'[Parser] Monster appear: max_hp from cache '
+                            f'tid={monster.template_id} max_hp={cached_max} uuid={uuid}'
+                        )
+                # Decode initial buff state on monster
+                if has_buffs:
+                    buffs = _decode_buff_info_sync_pb(entity.BuffInfos)
+                    if buffs:
+                        monster.buff_list = buffs
+                        logger.debug(f'[Parser] Entity appear: {len(buffs)} buffs on monster uuid={uuid}')
+                monster.last_update = time.time()
+                self._notify_monster(monster)
+            elif ent_type_player or _is_player(uuid):
                 uid = _uuid_to_uid(uuid)
                 player_uids_appeared.append(uid)
                 if has_attrs:
@@ -3561,28 +3611,6 @@ class PacketParser:
                         flush=True
                     )
                     self._notify_self()
-            elif _is_monster(uuid) or (not _is_player(uuid) and has_attrs and _attrs_look_monster_like(entity.Attrs)):
-                monster_uuids_appeared.append(uuid)
-                monster = self._get_monster(uuid)
-                monster.is_dead = False
-                if has_attrs:
-                    self._process_monster_attr_collection(uuid, entity.Attrs)
-                if monster.max_hp == 0 and monster.template_id > 0:
-                    cached_max = self._monster_hp_cache.get(monster.template_id)
-                    if cached_max and cached_max > 0:
-                        monster.max_hp = cached_max
-                        logger.info(
-                            f'[Parser] Monster appear: max_hp from cache '
-                            f'tid={monster.template_id} max_hp={cached_max} uuid={uuid}'
-                        )
-                # Decode initial buff state on monster
-                if has_buffs:
-                    buffs = _decode_buff_info_sync_pb(entity.BuffInfos)
-                    if buffs:
-                        monster.buff_list = buffs
-                        logger.debug(f'[Parser] Entity appear: {len(buffs)} buffs on monster uuid={uuid}')
-                monster.last_update = time.time()
-                self._notify_monster(monster)
 
         if player_uids_appeared:
             is_self = self._current_uid in player_uids_appeared
@@ -3745,8 +3773,7 @@ class PacketParser:
         uuid = delta.Uuid
         if uuid == 0:
             return
-        target_is_player = _is_player(uuid)
-        target_is_monster = _is_monster(uuid) or (not target_is_player and uuid in self._monsters)
+        target_is_player, target_is_monster = self._classify_entity_uuid(uuid)
         uid = _uuid_to_uid(uuid)
 
         # Attrs (field 2) — players and monsters
