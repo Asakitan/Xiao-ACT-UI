@@ -713,6 +713,7 @@ class GpuOverlayWindow:
         self._visible = False
         self._dirty = True
         self._created = False
+        self._create_pending = False
         self._shown = False
         self._show_pending = False
         self._cursor_pos_fn: Optional[Callable[[float, float], None]] = None
@@ -733,9 +734,44 @@ class GpuOverlayWindow:
         """
         if self._created:
             return
+        if self._create_pending:
+            try:
+                self._pump.exec_on_pump(lambda: None, timeout=10.0)
+            except Exception:
+                pass
+            if self._created:
+                return
         if not gpu_overlay_creation_allowed():
             raise RuntimeError('gpu overlay creation suspended')
         self._pump.exec_on_pump(self._create_on_pump, timeout=10.0)
+
+    def prepare_async(self) -> bool:
+        """Queue window creation on the pump thread without blocking.
+
+        The window stays hidden until a frame is staged and the normal
+        render path shows it. This is used to prewarm GPU panels before
+        the first visible menu interaction needs them.
+        """
+        if self._created or self._create_pending:
+            return True
+        if not gpu_overlay_creation_allowed():
+            return False
+        self._create_pending = True
+
+        def _run() -> None:
+            try:
+                self._create_on_pump()
+            except Exception:
+                pass
+            finally:
+                self._create_pending = False
+
+        try:
+            self._pump.post_cmd(_run)
+            return True
+        except Exception:
+            self._create_pending = False
+            return False
 
     def _create_on_pump(self) -> None:
         """Pump-thread half of _create. Wraps WGC pause/resume around
@@ -845,10 +881,14 @@ class GpuOverlayWindow:
         self._created = True
         self._install_input_callbacks()
 
-    def show(self) -> None:
+    def show(self, async_create: bool = False) -> None:
         if not self._created:
-            self._create()
-        if self._win is None:
+            if async_create:
+                if not self.prepare_async():
+                    return
+            else:
+                self._create()
+        if self._win is None and not async_create:
             return
         self._visible = True
         self._show_pending = True

@@ -643,6 +643,8 @@ class SAOPlayerPanel(tk.Frame):
     - 下三角装饰 (连接 top/bottom)
     """
 
+    ENTITY_GPU_ONLY = True
+
     def __init__(self, parent, username='Player', profession='',
                  panel_width: int | None = None, **kw):
         # GPU mode flag — when on, the visible pixels come from
@@ -662,6 +664,7 @@ class SAOPlayerPanel(tk.Frame):
                 return False
         self._PPGP_cls = _PPGP
         self._PPSnap_cls = _PPSnap
+        self._gpu_required = bool(self.ENTITY_GPU_ONLY)
         self._gpu_managed = bool(_PPGP is not None and _gppen())
         self._gpu_chroma = '#010101'
         self._gpu_painter = None
@@ -675,7 +678,10 @@ class SAOPlayerPanel(tk.Frame):
         # v2_3_0_phase2_gpu_overlay).
         self._cached_screen_xy: Optional[Tuple[int, int]] = None
 
-        bg_color = self._gpu_chroma if self._gpu_managed else '#ffffff'
+        bg_color = (
+            self._gpu_chroma
+            if (self._gpu_managed or self._gpu_required) else '#ffffff'
+        )
         super().__init__(parent, bg=bg_color, highlightthickness=0, **kw)
         self._active = False
         self._anim = Animator(self)
@@ -709,7 +715,7 @@ class SAOPlayerPanel(tk.Frame):
         # the chroma key so they are invisible. The animated visuals
         # live entirely in the GPU painter. In CPU mode we keep the
         # legacy 0×0-then-grow behaviour.
-        if self._gpu_managed:
+        if self._gpu_managed or self._gpu_required:
             top_w = self._target_w
             top_h = self._top_h
             bot_w = self._target_w
@@ -742,7 +748,7 @@ class SAOPlayerPanel(tk.Frame):
         if self._active:
             if self._gpu_managed:
                 self._dispatch_gpu_paint()
-            else:
+            elif not self._gpu_required:
                 self._redraw_bottom(self._target_w, self._bottom_h)
         if self._on_mode_change:
             try:
@@ -768,7 +774,7 @@ class SAOPlayerPanel(tk.Frame):
         if self._active:
             if self._gpu_managed:
                 self._dispatch_gpu_paint()
-            else:
+            elif not self._gpu_required:
                 self._redraw_top(self._target_w, self._top_h)
 
     def _animate_open(self):
@@ -788,6 +794,8 @@ class SAOPlayerPanel(tk.Frame):
 
             self._anim.animate('top_open', 500, phase1,
                                on_done=lambda: self._anim.animate('bottom_open', 400, phase2))
+            return
+        if self._gpu_required:
             return
 
         def phase1(t):
@@ -817,6 +825,8 @@ class SAOPlayerPanel(tk.Frame):
 
             self._anim.animate('close', 200, fade)
             return
+        if self._gpu_required:
+            return
 
         def fade(t):
             inv = 1 - t
@@ -835,6 +845,8 @@ class SAOPlayerPanel(tk.Frame):
             self._anim_top_w = max(self._anim_top_w, int(w))
             self._anim_top_h = max(self._anim_top_h, int(h))
             self._dispatch_gpu_paint()
+            return
+        if self._gpu_required:
             return
         self._top.delete('all')
         if w < 40 or h < 40:
@@ -969,6 +981,8 @@ class SAOPlayerPanel(tk.Frame):
             self._anim_bot_h = max(self._anim_bot_h, int(h))
             self._dispatch_gpu_paint()
             return
+        if self._gpu_required:
+            return
         self._bottom.delete('all')
         if w < 40 or h < 15:
             return
@@ -1025,6 +1039,24 @@ class SAOPlayerPanel(tk.Frame):
                   lambda e: setattr(self, '_cached_screen_xy', None),
                   add='+')
         self.bind('<Destroy>', lambda e: self._on_gpu_destroy(), add='+')
+        try:
+            self.after(1, self._warmup_gpu_painter)
+        except Exception:
+            pass
+
+    def _warmup_gpu_painter(self) -> None:
+        painter = self._gpu_painter
+        warmup = getattr(painter, 'warmup', None)
+        if not callable(warmup):
+            return
+        try:
+            sx, sy = self.winfo_rootx(), self.winfo_rooty()
+        except Exception:
+            sx, sy = 0, 0
+        try:
+            warmup(self._target_w, self._top_h + self._bottom_h, sx, sy)
+        except Exception:
+            pass
 
     def _on_gpu_destroy(self) -> None:
         if self._gpu_painter is not None:
@@ -1076,6 +1108,7 @@ class SAOPlayerPanel(tk.Frame):
 class SAOSessionPlayersPanel(tk.Frame):
     """SAO 菜单内的本次登录玩家列表。"""
 
+    ENTITY_GPU_ONLY = True
     PANEL_W = 304
     PANEL_H = 392
     INITIAL_RENDER_ROWS = 48
@@ -1096,6 +1129,7 @@ class SAOSessionPlayersPanel(tk.Frame):
                 return False
         self._SPGP_cls = _SPGP
         self._SPSnap_cls = _SPSnap
+        self._gpu_required = bool(self.ENTITY_GPU_ONLY)
         self._gpu_managed = bool(
             _SPGP is not None
             and _spgen()
@@ -1118,6 +1152,7 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._gpu_drain_after_id = None
         self._gpu_drain_retries = 0
         self._open_anim_duration = 0.90
+        self._rows_self_uid = ''
 
         if self._gpu_managed:
             self.configure(width=self.PANEL_W, height=self.PANEL_H)
@@ -1129,12 +1164,26 @@ class SAOSessionPlayersPanel(tk.Frame):
             if self._gpu_managed and self._gpu_painter is not None:
                 self._bind_wheel(self)
                 self._bind_wheel(self._hit)
+                try:
+                    self.after(1, self._warmup_gpu_painter)
+                except Exception:
+                    pass
                 return
             try:
                 self._hit.destroy()
             except Exception:
                 pass
             self._hit = None
+        if self._gpu_required:
+            self._gpu_managed = False
+            self.configure(width=self.PANEL_W, height=self.PANEL_H)
+            self.pack_propagate(False)
+            self._bind_wheel(self)
+            try:
+                print('[SAO Entity] Session Players GPU unavailable; Tk fallback suppressed', flush=True)
+            except Exception:
+                pass
+            return
 
         self.configure(width=self.PANEL_W, height=self.PANEL_H)
         self.pack_propagate(False)
@@ -1196,6 +1245,20 @@ class SAOSessionPlayersPanel(tk.Frame):
                   add='+')
         self.bind('<Destroy>', lambda e: self._on_gpu_destroy(), add='+')
 
+    def _warmup_gpu_painter(self):
+        painter = getattr(self, '_gpu_painter', None)
+        warmup = getattr(painter, 'warmup', None)
+        if not callable(warmup):
+            return
+        try:
+            sx, sy = self.winfo_rootx(), self.winfo_rooty()
+        except Exception:
+            sx, sy = 0, 0
+        try:
+            warmup(self.PANEL_W, self.PANEL_H, sx, sy)
+        except Exception:
+            pass
+
     def _on_gpu_destroy(self):
         for attr in ('_gpu_paint_after_id', '_gpu_drain_after_id',
                      '_open_anim_after_id'):
@@ -1250,11 +1313,7 @@ class SAOSessionPlayersPanel(tk.Frame):
         except Exception:
             sx, sy = self._cached_screen_xy or (0, 0)
         try:
-            self_uid = ''
-            for row in self._rows_data:
-                if row.get('is_self'):
-                    self_uid = str(row.get('uid') or '')
-                    break
+            self_uid = str(getattr(self, '_rows_self_uid', '') or '')
             if hasattr(painter, 'show'):
                 painter.show()
             snap = snap_cls(
@@ -1312,12 +1371,16 @@ class SAOSessionPlayersPanel(tk.Frame):
             self._queue_gpu_drain()
 
     def _on_rows_configure(self, _event=None):
+        if not hasattr(self, '_canvas'):
+            return
         try:
             self._canvas.configure(scrollregion=self._canvas.bbox('all'))
         except Exception:
             pass
 
     def _on_canvas_configure(self, event):
+        if not hasattr(self, '_canvas'):
+            return
         try:
             self._canvas.itemconfigure(self._canvas_window, width=event.width)
         except Exception:
@@ -1360,7 +1423,9 @@ class SAOSessionPlayersPanel(tk.Frame):
                 self._first_visible_row = max(
                     0, min(max_first, int(self._first_visible_row) + delta))
                 if self._first_visible_row != old_first:
-                    self._queue_gpu_paint(8)
+                    self._queue_gpu_paint(16)
+                return 'break'
+            if not hasattr(self, '_canvas'):
                 return 'break'
             self._canvas.yview_scroll(delta, 'units')
         except Exception:
@@ -1453,6 +1518,8 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._on_rows_configure()
 
     def _maybe_load_more(self):
+        if not hasattr(self, '_canvas'):
+            return
         if self._rendered_count >= len(self._rows_data):
             return
         try:
@@ -1466,6 +1533,8 @@ class SAOSessionPlayersPanel(tk.Frame):
         if self._gpu_managed:
             self._open_reveal = 0.0
             self._cached_screen_xy = None
+            return
+        if getattr(self, '_gpu_required', False):
             return
         try:
             if self._open_anim_after_id:
@@ -1509,6 +1578,8 @@ class SAOSessionPlayersPanel(tk.Frame):
                     self._open_anim_after_id = None
 
             _step()
+            return
+        if getattr(self, '_gpu_required', False):
             return
         try:
             if self._open_anim_after_id:
@@ -1564,6 +1635,14 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._rows_sig = sig
         self._rows_data = rows
         self._rendered_count = 0
+        self._rows_self_uid = ''
+        for row in rows:
+            try:
+                if row.get('is_self'):
+                    self._rows_self_uid = str(row.get('uid') or '')
+                    break
+            except Exception:
+                pass
         if self._gpu_managed:
             max_first = max(0, len(self._rows_data) - self._visible_row_count)
             self._first_visible_row = max(0, min(self._first_visible_row, max_first))
@@ -1571,7 +1650,9 @@ class SAOSessionPlayersPanel(tk.Frame):
                 self._first_visible_row = 0
             self._cached_screen_xy = None
             self._dispatch_gpu_paint()
-            self._queue_gpu_drain()
+            self._queue_gpu_drain(retries=30, delay_ms=33)
+            return
+        if getattr(self, '_gpu_required', False) and not hasattr(self, '_rows_host'):
             return
         self._destroy_rows()
         try:
