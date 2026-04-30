@@ -36,6 +36,7 @@ LOCAL_HIDDENIMPORTS = [
     '_sao_cy_pixels',
     '_sao_cy_combat',
     '_sao_cy_packet',
+    '_sao_cy_skillfx',
     'window_effects',
     'install_npcap',
     'sao_updater',
@@ -65,11 +66,9 @@ WEBVIEW_PLATFORM_HIDDENIMPORTS = collect_submodules('webview.platforms')
 PROTOBUF_HIDDENIMPORTS = collect_submodules('google.protobuf')
 CLR_LOADER_HIDDENIMPORTS = collect_submodules('clr_loader')
 
-# v2.3.0 GUI 链路重置 — 收集 skia / numba / llvmlite / moderngl-window 原生二进制
+# v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
 GPU_RENDER_BINARIES = (
     collect_dynamic_libs('skia')
-    + collect_dynamic_libs('numba')
-    + collect_dynamic_libs('llvmlite')
     + collect_dynamic_libs('glfw')
 )
 CYTHON_ACCEL_BINARIES = [
@@ -137,13 +136,6 @@ a = Analysis(
         'moderngl_window.context.headless',
         'glfw',
         'skia',  # skia-python: GPU 2D + 文字 atlas
-        'numba',
-        'numba.core',
-        'numba.core.runtime',
-        'numba.cpython',
-        'numba.np',
-        'llvmlite',
-        'llvmlite.binding',
         # 压缩
         'zstandard',
         # 标准库 (PyInstaller 有时遗漏)

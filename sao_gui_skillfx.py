@@ -51,28 +51,18 @@ except Exception:
     _gow = None  # type: ignore[assignment]
 from overlay_subpixel import subpixel_alpha_composite
 from render_capture_sync import wait_until_capture_idle
-try:
-    # v2.3.0 Phase 4: numba-JIT'd beam gradient kernel (~6-14x faster on long
-    # beams). Pixel-identical to the numpy path; falls back transparently if
-    # numba is missing or the JIT compile fails.
-    from skillfx_jit import fast_beam_rgba as _jit_fast_beam_rgba
-    from skillfx_jit import fast_ring_layer_rgba as _jit_fast_ring_rgba
-    from skillfx_jit import fast_ring_sweep_rgba as _jit_fast_sweep_rgba
-    from skillfx_jit import warmup as _jit_warmup
-except Exception:  # pragma: no cover - defensive
-    _jit_fast_beam_rgba = None  # type: ignore[assignment]
-    _jit_fast_ring_rgba = None  # type: ignore[assignment]
-    _jit_fast_sweep_rgba = None  # type: ignore[assignment]
-    _jit_warmup = None  # type: ignore[assignment]
+from skillfx_jit import fast_beam_rgba as _jit_fast_beam_rgba
+from skillfx_jit import fast_ring_layer_rgba as _jit_fast_ring_rgba
+from skillfx_jit import fast_ring_sweep_rgba as _jit_fast_sweep_rgba
+from skillfx_jit import warmup as _jit_warmup
 
-# Kick the JIT compile in a daemon thread so the first burst doesn't pay
-# the ~1s numba cold-start cost on the UI thread.
-if _jit_warmup is not None:
-    try:
-        threading.Thread(target=_jit_warmup, name='skillfx-jit-warmup',
-                         daemon=True).start()
-    except Exception:
-        pass
+# Exercise the mandatory Cython kernels off the UI thread so the first burst
+# has all imports and memoryview setup paid before it appears.
+try:
+    threading.Thread(target=_jit_warmup, name='skillfx-cython-warmup',
+                     daemon=True).start()
+except Exception:
+    pass
 
 from perf_probe import probe as _probe
 
@@ -1594,42 +1584,16 @@ void main() {
         pulse_q = pulse_bucket / 8.0
         pad = 28
         box = r_out * 2 + pad * 2
-        dist, cc = self._get_ring_field(box)
+        _, cc = self._get_ring_field(box)
 
         r_core = max(2, r_out - 38)
-        # v2.3.0 Phase B1: numba-JIT halo + core blending. Pixel-parity
+        # v2.4.27: mandatory Cython halo + core blending.
         # within ±1 LSB of the original numpy path (rounding only,
         # imperceptible on the alpha-blended ring); 8-28x faster on
         # ring-cache misses (the entire ENTER transition rebuilds 6+
         # buckets at 0.5-6 ms each on the legacy numpy path).
-        layer_arr = None
-        if _jit_fast_ring_rgba is not None:
-            try:
-                layer_arr = _jit_fast_ring_rgba(
-                    box, float(r_out), float(pulse_q), float(r_core))
-            except Exception:
-                layer_arr = None
-        if layer_arr is None:
-            halo_breath = 0.52 + 0.40 * pulse_q
-            halo_a = 46.0 * halo_breath * np.exp(
-                -((dist - r_out) ** 2) / (28.0 * 28.0))
-            halo_a = np.clip(halo_a, 0, 255)
-            arr = np.zeros((box, box, 4), dtype=np.float32)
-            arr[:, :, 0] = 97
-            arr[:, :, 1] = 232
-            arr[:, :, 2] = 255
-            arr[:, :, 3] = halo_a
-
-            core_a = 70.0 * (0.6 + 0.4 * pulse_q) * np.clip(
-                1.0 - dist / max(1.0, r_core), 0.0, 1.0)
-            core_mask = dist < r_core + 2
-            src_a = (core_a * core_mask) / 255.0
-            inv = 1.0 - src_a
-            arr[:, :, 0] = arr[:, :, 0] * inv + 176 * src_a
-            arr[:, :, 1] = arr[:, :, 1] * inv + 247 * src_a
-            arr[:, :, 2] = arr[:, :, 2] * inv + 255 * src_a
-            arr[:, :, 3] = np.maximum(arr[:, :, 3], core_a * core_mask)
-            layer_arr = np.clip(arr, 0, 255).astype(np.uint8)
+        layer_arr = _jit_fast_ring_rgba(
+            box, float(r_out), float(pulse_q), float(r_core))
 
         layer = Image.fromarray(layer_arr, 'RGBA')
         layer = _gpu_blur(layer, 3.0)
@@ -1687,30 +1651,9 @@ void main() {
             if 0.0 < sweep_t < 1.0:
                 clip_r = max(8.0, box * 0.5 - 12.0)
                 band_x = -box * 0.18 + (box * 1.30) * sweep_t
-                # v2.3.0 Phase B1: numba-JIT sweep band. Pixel-identical;
-                # 3-33x faster on the per-frame band build (was a fresh
-                # numpy mgrid + exp + broadcast + clip every motion
-                # sample, ~0.2-3 ms per call on box=160-340).
-                sweep_arr = None
-                if _jit_fast_sweep_rgba is not None:
-                    try:
-                        sweep_arr = _jit_fast_sweep_rgba(
-                            box, float(band_x), float(clip_r),
-                            float(alpha_mul))
-                    except Exception:
-                        sweep_arr = None
-                if sweep_arr is None:
-                    dist, _ = self._get_ring_field(box)
-                    xs = np.arange(box, dtype=np.float32)[None, :]
-                    band = np.exp(-((xs - band_x) / 8.5) ** 2) * 210.0
-                    band = np.broadcast_to(band, (box, box))
-                    mask = (dist <= clip_r).astype(np.float32)
-                    sweep_arr = np.zeros((box, box, 4), dtype=np.uint8)
-                    sweep_arr[:, :, 0] = 114
-                    sweep_arr[:, :, 1] = 238
-                    sweep_arr[:, :, 2] = 255
-                    sweep_arr[:, :, 3] = np.clip(
-                        band * mask * alpha_mul, 0, 255).astype(np.uint8)
+                # v2.4.27: mandatory Cython sweep band; no numpy fallback.
+                sweep_arr = _jit_fast_sweep_rgba(
+                    box, float(band_x), float(clip_r), float(alpha_mul))
                 sweep = Image.fromarray(sweep_arr, 'RGBA')
                 img.alpha_composite(sweep,
                                     (int(ax - box // 2), int(ay - box // 2)))
@@ -1857,49 +1800,8 @@ void main() {
                     )
 
     def _fast_beam(self, L: int, H: int) -> Image.Image:
-        """Vectorized linear-gradient beam with vertical glow falloff."""
-        if _jit_fast_beam_rgba is not None:
-            try:
-                arr = _jit_fast_beam_rgba(L, H)
-                return Image.fromarray(arr, 'RGBA')
-            except Exception:
-                pass
-        xs = np.arange(L, dtype=np.float32) / max(1, L - 1)
-        ys = (np.arange(H, dtype=np.float32) - H / 2.0) / (H / 2.0)
-        # Vertical falloff (gaussian-ish)
-        falloff = np.exp(-(ys * ys) * 4.0)[:, None]
-        # cyan→gold gradient alpha (base glow 150)
-        t1 = np.clip((xs - 0.0) / 0.22, 0.0, 1.0)
-        t2 = np.clip((xs - 0.35) / 0.65, 0.0, 1.0)
-        # color channels
-        R = 97 + (255 - 97) * t2
-        G = 232 + (188 - 232) * t2
-        B = 255 + (66 - 255) * t2
-        A_base = 150 * (0.15 + 0.85 * t1)
-        A_glow = A_base[None, :] * falloff
-        # Core bright line (3px tall)
-        core_mask = np.abs(np.arange(H) - H / 2.0) <= 1.5
-        core_a = np.where(core_mask[:, None], 245.0, 0.0)
-        core_R = np.where(core_mask[:, None],
-                          97 + (255 - 97) * t2[None, :], 0)
-        core_G = np.where(core_mask[:, None],
-                          232 + (188 - 232) * t2[None, :], 0)
-        core_B = np.where(core_mask[:, None],
-                          255 + (66 - 255) * t2[None, :], 0)
-        # Combine (core over glow)
-        alpha = np.maximum(A_glow, core_a)
-        final_R = np.where(core_mask[:, None],
-                           core_R, np.broadcast_to(R[None, :], (H, L)))
-        final_G = np.where(core_mask[:, None],
-                           core_G, np.broadcast_to(G[None, :], (H, L)))
-        final_B = np.where(core_mask[:, None],
-                           core_B, np.broadcast_to(B[None, :], (H, L)))
-        arr = np.stack([
-            np.clip(final_R, 0, 255),
-            np.clip(final_G, 0, 255),
-            np.clip(final_B, 0, 255),
-            np.clip(alpha, 0, 255),
-        ], axis=-1).astype(np.uint8)
+        """Cython linear-gradient beam with vertical glow falloff."""
+        arr = _jit_fast_beam_rgba(L, H)
         return Image.fromarray(arr, 'RGBA')
 
 

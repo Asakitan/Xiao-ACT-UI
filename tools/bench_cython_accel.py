@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Bench and parity-check the optional Cython pixel accelerators."""
+"""Bench and parity-check the mandatory Cython pixel accelerators."""
 from __future__ import annotations
 
 import argparse
@@ -16,13 +16,7 @@ _SAO_AUTO = os.path.dirname(_THIS_DIR)
 if _SAO_AUTO not in sys.path:
     sys.path.insert(0, _SAO_AUTO)
 
-try:
-    import _sao_cy_pixels as cy_pixels
-except Exception as exc:  # noqa: BLE001
-    cy_pixels = None
-    _IMPORT_ERROR = exc
-else:
-    _IMPORT_ERROR = None
+import _sao_cy_pixels as cy_pixels  # type: ignore[import-not-found]
 
 
 def _ref_overlay_round(rgba: np.ndarray) -> bytes:
@@ -134,10 +128,6 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--assert-parity', action='store_true')
     args = parser.parse_args()
-
-    if cy_pixels is None:
-        print(f'! _sao_cy_pixels import failed: {_IMPORT_ERROR!r}')
-        return 2
 
     rng = np.random.default_rng(0x53414F)
     print('Cython pixel accelerator benchmark')
