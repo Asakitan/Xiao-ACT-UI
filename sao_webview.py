@@ -4921,9 +4921,8 @@ class SAOWebViewGUI:
             pass
 
     def _combat_damage_timeout_s(self) -> float:
-        # User-configurable fade timeout (seconds). Default large enough that
-        # normal combat lulls (cast animations, mechanic phases, target swaps)
-        # don't cause the DPS panel to disappear every few seconds.
+        # User-configurable fade timeout (seconds). Default remains generous,
+        # but explicit shorter menu values should take effect.
         try:
             raw = self._get_setting('dps_fade_timeout_s', 60)
             v = float(raw if raw is not None else 60)
@@ -4931,7 +4930,7 @@ class SAOWebViewGUI:
             v = 60.0
         if v <= 0:
             return 86400.0
-        return float(max(60.0, v))
+        return float(max(1.0, v))
 
     def _boss_hp_hold_timeout_s(self) -> float:
         """BossHP gets a longer leash than DPS so revive/mechanics don't hide it."""

@@ -1371,6 +1371,48 @@ class PacketParser:
             and int(uid or 0) == self._current_uid
         )
 
+    def _player_entry_has_identity(self, uid: int) -> bool:
+        """Return True only for player rows backed by real player data.
+
+        Refreshing overworld monsters can use UUID layouts that look like
+        player entities. If an early delta creates an empty PlayerData row for
+        such a UUID, treating that row as a confirmed player suppresses DPS and
+        BossHP for everyone attacking it.
+        """
+        try:
+            player = self._players.get(int(uid or 0))
+        except Exception:
+            player = None
+        if not player:
+            return False
+        return bool(
+            getattr(player, 'name', '')
+            or int(getattr(player, 'level', 0) or 0) > 0
+            or int(getattr(player, 'profession_id', 0) or 0) > 0
+            or int(getattr(player, 'fight_point', 0) or 0) > 0
+            or bool(getattr(player, 'hp_from_full_sync', False))
+            or bool(getattr(player, 'skill_slot_map', None))
+        )
+
+    def _is_known_player_uuid(self, uuid: int) -> bool:
+        """Return True for UUIDs that should block combat-target DPS.
+
+        A raw player-looking suffix is not enough in overworld refresh maps:
+        monsters can be seen first via damage before their attrs/entity type
+        arrive. Confirm players through self identity, team cache, or actual
+        parsed player data.
+        """
+        if not uuid or not _is_player(uuid):
+            return False
+        if uuid in self._monsters:
+            return False
+        uid = _uuid_to_uid(uuid)
+        if self._is_confirmed_self_uid(uid):
+            return True
+        if uid in self._team_members:
+            return True
+        return self._player_entry_has_identity(uid)
+
     def _get_monster(self, uuid: int) -> MonsterData:
         if uuid not in self._monsters:
             self._monsters[uuid] = MonsterData(uuid)
@@ -1388,7 +1430,7 @@ class PacketParser:
             return False, False
         if uuid in self._monsters:
             return False, True
-        return bool(_is_player(uuid)), bool(_is_monster(uuid))
+        return bool(self._is_known_player_uuid(uuid)), bool(_is_monster(uuid))
 
     def reset_scene(self):
         """场景服务器切换时重置场景数据。
@@ -3445,6 +3487,12 @@ class PacketParser:
                     or (not ent_type_player and has_attrs
                         and _attrs_look_monster_like(entity.Attrs))):
                 monster_uuids_appeared.append(uuid)
+                if _is_player(uuid):
+                    stale_uid = _uuid_to_uid(uuid)
+                    if (not self._is_confirmed_self_uid(stale_uid)
+                            and stale_uid not in self._team_members
+                            and not self._player_entry_has_identity(stale_uid)):
+                        self._players.pop(stale_uid, None)
                 monster = self._get_monster(uuid)
                 monster.is_dead = False
                 if has_attrs:
