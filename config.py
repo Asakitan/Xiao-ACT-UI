@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.25"
+APP_VERSION = "2.4.26"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,10 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.26:
+#   Force Entity player UID/POWER panels onto the GPU overlay path, prewarm
+#   their GLFW windows asynchronously, and avoid Tk fallback redraws that made
+#   the first SAO menu open and large Session Players scrolls stutter.
 # v2.4.24:
 #   Keep the Session Players GPU panel attached to the SAO menu shell,
 #   make Entity BossHP fixed-position/click-through, and treat the first

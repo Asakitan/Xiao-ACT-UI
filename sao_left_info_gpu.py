@@ -545,12 +545,27 @@ class SessionPlayersGpuPainter:
         self._last_sig: Optional[tuple] = None
         self._last_geom: Optional[Tuple[int, int, int, int]] = None
         self._lock = threading.Lock()
+        self._create_lock = threading.Lock()
+        self._creating = False
 
-    def _ensure_window(self, w: int, h: int, x: int, y: int) -> bool:
+    def warmup(self, w: int, h: int, x: int = 0, y: int = 0) -> None:
+        """Create the hidden GLFW window off the Tk hot path."""
+        if self._destroyed or self._gpu_window is not None or self._creating:
+            return
+        try:
+            self._ensure_window(w, h, x, y, allow_async=True)
+        except Exception:
+            pass
+
+    def _ensure_window(self, w: int, h: int, x: int, y: int,
+                       allow_async: bool = False) -> bool:
         if self._gpu_window is not None:
             return True
         if _gow is None or not _gow.glfw_supported():
             return False
+        if not self._create_lock.acquire(blocking=False):
+            return False
+        self._creating = True
         try:
             pump = _gow.get_glfw_pump(self._root)
             self._presenter = _gow.BgraPresenter()
@@ -562,12 +577,18 @@ class SessionPlayersGpuPainter:
                 click_through=True,
                 title='sao_session_players_gpu',
             )
-            self._gpu_window.show()
+            self._gpu_window.show(async_create=allow_async)
             return True
         except Exception:
             self._presenter = None
             self._gpu_window = None
             return False
+        finally:
+            self._creating = False
+            try:
+                self._create_lock.release()
+            except Exception:
+                pass
 
     def destroy(self) -> None:
         if self._destroyed:
@@ -605,7 +626,7 @@ class SessionPlayersGpuPainter:
     def show(self) -> None:
         if self._gpu_window is not None:
             try:
-                self._gpu_window.show()
+                self._gpu_window.show(async_create=True)
             except Exception:
                 pass
 
@@ -616,7 +637,8 @@ class SessionPlayersGpuPainter:
             return
         out_w = max(1, snap.w)
         out_h = max(1, snap.h)
-        if not self._ensure_window(out_w, out_h, screen_x, screen_y):
+        if not self._ensure_window(out_w, out_h, screen_x, screen_y,
+                                   allow_async=True):
             return
         self.show()
 
@@ -722,12 +744,27 @@ class PlayerPanelGpuPainter:
         self._last_sig: Optional[tuple] = None
         self._last_geom: Optional[Tuple[int, int, int, int]] = None
         self._lock = threading.Lock()
+        self._create_lock = threading.Lock()
+        self._creating = False
 
-    def _ensure_window(self, w: int, h: int, x: int, y: int) -> bool:
+    def warmup(self, w: int, h: int, x: int = 0, y: int = 0) -> None:
+        """Create the hidden GLFW window before the menu animation needs it."""
+        if self._destroyed or self._gpu_window is not None or self._creating:
+            return
+        try:
+            self._ensure_window(w, h, x, y, allow_async=True)
+        except Exception:
+            pass
+
+    def _ensure_window(self, w: int, h: int, x: int, y: int,
+                       allow_async: bool = False) -> bool:
         if self._gpu_window is not None:
             return True
         if _gow is None or not _gow.glfw_supported():
             return False
+        if not self._create_lock.acquire(blocking=False):
+            return False
+        self._creating = True
         try:
             pump = _gow.get_glfw_pump(self._root)
             self._presenter = _gow.BgraPresenter()
@@ -739,12 +776,18 @@ class PlayerPanelGpuPainter:
                 click_through=True,
                 title='sao_player_panel_gpu',
             )
-            self._gpu_window.show()
+            self._gpu_window.show(async_create=allow_async)
             return True
         except Exception:
             self._presenter = None
             self._gpu_window = None
             return False
+        finally:
+            self._creating = False
+            try:
+                self._create_lock.release()
+            except Exception:
+                pass
 
     def destroy(self) -> None:
         if self._destroyed:
@@ -777,7 +820,7 @@ class PlayerPanelGpuPainter:
     def show(self) -> None:
         if self._gpu_window is not None:
             try:
-                self._gpu_window.show()
+                self._gpu_window.show(async_create=True)
             except Exception:
                 pass
 
@@ -788,7 +831,8 @@ class PlayerPanelGpuPainter:
             return
         out_w = max(1, snap.top_w, snap.bottom_w)
         out_h = max(1, snap.top_h + snap.bottom_h)
-        if not self._ensure_window(out_w, out_h, screen_x, screen_y):
+        if not self._ensure_window(out_w, out_h, screen_x, screen_y,
+                                   allow_async=True):
             return
 
         # 1) Drain previous result and present.
