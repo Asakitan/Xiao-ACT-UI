@@ -3,12 +3,7 @@
 # cython: wraparound=False
 # cython: initializedcheck=False
 # cython: nonecheck=False
-"""Cython byte-level helpers for packet parsing.
-
-This module intentionally keeps protocol semantics in Python.  It only
-accelerates small, stable byte loops that are easy to parity-check and safe to
-fall back from when the optional .pyd is unavailable.
-"""
+"""Mandatory Cython byte-level helpers for packet parsing and capture."""
 
 
 cdef union U32F:
@@ -213,3 +208,96 @@ cpdef int find_frame_realign(object data, Py_ssize_t max_scan=65536):
                 if msg == 2 or msg == 3 or msg == 4 or msg == 5 or msg == 6:
                     return <int>i
     return -1
+
+
+cpdef object parse_eth_ip_tcp(object raw):
+    """Parse Ethernet -> IPv4 -> TCP frame headers.
+
+    Returns ``(src_ip, dst_ip, sport, dport, seq, payload, ip_id, frag_offset,
+    more_frag)`` or ``None``. This mirrors packet_capture._parse_eth_ip_tcp's
+    historical semantics, including returning IPv4 fragment payload for
+    non-TCP packets so the Python reassembler can cache fragments.
+    """
+    cdef const unsigned char[:] src = raw
+    cdef Py_ssize_t length = src.shape[0]
+    cdef Py_ssize_t ip_off = 14
+    cdef Py_ssize_t tcp_off
+    cdef Py_ssize_t payload_off
+    cdef unsigned int eth_type
+    cdef unsigned int ver_ihl
+    cdef unsigned int ihl
+    cdef unsigned int total_len
+    cdef unsigned int ip_id
+    cdef unsigned int flags_frag
+    cdef unsigned int proto
+    cdef unsigned int sport
+    cdef unsigned int dport
+    cdef unsigned int seq
+    cdef unsigned int data_offset
+    cdef bint more_frag
+    cdef unsigned int frag_offset
+    cdef Py_ssize_t end
+
+    if length < 54:
+        return None
+    eth_type = _read_be16(src, 12)
+    if eth_type != 0x0800:
+        return None
+
+    ver_ihl = src[ip_off]
+    ihl = (ver_ihl & 0x0F) * 4
+    if ihl < 20 or ip_off + <Py_ssize_t>ihl > length:
+        return None
+
+    total_len = _read_be16(src, ip_off + 2)
+    ip_id = _read_be16(src, ip_off + 4)
+    flags_frag = _read_be16(src, ip_off + 6)
+    more_frag = (flags_frag & 0x2000) != 0
+    frag_offset = flags_frag & 0x1FFF
+    proto = src[ip_off + 9]
+    end = ip_off + <Py_ssize_t>total_len
+
+    if proto != 6:
+        return (
+            raw[ip_off + 12:ip_off + 16],
+            raw[ip_off + 16:ip_off + 20],
+            0,
+            0,
+            0,
+            raw[ip_off + <Py_ssize_t>ihl:end],
+            int(ip_id),
+            int(frag_offset),
+            bool(more_frag),
+        )
+
+    tcp_off = ip_off + <Py_ssize_t>ihl
+    if tcp_off + 20 > length:
+        return None
+    sport = _read_be16(src, tcp_off)
+    dport = _read_be16(src, tcp_off + 2)
+    seq = _read_be32(src, tcp_off + 4)
+    data_offset = ((src[tcp_off + 12] >> 4) & 0x0F) * 4
+    payload_off = tcp_off + <Py_ssize_t>data_offset
+    if payload_off < length:
+        return (
+            raw[ip_off + 12:ip_off + 16],
+            raw[ip_off + 16:ip_off + 20],
+            int(sport),
+            int(dport),
+            int(seq),
+            raw[payload_off:end],
+            int(ip_id),
+            int(frag_offset),
+            bool(more_frag),
+        )
+    return (
+        raw[ip_off + 12:ip_off + 16],
+        raw[ip_off + 16:ip_off + 20],
+        int(sport),
+        int(dport),
+        int(seq),
+        b'',
+        int(ip_id),
+        int(frag_offset),
+        bool(more_frag),
+    )

@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.26"
+APP_VERSION = "2.4.27"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,11 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.27:
+#   Make Cython accelerators mandatory instead of optional: packet/combat,
+#   pixel premultiply/alpha, packet capture frame parsing, and SkillFX math
+#   kernels now fail fast if the matching _sao_cy*.pyd is missing. Runtime
+#   Python/NumPy/Numba fallbacks were removed from those hot paths.
 # v2.4.26:
 #   Force Entity player UID/POWER panels onto the GPU overlay path, prewarm
 #   their GLFW windows asynchronously, and avoid Tk fallback redraws that made
@@ -444,8 +449,8 @@ USE_GPU_SKILLFX = True
 #   parity. BossHP/DPS packet display stability was hardened around revive /
 #   server-switch edge cases, hidden HP panels stop intercepting clicks, and
 #   Entity BossHP now mirrors the WebView main/secondary panel split.
-#   Packet parsing gained an optional _sao_cy_packet Cython helper for stable
-#   byte-level decode/scan hotspots with Python fallback, and dev_publish now
+#   Packet parsing gained a _sao_cy_packet helper for stable byte-level
+#   decode/scan hotspots (made mandatory in v2.4.27), and dev_publish now
 #   makes smarter full-package vs incremental-package decisions when the spec
 #   changes. Skill names were refreshed from current SRDPS/SRLOGS Chinese
 #   short-name tables so DPS skill breakdowns no longer show stale placeholders.
@@ -473,10 +478,10 @@ USE_GPU_SKILLFX = True
 #   soft in-instance transitions, while combat panels keep a longer idle
 #   window before fading/resetting.
 # v2.4.4:
-#   Add optional Cython combat helpers for UUID classification, damage fallback,
-#   self-attacker detection, and DPS target gating. Packet capture/protobuf
-#   parsing keep the Python fallback path so an ABI mismatch only disables
-#   acceleration instead of dropping the capture chain.
+#   Add Cython combat helpers for UUID classification, damage fallback,
+#   self-attacker detection, and DPS target gating. As of v2.4.27 the compiled
+#   helpers are mandatory so ABI mismatches fail fast instead of silently
+#   returning to Python hot paths.
 # v2.4.3:
 #   Fix overworld / city-edge combat targets that only report HP loss or use
 #   non-standard entity suffixes: DPS now counts player damage to non-player

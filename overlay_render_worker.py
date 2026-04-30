@@ -40,28 +40,8 @@ from PIL import Image
 from perf_probe import gauge as _perf_gauge, phase as _phase_trace
 from render_capture_sync import wait_until_capture_idle
 
-_CY_PIXELS = None
-if os.environ.get('SAO_DISABLE_CYTHON', '').strip().lower() not in (
-        '1', 'true', 'yes', 'on'):
-    try:
-        import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
-    except Exception:
-        _CY_PIXELS = None
+import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
 
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)))
-    except Exception:
-        return default
-
-
-_CY_PREMULT_MAX_PIXELS = max(
-    0, _env_int('SAO_CYTHON_PREMULT_MAX_PIXELS', 600_000))
-_CY_ALPHA_MIN_PIXELS = max(
-    0, _env_int('SAO_CYTHON_ALPHA_MIN_PIXELS', 250_000))
-_CY_MASK_MIN_PIXELS = max(
-    0, _env_int('SAO_CYTHON_MASK_MIN_PIXELS', 30_000))
 
 # ── Win32 structures (mirrored from sao_gui_dps for independence) ──
 _user32 = ctypes.windll.user32
@@ -131,9 +111,9 @@ def _cache_premult_bgra(img: Image.Image, out: bytes) -> bytes:
 def _premultiply_to_bgra(img: Image.Image) -> bytes:
     """RGBA PIL → premultiplied BGRA bytes.
 
-    Tries the optional Cython pixel loop first for GUI-sized panels, then
-    the GPU shader (already on the render-lane thread that owns a GL
-    context), and finally numpy on failure.
+    Uses the mandatory Cython pixel loop. Missing or ABI-mismatched Cython
+    modules should fail loudly at import time instead of silently returning
+    to the Python/NumPy hot path.
     """
     if getattr(img, '_sao_premult_safe', False):
         try:
@@ -146,33 +126,11 @@ def _premultiply_to_bgra(img: Image.Image) -> bytes:
             pass
     _phase_trace('render.premultiply.begin', f'{img.size[0]}x{img.size[1]}')
     rgba = np.asarray(img, dtype=np.uint8)
-    pixels = int(img.size[0]) * int(img.size[1])
-    if (_CY_PIXELS is not None and
-            (_CY_PREMULT_MAX_PIXELS <= 0 or pixels <= _CY_PREMULT_MAX_PIXELS)):
-        try:
-            out = _CY_PIXELS.premultiply_bgra_ndarray(rgba)
-            _phase_trace('render.premultiply.cython',
-                         f'{img.size[0]}x{img.size[1]}')
-            return _cache_premult_bgra(img, out)
-        except Exception:
-            pass
-
-    from gpu_renderer import premultiply_bgra_bytes
-    gpu_result = premultiply_bgra_bytes(rgba)
-    if gpu_result is not None:
-        _phase_trace('render.premultiply.gpu', f'{img.size[0]}x{img.size[1]}')
-        return _cache_premult_bgra(img, gpu_result)
-    # CPU fallback — pure numpy, releases GIL.
-    a = rgba[:, :, 3:4].astype(np.uint16)
-    rgb = (rgba[:, :, :3].astype(np.uint16) * a + 127) // 255
-    bgra = np.empty_like(rgba)
-    bgra[:, :, 0] = rgb[:, :, 2]  # B
-    bgra[:, :, 1] = rgb[:, :, 1]  # G
-    bgra[:, :, 2] = rgb[:, :, 0]  # R
-    bgra[:, :, 3] = rgba[:, :, 3]  # A
-    _phase_trace('render.premultiply.cpu', f'{img.size[0]}x{img.size[1]}')
-    out = bgra.tobytes()
+    out = _CY_PIXELS.premultiply_bgra_ndarray(rgba)
+    _phase_trace('render.premultiply.cython',
+                 f'{img.size[0]}x{img.size[1]}')
     return _cache_premult_bgra(img, out)
+
 
 
 def multiply_alpha_image(img: Image.Image, alpha: float) -> Image.Image:
@@ -183,43 +141,21 @@ def multiply_alpha_image(img: Image.Image, alpha: float) -> Image.Image:
         value = 1.0
     if not value == value or value >= 0.999:
         return img
-    pixels = int(img.size[0]) * int(img.size[1])
-    if _CY_PIXELS is not None and pixels >= _CY_ALPHA_MIN_PIXELS:
-        try:
-            rgba = np.asarray(img, dtype=np.uint8)
-            out = _CY_PIXELS.multiply_alpha_rgba_ndarray_floor(rgba, value)
-            return Image.frombytes('RGBA', img.size, out)
-        except Exception:
-            pass
-    arr = np.asarray(img, dtype=np.uint8).copy()
-    mul = int(max(0, min(255, value * 255)))
-    arr[:, :, 3] = (
-        arr[:, :, 3].astype(np.uint16) * mul // 255
-    ).astype(np.uint8)
-    return Image.fromarray(arr, 'RGBA')
+    rgba = np.asarray(img, dtype=np.uint8)
+    out = _CY_PIXELS.multiply_alpha_rgba_ndarray_floor(rgba, value)
+    return Image.frombytes('RGBA', img.size, out)
 
 
 def clip_alpha_image(img: Image.Image, mask: Image.Image) -> Image.Image:
     """Return RGBA ``img`` with its alpha channel multiplied by ``mask``."""
     if img.size != mask.size:
         mask = mask.resize(img.size)
-    pixels = int(img.size[0]) * int(img.size[1])
-    if _CY_PIXELS is not None and pixels >= _CY_MASK_MIN_PIXELS:
-        try:
-            rgba = np.asarray(img, dtype=np.uint8)
-            mask_arr = np.asarray(mask, dtype=np.uint8)
-            if mask_arr.ndim == 2:
-                out = _CY_PIXELS.multiply_alpha_mask_rgba_ndarray_floor(
-                    rgba, mask_arr)
-                return Image.frombytes('RGBA', img.size, out)
-        except Exception:
-            pass
-    arr = np.asarray(img, dtype=np.uint8).copy()
-    mask_arr = np.asarray(mask, dtype=np.uint16)
-    arr[:, :, 3] = (
-        arr[:, :, 3].astype(np.uint16) * mask_arr // 255
-    ).astype(np.uint8)
-    return Image.fromarray(arr, 'RGBA')
+    if mask.mode != 'L':
+        mask = mask.convert('L')
+    rgba = np.asarray(img, dtype=np.uint8)
+    mask_arr = np.asarray(mask, dtype=np.uint8)
+    out = _CY_PIXELS.multiply_alpha_mask_rgba_ndarray_floor(rgba, mask_arr)
+    return Image.frombytes('RGBA', img.size, out)
 
 
 def _recommended_lane_count() -> int:

@@ -63,13 +63,7 @@ def _gpu_dps_enabled() -> bool:
     except Exception:
         return False
 
-_CY_PIXELS = None
-if os.environ.get('SAO_DISABLE_CYTHON', '').strip().lower() not in (
-        '1', 'true', 'yes', 'on'):
-    try:
-        import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
-    except Exception:
-        _CY_PIXELS = None
+import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
 
 from perf_probe import gauge as _perf_gauge, probe as _probe
 
@@ -149,24 +143,9 @@ def _ulw_update(hwnd: int, img: Image.Image, x: int, y: int,
     )
     old_bm = _gdi32.SelectObject(hdc_mem, hbm)
 
-    # Build premultiplied BGRA buffer. The Cython path mirrors the numpy
-    # rounding exactly and falls back silently for ABI/env mismatches.
+    # Build premultiplied BGRA buffer via mandatory Cython.
     rgba = np.asarray(img, dtype=np.uint8)           # shape (h, w, 4) RGBA
-    raw = None
-    if _CY_PIXELS is not None:
-        try:
-            raw = _CY_PIXELS.premultiply_bgra_ndarray(rgba)
-        except Exception:
-            raw = None
-    if raw is None:
-        a = rgba[:, :, 3:4].astype(np.uint16)
-        rgb = (rgba[:, :, :3].astype(np.uint16) * a + 127) // 255
-        bgra = np.empty_like(rgba)
-        bgra[:, :, 0] = rgb[:, :, 2]
-        bgra[:, :, 1] = rgb[:, :, 1]
-        bgra[:, :, 2] = rgb[:, :, 0]
-        bgra[:, :, 3] = rgba[:, :, 3]
-        raw = bgra.tobytes()
+    raw = _CY_PIXELS.premultiply_bgra_ndarray(rgba)
     ctypes.memmove(bits, raw, len(raw))
 
     pt_dst = _POINT(x, y)

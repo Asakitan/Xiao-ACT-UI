@@ -4,8 +4,9 @@
 Usage:
     python build_cython_ext.py build_ext --inplace
 
-The generated .pyd is ABI-specific. The checked-in binary targets the
-current release environment; other Python versions should rebuild locally.
+The generated .pyd files are ABI-specific and mandatory at runtime. The
+checked-in binaries target the current release environment; other Python
+versions should rebuild locally.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ try:
 except Exception as exc:  # noqa: BLE001
     raise SystemExit(
         'Cython is required to build _sao_cy_pixels, _sao_cy_combat, '
-        'and _sao_cy_packet. '
+        '_sao_cy_packet, and _sao_cy_skillfx. '
         'Install requirements.txt or run: python -m pip install Cython'
     ) from exc
 
@@ -37,6 +38,10 @@ extensions = [
     Extension(
         name='_sao_cy_packet',
         sources=[os.path.join(HERE, '_sao_cy_packet.pyx')],
+    ),
+    Extension(
+        name='_sao_cy_skillfx',
+        sources=[os.path.join(HERE, '_sao_cy_skillfx.pyx')],
     ),
 ]
 

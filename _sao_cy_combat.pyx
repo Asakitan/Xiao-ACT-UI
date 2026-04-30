@@ -3,11 +3,7 @@
 # cython: wraparound=False
 # cython: initializedcheck=False
 # cython: nonecheck=False
-"""Cython helpers for combat packet parsing and DPS target gating.
-
-Keep this module dependency-free: packet capture and protobuf parsing stay in
-Python so a missing/ABI-mismatched .pyd only disables acceleration.
-"""
+"""Mandatory Cython helpers for combat packet parsing and DPS target gating."""
 
 
 cdef inline bint _to_u64(object value, unsigned long long *out):

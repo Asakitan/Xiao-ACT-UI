@@ -17,10 +17,7 @@ from typing import Optional, Callable, List, Dict, Tuple
 
 logger = logging.getLogger('sao_auto.capture')
 
-try:
-    import _sao_cy_packet as _CY_PACKET
-except Exception:  # noqa: BLE001
-    _CY_PACKET = None
+import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 
 # ═══════════════════════════════════════════════
 #  Npcap / WinPcap ctypes 绑定
@@ -201,42 +198,7 @@ def _parse_eth_ip_tcp(raw: bytes) -> Optional[Tuple[bytes, bytes, int, int, int,
     解析以太网帧 → IPv4 → TCP。
     返回 (src_ip, dst_ip, sport, dport, seq, payload, ip_id, frag_offset, more_frag)
     """
-    if len(raw) < 54:
-        return None
-    # Ethernet
-    eth_type = struct.unpack_from('!H', raw, 12)[0]
-    if eth_type != 0x0800:  # 非 IPv4
-        return None
-    ip_off = 14
-    # IPv4
-    ver_ihl = raw[ip_off]
-    ihl = (ver_ihl & 0xF) * 4
-    if ihl < 20 or ip_off + ihl > len(raw):
-        return None
-    total_len = struct.unpack_from('!H', raw, ip_off + 2)[0]
-    ip_id = struct.unpack_from('!H', raw, ip_off + 4)[0]
-    flags_frag = struct.unpack_from('!H', raw, ip_off + 6)[0]
-    more_frag = bool(flags_frag & 0x2000)
-    frag_offset = flags_frag & 0x1FFF
-    proto = raw[ip_off + 9]
-    src_ip = raw[ip_off + 12:ip_off + 16]
-    dst_ip = raw[ip_off + 16:ip_off + 20]
-
-    if proto != 6:  # 非 TCP
-        # 但如果是分片，仍需缓存
-        return (src_ip, dst_ip, 0, 0, 0, raw[ip_off + ihl:ip_off + total_len],
-                ip_id, frag_offset, more_frag)
-
-    tcp_off = ip_off + ihl
-    if tcp_off + 20 > len(raw):
-        return None
-    sport, dport, seq = struct.unpack_from('!HHI', raw, tcp_off)
-    data_offset = ((raw[tcp_off + 12] >> 4) & 0xF) * 4
-    payload_off = tcp_off + data_offset
-    payload = raw[payload_off:ip_off + total_len] if payload_off < len(raw) else b''
-
-    return (src_ip, dst_ip, sport, dport, seq, payload,
-            ip_id, frag_offset, more_frag)
+    return _CY_PACKET.parse_eth_ip_tcp(raw)
 
 
 # ═══════════════════════════════════════════════
@@ -613,28 +575,7 @@ class TcpReassembler:
 
     def _scan_c3sb(self, data: bytes) -> bool:
         """在嵌套帧数据中扫描 c3SB 签名"""
-        if _CY_PACKET is not None:
-            try:
-                return bool(_CY_PACKET.scan_c3sb_nested(data))
-            except Exception:
-                pass
-        offset = 0
-        while offset + 4 < len(data):
-            try:
-                plen = struct.unpack_from('>I', data, offset)[0]
-            except struct.error:
-                break
-            if plen < 6 or plen > 0xFFFFF:
-                break
-            end = offset + plen
-            if end > len(data):
-                break
-            payload_start = offset + 4
-            payload = data[payload_start:end]
-            if len(payload) > 11 and payload[5:5 + 6] == C3SB_SIGNATURE:
-                return True
-            offset = end
-        return False
+        return bool(_CY_PACKET.scan_c3sb_nested(data))
 
     # ─── TCP 重组 (参考 C# SRDPS TcpStreamProcessor) ───
     GAP_SKIP_SEC = 2.0  # 缺段等待超时后跳跃 (C# 用 2 秒)
@@ -768,29 +709,8 @@ class TcpReassembler:
                 if need_realign:
                     # 帧头损坏 — 扫描下一个有效帧头
                     found = False
-                    scan_end = min(buf_len - 5, 65536)
-                    realign_i = -1
-                    if _CY_PACKET is not None:
-                        try:
-                            realign_i = int(_CY_PACKET.find_frame_realign(buf, 65536))
-                        except Exception:
-                            realign_i = -1
-                    if realign_i > 0:
-                        found = True
-                    else:
-                        _buf_mv = memoryview(buf)
-                        try:
-                            for i in range(1, scan_end):
-                                sz = struct.unpack_from('>I', _buf_mv, i)[0]
-                                if 6 <= sz <= 0x0FFFFF:
-                                    tp = struct.unpack_from('>H', _buf_mv, i + 4)[0]
-                                    msg = tp & 0x7FFF
-                                    if msg in (2, 3, 4, 5, 6):
-                                        found = True
-                                        realign_i = i
-                                        break
-                        finally:
-                            _buf_mv.release()
+                    realign_i = int(_CY_PACKET.find_frame_realign(buf, 65536))
+                    found = realign_i > 0
                     if found:
                         logger.warning(
                             f'[Capture] 帧对齐修复: 跳过 {realign_i} 字节 '

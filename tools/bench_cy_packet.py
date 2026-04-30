@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Bench and parity-check optional Cython packet helpers."""
+"""Bench and parity-check mandatory Cython packet helpers."""
 from __future__ import annotations
 
 import argparse
@@ -16,13 +16,7 @@ _SAO_AUTO = os.path.dirname(_THIS_DIR)
 if _SAO_AUTO not in sys.path:
     sys.path.insert(0, _SAO_AUTO)
 
-try:
-    import _sao_cy_packet as cy_packet
-except Exception as exc:  # noqa: BLE001
-    cy_packet = None
-    _IMPORT_ERROR = exc
-else:
-    _IMPORT_ERROR = None
+import _sao_cy_packet as cy_packet  # type: ignore[import-not-found]
 
 
 def _encode_varint(value: int) -> bytes:
@@ -205,7 +199,6 @@ def _print_result(label: str, py_samples: List[float],
 
 
 def _assert_parity() -> None:
-    assert cy_packet is not None
     for sample in _field_samples():
         assert cy_packet.decode_fields(sample) == _ref_decode_fields(sample)
     for value in (0, 1, 127, 128, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF):
@@ -231,10 +224,6 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--assert-parity", action="store_true")
     args = parser.parse_args()
-
-    if cy_packet is None:
-        print(f"! _sao_cy_packet import failed: {_IMPORT_ERROR!r}")
-        return 2
 
     _assert_parity()
     if args.assert_parity:

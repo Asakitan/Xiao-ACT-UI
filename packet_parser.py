@@ -28,15 +28,8 @@ _PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field co
 
 from perf_probe import probe as _probe
 
-try:
-    import _sao_cy_combat as _CY_COMBAT
-except Exception:  # noqa: BLE001
-    _CY_COMBAT = None
-
-try:
-    import _sao_cy_packet as _CY_PACKET
-except Exception:  # noqa: BLE001
-    _CY_PACKET = None
+import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
+import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 
 # Lazy import for protobuf JSON conversion (used in full sync dump)
 _MessageToDict = None
@@ -110,21 +103,7 @@ def _ensure_pb():
 
 def _read_varint(data: bytes, pos: int):
     """Read a protobuf varint and return `(value, new_pos)`."""
-    if _CY_PACKET is not None:
-        try:
-            return _CY_PACKET.read_varint(data, pos)
-        except Exception:
-            pass
-    result = 0
-    shift = 0
-    while pos < len(data):
-        b = data[pos]
-        pos += 1
-        result |= (b & 0x7F) << shift
-        if (b & 0x80) == 0:
-            return result, pos
-        shift += 7
-    return result, pos
+    return _CY_PACKET.read_varint(data, pos)
 
 
 def _read_signed_varint(data: bytes, pos: int):
@@ -145,43 +124,7 @@ def _decode_fields(data: bytes) -> Dict[int, list]:
       2 = length-delimited
       5 = 32-bit
     """
-    if _CY_PACKET is not None:
-        try:
-            return _CY_PACKET.decode_fields(data)
-        except Exception:
-            pass
-    fields: Dict[int, list] = {}
-    pos = 0
-    length = len(data)
-    while pos < length:
-        tag, pos = _read_varint(data, pos)
-        field_num = tag >> 3
-        wire_type = tag & 0x07
-        if wire_type == 0:  # varint
-            val, pos = _read_varint(data, pos)
-            fields.setdefault(field_num, []).append(val)
-        elif wire_type == 1:  # 64-bit
-            if pos + 8 > length:
-                break
-            val = struct.unpack_from('<q', data, pos)[0]
-            pos += 8
-            fields.setdefault(field_num, []).append(val)
-        elif wire_type == 2:  # length-delimited
-            vlen, pos = _read_varint(data, pos)
-            if pos + vlen > length:
-                break
-            val = data[pos:pos + vlen]
-            pos += vlen
-            fields.setdefault(field_num, []).append(val)
-        elif wire_type == 5:  # 32-bit
-            if pos + 4 > length:
-                break
-            val = struct.unpack_from('<f', data, pos)[0]
-            pos += 4
-            fields.setdefault(field_num, []).append(val)
-        else:
-            break  # unknown wire type
-    return fields
+    return _CY_PACKET.decode_fields(data)
 
 
 def _varint_to_int64(val: int) -> int:
@@ -218,30 +161,13 @@ def _decode_int32_from_raw(raw: bytes) -> int:
     """Match protobufjs `reader.int32()` on a raw varint payload."""
     if not raw:
         return 0
-    if _CY_PACKET is not None:
-        try:
-            return int(_CY_PACKET.decode_int32_from_raw(raw))
-        except Exception:
-            pass
-    try:
-        val, _ = _read_varint(raw, 0)
-        return _varint_to_int32(val)
-    except Exception:
-        return 0
+    return int(_CY_PACKET.decode_int32_from_raw(raw))
 
 
 def _decode_float32_from_raw(raw: bytes) -> Optional[float]:
     if not raw or len(raw) < 4:
         return None
-    if _CY_PACKET is not None:
-        try:
-            return _CY_PACKET.decode_float32_from_raw(raw)
-        except Exception:
-            pass
-    try:
-        return struct.unpack_from('<f', raw, 0)[0]
-    except Exception:
-        return None
+    return _CY_PACKET.decode_float32_from_raw(raw)
 
 
 def _append_packet_debug(tag: str, payload: Dict[str, Any]):
@@ -835,16 +761,11 @@ def _compose_skill_level_id(skill_id: int, level: int = 0) -> int:
 
 
 def _is_player(uuid: int) -> bool:
-    if _CY_COMBAT is not None:
-        return bool(_CY_COMBAT.is_player_uuid(uuid))
-    return (uuid & 0xFFFF) == 640
+    return bool(_CY_COMBAT.is_player_uuid(uuid))
 
 
 def _is_monster(uuid: int) -> bool:
-    if _CY_COMBAT is not None:
-        return bool(_CY_COMBAT.is_monster_uuid(uuid))
-    low = uuid & 0xFFFF
-    return low == 64 or low == 32832  # 0x0040 or 0x8040
+    return bool(_CY_COMBAT.is_monster_uuid(uuid))
 
 
 _MONSTER_HINT_ATTR_IDS = (
@@ -882,31 +803,12 @@ def _attrs_look_monster_like(ac) -> bool:
 
 def _combat_damage_amount(value, lucky_value, actual_value, hp_lessen, shield_lessen) -> int:
     """Resolve display/stat damage using the same broad fallbacks as upstream counters."""
-    if _CY_COMBAT is not None:
-        return int(_CY_COMBAT.combat_damage_amount(
-            value, lucky_value, actual_value, hp_lessen, shield_lessen))
-    for raw in (value, lucky_value, actual_value):
-        try:
-            amount = int(raw or 0)
-        except Exception:
-            amount = 0
-        if amount > 0:
-            return amount
-    try:
-        hp = max(0, int(hp_lessen or 0))
-    except Exception:
-        hp = 0
-    try:
-        shield = max(0, int(shield_lessen or 0))
-    except Exception:
-        shield = 0
-    return hp + shield
+    return int(_CY_COMBAT.combat_damage_amount(
+        value, lucky_value, actual_value, hp_lessen, shield_lessen))
 
 
 def _uuid_to_uid(uuid: int) -> int:
-    if _CY_COMBAT is not None:
-        return int(_CY_COMBAT.uuid_to_uid(uuid))
-    return uuid >> 16
+    return int(_CY_COMBAT.uuid_to_uid(uuid))
 
 
 # Reverse lookup: base_skill_id → profession_id (for auto-detection when
@@ -3891,21 +3793,8 @@ class PacketParser:
                 return
 
         # Determine if this is self-outgoing damage (self attacks monster)
-        if _CY_COMBAT is not None:
-            attacker_is_self = bool(_CY_COMBAT.attacker_is_self(
-                attacker_uuid, self._current_uuid, self._current_uid))
-        else:
-            attacker_is_self = False
-        if _CY_COMBAT is None and self._current_uuid and attacker_uuid:
-            if attacker_uuid == self._current_uuid:
-                attacker_is_self = True
-            elif _is_player(attacker_uuid) and _uuid_to_uid(attacker_uuid) == self._current_uid:
-                attacker_is_self = True
-        elif _CY_COMBAT is None and self._current_uid and attacker_uuid and _is_player(attacker_uuid):
-            # Fallback: _current_uuid not yet known (SyncToMeDelta not received),
-            # but _current_uid is available from SyncContainerData / cache.
-            if _uuid_to_uid(attacker_uuid) == self._current_uid:
-                attacker_is_self = True
+        attacker_is_self = bool(_CY_COMBAT.attacker_is_self(
+            attacker_uuid, self._current_uuid, self._current_uid))
         if (not attacker_is_self) and attacker_uid and self._current_uid:
             if int(attacker_uid) == int(self._current_uid):
                 attacker_is_self = True
