@@ -2539,9 +2539,20 @@ class SAOPlayerGUI:
             return 0
 
     def _normalize_damage_event_for_self(self, event):
-        if not isinstance(event, dict) or event.get('attacker_is_self'):
+        if not isinstance(event, dict):
             return event
         self_uid = self._current_player_uid_int()
+        if event.get('attacker_is_self'):
+            try:
+                attacker_uid = int(event.get('attacker_uid') or 0)
+            except Exception:
+                attacker_uid = 0
+            if attacker_uid or self_uid <= 0:
+                return event
+            fixed = dict(event)
+            fixed['attacker_uid'] = self_uid
+            fixed.setdefault('self_uid', self_uid)
+            return fixed
         if self_uid <= 0:
             return event
 
@@ -2574,9 +2585,67 @@ class SAOPlayerGUI:
             )
         return fixed
 
+    def _normalize_damage_event_target_for_entity(self, event):
+        """Recover combat-target classification after scene/dungeon switches.
+
+        Some instance transitions clear the monster cache before the first
+        damage packet of the next dungeon arrives. If that target UUID has a
+        player-looking suffix, the parser can conservatively mark it as a
+        player until SyncNearEntities catches up, which suppresses both DPS
+        and BossHP. For self-outgoing damage to a target that is not present
+        in the known player table, treat it as a combat target.
+        """
+        if not isinstance(event, dict):
+            return event
+        if not event.get('attacker_is_self'):
+            return event
+        try:
+            target_uuid = int(event.get('target_uuid') or 0)
+        except Exception:
+            target_uuid = 0
+        if target_uuid <= 0:
+            return event
+        if event.get('target_is_combat_target') or event.get('target_is_monster'):
+            return event
+
+        target_uid = 0
+        try:
+            if (target_uuid & 0xFFFF) == 640:
+                target_uid = target_uuid >> 16
+        except Exception:
+            target_uid = 0
+        self_uid = self._current_player_uid_int()
+        if target_uid and self_uid and target_uid == self_uid:
+            return event
+
+        known_player = False
+        bridge = getattr(self, '_packet_engine', None)
+        if bridge and target_uid:
+            try:
+                known_player = target_uid in (bridge.get_players() or {})
+            except Exception:
+                known_player = False
+        if known_player:
+            return event
+
+        try:
+            damage = int(event.get('damage') or 0)
+        except Exception:
+            damage = 0
+        if damage <= 0 and not (event.get('is_immune') or event.get('is_absorbed')):
+            return event
+
+        fixed = dict(event)
+        fixed['target_is_player'] = False
+        fixed['target_is_monster'] = True
+        fixed['target_is_combat_target'] = True
+        fixed['entity_target_fallback'] = 'unknown_target_after_scene_change'
+        return fixed
+
     def _on_packet_damage(self, event):
         """Damage event callback from packet_parser → boss raid engine + DPS tracker."""
         event = self._normalize_damage_event_for_self(event)
+        event = self._normalize_damage_event_target_for_entity(event)
         # Track self -> non-player combat target damage for boss bar target.
         # BossHP only displays later if packet_parser has usable HP data.
         _is_self_combat_target = bool(
@@ -2617,6 +2686,10 @@ class SAOPlayerGUI:
                 self._bb_recent_targets[target_uuid] = _t.time()
                 self._bb_last_target_uuid = target_uuid
                 self._bb_last_damage_ts = _t.time()
+                # Damage is also liveness. Some encounters lock HP while
+                # still accepting hits, so do not let stable-HP hiding win.
+                self._bb_last_hp_motion_ts = self._bb_last_damage_ts
+                self._last_boss_hp_push_sig = None
                 if self._dps_tracker:
                     try: self._dps_tracker.set_boss_uuid(target_uuid)
                     except Exception: pass
@@ -3706,7 +3779,15 @@ class SAOPlayerGUI:
                     if _bb_stable_hide_s > 0:
                         _bb_motion_ts = float(
                             getattr(self, '_bb_last_hp_motion_ts', 0.0) or 0.0)
-                        if _bb_motion_ts > 0.0 and (_now - _bb_motion_ts) >= _bb_stable_hide_s:
+                        _bb_damage_ts = float(
+                            getattr(self, '_bb_last_damage_ts', 0.0) or 0.0)
+                        _bb_recent_damage_for_stable = (
+                            _bb_damage_ts > 0.0
+                            and (_now - _bb_damage_ts) < _bb_stable_hide_s
+                        )
+                        if (_bb_motion_ts > 0.0
+                                and (_now - _bb_motion_ts) >= _bb_stable_hide_s
+                                and not _bb_recent_damage_for_stable):
                             _bb_data['active'] = False
                 _bb_sig = (
                     bool(_bb_data.get('active', False)),
@@ -7290,8 +7371,8 @@ class SAOPlayerGUI:
         return default
 
     def _combat_damage_timeout_s(self) -> float:
-        # Keep combat panels alive through boss mechanics, target swaps and
-        # same-dungeon layer transitions. User settings above the floor still win.
+        # User-configurable fade timeout. 0 means never fade; otherwise respect
+        # the menu value so short-fade users are not pinned to the old 60s floor.
         try:
             raw = self._get_setting('dps_fade_timeout_s', 60)
             v = float(raw if raw is not None else 60)
@@ -7299,7 +7380,7 @@ class SAOPlayerGUI:
             v = 60.0
         if v <= 0:
             return 86400.0
-        return float(max(60.0, v))
+        return float(max(1.0, v))
 
     def _boss_hp_hold_timeout_s(self) -> float:
         """BossHP should survive death/revive and long mechanic downtime."""
