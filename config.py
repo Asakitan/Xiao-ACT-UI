@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.31"
+APP_VERSION = "2.4.33"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,45 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.33:
+#   Second pass of cython acceleration on the recognition loop and the
+#   protobuf parser hot helpers, removing the remaining Python-side
+#   "calculation stalls" reported on slower CPUs.
+#     - `_sao_cy_uihelpers` adds `breath_offsets()` (60-fps float HUD sin
+#       offsets) and `compute_skillfx_layout()` (window/viewport/slot rect
+#       geometry for the BurstReady overlay).
+#     - `_sao_cy_packet` adds `varint_to_int64`, `varint_to_int32`,
+#       `decode_string_from_raw`, `decode_dirty_energy_value`,
+#       `is_sane_attr_stamina_max`, `normalize_season_medal_level`,
+#       `level_extra_source_priority`, `attrs_match_monster_hint`. These are
+#       per-packet hot paths in `packet_parser.py`.
+#     - `sao_gui._breath_step` and `_get_skillfx_layout` are now thin entries
+#       that gather inputs and delegate; same for the corresponding parser
+#       helpers.
+#   Microbench (cp311, x64): breath_offsets ≈ 0.06 µs / call,
+#   compute_skillfx_layout(9 slots) ≈ 5.2 µs / call,
+#   decode_dirty_energy_value ≈ 0.10 µs / call.
+# v2.4.32:
+#   `dev_publish.py` / `dev_publish_gui.py` now smart-detect the recent
+#   cython refactor pattern (added/edited/removed `_sao_cy_*.pyx` and the
+#   matching `.pyd` artefacts). Highlights:
+#     - `git_changed_files_with_status()` separates added / modified /
+#       deleted, so deletes feed `manifest.removed_files` instead of being
+#       silently dropped.
+#     - `auto_rebuild_cython_if_stale()` detects a `.pyx` whose `.pyd` is
+#       missing or older and runs `build_cython_ext.py build_ext --inplace`
+#       in-place, then folds the freshly built `.pyd` into the change set.
+#     - New `.pyx` sources unregistered in `build_cython_ext.py` raise a
+#       visible warning during diagnose.
+#     - Deleted `.py` / `.pyx` / `.pyd` / data files become orphan-cleanup
+#       hints (`runtime/<x>.pyc`, `runtime/<x>.<EXT_SUFFIX>`, raw rel-paths)
+#       embedded both in `manifest.removed_files` and a zip-level
+#       `__remove_files__.json` sidecar.
+#     - Pure-delete publishes still produce a `runtime-delta` zip with the
+#       sidecar so the client can clean up without a body of new files.
+#   `update_apply.py` reads either signal, backs each orphan into the
+#   per-version `backup/__removed__/` tree before deletion, and refuses
+#   paths that escape `base/` or target the launcher/update exe.
 # v2.4.31:
 #   New `_sao_cy_uihelpers` extension. The recognition-loop / panel-float
 #   pure-logic helpers in `sao_gui.py` (`_pick_burst_trigger_slot`,

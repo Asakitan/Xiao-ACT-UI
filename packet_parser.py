@@ -128,33 +128,23 @@ def _decode_fields(data: bytes) -> Dict[int, list]:
 
 
 def _varint_to_int64(val: int) -> int:
-    """Convert a protobuf varint to signed int64."""
-    if val > 0x7FFFFFFFFFFFFFFF:
-        val -= 0x10000000000000000
-    return val
+    """Convert a protobuf varint to signed int64. v2.4.33: cython."""
+    return int(_CY_PACKET.varint_to_int64(val))
 
 
 def _varint_to_int32(val: int) -> int:
-    if val > 0x7FFFFFFF:
-        val -= 0x100000000
-    return val
+    """Convert a protobuf varint to signed int32. v2.4.33: cython."""
+    return int(_CY_PACKET.varint_to_int32(val))
 
 
 def _decode_string_from_raw(raw: bytes) -> str:
-    """Match protobufjs `reader.string()`: `[varint length][utf-8 bytes]`."""
-    if not raw:
-        return ''
-    try:
-        str_len, pos = _read_varint(raw, 0)
-        if str_len > 0 and pos + str_len <= len(raw):
-            return raw[pos:pos + str_len].decode('utf-8', 'ignore')
-    except Exception:
-        pass
+    """Match protobufjs `reader.string()`: `[varint length][utf-8 bytes]`.
 
-    try:
-        return raw.decode('utf-8', 'ignore')
-    except Exception:
+    v2.4.33: cython.
+    """
+    if raw is None:
         return ''
+    return _CY_PACKET.decode_string_from_raw(raw)
 
 
 def _decode_int32_from_raw(raw: bytes) -> int:
@@ -789,16 +779,20 @@ _MONSTER_HINT_ATTR_IDS = (
 
 
 def _attrs_look_monster_like(ac) -> bool:
-    """Return True for non-player entities carrying monster/combat HP attrs."""
+    """Return True for non-player entities carrying monster/combat HP attrs.
+
+    v2.4.33: pb2 decoding stays in Python (the AttrCollection wrapper is a
+    Python-only proto object), but the membership test is in cython now.
+    """
     if not ac or not getattr(ac, 'Attrs', None):
         return False
+    attr_ids: list = []
     for attr in ac.Attrs:
         try:
-            if int(attr.Id or 0) in _MONSTER_HINT_ATTR_IDS:
-                return True
+            attr_ids.append(int(attr.Id or 0))
         except Exception:
             continue
-    return False
+    return bool(_CY_PACKET.attrs_match_monster_hint(attr_ids, _MONSTER_HINT_ATTR_IDS))
 
 
 def _combat_damage_amount(value, lucky_value, actual_value, hp_lessen, shield_lessen) -> int:
@@ -1107,24 +1101,17 @@ def _decode_buff_info_sync_pb(bfs) -> list:
 
 
 def _decode_dirty_energy_value(raw_u32: int, raw_f32: float, stamina_max: int = 0) -> Optional[float]:
-    """Pick the sane representation from dirty-stream energy payload."""
-    max_allowed = max(20000.0, float(stamina_max) * 1.2) if stamina_max > 0 else 20000.0
-    if math.isfinite(raw_f32):
-        if 0.0 <= raw_f32 <= 1.05 and stamina_max > 0:
-            return float(raw_f32)
-        if 0.01 <= raw_f32 <= max_allowed:
-            return float(raw_f32)
-        if raw_f32 == 0.0:
-            return 0.0
-    if 0 <= raw_u32 <= max_allowed:
-        return float(raw_u32)
-    return None
+    """Pick the sane representation from dirty-stream energy payload.
+
+    v2.4.33: cython.
+    """
+    return _CY_PACKET.decode_dirty_energy_value(raw_u32, raw_f32, stamina_max)
 
 
 def _is_sane_attr_stamina_max(value: int) -> bool:
     # Current observed self STA caps stay around 1200. Values like 1350/1500
     # and the larger 2100/3100 spikes are not stable enough to trust.
-    return 0 < value <= 1300
+    return bool(_CY_PACKET.is_sane_attr_stamina_max(value))
 
 
 _LEVEL_EXTRA_SOURCE_PRIORITY = {
@@ -1144,7 +1131,8 @@ _TRUSTED_LEVEL_SOURCES = frozenset({'deep_sleep', 'season_attr', 'season_attr_lv
 
 
 def _source_priority(source: str) -> int:
-    return int(_LEVEL_EXTRA_SOURCE_PRIORITY.get(str(source or ''), 0))
+    """v2.4.33: cython."""
+    return int(_CY_PACKET.level_extra_source_priority(source))
 
 
 def _commit_level_extra(player: PlayerData, source: str, value: int) -> bool:
@@ -1164,11 +1152,13 @@ def _commit_level_extra(player: PlayerData, source: str, value: int) -> bool:
 
 def _normalize_season_medal_level(raw_level: int) -> int:
     """Normalize season medal level from raw server value.
-    
+
     The server may send various representations of the medal level.
     This function converts to a canonical form.
+
+    v2.4.33: cython.
     """
-    return max(0, int(raw_level or 0))
+    return int(_CY_PACKET.normalize_season_medal_level(raw_level))
 
 
 def _set_level_extra_candidate(player: PlayerData, source: str, value: int) -> bool:

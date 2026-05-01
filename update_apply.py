@@ -203,6 +203,10 @@ def _collect_entries(zf: zipfile.ZipFile, base: str, allow_top_level_exe: bool) 
         if info.is_dir():
             continue
         rel = _normalize_rel(info.filename)
+        # v2.4.32: ``__remove_files__.json`` is a publish-tool sidecar carrying
+        # orphan-cleanup hints; never write it to the install tree.
+        if rel == "__remove_files__.json":
+            continue
         # v2.1.2-f: runtime-delta 默认禁止顶层 .exe (避免覆盖 XiaoACTUI.exe),
         # 但 update.exe 自身允许走 delayed self-replace 路径。
         if not allow_top_level_exe and rel.lower().endswith(".exe") and "/" not in rel:
@@ -216,6 +220,135 @@ def _collect_entries(zf: zipfile.ZipFile, base: str, allow_top_level_exe: bool) 
             "exists": os.path.exists(dst),
         })
     return entries
+
+
+def _read_zip_remove_hints(zip_path: str) -> List[str]:
+    """Pull the ``__remove_files__.json`` sidecar from a delta zip, if present.
+
+    v2.4.32: Used as a fallback channel when ``meta.removed_files`` is missing
+    (e.g. legacy publishers that only embedded the hint in the zip).
+    """
+    out: List[str] = []
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            try:
+                blob = zf.read("__remove_files__.json")
+            except KeyError:
+                return []
+        try:
+            payload = json.loads(blob.decode("utf-8"))
+        except Exception:
+            return []
+        if isinstance(payload, dict):
+            items = payload.get("remove") or payload.get("removed_files") or []
+        else:
+            items = payload
+        if isinstance(items, list):
+            for entry in items:
+                if isinstance(entry, str) and entry.strip():
+                    out.append(entry.strip())
+    except Exception:
+        return out
+    return out
+
+
+def _safe_remove_orphan(base: str, rel: str) -> Tuple[bool, str]:
+    """Remove a single orphan file declared by manifest.removed_files.
+
+    Returns ``(removed, reason)``. Refuses to act on paths that escape the
+    install root, on top-level executables, and on the launcher exe itself.
+    Missing files are treated as already-clean and return ``(True, 'absent')``.
+    """
+    try:
+        norm = _normalize_rel(rel)
+    except Exception as exc:
+        return False, f"非法路径: {exc}"
+    low = norm.lower()
+    if low.endswith(".exe") and "/" not in norm:
+        return False, "禁止删除顶层 exe"
+    if low in {"update.exe", "xiaoactui.exe"}:
+        return False, "禁止删除启动器/更新器"
+    abs_path = os.path.abspath(os.path.join(base, norm))
+    abs_base = os.path.abspath(base)
+    if abs_path == abs_base or not abs_path.startswith(abs_base + os.sep):
+        return False, "路径逃出 base"
+    if not os.path.exists(abs_path):
+        return True, "absent"
+    try:
+        if os.path.isdir(abs_path):
+            return False, "拒绝目录删除"
+        os.remove(abs_path)
+        return True, "removed"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _apply_removed_files(
+    base: str,
+    rels: List[str],
+    backup_root: str,
+    progress_cb: Optional[Callable[[Dict[str, object]], None]] = None,
+) -> Tuple[List[str], List[Tuple[str, str]]]:
+    """Delete orphan files declared by manifest, backing them up first.
+
+    Returns ``(removed_rels, backups)`` so the caller can restore on rollback.
+    """
+    if not rels:
+        return [], []
+    seen: set = set()
+    ordered: List[str] = []
+    for rel in rels:
+        if not isinstance(rel, str):
+            continue
+        key = rel.replace("\\", "/").strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(rel)
+
+    removed: List[str] = []
+    backups: List[Tuple[str, str]] = []
+    total = len(ordered)
+    _emit(
+        progress_cb,
+        phase="cleanup",
+        step=3,
+        headline="正在清理孤儿文件",
+        detail=f"manifest 标记 {total} 项",
+        progress=0.0,
+        indeterminate=False,
+    )
+    for index, rel in enumerate(ordered, 1):
+        # Stash backup so rollback can restore.
+        try:
+            norm = _normalize_rel(rel)
+        except Exception:
+            norm = rel
+        abs_path = os.path.abspath(os.path.join(base, norm))
+        if os.path.isfile(abs_path):
+            try:
+                backup_path = os.path.join(backup_root, "__removed__", norm)
+                os.makedirs(os.path.dirname(backup_path) or backup_root, exist_ok=True)
+                shutil.copy2(abs_path, backup_path)
+                backups.append((norm, backup_path))
+            except Exception:
+                pass
+        ok, reason = _safe_remove_orphan(base, rel)
+        if ok:
+            removed.append(rel)
+            _log(f"removed orphan {rel} ({reason})", base)
+        else:
+            _log(f"skip orphan {rel}: {reason}", base)
+        _emit(
+            progress_cb,
+            phase="cleanup",
+            step=3,
+            headline="正在清理孤儿文件",
+            detail=f"{rel}",
+            progress=float(index) / float(total),
+            indeterminate=False,
+        )
+    return removed, backups
 
 
 def _safe_remove_tree(path: str, base: str) -> bool:
@@ -687,6 +820,30 @@ def run_apply_flow(
             can_close=True,
         )
         return 3
+
+    # v2.4.32: orphan cleanup driven by manifest.removed_files (preferred) or
+    # the in-zip __remove_files__.json sidecar (fallback for legacy meta).
+    removed_hints: List[str] = []
+    raw_removed = meta.get("removed_files")
+    if isinstance(raw_removed, list):
+        for entry in raw_removed:
+            if isinstance(entry, str) and entry.strip():
+                removed_hints.append(entry.strip())
+    if not removed_hints:
+        removed_hints = _read_zip_remove_hints(package_path)
+    if removed_hints:
+        backup_root = os.path.join(base, "backup", version or "unknown")
+        try:
+            removed_rels, removed_backups = _apply_removed_files(
+                base, removed_hints, backup_root, progress_cb=progress_cb,
+            )
+            backed_up.extend(removed_backups)
+            _log(
+                f"orphan cleanup: removed {len(removed_rels)} of {len(removed_hints)} hints",
+                base,
+            )
+        except Exception as exc:
+            _log(f"orphan cleanup failed (non-fatal): {exc}", base)
 
     _cleanup_staging(package_path, pending_path)
 

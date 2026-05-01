@@ -69,6 +69,157 @@ cpdef tuple read_varint(object data, Py_ssize_t pos):
     return _read_varint_u64(src, pos)
 
 
+cpdef long long varint_to_int64(unsigned long long val):
+    """Two's-complement reinterpretation of a 64-bit varint."""
+    if val > 0x7FFFFFFFFFFFFFFFULL:
+        return <long long>(val - (1ULL << 63)) - (1LL << 63)
+    return <long long>val
+
+
+cpdef int varint_to_int32(unsigned long long val):
+    """Two's-complement reinterpretation of a 32-bit varint payload."""
+    cdef unsigned int u = <unsigned int>(val & 0xFFFFFFFFULL)
+    if u > 0x7FFFFFFFu:
+        return <int>(u - 0x80000000u) - 0x80000000
+    return <int>u
+
+
+cpdef str decode_string_from_raw(object raw):
+    """Match ``protobufjs reader.string()``: ``[varint length][utf-8 bytes]``.
+
+    Falls back to decoding the entire payload as utf-8 when the leading
+    varint length is invalid or absent (matches the legacy Python helper).
+    """
+    if raw is None:
+        return ''
+    cdef const unsigned char[:] src = raw
+    cdef Py_ssize_t length = src.shape[0]
+    if length <= 0:
+        return ''
+    cdef object str_len_obj
+    cdef Py_ssize_t pos = 0
+    cdef Py_ssize_t end
+    cdef Py_ssize_t str_len
+    try:
+        str_len_obj, pos = _read_varint_u64(src, 0)
+        str_len = <Py_ssize_t>int(str_len_obj)
+        end = pos + str_len
+        if str_len > 0 and end <= length:
+            return bytes(raw[pos:end]).decode('utf-8', 'ignore')
+    except Exception:
+        pass
+    try:
+        return bytes(raw).decode('utf-8', 'ignore')
+    except Exception:
+        return ''
+
+
+cpdef bint is_sane_attr_stamina_max(object value):
+    """STA cap acceptance heuristic from packet_parser.
+
+    Mirrors `_is_sane_attr_stamina_max`: ``0 < value <= 1300``.
+    """
+    cdef long long v
+    try:
+        v = <long long>int(value or 0)
+    except Exception:
+        return False
+    return v > 0 and v <= 1300
+
+
+cpdef object decode_dirty_energy_value(object raw_u32, object raw_f32,
+                                       object stamina_max=None):
+    """Pick the sane stamina value out of a dirty-stream pair (u32/f32).
+
+    Matches `_decode_dirty_energy_value`: prefer f32 when finite and sensible,
+    otherwise the u32 if within the cap. Returns ``None`` on rejection.
+    """
+    cdef double f32
+    cdef long long u32
+    cdef long long sta_max_int = 0
+    cdef double max_allowed
+    try:
+        u32 = <long long>int(raw_u32 or 0)
+    except Exception:
+        u32 = 0
+    try:
+        f32 = <double>float(raw_f32 if raw_f32 is not None else 0.0)
+    except Exception:
+        f32 = 0.0
+    if stamina_max is not None:
+        try:
+            sta_max_int = <long long>int(stamina_max or 0)
+        except Exception:
+            sta_max_int = 0
+    if sta_max_int > 0:
+        max_allowed = <double>sta_max_int * 1.2
+        if max_allowed < 20000.0:
+            max_allowed = 20000.0
+    else:
+        max_allowed = 20000.0
+
+    # math.isfinite check inlined for f32.
+    cdef bint finite = not (f32 != f32 or f32 > 1e308 or f32 < -1e308)
+    if finite:
+        if 0.0 <= f32 <= 1.05 and sta_max_int > 0:
+            return float(f32)
+        if 0.01 <= f32 <= max_allowed:
+            return float(f32)
+        if f32 == 0.0:
+            return 0.0
+    if 0 <= u32 <= <long long>max_allowed:
+        return float(u32)
+    return None
+
+
+cpdef int normalize_season_medal_level(object raw_level):
+    """Clamp a season-medal level to ``>= 0`` ints (mirrors Python helper)."""
+    cdef long long v
+    try:
+        v = <long long>int(raw_level or 0)
+    except Exception:
+        return 0
+    if v < 0:
+        return 0
+    return <int>v
+
+
+# ── level_extra source priority (fixed table, queried per dirty packet) ──
+_LEVEL_EXTRA_SOURCE_PRIORITY = {
+    'deep_sleep': 200,
+    'season_attr': 100,
+    'season_attr_lv': 100,
+    'season_medal': 50,
+    'monster_hunt': 10,
+    'battlepass': 5,
+    'battlepass_data': 3,
+}
+
+
+cpdef int level_extra_source_priority(object source):
+    """Lookup priority for a level_extra source name (0 when unknown)."""
+    if source is None:
+        return 0
+    cdef str s = str(source) if not isinstance(source, str) else source
+    return <int>_LEVEL_EXTRA_SOURCE_PRIORITY.get(s, 0)
+
+
+cpdef bint attrs_match_monster_hint(list attr_ids, frozenset hint_set):
+    """Return True when any element of ``attr_ids`` is in ``hint_set``.
+
+    Used by `_attrs_look_monster_like` after Python collects the attr ids
+    from a pb2 ``AttrCollection``. The membership test is a single C-level
+    set lookup per id.
+    """
+    if not attr_ids or not hint_set:
+        return False
+    cdef object x
+    for x in attr_ids:
+        if x in hint_set:
+            return True
+    return False
+
+
 cpdef int decode_int32_from_raw(object raw):
     """Decode the project's raw int32 varint payload."""
     cdef const unsigned char[:] src = raw
