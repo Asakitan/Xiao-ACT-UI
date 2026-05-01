@@ -131,6 +131,193 @@ cpdef tuple panel_float_offsets(double t, double phase, double amp):
     return (dx, dy)
 
 
+cpdef tuple breath_offsets(double t):
+    """Return ``(dx, dy)`` integer offsets for the floating widget idle breath.
+
+    Mirrors `_breath_step`'s ``int(round(sin(t*1.25)*3.0))`` /
+    ``int(round(sin(t*2.1)*2.0))``. Runs at 60 fps so the avoided per-call
+    Python overhead (math.sin → builtin int → round) adds up.
+    """
+    cdef double dx_f = sin(t * 1.25) * 3.0
+    cdef double dy_f = sin(t * 2.1) * 2.0
+    # Match Python's built-in round() (banker's rounding to nearest even is
+    # close enough for whole-pixel deltas; use simple truncation toward
+    # nearest with explicit add 0.5 / sub 0.5 for sign).
+    cdef int dx
+    cdef int dy
+    if dx_f >= 0.0:
+        dx = <int>(dx_f + 0.5)
+    else:
+        dx = <int>(dx_f - 0.5)
+    if dy_f >= 0.0:
+        dy = <int>(dy_f + 0.5)
+    else:
+        dy = <int>(dy_f - 0.5)
+    return (dx, dy)
+
+
+cdef inline int _max_int(int a, int b):
+    return a if a > b else b
+
+
+cdef inline int _round_pos(double v):
+    if v >= 0.0:
+        return <int>(v + 0.5)
+    return <int>(v - 0.5)
+
+
+cpdef object compute_skillfx_layout(object client_rect, list slot_rects,
+                                    list fallback_slot_rects=None):
+    """Compute the SkillFX overlay window/viewport/slot layout.
+
+    Inputs:
+        client_rect: ``(left, top, right, bottom)`` of the game client.
+        slot_rects: list of dicts ``{'index': int, 'screen_rect': {...}}``
+            already mapped into screen coords. Pass empty when not yet
+            available; we'll fall back to the static layout below.
+        fallback_slot_rects: precomputed default ``{'index', 'screen_rect'}``
+            list (e.g. from ``get_skill_slot_rects``). Used only when
+            ``slot_rects`` is empty.
+
+    Returns ``None`` when no slots are available, otherwise the same dict
+    shape ``_get_skillfx_layout`` produced previously (window / viewport /
+    slots).
+    """
+    if not client_rect:
+        return None
+    cdef int client_left, client_top, client_right, client_bottom
+    try:
+        client_left = <int>client_rect[0]
+        client_top = <int>client_rect[1]
+        client_right = <int>client_rect[2]
+        client_bottom = <int>client_rect[3]
+    except Exception:
+        return None
+    cdef int client_w = _max_int(1, client_right - client_left)
+    cdef int client_h = _max_int(1, client_bottom - client_top)
+
+    cdef list slots = []
+    cdef object item
+    cdef object rect
+    cdef int sx, sy, sw, sh, idx
+
+    if slot_rects:
+        for item in slot_rects:
+            rect = item.get('screen_rect') if isinstance(item, dict) else None
+            if rect is None:
+                continue
+            try:
+                sx = <int>int(rect.get('x', 0))
+                sy = <int>int(rect.get('y', 0))
+                sw = <int>int(rect.get('w', 0))
+                sh = <int>int(rect.get('h', 0))
+                idx = <int>int(item.get('index', 0) or 0)
+            except Exception:
+                continue
+            if idx <= 0 or sw <= 0 or sh <= 0:
+                continue
+            slots.append({
+                'index': idx,
+                'screen_rect': {'x': sx, 'y': sy, 'w': sw, 'h': sh},
+            })
+
+    if not slots and fallback_slot_rects:
+        for item in fallback_slot_rects:
+            try:
+                idx = <int>int(item.get('index', 0) or 0)
+                rect = item.get('screen_rect') if isinstance(item, dict) else None
+                if rect is None:
+                    continue
+                sx = <int>int(rect.get('x', 0))
+                sy = <int>int(rect.get('y', 0))
+                sw = <int>int(rect.get('w', 0))
+                sh = <int>int(rect.get('h', 0))
+            except Exception:
+                continue
+            if idx <= 0 or sw <= 0 or sh <= 0:
+                continue
+            slots.append({
+                'index': idx,
+                'screen_rect': {'x': sx, 'y': sy, 'w': sw, 'h': sh},
+            })
+
+    if not slots:
+        return None
+
+    cdef int min_x = (<dict>slots[0])['screen_rect']['x']
+    cdef int max_y = (<dict>slots[0])['screen_rect']['y'] + (<dict>slots[0])['screen_rect']['h']
+    cdef object s
+    cdef int sxx, syy, shh
+    for s in slots:
+        sxx = (<dict>s)['screen_rect']['x']
+        syy = (<dict>s)['screen_rect']['y']
+        shh = (<dict>s)['screen_rect']['h']
+        if sxx < min_x:
+            min_x = sxx
+        if syy + shh > max_y:
+            max_y = syy + shh
+
+    cdef int pad_x = _max_int(18, _round_pos(<double>client_w * 0.012))
+    cdef int pad_y = _max_int(18, _round_pos(<double>client_h * 0.016))
+    cdef int pad_left = _max_int(96, _round_pos(<double>client_w * 0.055))
+    cdef int pad_right = _max_int(84, _round_pos(<double>client_w * 0.044))
+    cdef int win_x = min_x - pad_left
+    if win_x < 0:
+        win_x = 0
+    cdef int win_y = client_top
+    if win_y < 0:
+        win_y = 0
+    cdef int width = (client_right - win_x) + pad_right
+    if width < 420:
+        width = 420
+    cdef int height = (max_y - win_y) + pad_y
+    if height < 220:
+        height = 220
+    cdef int callout_w = _max_int(440, _round_pos(<double>client_w * 0.29))
+    cdef int callout_h = _max_int(128, _round_pos(<double>client_h * 0.115))
+    cdef int callout_margin_x = _max_int(28, _round_pos(<double>client_w * 0.022))
+    cdef int callout_margin_y = _max_int(24, _round_pos(<double>client_h * 0.040))
+    cdef int callout_x = width - callout_w - callout_margin_x
+    if callout_x < callout_margin_x:
+        callout_x = callout_margin_x
+    cdef int callout_y = callout_margin_y
+
+    cdef list payload_slots = []
+    cdef int rxw, ryw, rww, rhw
+    for s in slots:
+        rxw = (<dict>s)['screen_rect']['x']
+        ryw = (<dict>s)['screen_rect']['y']
+        rww = (<dict>s)['screen_rect']['w']
+        rhw = (<dict>s)['screen_rect']['h']
+        idx = (<dict>s)['index']
+        payload_slots.append({
+            'index': idx,
+            'rect': {'x': rxw - win_x, 'y': ryw - win_y, 'w': rww, 'h': rhw},
+        })
+    payload_slots.sort(key=_slot_index_key)
+
+    cdef int padding_x_final = pad_x
+    if pad_left > padding_x_final:
+        padding_x_final = pad_left
+    if pad_right > padding_x_final:
+        padding_x_final = pad_right
+
+    return {
+        'window': {'x': win_x, 'y': win_y, 'w': width, 'h': height},
+        'viewport': {
+            'width': width, 'height': height,
+            'padding_x': padding_x_final, 'padding_y': pad_y,
+            'callout': {'x': callout_x, 'y': callout_y,
+                        'w': callout_w, 'h': callout_h},
+        },
+        'slots': payload_slots,
+    }
+
+
+cdef inline object _slot_index_key(dict s):
+    return s['index']
+
+
 cpdef long long pick_burst_trigger_slot(object slots, object watched,
                                         long long prev_slot):
     """Burst-anchor selection state machine.
