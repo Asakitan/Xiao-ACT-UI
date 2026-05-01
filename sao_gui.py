@@ -80,6 +80,9 @@ from sao_gui_commander import CommanderPanel
 from sao_gui_profile_editors import AutoKeyDetailPanel, BossRaidDetailPanel
 from perf_probe import probe as _probe, phase as _phase_trace, gauge as _perf_gauge
 
+# v2.4.31: high-frequency UI helpers live in cython.
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+
 try:
     import pynput.keyboard as pynput_kb
     from pynput.keyboard import Key, KeyCode
@@ -2700,13 +2703,12 @@ class SAOPlayerGUI:
     def _is_dead_state(self, gs) -> bool:
         if gs is None:
             return False
-        try:
-            hp_max = int(getattr(gs, 'hp_max', 0) or 0)
-            hp_current = int(getattr(gs, 'hp_current', 0) or 0)
-            hp_pct = float(getattr(gs, 'hp_pct', 1.0) or 0.0)
-        except Exception:
-            return False
-        return hp_max > 0 and hp_current <= 0 and hp_pct <= 0.001
+        # v2.4.31: predicate moved to cython.
+        return bool(_CY_UI.is_dead_state(
+            getattr(gs, 'hp_max', 0),
+            getattr(gs, 'hp_current', 0),
+            getattr(gs, 'hp_pct', 1.0),
+        ))
 
     def _bump_boss_hp_target_hold(self, reason: str = ''):
         target_uuid = int(getattr(self, '_bb_last_target_uuid', 0) or 0)
@@ -2731,15 +2733,18 @@ class SAOPlayerGUI:
     def _boss_monster_usable(self, monster) -> bool:
         if not monster:
             return False
+        # v2.4.31: pure predicate in cython; keep the side effect (UUID-reuse
+        # revive) here so we don't pass the monster handle to native code.
         try:
-            hp = int(getattr(monster, 'hp', 0) or 0)
-            max_hp = int(getattr(monster, 'max_hp', 0) or 0)
-            is_dead = bool(getattr(monster, 'is_dead', False))
-            if is_dead and hp > 0:
+            usable, revive = _CY_UI.boss_monster_usable(
+                getattr(monster, 'hp', 0),
+                getattr(monster, 'max_hp', 0),
+                bool(getattr(monster, 'is_dead', False)),
+            )
+            if revive:
                 monster.is_dead = False
                 monster.last_update = time.time()
-                is_dead = False
-            return (not is_dead) and (max_hp > 0 or hp > 0)
+            return bool(usable)
         except Exception:
             return False
 
@@ -2798,12 +2803,25 @@ class SAOPlayerGUI:
         if _preserve_combat:
             # Same-dungeon layer/map transitions are common during long fights.
             # Keep the live encounter; only force the next overlay tick to refresh.
+            # v2.3.23: clear _bb_recent_targets / _bb_last_target_uuid even on
+            # soft transitions so phantom monsters from the previous layer
+            # drop out of the boss bar candidate set. DPS accumulators stay.
             print(
                 f'[SAO Entity] ↔ 同副本软切换({ _scene_kind or "transition" }/{_scene_reason}) '
-                f'— 保留 BossHP 与 DPS',
+                f'— 保留 DPS, 重置 BossHP 候选',
                 flush=True,
             )
+            self._bb_last_target_uuid = 0
+            self._bb_last_damage_ts = 0.0
+            self._bb_recent_targets = {}
+            self._bb_last_hp_motion_sig = None
+            self._bb_last_hp_motion_ts = 0.0
             self._last_boss_hp_push_sig = None
+            try:
+                if self._boss_hp_overlay:
+                    self._boss_hp_overlay.update({'active': False})
+            except Exception:
+                pass
             try:
                 if self._dps_tracker:
                     self._dps_tracker.invalidate_snapshot_cache()
@@ -3214,64 +3232,17 @@ class SAOPlayerGUI:
         return int(hwnd or 0), rect
 
     def _pick_burst_trigger_slot(self, gs):
+        # v2.4.31: state machine moved to _sao_cy_uihelpers.
         watched = self._get_setting(
             'watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]) or []
-        try:
-            watched = [int(x) for x in watched if int(x) > 0]
-        except Exception:
-            watched = []
-        if not watched:
-            watched = [1]
         slots = getattr(gs, 'skill_slots', []) or []
-        edge_slot = 0; first_ready = 0; first_active = 0; first_low_cd = 0
-        prev_slot = getattr(self, '_last_burst_slot', 0)
-        prev_still_ok = False
-        for slot in slots:
-            if not isinstance(slot, dict):
-                continue
-            try:
-                idx = int(slot.get('index', 0) or 0)
-            except Exception:
-                continue
-            if idx not in watched:
-                continue
-            state = str(slot.get('state', '') or '').strip().lower()
-            try:
-                cd = float(slot.get('cooldown_pct', 1.0) or 1.0)
-            except Exception:
-                cd = 1.0
-            is_ready = state in ('ready', 'active') or cd <= 0.02
-            if bool(slot.get('ready_edge')) and not edge_slot:
-                edge_slot = idx
-            if state == 'ready' and not first_ready:
-                first_ready = idx
-            if state == 'active' and not first_active:
-                first_active = idx
-            if cd <= 0.02 and not first_low_cd:
-                first_low_cd = idx
-            if idx == prev_slot and is_ready:
-                prev_still_ok = True
-        if edge_slot:
-            chosen = edge_slot
-        elif prev_still_ok and prev_slot:
-            chosen = prev_slot
-        elif first_ready:
-            chosen = first_ready
-        elif first_active:
-            chosen = first_active
-        elif first_low_cd:
-            chosen = first_low_cd
-        else:
-            chosen = 0
+        prev_slot = int(getattr(self, '_last_burst_slot', 0) or 0)
+        chosen = int(_CY_UI.pick_burst_trigger_slot(slots, watched, prev_slot))
         self._last_burst_slot = chosen
         return chosen
 
     def _format_level_text(self, level_base: int, level_extra: int) -> str:
-        level_base = int(level_base or self._level or 1)
-        level_extra = int(level_extra or 0)
-        if level_extra > 0 and level_base > 0:
-            return f'{level_base}(+{level_extra})'
-        return str(level_base)
+        return _CY_UI.format_level_text(level_base, level_extra, self._level or 1)
 
     def _reset_sta_offline_state(self):
         self._sta_offline_armed = False
@@ -4117,8 +4088,8 @@ class SAOPlayerGUI:
             t = now_abs - float(entry.get('t0') or now_abs)
             phase = float(entry.get('phase') or 0.0)
             amp = float(entry.get('amp') or 0.0)
-            new_dx = int(amp * math.sin(t * 0.82 + phase))
-            new_dy = int(amp * math.sin(t * 0.61 + phase + 1.2))
+            # v2.4.31: sin offsets in cython (libc.math.sin, no Python call).
+            new_dx, new_dy = _CY_UI.panel_float_offsets(t, phase, amp)
             if new_dx != old_dx or new_dy != old_dy:
                 try:
                     panel.geometry(f'+{int(base_x) + new_dx}+{int(base_y) + new_dy}')
@@ -4252,16 +4223,8 @@ class SAOPlayerGUI:
     # ══════════════════════════════════════════════
     @staticmethod
     def _session_int(value, default: int = 0) -> int:
-        try:
-            if value is None:
-                return default
-            return int(value)
-        except Exception:
-            try:
-                text = str(value).strip()
-                return int(text) if text.isdigit() else default
-            except Exception:
-                return default
+        # v2.4.31: cython helper.
+        return int(_CY_UI.session_int(value, default))
 
     def _session_self_uid(self) -> int:
         for source in (
@@ -4344,8 +4307,8 @@ class SAOPlayerGUI:
 
     @staticmethod
     def _format_session_power(value) -> str:
-        value = SAOPlayerGUI._session_int(value, 0)
-        return f'{value:,}' if value > 0 else '--'
+        # v2.4.31: cython helper.
+        return _CY_UI.format_session_power(value)
 
     def _get_session_player_rows(self, sync: bool = True) -> List[Dict[str, Any]]:
         if sync:
@@ -7540,17 +7503,8 @@ class SAOPlayerGUI:
         self._refresh_menu_if_open()
 
     def _normalize_watched_skill_slots(self, slots):
-        normalized = []
-        seen = set()
-        for raw in list(slots or []):
-            try:
-                slot = int(raw)
-            except Exception:
-                continue
-            if 1 <= slot <= 9 and slot not in seen:
-                seen.add(slot)
-                normalized.append(slot)
-        return normalized
+        # v2.4.31: cython helper.
+        return _CY_UI.normalize_watched_skill_slots(slots)
 
     def _reset_burst_tracking_state(self):
         self._last_burst_ready = False

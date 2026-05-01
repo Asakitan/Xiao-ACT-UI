@@ -49,157 +49,15 @@ def _safe_int(v, default: int = 0) -> int:
 
 
 # ═══════════════════════════════════════════════
-#  Per-Skill Stats
+#  Per-Skill / Per-Entity Stats
 # ═══════════════════════════════════════════════
+# v2.4.30: SkillStats and EntityStats are now Cython cdef classes living in
+# `_sao_cy_combat`. The hot paths (add_damage / add_heal / add_taken / to_dict)
+# run with C-typed fields and no Python attribute lookups. Keep the original
+# names exported so external code (`from dps_tracker import ...`) still works.
 
-class SkillStats:
-    __slots__ = ('skill_id', 'skill_name', 'total', 'hits', 'crit_hits',
-                 'max_hit', 'heal_total', 'heal_hits')
-
-    def __init__(self, skill_id: int, skill_name: str = ''):
-        self.skill_id = skill_id
-        self.skill_name = skill_name or str(skill_id)
-        self.total = 0
-        self.hits = 0
-        self.crit_hits = 0
-        self.max_hit = 0
-        self.heal_total = 0
-        self.heal_hits = 0
-
-    def add_damage(self, value: int, is_crit: bool = False):
-        self.total += value
-        self.hits += 1
-        if is_crit:
-            self.crit_hits += 1
-        if value > self.max_hit:
-            self.max_hit = value
-
-    def add_heal(self, value: int):
-        self.heal_total += value
-        self.heal_hits += 1
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            'skill_id': self.skill_id,
-            'skill_name': self.skill_name,
-            'total': self.total,
-            'hits': self.hits,
-            'crit_hits': self.crit_hits,
-            'crit_rate': round(self.crit_hits / max(self.hits, 1), 3),
-            'max_hit': self.max_hit,
-            'heal_total': self.heal_total,
-            'heal_hits': self.heal_hits,
-        }
-
-
-# ═══════════════════════════════════════════════
-#  Per-Entity Stats
-# ═══════════════════════════════════════════════
-
-class EntityStats:
-    __slots__ = ('uid', 'name', 'profession', 'fight_point', 'is_self',
-                 'damage_total', 'damage_hits', 'damage_crit_hits',
-                 'heal_total', 'heal_hits',
-                 'taken_total', 'taken_hits',
-                 'first_damage_time', 'last_damage_time',
-                 'skills', 'max_hit', 'created_at')
-
-    def __init__(self, uid: int, name: str = '', profession: str = '',
-                 is_self: bool = False, fight_point: int = 0):
-        self.uid = uid
-        self.name = name or f'Player_{uid}'
-        self.profession = profession
-        self.fight_point = fight_point
-        self.is_self = is_self
-        self.damage_total = 0
-        self.damage_hits = 0
-        self.damage_crit_hits = 0
-        self.heal_total = 0
-        self.heal_hits = 0
-        self.taken_total = 0
-        self.taken_hits = 0
-        self.first_damage_time = 0.0
-        self.last_damage_time = 0.0
-        self.skills: Dict[int, SkillStats] = {}
-        self.max_hit = 0
-        self.created_at = time.time()
-
-    def add_damage(self, skill_id: int, value: int, is_crit: bool = False,
-                   skill_name: str = '', timestamp: float = 0.0):
-        self.damage_total += value
-        self.damage_hits += 1
-        if is_crit:
-            self.damage_crit_hits += 1
-        if value > self.max_hit:
-            self.max_hit = value
-        if not self.first_damage_time:
-            self.first_damage_time = timestamp or time.time()
-        self.last_damage_time = timestamp or time.time()
-        # Per-skill
-        sk = self.skills.get(skill_id)
-        if not sk:
-            sk = SkillStats(skill_id, skill_name)
-            self.skills[skill_id] = sk
-        sk.add_damage(value, is_crit)
-
-    def add_heal(self, skill_id: int, value: int, skill_name: str = '',
-                 timestamp: float = 0.0):
-        self.heal_total += value
-        self.heal_hits += 1
-        if not self.first_damage_time:
-            self.first_damage_time = timestamp or time.time()
-        self.last_damage_time = timestamp or time.time()
-        sk = self.skills.get(skill_id)
-        if not sk:
-            sk = SkillStats(skill_id, skill_name)
-            self.skills[skill_id] = sk
-        sk.add_heal(value)
-
-    def add_taken(self, value: int):
-        self.taken_total += value
-        self.taken_hits += 1
-
-    @property
-    def elapsed_s(self) -> float:
-        if self.first_damage_time and self.last_damage_time:
-            return max(0.001, self.last_damage_time - self.first_damage_time)
-        return 0.001
-
-    @property
-    def dps(self) -> int:
-        return int(self.damage_total / self.elapsed_s) if self.damage_total else 0
-
-    @property
-    def hps(self) -> int:
-        return int(self.heal_total / self.elapsed_s) if self.heal_total else 0
-
-    def to_dict(self, include_skills: bool = False) -> Dict[str, Any]:
-        d = {
-            'uid': self.uid,
-            'name': self.name,
-            'profession': self.profession,
-            'fight_point': self.fight_point,
-            'is_self': self.is_self,
-            'damage_total': self.damage_total,
-            'damage_hits': self.damage_hits,
-            'damage_crit_hits': self.damage_crit_hits,
-            'crit_rate': round(self.damage_crit_hits / max(self.damage_hits, 1), 3),
-            'heal_total': self.heal_total,
-            'heal_hits': self.heal_hits,
-            'taken_total': self.taken_total,
-            'taken_hits': self.taken_hits,
-            'dps': self.dps,
-            'hps': self.hps,
-            'max_hit': self.max_hit,
-            'elapsed_s': round(self.elapsed_s, 1),
-        }
-        if include_skills:
-            d['skills'] = sorted(
-                [sk.to_dict() for sk in self.skills.values()],
-                key=lambda s: s['total'],
-                reverse=True,
-            )
-        return d
+SkillStats = _CY_COMBAT.CySkillStats
+EntityStats = _CY_COMBAT.CyEntityStats
 
 
 # ═══════════════════════════════════════════════
@@ -439,14 +297,15 @@ class DpsTracker:
         self._dirty = True
 
     def _track_big_hit_fx_locked(self, entity: EntityStats, damage: int, timestamp: float):
-        if damage < self.BIG_HIT_THRESHOLD:
+        # v2.4.30: tier classification is in cython.
+        emit, tier = _CY_COMBAT.classify_big_hit_tier(
+            damage,
+            self.BIG_HIT_THRESHOLD,
+            self.MEGA_HIT_THRESHOLD,
+            self.STARBURST_HIT_THRESHOLD,
+        )
+        if not emit:
             return
-        if damage >= self.STARBURST_HIT_THRESHOLD:
-            tier = 'starburst'
-        elif damage >= self.MEGA_HIT_THRESHOLD:
-            tier = 'mega'
-        else:
-            tier = 'impact'
         self._hit_fx_seq += 1
         self._last_hit_fx = {
             'seq': self._hit_fx_seq,
@@ -567,31 +426,15 @@ class DpsTracker:
             if self._encounter_start else 0.001
 
         now = time.time()
-        # Remove players who have never dealt damage/heal after 5 seconds
-        _IDLE_REMOVE_S = 5.0
-        entities = sorted(
-            [e.to_dict(include_skills=include_skills)
-             for e in self._entities.values()
-             if (e.damage_total > 0 or e.heal_total > 0
-                 or e.is_self
-                 or (now - e.created_at) < _IDLE_REMOVE_S)],
-            key=lambda e: e['damage_total'],
-            reverse=True,
+        # v2.4.30: filter+serialize+sort+pct fill in cython.
+        entities = _CY_COMBAT.build_entity_snapshot(
+            self._entities,
+            now,
+            5.0,                        # idle remove (s) for never-acted entries
+            bool(include_skills),
+            self._player_cache,
+            int(self._total_damage),
         )
-
-        max_damage = entities[0]['damage_total'] if entities else 0
-        for e in entities:
-            e['damage_pct'] = round(
-                e['damage_total'] / max(self._total_damage, 1), 3
-            )
-            e['bar_pct'] = round(
-                e['damage_total'] / max(max_damage, 1), 3
-            )
-            # Fill missing fight_point from cache
-            if not e.get('fight_point'):
-                cached = self._player_cache.get(str(e.get('uid', 0)))
-                if cached and cached.get('fight_point'):
-                    e['fight_point'] = int(cached['fight_point'])
 
         display_damage = self._total_damage_boss if (
             self._boss_uuid and self._total_damage_boss > 0

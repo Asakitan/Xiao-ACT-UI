@@ -43,6 +43,10 @@ extensions = [
         name='_sao_cy_skillfx',
         sources=[os.path.join(HERE, '_sao_cy_skillfx.pyx')],
     ),
+    Extension(
+        name='_sao_cy_uihelpers',
+        sources=[os.path.join(HERE, '_sao_cy_uihelpers.pyx')],
+    ),
 ]
 
 

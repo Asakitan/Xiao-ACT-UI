@@ -1534,7 +1534,15 @@ class PacketParser:
         self._last_soft_scene_restart_ts = now
         old_uuid = self._current_uuid
         self._current_uuid = 0
-        logger.info(f'[Parser] Soft scene restart: {reason}, cleared current_uuid={old_uuid}')
+        # v2.3.23: prune stale monsters that haven't been refreshed for >30 s.
+        # SyncNearEntities Disappear packets are not always reliable across
+        # restarts; without this purge the boss bar can adopt phantom monsters
+        # from the previous instance via `_bb_recent_targets`.
+        purged = self._purge_stale_monsters_locked(30.0)
+        logger.info(
+            f'[Parser] Soft scene restart: {reason}, cleared current_uuid={old_uuid}, '
+            f'purged {purged} stale monsters'
+        )
         print(
             f'[Parser] ♻ 同场景重开: {reason}, 等下一次伤害再重置 DPS/BossHP',
             flush=True,
@@ -1557,9 +1565,14 @@ class PacketParser:
         self._last_soft_scene_transition_ts = now
         old_uuid = self._current_uuid
         self._current_uuid = 0
+        # v2.3.23: prune stale monsters that haven't been refreshed for >15 s.
+        # Layer/sub-map transitions move us to a new region with new monsters;
+        # the stale entries from the old layer must not survive into the new
+        # boss-bar candidate list.
+        purged = self._purge_stale_monsters_locked(15.0)
         logger.info(
             f'[Parser] Soft scene transition: {reason}, '
-            f'cleared current_uuid={old_uuid}, preserve combat'
+            f'cleared current_uuid={old_uuid}, purged {purged} stale monsters, preserve combat'
         )
         print(
             f'[Parser] ↔ 同副本小地图/分层切换: {reason}, 保留 DPS/BossHP 遭遇战',
@@ -1572,6 +1585,36 @@ class PacketParser:
             old_scene_key=old_scene_key,
             new_scene_key=new_scene_key,
         )
+
+    def _purge_stale_monsters_locked(self, ttl_s: float) -> int:
+        """Drop monsters that have not been updated for at least `ttl_s` seconds.
+
+        Returns the number of evicted entries. Saves each evicted monster's
+        template_id → max_hp into `_monster_hp_cache` first so an Appear
+        packet for the same template can rehydrate max_hp.
+        """
+        if not self._monsters:
+            return 0
+        now = time.time()
+        cutoff = now - max(0.0, float(ttl_s))
+        stale_uuids = []
+        for uuid, m in self._monsters.items():
+            last = float(getattr(m, 'last_update', 0.0) or 0.0)
+            if last and last < cutoff:
+                stale_uuids.append(uuid)
+        for uuid in stale_uuids:
+            m = self._monsters.get(uuid)
+            if not m:
+                continue
+            if m.template_id > 0 and m.max_hp > 0:
+                self._monster_hp_cache[m.template_id] = m.max_hp
+            self._monsters.pop(uuid, None)
+        if stale_uuids:
+            print(
+                f'[Parser] 清理 {len(stale_uuids)} 个过期怪物 (>{ttl_s:.0f}s 未更新)',
+                flush=True,
+            )
+        return len(stale_uuids)
 
     def get_monsters(self) -> Dict[int, MonsterData]:
         """Return the current monster tracking dict (uuid → MonsterData)."""
@@ -3448,6 +3491,12 @@ class PacketParser:
             return
 
         # ── Disappear ──
+        # v2.3.23: Treat all non-Dead disappear types (FAR_AWAY/REGION/TELEPORT/
+        # ENTER_VEHICLE/ENTER_RIDE) as "no longer relevant in current view" and
+        # evict from `_monsters`. Previously only EDisappearDead updated state,
+        # so out-of-range monsters lingered in cache → boss bar would re-display
+        # them via `_bb_recent_targets` lookups after map switches.
+        # Save template_id → max_hp first so future Appear can rehydrate.
         for de in msg.Disappear:
             uuid = de.Uuid
             if not uuid:
@@ -3463,7 +3512,13 @@ class PacketParser:
                     logger.info(f'[Parser] Monster DEAD (disappear) uuid={uuid} name={monster.name!r}')
                     self._notify_monster(monster)
                 else:
-                    logger.debug(f'[Parser] Monster disappeared type={disappear_type} uuid={uuid}')
+                    if monster.template_id > 0 and monster.max_hp > 0:
+                        self._monster_hp_cache[monster.template_id] = monster.max_hp
+                    logger.info(
+                        f'[Parser] Monster left view type={disappear_type} '
+                        f'uuid={uuid} name={monster.name!r} — evicting from cache'
+                    )
+                    self._monsters.pop(uuid, None)
 
         # ── Appear ──
         player_uids_appeared = []
