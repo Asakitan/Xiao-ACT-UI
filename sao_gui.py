@@ -2811,25 +2811,12 @@ class SAOPlayerGUI:
         if _preserve_combat:
             # Same-dungeon layer/map transitions are common during long fights.
             # Keep the live encounter; only force the next overlay tick to refresh.
-            # v2.3.23: clear _bb_recent_targets / _bb_last_target_uuid even on
-            # soft transitions so phantom monsters from the previous layer
-            # drop out of the boss bar candidate set. DPS accumulators stay.
             print(
                 f'[SAO Entity] ↔ 同副本软切换({ _scene_kind or "transition" }/{_scene_reason}) '
-                f'— 保留 DPS, 重置 BossHP 候选',
+                    f'— 保留 BossHP 与 DPS',
                 flush=True,
             )
-            self._bb_last_target_uuid = 0
-            self._bb_last_damage_ts = 0.0
-            self._bb_recent_targets = {}
-            self._bb_last_hp_motion_sig = None
-            self._bb_last_hp_motion_ts = 0.0
             self._last_boss_hp_push_sig = None
-            try:
-                if self._boss_hp_overlay:
-                    self._boss_hp_overlay.update({'active': False})
-            except Exception:
-                pass
             try:
                 if self._dps_tracker:
                     self._dps_tracker.invalidate_snapshot_cache()
