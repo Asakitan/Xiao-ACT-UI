@@ -2514,12 +2514,23 @@ class SAOWebViewGUI:
         if _preserve_combat:
             # Same-dungeon layer/map transitions can happen mid-fight. Do not
             # wipe the live encounter; just invalidate the next boss-bar push.
+            # v2.3.23: clear _bb_recent_targets / _bb_last_target_uuid even on
+            # soft transitions so the boss bar drops monsters that belong to
+            # the previous layer. The next damage event will repopulate the
+            # bar with the live target. DPS accumulators are preserved.
             print(
                 f'[SAO] ↔ 同副本软切换({ _scene_kind or "transition" }/{_scene_reason}) '
-                f'— 保留 boss bar 和 DPS 追踪',
+                f'— 保留 DPS, 重置 boss bar 候选',
                 flush=True,
             )
+            self._bb_last_target_uuid = 0
+            self._bb_last_damage_ts = 0.0
+            self._bb_recent_targets = {}
             self._last_boss_bar_sig = None
+            try:
+                self._eval_boss_hp('updateBossBar({active:false})')
+            except Exception:
+                pass
             try:
                 if self._dps_tracker:
                     self._dps_tracker.invalidate_snapshot_cache()

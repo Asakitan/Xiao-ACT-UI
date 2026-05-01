@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.28"
+APP_VERSION = "2.4.31"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -372,6 +372,29 @@ USE_GPU_OVERLAY = True
 # pipeline failure. Set `SAO_SKILLFX_GPU=0` to force the legacy CPU
 # path for diagnostics.
 USE_GPU_SKILLFX = True
+# v2.4.31:
+#   New `_sao_cy_uihelpers` extension. The recognition-loop / panel-float
+#   pure-logic helpers in `sao_gui.py` (`_pick_burst_trigger_slot`,
+#   `_panel_float_shared_tick` sin offsets, `_format_level_text`,
+#   `_normalize_watched_skill_slots`, `_is_dead_state`, `_boss_monster_usable`,
+#   `_session_int`, `_format_session_power`) now route through cython.
+#   Side-effecting parts (Tk/PIL widget calls, monster.is_dead revive flip)
+#   stay in Python; the cython side returns intent flags only.
+# v2.4.30:
+#   Move `dps_tracker.SkillStats` / `EntityStats` and the per-tick snapshot
+#   builder into `_sao_cy_combat`. `add_damage`, `add_heal`, `add_taken`,
+#   `to_dict`, `build_entity_snapshot`, and big-hit FX tier classification now
+#   run as Cython `cdef class` methods with C-typed fields. The Python module
+#   re-exports the names so external imports stay stable.
+# v2.4.29:
+#   Fix DPS/BossHP not displaying stably and counting phantom HP/monsters after
+#   map switches. SyncNearEntities Disappear of non-Dead types (FAR_AWAY,
+#   REGION, TELEPORT, ENTER_VEHICLE, ENTER_RIDE) now evicts monsters from the
+#   parser cache instead of letting them linger. Soft scene transitions and
+#   restarts purge monsters whose `last_update` is older than 15 / 30 s, and
+#   Entity + WebView soft-scene paths clear `_bb_recent_targets` /
+#   `_bb_last_target_uuid` so the next damage event repopulates the boss bar
+#   with the live target.
 # v2.4.27:
 #   Make Cython accelerators mandatory instead of optional: packet/combat,
 #   pixel premultiply/alpha, packet capture frame parsing, and SkillFX math
