@@ -397,3 +397,147 @@ cpdef long long pick_burst_trigger_slot(object slots, object watched,
     if first_low_cd != 0:
         return first_low_cd
     return 0
+
+
+# ══════════════════════════════════════════════════════════
+#  Phase 4: ULW RGBA → premultiplied BGRA (uint8, no float)
+# ══════════════════════════════════════════════════════════
+
+cpdef void premultiply_rgba_to_bgra(
+    const unsigned char[:, :, :] rgba,
+    unsigned char[:, :, :] bgra,
+) noexcept:
+    """Convert RGBA uint8 image to premultiplied-alpha BGRA uint8 in-place.
+
+    Parameters
+    ----------
+    rgba : memoryview (h, w, 4) uint8 — source RGBA pixels.
+    bgra : memoryview (h, w, 4) uint8 — destination buffer (must be same shape).
+
+    The caller is responsible for allocating ``bgra`` with the correct shape.
+    This function runs with the GIL released for maximum throughput.
+    """
+    cdef Py_ssize_t h = rgba.shape[0]
+    cdef Py_ssize_t w = rgba.shape[1]
+    cdef Py_ssize_t y, x
+    cdef unsigned int r, g, b, a
+    with nogil:
+        for y in range(h):
+            for x in range(w):
+                r = rgba[y, x, 0]
+                g = rgba[y, x, 1]
+                b = rgba[y, x, 2]
+                a = rgba[y, x, 3]
+                # premultiply: channel = channel * alpha / 255
+                # Use (c * a + 127) / 255 for better rounding
+                bgra[y, x, 0] = <unsigned char>((b * a + 127) // 255)  # B
+                bgra[y, x, 1] = <unsigned char>((g * a + 127) // 255)  # G
+                bgra[y, x, 2] = <unsigned char>((r * a + 127) // 255)  # R
+                bgra[y, x, 3] = <unsigned char>a
+
+
+# ══════════════════════════════════════════════════════════
+#  Phase 5: Batch signature building (replaces Python sorted+tuple)
+# ══════════════════════════════════════════════════════════
+
+cpdef tuple build_batch_sig(list batch):
+    """Build a sorted signature tuple from a player roster batch.
+
+    Each element of *batch* is a tuple ``(uid, name, prof, fp, lv)``.
+    Returns ``tuple(sorted(batch))`` — equivalent to the Python code in
+    ``_push_packet_overlays`` but avoids Python-level sort overhead for
+    the common case of small rosters (4-8 players).
+    """
+    if not batch:
+        return ()
+    cdef list copy = list(batch)
+    copy.sort()
+    return tuple(copy)
+
+
+cpdef tuple build_boss_bar_sig(dict data, list additional):
+    """Build the boss-bar overlay signature tuple.
+
+    Mirrors the ``_bb_sig`` construction in ``_push_packet_overlays``.
+    Moves the many ``int()/float()/bool()/round()`` calls into Cython
+    to reduce per-tick Python overhead.
+    """
+    cdef bint active = bool(data.get('active', False))
+    cdef double hp_pct = _safe_f64(data.get('hp_pct'), 0.0)
+    cdef str hp_source = str(data.get('hp_source') or '')
+    cdef long long current_hp = _safe_i64(data.get('current_hp'), 0)
+    cdef long long total_hp = _safe_i64(data.get('total_hp'), 0)
+    cdef bint shield_active = bool(data.get('shield_active', False))
+    cdef double shield_pct = _safe_f64(data.get('shield_pct'), 0.0)
+    cdef long long breaking_stage = _safe_i64(data.get('breaking_stage'), 0)
+    cdef bint has_break_data = bool(data.get('has_break_data', False))
+    cdef double extinction_pct = _safe_f64(data.get('extinction_pct'), 0.0)
+    cdef long long extinction = _safe_i64(data.get('extinction'), 0)
+    cdef long long max_extinction = _safe_i64(data.get('max_extinction'), 0)
+    cdef bint stop_breaking_ticking = bool(data.get('stop_breaking_ticking', False))
+    cdef bint in_overdrive = bool(data.get('in_overdrive', False))
+    cdef bint invincible = bool(data.get('invincible', False))
+    cdef str boss_name = str(data.get('boss_name') or '')
+
+    # Build additional sub-tuple
+    cdef list add_items = []
+    cdef dict u
+    for u_obj in (additional or []):
+        u = <dict>u_obj
+        add_items.append((
+            str(u.get('name') or ''),
+            round(_safe_f64(u.get('hp_pct'), 0.0), 3),
+            round(_safe_f64(u.get('extinction_pct'), 0.0), 3),
+            bool(u.get('has_break_data', False)),
+            <int>_safe_i64(u.get('breaking_stage'), -1),
+            bool(u.get('shield_active', False)),
+            round(_safe_f64(u.get('shield_pct'), 0.0), 3),
+        ))
+
+    return (
+        active,
+        hp_pct,
+        hp_source,
+        current_hp,
+        total_hp,
+        shield_active,
+        shield_pct,
+        breaking_stage,
+        has_break_data,
+        extinction_pct,
+        extinction,
+        max_extinction,
+        stop_breaking_ticking,
+        in_overdrive,
+        invincible,
+        boss_name,
+        tuple(add_items),
+    )
+
+
+cpdef list sort_recent_monsters(list monsters, dict recent_targets):
+    """Sort monster list by (hp_pct DESC, last_damage_ts DESC).
+
+    Mirrors the ``_sort_key`` lambda in ``_push_packet_overlays``.
+    Each element is a monster object with ``.hp``, ``.max_hp``, ``.uuid``
+    attributes.
+    """
+    if not monsters:
+        return []
+    cdef list decorated = []
+    cdef object m
+    cdef long long hp, maxhp
+    cdef double hp_pct, last_ts
+    for m in monsters:
+        hp = _safe_i64(getattr(m, 'hp', 0), 0)
+        maxhp = _safe_i64(getattr(m, 'max_hp', 0), 0)
+        if maxhp <= 0:
+            maxhp = hp if hp > 0 else 1
+        hp_pct = <double>hp / <double>maxhp if maxhp > 0 else 0.0
+        last_ts = _safe_f64(recent_targets.get(getattr(m, 'uuid', 0), 0), 0.0)
+        decorated.append((-hp_pct, -last_ts, m))
+    decorated.sort()
+    cdef list result = []
+    for item in decorated:
+        result.append(item[2])
+    return result

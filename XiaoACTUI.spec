@@ -37,6 +37,7 @@ LOCAL_HIDDENIMPORTS = [
     '_sao_cy_combat',
     '_sao_cy_packet',
     '_sao_cy_skillfx',
+    '_sao_cy_uihelpers',
     'window_effects',
     'install_npcap',
     'sao_updater',

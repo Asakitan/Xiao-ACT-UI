@@ -404,27 +404,36 @@ def _hex_rgba(hex_color: str, alpha: int = 255):
         hex_color = ''.join(ch * 2 for ch in hex_color)
     return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4)) + (alpha,)
 
+# ── PhotoImage cache for panel close buttons (avoid per-panel re-creation) ──
+_close_btn_photo_cache: Dict[str, Tuple[Any, Any]] = {}
+
 
 def _make_panel_close_button(parent, command, bg=_SAO_PANEL_HEADER_BG):
     size = 18
     scale = 4
     sw = size * scale
-    img = Image.new('RGBA', (sw, sw), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+    cache_key = f'{size}_{bg}'
+    cached = _close_btn_photo_cache.get(cache_key)
+    if cached is not None:
+        normal, hover = cached
+    else:
+        img = Image.new('RGBA', (sw, sw), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
 
-    def S(v):
-        return int(round(v * scale))
+        def S(v):
+            return int(round(v * scale))
 
-    draw.line((S(4), S(4), S(14), S(14)), fill=_hex_rgba('#ff707a'), width=max(1, S(2)))
-    draw.line((S(4), S(14), S(14), S(4)), fill=_hex_rgba('#ff707a'), width=max(1, S(2)))
-    normal = ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
+        draw.line((S(4), S(4), S(14), S(14)), fill=_hex_rgba('#ff707a'), width=max(1, S(2)))
+        draw.line((S(4), S(14), S(14), S(4)), fill=_hex_rgba('#ff707a'), width=max(1, S(2)))
+        normal = ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
 
-    img_h = Image.new('RGBA', (sw, sw), (0, 0, 0, 0))
-    draw_h = ImageDraw.Draw(img_h)
-    draw_h.ellipse((S(1), S(1), S(17), S(17)), outline=_hex_rgba('#ff707a', 210), width=max(1, S(1)))
-    draw_h.line((S(4), S(4), S(14), S(14)), fill=_hex_rgba('#ffffff'), width=max(1, S(2)))
-    draw_h.line((S(4), S(14), S(14), S(4)), fill=_hex_rgba('#ffffff'), width=max(1, S(2)))
-    hover = ImageTk.PhotoImage(img_h.resize((size, size), Image.LANCZOS))
+        img_h = Image.new('RGBA', (sw, sw), (0, 0, 0, 0))
+        draw_h = ImageDraw.Draw(img_h)
+        draw_h.ellipse((S(1), S(1), S(17), S(17)), outline=_hex_rgba('#ff707a', 210), width=max(1, S(1)))
+        draw_h.line((S(4), S(4), S(14), S(14)), fill=_hex_rgba('#ffffff'), width=max(1, S(2)))
+        draw_h.line((S(4), S(14), S(14), S(4)), fill=_hex_rgba('#ffffff'), width=max(1, S(2)))
+        hover = ImageTk.PhotoImage(img_h.resize((size, size), Image.LANCZOS))
+        _close_btn_photo_cache[cache_key] = (normal, hover)
 
     lbl = tk.Label(parent, bg=bg, image=normal, cursor='hand2', bd=0, highlightthickness=0)
     lbl._img_normal = normal
@@ -494,14 +503,16 @@ def _update_layered_win(hwnd, rgba_image, overall_alpha=255, dst_pos=None):
     if not wait_until_capture_idle(0.010):
         return False
     w, h = rgba_image.size
-    # RGBA -> 预乘 BGRA (ULW 要求预乘 alpha)
-    arr = np.array(rgba_image, dtype=np.float32)
-    a = arr[:, :, 3:4] / 255.0
-    bgra = np.empty((h, w, 4), dtype=np.uint8)
-    bgra[:, :, 0] = np.clip(arr[:, :, 2] * a[:, :, 0], 0, 255)  # B
-    bgra[:, :, 1] = np.clip(arr[:, :, 1] * a[:, :, 0], 0, 255)  # G
-    bgra[:, :, 2] = np.clip(arr[:, :, 0] * a[:, :, 0], 0, 255)  # R
-    bgra[:, :, 3] = arr[:, :, 3].astype(np.uint8)
+    # RGBA -> 预乘 BGRA (ULW 要求预乘 alpha) — Cython uint8 fast path
+    rgba_arr = np.asarray(rgba_image, dtype=np.uint8)
+    # Reuse preallocated bgra buffer when dimensions match
+    _prev = getattr(_update_layered_win, '_bgra_buf', None)
+    if _prev is not None and _prev.shape[0] == h and _prev.shape[1] == w:
+        bgra = _prev
+    else:
+        bgra = np.empty((h, w, 4), dtype=np.uint8)
+        _update_layered_win._bgra_buf = bgra
+    _CY_UI.premultiply_rgba_to_bgra(rgba_arr, bgra)
 
     bmi = _BITMAPINFOHEADER()
     bmi.biSize = ctypes.sizeof(bmi)
@@ -1834,9 +1845,6 @@ class SAOPlayerGUI:
         self._season_exp = 0
         self._sta_offline_armed = False
 
-        # 加载 SAO 字体
-        load_sao_fonts()
-
         self._current_file = None
         self._panels_hidden = False  # 一键隐藏所有面板
         self._hidden_panels_snapshot = []  # 隐藏前记录哪些面板是开的
@@ -1955,7 +1963,7 @@ class SAOPlayerGUI:
         self._pending_combat_reset_reason = ''
         self._damage_self_fallback_log_ts = 0.0
         self._hide_seek_engine = None
-        self._hide_seek_alert_timer = None
+        self._hide_seek_alert_after_id = None
         self._hide_seek_alert_active = False
 
         # ── ULW 覆盖层引用 ──
@@ -1974,9 +1982,9 @@ class SAOPlayerGUI:
         self._commander_panel = None  # CommanderPanel
         self._commander_last_push = 0.0
 
+        self._sao_menu = None  # lazy-init on first _toggle_sao_menu()
         self._set_icon()
         self._create_floating_widget()
-        self._setup_sao_menu()
         self._setup_hotkeys()
         self.root.after(0, self._ensure_updater_listener)
 
@@ -2322,11 +2330,11 @@ class SAOPlayerGUI:
             except Exception: pass
             self._boss_raid_engine = None
         self._hide_seek_alert_active = False
-        timer = getattr(self, '_hide_seek_alert_timer', None)
-        if timer:
-            try: timer.cancel()
+        aid = getattr(self, '_hide_seek_alert_after_id', None)
+        if aid is not None:
+            try: self.root.after_cancel(aid)
             except Exception: pass
-            self._hide_seek_alert_timer = None
+            self._hide_seek_alert_after_id = None
         if getattr(self, '_hide_seek_engine', None):
             try: self._hide_seek_engine.stop()
             except Exception: pass
@@ -3456,10 +3464,7 @@ class SAOPlayerGUI:
                                 getattr(_pd, 'level', 0) or 0,
                             ))
                     # v2.3.16: skip batch update if player roster unchanged
-                    _batch_sig = tuple(sorted(
-                        (uid, name, prof, fp, lv)
-                        for uid, name, prof, fp, lv in _batch
-                    ))
+                    _batch_sig = _CY_UI.build_batch_sig(_batch)
                     if _batch_sig != getattr(self, '_last_batch_pi_sig', None):
                         self._last_batch_pi_sig = _batch_sig
                         self._dps_tracker.update_player_info_batch(_batch)
@@ -3559,13 +3564,8 @@ class SAOPlayerGUI:
                                 if self._boss_monster_usable(m):
                                     _recent_monsters.append(m)
                         if _recent_monsters:
-                            def _sort_key(m):
-                                hp = getattr(m, 'hp', 0) or 0
-                                maxhp = getattr(m, 'max_hp', 0) or hp or 1
-                                hp_pct = hp / maxhp if maxhp > 0 else 0
-                                last_ts = self._bb_recent_targets.get(getattr(m, 'uuid', 0), 0)
-                                return (-hp_pct, -last_ts)
-                            _recent_monsters.sort(key=_sort_key)
+                            _recent_monsters = _CY_UI.sort_recent_monsters(
+                                _recent_monsters, self._bb_recent_targets)
                             main_m = _recent_monsters[0]
                             self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)
                             _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
@@ -3721,33 +3721,7 @@ class SAOPlayerGUI:
                                 and (_now - _bb_motion_ts) >= _bb_stable_hide_s
                                 and not _bb_recent_damage_for_stable):
                             _bb_data['active'] = False
-                _bb_sig = (
-                    bool(_bb_data.get('active', False)),
-                    _bb_data.get('hp_pct'),
-                    _bb_data.get('hp_source'),
-                    int(_bb_data.get('current_hp') or 0),
-                    int(_bb_data.get('total_hp') or 0),
-                    bool(_bb_data.get('shield_active', False)),
-                    _bb_data.get('shield_pct'),
-                    int(_bb_data.get('breaking_stage') or 0),
-                    bool(_bb_data.get('has_break_data', False)),
-                    _bb_data.get('extinction_pct'),
-                    int(_bb_data.get('extinction') or 0),
-                    int(_bb_data.get('max_extinction') or 0),
-                    bool(_bb_data.get('stop_breaking_ticking', False)),
-                    bool(_bb_data.get('in_overdrive', False)),
-                    bool(_bb_data.get('invincible', False)),
-                    str(_bb_data.get('boss_name') or ''),
-                    tuple((
-                        str(u.get('name') or ''),
-                        round(float(u.get('hp_pct') or 0.0), 3),
-                        round(float(u.get('extinction_pct') or 0.0), 3),
-                        bool(u.get('has_break_data', False)),
-                        int(u.get('breaking_stage') or -1),
-                        bool(u.get('shield_active', False)),
-                        round(float(u.get('shield_pct') or 0.0), 3),
-                    ) for u in _bb_additional),
-                )
+                _bb_sig = _CY_UI.build_boss_bar_sig(_bb_data, _bb_additional)
                 if _bb_sig != self._last_boss_hp_push_sig:
                     self._last_boss_hp_push_sig = _bb_sig
                     _bb_data['additional'] = _bb_additional
@@ -4885,6 +4859,9 @@ class SAOPlayerGUI:
         _step()
 
     def _toggle_sao_menu(self):
+        # Lazy-init: build menu on first toggle (deferred from __init__)
+        if self._sao_menu is None:
+            self._setup_sao_menu()
         if self._sao_menu.visible:
             try:
                 play_sound('menu_close')
@@ -4943,7 +4920,7 @@ class SAOPlayerGUI:
             return  # 已在运行
         if retries <= 0:
             return
-        if self._sao_menu.visible or self._any_panel_open():
+        if (self._sao_menu is not None and self._sao_menu.visible) or self._any_panel_open():
             self._start_fisheye_overlay()
         else:
             try:
@@ -4977,7 +4954,7 @@ class SAOPlayerGUI:
 
     def _maybe_stop_fisheye(self):
         """仅当 SAO 菜单和所有面板都关闭时才销毁鱼眼叠加层"""
-        if self._sao_menu.visible:
+        if self._sao_menu is not None and self._sao_menu.visible:
             return
         if self._any_panel_open():
             return
@@ -5313,6 +5290,7 @@ class SAOPlayerGUI:
                 pass
 
         self._update_listener = _listener
+        self._updater_mgr = mgr
         mgr.add_listener(_listener)
         self._update_listener_installed = True
         try:
@@ -6023,7 +6001,7 @@ class SAOPlayerGUI:
             下降 (无每帧 ImageTk.PhotoImage 构造 / Canvas 更新)
         """
         self._stop_fisheye_overlay()
-        if not self._sao_menu.visible and not self._any_panel_open():
+        if not (self._sao_menu is not None and self._sao_menu.visible) and not self._any_panel_open():
             return
         self._lift_loop_active = False
 
@@ -6370,7 +6348,8 @@ class SAOPlayerGUI:
             # State machine — kicks off pump-driven fades.
             try:
                 _actual_should_run = bool(
-                    self._sao_menu.visible or self._any_panel_open())
+                    (self._sao_menu is not None and self._sao_menu.visible)
+                    or self._any_panel_open())
             except Exception:
                 _actual_should_run = False
             if _actual_should_run:
@@ -6840,8 +6819,10 @@ class SAOPlayerGUI:
             if worker_thread is not None:
                 try:
                     if worker_thread.is_alive():
-                        _phase_trace('fisheye.stop.no_join',
-                                     getattr(worker_thread, 'name', 'worker'))
+                        worker_thread.join(timeout=2.0)
+                        if worker_thread.is_alive():
+                            _phase_trace('fisheye.stop.join_timeout',
+                                         getattr(worker_thread, 'name', 'worker'))
                 except Exception:
                     pass
             # GPU window + presenter cleanup
@@ -7174,13 +7155,13 @@ class SAOPlayerGUI:
     def _stop_hide_seek(self, show_alert: bool = True):
         """停止自动躲猫猫并取消持久提示刷新."""
         self._hide_seek_alert_active = False
-        timer = getattr(self, '_hide_seek_alert_timer', None)
-        if timer:
+        aid = getattr(self, '_hide_seek_alert_after_id', None)
+        if aid is not None:
             try:
-                timer.cancel()
+                self.root.after_cancel(aid)
             except Exception:
                 pass
-            self._hide_seek_alert_timer = None
+            self._hide_seek_alert_after_id = None
         engine = self._hide_seek_engine
         self._hide_seek_engine = None
         if engine is not None:
@@ -7198,23 +7179,22 @@ class SAOPlayerGUI:
             print(f'[HideSeek] step={step}: {message}')
 
     def _schedule_hide_seek_alert_refresh(self):
-        timer = getattr(self, '_hide_seek_alert_timer', None)
-        if timer:
+        aid = getattr(self, '_hide_seek_alert_after_id', None)
+        if aid is not None:
             try:
-                timer.cancel()
+                self.root.after_cancel(aid)
             except Exception:
                 pass
-        self._hide_seek_alert_timer = threading.Timer(50.0, self._refresh_hide_seek_alert)
-        self._hide_seek_alert_timer.daemon = True
-        self._hide_seek_alert_timer.start()
+        self._hide_seek_alert_after_id = self.root.after(
+            50000, self._refresh_hide_seek_alert)
 
     def _refresh_hide_seek_alert(self):
+        self._hide_seek_alert_after_id = None
         if self._destroyed or not getattr(self, '_hide_seek_alert_active', False):
             return
         engine = getattr(self, '_hide_seek_engine', None)
         if engine is None:
             self._hide_seek_alert_active = False
-            self._hide_seek_alert_timer = None
             return
         if not engine.running:
             print('[SAO Entity] Hide&Seek engine thread is no longer running')
@@ -7545,7 +7525,7 @@ class SAOPlayerGUI:
         pass
 
     def _show_about(self):
-        if self._sao_menu.visible:
+        if self._sao_menu is not None and self._sao_menu.visible:
             self._sao_menu.close()
         try:
             from sao_updater import get_manager, STATE_AVAILABLE, STATE_READY
@@ -7592,7 +7572,7 @@ class SAOPlayerGUI:
         except Exception as e:
             SAODialog.showinfo(self._float, '更新', f'更新模块不可用: {e}')
             return
-        if self._sao_menu.visible:
+        if self._sao_menu is not None and self._sao_menu.visible:
             self._sao_menu.close()
         mgr = get_manager()
         st = mgr.snapshot()
@@ -7712,7 +7692,7 @@ class SAOPlayerGUI:
 
     def _edit_profile(self):
         """打开角色资料编辑对话框"""
-        if self._sao_menu.visible:
+        if self._sao_menu is not None and self._sao_menu.visible:
             self._sao_menu.close()
 
         def on_profile_done(username, profession):
@@ -7898,10 +7878,20 @@ void main() {
             prog['u_progress'].value = float(max(0.0, min(1.0, progress)))
             vao.render()
             raw = fbo.read(components=4, alignment=1)
-            arr = np.frombuffer(raw, dtype=np.uint8).reshape(ov['sh'], ov['sw'], 4)
-            photo = ImageTk.PhotoImage(Image.fromarray(arr[::-1], 'RGBA'))
-            ov['gl_photo'] = photo
-            cv.create_image(0, 0, image=photo, anchor='nw')
+            _h, _w = ov['sh'], ov['sw']
+            arr = np.frombuffer(raw, dtype=np.uint8).reshape(_h, _w, 4)
+            pil_img = ov.get('_gl_pil_buf')
+            if pil_img is None or pil_img.size != (_w, _h):
+                pil_img = Image.fromarray(arr[::-1], 'RGBA')
+                ov['_gl_pil_buf'] = pil_img
+                photo = ImageTk.PhotoImage(pil_img)
+                ov['gl_photo'] = photo
+                ov['_gl_canvas_id'] = cv.create_image(0, 0, image=photo, anchor='nw')
+            else:
+                pil_img.frombytes(arr[::-1].tobytes())
+                photo = ov['gl_photo']
+                photo.paste(pil_img)
+                # canvas item already exists — just update reference
             return True
         except Exception:
             return False
@@ -8247,10 +8237,19 @@ void main() {
             prog['u_progress'].value = float(max(0.0, min(1.0, purge_t)))
             vao.render()
             raw = fbo.read(components=4, alignment=1)
-            arr = np.frombuffer(raw, dtype=np.uint8).reshape(ov['sh'], ov['sw'], 4)
-            photo = ImageTk.PhotoImage(Image.fromarray(arr[::-1], 'RGBA'))
-            ov['gl_photo'] = photo
-            cv.create_image(0, 0, image=photo, anchor='nw')
+            _h, _w = ov['sh'], ov['sw']
+            arr = np.frombuffer(raw, dtype=np.uint8).reshape(_h, _w, 4)
+            pil_img = ov.get('_gl_pil_buf')
+            if pil_img is None or pil_img.size != (_w, _h):
+                pil_img = Image.fromarray(arr[::-1], 'RGBA')
+                ov['_gl_pil_buf'] = pil_img
+                photo = ImageTk.PhotoImage(pil_img)
+                ov['gl_photo'] = photo
+                ov['_gl_canvas_id'] = cv.create_image(0, 0, image=photo, anchor='nw')
+            else:
+                pil_img.frombytes(arr[::-1].tobytes())
+                photo = ov['gl_photo']
+                photo.paste(pil_img)
             return True
         except Exception:
             return False
@@ -8555,6 +8554,35 @@ void main() {
         self._destroyed = True
         self._breath_active = False
         self._lift_loop_active = False
+        # ── Cancel all global after() IDs ──
+        for _aid_attr in ('_panel_float_after_id', '_menu_refresh_after_id',
+                          '_hide_seek_alert_after_id'):
+            _aid = getattr(self, _aid_attr, None)
+            if _aid is not None:
+                try:
+                    self.root.after_cancel(_aid)
+                except Exception:
+                    pass
+                setattr(self, _aid_attr, None)
+        # Cancel shared HUD fx tick (class-level)
+        _fx_aid = getattr(SAOPlayerGUI, '_sao_fx_after_id', None)
+        if _fx_aid is not None:
+            try:
+                self.root.after_cancel(_fx_aid)
+            except Exception:
+                pass
+            SAOPlayerGUI._sao_fx_after_id = None
+        # ── Remove updater listener ──
+        _umgr = getattr(self, '_updater_mgr', None)
+        _ulistener = getattr(self, '_update_listener', None)
+        if _umgr is not None and _ulistener is not None:
+            try:
+                _umgr.remove_listener(_ulistener)
+            except Exception:
+                pass
+            self._updater_mgr = None
+            self._update_listener = None
+            self._update_listener_installed = False
         self._cleanup_entry_overlay()
         self._cleanup_exit_overlay()
         if hasattr(self, '_hotkey_mgr'):
@@ -8566,8 +8594,9 @@ void main() {
             pass
         self._stop_fisheye_overlay()
         try:
-            self._sao_menu.unbind_events()
-            self._sao_menu.force_destroy_overlay()
+            if self._sao_menu is not None:
+                self._sao_menu.unbind_events()
+                self._sao_menu.force_destroy_overlay()
         except Exception:
             pass
         # 停止识别引擎
@@ -8651,7 +8680,7 @@ void main() {
         except Exception:
             pass
         try:
-            if self._sao_menu.visible:
+            if self._sao_menu is not None and self._sao_menu.visible:
                 self._sao_menu.prepare_external_fade()
         except Exception:
             pass
