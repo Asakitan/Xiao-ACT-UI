@@ -83,6 +83,26 @@ from perf_probe import probe as _probe, phase as _phase_trace, gauge as _perf_ga
 # v2.4.31: high-frequency UI helpers live in cython.
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
+
+_SESSION_WHEEL_ROOTS: Dict[int, Dict[str, Any]] = {}
+
+
+def _dispatch_session_wheel(root, event):
+    entry = _SESSION_WHEEL_ROOTS.get(id(root))
+    if not entry:
+        return None
+    panels = list(entry.get('panels') or ())
+    for panel in reversed(panels):
+        try:
+            if not panel.winfo_exists() or not panel.winfo_ismapped():
+                continue
+            if not panel._cursor_inside_panel(event):
+                continue
+            return panel._on_mousewheel(event)
+        except Exception:
+            continue
+    return None
+
 try:
     import pynput.keyboard as pynput_kb
     from pynput.keyboard import Key, KeyCode
@@ -1275,6 +1295,7 @@ class SAOSessionPlayersPanel(tk.Frame):
             pass
 
     def _on_gpu_destroy(self):
+        self.unbind_global_wheel_fallback()
         for attr in ('_gpu_paint_after_id', '_gpu_drain_after_id',
                      '_open_anim_after_id'):
             job = getattr(self, attr, None)
@@ -1425,14 +1446,29 @@ class SAOSessionPlayersPanel(tk.Frame):
         if self._wheel_fallback_bound:
             return
         root = self.winfo_toplevel()
-        for seq in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
-            try:
-                root.bind_all(seq, self._on_global_mousewheel, add='+')
-            except Exception:
-                pass
+        entry = _SESSION_WHEEL_ROOTS.get(id(root))
+        if entry is None:
+            entry = {'root': root, 'panels': []}
+            _SESSION_WHEEL_ROOTS[id(root)] = entry
+            for seq in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+                try:
+                    root.bind_all(seq, lambda e, r=root: _dispatch_session_wheel(r, e), add='+')
+                except Exception:
+                    pass
+        panels = entry.get('panels')
+        if panels is not None and self not in panels:
+            panels.append(self)
         self._wheel_fallback_bound = True
 
     def unbind_global_wheel_fallback(self):
+        try:
+            root = self.winfo_toplevel()
+            entry = _SESSION_WHEEL_ROOTS.get(id(root))
+            panels = entry.get('panels') if entry else None
+            if panels is not None:
+                entry['panels'] = [p for p in panels if p is not self]
+        except Exception:
+            pass
         self._wheel_fallback_bound = False
 
     def _cursor_inside_panel(self, event) -> bool:
