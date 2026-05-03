@@ -1963,6 +1963,7 @@ class SAOPlayerGUI:
         self._bb_damage_timeout = 60.0
         self._pending_combat_reset_after = 0.0
         self._pending_combat_reset_reason = ''
+        self._scene_hide_token = 0
         self._damage_self_fallback_log_ts = 0.0
         self._hide_seek_engine = None
         self._hide_seek_alert_after_id = None
@@ -2527,6 +2528,7 @@ class SAOPlayerGUI:
         self._dps_visible = False
         self._dps_faded = False
         self._dps_mode = 'hidden'
+        self._scene_hide_token = int(getattr(self, '_scene_hide_token', 0) or 0) + 1
         if self._boss_raid_engine:
             try:
                 if getattr(self._boss_raid_engine, '_state', '') != 'running':
@@ -2699,6 +2701,7 @@ class SAOPlayerGUI:
                 self._bb_recent_targets[target_uuid] = _t.time()
                 self._bb_last_target_uuid = target_uuid
                 self._bb_last_damage_ts = _t.time()
+                self._scene_hide_token = int(getattr(self, '_scene_hide_token', 0) or 0) + 1
                 # Damage is also liveness. Some encounters lock HP while
                 # still accepting hits, so do not let stable-HP hiding win.
                 self._bb_last_hp_motion_ts = self._bb_last_damage_ts
@@ -2871,7 +2874,12 @@ class SAOPlayerGUI:
             except Exception:
                 pass
 
+        self._scene_hide_token = int(getattr(self, '_scene_hide_token', 0) or 0) + 1
+        _hide_token = self._scene_hide_token
+
         def _hide_overlays():
+            if _hide_token != int(getattr(self, '_scene_hide_token', 0) or 0):
+                return
             _has_new_self_damage = bool(self._bb_last_damage_ts > _scene_change_ts)
             _has_new_dps = False
             try:
@@ -2894,7 +2902,7 @@ class SAOPlayerGUI:
                 pass
 
         try:
-            self.root.after(0, _hide_overlays)
+            self.root.after(120, _hide_overlays)
         except Exception:
             pass
 
@@ -3496,6 +3504,7 @@ class SAOPlayerGUI:
 
                 if _dps_should_push:
                     if _dps_enabled and _dps_has_live and self._dps_overlay and self._dps_mode != 'report':
+                        self._scene_hide_token = int(getattr(self, '_scene_hide_token', 0) or 0) + 1
                         if not self._dps_visible:
                             self._dps_visible = True
                             self._dps_faded = False
