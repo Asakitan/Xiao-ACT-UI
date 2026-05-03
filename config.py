@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.5"
+APP_VERSION = "2.5.6"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,10 +364,19 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.6:
+#     • BossHP main-target picker uses the highest MAX_HP unit (the actual
+#       boss) instead of the most-full hp_pct, so a 100 % overworld trash
+#       next to a 28 % real boss no longer hijacks the bar.
+#     • boss_hp_hold_timeout_s floor dropped from 180 s → 1 s; user-set
+#       fade values now actually take effect when no damage is happening.
+#     • Hard scene resets push BossHP / DPS hide() immediately instead of
+#       deferring 120 ms behind a token check that stray packets could bump.
 # v2.5.5:
 #   Restore UID/POWER Session Players wheel and click-drag scrolling through
-#   the fisheye backdrop, and align target classification with StarResonanceDps
-#   / resonance-logs-cn so BOSS HP / DPS keep routing across map changes:
+#   the fisheye backdrop, align target classification with StarResonanceDps
+#   / resonance-logs-cn so BOSS HP / DPS keep routing across map changes,
+#   and tighten BossHP fade behavior:
 #     • Fisheye GpuOverlayWindow now forwards wheel + cursor + button events
 #       to the Tk session_panel underneath (so wheel scroll and touch-style
 #       drag both work even though the Tk shell is chroma-keyed transparent).
