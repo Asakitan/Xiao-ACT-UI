@@ -24,7 +24,7 @@ from perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _pr
 
 from .state import PopupState
 from . import composer, menu_bar_layout, child_bar_layout, hud_layout
-from .hit_test import HitTester, KIND_MENU_BTN, KIND_CHILD_ROW
+from .hit_test import HitTester, KIND_MENU_BTN, KIND_CHILD_ROW, KIND_BACKGROUND
 
 
 _TRANSPARENT_KEY = '#010101'
@@ -659,6 +659,9 @@ class SAOPopUpMenu:
             elif kind == KIND_CHILD_ROW:
                 self._state.hover_row_idx = idx
                 self._state.hover_btn_idx = None
+            elif kind == KIND_BACKGROUND:
+                self._state.hover_btn_idx = None
+                self._state.hover_row_idx = None
 
     def _on_cursor_leave(self) -> None:
         self._state.hover_btn_idx = None
@@ -691,6 +694,8 @@ class SAOPopUpMenu:
             self._click_pending = True
             self._click_queue.append(('row', int(idx)))
             _phase_trace('popup.click.enqueue', f'row:{idx}')
+        elif kind == KIND_BACKGROUND:
+            _phase_trace('popup.click.swallow', 'background')
 
     def _drain_click_queue(self) -> None:
         """Drain queued GLFW clicks. Always invoked from a top-level Tk
