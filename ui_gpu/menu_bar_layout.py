@@ -2,7 +2,6 @@
 
 Renders to a single PIL.Image and exposes ``hit_rects`` so the
 ``HitTester`` can map cursor positions back to button indexes.
-
 """
 
 from __future__ import annotations

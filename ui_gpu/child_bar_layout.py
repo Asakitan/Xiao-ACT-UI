@@ -3,7 +3,6 @@
 Reuses the existing PIL composer ``_compose_child_bar`` from
 ``sao_child_bar_gpu`` so we don't duplicate ~200 LOC of font fallback +
 row composition.
-
 """
 
 from __future__ import annotations

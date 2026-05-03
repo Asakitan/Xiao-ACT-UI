@@ -469,6 +469,7 @@ class SAOPopUpMenu:
         # Stop click drainer first so no more queued clicks fire after
         # widgets are gone.
         self._stop_click_drainer()
+        self._click_pending = False
         if self._sched_registered:
             try:
                 _get_scheduler(self.root).unregister(self._sched_ident)
