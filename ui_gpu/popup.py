@@ -48,7 +48,9 @@ class SAOPopUpMenu:
                  key_code: str = 'a',
                  slide_down: bool = True,
                  left_widget_factory: Optional[Callable] = None,
-                 anchor_widget=None):
+                 anchor_widget=None,
+                 external_close: bool = True,
+                 alt_toggle_close: bool = True):
         if not _gow.glfw_supported():
             raise RuntimeError(
                 'SAOPopUpMenu requires GLFW; gpu_overlay_window reports it is unavailable')
@@ -64,6 +66,8 @@ class SAOPopUpMenu:
         self.slide_down = slide_down
         self.left_widget_factory = left_widget_factory
         self.anchor_widget = anchor_widget
+        self.external_close = bool(external_close)
+        self.alt_toggle_close = bool(alt_toggle_close)
 
         self._state = PopupState()
         self._state.menu_items = list(icon_arr)
@@ -927,6 +931,8 @@ class SAOPopUpMenu:
 
     def _on_alt_key(self, e) -> None:
         if e.keysym.lower() == self.key_code.lower():
+            if self._state.is_open and not self.alt_toggle_close:
+                return
             self.toggle()
 
     def _on_mouse_down(self, e) -> None:
@@ -948,6 +954,12 @@ class SAOPopUpMenu:
         """Close the popup when the foreground HWND is none of our
         windows (root, shell, GPU)."""
         if not self._state.is_open or self._closing:
+            return
+        if not self.external_close:
+            try:
+                self._focus_poll_job = self.root.after(150, self._poll_foreground)
+            except Exception:
+                self._focus_poll_job = None
             return
         # Grace period: ignore foreground for first 600ms after open so
         # transient creation/init focus doesn't snap us shut.

@@ -88,7 +88,8 @@ def _ref_decode_int32_from_raw(raw: bytes) -> int:
     if not raw:
         return 0
     val, _ = _ref_read_varint(raw, 0)
-    if val > 0x7FFFFFFF:
+    val &= 0xFFFFFFFF
+    if val >= 0x80000000:
         val -= 0x100000000
     return val
 

@@ -130,10 +130,10 @@ class AlertOverlay:
         self._center_y = (sh - self.HEIGHT) // 2
 
         # Theme: load saved preference
-        self._theme_name: str = 'light'
+        self._theme_name: str = 'dark'
         if settings is not None:
             try:
-                saved = settings.get('panel_themes', {}).get('alert', 'light')
+                saved = settings.get('panel_themes', {}).get('alert', 'dark')
                 if saved in ('light', 'dark'):
                     self._apply_theme(saved)
             except Exception:

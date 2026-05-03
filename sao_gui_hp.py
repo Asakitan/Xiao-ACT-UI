@@ -676,10 +676,10 @@ class HpOverlay:
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
 
         # Theme: load saved preference
-        self._theme_name: str = 'light'
+        self._theme_name: str = 'dark'
         if settings is not None:
             try:
-                saved = settings.get('panel_themes', {}).get('hp', 'light')
+                saved = settings.get('panel_themes', {}).get('hp', 'dark')
                 if saved in ('light', 'dark'):
                     self._apply_theme(saved)
             except Exception:
@@ -2674,13 +2674,38 @@ class HpOverlay:
             self._set_input_passthrough(True)
             return
         if not self._hp_group_clickable():
-            if self._set_input_region('id'):
-                self._set_input_passthrough(False)
-            else:
-                self._set_input_passthrough(not self._cursor_over_id_plate())
+            self._set_input_region('full')
+            self._set_input_passthrough(not self._cursor_over_id_plate())
             return
         self._set_input_region('full')
+        if self._input_region_supported:
+            self._set_input_passthrough(not self._cursor_over_click_zones())
+            return
         self._set_input_passthrough(False)
+
+    def _cursor_over_click_zones(self) -> bool:
+        hwnd = self._input_hwnd()
+        if not hwnd:
+            return False
+        try:
+            class POINT(ctypes.Structure):
+                _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
+
+            class RECT(ctypes.Structure):
+                _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
+                            ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+
+            pt = POINT()
+            if not _user32.GetCursorPos(ctypes.byref(pt)):
+                return False
+            rc = RECT()
+            if not _user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rc)):
+                return False
+            lx = int(pt.x - rc.left)
+            ly = int(pt.y - rc.top)
+            return self._point_in_click_zones(lx, ly)
+        except Exception:
+            return False
 
     def _start_input_passthrough_poller(self) -> None:
         if self._input_passthrough_poller_started:

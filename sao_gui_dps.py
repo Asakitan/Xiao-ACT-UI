@@ -667,10 +667,10 @@ class DpsOverlay:
         self._render_worker = AsyncFrameWorker(prefer_isolation=True)
 
         # Theme: load saved preference, apply before first compose
-        self._theme_name: str = 'light'
+        self._theme_name: str = 'dark'
         if settings is not None:
             try:
-                saved = settings.get('panel_themes', {}).get('dps', 'light')
+                saved = settings.get('panel_themes', {}).get('dps', 'dark')
                 if saved in ('light', 'dark'):
                     self._apply_theme(saved)
             except Exception:

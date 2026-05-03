@@ -3817,11 +3817,11 @@ html, body {
                         <button class="boss-bar-mode-btn" id="theme-all-dark" type="button" onclick="_setAllThemes('dark')">全部 Dark</button>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-top:6px;font-size:12px;">
-                        <div class="mode-btn" id="theme-dps" onclick="_toggleTheme('dps')" style="cursor:pointer;text-align:center;padding:3px 6px;">DPS: Light</div>
-                        <div class="mode-btn" id="theme-hp" onclick="_toggleTheme('hp')" style="cursor:pointer;text-align:center;padding:3px 6px;">HP: Light</div>
-                        <div class="mode-btn" id="theme-bosshp" onclick="_toggleTheme('bosshp')" style="cursor:pointer;text-align:center;padding:3px 6px;">BossHP: Light</div>
+                        <div class="mode-btn" id="theme-dps" onclick="_toggleTheme('dps')" style="cursor:pointer;text-align:center;padding:3px 6px;">DPS: Dark</div>
+                        <div class="mode-btn" id="theme-hp" onclick="_toggleTheme('hp')" style="cursor:pointer;text-align:center;padding:3px 6px;">HP: Dark</div>
+                        <div class="mode-btn" id="theme-bosshp" onclick="_toggleTheme('bosshp')" style="cursor:pointer;text-align:center;padding:3px 6px;">BossHP: Dark</div>
                         <div class="mode-btn" id="theme-skillfx" onclick="_toggleTheme('skillfx')" style="cursor:pointer;text-align:center;padding:3px 6px;">SkillFX: Dark</div>
-                        <div class="mode-btn" id="theme-alert" onclick="_toggleTheme('alert')" style="cursor:pointer;text-align:center;padding:3px 6px;">Alert: Light</div>
+                        <div class="mode-btn" id="theme-alert" onclick="_toggleTheme('alert')" style="cursor:pointer;text-align:center;padding:3px 6px;">Alert: Dark</div>
                     </div>
                 </li>
             </ul>
@@ -5665,7 +5665,7 @@ document.getElementById('ak-engine-pause-on-death').addEventListener('change', f
 
 /* ═══ Panel Theme toggles ═══ */
 var _panelThemes = {};
-var _themeDefaultDark = { skillfx: true };
+var _themeDefaultDark = { dps: true, hp: true, bosshp: true, skillfx: true, alert: true };
 
 function _refreshThemeButtons() {
     var panels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert'];

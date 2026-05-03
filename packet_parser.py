@@ -137,6 +137,20 @@ def _varint_to_int32(val: int) -> int:
     return int(_CY_PACKET.varint_to_int32(val))
 
 
+def _raw_varint_to_int32_py(raw: bytes) -> int:
+    val = 0
+    shift = 0
+    for b in raw[:10]:
+        val |= (int(b) & 0x7F) << shift
+        if not (int(b) & 0x80):
+            break
+        shift += 7
+    val &= 0xFFFFFFFF
+    if val >= 0x80000000:
+        val -= 0x100000000
+    return int(val)
+
+
 def _decode_string_from_raw(raw: bytes) -> str:
     """Match protobufjs `reader.string()`: `[varint length][utf-8 bytes]`.
 
@@ -151,7 +165,10 @@ def _decode_int32_from_raw(raw: bytes) -> int:
     """Match protobufjs `reader.int32()` on a raw varint payload."""
     if not raw:
         return 0
-    return int(_CY_PACKET.decode_int32_from_raw(raw))
+    try:
+        return int(_CY_PACKET.decode_int32_from_raw(raw))
+    except (OverflowError, ValueError):
+        return _raw_varint_to_int32_py(raw)
 
 
 def _decode_float32_from_raw(raw: bytes) -> Optional[float]:
