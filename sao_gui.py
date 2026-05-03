@@ -1858,6 +1858,8 @@ class SAOPlayerGUI:
         self._session_players_rows_cache = []
         self._last_session_players_panel_sig = None
         self._last_session_players_panel_push_ts = 0.0
+        self._profile_dialog_pending = False
+        self._profile_dialog_ref = None
         self._picker = None        # SAOFilePicker 引用 (防止 GC)
         self._status_panel = None  # 浮动状态面板
         self._update_panel = None  # 浮动更新面板
@@ -7710,10 +7712,24 @@ class SAOPlayerGUI:
 
     def _edit_profile(self):
         """打开角色资料编辑对话框"""
+        dialog = getattr(self, '_profile_dialog_ref', None)
+        try:
+            dlg_win = getattr(dialog, '_dlg', None)
+            if dlg_win is not None and dlg_win.winfo_exists():
+                dlg_win.lift()
+                dlg_win.focus_force()
+                return
+        except Exception:
+            pass
+        if getattr(self, '_profile_dialog_pending', False):
+            return
+        self._profile_dialog_pending = True
         if self._sao_menu is not None and self._sao_menu.visible:
             self._sao_menu.close()
 
         def on_profile_done(username, profession):
+            self._profile_dialog_pending = False
+            self._profile_dialog_ref = None
             self._username = username
             self._profession = profession
             self._update_float_title()
@@ -7728,8 +7744,26 @@ class SAOPlayerGUI:
                         self._player_panel._target_w,
                         self._player_panel._top_h)
 
-        self.root.after(600, lambda: show_welcome_dialog(
-            self._float, on_done=on_profile_done))
+        def _open_profile_dialog():
+            self._profile_dialog_pending = False
+            try:
+                dialog = show_welcome_dialog(self._float, on_done=on_profile_done)
+                self._profile_dialog_ref = dialog
+                dlg_win = getattr(dialog, '_dlg', None)
+                if dlg_win is not None:
+                    def _clear_ref(_event=None, ref=dialog):
+                        if getattr(self, '_profile_dialog_ref', None) is ref:
+                            self._profile_dialog_ref = None
+                        self._profile_dialog_pending = False
+                    try:
+                        dlg_win.bind('<Destroy>', _clear_ref, add='+')
+                    except Exception:
+                        pass
+            except Exception:
+                self._profile_dialog_ref = None
+                self._profile_dialog_pending = False
+
+        self.root.after(600, _open_profile_dialog)
 
     def _show_leaderboard(self):
         """排行榜已移除 — no-op"""

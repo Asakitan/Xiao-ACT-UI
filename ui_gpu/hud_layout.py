@@ -2,7 +2,6 @@
 
 Wraps ``MenuHudSpriteRenderer`` from ``sao_menu_hud`` so we get a single
 RGBA frame plus a sprite origin offset relative to the content rect.
-
 """
 
 from __future__ import annotations
