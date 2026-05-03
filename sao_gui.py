@@ -2969,10 +2969,33 @@ class SAOPlayerGUI:
             except Exception:
                 pass
 
+        # v2.5.5: hide overlays immediately on hard scene reset. Previously
+        # hide was deferred 120 ms behind a token check, so any stray damage
+        # event arriving in that window (queued packets from the old scene,
+        # auto-attacks landing on a dying mob, etc.) would bump the token and
+        # leave BossHP / DPS pinned to the old encounter forever.
+        try:
+            if self._boss_hp_overlay:
+                self._boss_hp_overlay.update({'active': False})
+        except Exception:
+            pass
+        try:
+            if self._dps_overlay:
+                self._dps_overlay.hide()
+        except Exception:
+            pass
+        try:
+            self._sync_dps_report_availability()
+        except Exception:
+            pass
+
         self._scene_hide_token = int(getattr(self, '_scene_hide_token', 0) or 0) + 1
         _hide_token = self._scene_hide_token
 
         def _hide_overlays():
+            # Re-hide once more after settling. The deferred pass is for any
+            # paint that managed to push between the immediate hide above and
+            # the next overlay tick.
             if _hide_token != int(getattr(self, '_scene_hide_token', 0) or 0):
                 return
             _has_new_self_damage = bool(self._bb_last_damage_ts > _scene_change_ts)
@@ -3663,8 +3686,21 @@ class SAOPlayerGUI:
                                 if self._boss_monster_usable(m):
                                     _recent_monsters.append(m)
                         if _recent_monsters:
-                            _recent_monsters = _CY_UI.sort_recent_monsters(
-                                _recent_monsters, self._bb_recent_targets)
+                            # v2.5.5: prefer the highest-MAX_HP unit as the
+                            # main boss bar — overworld trash next to a real
+                            # boss can sit at higher hp_pct (full) while the
+                            # boss is mid-fight at 28%, so the legacy hp_pct
+                            # DESC ordering picked the wrong unit. Tie-break
+                            # by hp_pct DESC then last-damage recency.
+                            def _bb_main_key(_m, _rt=self._bb_recent_targets):
+                                _max_hp = int(getattr(_m, 'max_hp', 0) or 0)
+                                _hp = int(getattr(_m, 'hp', 0) or 0)
+                                _mh_for_pct = _max_hp if _max_hp > 0 else (
+                                    _hp if _hp > 0 else 1)
+                                _hp_pct = (_hp / _mh_for_pct) if _mh_for_pct > 0 else 0.0
+                                _last_ts = float(_rt.get(getattr(_m, 'uuid', 0), 0) or 0.0)
+                                return (-_max_hp, -_hp_pct, -_last_ts)
+                            _recent_monsters.sort(key=_bb_main_key)
                             main_m = _recent_monsters[0]
                             self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)
                             _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
@@ -7563,15 +7599,21 @@ class SAOPlayerGUI:
         return float(max(1.0, v))
 
     def _boss_hp_hold_timeout_s(self) -> float:
-        """BossHP should survive death/revive and long mechanic downtime."""
+        """BossHP should survive death/revive and long mechanic downtime.
+
+        v2.5.5: drop the 180 s floor — users reported BossHP refusing to fade
+        for several minutes after an encounter went idle or after a map change.
+        Now the user-set value wins (with a 1 s minimum); the only enforced
+        floor is the dps fade timeout, so BB can never disappear before DPS.
+        """
         try:
-            raw = self._get_setting('boss_hp_hold_timeout_s', 300)
-            v = float(raw if raw is not None else 300)
+            raw = self._get_setting('boss_hp_hold_timeout_s', 60)
+            v = float(raw if raw is not None else 60)
         except Exception:
-            v = 300.0
+            v = 60.0
         if v <= 0:
             return 86400.0
-        return float(max(180.0, v, self._combat_damage_timeout_s()))
+        return float(max(1.0, v, self._combat_damage_timeout_s()))
 
     @staticmethod
     def _empty_dps_snapshot():
