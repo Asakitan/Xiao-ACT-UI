@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.39"
+APP_VERSION = "2.4.40"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,11 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.4.40:
+#   Stop Entity SAOMenu GPU windows from click-through leaking to the game or
+#   panels behind them. Interactive GpuOverlayWindow instances now explicitly
+#   clear inherited Win32 WS_EX_TRANSPARENT / WS_EX_NOACTIVATE styles after
+#   GLFW window creation, complementing the existing sticky GLFW hint reset.
 # v2.3.0: GPU SDF shader pipeline for SkillFX (ring + beam + glow as a
 # single fragment-shader pass). Replaces the old PIL/numpy compose that
 # cost 60-90 ms per frame on the render worker; the GPU path runs the
