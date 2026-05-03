@@ -263,6 +263,19 @@ def _apply_click_through(hwnd: int) -> None:
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
 
 
+def _apply_interactive(hwnd: int) -> None:
+    if sys.platform != 'win32':
+        return
+    cur = _user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+    new = ((cur | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST)
+           & ~WS_EX_TRANSPARENT & ~WS_EX_NOACTIVATE)
+    _user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new)
+    _user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
+    _user32.SetWindowPos(
+        hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+
+
 _overlay_creation_lock = threading.Lock()
 _overlay_creation_suspended = 0
 
@@ -868,6 +881,8 @@ class GpuOverlayWindow:
                 self._hwnd = int(glfw.get_win32_window(win) or 0)  # type: ignore[union-attr]
                 if self._click_through and self._hwnd:
                     _apply_click_through(self._hwnd)
+                elif self._hwnd:
+                    _apply_interactive(self._hwnd)
             except Exception:
                 pass
 
