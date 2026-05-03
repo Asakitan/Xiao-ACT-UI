@@ -3909,6 +3909,18 @@ class PacketParser:
             if int(attacker_uid) == int(self._current_uid):
                 attacker_is_self = True
 
+        entity_target_fallback = ''
+        if attacker_is_self and target_uuid and target_is_player:
+            target_uid = _uuid_to_uid(target_uuid) if _is_player(target_uuid) else 0
+            known_player = bool(target_uid and target_uid in self._players)
+            is_self_target = bool(
+                target_uid and self._current_uid and int(target_uid) == int(self._current_uid))
+            if (not known_player) and (not is_self_target):
+                target_is_player = False
+                target_is_monster = True
+                target_is_combat_target = True
+                entity_target_fallback = 'self_unknown_player_suffix_target'
+
         event = {
             'target_uuid': target_uuid,
             'target_is_player': target_is_player,
@@ -3934,6 +3946,8 @@ class PacketParser:
             'element': int(element),
             'timestamp': time.time(),
         }
+        if entity_target_fallback:
+            event['entity_target_fallback'] = entity_target_fallback
         self.stats['damage_events'] += 1
         if target_is_combat_target:
             self.stats['combat_damage_events'] += 1

@@ -1167,6 +1167,7 @@ class SAOSessionPlayersPanel(tk.Frame):
         self._gpu_drain_retries = 0
         self._open_anim_duration = 0.90
         self._rows_self_uid = ''
+        self._wheel_fallback_bound = False
 
         if self._gpu_managed:
             self.configure(width=self.PANEL_W, height=self.PANEL_H)
@@ -1419,6 +1420,42 @@ class SAOSessionPlayersPanel(tk.Frame):
                 self._bind_wheel_tree(child)
         except Exception:
             pass
+
+    def bind_global_wheel_fallback(self):
+        if self._wheel_fallback_bound:
+            return
+        root = self.winfo_toplevel()
+        for seq in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            try:
+                root.bind_all(seq, self._on_global_mousewheel, add='+')
+            except Exception:
+                pass
+        self._wheel_fallback_bound = True
+
+    def unbind_global_wheel_fallback(self):
+        self._wheel_fallback_bound = False
+
+    def _cursor_inside_panel(self, event) -> bool:
+        try:
+            x_root = int(getattr(event, 'x_root', 0) or 0)
+            y_root = int(getattr(event, 'y_root', 0) or 0)
+            x1 = int(self.winfo_rootx())
+            y1 = int(self.winfo_rooty())
+            width = int(getattr(self, 'PANEL_W', self.winfo_width()) or self.winfo_width())
+            height = int(getattr(self, 'PANEL_H', self.winfo_height()) or self.winfo_height())
+            return x1 <= x_root < x1 + width and y1 <= y_root < y1 + height
+        except Exception:
+            return False
+
+    def _on_global_mousewheel(self, event):
+        try:
+            if not self.winfo_exists() or not self.winfo_ismapped():
+                return None
+        except Exception:
+            return None
+        if not self._cursor_inside_panel(event):
+            return None
+        return self._on_mousewheel(event)
 
     def _on_mousewheel(self, event):
         try:
@@ -1793,6 +1830,9 @@ class SAOMenuLeftStack(tk.Frame):
         try:
             if active:
                 self.show_session_players(rows=None, force=False)
+                panel = getattr(self, 'session_panel', None)
+                if panel is not None and hasattr(panel, 'bind_global_wheel_fallback'):
+                    panel.bind_global_wheel_fallback()
             elif self.is_session_players_visible():
                 self.hide_session_players()
         except Exception:
@@ -2484,7 +2524,9 @@ class SAOPlayerGUI:
             damage = int(event.get('damage') or 0)
         except Exception:
             damage = 0
-        if damage <= 0 or bool(event.get('is_heal', False)):
+        if bool(event.get('is_heal', False)):
+            return False
+        if damage <= 0 and not (event.get('is_immune') or event.get('is_absorbed')):
             return False
 
         reason = str(getattr(self, '_pending_combat_reset_reason', '') or 'restart')
@@ -4351,6 +4393,10 @@ class SAOPlayerGUI:
         self._menu_left_stack = stack
         self._player_panel = panel
         self._session_players_panel = stack.session_panel
+        try:
+            stack.session_panel.bind_global_wheel_fallback()
+        except Exception:
+            pass
 
         panel.update_level(self._level, self._level_extra, self._season_exp)
 
@@ -4978,6 +5024,13 @@ class SAOPlayerGUI:
         self._lift_loop_active = False
         self._cancel_pending_menu_refresh()
         self._persist_entity_menu_state(save_now=False)
+        try:
+            stack = getattr(self, '_menu_left_stack', None)
+            panel = getattr(stack, 'session_panel', None) if stack is not None else None
+            if panel is not None and hasattr(panel, 'unbind_global_wheel_fallback'):
+                panel.unbind_global_wheel_fallback()
+        except Exception:
+            pass
         self._player_panel = None
         self._menu_left_stack = None
         self._session_players_panel = None
@@ -6211,7 +6264,7 @@ class SAOPlayerGUI:
                 w=int(sw), h=int(sh),
                 x=0, y=0,
                 render_fn=presenter.render,
-                click_through=False,
+                click_through=True,
                 title='sao_fisheye_gpu',
             )
             gpu_win.show()
