@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.4.40"
+APP_VERSION = "2.5.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,12 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.0:
+#   Make the Entity SAOMenu fisheye backdrop non-click-through so clicks on
+#   the blurred background no longer leak to the game. Also make combat panel
+#   reveal decisions more robust: DPS can open from an existing live snapshot
+#   even if the dirty flag was already consumed, and BossHP no longer suppresses
+#   the first confirmed self-damage target as a hidden baseline.
 # v2.4.40:
 #   Stop Entity SAOMenu GPU windows from click-through leaking to the game or
 #   panels behind them. Interactive GpuOverlayWindow instances now explicitly
