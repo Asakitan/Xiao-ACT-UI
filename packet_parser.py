@@ -3828,7 +3828,23 @@ class PacketParser:
         # overworld / city-edge combat targets do not use the usual monster
         # UUID suffix.
         if delta.HasField('SkillEffects'):
-            target_is_combat_target = not target_is_player
+            # v2.5.4: align with StarResonanceDps / resonance-logs-cn —
+            # classify target by UUID encoding, not by the _classify_entity_uuid
+            # result. After scene resets / dungeon re-entries the _monsters
+            # cache is empty for one or two ticks and stale _team_members /
+            # _players entries can flip a fresh combat target to "player" via
+            # the _is_known_player_uuid fallback. SRDPS / SRLOGS only check
+            # `(uuid & 0xFFFF) == 640` for player vs combat target; mirroring
+            # that here keeps BOSS HP / DPS routing alive across map changes.
+            uuid_suffix_player = (int(uuid) & 0xFFFF) == 640
+            if not uuid_suffix_player:
+                # Definitely a combat target by encoding — override any stale
+                # cache mis-classification.
+                target_is_player = False
+                target_is_monster = True
+                target_is_combat_target = True
+            else:
+                target_is_combat_target = not target_is_player
             self._process_skill_effect(
                 uuid, target_is_player, target_is_monster,
                 target_is_combat_target, delta.SkillEffects)

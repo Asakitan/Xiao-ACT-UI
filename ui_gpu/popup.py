@@ -49,7 +49,8 @@ class SAOPopUpMenu:
                  left_widget_factory: Optional[Callable] = None,
                  anchor_widget=None,
                  external_close: bool = True,
-                 alt_toggle_close: bool = True):
+                 alt_toggle_close: bool = True,
+                 on_background_click: Optional[Callable] = None):
         if not _gow.glfw_supported():
             raise RuntimeError(
                 'SAOPopUpMenu requires GLFW; gpu_overlay_window reports it is unavailable')
@@ -67,6 +68,7 @@ class SAOPopUpMenu:
         self.anchor_widget = anchor_widget
         self.external_close = bool(external_close)
         self.alt_toggle_close = bool(alt_toggle_close)
+        self.on_background_click = on_background_click
 
         self._state = PopupState()
         self._state.menu_items = list(icon_arr)
@@ -696,7 +698,9 @@ class SAOPopUpMenu:
             self._click_queue.append(('row', int(idx)))
             _phase_trace('popup.click.enqueue', f'row:{idx}')
         elif kind == KIND_BACKGROUND:
-            _phase_trace('popup.click.swallow', 'background')
+            self._click_pending = True
+            self._click_queue.append(('background', -1))
+            _phase_trace('popup.click.enqueue', 'background')
 
     def _drain_click_queue(self) -> None:
         """Drain queued GLFW clicks. Always invoked from a top-level Tk
@@ -711,6 +715,16 @@ class SAOPopUpMenu:
                         self._fire_activate_menu(idx)
                     elif kind == 'row':
                         self._fire_invoke_row(idx)
+                    elif kind == 'background':
+                        cb = self.on_background_click
+                        if cb is not None:
+                            cb()
+                        else:
+                            self.close()
+                        try:
+                            self.root.after(120, self._clear_click_pending)
+                        except Exception:
+                            self._click_pending = False
                 except Exception:
                     pass
         finally:
