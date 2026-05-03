@@ -3488,7 +3488,13 @@ class SAOPlayerGUI:
                 _dps_has_live = _poll['has_live']
                 _dirty = _poll['dirty']
 
-                if _dirty and _dps_snap:
+                _dps_should_push = bool(_dps_snap and (
+                    _dirty
+                    or (_dps_enabled and _dps_has_live and not self._dps_visible)
+                    or (self._dps_visible and self._dps_mode != 'report')
+                ))
+
+                if _dps_should_push:
                     if _dps_enabled and _dps_has_live and self._dps_overlay and self._dps_mode != 'report':
                         if not self._dps_visible:
                             self._dps_visible = True
@@ -3681,11 +3687,8 @@ class SAOPlayerGUI:
                         or _bb_prev_motion_sig[0] != _bb_hp_motion_sig[0]
                     )
                     if _bb_is_new_target:
-                        # First sight of a target is only a baseline. Do not
-                        # flash BossHP until the target's HP/shield/break data
-                        # actually moves on a later packet.
                         self._bb_last_hp_motion_sig = _bb_hp_motion_sig
-                        _bb_data['active'] = False
+                        self._bb_last_hp_motion_ts = _now
                     elif _bb_hp_motion_sig != _bb_prev_motion_sig:
                         self._bb_last_hp_motion_sig = _bb_hp_motion_sig
                         self._bb_last_hp_motion_ts = _now
@@ -6199,7 +6202,7 @@ class SAOPlayerGUI:
                 w=int(sw), h=int(sh),
                 x=0, y=0,
                 render_fn=presenter.render,
-                click_through=True,
+                click_through=False,
                 title='sao_fisheye_gpu',
             )
             gpu_win.show()
