@@ -2687,10 +2687,14 @@ class SAOPlayerGUI:
         player until SyncNearEntities catches up, which suppresses both DPS
         and BossHP. For self-outgoing damage to a target that is not present
         in the known player table, treat it as a combat target.
+
+        v2.5.4: also force combat_target on by UUID encoding alone for any
+        non-player-suffix target (StarResonanceDps / resonance-logs-cn parity).
+        Stale `_players` entries preserved across scene resets used to make the
+        `known_player` early return swallow the very first hit on a new boss
+        whose encoded uid happened to collide with an old teammate's uid.
         """
         if not isinstance(event, dict):
-            return event
-        if not event.get('attacker_is_self'):
             return event
         try:
             target_uuid = int(event.get('target_uuid') or 0)
@@ -2701,10 +2705,23 @@ class SAOPlayerGUI:
         if event.get('target_is_combat_target') or event.get('target_is_monster'):
             return event
 
+        target_suffix_player = (target_uuid & 0xFFFF) == 640
+        if not target_suffix_player:
+            # Pure UUID-encoding routing — no caches involved, so no stale
+            # state can mis-flag a fresh boss after a map change.
+            fixed = dict(event)
+            fixed['target_is_player'] = False
+            fixed['target_is_monster'] = True
+            fixed['target_is_combat_target'] = True
+            fixed['entity_target_fallback'] = 'uuid_suffix_combat_target'
+            return fixed
+
+        if not event.get('attacker_is_self'):
+            return event
+
         target_uid = 0
         try:
-            if (target_uuid & 0xFFFF) == 640:
-                target_uid = target_uuid >> 16
+            target_uid = target_uuid >> 16
         except Exception:
             target_uid = 0
         self_uid = self._current_player_uid_int()
@@ -4871,6 +4888,7 @@ class SAOPlayerGUI:
             anchor_widget=self._float,
             external_close=False,
             alt_toggle_close=False,
+            on_background_click=lambda: self._toggle_sao_menu(allow_close=True),
         )
         self._sao_menu.bind_events()
 
@@ -6118,7 +6136,114 @@ class SAOPlayerGUI:
         sh = self.root.winfo_screenheight()
         hw, hh = int(sw * 0.85), int(sh * 0.85)   # 85% 分辨率 (清晰度提升)
 
-        # ── 创建 GPU 叠加窗口 (click-through, 自然位于 topmost UI 下方) ──
+        # v2.5.4: fisheye is click_through=False, so it captures wheel + click
+        # events that target the SessionPlayers (UID/POWER) panel area. The
+        # panel itself sits on a chroma-keyed Tk shell which is mouse-leaky on
+        # transparent pixels and below the fisheye in z-order, so wheel/drag
+        # never reaches it. Forward both interactions from the fisheye.
+        _backdrop_drag = {
+            'pressed': False, 'in_panel': False,
+            'cursor_x': 0, 'cursor_y': 0, 'last_y': 0,
+        }
+        _DRAG_ROW_PX = 40  # row height (36) + gap (4) — see _SessionPlayersRenderer
+
+        def _cursor_in_session_panel(x, y):
+            panel = getattr(self, '_session_players_panel', None)
+            if panel is None:
+                return False, None
+            try:
+                if not panel.winfo_exists() or not panel.winfo_ismapped():
+                    return False, None
+                px = int(panel.winfo_rootx())
+                py = int(panel.winfo_rooty())
+                pw = int(getattr(panel, 'PANEL_W', 0) or panel.winfo_width())
+                ph = int(getattr(panel, 'PANEL_H', 0) or panel.winfo_height())
+                return (px <= x < px + pw and py <= y < py + ph), panel
+            except Exception:
+                return False, None
+
+        def _scroll_panel_by_rows(panel, rows):
+            if not rows or panel is None:
+                return
+            try:
+                total = len(getattr(panel, '_rows_data', ()) or ())
+                visible = int(getattr(panel, '_visible_row_count', 0) or 0)
+                max_first = max(0, total - visible)
+                old_first = int(getattr(panel, '_first_visible_row', 0) or 0)
+                new_first = max(0, min(max_first, old_first + int(rows)))
+                if new_first != old_first:
+                    panel._first_visible_row = new_first
+                    panel._queue_gpu_paint(16)
+            except Exception:
+                pass
+
+        def _backdrop_cursor_pos(x, y):
+            _backdrop_drag['cursor_x'] = int(x)
+            _backdrop_drag['cursor_y'] = int(y)
+            if not _backdrop_drag['pressed'] or not _backdrop_drag['in_panel']:
+                return
+            panel = getattr(self, '_session_players_panel', None)
+            if panel is None:
+                return
+            dy = int(y) - int(_backdrop_drag['last_y'])
+            # Drag down → list scrolls up (touch-style). Convert to row delta.
+            rows = -(dy // _DRAG_ROW_PX) if dy < 0 else -((dy + _DRAG_ROW_PX // 2) // _DRAG_ROW_PX)
+            if rows == 0:
+                return
+            _scroll_panel_by_rows(panel, rows)
+            _backdrop_drag['last_y'] = int(_backdrop_drag['last_y']) - rows * _DRAG_ROW_PX
+
+        def _backdrop_scroll(dx, dy):
+            cx = int(_backdrop_drag.get('cursor_x', 0))
+            cy = int(_backdrop_drag.get('cursor_y', 0))
+            inside, panel = _cursor_in_session_panel(cx, cy)
+            if not inside or panel is None:
+                return
+            # GLFW yoffset: +up / -down. Tk wheel delta: +120 per notch up.
+            delta = int(120 * float(dy))
+            if delta == 0:
+                delta = 120 if dy > 0 else (-120 if dy < 0 else 0)
+            if delta == 0:
+                return
+
+            class _Evt:
+                pass
+            evt = _Evt()
+            evt.x_root = cx
+            evt.y_root = cy
+            evt.delta = delta
+            evt.num = 0
+            try:
+                panel._on_mousewheel(evt)
+            except Exception:
+                pass
+
+        def _close_sao_menu_from_backdrop(button=None, action=None, *_args):
+            if button != 0:
+                return
+            x = int(_backdrop_drag.get('cursor_x', 0))
+            y = int(_backdrop_drag.get('cursor_y', 0))
+            inside, _ = _cursor_in_session_panel(x, y)
+            if action == 1:  # press
+                _backdrop_drag['pressed'] = True
+                _backdrop_drag['in_panel'] = bool(inside)
+                _backdrop_drag['last_y'] = y
+                if inside:
+                    return  # Reserve the click for drag scrolling
+            elif action == 0:  # release
+                was_in_panel = bool(_backdrop_drag.get('in_panel', False))
+                _backdrop_drag['pressed'] = False
+                _backdrop_drag['in_panel'] = False
+                if was_in_panel:
+                    return  # Drag finished — do not close
+            else:
+                return
+            try:
+                self._toggle_sao_menu(allow_close=True)
+            except Exception:
+                pass
+
+        # ── 创建 GPU 叠加窗口 (interactive backdrop, 自然位于 topmost UI 下方) ──
         try:
             pump = _gow.get_glfw_pump(self.root)
 
@@ -6300,10 +6425,41 @@ class SAOPlayerGUI:
                 w=int(sw), h=int(sh),
                 x=0, y=0,
                 render_fn=presenter.render,
-                click_through=True,
+                click_through=False,
                 title='sao_fisheye_gpu',
             )
+            gpu_win.set_input_callbacks(
+                cursor_pos_fn=_backdrop_cursor_pos,
+                mouse_button_fn=_close_sao_menu_from_backdrop,
+                scroll_fn=_backdrop_scroll,
+            )
             gpu_win.show()
+            try:
+                import ctypes as _ct0
+                _u32a = _ct0.windll.user32
+                _GWL_EXSTYLE = -20
+                _WS_EX_LAYERED = 0x00080000
+                _WS_EX_TOOLWINDOW = 0x00000080
+                _WS_EX_NOACTIVATE = 0x08000000
+                _WS_EX_TRANSPARENT = 0x00000020
+                _LWA_ALPHA = 0x00000002
+                _SWP_NOMOVE = 0x0002
+                _SWP_NOSIZE = 0x0001
+                _SWP_NOACTIVATE = 0x0010
+                _hwnd_i = int(getattr(gpu_win, '_hwnd', 0) or 0)
+                if _hwnd_i:
+                    _cur = _u32a.GetWindowLongPtrW(_ct0.c_void_p(_hwnd_i), _GWL_EXSTYLE)
+                    _new = ((_cur | _WS_EX_LAYERED | _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE)
+                            & ~_WS_EX_TRANSPARENT)
+                    _u32a.SetWindowLongPtrW(_ct0.c_void_p(_hwnd_i), _GWL_EXSTYLE, _new)
+                    _u32a.SetLayeredWindowAttributes(_ct0.c_void_p(_hwnd_i), 0, 255, _LWA_ALPHA)
+                    _u32a.SetWindowPos(
+                        _ct0.c_void_p(_hwnd_i), _ct0.c_void_p(-2),
+                        0, 0, 0, 0,
+                        _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE,
+                    )
+            except Exception:
+                pass
         except Exception:
             return
 

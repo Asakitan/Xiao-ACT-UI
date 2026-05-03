@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.4"
+APP_VERSION = "2.5.5"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,22 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.5:
+#   Restore UID/POWER Session Players wheel and click-drag scrolling through
+#   the fisheye backdrop, and align target classification with StarResonanceDps
+#   / resonance-logs-cn so BOSS HP / DPS keep routing across map changes:
+#     • Fisheye GpuOverlayWindow now forwards wheel + cursor + button events
+#       to the Tk session_panel underneath (so wheel scroll and touch-style
+#       drag both work even though the Tk shell is chroma-keyed transparent).
+#     • Damage target classification (parser AoiSyncDelta SkillEffect path
+#       and the GUI _normalize_damage_event_target_for_entity fallback) now
+#       trusts UUID encoding over stale _monsters / _team_members / _players
+#       caches, mirroring SRDPS `IsUuidPlayerRaw` / SRLOGS `EEntityType`.
+# v2.5.4:
+#   Route Entity SAOMenu backdrop clicks through the normal close animation:
+#   popup empty-area clicks and full-screen fisheye-background clicks now
+#   trigger the same menu-close/motion-blur/fisheye fade-out path instead of
+#   leaking to the game or only being swallowed silently.
 # v2.5.3:
 #   Restore UID/POWER Session Players wheel input while the GPU panel is
 #   visible, keep the fisheye backdrop as a background layer so popup buttons
