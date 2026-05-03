@@ -513,10 +513,10 @@ class BossHpOverlay:
         self._idle_committed = False
 
         # Theme: load saved preference
-        self._theme_name: str = 'light'
+        self._theme_name: str = 'dark'
         if settings is not None:
             try:
-                saved = settings.get('panel_themes', {}).get('bosshp', 'light')
+                saved = settings.get('panel_themes', {}).get('bosshp', 'dark')
                 if saved in ('light', 'dark'):
                     self._apply_theme(saved)
             except Exception:

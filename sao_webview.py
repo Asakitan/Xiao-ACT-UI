@@ -409,9 +409,18 @@ class SAOWebAPI:
         """返回当前面板主题设置 (JS 调用获取初始主题)."""
         try:
             cfg = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
-            return cfg.get('panel_themes', {})
+            defaults = {
+                'dps': 'dark',
+                'hp': 'dark',
+                'bosshp': 'dark',
+                'skillfx': 'dark',
+                'alert': 'dark',
+            }
+            themes = dict(cfg.get('panel_themes', {}) or {})
+            defaults.update({k: v for k, v in themes.items() if v in ('light', 'dark')})
+            return defaults
         except Exception:
-            return {}
+            return {'dps': 'dark', 'hp': 'dark', 'bosshp': 'dark', 'skillfx': 'dark', 'alert': 'dark'}
 
     def set_panel_theme(self, panel: str, theme: str):
         """从 JS 端设置面板主题并保存."""

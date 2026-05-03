@@ -4561,7 +4561,7 @@ class SAOPlayerGUI:
         skin_items.append({'icon': '🌙', 'label': '全部 Dark', 'command': lambda: self._set_all_themes('dark')})
         skin_items.append({'icon': '─', 'label': '──────────'})
         for _key, (_ico, _lbl) in _overlay_map.items():
-            _cur = _theme_settings.get(_key, 'light')
+            _cur = _theme_settings.get(_key, 'dark')
             skin_items.append({
                 'icon': _ico,
                 'label': f'{_lbl}: {_cur.upper()}',
@@ -4773,6 +4773,8 @@ class SAOPlayerGUI:
             slide_down=False,
             left_widget_factory=self._make_player_panel,
             anchor_widget=self._float,
+            external_close=False,
+            alt_toggle_close=False,
         )
         self._sao_menu.bind_events()
 
@@ -4845,11 +4847,13 @@ class SAOPlayerGUI:
 
         _step()
 
-    def _toggle_sao_menu(self):
+    def _toggle_sao_menu(self, allow_close: bool = False):
         # Lazy-init: build menu on first toggle (deferred from __init__)
         if self._sao_menu is None:
             self._setup_sao_menu()
         if self._sao_menu.visible:
+            if not allow_close:
+                return
             try:
                 play_sound('menu_close')
             except Exception:
@@ -5711,7 +5715,7 @@ class SAOPlayerGUI:
         """切换某个面板的 Light/Dark 主题。"""
         cfg = self._cfg_settings_ref or self.settings
         themes = dict(cfg.get('panel_themes', {}))
-        current = themes.get(key, 'light')
+        current = themes.get(key, 'dark')
         new_theme = 'dark' if current == 'light' else 'light'
         self._apply_theme_to_overlay(key, new_theme)
         themes[key] = new_theme
@@ -5756,7 +5760,7 @@ class SAOPlayerGUI:
     def _hp_overlay_on_click(self):
         """Left-click on HP panel: open the SAO radial menu (web parity)."""
         try:
-            self._toggle_sao_menu()
+            self._toggle_sao_menu(allow_close=True)
         except Exception:
             pass
 
@@ -6429,6 +6433,28 @@ class SAOPlayerGUI:
             _tex_w = 0
             _tex_h = 0
 
+            try:
+                import numpy as _np
+            except ImportError:
+                return
+
+            _rgb_repack_buf = [None]
+
+            def _bgr_to_rgb_payload(frame):
+                try:
+                    h = int(frame.shape[0])
+                    w = int(frame.shape[1])
+                    buf = _rgb_repack_buf[0]
+                    if buf is None or buf.shape[0] != h or buf.shape[1] != w:
+                        buf = _np.empty((h, w, 3), dtype=_np.uint8)
+                        _rgb_repack_buf[0] = buf
+                    buf[..., 0] = frame[..., 2]
+                    buf[..., 1] = frame[..., 1]
+                    buf[..., 2] = frame[..., 0]
+                    return (buf.tobytes(), w, h)
+                except Exception:
+                    return None
+
             # ── 优先 mss 快速截屏 (DXGI), fallback ImageGrab ──
             _cap_fn = None
             _cap_source = ''
@@ -6446,7 +6472,7 @@ class SAOPlayerGUI:
                         return None
                     if frame is None or frame.size == 0:
                         return None
-                    return Image.fromarray(frame[:, :, ::-1])
+                    return _bgr_to_rgb_payload(frame)
                 _cap_fn = _cap_dxgi_window
                 _cap_source = 'dxgi_window'
             if _cap_fn is None and capture_monitor_bgr_for_point is not None:
@@ -6465,7 +6491,7 @@ class SAOPlayerGUI:
                         px, py, timeout_ms=16, max_age_s=0.2)
                     if frame is None or frame.size == 0:
                         return None
-                    return Image.fromarray(frame[:, :, ::-1])
+                    return _bgr_to_rgb_payload(frame)
                 _cap_fn = _cap_dxgi
                 _cap_source = 'dxgi_monitor'
             try:
@@ -6563,10 +6589,6 @@ class SAOPlayerGUI:
             # ── numpy 后备 ──
             qw, qh = (hw, hh) if _gl_ok else (int(sw * 0.5), int(sh * 0.5))
             _np_maps = None
-            try:
-                import numpy as _np
-            except ImportError:
-                return
             if not _gl_ok:
                 cx_, cy_ = qw / 2.0, qh / 2.0
                 _yy, _xx = _np.mgrid[0:qh, 0:qw].astype(_np.float32)
@@ -6580,7 +6602,7 @@ class SAOPlayerGUI:
                 _wfy = (_sy - _y0).astype(_np.float32)[..., _np.newaxis]
                 _np_maps = (_x0, _x1, _y0, _y1, _wfx, _wfy)
 
-            _frame_interval = 1.0 / 30.0
+            _frame_interval = 1.0 / 60.0
 
             # ── 预生成 HUD 叠加 (RGBA premultiplied, 一次性) ──
             # v2.3.10: 改在 (out_w, out_h) 分辨率合成 (而不是 sw×sh)，
@@ -6655,22 +6677,31 @@ class SAOPlayerGUI:
                     continue
                 if not _fisheye_diag_logged[0]:
                     _fisheye_diag_logged[0] = True
-                    print(f'[SAO-UI] fisheye worker: shot={shot.size}, '
+                    _diag_size = (shot[1], shot[2]) if isinstance(shot, tuple) else shot.size
+                    print(f'[SAO-UI] fisheye worker: shot={_diag_size}, '
                           f'final_shader={int(_shader_gpu)}, '
                           f'gl_ok={_gl_ok}, tex=({_tex_w},{_tex_h}), '
                           f'fbo=({hw},{hh})')
                 try:
                     if _shader_gpu:
-                        if getattr(shot, 'mode', 'RGB') != 'RGB':
-                            shot = shot.convert('RGB')
+                        if isinstance(shot, tuple):
+                            _rgb_bytes, _shot_w, _shot_h = shot
+                        else:
+                            if getattr(shot, 'mode', 'RGB') != 'RGB':
+                                shot = shot.convert('RGB')
+                            _rgb_bytes = shot.tobytes()
+                            _shot_w, _shot_h = shot.size
                         _frame_seq[0] += 1
                         _latest_frame[0] = (
-                            _frame_seq[0], shot.tobytes(), shot.size[0], shot.size[1])
+                            _frame_seq[0], _rgb_bytes, _shot_w, _shot_h)
                         _elapsed = _time.time() - _t_start
                         _perf_gauge('fisheye.worker.frame_ms', _elapsed * 1000.0)
                         _sleep = max(0.001, _frame_interval - _elapsed)
                         _time.sleep(_sleep)
                         continue
+                    if isinstance(shot, tuple):
+                        _rgb_bytes, _shot_w, _shot_h = shot
+                        shot = Image.frombytes('RGB', (_shot_w, _shot_h), _rgb_bytes)
                     if _gl_ok:
                         # v2.3.15: feed screenshot directly to GPU texture.
                         # The texture is rebuilt only when shot size changes

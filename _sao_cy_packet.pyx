@@ -225,14 +225,14 @@ cpdef int decode_int32_from_raw(object raw):
     cdef const unsigned char[:] src = raw
     cdef object val_obj
     cdef Py_ssize_t pos
-    cdef long long val
+    cdef unsigned int val32
     if src.shape[0] <= 0:
         return 0
     val_obj, pos = _read_varint_u64(src, 0)
-    val = <long long>val_obj
-    if val > 0x7FFFFFFF:
-        val -= 0x100000000
-    return <int>val
+    val32 = <unsigned int>(val_obj & 0xFFFFFFFF)
+    if val32 >= 0x80000000:
+        return <int>(<long long>val32 - 0x100000000)
+    return <int>val32
 
 
 cpdef object decode_float32_from_raw(object raw):
