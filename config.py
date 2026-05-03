@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.2"
+APP_VERSION = "2.5.3"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,7 +364,7 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
-# v2.5.1:
+# v2.5.3:
 #   Restore UID/POWER Session Players wheel input while the GPU panel is
 #   visible, keep the fisheye backdrop as a background layer so popup buttons
 #   remain the only interactive menu targets, swallow popup empty-area clicks,

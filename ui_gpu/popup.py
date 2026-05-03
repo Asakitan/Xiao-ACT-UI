@@ -620,7 +620,8 @@ class SAOPopUpMenu:
         else:
             _perf_gauge('ui.popup.presented', 0)
         # Update hit-test geometry after layouts settle
-        self._hit.update(self._state)
+        reserved_rows = int(getattr(self, '_reserved_rows', 0) or 0)
+        self._hit.update(self._state, reserved_rows)
         try:
             sw = self.root.winfo_screenwidth()
             sh = self.root.winfo_screenheight()
@@ -629,7 +630,7 @@ class SAOPopUpMenu:
                 float(self._state.hud_phase),
                 int(sw),
                 int(sh),
-                int(getattr(self, '_reserved_rows', 0)),
+                reserved_rows,
             )
             self._render_worker.submit(self._compose_framebuffer, payload, 0, 0, 0)
             _perf_gauge('ui.popup.submitted', 1)
