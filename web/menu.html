@@ -60,6 +60,23 @@
     --menu-hover-warm-2: rgba(239, 227, 202, 0.92);
     --menu-hover-border: rgba(243, 175, 18, 0.42);
 }
+.theme-dark {
+    --menu-surface: rgba(20, 26, 36, 0.92);
+    --menu-surface-2: rgba(16, 22, 32, 0.90);
+    --menu-surface-card: rgba(22, 30, 42, 0.94);
+    --menu-surface-card-2: rgba(14, 20, 30, 0.92);
+    --menu-border: rgba(60, 180, 220, 0.44);
+    --menu-border-strong: rgba(104, 228, 255, 0.56);
+    --menu-shadow: rgba(0, 0, 0, 0.36);
+    --menu-text: rgb(218, 226, 234);
+    --menu-text-muted: rgb(138, 158, 174);
+    --menu-icon: rgb(128, 210, 232);
+    --menu-hover-cyan: rgba(26, 54, 70, 0.98);
+    --menu-hover-cyan-2: rgba(20, 42, 58, 0.94);
+    --menu-hover-warm: rgba(50, 42, 28, 0.98);
+    --menu-hover-warm-2: rgba(42, 34, 22, 0.94);
+    --menu-hover-border: rgba(243, 190, 82, 0.46);
+}
 
 /* ═══════════════════════════════════════
    PopUpMenu — fullscreen overlay
@@ -833,6 +850,12 @@ html, body {
     font-size: 10px;
     letter-spacing: 0.55px;
     line-height: 1.6;
+}
+.mem-source-group {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+    margin-top: 6px;
 }
 .source-msgbox {
     width: 420px;
@@ -3783,7 +3806,7 @@ html, body {
                     <div class="widget-note">待机时保持隐藏，进入战斗后自动弹出，空闲后自动隐藏。点击角色可查看技能明细，并可随时打开上一场报告。 Hidden while idle, auto-shows on combat, auto-hides after combat, and keeps the last report available.</div>
                     <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
                         <span style="font-size:11px;color:rgb(140,138,140);">空闲隐藏/结算 Idle timeout (s)</span>
-                        <input type="number" id="dps-fade-timeout" min="0" max="120" step="1" value="8" style="width:52px;font-size:11px;padding:2px 4px;border:1px solid rgba(201,198,198,0.60);border-radius:3px;background:rgba(255,255,255,0.85);color:rgb(100,99,100);" onchange="_setDpsFadeTimeout(this.value)" />
+                        <input type="number" id="dps-fade-timeout" min="0" max="120" step="1" value="5" style="width:52px;font-size:11px;padding:2px 4px;border:1px solid rgba(201,198,198,0.60);border-radius:3px;background:rgba(255,255,255,0.85);color:rgb(100,99,100);" onchange="_setDpsFadeTimeout(this.value)" />
                     </div>
                     <div class="mode-group" style="margin-top:8px;">
                         <div class="mode-btn disabled" id="dps-last-report-btn" onclick="_showLastDpsReport()">查看上一场报告 LAST REPORT</div>
@@ -3791,8 +3814,14 @@ html, body {
                 </li>
                 <li class="sep"></li>
                 <li class="widget-row">
-                    <div class="widget-label">VISION PIPELINE</div>
-                    <div class="widget-note">目前内存注入安全性仍在确认，暂时使用packet捕捉与识图，不提供切换。</div>
+                    <div class="widget-label">DATA PIPELINE</div>
+                    <div class="mem-source-group" id="mem-source-group">
+                        <button class="boss-bar-mode-btn mem-source-btn" data-mode="tcp" type="button">TCP</button>
+                        <button class="boss-bar-mode-btn mem-source-btn" data-mode="memory" type="button">MEM</button>
+                        <button class="boss-bar-mode-btn mem-source-btn active" data-mode="hybrid" type="button">HYBRID</button>
+                        <button class="boss-bar-mode-btn mem-source-btn" data-mode="auto" type="button">AUTO</button>
+                    </div>
+                    <div class="widget-note">MEM 为纯内存模式；HYBRID 使用 mem_probe 主数据，并保留 TCP 伤害事件兜底。</div>
                     <div class="source-summary" id="data-source-summary" style="display:none">
                         HP: NETWORK · LV: NETWORK · STA: VISION · SKILL: VISION
                     </div>
@@ -4016,6 +4045,7 @@ var _spRenderToken = 0;
 var _spRenderPending = false;
 var _SP_INITIAL_ROWS = 80;
 var _SP_BATCH_ROWS = 120;
+var _memDataSource = 'hybrid';
 
 var currentActive = 'userInfo';
 var menuOpen = false;
@@ -4031,6 +4061,19 @@ function _sourceLabel(mode) {
     return mode === 'vision' ? 'VISION' : 'NETWORK';
 }
 
+function _memSourceLabel(mode) {
+    if (mode === 'memory') return 'MEM';
+    if (mode === 'hybrid') return 'HYBRID';
+    if (mode === 'auto') return 'AUTO';
+    return 'TCP';
+}
+
+function _syncMemSourceButtons() {
+    document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.getAttribute('data-mode') === _memDataSource);
+    });
+}
+
 function _syncSourceButtons() {
     document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
         var component = btn.getAttribute('data-component');
@@ -4041,6 +4084,7 @@ function _syncSourceButtons() {
 
 function _updateSourceSummary() {
     var summary = [
+        'DATA: ' + _memSourceLabel(_memDataSource),
         'HP: ' + _sourceLabel(_dataSourceMap.hp),
         'LV: ' + _sourceLabel(_dataSourceMap.level),
         'STA: ' + _sourceLabel(_dataSourceMap.stamina),
@@ -4777,6 +4821,19 @@ document.querySelectorAll('.source-mode-btn').forEach(function(btn) {
         _updateSourceSummary();
         if (window.pywebview && window.pywebview.api && window.pywebview.api.set_component_source) {
             window.pywebview.api.set_component_source(component, mode);
+        }
+    });
+});
+document.querySelectorAll('.mem-source-btn').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var mode = this.getAttribute('data-mode') || 'tcp';
+        playSound('snd-click');
+        _memDataSource = mode;
+        _syncMemSourceButtons();
+        _updateSourceSummary();
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.set_data_source) {
+            window.pywebview.api.set_data_source(mode);
         }
     });
 });
@@ -5685,6 +5742,35 @@ function _refreshThemeButtons() {
     if (bd) bd.classList.toggle('active', !!allDark);
 }
 
+function _menuThemeFromPanels() {
+    var panels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert'];
+    var lightCount = 0;
+    var darkCount = 0;
+    panels.forEach(function(p) {
+        var t = _panelThemes[p] || (_themeDefaultDark[p] ? 'dark' : 'light');
+        if (t === 'light') lightCount += 1;
+        if (t === 'dark') darkCount += 1;
+    });
+    return lightCount > darkCount ? 'light' : 'dark';
+}
+
+function _applyMenuTheme(theme) {
+    document.documentElement.classList.toggle('theme-dark', theme === 'dark');
+}
+
+function _syncPanelThemes(themes) {
+    if (themes && typeof themes === 'object') {
+        var next = {};
+        ['dps', 'hp', 'bosshp', 'skillfx', 'alert'].forEach(function(p) {
+            var t = String(themes[p] || '').toLowerCase();
+            next[p] = (t === 'light' || t === 'dark') ? t : (_themeDefaultDark[p] ? 'dark' : 'light');
+        });
+        _panelThemes = next;
+    }
+    _applyMenuTheme(_menuThemeFromPanels());
+    _refreshThemeButtons();
+}
+
 function _toggleTheme(panel) {
     var cur = _panelThemes[panel] || (_themeDefaultDark[panel] ? 'dark' : 'light');
     var next = cur === 'light' ? 'dark' : 'light';
@@ -5692,7 +5778,7 @@ function _toggleTheme(panel) {
     if (window.pywebview && window.pywebview.api && window.pywebview.api.set_panel_theme) {
         window.pywebview.api.set_panel_theme(panel, next);
     }
-    _refreshThemeButtons();
+    _syncPanelThemes(_panelThemes);
 }
 
 function _setAllThemes(theme) {
@@ -5703,17 +5789,16 @@ function _setAllThemes(theme) {
             window.pywebview.api.set_panel_theme(p, theme);
         }
     });
-    _refreshThemeButtons();
+    _syncPanelThemes(_panelThemes);
 }
 
 function _initPanelThemes() {
     if (window.pywebview && window.pywebview.api && window.pywebview.api.get_panel_themes) {
         window.pywebview.api.get_panel_themes().then(function(themes) {
-            if (themes && typeof themes === 'object') {
-                _panelThemes = themes;
-            }
-            _refreshThemeButtons();
-        }).catch(function() { _refreshThemeButtons(); });
+            _syncPanelThemes(themes);
+        }).catch(function() { _syncPanelThemes(_panelThemes); });
+    } else {
+        _syncPanelThemes(_panelThemes);
     }
 }
 
@@ -5742,6 +5827,13 @@ function restoreMenuSettings(cfg) {
         document.getElementById('sound-volume').value = cfg.sound_volume;
     }
     /* Data source */
+    if (cfg.panel_themes) {
+        _syncPanelThemes(cfg.panel_themes);
+    }
+    if (cfg.mem_data_source) {
+        _memDataSource = String(cfg.mem_data_source).toLowerCase();
+        if (['tcp', 'memory', 'hybrid', 'auto'].indexOf(_memDataSource) < 0) _memDataSource = 'hybrid';
+    }
     if (cfg.data_source_map) {
         Object.keys(_dataSourceMap).forEach(function(key) {
             if (cfg.data_source_map[key]) {
@@ -5755,6 +5847,7 @@ function restoreMenuSettings(cfg) {
         });
     }
     _syncSourceButtons();
+    _syncMemSourceButtons();
     _updateSourceSummary();
     if (cfg.auto_key) {
         _syncAutoKeyState(cfg.auto_key);

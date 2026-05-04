@@ -760,7 +760,7 @@ class PacketBridge:
         """
         data_source:
             'tcp'    — current behavior, full TCP packet parsing
-            'memory' — fully replace TCP via mem_probe.UnifiedDataSource
+            'memory' — strict mem_probe only; no TCP damage fallback
             'hybrid' — mem_probe for self/scene/entity/combat;
                        TCP only for damage events (PATH B)
             'auto'   — try memory; fall back to tcp on failure
@@ -829,7 +829,7 @@ class PacketBridge:
     def start(self):
         """启动抓包，后台线程运行.
 
-        data_source='memory'  → 跑 UnifiedDataSource, 不启动 TCP 抓包
+        data_source='memory'  → 跑 UnifiedDataSource, 不启动 TCP 抓包/伤害兜底
         data_source='hybrid'  → UnifiedDataSource 内部启 PATH-B damage-only TCP
         data_source='auto'    → 尝试 memory; 失败则降级 TCP
         data_source='tcp'     → 当前默认行为, 完整 TCP 抓包

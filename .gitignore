@@ -5,7 +5,6 @@ __pycache__/
 !_sao_cy*.pyd
 *.pyo
 plan_*
-!PLAN_*.md
 
 # ── User data (excluded from repo) ────────────────
 player_profile.json
@@ -22,6 +21,7 @@ exports/
 test_*.py
 *_test.py
 tests/
+test_*
 
 # ── Build / dist ──────────────────────────────────
 dist/

@@ -2415,7 +2415,7 @@ class SAOPlayerGUI:
             # the webview menu does.
             try:
                 _data_source_mode = str(
-                    self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
+                    self._cfg_settings_ref.get('mem_data_source', 'hybrid') or 'hybrid'
                 ).lower()
             except Exception:
                 _data_source_mode = 'tcp'
@@ -4670,6 +4670,7 @@ class SAOPlayerGUI:
         if not burst_slots:
             burst_slots = [1]
         boss_bar_mode = str(self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid')
+        mem_data_source = self._get_mem_data_source()
         update_label = self._build_update_menu_label()
         session_visible = False
         session_count = 0
@@ -4695,6 +4696,7 @@ class SAOPlayerGUI:
             burst_on,
             tuple(burst_slots),
             boss_bar_mode,
+            mem_data_source,
             bool(self._panels_hidden),
             update_label,
             session_visible,
@@ -4778,6 +4780,9 @@ class SAOPlayerGUI:
         boss_bar_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
         boss_bar_labels = {'always': '常显', 'boss_raid': 'Boss战', 'off': '关闭'}
         boss_bar_disp = boss_bar_labels.get(boss_bar_mode, boss_bar_mode)
+        mem_mode = self._get_mem_data_source()
+        mem_mode_labels = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}
+        mem_mode_disp = mem_mode_labels.get(mem_mode, mem_mode.upper())
         session_visible = False
         try:
             stack = getattr(self, '_menu_left_stack', None)
@@ -4853,6 +4858,7 @@ class SAOPlayerGUI:
              'label': '查看上次战斗DPS' + (' ✓' if dps_report_available else ' (暂无)'),
              'command': self._show_last_dps_report_menu},
             {'icon': '◇', 'label': f'Boss血条: {boss_bar_disp}', 'command': self._cycle_boss_bar_mode},
+            {'icon': '◆', 'label': f'Hybrid数据源: {mem_mode_disp}', 'command': self._cycle_mem_data_source},
         ])
 
         return {
@@ -5431,8 +5437,8 @@ class SAOPlayerGUI:
         # 数据源行
         src_text = 'Packet'
         if getattr(self, '_cfg_settings_ref', None):
-            src = self._cfg_settings_ref.get('data_source', 'packet')
-            src_text = 'Packet' if src == 'packet' else 'OCR'
+            src = str(self._cfg_settings_ref.get('mem_data_source', 'hybrid') or 'hybrid').lower()
+            src_text = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}.get(src, 'TCP')
         self._status_source_lbl = _sao_row(body_pad, '数据源', src_text,
                                             value_fg=_SAO_PANEL_GOLD)
 
@@ -5480,8 +5486,8 @@ class SAOPlayerGUI:
         if hasattr(self, '_status_source_lbl'):
             src_text = 'Packet'
             if getattr(self, '_cfg_settings_ref', None):
-                src = self._cfg_settings_ref.get('data_source', 'packet')
-                src_text = 'Packet' if src == 'packet' else 'OCR'
+                src = str(self._cfg_settings_ref.get('mem_data_source', 'hybrid') or 'hybrid').lower()
+                src_text = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}.get(src, 'TCP')
             self._status_source_lbl.configure(text=src_text, fg=_SAO_PANEL_GOLD)
         view = self._get_update_view()
         if hasattr(self, '_status_update_lbl'):
@@ -7900,10 +7906,10 @@ class SAOPlayerGUI:
         # User-configurable fade timeout. 0 means never fade; otherwise respect
         # the menu value so short-fade users are not pinned to the old 60s floor.
         try:
-            raw = self._get_setting('dps_fade_timeout_s', 60)
-            v = float(raw if raw is not None else 60)
+            raw = self._get_setting('dps_fade_timeout_s', 5)
+            v = float(raw if raw is not None else 5)
         except Exception:
-            v = 60.0
+            v = 5.0
         if v <= 0:
             return 86400.0
         return float(max(1.0, v))
@@ -7950,10 +7956,10 @@ class SAOPlayerGUI:
         floor is the dps fade timeout, so BB can never disappear before DPS.
         """
         try:
-            raw = self._get_setting('boss_hp_hold_timeout_s', 60)
-            v = float(raw if raw is not None else 60)
+            raw = self._get_setting('boss_hp_hold_timeout_s', 5)
+            v = float(raw if raw is not None else 5)
         except Exception:
-            v = 60.0
+            v = 5.0
         if v <= 0:
             return 86400.0
         return float(max(1.0, v, self._combat_damage_timeout_s()))
@@ -8144,6 +8150,21 @@ class SAOPlayerGUI:
         nxt = modes[(idx + 1) % len(modes)]
         self._set_setting('boss_bar_mode', nxt)
         self._refresh_menu_if_open()
+
+    def _get_mem_data_source(self) -> str:
+        mode = str(self._get_setting('mem_data_source', 'hybrid') or 'hybrid').strip().lower()
+        return mode if mode in ('tcp', 'memory', 'hybrid', 'auto') else 'hybrid'
+
+    def _cycle_mem_data_source(self):
+        modes = ['tcp', 'hybrid', 'auto', 'memory']
+        cur = self._get_mem_data_source()
+        nxt = modes[(modes.index(cur) + 1) % len(modes)]
+        self._set_setting('mem_data_source', nxt)
+        self._reconfigure_data_engines()
+        self._update_status_panel()
+        self._refresh_menu_if_open()
+        labels = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}
+        self._show_entity_alert('DATA SOURCE', f'已切换到 {labels.get(nxt, nxt.upper())}', display_time=2.4)
 
     # ══════════════════════════════════════════════
     #  其他功能

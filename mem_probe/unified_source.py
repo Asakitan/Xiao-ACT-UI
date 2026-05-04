@@ -6,11 +6,11 @@ Replaces TCP packet parsing as the data source for SAO-UI. Combines:
     MemSceneWatcher   → on_scene_change
     MemEntityWatcher  → on_monster_update
     MemCombatWatcher  → on_boss_event + in_combat
-    MemDamageWatcher  → on_damage (PATH B: TCP damage-only by default)
+    MemDamageWatcher  → on_damage (PATH B: TCP damage-only in hybrid/auto)
 
 Entry point used by `packet_bridge.PacketBridge` when `data_source='memory'`
-or `'hybrid'`. Main app (`sao_webview.py`) doesn't change beyond a single
-settings read added in Phase 7.
+or `'hybrid'`. `memory` is strict/pure memory and does not start TCP damage
+fallback; `hybrid` keeps TCP for damage events until PATH A is implemented.
 """
 from __future__ import annotations
 
@@ -172,24 +172,50 @@ class UnifiedDataSource:
             )
             self._scene_watcher.start()
 
-        # Entity watcher
+        # Entity watcher — uses offsets discovered by mem_probe.discover_entities.
         entity_anchor = _get_v2_anchor(anchors, "entity_collection")
         monster_klass = _parse_hex(entity_anchor.get("monster_klass_ptr"))
         if monster_klass:
-            # Build a minimal EntityReadConfig — field offsets must come from
-            # a Phase 4 discovery (or hardcoded if game-specific).
+            uuid_off = int(entity_anchor.get("uuid_off", 0x10) or 0x10)
+            attr_slot_off = int(entity_anchor.get("attr_slot_off", -1))
+            hp_off = int(entity_anchor.get("hp_off", -1))
+            max_hp_off = int(entity_anchor.get("max_hp_off", 0x20) or 0x20)
+            hp_width = int(entity_anchor.get("hp_width", 4) or 4)
+            # If hp_off wasn't disambiguated (discovery saw hp == max_hp),
+            # fall back to reading max_hp into both — once monster takes damage,
+            # the watcher's re-discovery will refine cur_hp_off.
+            effective_hp_off = hp_off if hp_off >= 0 else max_hp_off
+            nested = (attr_slot_off >= 0)
+            # obj body must cover uuid+attr_slot. If FLAT, also cover hp/max_hp.
+            obj_body_size = max(uuid_off, attr_slot_off + 8) + 0x40
+            attr_body_size = max(effective_hp_off, max_hp_off) + 0x80
+            if not nested:
+                obj_body_size = max(obj_body_size, attr_body_size)
+            field_specs = [
+                ("uuid", uuid_off, 8),
+                ("attr.hp" if nested else "hp", effective_hp_off, hp_width),
+                ("attr.max_hp" if nested else "max_hp", max_hp_off, hp_width),
+            ]
+            # Optional fields written by future discovery phases.
+            for opt_name in ("is_dead_off", "profession_id_off",
+                             "extinction_off", "max_extinction_off"):
+                logical = opt_name.replace("_off", "")
+                v = entity_anchor.get(opt_name)
+                if v is not None and int(v) >= 0:
+                    field_specs.append((logical, int(v), 4))
+            hp_encoding = str(entity_anchor.get("hp_encoding", "i32") or "i32")
+            field_encodings = {}
+            if hp_encoding in ("f32", "f64"):
+                field_encodings["hp"] = hp_encoding
+                field_encodings["max_hp"] = hp_encoding
             entity_cfg = EntityReadConfig(
                 klass_ptr=monster_klass,
-                field_specs=[
-                    # Default IL2CPP-style layout (game-specific; tune via phase 4)
-                    ("uuid", 0x10, 8),
-                    ("hp", 0x18, 4),
-                    ("max_hp", 0x1C, 4),
-                    ("is_dead", 0x20, 1),
-                    ("profession_id", 0x24, 4),
-                ],
-                body_size=0x40,
+                field_specs=field_specs,
+                body_size=obj_body_size,
                 name="monster",
+                attr_slot_off=int(attr_slot_off),
+                attr_body_size=attr_body_size,
+                field_encodings=field_encodings,
             )
             self._entity_watcher = MemEntityWatcher(
                 pm, [entity_cfg],
@@ -216,10 +242,19 @@ class UnifiedDataSource:
             )
             self._combat_watcher.start()
 
-        # Damage watcher (PATH B by default)
-        if self.mode in ("hybrid", "auto", "memory"):
+        # Damage watcher / TCP supplement: PATH B is TCP-backed.
+        # IL2CPP klass table is anti-cheat-protected in this game (script.json
+        # RVAs yield obfuscated klass_ptrs), so memory-side monster/scene
+        # discovery isn't viable. In hybrid mode we forward ALL non-SELF
+        # events (damage, monster_update, boss_event, scene_change) through
+        # an embedded PacketBridge — memory provides the latency win for
+        # SELF (HP/level), TCP supplies everything else.
+        if self.mode in ("hybrid", "auto"):
             self._damage_watcher = MemDamageWatcher(
                 on_damage=self._handle_damage,
+                on_monster_update=self._handle_monster_update,
+                on_boss_event=self._handle_boss_event,
+                on_scene_change=self._handle_scene_change,
                 on_status_change=self._set_status,
                 path="B",
             )

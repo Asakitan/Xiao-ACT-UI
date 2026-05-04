@@ -659,6 +659,23 @@ class BossHpOverlay:
         self._hide_after_exit = True
         self._schedule_tick(immediate=True)
 
+    def fade_out(self) -> None:
+        # Soft idle fade — keep the window alive in the background so the
+        # next active=True update can fade_in() instantly without rebuilding
+        # the GPU presenter / ULW. Real teardown still goes through
+        # hide() / destroy().
+        if self._win is None:
+            return
+        if self._exiting:
+            return
+        self._exiting = True
+        self._fade_from = self._fade_alpha
+        self._fade_target = 0.0
+        self._fade_start = time.time()
+        self._fade_duration = self.FADE_OUT
+        self._hide_after_exit = False
+        self._schedule_tick(immediate=True)
+
     def destroy(self) -> None:
         self._cancel_tick()
         if hasattr(self, '_render_worker') and self._render_worker is not None:
@@ -702,12 +719,12 @@ class BossHpOverlay:
             return
         if not data.get('active', False):
             self._additional_units = []
-            # Boss inactive → animate out.
+            # Boss inactive → soft fade only. Keep the window alive so the
+            # next pull becomes a cheap fade_in instead of a full GPU
+            # presenter rebuild. Real teardown happens through hide()
+            # (toggle off / shutdown) or destroy().
             if self._visible and not self._exiting:
-                self.hide()
-            elif not self._visible:
-                # Already hidden, nothing to do.
-                pass
+                self.fade_out()
             return
 
         # Cancel any pending exit — boss re-appeared.

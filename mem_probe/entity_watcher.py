@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import traceback
+import struct
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set
@@ -33,24 +34,33 @@ class EntityReadConfig:
 
     klass_ptr: the IL2CPP Il2CppClass* pointer (heap match for instance discovery)
     field_specs: list of (logical_name, byte_offset, byte_width) describing
-                 fields to extract from each entity body.
+                 fields to extract.
+
+    Two layouts supported:
+      FLAT  (attr_slot_off < 0): all fields read from obj body.
+      NESTED (attr_slot_off >= 0): obj body contains uuid; obj+attr_slot_off
+                                   is a ptr to an attr object. Fields whose
+                                   logical_name starts with 'attr.' are read
+                                   from the deref'd attr body instead. Fields
+                                   without that prefix stay in obj body.
 
     Required logical names (semantics):
-        'uuid'         — entity UUID (i64 typical)
-        'hp'           — current HP (i32 or i64)
-        'max_hp'       — max HP (same width as hp)
-        'is_dead'      — boolean / i32
-        'profession_id' — i32, used for boss type detection
+        'uuid'         — entity UUID (i64 typical) — always in obj body
+        'hp'           — current HP — typically nested ('attr.hp')
+        'max_hp'       — max HP — typically nested ('attr.max_hp')
     Optional:
-        'max_extinction' — break-bar max
-        'extinction'     — break-bar current
-        'name_ptr'       — utf-16 string pointer
-        'pos_x' / 'pos_y' / 'pos_z' — float position
+        'is_dead', 'profession_id', 'max_extinction', 'extinction'
     """
     klass_ptr: int
     field_specs: List[tuple]   # [(name, off, width), ...]
-    body_size: int = 0x200     # how many bytes to read per entity for unpack
+    body_size: int = 0x200     # how many bytes to read per entity body
     name: str = "monster"      # for logging
+    attr_slot_off: int = -1    # if >=0, deref obj+attr_slot_off → attr obj
+    attr_body_size: int = 0x200  # how many bytes to read per attr body
+    # Optional per-field encoding hints (logical_name -> 'i32'|'i64'|'f32'|'f64').
+    # When a hint is present, the watcher reinterprets the unpacked u-int via
+    # struct so the consumer sees the natural number. Default = u-int passthrough.
+    field_encodings: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -108,6 +118,8 @@ class MemEntityWatcher:
     def stop(self, timeout: float = 1.0) -> None:
         self._stop.set()
         if self._thread:
+            if self._thread is threading.current_thread():
+                return
             self._thread.join(timeout=timeout)
             self._thread = None
 
@@ -200,17 +212,50 @@ class MemEntityWatcher:
             cfg = self._cfg_by_klass.get(klass)
             if cfg is None:
                 continue
-            # Build (off, width) specs for unpack
-            specs = [(off, width) for _name, off, width in cfg.field_specs]
+            # Partition specs: 'attr.*' → nested attr body; others → obj body.
+            obj_specs: List[tuple] = []   # (logical_name, off, width)
+            attr_specs: List[tuple] = []
+            for name, off, width in cfg.field_specs:
+                if isinstance(name, str) and name.startswith("attr."):
+                    attr_specs.append((name[5:], off, width))
+                else:
+                    obj_specs.append((name, off, width))
+            obj_pack = [(off, width) for _n, off, width in obj_specs]
+            attr_pack = [(off, width) for _n, off, width in attr_specs]
+            encs = cfg.field_encodings or {}
+
+            def _maybe_reinterpret(name: str, raw_uint: int, width: int) -> int:
+                """Convert unpacked u-int back to natural number if encoded as float."""
+                enc = encs.get(name)
+                if enc == "f32" and width == 4:
+                    return int(struct.unpack("<f", raw_uint.to_bytes(4, "little"))[0])
+                if enc == "f64" and width == 8:
+                    return int(struct.unpack("<d", raw_uint.to_bytes(8, "little"))[0])
+                return raw_uint
+
             for obj in obj_list:
                 blob = self.pm.read_bytes(obj, cfg.body_size)
                 if not blob:
                     continue
-                values = _cy.unpack_struct_fields(blob, specs)
-                fields = {
-                    name: values[i]
-                    for i, (name, _o, _w) in enumerate(cfg.field_specs)
-                }
+                fields: Dict[str, int] = {}
+                obj_vals = _cy.unpack_struct_fields(blob, obj_pack)
+                for i, (n, _o, w) in enumerate(obj_specs):
+                    fields[n] = _maybe_reinterpret(n, obj_vals[i], w)
+                # NESTED: deref attr_slot, read attr body, unpack remaining fields
+                if attr_specs and cfg.attr_slot_off >= 0:
+                    if cfg.attr_slot_off + 8 > len(blob):
+                        continue
+                    attr_ptr = int.from_bytes(
+                        blob[cfg.attr_slot_off:cfg.attr_slot_off + 8], "little")
+                    if not (0x10000 <= attr_ptr <= 0x7FFFFFFFFFFF):
+                        continue
+                    attr_blob = self.pm.read_bytes(attr_ptr, cfg.attr_body_size)
+                    if not attr_blob:
+                        continue
+                    attr_vals = _cy.unpack_struct_fields(attr_blob, attr_pack)
+                    for i, (n, _o, w) in enumerate(attr_specs):
+                        # field_encodings keys use the un-prefixed logical name
+                        fields[n] = _maybe_reinterpret(n, attr_vals[i], w)
                 self._update_entity(obj, klass, fields)
 
     def _update_entity(self, obj: int, klass: int, fields: dict) -> None:
