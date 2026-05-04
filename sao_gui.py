@@ -5075,16 +5075,26 @@ class SAOPlayerGUI:
     def _close_sao_menu_from_background(self):
         if self._sao_menu_close_pending or self._exit_animating or self._close_finalized:
             return
+        menu = getattr(self, '_sao_menu', None)
+        if menu is None or not getattr(menu, 'visible', False):
+            return
         self._sao_menu_close_pending = True
         try:
             self._toggle_sao_menu(allow_close=True)
         finally:
             try:
-                self.root.after(380, self._clear_sao_menu_close_pending)
+                self.root.after(650, self._clear_sao_menu_close_pending)
             except Exception:
                 self._sao_menu_close_pending = False
 
     def _clear_sao_menu_close_pending(self):
+        menu = getattr(self, '_sao_menu', None)
+        if menu is not None and getattr(menu, 'visible', False):
+            try:
+                self.root.after(180, self._clear_sao_menu_close_pending)
+                return
+            except Exception:
+                pass
         self._sao_menu_close_pending = False
 
     def _on_sao_menu_open(self):
@@ -6228,6 +6238,7 @@ class SAOPlayerGUI:
         _backdrop_drag = {
             'pressed': False, 'in_panel': False,
             'cursor_x': 0, 'cursor_y': 0, 'last_y': 0,
+            'close_candidate': False,
         }
         _DRAG_ROW_PX = 40  # row height (36) + gap (4) — see _SessionPlayersRenderer
 
@@ -6312,14 +6323,20 @@ class SAOPlayerGUI:
                 _backdrop_drag['pressed'] = True
                 _backdrop_drag['in_panel'] = bool(inside)
                 _backdrop_drag['last_y'] = y
+                _backdrop_drag['close_candidate'] = not bool(inside)
                 if inside:
                     return  # Reserve the click for drag scrolling
+                return
             elif action == 0:  # release
                 was_in_panel = bool(_backdrop_drag.get('in_panel', False))
+                close_candidate = bool(_backdrop_drag.get('close_candidate', False))
                 _backdrop_drag['pressed'] = False
                 _backdrop_drag['in_panel'] = False
+                _backdrop_drag['close_candidate'] = False
                 if was_in_panel:
                     return  # Drag finished — do not close
+                if not close_candidate or inside:
+                    return
             else:
                 return
             try:
@@ -7173,6 +7190,33 @@ class SAOPlayerGUI:
         ov = self._fisheye_ov
         self._fisheye_ov = None
         if ov is not None:
+            gpu_win = getattr(ov, 'gpu_win', None)
+            if gpu_win is not None:
+                try:
+                    import ctypes as _ct
+                    _u32 = _ct.windll.user32
+                    _GWL_EXSTYLE = -20
+                    _WS_EX_TRANSPARENT = 0x00000020
+                    _HWND_NOTOPMOST = -2
+                    _SWP_NOMOVE = 0x0002
+                    _SWP_NOSIZE = 0x0001
+                    _SWP_NOACTIVATE = 0x0010
+                    _SWP_NOOWNERZORDER = 0x0200
+                    _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
+                    if _hwnd:
+                        _ex = _u32.GetWindowLongPtrW(_ct.c_void_p(_hwnd), _GWL_EXSTYLE)
+                        _u32.SetWindowLongPtrW(
+                            _ct.c_void_p(_hwnd), _GWL_EXSTYLE,
+                            _ex | _WS_EX_TRANSPARENT,
+                        )
+                        _u32.SetWindowPos(
+                            _ct.c_void_p(_hwnd), _ct.c_void_p(_HWND_NOTOPMOST),
+                            0, 0, 0, 0,
+                            _SWP_NOMOVE | _SWP_NOSIZE
+                            | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
+                        )
+                except Exception:
+                    pass
             running = getattr(ov, '_running_ref', None)
             if running:
                 running[0] = False
@@ -7187,7 +7231,6 @@ class SAOPlayerGUI:
                 except Exception:
                     pass
             # GPU window + presenter cleanup
-            gpu_win = getattr(ov, 'gpu_win', None)
             if gpu_win is not None:
                 try:
                     gpu_win.destroy()
