@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.10"
+APP_VERSION = "2.5.11"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,11 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.11:
+#     • Keep BossHP visible during invincible / lock-HP boss mechanics while
+#       DPS still has recent live damage, and protect self/team/known player
+#       UIDs from the post-scene combat-target grace so teammates never become
+#       fake boss-bar targets.
 # v2.5.10:
 #     • Keep DPS/BossHP recoverable after hard map switches by preserving the
 #       DPS overlay window, re-opening live DPS on fresh damage, and adding a

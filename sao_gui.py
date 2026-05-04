@@ -2597,6 +2597,43 @@ class SAOPlayerGUI:
         except Exception:
             return 0
 
+    def _is_known_friendly_uid(self, uid: int) -> bool:
+        uid = self._session_int(uid, 0)
+        if uid <= 0:
+            return False
+        self_uid = self._current_player_uid_int()
+        if self_uid > 0 and uid == self_uid:
+            return True
+        bridge = getattr(self, '_packet_engine', None)
+        if bridge is not None:
+            try:
+                team_members = getattr(bridge, '_team_members', {}) or {}
+                if uid in team_members:
+                    return True
+            except Exception:
+                pass
+            try:
+                pdata = (bridge.get_players() or {}).get(uid)
+            except Exception:
+                pdata = None
+            if pdata is not None:
+                try:
+                    if (getattr(pdata, 'name', '')
+                            or int(getattr(pdata, 'level', 0) or 0) > 0
+                            or int(getattr(pdata, 'profession_id', 0) or 0) > 0
+                            or int(getattr(pdata, 'fight_point', 0) or 0) > 0):
+                        return True
+                except Exception:
+                    pass
+        entry = getattr(self, '_session_players', {}).get(uid)
+        if entry is not None:
+            try:
+                return bool(entry.get('is_self') or entry.get('name')
+                            or int(entry.get('fight_point') or 0) > 0)
+            except Exception:
+                return True
+        return False
+
     def _normalize_damage_event_for_self(self, event):
         if not isinstance(event, dict):
             return event
@@ -2692,6 +2729,8 @@ class SAOPlayerGUI:
             target_uid = 0
         self_uid = self._current_player_uid_int()
         if target_uid and self_uid and target_uid == self_uid:
+            return event
+        if self._is_known_friendly_uid(target_uid):
             return event
 
         try:
@@ -3830,13 +3869,22 @@ class SAOPlayerGUI:
                             getattr(self, '_bb_last_hp_motion_ts', 0.0) or 0.0)
                         _bb_damage_ts = float(
                             getattr(self, '_bb_last_damage_ts', 0.0) or 0.0)
+                        try:
+                            _dps_live_window_s = max(
+                                float(_bb_timeout), float(_bb_stable_hide_s) * 2.0)
+                            _dps_live_for_stable = bool(
+                                self._dps_tracker
+                                and self._dps_tracker.has_recent_damage(_dps_live_window_s))
+                        except Exception:
+                            _dps_live_for_stable = False
                         _bb_recent_damage_for_stable = (
                             _bb_damage_ts > 0.0
                             and (_now - _bb_damage_ts) < _bb_stable_hide_s
                         )
                         if (_bb_motion_ts > 0.0
                                 and (_now - _bb_motion_ts) >= _bb_stable_hide_s
-                                and not _bb_recent_damage_for_stable):
+                                and not _bb_recent_damage_for_stable
+                                and not _dps_live_for_stable):
                             _bb_data['active'] = False
                 _bb_sig = _CY_UI.build_boss_bar_sig(_bb_data, _bb_additional)
                 if _bb_sig != self._last_boss_hp_push_sig:
