@@ -381,6 +381,8 @@ _BOSS_BUFF_EVENTS = frozenset({
     BuffEventType.INTO_FRACTURE_STATE,
 })
 
+WIPE_BUFF_BASE_ID = 510072
+
 # EDamageType enum (from SRDPS enum_e_damage_type.proto)
 class DamageType:
     NORMAL = 0
@@ -1716,6 +1718,36 @@ class PacketParser:
             except Exception as e:
                 logger.debug(f'[Parser] boss event callback error: {e}')
 
+    def _check_wipe_buff(self, buff_id: int, source: str = '',
+                         host_uuid: int = 0, buff_uuid: int = 0) -> bool:
+        try:
+            buff_id = int(buff_id or 0)
+        except Exception:
+            buff_id = 0
+        if buff_id != WIPE_BUFF_BASE_ID:
+            return False
+        logger.info(
+            f'[Parser] Wipe buff detected: base_id={buff_id} source={source} '
+            f'host={host_uuid} buff_uuid={buff_uuid}'
+        )
+        print(
+            f'[Parser] ☠ 检测到团灭 buff({buff_id})，等待下一次伤害重置 DPS/BossHP',
+            flush=True,
+        )
+        self._notify_soft_scene_restart(f'wipe_buff:{source}:base={buff_id}')
+        return True
+
+    def _check_wipe_buffs(self, buffs, source: str = '', host_uuid: int = 0) -> bool:
+        matched = False
+        for buff in buffs or []:
+            if not isinstance(buff, dict):
+                continue
+            buff_id = buff.get('buff_id') or buff.get('base_id') or buff.get('id')
+            buff_uuid = buff.get('buff_uuid') or buff.get('uuid') or 0
+            if self._check_wipe_buff(buff_id, source, host_uuid, buff_uuid):
+                matched = True
+        return matched
+
     def _notify_self(self):
         """Notify callback for current player if available."""
         if self._current_uid and self._current_uid in self._players:
@@ -2147,6 +2179,7 @@ class PacketParser:
             new_id = msg.NewBuffId
             logger.info(f'[Parser] NotifyBuffChange(pb2): old={old_id} new={new_id}')
             _append_packet_debug('buff_change', {'old_buff_id': old_id, 'new_buff_id': new_id})
+            self._check_wipe_buff(new_id, 'notify_buff_change')
         except Exception as e:
             logger.debug(f'[Parser] NotifyBuffChange decode error: {e}')
 
@@ -3730,6 +3763,7 @@ class PacketParser:
                 if has_buffs:
                     buffs = _decode_buff_info_sync_pb(entity.BuffInfos)
                     if buffs:
+                        self._check_wipe_buffs(buffs, 'entity_appear_monster', uuid)
                         monster.buff_list = buffs
                         logger.debug(f'[Parser] Entity appear: {len(buffs)} buffs on monster uuid={uuid}')
                 monster.last_update = time.time()
@@ -3766,6 +3800,7 @@ class PacketParser:
                         player = self._get_player(uid)
                         buffs = _decode_buff_info_sync_pb(entity.BuffInfos)
                         if buffs:
+                            self._check_wipe_buffs(buffs, 'entity_appear_self', uuid)
                             player.buff_list = buffs
                             logger.info(f'[Parser] Entity appear: {len(buffs)} buffs on player uid={uid}')
                 # Log player state after entity appear for debugging
@@ -3968,6 +4003,7 @@ class PacketParser:
         if delta.HasField('BuffInfos'):
             buffs = _decode_buff_info_sync_pb(delta.BuffInfos)
             if buffs:
+                self._check_wipe_buffs(buffs, 'aoi_delta_buffs', uuid)
                 if target_is_player:
                     if uid in self._players:
                         self._players[uid].buff_list = buffs

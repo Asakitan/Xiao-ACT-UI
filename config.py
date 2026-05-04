@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.21"
+APP_VERSION = "2.5.22"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,12 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.22:
+#     • Add packet-capture self-healing for long idle stalls: bridge timeout
+#       now clears the capture endpoint lock for re-detection and can request a
+#       pcap handle restart when raw frames stop, matching SRDPS-style idle
+#       reconnect behavior. Also align deferred DPS/BossHP reset with
+#       resonance semantics and route wipe buff 510072 into soft restart.
 # v2.5.21:
 #     • Harden Entity DPS/BossHP recovery across map switches and mid-session
 #       startup: replay early self dirty packets after UID confirmation, keep a

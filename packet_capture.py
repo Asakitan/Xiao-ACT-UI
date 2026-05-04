@@ -240,6 +240,9 @@ class TcpReassembler:
             'gap_skips': 0,
             'server_changes': 0,
             'replayed_after_change': 0,
+            'force_reconnects': 0,
+            'pcap_timeouts': 0,
+            'pcap_errors': 0,
         }
         self._frag = _IpFragmentCache()
         # v2.1.18: 同 (addr) 入站 payload 的近端环形缓冲, 用于在
@@ -257,6 +260,8 @@ class TcpReassembler:
         # → BossHP 目标被反复清掉. 这里加最小间隔, 真重连漏不了, 误触发被吃掉.
         self._last_reconnect_ts: float = 0.0
         self._RECONNECT_COOLDOWN = 3.0
+        self._last_force_reconnect_ts: float = 0.0
+        self._FORCE_RECONNECT_COOLDOWN = 8.0
 
     @property
     def server_identified(self) -> bool:
@@ -270,6 +275,29 @@ class TcpReassembler:
             self._buf = b''
             self._last_t = 0
             self._gap_since = 0.0
+
+    def force_reconnect(self, reason: str = 'watchdog') -> bool:
+        """Drop the current endpoint lock so the next packet can re-detect it."""
+        now = time.time()
+        if now - self._last_force_reconnect_ts < self._FORCE_RECONNECT_COOLDOWN:
+            return False
+        self._last_force_reconnect_ts = now
+        old_addr = None
+        with self._lock:
+            old_addr = self._server_addr
+            self._server_addr = None
+            self._next_seq = -1
+            self._cache.clear()
+            self._buf = b''
+            self._last_t = 0
+            self._gap_since = 0.0
+            self.stats['force_reconnects'] += 1
+        logger.warning(f'[Capture] force reconnect: reason={reason} old={old_addr}')
+        print(
+            f'[Capture] 🔄 抓包链路自愈: {reason}, 重新搜索游戏服务器',
+            flush=True,
+        )
+        return True
 
     # ─── 主入口 ───
     def feed_raw_frame(self, raw: bytes):
@@ -756,6 +784,8 @@ class PacketCapture:
         self._thread: Optional[threading.Thread] = None
         self._reassembler = TcpReassembler(on_game_packet,
                                             on_server_change=on_server_change)
+        self._restart_requested = threading.Event()
+        self._last_packet_ts: float = 0.0
 
     @property
     def server_identified(self) -> bool:
@@ -763,7 +793,20 @@ class PacketCapture:
 
     @property
     def stats(self) -> Dict[str, int]:
-        return dict(getattr(self._reassembler, 'stats', {}) or {})
+        data = dict(getattr(self._reassembler, 'stats', {}) or {})
+        data['last_packet_age_s'] = int(max(0.0, time.time() - self._last_packet_ts)) if self._last_packet_ts else -1
+        return data
+
+    def force_reconnect(self, reason: str = 'watchdog') -> bool:
+        return bool(self._reassembler.force_reconnect(reason))
+
+    def request_restart(self, reason: str = 'watchdog') -> bool:
+        if not self._running:
+            return False
+        print(f'[Capture] 🔁 请求重开 pcap handle: {reason}', flush=True)
+        logger.warning(f'[Capture] pcap restart requested: {reason}')
+        self._restart_requested.set()
+        return True
 
     def start(self):
         if self._running:
@@ -780,20 +823,28 @@ class PacketCapture:
             self._thread = None
 
     def _loop(self):
+        while self._running:
+            should_retry = self._loop_once()
+            if self._running and should_retry:
+                time.sleep(0.25)
+                continue
+            break
+
+    def _loop_once(self) -> bool:
         print(f'[Capture] _loop 线程已启动', flush=True)
         try:
             dll = _load_wpcap()
         except RuntimeError as e:
             print(f'[Capture] wpcap.dll 加载失败: {e}', flush=True)
             logger.error(str(e))
-            return
+            return False
 
         # 设备选择
         dev = self._device or auto_select_device()
         if not dev:
             print('[Capture] 没有可用网络设备!', flush=True)
             logger.error('[Capture] 没有可用网络设备')
-            return
+            return False
 
         print(f'[Capture] 设备: {dev["description"]}  name={dev["name"]}', flush=True)
         logger.info(f'[Capture] 使用设备: {dev["description"]}')
@@ -821,17 +872,21 @@ class PacketCapture:
             err_msg = errbuf.value.decode('utf-8', 'ignore')
             print(f'[Capture] pcap_open_live 失败: {err_msg}', flush=True)
             logger.error(f'[Capture] pcap_open_live 失败: {err_msg}')
-            return
+            return False
 
         print('[Capture] pcap_open_live 成功, 抓包已启动', flush=True)
         logger.info('[Capture] 抓包已启动')
         pkt_count = 0
         try:
             while self._running:
+                if self._restart_requested.is_set():
+                    self._restart_requested.clear()
+                    break
                 hdr_ptr = ctypes.POINTER(_PcapPkthdr)()
                 data_ptr = ctypes.POINTER(ctypes.c_ubyte)()
                 res = pcap_next(handle, ctypes.byref(hdr_ptr), ctypes.byref(data_ptr))
                 if res == 1:
+                    self._last_packet_ts = time.time()
                     caplen = hdr_ptr.contents.caplen
                     raw = ctypes.string_at(data_ptr, caplen)
                     self._reassembler.feed_raw_frame(raw)
@@ -842,10 +897,12 @@ class PacketCapture:
                     if pkt_count <= 3 or pkt_count % 5000 == 0:
                         print(f'[Capture] pkt#{pkt_count} caplen={caplen} reassembler_raw={self._reassembler.stats["raw_frames"]}', flush=True)
                 elif res == 0:
+                    self._reassembler.stats['pcap_timeouts'] += 1
                     continue  # 超时
                 elif res == -1:
                     print('[Capture] pcap_next_ex 返回 -1 (错误)', flush=True)
                     logger.error('[Capture] pcap_next_ex 错误')
+                    self._reassembler.stats['pcap_errors'] += 1
                     break
         except Exception as exc:
             import traceback
@@ -854,6 +911,9 @@ class PacketCapture:
             pcap_close(handle)
             print(f'[Capture] 抓包已停止 (共 {pkt_count} 个包)', flush=True)
             logger.info(f'[Capture] 抓包已停止 (共 {pkt_count} 个包)')
+        if self._running and self._restart_requested.is_set():
+            self._restart_requested.clear()
+        return bool(self._running)
 
 
 # ═══════════════════════════════════════════════

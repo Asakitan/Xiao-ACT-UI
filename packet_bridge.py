@@ -777,6 +777,10 @@ class PacketBridge:
         self._pending_sta_current = None
         self._pending_sta_hits: int = 0
         self._last_player = None
+        self._last_capture_watchdog_ts: float = 0.0
+        self._last_capture_restart_ts: float = 0.0
+        self._last_capture_raw_seen: int = 0
+        self._last_capture_raw_seen_ts: float = 0.0
         self._identity_warn_logged: bool = False  # log once about missing name/level
         state = self._state_mgr.state
         self._identity_cache_available: bool = bool(
@@ -992,6 +996,7 @@ class PacketBridge:
                             self._state_mgr.update(
                                 recognition_ok=False,
                                 error_msg=f'数据超时 ({idle:.0f}s)')
+                            self._maybe_recover_capture_idle(idle)
                     else:
                         self._state_mgr.update(
                             recognition_ok=False,
@@ -1028,6 +1033,53 @@ class PacketBridge:
                 )
 
         logger.info('[Bridge] 数据桥已停止')
+
+    def _maybe_recover_capture_idle(self, idle: float) -> None:
+        cap = getattr(self, '_capture', None)
+        if not cap:
+            return
+        now = time.time()
+        if now - float(getattr(self, '_last_capture_watchdog_ts', 0.0) or 0.0) < 8.0:
+            return
+        self._last_capture_watchdog_ts = now
+        stats = cap.stats or {}
+        try:
+            raw = int(stats.get('raw_frames') or 0)
+        except Exception:
+            raw = 0
+        last_raw = int(getattr(self, '_last_capture_raw_seen', 0) or 0)
+        last_raw_ts = float(getattr(self, '_last_capture_raw_seen_ts', 0.0) or 0.0)
+        if raw != last_raw:
+            self._last_capture_raw_seen = raw
+            self._last_capture_raw_seen_ts = now
+            last_raw_ts = now
+        thread_alive = False
+        try:
+            thread_alive = bool(cap._thread and cap._thread.is_alive())
+        except Exception:
+            thread_alive = False
+        if (not thread_alive) and now - float(getattr(self, '_last_capture_restart_ts', 0.0) or 0.0) > 10.0:
+            self._last_capture_restart_ts = now
+            print('[Bridge] 🔁 抓包线程不活跃，重启 PacketCapture', flush=True)
+            try:
+                cap.stop()
+                cap.start()
+            except Exception as e:
+                logger.warning(f'[Bridge] capture thread restart failed: {e}')
+            return
+        no_raw_for = now - last_raw_ts if last_raw_ts > 0 else idle
+        if idle >= 12.0:
+            try:
+                if cap.force_reconnect(f'bridge_idle_{idle:.0f}s'):
+                    self._server_found_printed = False
+            except Exception as e:
+                logger.warning(f'[Bridge] capture force_reconnect failed: {e}')
+        if no_raw_for >= 30.0 and now - float(getattr(self, '_last_capture_restart_ts', 0.0) or 0.0) > 30.0:
+            self._last_capture_restart_ts = now
+            try:
+                cap.request_restart(f'no_raw_{no_raw_for:.0f}s')
+            except Exception as e:
+                logger.warning(f'[Bridge] capture handle restart request failed: {e}')
 
     def _on_server_change(self):
         """抓包层回调: 检测到场景服务器切换 (切换地图/副本)。

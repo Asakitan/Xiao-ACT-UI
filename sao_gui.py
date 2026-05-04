@@ -2537,6 +2537,22 @@ class SAOPlayerGUI:
         if damage <= 0 and not (event.get('is_immune') or event.get('is_absorbed')):
             return False
 
+        has_existing_encounter = False
+        try:
+            has_existing_encounter = bool(
+                self._dps_tracker and self._dps_tracker.has_active_encounter())
+        except Exception:
+            has_existing_encounter = False
+        if not has_existing_encounter:
+            reason = str(getattr(self, '_pending_combat_reset_reason', '') or 'restart')
+            self._pending_combat_reset_after = 0.0
+            self._pending_combat_reset_reason = ''
+            print(
+                f'[SAO Entity] ♻ 延迟重置跳过: {reason} 当前遭遇战无有效伤害',
+                flush=True,
+            )
+            return False
+
         reason = str(getattr(self, '_pending_combat_reset_reason', '') or 'restart')
         try:
             damage_ts = float(event.get('timestamp') or time.time())
