@@ -441,25 +441,25 @@ class DpsOverlay:
 
     # Colors (parity with web/dps.html CSS vars, alpha 0-255)
     # v2.2.0: SAO Alert flat hi-tech — 纯白+略灰, 透明度保持
-    PANEL_BG_A = (255, 255, 255, 255)
-    PANEL_BG_B = (234, 233, 233, 255)
-    PANEL_EDGE = (178, 180, 182, 255)
+    PANEL_BG_A = (250, 252, 253, 255)
+    PANEL_BG_B = (220, 224, 229, 255)
+    PANEL_EDGE = (128, 190, 220, 255)
     PANEL_LINE = (255, 255, 255, 255)
     INNER_HIGHLIGHT = (255, 255, 255, 255)
     HAIRLINE_LIGHT = (250, 250, 250, 255)
     HAIRLINE_MID = (228, 228, 228, 255)
     HAIRLINE_DARK = (140, 138, 138, 255)
-    SCAN_LINE = (255, 255, 255, 14)
+    SCAN_LINE = (104, 228, 255, 24)
     TEXT_MAIN = (100, 99, 100, 255)
     TEXT_MUTED = (140, 135, 138, 255)
     GOLD = (222, 166, 32, 255)
     GOLD_SOFT = (222, 166, 32, 56)
     CYAN = (104, 228, 255, 255)
     DIVIDER = (178, 180, 182, 255)
-    LIST_BG = (255, 255, 255, 46)
-    LIST_BORDER = (178, 180, 182, 255)
-    ROW_BG = (255, 255, 255, 122)
-    ROW_BORDER = (178, 180, 182, 255)
+    LIST_BG = (244, 248, 252, 196)
+    LIST_BORDER = (120, 190, 225, 230)
+    ROW_BG = (248, 247, 244, 214)
+    ROW_BORDER = (156, 178, 194, 235)
     ROW_SELF_BAR = (222, 166, 32, 255)
     BTN_BG = (255, 255, 255, 112)
     BTN_BORDER = (178, 180, 182, 255)
@@ -474,9 +474,9 @@ class DpsOverlay:
     BADGE_LIVE = (82, 140, 48, 255)
     BADGE_REPORT = (222, 166, 32, 255)
     # v2.3.x: previously hardcoded dark colors — now themeable
-    FOOTER_BG = (15, 20, 30, 140)
-    FOOTER_CYAN_TINT = (104, 228, 255, 6)
-    FOOTER_SHADOW = (0, 0, 0, 18)
+    FOOTER_BG = (238, 242, 247, 205)
+    FOOTER_CYAN_TINT = (104, 228, 255, 18)
+    FOOTER_SHADOW = (40, 55, 70, 28)
     TAB_ACTIVE_FILL = (222, 190, 80, 35)
     TAB_ACTIVE_BORDER = (222, 190, 80, 220)
     TAB_INACTIVE_FILL = (40, 55, 75, 120)
@@ -486,14 +486,14 @@ class DpsOverlay:
     BTN_DISABLED_FILL = (30, 35, 45, 120)
     BTN_DISABLED_BORDER = (50, 60, 70, 100)
     BTN_DISABLED_FG = (80, 85, 95, 180)
-    HEADER_BADGE_FILL = (30, 45, 65, 180)
+    HEADER_BADGE_FILL = (230, 240, 248, 220)
     HEADER_BADGE_BORDER = (60, 140, 180, 160)
-    LIST_CYAN_TINT = (104, 228, 255, 6)
-    LIST_SHADOW = (0, 0, 0, 15)
-    ROW_SHEEN_CYAN = (104, 228, 255, 8)
-    ROW_LOWER_SHADOW = (0, 0, 0, 20)
+    LIST_CYAN_TINT = (104, 228, 255, 22)
+    LIST_SHADOW = (45, 55, 70, 34)
+    ROW_SHEEN_CYAN = (104, 228, 255, 20)
+    ROW_LOWER_SHADOW = (60, 45, 38, 32)
     ROW_SELF_OUTLINE = (222, 190, 80, 220)
-    ROW_SELF_TINT = (222, 190, 80, 12)
+    ROW_SELF_TINT = (222, 190, 80, 28)
     DETAIL_CARD_BG = (35, 45, 60, 160)
     SKILL_ROW_BG = (30, 40, 55, 140)
     STAT_HEAL_GREEN = (92, 150, 44, 255)
@@ -503,8 +503,8 @@ class DpsOverlay:
     # Shell layer
     SHELL_AMBIENT_SHADOW = (22, 24, 18, 62)
     SHELL_CONTACT_SHADOW = (31, 34, 16, 88)
-    SHELL_SHEEN_CYAN = (104, 228, 255, 18)
-    SHELL_SHEEN_SHADOW = (0, 0, 0, 25)
+    SHELL_SHEEN_CYAN = (104, 228, 255, 32)
+    SHELL_SHEEN_SHADOW = (42, 52, 64, 34)
     CORNER_CYAN_ACCENT = (104, 228, 255, 120)
     CORNER_GOLD_ACCENT = (222, 190, 80, 120)
     CORNER_GOLD = (222, 190, 80, 255)
@@ -1892,6 +1892,18 @@ class DpsOverlay:
         self._draw_clip_rect(draw, x, y, w, h,
                              fill=self.ROW_BG, outline=self.ROW_BORDER,
                              bevel=bevel)
+        glow_color = self.GOLD_SOFT if not row['is_heal'] else self.SKILL_BAR_HEAL
+        glow_alpha = 44 if row['is_self'] else 26
+        self._fill_polygon(
+            img,
+            [
+                (x + bevel + 2, y + h - 8),
+                (x + w - 6, y + h - 8),
+                (x + w - 2, y + h - 2),
+                (x + 2, y + h - 2),
+            ],
+            (glow_color[0], glow_color[1], glow_color[2], glow_alpha),
+        )
         top_sheen = [
             (x + bevel + 1, y + 1),
             (x + w - 2, y + 1),
@@ -1946,6 +1958,12 @@ class DpsOverlay:
         if bar_w > 0:
             bar_img = self._make_bar(bar_w, h - 4, row['is_self'], row['is_heal'])
             img.alpha_composite(bar_img, (x + 2, y + 2))
+            lead_x = x + 2 + max(0, bar_w - 2)
+            draw.line(
+                (lead_x, y + 4, lead_x, y + h - 5),
+                fill=self.CYAN if row['is_heal'] else self.GOLD,
+                width=1,
+            )
 
         # Hit-fx pulse outline
         if row['fx_tier']:
@@ -2870,25 +2888,25 @@ class DpsOverlay:
 # ────────────────────────────────────────────────────────────
 
 DPS_THEME_LIGHT = {
-    'PANEL_BG_A':      (255, 255, 255, 255),
-    'PANEL_BG_B':      (234, 233, 233, 255),
-    'PANEL_EDGE':      (178, 180, 182, 255),
+    'PANEL_BG_A':      (250, 252, 253, 255),
+    'PANEL_BG_B':      (220, 224, 229, 255),
+    'PANEL_EDGE':      (128, 190, 220, 255),
     'PANEL_LINE':      (255, 255, 255, 255),
     'INNER_HIGHLIGHT': (255, 255, 255, 255),
     'HAIRLINE_LIGHT':  (250, 250, 250, 255),
     'HAIRLINE_MID':    (228, 228, 228, 255),
     'HAIRLINE_DARK':   (140, 138, 138, 255),
-    'SCAN_LINE':       (255, 255, 255, 14),
+    'SCAN_LINE':       (104, 228, 255, 24),
     'TEXT_MAIN':       (100, 99, 100, 255),
     'TEXT_MUTED':      (140, 135, 138, 255),
     'GOLD':            (222, 166, 32, 255),
     'GOLD_SOFT':       (222, 166, 32, 56),
     'CYAN':            (104, 228, 255, 255),
     'DIVIDER':         (178, 180, 182, 255),
-    'LIST_BG':         (255, 255, 255, 46),
-    'LIST_BORDER':     (178, 180, 182, 255),
-    'ROW_BG':          (255, 255, 255, 122),
-    'ROW_BORDER':      (178, 180, 182, 255),
+    'LIST_BG':         (244, 248, 252, 196),
+    'LIST_BORDER':     (120, 190, 225, 230),
+    'ROW_BG':          (248, 247, 244, 214),
+    'ROW_BORDER':      (156, 178, 194, 235),
     'ROW_SELF_BAR':    (222, 166, 32, 255),
     'BTN_BG':          (255, 255, 255, 112),
     'BTN_BORDER':      (178, 180, 182, 255),
@@ -2903,9 +2921,9 @@ DPS_THEME_LIGHT = {
     'BADGE_LIVE':      (82, 140, 48, 255),
     'BADGE_REPORT':    (222, 166, 32, 255),
     # v2.3.x: previously hardcoded dark colors that broke light-theme
-    'FOOTER_BG':       (15, 20, 30, 140),
-    'FOOTER_CYAN_TINT':(104, 228, 255, 6),
-    'FOOTER_SHADOW':   (0, 0, 0, 18),
+    'FOOTER_BG':       (238, 242, 247, 205),
+    'FOOTER_CYAN_TINT':(104, 228, 255, 18),
+    'FOOTER_SHADOW':   (40, 55, 70, 28),
     'TAB_ACTIVE_FILL': (222, 190, 80, 35),
     'TAB_ACTIVE_BORDER':(222, 190, 80, 220),
     'TAB_INACTIVE_FILL':(40, 55, 75, 120),
@@ -2915,14 +2933,14 @@ DPS_THEME_LIGHT = {
     'BTN_DISABLED_FILL':(30, 35, 45, 120),
     'BTN_DISABLED_BORDER':(50, 60, 70, 100),
     'BTN_DISABLED_FG': (80, 85, 95, 180),
-    'HEADER_BADGE_FILL':(30, 45, 65, 180),
+    'HEADER_BADGE_FILL':(230, 240, 248, 220),
     'HEADER_BADGE_BORDER':(60, 140, 180, 160),
-    'LIST_CYAN_TINT':  (104, 228, 255, 6),
-    'LIST_SHADOW':     (0, 0, 0, 15),
-    'ROW_SHEEN_CYAN':  (104, 228, 255, 8),
-    'ROW_LOWER_SHADOW':(0, 0, 0, 20),
+    'LIST_CYAN_TINT':  (104, 228, 255, 22),
+    'LIST_SHADOW':     (45, 55, 70, 34),
+    'ROW_SHEEN_CYAN':  (104, 228, 255, 20),
+    'ROW_LOWER_SHADOW':(60, 45, 38, 32),
     'ROW_SELF_OUTLINE':(222, 190, 80, 220),
-    'ROW_SELF_TINT':   (222, 190, 80, 12),
+    'ROW_SELF_TINT':   (222, 190, 80, 28),
     'DETAIL_CARD_BG':  (35, 45, 60, 160),
     'SKILL_ROW_BG':    (30, 40, 55, 140),
     'STAT_HEAL_GREEN': (92, 150, 44, 255),
@@ -2931,8 +2949,8 @@ DPS_THEME_LIGHT = {
     'VAL_HEAL_GREEN':  (92, 150, 44, 255),
     'SHELL_AMBIENT_SHADOW': (22, 24, 18, 62),
     'SHELL_CONTACT_SHADOW': (31, 34, 16, 88),
-    'SHELL_SHEEN_CYAN': (104, 228, 255, 18),
-    'SHELL_SHEEN_SHADOW': (0, 0, 0, 25),
+    'SHELL_SHEEN_CYAN': (104, 228, 255, 32),
+    'SHELL_SHEEN_SHADOW': (42, 52, 64, 34),
     'CORNER_CYAN_ACCENT': (104, 228, 255, 120),
     'CORNER_GOLD_ACCENT': (222, 190, 80, 120),
     'CORNER_GOLD': (222, 190, 80, 255),
