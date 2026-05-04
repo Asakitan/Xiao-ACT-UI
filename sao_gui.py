@@ -5130,7 +5130,6 @@ class SAOPlayerGUI:
             _GWL_EXSTYLE = -20
             _WS_EX_TRANSPARENT = 0x00000020
             _HWND_NOTOPMOST = -2
-            _SW_HIDE = 0
             _SWP_NOMOVE = 0x0002
             _SWP_NOSIZE = 0x0001
             _SWP_NOACTIVATE = 0x0010
@@ -5148,13 +5147,6 @@ class SAOPlayerGUI:
                     _SWP_NOMOVE | _SWP_NOSIZE
                     | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
                 )
-                _u32.ShowWindow(_ct.c_void_p(_hwnd), _SW_HIDE)
-        except Exception:
-            pass
-        try:
-            hide = getattr(gpu_win, 'hide', None)
-            if callable(hide):
-                hide()
         except Exception:
             pass
 
@@ -6809,7 +6801,7 @@ class SAOPlayerGUI:
                         pass
                     _state[0] = 'fadeout'
             elif s == 'fadeout':
-                if _actual_should_run:
+                if _actual_should_run and not _stop_requested[0]:
                     try:
                         presenter.start_fade(1.0, _FADEIN_DUR * 0.55)
                         gpu_win.request_redraw()
