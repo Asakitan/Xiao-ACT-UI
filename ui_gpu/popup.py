@@ -578,7 +578,7 @@ class SAOPopUpMenu:
         # the OS routes clicks down to us, GLFW input delivery can be
         # flaky in that configuration. Re-raising every ~250ms keeps
         # us at the top so clicks reach our window directly.
-        if (tick_now - self._last_raise_t) > 0.25:
+        if (not self._closing) and (tick_now - self._last_raise_t) > 0.25:
             self._last_raise_t = tick_now
             self._raise_to_top()
         self._render_once()
@@ -689,7 +689,6 @@ class SAOPopUpMenu:
             self._click_queue.append(('row', int(idx)))
             _phase_trace('popup.click.enqueue', f'row:{idx}')
         elif kind == KIND_BACKGROUND:
-            self._raise_to_top()
             self._click_pending = True
             self._click_queue.append(('background', -1))
             _phase_trace('popup.click.enqueue', 'background')

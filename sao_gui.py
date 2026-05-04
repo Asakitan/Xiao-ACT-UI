@@ -2544,6 +2544,7 @@ class SAOPlayerGUI:
         self._bb_last_hp_motion_sig = None
         self._bb_last_hp_motion_ts = 0.0
         self._last_boss_hp_push_sig = None
+        self._scene_damage_grace_until = _scene_change_ts + 8.0
         try:
             if self._state_mgr:
                 self._state_mgr.update(
@@ -2692,6 +2693,24 @@ class SAOPlayerGUI:
         self_uid = self._current_player_uid_int()
         if target_uid and self_uid and target_uid == self_uid:
             return event
+
+        try:
+            in_scene_damage_grace = time.time() < float(
+                getattr(self, '_scene_damage_grace_until', 0.0) or 0.0)
+        except Exception:
+            in_scene_damage_grace = False
+        if in_scene_damage_grace:
+            try:
+                damage = int(event.get('damage') or 0)
+            except Exception:
+                damage = 0
+            if damage > 0 or event.get('is_immune') or event.get('is_absorbed'):
+                fixed = dict(event)
+                fixed['target_is_player'] = False
+                fixed['target_is_monster'] = True
+                fixed['target_is_combat_target'] = True
+                fixed['entity_target_fallback'] = 'post_scene_self_damage_grace'
+                return fixed
 
         known_player = False
         bridge = getattr(self, '_packet_engine', None)
@@ -2934,19 +2953,13 @@ class SAOPlayerGUI:
             except Exception:
                 pass
 
-        # v2.5.5: hide overlays immediately on hard scene reset. Previously
-        # hide was deferred 120 ms behind a token check, so any stray damage
-        # event arriving in that window (queued packets from the old scene,
-        # auto-attacks landing on a dying mob, etc.) would bump the token and
-        # leave BossHP / DPS pinned to the old encounter forever.
+        # Hard scene reset clears encounter data, but keep overlay windows
+        # ready for the first fresh damage packet. Destroying the DPS window
+        # here races the post-transition rebuild path and can leave the panel
+        # visually suppressed after repeated map switches.
         try:
             if self._boss_hp_overlay:
                 self._boss_hp_overlay.update({'active': False})
-        except Exception:
-            pass
-        try:
-            if self._dps_overlay:
-                self._dps_overlay.hide()
         except Exception:
             pass
         try:
@@ -3595,6 +3608,11 @@ class SAOPlayerGUI:
                             self._dps_faded = False
                             self._dps_mode = 'live'
                             self._dps_overlay.show()
+                        else:
+                            try:
+                                self._dps_overlay.fade_in()
+                            except Exception:
+                                pass
                         self._dps_overlay.update(_dps_snap)
                     elif self._dps_overlay and (self._dps_visible or self._dps_mode == 'report'):
                         self._dps_overlay.update(_dps_snap)
@@ -5010,13 +5028,6 @@ class SAOPlayerGUI:
         if self._sao_menu_close_pending or self._exit_animating or self._close_finalized:
             return
         self._sao_menu_close_pending = True
-        try:
-            menu = getattr(self, '_sao_menu', None)
-            raise_to_top = getattr(menu, '_raise_to_top', None)
-            if callable(raise_to_top):
-                raise_to_top()
-        except Exception:
-            pass
         try:
             self._toggle_sao_menu(allow_close=True)
         finally:

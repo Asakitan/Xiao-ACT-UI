@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.9"
+APP_VERSION = "2.5.10"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,13 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.10:
+#     • Keep DPS/BossHP recoverable after hard map switches by preserving the
+#       DPS overlay window, re-opening live DPS on fresh damage, and adding a
+#       short post-scene self-damage grace path for stale target classification.
+#     • Prevent SAO menu backdrop/fisheye clicks from re-raising the popup while
+#       closing, and strengthen DPS panel contrast, row glow, scanlines, and
+#       list masking so combat text remains readable over bright game scenes.
 # v2.5.9:
 #     • Parse EnterScene payloads during map/server transitions so scene keys
 #       and self entity UUID refresh correctly, and prevent delayed scene-hide
