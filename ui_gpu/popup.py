@@ -1018,6 +1018,18 @@ class SAOPopUpMenu:
                 wintypes.HWND(hwnd), wintypes.HWND(HWND_TOPMOST),
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+            shell = getattr(self, '_shell', None)
+            if shell is not None:
+                try:
+                    shell.update_idletasks()
+                    shell_hwnd = int(user32.GetParent(shell.winfo_id()) or shell.winfo_id())
+                    if shell_hwnd:
+                        user32.SetWindowPos(
+                            wintypes.HWND(shell_hwnd), wintypes.HWND(HWND_TOPMOST),
+                            0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+                except Exception:
+                    pass
         except Exception:
             pass
 
