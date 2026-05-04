@@ -10,6 +10,7 @@ from PIL import Image
 from . import menu_bar_layout, child_bar_layout, hud_layout
 
 import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 
 # Layout offsets within the GPU window.  The window covers the menu_bar
@@ -23,30 +24,28 @@ CHILD_X = HUD_PAD + menu_bar_layout.WIDTH + GAP_MENU_CHILD
 
 def content_shift(state) -> tuple[int, int]:
     """Small master slide used during popup open/close."""
-    alpha = max(0.0, min(1.0, float(getattr(state, 'fade_alpha', 1.0))))
-    shift_x = -int(round((1.0 - alpha) * 14.0))
-    shift_y = int(round((1.0 - alpha) * 10.0))
-    return shift_x, shift_y
+    return _CY_UI.popup_content_shift(getattr(state, 'fade_alpha', 1.0))
 
 
 def menu_origin(state) -> tuple[int, int]:
-    dx, dy = content_shift(state)
-    return MENU_X + dx, HUD_PAD + dy
+    menu, _child = _CY_UI.popup_origins(
+        getattr(state, 'fade_alpha', 1.0), HUD_PAD, MENU_X, CHILD_X)
+    return menu
 
 
 def child_origin(state) -> tuple[int, int]:
-    dx, dy = content_shift(state)
-    return CHILD_X + dx, HUD_PAD + dy
+    _menu, child = _CY_UI.popup_origins(
+        getattr(state, 'fade_alpha', 1.0), HUD_PAD, MENU_X, CHILD_X)
+    return child
 
 
 def content_size(state) -> tuple:
     """Return (content_w, content_h) — the inner box that excludes
     the HUD margin."""
-    menu_h = menu_bar_layout.column_height(state)
-    child_h = child_bar_layout.height_for(state)
-    inner_h = max(menu_h, child_h, 1)
-    inner_w = menu_bar_layout.WIDTH + GAP_MENU_CHILD + child_bar_layout.WIDTH
-    return inner_w, inner_h
+    return _CY_UI.popup_content_size(
+        len(state.menu_items), len(state.child_rows), menu_bar_layout.MAX_VISIBLE,
+        menu_bar_layout.SLOT, child_bar_layout.ROW_STRIDE,
+        menu_bar_layout.WIDTH, GAP_MENU_CHILD, child_bar_layout.WIDTH)
 
 
 def window_size(state) -> tuple:
@@ -59,19 +58,19 @@ def window_size_reserved(state, reserved_rows: int) -> tuple:
     child rows. Used at open() time to bake in a fixed window size
     big enough for the worst-case menu, so switching menus never
     requires a GPU window resize."""
-    iw, ih = content_size(state)
-    from sao_child_bar_gpu import ROW_STRIDE as _RS
-    reserved_h = max(reserved_rows, 0) * _RS
-    ih = max(ih, reserved_h, menu_bar_layout.column_height(state))
-    return iw + HUD_PAD * 2, ih + HUD_PAD * 2
+    return _CY_UI.popup_window_size(
+        len(state.menu_items), len(state.child_rows), reserved_rows,
+        menu_bar_layout.MAX_VISIBLE, menu_bar_layout.SLOT,
+        child_bar_layout.ROW_STRIDE, menu_bar_layout.WIDTH,
+        GAP_MENU_CHILD, child_bar_layout.WIDTH, HUD_PAD)
 
 
 def compose_rgba(state, hud_phase: float, screen_w: int, screen_h: int,
                  reserved_rows: int = 0) -> Image.Image:
     iw, ih = content_size(state)
     if reserved_rows > 0:
-        from sao_child_bar_gpu import ROW_STRIDE as _RS
-        ih = max(ih, reserved_rows * _RS, menu_bar_layout.column_height(state))
+        _win_w, win_h = window_size_reserved(state, reserved_rows)
+        ih = max(1, win_h - HUD_PAD * 2)
     win_w, win_h = iw + HUD_PAD * 2, ih + HUD_PAD * 2
     frame = Image.new('RGBA', (win_w, win_h), (0, 0, 0, 0))
     dx, dy = content_shift(state)

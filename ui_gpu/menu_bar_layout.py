@@ -6,12 +6,12 @@ Renders to a single PIL.Image and exposes ``hit_rects`` so the
 
 from __future__ import annotations
 
-import math
 from typing import List, Tuple
 
 from PIL import Image
 
 from sao_menu_hud import MenuCircleButtonRenderer
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 # Mirror legacy SAOCircleButton constants
 SIZE = 54
@@ -29,11 +29,11 @@ _renderer = MenuCircleButtonRenderer()
 
 
 def visible_count(state) -> int:
-    return min(len(state.menu_items), MAX_VISIBLE)
+    return _CY_UI.popup_visible_count(len(state.menu_items), MAX_VISIBLE)
 
 
 def column_height(state) -> int:
-    return SLOT * max(1, visible_count(state))
+    return _CY_UI.popup_column_height(len(state.menu_items), MAX_VISIBLE, SLOT)
 
 
 def _color_lerp(c1, c2, t):
@@ -64,51 +64,15 @@ _TRANSPARENT = (0, 0, 0, 0)
 def advance_animation(state) -> bool:
     """Tick fisheye + hover lerp toward targets. Returns True if still
     animating (caller should re-render next frame)."""
-    n = visible_count(state)
-    if n == 0:
-        return False
-    # ensure per-button arrays match
-    while len(state.btn_size) < n:
-        state.btn_size.append(float(SIZE))
-    while len(state.btn_hover_t) < n:
-        state.btn_hover_t.append(0.0)
-    keep = False
-    hover_idx = state.hover_btn_idx
-    for i in range(n):
-        # fisheye target: hovered button gets +22% with exp falloff to neighbours
-        if hover_idx is not None:
-            dist = abs(hover_idx - i)
-            target = SIZE * (1.0 + 0.22 * math.exp(-0.9 * dist * dist))
-        else:
-            target = float(SIZE)
-        delta = target - state.btn_size[i]
-        if abs(delta) > SIZE_EPS:
-            state.btn_size[i] += delta * SIZE_LERP
-            keep = True
-        else:
-            state.btn_size[i] = target
-        # hover_t lerps to 1 if hovered, else 0
-        ht_target = 1.0 if (hover_idx == i) else 0.0
-        ht_delta = ht_target - state.btn_hover_t[i]
-        if abs(ht_delta) > 0.01:
-            state.btn_hover_t[i] += ht_delta * 0.25
-            keep = True
-        else:
-            state.btn_hover_t[i] = ht_target
-    return keep
+    return bool(_CY_UI.popup_advance_menu_animation(
+        state.btn_size, state.btn_hover_t, state.hover_btn_idx,
+        len(state.menu_items), MAX_VISIBLE, float(SIZE), SIZE_EPS,
+        SIZE_LERP, 0.25))
 
 
 def hit_rects(state, x_off: int, y_off: int) -> List[Tuple[Tuple[int, int, int, int], int]]:
     """Return [((x1,y1,x2,y2), idx), ...] for each visible button slot."""
-    n = visible_count(state)
-    out = []
-    for i in range(n):
-        x1 = x_off
-        y1 = y_off + i * SLOT
-        x2 = x1 + SLOT
-        y2 = y1 + SLOT
-        out.append(((x1, y1, x2, y2), i))
-    return out
+    return _CY_UI.popup_menu_hit_rects(len(state.menu_items), MAX_VISIBLE, SLOT, x_off, y_off)
 
 
 def compose(state, bg_hex: str = '#010101') -> Image.Image:
@@ -120,8 +84,9 @@ def compose(state, bg_hex: str = '#010101') -> Image.Image:
     active_idx = state.active_menu_idx
     for i in range(n):
         item = state.menu_items[i]
-        size_f = max(1.0, min(float(MAX_SIZE), float(state.btn_size[i] if i < len(state.btn_size) else SIZE)))
-        size = max(1, int(math.ceil(size_f)))
+        size_f, size, ox, oy = _CY_UI.popup_menu_button_frame(
+            state.btn_size[i] if i < len(state.btn_size) else SIZE,
+            SLOT, MAX_SIZE, i)
         is_active = (active_idx == i)
         t = state.btn_hover_t[i] if i < len(state.btn_hover_t) else 0.0
         if is_active:
@@ -134,7 +99,5 @@ def compose(state, bg_hex: str = '#010101') -> Image.Image:
         # bg_hex is only used for cache keying (legacy chroma path).
         sprite = _renderer.render(size, item.get('icon', '●') or '●',
                                   border, inner, icon_c, bg_hex)
-        ox = int(round((SLOT - size_f) / 2.0))
-        oy = int(round(i * SLOT + (SLOT - size_f) / 2.0))
         img.alpha_composite(sprite, (ox, oy))
     return img

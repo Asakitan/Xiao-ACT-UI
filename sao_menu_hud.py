@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 
 # v2.3.3 GIL-safety fix.
@@ -225,18 +226,9 @@ class MenuHudSpriteRenderer:
         screen_w = max(1, int(screen_w))
         screen_h = max(1, int(screen_h))
 
-        cx1 = self._PLATE_PAD - self._HUD_MARGIN
-        cy1 = self._PLATE_PAD - self._HUD_MARGIN
-        cx2 = self._PLATE_PAD + content_w + self._HUD_MARGIN
-        cy2 = self._PLATE_PAD + content_h + self._HUD_MARGIN
-        scan_period = 6.0
-        scan_pos = (phase % scan_period) / scan_period
-        scan_y = int(cy1 + (cy2 - cy1) * scan_pos)
-        dot_travel = max(1, cy2 - cy1 - self._BRACKET_LEN * 2)
-        dot_y_l = cy1 + self._BRACKET_LEN + int(
-            dot_travel * ((math.sin(phase * 0.8) + 1.0) * 0.5))
-        dot_y_r = cy1 + self._BRACKET_LEN + int(
-            dot_travel * ((math.sin(phase * 0.8 + math.pi) + 1.0) * 0.5))
+        cx1, cy1, cx2, cy2, scan_y, dot_y_l, dot_y_r = _CY_UI.popup_hud_dynamic(
+            content_w, content_h, phase, self._PLATE_PAD,
+            self._HUD_MARGIN, self._BRACKET_LEN)
         now = _dt.datetime.now()
         now_second = int(now.timestamp())
 
@@ -319,18 +311,9 @@ class MenuHudSpriteRenderer:
         scratch.paste(static, (0, 0))
         frame = scratch
 
-        cx1 = self._PLATE_PAD - self._HUD_MARGIN
-        cy1 = self._PLATE_PAD - self._HUD_MARGIN
-        cx2 = self._PLATE_PAD + content_w + self._HUD_MARGIN
-        cy2 = self._PLATE_PAD + content_h + self._HUD_MARGIN
-        scan_period = 6.0
-        scan_pos = (phase % scan_period) / scan_period
-        scan_y = int(cy1 + (cy2 - cy1) * scan_pos)
-        dot_travel = max(1, cy2 - cy1 - self._BRACKET_LEN * 2)
-        dot_y_l = cy1 + self._BRACKET_LEN + int(
-            dot_travel * ((math.sin(phase * 0.8) + 1.0) * 0.5))
-        dot_y_r = cy1 + self._BRACKET_LEN + int(
-            dot_travel * ((math.sin(phase * 0.8 + math.pi) + 1.0) * 0.5))
+        cx1, cy1, cx2, cy2, scan_y, dot_y_l, dot_y_r = _CY_UI.popup_hud_dynamic(
+            content_w, content_h, phase, self._PLATE_PAD,
+            self._HUD_MARGIN, self._BRACKET_LEN)
 
         now = _dt.datetime.now()
         now_second = int(now.timestamp())

@@ -41,6 +41,7 @@ from PIL import Image
 from overlay_render_worker import AsyncFrameWorker, FrameBuffer
 from perf_probe import phase as _phase_trace, probe as _probe
 from sao_menu_hud import MenuCircleButtonRenderer
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 try:
     import gpu_overlay_window as _gow
@@ -169,14 +170,8 @@ class MenuBarGpuPainter:
             return False
 
     def _slot_index(self, x: float, y: float) -> Optional[int]:
-        if self._button_count <= 0:
-            return None
-        if x < 0 or y < 0 or x >= float(self._max_size):
-            return None
-        idx = int(y // float(self._slot))
-        if idx < 0 or idx >= self._button_count:
-            return None
-        return idx
+        return _CY_UI.menu_bar_slot_index(
+            x, y, self._max_size, self._slot, self._button_count)
 
     def _handle_cursor_pos(self, x: float, y: float) -> None:
         idx = self._slot_index(x, y)
@@ -350,14 +345,7 @@ class MenuBarGpuPainter:
         # 2) Build dedup signature. Quantize size to 1/4 px and hover_t
         #    to 1/20 (matches SAOCircleButton._draw quantization so we
         #    submit one frame per visually-distinct state).
-        sig_buttons = tuple(
-            (round(s.size * 4.0) / 4.0,
-             round(s.hover_t * 20.0) / 20.0,
-             s.active,
-             s.icon)
-            for s in snapshots
-        )
-        sig = (int(strip_w), int(strip_h), len(snapshots), sig_buttons)
+        sig = _CY_UI.menu_bar_snapshot_sig(strip_w, strip_h, snapshots)
         with self._lock:
             if sig == self._last_sig:
                 # Position can still drift even when visuals are static

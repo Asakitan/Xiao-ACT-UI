@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import (
@@ -88,25 +89,12 @@ from sao_gui_dps import (  # noqa: F401
 # ═══════════════════════════════════════════════
 
 def _fmt_hp(v: float) -> str:
-    v = float(v or 0)
-    if v >= 1_000_000_000:
-        return f'{v / 1_000_000_000:.2f}B'
-    if v >= 1_000_000:
-        return f'{v / 1_000_000:.2f}M'
-    if v >= 10_000:
-        return f'{v / 1_000:.1f}K'
-    return f'{int(round(v)):,}'
+    return _CY_UI.bosshp_fmt_hp(v)
 
 
 def _mix(a: Tuple[int, int, int, int],
          b: Tuple[int, int, int, int], t: float) -> Tuple[int, int, int, int]:
-    t = max(0.0, min(1.0, t))
-    return (
-        int(_lerp(a[0], b[0], t)),
-        int(_lerp(a[1], b[1], t)),
-        int(_lerp(a[2], b[2], t)),
-        int(_lerp(a[3], b[3], t)),
-    )
+    return _CY_UI.mix_rgba(a, b, t)
 
 
 def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
@@ -124,7 +112,7 @@ def _draw_text_shadow(img: Image.Image, xy, text: str, font,
 
 
 def _offset_poly(points, dx: int, dy: int):
-    return [(x + dx, y + dy) for x, y in points]
+    return _CY_UI.offset_poly(points, dx, dy)
 
 
 def _apply_inset_shadow(img: Image.Image, mask: Image.Image,

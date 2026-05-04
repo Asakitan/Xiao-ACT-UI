@@ -15,6 +15,7 @@ from sao_child_bar_gpu import (
     _compose_child_bar, _ChildBarSnapshot, _RowSnapshot, BarColors,
     ROW_STRIDE, ROW_H, LIST_X,
 )
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 # Column dimensions
 TARGET_ROW_W = 240   # full slide-in width
@@ -54,60 +55,22 @@ _COLORS.lerp = _lerp_color
 
 
 def height_for(state) -> int:
-    n = len(state.child_rows)
-    if n == 0:
-        return 0
-    return n * ROW_STRIDE
+    return _CY_UI.popup_child_height(len(state.child_rows), ROW_STRIDE)
 
 
 def advance_animation(state, now: float) -> bool:
     """Tick row hover lerp + slide-in width. Returns True if still
     animating."""
-    n = len(state.child_rows)
-    while len(state.row_hover_t) < n:
-        state.row_hover_t.append(0.0)
-    while len(state.row_anim_w) < n:
-        state.row_anim_w.append(0)
-    keep = False
-    hover_idx = state.hover_row_idx
-    # Row slide-in: grow from 0 to full width per row with stagger so
-    # the sequence reads as a visible reveal ("drop-in" feel).
-    DURATION = 0.32
-    STAGGER = 0.05
-    START_W = 0
-    for i in range(n):
-        # slide-in width
-        local_t = (now - state.row_anim_t0 - i * STAGGER) / DURATION
-        local_t = max(0.0, min(1.0, local_t))
-        # ease_out cubic
-        st = 1 - (1 - local_t) ** 3
-        target_w = int(round(START_W + (TARGET_ROW_W - START_W) * st))
-        if state.row_anim_w[i] != target_w:
-            state.row_anim_w[i] = target_w
-            keep = True
-        if local_t < 1.0:
-            keep = True
-        # hover lerp
-        ht_target = 1.0 if (hover_idx == i) else 0.0
-        delta = ht_target - state.row_hover_t[i]
-        if abs(delta) > 0.01:
-            state.row_hover_t[i] += delta * 0.25
-            keep = True
-        else:
-            state.row_hover_t[i] = ht_target
-    return keep
+    return bool(_CY_UI.popup_advance_child_animation(
+        state.row_hover_t, state.row_anim_w, state.hover_row_idx,
+        len(state.child_rows), now, state.row_anim_t0,
+        float(TARGET_ROW_W), 0.32, 0.05, 0.25))
 
 
 def hit_rects(state, x_off: int, y_off: int) -> List[Tuple[Tuple[int, int, int, int], int]]:
-    out = []
-    for i in range(len(state.child_rows)):
-        x1 = x_off + LIST_X
-        y1 = y_off + i * ROW_STRIDE
-        rw = state.row_anim_w[i] if i < len(state.row_anim_w) else TARGET_ROW_W
-        x2 = x1 + max(1, rw)
-        y2 = y1 + ROW_H
-        out.append(((x1, y1, x2, y2), i))
-    return out
+    return _CY_UI.popup_child_hit_rects(
+        len(state.child_rows), state.row_anim_w, x_off, y_off,
+        LIST_X, ROW_STRIDE, ROW_H, TARGET_ROW_W)
 
 
 def compose(state) -> Image.Image:
