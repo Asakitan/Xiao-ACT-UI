@@ -1261,6 +1261,12 @@ class PacketParser:
         self._on_monster_update = on_monster_update  # callback(MonsterData.to_dict())
         self._on_boss_event = on_boss_event          # callback({event_type, host_uuid, ...})
         self._on_scene_change = on_scene_change      # callback() — 场景服务器切换时清理
+        # Phase 9: optional message-name allowlist for anchor-only TCP mode.
+        # When None (default), all messages are processed. When set to a
+        # non-empty set, only messages whose name is in the set are dispatched
+        # to handlers (others are decoded but their handler invocation is
+        # short-circuited).
+        self._subscribed_messages: Optional[set] = None
         self._current_uuid: int = 0   # Current player UUID
         self._current_uid: int = max(0, int(preferred_uid))    # Current player UID (uuid >> 16)
         self._current_uid_confirmed: bool = False
@@ -1747,6 +1753,29 @@ class PacketParser:
             if self._check_wipe_buff(buff_id, source, host_uuid, buff_uuid):
                 matched = True
         return matched
+
+    def set_subscribed_messages(self, names: Optional[set]) -> None:
+        """Phase 9: restrict which TCP messages trigger upstream callbacks.
+
+        Pass `None` to subscribe to everything (default). Pass a set of
+        message names like {'SyncContainerData'} to dispatch only those.
+        Other messages are still parsed (for internal state coherence)
+        but their on_* callbacks are skipped, saving CPU on the consumer
+        side (DpsTracker, BossRaidEngine, etc.).
+
+        Used by mem_probe.tcp_source.TcpSnapshotSource(mode='anchor_only')
+        to keep the TCP path cheap once mem_probe owns the data flow.
+        """
+        if names is None:
+            self._subscribed_messages = None
+        else:
+            self._subscribed_messages = {str(n) for n in names}
+
+    def _is_subscribed(self, name: str) -> bool:
+        """Returns True if message `name` should fire upstream callbacks."""
+        if self._subscribed_messages is None:
+            return True
+        return name in self._subscribed_messages
 
     def _notify_self(self):
         """Notify callback for current player if available."""

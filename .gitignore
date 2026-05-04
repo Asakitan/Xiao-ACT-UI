@@ -4,6 +4,8 @@ __pycache__/
 *.pyd
 !_sao_cy*.pyd
 *.pyo
+plan_*
+!PLAN_*.md
 
 # ── User data (excluded from repo) ────────────────
 player_profile.json
@@ -55,6 +57,10 @@ update_host/releases/
 
 # ── Memory probe research (local only, IL2CPP dumps) ───
 tools/mem_probe/
+
+# ── mem_probe production: keep code, exclude per-user anchor data ───
+mem_probe/anchors.json
+!mem_probe/test_cy_memscan.py
 
 # ── Misc ───────────────────────────────────────────
 .github/
