@@ -1978,6 +1978,7 @@ class SAOPlayerGUI:
         self._dps_visible = False
         self._dps_enabled = True
         self._dps_faded = False
+        self._dps_idle_reset_after_id = None
         self._dps_mode = 'hidden'
         self._dps_last_report_available = False
         self._last_burst_ready = False
@@ -3641,6 +3642,7 @@ class SAOPlayerGUI:
 
                 if _dps_should_push:
                     if _dps_enabled and _dps_has_live and self._dps_overlay and self._dps_mode != 'report':
+                        self._cancel_dps_idle_reset_after()
                         self._scene_hide_token = int(getattr(self, '_scene_hide_token', 0) or 0) + 1
                         if not self._dps_visible:
                             self._dps_visible = True
@@ -3669,9 +3671,13 @@ class SAOPlayerGUI:
                         if not self._dps_faded:
                             self._dps_overlay.fade_out()
                             self._dps_faded = True
+                            self._schedule_dps_idle_reset_after_fade(
+                                getattr(self._dps_overlay, 'FADE_OUT', 0.26) + 0.25,
+                                float(_poll.get('last_event_time') or 0.0))
                         self._dps_visible = False
                         self._dps_mode = 'hidden'
                     elif self._dps_faded and _dps_has_live:
+                        self._cancel_dps_idle_reset_after()
                         self._dps_overlay.fade_in()
                         self._dps_faded = False
             except Exception:
@@ -7709,6 +7715,39 @@ class SAOPlayerGUI:
         if v <= 0:
             return 86400.0
         return float(max(1.0, v))
+
+    def _cancel_dps_idle_reset_after(self):
+        after_id = getattr(self, '_dps_idle_reset_after_id', None)
+        if after_id:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+        self._dps_idle_reset_after_id = None
+
+    def _schedule_dps_idle_reset_after_fade(self, timeout_s: float,
+                                           expected_last_event_time: float = 0.0):
+        self._cancel_dps_idle_reset_after()
+        delay_ms = int(max(350, min(1500, float(timeout_s or 0.0) * 1000)))
+
+        def _reset_if_still_idle():
+            self._dps_idle_reset_after_id = None
+            tracker = getattr(self, '_dps_tracker', None)
+            if not tracker:
+                return
+            try:
+                if tracker.has_recent_damage(0.2):
+                    return
+                if tracker.reset_idle_live_data(
+                        'idle_timeout', expected_last_event_time):
+                    self._sync_dps_report_availability()
+            except Exception:
+                pass
+
+        try:
+            self._dps_idle_reset_after_id = self.root.after(delay_ms, _reset_if_still_idle)
+        except Exception:
+            pass
 
     def _boss_hp_hold_timeout_s(self) -> float:
         """BossHP should survive death/revive and long mechanic downtime.

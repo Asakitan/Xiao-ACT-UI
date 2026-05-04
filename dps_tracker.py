@@ -463,6 +463,19 @@ class DpsTracker:
             self._finalize_current_locked('manual_reset')
             self._reset_locked()
 
+    def reset_idle_live_data(self, reason: str = 'idle_timeout',
+                             expected_last_event_time: float = 0.0) -> bool:
+        with self._lock:
+            if not self._has_meaningful_data_locked():
+                return False
+            if expected_last_event_time > 0:
+                if abs(self._last_event_time - expected_last_event_time) > 1e-6:
+                    return False
+            if self._finalize_current_locked(reason) is not None:
+                self._last_finalized_event_time = self._last_event_time
+            self._reset_locked()
+            return True
+
     def _reset_locked(self):
         self._entities.clear()
         self._encounter_start = 0.0
@@ -679,6 +692,7 @@ class DpsTracker:
                 result['should_fade_out'] = (now - self._last_damage_time) >= idle_timeout_s
             else:
                 result['should_fade_out'] = False
+            result['last_event_time'] = float(self._last_event_time or 0.0)
 
             # 6) Has report
             result['has_report'] = self._last_report is not None
