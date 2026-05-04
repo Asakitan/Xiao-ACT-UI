@@ -5087,6 +5087,7 @@ class SAOPlayerGUI:
         self._sao_menu_close_pending = True
         self._fisheye_close_suppress_until = time.time() + 1.4
         ov = getattr(self, '_fisheye_ov', None)
+        self._release_fisheye_input_zorder(ov)
         request_fadeout = getattr(ov, '_request_fadeout', None)
         if callable(request_fadeout):
             try:
@@ -5116,6 +5117,46 @@ class SAOPlayerGUI:
             return time.time() < float(getattr(self, '_fisheye_close_suppress_until', 0.0) or 0.0)
         except Exception:
             return False
+
+    def _release_fisheye_input_zorder(self, ov=None):
+        if ov is None:
+            ov = getattr(self, '_fisheye_ov', None)
+        gpu_win = getattr(ov, 'gpu_win', None) if ov is not None else None
+        if gpu_win is None:
+            return
+        try:
+            import ctypes as _ct
+            _u32 = _ct.windll.user32
+            _GWL_EXSTYLE = -20
+            _WS_EX_TRANSPARENT = 0x00000020
+            _HWND_NOTOPMOST = -2
+            _SW_HIDE = 0
+            _SWP_NOMOVE = 0x0002
+            _SWP_NOSIZE = 0x0001
+            _SWP_NOACTIVATE = 0x0010
+            _SWP_NOOWNERZORDER = 0x0200
+            _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
+            if _hwnd:
+                _ex = _u32.GetWindowLongPtrW(_ct.c_void_p(_hwnd), _GWL_EXSTYLE)
+                _u32.SetWindowLongPtrW(
+                    _ct.c_void_p(_hwnd), _GWL_EXSTYLE,
+                    _ex | _WS_EX_TRANSPARENT,
+                )
+                _u32.SetWindowPos(
+                    _ct.c_void_p(_hwnd), _ct.c_void_p(_HWND_NOTOPMOST),
+                    0, 0, 0, 0,
+                    _SWP_NOMOVE | _SWP_NOSIZE
+                    | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
+                )
+                _u32.ShowWindow(_ct.c_void_p(_hwnd), _SW_HIDE)
+        except Exception:
+            pass
+        try:
+            hide = getattr(gpu_win, 'hide', None)
+            if callable(hide):
+                hide()
+        except Exception:
+            pass
 
     def _on_sao_menu_open(self):
         """SAO 菜单打开时 — 停止呼吸, 启动持久鱼眼 (Win32 z-order 接管)"""
@@ -7219,31 +7260,7 @@ class SAOPlayerGUI:
         if ov is not None:
             gpu_win = getattr(ov, 'gpu_win', None)
             if gpu_win is not None:
-                try:
-                    import ctypes as _ct
-                    _u32 = _ct.windll.user32
-                    _GWL_EXSTYLE = -20
-                    _WS_EX_TRANSPARENT = 0x00000020
-                    _HWND_NOTOPMOST = -2
-                    _SWP_NOMOVE = 0x0002
-                    _SWP_NOSIZE = 0x0001
-                    _SWP_NOACTIVATE = 0x0010
-                    _SWP_NOOWNERZORDER = 0x0200
-                    _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
-                    if _hwnd:
-                        _ex = _u32.GetWindowLongPtrW(_ct.c_void_p(_hwnd), _GWL_EXSTYLE)
-                        _u32.SetWindowLongPtrW(
-                            _ct.c_void_p(_hwnd), _GWL_EXSTYLE,
-                            _ex | _WS_EX_TRANSPARENT,
-                        )
-                        _u32.SetWindowPos(
-                            _ct.c_void_p(_hwnd), _ct.c_void_p(_HWND_NOTOPMOST),
-                            0, 0, 0, 0,
-                            _SWP_NOMOVE | _SWP_NOSIZE
-                            | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
-                        )
-                except Exception:
-                    pass
+                self._release_fisheye_input_zorder(ov)
             running = getattr(ov, '_running_ref', None)
             if running:
                 running[0] = False
