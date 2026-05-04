@@ -1263,6 +1263,8 @@ class PacketParser:
         self._current_uid: int = max(0, int(preferred_uid))    # Current player UID (uuid >> 16)
         self._current_uid_confirmed: bool = False
         self._current_uid_source: str = 'cache' if self._current_uid > 0 else ''
+        self._pending_self_dirty_packets: List[bytes] = []
+        self._pending_self_dirty_replaying: bool = False
         self._players: Dict[int, PlayerData] = {}  # uid -> PlayerData
         self._monsters: Dict[int, MonsterData] = {}  # uuid -> MonsterData
         # Team member cache: uid -> {uid, name, profession, profession_id,
@@ -1338,7 +1340,43 @@ class PacketParser:
         player = self._get_player(uid)
         player.self_uid_confirmed = True
         player.self_uid_source = self._current_uid_source
+        if previous_uid != uid or not was_confirmed:
+            self._replay_pending_self_dirty_packets(uid, source)
         return previous_uid != uid or not was_confirmed
+
+    def _queue_pending_self_dirty_packet(self, data: bytes) -> None:
+        if not isinstance(data, bytes) or not data:
+            return
+        pending = self._pending_self_dirty_packets
+        pending.append(bytes(data))
+        if len(pending) > 12:
+            del pending[:-12]
+        if len(pending) in (1, 12):
+            logger.info(
+                f'[Parser] queued self dirty packet until UID confirmation '
+                f'(pending={len(pending)}, tentative_uid={self._current_uid})'
+            )
+
+    def _replay_pending_self_dirty_packets(self, uid: int, source: str) -> None:
+        if self._pending_self_dirty_replaying:
+            return
+        pending = self._pending_self_dirty_packets
+        if not pending:
+            return
+        self._pending_self_dirty_packets = []
+        self._pending_self_dirty_replaying = True
+        try:
+            logger.info(
+                f'[Parser] replaying {len(pending)} queued self dirty packets '
+                f'after UID confirm uid={uid} source={source}'
+            )
+            for raw in pending:
+                try:
+                    self._on_sync_container_dirty(raw)
+                except Exception as e:
+                    logger.debug(f'[Parser] queued dirty replay error: {e}')
+        finally:
+            self._pending_self_dirty_replaying = False
 
     def _is_confirmed_self_uid(self, uid: int) -> bool:
         return bool(
@@ -3127,7 +3165,7 @@ class PacketParser:
     def _on_sync_container_dirty(self, data: bytes):
         """Handle the custom dirty-data stream wrapper."""
         if not self._current_uid_confirmed:
-            logger.debug('[Parser] _on_sync_container_dirty: skipped (self UID not confirmed)')
+            self._queue_pending_self_dirty_packet(data)
             return
 
         outer = _decode_fields(data)
