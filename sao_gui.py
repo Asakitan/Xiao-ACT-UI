@@ -2533,6 +2533,10 @@ class SAOPlayerGUI:
             return False
 
         reason = str(getattr(self, '_pending_combat_reset_reason', '') or 'restart')
+        try:
+            damage_ts = float(event.get('timestamp') or time.time())
+        except Exception:
+            damage_ts = time.time()
         self._pending_combat_reset_after = 0.0
         self._pending_combat_reset_reason = ''
         print(
@@ -2546,7 +2550,7 @@ class SAOPlayerGUI:
         self._bb_last_hp_motion_sig = None
         self._bb_last_hp_motion_ts = 0.0
         self._last_boss_hp_push_sig = None
-        self._scene_damage_grace_until = _scene_change_ts + 8.0
+        self._scene_damage_grace_until = damage_ts + 8.0
         try:
             if self._state_mgr:
                 self._state_mgr.update(
@@ -2797,6 +2801,7 @@ class SAOPlayerGUI:
             try: self._boss_raid_engine.on_damage_event(event)
             except Exception: pass
         if _is_self_combat_target:
+            self._cancel_dps_idle_reset_after()
             target_uuid = event.get('target_uuid', 0)
             if target_uuid:
                 import time as _t
