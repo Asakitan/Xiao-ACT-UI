@@ -33,6 +33,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import (
@@ -257,41 +258,23 @@ def _text_width(draw: ImageDraw.ImageDraw, text: str, font) -> int:
 # ═══════════════════════════════════════════════
 
 def _fmt_num(v: float) -> str:
-    v = float(v or 0)
-    if v >= 1_000_000:
-        digits = 0 if v >= 10_000_000 else 1
-        return f"{_to_fixed_half_up(v / 1_000_000, digits)}M"
-    if v >= 1_000:
-        digits = 0 if v >= 100_000 else 1
-        return f"{_to_fixed_half_up(v / 1_000, digits)}K"
-    return f"{_round_half_up_int(v):,}"
+    return _CY_UI.dps_fmt_num(v)
 
 
 def _fmt_time(s: float) -> str:
-    s = max(0, int(s or 0))
-    return f"{s // 60:02d}:{s % 60:02d}"
+    return _CY_UI.dps_fmt_time(s)
 
 
 def _fmt_fp(fp: float) -> str:
-    fp = float(fp or 0)
-    if fp <= 0:
-        return ''
-    if fp >= 1_000_000:
-        return f"{_to_fixed_half_up(fp / 1_000_000, 2)}M"
-    if fp >= 1_000:
-        digits = 0 if fp >= 100_000 else 1
-        return f"{_to_fixed_half_up(fp / 1_000, digits)}K"
-    return f"{_round_half_up_int(fp):,}"
+    return _CY_UI.dps_fmt_fp(fp)
 
 
 def _to_fixed_half_up(value: float, digits: int) -> str:
-    quant = Decimal('1').scaleb(-digits)
-    dec = Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP)
-    return format(dec, f'.{digits}f')
+    return _CY_UI.dps_to_fixed_half_up(value, digits)
 
 
 def _round_half_up_int(value: float) -> int:
-    return int(Decimal(str(value)).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+    return int(_CY_UI.dps_round_half_up_int(value))
 
 
 # ═══════════════════════════════════════════════
@@ -299,12 +282,11 @@ def _round_half_up_int(value: float) -> int:
 # ═══════════════════════════════════════════════
 
 def _ease_out_cubic(t: float) -> float:
-    t = max(0.0, min(1.0, t))
-    return 1.0 - (1.0 - t) ** 3
+    return _CY_UI.ease_out_cubic(t)
 
 
 def _lerp(a: float, b: float, t: float) -> float:
-    return a + (b - a) * max(0.0, min(1.0, t))
+    return _CY_UI.lerp_clamped(a, b, t)
 
 
 # ═══════════════════════════════════════════════

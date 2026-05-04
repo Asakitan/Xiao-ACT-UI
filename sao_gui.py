@@ -814,14 +814,13 @@ class SAOPlayerPanel(tk.Frame):
     def _animate_open(self):
         if self._gpu_managed:
             def phase1(t):
-                w = max(1, int(self._target_w * t))
-                h = max(1, int(self._top_h * t))
+                w, h = _CY_UI.player_panel_anim_size(self._target_w, self._top_h, t)
                 self._anim_top_w = w
                 self._anim_top_h = h
                 self._dispatch_gpu_paint()
 
             def phase2(t):
-                h = max(1, int(self._bottom_h * t))
+                _, h = _CY_UI.player_panel_anim_size(self._target_w, self._bottom_h, t)
                 self._anim_bot_w = self._target_w
                 self._anim_bot_h = h
                 self._dispatch_gpu_paint()
@@ -833,13 +832,12 @@ class SAOPlayerPanel(tk.Frame):
             return
 
         def phase1(t):
-            w = max(1, int(self._target_w * t))
-            h = max(1, int(self._top_h * t))
+            w, h = _CY_UI.player_panel_anim_size(self._target_w, self._top_h, t)
             self._top.configure(width=w, height=h)
             self._redraw_top(w, h)
 
         def phase2(t):
-            h = max(1, int(self._bottom_h * t))
+            _, h = _CY_UI.player_panel_anim_size(self._target_w, self._bottom_h, t)
             self._bottom.configure(width=self._target_w, height=h)
             self._redraw_bottom(self._target_w, h)
 
@@ -850,11 +848,12 @@ class SAOPlayerPanel(tk.Frame):
         if self._gpu_managed:
             def fade(t):
                 inv = 1 - t
-                w = max(1, int(self._target_w * inv))
+                w, top_h = _CY_UI.player_panel_anim_size(self._target_w, self._top_h, inv)
+                _, bot_h = _CY_UI.player_panel_anim_size(self._target_w, self._bottom_h, inv)
                 self._anim_top_w = w
-                self._anim_top_h = max(1, int(self._top_h * inv))
+                self._anim_top_h = top_h
                 self._anim_bot_w = w
-                self._anim_bot_h = max(1, int(self._bottom_h * inv))
+                self._anim_bot_h = bot_h
                 self._dispatch_gpu_paint()
 
             self._anim.animate('close', 200, fade)
@@ -864,9 +863,10 @@ class SAOPlayerPanel(tk.Frame):
 
         def fade(t):
             inv = 1 - t
-            w = max(1, int(self._target_w * inv))
-            self._top.configure(width=w, height=max(1, int(self._top_h * inv)))
-            self._bottom.configure(width=w, height=max(1, int(self._bottom_h * inv)))
+            w, top_h = _CY_UI.player_panel_anim_size(self._target_w, self._top_h, inv)
+            _, bot_h = _CY_UI.player_panel_anim_size(self._target_w, self._bottom_h, inv)
+            self._top.configure(width=w, height=top_h)
+            self._bottom.configure(width=w, height=bot_h)
 
         self._anim.animate('close', 200, fade)
 
@@ -1002,8 +1002,7 @@ class SAOPlayerPanel(tk.Frame):
         if h > 185:
             scan_y = h - 16
             self._top.create_line(10, scan_y, w - 10, scan_y, fill='#e8e8e8', width=1)
-            t = time.time()
-            scan_x = 10 + int((w - 20) * ((math.sin(t * 1.5) + 1) / 2))
+            scan_x = _CY_UI.scan_x(w, time.time())
             self._top.create_rectangle(scan_x - 12, scan_y - 1,
                                        scan_x + 12, scan_y + 1,
                                        fill=CYAN, outline='')
@@ -1117,7 +1116,7 @@ class SAOPlayerPanel(tk.Frame):
         bot_w = self._anim_bot_w if self._anim_bot_w > 0 else self._target_w
         bot_h = self._anim_bot_h if self._anim_bot_h > 0 else self._bottom_h
         # Match Tk: scan dot uses time.time()*1.5 sin → [0,1] phase
-        scan_phase = (math.sin(time.time() * 1.5) + 1.0) / 2.0
+        scan_phase = _CY_UI.scan_phase(time.time())
         snap = snap_cls(
             self._username,
             self._level, self._level_extra, self._season_exp,
@@ -1314,16 +1313,10 @@ class SAOSessionPlayersPanel(tk.Frame):
             self._gpu_painter = None
 
     def _gpu_visible_rows(self):
-        total = len(self._rows_data)
-        max_first = max(0, total - self._visible_row_count)
-        self._first_visible_row = max(0, min(int(self._first_visible_row), max_first))
-        rows = []
-        for row in self._rows_data[self._first_visible_row:self._first_visible_row + self._visible_row_count]:
-            name = self._short_name(row.get('name') or '')
-            uid = str(row.get('uid') or '--')
-            power = str(row.get('fight_power') or '--')
-            rows.append((name, uid, power, bool(row.get('is_self'))))
-        return rows
+        self._first_visible_row = _CY_UI.clamp_session_first_index(
+            self._first_visible_row, len(self._rows_data), self._visible_row_count)
+        return _CY_UI.session_visible_rows(
+            self._rows_data, self._first_visible_row, self._visible_row_count)
 
     def _dispatch_gpu_paint(self):
         painter = getattr(self, '_gpu_painter', None)
@@ -1495,20 +1488,13 @@ class SAOSessionPlayersPanel(tk.Frame):
 
     def _on_mousewheel(self, event):
         try:
-            if getattr(event, 'num', None) == 4:
-                delta = -3
-            elif getattr(event, 'num', None) == 5:
-                delta = 3
-            else:
-                delta = int(-1 * (event.delta / 120))
-                if delta == 0:
-                    delta = -1 if event.delta > 0 else 1
+            delta = _CY_UI.session_scroll_delta(
+                getattr(event, 'num', None), getattr(event, 'delta', 0))
             if self._gpu_managed:
                 total = len(self._rows_data)
-                max_first = max(0, total - self._visible_row_count)
                 old_first = int(self._first_visible_row)
-                self._first_visible_row = max(
-                    0, min(max_first, int(self._first_visible_row) + delta))
+                self._first_visible_row = _CY_UI.session_scroll_first_index(
+                    self._first_visible_row, total, self._visible_row_count, delta)
                 if self._first_visible_row != old_first:
                     self._queue_gpu_paint(16)
                 return 'break'
@@ -1522,10 +1508,7 @@ class SAOSessionPlayersPanel(tk.Frame):
 
     @staticmethod
     def _short_name(name: str) -> str:
-        name = str(name or '').strip()
-        if not name:
-            return '--'
-        return name if len(name) <= 14 else name[:13] + '…'
+        return _CY_UI.short_session_name(name)
 
     def _destroy_rows(self):
         self._loading_footer = None
@@ -1652,10 +1635,10 @@ class SAOSessionPlayersPanel(tk.Frame):
 
             def _step():
                 try:
-                    t = min(1.0, (time.perf_counter() - start) / dur)
-                    self._open_reveal = 1.0 - pow(1.0 - t, 3)
+                    elapsed = time.perf_counter() - start
+                    self._open_reveal = _CY_UI.cubic_open_reveal(elapsed, dur)
                     self._dispatch_gpu_paint()
-                    if t < 1.0:
+                    if self._open_reveal < 1.0:
                         self._open_anim_after_id = self.after(16, _step)
                     else:
                         self._open_reveal = 1.0
@@ -1679,13 +1662,11 @@ class SAOSessionPlayersPanel(tk.Frame):
 
         def _step():
             try:
-                t = min(1.0, (time.perf_counter() - start) / dur)
-                ease = 1.0 - pow(1.0 - t, 3)
-                height = max(1, int(round(self.PANEL_H * ease)))
-                offset = int(round(64 * (1.0 - ease)))
+                t, _ease, height, offset, highlight_on = _CY_UI.session_open_anim_geometry(
+                    self.PANEL_H, time.perf_counter() - start, dur)
                 self.configure(width=self.PANEL_W, height=height)
                 self._box.pack_configure(pady=(offset, 0))
-                if t < 0.55:
+                if highlight_on:
                     self._box.configure(highlightbackground='#f3af12')
                     self._summary.configure(fg='#b89036')
                 else:
@@ -1711,28 +1692,16 @@ class SAOSessionPlayersPanel(tk.Frame):
             except Exception:
                 rows = []
         rows = list(rows or [])
-        sig = tuple((
-            str(r.get('uid') or ''),
-            str(r.get('name') or ''),
-            int(r.get('fight_power_value') or 0),
-            bool(r.get('is_self')),
-        ) for r in rows)
+        sig = _CY_UI.session_rows_signature(rows)
         if sig == self._rows_sig and (not force or self._rows_sig is not None):
             return
         self._rows_sig = sig
         self._rows_data = rows
         self._rendered_count = 0
-        self._rows_self_uid = ''
-        for row in rows:
-            try:
-                if row.get('is_self'):
-                    self._rows_self_uid = str(row.get('uid') or '')
-                    break
-            except Exception:
-                pass
+        self._rows_self_uid = _CY_UI.session_self_uid(rows)
         if self._gpu_managed:
-            max_first = max(0, len(self._rows_data) - self._visible_row_count)
-            self._first_visible_row = max(0, min(self._first_visible_row, max_first))
+            self._first_visible_row = _CY_UI.clamp_session_first_index(
+                self._first_visible_row, len(self._rows_data), self._visible_row_count)
             if force:
                 self._first_visible_row = 0
             self._cached_screen_xy = None
@@ -2214,14 +2183,9 @@ class SAOPlayerGUI:
                 continue
             active_count += 1
 
-            # 每面板加一个相位偏移避免完全同步
-            t = tt + (id(panel) % 17) * 0.13
-
-            # 量化坐标到整数 (Canvas 本身就是整数坐标系)
-            left_far = int(10 + 5 * math.sin(t * 0.66))
-            left_near = int(20 + 12 * math.sin(t * 1.35 + 0.8))
-            right_far = int(pw - 18 + 7 * math.sin(t * 0.72 + 1.1))
-            right_near = int(pw - 34 + 12 * math.sin(t * 1.45 + 2.1))
+            # 每面板加一个相位偏移避免完全同步；坐标计算在 Cython。
+            left_far, left_near, right_far, right_near = _CY_UI.sao_fx_coords(
+                tt, id(panel), pw)
 
             # 签名: 所有可能变化的整数坐标
             sig = (left_far, left_near, right_far, right_near)

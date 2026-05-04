@@ -15,13 +15,12 @@ Supported features:
 """
 
 import math
-import struct
 import logging
 import os
 import json
 import sys
 import time
-from typing import Optional, Callable, Dict, Any, List, Tuple
+from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger('sao_auto.parser')
 _PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
@@ -97,159 +96,15 @@ def _ensure_pb():
 
 
 
-# Mini protobuf helpers
+# Mini protobuf helpers — mandatory Cython bindings, no Python fallback.
 
 
-
-def _read_varint(data: bytes, pos: int):
-    """Read a protobuf varint and return `(value, new_pos)`."""
-    return _CY_PACKET.read_varint(data, pos)
-
-
-def _read_signed_varint(data: bytes, pos: int):
-    """Read a signed varint using direct int32 two's-complement semantics."""
-    val, pos = _read_varint(data, pos)
-    if val > 0x7FFFFFFF:
-        val -= 0x100000000
-    return val, pos
+_read_varint = _CY_PACKET.read_varint
+_read_signed_varint = _CY_PACKET.read_signed_varint
+_decode_fields = _CY_PACKET.decode_fields
 
 
-def _decode_fields(data: bytes) -> Dict[int, list]:
-    """
-    Decode protobuf bytes into a `{field_number: [values]}` dictionary.
-
-    Supported wire types:
-      0 = varint
-      1 = 64-bit
-      2 = length-delimited
-      5 = 32-bit
-    """
-    return _CY_PACKET.decode_fields(data)
-
-
-_DUNGEON_DIRTY_TAG_BEGIN = -2
-_DUNGEON_DIRTY_TAG_END = -3
-_DUNGEON_DIRTY_TAG_EMPTY = -4
-_DUNGEON_DIRTY_PAD_BYTES = 4
-
-
-class _DungeonDirtyCursor:
-    def __init__(self, data: bytes):
-        self.data = data or b''
-        self.offset = 0
-
-    def set_offset(self, offset: int):
-        self.offset = min(max(0, int(offset or 0)), len(self.data))
-
-    def read_i32_padded(self) -> int:
-        end = self.offset + 4
-        padded_end = end + _DUNGEON_DIRTY_PAD_BYTES
-        if padded_end > len(self.data):
-            raise ValueError('unexpected eof while reading padded i32')
-        value = struct.unpack_from('<i', self.data, self.offset)[0]
-        self.offset = padded_end
-        return int(value)
-
-
-def _parse_dungeon_dirty_container(cur: _DungeonDirtyCursor, handler):
-    begin = cur.read_i32_padded()
-    if begin != _DUNGEON_DIRTY_TAG_BEGIN:
-        raise ValueError(f'invalid dirty container begin tag: {begin}')
-    size = cur.read_i32_padded()
-    if size == _DUNGEON_DIRTY_TAG_END:
-        return
-    if size < 0:
-        raise ValueError(f'invalid dirty container size: {size}')
-    body_start = cur.offset
-    body_end = body_start + int(size)
-    if body_end > len(cur.data):
-        raise ValueError('dirty container body exceeds buffer size')
-
-    field = cur.read_i32_padded()
-    while field > 0:
-        handled = bool(handler(field, cur, body_end))
-        if not handled:
-            cur.set_offset(body_end)
-        if cur.offset + 8 > len(cur.data):
-            break
-        field = cur.read_i32_padded()
-    if field != _DUNGEON_DIRTY_TAG_END:
-        cur.set_offset(body_end)
-
-
-def _parse_dungeon_dirty_target(cur: _DungeonDirtyCursor) -> Dict[str, int]:
-    out = {'target_id': 0, 'nums': 0, 'complete': 0}
-
-    def handle(field: int, inner: _DungeonDirtyCursor, _body_end: int) -> bool:
-        if field == 1:
-            out['target_id'] = inner.read_i32_padded()
-            return True
-        if field == 2:
-            out['nums'] = inner.read_i32_padded()
-            return True
-        if field == 3:
-            out['complete'] = inner.read_i32_padded()
-            return True
-        return False
-
-    _parse_dungeon_dirty_container(cur, handle)
-    return out
-
-
-def _parse_dungeon_dirty_target_map(cur: _DungeonDirtyCursor) -> List[Dict[str, int]]:
-    entries: List[Dict[str, int]] = []
-    add = cur.read_i32_padded()
-    remove = 0
-    update = 0
-    if add == _DUNGEON_DIRTY_TAG_EMPTY:
-        return entries
-    if add == -1:
-        add = cur.read_i32_padded()
-    else:
-        remove = cur.read_i32_padded()
-        update = cur.read_i32_padded()
-    if add < 0 or remove < 0 or update < 0:
-        raise ValueError('negative dirty target map section size')
-    for _ in range(int(add)):
-        cur.read_i32_padded()
-        entries.append(_parse_dungeon_dirty_target(cur))
-    for _ in range(int(remove)):
-        cur.read_i32_padded()
-    for _ in range(int(update)):
-        cur.read_i32_padded()
-        entries.append(_parse_dungeon_dirty_target(cur))
-    return entries
-
-
-def _parse_dungeon_dirty_buffer(data: bytes) -> Tuple[Optional[int], List[Dict[str, int]]]:
-    cur = _DungeonDirtyCursor(data)
-    flow_state: Optional[int] = None
-    targets: List[Dict[str, int]] = []
-
-    def handle_root(field: int, inner: _DungeonDirtyCursor, _body_end: int) -> bool:
-        nonlocal flow_state, targets
-        if field == 2:
-            def handle_flow(flow_field: int, flow_cur: _DungeonDirtyCursor, _flow_end: int) -> bool:
-                nonlocal flow_state
-                if flow_field == 1:
-                    flow_state = flow_cur.read_i32_padded()
-                    return True
-                return False
-            _parse_dungeon_dirty_container(inner, handle_flow)
-            return True
-        if field == 4:
-            def handle_target(target_field: int, map_cur: _DungeonDirtyCursor, _target_end: int) -> bool:
-                nonlocal targets
-                if target_field == 1:
-                    targets = _parse_dungeon_dirty_target_map(map_cur)
-                    return True
-                return False
-            _parse_dungeon_dirty_container(inner, handle_target)
-            return True
-        return False
-
-    _parse_dungeon_dirty_container(cur, handle_root)
-    return flow_state, targets
+_parse_dungeon_dirty_buffer = _CY_PACKET.parse_dungeon_dirty_buffer
 
 
 _RESET_IGNORE_TARGETS = frozenset({
@@ -257,54 +112,11 @@ _RESET_IGNORE_TARGETS = frozenset({
 })
 
 
-def _varint_to_int64(val: int) -> int:
-    """Convert a protobuf varint to signed int64. v2.4.33: cython."""
-    return int(_CY_PACKET.varint_to_int64(val))
-
-
-def _varint_to_int32(val: int) -> int:
-    """Convert a protobuf varint to signed int32. v2.4.33: cython."""
-    return int(_CY_PACKET.varint_to_int32(val))
-
-
-def _raw_varint_to_int32_py(raw: bytes) -> int:
-    val = 0
-    shift = 0
-    for b in raw[:10]:
-        val |= (int(b) & 0x7F) << shift
-        if not (int(b) & 0x80):
-            break
-        shift += 7
-    val &= 0xFFFFFFFF
-    if val >= 0x80000000:
-        val -= 0x100000000
-    return int(val)
-
-
-def _decode_string_from_raw(raw: bytes) -> str:
-    """Match protobufjs `reader.string()`: `[varint length][utf-8 bytes]`.
-
-    v2.4.33: cython.
-    """
-    if raw is None:
-        return ''
-    return _CY_PACKET.decode_string_from_raw(raw)
-
-
-def _decode_int32_from_raw(raw: bytes) -> int:
-    """Match protobufjs `reader.int32()` on a raw varint payload."""
-    if not raw:
-        return 0
-    try:
-        return int(_CY_PACKET.decode_int32_from_raw(raw))
-    except (OverflowError, ValueError):
-        return _raw_varint_to_int32_py(raw)
-
-
-def _decode_float32_from_raw(raw: bytes) -> Optional[float]:
-    if not raw or len(raw) < 4:
-        return None
-    return _CY_PACKET.decode_float32_from_raw(raw)
+_varint_to_int64 = _CY_PACKET.varint_to_int64
+_varint_to_int32 = _CY_PACKET.varint_to_int32
+_decode_string_from_raw = _CY_PACKET.decode_string_from_raw
+_decode_int32_from_raw = _CY_PACKET.raw_varint_to_int32
+_decode_float32_from_raw = _CY_PACKET.decode_float32_from_raw
 
 
 def _append_packet_debug(tag: str, payload: Dict[str, Any]):
@@ -954,29 +766,9 @@ def _combat_damage_amount(value, lucky_value, actual_value, hp_lessen, shield_le
         value, lucky_value, actual_value, hp_lessen, shield_lessen))
 
 
-def _append_decimal_key(prefix: int, suffix: int, min_width: int) -> int:
-    suffix = max(0, int(suffix or 0))
-    width = max(len(str(suffix)) if suffix >= 10 else 1, int(min_width or 0))
-    return int(prefix or 0) * (10 ** width) + suffix
-
-
 def _compute_damage_key(owner_id: int, damage_source: int, owner_level: int,
                         hit_event_id: int) -> int:
-    owner_id = max(0, int(owner_id or 0))
-    if owner_id <= 0:
-        return 0
-    source = int(damage_source or 0)
-    hit_event_id = max(0, int(hit_event_id or 0))
-    # Parser does not load the large SkillFightLevelTable; dps_tracker refines
-    # skill attacks with that table. Keep the same prefix/source structure here
-    # so packet debug and bridge consumers can still distinguish hit events.
-    damage_type = 2 if source == 2 else (3 if source > 0 else 1)
-    skill_effect_id = owner_id
-    return _append_decimal_key(
-        _append_decimal_key(damage_type, skill_effect_id, 0),
-        hit_event_id,
-        2,
-    )
+    return int(_CY_PACKET.compute_damage_key(owner_id, damage_source, owner_level, hit_event_id))
 
 
 def _uuid_to_uid(uuid: int) -> int:
@@ -1384,31 +1176,11 @@ def _set_level_extra_candidate(player: PlayerData, source: str, value: int) -> b
 
 
 def _decode_resource_value_map(resource_ids, resources) -> Dict[int, int]:
-    result: Dict[int, int] = {}
-    count = min(len(resource_ids or []), len(resources or []))
-    for idx in range(count):
-        res_id_raw = resource_ids[idx]
-        value_raw = resources[idx]
-        if not isinstance(res_id_raw, int) or not isinstance(value_raw, int):
-            continue
-        res_id = _varint_to_int32(res_id_raw)
-        value = _varint_to_int32(value_raw)
-        if res_id > 0 and value >= 0:
-            result[res_id] = value
-    return result
+    return _CY_PACKET.decode_resource_value_map(resource_ids, resources)
 
 
 def _decode_packed_varints(raw: bytes) -> list:
-    values = []
-    pos = 0
-    raw = raw or b''
-    while pos < len(raw):
-        try:
-            value, pos = _read_varint(raw, pos)
-        except Exception:
-            break
-        values.append(int(value))
-    return values
+    return _CY_PACKET.decode_packed_varints(raw or b'')
 
 
 def _extract_scene_basic_id_from_attrs(attrs) -> int:
@@ -2173,20 +1945,7 @@ class PacketParser:
         self.stats['raw_frames'] += 1
         if self.stats['raw_frames'] == 1:
             print(f'[Parser] 首个数据帧到达 (size={len(frame)})', flush=True)
-        offset = 0
-        total = len(frame)
-        while offset < total:
-            if offset + 6 > total:
-                break
-            pkt_size = struct.unpack_from('>I', frame, offset)[0]
-            if pkt_size < 6 or offset + pkt_size > total:
-                break
-            pkt_type = struct.unpack_from('>H', frame, offset + 4)[0]
-            is_zstd = bool(pkt_type & 0x8000)
-            msg_type = pkt_type & 0x7FFF
-            payload = frame[offset + 6:offset + pkt_size]
-            offset += pkt_size
-
+        for msg_type, is_zstd, payload in _CY_PACKET.parse_game_frame_headers(frame):
             try:
                 if msg_type == MessageType.NOTIFY:
                     self.stats['game_frames'] += 1
@@ -2210,7 +1969,6 @@ class PacketParser:
     def _on_frame_down(self, payload: bytes, is_zstd: bool):
         if len(payload) < 4:
             return
-        # server_seq_id = struct.unpack_from('>I', payload, 0)[0]
         nested = payload[4:]
         if not nested:
             return
@@ -2226,22 +1984,16 @@ class PacketParser:
 
 
     def _on_notify(self, payload: bytes, is_zstd: bool):
-        if len(payload) < 16:
+        header = _CY_PACKET.parse_notify_header(payload, SERVICE_UUID_C3SB)
+        if header is None:
             return
-        # serviceUuid (8B) + stubId (4B) + methodId (4B)
-        service_uuid = struct.unpack_from('>Q', payload, 0)[0]
-        # stub_id = struct.unpack_from('>I', payload, 8)[0]
-        method_id = struct.unpack_from('>I', payload, 12)[0]
-
-        if service_uuid != SERVICE_UUID_C3SB:
-            return
+        method_id, msg_payload = header
 
         # 首次收到游戏消息时打印
         if not getattr(self, '_first_notify_printed', False):
             self._first_notify_printed = True
             print(f'[Parser] 首个游戏Notify: method=0x{method_id:02X} zstd={is_zstd}', flush=True)
 
-        msg_payload = payload[16:]
         if is_zstd:
             msg_payload = self._decompress(msg_payload)
             if msg_payload is None:
@@ -3399,7 +3151,7 @@ class PacketParser:
 
         if pos + 8 > len(data):
             return
-        ident = struct.unpack_from('<I', data, pos)[0]
+        ident = _CY_PACKET.read_le_u32_at(data, pos)
         if ident != 0xFFFFFFFE:
             return
         pos += 4
@@ -3408,7 +3160,7 @@ class PacketParser:
 
         if pos + 4 > len(data):
             return
-        field_index = struct.unpack_from('<I', data, pos)[0]
+        field_index = _CY_PACKET.read_le_u32_at(data, pos)
         pos += 4
         _fname = CHAR_FIELD_NAMES.get(field_index, f'FIELD_{field_index}')
         debug_info = {
@@ -3430,13 +3182,13 @@ class PacketParser:
             debug_info['remaining_len'] = len(data) - pos
             if pos + 8 > len(data):
                 return
-            ident2 = struct.unpack_from('<I', data, pos)[0]
+            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
             if ident2 != 0xFFFFFFFE:
                 return
             pos += 8  # skip identifier + validation
             if pos + 4 > len(data):
                 return
-            sub_field = struct.unpack_from('<I', data, pos)[0]
+            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
             pos += 4
             debug_info['sub_field'] = sub_field
 
@@ -3493,7 +3245,7 @@ class PacketParser:
                     if pos + 4 > len(data):
                         debug_info['tail_hex'] = data[pos:].hex()
                     else:
-                        slen = struct.unpack_from('<I', data, pos)[0]
+                        slen = _CY_PACKET.read_le_u32_at(data, pos)
                         pos += 4
                         if pos + slen <= len(data):
                             val = data[pos:pos+slen].decode('utf-8', 'ignore')
@@ -3506,7 +3258,7 @@ class PacketParser:
                             debug_info['tail_hex'] = data[pos:].hex()
                 elif ftype == 'I':
                     if pos + 4 <= len(data):
-                        val = struct.unpack_from('<I', data, pos)[0]
+                        val = _CY_PACKET.read_le_u32_at(data, pos)
                         pos += 4
                         debug_info['u32'] = val
                         if fname == 'FightPoint':
@@ -3516,14 +3268,14 @@ class PacketParser:
                         debug_info['tail_hex'] = data[pos:].hex()
                 elif ftype == 'Q':
                     if pos + 8 <= len(data):
-                        val = struct.unpack_from('<Q', data, pos)[0]
+                        val = _CY_PACKET.read_le_u64_at(data, pos)
                         pos += 8
                         debug_info['u64'] = val
                     else:
                         debug_info['tail_hex'] = data[pos:].hex()
                 elif ftype == 'f':
                     if pos + 4 <= len(data):
-                        val = struct.unpack_from('<f', data, pos)[0]
+                        val = _CY_PACKET.read_le_f32_at(data, pos)
                         pos += 4
                         debug_info['float'] = round(val, 4)
                     else:
@@ -3571,19 +3323,19 @@ class PacketParser:
         elif field_index == 16:  # UserFightAttr
             if pos + 8 > len(data):
                 return
-            ident2 = struct.unpack_from('<I', data, pos)[0]
+            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
             if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
                 return
-            sub_field = struct.unpack_from('<I', data, pos)[0]
+            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
             pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 1:  # CurHp
                 if pos + 4 > len(data):
                     return
-                hp = struct.unpack_from('<I', data, pos)[0]
+                hp = _CY_PACKET.read_le_u32_at(data, pos)
                 debug_info['u32'] = hp
 
                 if hp > 0 or player.max_hp == 0:
@@ -3594,7 +3346,7 @@ class PacketParser:
             elif sub_field == 2:  # MaxHp
                 if pos + 4 > len(data):
                     return
-                max_hp = struct.unpack_from('<I', data, pos)[0]
+                max_hp = _CY_PACKET.read_le_u32_at(data, pos)
                 debug_info['u32'] = max_hp
                 if max_hp > 0:
                     player.max_hp = max_hp
@@ -3606,8 +3358,8 @@ class PacketParser:
                     return
 
                 try:
-                    energy_f = struct.unpack_from('<f', data, pos)[0]
-                    energy_i = struct.unpack_from('<I', data, pos)[0]
+                    energy_f = _CY_PACKET.read_le_f32_at(data, pos)
+                    energy_i = _CY_PACKET.read_le_u32_at(data, pos)
                     stamina_max = max(0, player.energy_limit) + max(0, player.extra_energy_limit)
                     energy_v = _decode_dirty_energy_value(energy_i, energy_f, stamina_max=stamina_max)
                     if energy_v is not None:
@@ -3633,19 +3385,19 @@ class PacketParser:
         elif field_index == 22:  # RoleLevel
             if pos + 8 > len(data):
                 return
-            ident2 = struct.unpack_from('<I', data, pos)[0]
+            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
             if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
                 return
-            sub_field = struct.unpack_from('<I', data, pos)[0]
+            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
             pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 1:  # Level
                 if pos + 4 > len(data):
                     return
-                lv = struct.unpack_from('<I', data, pos)[0]
+                lv = _CY_PACKET.read_le_u32_at(data, pos)
                 debug_info['u32'] = lv
                 if lv > 0:
                     player.level = lv
@@ -3653,35 +3405,35 @@ class PacketParser:
                     debug_info['role_level'] = lv
                     logger.info(f'[Parser] DirtyData Level -> {lv}')
             elif pos + 4 <= len(data):
-                debug_info['u32'] = struct.unpack_from('<I', data, pos)[0]
+                debug_info['u32'] = _CY_PACKET.read_le_u32_at(data, pos)
                 debug_info['raw_hex'] = data[pos:].hex()[:128]
 
         elif field_index == 50:  # SeasonCenter
             if pos + 8 > len(data):
                 return
-            ident2 = struct.unpack_from('<I', data, pos)[0]
+            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
             if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
                 return
-            sub_field = struct.unpack_from('<I', data, pos)[0]
+            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
             pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 2:  # BattlePass
                 if pos + 8 > len(data):
                     return
-                ident3 = struct.unpack_from('<I', data, pos)[0]
+                ident3 = _CY_PACKET.read_le_u32_at(data, pos)
                 if ident3 != 0xFFFFFFFE:
                     return
                 pos += 8
                 if pos + 4 > len(data):
                     return
-                bp_sub_field = struct.unpack_from('<I', data, pos)[0]
+                bp_sub_field = _CY_PACKET.read_le_u32_at(data, pos)
                 pos += 4
                 debug_info['nested_sub_field'] = bp_sub_field
                 if bp_sub_field == 2 and pos + 4 <= len(data):  # BattlePass.Level
-                    battlepass_lv = struct.unpack_from('<I', data, pos)[0]
+                    battlepass_lv = _CY_PACKET.read_le_u32_at(data, pos)
                     debug_info['u32'] = battlepass_lv
                     if battlepass_lv > 0:
                         player.battlepass_level = battlepass_lv
@@ -3697,29 +3449,29 @@ class PacketParser:
         elif field_index == 52:  # SeasonMedalInfo
             if pos + 8 > len(data):
                 return
-            ident2 = struct.unpack_from('<I', data, pos)[0]
+            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
             if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
                 return
-            sub_field = struct.unpack_from('<I', data, pos)[0]
+            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
             pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 3:  # CoreHoleInfo
                 if pos + 8 > len(data):
                     return
-                ident3 = struct.unpack_from('<I', data, pos)[0]
+                ident3 = _CY_PACKET.read_le_u32_at(data, pos)
                 if ident3 != 0xFFFFFFFE:
                     return
                 pos += 8
                 if pos + 4 > len(data):
                     return
-                hole_sub_field = struct.unpack_from('<I', data, pos)[0]
+                hole_sub_field = _CY_PACKET.read_le_u32_at(data, pos)
                 pos += 4
                 debug_info['nested_sub_field'] = hole_sub_field
                 if hole_sub_field == 2 and pos + 4 <= len(data):  # HoleLevel
-                    medal_lv_raw = struct.unpack_from('<I', data, pos)[0]
+                    medal_lv_raw = _CY_PACKET.read_le_u32_at(data, pos)
                     medal_lv = _normalize_season_medal_level(medal_lv_raw)
                     debug_info['u32'] = medal_lv_raw
                     debug_info['season_medal_level_raw'] = medal_lv_raw
@@ -3741,17 +3493,17 @@ class PacketParser:
         elif field_index == 56:  # MonsterHuntInfo
             if pos + 8 > len(data):
                 return
-            ident2 = struct.unpack_from('<I', data, pos)[0]
+            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
             if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
                 return
-            sub_field = struct.unpack_from('<I', data, pos)[0]
+            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
             pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 2 and pos + 4 <= len(data):  # CurLevel
-                hunt_lv = struct.unpack_from('<I', data, pos)[0]
+                hunt_lv = _CY_PACKET.read_le_u32_at(data, pos)
                 debug_info['u32'] = hunt_lv
                 if hunt_lv > 0:
                     player.monster_hunt_level = hunt_lv
@@ -3771,11 +3523,11 @@ class PacketParser:
             debug_info['full_raw_hex'] = data[pos:].hex()[:256]
             # Binary dirty format: 0xFFFFFFFE + validation + sub_field + nested data
             if pos + 8 <= len(data):
-                ident2 = struct.unpack_from('<I', data, pos)[0]
+                ident2 = _CY_PACKET.read_le_u32_at(data, pos)
                 if ident2 == 0xFFFFFFFE:
                     pos += 8  # skip identifier + validation
                     if pos + 4 <= len(data):
-                        sub_field = struct.unpack_from('<I', data, pos)[0]
+                        sub_field = _CY_PACKET.read_le_u32_at(data, pos)
                         pos += 4
                         debug_info['sub_field'] = sub_field
                         # sub_field=3 is 深眠心相仪
@@ -3817,19 +3569,19 @@ class PacketParser:
         elif field_index == 61:  # ProfessionList
             if pos + 8 > len(data):
                 return
-            ident2 = struct.unpack_from('<I', data, pos)[0]
+            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
             if ident2 != 0xFFFFFFFE:
                 return
             pos += 8
             if pos + 4 > len(data):
                 return
-            sub_field = struct.unpack_from('<I', data, pos)[0]
+            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
             pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 1:  # CurProfessionId
                 if pos + 4 > len(data):
                     return
-                pid = struct.unpack_from('<I', data, pos)[0]
+                pid = _CY_PACKET.read_le_u32_at(data, pos)
                 debug_info['u32'] = pid
                 if pid > 0:
                     player.profession_id = pid

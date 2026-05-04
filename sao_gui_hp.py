@@ -80,6 +80,8 @@ from sao_gui_dps import (
     _has_cjk, _ease_out_cubic, _lerp,
     GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 )
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
 
 WS_EX_TRANSPARENT = 0x00000020
 
@@ -160,22 +162,10 @@ def _recompute_layout(sw: Optional[int] = None) -> None:
     if sw is None:
         sw, _ = _get_screen_metrics()
 
-    # The CSS `vw` unit resolves against the webview window, not the screen.
-    viewport_w = int(round(sw * HUD_VW_PCT))
-    STAGE_W = int(round(viewport_w * STAGE_WIDTH_PCT))
-    ID_X = int(round(STAGE_W * 0.032 - 25))
-    ID_W = int(round(STAGE_W * 0.396 + 55))
-    COVER_X = int(round(STAGE_W * 0.452 + 25))
-    BOX_X = int(round(STAGE_W * 0.47 + 25))
-    STA_X = BOX_X
-
-    right_edge = max(
-        ID_X + ID_W,
-        COVER_X + COVER_W,
-        BOX_X + BOX_W,
-        STA_X + STA_W,
+    STAGE_W, PANEL_W, ID_X, ID_W, COVER_X, BOX_X, STA_X = _CY_UI.hp_layout_metrics(
+        sw, HUD_VW_PCT, STAGE_WIDTH_PCT, PANEL_SHADOW_GUTTER,
+        COVER_W, BOX_W, STA_W,
     )
-    PANEL_W = int(math.ceil(right_edge + PANEL_SHADOW_GUTTER))
 
 
 _recompute_layout()
@@ -221,10 +211,7 @@ STA_B = (243, 195, 72, 250)
 # ═══════════════════════════════════════════════
 
 def _fmt_int(v: float) -> str:
-    try:
-        return f'{int(round(v)):,}'
-    except Exception:
-        return str(v)
+    return _CY_UI.hp_fmt_int(v)
 
 
 def _draw_tracked(draw: ImageDraw.ImageDraw, xy, text: str,
@@ -392,30 +379,18 @@ def _multiply_alpha_regions(img: Image.Image,
     if alpha >= 0.999:
         return img
     arr = np.asarray(img, dtype=np.uint8).copy()
-    h, w = arr.shape[:2]
-    mul = int(max(0, min(255, alpha * 255)))
-    for x0, y0, x1, y1 in rects:
-        rx0 = max(0, min(w, int(x0)))
-        ry0 = max(0, min(h, int(y0)))
-        rx1 = max(rx0, min(w, int(x1)))
-        ry1 = max(ry0, min(h, int(y1)))
-        if rx1 <= rx0 or ry1 <= ry0:
-            continue
-        arr[ry0:ry1, rx0:rx1, 3] = (
-            arr[ry0:ry1, rx0:rx1, 3].astype(np.uint16) * mul // 255
-        ).astype(np.uint8)
-    return Image.fromarray(arr, 'RGBA')
+    raw = _CY_PIXELS.multiply_alpha_regions_rgba_bytes(arr, rects, alpha)
+    return Image.frombytes('RGBA', img.size, raw)
 
 
 def _make_scanline_texture(w: int, h: int, alpha: int = 10) -> Image.Image:
     """Web-parity horizontal scan-line overlay: 2px transparent + 1px white at
     the given alpha (CSS repeating-linear-gradient 0deg 0-2px transparent,
     2-3px rgba(255,255,255,0.04))."""
-    tex = np.zeros((h, w, 4), dtype=np.uint8)
-    rows = np.arange(h) % 3 == 2
-    tex[rows, :, :3] = 255
-    tex[rows, :, 3] = alpha
-    return Image.fromarray(tex, 'RGBA')
+    if w <= 0 or h <= 0:
+        return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+    raw = _CY_PIXELS.scanline_texture_rgba_bytes(w, h, alpha)
+    return Image.frombytes('RGBA', (w, h), raw)
 
 
 def _make_hgrad_bar(w: int, h: int,
@@ -423,17 +398,8 @@ def _make_hgrad_bar(w: int, h: int,
                     cb: Tuple[int, int, int, int]) -> Image.Image:
     if w <= 0 or h <= 0:
         return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
-    xs = np.linspace(0, 1, w)[None, :]
-    rr = ca[0] + (cb[0] - ca[0]) * xs
-    gg = ca[1] + (cb[1] - ca[1]) * xs
-    bb = ca[2] + (cb[2] - ca[2]) * xs
-    aa = ca[3] + (cb[3] - ca[3]) * xs
-    arr = np.broadcast_to(
-        np.stack([rr, gg, bb, aa], axis=-1), (h, w, 4)).copy()
-    # subtle vertical shading to mimic box-shadow inset gradient
-    ys = np.linspace(1.02, 0.88, h)[:, None, None]
-    arr[:, :, :3] = np.clip(arr[:, :, :3] * ys, 0, 255)
-    return Image.fromarray(arr.astype(np.uint8), 'RGBA')
+    raw = _CY_PIXELS.hgrad_bar_rgba_bytes(w, h, ca, cb)
+    return Image.frombytes('RGBA', (w, h), raw)
 
 
 def _make_skew_cap(h: int,

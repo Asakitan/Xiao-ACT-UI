@@ -25,6 +25,7 @@ from perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _pr
 from .state import PopupState
 from . import composer, menu_bar_layout, child_bar_layout, hud_layout
 from .hit_test import HitTester, KIND_MENU_BTN, KIND_CHILD_ROW, KIND_BACKGROUND
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 
 _TRANSPARENT_KEY = '#010101'
@@ -230,7 +231,8 @@ class SAOPopUpMenu:
         self._state.child_phase = 'idle'
         self._state.pending_child_rows = []
         initial_btn = max(12.0, float(menu_bar_layout.SIZE) * 0.42)
-        visible = menu_bar_layout.visible_count(self._state)
+        visible = _CY_UI.popup_visible_count(
+            len(self._state.menu_items), menu_bar_layout.MAX_VISIBLE)
         self._state.btn_size = [initial_btn] * visible
         self._state.btn_hover_t = [0.0] * visible
         self._create_window()
@@ -371,13 +373,7 @@ class SAOPopUpMenu:
         # Reserve GPU window size for the WORST-CASE child menu so that
         # switching between menus never clips rows or forces a resize
         # (resizes are jarring and visually break the compose layout).
-        max_rows = 0
-        for items in self.child_menus.values():
-            try:
-                if len(items) > max_rows:
-                    max_rows = len(items)
-            except Exception:
-                continue
+        max_rows = _CY_UI.popup_max_child_rows(self.child_menus)
         self._reserved_rows = max_rows
         win_w, win_h = composer.window_size_reserved(self._state, max_rows)
         win_w = max(win_w, 200)
@@ -545,18 +541,13 @@ class SAOPopUpMenu:
         # Mixing the two clocks collapses every animation to its end-state
         # in a single frame. Normalize everything onto monotonic time here.
         tick_now = time.monotonic()
-        dt = min(0.10, max(0.0, (tick_now - self._last_tick_t) if self._last_tick_t else (1.0 / 60.0)))
-        self._last_tick_t = tick_now
+        dt, self._last_tick_t = _CY_UI.popup_tick_dt(tick_now, self._last_tick_t)
         # Fade
         if self._fading:
-            elapsed = tick_now - self._fade_t0
             DUR = float(self._fade_duration or (0.45 if self._fade_target > 0 else 0.30))
-            t = max(0.0, min(1.0, elapsed / DUR))
-            if self._fade_target > 0:
-                self._state.fade_alpha = t
-            else:
-                self._state.fade_alpha = 1.0 - t
-            if t >= 1.0:
+            self._state.fade_alpha, fade_done, _fade_t = _CY_UI.popup_fade_alpha(
+                tick_now, self._fade_t0, DUR, self._fade_target)
+            if fade_done:
                 self._fading = False
                 self._fade_duration = None
                 if self._fade_target <= 0:
@@ -904,9 +895,12 @@ class SAOPopUpMenu:
                 pass
 
     def _advance_child_phase(self, dt: float) -> None:
-        if self._state.child_phase == 'fadeout':
-            self._state.child_fade_t = min(1.0, self._state.child_fade_t + dt / 0.16)
-            if self._state.child_fade_t >= 0.999:
+        phase, fade_t, completed = _CY_UI.popup_child_phase_step(
+            self._state.child_phase, self._state.child_fade_t, dt)
+        self._state.child_phase = phase
+        self._state.child_fade_t = fade_t
+        if phase == 'fadeout':
+            if completed:
                 self._state.child_rows = list(self._state.pending_child_rows)
                 self._state.pending_child_rows = []
                 if self._state.child_rows:
@@ -918,11 +912,6 @@ class SAOPopUpMenu:
                     self._state.row_hover_t = []
                     self._state.hover_row_idx = None
                     self._state.child_phase = 'idle'
-        elif self._state.child_phase == 'fadein':
-            self._state.child_fade_t = max(0.0, self._state.child_fade_t - dt / 0.22)
-            if self._state.child_fade_t <= 0.001:
-                self._state.child_fade_t = 0.0
-                self._state.child_phase = 'idle'
 
     def _begin_child_transition(self, rows: List[Dict]) -> None:
         next_rows = list(rows)

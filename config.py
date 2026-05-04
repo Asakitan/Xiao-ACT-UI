@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.7"
+APP_VERSION = "2.5.8"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,11 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.8:
+#     • Move packet byte decoding, GUI layout/signature math, entity-menu
+#       hit testing/animation helpers, and HP/DPS/BossHP pixel/formatting
+#       hot paths into mandatory Cython helpers to reduce Python-frame
+#       overhead without lowering overlay effects or frame cadence.
 # v2.5.7:
 #     • Align DPS/BossHP scene and dungeon transition handling with
 #       StarResonanceDps / resonance-logs-cn, including deferred combat resets,
