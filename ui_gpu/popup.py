@@ -250,6 +250,7 @@ class SAOPopUpMenu:
         # row callbacks must remain protected. Guard is released in
         # _destroy_window after the popup is actually torn down.
         self._closing = True
+        self._release_input_zorder()
         self._fading = True
         self._fade_target = 0.0
         self._fade_duration = 0.30
@@ -1017,6 +1018,34 @@ class SAOPopUpMenu:
                 wintypes.HWND(hwnd), wintypes.HWND(HWND_TOPMOST),
                 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        except Exception:
+            pass
+
+    def _release_input_zorder(self) -> None:
+        """Drop the popup below topmost and make it click-through while closing."""
+        if sys.platform != 'win32' or self._gpu_win is None:
+            return
+        hwnd = int(getattr(self._gpu_win, '_hwnd', 0) or 0)
+        if not hwnd:
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            GWL_EXSTYLE = -20
+            WS_EX_TRANSPARENT = 0x00000020
+            HWND_NOTOPMOST = -2
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            SWP_NOOWNERZORDER = 0x0200
+            ex = user32.GetWindowLongW(wintypes.HWND(hwnd), GWL_EXSTYLE)
+            user32.SetWindowLongW(
+                wintypes.HWND(hwnd), GWL_EXSTYLE, ex | WS_EX_TRANSPARENT)
+            user32.SetWindowPos(
+                wintypes.HWND(hwnd), wintypes.HWND(HWND_NOTOPMOST),
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)
         except Exception:
             pass
 

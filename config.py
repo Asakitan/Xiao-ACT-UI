@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.11"
+APP_VERSION = "2.5.12"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,10 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.12:
+#     • Release SAO popup/fisheye input and z-order immediately when closing
+#       by demoting their HWNDs below topmost and enabling click-through before
+#       fade/worker teardown, preventing closing overlays from stealing clicks.
 # v2.5.11:
 #     • Keep BossHP visible during invincible / lock-HP boss mechanics while
 #       DPS still has recent live damage, and protect self/team/known player
