@@ -1,0 +1,3159 @@
+{
+  "groups": {
+    "player": {
+      "n_hits": 217116,
+      "clusters": [
+        {
+          "span_lo": "0x4FF28B1F4",
+          "span_hi": "0x4FF28B584",
+          "n_distinct_fields": 5,
+          "n_hits": 9,
+          "owner_candidates": [
+            {
+              "obj_addr": "0x4FF288F68",
+              "klass_ptr": "0x7FFA704AD5D0",
+              "walk_back": 8844
+            },
+            {
+              "obj_addr": "0x4FF288F48",
+              "klass_ptr": "0x7FFA74727530",
+              "walk_back": 8876
+            },
+            {
+              "obj_addr": "0x4FF288F40",
+              "klass_ptr": "0x7FFA74727530",
+              "walk_back": 8884
+            }
+          ],
+          "neighborhood_ptrs": {
+            "addr": "0x4FF28B1F4",
+            "scanned": [
+              "0x4FF28B0F0..0x4FF28B230"
+            ],
+            "n_user_ptrs": 10,
+            "ptrs": [
+              {
+                "rel_off": -260,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -212,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -164,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -148,
+                "value": "0x251300000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -116,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -100,
+                "value": "0x251300000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -68,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -52,
+                "value": "0x251300000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -20,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": 28,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "player.endurance",
+              "addr": "0x4FF28B1F4",
+              "rel_off": 8844,
+              "value": 34539,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.endurance",
+              "addr": "0x4FF28B224",
+              "rel_off": 8892,
+              "value": 34539,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.endurance",
+              "addr": "0x4FF28B254",
+              "rel_off": 8940,
+              "value": 34539,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.strength",
+              "addr": "0x4FF28B404",
+              "rel_off": 9372,
+              "value": 6032,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.strength",
+              "addr": "0x4FF28B434",
+              "rel_off": 9420,
+              "value": 6032,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.fight_point",
+              "addr": "0x4FF28B528",
+              "rel_off": 9664,
+              "value": 54452,
+              "encoding": "i64"
+            },
+            {
+              "name": "player.fight_point",
+              "addr": "0x4FF28B528",
+              "rel_off": 9664,
+              "value": 54452,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.level_extra",
+              "addr": "0x4FF28B554",
+              "rel_off": 9708,
+              "value": 74,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.level_base",
+              "addr": "0x4FF28B584",
+              "rel_off": 9756,
+              "value": 60,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x4564BA724",
+          "span_hi": "0x4564BA9EC",
+          "n_distinct_fields": 4,
+          "n_hits": 4,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x4564BA724",
+            "scanned": [
+              "0x4564BA620..0x4564BA760"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -260,
+                "value": "0x51E00000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -252,
+                "value": "0x57800000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -244,
+                "value": "0x5DC00000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -236,
+                "value": "0x5DD00000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -228,
+                "value": "0x5DE00000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -220,
+                "value": "0x5DF00000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -212,
+                "value": "0x5E000000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -204,
+                "value": "0x5E100000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -196,
+                "value": "0x5E200000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -188,
+                "value": "0x5E300000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -180,
+                "value": "0x5E400000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -172,
+                "value": "0x7D100000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -164,
+                "value": "0x7D200000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -156,
+                "value": "0x7D300000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -148,
+                "value": "0x7D400000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -140,
+                "value": "0x7D500000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -132,
+                "value": "0x7D600000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -124,
+                "value": "0x7D700000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -116,
+                "value": "0x7D800000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -108,
+                "value": "0x7D900000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -100,
+                "value": "0x7DA00000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -92,
+                "value": "0x7DB00000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -84,
+                "value": "0x7DC00000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -76,
+                "value": "0x7DD00000000",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "player.crit_bps",
+              "addr": "0x4564BA724",
+              "rel_off": 0,
+              "value": 2095,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.luck_bps",
+              "addr": "0x4564BA76C",
+              "rel_off": 72,
+              "value": 2290,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.all_bps",
+              "addr": "0x4564BA90C",
+              "rel_off": 488,
+              "value": 6004,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.strength",
+              "addr": "0x4564BA9EC",
+              "rel_off": 712,
+              "value": 6032,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x45A936310",
+          "span_hi": "0x45A93670C",
+          "n_distinct_fields": 4,
+          "n_hits": 6,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x45A936310",
+            "scanned": [
+              "0x45A936210..0x45A936350"
+            ],
+            "n_user_ptrs": 14,
+            "ptrs": [
+              {
+                "rel_off": -248,
+                "value": "0x1D49135",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -224,
+                "value": "0x1D49131",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -200,
+                "value": "0x1D49132",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -176,
+                "value": "0x1D5FC69",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -152,
+                "value": "0x1D5FC6A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -128,
+                "value": "0x1D5FC6B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -104,
+                "value": "0x1D5FC6C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -80,
+                "value": "0x1D5FC6D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -56,
+                "value": "0x1D5FC6F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -32,
+                "value": "0x1D5FC72",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -8,
+                "value": "0x1D5FC71",
+                "kind": "heap"
+              },
+              {
+                "rel_off": 16,
+                "value": "0x1D5FC73",
+                "kind": "heap"
+              },
+              {
+                "rel_off": 32,
+                "value": "0x102201D5FC70",
+                "kind": "heap"
+              },
+              {
+                "rel_off": 40,
+                "value": "0x1D5FC70",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "player.all_bps",
+              "addr": "0x45A936310",
+              "rel_off": 0,
+              "value": 6004,
+              "encoding": "i64"
+            },
+            {
+              "name": "player.all_bps",
+              "addr": "0x45A936310",
+              "rel_off": 0,
+              "value": 6004,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.strength",
+              "addr": "0x45A9365B0",
+              "rel_off": 672,
+              "value": 6032,
+              "encoding": "i64"
+            },
+            {
+              "name": "player.strength",
+              "addr": "0x45A9365B0",
+              "rel_off": 672,
+              "value": 6032,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.level_extra",
+              "addr": "0x45A9366F4",
+              "rel_off": 996,
+              "value": 74,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.level_base",
+              "addr": "0x45A93670C",
+              "rel_off": 1020,
+              "value": 60,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x45B0D8C30",
+          "span_hi": "0x45B0D8D80",
+          "n_distinct_fields": 4,
+          "n_hits": 4,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x45B0D8C30",
+            "scanned": [
+              "0x45B0D8B30..0x45B0D8C70"
+            ],
+            "n_user_ptrs": 38,
+            "ptrs": [
+              {
+                "rel_off": -256,
+                "value": "0x139700001396",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -248,
+                "value": "0x139900001398",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -240,
+                "value": "0x139B0000139A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -232,
+                "value": "0x139D0000139C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -224,
+                "value": "0x139F00003243",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -216,
+                "value": "0x13A1000013A0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -208,
+                "value": "0x13A3000013A2",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -200,
+                "value": "0x13A5000013A4",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -192,
+                "value": "0xD8000000D7F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -184,
+                "value": "0xD8200000D81",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -176,
+                "value": "0xD8400000D83",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -168,
+                "value": "0xD8600000D85",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -160,
+                "value": "0x3A0B00000D87",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -152,
+                "value": "0xD8A00000D89",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -144,
+                "value": "0x33CF00000D8B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -136,
+                "value": "0xD8E00002F21",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -128,
+                "value": "0xD9000000D8F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -104,
+                "value": "0x3C7000000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -96,
+                "value": "0x3F2B00000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -88,
+                "value": "0x2700000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -80,
+                "value": "0x2900000028",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -72,
+                "value": "0x2B000037B6",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -64,
+                "value": "0x2D0000002C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -56,
+                "value": "0x2D270000002E",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "player.level_base",
+              "addr": "0x45B0D8C30",
+              "rel_off": 0,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.all_bps",
+              "addr": "0x45B0D8C40",
+              "rel_off": 16,
+              "value": 6004,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.strength",
+              "addr": "0x45B0D8CB0",
+              "rel_off": 128,
+              "value": 6032,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.level_extra",
+              "addr": "0x45B0D8D80",
+              "rel_off": 336,
+              "value": 74,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x45B224C30",
+          "span_hi": "0x45B224D80",
+          "n_distinct_fields": 4,
+          "n_hits": 4,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x45B224C30",
+            "scanned": [
+              "0x45B224B30..0x45B224C70"
+            ],
+            "n_user_ptrs": 38,
+            "ptrs": [
+              {
+                "rel_off": -256,
+                "value": "0x139700001396",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -248,
+                "value": "0x139900001398",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -240,
+                "value": "0x139B0000139A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -232,
+                "value": "0x139D0000139C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -224,
+                "value": "0x139F00003243",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -216,
+                "value": "0x13A1000013A0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -208,
+                "value": "0x13A3000013A2",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -200,
+                "value": "0x13A5000013A4",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -192,
+                "value": "0xD8000000D7F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -184,
+                "value": "0xD8200000D81",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -176,
+                "value": "0xD8400000D83",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -168,
+                "value": "0xD8600000D85",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -160,
+                "value": "0x3A0B00000D87",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -152,
+                "value": "0xD8A00000D89",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -144,
+                "value": "0x33CF00000D8B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -136,
+                "value": "0xD8E00002F21",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -128,
+                "value": "0xD9000000D8F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -104,
+                "value": "0x3C7000000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -96,
+                "value": "0x3F2B00000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -88,
+                "value": "0x2700000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -80,
+                "value": "0x2900000028",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -72,
+                "value": "0x2B000037B6",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -64,
+                "value": "0x2D0000002C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -56,
+                "value": "0x2D270000002E",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "player.level_base",
+              "addr": "0x45B224C30",
+              "rel_off": 0,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.all_bps",
+              "addr": "0x45B224C40",
+              "rel_off": 16,
+              "value": 6004,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.strength",
+              "addr": "0x45B224CB0",
+              "rel_off": 128,
+              "value": 6032,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.level_extra",
+              "addr": "0x45B224D80",
+              "rel_off": 336,
+              "value": 74,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x4FF28ED64",
+          "span_hi": "0x4FF28F02C",
+          "n_distinct_fields": 4,
+          "n_hits": 9,
+          "owner_candidates": [
+            {
+              "obj_addr": "0x4FF288F68",
+              "klass_ptr": "0x7FFA704AD5D0",
+              "walk_back": 24060
+            },
+            {
+              "obj_addr": "0x4FF288F48",
+              "klass_ptr": "0x7FFA74727530",
+              "walk_back": 24092
+            },
+            {
+              "obj_addr": "0x4FF288F40",
+              "klass_ptr": "0x7FFA74727530",
+              "walk_back": 24100
+            }
+          ],
+          "neighborhood_ptrs": {
+            "addr": "0x4FF28ED64",
+            "scanned": [
+              "0x4FF28EC60..0x4FF28EDA0"
+            ],
+            "n_user_ptrs": 13,
+            "ptrs": [
+              {
+                "rel_off": -260,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -244,
+                "value": "0x600000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -212,
+                "value": "0x3A3003C0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -164,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -116,
+                "value": "0x3F49E0F0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -100,
+                "value": "0x4FF27F9A0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -92,
+                "value": "0x4FF251580",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -68,
+                "value": "0x3A558F80",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -52,
+                "value": "0x45AD2E240",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -20,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -4,
+                "value": "0xCE600000000",
+                "kind": "heap"
+              },
+              {
+                "rel_off": 28,
+                "value": "0x3A3005D0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": 44,
+                "value": "0xCE600000000",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "player.break_power",
+              "addr": "0x4FF28ED64",
+              "rel_off": 24060,
+              "value": 3302,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.break_power",
+              "addr": "0x4FF28ED94",
+              "rel_off": 24108,
+              "value": 3302,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.break_power",
+              "addr": "0x4FF28EDC4",
+              "rel_off": 24156,
+              "value": 3302,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.mastery_bps",
+              "addr": "0x4FF28EF14",
+              "rel_off": 24492,
+              "value": 4314,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.mastery_bps",
+              "addr": "0x4FF28EF44",
+              "rel_off": 24540,
+              "value": 4314,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.mastery_bps",
+              "addr": "0x4FF28EF74",
+              "rel_off": 24588,
+              "value": 4314,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.haste_bps",
+              "addr": "0x4FF28EFA4",
+              "rel_off": 24636,
+              "value": 4198,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.haste_bps",
+              "addr": "0x4FF28EFD4",
+              "rel_off": 24684,
+              "value": 4198,
+              "encoding": "i32"
+            },
+            {
+              "name": "player.level_base",
+              "addr": "0x4FF28F02C",
+              "rel_off": 24772,
+              "value": 60,
+              "encoding": "f32_of_int"
+            }
+          ]
+        }
+      ],
+      "convergent_owners": [
+        {
+          "obj_addr": "0x4FF288F68",
+          "klass_ptr": "0x7FFA704AD5D0",
+          "n_clusters": 2
+        },
+        {
+          "obj_addr": "0x4FF288F48",
+          "klass_ptr": "0x7FFA74727530",
+          "n_clusters": 2
+        },
+        {
+          "obj_addr": "0x4FF288F40",
+          "klass_ptr": "0x7FFA74727530",
+          "n_clusters": 2
+        }
+      ]
+    },
+    "weapon": {
+      "n_hits": 1301459,
+      "clusters": [
+        {
+          "span_lo": "0x1B2A5D5CC",
+          "span_hi": "0x1B2A5D85C",
+          "n_distinct_fields": 6,
+          "n_hits": 6,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x1B2A5D5CC",
+            "scanned": [
+              "0x1B2A5D4C8..0x1B2A5D608"
+            ],
+            "n_user_ptrs": 20,
+            "ptrs": [
+              {
+                "rel_off": -260,
+                "value": "0x1BC00000191",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -244,
+                "value": "0x1D3000001A8",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -228,
+                "value": "0x1D8000001AD",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -212,
+                "value": "0x1B80000018D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -196,
+                "value": "0x1BB00000190",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -180,
+                "value": "0x1C400000199",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -164,
+                "value": "0x1BA0000018F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -148,
+                "value": "0x1BF00000194",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -132,
+                "value": "0x1B50000018A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -116,
+                "value": "0x1B60000018B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -100,
+                "value": "0x1B90000018E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -84,
+                "value": "0x1D4000001A9",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -68,
+                "value": "0x1DB000001B0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -52,
+                "value": "0x1DD000001B2",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -36,
+                "value": "0x1C50000019A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -20,
+                "value": "0x1C60000019B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -4,
+                "value": "0x1C80000019D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": 12,
+                "value": "0x1B70000018C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": 28,
+                "value": "0x5A00000034",
+                "kind": "heap"
+              },
+              {
+                "rel_off": 44,
+                "value": "0x5900000033",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "weapon.strength",
+              "addr": "0x1B2A5D5CC",
+              "rel_off": 0,
+              "value": 456,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.wear_lv",
+              "addr": "0x1B2A5D698",
+              "rel_off": 204,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.perfection",
+              "addr": "0x1B2A5D69C",
+              "rel_off": 208,
+              "value": 100,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.break_power",
+              "addr": "0x1B2A5D7FC",
+              "rel_off": 560,
+              "value": 252,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.phys_atk",
+              "addr": "0x1B2A5D83C",
+              "rel_off": 624,
+              "value": 256,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.ilvl",
+              "addr": "0x1B2A5D85C",
+              "rel_off": 656,
+              "value": 250,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x448D9D13C",
+          "span_hi": "0x448D9D3F0",
+          "n_distinct_fields": 6,
+          "n_hits": 6,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x448D9D13C",
+            "scanned": [
+              "0x448D9D038..0x448D9D178"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -260,
+                "value": "0x11500000114",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -252,
+                "value": "0x4600000047",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -244,
+                "value": "0x13700000136",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -236,
+                "value": "0x13F00000140",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -228,
+                "value": "0x13100000132",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -220,
+                "value": "0x1340000013E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -212,
+                "value": "0x11700000116",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -204,
+                "value": "0x12100000135",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -196,
+                "value": "0x11C00000120",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -188,
+                "value": "0x11E0000011D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -180,
+                "value": "0x1290000012A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -172,
+                "value": "0x12300000122",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -164,
+                "value": "0xB400000072",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -156,
+                "value": "0x63000000B5",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -148,
+                "value": "0x6200000061",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -140,
+                "value": "0x18B0000018A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -132,
+                "value": "0x730000017C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -124,
+                "value": "0x19800000182",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -116,
+                "value": "0x1A6000001A7",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -108,
+                "value": "0x9E0000019E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -100,
+                "value": "0x850000009F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -92,
+                "value": "0xA000000084",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -84,
+                "value": "0xA2000000A1",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -76,
+                "value": "0xA6000000A3",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "weapon.perfection",
+              "addr": "0x448D9D13C",
+              "rel_off": 0,
+              "value": 100,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.break_power",
+              "addr": "0x448D9D298",
+              "rel_off": 348,
+              "value": 252,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.phys_atk",
+              "addr": "0x448D9D2A0",
+              "rel_off": 356,
+              "value": 256,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.ilvl",
+              "addr": "0x448D9D2CC",
+              "rel_off": 400,
+              "value": 250,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.wear_lv",
+              "addr": "0x448D9D344",
+              "rel_off": 520,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.strength",
+              "addr": "0x448D9D3F0",
+              "rel_off": 692,
+              "value": 456,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x45188BC88",
+          "span_hi": "0x45188BF64",
+          "n_distinct_fields": 6,
+          "n_hits": 6,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x45188BC88",
+            "scanned": [
+              "0x45188BB88..0x45188BCC8"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -256,
+                "value": "0xDC0000017B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -248,
+                "value": "0xDF000000E0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -240,
+                "value": "0x17D000000D6",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -232,
+                "value": "0x1700000017C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -224,
+                "value": "0xE20000016F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -216,
+                "value": "0x18B000000E1",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -208,
+                "value": "0x3000000031",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -200,
+                "value": "0xE40000002D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -192,
+                "value": "0x2F000000E3",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -184,
+                "value": "0x15500000088",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -176,
+                "value": "0x17100000156",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -168,
+                "value": "0x17300000172",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -160,
+                "value": "0xE5000000E6",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -152,
+                "value": "0x19100000089",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -144,
+                "value": "0x3400000190",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -136,
+                "value": "0xE80000002E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -128,
+                "value": "0xE700000032",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -120,
+                "value": "0x17A00000033",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -112,
+                "value": "0x860000017E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -104,
+                "value": "0xEB000001AC",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -96,
+                "value": "0xE9000000EA",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -88,
+                "value": "0x29000000EC",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -80,
+                "value": "0xD700000035",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -72,
+                "value": "0x18F0000018E",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "weapon.ilvl",
+              "addr": "0x45188BC88",
+              "rel_off": 0,
+              "value": 250,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.break_power",
+              "addr": "0x45188BCA8",
+              "rel_off": 32,
+              "value": 252,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.phys_atk",
+              "addr": "0x45188BCE8",
+              "rel_off": 96,
+              "value": 256,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.perfection",
+              "addr": "0x45188BE34",
+              "rel_off": 428,
+              "value": 100,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.wear_lv",
+              "addr": "0x45188BE5C",
+              "rel_off": 468,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.strength",
+              "addr": "0x45188BF64",
+              "rel_off": 732,
+              "value": 456,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x4EA6B7E84",
+          "span_hi": "0x4EA6B8268",
+          "n_distinct_fields": 6,
+          "n_hits": 6,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x4EA6B7E84",
+            "scanned": [
+              "0x4EA6B7D80..0x4EA6B7EC0"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -260,
+                "value": "0x154000001B4",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -252,
+                "value": "0xBF0000014F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -244,
+                "value": "0x5A000000C3",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -236,
+                "value": "0x290000005B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -228,
+                "value": "0x2A00000030",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -220,
+                "value": "0x5C0000002F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -212,
+                "value": "0xBD0000005D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -204,
+                "value": "0x156000000C2",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -196,
+                "value": "0x1B600000150",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -188,
+                "value": "0x1E2000001B7",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -180,
+                "value": "0x1C2000001DD",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -172,
+                "value": "0x198000001C3",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -164,
+                "value": "0x12E00000199",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -156,
+                "value": "0xE700000129",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -148,
+                "value": "0x77000000DD",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -140,
+                "value": "0x4E00000076",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -132,
+                "value": "0x4B0000004D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -124,
+                "value": "0x790000004C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -116,
+                "value": "0xE200000078",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -108,
+                "value": "0x12B000000E8",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -100,
+                "value": "0x19A00000132",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -92,
+                "value": "0x1C00000019B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -84,
+                "value": "0x103000001C1",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -76,
+                "value": "0x10900000101",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "weapon.ilvl",
+              "addr": "0x4EA6B7E84",
+              "rel_off": 0,
+              "value": 250,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.break_power",
+              "addr": "0x4EA6B7EA8",
+              "rel_off": 36,
+              "value": 252,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.phys_atk",
+              "addr": "0x4EA6B7EB0",
+              "rel_off": 44,
+              "value": 256,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.perfection",
+              "addr": "0x4EA6B7ED8",
+              "rel_off": 84,
+              "value": 100,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.wear_lv",
+              "addr": "0x4EA6B7EDC",
+              "rel_off": 88,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.elem_bonus_bps",
+              "addr": "0x4EA6B8268",
+              "rel_off": 996,
+              "value": 800,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x4EAAF9BF8",
+          "span_hi": "0x4EAAF9E94",
+          "n_distinct_fields": 6,
+          "n_hits": 6,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x4EAAF9BF8",
+            "scanned": [
+              "0x4EAAF9AF8..0x4EAAF9C38"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -256,
+                "value": "0x19600000191",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -248,
+                "value": "0xF100000197",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -240,
+                "value": "0xE3000000E2",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -232,
+                "value": "0x14200000123",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -224,
+                "value": "0x15300000143",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -216,
+                "value": "0x12600000152",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -208,
+                "value": "0xB700000127",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -200,
+                "value": "0x9A000000B6",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -192,
+                "value": "0x1220000009B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -184,
+                "value": "0xDF000000DE",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -176,
+                "value": "0xE4000001DA",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -168,
+                "value": "0x140000000E5",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -160,
+                "value": "0x15100000150",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -152,
+                "value": "0x16200000141",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -144,
+                "value": "0x12500000120",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -136,
+                "value": "0xB800000124",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -128,
+                "value": "0x9D000000B9",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -120,
+                "value": "0x1210000009C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -112,
+                "value": "0xE1000000E0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -104,
+                "value": "0xE6000000E7",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -96,
+                "value": "0xE8000000E9",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -88,
+                "value": "0x410000016B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -80,
+                "value": "0x16D0000016A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -72,
+                "value": "0x3B0000016C",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "weapon.wear_lv",
+              "addr": "0x4EAAF9BF8",
+              "rel_off": 0,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.perfection",
+              "addr": "0x4EAAF9C40",
+              "rel_off": 72,
+              "value": 100,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.break_power",
+              "addr": "0x4EAAF9D08",
+              "rel_off": 272,
+              "value": 252,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.phys_atk",
+              "addr": "0x4EAAF9DB0",
+              "rel_off": 440,
+              "value": 256,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.ilvl",
+              "addr": "0x4EAAF9DFC",
+              "rel_off": 516,
+              "value": 250,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.strength",
+              "addr": "0x4EAAF9E94",
+              "rel_off": 668,
+              "value": 456,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x4EAAFC754",
+          "span_hi": "0x4EAAFCA7C",
+          "n_distinct_fields": 6,
+          "n_hits": 6,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x4EAAFC754",
+            "scanned": [
+              "0x4EAAFC650..0x4EAAFC790"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -260,
+                "value": "0xEC000000ED",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -252,
+                "value": "0x13D00000133",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -244,
+                "value": "0x13C0000015D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -236,
+                "value": "0x2B0000002A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -228,
+                "value": "0x18E0000018F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -220,
+                "value": "0x18900000188",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -212,
+                "value": "0x1ED000001EC",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -204,
+                "value": "0x1EA000001EB",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -196,
+                "value": "0x1F6000001F7",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -188,
+                "value": "0x1F3000001F2",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -180,
+                "value": "0x2800000024",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -172,
+                "value": "0x1AF00000029",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -164,
+                "value": "0x93000001AE",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -156,
+                "value": "0x9400000095",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -148,
+                "value": "0x1AD000001AC",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -140,
+                "value": "0x6B00000025",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -132,
+                "value": "0x14F0000006A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -124,
+                "value": "0x660000014E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -116,
+                "value": "0x9200000067",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -108,
+                "value": "0x1340000015E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -100,
+                "value": "0x15F00000135",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -92,
+                "value": "0x13F0000013E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -84,
+                "value": "0x16800000169",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -76,
+                "value": "0x16F0000003F",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "weapon.perfection",
+              "addr": "0x4EAAFC754",
+              "rel_off": 0,
+              "value": 100,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.wear_lv",
+              "addr": "0x4EAAFC7B0",
+              "rel_off": 92,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.break_power",
+              "addr": "0x4EAAFC7FC",
+              "rel_off": 168,
+              "value": 252,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.phys_atk",
+              "addr": "0x4EAAFC940",
+              "rel_off": 492,
+              "value": 256,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.strength",
+              "addr": "0x4EAAFC97C",
+              "rel_off": 552,
+              "value": 456,
+              "encoding": "i32"
+            },
+            {
+              "name": "weapon.ilvl",
+              "addr": "0x4EAAFCA7C",
+              "rel_off": 808,
+              "value": 250,
+              "encoding": "i32"
+            }
+          ]
+        }
+      ],
+      "convergent_owners": []
+    },
+    "helmet": {
+      "n_hits": 1125541,
+      "clusters": [
+        {
+          "span_lo": "0x3D89FAA4",
+          "span_hi": "0x3D89FE78",
+          "n_distinct_fields": 7,
+          "n_hits": 7,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x3D89FAA4",
+            "scanned": [
+              "0x3D89F9A0..0x3D89FAE0"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -260,
+                "value": "0x17C0000017B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -252,
+                "value": "0x8D00000029",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -244,
+                "value": "0x10A000000FD",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -236,
+                "value": "0x10F0000016E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -228,
+                "value": "0x17E0000017D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -220,
+                "value": "0x17F00000185",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -212,
+                "value": "0x10500000104",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -204,
+                "value": "0x10700000106",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -196,
+                "value": "0xE700000108",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -188,
+                "value": "0xE9000000E8",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -180,
+                "value": "0xEB000000EA",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -172,
+                "value": "0xED000000EC",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -164,
+                "value": "0xF0000000EF",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -156,
+                "value": "0xF2000000F1",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -148,
+                "value": "0xF4000000F3",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -140,
+                "value": "0xF6000000F5",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -132,
+                "value": "0xF8000000F7",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -124,
+                "value": "0xFA000000F9",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -116,
+                "value": "0xFC000000FB",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -108,
+                "value": "0xFF000000FE",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -100,
+                "value": "0x10100000100",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -92,
+                "value": "0x9300000020",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -84,
+                "value": "0x10C00000103",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -76,
+                "value": "0x11200000171",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "helmet.phys_def_extra",
+              "addr": "0x3D89FAA4",
+              "rel_off": 0,
+              "value": 320,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.strength",
+              "addr": "0x3D89FC80",
+              "rel_off": 476,
+              "value": 432,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.break_power",
+              "addr": "0x3D89FD94",
+              "rel_off": 752,
+              "value": 201,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.wear_lv",
+              "addr": "0x3D89FE20",
+              "rel_off": 892,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.ilvl",
+              "addr": "0x3D89FE28",
+              "rel_off": 900,
+              "value": 240,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.perfection",
+              "addr": "0x3D89FE40",
+              "rel_off": 924,
+              "value": 100,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.reforge",
+              "addr": "0x3D89FE78",
+              "rel_off": 980,
+              "value": 33,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x4EA892E00",
+          "span_hi": "0x4EA893200",
+          "n_distinct_fields": 7,
+          "n_hits": 7,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x4EA892E00",
+            "scanned": [
+              "0x4EA892D00..0x4EA892E40"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -256,
+                "value": "0x2B2000002AB",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -248,
+                "value": "0x217000001CF",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -240,
+                "value": "0x2180000020D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -232,
+                "value": "0x20E0000017E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -224,
+                "value": "0x2B400000216",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -216,
+                "value": "0x2A6000002A2",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -208,
+                "value": "0x2A8000002A3",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -200,
+                "value": "0x2AE000002A5",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -192,
+                "value": "0x2AD0000029D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -184,
+                "value": "0x2A00000029F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -176,
+                "value": "0x2B5000002A7",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -168,
+                "value": "0x2B6000002A1",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -160,
+                "value": "0x2A4000001FC",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -152,
+                "value": "0x1FE000001FD",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -144,
+                "value": "0x21C000001FF",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -136,
+                "value": "0x2BA0000021D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -128,
+                "value": "0x2B8000002B7",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -120,
+                "value": "0x213000001FB",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -112,
+                "value": "0x21500000210",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -104,
+                "value": "0x2AF00000212",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -96,
+                "value": "0x2B1000002AC",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -88,
+                "value": "0x20000000177",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -80,
+                "value": "0x17A00000179",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -72,
+                "value": "0x1860000017C",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "helmet.phys_def_extra",
+              "addr": "0x4EA892E00",
+              "rel_off": 0,
+              "value": 320,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.mastery",
+              "addr": "0x4EA892E6C",
+              "rel_off": 108,
+              "value": 711,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.ilvl",
+              "addr": "0x4EA892EA4",
+              "rel_off": 164,
+              "value": 240,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.break_power",
+              "addr": "0x4EA892F18",
+              "rel_off": 280,
+              "value": 201,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.wear_lv",
+              "addr": "0x4EA892FD8",
+              "rel_off": 472,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.reforge",
+              "addr": "0x4EA892FE8",
+              "rel_off": 488,
+              "value": 33,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.perfection",
+              "addr": "0x4EA893200",
+              "rel_off": 1024,
+              "value": 100,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x12C3BC15DC",
+          "span_hi": "0x12C3BC189C",
+          "n_distinct_fields": 7,
+          "n_hits": 7,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x12C3BC15DC",
+            "scanned": [
+              "0x12C3BC14D8..0x12C3BC1618"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -260,
+                "value": "0xC00000013",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -252,
+                "value": "0x1100000012",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -244,
+                "value": "0x2500000026",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -236,
+                "value": "0x7000000071",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -228,
+                "value": "0x22700000228",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -220,
+                "value": "0x1DF000001E0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -212,
+                "value": "0x19500000197",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -204,
+                "value": "0x15000000151",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -196,
+                "value": "0x11D0000011E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -188,
+                "value": "0xDB000000DD",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -180,
+                "value": "0x9400000092",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -172,
+                "value": "0x5600000054",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -164,
+                "value": "0x3700000036",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -156,
+                "value": "0x3800000039",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -148,
+                "value": "0x6600000067",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -140,
+                "value": "0xA6000000A5",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -132,
+                "value": "0x21E0000021F",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -124,
+                "value": "0x1D8000001D9",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -116,
+                "value": "0x19600000198",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -108,
+                "value": "0x15300000161",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -100,
+                "value": "0x11C00000130",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -92,
+                "value": "0xDC000000F4",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -84,
+                "value": "0x93000000B8",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -76,
+                "value": "0x5B00000083",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "helmet.mastery",
+              "addr": "0x12C3BC15DC",
+              "rel_off": 0,
+              "value": 711,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.wear_lv",
+              "addr": "0x12C3BC1664",
+              "rel_off": 136,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.strength",
+              "addr": "0x12C3BC1778",
+              "rel_off": 412,
+              "value": 432,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.phys_def_extra",
+              "addr": "0x12C3BC178C",
+              "rel_off": 432,
+              "value": 320,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.ilvl",
+              "addr": "0x12C3BC17C0",
+              "rel_off": 484,
+              "value": 240,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.break_power",
+              "addr": "0x12C3BC17F0",
+              "rel_off": 532,
+              "value": 201,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.reforge",
+              "addr": "0x12C3BC189C",
+              "rel_off": 704,
+              "value": 33,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x1446962910",
+          "span_hi": "0x1446962B44",
+          "n_distinct_fields": 7,
+          "n_hits": 7,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x1446962910",
+            "scanned": [
+              "0x1446962810..0x1446962950"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -256,
+                "value": "0xD400000049",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -248,
+                "value": "0x870000005D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -240,
+                "value": "0x5E000000BB",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -232,
+                "value": "0x12800000058",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -224,
+                "value": "0x7600000158",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -216,
+                "value": "0x5200000075",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -208,
+                "value": "0x59000000BF",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -200,
+                "value": "0x80000001B9",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -192,
+                "value": "0x5B00000066",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -184,
+                "value": "0x182000000C5",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -176,
+                "value": "0x8D000000E4",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -168,
+                "value": "0xF90000008B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -160,
+                "value": "0x122000000A0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -152,
+                "value": "0x7BD000000B8",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -144,
+                "value": "0x6300000068",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -136,
+                "value": "0x7E0000006C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -128,
+                "value": "0xC3000007C8",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -120,
+                "value": "0x570000019A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -112,
+                "value": "0xB000000081",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -104,
+                "value": "0xFB000000C0",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -96,
+                "value": "0x840000006D",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -88,
+                "value": "0xDB00000145",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -80,
+                "value": "0x9E00000163",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -72,
+                "value": "0x25A0000009D",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "helmet.strength",
+              "addr": "0x1446962910",
+              "rel_off": 0,
+              "value": 432,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.phys_def_extra",
+              "addr": "0x1446962938",
+              "rel_off": 40,
+              "value": 320,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.ilvl",
+              "addr": "0x1446962AA4",
+              "rel_off": 404,
+              "value": 240,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.perfection",
+              "addr": "0x1446962AA8",
+              "rel_off": 408,
+              "value": 100,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.break_power",
+              "addr": "0x1446962AB8",
+              "rel_off": 424,
+              "value": 201,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.reforge",
+              "addr": "0x1446962B28",
+              "rel_off": 536,
+              "value": 33,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.phys_def",
+              "addr": "0x1446962B44",
+              "rel_off": 564,
+              "value": 1260,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0x148B330298",
+          "span_hi": "0x148B33063C",
+          "n_distinct_fields": 7,
+          "n_hits": 7,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0x148B330298",
+            "scanned": [
+              "0x148B330198..0x148B3302D8"
+            ],
+            "n_user_ptrs": 40,
+            "ptrs": [
+              {
+                "rel_off": -256,
+                "value": "0xED000000BE",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -248,
+                "value": "0x1C000000EE",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -240,
+                "value": "0x1270000001B",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -232,
+                "value": "0x13D00000128",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -224,
+                "value": "0x1550000013E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -216,
+                "value": "0x16900000154",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -208,
+                "value": "0x1970000016A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -200,
+                "value": "0x1AD00000199",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -192,
+                "value": "0x1C2000001AE",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -184,
+                "value": "0x1D5000001C5",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -176,
+                "value": "0x1EB000001D6",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -168,
+                "value": "0x218000001EC",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -160,
+                "value": "0x2470000021A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -152,
+                "value": "0x25D00000248",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -144,
+                "value": "0x2730000025E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -136,
+                "value": "0x28800000272",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -128,
+                "value": "0x2B10000028A",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -120,
+                "value": "0x2CD000002AE",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -112,
+                "value": "0x2E1000002CE",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -104,
+                "value": "0x2F2000002E2",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -96,
+                "value": "0x304000002F3",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -88,
+                "value": "0x31B00000305",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -80,
+                "value": "0x35F0000031C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -72,
+                "value": "0x37900000361",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "helmet.mastery",
+              "addr": "0x148B330298",
+              "rel_off": 0,
+              "value": 711,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.perfection",
+              "addr": "0x148B330384",
+              "rel_off": 236,
+              "value": 100,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.ilvl",
+              "addr": "0x148B3303A4",
+              "rel_off": 268,
+              "value": 240,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.phys_def_extra",
+              "addr": "0x148B3303D0",
+              "rel_off": 312,
+              "value": 320,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.strength",
+              "addr": "0x148B330408",
+              "rel_off": 368,
+              "value": 432,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.wear_lv",
+              "addr": "0x148B330574",
+              "rel_off": 732,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.break_power",
+              "addr": "0x148B33063C",
+              "rel_off": 932,
+              "value": 201,
+              "encoding": "i32"
+            }
+          ]
+        },
+        {
+          "span_lo": "0xE079C754",
+          "span_hi": "0xE079CB20",
+          "n_distinct_fields": 6,
+          "n_hits": 7,
+          "owner_candidates": [],
+          "neighborhood_ptrs": {
+            "addr": "0xE079C754",
+            "scanned": [
+              "0xE079C650..0xE079C790"
+            ],
+            "n_user_ptrs": 39,
+            "ptrs": [
+              {
+                "rel_off": -260,
+                "value": "0x139000000FA",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -252,
+                "value": "0x14300000105",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -244,
+                "value": "0x8800000056",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -236,
+                "value": "0xBD00000091",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -228,
+                "value": "0x12E000000CE",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -220,
+                "value": "0xEB0000006E",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -212,
+                "value": "0x1900000119",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -204,
+                "value": "0x7300000039",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -196,
+                "value": "0x1600000156",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -188,
+                "value": "0x5300000035",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -180,
+                "value": "0x85000000B5",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -172,
+                "value": "0x7C0000005C",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -164,
+                "value": "0x14200000104",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -156,
+                "value": "0x10300000086",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -148,
+                "value": "0x6500000081",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -140,
+                "value": "0xA9000000A1",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -132,
+                "value": "0xC5000000B4",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -124,
+                "value": "0x57000000D7",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -116,
+                "value": "0x9200000089",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -108,
+                "value": "0xCF000000BE",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -100,
+                "value": "0x14D00000110",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -92,
+                "value": "0x13A000000FB",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -84,
+                "value": "0x2000000003",
+                "kind": "heap"
+              },
+              {
+                "rel_off": -76,
+                "value": "0xE80000003F",
+                "kind": "heap"
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "helmet.break_power",
+              "addr": "0xE079C754",
+              "rel_off": 0,
+              "value": 201,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.ilvl",
+              "addr": "0xE079C784",
+              "rel_off": 48,
+              "value": 240,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.wear_lv",
+              "addr": "0xE079C84C",
+              "rel_off": 248,
+              "value": 60,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.perfection",
+              "addr": "0xE079C960",
+              "rel_off": 524,
+              "value": 100,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.reforge",
+              "addr": "0xE079CAA4",
+              "rel_off": 848,
+              "value": 33,
+              "encoding": "i32"
+            },
+            {
+              "name": "helmet.phys_def_extra",
+              "addr": "0xE079CB20",
+              "rel_off": 972,
+              "value": 320,
+              "encoding": "i64"
+            },
+            {
+              "name": "helmet.phys_def_extra",
+              "addr": "0xE079CB20",
+              "rel_off": 972,
+              "value": 320,
+              "encoding": "i32"
+            }
+          ]
+        }
+      ],
+      "convergent_owners": []
+    }
+  },
+  "elapsed_s": 30.697163105010986,
+  "pid": 38796
+}

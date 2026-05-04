@@ -1250,7 +1250,20 @@ class SAOWebAPI:
 
     # ── Data source mode ──
     def set_data_source(self, mode):
-        """Legacy no-op: stamina and skills are fixed to vision now."""
+        """Switch PacketBridge between tcp/memory/hybrid/auto modes."""
+        normalized = str(mode or 'tcp').strip().lower()
+        if normalized not in ('tcp', 'memory', 'hybrid', 'auto'):
+            normalized = 'hybrid'
+        try:
+            ref = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
+            ref.set('mem_data_source', normalized)
+            try:
+                ref.save()
+            except Exception:
+                pass
+            self._g._reconfigure_data_engines(restart_packet=True)
+        except Exception as e:
+            print(f'[SAO-WV] set_data_source failed: {e}')
         self._g._sync_menu_info()
 
     def set_component_source(self, component, mode):
@@ -1825,11 +1838,11 @@ class SAOWebViewGUI:
             # Phase 7: read mem_data_source preference from settings.
             # Key is `mem_data_source` (not legacy 'data_source' which is
             # the packet/vision component toggle). Values:
-            # 'tcp' (default, full TCP) | 'memory' (mem_probe full) |
+            # 'tcp' (full TCP) | 'memory' (strict mem_probe, no TCP fallback) |
             # 'hybrid' (mem_probe + TCP damage-only) | 'auto' (try memory, fall back).
             try:
                 _data_source_mode = str(
-                    self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
+                    self._cfg_settings_ref.get('mem_data_source', 'hybrid') or 'hybrid'
                 ).lower()
             except Exception:
                 _data_source_mode = 'tcp'
@@ -3158,7 +3171,7 @@ class SAOWebViewGUI:
                 # Phase 7: also propagate mem_data_source on restart
                 try:
                     _data_source_mode = str(
-                        self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
+                        self._cfg_settings_ref.get('mem_data_source', 'hybrid') or 'hybrid'
                     ).lower()
                 except Exception:
                     _data_source_mode = 'tcp'
@@ -5059,27 +5072,27 @@ class SAOWebViewGUI:
             pass
 
     def _combat_damage_timeout_s(self) -> float:
-        # User-configurable fade timeout (seconds). Default remains generous,
-        # but explicit shorter menu values should take effect.
+        # User-configurable fade timeout (seconds). Default 5s — overlay
+        # fades when no damage has been seen for that long.
         try:
-            raw = self._get_setting('dps_fade_timeout_s', 60)
-            v = float(raw if raw is not None else 60)
+            raw = self._get_setting('dps_fade_timeout_s', 5)
+            v = float(raw if raw is not None else 5)
         except Exception:
-            v = 60.0
+            v = 5.0
         if v <= 0:
             return 86400.0
         return float(max(1.0, v))
 
     def _boss_hp_hold_timeout_s(self) -> float:
-        """BossHP gets a longer leash than DPS so revive/mechanics don't hide it."""
+        """BossHP fades alongside DPS once HP / damage stop changing."""
         try:
-            raw = self._get_setting('boss_hp_hold_timeout_s', 300)
-            v = float(raw if raw is not None else 300)
+            raw = self._get_setting('boss_hp_hold_timeout_s', 5)
+            v = float(raw if raw is not None else 5)
         except Exception:
-            v = 300.0
+            v = 5.0
         if v <= 0:
             return 86400.0
-        return float(max(180.0, v, self._combat_damage_timeout_s()))
+        return float(max(1.0, v, self._combat_damage_timeout_s()))
 
     def _get_dps_last_report_available(self) -> bool:
         tracker = getattr(self, '_dps_tracker', None)
@@ -5145,11 +5158,20 @@ class SAOWebViewGUI:
         self._dps_mode = 'hidden'
 
     def _finish_hide_dps_window(self, fade_seq: int):
+        # Keep the OS-level window alive in the background. Toggling
+        # webview.Window.hide()/show() repeatedly across scene switches
+        # can drop topmost / transparency / click-through styles and
+        # leave the panel invisible or behind the game window. Idle
+        # state is now expressed purely through JS CSS fadeOut + the
+        # window-alpha clamp set by the caller, so no OS hide is
+        # required here.
         try:
             if fade_seq != self._dps_fade_seq or self._dps_visible:
                 return
-            if self.dps_win:
-                self.dps_win.hide()
+            # Drive the window alpha to 0 so any leftover CSS pixels
+            # cannot bleed through during the idle window. JS fadeOut
+            # has already run; the window itself stays shown.
+            self._set_window_alpha('SAO-DPS', 0.0)
         except Exception:
             pass
 
@@ -6863,11 +6885,22 @@ class SAOWebViewGUI:
                 'burst_enabled': self._get_setting('burst_enabled', True),
                 'sound_enabled': get_sound_enabled(),
                 'sound_volume': get_sound_volume(),
+                'mem_data_source': str(self._get_setting('mem_data_source', 'hybrid') or 'hybrid').lower(),
             }
+            try:
+                cfg['panel_themes'] = self._api.get_panel_themes()
+            except Exception:
+                cfg['panel_themes'] = {
+                    'dps': 'dark',
+                    'hp': 'dark',
+                    'bosshp': 'dark',
+                    'skillfx': 'dark',
+                    'alert': 'dark',
+                }
             cfg['auto_key'] = self._get_auto_key_menu_state()
             cfg['boss_bar_mode'] = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
             cfg['dps_enabled'] = bool(self._get_setting('dps_enabled', True))
-            cfg['dps_fade_timeout_s'] = int(self._get_setting('dps_fade_timeout_s', 60))
+            cfg['dps_fade_timeout_s'] = int(self._get_setting('dps_fade_timeout_s', 5))
             cfg['dps_last_report_available'] = self._get_dps_last_report_available()
             cfg['raid_editor_visible'] = bool(self._raid_editor_visible)
             cfg['autokey_editor_visible'] = bool(self._autokey_editor_visible)

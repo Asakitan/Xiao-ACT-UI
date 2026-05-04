@@ -618,6 +618,12 @@ class DpsOverlay:
         self._fade_duration = self.FADE_IN
         self._faded_out = False
         self._hide_after_fade = False
+        # When True the next tick that observes ``fade_alpha <= 0.01`` will
+        # flip the panel to mouse pass-through so faded-out idle DPS does
+        # not swallow clicks meant for the game window underneath. Cleared
+        # by fade_in() and by show().
+        self._idle_passthrough_pending = False
+        self._is_passthrough = False
 
         self._drag_ox = 0
         self._drag_oy = 0
@@ -693,6 +699,8 @@ class DpsOverlay:
                 self._visible = True
                 self._faded_out = False
                 self._hide_after_fade = False
+                self._idle_passthrough_pending = False
+                self._is_passthrough = False
                 self._fade_from = 0.0
                 self._fade_alpha = 0.0
                 self._fade_target = 1.0
@@ -754,6 +762,8 @@ class DpsOverlay:
         self._visible = True
         self._faded_out = False
         self._hide_after_fade = False
+        self._idle_passthrough_pending = False
+        self._is_passthrough = False
         self._fade_from = 0.0
         self._fade_alpha = 0.0
         self._fade_target = 1.0
@@ -763,6 +773,8 @@ class DpsOverlay:
 
     def hide(self) -> None:
         self._hide_after_fade = False
+        self._idle_passthrough_pending = False
+        self._is_passthrough = False
         self._cancel_tick()
         # v2.3.x: tear down GPU presenter if active.
         if self._gpu_presenter is not None:
@@ -792,21 +804,65 @@ class DpsOverlay:
     def _window_ready(self) -> bool:
         return bool(self._gpu_managed or self._hwnd)
 
-    # Idle fade target: fully fade the panel out, then destroy the ULW window.
+    # Idle fade target: fully fade the panel out, but keep the ULW/GPU window
+    # alive in the background so the next damage packet can fade_in() instantly
+    # without rebuilding the presenter.
     FADE_IDLE_ALPHA = 0.0
+
+    def _set_passthrough(self, passthrough: bool) -> None:
+        """Toggle WS_EX_TRANSPARENT so a faded-out idle panel stops
+        swallowing clicks meant for the game window. Re-enabled
+        (interactive) on fade_in()."""
+        passthrough = bool(passthrough)
+        if passthrough == self._is_passthrough:
+            return
+        if self._gpu_managed and self._gpu_window is not None:
+            try:
+                self._gpu_window.set_click_through(passthrough)
+                self._is_passthrough = passthrough
+                return
+            except Exception:
+                pass
+        if not self._hwnd:
+            return
+        try:
+            ex = _user32.GetWindowLongW(
+                ctypes.c_void_p(self._hwnd), GWL_EXSTYLE)
+            if passthrough:
+                new_ex = ex | WS_EX_TRANSPARENT
+            else:
+                new_ex = ex & ~WS_EX_TRANSPARENT
+            if new_ex != ex:
+                _user32.SetWindowLongW(
+                    ctypes.c_void_p(self._hwnd), GWL_EXSTYLE, new_ex)
+            self._is_passthrough = passthrough
+        except Exception:
+            pass
 
     def fade_out(self) -> None:
         if self._faded_out:
             return
         self._faded_out = True
-        self._hide_after_fade = True
+        # Soft idle fade — do NOT tear down the window. fade_in() will bring
+        # it back. Real teardown goes through hide().
+        self._hide_after_fade = False
         self._fade_from = self._fade_alpha
         self._fade_target = self.FADE_IDLE_ALPHA
         self._fade_start = time.time()
         self._fade_duration = self.FADE_OUT
+        # Flip the panel to mouse pass-through immediately so the
+        # invisible-but-still-alive ULW does not steal clicks meant for
+        # the game window underneath. fade_in() reverses this.
+        self._idle_passthrough_pending = False
+        self._set_passthrough(True)
         self._schedule_tick(immediate=True)
 
     def fade_in(self) -> None:
+        # Restore interactivity the moment the panel starts coming back,
+        # so users can click it as soon as it begins reappearing instead
+        # of waiting for the alpha to finish climbing.
+        self._idle_passthrough_pending = False
+        self._set_passthrough(False)
         if not self._faded_out and self._fade_target >= 1.0:
             return
         self._faded_out = False

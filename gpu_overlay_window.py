@@ -1283,6 +1283,22 @@ class BgraPresenter:
         self._fade_active = False  # cancel any in-flight fade
         self._alpha = max(0.0, min(1.0, float(alpha)))
 
+    def set_click_through(self, click_through: bool) -> None:
+        """Toggle WS_EX_TRANSPARENT (mouse pass-through) at runtime so
+        a panel that has faded to alpha=0 can stop swallowing clicks
+        meant for the game window underneath, then start receiving
+        them again on fade-in."""
+        self._click_through = bool(click_through)
+        if not self._hwnd:
+            return
+        try:
+            if self._click_through:
+                _apply_click_through(self._hwnd)
+            else:
+                _apply_interactive(self._hwnd)
+        except Exception:
+            pass
+
     def set_frame(self, bgra: bytes, w: int, h: int) -> None:
         """Stage a frame for the next render. Cheap (just stores refs).
 

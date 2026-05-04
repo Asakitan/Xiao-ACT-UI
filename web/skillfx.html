@@ -978,6 +978,7 @@ window.addEventListener('load', function() {
 (function(){
     var panel='skillfx', darkCls='theme-light', fallback='dark';
     function apply(t){document.documentElement.classList.toggle(darkCls,t==='light')}
+    apply(fallback);
     try{
         if(window.pywebview&&window.pywebview.api){
             window.pywebview.api.get_panel_themes().then(function(themes){

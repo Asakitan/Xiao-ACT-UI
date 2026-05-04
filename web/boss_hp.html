@@ -1962,6 +1962,7 @@ window.BossHP = {
 (function(){
     var panel='bosshp', darkCls='theme-dark', fallback='dark';
     function apply(t){document.documentElement.classList.toggle(darkCls,t==='dark')}
+    apply(fallback);
     try{
         if(window.pywebview&&window.pywebview.api){
             window.pywebview.api.get_panel_themes().then(function(themes){

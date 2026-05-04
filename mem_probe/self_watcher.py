@@ -101,6 +101,8 @@ class MemSelfWatcher:
     def stop(self, timeout: float = 1.0) -> None:
         self._stop.set()
         if self._thread:
+            if self._thread is threading.current_thread():
+                return
             self._thread.join(timeout=timeout)
             self._thread = None
 
