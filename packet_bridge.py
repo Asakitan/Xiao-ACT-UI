@@ -755,13 +755,25 @@ class PacketBridge:
 
     def __init__(self, state_mgr: GameStateManager, settings=None, on_damage=None,
                  on_monster_update=None, on_boss_event=None,
-                 on_scene_change=None):
+                 on_scene_change=None, on_self_update=None,
+                 data_source: str = 'tcp'):
+        """
+        data_source:
+            'tcp'    — current behavior, full TCP packet parsing
+            'memory' — fully replace TCP via mem_probe.UnifiedDataSource
+            'hybrid' — mem_probe for self/scene/entity/combat;
+                       TCP only for damage events (PATH B)
+            'auto'   — try memory; fall back to tcp on failure
+        """
         self._state_mgr = state_mgr
         self._settings = settings
         self._on_damage = on_damage
         self._on_monster_update = on_monster_update
         self._on_boss_event = on_boss_event
         self._on_scene_change = on_scene_change  # 场景切换通知 (给 webview 清理 boss HP / DPS)
+        self._on_self_update = on_self_update    # mem_probe 引入: SELF 综合更新
+        self._data_source_mode = str(data_source or 'tcp').lower()
+        self._mem_source = None                  # UnifiedDataSource 实例 (lazy)
         self._running = False
 
         # 抓包层
@@ -815,17 +827,78 @@ class PacketBridge:
         return self._get_component_source(component, 'packet') == 'packet'
 
     def start(self):
-        """启动抓包，后台线程运行"""
+        """启动抓包，后台线程运行.
+
+        data_source='memory'  → 跑 UnifiedDataSource, 不启动 TCP 抓包
+        data_source='hybrid'  → UnifiedDataSource 内部启 PATH-B damage-only TCP
+        data_source='auto'    → 尝试 memory; 失败则降级 TCP
+        data_source='tcp'     → 当前默认行为, 完整 TCP 抓包
+        """
         if self._running:
             return
         self._running = True
+        mode = self._data_source_mode
+        if mode in ('memory', 'hybrid', 'auto'):
+            if self._start_memory_source():
+                # memory 启动成功, 不启 TCP
+                return
+            elif mode == 'memory':
+                # 严格 memory 模式失败, 报错不降级
+                self._error_msg = "memory data_source failed to start"
+                self._running = False
+                return
+            # auto 模式: fall through 到 TCP
+            try:
+                from config import logger as _logger  # type: ignore
+                _logger.warning("[bridge] memory source failed; falling back to TCP")
+            except Exception:
+                pass
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name='sao_bridge')
         self._thread.start()
 
+    def _start_memory_source(self) -> bool:
+        """Lazy-import + start UnifiedDataSource. Returns True on success."""
+        try:
+            from mem_probe.unified_source import UnifiedDataSource
+        except ImportError as e:
+            self._error_msg = f"mem_probe import failed: {e}"
+            return False
+        try:
+            self._mem_source = UnifiedDataSource(
+                self._state_mgr,
+                mode=self._data_source_mode,
+                on_self_update=self._on_self_update,
+                on_damage=self._on_damage,
+                on_monster_update=self._on_monster_update,
+                on_boss_event=self._on_boss_event,
+                on_scene_change=self._on_scene_change,
+                on_status_change=self._on_mem_status_change,
+            )
+            return self._mem_source.start()
+        except Exception as e:
+            self._error_msg = f"UnifiedDataSource start failed: {e}"
+            return False
+
+    def _on_mem_status_change(self, status: str, error: str = "") -> None:
+        """Forward mem_probe status into state_mgr's health flags."""
+        try:
+            self._state_mgr.update(
+                packet_active=(status == "running"),
+                error_msg=error or '',
+            )
+        except Exception:
+            pass
+
     def stop(self):
         """停止抓包"""
         self._running = False
+        if self._mem_source is not None:
+            try:
+                self._mem_source.stop()
+            except Exception:
+                pass
+            self._mem_source = None
         if self._capture:
             try:
                 self._capture.stop()
@@ -838,6 +911,20 @@ class PacketBridge:
     def single_capture(self):
         """返回当前快照 (兼容 RecognitionEngine 接口)"""
         return self._state_mgr.state.to_dict()
+
+    def health(self) -> dict:
+        """Phase 10: unified health status across all data sources."""
+        out = {
+            "data_source": self._data_source_mode,
+            "running": self._running,
+            "error_msg": self._error_msg,
+        }
+        if self._mem_source is not None:
+            try:
+                out["mem"] = self._mem_source.health()
+            except Exception:
+                out["mem"] = {"alive": False}
+        return out
 
     def get_alive_monsters(self) -> list:
         """Return list of alive monster dicts from the parser."""

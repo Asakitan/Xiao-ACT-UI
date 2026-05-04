@@ -352,6 +352,16 @@ class SAOWebAPI:
     def exit_app(self):
         threading.Thread(target=self._g._exit_with_animation, daemon=True).start()
 
+    def getDataSourceHealth(self):
+        """Phase 10: webview menu diagnostic — exposes mem_probe / TCP health."""
+        try:
+            engine = getattr(self._g, '_packet_engine', None)
+            if engine is None or not hasattr(engine, 'health'):
+                return {"available": False, "reason": "no packet engine"}
+            return {"available": True, **engine.health()}
+        except Exception as e:
+            return {"available": False, "error": str(e)}
+
     def switch_to_entity(self):
         """切换到 Entity (tkinter) UI 模式."""
         threading.Thread(target=lambda: self._g._transition_with_animation('entity'), daemon=True).start()
@@ -1812,6 +1822,17 @@ class SAOWebViewGUI:
         try:
             from packet_bridge import PacketBridge
 
+            # Phase 7: read mem_data_source preference from settings.
+            # Key is `mem_data_source` (not legacy 'data_source' which is
+            # the packet/vision component toggle). Values:
+            # 'tcp' (default, full TCP) | 'memory' (mem_probe full) |
+            # 'hybrid' (mem_probe + TCP damage-only) | 'auto' (try memory, fall back).
+            try:
+                _data_source_mode = str(
+                    self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
+                ).lower()
+            except Exception:
+                _data_source_mode = 'tcp'
             packet_engine = PacketBridge(
                 self._state_mgr,
                 self._cfg_settings_ref,
@@ -1819,6 +1840,7 @@ class SAOWebViewGUI:
                 on_monster_update=self._on_monster_update,
                 on_boss_event=self._on_boss_event,
                 on_scene_change=self._on_scene_change,
+                data_source=_data_source_mode,
             )
             packet_engine.start()
             self._packet_engine = packet_engine
@@ -3133,16 +3155,25 @@ class SAOWebViewGUI:
         if restart_packet or getattr(self, '_packet_engine', None) is None:
             try:
                 from packet_bridge import PacketBridge
+                # Phase 7: also propagate mem_data_source on restart
+                try:
+                    _data_source_mode = str(
+                        self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
+                    ).lower()
+                except Exception:
+                    _data_source_mode = 'tcp'
                 packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref,
                                              on_damage=self._on_packet_damage,
                                              on_monster_update=self._on_monster_update,
                                              on_boss_event=self._on_boss_event,
-                                             on_scene_change=self._on_scene_change)
+                                             on_scene_change=self._on_scene_change,
+                                             data_source=_data_source_mode)
                 packet_engine.start()
                 self._packet_engine = packet_engine
                 engines = [engine for engine in engines if engine is not packet_engine]
                 engines.insert(0, packet_engine)
-                print('[SAO] Packet bridge started (network capture)')
+                print(f'[SAO] Packet bridge started '
+                      f'(data_source={_data_source_mode!r})')
             except Exception as e:
                 import traceback
                 print(f'[SAO] Packet bridge FAILED to start: {e}', flush=True)

@@ -2407,15 +2407,29 @@ class SAOPlayerGUI:
         engines = []
         try:
             from packet_bridge import PacketBridge
+            # Phase 7: Entity menu reads `mem_data_source` preference
+            # (key intentionally distinct from legacy 'data_source' which is
+            # a packet-vs-vision toggle). Values: 'tcp' (default) | 'memory' |
+            # 'hybrid' | 'auto'. Routes through mem_probe.UnifiedDataSource
+            # for non-tcp modes so Entity menu gets the exact same dataset
+            # the webview menu does.
+            try:
+                _data_source_mode = str(
+                    self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
+                ).lower()
+            except Exception:
+                _data_source_mode = 'tcp'
             packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref,
                                          on_damage=self._on_packet_damage,
                                          on_monster_update=self._on_monster_update,
                                          on_boss_event=self._on_boss_event,
-                                         on_scene_change=self._on_scene_change)
+                                         on_scene_change=self._on_scene_change,
+                                         data_source=_data_source_mode)
             packet_engine.start()
             engines.append(packet_engine)
             self._packet_engine = packet_engine
-            print('[SAO Entity] Packet bridge started (network capture)')
+            print(f'[SAO Entity] Packet bridge started '
+                  f'(data_source={_data_source_mode!r})')
         except Exception as e:
             import traceback
             print(f'[SAO Entity] Packet bridge FAILED: {e}')

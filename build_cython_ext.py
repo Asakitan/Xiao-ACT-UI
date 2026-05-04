@@ -47,6 +47,16 @@ extensions = [
         name='_sao_cy_uihelpers',
         sources=[os.path.join(HERE, '_sao_cy_uihelpers.pyx')],
     ),
+    # Lives under mem_probe/ as a sub-package extension
+    # (`from mem_probe import _sao_cy_memscan`). Built as a C++ extension
+    # because it uses libcpp.vector and libcpp.unordered_set. AVX2
+    # intrinsics are emitted via immintrin.h; per-CPU dispatch is done at
+    # runtime via cpuid.
+    Extension(
+        name='mem_probe._sao_cy_memscan',
+        sources=[os.path.join(HERE, 'mem_probe', '_sao_cy_memscan.pyx')],
+        language='c++',
+    ),
 ]
 
 
