@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.20"
+APP_VERSION = "2.5.21"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,11 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.21:
+#     • Harden Entity DPS/BossHP recovery across map switches and mid-session
+#       startup: replay early self dirty packets after UID confirmation, keep a
+#       scene/startup damage grace window, force-show the first live DPS
+#       snapshot, and allow packet BossHP data to wake during that grace.
 # v2.5.20:
 #     • Fix Entity DPS/BossHP recovery after map switches and mid-session
 #       startup by keeping the post-restart damage callback alive and canceling

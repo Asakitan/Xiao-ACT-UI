@@ -2011,6 +2011,7 @@ class SAOPlayerGUI:
         self._bb_damage_timeout = 60.0
         self._pending_combat_reset_after = 0.0
         self._pending_combat_reset_reason = ''
+        self._scene_damage_grace_until = time.time() + 20.0
         self._scene_hide_token = 0
         self._damage_self_fallback_log_ts = 0.0
         self._hide_seek_engine = None
@@ -2504,6 +2505,10 @@ class SAOPlayerGUI:
                 delay_s = 3.0
         self._pending_combat_reset_after = time.time() + max(0.0, delay_s)
         self._pending_combat_reset_reason = reason
+        self._scene_damage_grace_until = max(
+            float(getattr(self, '_scene_damage_grace_until', 0.0) or 0.0),
+            time.time() + max(8.0, delay_s + 8.0),
+        )
         self._last_boss_hp_push_sig = None
         try:
             if self._dps_tracker:
@@ -2634,10 +2639,15 @@ class SAOPlayerGUI:
         entry = getattr(self, '_session_players', {}).get(uid)
         if entry is not None:
             try:
-                return bool(entry.get('is_self') or entry.get('name')
-                            or int(entry.get('fight_point') or 0) > 0)
+                return bool(
+                    entry.get('is_self')
+                    or entry.get('name')
+                    or int(entry.get('fight_point') or 0) > 0
+                    or int(entry.get('level') or 0) > 0
+                    or int(entry.get('profession_id') or 0) > 0
+                )
             except Exception:
-                return True
+                return False
         return False
 
     def _normalize_damage_event_for_self(self, event):
@@ -2947,6 +2957,10 @@ class SAOPlayerGUI:
                 flush=True,
             )
             self._last_boss_hp_push_sig = None
+            self._scene_damage_grace_until = max(
+                float(getattr(self, '_scene_damage_grace_until', 0.0) or 0.0),
+                time.time() + 10.0,
+            )
             try:
                 if self._dps_tracker:
                     self._dps_tracker.invalidate_snapshot_cache()
@@ -2957,6 +2971,7 @@ class SAOPlayerGUI:
         _scene_change_ts = time.time()
         self._pending_combat_reset_after = 0.0
         self._pending_combat_reset_reason = ''
+        self._scene_damage_grace_until = _scene_change_ts + 15.0
         print('[SAO Entity] ⚡ 场景/同副本重开 — 重置 BossHP 与 DPS 追踪', flush=True)
         self._bb_last_target_uuid = 0
         self._bb_last_damage_ts = 0.0
@@ -3651,10 +3666,7 @@ class SAOPlayerGUI:
                         self._cancel_dps_idle_reset_after()
                         self._scene_hide_token = int(getattr(self, '_scene_hide_token', 0) or 0) + 1
                         if not self._dps_visible:
-                            self._dps_visible = True
-                            self._dps_faded = False
-                            self._dps_mode = 'live'
-                            self._dps_overlay.show()
+                            self._show_dps_live_snapshot(_dps_snap)
                         else:
                             try:
                                 self._dps_overlay.fade_in()
@@ -3698,6 +3710,11 @@ class SAOPlayerGUI:
 
                 _now = time.time()
                 _bb_timeout = self._boss_hp_hold_timeout_s()
+                try:
+                    _bb_scene_grace = _now < float(
+                        getattr(self, '_scene_damage_grace_until', 0.0) or 0.0)
+                except Exception:
+                    _bb_scene_grace = False
                 _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
                 _bb_has_damage_target = bool(
                     _has_recent_self_damage
@@ -3773,7 +3790,8 @@ class SAOPlayerGUI:
                     _bb_show = True
                 else:
                     _bb_show = (
-                        _has_recent_self_damage
+                        (_has_recent_self_damage
+                         or (_bb_scene_grace and _bb_direct_data is not None))
                         and (_bb_src != 'none' or _bb_direct_data is not None
                              or _bb_has_damage_target)
                     )
@@ -3896,7 +3914,8 @@ class SAOPlayerGUI:
                         if (_bb_motion_ts > 0.0
                                 and (_now - _bb_motion_ts) >= _bb_stable_hide_s
                                 and not _bb_recent_damage_for_stable
-                                and not _dps_live_for_stable):
+                            and not _dps_live_for_stable
+                            and not _bb_scene_grace):
                             _bb_data['active'] = False
                 _bb_sig = _CY_UI.build_boss_bar_sig(_bb_data, _bb_additional)
                 if _bb_sig != self._last_boss_hp_push_sig:
