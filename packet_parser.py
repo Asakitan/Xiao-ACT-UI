@@ -2215,6 +2215,7 @@ class PacketParser:
             return
         try:
             msg = pb.EnterScene()
+            msg.ParseFromString(data)
             info = msg.EnterSceneInfo
             scene_id = _extract_scene_basic_id_from_attrs(info.SceneAttrs)
             if scene_id <= 0:

@@ -689,6 +689,7 @@ class SAOPopUpMenu:
             self._click_queue.append(('row', int(idx)))
             _phase_trace('popup.click.enqueue', f'row:{idx}')
         elif kind == KIND_BACKGROUND:
+            self._raise_to_top()
             self._click_pending = True
             self._click_queue.append(('background', -1))
             _phase_trace('popup.click.enqueue', 'background')
