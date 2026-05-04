@@ -1928,6 +1928,7 @@ class SAOPlayerGUI:
         self._cached_boss_raid_result = None
         self._cached_boss_raid_sig = None
         self._fisheye_ov = None    # 菜单开启时的持久鱼眼叠加层
+        self._fisheye_hit_layer = None
         self._ctx_menu_open = False  # 右键菜单弹出中, 暂停 z-order 置顶
         self._lift_loop_active = False
         self._skip_canvas_click = False
@@ -5036,7 +5037,7 @@ class SAOPlayerGUI:
 
         _step()
 
-    def _toggle_sao_menu(self, allow_close: bool = False, play_blur: bool = True):
+    def _toggle_sao_menu(self, allow_close: bool = False):
         # Lazy-init: build menu on first toggle (deferred from __init__)
         if self._sao_menu is None:
             self._setup_sao_menu()
@@ -5047,8 +5048,7 @@ class SAOPlayerGUI:
                 play_sound('menu_close')
             except Exception:
                 pass
-            if play_blur:
-                self._play_motion_blur(closing=True)
+            self._play_motion_blur(closing=True)
             self._sao_menu.close()
             try:
                 from overlay_scheduler import get_scheduler as _get_sched
@@ -5086,6 +5086,7 @@ class SAOPlayerGUI:
         if menu is None or not getattr(menu, 'visible', False):
             return
         self._sao_menu_close_pending = True
+        self._destroy_fisheye_hit_layer()
         self._fisheye_close_suppress_until = time.time() + 1.4
         ov = getattr(self, '_fisheye_ov', None)
         self._release_fisheye_input_zorder(ov)
@@ -5096,7 +5097,7 @@ class SAOPlayerGUI:
             except Exception:
                 pass
         try:
-            self._toggle_sao_menu(allow_close=True, play_blur=False)
+            self._toggle_sao_menu(allow_close=True)
         finally:
             try:
                 self.root.after(650, self._clear_sao_menu_close_pending)
@@ -5150,6 +5151,16 @@ class SAOPlayerGUI:
                 )
         except Exception:
             pass
+
+    def _destroy_fisheye_hit_layer(self):
+        layer = getattr(self, '_fisheye_hit_layer', None)
+        self._fisheye_hit_layer = None
+        if layer is not None:
+            try:
+                if layer.winfo_exists():
+                    layer.destroy()
+            except Exception:
+                pass
 
     def _on_sao_menu_open(self):
         """SAO 菜单打开时 — 停止呼吸, 启动持久鱼眼 (Win32 z-order 接管)"""
@@ -6289,11 +6300,8 @@ class SAOPlayerGUI:
         sh = self.root.winfo_screenheight()
         hw, hh = int(sw * 0.85), int(sh * 0.85)   # 85% 分辨率 (清晰度提升)
 
-        # v2.5.4: fisheye is click_through=False, so it captures wheel + click
-        # events that target the SessionPlayers (UID/POWER) panel area. The
-        # panel itself sits on a chroma-keyed Tk shell which is mouse-leaky on
-        # transparent pixels and below the fisheye in z-order, so wheel/drag
-        # never reaches it. Forward both interactions from the fisheye.
+        # Fisheye is render-only. A separate transparent Tk hit layer owns
+        # backdrop clicks, so the GPU window never steals mouse focus/z-order.
         _backdrop_drag = {
             'pressed': False, 'in_panel': False,
             'cursor_x': 0, 'cursor_y': 0, 'last_y': 0,
@@ -6402,6 +6410,96 @@ class SAOPlayerGUI:
                 self._close_sao_menu_from_background()
             except Exception:
                 pass
+
+        def _create_fisheye_hit_layer():
+            self._destroy_fisheye_hit_layer()
+            try:
+                layer = tk.Toplevel(self.root)
+                layer.overrideredirect(True)
+                layer.attributes('-topmost', True)
+                layer.attributes('-alpha', 0.01)
+                layer.configure(bg='black', cursor='arrow')
+                layer.geometry(f'{sw}x{sh}+0+0')
+                layer.update_idletasks()
+                try:
+                    import ctypes as _cth
+                    _u32h = _cth.windll.user32
+                    _GWL_EXSTYLE = -20
+                    _WS_EX_LAYERED = 0x00080000
+                    _WS_EX_TOOLWINDOW = 0x00000080
+                    _WS_EX_NOACTIVATE = 0x08000000
+                    _HWND_TOPMOST = -1
+                    _SWP_NOMOVE = 0x0002
+                    _SWP_NOSIZE = 0x0001
+                    _SWP_NOACTIVATE = 0x0010
+                    _SWP_NOOWNERZORDER = 0x0200
+                    hwnd = int(_u32h.GetParent(layer.winfo_id()) or layer.winfo_id())
+                    ex = _u32h.GetWindowLongPtrW(_cth.c_void_p(hwnd), _GWL_EXSTYLE)
+                    _u32h.SetWindowLongPtrW(
+                        _cth.c_void_p(hwnd), _GWL_EXSTYLE,
+                        ex | _WS_EX_LAYERED | _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE,
+                    )
+                    _u32h.SetWindowPos(
+                        _cth.c_void_p(hwnd), _cth.c_void_p(_HWND_TOPMOST),
+                        0, 0, 0, 0,
+                        _SWP_NOMOVE | _SWP_NOSIZE
+                        | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
+                    )
+                except Exception:
+                    pass
+
+                def _layer_pos(event):
+                    try:
+                        _backdrop_drag['cursor_x'] = int(event.x_root)
+                        _backdrop_drag['cursor_y'] = int(event.y_root)
+                    except Exception:
+                        pass
+
+                def _layer_press(event):
+                    _layer_pos(event)
+                    x = int(_backdrop_drag.get('cursor_x', 0))
+                    y = int(_backdrop_drag.get('cursor_y', 0))
+                    inside, _ = _cursor_in_session_panel(x, y)
+                    _backdrop_drag['pressed'] = True
+                    _backdrop_drag['in_panel'] = bool(inside)
+                    _backdrop_drag['last_y'] = y
+                    _backdrop_drag['close_candidate'] = not bool(inside)
+                    return 'break'
+
+                def _layer_release(event):
+                    _layer_pos(event)
+                    _close_sao_menu_from_backdrop(0, 0)
+                    return 'break'
+
+                def _layer_motion(event):
+                    _layer_pos(event)
+                    _backdrop_cursor_pos(event.x_root, event.y_root)
+                    return 'break'
+
+                def _layer_wheel(event):
+                    _layer_pos(event)
+                    delta = getattr(event, 'delta', 0) or 0
+                    dy = 1.0 if delta > 0 else (-1.0 if delta < 0 else 0.0)
+                    _backdrop_scroll(0.0, dy)
+                    return 'break'
+
+                layer.bind('<ButtonPress-1>', _layer_press)
+                layer.bind('<ButtonRelease-1>', _layer_release)
+                layer.bind('<B1-Motion>', _layer_motion)
+                layer.bind('<Motion>', _layer_pos)
+                layer.bind('<MouseWheel>', _layer_wheel)
+                layer.bind('<Button-4>', lambda e: (_layer_pos(e), _backdrop_scroll(0.0, 1.0), 'break')[-1])
+                layer.bind('<Button-5>', lambda e: (_layer_pos(e), _backdrop_scroll(0.0, -1.0), 'break')[-1])
+                self._fisheye_hit_layer = layer
+                try:
+                    menu = getattr(self, '_sao_menu', None)
+                    raise_to_top = getattr(menu, '_raise_to_top', None)
+                    if callable(raise_to_top):
+                        raise_to_top()
+                except Exception:
+                    pass
+            except Exception:
+                self._fisheye_hit_layer = None
 
         # ── 创建 GPU 叠加窗口 (interactive backdrop, 自然位于 topmost UI 下方) ──
         try:
@@ -6585,13 +6683,8 @@ class SAOPlayerGUI:
                 w=int(sw), h=int(sh),
                 x=0, y=0,
                 render_fn=presenter.render,
-                click_through=False,
+                click_through=True,
                 title='sao_fisheye_gpu',
-            )
-            gpu_win.set_input_callbacks(
-                cursor_pos_fn=_backdrop_cursor_pos,
-                mouse_button_fn=_close_sao_menu_from_backdrop,
-                scroll_fn=_backdrop_scroll,
             )
             gpu_win.show()
             try:
@@ -6609,8 +6702,8 @@ class SAOPlayerGUI:
                 _hwnd_i = int(getattr(gpu_win, '_hwnd', 0) or 0)
                 if _hwnd_i:
                     _cur = _u32a.GetWindowLongPtrW(_ct0.c_void_p(_hwnd_i), _GWL_EXSTYLE)
-                    _new = ((_cur | _WS_EX_LAYERED | _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE)
-                            & ~_WS_EX_TRANSPARENT)
+                    _new = (_cur | _WS_EX_LAYERED | _WS_EX_TOOLWINDOW
+                        | _WS_EX_NOACTIVATE | _WS_EX_TRANSPARENT)
                     _u32a.SetWindowLongPtrW(_ct0.c_void_p(_hwnd_i), _GWL_EXSTYLE, _new)
                     _u32a.SetLayeredWindowAttributes(_ct0.c_void_p(_hwnd_i), 0, 255, _LWA_ALPHA)
                     _u32a.SetWindowPos(
@@ -6633,6 +6726,7 @@ class SAOPlayerGUI:
         ov._worker_thread = None
         ov._request_fadeout = None
         self._fisheye_ov = ov
+        _create_fisheye_hit_layer()
 
         _fisheye_capture_excluded = [False]
 
@@ -7248,6 +7342,7 @@ class SAOPlayerGUI:
     @_probe.decorate('ui.fisheye.stop')
     def _stop_fisheye_overlay(self):
         """销毁持久鱼眼叠加层 (GPU 由后台线程自行释放)."""
+        self._destroy_fisheye_hit_layer()
         ov = self._fisheye_ov
         self._fisheye_ov = None
         if ov is not None:
