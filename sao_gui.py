@@ -2929,18 +2929,9 @@ class SAOPlayerGUI:
             _max_hp = int(monster_data.get('max_hp', 0) or 0)
             _hp = int(monster_data.get('hp', 0) or 0)
             _is_dead = bool(monster_data.get('is_dead', False))
-            if _uuid and (_max_hp > 0 or _hp > 0) and (not _is_dead or _hp > 0):
-                _should_adopt = not bool(self._bb_last_target_uuid)
-                if not _should_adopt:
-                    try:
-                        _bridge = getattr(self, '_packet_engine', None)
-                        _cur = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
-                        if not self._boss_monster_usable(_cur):
-                            _should_adopt = True
-                    except Exception:
-                        pass
-                if _should_adopt:
-                    self._bb_last_target_uuid = _uuid
+            if (_uuid and _uuid == int(getattr(self, '_bb_last_target_uuid', 0) or 0)
+                    and (_max_hp > 0 or _hp > 0) and (not _is_dead or _hp > 0)):
+                self._last_boss_hp_push_sig = None
         except Exception:
             pass
 
@@ -3805,19 +3796,35 @@ class SAOPlayerGUI:
                 elif _bb_raid_active:
                     _bb_show = True
                 else:
-                    _bb_has_packet_boss = bool(
+                    _bb_target_locked = bool(
+                        self._bb_last_target_uuid
+                        and self._bb_last_target_uuid in self._bb_recent_targets
+                    )
+                    _bb_has_tracked_packet_boss = bool(
                         _bb_direct_data is not None
-                        or (_bb_src != 'none'
-                            and (getattr(gs, 'boss_current_hp', 0)
-                                 or getattr(gs, 'boss_total_hp', 0)
-                                 or getattr(gs, 'boss_breaking_stage', -1) != -1))
+                        and (_bb_target_locked or _has_recent_self_damage)
+                    )
+                    _bb_has_estimated_tracked_boss = bool(
+                        _bb_target_locked
+                        and _bb_src != 'none'
+                        and _has_recent_self_damage
+                        and (getattr(gs, 'boss_current_hp', 0)
+                             or getattr(gs, 'boss_total_hp', 0)
+                             or getattr(gs, 'boss_breaking_stage', -1) != -1)
+                    )
+                    _bb_has_packet_boss = bool(
+                        _bb_has_tracked_packet_boss
+                        or _bb_has_estimated_tracked_boss
                     )
                     _bb_show = (
                         (_has_recent_self_damage
-                         or _bb_has_packet_boss
-                         or (_bb_scene_grace and _bb_direct_data is not None))
-                        and (_bb_src != 'none' or _bb_direct_data is not None
-                             or _bb_has_damage_target)
+                         or (_bb_scene_grace and _bb_has_tracked_packet_boss))
+                        and (_bb_has_packet_boss
+                             or (_bb_src != 'none'
+                                 and _bb_has_damage_target
+                                   and (getattr(gs, 'boss_current_hp', 0)
+                                       or getattr(gs, 'boss_total_hp', 0)
+                                       or getattr(gs, 'boss_breaking_stage', -1) != -1)))
                     )
 
                 if _bb_direct_data and not _bb_raid_active:
@@ -3939,7 +3946,6 @@ class SAOPlayerGUI:
                                 and (_now - _bb_motion_ts) >= _bb_stable_hide_s
                                 and not _bb_recent_damage_for_stable
                                 and not _dps_live_for_stable
-                                and not _bb_direct_data
                                 and not _bb_scene_grace):
                             _bb_data['active'] = False
                 _bb_sig = _CY_UI.build_boss_bar_sig(_bb_data, _bb_additional)
