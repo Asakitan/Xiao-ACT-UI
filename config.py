@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.19"
+APP_VERSION = "2.5.20"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,10 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.20:
+#     • Fix Entity DPS/BossHP recovery after map switches and mid-session
+#       startup by keeping the post-restart damage callback alive and canceling
+#       stale DPS idle-reset timers when fresh self combat damage arrives.
 # v2.5.19:
 #     • Restore close motion blur and move fisheye backdrop input off the GPU
 #       fisheye window: the GPU backdrop is now click-through/render-only,
