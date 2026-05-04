@@ -2813,9 +2813,18 @@ class SAOPlayerGUI:
         event = self._normalize_damage_event_target_for_entity(event)
         # Track self -> non-player combat target damage for boss bar target.
         # BossHP only displays later if packet_parser has usable HP data.
+        try:
+            _target_uuid_for_boss_hp = int(event.get('target_uuid', 0) or 0)
+        except Exception:
+            _target_uuid_for_boss_hp = 0
+        _is_friendly_boss_hp_target = bool(
+            _target_uuid_for_boss_hp
+            and self._is_known_friendly_uid(_target_uuid_for_boss_hp)
+        )
         _is_self_combat_target = bool(
             event.get('attacker_is_self')
-            and event.get('target_uuid', 0)
+            and _target_uuid_for_boss_hp
+            and not _is_friendly_boss_hp_target
             and (
                 event.get('target_is_combat_target', False)
                 or event.get('target_is_monster', False)
@@ -3722,15 +3731,24 @@ class SAOPlayerGUI:
                         getattr(self, '_scene_damage_grace_until', 0.0) or 0.0)
                 except Exception:
                     _bb_scene_grace = False
-                _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
-                _bb_has_damage_target = bool(
-                    _has_recent_self_damage
-                    and (self._bb_recent_targets or self._bb_last_target_uuid)
-                )
-
                 for uuid in list(self._bb_recent_targets.keys()):
                     if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout:
                         self._bb_recent_targets.pop(uuid, None)
+
+                _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
+                if not _has_recent_self_damage and not self._bb_recent_targets:
+                    self._bb_last_target_uuid = 0
+                _bb_last_target_damage_ts = float(
+                    self._bb_recent_targets.get(self._bb_last_target_uuid, 0.0) or 0.0)
+                _bb_target_damage_live = bool(
+                    self._bb_last_target_uuid
+                    and _bb_last_target_damage_ts > 0.0
+                    and (_now - _bb_last_target_damage_ts) < _bb_timeout
+                )
+                _bb_has_damage_target = bool(
+                    _has_recent_self_damage
+                    and _bb_target_damage_live
+                )
 
                 _bb_direct_data = None
                 _bb_direct_hp = 0
@@ -3793,12 +3811,11 @@ class SAOPlayerGUI:
 
                 if _bb_mode == 'off':
                     _bb_show = False
-                elif _bb_raid_active:
-                    _bb_show = True
                 else:
                     _bb_target_locked = bool(
                         self._bb_last_target_uuid
                         and self._bb_last_target_uuid in self._bb_recent_targets
+                        and _bb_target_damage_live
                     )
                     _bb_has_tracked_packet_boss = bool(
                         _bb_direct_data is not None
@@ -3818,6 +3835,7 @@ class SAOPlayerGUI:
                     )
                     _bb_show = (
                         (_has_recent_self_damage
+                         or (_bb_raid_active and _bb_has_packet_boss)
                          or (_bb_scene_grace and _bb_has_tracked_packet_boss))
                         and (_bb_has_packet_boss
                              or (_bb_src != 'none'
