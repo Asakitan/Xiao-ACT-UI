@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.6"
+APP_VERSION = "2.5.7"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,14 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.7:
+#     • Align DPS/BossHP scene and dungeon transition handling with
+#       StarResonanceDps / resonance-logs-cn, including deferred combat resets,
+#       dungeon dirty target progress, EnterScene scene IDs, and richer damage
+#       fields for stable all-map routing.
+#     • Expand skill_names coverage from the upstream merged skill table and
+#       switch DPS/HPS per-skill aggregation to resonance-logs-cn style
+#       SkillFightLevelTable-backed damage IDs.
 # v2.5.6:
 #     • BossHP main-target picker uses the highest MAX_HP unit (the actual
 #       boss) instead of the most-full hp_pct, so a 100 % overworld trash

@@ -21,7 +21,7 @@ import os
 import json
 import sys
 import time
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List, Tuple
 
 logger = logging.getLogger('sao_auto.parser')
 _PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
@@ -127,6 +127,136 @@ def _decode_fields(data: bytes) -> Dict[int, list]:
     return _CY_PACKET.decode_fields(data)
 
 
+_DUNGEON_DIRTY_TAG_BEGIN = -2
+_DUNGEON_DIRTY_TAG_END = -3
+_DUNGEON_DIRTY_TAG_EMPTY = -4
+_DUNGEON_DIRTY_PAD_BYTES = 4
+
+
+class _DungeonDirtyCursor:
+    def __init__(self, data: bytes):
+        self.data = data or b''
+        self.offset = 0
+
+    def set_offset(self, offset: int):
+        self.offset = min(max(0, int(offset or 0)), len(self.data))
+
+    def read_i32_padded(self) -> int:
+        end = self.offset + 4
+        padded_end = end + _DUNGEON_DIRTY_PAD_BYTES
+        if padded_end > len(self.data):
+            raise ValueError('unexpected eof while reading padded i32')
+        value = struct.unpack_from('<i', self.data, self.offset)[0]
+        self.offset = padded_end
+        return int(value)
+
+
+def _parse_dungeon_dirty_container(cur: _DungeonDirtyCursor, handler):
+    begin = cur.read_i32_padded()
+    if begin != _DUNGEON_DIRTY_TAG_BEGIN:
+        raise ValueError(f'invalid dirty container begin tag: {begin}')
+    size = cur.read_i32_padded()
+    if size == _DUNGEON_DIRTY_TAG_END:
+        return
+    if size < 0:
+        raise ValueError(f'invalid dirty container size: {size}')
+    body_start = cur.offset
+    body_end = body_start + int(size)
+    if body_end > len(cur.data):
+        raise ValueError('dirty container body exceeds buffer size')
+
+    field = cur.read_i32_padded()
+    while field > 0:
+        handled = bool(handler(field, cur, body_end))
+        if not handled:
+            cur.set_offset(body_end)
+        if cur.offset + 8 > len(cur.data):
+            break
+        field = cur.read_i32_padded()
+    if field != _DUNGEON_DIRTY_TAG_END:
+        cur.set_offset(body_end)
+
+
+def _parse_dungeon_dirty_target(cur: _DungeonDirtyCursor) -> Dict[str, int]:
+    out = {'target_id': 0, 'nums': 0, 'complete': 0}
+
+    def handle(field: int, inner: _DungeonDirtyCursor, _body_end: int) -> bool:
+        if field == 1:
+            out['target_id'] = inner.read_i32_padded()
+            return True
+        if field == 2:
+            out['nums'] = inner.read_i32_padded()
+            return True
+        if field == 3:
+            out['complete'] = inner.read_i32_padded()
+            return True
+        return False
+
+    _parse_dungeon_dirty_container(cur, handle)
+    return out
+
+
+def _parse_dungeon_dirty_target_map(cur: _DungeonDirtyCursor) -> List[Dict[str, int]]:
+    entries: List[Dict[str, int]] = []
+    add = cur.read_i32_padded()
+    remove = 0
+    update = 0
+    if add == _DUNGEON_DIRTY_TAG_EMPTY:
+        return entries
+    if add == -1:
+        add = cur.read_i32_padded()
+    else:
+        remove = cur.read_i32_padded()
+        update = cur.read_i32_padded()
+    if add < 0 or remove < 0 or update < 0:
+        raise ValueError('negative dirty target map section size')
+    for _ in range(int(add)):
+        cur.read_i32_padded()
+        entries.append(_parse_dungeon_dirty_target(cur))
+    for _ in range(int(remove)):
+        cur.read_i32_padded()
+    for _ in range(int(update)):
+        cur.read_i32_padded()
+        entries.append(_parse_dungeon_dirty_target(cur))
+    return entries
+
+
+def _parse_dungeon_dirty_buffer(data: bytes) -> Tuple[Optional[int], List[Dict[str, int]]]:
+    cur = _DungeonDirtyCursor(data)
+    flow_state: Optional[int] = None
+    targets: List[Dict[str, int]] = []
+
+    def handle_root(field: int, inner: _DungeonDirtyCursor, _body_end: int) -> bool:
+        nonlocal flow_state, targets
+        if field == 2:
+            def handle_flow(flow_field: int, flow_cur: _DungeonDirtyCursor, _flow_end: int) -> bool:
+                nonlocal flow_state
+                if flow_field == 1:
+                    flow_state = flow_cur.read_i32_padded()
+                    return True
+                return False
+            _parse_dungeon_dirty_container(inner, handle_flow)
+            return True
+        if field == 4:
+            def handle_target(target_field: int, map_cur: _DungeonDirtyCursor, _target_end: int) -> bool:
+                nonlocal targets
+                if target_field == 1:
+                    targets = _parse_dungeon_dirty_target_map(map_cur)
+                    return True
+                return False
+            _parse_dungeon_dirty_container(inner, handle_target)
+            return True
+        return False
+
+    _parse_dungeon_dirty_container(cur, handle_root)
+    return flow_state, targets
+
+
+_RESET_IGNORE_TARGETS = frozenset({
+    1301104, 1301105, 1301106, 6521002, 6521003, 1083, 1302101,
+})
+
+
 def _varint_to_int64(val: int) -> int:
     """Convert a protobuf varint to signed int64. v2.4.33: cython."""
     return int(_CY_PACKET.varint_to_int64(val))
@@ -210,6 +340,7 @@ class MessageType:
 
 class NotifyMethod:
     # ── Core sync (handled with full logic) ──
+    ENTER_SCENE = 0x03
     SYNC_NEAR_ENTITIES = 0x06
     SYNC_CONTAINER_DATA = 0x15
     SYNC_CONTAINER_DIRTY_DATA = 0x16
@@ -222,6 +353,7 @@ class NotifyMethod:
     SYNC_SWITCH_INFO = 0x13
     ENTER_GAME = 0x14
     SYNC_DUNGEON_DATA = 0x17
+    SYNC_DUNGEON_DIRTY_DATA = 0x18
     # ── Awards / Items ──
     AWARD_NOTIFY = 0x19
     CARD_INFO_ACK = 0x1A
@@ -257,6 +389,7 @@ class NotifyMethod:
     NOTIFY_DEBUG_MESSAGE_TIP = 0x3D
     NOTIFY_USER_CLOSE_FUNCTION = 0x3E
     NOTIFY_SERVER_CLOSE_FUNCTION = 0x3F
+    SYNC_CLIENT_USE_SKILL_WORLD = 0x43
     # ── Team ──
     NOTIFY_AWARD_ALL_ITEMS = 0x45
     NOTIFY_ALL_MEMBER_READY = 0x46
@@ -309,11 +442,13 @@ _NOTIFY_METHOD_NAMES = {
 class AttrType:
     NAME = 0x01
     ID = 0x0A
+    SKILL_ID = 0x64              # AttrSkillId — current/triggered skill id
     # ── Player info attrs ──
     COMBAT_STATE = 104           # AttrCombatState  — 0=out, 1=in combat
     COMBAT_STATE_TIME = 114      # AttrCombatStateTime — transition timestamp
     SEASON_LV = 196              # AttrSeasonLv (season star rank — display extra level)
     PROFESSION_ID = 0xDC         # 220 = AttrProfessionId
+    SCENE_BASIC_ID = 0x155       # 341 = AttrSceneBasicId (EnterScene)
     MONSTER_SEASON_LEVEL = 462   # AttrMonsterSeasonLevel — monster season level
     FIGHT_POINT = 0x272E         # 10030
     LEVEL = 0x2710               # 10000
@@ -355,6 +490,7 @@ class AttrType:
     # ── Fight resource / general CD speed ──
     FIGHT_RES_CD_SPEED_PCT = 11980       # AttrFightResCdSpeedPct — CD speed pct (/10000)
     FIGHT_RES_CD_SPEED_PCT_TOTAL = 11981 # AttrFightResCdSpeedPctTotal
+    FIGHT_RESOURCES = 50002              # AttrFightResources — packed fight resource values
     # ── Base stats (from EAttrType enum) ──
     STR = 11010;              STR_TOTAL = 11011
     INT_ATTR = 11020;         INT_ATTR_TOTAL = 11021
@@ -818,6 +954,31 @@ def _combat_damage_amount(value, lucky_value, actual_value, hp_lessen, shield_le
         value, lucky_value, actual_value, hp_lessen, shield_lessen))
 
 
+def _append_decimal_key(prefix: int, suffix: int, min_width: int) -> int:
+    suffix = max(0, int(suffix or 0))
+    width = max(len(str(suffix)) if suffix >= 10 else 1, int(min_width or 0))
+    return int(prefix or 0) * (10 ** width) + suffix
+
+
+def _compute_damage_key(owner_id: int, damage_source: int, owner_level: int,
+                        hit_event_id: int) -> int:
+    owner_id = max(0, int(owner_id or 0))
+    if owner_id <= 0:
+        return 0
+    source = int(damage_source or 0)
+    hit_event_id = max(0, int(hit_event_id or 0))
+    # Parser does not load the large SkillFightLevelTable; dps_tracker refines
+    # skill attacks with that table. Keep the same prefix/source structure here
+    # so packet debug and bridge consumers can still distinguish hit events.
+    damage_type = 2 if source == 2 else (3 if source > 0 else 1)
+    skill_effect_id = owner_id
+    return _append_decimal_key(
+        _append_decimal_key(damage_type, skill_effect_id, 0),
+        hit_event_id,
+        2,
+    )
+
+
 def _uuid_to_uid(uuid: int) -> int:
     return int(_CY_COMBAT.uuid_to_uid(uuid))
 
@@ -949,7 +1110,7 @@ class PlayerData:
                  'slot_bar_map',
                  'skill_cd_map', 'skill_last_use_at', 'skill_seen_ids',
                  '_inferred_skill_count',
-                 'fight_res_cd_map',
+                 'fight_res_cd_map', 'fight_resource_values', 'attr_skill_id',
                  'server_time_offset_ms',
                  'attr_skill_cd', 'attr_skill_cd_pct', 'attr_cd_accelerate_pct',
                  'temp_attr_cd_pct', 'temp_attr_cd_fixed', 'temp_attr_cd_accel',
@@ -964,7 +1125,7 @@ class PlayerData:
                  # ── Buff tracking ──
                  'buff_list',
                  # ── Scene / dungeon ──
-                 'scene_id', 'dungeon_id',
+                 'scene_id', 'dungeon_id', 'dungeon_difficulty',
                  # ── Self identity guard ──
                  'self_uid_confirmed', 'self_uid_source',
                  # ── Extended CharSerialize data (decoded generic) ──
@@ -1014,6 +1175,8 @@ class PlayerData:
         self.skill_seen_ids = []
         self._inferred_skill_count: int = 0
         self.fight_res_cd_map: Dict[int, Dict[str, Any]] = {}  # res_id → FightResCD state
+        self.fight_resource_values: list = []
+        self.attr_skill_id: int = 0
         self.server_time_offset_ms: Optional[float] = None
         # Entity-level CD modifiers (from AttrCollection + TempAttr)
         self.attr_skill_cd: int = 0           # AttrSkillCD 11750 — flat CD reduction ms
@@ -1047,6 +1210,7 @@ class PlayerData:
         # Scene / dungeon context
         self.scene_id: int = 0           # from CharSerialize.SceneData or SyncDungeonData
         self.dungeon_id: int = 0         # current dungeon ID
+        self.dungeon_difficulty: int = 0
         self.self_uid_confirmed: bool = False
         self.self_uid_source: str = ''
         # Extended CharSerialize data — decoded but not actively used by overlay
@@ -1234,6 +1398,38 @@ def _decode_resource_value_map(resource_ids, resources) -> Dict[int, int]:
     return result
 
 
+def _decode_packed_varints(raw: bytes) -> list:
+    values = []
+    pos = 0
+    raw = raw or b''
+    while pos < len(raw):
+        try:
+            value, pos = _read_varint(raw, pos)
+        except Exception:
+            break
+        values.append(int(value))
+    return values
+
+
+def _extract_scene_basic_id_from_attrs(attrs) -> int:
+    if not attrs or not getattr(attrs, 'Attrs', None):
+        return 0
+    for attr in attrs.Attrs:
+        try:
+            attr_id = int(attr.Id or 0)
+        except Exception:
+            continue
+        if attr_id != AttrType.SCENE_BASIC_ID:
+            continue
+        raw_data = getattr(attr, 'RawData', b'') or b''
+        if not raw_data:
+            continue
+        scene_id = _decode_int32_from_raw(raw_data)
+        if scene_id > 0:
+            return scene_id
+    return 0
+
+
 def _pick_stamina_resource_id(player: PlayerData) -> int:
     resource_values = getattr(player, 'resource_values', {}) or {}
     energy_info_map = getattr(player, 'energy_info_map', {}) or {}
@@ -1318,6 +1514,7 @@ class PacketParser:
         self._sync_container_count: int = 0  # Count SyncContainerData receives
         self._last_soft_scene_restart_ts: float = 0.0
         self._last_soft_scene_transition_ts: float = 0.0
+        self._active_dungeon_target_id: int = 0
         self.stats = {
             'raw_frames': 0,
             'game_frames': 0,
@@ -1418,7 +1615,13 @@ class PacketParser:
             return True
         if uid in self._team_members:
             return True
-        return self._player_entry_has_identity(uid)
+        # Player rows are intentionally preserved across scene resets so DPS
+        # names/professions survive map changes. They are not strong enough by
+        # themselves to classify a fresh target UUID as a player, because some
+        # bosses/monsters in new scenes can reuse player-looking UUID suffixes
+        # before SyncNearEntities arrives. Let damage-target fallbacks classify
+        # unknown post-transition targets as combat units instead.
+        return False
 
     def _get_monster(self, uuid: int) -> MonsterData:
         if uuid not in self._monsters:
@@ -1477,6 +1680,7 @@ class PacketParser:
         # 把已经由 SyncNearEntities 填充的新怪物清空 (包括 MAX_HP)
         # → 后续 AoiSyncDelta 只发 HP 增量 → max_hp=0 → boss bar 失效。
         self._last_dungeon_id = 0
+        self._active_dungeon_target_id = 0
         # 重置同步计数: 新连接需要重新接收首个 full sync
         self._sync_container_count = 0
         # 重置场景 ID: 新服务器/地图的场景 ID 需要重新识别
@@ -1561,6 +1765,45 @@ class PacketParser:
             reset_on_next_damage=True,
             reset_delay_s=3.0,
         )
+
+    def _apply_dungeon_target_reset_rules(self, targets, source: str) -> bool:
+        """Mirror upstream objective checks without hard-clearing scene entities."""
+        matched = False
+        for target_data in targets or []:
+            try:
+                target_id = int(target_data.get('target_id') or 0)
+                nums = int(target_data.get('nums') or 0)
+                complete = int(target_data.get('complete') or 0)
+            except Exception:
+                continue
+            reason = ''
+            effective_target_id = target_id
+            if complete == 0 and nums == 0:
+                self._active_dungeon_target_id = target_id
+                reason = 'new_objective'
+            elif complete == 1 and nums > 0:
+                if target_id == 0 and self._active_dungeon_target_id:
+                    effective_target_id = self._active_dungeon_target_id
+                reason = 'target_completed'
+            if not reason:
+                continue
+            if effective_target_id in _RESET_IGNORE_TARGETS:
+                logger.info(
+                    f'[Parser] Dungeon target reset ignored: source={source} '
+                    f'target_id={target_id} effective={effective_target_id} '
+                    f'complete={complete} nums={nums}'
+                )
+                continue
+            matched = True
+            logger.info(
+                f'[Parser] Dungeon target reset rule: source={source} '
+                f'reason={reason} target_id={target_id} effective={effective_target_id} '
+                f'complete={complete} nums={nums}'
+            )
+            self._notify_soft_scene_restart(
+                f'dungeon_{reason}:{source}:target={effective_target_id}'
+            )
+        return matched
 
     def _notify_soft_scene_transition(self, reason: str, old_scene_key=None,
                                       new_scene_key=None):
@@ -2004,7 +2247,9 @@ class PacketParser:
             if msg_payload is None:
                 return
 
-        if method_id == NotifyMethod.SYNC_CONTAINER_DATA:
+        if method_id == NotifyMethod.ENTER_SCENE:
+            self._on_enter_scene(msg_payload)
+        elif method_id == NotifyMethod.SYNC_CONTAINER_DATA:
             self._on_sync_container_data(msg_payload)
         elif method_id == NotifyMethod.SYNC_CONTAINER_DIRTY_DATA:
             self._on_sync_container_dirty(msg_payload)
@@ -2019,7 +2264,8 @@ class PacketParser:
         # ── Combat notify (battle server) ──
         elif method_id == NotifyMethod.NOTIFY_BUFF_CHANGE:
             self._on_notify_buff_change(msg_payload)
-        elif method_id == NotifyMethod.SYNC_CLIENT_USE_SKILL:
+        elif method_id in (NotifyMethod.SYNC_CLIENT_USE_SKILL,
+                           NotifyMethod.SYNC_CLIENT_USE_SKILL_WORLD):
             self._on_sync_client_use_skill(msg_payload)
         elif method_id == NotifyMethod.SYNC_SERVER_SKILL_END:
             self._on_sync_server_skill_end(msg_payload)
@@ -2030,6 +2276,8 @@ class PacketParser:
         # ── Dungeon / Scene ──
         elif method_id == NotifyMethod.SYNC_DUNGEON_DATA:
             self._on_sync_dungeon_data(msg_payload)
+        elif method_id == NotifyMethod.SYNC_DUNGEON_DIRTY_DATA:
+            self._on_sync_dungeon_dirty_data(msg_payload)
         elif method_id == NotifyMethod.NOTIFY_START_PLAYING_DUNGEON:
             self._on_notify_start_playing_dungeon(msg_payload)
         # ── Login / Session ──
@@ -2208,6 +2456,49 @@ class PacketParser:
     # ── Dungeon / Scene notify handlers ──
 
 
+    def _on_enter_scene(self, data: bytes):
+        """Handle EnterScene (0x03) — authoritative scene attribute sync."""
+        pb = _ensure_pb()
+        if not pb:
+            return
+        try:
+            msg = pb.EnterScene()
+            info = msg.EnterSceneInfo
+            scene_id = _extract_scene_basic_id_from_attrs(info.SceneAttrs)
+            if scene_id <= 0:
+                scene_id = _extract_scene_basic_id_from_attrs(info.SubsceneAttrs)
+            player_uuid = int(info.PlayerEnt.Uuid or 0) if info.HasField('PlayerEnt') else 0
+            if player_uuid and _is_player(player_uuid):
+                player_uid = _uuid_to_uid(player_uuid)
+                self._confirm_self_uid(player_uid, 'enter_scene_player_ent', player_uuid)
+                if info.PlayerEnt.HasField('Attrs'):
+                    self._process_attr_collection(player_uid, info.PlayerEnt.Attrs)
+            if scene_id > 0:
+                scene_key = ('enter_scene', int(scene_id), str(info.SceneGuid or ''), str(info.ConnectGuid or ''))
+                if self._last_scene_id and scene_id != self._last_scene_id:
+                    self._notify_soft_scene_transition(
+                        'enter_scene_basic_id_changed',
+                        old_scene_key=self._last_scene_key,
+                        new_scene_key=scene_key,
+                    )
+                self._last_scene_id = scene_id
+                self._last_scene_key = scene_key
+                if self._current_uid and self._current_uid in self._players:
+                    self._players[self._current_uid].scene_id = scene_id
+                logger.info(
+                    f'[Parser] EnterScene: scene_id={scene_id} scene_guid={info.SceneGuid!r} '
+                    f'connect_guid={info.ConnectGuid!r} player_uuid={player_uuid}'
+                )
+                _append_packet_debug('enter_scene', {
+                    'scene_id': scene_id,
+                    'scene_guid': str(info.SceneGuid or ''),
+                    'connect_guid': str(info.ConnectGuid or ''),
+                    'player_uuid': player_uuid,
+                })
+        except Exception as e:
+            logger.debug(f'[Parser] EnterScene decode error: {e}')
+
+
     def _on_sync_dungeon_data(self, data: bytes):
         """Handle SyncDungeonData (0x17) — dungeon context sync.
 
@@ -2228,23 +2519,95 @@ class PacketParser:
             msg.ParseFromString(data)
             vd = msg.VData
             scene_uuid = vd.SceneUuid
+            dungeon_difficulty = 0
+            if vd.HasField('DungeonSceneInfo'):
+                dungeon_difficulty = int(vd.DungeonSceneInfo.Difficulty or 0)
             logger.info(f'[Parser] SyncDungeonData(pb2): scene_uuid={scene_uuid} last={self._last_dungeon_id}')
-            _append_packet_debug('dungeon_data', {'scene_uuid': scene_uuid, 'last_dungeon_id': self._last_dungeon_id})
-            # Detect dungeon change → reset scene to clear old monsters
+            target_debug = []
+            if vd.HasField('Target'):
+                for _key, target_data in vd.Target.TargetData.items():
+                    target_debug.append({
+                        'target_id': int(target_data.TargetId),
+                        'nums': int(target_data.Nums),
+                        'complete': int(target_data.Complete),
+                    })
+            _append_packet_debug(
+                'dungeon_data',
+                {
+                    'scene_uuid': scene_uuid,
+                    'last_dungeon_id': self._last_dungeon_id,
+                    'dungeon_difficulty': dungeon_difficulty,
+                    'targets': target_debug[:16],
+                },
+            )
+            if target_debug:
+                self._apply_dungeon_target_reset_rules(target_debug, 'sync_dungeon_data')
             dungeon_id = scene_uuid  # Use scene_uuid as dungeon identity
             if dungeon_id != self._last_dungeon_id and self._last_dungeon_id != 0:
                 print(
-                    f'[Parser] ⚡ 副本切换: dungeon {self._last_dungeon_id} → {dungeon_id}, 重置场景',
+                    f'[Parser] ⚡ 副本上下文切换: dungeon {self._last_dungeon_id} → {dungeon_id}, '
+                    f'保留实体并等待下一次伤害确认',
                     flush=True,
                 )
-                self.reset_scene()
+                self._notify_soft_scene_transition(
+                    'sync_dungeon_scene_uuid_changed',
+                    old_scene_key=('dungeon', self._last_dungeon_id),
+                    new_scene_key=('dungeon', dungeon_id),
+                )
             self._last_dungeon_id = dungeon_id
             if self._current_uid and self._current_uid in self._players:
                 player = self._players[self._current_uid]
                 if dungeon_id > 0:
                     player.dungeon_id = dungeon_id
+                if dungeon_difficulty > 0 and dungeon_difficulty != player.dungeon_difficulty:
+                    old_difficulty = player.dungeon_difficulty
+                    player.dungeon_difficulty = dungeon_difficulty
+                    if old_difficulty > 0:
+                        self._notify_soft_scene_transition(
+                            'dungeon_difficulty_changed',
+                            old_scene_key=('dungeon_difficulty', old_difficulty),
+                            new_scene_key=('dungeon_difficulty', dungeon_difficulty),
+                        )
         except Exception as e:
             logger.debug(f'[Parser] SyncDungeonData decode error: {e}')
+
+    def _on_sync_dungeon_dirty_data(self, data: bytes):
+        """Handle SyncDungeonDirtyData (0x18) target progress updates."""
+        pb = _ensure_pb()
+        if not pb:
+            return
+        try:
+            msg = pb.SyncDungeonDirtyData()
+            msg.ParseFromString(data)
+            buffer_data = bytes(msg.VData.Buffer or b'')
+        except Exception as e:
+            logger.debug(f'[Parser] SyncDungeonDirtyData pb2 decode error: {e}')
+            return
+        if not buffer_data:
+            return
+        try:
+            flow_state, targets = _parse_dungeon_dirty_buffer(buffer_data)
+        except Exception as e:
+            logger.debug(f'[Parser] SyncDungeonDirtyData dirty buffer decode error: {e}')
+            _append_packet_debug(
+                'dungeon_dirty_decode_error',
+                {'error': str(e), 'buffer_len': len(buffer_data)},
+            )
+            return
+        logger.info(
+            f'[Parser] SyncDungeonDirtyData: flow_state={flow_state} '
+            f'targets={targets[:8]} len={len(buffer_data)}'
+        )
+        _append_packet_debug(
+            'dungeon_dirty_data',
+            {
+                'flow_state': flow_state,
+                'targets': targets[:16],
+                'buffer_len': len(buffer_data),
+            },
+        )
+        if targets:
+            self._apply_dungeon_target_reset_rules(targets, 'sync_dungeon_dirty_data')
 
     def _on_notify_start_playing_dungeon(self, data: bytes):
         """Handle NotifyStartPlayingDungeon (0x37) — dungeon play started.
@@ -2257,14 +2620,19 @@ class PacketParser:
             dungeon_id = outer.get(1, [0])[0]
             logger.info(f'[Parser] NotifyStartPlayingDungeon: dungeon_id={dungeon_id} last={self._last_dungeon_id}')
             _append_packet_debug('start_dungeon', {'dungeon_id': dungeon_id, 'last_dungeon_id': self._last_dungeon_id})
-            # NotifyStartPlayingDungeon definitively means new dungeon → reset scene
-            # Guard: skip if _last_dungeon_id == 0 (already reset by server change)
+            # NotifyStartPlayingDungeon definitively means new dungeon, but the
+            # capture layer already handles true cross-server hard resets. Keep
+            # entity/max HP data and defer encounter reset until the next hit,
+            # matching resonance-logs-cn's pending_auto_reset behavior.
             if dungeon_id != self._last_dungeon_id and self._last_dungeon_id != 0:
                 print(
-                    f'[Parser] ⚡ 开始副本: dungeon {self._last_dungeon_id} → {dungeon_id}, 重置场景',
+                    f'[Parser] ⚡ 开始副本: dungeon {self._last_dungeon_id} → {dungeon_id}, '
+                    f'等下一次伤害再重置 DPS/BossHP',
                     flush=True,
                 )
-                self.reset_scene()
+                self._notify_soft_scene_restart(
+                    f'notify_start_playing_dungeon:{self._last_dungeon_id}->{dungeon_id}'
+                )
             elif dungeon_id == self._last_dungeon_id and self._last_dungeon_id != 0:
                 # Same dungeon retry (刷本): UUID 不变, 需要重置死亡状态
                 # 不调用 reset_scene() 以保留 max_hp 缓存,
@@ -3882,6 +4250,13 @@ class PacketParser:
         shield_lessen = dmg.ShieldLessenValue
         attacker_uuid_raw = int(dmg.AttackerUuid or 0)
         skill_id = dmg.OwnerId
+        base_skill_id = _varint_to_int32(skill_id) if skill_id else 0
+        damage_source = int(dmg.DamageSource)
+        owner_level = int(dmg.OwnerLevel or 0)
+        owner_stage = int(dmg.OwnerStage or 0)
+        hit_event_id = int(dmg.HitEventId or 0)
+        passive_uuid = int(dmg.PassiveUuid or 0)
+        damage_mode = int(getattr(dmg, 'DamageMode', 0) or 0)
         is_dead = dmg.IsDead
         element = int(dmg.Property)
         top_summoner = int(dmg.TopSummonerId or 0)
@@ -3949,7 +4324,16 @@ class PacketParser:
             'top_summoner_id': top_summoner,
             'self_uid': int(self._current_uid or 0),
             'self_uuid': int(self._current_uuid or 0),
-            'skill_id': _varint_to_int32(skill_id) if skill_id else 0,
+            'skill_id': base_skill_id,
+            'skill_key': _compute_damage_key(base_skill_id, damage_source, owner_level, hit_event_id),
+            'damage_source': damage_source,
+            'owner_level': owner_level,
+            'owner_stage': owner_stage,
+            'hit_event_id': hit_event_id,
+            'passive_uuid': passive_uuid,
+            'is_normal': bool(getattr(dmg, 'IsNormal', False)),
+            'is_rainbow': bool(getattr(dmg, 'IsRainbow', False)),
+            'damage_mode': damage_mode,
             'damage': int(damage_amount),
             'hp_lessen': int(hp_lessen),
             'shield_lessen': int(shield_lessen),
@@ -4750,6 +5134,17 @@ class PacketParser:
             elif attr_id in (AttrType.CRI, AttrType.LUCKY, AttrType.ELEMENT_FLAG,
                              AttrType.REDUCTION_LEVEL, AttrType.ID):
                 pass
+            elif attr_id == AttrType.SKILL_ID:
+                if int_value > 0:
+                    player.attr_skill_id = int_value
+                    changed = True
+                    logger.info(f'[Parser] AttrCollection SkillId={int_value} uid={uid}')
+            elif attr_id == AttrType.FIGHT_RESOURCES:
+                values = _decode_packed_varints(raw_data)
+                if values != player.fight_resource_values:
+                    player.fight_resource_values = values
+                    changed = True
+                    logger.info(f'[Parser] AttrCollection FightResources={values[:8]} uid={uid}')
             elif attr_id == AttrType.COMBAT_STATE:
                 # AttrCombatState (104) — 0=out of combat, 1=in combat
                 flag = bool(int_value)
