@@ -5079,6 +5079,14 @@ class SAOPlayerGUI:
         if menu is None or not getattr(menu, 'visible', False):
             return
         self._sao_menu_close_pending = True
+        self._fisheye_close_suppress_until = time.time() + 1.4
+        ov = getattr(self, '_fisheye_ov', None)
+        request_fadeout = getattr(ov, '_request_fadeout', None)
+        if callable(request_fadeout):
+            try:
+                request_fadeout()
+            except Exception:
+                pass
         try:
             self._toggle_sao_menu(allow_close=True)
         finally:
@@ -5097,6 +5105,12 @@ class SAOPlayerGUI:
                 pass
         self._sao_menu_close_pending = False
 
+    def _fisheye_close_suppressed(self) -> bool:
+        try:
+            return time.time() < float(getattr(self, '_fisheye_close_suppress_until', 0.0) or 0.0)
+        except Exception:
+            return False
+
     def _on_sao_menu_open(self):
         """SAO 菜单打开时 — 停止呼吸, 启动持久鱼眼 (Win32 z-order 接管)"""
         self._stop_float_breath()
@@ -5114,6 +5128,8 @@ class SAOPlayerGUI:
     def _start_fisheye_with_retry(self, retries=5, delay=80):
         """带重试的鱼眼启动 — 首次进入时菜单可能还未完成渲染"""
         if self._destroyed:
+            return
+        if self._fisheye_close_suppressed():
             return
         if self._fisheye_ov is not None:
             return  # 已在运行
@@ -5153,7 +5169,8 @@ class SAOPlayerGUI:
 
     def _maybe_stop_fisheye(self):
         """仅当 SAO 菜单和所有面板都关闭时才销毁鱼眼叠加层"""
-        if self._sao_menu is not None and self._sao_menu.visible:
+        if (self._sao_menu is not None and self._sao_menu.visible
+                and not self._fisheye_close_suppressed()):
             return
         if self._any_panel_open():
             return
@@ -6206,6 +6223,8 @@ class SAOPlayerGUI:
           • 相比旧 Tk Canvas + PhotoImage 路径: 主线程 CPU 占用大幅
             下降 (无每帧 ImageTk.PhotoImage 构造 / Canvas 更新)
         """
+        if self._fisheye_close_suppressed():
+            return
         self._stop_fisheye_overlay()
         if not (self._sao_menu is not None and self._sao_menu.visible) and not self._any_panel_open():
             return
@@ -6702,6 +6721,8 @@ class SAOPlayerGUI:
                     (self._sao_menu is not None and self._sao_menu.visible)
                     or self._any_panel_open())
             except Exception:
+                _actual_should_run = False
+            if self._fisheye_close_suppressed():
                 _actual_should_run = False
             if _actual_should_run:
                 _stop_requested[0] = False
