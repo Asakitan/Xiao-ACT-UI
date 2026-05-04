@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.23"
+APP_VERSION = "2.5.24"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,11 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.24:
+#     • Tighten Entity BossHP target gating: monster updates no longer adopt
+#       untargeted NPCs/party units, packet BossHP stays visible only for a
+#       self-damaged tracked target, and normal timeout/stable-hide can hide it
+#       again after combat ends.
 # v2.5.23:
 #     • Keep Entity BossHP visible while packet boss data is valid instead of
 #       hiding it after the startup/scene grace window; stable-hide no longer
