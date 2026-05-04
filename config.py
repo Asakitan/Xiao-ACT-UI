@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.8"
+APP_VERSION = "2.5.9"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,10 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.9:
+#     • Parse EnterScene payloads during map/server transitions so scene keys
+#       and self entity UUID refresh correctly, and prevent delayed scene-hide
+#       callbacks from suppressing fresh DPS/BossHP live updates after切图.
 # v2.5.8:
 #     • Move packet byte decoding, GUI layout/signature math, entity-menu
 #       hit testing/animation helpers, and HP/DPS/BossHP pixel/formatting

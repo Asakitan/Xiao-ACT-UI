@@ -1939,6 +1939,7 @@ class SAOPlayerGUI:
         self._destroyed = False  # hot-switch 守卫: 阻止 after() 回调在 root 销毁后执行
         self._exit_animating = False
         self._close_finalized = False
+        self._sao_menu_close_pending = False
         self._entry_overlay = None
         self._exit_overlay = None
         # 浮动呼吸动画
@@ -2969,15 +2970,17 @@ class SAOPlayerGUI:
             except Exception:
                 _has_new_dps = False
             try:
-                if self._boss_hp_overlay and not _has_new_self_damage:
+                if (self._boss_hp_overlay
+                        and not _has_new_self_damage
+                        and not bool(getattr(self, '_bb_recent_targets', None))):
                     self._boss_hp_overlay.update({'active': False})
             except Exception:
                 pass
-            try:
-                if self._dps_overlay and not _has_new_dps:
-                    self._dps_overlay.hide()
-            except Exception:
-                pass
+            # Do not call DpsOverlay.hide() from this deferred guard. A fresh
+            # post-transition damage packet can rebuild the tracker before the
+            # next overlay tick has flipped _dps_visible back to True; hiding
+            # here races that first live update and can leave the DPS panel
+            # visually suppressed after several map switches.
             try:
                 self._sync_dps_report_availability()
             except Exception:
@@ -4888,7 +4891,7 @@ class SAOPlayerGUI:
             anchor_widget=self._float,
             external_close=False,
             alt_toggle_close=False,
-            on_background_click=lambda: self._toggle_sao_menu(allow_close=True),
+            on_background_click=self._close_sao_menu_from_background,
         )
         self._sao_menu.bind_events()
 
@@ -5002,6 +5005,28 @@ class SAOPlayerGUI:
                 pass
             # 立即将悬浮按钮浮到 overlay 之上 (避免撕裂)
             self._float.lift()
+
+    def _close_sao_menu_from_background(self):
+        if self._sao_menu_close_pending or self._exit_animating or self._close_finalized:
+            return
+        self._sao_menu_close_pending = True
+        try:
+            menu = getattr(self, '_sao_menu', None)
+            raise_to_top = getattr(menu, '_raise_to_top', None)
+            if callable(raise_to_top):
+                raise_to_top()
+        except Exception:
+            pass
+        try:
+            self._toggle_sao_menu(allow_close=True)
+        finally:
+            try:
+                self.root.after(380, self._clear_sao_menu_close_pending)
+            except Exception:
+                self._sao_menu_close_pending = False
+
+    def _clear_sao_menu_close_pending(self):
+        self._sao_menu_close_pending = False
 
     def _on_sao_menu_open(self):
         """SAO 菜单打开时 — 停止呼吸, 启动持久鱼眼 (Win32 z-order 接管)"""
@@ -6239,7 +6264,7 @@ class SAOPlayerGUI:
             else:
                 return
             try:
-                self._toggle_sao_menu(allow_close=True)
+                self._close_sao_menu_from_background()
             except Exception:
                 pass
 
