@@ -26,6 +26,8 @@ _BASE_DIR = (
     else os.path.dirname(os.path.abspath(__file__))
 )
 _PLAYER_CACHE_PATH = os.path.join(_BASE_DIR, 'player_cache.json')
+_SKILL_FIGHT_LEVEL_TABLE_PATH = os.path.join(_BASE_DIR, 'assets', 'SkillFightLevelTable.json')
+_SKILL_LEVEL_TO_EFFECT: Optional[Dict[int, int]] = None
 
 
 # ═══════════════════════════════════════════════
@@ -46,6 +48,58 @@ def _safe_int(v, default: int = 0) -> int:
         return int(v)
     except Exception:
         return default
+
+
+def _load_skill_level_to_effect() -> Dict[int, int]:
+    global _SKILL_LEVEL_TO_EFFECT
+    if _SKILL_LEVEL_TO_EFFECT is not None:
+        return _SKILL_LEVEL_TO_EFFECT
+    result: Dict[int, int] = {}
+    try:
+        with open(_SKILL_FIGHT_LEVEL_TABLE_PATH, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                try:
+                    skill_level_id = int(key)
+                    effect_id = int((value or {}).get('SkillEffectId') or 0)
+                except Exception:
+                    continue
+                if skill_level_id > 0 and effect_id > 0:
+                    result[skill_level_id] = effect_id
+    except Exception:
+        result = {}
+    _SKILL_LEVEL_TO_EFFECT = result
+    return result
+
+
+def _decimal_digits(value: int) -> int:
+    value = max(0, int(value or 0))
+    return len(str(value)) if value >= 10 else 1
+
+
+def _append_decimal(prefix: int, suffix: int, min_width: int) -> int:
+    suffix = max(0, int(suffix or 0))
+    width = max(_decimal_digits(suffix), int(min_width or 0))
+    return int(prefix or 0) * (10 ** width) + suffix
+
+
+def _compute_damage_id(event: Dict[str, Any]) -> int:
+    owner_id = max(0, _safe_int(event.get('skill_id')))
+    if owner_id <= 0:
+        return 0
+    damage_source = _safe_int(event.get('damage_source'), 0)
+    owner_level = max(0, _safe_int(event.get('owner_level'), 0))
+    hit_event_id = max(0, _safe_int(event.get('hit_event_id'), 0))
+    skill_effect_id = owner_id
+    if damage_source > 0:
+        damage_type = 2 if damage_source == 2 else 3
+    else:
+        table = _load_skill_level_to_effect()
+        skill_level_id = owner_id * 100 + owner_level
+        skill_effect_id = table.get(skill_level_id) or table.get(owner_id * 100 + 1) or owner_id
+        damage_type = 1
+    return _append_decimal(_append_decimal(damage_type, skill_effect_id, 0), hit_event_id, 2)
 
 
 # ═══════════════════════════════════════════════
@@ -237,6 +291,7 @@ class DpsTracker:
         is_absorbed = event.get('is_absorbed', False)
         damage = max(0, _safe_int(event.get('damage')))
         skill_id = _safe_int(event.get('skill_id'))
+        skill_key = _compute_damage_id(event) or _safe_int(event.get('skill_key')) or skill_id
         is_crit = event.get('is_crit', False)
 
         # Prefer parser-provided owner UID. Some damage events route through a
@@ -253,7 +308,11 @@ class DpsTracker:
         if is_immune or is_absorbed or damage <= 0:
             return
 
-        skill_name = self._skill_names.get(skill_id, str(skill_id))
+        skill_name = (
+            self._skill_names.get(skill_key)
+            or self._skill_names.get(skill_id)
+            or str(skill_id or skill_key)
+        )
         tracked = False
 
         if is_heal:
@@ -262,7 +321,7 @@ class DpsTracker:
                 if not self._encounter_start:
                     self._encounter_start = now
                 entity = self._get_or_create(attacker_uid, attacker_is_self)
-                entity.add_heal(skill_id, damage, skill_name, now)
+                entity.add_heal(skill_key, damage, skill_name, now)
                 self._total_heal += damage
                 tracked = True
         elif target_is_combat_target:
@@ -271,7 +330,7 @@ class DpsTracker:
                 if not self._encounter_start:
                     self._encounter_start = now
                 entity = self._get_or_create(attacker_uid, attacker_is_self)
-                entity.add_damage(skill_id, damage, is_crit, skill_name, now)
+                entity.add_damage(skill_key, damage, is_crit, skill_name, now)
                 self._track_big_hit_fx_locked(entity, damage, now)
                 self._total_damage += damage
                 if self._boss_uuid and target_uuid == self._boss_uuid:

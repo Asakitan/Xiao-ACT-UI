@@ -2254,7 +2254,9 @@ class SAOWebViewGUI:
             damage = int(event.get('damage') or 0)
         except Exception:
             damage = 0
-        if damage <= 0 or bool(event.get('is_heal', False)):
+        if bool(event.get('is_heal', False)):
+            return False
+        if damage <= 0 and not (event.get('is_immune') or event.get('is_absorbed')):
             return False
 
         reason = str(getattr(self, '_pending_combat_reset_reason', '') or 'restart')
@@ -2319,8 +2321,20 @@ class SAOWebViewGUI:
         return 0
 
     def _normalize_damage_event_for_self(self, event):
-        if not isinstance(event, dict) or event.get('attacker_is_self'):
+        if not isinstance(event, dict):
             return event
+        if event.get('attacker_is_self'):
+            try:
+                attacker_uid = int(event.get('attacker_uid') or 0)
+            except Exception:
+                attacker_uid = 0
+            self_uid = self._current_player_uid_int()
+            if attacker_uid or self_uid <= 0:
+                return event
+            fixed = dict(event)
+            fixed['attacker_uid'] = self_uid
+            fixed.setdefault('self_uid', self_uid)
+            return fixed
         self_uid = self._current_player_uid_int()
         if self_uid <= 0:
             return event
@@ -2354,6 +2368,78 @@ class SAOWebViewGUI:
             )
         return fixed
 
+    def _normalize_damage_event_target_for_webview(self, event):
+        """Recover combat-target classification after scene/dungeon switches.
+
+        Mirrors the entity overlay fallback: after a map/server transition the
+        parser may still hold old player rows while the first new boss hit
+        arrives before SyncNearEntities refreshes monster identity. If the hit
+        is clearly going to a non-self unknown target, keep DPS/BossHP alive by
+        treating it as a combat target until packet monster data catches up.
+        """
+        if not isinstance(event, dict):
+            return event
+        try:
+            target_uuid = int(event.get('target_uuid') or 0)
+        except Exception:
+            target_uuid = 0
+        if target_uuid <= 0:
+            return event
+        if event.get('target_is_combat_target') or event.get('target_is_monster'):
+            return event
+
+        target_suffix_player = (target_uuid & 0xFFFF) == 640
+        if not target_suffix_player:
+            fixed = dict(event)
+            fixed['target_is_player'] = False
+            fixed['target_is_monster'] = True
+            fixed['target_is_combat_target'] = True
+            fixed['webview_target_fallback'] = 'uuid_suffix_combat_target'
+            return fixed
+
+        if not event.get('attacker_is_self'):
+            return event
+
+        try:
+            target_uid = target_uuid >> 16
+        except Exception:
+            target_uid = 0
+        self_uid = self._current_player_uid_int()
+        if target_uid and self_uid and target_uid == self_uid:
+            return event
+
+        known_player = False
+        bridge = getattr(self, '_packet_engine', None)
+        if bridge and target_uid:
+            try:
+                player = (bridge.get_players() or {}).get(target_uid)
+                known_player = bool(
+                    player and (
+                        str(getattr(player, 'name', '') or '').strip()
+                        or int(getattr(player, 'level', 0) or 0) > 0
+                        or int(getattr(player, 'profession_id', 0) or 0) > 0
+                        or int(getattr(player, 'fight_point', 0) or 0) > 0
+                    )
+                )
+            except Exception:
+                known_player = False
+        if known_player:
+            return event
+
+        try:
+            damage = int(event.get('damage') or 0)
+        except Exception:
+            damage = 0
+        if damage <= 0 and not (event.get('is_immune') or event.get('is_absorbed')):
+            return event
+
+        fixed = dict(event)
+        fixed['target_is_player'] = False
+        fixed['target_is_monster'] = True
+        fixed['target_is_combat_target'] = True
+        fixed['webview_target_fallback'] = 'unknown_target_after_scene_change'
+        return fixed
+
     def _on_packet_damage(self, event):
         """Damage event callback from packet_parser → boss raid engine + DPS tracker.
 
@@ -2361,6 +2447,7 @@ class SAOWebViewGUI:
         ARE flowing. We use this to also ensure the boss bar target is set.
         """
         event = self._normalize_damage_event_for_self(event)
+        event = self._normalize_damage_event_target_for_webview(event)
         # Track last self -> non-player combat target damage for boss bar target.
         # BossHP only displays later if packet_parser has usable HP data.
         _is_self_combat_target = bool(
