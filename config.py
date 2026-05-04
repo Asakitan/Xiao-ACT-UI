@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "2.5.17"
+APP_VERSION = "2.5.18"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,10 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v2.5.18:
+#     • Do not stack the fullscreen motion-blur close overlay on top of the
+#       fisheye backdrop's own fade-out when closing by clicking the fisheye
+#       background; ID/HP/menu closes still keep their normal close blur.
 # v2.5.17:
 #     • Preserve the fisheye backdrop window lifecycle during background-click
 #       close: demote/click-through only, keep the GPU window visible for its
