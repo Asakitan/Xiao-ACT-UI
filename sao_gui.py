@@ -5036,7 +5036,7 @@ class SAOPlayerGUI:
 
         _step()
 
-    def _toggle_sao_menu(self, allow_close: bool = False):
+    def _toggle_sao_menu(self, allow_close: bool = False, play_blur: bool = True):
         # Lazy-init: build menu on first toggle (deferred from __init__)
         if self._sao_menu is None:
             self._setup_sao_menu()
@@ -5047,7 +5047,8 @@ class SAOPlayerGUI:
                 play_sound('menu_close')
             except Exception:
                 pass
-            self._play_motion_blur(closing=True)
+            if play_blur:
+                self._play_motion_blur(closing=True)
             self._sao_menu.close()
             try:
                 from overlay_scheduler import get_scheduler as _get_sched
@@ -5095,7 +5096,7 @@ class SAOPlayerGUI:
             except Exception:
                 pass
         try:
-            self._toggle_sao_menu(allow_close=True)
+            self._toggle_sao_menu(allow_close=True, play_blur=False)
         finally:
             try:
                 self.root.after(650, self._clear_sao_menu_close_pending)
