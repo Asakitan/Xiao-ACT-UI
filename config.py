@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.0.1"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,20 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v3.0.1
+#   Minor bug fixes and performance improvements. Set up buff monitor.
+# ── Buff 监视器 ──
+# True: 在主控台输出 buff 数据流诊断日志 (FIRST data / FIRST rows / 全部被过滤掉等),
+# 用于排查 "buff 栏没出来" 类问题。生产环境建议 False。
+BUFFMON_DEBUG = True
+# 'ultimate': 仅显示 奥义/幻想/职业大招 buff (默认, 严格过滤)
+# 'all'     : 显示所有自身 buff (无过滤, 用于诊断或纯展示)
+BUFFMON_SELF_FILTER = 'ultimate'
+# True: 走 GPU presenter (GpuOverlayWindow + AsyncFrameWorker + BgraPresenter),
+#       同 sao_left_info_gpu / sao_gui_skillfx 的渲染路径; 后台合成 + GL 上传, 主线程零开销。
+# False: 走 ULW (UpdateLayeredWindow) 兼容路径, 主线程 PIL 合成。
+# 自动 fallback: 当 GLFW 不可用或 GPU 窗口创建失败时, 自动切到 ULW。
+USE_GPU_BUFFMON = True
 # v3.0.0
 #   Added a new memory mode for combat data, which is more direct and has 
 #   lower latency than the previous implementation. This mode is enabled by default, 

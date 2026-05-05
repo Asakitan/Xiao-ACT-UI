@@ -126,6 +126,14 @@ class GameState:
     profession_id: int = 0             # 职业 ID (来自抓包)
     profession_name: str = ''          # 职业名称
 
+    # ── Buff 监视器数据源 ──
+    # 自身 active buff 列表; 每个元素 dict:
+    # {'id': int, 'uuid': int, 'begin_ms': int (server clock),
+    #  'duration_ms': int, 'layer': int, 'count': int, 'name': str}
+    self_buffs: List = field(default_factory=list)
+    # 服务器时间偏移 (ms): server_now = client_now * 1000 + server_time_offset_ms
+    server_time_offset_ms: float = 0.0
+
     # ── 战斗状态 ──
     in_combat: bool = False            # AttrCombatState (104) — 是否在战斗中
 
@@ -220,6 +228,8 @@ class GameState:
             'identity_alert_serial': self.identity_alert_serial,
             'identity_alert_title': self.identity_alert_title,
             'identity_alert_message': self.identity_alert_message,
+            'self_buffs': list(self.self_buffs or []),
+            'server_time_offset_ms': float(self.server_time_offset_ms or 0.0),
         }
 
 

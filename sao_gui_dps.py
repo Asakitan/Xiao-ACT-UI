@@ -476,7 +476,7 @@ class DpsOverlay:
     # v2.3.x: previously hardcoded dark colors — now themeable
     FOOTER_BG = (238, 242, 247, 205)
     FOOTER_CYAN_TINT = (104, 228, 255, 18)
-    FOOTER_SHADOW = (40, 55, 70, 28)
+    FOOTER_SHADOW = (40, 55, 70, 0)
     TAB_ACTIVE_FILL = (222, 190, 80, 35)
     TAB_ACTIVE_BORDER = (222, 190, 80, 220)
     TAB_INACTIVE_FILL = (40, 55, 75, 120)
@@ -489,9 +489,9 @@ class DpsOverlay:
     HEADER_BADGE_FILL = (230, 240, 248, 220)
     HEADER_BADGE_BORDER = (60, 140, 180, 160)
     LIST_CYAN_TINT = (104, 228, 255, 22)
-    LIST_SHADOW = (45, 55, 70, 34)
+    LIST_SHADOW = (45, 55, 70, 0)
     ROW_SHEEN_CYAN = (104, 228, 255, 20)
-    ROW_LOWER_SHADOW = (60, 45, 38, 32)
+    ROW_LOWER_SHADOW = (60, 45, 38, 0)
     ROW_SELF_OUTLINE = (222, 190, 80, 220)
     ROW_SELF_TINT = (222, 190, 80, 28)
     DETAIL_CARD_BG = (35, 45, 60, 160)
@@ -501,8 +501,8 @@ class DpsOverlay:
     SKILL_BAR_DAMAGE = (222, 190, 80, 60)
     VAL_HEAL_GREEN = (92, 150, 44, 255)
     # Shell layer
-    SHELL_AMBIENT_SHADOW = (22, 24, 18, 62)
-    SHELL_CONTACT_SHADOW = (31, 34, 16, 88)
+    SHELL_AMBIENT_SHADOW = (22, 24, 18, 0)
+    SHELL_CONTACT_SHADOW = (31, 34, 16, 0)
     SHELL_SHEEN_CYAN = (104, 228, 255, 32)
     SHELL_SHEEN_SHADOW = (42, 52, 64, 34)
     CORNER_CYAN_ACCENT = (104, 228, 255, 120)
@@ -565,6 +565,13 @@ class DpsOverlay:
         self._row_click_regions: List[Tuple[int, Tuple[int, int, int, int]]] = []
         self._detail_back_rect: Optional[Tuple[int, int, int, int]] = None
         self._resize_rect: Optional[Tuple[int, int, int, int]] = None
+        # List area rect (x, y, w, h) in window-local coords — for drag-scroll
+        self._list_rect: Optional[Tuple[int, int, int, int]] = None
+        # Drag-scroll state
+        self._list_drag_active: bool = False
+        self._list_drag_start_y: int = 0
+        self._list_drag_start_offset: int = 0
+        self._list_drag_pending_acc: float = 0.0
 
         sw = _user32.GetSystemMetrics(0)
         sh = _user32.GetSystemMetrics(1)
@@ -1586,28 +1593,59 @@ class DpsOverlay:
             print(f'[DPS-OV] ulw error: {e}')
 
     def _build_shell_layer(self, w: int, h: int) -> Image.Image:
-        """Compose the static shell (shadow + body + corners) once per size."""
+        """Compose the static shell (shadow + body + corners) once per size.
+
+        阴影 polygon 沿用 shell 切角形状; 偏移 + blur 后会从切角区域漏出来,
+        所以最后用切角三角形 mask 把那两块抠掉, 让 cut 区透明 (只露背景)。
+        """
         layer = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        ambient = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        ImageDraw.Draw(ambient).rounded_rectangle(
-            (self.BODY_PAD + 4, self.BODY_PAD + 8,
-             w - self.BODY_PAD + 1, h - self.BODY_PAD + 4),
-            radius=10, fill=self.SHELL_AMBIENT_SHADOW,
-        )
-        ambient = _gpu_blur(ambient, 8)
-        layer.alpha_composite(ambient)
-
-        contact = Image.new('RGBA', (w, h), (0, 0, 0, 0))
-        ImageDraw.Draw(contact).rounded_rectangle(
-            (self.BODY_PAD + 2, self.BODY_PAD + 4,
-             w - self.BODY_PAD, h - self.BODY_PAD + 1),
-            radius=8, fill=self.SHELL_CONTACT_SHADOW,
-        )
-        contact = _gpu_blur(contact, 3)
-        layer.alpha_composite(contact)
-
         sx, sy = self.BODY_PAD, self.BODY_PAD
         sw, sh = w - 2 * self.BODY_PAD, h - 2 * self.BODY_PAD
+        c = self.SHELL_CUT
+
+        shadow_layers = []
+        if self.SHELL_AMBIENT_SHADOW[3] > 0:
+            ambient = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+            amb_poly = [(p[0] + 4, p[1] + 8) for p in
+                        self._shell_polygon(sx, sy, sw, sh)]
+            ImageDraw.Draw(ambient, 'RGBA').polygon(
+                amb_poly, fill=self.SHELL_AMBIENT_SHADOW)
+            shadow_layers.append(_gpu_blur(ambient, 8))
+
+        if self.SHELL_CONTACT_SHADOW[3] > 0:
+            contact = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+            ct_poly = [(p[0] + 2, p[1] + 4) for p in
+                       self._shell_polygon(sx, sy, sw, sh)]
+            ImageDraw.Draw(contact, 'RGBA').polygon(
+                ct_poly, fill=self.SHELL_CONTACT_SHADOW)
+            shadow_layers.append(_gpu_blur(contact, 3))
+
+        # 3) 把 shell 自己的两个切角三角形从阴影里抠掉 (避免漏底)
+        # mask: 255 = 保留, 0 = 抠掉
+        cut_mask = Image.new('L', (w, h), 255)
+        cd = ImageDraw.Draw(cut_mask)
+        # 右上切角三角形 (从 shell 视角)
+        cd.polygon([
+            (sx + sw - c, sy),
+            (sx + sw, sy),
+            (sx + sw, sy + c),
+        ], fill=0)
+        # 左下切角三角形
+        cd.polygon([
+            (sx, sy + sh - c),
+            (sx + c, sy + sh),
+            (sx, sy + sh),
+        ], fill=0)
+        # 同时把 shell 主体内部也抠掉 (反正会被 shell 覆盖, 提前剔除避免 alpha 累积)
+        cd.polygon(self._shell_polygon(sx, sy, sw, sh), fill=0)
+
+        for shadow_layer in shadow_layers:
+            a = shadow_layer.getchannel('A')
+            from PIL import ImageChops
+            a = ImageChops.multiply(a, cut_mask)
+            shadow_layer.putalpha(a)
+            layer.alpha_composite(shadow_layer)
+
         self._draw_shell(layer, sx, sy, sw, sh)
         self._draw_corners(ImageDraw.Draw(layer, 'RGBA'), sx, sy, sw, sh)
         return layer
@@ -1637,12 +1675,14 @@ class DpsOverlay:
         self._row_click_regions = []
         self._detail_back_rect = None
         self._resize_rect = None
+        self._list_rect = None
         if self._detail_visible:
             content_y = sy + hh
             footer_y = sy + sh - self.FOOTER_H
             list_x = sx + self.CONTENT_PAD_X
             list_w = sw - 2 * self.CONTENT_PAD_X
             list_h = footer_y - content_y - self.CONTENT_PAD_BOT
+            self._list_rect = (list_x, content_y, list_w, list_h)
             self._draw_detail_view(draw, img, list_x, content_y, list_w, list_h)
         else:
             tabs_y = sy + hh
@@ -1652,6 +1692,7 @@ class DpsOverlay:
             list_x = sx + self.CONTENT_PAD_X
             list_w = sw - 2 * self.CONTENT_PAD_X
             list_h = footer_y - content_y - self.CONTENT_PAD_BOT
+            self._list_rect = (list_x, content_y, list_w, list_h)
             self._draw_list_frame(draw, img, list_x, content_y, list_w, list_h)
         self._draw_footer(draw, sx, footer_y, sw, self.FOOTER_H)
 
@@ -1666,11 +1707,29 @@ class DpsOverlay:
             img = multiply_alpha_image(img, final_alpha)
         return img
 
-    # --------  Shell (gradient + scanlines + borders)  --------
+    # --------  Shell (gradient + scanlines + cut-corner borders, web/dps.html parity)  --------
+
+    # SAO 切角尺寸 (web/dps.html 用 22px 对角剪切)
+    SHELL_CUT = 22
+
+    def _shell_polygon(self, sx: int, sy: int, sw: int, sh: int,
+                        inset: int = 0):
+        """web/dps.html clip-path:polygon 几何 — 右上角 + 左下角各切 22px 对角。"""
+        c = max(2, self.SHELL_CUT - inset)
+        x0, y0 = sx + inset, sy + inset
+        x1, y1 = sx + sw - 1 - inset, sy + sh - 1 - inset
+        return [
+            (x0, y0),
+            (x1 - c, y0),
+            (x1, y0 + c),
+            (x1, y1),
+            (x0 + c, y1),
+            (x0, y1 - c),
+        ]
 
     def _draw_shell(self, img: Image.Image,
                     sx: int, sy: int, sw: int, sh: int) -> None:
-        # Vertical gradient A→B (dark blue-black)
+        # 1) Vertical gradient A→B
         grad = np.zeros((sh, 1, 4), dtype=np.uint8)
         ys = np.linspace(0, 1, sh)
         for i in range(4):
@@ -1678,70 +1737,104 @@ class DpsOverlay:
                              + (self.PANEL_BG_B[i] - self.PANEL_BG_A[i]) * ys)
         grad_img = Image.fromarray(grad, 'RGBA').resize((sw, sh))
 
+        # 2) Polygon mask — webview clip-path 切角形状
+        local_poly = [(p[0] - sx, p[1] - sy) for p in
+                      self._shell_polygon(sx, sy, sw, sh)]
         mask = Image.new('L', (sw, sh), 0)
-        ImageDraw.Draw(mask).rounded_rectangle(
-            (0, 0, sw - 1, sh - 1), radius=6, fill=255
-        )
+        ImageDraw.Draw(mask).polygon(local_poly, fill=255)
         img.paste(grad_img, (sx, sy), mask)
 
-        # Top-cyan sheen (glow effect at the top edge)
+        # 3) Top-cyan sheen + bottom shadow (clipped by polygon mask)
         sheen = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
         sd_sheen = ImageDraw.Draw(sheen, 'RGBA')
-        sd_sheen.rounded_rectangle(
+        sd_sheen.rectangle(
             (1, 1, sw - 2, max(16, int(sh * 0.18))),
-            radius=6, fill=self.SHELL_SHEEN_CYAN,
+            fill=self.SHELL_SHEEN_CYAN,
         )
-        sd_sheen.rounded_rectangle(
+        sd_sheen.rectangle(
             (2, max(12, int(sh * 0.42)), sw - 3, sh - 3),
-            radius=6, fill=self.SHELL_SHEEN_SHADOW,
+            fill=self.SHELL_SHEEN_SHADOW,
         )
         sheen = _gpu_blur(sheen, 4)
         sheen_masked = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
         sheen_masked.paste(sheen, (0, 0), mask)
         img.alpha_composite(sheen_masked, (sx, sy))
 
-        # Subtle horizontal scanlines (every 3px, faint cyan)
+        # 4) Subtle horizontal scanlines (every 4px, web parity)
         scan = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
         sd = ImageDraw.Draw(scan)
-        for y in range(0, sh, 3):
+        for y in range(0, sh, 4):
             sd.line((0, y, sw, y), fill=self.SCAN_LINE)
         scan_masked = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
         scan_masked.paste(scan, (0, 0), mask)
         img.alpha_composite(scan_masked, (sx, sy))
 
         draw = ImageDraw.Draw(img, 'RGBA')
-        # Outer border (cyan-tinted)
-        draw.rounded_rectangle(
-            (sx, sy, sx + sw - 1, sy + sh - 1),
-            radius=6, outline=self.PANEL_EDGE, width=1,
-        )
-        # Inner glow border
-        draw.rounded_rectangle(
-            (sx + 1, sy + 1, sx + sw - 2, sy + sh - 2),
-            radius=6, outline=self.INNER_HIGHLIGHT, width=1,
-        )
-        # Top-edge cyan highlight
+
+        # 5) Outer border — cyan-edged polygon
+        outer_poly = self._shell_polygon(sx, sy, sw, sh)
+        draw.line(outer_poly + [outer_poly[0]],
+                  fill=self.PANEL_EDGE, width=1)
+
+        # 6) Inner highlight — white polygon inset 1px
+        inner_poly = self._shell_polygon(sx, sy, sw, sh, inset=1)
+        draw.line(inner_poly + [inner_poly[0]],
+                  fill=self.INNER_HIGHLIGHT, width=1)
+
+        # 7) Top-edge cyan thin line (web/dps.html ::after top 2px)
         draw.line(
-            (sx + 1, sy + 2, sx + sw - 2, sy + 2),
+            (sx + 1, sy + 2, sx + sw - 2 - self.SHELL_CUT, sy + 2),
             fill=self.PANEL_LINE, width=1,
         )
 
+        # 8) Bottom cyan→gold gradient line — SAO 招牌 (web/dps.html ::after bottom)
+        line_y = sy + sh - 2
+        line_x0 = sx + self.SHELL_CUT + 2
+        line_x1 = sx + sw - 3
+        line_w = max(0, line_x1 - line_x0)
+        if line_w > 0:
+            grad_line = Image.new('RGBA', (line_w, 1), (0, 0, 0, 0))
+            arr = np.zeros((1, line_w, 4), dtype=np.uint8)
+            for i in range(line_w):
+                t = i / max(1, line_w - 1)
+                if t < 0.30:
+                    a = int(220 * (t / 0.30))
+                    arr[0, i] = (104, 228, 255, a)
+                elif t < 0.70:
+                    u = (t - 0.30) / 0.40
+                    r = int(104 + (243 - 104) * u)
+                    g = int(228 + (175 - 228) * u)
+                    b = int(255 + (18 - 255) * u)
+                    a = int(220 + (200 - 220) * u)
+                    arr[0, i] = (r, g, b, a)
+                else:
+                    a = int(200 * (1.0 - (t - 0.70) / 0.30))
+                    arr[0, i] = (243, 175, 18, max(0, a))
+            grad_line = Image.fromarray(arr, 'RGBA')
+            img.alpha_composite(grad_line, (line_x0, line_y))
+
     def _draw_corners(self, draw: ImageDraw.ImageDraw,
                       sx: int, sy: int, sw: int, sh: int) -> None:
-        cs = self.CORNER_SIZE
-        # top-left: bright cyan
+        """高亮 cut-corner 转折点 — 强化 SAO 切角观感。"""
+        c = self.SHELL_CUT
+        # Top-left full corner — bright cyan accent
         cyan = self.CYAN
+        cs = self.CORNER_SIZE
         draw.line((sx + 2, sy + 2, sx + 2 + cs, sy + 2),
                   fill=cyan, width=2)
         draw.line((sx + 2, sy + 2, sx + 2, sy + 2 + cs),
                   fill=cyan, width=2)
-        # top-right: faint cyan accent
-        draw.line((sx + sw - 2 - cs, sy + 2, sx + sw - 2, sy + 2),
-                  fill=self.CORNER_CYAN_ACCENT, width=1)
-        # bottom-left: faint gold accent
-        draw.line((sx + 2, sy + sh - 2, sx + 2 + cs, sy + sh - 2),
-                  fill=self.CORNER_GOLD_ACCENT, width=1)
-        # bottom-right: gold
+        # Top-right diagonal cut — 沿对角线画 2px 青线
+        draw.line(
+            (sx + sw - 1 - c, sy + 1, sx + sw - 1, sy + 1 + c),
+            fill=self.CORNER_CYAN_ACCENT, width=2,
+        )
+        # Bottom-left diagonal cut — 沿对角线画 2px 金线
+        draw.line(
+            (sx + 1, sy + sh - 1 - c, sx + 1 + c, sy + sh - 1),
+            fill=self.CORNER_GOLD_ACCENT, width=2,
+        )
+        # Bottom-right full corner — gold accent
         gold_c = self.CORNER_GOLD
         bx = sx + sw - 2
         by = sy + sh - 2
@@ -2799,6 +2892,8 @@ class DpsOverlay:
     def _on_drag_start(self, ev) -> None:
         try:
             self._resize_active = False
+            self._list_drag_active = False
+            self._list_drag_pending_acc = 0.0
             if self._detail_mode and self._point_in_rect(
                     int(ev.x), int(ev.y), self._resize_hit_rect()):
                 self._resize_active = True
@@ -2807,6 +2902,18 @@ class DpsOverlay:
                 self._drag_start_root = self._resize_start_root
                 self._drag_moved = False
                 return
+            # 落点在 entity 列表区域 → 拖动滚动列表 (上下), 不移动窗口
+            if self._list_rect is not None and self._point_in_rect(
+                    int(ev.x), int(ev.y), self._list_rect):
+                # 仅当列表实际可滚动 (内容多于可见行) 才进入 drag-scroll
+                if self._max_scroll_offset() > 0:
+                    self._list_drag_active = True
+                    self._list_drag_start_y = int(ev.y_root)
+                    self._list_drag_start_offset = self._current_scroll_offset()
+                    self._list_drag_pending_acc = 0.0
+                    self._drag_start_root = (int(ev.x_root), int(ev.y_root))
+                    self._drag_moved = False
+                    return
             self._drag_ox = ev.x_root - self._x
             self._drag_oy = ev.y_root - self._y
             self._drag_start_root = (int(ev.x_root), int(ev.y_root))
@@ -2816,9 +2923,22 @@ class DpsOverlay:
             self._drag_oy = 0
             self._drag_start_root = (0, 0)
             self._drag_moved = False
+            self._list_drag_active = False
 
     def _on_drag_move(self, ev) -> None:
         try:
+            if self._list_drag_active:
+                dy = int(ev.y_root) - self._list_drag_start_y
+                # 反向: 向上拖 = 向下滚 (内容向上移)
+                rows_delta = -dy / float(self.ROW_H + self.ROW_MARGIN)
+                target_offset = int(round(self._list_drag_start_offset + rows_delta))
+                max_off = self._max_scroll_offset()
+                target_offset = max(0, min(max_off, target_offset))
+                cur = self._current_scroll_offset()
+                if target_offset != cur:
+                    self._set_scroll_offset(target_offset)
+                self._drag_moved = True
+                return
             if self._resize_active:
                 dx = int(ev.x_root) - self._resize_start_root[0]
                 dy = int(ev.y_root) - self._resize_start_root[1]
@@ -2878,6 +2998,16 @@ class DpsOverlay:
             pass
 
     def _on_drag_end(self, ev) -> None:
+        if self._list_drag_active:
+            self._list_drag_active = False
+            # 列表拖动完成, 不当作 click; 若没移动则 fall through 当作普通 click
+            if self._drag_moved:
+                return
+            try:
+                self._handle_click(int(ev.x), int(ev.y))
+            except Exception:
+                pass
+            return
         if self._resize_active:
             moved = bool(self._drag_moved)
             self._resize_active = False
@@ -2923,20 +3053,30 @@ class DpsOverlay:
 
     def _scroll(self, direction: int) -> None:
         """Scroll the entity list by one row in the given direction (+1 down, -1 up)."""
-        is_report = self._view_mode == 'report'
-        if is_report:
-            total = len(self._report_entities())
-            offset_attr = '_scroll_offset_report'
-        else:
-            total = len(self._rows)
-            offset_attr = '_scroll_offset'
-        max_offset = max(0, total - self.MAX_ROWS)
-        old = getattr(self, offset_attr)
+        max_offset = self._max_scroll_offset()
+        old = self._current_scroll_offset()
         new = max(0, min(max_offset, old + direction))
         if new != old:
-            setattr(self, offset_attr, new)
-            # Reset row positions so they animate smoothly
-            self._schedule_tick(immediate=True)
+            self._set_scroll_offset(new)
+
+    def _scroll_offset_attr(self) -> str:
+        return '_scroll_offset_report' if self._view_mode == 'report' else '_scroll_offset'
+
+    def _max_scroll_offset(self) -> int:
+        if self._view_mode == 'report':
+            total = len(self._report_entities())
+        else:
+            total = len(self._rows)
+        return max(0, total - self.MAX_ROWS)
+
+    def _current_scroll_offset(self) -> int:
+        return int(getattr(self, self._scroll_offset_attr(), 0) or 0)
+
+    def _set_scroll_offset(self, value: int) -> None:
+        max_offset = self._max_scroll_offset()
+        v = max(0, min(max_offset, int(value)))
+        setattr(self, self._scroll_offset_attr(), v)
+        self._schedule_tick(immediate=True)
 
 
 # ────────────────────────────────────────────────────────────
@@ -2979,7 +3119,7 @@ DPS_THEME_LIGHT = {
     # v2.3.x: previously hardcoded dark colors that broke light-theme
     'FOOTER_BG':       (238, 242, 247, 205),
     'FOOTER_CYAN_TINT':(104, 228, 255, 18),
-    'FOOTER_SHADOW':   (40, 55, 70, 28),
+    'FOOTER_SHADOW':   (40, 55, 70, 0),
     'TAB_ACTIVE_FILL': (222, 190, 80, 35),
     'TAB_ACTIVE_BORDER':(222, 190, 80, 220),
     'TAB_INACTIVE_FILL':(40, 55, 75, 120),
@@ -2992,9 +3132,9 @@ DPS_THEME_LIGHT = {
     'HEADER_BADGE_FILL':(230, 240, 248, 220),
     'HEADER_BADGE_BORDER':(60, 140, 180, 160),
     'LIST_CYAN_TINT':  (104, 228, 255, 22),
-    'LIST_SHADOW':     (45, 55, 70, 34),
+    'LIST_SHADOW':     (45, 55, 70, 0),
     'ROW_SHEEN_CYAN':  (104, 228, 255, 20),
-    'ROW_LOWER_SHADOW':(60, 45, 38, 32),
+    'ROW_LOWER_SHADOW':(60, 45, 38, 0),
     'ROW_SELF_OUTLINE':(222, 190, 80, 220),
     'ROW_SELF_TINT':   (222, 190, 80, 28),
     'DETAIL_CARD_BG':  (35, 45, 60, 160),
@@ -3003,8 +3143,8 @@ DPS_THEME_LIGHT = {
     'SKILL_BAR_HEAL':  (154, 211, 52, 70),
     'SKILL_BAR_DAMAGE':(222, 190, 80, 60),
     'VAL_HEAL_GREEN':  (92, 150, 44, 255),
-    'SHELL_AMBIENT_SHADOW': (22, 24, 18, 62),
-    'SHELL_CONTACT_SHADOW': (31, 34, 16, 88),
+    'SHELL_AMBIENT_SHADOW': (22, 24, 18, 0),
+    'SHELL_CONTACT_SHADOW': (31, 34, 16, 0),
     'SHELL_SHEEN_CYAN': (104, 228, 255, 32),
     'SHELL_SHEEN_SHADOW': (42, 52, 64, 34),
     'CORNER_CYAN_ACCENT': (104, 228, 255, 120),
@@ -3048,7 +3188,7 @@ DPS_THEME_DARK = {
     # v2.3.x: dark-mode counterparts
     'FOOTER_BG':       (8, 10, 16, 160),
     'FOOTER_CYAN_TINT':(104, 228, 255, 10),
-    'FOOTER_SHADOW':   (0, 0, 0, 30),
+    'FOOTER_SHADOW':   (0, 0, 0, 0),
     'TAB_ACTIVE_FILL': (222, 190, 80, 50),
     'TAB_ACTIVE_BORDER':(222, 190, 80, 240),
     'TAB_INACTIVE_FILL':(25, 35, 50, 140),
@@ -3061,9 +3201,9 @@ DPS_THEME_DARK = {
     'HEADER_BADGE_FILL':(20, 30, 45, 200),
     'HEADER_BADGE_BORDER':(50, 120, 160, 180),
     'LIST_CYAN_TINT':  (104, 228, 255, 10),
-    'LIST_SHADOW':     (0, 0, 0, 25),
+    'LIST_SHADOW':     (0, 0, 0, 0),
     'ROW_SHEEN_CYAN':  (104, 228, 255, 12),
-    'ROW_LOWER_SHADOW':(0, 0, 0, 30),
+    'ROW_LOWER_SHADOW':(0, 0, 0, 0),
     'ROW_SELF_OUTLINE':(222, 190, 80, 240),
     'ROW_SELF_TINT':   (222, 190, 80, 18),
     'DETAIL_CARD_BG':  (20, 28, 40, 180),
@@ -3072,8 +3212,8 @@ DPS_THEME_DARK = {
     'SKILL_BAR_HEAL':  (80, 200, 120, 80),
     'SKILL_BAR_DAMAGE':(222, 190, 80, 70),
     'VAL_HEAL_GREEN':  (110, 200, 80, 255),
-    'SHELL_AMBIENT_SHADOW': (12, 14, 10, 50),
-    'SHELL_CONTACT_SHADOW': (18, 20, 14, 70),
+    'SHELL_AMBIENT_SHADOW': (12, 14, 10, 0),
+    'SHELL_CONTACT_SHADOW': (18, 20, 14, 0),
     'SHELL_SHEEN_CYAN': (104, 228, 255, 24),
     'SHELL_SHEEN_SHADOW': (0, 0, 0, 40),
     'CORNER_CYAN_ACCENT': (104, 228, 255, 160),

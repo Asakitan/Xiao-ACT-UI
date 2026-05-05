@@ -2729,16 +2729,19 @@ class BossHpOverlay:
         draw = ImageDraw.Draw(img, 'RGBA')
         for idx, unit in enumerate(units):
             x = start_x + idx * (self.ADD_W + self.ADD_GAP)
+            # Cut-corner polygon (web/dps.html 风格 — 左上 + 右下 各切 8px)
             poly = [
-                (x + 8, y), (x + self.ADD_W - 8, y),
-                (x + self.ADD_W, y + 8), (x + self.ADD_W, y + self.ADD_H),
-                (x + 8, y + self.ADD_H), (x, y + self.ADD_H - 8),
+                (x + 8, y), (x + self.ADD_W - 1, y),
+                (x + self.ADD_W - 1, y + self.ADD_H - 1 - 8),
+                (x + self.ADD_W - 1 - 8, y + self.ADD_H - 1),
+                (x, y + self.ADD_H - 1),
+                (x, y + 8),
             ]
             mask = Image.new('L', (self.ADD_W, self.ADD_H), 0)
             local_poly = [(px - x, py - y) for px, py in poly]
             ImageDraw.Draw(mask).polygon(local_poly, fill=255)
 
-            bg = Image.new('RGBA', (self.ADD_W, self.ADD_H), (0, 0, 0, 0))
+            # Background gradient (cream)
             bg_arr = np.zeros((self.ADD_H, self.ADD_W, 4), dtype=np.uint8)
             top = np.array(self.COVER_A, dtype=np.float32)
             bot = np.array(self.COVER_B, dtype=np.float32)
@@ -2748,63 +2751,115 @@ class BossHpOverlay:
             bg = Image.fromarray(bg_arr, 'RGBA')
             img.alpha_composite(_clip_alpha(bg, mask), (x, y))
 
-            draw.line(poly + [poly[0]], fill=(104, 228, 255, 188), width=1)
-            draw.line((x + 4, y + 4, x + 18, y + 4), fill=(255, 255, 255, 92), width=1)
-            draw.line((x + self.ADD_W - 20, y + self.ADD_H - 4,
-                       x + self.ADD_W - 5, y + self.ADD_H - 4),
-                      fill=(243, 175, 18, 160), width=1)
+            # Border + corner highlights
+            draw.line(poly + [poly[0]], fill=(104, 228, 255, 200), width=1)
+            # Inner white highlight (1px inset along top edge)
+            draw.line(
+                (x + 9, y + 1, x + self.ADD_W - 2, y + 1),
+                fill=(255, 255, 255, 130), width=1,
+            )
+            # Bottom cyan→gold mini gradient line (signature SAO touch)
+            line_w = self.ADD_W - 12
+            line_y = y + self.ADD_H - 2
+            line_arr = np.zeros((1, line_w, 4), dtype=np.uint8)
+            for ii in range(line_w):
+                t = ii / max(1, line_w - 1)
+                if t < 0.30:
+                    a = int(180 * (t / 0.30))
+                    line_arr[0, ii] = (104, 228, 255, a)
+                elif t < 0.70:
+                    u = (t - 0.30) / 0.40
+                    line_arr[0, ii] = (
+                        int(104 + (243 - 104) * u),
+                        int(228 + (175 - 228) * u),
+                        int(255 + (18 - 255) * u),
+                        180,
+                    )
+                else:
+                    a = int(160 * (1.0 - (t - 0.70) / 0.30))
+                    line_arr[0, ii] = (243, 175, 18, max(0, a))
+            img.alpha_composite(Image.fromarray(line_arr, 'RGBA'),
+                                (x + 6, line_y))
 
+            # Layout: name + pct (top row, y0..y15), HP bar (y16..y26), break/status (y28..y36)
             hp_pct = max(0.0, min(1.0, float(unit.get('hp_pct') or 0.0)))
-            hp_x = x + 10
-            hp_y = y + 5
-            hp_w = self.ADD_W - 20
-            hp_h = 11
+            name = str(unit.get('name') or 'Unit')
+            name_font = _pick_font(name, 11)
+            pct_text = f'{int(round(hp_pct * 100))}%'
+            pct_font = _load_font('sao', 10)
+            pct_w = _text_width(draw, pct_text, pct_font)
+            name = _truncate(draw, name, name_font, self.ADD_W - pct_w - 22)
+            draw.text((x + 9, y + 2), name, font=name_font, fill=self.TEXT_MAIN)
+            # 百分比颜色: green-> yellow -> red 跟 HP 状态
+            if hp_pct > 0.55:
+                pct_color = (92, 150, 44, 255)
+            elif hp_pct > 0.25:
+                pct_color = (210, 156, 32, 255)
+            else:
+                pct_color = (235, 84, 70, 255)
+            draw.text((x + self.ADD_W - 7 - pct_w, y + 2),
+                      pct_text, font=pct_font, fill=pct_color)
+
+            # HP bar — 横跨 panel, green/yellow/red 渐变 (匹配 sao_gui_bosshp 主血条规范)
+            hp_x = x + 8
+            hp_y = y + 16
+            hp_w = self.ADD_W - 16
+            hp_h = 8
+            # 凹槽
             draw.rounded_rectangle((hp_x, hp_y, hp_x + hp_w, hp_y + hp_h),
-                                   radius=2, fill=(54, 70, 78, 56))
-            fill_w = int(round(hp_w * hp_pct))
+                                   radius=2, fill=(54, 70, 78, 80),
+                                   outline=(255, 255, 255, 100), width=1)
+            fill_w = int(round((hp_w - 2) * hp_pct))
             if fill_w > 0:
-                bar = Image.new('RGBA', (fill_w, hp_h), (0, 0, 0, 0))
-                arr = np.zeros((hp_h, fill_w, 4), dtype=np.uint8)
+                # 颜色按 hp_pct 选 — 绿/黄/红
+                if hp_pct > 0.55:
+                    c0, c1 = (211, 234, 124), (154, 211, 52)
+                elif hp_pct > 0.25:
+                    c0, c1 = (235, 238, 112), (244, 250, 73)
+                else:
+                    c0, c1 = (248, 140, 122), (239, 104, 78)
+                arr = np.zeros((hp_h - 2, fill_w, 4), dtype=np.uint8)
                 for xx in range(fill_w):
                     t = xx / max(1, fill_w - 1)
-                    arr[:, xx, 0] = int(94 * (1 - t) + 15 * t)
-                    arr[:, xx, 1] = int(220 * (1 - t) + 255 * t)
-                    arr[:, xx, 2] = int(255 * (1 - t) + 170 * t)
-                    arr[:, xx, 3] = 232
-                bar = Image.fromarray(arr, 'RGBA')
-                img.alpha_composite(bar, (hp_x, hp_y))
+                    arr[:, xx, 0] = int(c0[0] * (1 - t) + c1[0] * t)
+                    arr[:, xx, 1] = int(c0[1] * (1 - t) + c1[1] * t)
+                    arr[:, xx, 2] = int(c0[2] * (1 - t) + c1[2] * t)
+                    arr[:, xx, 3] = 240
+                img.alpha_composite(Image.fromarray(arr, 'RGBA'),
+                                    (hp_x + 1, hp_y + 1))
+            # 护盾覆盖
             if bool(unit.get('shield_active')) and float(unit.get('shield_pct') or 0.0) > 0:
-                shield_w = int(round(hp_w * max(0.0, min(1.0, float(unit.get('shield_pct') or 0.0)))))
+                shield_w = int(round((hp_w - 2) * max(0.0, min(1.0, float(unit.get('shield_pct') or 0.0)))))
                 if shield_w > 0:
-                    draw.rounded_rectangle((hp_x, hp_y, hp_x + shield_w, hp_y + hp_h),
-                                           radius=2, fill=(98, 208, 255, 88))
+                    draw.rounded_rectangle(
+                        (hp_x + 1, hp_y + 1, hp_x + 1 + shield_w, hp_y + hp_h - 1),
+                        radius=1, fill=(98, 208, 255, 100),
+                    )
 
-            name = str(unit.get('name') or 'Unit')
-            name_font = _pick_font(name, 10)
-            pct_font = _pick_font(str(int(round(hp_pct * 100))), 10)
-            name = _truncate(draw, name, name_font, self.ADD_W - 56)
-            draw.text((x + 12, y + 4), name, font=name_font, fill=self.TEXT_MAIN)
-            pct = f'{int(round(hp_pct * 100))}%'
-            draw.text((x + self.ADD_W - 10 - _text_width(draw, pct, pct_font), y + 4),
-                      pct, font=pct_font, fill=(80, 174, 216, 255))
-
-            break_y = y + 23
-            draw.rectangle((x + 1, break_y, x + self.ADD_W - 1, y + self.ADD_H - 1),
-                           fill=(35, 38, 45, 214))
+            # Break row — 单独一行细 bar, 不再是黑色块
+            break_y = y + 28
+            break_w = self.ADD_W - 16
+            break_h = 5
+            draw.rounded_rectangle(
+                (x + 8, break_y, x + 8 + break_w, break_y + break_h),
+                radius=1, fill=(45, 50, 58, 100),
+            )
             if bool(unit.get('has_break_data', False)):
                 ext_pct = max(0.0, min(1.0, float(unit.get('extinction_pct') or 0.0)))
-                break_w = int(round((self.ADD_W - 20) * ext_pct))
-                if break_w > 0:
-                    fill = (255, 94, 94, 225)
+                bw = int(round((break_w - 2) * ext_pct))
+                if bw > 0:
+                    fill = (255, 94, 94, 220)
                     if int(unit.get('breaking_stage') or -1) > 0:
-                        fill = (243, 175, 18, 228)
-                    draw.rounded_rectangle((x + 10, break_y + 3,
-                                           x + 10 + break_w, break_y + 10),
-                                          radius=1, fill=fill)
+                        fill = (243, 175, 18, 230)
+                    draw.rounded_rectangle(
+                        (x + 9, break_y + 1,
+                         x + 9 + bw, break_y + break_h - 1),
+                        radius=1, fill=fill,
+                    )
             else:
-                off_font = _pick_font('OFFLINE', 8)
-                draw.text((x + 11, break_y + 2), 'OFFLINE',
-                          font=off_font, fill=(120, 124, 130, 230))
+                off_font = _load_font('sao', 8)
+                draw.text((x + 9, break_y - 2), 'OFFLINE',
+                          font=off_font, fill=(120, 124, 130, 200))
 
     def _draw_invincible_glow(self, img: Image.Image, y_off: int,
                               now: float) -> None:

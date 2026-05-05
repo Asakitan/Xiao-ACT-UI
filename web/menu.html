@@ -3814,6 +3814,16 @@ html, body {
                 </li>
                 <li class="sep"></li>
                 <li class="widget-row">
+                    <div class="widget-label">BUFF MONITOR</div>
+                    <label class="sao-toggle">
+                        <input type="checkbox" id="buffmon-enabled" checked />
+                        <div class="toggle-track"><div class="toggle-thumb"></div></div>
+                        <span>Buff 监视器 Buff Monitor</span>
+                    </label>
+                    <div class="widget-note">显示在 ID 面板正上方的半透明 buff 倒计时面板，自动跟随当前锁定 Boss。 Semi-transparent buff timer panel anchored above the ID plate, follows the locked boss target.</div>
+                </li>
+                <li class="sep"></li>
+                <li class="widget-row">
                     <div class="widget-label">DATA PIPELINE</div>
                     <div class="mem-source-group" id="mem-source-group">
                         <button class="boss-bar-mode-btn mem-source-btn" data-mode="tcp" type="button">TCP</button>
@@ -5861,6 +5871,11 @@ function restoreMenuSettings(cfg) {
         var dpsEl = document.getElementById('dps-enabled');
         if (dpsEl) dpsEl.checked = !!cfg.dps_enabled;
     }
+    /* Buff Monitor toggle */
+    if (cfg.buffmon_enabled !== undefined) {
+        var bmEl = document.getElementById('buffmon-enabled');
+        if (bmEl) bmEl.checked = !!cfg.buffmon_enabled;
+    }
     /* DPS fade timeout */
     if (cfg.dps_fade_timeout_s !== undefined) {
         var fadeEl = document.getElementById('dps-fade-timeout');
@@ -7043,6 +7058,22 @@ document.querySelectorAll('#boss-bar-mode-group .boss-bar-mode-btn').forEach(fun
                 window.pywebview.api.set_dps_enabled(on);
             }
             showToast('DPS METER: ' + (on ? 'ON' : 'OFF'));
+        });
+    }
+})();
+
+/* Buff Monitor toggle */
+(function() {
+    var el = document.getElementById('buffmon-enabled');
+    if (el) {
+        el.addEventListener('change', function(e) {
+            e.stopPropagation();
+            playSound('snd-click');
+            var on = this.checked;
+            if (window.pywebview && window.pywebview.api && window.pywebview.api.set_buffmon_enabled) {
+                window.pywebview.api.set_buffmon_enabled(on);
+            }
+            showToast('BUFF MONITOR: ' + (on ? 'ON' : 'OFF'));
         });
     }
 })();

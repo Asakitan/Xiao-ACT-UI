@@ -881,6 +881,7 @@ class MonsterData:
             'shield_max_total': self.shield_max_total,
             'shield_pct': (self.shield_total / self.shield_max_total) if self.shield_max_total > 0 else 0.0,
             'is_dead': self.is_dead,
+            'buff_list': list(self.buff_list or []),
         }
 
 
