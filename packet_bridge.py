@@ -1477,6 +1477,48 @@ class PacketBridge:
             import traceback
             logger.error(traceback.format_exc())
 
+        # ── Buff 监视器: 自身 active buff 列表 + 服务器时钟偏移 ──
+        try:
+            raw_buffs = getattr(player, 'buff_list', None) or []
+            if raw_buffs:
+                packed = []
+                for b in raw_buffs:
+                    if not isinstance(b, dict):
+                        continue
+                    bid = int(b.get('buff_id', 0) or 0)
+                    if bid <= 0:
+                        continue
+                    packed.append({
+                        'id': bid,
+                        'uuid': int(b.get('buff_uuid', 0) or 0),
+                        'begin_ms': int(b.get('begin_time', 0) or 0),
+                        'duration_ms': int(b.get('duration', 0) or 0),
+                        'layer': int(b.get('layer', 0) or 0),
+                        'count': int(b.get('count', 0) or 0),
+                        'fire_uuid': int(b.get('fire_uuid', 0) or 0),
+                        'name': _get_skill_name(bid),
+                    })
+                updates['self_buffs'] = packed
+                # Debug: 第一次拿到自身 buff 时打印一次
+                if not getattr(self, '_dbg_buffmon_first', False):
+                    self._dbg_buffmon_first = True
+                    try:
+                        from config import BUFFMON_DEBUG as _bm_dbg
+                    except Exception:
+                        _bm_dbg = False
+                    if _bm_dbg:
+                        sample = [(p['id'], p['name']) for p in packed[:5]]
+                        print(f'[Bridge] BuffMon FIRST self-buff publish: '
+                              f'{len(packed)} buffs, sample={sample}',
+                              flush=True)
+            else:
+                updates['self_buffs'] = []
+            offset = getattr(player, 'server_time_offset_ms', None)
+            if offset is not None:
+                updates['server_time_offset_ms'] = float(offset)
+        except Exception as e:
+            logger.debug(f'[Bridge] buff publish error: {e}')
+
         self._state_mgr.update(**updates)
         # ── 积极缓存: 有意义的数据就保存 (节流写盘) ──
         _should_save = False

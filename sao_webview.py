@@ -1186,6 +1186,23 @@ class SAOWebAPI:
     def get_dps_enabled(self):
         return bool(self._g._get_setting('dps_enabled', True))
 
+    # ── Buff 监视器开关 (同时控制自身奥义 buff + boss target buff) ──
+    def set_buffmon_enabled(self, enabled):
+        on = bool(enabled)
+        self._g._set_setting('buffmon_enabled', on)
+        for attr in ('_self_buff_overlay', '_boss_buff_overlay'):
+            try:
+                ov = getattr(self._g, attr, None)
+                if ov is not None:
+                    ov.set_enabled(on)
+            except Exception:
+                pass
+        self._g._sync_menu_settings()
+        return json.dumps({'ok': True, 'enabled': on}, ensure_ascii=False)
+
+    def get_buffmon_enabled(self):
+        return bool(self._g._get_setting('buffmon_enabled', True))
+
     def show_last_dps_report(self):
         try:
             if self._g._show_dps_last_report():
@@ -6902,6 +6919,7 @@ class SAOWebViewGUI:
             cfg['dps_enabled'] = bool(self._get_setting('dps_enabled', True))
             cfg['dps_fade_timeout_s'] = int(self._get_setting('dps_fade_timeout_s', 5))
             cfg['dps_last_report_available'] = self._get_dps_last_report_available()
+            cfg['buffmon_enabled'] = bool(self._get_setting('buffmon_enabled', True))
             cfg['raid_editor_visible'] = bool(self._raid_editor_visible)
             cfg['autokey_editor_visible'] = bool(self._autokey_editor_visible)
             cfg['commander_visible'] = bool(self._commander_visible)

@@ -74,6 +74,7 @@ from sao_gui_bosshp import BossHpOverlay
 from sao_gui_hp import HpOverlay
 from sao_gui_alert import AlertOverlay
 from sao_gui_skillfx import BurstReadyOverlay
+from sao_gui_buffmon import SelfBuffOverlay, BossBuffOverlay
 from sao_gui_autokey import AutoKeyPanel
 from sao_gui_bossraid import BossRaidPanel
 from sao_gui_commander import CommanderPanel
@@ -2025,6 +2026,10 @@ class SAOPlayerGUI:
         self._alert_overlay = None
         self._skillfx_overlay = None
         self._skillfx_layout = None
+        self._self_buff_overlay = None
+        self._boss_buff_overlay = None
+        # buffmon 数据缓存 — 由 _on_game_state_update / _on_monster_update 写入
+        self._buffmon_target_uuid = 0
 
         # ── 配置面板实例 ──
         self._autokey_panel = None    # AutoKeyPanel
@@ -2957,6 +2962,56 @@ class SAOPlayerGUI:
                 self._last_boss_hp_push_sig = None
         except Exception:
             pass
+        # Buff 监视器 (boss): 仅推当前锁定 boss target 的 buff_list
+        try:
+            ov = getattr(self, '_boss_buff_overlay', None)
+            if ov is not None:
+                _uuid = int(monster_data.get('uuid', 0) or 0)
+                _target = int(getattr(self, '_bb_last_target_uuid', 0) or 0)
+                if _uuid and _target and _uuid == _target:
+                    if monster_data.get('is_dead', False):
+                        ov.clear_target()
+                    else:
+                        raw_buffs = monster_data.get('buff_list', None) or []
+                        # bridge 不走 monster 路, 这里现场 resolve buff 名字
+                        from packet_bridge import _get_skill_name as _bm_name
+                        packed = []
+                        for b in raw_buffs:
+                            if not isinstance(b, dict):
+                                continue
+                            bid = int(b.get('buff_id', 0) or 0)
+                            if bid <= 0:
+                                continue
+                            packed.append({
+                                'id': bid,
+                                'uuid': int(b.get('buff_uuid', 0) or 0),
+                                'begin_ms': int(b.get('begin_time', 0) or 0),
+                                'duration_ms': int(b.get('duration', 0) or 0),
+                                'layer': int(b.get('layer', 0) or 0),
+                                'count': int(b.get('count', 0) or 0),
+                                'name': _bm_name(bid),
+                            })
+                        # 把 server offset 一起带过去
+                        try:
+                            offset = float(getattr(self._state_mgr.state,
+                                                   'server_time_offset_ms', 0.0) or 0.0)
+                        except Exception:
+                            offset = 0.0
+                        ov.update_target(
+                            _uuid, monster_data.get('name', ''), packed, offset)
+                        # First-time debug print: 第一次成功推 boss buff
+                        if not getattr(self, '_dbg_buffmon_boss_first', False):
+                            self._dbg_buffmon_boss_first = True
+                            try:
+                                from config import BUFFMON_DEBUG as _bm_dbg
+                            except Exception:
+                                _bm_dbg = False
+                            if _bm_dbg:
+                                print(f'[SAO Entity] BuffMon boss FIRST push: '
+                                      f'target_uuid={_uuid} name={monster_data.get("name","")!r} '
+                                      f'buffs={len(packed)}', flush=True)
+        except Exception:
+            pass
 
     def _on_boss_event(self, event):
         """Boss buff/event callback from packet_parser → boss raid engine."""
@@ -3051,6 +3106,11 @@ class SAOPlayerGUI:
         try:
             if self._boss_hp_overlay:
                 self._boss_hp_overlay.update({'active': False})
+        except Exception:
+            pass
+        try:
+            if self._boss_buff_overlay:
+                self._boss_buff_overlay.clear_target()
         except Exception:
             pass
         try:
@@ -3259,6 +3319,21 @@ class SAOPlayerGUI:
             except Exception as e:
                 print(f'[SAO Entity] SkillFX overlay init failed: {e}')
                 self._skillfx_overlay = None
+
+            try:
+                _bm_on = bool(self._get_setting('buffmon_enabled', True))
+                self._self_buff_overlay = SelfBuffOverlay(
+                    self.root, self._cfg_settings_ref, hp_overlay=self._hp_overlay)
+                self._self_buff_overlay.set_enabled(_bm_on)
+                self._boss_buff_overlay = BossBuffOverlay(
+                    self.root, self._cfg_settings_ref,
+                    boss_hp_overlay=self._boss_hp_overlay)
+                self._boss_buff_overlay.set_enabled(_bm_on)
+                print('[SAO Entity] BuffMon overlays (self/boss) initialized')
+            except Exception as e:
+                print(f'[SAO Entity] BuffMon overlay init failed: {e}')
+                self._self_buff_overlay = None
+                self._boss_buff_overlay = None
 
             # 启动定时缓存保存 (每30秒)
             import threading as _thr
@@ -3497,6 +3572,17 @@ class SAOPlayerGUI:
         """Fast path for identity/level updates from packet or vision threads."""
         if self._destroyed or gs is None:
             return
+        # Buff 监视器 (自身): 不走 sig 短路 — buff 几乎每个 tick 都在变, 直接推
+        try:
+            ov = getattr(self, '_self_buff_overlay', None)
+            if ov is not None:
+                ov.update_buffs(
+                    list(getattr(gs, 'self_buffs', []) or []),
+                    float(getattr(gs, 'server_time_offset_ms', 0.0) or 0.0),
+                )
+        except Exception:
+            pass
+
         try:
             sig = (
                 int(getattr(gs, 'level_base', 0) or 0),
@@ -4663,6 +4749,7 @@ class SAOPlayerGUI:
         snd_on = bool(self._get_setting('sound_enabled', True))
         dps_on = bool(self._get_setting('dps_enabled', True))
         dps_report_available = bool(self._get_dps_last_report_available())
+        buffmon_on = bool(self._get_setting('buffmon_enabled', True))
         burst_on = bool(self._get_setting('burst_enabled', True))
         burst_slots = self._normalize_watched_skill_slots(
             self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9])
@@ -4693,6 +4780,7 @@ class SAOPlayerGUI:
             snd_on,
             dps_on,
             dps_report_available,
+            buffmon_on,
             burst_on,
             tuple(burst_slots),
             boss_bar_mode,
@@ -4849,6 +4937,7 @@ class SAOPlayerGUI:
                 'command': lambda k=_key: self._toggle_panel_theme(k),
             })
 
+        buffmon_on = bool(self._get_setting('buffmon_enabled', True))
         panel_items.extend([
             {'icon': '♪', 'label': f'音效: {"ON" if snd_on else "OFF"}', 'command': self._toggle_sound_enabled},
             {'icon': '♪', 'label': '音量+', 'command': lambda: self._adj_sound_volume(10)},
@@ -4858,6 +4947,7 @@ class SAOPlayerGUI:
              'label': '查看上次战斗DPS' + (' ✓' if dps_report_available else ' (暂无)'),
              'command': self._show_last_dps_report_menu},
             {'icon': '◇', 'label': f'Boss血条: {boss_bar_disp}', 'command': self._cycle_boss_bar_mode},
+            {'icon': '✦', 'label': f'Buff监视器: {"ON" if buffmon_on else "OFF"}', 'command': self._toggle_buffmon_enabled},
             {'icon': '◆', 'label': f'Hybrid数据源: {mem_mode_disp}', 'command': self._cycle_mem_data_source},
         ])
 
@@ -8110,6 +8200,18 @@ class SAOPlayerGUI:
                 self._dps_overlay.hide()
         self._refresh_menu_if_open()
 
+    def _toggle_buffmon_enabled(self):
+        cur = bool(self._get_setting('buffmon_enabled', True))
+        new = not cur
+        self._set_setting('buffmon_enabled', new)
+        for ov in (self._self_buff_overlay, self._boss_buff_overlay):
+            try:
+                if ov is not None:
+                    ov.set_enabled(new)
+            except Exception:
+                pass
+        self._refresh_menu_if_open()
+
     def _normalize_watched_skill_slots(self, slots):
         # v2.4.31: cython helper.
         return _CY_UI.normalize_watched_skill_slots(slots)
@@ -9340,7 +9442,9 @@ void main() {
             except Exception:
                 pass
         # 销毁 ULW 覆盖层 + 配置面板
-        for ov in [self._dps_overlay, self._boss_hp_overlay, self._hp_overlay, self._alert_overlay, self._skillfx_overlay]:
+        for ov in [self._dps_overlay, self._boss_hp_overlay, self._hp_overlay,
+                   self._alert_overlay, self._skillfx_overlay,
+                   self._self_buff_overlay, self._boss_buff_overlay]:
             try:
                 if ov:
                     ov.destroy()
@@ -9363,6 +9467,8 @@ void main() {
         self._hp_overlay = None
         self._alert_overlay = None
         self._skillfx_overlay = None
+        self._self_buff_overlay = None
+        self._boss_buff_overlay = None
         self._autokey_panel = None
         self._bossraid_panel = None
         self._autokey_detail_panel = None
