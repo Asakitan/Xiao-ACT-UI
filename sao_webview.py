@@ -1838,11 +1838,11 @@ class SAOWebViewGUI:
             # Phase 7: read mem_data_source preference from settings.
             # Key is `mem_data_source` (not legacy 'data_source' which is
             # the packet/vision component toggle). Values:
-            # 'tcp' (full TCP) | 'memory' (strict mem_probe, no TCP fallback) |
+            # 'tcp' (default, full TCP) | 'memory' (strict mem_probe, no TCP fallback) |
             # 'hybrid' (mem_probe + TCP damage-only) | 'auto' (try memory, fall back).
             try:
                 _data_source_mode = str(
-                    self._cfg_settings_ref.get('mem_data_source', 'hybrid') or 'hybrid'
+                    self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
                 ).lower()
             except Exception:
                 _data_source_mode = 'tcp'
@@ -3171,7 +3171,7 @@ class SAOWebViewGUI:
                 # Phase 7: also propagate mem_data_source on restart
                 try:
                     _data_source_mode = str(
-                        self._cfg_settings_ref.get('mem_data_source', 'hybrid') or 'hybrid'
+                        self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
                     ).lower()
                 except Exception:
                     _data_source_mode = 'tcp'
