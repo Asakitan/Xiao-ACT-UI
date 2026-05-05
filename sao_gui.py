@@ -2415,7 +2415,7 @@ class SAOPlayerGUI:
             # the webview menu does.
             try:
                 _data_source_mode = str(
-                    self._cfg_settings_ref.get('mem_data_source', 'hybrid') or 'hybrid'
+                    self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
                 ).lower()
             except Exception:
                 _data_source_mode = 'tcp'
@@ -5437,7 +5437,7 @@ class SAOPlayerGUI:
         # 数据源行
         src_text = 'Packet'
         if getattr(self, '_cfg_settings_ref', None):
-            src = str(self._cfg_settings_ref.get('mem_data_source', 'hybrid') or 'hybrid').lower()
+            src = str(self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp').lower()
             src_text = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}.get(src, 'TCP')
         self._status_source_lbl = _sao_row(body_pad, '数据源', src_text,
                                             value_fg=_SAO_PANEL_GOLD)
@@ -5486,7 +5486,7 @@ class SAOPlayerGUI:
         if hasattr(self, '_status_source_lbl'):
             src_text = 'Packet'
             if getattr(self, '_cfg_settings_ref', None):
-                src = str(self._cfg_settings_ref.get('mem_data_source', 'hybrid') or 'hybrid').lower()
+                src = str(self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp').lower()
                 src_text = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}.get(src, 'TCP')
             self._status_source_lbl.configure(text=src_text, fg=_SAO_PANEL_GOLD)
         view = self._get_update_view()
@@ -8152,8 +8152,8 @@ class SAOPlayerGUI:
         self._refresh_menu_if_open()
 
     def _get_mem_data_source(self) -> str:
-        mode = str(self._get_setting('mem_data_source', 'hybrid') or 'hybrid').strip().lower()
-        return mode if mode in ('tcp', 'memory', 'hybrid', 'auto') else 'hybrid'
+        mode = str(self._get_setting('mem_data_source', 'tcp') or 'tcp').strip().lower()
+        return mode if mode in ('tcp', 'memory', 'hybrid', 'auto') else 'tcp'
 
     def _cycle_mem_data_source(self):
         modes = ['tcp', 'hybrid', 'auto', 'memory']
