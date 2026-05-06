@@ -85,6 +85,20 @@ public sealed class MethodDecoderRegistry
         reg.Register(new NotifyStartPlayingDungeonDecoder());
         reg.Register(new EnterSceneDecoder());
         reg.Register(new EnterMatchResultDecoder());
+        reg.Register(new EnterGameDecoder());
+        reg.Register(new NotifyBuffChangeDecoder());
+        reg.Register(new SyncClientUseSkillDecoder());
+        reg.Register(new SyncServerSkillEndDecoder());
+        reg.Register(new SyncServerSkillStageEndDecoder());
+        reg.Register(new QteBeginDecoder());
+        reg.Register(new SyncDungeonDataDecoder());
+        reg.Register(new SyncDungeonDirtyDataDecoder());
+        reg.Register(new SyncClientUseSkillWorldDecoder());
+        reg.Register(new SyncNearEntitiesDecoder());
+        reg.Register(new SyncNearDeltaInfoDecoder());
+        reg.Register(new SyncToMeDeltaInfoDecoder());
+        reg.Register(new SyncContainerDataDecoder());
+        reg.Register(new SyncContainerDirtyDataDecoder());
         return reg;
     }
 }

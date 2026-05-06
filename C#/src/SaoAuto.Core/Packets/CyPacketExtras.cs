@@ -428,6 +428,100 @@ public static class CyPacketExtras
         pos += 8; // 4 value + 4 padding
         return unchecked((int)u);
     }
+
+    /// <summary>
+    /// Parse the V3.3.6 container-dirty binary stream that wraps a single
+    /// (field_index, sub_field, value) tuple per packet. Mirrors
+    /// <c>packet_parser._parse_dirty_stream</c> for the skeleton subset we
+    /// support: field 2 (CharBase) sub_fields 5/Name + 35/FightPoint;
+    /// field 16 (UserFightAttr) sub_fields 1/CurHp + 2/MaxHp + 3/OriginEnergy;
+    /// field 22 (RoleLevel) sub_field 1/Level. Returns null when the
+    /// header tag is missing, the stream is short, or the (field, sub_field)
+    /// combination is outside the supported set — matches Python's silent
+    /// drop on unrecognised fields. Wider field coverage (SeasonCenter,
+    /// SeasonMedalInfo, MonsterHuntInfo, ProfessionList) is held for a
+    /// follow-up session that wires the corresponding GameState slots.
+    /// </summary>
+    public static ContainerDirtyChange? ParseContainerDirtyStream(byte[] data)
+    {
+        if (data is null || data.Length < 12) return null;
+        var span = data.AsSpan();
+        var pos = 0;
+        if (BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(pos, 4)) != 0xFFFFFFFEu) return null;
+        pos += 8; // skip ident + 4-byte validation
+        if (pos + 4 > span.Length) return null;
+        var fieldIndex = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(pos, 4));
+        pos += 4;
+
+        if (pos + 8 > span.Length) return null;
+        if (BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(pos, 4)) != 0xFFFFFFFEu) return null;
+        pos += 8;
+        if (pos + 4 > span.Length) return null;
+        var subField = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(pos, 4));
+        pos += 4;
+
+        switch (fieldIndex)
+        {
+            case 2: // CharBase
+                if (subField == 5)
+                {
+                    if (pos + 4 > span.Length) return null;
+                    var slen = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(pos, 4));
+                    pos += 4;
+                    if (slen < 0 || pos + slen > span.Length) return null;
+                    var str = System.Text.Encoding.UTF8.GetString(span.Slice(pos, slen));
+                    return new ContainerDirtyChange(2, 5, str, null, null);
+                }
+                if (subField == 35)
+                {
+                    if (pos + 4 > span.Length) return null;
+                    var fp = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(pos, 4));
+                    return new ContainerDirtyChange(2, 35, null, fp, null);
+                }
+                return null;
+            case 16: // UserFightAttr
+                if (subField == 1 || subField == 2)
+                {
+                    if (pos + 4 > span.Length) return null;
+                    var v = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(pos, 4));
+                    return new ContainerDirtyChange(16, subField, null, v, null);
+                }
+                if (subField == 3)
+                {
+                    if (pos + 4 > span.Length) return null;
+                    var f = BinaryPrimitives.ReadSingleLittleEndian(span.Slice(pos, 4));
+                    var i = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(pos, 4));
+                    return new ContainerDirtyChange(16, 3, null, i, f);
+                }
+                return null;
+            case 22: // RoleLevel
+                if (subField == 1)
+                {
+                    if (pos + 4 > span.Length) return null;
+                    var lv = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(pos, 4));
+                    return new ContainerDirtyChange(22, 1, null, lv, null);
+                }
+                return null;
+            default:
+                return null;
+        }
+    }
 }
 
 public sealed record DungeonTargetProgress(int TargetId, int Nums, int Complete);
+
+/// <summary>
+/// One (field, sub_field, value) tuple decoded from a SyncContainerDirtyData
+/// stream. Exactly one of <see cref="StringValue"/> / <see cref="IntValue"/>
+/// / <see cref="FloatValue"/> is non-null for the supported subset; both
+/// <see cref="IntValue"/> and <see cref="FloatValue"/> are populated for
+/// field=16, sub=3 (OriginEnergy) so the bridge can pick whichever
+/// interpretation matches the player's current stamina_max — same as
+/// Python's <c>_decode_dirty_energy_value</c>.
+/// </summary>
+public sealed record ContainerDirtyChange(
+    int FieldIndex,
+    int SubField,
+    string? StringValue,
+    long? IntValue,
+    float? FloatValue);
