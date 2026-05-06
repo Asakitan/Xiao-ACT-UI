@@ -1371,21 +1371,6 @@ class DpsOverlay:
         if self._hide_after_fade and self._fade_alpha <= 0.01:
             self.hide()
 
-        # v3.0.2: belt-and-suspenders. Once the idle fade has fully
-        # settled (alpha clamped to 0 and ``_faded_out`` still set),
-        # re-assert pass-through. GLFW can re-clear WS_EX_TRANSPARENT
-        # on focus/activation events even after fade_out() set it,
-        # which leaves the invisible panel quietly intercepting clicks.
-        # ``_set_passthrough`` no longer early-returns on a cached
-        # match (v3.0.2), so this just re-issues the GLFW + Win32
-        # toggle each idle tick (~20 Hz) — cheap and self-healing.
-        if (self._faded_out and self._fade_alpha <= 0.01
-                and self._fade_target <= 0.01):
-            try:
-                self._set_passthrough(True)
-            except Exception:
-                pass
-
     def _advance_animations(self, now: float) -> bool:
         animating = False
 

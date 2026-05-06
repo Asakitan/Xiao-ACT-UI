@@ -1289,49 +1289,53 @@ class BgraPresenter:
         meant for the game window underneath, then start receiving
         them again on fade-in.
 
-        v3.0.2: marshal the toggle to the GLFW pump thread and flip
-        ``GLFW_MOUSE_PASSTHROUGH`` via ``glfw.set_window_attrib`` first,
-        then re-assert the Win32 ex-styles. Without the GLFW attrib
-        update, GLFW retains its create-time MOUSE_PASSTHROUGH state and
-        can re-clear ``WS_EX_TRANSPARENT`` on focus / activation events
-        — which is what made the DPS overlay still grab clicks while
-        faded-out.
+        v3.0.3: apply the Win32 ex-style change synchronously from the
+        calling (Tk) thread — ``SetWindowLongPtrW`` is thread-safe and
+        the previous pump-marshalled path could let a fade_in/fade_out
+        toggle race with the pump's command queue, leaving the second
+        hide pulse visible-but-faded and still grabbing clicks.
+        ``GLFW_MOUSE_PASSTHROUGH`` still has thread affinity to the
+        pump, so only that attribute call is queued, fire-and-forget,
+        purely to keep GLFW's internal mirror of the ex-style in sync
+        for the next focus/activation event.
         """
-        self._click_through = bool(click_through)
+        click = bool(click_through)
+        self._click_through = click
         win = self._win
         hwnd = self._hwnd
-        if not hwnd or win is None or _glfw is None:
+        if not hwnd:
             return
 
-        click = self._click_through
+        # Fast path: Win32 ex-style toggle, synchronous, thread-safe.
+        try:
+            if click:
+                _apply_click_through(hwnd)
+            else:
+                _apply_interactive(hwnd)
+        except Exception:
+            pass
 
-        def _apply_on_pump() -> None:
+        # Belt: keep GLFW's MOUSE_PASSTHROUGH attribute mirrored so
+        # GLFW does not re-clear our WS_EX_TRANSPARENT on the next
+        # focus/activation event it processes on the pump thread.
+        if win is None or _glfw is None:
+            return
+        attr = getattr(_glfw, 'MOUSE_PASSTHROUGH', None)
+        if attr is None:
+            return
+
+        glfw_value = _glfw.TRUE if click else _glfw.FALSE  # type: ignore[union-attr]
+
+        def _set_attrib_on_pump() -> None:
             try:
-                attr = getattr(_glfw, 'MOUSE_PASSTHROUGH', None)
-                if attr is not None:
-                    _glfw.set_window_attrib(  # type: ignore[union-attr]
-                        win, attr,
-                        _glfw.TRUE if click else _glfw.FALSE)  # type: ignore[union-attr]
-            except Exception:
-                pass
-            try:
-                if click:
-                    _apply_click_through(hwnd)
-                else:
-                    _apply_interactive(hwnd)
+                _glfw.set_window_attrib(win, attr, glfw_value)  # type: ignore[union-attr]
             except Exception:
                 pass
 
         try:
-            self._pump.post_cmd(_apply_on_pump)
+            self._pump.post_cmd(_set_attrib_on_pump)
         except Exception:
-            try:
-                if click:
-                    _apply_click_through(hwnd)
-                else:
-                    _apply_interactive(hwnd)
-            except Exception:
-                pass
+            pass
 
     def set_frame(self, bgra: bytes, w: int, h: int) -> None:
         """Stage a frame for the next render. Cheap (just stores refs).
