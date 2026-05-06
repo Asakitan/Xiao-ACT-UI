@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using SaoAuto.Core.Packets;
 
 namespace SaoAuto.Core.State;
 
@@ -40,6 +41,34 @@ public sealed record GameState
 
     // ── Combat ──
     public bool InCombat { get; init; }
+
+    // ── Self identity (S64: from EnterGame) ──
+    public ulong SelfUuid { get; init; }
+
+    // ── Skill cooldown table (S64: from SyncClientUseSkill) ──
+    // Keyed by SkillLevelId; value = timestampSeconds of last use.
+    public ImmutableDictionary<int, double> SkillLastUseAt { get; init; }
+        = ImmutableDictionary<int, double>.Empty;
+
+    // ── Server-reported skill cooldowns (S69: from SyncToMeDeltaInfo) ──
+    // Keyed by SkillLevelId; value = full per-CD snapshot (begin/dur/vcd/
+    // charge/sub/accel). Populated by AoiSyncToMeDelta.SyncSkillCDs;
+    // expired entries are pruned on each delta.
+    public ImmutableDictionary<int, SkillCdSnapshot> SkillCdMap { get; init; }
+        = ImmutableDictionary<int, SkillCdSnapshot>.Empty;
+
+    // ── Dungeon (S64: from SyncDungeonData / SyncDungeonDirtyData) ──
+    public long DungeonSceneUuid { get; init; }
+    public int DungeonDifficulty { get; init; }
+    public int? DungeonFlowState { get; init; }
+    public ImmutableArray<DungeonTargetProgress> DungeonTargets { get; init; }
+        = ImmutableArray<DungeonTargetProgress>.Empty;
+
+    // ── Near-entity table (S68: from SyncNearEntities) ──
+    // Keyed by entity Uuid; value = (EntityType, FirstSeenSeconds).
+    // Removed when SyncNearEntities reports a Disappear for the uuid.
+    public ImmutableDictionary<long, EntityTableEntry> NearEntities { get; init; }
+        = ImmutableDictionary<long, EntityTableEntry>.Empty;
 
     // ── Window ──
     public WindowRect? WindowRect { get; init; }
@@ -131,3 +160,14 @@ public enum BossHpSource
     Packet = 1,
     Estimate = 2,
 }
+
+/// <summary>
+/// One row of the near-entity table populated from SyncNearEntities
+/// appearances. Holds the entity's wire-format type + the timestamp
+/// of first observation; richer per-entity attributes (HP, level, buffs)
+/// land in a follow-up session when the deeper SyncNearDeltaInfo
+/// destructuring is ported.
+/// </summary>
+public readonly record struct EntityTableEntry(
+    int EntityType,
+    double FirstSeenSeconds);
