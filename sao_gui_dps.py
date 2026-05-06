@@ -819,10 +819,16 @@ class DpsOverlay:
     def _set_passthrough(self, passthrough: bool) -> None:
         """Toggle WS_EX_TRANSPARENT so a faded-out idle panel stops
         swallowing clicks meant for the game window. Re-enabled
-        (interactive) on fade_in()."""
+        (interactive) on fade_in().
+
+        v3.0.2: always re-assert the Win32 / GLFW state instead of
+        early-returning on a cached ``_is_passthrough`` match. The
+        cached flag could drift out of sync with the actual window
+        ex-style if GLFW reset it on focus/activation, leaving the
+        idle DPS panel quietly intercepting clicks even though we
+        believed it was already pass-through.
+        """
         passthrough = bool(passthrough)
-        if passthrough == self._is_passthrough:
-            return
         if self._gpu_managed and self._gpu_window is not None:
             try:
                 self._gpu_window.set_click_through(passthrough)
@@ -1364,6 +1370,21 @@ class DpsOverlay:
 
         if self._hide_after_fade and self._fade_alpha <= 0.01:
             self.hide()
+
+        # v3.0.2: belt-and-suspenders. Once the idle fade has fully
+        # settled (alpha clamped to 0 and ``_faded_out`` still set),
+        # re-assert pass-through. GLFW can re-clear WS_EX_TRANSPARENT
+        # on focus/activation events even after fade_out() set it,
+        # which leaves the invisible panel quietly intercepting clicks.
+        # ``_set_passthrough`` no longer early-returns on a cached
+        # match (v3.0.2), so this just re-issues the GLFW + Win32
+        # toggle each idle tick (~20 Hz) — cheap and self-healing.
+        if (self._faded_out and self._fade_alpha <= 0.01
+                and self._fade_target <= 0.01):
+            try:
+                self._set_passthrough(True)
+            except Exception:
+                pass
 
     def _advance_animations(self, now: float) -> bool:
         animating = False

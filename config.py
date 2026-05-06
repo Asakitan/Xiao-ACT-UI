@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.0.1"
+APP_VERSION = "3.0.2"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
@@ -364,6 +364,13 @@ USE_GPU_MENU_HUD = True
 # Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
 # refuses GLFW transparent windows).
 USE_GPU_OVERLAY = True
+# v3.0.2
+#   Fix DPS overlay click-through while idle / faded out. The GPU
+#   panel now flips GLFW_MOUSE_PASSTHROUGH (in addition to the Win32
+#   ex-style) on the pump thread when fade_out() runs, and the tick
+#   loop re-asserts pass-through every idle frame so a focus/activation
+#   event can no longer leave the invisible panel quietly intercepting
+#   clicks meant for the game window.
 # v3.0.1
 #   Minor bug fixes and performance improvements. Set up buff monitor.
 # ── Buff 监视器 ──
