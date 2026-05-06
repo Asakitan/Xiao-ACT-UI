@@ -1287,17 +1287,51 @@ class BgraPresenter:
         """Toggle WS_EX_TRANSPARENT (mouse pass-through) at runtime so
         a panel that has faded to alpha=0 can stop swallowing clicks
         meant for the game window underneath, then start receiving
-        them again on fade-in."""
+        them again on fade-in.
+
+        v3.0.2: marshal the toggle to the GLFW pump thread and flip
+        ``GLFW_MOUSE_PASSTHROUGH`` via ``glfw.set_window_attrib`` first,
+        then re-assert the Win32 ex-styles. Without the GLFW attrib
+        update, GLFW retains its create-time MOUSE_PASSTHROUGH state and
+        can re-clear ``WS_EX_TRANSPARENT`` on focus / activation events
+        — which is what made the DPS overlay still grab clicks while
+        faded-out.
+        """
         self._click_through = bool(click_through)
-        if not self._hwnd:
+        win = self._win
+        hwnd = self._hwnd
+        if not hwnd or win is None or _glfw is None:
             return
+
+        click = self._click_through
+
+        def _apply_on_pump() -> None:
+            try:
+                attr = getattr(_glfw, 'MOUSE_PASSTHROUGH', None)
+                if attr is not None:
+                    _glfw.set_window_attrib(  # type: ignore[union-attr]
+                        win, attr,
+                        _glfw.TRUE if click else _glfw.FALSE)  # type: ignore[union-attr]
+            except Exception:
+                pass
+            try:
+                if click:
+                    _apply_click_through(hwnd)
+                else:
+                    _apply_interactive(hwnd)
+            except Exception:
+                pass
+
         try:
-            if self._click_through:
-                _apply_click_through(self._hwnd)
-            else:
-                _apply_interactive(self._hwnd)
+            self._pump.post_cmd(_apply_on_pump)
         except Exception:
-            pass
+            try:
+                if click:
+                    _apply_click_through(hwnd)
+                else:
+                    _apply_interactive(hwnd)
+            except Exception:
+                pass
 
     def set_frame(self, bgra: bytes, w: int, h: int) -> None:
         """Stage a frame for the next render. Cheap (just stores refs).
