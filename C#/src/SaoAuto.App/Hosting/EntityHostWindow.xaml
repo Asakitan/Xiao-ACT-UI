@@ -1,0 +1,23 @@
+<Window x:Class="SaoAuto.App.Hosting.EntityHostWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SaoAuto Entity (placeholder)"
+        Height="450"
+        Width="800"
+        WindowStartupLocation="CenterScreen"
+        Background="#0E1014"
+        Foreground="#E8F0FE">
+    <Grid>
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" >
+            <TextBlock Text="SaoAuto · Entity host"
+                       FontSize="28" FontWeight="Bold"
+                       HorizontalAlignment="Center"
+                       Foreground="#7AC0FF" />
+            <TextBlock Text="Session 4 placeholder · SAO popup menu lands in Session 8"
+                       FontSize="14"
+                       HorizontalAlignment="Center"
+                       Margin="0,12,0,0"
+                       Opacity="0.75" />
+        </StackPanel>
+    </Grid>
+</Window>

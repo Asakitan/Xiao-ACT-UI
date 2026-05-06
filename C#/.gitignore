@@ -1,0 +1,7 @@
+﻿bin/
+obj/
+TestResults/
+*.user
+*.log
+tools/parity-fixtures/generated/
+docs/
