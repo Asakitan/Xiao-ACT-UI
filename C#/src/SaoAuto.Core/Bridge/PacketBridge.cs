@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using SaoAuto.Core.Automation;
 using SaoAuto.Core.Packets;
 using SaoAuto.Core.State;
 
@@ -24,6 +25,7 @@ public sealed class PacketBridge : IDisposable
     private readonly IPacketParser _parser;
     private readonly MethodDecoderRegistry _registry;
     private readonly ILogger _log;
+    private readonly DpsTracker _dps;
     private long _eventsApplied;
     private long _rawNotifiesDispatched;
     private bool _disposed;
@@ -32,18 +34,21 @@ public sealed class PacketBridge : IDisposable
         GameStateManager state,
         IPacketParser parser,
         MethodDecoderRegistry? registry = null,
-        ILogger<PacketBridge>? logger = null)
+        ILogger<PacketBridge>? logger = null,
+        DpsTracker? dpsTracker = null)
     {
         _state = state ?? throw new ArgumentNullException(nameof(state));
         _parser = parser ?? throw new ArgumentNullException(nameof(parser));
         _registry = registry ?? MethodDecoderRegistry.BuildDefault();
         _log = (ILogger?)logger ?? NullLogger.Instance;
+        _dps = dpsTracker ?? new DpsTracker();
         _parser.Event += OnParserEvent;
     }
 
     public long EventsApplied => Interlocked.Read(ref _eventsApplied);
     public long RawNotifiesDispatched => Interlocked.Read(ref _rawNotifiesDispatched);
     public MethodDecoderRegistry Registry => _registry;
+    public DpsTracker DpsTracker => _dps;
 
     private void OnParserEvent(ParserEvent ev)
     {
@@ -85,10 +90,66 @@ public sealed class PacketBridge : IDisposable
         {
             var changed = StateMutators.Apply(_state, ev);
             if (changed) Interlocked.Increment(ref _eventsApplied);
+            if (ev is SkillEffectEvent se) RouteSkillEffectToDps(se);
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "[PacketBridge] mutator threw for {EventType}", ev.GetType().Name);
+        }
+    }
+
+    /// <summary>
+    /// S128b — fan out a <see cref="SkillEffectEvent"/> to the
+    /// <see cref="DpsTracker"/>. Mirrors Python's <c>_on_damage</c>
+    /// callback at packet_parser.py 4172–4253: per-row attacker
+    /// resolution via <see cref="CyCombat.DpsAttackerUid"/>, name
+    /// resolution from snapshot (self → <c>PlayerName</c>; monster
+    /// uuid → <c>MonsterDataMap[uuid].Name</c>; otherwise
+    /// <c>Player_{uid}</c>), profession only when self.
+    /// </summary>
+    private void RouteSkillEffectToDps(SkillEffectEvent ev)
+    {
+        if (ev.Damages.Count == 0) return;
+        var snap = _state.Snapshot;
+        var selfUuid = snap.SelfUuid;
+        var selfUid = selfUuid >> 16;
+        foreach (var row in ev.Damages)
+        {
+            if (row.Damage <= 0) continue;
+            var attackerUuid = (ulong)row.AttackerUuid;
+            var isSelf = CyCombat.AttackerIsSelf(attackerUuid, selfUuid, selfUid);
+            var attackerUid = CyCombat.DpsAttackerUid(attackerUuid, isSelf, selfUid);
+            if (attackerUid == 0) continue;
+
+            string name;
+            int profession = 0;
+            if (isSelf)
+            {
+                name = string.IsNullOrEmpty(snap.PlayerName)
+                    ? $"Player_{attackerUid}"
+                    : snap.PlayerName;
+                profession = snap.ProfessionId;
+            }
+            else if (snap.MonsterDataMap.TryGetValue(row.AttackerUuid, out var md)
+                     && !string.IsNullOrEmpty(md.Name))
+            {
+                name = md.Name;
+            }
+            else
+            {
+                name = $"Player_{attackerUid}";
+            }
+
+            if (row.IsHeal)
+            {
+                _dps.RecordHeal((long)attackerUid, name, row.Damage, profession, isSelf, row.SkillId);
+            }
+            else
+            {
+                _dps.RecordDamage(
+                    (long)attackerUid, name, row.Damage, profession, isSelf,
+                    row.SkillId, isCrit: row.IsCrit);
+            }
         }
     }
 

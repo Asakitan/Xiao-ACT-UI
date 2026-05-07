@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using SaoAuto.App.Startup;
 using SaoAuto.Core.Configuration;
 using SaoAuto.Core.Logging;
 using SaoAuto.Core.State;
@@ -35,6 +36,14 @@ public sealed class HeadlessRunner
 
         // Force one print of the cached snapshot so the operator sees something immediately.
         PrintStateLine(_states.Snapshot);
+
+        // S96/S97 — wire the recognition pipeline via the shared
+        // best-effort lifecycle. A failure here (no game window, GDI
+        // init issue) must not block headless from publishing cache.
+        using var recognition = RecognitionLifecycle.Start(
+            () => RecognitionPipelineBootstrap.Build(_settings, _states, _log),
+            _log,
+            cancellationToken);
 
         try
         {

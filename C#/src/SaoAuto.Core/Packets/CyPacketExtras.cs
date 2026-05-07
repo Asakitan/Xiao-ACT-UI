@@ -71,6 +71,101 @@ public static class CyPacketExtras
         return BinaryPrimitives.ReadSingleLittleEndian(raw[..4]);
     }
 
+    /// <summary>
+    /// Mirrors Cython <c>decode_string_from_raw</c>: parses a leading
+    /// varint length, then reads that many UTF-8 bytes. Falls back to
+    /// decoding the entire payload as UTF-8 when the leading length is
+    /// invalid or absent (matches the legacy Python helper). Used by
+    /// AttrCollection unpack for string-typed monster attrs (NAME id=1).
+    /// </summary>
+    public static string DecodeStringFromRaw(ReadOnlySpan<byte> raw)
+    {
+        if (raw.IsEmpty) return string.Empty;
+        try
+        {
+            var len = (int)Varint.ReadUInt64(raw, out var consumed);
+            if (consumed > 0 && len >= 0 && consumed + len <= raw.Length)
+            {
+                return len == 0
+                    ? string.Empty
+                    : System.Text.Encoding.UTF8.GetString(raw.Slice(consumed, len));
+            }
+        }
+        catch
+        {
+            // fall through to whole-payload decode
+        }
+        try
+        {
+            return System.Text.Encoding.UTF8.GetString(raw);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// S116 — port of Python <c>_decode_shield_list</c> at packet_parser.py
+    /// 4742. Sums (value, max_value) over each <c>ShieldInfo</c> submessage
+    /// (uuid=1, shield_type=2, value=3, initial_value=4, max_value=5) carried
+    /// inside the wrapper at field 1. Empty payload returns (0, 0)
+    /// (server signalling "shield cleared"); any decode error falls back
+    /// to (0, 0) — matches Python's "force-clear on parse failure" rule
+    /// so a stale shield_active doesn't survive a corrupt packet.
+    /// </summary>
+    public static (int Total, int MaxTotal) DecodeShieldList(ReadOnlySpan<byte> raw)
+    {
+        if (raw.IsEmpty) return (0, 0);
+        try
+        {
+            var shields = DecodeFields(raw.ToArray());
+            int totalValue = 0, totalMax = 0;
+            if (shields.TryGetValue(1, out var entries))
+            {
+                foreach (var entry in entries)
+                {
+                    if (entry is byte[] bytes)
+                    {
+                        var sf = DecodeFields(bytes);
+                        var value = ToLong(sf, 3);
+                        var maxVal = ToLong(sf, 5);
+                        totalValue += (int)Math.Max(0, Math.Min(int.MaxValue, value));
+                        totalMax += (int)Math.Max(0, Math.Min(int.MaxValue, maxVal));
+                    }
+                    else
+                    {
+                        // Inline single shield — top-level field 3 = value,
+                        // field 5 = max_val. Mirrors Python's `elif
+                        // isinstance(shield_raw, int)` branch.
+                        var value = ToLong(shields, 3);
+                        var maxVal = ToLong(shields, 5);
+                        totalValue = (int)Math.Max(0, Math.Min(int.MaxValue, value));
+                        totalMax = (int)Math.Max(0, Math.Min(int.MaxValue, maxVal));
+                        break;
+                    }
+                }
+            }
+            return (totalValue, totalMax);
+        }
+        catch
+        {
+            return (0, 0);
+        }
+    }
+
+    private static long ToLong(Dictionary<int, List<object>> fields, int tag)
+    {
+        if (!fields.TryGetValue(tag, out var list) || list.Count == 0) return 0;
+        return list[0] switch
+        {
+            ulong u => unchecked((long)u),
+            long l => l,
+            int i => i,
+            _ => 0,
+        };
+    }
+
     public static uint ReadLittleEndianU32At(ReadOnlySpan<byte> data, int pos)
     {
         if (pos < 0 || pos + 4 > data.Length)
