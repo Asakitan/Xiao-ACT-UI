@@ -61,4 +61,57 @@ public static class GameStateValidation
 
     /// <summary>Same shape as <see cref="CapToMax(int,int)"/> but for stamina.</summary>
     public static int CapStaminaToMax(int current, int max) => CapToMax(current, max);
+
+    /// <summary>
+    /// S88 — Level-base rollback (Python game_state.py 267–270).
+    /// When the new <c>level_base</c> arrives as 0 but a previous non-zero
+    /// value was tracked, reuse the previous value (treat zero as "stale
+    /// reading", not "level is actually zero").
+    /// </summary>
+    public static int RollbackLevelBase(int incoming, int previousNonZero)
+    {
+        if (incoming != 0) return incoming;
+        return previousNonZero > 0 ? previousNonZero : incoming;
+    }
+
+    /// <summary>
+    /// S88 — Level-extra rollback (Python game_state.py 271–274). Same
+    /// shape as <see cref="RollbackLevelBase"/> but for the bracketed
+    /// "+XX" extra-level field.
+    /// </summary>
+    public static int RollbackLevelExtra(int incoming, int previousNonZero)
+    {
+        if (incoming != 0) return incoming;
+        return previousNonZero > 0 ? previousNonZero : incoming;
+    }
+
+    /// <summary>
+    /// S88 — Stamina-current rollback (Python game_state.py 275–280).
+    /// When <c>stamina_current</c> arrives as 0 *and* no <c>stamina_pct</c>
+    /// is being written *and* <c>stamina_max</c> is non-positive, reuse the
+    /// previously-tracked non-zero value. The Python guard exists because
+    /// stamina_max==0 means we have no anchor for the % conversion, so the
+    /// 0 is almost always a misread rather than an actual empty bar.
+    /// </summary>
+    /// <param name="incoming">Newly arrived stamina_current.</param>
+    /// <param name="incomingStaminaPctIsExplicit">
+    /// True when the same update batch also writes stamina_pct — in that
+    /// case Python skips the rollback (the explicit pct already pins truth).
+    /// </param>
+    /// <param name="incomingStaminaMax">
+    /// Stamina max effective for this update (either the new incoming value
+    /// or the existing snapshot's value when not being mutated).
+    /// </param>
+    /// <param name="previousNonZero">Tracked previous non-zero stamina_current.</param>
+    public static int RollbackStaminaCurrent(
+        int incoming,
+        bool incomingStaminaPctIsExplicit,
+        int incomingStaminaMax,
+        int previousNonZero)
+    {
+        if (incoming != 0) return incoming;
+        if (incomingStaminaPctIsExplicit) return incoming;
+        if (incomingStaminaMax > 0) return incoming;
+        return previousNonZero > 0 ? previousNonZero : incoming;
+    }
 }

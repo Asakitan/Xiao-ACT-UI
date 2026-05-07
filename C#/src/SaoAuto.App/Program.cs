@@ -70,6 +70,19 @@ public static class Program
         try
         {
             var settings = BuildSettingsManager(options);
+            // S90 — one-shot migration from pre-2026.04 player_profile.json into
+            // settings.json (game_cache + player_stats). Best-effort; never fatal.
+            try
+            {
+                LegacyProfileBootstrap.Run(
+                    settings,
+                    ResourcePathResolver.ForCurrentProcess(),
+                    SaoLog.For("legacy-profile"));
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "legacy profile migration threw; continuing startup");
+            }
             var states = new GameStateManager(SaoLog.For("state"));
 
             return options.RunMode switch

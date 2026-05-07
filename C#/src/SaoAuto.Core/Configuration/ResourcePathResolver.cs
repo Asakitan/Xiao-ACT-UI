@@ -34,6 +34,16 @@ public sealed class ResourcePathResolver
     public string Temp => Path.Combine(BaseDir, "temp");
     public string UpdateState => Path.Combine(BaseDir, "update_state.json");
 
+    /// <summary>
+    /// Pre-2026.04 stand-alone player profile (<c>player_profile.json</c>) that the
+    /// midiplayer-era Python build kept next to the executable. Modern builds keep
+    /// this data inside <c>settings.json</c> under <c>game_cache</c> + <c>player_stats</c>.
+    /// <see cref="SaoAuto.Core.Automation.LegacyProfileMigrator"/> consumes this path
+    /// once at startup and removes the file on a successful merge.
+    /// Mirrors Python <c>character_profile._LEGACY_PROFILE_FILE</c>.
+    /// </summary>
+    public string LegacyProfile => Path.Combine(BaseDir, "player_profile.json");
+
     public string Resolve(params string[] parts)
     {
         if (parts.Length == 0)

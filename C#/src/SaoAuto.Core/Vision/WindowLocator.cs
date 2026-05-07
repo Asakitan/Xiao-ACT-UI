@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using SaoAuto.Core.State;
 
 namespace SaoAuto.Core.Vision;
 
@@ -84,5 +85,56 @@ public sealed class WindowLocator
             if (_processNames.Contains(proc.ToLowerInvariant())) return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// S86 — Cached client-area screen rect (left, top, width, height).
+    /// Mirrors Python's <c>WindowLocator.get_rect()</c>; returns null
+    /// when no game window is currently located.
+    /// </summary>
+    public RectI? GetRect()
+    {
+        var w = FindGameWindow();
+        if (w is null) return null;
+        var win = w.Value;
+        return new RectI(win.Left, win.Top, win.Width, win.Height);
+    }
+
+    /// <summary>S86 — Client-area (Width, Height) of the located window, or null.</summary>
+    public (int W, int H)? GetSize()
+    {
+        var w = FindGameWindow();
+        return w is null ? null : (w.Value.Width, w.Value.Height);
+    }
+
+    /// <summary>
+    /// S86 — Resolve a normalized <see cref="Roi"/> against the located
+    /// window to an absolute screen-space bbox <c>(X1, Y1, X2, Y2)</c>.
+    /// Mirrors Python's <c>WindowLocator.roi_to_pixels(roi, rect=None)</c>;
+    /// returns null when no window is currently located.
+    /// </summary>
+    public (int X1, int Y1, int X2, int Y2)? RoiToScreenBbox(Roi roi)
+    {
+        var w = FindGameWindow();
+        if (w is null) return null;
+        var pixels = roi.ToScreenPixels(w.Value);
+        return (pixels.X, pixels.Y, pixels.X + pixels.W, pixels.Y + pixels.H);
+    }
+
+    /// <summary>
+    /// S86 — Pure projection of a normalized ROI against an explicit
+    /// client-rect tuple. Lets callers reuse a previously-resolved rect
+    /// without re-enumerating windows. Mirrors Python's
+    /// <c>roi_to_pixels(roi, rect=...)</c> overload.
+    /// </summary>
+    public static (int X1, int Y1, int X2, int Y2) RoiToScreenBbox(Roi roi, int left, int top, int right, int bottom)
+    {
+        var ww = right - left;
+        var wh = bottom - top;
+        var rx = left + (int)(ww * roi.X);
+        var ry = top + (int)(wh * roi.Y);
+        var rr = rx + (int)(ww * roi.W);
+        var rb = ry + (int)(wh * roi.H);
+        return (rx, ry, rr, rb);
     }
 }
