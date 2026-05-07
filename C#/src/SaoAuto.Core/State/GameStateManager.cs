@@ -124,7 +124,31 @@ public sealed class GameStateManager
     public GameState ApplyPartial(StatePartial partial)
     {
         if (partial is null) throw new ArgumentNullException(nameof(partial));
+        return ApplyPartialCore(partial, extraMutate: null);
+    }
 
+    /// <summary>
+    /// S102 — <see cref="ApplyPartial(StatePartial)"/> overload that runs the
+    /// rollback/clamp/cap pipeline AND applies a free-form mutation to
+    /// non-tracked fields (PacketActive, PlayerName, BossHp, etc.) inside
+    /// the same atomic snapshot. Lets packet writers move HP/Stamina
+    /// through the validation pipeline without splitting one logical
+    /// packet into two emitted snapshots (which would double-fire
+    /// <c>state.changed</c> + the S101 narrow channels).
+    ///
+    /// The <paramref name="extraMutate"/> lambda runs AFTER the partial's
+    /// fields are composed but BEFORE the cap step. Returning the input
+    /// snapshot unchanged is allowed; null is not.
+    /// </summary>
+    public GameState ApplyPartial(StatePartial partial, Func<GameState, GameState> extraMutate)
+    {
+        if (partial is null) throw new ArgumentNullException(nameof(partial));
+        if (extraMutate is null) throw new ArgumentNullException(nameof(extraMutate));
+        return ApplyPartialCore(partial, extraMutate);
+    }
+
+    private GameState ApplyPartialCore(StatePartial partial, Func<GameState, GameState>? extraMutate)
+    {
         GameState snapshot;
         Action<GameState>[] subscribers;
 
@@ -198,6 +222,13 @@ public sealed class GameStateManager
                 LevelBase = levelBase ?? s.LevelBase,
                 LevelExtra = levelExtra ?? s.LevelExtra,
             };
+
+            // ── 5b. S102: apply caller's extra mutation for non-tracked fields. ──
+            if (extraMutate is not null)
+            {
+                next = extraMutate(next)
+                    ?? throw new InvalidOperationException("extraMutate must not return null");
+            }
 
             // ── 6. Cap current ≤ max for HP / stamina. ──
             next = next with

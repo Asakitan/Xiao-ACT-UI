@@ -1,9 +1,12 @@
 using System.Windows;
 using Microsoft.Extensions.Logging;
 using SaoAuto.App.Hosting;
+using SaoAuto.App.Startup;
+using SaoAuto.App.WebBridge;
 using SaoAuto.Core.Configuration;
 using SaoAuto.Core.Logging;
 using SaoAuto.Core.State;
+using SaoAuto.Core.Vision;
 
 namespace SaoAuto.App.Modes;
 
@@ -18,18 +21,22 @@ public sealed class UiRunner
     private readonly SettingsManager _settings;
     private readonly GameStateManager _states;
     private readonly IUiHostFactory _hostFactory;
+    private readonly Func<RecognitionTickHost> _recognitionHostFactory;
     private readonly ILogger _log;
 
     public UiRunner(
         SettingsManager settings,
         GameStateManager states,
         IUiHostFactory? hostFactory = null,
+        Func<RecognitionTickHost>? recognitionHostFactory = null,
         ILogger? logger = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _states = states ?? throw new ArgumentNullException(nameof(states));
         _hostFactory = hostFactory ?? new DefaultUiHostFactory();
         _log = logger ?? SaoLog.For("ui");
+        _recognitionHostFactory = recognitionHostFactory
+            ?? (() => RecognitionPipelineBootstrap.Build(_settings, _states, _log));
     }
 
     public int Run(CancellationToken cancellationToken)
@@ -39,6 +46,13 @@ public sealed class UiRunner
         _log.LogInformation("UI mode requested={Requested} chain=[{Chain}]", requested, string.Join(", ", chain));
 
         GameStateCache.Load(_settings, _states);
+
+        // S99 — own the WebView bridge runtime for this UiRunner.Run.
+        // The broadcaster has no JS subscriber yet (WebView2 attach
+        // pending), but the publisher already streams the typed
+        // state.changed payload so a future host attach is one line.
+        using var webBridge = new WebBridgeLifecycle(_states);
+        webBridge.Start();
 
         var application = (System.Windows.Application.Current as App) ?? new App();
         application.DispatcherUnhandledException += (_, e) =>
@@ -96,6 +110,11 @@ public sealed class UiRunner
             try
             {
                 _log.LogInformation("starting {Mode} host window", modeName);
+                // S97 — best-effort recognition lifecycle scoped to this
+                // host's Application.Run. If the pipeline can't start
+                // (no game window, GDI init failure) the UI still runs.
+                using var recognition = RecognitionLifecycle.Start(
+                    _recognitionHostFactory, _log, cancellationToken);
                 return application.Run(window);
             }
             catch (Exception ex)

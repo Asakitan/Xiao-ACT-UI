@@ -122,13 +122,23 @@ public sealed class RecognitionTickHost : IDisposable
 
     private void Project(RecognitionTickResult r)
     {
+        // S103: route StaminaPct through ApplyPartial so the [0,1] clamp
+        // runs (vision interpolation can produce values slightly outside
+        // the range). The other recognition fields (RecognitionOk,
+        // ErrorMsg, StaminaOffline, SkillSlots, BurstReady) ride along
+        // via the extraMutate hook so the projection still emits one
+        // atomic snapshot per tick — preserving the S101 narrow-channel
+        // single-fire contract.
         var slots = RecognitionSkillSlotProjector.Project(r.SkillSlots);
         var burstReady = BurstReadyCalculator.Compute(slots, _watchedSlots);
-        _states.Update(s => s with
+        var partial = new StatePartial
+        {
+            StaminaPct = r.StaminaPct,
+        };
+        _states.ApplyPartial(partial, s => s with
         {
             RecognitionOk = r.RecognitionOk,
             ErrorMsg = r.ErrorMsg,
-            StaminaPct = r.StaminaPct ?? s.StaminaPct,
             StaminaOffline = r.StaminaOffline,
             SkillSlots = slots,
             BurstReady = burstReady,
