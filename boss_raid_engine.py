@@ -17,7 +17,7 @@ from config import BASE_DIR
 from perf_probe import probe as _probe
 
 BOSS_RAID_SCHEMA_VERSION = 1
-DEFAULT_BOSS_RAID_SERVER_URL = ""
+DEFAULT_BOSS_RAID_SERVER_URL = "http://doi.sakisense.top:15538"
 BOSS_RAID_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "boss_raids")
 
 # ═══════════════════════════════════════════════

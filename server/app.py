@@ -569,4 +569,4 @@ if __name__ == "__main__":
     import uvicorn
 
     # 直接传 app 对象，避免冻结环境下按模块名导入失败
-    uvicorn.run(app, host="0.0.0.0", port=9320, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=9983, reload=False)

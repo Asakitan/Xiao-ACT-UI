@@ -8,7 +8,7 @@
 cd sao_auto/update_host
 pip install fastapi uvicorn
 $env:UPDATE_HOST_RELEASE_DIR = "$pwd\releases"
-uvicorn app:app --host 0.0.0.0 --port 9330
+uvicorn app:app --host 0.0.0.0 --port 9973
 ```
 
 或使用打包后的 exe:
@@ -18,7 +18,7 @@ cd update_host
 .\UpdateHost.exe
 ```
 
-客户端默认访问 `` (见 `config.DEFAULT_UPDATE_HOST`).
+客户端默认访问 `http://doi.sakisense.top:15018` (见 `config.DEFAULT_UPDATE_HOST`).
 可在 `settings.json` 中设置 `update_host` 覆盖.
 
 ## 发布新版本

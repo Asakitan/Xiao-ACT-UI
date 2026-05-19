@@ -2,7 +2,7 @@
 """SAO Auto - 远程更新服务 (独立 FastAPI)
 
 部署:
-  uvicorn sao_auto.update_host.app:app --host 0.0.0.0 --port 9330
+  uvicorn sao_auto.update_host.app:app --host 0.0.0.0 --port 9973
 
 配置 (环境变量或 update_host_config.json):
   UPDATE_HOST_RELEASE_DIR  : 发布包根目录, 内含 channel/<channel>/manifest.json + 包文件

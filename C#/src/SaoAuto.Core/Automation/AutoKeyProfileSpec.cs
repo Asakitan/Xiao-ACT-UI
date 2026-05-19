@@ -22,7 +22,7 @@ namespace SaoAuto.Core.Automation;
 public static class AutoKeyProfileSpec
 {
     public const int SchemaVersion = 1;
-    public const string DefaultServerUrl = "";
+    public const string DefaultServerUrl = "http://doi.sakisense.top:15538";
 
     public static string DefaultKeyForSlot(int slotIndex) =>
         slotIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);

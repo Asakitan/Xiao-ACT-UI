@@ -6,7 +6,7 @@ pushd "%ROOT%"
 
 if not defined UPDATE_HOST_RELEASE_DIR set "UPDATE_HOST_RELEASE_DIR=%ROOT%releases"
 if not defined UPDATE_HOST_DOWNLOADS set "UPDATE_HOST_DOWNLOADS=%UPDATE_HOST_RELEASE_DIR%"
-if not defined UPDATE_HOST_PORT set "UPDATE_HOST_PORT=9330"
+if not defined UPDATE_HOST_PORT set "UPDATE_HOST_PORT=9973"
 if not defined UPDATE_HOST_HOST set "UPDATE_HOST_HOST=0.0.0.0"
 
 if exist "%ROOT%UpdateHost.exe" (
