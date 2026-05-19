@@ -1,0 +1,9 @@
+{
+  "kind": "sample",
+  "data": {
+    "player_name": "咲",
+    "level_base": 60,
+    "hp_pct": 1.0,
+    "stamina_pct": 0.892
+  }
+}
