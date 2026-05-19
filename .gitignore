@@ -18,15 +18,20 @@ packet_debug.jsonl
 exports/
 
 # ── Test files ────────────────────────────────────
+# Scoped to repo root so C#/tests/ stays tracked.
 test_*.py
 *_test.py
-tests/
-test_*
+/tests/
+/test_*
 
 # ── Build / dist ──────────────────────────────────
 dist/
 build/
 *.exe
+
+# ── .NET build artifacts ──────────────────────────
+**/bin/
+**/obj/
 
 # ── Packaging specs (tracked) ─────────────────────
 # XiaoACTUI.spec and server/AutoKeyServer.spec are tracked
