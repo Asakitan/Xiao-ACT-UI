@@ -1,5 +1,7 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using SaoAuto.Core.Automation;
 
 namespace SaoAuto.Core.State;
 
@@ -22,6 +24,17 @@ namespace SaoAuto.Core.State;
 public static class StateSnapshotPayload
 {
     public static JsonObject ToDict(GameState s)
+        => ToDict(s, dps: null);
+
+    /// <summary>
+    /// S131 — overload that surfaces a per-attacker DPS rollup as
+    /// <c>dps_entries</c> (and <c>dps_active / dps_total_damage / dps_total /
+    /// dps_total_heal / dps_hps / dps_duration_seconds / dps_report_reason</c>
+    /// scalars). Pass <c>null</c> (the 1-arg overload does this) when no
+    /// tracker is available — the keys still ship with empty/zero defaults
+    /// so JS subscribers never null-guard.
+    /// </summary>
+    public static JsonObject ToDict(GameState s, DpsSnapshot? dps)
     {
         if (s is null) throw new ArgumentNullException(nameof(s));
 
@@ -70,8 +83,146 @@ public static class StateSnapshotPayload
             ["identity_alert_message"] = s.IdentityAlertMessage,
             ["self_buffs"] = SerializeArray(s.SelfBuffs),
             ["server_time_offset_ms"] = s.ServerTimeOffsetMs,
+            // ── S129 narrow-channel extensions (not in Python to_dict;
+            // surfaced for the WebView2 HUD's combat-stat / CDR / DPS panels).
+            // S126 player identity tail.
+            ["fight_point"] = s.FightPoint,
+            ["in_combat"] = s.InCombat,
+            // S126b combat stats.
+            ["attack"] = s.Attack,
+            ["magic_attack"] = s.MagicAttack,
+            ["defense"] = s.Defense,
+            ["magic_defense"] = s.MagicDefense,
+            ["crit_rate"] = s.CritRate,
+            ["crit_damage"] = s.CritDamage,
+            ["attack_speed_pct"] = s.AttackSpeedPct,
+            ["cast_speed_pct"] = s.CastSpeedPct,
+            ["charge_speed_pct"] = s.ChargeSpeedPct,
+            ["heal_power"] = s.HealPower,
+            ["dam_inc"] = s.DamInc,
+            ["m_dam_inc"] = s.MDamInc,
+            ["boss_dam_inc"] = s.BossDamInc,
+            // S122 buff-driven CDR scalars (TempAttr ids 100/101/103).
+            ["temp_attr_cd_pct"] = s.TempAttrCdPct,
+            ["temp_attr_cd_fixed"] = s.TempAttrCdFixed,
+            ["temp_attr_cd_accel"] = s.TempAttrCdAccel,
+            // S126c equipment / passive CDR (AttrCollection 11750/11760/11960/11980).
+            ["attr_skill_cd"] = s.AttrSkillCd,
+            ["attr_skill_cd_pct"] = s.AttrSkillCdPct,
+            ["attr_cd_accelerate_pct"] = s.AttrCdAcceleratePct,
+            ["attr_fight_res_cd_speed"] = s.AttrFightResCdSpeed,
+            // S130 — per-monster table (S113 lazy-create + S114-S117 attrs +
+            // S123 BuffList + S128 IsDead). Sorted by MaxHp desc so the JS
+            // HUD's primary slot is the strongest live mob; dead rows kept
+            // (consumer can filter) so per-encounter death tracking works.
+            ["monster_table"] = SerializeMonsterTable(s.MonsterDataMap),
+            // S131 — DPS rollup from PacketBridge.DpsTracker. When the
+            // 1-arg overload runs, defaults to inactive/empty so JS still
+            // sees every key. Per-attacker rows include skill breakdown only
+            // when the caller passed `SnapshotWithSkills()`.
+            ["dps_active"] = dps?.Active ?? false,
+            ["dps_total_damage"] = dps?.TotalDamage ?? 0L,
+            ["dps_total"] = dps?.Dps ?? 0L,
+            ["dps_total_heal"] = dps?.TotalHeal ?? 0L,
+            ["dps_hps"] = dps?.Hps ?? 0L,
+            ["dps_duration_seconds"] = dps?.DurationSeconds ?? 0.0,
+            ["dps_report_reason"] = dps?.ReportReason,
+            ["dps_entries"] = SerializeDpsEntries(dps),
         };
         return obj;
+    }
+
+    private static JsonArray SerializeMonsterTable(
+        ImmutableDictionary<long, MonsterData> map)
+    {
+        var arr = new JsonArray();
+        foreach (var m in map.Values
+            .OrderByDescending(m => m.MaxHp)
+            .ThenBy(m => m.Uuid))
+        {
+            arr.Add(new JsonObject
+            {
+                ["uuid"] = m.Uuid,
+                ["uid"] = m.Uid,
+                ["name"] = m.Name,
+                ["template_id"] = m.TemplateId,
+                ["hp"] = m.Hp,
+                ["max_hp"] = m.MaxHp,
+                ["level"] = m.Level,
+                ["breaking_stage"] = m.BreakingStage,
+                ["extinction"] = m.Extinction,
+                ["max_extinction"] = m.MaxExtinction,
+                ["stunned"] = m.Stunned,
+                ["max_stunned"] = m.MaxStunned,
+                ["in_overdrive"] = m.InOverdrive,
+                ["shield_active"] = m.ShieldActive,
+                ["shield_total"] = m.ShieldTotal,
+                ["shield_max_total"] = m.ShieldMaxTotal,
+                ["is_dead"] = m.IsDead,
+                ["is_lock_stunned"] = m.IsLockStunned,
+                ["stop_breaking_ticking"] = m.StopBreakingTicking,
+                ["state"] = m.State,
+                ["dead_type"] = m.DeadType,
+                ["dead_time"] = m.DeadTime,
+                ["first_attack"] = m.FirstAttack,
+                ["hated_char_id"] = m.HatedCharId,
+                ["hated_char_name"] = m.HatedCharName,
+                ["buff_list"] = SerializeArray(m.BuffList),
+                ["last_update_seconds"] = m.LastUpdateSeconds,
+            });
+        }
+        return arr;
+    }
+
+    private static JsonArray SerializeDpsEntries(DpsSnapshot? dps)
+    {
+        var arr = new JsonArray();
+        if (dps is null || dps.Rows.IsDefaultOrEmpty) return arr;
+
+        var totalDamage = dps.TotalDamage;
+        foreach (var row in dps.Rows)
+        {
+            arr.Add(new JsonObject
+            {
+                ["uid"] = row.EntityUuid,
+                ["name"] = row.EntityName,
+                ["profession_id"] = row.ProfessionId,
+                ["is_self"] = row.IsSelf,
+                ["damage_total"] = row.Damage,
+                ["heal_total"] = row.Heal,
+                ["dps"] = row.Dps,
+                ["hps"] = row.Hps,
+                ["damage_pct"] = totalDamage > 0
+                    ? Math.Round((double)row.Damage / totalDamage, 3)
+                    : 0.0,
+                ["skills"] = SerializeSkillBreakdown(row.Skills),
+            });
+        }
+        return arr;
+    }
+
+    private static JsonArray SerializeSkillBreakdown(
+        ImmutableArray<SkillBreakdownRow> skills)
+    {
+        var arr = new JsonArray();
+        if (skills.IsDefaultOrEmpty) return arr;
+
+        foreach (var skill in skills)
+        {
+            arr.Add(new JsonObject
+            {
+                ["skill_id"] = skill.SkillId,
+                ["name"] = skill.Name,
+                ["total"] = skill.Total,
+                ["hits"] = skill.Hits,
+                ["crit_hits"] = skill.CritHits,
+                ["crit_rate"] = skill.CritRate,
+                ["max_hit"] = skill.MaxHit,
+                ["heal_total"] = skill.HealTotal,
+                ["heal_hits"] = skill.HealHits,
+            });
+        }
+        return arr;
     }
 
     private static JsonArray SerializeArray<T>(IEnumerable<T> items)

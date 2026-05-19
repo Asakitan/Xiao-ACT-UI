@@ -487,6 +487,27 @@ public sealed record PlayerAttrEvent(
     public int MaxHp { get; init; }
     public int ProfessionId { get; init; }
 
+    // S126b — extended combat stats (player AttrCollection).
+    public int Attack { get; init; }
+    public int MagicAttack { get; init; }
+    public int Defense { get; init; }
+    public int MagicDefense { get; init; }
+    public int CritRate { get; init; }
+    public int CritDamage { get; init; }
+    public int AttackSpeedPct { get; init; }
+    public int CastSpeedPct { get; init; }
+    public int ChargeSpeedPct { get; init; }
+    public int HealPower { get; init; }
+    public int DamInc { get; init; }
+    public int MDamInc { get; init; }
+    public int BossDamInc { get; init; }
+
+    // S126c — CD-related player attrs (separate from S122 TempAttr CDR).
+    public int AttrSkillCd { get; init; }
+    public int AttrSkillCdPct { get; init; }
+    public int AttrCdAcceleratePct { get; init; }
+    public int AttrFightResCdSpeed { get; init; }
+
     public bool HasName { get; init; }
     public bool HasLevel { get; init; }
     public bool HasRankLevel { get; init; }
@@ -495,8 +516,33 @@ public sealed record PlayerAttrEvent(
     public bool HasMaxHp { get; init; }
     public bool HasProfessionId { get; init; }
 
+    public bool HasAttack { get; init; }
+    public bool HasMagicAttack { get; init; }
+    public bool HasDefense { get; init; }
+    public bool HasMagicDefense { get; init; }
+    public bool HasCritRate { get; init; }
+    public bool HasCritDamage { get; init; }
+    public bool HasAttackSpeedPct { get; init; }
+    public bool HasCastSpeedPct { get; init; }
+    public bool HasChargeSpeedPct { get; init; }
+    public bool HasHealPower { get; init; }
+    public bool HasDamInc { get; init; }
+    public bool HasMDamInc { get; init; }
+    public bool HasBossDamInc { get; init; }
+
+    public bool HasAttrSkillCd { get; init; }
+    public bool HasAttrSkillCdPct { get; init; }
+    public bool HasAttrCdAcceleratePct { get; init; }
+    public bool HasAttrFightResCdSpeed { get; init; }
+
     public bool Any => HasName || HasLevel || HasRankLevel
-        || HasFightPoint || HasHp || HasMaxHp || HasProfessionId;
+        || HasFightPoint || HasHp || HasMaxHp || HasProfessionId
+        || HasAttack || HasMagicAttack || HasDefense || HasMagicDefense
+        || HasCritRate || HasCritDamage || HasAttackSpeedPct
+        || HasCastSpeedPct || HasChargeSpeedPct || HasHealPower
+        || HasDamInc || HasMDamInc || HasBossDamInc
+        || HasAttrSkillCd || HasAttrSkillCdPct
+        || HasAttrCdAcceleratePct || HasAttrFightResCdSpeed;
 }
 
 /// <summary>
@@ -560,6 +606,20 @@ public sealed record RawNotifyEvent(
     int PayloadLength,
     double TimestampSeconds) : ParserEvent(TimestampSeconds);
 
+/// <summary>
+/// Side-channel emitted by <see cref="PacketParser"/> when a strict c3SB
+/// Notify header was successfully parsed and the raw proto body is
+/// available. Not a <see cref="ParserEvent"/> on purpose: higher layers
+/// use it to feed the body-bearing path (<c>PacketBridge.DispatchRawNotify</c>)
+/// while the ordinary event stream continues to carry the lightweight
+/// <see cref="RawNotifyEvent"/> marker.
+/// </summary>
+public readonly record struct NotifyBodyDecoded(
+    int MethodId,
+    bool IsZstd,
+    ReadOnlyMemory<byte> Body,
+    double TimestampSeconds);
+
 public sealed record CompressedFrameEvent(
     MessageType Kind,
     int PayloadLength,
@@ -577,6 +637,15 @@ public sealed record UnknownMessageEvent(
 public interface IPacketParser
 {
     event Action<ParserEvent>? Event;
+
+    /// <summary>
+    /// Fires once per c3SB-formatted Notify frame, immediately after the
+    /// corresponding <see cref="RawNotifyEvent"/>. Carries the inner notify
+    /// body so consumers (typically <c>PacketBridge</c>) can route through
+    /// <see cref="MethodDecoderRegistry"/> without inspecting the parser's
+    /// event channel for body bytes.
+    /// </summary>
+    event Action<NotifyBodyDecoded>? NotifyBodyAvailable;
 
     /// <summary>Feed a complete game frame (post TCP reassembly + length-stripping).</summary>
     void FeedGameFrame(ReadOnlySpan<byte> frame, double timestampSeconds);

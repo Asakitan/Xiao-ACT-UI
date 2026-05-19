@@ -43,6 +43,7 @@ public sealed class PacketBridge : IDisposable
         _log = (ILogger?)logger ?? NullLogger.Instance;
         _dps = dpsTracker ?? new DpsTracker();
         _parser.Event += OnParserEvent;
+        _parser.NotifyBodyAvailable += OnNotifyBody;
     }
 
     public long EventsApplied => Interlocked.Read(ref _eventsApplied);
@@ -52,26 +53,24 @@ public sealed class PacketBridge : IDisposable
 
     private void OnParserEvent(ParserEvent ev)
     {
-        if (ev is RawNotifyEvent raw)
-        {
-            // Hand off to the per-method registry. The decoder will emit
-            // strongly-typed events that we'll see on the next call to
-            // OnParserEvent (the registry takes our Apply callback).
-            // Since RawNotifyEvent does not carry the body, we only
-            // count it; the actual dispatch is done by the parser->bridge
-            // contract documented on PacketParserBodyDispatch.
-            Interlocked.Increment(ref _rawNotifiesDispatched);
-            return;
-        }
-
+        // S135: raw-notify counting + dispatch both moved to OnNotifyBody so
+        // each c3SB notify lands exactly once. Non-c3SB notifies still surface
+        // here as RawNotifyEvent but have no decodable body — ignore them.
+        if (ev is RawNotifyEvent) return;
         Apply(ev);
     }
 
+    private void OnNotifyBody(NotifyBodyDecoded notify)
+    {
+        if (notify.IsZstd) return;
+        DispatchRawNotify(notify.MethodId, notify.Body.Span, notify.TimestampSeconds);
+    }
+
     /// <summary>
-    /// External feed for raw notify bodies — the parser surfaces only
-    /// <see cref="RawNotifyEvent"/> on its event channel; the body bytes
-    /// flow through this method so the registry can decode them. This
-    /// keeps the parser a pure envelope decoder.
+    /// External feed for raw notify bodies. The parser auto-fires this via
+    /// <see cref="IPacketParser.NotifyBodyAvailable"/>, but tests and
+    /// non-parser sources (replay harness, future zstd inflater) can call
+    /// it directly to bypass the parser.
     /// </summary>
     public void DispatchRawNotify(int methodId, ReadOnlySpan<byte> body, double timestampSeconds)
     {
@@ -158,5 +157,6 @@ public sealed class PacketBridge : IDisposable
         if (_disposed) return;
         _disposed = true;
         _parser.Event -= OnParserEvent;
+        _parser.NotifyBodyAvailable -= OnNotifyBody;
     }
 }

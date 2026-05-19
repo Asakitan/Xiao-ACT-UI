@@ -14,6 +14,26 @@ namespace SaoAuto.Core.Packets;
 /// </summary>
 public sealed class SharpPcapPacketSource : IPacketSource
 {
+    private static readonly string[] VirtualKeywords =
+    {
+        "vmware", "virtualbox", "hyper-v", "zerotier",
+        "docker", "wsl", "vethernet", "loopback",
+        "npcap loopback", "bluetooth",
+        "wan miniport", "network monitor", "miniport",
+        "microsoft kernel debug", "teredo", "isatap", "6to4",
+        "pptp", "l2tp", "sstp", "pppoe", "ikev2",
+        "tunnel", "tap-windows", "wireguard", "vpn",
+        "pseudo", "microsoft wi-fi direct",
+    };
+
+    private static readonly string[] PreferredNicKeywords =
+    {
+        "ethernet", "wi-fi", "wifi", "wireless", "802.11",
+        "realtek", "intel", "broadcom", "qualcomm", "killer",
+        "mediatek", "marvell", "aquantia", "nvidia",
+        "gigabit", "gaming",
+    };
+
     private readonly ILogger _log;
     private readonly Channel<RawFrame> _channel;
     private readonly string? _bpfFilter;
@@ -57,6 +77,59 @@ public sealed class SharpPcapPacketSource : IPacketSource
         }
     }
 
+    /// <summary>
+    /// Match a user-requested adapter by exact name, exact description, or
+    /// case-insensitive substring on either field. Returns null when the
+    /// request does not match any known device.
+    /// </summary>
+    public static NetworkDeviceInfo? ResolveRequestedDevice(
+        IReadOnlyList<NetworkDeviceInfo> devices,
+        string? requested)
+    {
+        if (devices is null) throw new ArgumentNullException(nameof(devices));
+        if (string.IsNullOrWhiteSpace(requested)) return null;
+
+        var needle = requested.Trim();
+        foreach (var d in devices)
+        {
+            if (string.Equals(d.Name, needle, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(d.Description, needle, StringComparison.OrdinalIgnoreCase))
+            {
+                return d;
+            }
+        }
+        foreach (var d in devices)
+        {
+            if (d.Name.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || d.Description.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            {
+                return d;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Port of Python's auto-select heuristic: prefer non-virtual adapters,
+    /// then score likely physical NIC descriptions above the rest.
+    /// </summary>
+    public static NetworkDeviceInfo? SelectPreferredDevice(
+        IReadOnlyList<NetworkDeviceInfo> devices)
+    {
+        if (devices is null) throw new ArgumentNullException(nameof(devices));
+        if (devices.Count == 0) return null;
+
+        var real = devices
+            .Where(d => !VirtualKeywords.Any(k => d.Description.Contains(k, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        var candidates = real.Length > 0 ? real : devices.ToArray();
+
+        return candidates
+            .OrderByDescending(ScoreDevice)
+            .ThenBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
+            .First();
+    }
+
     public async IAsyncEnumerable<RawFrame> ReadAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -91,16 +164,24 @@ public sealed class SharpPcapPacketSource : IPacketSource
                 return false;
             }
 
-            SharpPcap.ICaptureDevice? picked = null;
-            if (!string.IsNullOrEmpty(_deviceName))
+            var infos = devices
+                .Select(d => new NetworkDeviceInfo(d.Name, d.Description ?? string.Empty, d.MacAddress?.ToString()))
+                .ToArray();
+            var requested = ResolveRequestedDevice(infos, _deviceName);
+            if (requested is null && !string.IsNullOrWhiteSpace(_deviceName))
             {
-                foreach (var d in devices)
+                _log.LogWarning("[Capture] requested adapter not found: {Requested}; falling back to auto-select", _deviceName);
+            }
+            var selected = requested ?? SelectPreferredDevice(infos);
+            if (selected is null) return false;
+
+            SharpPcap.ICaptureDevice? picked = null;
+            foreach (var d in devices)
+            {
+                if (string.Equals(d.Name, selected.Value.Name, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (string.Equals(d.Name, _deviceName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        picked = d;
-                        break;
-                    }
+                    picked = d;
+                    break;
                 }
             }
             picked ??= devices[0];
@@ -164,6 +245,20 @@ public sealed class SharpPcapPacketSource : IPacketSource
         _disposed = true;
         StopDevice();
         _channel.Writer.TryComplete();
+    }
+
+    private static int ScoreDevice(NetworkDeviceInfo device)
+    {
+        var desc = device.Description ?? string.Empty;
+        var score = 0;
+        foreach (var keyword in PreferredNicKeywords)
+        {
+            if (desc.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            {
+                score++;
+            }
+        }
+        return score;
     }
 }
 

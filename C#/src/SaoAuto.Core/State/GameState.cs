@@ -42,6 +42,25 @@ public sealed record GameState
     // ── Combat ──
     public bool InCombat { get; init; }
 
+    // ── Combat stats (S126b: from player AttrCollection) ──
+    // Mirrors `_process_attr_collection` extended-stats branches at
+    // packet_parser.py 5060–5111. BASE id and TOTAL id both write the
+    // same slot (last-write-wins on the foreach — matches Python's
+    // `elif attr_id in (BASE, TOTAL):` semantics).
+    public int Attack { get; init; }
+    public int MagicAttack { get; init; }
+    public int Defense { get; init; }
+    public int MagicDefense { get; init; }
+    public int CritRate { get; init; }
+    public int CritDamage { get; init; }
+    public int AttackSpeedPct { get; init; }
+    public int CastSpeedPct { get; init; }
+    public int ChargeSpeedPct { get; init; }
+    public int HealPower { get; init; }
+    public int DamInc { get; init; }
+    public int MDamInc { get; init; }
+    public int BossDamInc { get; init; }
+
     // ── Self identity (S64: from EnterGame) ──
     public ulong SelfUuid { get; init; }
 
@@ -76,6 +95,20 @@ public sealed record GameState
     public int TempAttrCdPct { get; init; }
     public int TempAttrCdFixed { get; init; }
     public int TempAttrCdAccel { get; init; }
+
+    // ── CD-related player attrs (S126c: from player AttrCollection) ──
+    // Separate from S122's TempAttrCd* (those come from TempAttrCollection).
+    // These are equipment / passive contributions written by Python's
+    // `_process_attr_collection` at packet_parser.py 5034–5058. BASE/TOTAL
+    // share the slot (last-write-wins). Units:
+    //   AttrSkillCd        — flat CD reduction in ms
+    //   AttrSkillCdPct     — percent CD reduction (万分比, /10000)
+    //   AttrCdAcceleratePct — CD acceleration percent (万分比, /10000)
+    //   AttrFightResCdSpeed — fight-resource CD speed/duration mod (万分比)
+    public int AttrSkillCd { get; init; }
+    public int AttrSkillCdPct { get; init; }
+    public int AttrCdAcceleratePct { get; init; }
+    public int AttrFightResCdSpeed { get; init; }
 
     // ── Dungeon (S64: from SyncDungeonData / SyncDungeonDirtyData) ──
     public long DungeonSceneUuid { get; init; }

@@ -62,6 +62,7 @@ public sealed class TcpReassembler
     private long _serverChanges;
     private long _replayedAfterChange;
     private long _forceReconnects;
+    private double _lastRawFrameTimestampSeconds;
 
     public TcpReassembler(ILogger<TcpReassembler>? logger = null, Func<DateTimeOffset>? clock = null)
     {
@@ -71,6 +72,7 @@ public sealed class TcpReassembler
     }
 
     public event Action<ReadOnlyMemory<byte>>? GamePacket;
+    public event Action<CapturedGamePacket>? GamePacketCaptured;
     public event Action? ServerChange;
 
     public bool ServerIdentified
@@ -129,7 +131,11 @@ public sealed class TcpReassembler
     }
 
     public void FeedRawFrame(ReadOnlySpan<byte> raw)
+        => FeedRawFrame(raw, _clock());
+
+    public void FeedRawFrame(ReadOnlySpan<byte> raw, DateTimeOffset timestamp)
     {
+        _lastRawFrameTimestampSeconds = timestamp.UtcTicks / (double)TimeSpan.TicksPerSecond;
         Interlocked.Increment(ref _rawFrames);
         var parsed = EthernetIpTcpParser.TryParse(raw);
         if (parsed is null) return;
@@ -569,6 +575,7 @@ public sealed class TcpReassembler
                 try
                 {
                     GamePacket?.Invoke(frame);
+                    GamePacketCaptured?.Invoke(new CapturedGamePacket(frame, _lastRawFrameTimestampSeconds));
                     Interlocked.Increment(ref _completeGameFrames);
                 }
                 catch (Exception ex)
@@ -652,3 +659,7 @@ public sealed class TcpReassembler
 
     private readonly record struct RecentPkt(TcpEndpoint Addr, uint Seq, byte[] Payload);
 }
+
+public readonly record struct CapturedGamePacket(
+    ReadOnlyMemory<byte> Frame,
+    double TimestampSeconds);

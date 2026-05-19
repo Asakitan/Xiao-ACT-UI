@@ -934,6 +934,24 @@ public sealed class SyncToMeDeltaInfoDecoder : ProtoMethodDecoder<SyncToMeDeltaI
         bool hasFightPoint = false, hasHp = false, hasMaxHp = false;
         bool hasProfessionId = false;
 
+        // S126b — extended combat stats. BASE id and TOTAL id share the
+        // same accumulator (matches Python's `elif attr_id in (BASE,
+        // TOTAL):` last-write-wins on the foreach at packet_parser.py
+        // 5060–5111).
+        int attack = 0, magicAttack = 0, defense = 0, magicDefense = 0;
+        int critRate = 0, critDamage = 0;
+        int attackSpeedPct = 0, castSpeedPct = 0, chargeSpeedPct = 0;
+        int healPower = 0, damInc = 0, mDamInc = 0, bossDamInc = 0;
+        bool hasAttack = false, hasMagicAttack = false, hasDefense = false, hasMagicDefense = false;
+        bool hasCritRate = false, hasCritDamage = false;
+        bool hasAttackSpeedPct = false, hasCastSpeedPct = false, hasChargeSpeedPct = false;
+        bool hasHealPower = false, hasDamInc = false, hasMDamInc = false, hasBossDamInc = false;
+
+        // S126c — CD-related player attrs (separate from S122 TempAttr CDR).
+        int attrSkillCd = 0, attrSkillCdPct = 0, attrCdAcceleratePct = 0, attrFightResCdSpeed = 0;
+        bool hasAttrSkillCd = false, hasAttrSkillCdPct = false;
+        bool hasAttrCdAcceleratePct = false, hasAttrFightResCdSpeed = false;
+
         foreach (var a in attrs.Attrs)
         {
             var id = a.Id;
@@ -969,6 +987,45 @@ public sealed class SyncToMeDeltaInfoDecoder : ProtoMethodDecoder<SyncToMeDeltaI
                     maxHp = CyPacketExtras.RawVarintToInt32(raw.Span);
                     hasMaxHp = true;
                     break;
+                // S126b — combat stats. BASE/TOTAL share the same slot
+                // (last-write-wins on the foreach — matches Python's
+                // `elif attr_id in (BASE, TOTAL):` at packet_parser.py
+                // 5060–5111).
+                case 11330: case 11331:
+                    attack = CyPacketExtras.RawVarintToInt32(raw.Span); hasAttack = true; break;
+                case 11340: case 11341:
+                    magicAttack = CyPacketExtras.RawVarintToInt32(raw.Span); hasMagicAttack = true; break;
+                case 11350: case 11351:
+                    defense = CyPacketExtras.RawVarintToInt32(raw.Span); hasDefense = true; break;
+                case 11360: case 11361:
+                    magicDefense = CyPacketExtras.RawVarintToInt32(raw.Span); hasMagicDefense = true; break;
+                case 11110: case 11111:
+                    critRate = CyPacketExtras.RawVarintToInt32(raw.Span); hasCritRate = true; break;
+                case 12510: case 12511:
+                    critDamage = CyPacketExtras.RawVarintToInt32(raw.Span); hasCritDamage = true; break;
+                case 11720: case 11721:
+                    attackSpeedPct = CyPacketExtras.RawVarintToInt32(raw.Span); hasAttackSpeedPct = true; break;
+                case 11730: case 11731:
+                    castSpeedPct = CyPacketExtras.RawVarintToInt32(raw.Span); hasCastSpeedPct = true; break;
+                case 11740: case 11741:
+                    chargeSpeedPct = CyPacketExtras.RawVarintToInt32(raw.Span); hasChargeSpeedPct = true; break;
+                case 11790: case 11791:
+                    healPower = CyPacketExtras.RawVarintToInt32(raw.Span); hasHealPower = true; break;
+                case 12550: case 12551:
+                    damInc = CyPacketExtras.RawVarintToInt32(raw.Span); hasDamInc = true; break;
+                case 12570: case 12571:
+                    mDamInc = CyPacketExtras.RawVarintToInt32(raw.Span); hasMDamInc = true; break;
+                case 12630: case 12631:
+                    bossDamInc = CyPacketExtras.RawVarintToInt32(raw.Span); hasBossDamInc = true; break;
+                // S126c — CD-related player attrs.
+                case 11750: case 11751:
+                    attrSkillCd = CyPacketExtras.RawVarintToInt32(raw.Span); hasAttrSkillCd = true; break;
+                case 11760: case 11761:
+                    attrSkillCdPct = CyPacketExtras.RawVarintToInt32(raw.Span); hasAttrSkillCdPct = true; break;
+                case 11960: case 11961:
+                    attrCdAcceleratePct = CyPacketExtras.RawVarintToInt32(raw.Span); hasAttrCdAcceleratePct = true; break;
+                case 11980: case 11981:
+                    attrFightResCdSpeed = CyPacketExtras.RawVarintToInt32(raw.Span); hasAttrFightResCdSpeed = true; break;
             }
         }
 
@@ -980,6 +1037,24 @@ public sealed class SyncToMeDeltaInfoDecoder : ProtoMethodDecoder<SyncToMeDeltaI
             HasName = hasName, HasLevel = hasLevel, HasRankLevel = hasRankLevel,
             HasFightPoint = hasFightPoint, HasHp = hasHp, HasMaxHp = hasMaxHp,
             HasProfessionId = hasProfessionId,
+            Attack = attack, MagicAttack = magicAttack,
+            Defense = defense, MagicDefense = magicDefense,
+            CritRate = critRate, CritDamage = critDamage,
+            AttackSpeedPct = attackSpeedPct, CastSpeedPct = castSpeedPct,
+            ChargeSpeedPct = chargeSpeedPct, HealPower = healPower,
+            DamInc = damInc, MDamInc = mDamInc, BossDamInc = bossDamInc,
+            HasAttack = hasAttack, HasMagicAttack = hasMagicAttack,
+            HasDefense = hasDefense, HasMagicDefense = hasMagicDefense,
+            HasCritRate = hasCritRate, HasCritDamage = hasCritDamage,
+            HasAttackSpeedPct = hasAttackSpeedPct, HasCastSpeedPct = hasCastSpeedPct,
+            HasChargeSpeedPct = hasChargeSpeedPct, HasHealPower = hasHealPower,
+            HasDamInc = hasDamInc, HasMDamInc = hasMDamInc, HasBossDamInc = hasBossDamInc,
+            AttrSkillCd = attrSkillCd, AttrSkillCdPct = attrSkillCdPct,
+            AttrCdAcceleratePct = attrCdAcceleratePct,
+            AttrFightResCdSpeed = attrFightResCdSpeed,
+            HasAttrSkillCd = hasAttrSkillCd, HasAttrSkillCdPct = hasAttrSkillCdPct,
+            HasAttrCdAcceleratePct = hasAttrCdAcceleratePct,
+            HasAttrFightResCdSpeed = hasAttrFightResCdSpeed,
         };
         return ev.Any ? ev : null;
     }

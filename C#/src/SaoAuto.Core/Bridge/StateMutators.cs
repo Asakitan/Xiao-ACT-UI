@@ -903,6 +903,50 @@ public static class StateMutators
             if (ev.HasProfessionId && ev.ProfessionId > 0
                 && newState.ProfessionId != ev.ProfessionId)
                 newState = newState with { ProfessionId = ev.ProfessionId };
+            // S126b — combat stats. ATTACK / M_ATTACK / DEFENSE /
+            // M_DEFENSE use `> 0` (zero is meaningless for raw
+            // damage/defense). Percent stats use `>= 0` so a buff
+            // expiry that drops the slot back to baseline can land.
+            if (ev.HasAttack && ev.Attack > 0 && newState.Attack != ev.Attack)
+                newState = newState with { Attack = ev.Attack };
+            if (ev.HasMagicAttack && ev.MagicAttack > 0 && newState.MagicAttack != ev.MagicAttack)
+                newState = newState with { MagicAttack = ev.MagicAttack };
+            if (ev.HasDefense && ev.Defense > 0 && newState.Defense != ev.Defense)
+                newState = newState with { Defense = ev.Defense };
+            if (ev.HasMagicDefense && ev.MagicDefense > 0 && newState.MagicDefense != ev.MagicDefense)
+                newState = newState with { MagicDefense = ev.MagicDefense };
+            if (ev.HasCritRate && ev.CritRate >= 0 && newState.CritRate != ev.CritRate)
+                newState = newState with { CritRate = ev.CritRate };
+            if (ev.HasCritDamage && ev.CritDamage >= 0 && newState.CritDamage != ev.CritDamage)
+                newState = newState with { CritDamage = ev.CritDamage };
+            if (ev.HasAttackSpeedPct && ev.AttackSpeedPct >= 0 && newState.AttackSpeedPct != ev.AttackSpeedPct)
+                newState = newState with { AttackSpeedPct = ev.AttackSpeedPct };
+            if (ev.HasCastSpeedPct && ev.CastSpeedPct >= 0 && newState.CastSpeedPct != ev.CastSpeedPct)
+                newState = newState with { CastSpeedPct = ev.CastSpeedPct };
+            if (ev.HasChargeSpeedPct && ev.ChargeSpeedPct >= 0 && newState.ChargeSpeedPct != ev.ChargeSpeedPct)
+                newState = newState with { ChargeSpeedPct = ev.ChargeSpeedPct };
+            if (ev.HasHealPower && ev.HealPower >= 0 && newState.HealPower != ev.HealPower)
+                newState = newState with { HealPower = ev.HealPower };
+            if (ev.HasDamInc && ev.DamInc >= 0 && newState.DamInc != ev.DamInc)
+                newState = newState with { DamInc = ev.DamInc };
+            if (ev.HasMDamInc && ev.MDamInc >= 0 && newState.MDamInc != ev.MDamInc)
+                newState = newState with { MDamInc = ev.MDamInc };
+            if (ev.HasBossDamInc && ev.BossDamInc >= 0 && newState.BossDamInc != ev.BossDamInc)
+                newState = newState with { BossDamInc = ev.BossDamInc };
+            // S126c — CD-related player attrs. Python guards: SkillCd /
+            // SkillCdPct / CdAcceleratePct use `>= 0` (zero is a real
+            // baseline — no equipment CDR); FightResCdSpeed uses `> 0`
+            // (matches packet_parser.py 5054–5057 explicit `> 0` gate).
+            if (ev.HasAttrSkillCd && ev.AttrSkillCd >= 0 && newState.AttrSkillCd != ev.AttrSkillCd)
+                newState = newState with { AttrSkillCd = ev.AttrSkillCd };
+            if (ev.HasAttrSkillCdPct && ev.AttrSkillCdPct >= 0 && newState.AttrSkillCdPct != ev.AttrSkillCdPct)
+                newState = newState with { AttrSkillCdPct = ev.AttrSkillCdPct };
+            if (ev.HasAttrCdAcceleratePct && ev.AttrCdAcceleratePct >= 0
+                && newState.AttrCdAcceleratePct != ev.AttrCdAcceleratePct)
+                newState = newState with { AttrCdAcceleratePct = ev.AttrCdAcceleratePct };
+            if (ev.HasAttrFightResCdSpeed && ev.AttrFightResCdSpeed > 0
+                && newState.AttrFightResCdSpeed != ev.AttrFightResCdSpeed)
+                newState = newState with { AttrFightResCdSpeed = ev.AttrFightResCdSpeed };
             // Recompute HpPct when either HP field actually changed.
             if (newState.HpMax > 0
                 && (newState.HpCurrent != s.HpCurrent || newState.HpMax != s.HpMax))

@@ -11,6 +11,11 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional, List, Callable
 
+try:
+    import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
+except Exception:
+    _CY_PACKET = None  # type: ignore[assignment]
+
 from perf_probe import probe as _probe
 
 # 缓存字段名列表
@@ -31,6 +36,11 @@ _CACHE_IDENTITY_FIELDS = frozenset((
 
 def compute_burst_ready(skill_slots, watched_slots) -> bool:
     """Return True when every watched slot is ready and at least one matched."""
+    if _CY_PACKET is not None:
+        try:
+            return bool(_CY_PACKET.burst_ready(skill_slots, watched_slots))
+        except Exception:
+            pass
     if not skill_slots or not watched_slots:
         return False
     try:

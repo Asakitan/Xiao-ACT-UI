@@ -1210,34 +1210,8 @@ def _pick_stamina_resource_id(player: PlayerData) -> int:
     energy_info_map = getattr(player, 'energy_info_map', {}) or {}
     total_limit = max(0, int(getattr(player, 'energy_limit', 0) or 0))
     total_limit += max(0, int(getattr(player, 'extra_energy_limit', 0) or 0))
-
-    candidates = []
-    for resource_id, current_value in resource_values.items():
-        info = energy_info_map.get(resource_id) or {}
-        max_value = max(0, int(info.get('energy_value', 0) or 0))
-        score = 0
-        if max_value > 0:
-            score += 50
-            if 0 <= current_value <= max_value:
-                score += 25
-            if total_limit > 0 and abs(max_value - total_limit) <= max(12, int(total_limit * 0.08)):
-                score += 25
-            if _is_sane_attr_stamina_max(max_value):
-                score += 15
-        if 0 <= current_value <= 1300:
-            score += 8
-        if int(info.get('unlock_num', 0) or 0) >= 0:
-            score += 2
-        candidates.append((score, -abs(total_limit - max_value) if total_limit > 0 and max_value > 0 else 0, resource_id))
-
-    if not candidates and len(energy_info_map) == 1:
-        try:
-            return int(next(iter(energy_info_map.keys())))
-        except Exception:
-            return 0
-
-    candidates.sort(reverse=True)
-    return int(candidates[0][2]) if candidates else 0
+    return int(_CY_PACKET.pick_stamina_resource_id(
+        resource_values, energy_info_map, total_limit))
 
 
 def _refresh_stamina_resource(player: PlayerData) -> bool:

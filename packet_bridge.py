@@ -23,6 +23,8 @@ import json
 import os
 import sys
 
+import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
+
 from game_state import GameStateManager, compute_burst_ready
 from packet_parser import (PacketParser, PlayerData, MonsterData,
                            BuffEventType, DamageType,
@@ -86,137 +88,28 @@ def _get_skill_name(skill_id: int) -> str:
 _energy_samples = []          # 最近 N 个 energy 值
 _energy_domain = 'unknown'    # 'pct' | 'absolute' | 'unknown'
 _stamina_max_cached = 0       # 从 OCR 或观测推断的最大体力
-
-
-def _sanitize_packet_stamina_max(candidate: int, previous: int) -> int:
-    """Reject implausible STA max spikes before they reach the HUD."""
-    if candidate <= 0:
-        return previous if previous > 0 else 0
-
-    if candidate > 1300:
-        if 0 < previous <= 1300:
-            return previous
-        return 0
-
-    # Allow the first sane self STA cap (for example 1200) to replace
-    # placeholder values like 100 coming from the early full-sync path.
-    if 0 < previous <= 200 and 500 <= candidate <= 1300:
-        return candidate
-
-    if 0 < previous <= 1300:
-        if candidate > previous + max(80, int(previous * 0.10)):
-            return previous
-        if candidate < previous - max(220, int(previous * 0.35)):
-            return previous
-
-    return candidate
-
-
-def _resolve_packet_stamina(energy_value: float, stamina_max: int):
-    """Convert OriginEnergy into (current, pct) when it looks sane."""
-    if stamina_max <= 0:
-        return None
-    if not isinstance(energy_value, (int, float)):
-        return None
-
-    value = float(energy_value)
-    if not math.isfinite(value) or value < 0:
-        return None
-
-    if value <= 1.05 and stamina_max > 1:
-        current = int(round(stamina_max * value))
-    else:
-        current = int(round(value))
-
-    if current < 0:
-        return None
-    if current > stamina_max:
-        if current <= int(stamina_max * 1.2):
-            current = stamina_max
-        else:
-            return None
-
-    pct = (current / stamina_max) if stamina_max > 0 else 0.0
-    return current, pct
+_sanitize_packet_stamina_max = _CY_PACKET.sanitize_packet_stamina_max
+_resolve_packet_stamina = _CY_PACKET.resolve_packet_stamina
+_resolve_ratio_stamina = _CY_PACKET.resolve_ratio_stamina
+_resolve_skill_level_id_from_cd = _CY_PACKET.resolve_skill_level_id_from_cd
+_slot_is_ready = _CY_PACKET.slot_ready
 
 
 def _resolve_resource_stamina(player: PlayerData, stamina_max: int):
     resource_id = int(getattr(player, 'stamina_resource_id', 0) or 0)
     resource_values = getattr(player, 'resource_values', {}) or {}
-    if resource_id <= 0 or resource_id not in resource_values:
-        return None
-
-    current = int(resource_values.get(resource_id, 0) or 0)
-    if current < 0:
-        return None
-
-    energy_info = (getattr(player, 'energy_info_map', {}) or {}).get(resource_id) or {}
-    resource_max = int(energy_info.get('energy_value', 0) or 0)
-    if resource_max > 0:
-        stamina_max = resource_max if stamina_max <= 0 else min(max(stamina_max, current), resource_max)
-
-    if stamina_max <= 0:
-        return None
-    if current > stamina_max:
-        if current <= int(stamina_max * 1.15):
-            current = stamina_max
-        else:
-            return None
-    pct = (current / stamina_max) if stamina_max > 0 else 0.0
-    return current, pct
-
-
-def _resolve_ratio_stamina(ratio_value: float, stamina_max: int):
-    """Convert a 0..1 packet ratio candidate into (current, pct)."""
-    if stamina_max <= 0:
-        return None
-    if not isinstance(ratio_value, (int, float)):
-        return None
-    ratio = float(ratio_value)
-    if not math.isfinite(ratio):
-        return None
-    ratio = max(0.0, min(1.0, ratio))
-    current = int(round(stamina_max * ratio))
-    return current, ratio
+    return _CY_PACKET.resolve_resource_stamina(
+        resource_id, resource_values,
+        getattr(player, 'energy_info_map', {}) or {},
+        stamina_max,
+    )
 
 
 def _get_skill_id_for_level(player: PlayerData, skill_level_id: int) -> int:
-    skill_level_id = int(skill_level_id or 0)
-    if skill_level_id <= 0:
-        return 0
-    skill_info = (getattr(player, 'skill_level_info_map', {}) or {}).get(skill_level_id) or {}
-    skill_id = int(skill_info.get('skill_id', 0) or 0)
-    if skill_id > 0:
-        return skill_id
-    if skill_level_id >= 100:
-        return int(skill_level_id // 100)
-    return skill_level_id
-
-
-def _resolve_skill_level_id_from_cd(base_skill_id: int, cd_map: dict,
-                                    last_use_map: dict = None,
-                                    seen_ids: list = None) -> int:
-    """Find the skill_level_id that matches a base skill_id.
-
-    skill_level_id = skill_id * 100 + level,  so skill_level_id // 100 == skill_id.
-    Searches cd_map first, then last_use_map and seen_ids as fallbacks.
-    Returns the matching skill_level_id, or 0 if not found.
-    """
-    if base_skill_id <= 0:
-        return 0
-    # Search in cd_map (active CDs)
-    for slid in (cd_map or {}):
-        if int(slid or 0) > 0 and int(slid) // 100 == base_skill_id:
-            return int(slid)
-    # Search in last_use_at (skills that were used but CD expired)
-    for slid in (last_use_map or {}):
-        if int(slid or 0) > 0 and int(slid) // 100 == base_skill_id:
-            return int(slid)
-    # Search in seen_ids history
-    for slid in (seen_ids or []):
-        if int(slid or 0) > 0 and int(slid) // 100 == base_skill_id:
-            return int(slid)
-    return 0
+    return int(_CY_PACKET.get_skill_id_for_level(
+        getattr(player, 'skill_level_info_map', {}) or {},
+        skill_level_id,
+    ))
 
 
 def _infer_slot_map_from_cds(player: PlayerData) -> dict:
@@ -229,51 +122,12 @@ def _infer_slot_map_from_cds(player: PlayerData) -> dict:
     seen_ids = list(getattr(player, 'skill_seen_ids', []) or [])
     last_use = getattr(player, 'skill_last_use_at', {}) or {}
 
-    # Collect all known skill_level_ids from CDs and seen history
-    all_skill_ids = set()
-    for slid in cd_map:
-        if int(slid or 0) > 0:
-            all_skill_ids.add(int(slid))
-    for slid in seen_ids:
-        if int(slid or 0) > 0:
-            all_skill_ids.add(int(slid))
-    for slid in last_use:
-        if int(slid or 0) > 0:
-            all_skill_ids.add(int(slid))
-
+    all_skill_ids, deduped = _CY_PACKET.collect_meaningful_skill_ids(
+        cd_map, seen_ids, last_use)
     if not all_skill_ids:
         return {}
-
-    # Filter out very short/normal-attack pings (duration=0 and never had a real CD)
-    meaningful = []
-    for slid in sorted(all_skill_ids):
-        cd_info = cd_map.get(slid)
-        if cd_info and int(cd_info.get('duration', 0) or 0) > 0:
-            meaningful.append(slid)
-        elif slid in last_use:
-            meaningful.append(slid)
-
-    if not meaningful:
-        # If we only have zero-duration CDs (normal attacks), nothing to show
+    if not deduped:
         return {}
-
-    # Deduplicate by base skill_id (different levels map to same skill).
-    # Prefer the variant with the highest level that has data in cd_map,
-    # so _build_packet_skill_slots can find its cooldown info.
-    seen_base: dict = {}   # base → best skill_level_id
-    for slid in meaningful:
-        base = slid // 100 if slid >= 100 else slid
-        prev = seen_base.get(base)
-        if prev is None:
-            seen_base[base] = slid
-        else:
-            # Prefer variant in cd_map over one only in last_use;
-            # among equals, prefer higher level variant (= larger id)
-            prev_in_cd = prev in cd_map
-            slid_in_cd = slid in cd_map
-            if (slid_in_cd and not prev_in_cd) or (slid_in_cd == prev_in_cd and slid > prev):
-                seen_base[base] = slid
-    deduped = sorted(seen_base.values())
 
     # ── Profession-based anchoring ──
     # 固定三个槽位: 普攻→1, 职业技能→2, 大招→7
@@ -305,99 +159,20 @@ def _infer_slot_map_from_cds(player: PlayerData) -> dict:
         prof_skill_bases.add(primary_prof_skill)
     ultimate_base = PROFESSION_ULTIMATE.get(profession_id, 0)
 
-    pinned_normal = None
-    pinned_skill = None
-    pinned_ultimate = None
-    rest = []
-    for slid in deduped:
-        base = slid // 100 if slid >= 100 else slid
-        if normal_attack_base > 0 and base == normal_attack_base and pinned_normal is None:
-            pinned_normal = slid
-        elif prof_skill_bases and base in prof_skill_bases and pinned_skill is None:
-            pinned_skill = slid
-            # Detect sub-profession branch from the pinned slot 2 skill
-            sub = SUB_PROFESSION_NAMES.get(base, '')
-            if sub and sub != getattr(player, 'sub_profession', ''):
-                player.sub_profession = sub
-                logger.info(
-                    f'[Bridge] detected sub_profession={sub!r} '
-                    f'from slot-2 skill base={base}'
-                )
-        elif ultimate_base > 0 and base == ultimate_base and pinned_ultimate is None:
-            pinned_ultimate = slid
-        else:
-            rest.append(slid)
-
-    # Filter rest: keep only skills from the current profession or shared/environment
-    # skills. Use _SKILL_TO_PROFESSION for precise filtering — only exclude skills
-    # that are EXPLICITLY assigned to a different profession in the lookup table.
-    # Prefix-based filtering was too aggressive (e.g. removing shared skill 1222
-    # because prefix 12 belongs to 冰魔导师, even on a 神盾骑士).
-    if profession_id > 0:
-        filtered_rest = []
-        for slid in rest:
-            base = slid // 100 if slid >= 100 else slid
-            assigned_profession = _SKILL_TO_PROFESSION.get(base, 0)
-            if assigned_profession > 0 and assigned_profession != profession_id:
-                continue  # Known to belong to a different profession — exclude
-            filtered_rest.append(slid)
-        rest = filtered_rest
-
-    # Sort remaining deterministically by skill_level_id to avoid slot jumping
-    # when last_use timestamps change on every skill cast
-    rest.sort(key=lambda slid: slid)
-
-    # Build slot map: pin normal→1, profession skill→2, ultimate→7
-    # (Inferred map uses DISPLAY positions directly — no remap applied)
-    # Remaining fill into 3-6 (选配) and 8-9 (共鸣)
-    slot_map = {}
-    if pinned_normal:
-        slot_map[1] = pinned_normal
-    if pinned_skill:
-        slot_map[2] = pinned_skill
-    if pinned_ultimate:
-        slot_map[7] = pinned_ultimate
-
-    fill_positions = [i for i in [3, 4, 5, 6, 8, 9] if i not in slot_map]
-    for slid in rest:
-        if not fill_positions:
-            break
-        slot_map[fill_positions.pop(0)] = slid
-
-    # If no profession anchoring at all, fall back to simple sequential assignment
-    if not pinned_normal and not pinned_skill and not pinned_ultimate:
-        slot_map = {}
-        deduped.sort()  # deterministic by skill_level_id
-        for idx, slid in enumerate(deduped[:9], start=1):
-            slot_map[idx] = slid
+    pinned_skill_base, slot_map = _CY_PACKET.infer_skill_slot_map(
+        deduped, profession_id, normal_attack_base,
+        tuple(sorted(prof_skill_bases)) if prof_skill_bases else (),
+        ultimate_base, _SKILL_TO_PROFESSION,
+    )
+    if pinned_skill_base > 0:
+        sub = SUB_PROFESSION_NAMES.get(int(pinned_skill_base), '')
+        if sub and sub != getattr(player, 'sub_profession', ''):
+            player.sub_profession = sub
+            logger.info(
+                f'[Bridge] detected sub_profession={sub!r} '
+                f'from slot-2 skill base={int(pinned_skill_base)}'
+            )
     return slot_map
-
-
-def _slot_is_ready(slot) -> bool:
-    if not isinstance(slot, dict):
-        return False
-    state = str(slot.get('state', '') or '').strip().lower()
-    if state in ('ready', 'active'):
-        return True
-    try:
-        if bool(slot.get('active')):
-            return True
-    except Exception:
-        pass
-    try:
-        if int(slot.get('charge_count', 0) or 0) > 0:
-            return True
-    except Exception:
-        pass
-    try:
-        if int(slot.get('remaining_ms', 0) or 0) <= 120:
-            return True
-    except Exception:
-        pass
-    try:
-        return float(slot.get('cooldown_pct', 1.0) or 1.0) <= 0.02
-    except Exception:
-        return False
 
 
 # ── 槽位重映射 ──
@@ -535,199 +310,42 @@ def _build_packet_skill_slots(player: PlayerData):
             charge_count = max(0, int(cd_info.get('charge_count') or 0))
             skill_cd_type = max(0, int(cd_info.get('skill_cd_type') or 0))
 
-            # ── CD modifier sources ──
-            # 1. Per-packet SkillCDInfo fields 9/10/11 (per-skill passives)
-            pkt_sub_ratio = max(0, int(cd_info.get('sub_cd_ratio') or 0))
-            pkt_sub_fixed = max(0, int(cd_info.get('sub_cd_fixed') or 0))
-            pkt_accel = max(0, int(cd_info.get('accelerate_cd_ratio') or 0))
-
-            # 2. Entity-level attrs (AttrSkillCD/AttrSkillCDPCT/AttrCdAcceleratePct)
-            ent_cd_flat = max(0, int(getattr(player, 'attr_skill_cd', 0) or 0))
-            ent_cd_pct = max(0, int(getattr(player, 'attr_skill_cd_pct', 0) or 0))
-            ent_accel = max(0, int(getattr(player, 'attr_cd_accelerate_pct', 0) or 0))
-
-            # 3. Buff-based TempAttr (types 100/101/103)
-            tmp_cd_pct = max(0, int(getattr(player, 'temp_attr_cd_pct', 0) or 0))
-            tmp_cd_fixed = max(0, int(getattr(player, 'temp_attr_cd_fixed', 0) or 0))
-            tmp_accel = max(0, int(getattr(player, 'temp_attr_cd_accel', 0) or 0))
-
-            has_entity_mods = ent_cd_flat > 0 or ent_cd_pct > 0 or ent_accel > 0
-            has_buff_mods = tmp_cd_pct > 0 or tmp_cd_fixed > 0 or tmp_accel > 0
-            has_pkt_mods = pkt_sub_ratio > 0 or pkt_sub_fixed > 0 or pkt_accel > 0
-
-            # ── Compute effective CD duration (resonance-logs-cn formula) ──
-            # Entity/buff attrs: calculated_duration = (1 - pct_reduce) * (base - flat_reduce)
-            # Per-packet fields are applied ON TOP of entity attrs (per-skill passives)
-            effective_ms = total_ms
-            accel_rate = 0.0  # as a fraction (0.2 = 20% faster)
-
-            if has_entity_mods or has_buff_mods:
-                # Primary: entity + buff modifiers (from resonance-logs-cn)
-                total_pct = (ent_cd_pct + tmp_cd_pct) / 10000.0
-                total_flat = ent_cd_flat + tmp_cd_fixed
-                effective_ms = max(0, int((1.0 - total_pct) * (total_ms - total_flat)))
-                accel_rate = (ent_accel + tmp_accel) / 10000.0
-                # Also layer per-packet per-skill passive reductions on top
-                if pkt_sub_fixed > 0 or pkt_sub_ratio > 0:
-                    effective_ms = max(0, effective_ms - pkt_sub_fixed)
-                    if pkt_sub_ratio > 0:
-                        effective_ms = int(effective_ms * max(0, 10000 - pkt_sub_ratio) / 10000)
-                if pkt_accel > 0:
-                    accel_rate += pkt_accel / 10000.0
-            elif has_pkt_mods:
-                # Fallback: per-packet fields only (no entity attrs available)
-                if pkt_sub_fixed > 0 or pkt_sub_ratio > 0:
-                    effective_ms = max(0, total_ms - pkt_sub_fixed)
-                    if pkt_sub_ratio > 0:
-                        effective_ms = int(effective_ms * max(0, 10000 - pkt_sub_ratio) / 10000)
-                if pkt_accel > 0:
-                    accel_rate = pkt_accel / 10000.0
-            # NOTE: FightResCdSpeedPct (11980) applies to fight RESOURCE regeneration
-            # (e.g. shield energy), NOT skill cooldowns. Do NOT use it for skill CD calc.
-
-            # Known-accel speed multiplier from packet/entity modifiers
-            accel_speed_mult = 1.0 + accel_rate
-
-            # ── Compute remaining CD ──
-            # With proto fix (ValidCDTimeLegacy at field 5), valid_cd_time is
-            # now captured from SyncToMeDelta's SkillCD wire format.
-            #
-            # Priority:
-            # A) VCD-based + measured speed (most accurate; CDR is inherently
-            #    included because VCD ticks faster when CDR is active)
-            # B) begin_time + CDR attrs (when VCD = 0, first ~1s of a CD)
-            # C) local elapsed fallback (least accurate)
-            #
-            # VCD formula (resonance-logs-cn): the server sends valid_cd_time
-            # which progresses from 0 → duration.  VCD speed > 1.0 when CDR
-            # reduces the real CD.  remaining_real = (duration − VCD) / speed.
-            begin_ms = int(cd_info.get('begin_time') or 0)
-            _ts_2020 = 1577836800000  # 2020-01-01
-            _ts_2030 = 1893456000000  # 2030-01-01
-
-            # Filter out impossible values (wrapped int64 from charge entries)
-            if total_ms > 600_000 or total_ms < 0:
-                total_ms = 0
-                effective_ms = 0
-            if elapsed_ms > 600_000 or elapsed_ms < 0:
-                elapsed_ms = 0
-
-            # ── Measure VCD speed ──
-            # vcd_speed = VCD / server_elapsed  →  captures ALL CDR effects
-            vcd_speed = accel_speed_mult  # default from entity/buff CDR attrs
-            server_elapsed_ms = 0
-            has_server_clock = (now_server_ms > 0 and _ts_2020 < begin_ms < _ts_2030)
-
-            if has_server_clock:
-                server_elapsed_ms = max(0, now_server_ms - begin_ms)
-
-            # Measure from VCD + server clock (most reliable)
-            measured_vcd_speed = 0.0
-            if elapsed_ms > 0 and server_elapsed_ms > 500:
-                measured_vcd_speed = elapsed_ms / server_elapsed_ms
-                if 0.5 <= measured_vcd_speed <= 25.0:
-                    vcd_speed = measured_vcd_speed
-
-            # Fall back to parser-tracked EMA speed from prior VCD deltas
-            if measured_vcd_speed <= 0:
-                parser_speed = float(cd_info.get('vcd_speed_ratio') or 0)
-                if 0.8 <= parser_speed <= 25.0:
-                    vcd_speed = parser_speed
-
-            if total_ms > 0:
-                last_update_ms = int(
-                    cd_info.get('last_vcd_update_ms')
-                    or cd_info.get('observed_at_ms')
-                    or now_local_ms
-                )
-                local_since_ms = max(0, now_local_ms - last_update_ms)
-
-                # ── Path A: VCD available → VCD-speed approach ──
-                # remaining_real = (duration − extrapolated_vcd) / vcd_speed
-                if elapsed_ms > 0 and vcd_speed > 0.01:
-                    # Extrapolate VCD forward from last update
-                    current_vcd = elapsed_ms + local_since_ms * vcd_speed
-                    if current_vcd >= total_ms:
-                        remaining_ms = 0
-                        cooldown_pct = 0.0
-                    else:
-                        remaining_vcd = total_ms - current_vcd
-                        remaining_ms = max(0, int(remaining_vcd / vcd_speed))
-                        display_total_ms = max(1, int(total_ms / vcd_speed))
-                        cooldown_pct = max(0.0, min(1.0,
-                            remaining_ms / display_total_ms
-                        )) if display_total_ms > 0 else 0.0
-                    source_confidence = 0.97
-                    display_total_ms = max(1, int(total_ms / vcd_speed))
-
-                # ── Path B: begin_time + CDR attrs (VCD = 0) ──
-                # Falls back to CDR-adjusted duration.  Accuracy depends on
-                # whether entity/buff CDR attrs are populated.
-                elif has_server_clock:
-                    # actual total real CD = effective_ms / (1 + accel)
-                    real_total_cd = (
-                        int(effective_ms / accel_speed_mult)
-                        if accel_speed_mult > 0.01
-                        else effective_ms
-                    )
-                    if server_elapsed_ms >= real_total_cd:
-                        remaining_ms = 0
-                        cooldown_pct = 0.0
-                    elif server_elapsed_ms >= 0:
-                        remaining_ms = max(0, real_total_cd - int(server_elapsed_ms))
-                        cooldown_pct = max(0.0, min(1.0,
-                            remaining_ms / real_total_cd
-                        )) if real_total_cd > 0 else 0.0
-                    else:
-                        remaining_ms = real_total_cd
-                        cooldown_pct = 1.0
-                    display_total_ms = max(1, real_total_cd)
-                    source_confidence = 0.80
-
-                # ── Path C: local elapsed fallback ──
-                else:
-                    local_elapsed = max(0, now_local_ms - last_update_ms)
-                    real_total_cd = (
-                        int(effective_ms / accel_speed_mult)
-                        if accel_speed_mult > 0.01
-                        else effective_ms
-                    )
-                    remaining_ms = max(0, int(real_total_cd - local_elapsed))
-                    display_total_ms = max(1, real_total_cd)
-                    cooldown_pct = max(0.0, min(1.0,
-                        remaining_ms / display_total_ms
-                    )) if display_total_ms > 0 else 0.0
-                    source_confidence = 0.55
-
-                effective_ms = display_total_ms
-
-                if charge_count > 0:
-                    cooldown_pct = 0.0
-                active = remaining_ms > 0 and (now_t - float(last_use_map.get(skill_level_id, 0.0))) <= 0.45
+            state, cooldown_pct, remaining_ms, effective_ms, charge_count, active, source_confidence = _CY_PACKET.compute_skill_cd_ui_state(
+                total_ms,
+                elapsed_ms,
+                charge_count,
+                cd_info.get('sub_cd_ratio', 0),
+                cd_info.get('sub_cd_fixed', 0),
+                cd_info.get('accelerate_cd_ratio', 0),
+                getattr(player, 'attr_skill_cd', 0),
+                getattr(player, 'attr_skill_cd_pct', 0),
+                getattr(player, 'attr_cd_accelerate_pct', 0),
+                getattr(player, 'temp_attr_cd_pct', 0),
+                getattr(player, 'temp_attr_cd_fixed', 0),
+                getattr(player, 'temp_attr_cd_accel', 0),
+                now_server_ms,
+                now_local_ms,
+                cd_info.get('begin_time', 0),
+                cd_info.get('last_vcd_update_ms') or cd_info.get('observed_at_ms') or now_local_ms,
+                cd_info.get('vcd_speed_ratio', 0),
+                last_use_map.get(skill_level_id, 0.0),
+                now_t,
+            )
         skill_id = _get_skill_id_for_level(player, skill_level_id)
         skill_name = _get_skill_name(skill_id) or _get_skill_name(skill_level_id)
-        # Compute display state for the HUD
-        if charge_count > 0 or (remaining_ms <= 120 and cooldown_pct <= 0.02):
-            state = 'ready'
-        elif active:
-            state = 'active'
-        elif remaining_ms > 0 and cooldown_pct > 0.02:
-            state = 'cooldown'
-        else:
-            state = 'ready'
         slots.append({
             'index': int(display_idx),
             'skill_level_id': int(skill_level_id or 0),
             'skill_id': int(skill_id or 0),
             'state': state,
-            'cooldown_pct': round(cooldown_pct, 3),
+            'cooldown_pct': cooldown_pct,
             'remaining_ms': max(0, int(remaining_ms or 0)),
             'total_cd_ms': max(0, int(effective_ms or total_ms or 0)),
             'charge_count': max(0, int(charge_count or 0)),
             'max_charges': max(1, int(cd_info.get('max_charges') or 1)) if cd_info else 1,
             'skill_cd_type': max(0, int(skill_cd_type or 0)),
             'active': bool(active),
-            'source_confidence': round(float(source_confidence or 0.0), 2),
+            'source_confidence': source_confidence,
             'ready_edge': False,
             'name': skill_name,
             'inferred': inferred,
@@ -1466,9 +1084,7 @@ class PacketBridge:
                         previous_slots[int(slot.get('index', 0) or 0)] = slot
                     except Exception:
                         continue
-                for slot in skill_slots:
-                    prev_slot = previous_slots.get(int(slot.get('index', 0) or 0))
-                    slot['ready_edge'] = bool(prev_slot and _slot_is_ready(slot) and not _slot_is_ready(prev_slot))
+                _CY_PACKET.apply_ready_edges(skill_slots, previous_slots)
                 updates['skill_slots'] = skill_slots
                 watched = self._get_watched_slots()
                 updates['burst_ready'] = compute_burst_ready(skill_slots, watched)
@@ -1559,56 +1175,27 @@ class PacketBridge:
 
     def _stabilize_packet_stamina(self, current: int, stamina_max: int, energy_priority: int) -> int:
         """Hold packet-only STA spikes until they repeat, instead of showing instant jumps."""
-        if stamina_max <= 0:
-            self._stable_sta_current = 0
-            self._stable_sta_max = 0
-            self._pending_sta_current = None
-            self._pending_sta_hits = 0
-            return max(0, int(current))
-
-        current = max(0, min(int(current), int(stamina_max)))
-        if self._stable_sta_max != stamina_max:
-            self._stable_sta_current = min(max(0, int(self._stable_sta_current or 0)), int(stamina_max))
-            self._stable_sta_max = int(stamina_max)
-            self._pending_sta_current = None
-            self._pending_sta_hits = 0
-
-        if energy_priority != 2:
-            self._stable_sta_current = current
-            self._pending_sta_current = None
-            self._pending_sta_hits = 0
-            return current
-
-        previous = max(0, min(int(self._stable_sta_current or 0), int(stamina_max)))
-        if previous <= 0:
-            self._stable_sta_current = current
-            return current
-
-        threshold = max(36, int(stamina_max * 0.08))
-        if abs(current - previous) <= threshold:
-            self._stable_sta_current = current
-            self._pending_sta_current = None
-            self._pending_sta_hits = 0
-            return current
-
-        if self._pending_sta_current == current:
-            self._pending_sta_hits += 1
-        else:
-            self._pending_sta_current = current
-            self._pending_sta_hits = 1
-
-        if self._pending_sta_hits >= 2:
-            logger.info(
-                f'[Bridge] accept repeated STA candidate {current}/{stamina_max} '
-                f'after filtering spike from {previous}/{stamina_max}'
-            )
-            self._stable_sta_current = current
-            self._pending_sta_current = None
-            self._pending_sta_hits = 0
-            return current
-
-        logger.debug(
-            f'[Bridge] hold STA spike candidate {current}/{stamina_max} '
-            f'(prev={previous}/{stamina_max}, priority={energy_priority})'
+        (result_cur,
+         self._stable_sta_current,
+         self._stable_sta_max,
+         self._pending_sta_current,
+         self._pending_sta_hits,
+         accepted_repeated,
+         held_spike) = _CY_PACKET.stabilize_packet_stamina(
+            current, stamina_max, energy_priority,
+            self._stable_sta_current,
+            self._stable_sta_max,
+            self._pending_sta_current,
+            self._pending_sta_hits,
         )
-        return previous
+        if accepted_repeated:
+            logger.info(
+                f'[Bridge] accept repeated STA candidate {int(result_cur)}/{stamina_max} '
+                f'after packet spike filtering'
+            )
+        elif held_spike:
+            logger.debug(
+                f'[Bridge] hold STA spike candidate {int(current)}/{stamina_max} '
+                f'(stable={int(self._stable_sta_current)}/{stamina_max}, priority={energy_priority})'
+            )
+        return int(result_cur)
