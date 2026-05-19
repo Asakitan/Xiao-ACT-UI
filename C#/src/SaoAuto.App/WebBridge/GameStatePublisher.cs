@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using SaoAuto.Core.Automation;
 using SaoAuto.Core.State;
 
 namespace SaoAuto.App.WebBridge;
@@ -37,6 +38,13 @@ namespace SaoAuto.App.WebBridge;
 /// BossDps changes. Same first-emit-fires-all contract so JS
 /// subscribers that connect after Start can render an initial value.
 ///
+/// S131 adds an optional DPS snapshot provider. When supplied, the
+/// full <c>state.changed</c> payload includes the per-attacker
+/// <c>dps_entries</c> rollup plus total damage/heal/HPS metadata via
+/// <see cref="StateSnapshotPayload.ToDict(GameState, DpsSnapshot?)"/>.
+/// The provider is intentionally optional because the App layer does
+/// not always own a live <see cref="DpsTracker"/> yet.
+///
 /// Lifecycle: <see cref="Start"/> hooks the subscription and (by
 /// default) emits an initial snapshot so the JS side has a value to
 /// render before the first state mutation. <see cref="Dispose"/>
@@ -48,6 +56,7 @@ public sealed class GameStatePublisher : IDisposable
 
     private readonly GameStateManager _states;
     private readonly BridgeEventBroadcaster _broadcaster;
+    private readonly Func<DpsSnapshot?>? _dpsSnapshotProvider;
     private readonly object _gate = new();
     private IDisposable? _sub;
     private string? _lastSig;
@@ -73,10 +82,14 @@ public sealed class GameStatePublisher : IDisposable
     private int _lastBossTotalDamage;
     private int _lastBossDps;
 
-    public GameStatePublisher(GameStateManager states, BridgeEventBroadcaster broadcaster)
+    public GameStatePublisher(
+        GameStateManager states,
+        BridgeEventBroadcaster broadcaster,
+        Func<DpsSnapshot?>? dpsSnapshotProvider = null)
     {
         _states = states ?? throw new ArgumentNullException(nameof(states));
         _broadcaster = broadcaster ?? throw new ArgumentNullException(nameof(broadcaster));
+        _dpsSnapshotProvider = dpsSnapshotProvider;
     }
 
     public bool IsActive => _sub is not null;
@@ -107,7 +120,8 @@ public sealed class GameStatePublisher : IDisposable
 
     private void OnState(GameState state)
     {
-        var payload = StateSnapshotPayload.ToDict(state);
+        var dps = _dpsSnapshotProvider?.Invoke();
+        var payload = StateSnapshotPayload.ToDict(state, dps);
         // S119 — dedup signature excludes the auto-stamped capture_ts so two
         // back-to-back identical Update calls (which differ only by ms-level
         // CaptureTimestamp) collapse to a single emit, matching Python's

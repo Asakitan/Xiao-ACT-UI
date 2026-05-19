@@ -18,6 +18,15 @@ public static class BridgeCommands
     public const string ImportAutoKey = "autokey.import";
     public const string ExportAutoKey = "autokey.export";
     public const string OpenAutoKeyEditor = "autokey.editor.open";
+    // S156 — profile CRUD (served by AutoKeyProfileBridge).
+    public const string SetAutoKeyEnabled = "autokey.set_enabled";
+    public const string ListAutoKeyProfiles = "autokey.profile.list";
+    public const string SetAutoKeyActiveProfile = "autokey.profile.set_active";
+    public const string DeleteAutoKeyProfile = "autokey.profile.delete";
+    public const string CloneAutoKeyProfile = "autokey.profile.clone";
+    public const string UpsertAutoKeyProfile = "autokey.profile.upsert";
+    public const string ExportAutoKeyProfile = "autokey.profile.export";
+    public const string ImportAutoKeyProfile = "autokey.profile.import";
 
     // BossRaid
     public const string StartBossRaid = "bossraid.start";
@@ -55,6 +64,7 @@ public static class BridgeEvents
     public const string BossHpSnapshot = "state.bosshp";
     public const string BurstReady = "state.burst_ready";
     public const string BuffSnapshot = "state.buffs";
+    public const string HideSeekStatus = "state.hideseek";
     public const string AlertRaised = "alert.raised";
     public const string CommanderUpdated = "commander.updated";
     public const string UpdaterStatus = "updater.status";

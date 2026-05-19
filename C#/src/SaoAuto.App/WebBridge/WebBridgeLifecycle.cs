@@ -1,3 +1,6 @@
+using SaoAuto.App.Startup;
+using SaoAuto.Core.Automation;
+using SaoAuto.Core.Configuration;
 using SaoAuto.Core.State;
 
 namespace SaoAuto.App.WebBridge;
@@ -23,15 +26,34 @@ namespace SaoAuto.App.WebBridge;
 public sealed class WebBridgeLifecycle : IDisposable
 {
     private readonly GameStatePublisher _publisher;
+    private HideSeekStatusPublisher? _hideSeekPublisher;
+    private AutoKeyProfileBridge? _autoKeyProfileBridge;
+    private BuffMonBridge? _buffMonBridge;
+    private DpsBridge? _dpsBridge;
+    private RecognitionStatusBridge? _recognitionBridge;
+    private UpdaterBridge? _updaterBridge;
     private bool _disposed;
 
     public BridgeEventBroadcaster Broadcaster { get; }
+    /// <summary>S156 — single router owned by the bridge runtime.
+    /// Empty until something registers (e.g.
+    /// <see cref="AttachAutoKeyProfile"/>).</summary>
+    public BridgeRouter Router { get; } = new();
+    /// <summary>S157 — string-in/string-out adapter for a WebView2
+    /// host. Subscribe to <see cref="BridgeHostAdapter.PostJson"/> and
+    /// route its output to <c>CoreWebView2.PostWebMessageAsString</c>.
+    /// Feed inbound messages via
+    /// <see cref="BridgeHostAdapter.HandleMessageJson"/>.</summary>
+    public BridgeHostAdapter HostAdapter { get; }
 
-    public WebBridgeLifecycle(GameStateManager states)
+    public WebBridgeLifecycle(
+        GameStateManager states,
+        Func<DpsSnapshot?>? dpsSnapshotProvider = null)
     {
         if (states is null) throw new ArgumentNullException(nameof(states));
         Broadcaster = new BridgeEventBroadcaster();
-        _publisher = new GameStatePublisher(states, Broadcaster);
+        _publisher = new GameStatePublisher(states, Broadcaster, dpsSnapshotProvider);
+        HostAdapter = new BridgeHostAdapter(Router, Broadcaster);
     }
 
     public bool IsActive => _publisher.IsActive;
@@ -42,10 +64,107 @@ public sealed class WebBridgeLifecycle : IDisposable
         _publisher.Start(emitInitial);
     }
 
+    /// <summary>
+    /// S155 — attach a <see cref="HideSeekLifecycle"/> so per-tick
+    /// snapshots flow out as <see cref="BridgeEvents.HideSeekStatus"/>.
+    /// Idempotent: a second call replaces the previous attachment.
+    /// </summary>
+    public void AttachHideSeek(HideSeekLifecycle lifecycle, bool emitInitial = true)
+    {
+        if (lifecycle is null) throw new ArgumentNullException(nameof(lifecycle));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _hideSeekPublisher?.Dispose();
+        _hideSeekPublisher = new HideSeekStatusPublisher(lifecycle, Broadcaster);
+        _hideSeekPublisher.Start(emitInitial);
+    }
+
+    /// <summary>
+    /// S156 — attach an <see cref="AutoKeyProfileLifecycle"/> so its
+    /// service registers profile-CRUD handlers on <see cref="Router"/>.
+    /// Idempotent: a second call replaces the previous attachment.
+    /// </summary>
+    public void AttachAutoKeyProfile(AutoKeyProfileLifecycle lifecycle)
+    {
+        if (lifecycle is null) throw new ArgumentNullException(nameof(lifecycle));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _autoKeyProfileBridge?.Dispose();
+        _autoKeyProfileBridge = new AutoKeyProfileBridge(lifecycle.Service, Router);
+    }
+
+    /// <summary>
+    /// S169 — attach a <see cref="BuffMonBridge"/> so HUD can read/write
+    /// the <c>buffmon_enabled</c> setting. Idempotent.
+    /// </summary>
+    public void AttachBuffMon(SettingsManager settings)
+    {
+        if (settings is null) throw new ArgumentNullException(nameof(settings));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _buffMonBridge?.Dispose();
+        _buffMonBridge = new BuffMonBridge(settings, Router);
+    }
+
+    /// <summary>
+    /// S169 — attach a <see cref="DpsBridge"/> backed by the packet
+    /// lifecycle's reset action + snapshot provider. Either delegate
+    /// may be null when the packet runtime didn't start; the bridge
+    /// then returns <c>{error:"dps_unavailable"}</c>. Idempotent.
+    /// </summary>
+    public void AttachDps(Action? reset, Func<DpsSnapshot?>? lastReport)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _dpsBridge?.Dispose();
+        _dpsBridge = new DpsBridge(Router, reset, lastReport);
+    }
+
+    /// <summary>
+    /// S169 — attach a <see cref="RecognitionStatusBridge"/>. The
+    /// <paramref name="start"/> / <paramref name="stop"/> hooks stay
+    /// optional until <see cref="RecognitionLifecycle"/> grows a real
+    /// suspend/restart path. Idempotent.
+    /// </summary>
+    public void AttachRecognition(
+        Func<bool> isActive,
+        Action? start = null,
+        Action? stop = null)
+    {
+        if (isActive is null) throw new ArgumentNullException(nameof(isActive));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _recognitionBridge?.Dispose();
+        _recognitionBridge = new RecognitionStatusBridge(Router, isActive, start, stop);
+    }
+
+    /// <summary>
+    /// S172 — attach an <see cref="UpdaterLifecycle"/>. Registers
+    /// <c>updater.check</c> / <c>updater.download</c> / <c>updater.apply</c>
+    /// on <see cref="Router"/> and rebroadcasts the
+    /// <see cref="Core.Updater.UpdaterStateMachine.StateChanged"/> event as
+    /// <see cref="BridgeEvents.UpdaterStatus"/>. Idempotent.
+    /// </summary>
+    public void AttachUpdater(UpdaterLifecycle lifecycle)
+    {
+        if (lifecycle is null) throw new ArgumentNullException(nameof(lifecycle));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _updaterBridge?.Dispose();
+        _updaterBridge = new UpdaterBridge(
+            Router,
+            lifecycle.StateMachine,
+            Broadcaster,
+            lifecycle.Check,
+            lifecycle.Download,
+            lifecycle.Apply);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        _updaterBridge?.Dispose();
+        _recognitionBridge?.Dispose();
+        _dpsBridge?.Dispose();
+        _buffMonBridge?.Dispose();
+        _autoKeyProfileBridge?.Dispose();
+        _hideSeekPublisher?.Dispose();
+        HostAdapter.Dispose();
         _publisher.Dispose();
     }
 }
