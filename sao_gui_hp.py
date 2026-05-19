@@ -246,9 +246,30 @@ def _draw_text_shadow(img: Image.Image, xy, text: str, font,
                       shadow_color: Tuple[int, int, int, int],
                       blur: int = 3) -> None:
     """CSS text-shadow: render text in shadow_color, blur, composite."""
-    g = Image.new('RGBA', img.size, (0, 0, 0, 0))
-    ImageDraw.Draw(g).text(xy, text, fill=shadow_color, font=font)
-    img.alpha_composite(_gpu_blur(g, blur))
+    if not text:
+        return
+    blur = max(0, int(blur))
+    probe = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+    pdraw = ImageDraw.Draw(probe)
+    try:
+        bbox = pdraw.textbbox((0, 0), text, font=font)
+    except Exception:
+        try:
+            tw, th = pdraw.textsize(text, font=font)
+            bbox = (0, 0, tw, th)
+        except Exception:
+            bbox = (0, 0, max(1, len(text) * max(1, getattr(font, 'size', 8) // 2)),
+                    max(1, getattr(font, 'size', 8)))
+    pad = blur * 2
+    w = max(1, bbox[2] - bbox[0] + pad * 2)
+    h = max(1, bbox[3] - bbox[1] + pad * 2)
+    g = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(g).text(
+        (pad - bbox[0], pad - bbox[1]),
+        text, fill=shadow_color, font=font
+    )
+    g = _gpu_blur(g, blur) if blur > 0 else g
+    img.alpha_composite(g, dest=(int(round(xy[0])) - pad, int(round(xy[1])) - pad))
 
 
 def _offset_poly(points, dx: int, dy: int):
@@ -617,8 +638,10 @@ class HpOverlay:
         # ~70-90% of frames hit the cache.
         self._outer_pulse_cache: Optional[Image.Image] = None
         self._outer_pulse_sig: tuple = ()
+        self._outer_pulse_cache_pos: Tuple[int, int] = (0, 0)
         self._cover_pulse_cache: Optional[Image.Image] = None
         self._cover_pulse_sig: tuple = ()
+        self._cover_pulse_cache_pos: Tuple[int, int] = (0, 0)
         self._interaction_fx_cache: Optional[Image.Image] = None
         self._interaction_fx_sig: tuple = ()
         # v2.3.0 Phase 1: full-frame cache. The HP panel runs at 60 Hz
@@ -669,7 +692,9 @@ class HpOverlay:
         self._shell_cache = None; self._shell_sig = ()
         self._shadow_cache = None; self._shadow_sig = ()
         self._outer_pulse_cache = None; self._outer_pulse_sig = ()
+        self._outer_pulse_cache_pos = (0, 0)
         self._cover_pulse_cache = None; self._cover_pulse_sig = ()
+        self._cover_pulse_cache_pos = (0, 0)
         self._interaction_fx_cache = None; self._interaction_fx_sig = ()
         self._frame_cache = None; self._frame_sig = ()
         self._last_compose_sig = None
@@ -723,8 +748,10 @@ class HpOverlay:
         self._shadow_sig = ()
         self._outer_pulse_cache = None
         self._outer_pulse_sig = ()
+        self._outer_pulse_cache_pos = (0, 0)
         self._cover_pulse_cache = None
         self._cover_pulse_sig = ()
+        self._cover_pulse_cache_pos = (0, 0)
         self._interaction_fx_cache = None
         self._interaction_fx_sig = ()
         self._frame_cache = None
@@ -1098,12 +1125,6 @@ class HpOverlay:
             return None
         try:
             y_off = int(round(8 * (1.0 - self._enter_scale_t)))
-            hp_pct = max(0.0, min(1.0, self._hp_pct_disp))
-            max_int = int(round(self._hp_max))
-            bucket = max(1, max_int // 1000) if max_int > 0 else 1
-            hp_int = (int(round(self._hp_max * hp_pct)) // bucket) * bucket
-            sta_pct_q = int(round(self._sta_pct_disp * 100))
-            hp_group_alpha_q = int(self._hp_group_alpha_now(now) * 24)
             tl_pulse_q = int(((now % 2.5) / 2.5) * 8)
             br_pulse_q = int((((now + 1.3) % 2.5) / 2.5) * 8)
             scan_q = int((((now - self._spawn_time) / 3.5) % 1.0) * 10)
@@ -1117,13 +1138,13 @@ class HpOverlay:
             else:
                 clock_q = int(now)
                 link_q = int((((now - self._spawn_time + 0.5) % 4.0) / 4.0) * 10)
-            return (
+            return _CY_UI.hp_idle_signature(
                 y_off,
-                int(round(self._fade_alpha * 100)),
-                hp_group_alpha_q,
+                self._fade_alpha,
+                self._hp_group_alpha_now(now),
                 self._profession, self._name, self._uid, self._level,
-                hp_int, max_int, sta_pct_q, self._sta_text,
-                bool(self._sta_offline),
+                self._hp_max, self._hp_pct_disp, self._sta_pct_disp,
+                self._sta_text, bool(self._sta_offline),
                 self._boss_timer_text, self._boss_timer_urgent,
                 clock_q, link_q,
                 tl_pulse_q, br_pulse_q, scan_q,
@@ -1648,40 +1669,48 @@ class HpOverlay:
         sig = (img.size, y_off, s_q)
         if self._outer_pulse_cache is None or self._outer_pulse_sig != sig:
             strength_q = s_q / 50.0
-            layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            x0 = max(0, min(ID_X - 18, COVER_X - 14, STA_X - 8, ID_X - 4, COVER_X - 6) - 10)
+            y0 = max(0, min(ID_Y - 8, COVER_Y - 8, STA_Y - 4, ID_Y - 3, COVER_Y - 4) + y_off - 10)
+            x1 = min(img.size[0], max(ID_X + ID_W + 10, COVER_X + COVER_W + 18,
+                                      STA_X + STA_W + 10, ID_X + ID_W + 4,
+                                      COVER_X + COVER_W + 6) + 11)
+            y1 = min(img.size[1], max(ID_Y + ID_H + 8, COVER_Y + COVER_H + 10,
+                                      STA_Y + STA_H + 6, ID_Y + ID_H + 3,
+                                      COVER_Y + COVER_H + 4) + y_off + 11)
+            layer = Image.new('RGBA', (max(1, x1 - x0), max(1, y1 - y0)), (0, 0, 0, 0))
             ld = ImageDraw.Draw(layer, 'RGBA')
             ld.rounded_rectangle(
-                (ID_X - 18, ID_Y - 8 + y_off,
-                 ID_X + ID_W + 10, ID_Y + ID_H + 8 + y_off),
+                (ID_X - 18 - x0, ID_Y - 8 + y_off - y0,
+                 ID_X + ID_W + 10 - x0, ID_Y + ID_H + 8 + y_off - y0),
                 radius=12,
                 fill=(104, 228, 255, int(34 * strength_q)),
             )
             ld.rounded_rectangle(
-                (COVER_X - 14, COVER_Y - 8 + y_off,
-                 COVER_X + COVER_W + 18, COVER_Y + COVER_H + 10 + y_off),
+                (COVER_X - 14 - x0, COVER_Y - 8 + y_off - y0,
+                 COVER_X + COVER_W + 18 - x0, COVER_Y + COVER_H + 10 + y_off - y0),
                 radius=10,
                 fill=(243, 175, 18, int(26 * strength_q)),
             )
             ld.rounded_rectangle(
-                (STA_X - 8, STA_Y - 4 + y_off,
-                 STA_X + STA_W + 10, STA_Y + STA_H + 6 + y_off),
+                (STA_X - 8 - x0, STA_Y - 4 + y_off - y0,
+                 STA_X + STA_W + 10 - x0, STA_Y + STA_H + 6 + y_off - y0),
                 radius=8,
                 fill=(212, 156, 23, int(18 * strength_q)),
             )
             layer = _gpu_blur(layer, 8)
 
-            ring = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            ring = Image.new('RGBA', layer.size, (0, 0, 0, 0))
             rd = ImageDraw.Draw(ring, 'RGBA')
             rd.rounded_rectangle(
-                (COVER_X - 6, COVER_Y - 4 + y_off,
-                 COVER_X + COVER_W + 6, COVER_Y + COVER_H + 4 + y_off),
+                (COVER_X - 6 - x0, COVER_Y - 4 + y_off - y0,
+                 COVER_X + COVER_W + 6 - x0, COVER_Y + COVER_H + 4 + y_off - y0),
                 radius=9,
                 outline=(208, 244, 255, int(52 * strength_q)),
                 width=1,
             )
             rd.rounded_rectangle(
-                (ID_X - 4, ID_Y - 3 + y_off,
-                 ID_X + ID_W + 4, ID_Y + ID_H + 3 + y_off),
+                (ID_X - 4 - x0, ID_Y - 3 + y_off - y0,
+                 ID_X + ID_W + 4 - x0, ID_Y + ID_H + 3 + y_off - y0),
                 radius=8,
                 outline=(255, 226, 154, int(38 * strength_q)),
                 width=1,
@@ -1689,8 +1718,9 @@ class HpOverlay:
             layer.alpha_composite(ring)
             self._outer_pulse_cache = layer
             self._outer_pulse_sig = sig
+            self._outer_pulse_cache_pos = (x0, y0)
 
-        img.alpha_composite(self._outer_pulse_cache)
+        img.alpha_composite(self._outer_pulse_cache, dest=self._outer_pulse_cache_pos)
 
     def _draw_root_cover_pulse(self, img: Image.Image, y_off: int,
                                now: float, alpha_scale: float = 1.0) -> None:
@@ -1717,39 +1747,46 @@ class HpOverlay:
         sig = (img.size, y_off, s_q, sweep_q)
         if self._cover_pulse_cache is None or self._cover_pulse_sig != sig:
             strength_q = s_q / 50.0
-            combined = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            x0 = max(0, min(ID_X + 2, COVER_X + 2) - 14)
+            y0 = max(0, min(ID_Y + 2, COVER_Y + 2) + y_off - 14)
+            x1 = min(img.size[0], max(ID_X + ID_W - 3, COVER_X + COVER_W - 3) + 15)
+            y1 = min(img.size[1], max(ID_Y + ID_H - 3, COVER_Y + COVER_H - 3) + y_off + 15)
+            combined = Image.new('RGBA', (max(1, x1 - x0), max(1, y1 - y0)), (0, 0, 0, 0))
 
-            id_glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            id_glow = Image.new('RGBA', combined.size, (0, 0, 0, 0))
             idd = ImageDraw.Draw(id_glow, 'RGBA')
             idd.rounded_rectangle(
-                (ID_X + 2, ID_Y + 2 + y_off,
-                 ID_X + ID_W - 3, ID_Y + ID_H - 3 + y_off),
+                (ID_X + 2 - x0, ID_Y + 2 + y_off - y0,
+                 ID_X + ID_W - 3 - x0, ID_Y + ID_H - 3 + y_off - y0),
                 radius=6,
                 fill=(104, 228, 255, int(26 * strength_q)),
             )
             id_glow = _gpu_blur(id_glow, 5)
-            combined.alpha_composite(_clip_alpha(id_glow, self._id_plate_mask(y_off)))
+            id_mask = self._id_plate_mask(y_off).crop((x0, y0, x1, y1))
+            combined.alpha_composite(_clip_alpha(id_glow, id_mask))
 
-            cover_glow = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            cover_glow = Image.new('RGBA', combined.size, (0, 0, 0, 0))
             cgd = ImageDraw.Draw(cover_glow, 'RGBA')
             cgd.rounded_rectangle(
-                (COVER_X + 2, COVER_Y + 2 + y_off,
-                 COVER_X + COVER_W - 3, COVER_Y + COVER_H - 3 + y_off),
+                (COVER_X + 2 - x0, COVER_Y + 2 + y_off - y0,
+                 COVER_X + COVER_W - 3 - x0, COVER_Y + COVER_H - 3 + y_off - y0),
                 radius=6,
                 fill=(255, 220, 132, int(24 * strength_q)),
             )
             cgd.rectangle(
-                (sweep_q, COVER_Y + 4 + y_off,
-                 sweep_q + 54, COVER_Y + COVER_H - 4 + y_off),
+                (sweep_q - x0, COVER_Y + 4 + y_off - y0,
+                 sweep_q + 54 - x0, COVER_Y + COVER_H - 4 + y_off - y0),
                 fill=(255, 255, 255, int(10 + 12 * strength_q)),
             )
             cover_glow = _gpu_blur(cover_glow, 5)
-            combined.alpha_composite(_clip_alpha(cover_glow, self._cover_mask(y_off)))
+            cover_mask = self._cover_mask(y_off).crop((x0, y0, x1, y1))
+            combined.alpha_composite(_clip_alpha(cover_glow, cover_mask))
 
             self._cover_pulse_cache = combined
             self._cover_pulse_sig = sig
+            self._cover_pulse_cache_pos = (x0, y0)
 
-        img.alpha_composite(self._cover_pulse_cache)
+        img.alpha_composite(self._cover_pulse_cache, dest=self._cover_pulse_cache_pos)
 
     # ── panel drop shadows (drawn BEFORE any content) ─────────────
 

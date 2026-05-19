@@ -45,6 +45,7 @@ try:
 except Exception:
     _gow = None  # type: ignore[assignment]
 
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from overlay_render_worker import AsyncFrameWorker
 from perf_probe import probe as _probe
 from sao_menu_hud import _PIL_DRAW_LOCK
@@ -522,16 +523,10 @@ class ChildBarGpuPainter:
                 pass
 
         # 2) Build dedup signature.
-        rows_sig = tuple(
-            (r.icon, r.label, int(r.hover_t * 16), r.row_w)
-            for r in snap.rows
-        )
-        sig = (
+        sig = _CY_UI.popup_child_snapshot_sig(
             out_w, out_h,
             snap.line_w, snap.line_h, snap.arrow_w,
-            int(snap.fade_t * 16),
-            snap.bg_hex,
-            rows_sig,
+            snap.fade_t, snap.bg_hex, snap.rows,
         )
         with self._lock:
             if sig == self._last_sig:

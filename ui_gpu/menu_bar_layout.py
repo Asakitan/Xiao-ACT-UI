@@ -37,16 +37,7 @@ def column_height(state) -> int:
 
 
 def _color_lerp(c1, c2, t):
-    # tiny inline lerp_color to avoid pulling sao_theme into ui_gpu
-    h1 = c1.lstrip('#')
-    h2 = c2.lstrip('#')
-    r1, g1, b1 = int(h1[0:2], 16), int(h1[2:4], 16), int(h1[4:6], 16)
-    r2, g2, b2 = int(h2[0:2], 16), int(h2[2:4], 16), int(h2[4:6], 16)
-    return '#{:02x}{:02x}{:02x}'.format(
-        int(r1 + (r2 - r1) * t),
-        int(g1 + (g2 - g1) * t),
-        int(b1 + (b2 - b1) * t),
-    )
+    return _CY_UI.lerp_hex_color(c1, c2, t)
 
 
 # SAO palette (mirrors SAOColors; duplicated to avoid import cycle)

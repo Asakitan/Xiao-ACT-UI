@@ -32,6 +32,7 @@ from sao_menu_hud import (
     MenuHudSpriteRenderer,
     MenuLeftInfoRenderer,
 )
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 try:
     # v2.2.12: per-pixel-alpha layered window for the HUD layer.
     # Optional: falls back to canvas-native chroma-key path if unavailable.
@@ -268,9 +269,7 @@ def _strip_alpha(c: str) -> str:
 
 
 def lerp_color(c1: str, c2: str, t: float) -> str:
-    r1, g1, b1 = hex_to_rgb(_strip_alpha(c1))
-    r2, g2, b2 = hex_to_rgb(_strip_alpha(c2))
-    return rgb_to_hex(int(lerp(r1, r2, t)), int(lerp(g1, g2, t)), int(lerp(b1, b2, t)))
+    return _CY_UI.lerp_hex_color(_strip_alpha(c1), _strip_alpha(c2), t)
 
 
 # ──────────────────── 通用动画引擎 ────────────────────
@@ -390,18 +389,17 @@ class SAOCircleButton(tk.Canvas):
         # bucket) but composite it onto the canvas using the fractional
         # `_size` so smooth fisheye scaling no longer snaps to whole-pixel
         # parity flips (the visual "half-pixel tear" the user reported).
-        size_f = max(1.0, min(float(self.MAX_SIZE), float(self._size)))
-        size = max(1, int(math.ceil(size_f)))
+        size_f, size, size_q, off_pre, ioff_pre, snap_pre = _CY_UI.menu_circle_visual_metrics(
+            float(self._size), float(self.MAX_SIZE))
         t = self._hover_t
 
-        if self._active:
-            border_color = SAOColors.ACTIVE_BORDER
-            inner_fill = SAOColors.ACTIVE_BG
-            icon_color = SAOColors.ACTIVE_ICON
-        else:
-            border_color = lerp_color(SAOColors.CIRCLE_BORDER, SAOColors.ACTIVE_BORDER, t)
-            inner_fill = lerp_color(SAOColors.CIRCLE_BG, SAOColors.HOVER_BG, t)
-            icon_color = lerp_color(SAOColors.CIRCLE_ICON, SAOColors.HOVER_ICON, t)
+        border_color, inner_fill, icon_color = _CY_UI.menu_circle_palette(
+            bool(self._active), t,
+            SAOColors.CIRCLE_BORDER, SAOColors.ACTIVE_BORDER,
+            SAOColors.CIRCLE_BG, SAOColors.HOVER_BG,
+            SAOColors.CIRCLE_ICON, SAOColors.HOVER_ICON,
+            SAOColors.ACTIVE_BG, SAOColors.ACTIVE_ICON,
+        )
 
         bg_key = self.cget('bg') or '#010101'
         # Quantize the floating size to 1/4 px so we still skip duplicate
@@ -413,10 +411,6 @@ class SAOCircleButton(tk.Canvas):
         # of the same integer offset. Without this, fisheye redrew every
         # frame because size_q kept ticking while the actual composite
         # was identical.
-        size_q = round(size_f * 4.0) / 4.0
-        off_pre = (self.MAX_SIZE - size_f) / 2.0
-        ioff_pre = round(off_pre)
-        snap_pre = abs(off_pre - ioff_pre) < 0.25
         sig_pos = (size, ioff_pre, True) if snap_pre else (size_q, off_pre, False)
         sig = (sig_pos, self.icon_text, border_color, inner_fill, icon_color, bg_key)
         if sig == self._visual_sig and self._bg_item is not None:
@@ -451,11 +445,10 @@ class SAOCircleButton(tk.Canvas):
         # catches ~50% of fisheye frames vs ~20% with the 0.10 threshold,
         # cutting per-tick wall from ~1.25 ms → ~0.6 ms per button (×8
         # buttons = ~5 ms saved per tick on Tk main thread).
-        ioff = round(off)
-        if abs(off - ioff) < 0.25:
-            canvas_img.alpha_composite(image, (int(ioff), int(ioff)))
+        if snap_pre:
+            canvas_img.alpha_composite(image, (int(ioff_pre), int(ioff_pre)))
         else:
-            subpixel_alpha_composite(canvas_img, image, off, off)
+            subpixel_alpha_composite(canvas_img, image, off_pre, off_pre)
         self._last_pasted_size = size
 
         if self._bg_photo is None:
@@ -575,6 +568,7 @@ class SAOMenuBar(tk.Frame):
             btn.place(x=0, y=0)
             self._buttons.append(btn)
             self._slots.append(slot)
+            btn._cursor_ready = True
             # 鱼眼: hover 时通知 MenuBar 更新所有按钮尺寸
             btn.bind('<Enter>', lambda e, i=idx: self._on_fisheye(i), add='+')
             btn.bind('<Leave>', lambda e: self._off_fisheye(),         add='+')
@@ -758,6 +752,7 @@ class SAOMenuBar(tk.Frame):
             btn._size = 1.0
             btn._draw()
             btn._float_prev_s = 1
+            btn._cursor_ready = False
         self._start_float()
 
 
@@ -815,35 +810,19 @@ class SAOMenuBar(tk.Frame):
     def _tick_float(self, _now: float):
         if not self.winfo_exists() or not self._buttons:
             return
-        keep_animating = False
+        keep_animating, ready_indices = _CY_UI.menu_bar_advance_buttons(
+            self._buttons, _now,
+            self._enter_active, self._enter_t0,
+            self._enter_delay_s, self._enter_duration_s,
+            self._hover_idx, float(SAOCircleButton.SIZE),
+            0.18, 0.28,
+        )
+        ready_set = set(ready_indices)
         for i, btn in enumerate(self._buttons):
-            if self._enter_active:
-                local_t = (_now - self._enter_t0 - i * self._enter_delay_s) / self._enter_duration_s
-                local_t = max(0.0, min(1.0, local_t))
-                btn._size = float(max(1, int(round(SAOCircleButton.SIZE * ease_out(local_t)))))
-                if local_t < 1.0:
-                    keep_animating = True
-                else:
-                    btn.configure(cursor='hand2')
-            elif self._hover_idx is not None:
-                dist = abs(self._hover_idx - i)
-                target = SAOCircleButton.SIZE * (1.0 + 0.22 * math.exp(-0.9 * dist * dist))
-                delta = target - btn._size
-                if abs(delta) > 0.18:
-                    keep_animating = True
-                    btn._size += delta * 0.28
-                else:
-                    btn._size = target
-            else:
-                target = float(SAOCircleButton.SIZE)
-                delta = target - btn._size
-                if abs(delta) > 0.18:
-                    keep_animating = True
-                    btn._size += delta * 0.28
-                else:
-                    btn._size = target
+            if i in ready_set and getattr(btn, '_cursor_ready', False) is not True:
+                btn.configure(cursor='hand2')
+                btn._cursor_ready = True
             s = max(1, int(round(btn._size)))
-            prev_s = getattr(btn, '_float_prev_s', None)
             # v2.1.17: trigger redraw on 1/4 px changes for subpixel-smooth
             # fisheye motion (the actual paint dedup happens via _visual_sig).
             sq = round(float(btn._size) * 4.0) / 4.0
@@ -1047,14 +1026,13 @@ class SAOLeftInfo(tk.Frame):
     @_probe.decorate('ui.menu.left_panel_apply')
     def _apply_panel_progresses(self, top_t: float, bottom_t: float,
                                 sweep_phase: float = 0.0, sweep_strength: float = 0.0):
-        top_t = max(0.0, min(1.0, top_t))
-        bottom_t = max(0.0, min(1.0, bottom_t))
-        self._sweep_phase = max(0.0, min(1.0, sweep_phase))
-        self._sweep_strength = max(0.0, min(1.0, sweep_strength))
-        top_w = max(1, int(round(self._target_w * top_t)))
-        top_h = max(1, int(round(self._top_h * top_t)))
-        bottom_w = max(1, int(round(self._target_w * max(top_t, bottom_t * 0.94))))
-        bottom_h = max(1, int(round(self._bottom_h * bottom_t)))
+        (top_t, bottom_t,
+         self._sweep_phase, self._sweep_strength,
+         top_w, top_h, bottom_w, bottom_h) = _CY_UI.left_panel_progress_dims(
+            top_t, bottom_t,
+            self._target_w, self._top_h, self._bottom_h,
+            sweep_phase, sweep_strength,
+        )
 
         if self._gpu_managed and self._gpu_painter is not None \
                 and _LeftInfoSnapshot is not None:
@@ -1073,8 +1051,10 @@ class SAOLeftInfo(tk.Frame):
                     pass
             self._dispatch_gpu_paint(top_w, top_h, bottom_w, bottom_h)
         else:
-            self._top.configure(width=top_w, height=top_h)
-            self._bottom.configure(width=bottom_w, height=bottom_h)
+            if (int(self._top.cget('width') or 0), int(self._top.cget('height') or 0)) != (top_w, top_h):
+                self._top.configure(width=top_w, height=top_h)
+            if (int(self._bottom.cget('width') or 0), int(self._bottom.cget('height') or 0)) != (bottom_w, bottom_h):
+                self._bottom.configure(width=bottom_w, height=bottom_h)
             self._redraw_top(top_w, top_h)
             self._redraw_bottom(bottom_w, bottom_h)
 
@@ -1115,7 +1095,7 @@ class SAOLeftInfo(tk.Frame):
         if self._top_image_id is None:
             self._top.delete('all')
             self._top_image_id = self._top.create_image(0, 0, image=photo, anchor='nw')
-        else:
+        elif photo is not self._top_photo:
             self._top.itemconfigure(self._top_image_id, image=photo)
         self._top_photo = photo
 
@@ -1134,7 +1114,7 @@ class SAOLeftInfo(tk.Frame):
         if self._bottom_image_id is None:
             self._bottom.delete('all')
             self._bottom_image_id = self._bottom.create_image(0, 0, image=photo, anchor='nw')
-        else:
+        elif photo is not self._bottom_photo:
             self._bottom.itemconfigure(self._bottom_image_id, image=photo)
         self._bottom_photo = photo
 
@@ -1161,6 +1141,8 @@ class SAOChildBar(tk.Frame):
         self._arrow_cv = None
         self._line_item_specs = []
         self._arrow_item_specs = []
+        self._line_item_last: Dict[int, str] = {}
+        self._arrow_item_last: Dict[Tuple[int, str], str] = {}
         self._transition_serial = 0
         self._row_anim_registered = False
         self._row_anim_active = False
@@ -1270,6 +1252,8 @@ class SAOChildBar(tk.Frame):
             self._arrow_cv = None
             self._line_item_specs = []
             self._arrow_item_specs = []
+            self._line_item_last = {}
+            self._arrow_item_last = {}
             on_done()
             return
 
@@ -1300,7 +1284,9 @@ class SAOChildBar(tk.Frame):
                 if gpu:
                     outer._anim_row_w = w
                 elif row.winfo_exists():
-                    row.configure(width=w)
+                    if getattr(outer, '_anim_row_w', None) != w:
+                        row.configure(width=w)
+                        outer._anim_row_w = w
             fade_t = ease_in_out(t)
             self._apply_line_arrow_fade(fade_t)
             for outer in self._items:
@@ -1315,9 +1301,13 @@ class SAOChildBar(tk.Frame):
                 self._dispatch_gpu_paint()
             else:
                 if self._line_cv is not None and self._line_cv.winfo_exists():
-                    self._line_cv.configure(width=line_w)
+                    if self._anim_line_w != line_w:
+                        self._line_cv.configure(width=line_w)
+                        self._anim_line_w = line_w
                 if self._arrow_cv is not None and self._arrow_cv.winfo_exists():
-                    self._arrow_cv.configure(width=arrow_w)
+                    if self._anim_arrow_w != arrow_w:
+                        self._arrow_cv.configure(width=arrow_w)
+                        self._anim_arrow_w = arrow_w
 
         def _finish():
             for w in self.winfo_children():
@@ -1331,6 +1321,8 @@ class SAOChildBar(tk.Frame):
             self._arrow_cv = None
             self._line_item_specs = []
             self._arrow_item_specs = []
+            self._line_item_last = {}
+            self._arrow_item_last = {}
             on_done()
 
         self._anim.animate('switch_out', 140, _step, on_done=_finish, easing=ease_in_out)
@@ -1344,14 +1336,23 @@ class SAOChildBar(tk.Frame):
         bg = self.cget('bg')
         if self._line_cv is not None and self._line_cv.winfo_exists():
             for item_id, base_color in self._line_item_specs:
+                new_color = lerp_color(base_color, bg, fade_t)
+                if self._line_item_last.get(item_id) == new_color:
+                    continue
                 try:
-                    self._line_cv.itemconfigure(item_id, fill=lerp_color(base_color, bg, fade_t))
+                    self._line_cv.itemconfigure(item_id, fill=new_color)
+                    self._line_item_last[item_id] = new_color
                 except Exception:
                     pass
         if self._arrow_cv is not None and self._arrow_cv.winfo_exists():
             for item_id, base_color, channel in self._arrow_item_specs:
+                new_color = lerp_color(base_color, bg, fade_t)
+                cache_key = (item_id, channel)
+                if self._arrow_item_last.get(cache_key) == new_color:
+                    continue
                 try:
-                    self._arrow_cv.itemconfigure(item_id, **{channel: lerp_color(base_color, bg, fade_t)})
+                    self._arrow_cv.itemconfigure(item_id, **{channel: new_color})
+                    self._arrow_item_last[cache_key] = new_color
                 except Exception:
                     pass
 
@@ -1383,6 +1384,8 @@ class SAOChildBar(tk.Frame):
         self._arrow_cv = None
         self._line_item_specs = []
         self._arrow_item_specs = []
+        self._line_item_last = {}
+        self._arrow_item_last = {}
 
         if not items:
             self._anim.cancel('size_shift')
@@ -1423,6 +1426,12 @@ class SAOChildBar(tk.Frame):
             (top_dot, '#b0b0b0'),
             (bottom_dot, '#b0b0b0'),
         ]
+        self._line_item_last = {
+            glow_line: '#d4d0d0',
+            main_line: '#9c9999',
+            top_dot: '#b0b0b0',
+            bottom_dot: '#b0b0b0',
+        }
 
         # 箭头指示器 (微弱金色点)
         arrow_cv = tk.Canvas(content, width=12, height=max(1, line_h),
@@ -1441,6 +1450,9 @@ class SAOChildBar(tk.Frame):
             (core_dot, '#c9b896', 'fill'),
             (core_dot, '#d4c8a8', 'outline'),
         ])
+        self._arrow_item_last = {}
+        for item_id, base_color, channel in self._arrow_item_specs:
+            self._arrow_item_last[(item_id, channel)] = base_color
         arrow_cv.pack(side=tk.LEFT, padx=(0, 2), anchor='n', pady=5)
         self._arrow_cv = arrow_cv
 
@@ -1463,6 +1475,7 @@ class SAOChildBar(tk.Frame):
             if row is not None and row.winfo_exists():
                 try:
                     row.configure(width=240)
+                    outer._anim_row_w = 240
                 except Exception:
                     pass
         self._schedule_rebuild_layout(content)
@@ -1555,10 +1568,12 @@ class SAOChildBar(tk.Frame):
             row = getattr(outer, '_row_body', None)
             if row is None or not row.winfo_exists():
                 continue
-            local_t = (now - self._row_anim_t0 - idx * self._row_anim_stagger_s) / self._row_anim_duration_s
-            local_t = max(0.0, min(1.0, local_t))
             start_w = max(1, int(getattr(outer, '_row_start_w', 72)))
-            width = max(1, int(round(lerp(start_w, 240, ease_out(local_t)))))
+            width, row_active = _CY_UI.popup_child_row_anim_step(
+                now, self._row_anim_t0, idx,
+                self._row_anim_stagger_s, self._row_anim_duration_s,
+                start_w, 240,
+            )
             if gpu:
                 # GPU path: stash the animated width on outer; Tk row
                 # frame is invisible (chroma keyed) and its inner
@@ -1566,9 +1581,10 @@ class SAOChildBar(tk.Frame):
                 # expensive .configure entirely.
                 outer._anim_row_w = width
             else:
-                if int(row.cget('width')) != width:
+                if getattr(outer, '_anim_row_w', None) != width:
                     row.configure(width=width)
-            if local_t < 1.0:
+                    outer._anim_row_w = width
+            if row_active:
                 keep_animating = True
         if gpu:
             self._dispatch_gpu_paint()
@@ -1663,22 +1679,40 @@ class SAOChildBar(tk.Frame):
         _hover_state = {'t': 0.0}
         fade_bg = self.cget('bg') or '#010101'
 
+        def _apply_row_visual(bg: str, fg: str, icon_fg: str,
+                              ind_color: str, arr_fg: str):
+            last = getattr(outer, '_visual_colors', None)
+            current = (bg, fg, icon_fg, ind_color, arr_fg)
+            if last == current:
+                return
+            if last is None or last[0] != bg:
+                row.configure(bg=bg)
+                icon_lbl.configure(bg=bg)
+                text_lbl.configure(bg=bg)
+                arrow_lbl.configure(bg=bg)
+            if last is None or last[1] != fg:
+                text_lbl.configure(fg=fg)
+            if last is None or last[2] != icon_fg:
+                icon_lbl.configure(fg=icon_fg)
+            if last is None or last[3] != ind_color:
+                indicator.configure(bg=ind_color)
+            if last is None or last[4] != arr_fg:
+                arrow_lbl.configure(fg=arr_fg)
+            outer._visual_colors = current
+
         def _update_hover(t, r=row, il=icon_lbl, tl=text_lbl,
                           ind=indicator, arr=arrow_lbl):
             _hover_state['t'] = t
             if self._gpu_managed:
                 self._dispatch_gpu_paint()
                 return
-            bg = lerp_color(SAOColors.CHILD_BG, SAOColors.CHILD_HOVER, t)
-            fg = lerp_color(SAOColors.CHILD_TEXT, SAOColors.CHILD_HOVER_FG, t)
-            icon_fg = lerp_color(SAOColors.CHILD_ICON, SAOColors.CHILD_HOVER_FG, t)
-            ind_color = lerp_color(SAOColors.CHILD_BG, SAOColors.ACTIVE_BORDER, t)
-            arr_fg = lerp_color(SAOColors.CHILD_BG, SAOColors.CHILD_HOVER_FG, t)
-            r.configure(bg=bg)
-            il.configure(bg=bg, fg=icon_fg)
-            tl.configure(bg=bg, fg=fg)
-            ind.configure(bg=ind_color)
-            arr.configure(bg=bg, fg=arr_fg)
+            bg, fg, icon_fg, ind_color, arr_fg = _CY_UI.popup_child_hover_palette(
+                t,
+                SAOColors.CHILD_BG, SAOColors.CHILD_HOVER,
+                SAOColors.CHILD_TEXT, SAOColors.CHILD_HOVER_FG,
+                SAOColors.CHILD_ICON, SAOColors.ACTIVE_BORDER,
+            )
+            _apply_row_visual(bg, fg, icon_fg, ind_color, arr_fg)
 
         def _apply_fade_visual(fade_t, r=row, il=icon_lbl, tl=text_lbl,
                                ind=indicator, arr=arrow_lbl):
@@ -1689,21 +1723,13 @@ class SAOChildBar(tk.Frame):
                 # We only need to keep _hover_state coherent — no-op.
                 return
             ht = _hover_state['t']
-            bg_now = lerp_color(SAOColors.CHILD_BG, SAOColors.CHILD_HOVER, ht)
-            fg_now = lerp_color(SAOColors.CHILD_TEXT, SAOColors.CHILD_HOVER_FG, ht)
-            icon_now = lerp_color(SAOColors.CHILD_ICON, SAOColors.CHILD_HOVER_FG, ht)
-            ind_now = lerp_color(SAOColors.CHILD_BG, SAOColors.ACTIVE_BORDER, ht)
-            arr_now = lerp_color(SAOColors.CHILD_BG, SAOColors.CHILD_HOVER_FG, ht)
-            bg = lerp_color(bg_now, fade_bg, fade_t)
-            fg = lerp_color(fg_now, fade_bg, fade_t)
-            icon_fg = lerp_color(icon_now, fade_bg, fade_t)
-            ind_color = lerp_color(ind_now, fade_bg, fade_t)
-            arr_fg = lerp_color(arr_now, fade_bg, fade_t)
-            r.configure(bg=bg)
-            il.configure(bg=bg, fg=icon_fg)
-            tl.configure(bg=bg, fg=fg)
-            ind.configure(bg=ind_color)
-            arr.configure(bg=bg, fg=arr_fg)
+            bg, fg, icon_fg, ind_color, arr_fg = _CY_UI.popup_child_fade_palette(
+                ht, fade_t, fade_bg,
+                SAOColors.CHILD_BG, SAOColors.CHILD_HOVER,
+                SAOColors.CHILD_TEXT, SAOColors.CHILD_HOVER_FG,
+                SAOColors.CHILD_ICON, SAOColors.ACTIVE_BORDER,
+            )
+            _apply_row_visual(bg, fg, icon_fg, ind_color, arr_fg)
 
         def enter(e, a=_anim):
             a.animate('hover', 150, lambda t: _update_hover(t))
@@ -1747,6 +1773,7 @@ class SAOChildBar(tk.Frame):
         outer._icon_text = item.get('icon', '') or ''
         outer._label_text = item.get('label', '') or ''
         outer._anim_row_w = outer._row_start_w
+        outer._visual_colors = None
         row.configure(width=outer._row_start_w)
 
         return outer
@@ -1957,6 +1984,7 @@ class SAOPopUpMenu:
         # only call coords/itemconfigure when state actually changed.
         self._menu_hud_items: Dict[str, object] = {}
         self._menu_hud_static_photo = None
+        self._menu_hud_last_sig = None
         self._menu_hud_renderer = MenuHudSpriteRenderer()
         self._menu_hud_backdrop = None
         self._menu_hud_backdrop_key = None
@@ -2403,6 +2431,7 @@ class SAOPopUpMenu:
                 )
                 self._hud_overlay.tick(time.time(), dx, dy, phase)
                 self._menu_hud_origin = (left, top)
+                self._menu_hud_last_sig = None
                 return
             except Exception:
                 # Fall through to legacy canvas path on any error so the
@@ -2418,6 +2447,11 @@ class SAOPopUpMenu:
             phase,
         )
         ox, oy = self._menu_hud_renderer.sprite_origin(left, top)
+        hud_sig = (ox, oy, id(frame.static_photo), frame.canvas_sig)
+        if hud_sig == self._menu_hud_last_sig:
+            self._menu_hud_origin = (ox, oy)
+            self._menu_hud_sprite = frame.static_photo
+            return
 
         items = self._menu_hud_items
         # ── Static background photo (brackets + rails + labels) ─────────
@@ -2477,6 +2511,7 @@ class SAOPopUpMenu:
 
         self._menu_hud_origin = (ox, oy)
         self._menu_hud_sprite = frame.static_photo
+        self._menu_hud_last_sig = hud_sig
 
     def _ensure_line(self, items, key, x1, y1, x2, y2, color):
         cv = self._menu_hud_cv
@@ -2644,6 +2679,7 @@ class SAOPopUpMenu:
                 self._hud_cached_dims = None
                 self._content_place_sig = None
                 self._menu_hud_renderer.reset()
+                self._menu_hud_last_sig = None
                 self._schedule_menu_layout_refresh()
             return
         if lw and hasattr(lw, 'set_active'):
@@ -2672,6 +2708,7 @@ class SAOPopUpMenu:
             self._hud_cached_dims = None
             self._content_place_sig = None
             self._menu_hud_renderer.reset()
+            self._menu_hud_last_sig = None
             self._schedule_menu_layout_refresh()
 
     def refresh_child_menus(self, menus: Dict[str, List[Dict]], force: bool = False):
@@ -2699,6 +2736,7 @@ class SAOPopUpMenu:
         self._hud_cached_dims = None
         self._content_place_sig = None
         self._menu_hud_renderer.reset()
+        self._menu_hud_last_sig = None
         self._schedule_menu_layout_refresh()
         return True
 
@@ -2722,6 +2760,7 @@ class SAOPopUpMenu:
         self._menu_hud_item = None
         self._menu_hud_sprite = None
         self._menu_hud_origin = None
+        self._menu_hud_last_sig = None
 
     @property
     def left_widget(self):
@@ -2806,6 +2845,7 @@ class SAOPopUpMenu:
         self._menu_hud_origin = None
         self._menu_hud_items = {}
         self._menu_hud_static_photo = None
+        self._menu_hud_last_sig = None
         self._content_place_sig = None
         self._overlay_size_part = ''
         self._overlay_drift_sig = None
@@ -2839,20 +2879,16 @@ class SAOPopUpMenu:
         if not self._visible or not self._overlay or not self._overlay.winfo_exists():
             return
         elapsed = max(0.0, now - self._menu_anim_t0)
+        phase = _CY_UI.menu_hud_phase_quantized(
+            elapsed, now < self._menu_force_60_until)
         # Gentle 2 px-quantized drift used by the HUD canvas only. The content
         # frame itself is NEVER re-placed every tick: doing that re-runs
         # Tk's geometry pass on the whole menu and causes visible tearing
         # and right-edge clipping when the anchored menu is near the
         # screen edge. Drift is now applied purely as a visual offset to
         # the HUD sprite via _draw_menu_hud(dx, dy, ...).
-        raw_dx = 4.8 * math.sin(elapsed * 0.44) + 1.8 * math.sin(elapsed * 0.96)
-        raw_dy = 3.8 * math.sin(elapsed * 0.32 + 1.0) + 1.4 * math.sin(elapsed * 0.79)
-        if now < self._menu_force_60_until:
-            dx = 0
-            dy = 0
-        else:
-            dx = int(round(raw_dx / 2.0) * 2)
-            dy = int(round(raw_dy / 2.0) * 2)
+        dx, dy = _CY_UI.menu_hud_breath_offsets(
+            elapsed, now < self._menu_force_60_until)
         # v2.2.12: do NOT call overlay.geometry() per tick. Moving a
         # fullscreen chroma-key Toplevel forces DWM to recomposite the
         # entire desktop region under it on every frame, which is the
@@ -2863,7 +2899,7 @@ class SAOPopUpMenu:
         # IMPORTANT: do not re-.place() the content frame on every tick
         # either — that re-runs Tk's geometry pass on the whole menu and
         # also tears.
-        self._draw_menu_hud(dx, dy, elapsed)
+        self._draw_menu_hud(dx, dy, phase)
 
 
 # ──────────────────── SAO 对话框 (Alert) ────────────────────

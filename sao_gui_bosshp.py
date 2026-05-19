@@ -106,9 +106,33 @@ def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
 def _draw_text_shadow(img: Image.Image, xy, text: str, font,
                       shadow_color: Tuple[int, int, int, int],
                       blur: int = 3) -> None:
-    layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
-    ImageDraw.Draw(layer).text(xy, text, fill=shadow_color, font=font)
-    img.alpha_composite(_gpu_blur(layer, blur))
+    if not text:
+        return
+    blur = max(0, int(blur))
+    probe = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+    pdraw = ImageDraw.Draw(probe)
+    try:
+        bbox = pdraw.textbbox((0, 0), text, font=font)
+    except Exception:
+        try:
+            tw, th = pdraw.textsize(text, font=font)
+            bbox = (0, 0, tw, th)
+        except Exception:
+            bbox = (0, 0, max(1, len(text) * max(1, getattr(font, 'size', 8) // 2)),
+                    max(1, getattr(font, 'size', 8)))
+    pad = blur * 2
+    w = max(1, bbox[2] - bbox[0] + pad * 2)
+    h = max(1, bbox[3] - bbox[1] + pad * 2)
+    layer = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).text(
+        (pad - bbox[0], pad - bbox[1]),
+        text, fill=shadow_color, font=font
+    )
+    layer = _gpu_blur(layer, blur) if blur > 0 else layer
+    img.alpha_composite(
+        layer,
+        dest=(int(round(xy[0])) - pad, int(round(xy[1])) - pad),
+    )
 
 
 def _offset_poly(points, dx: int, dy: int):
@@ -475,6 +499,10 @@ class BossHpOverlay:
         # Composited static base (cover + corners + boss box + bar track).
         self._static_cache: Optional[Image.Image] = None
         self._static_y_off: int = -9999
+        self._outer_pulse_cache: Optional[Image.Image] = None
+        self._outer_pulse_sig: tuple = ()
+        self._cover_pulse_cache: Optional[Image.Image] = None
+        self._cover_pulse_sig: tuple = ()
         # v2.2.18 (Phase 3a): per-frame text layer cache. Name plate +
         # HP digits + source tag are content-driven (no animation), but
         # were redrawn every frame including a _gpu_blur(2) per shadow
@@ -535,6 +563,8 @@ class BossHpOverlay:
         self._cache_bar_mask = None
         self._cache_panel_mask = None
         self._static_cache = None; self._static_y_off = -9999
+        self._outer_pulse_cache = None; self._outer_pulse_sig = ()
+        self._cover_pulse_cache = None; self._cover_pulse_sig = ()
         self._text_layer_cache = None; self._text_layer_sig = ()
         self._frame_cache = None; self._frame_sig = ()
         self._frame_version += 1
@@ -1196,40 +1226,22 @@ class BossHpOverlay:
         # v2.2.14: real animation check (was hard-coded ``return True``,
         # which forced 60 Hz compose + commit even on a steady boss bar
         # at full HP — the single biggest idle-CPU drain).
-        if not self._visible:
-            return False
-        # Fade in/out
-        if abs(self._fade_alpha - self._fade_target) > 1e-3:
-            return True
-        # Tweens
-        if abs(self._disp_hp_pct - self._target_hp_pct) > 4e-4:
-            return True
-        if abs(self._disp_trail_pct - self._target_trail_pct) > 4e-4:
-            return True
-        if abs(self._disp_shield_pct - self._target_shield_pct) > 4e-4:
-            return True
-        if abs(self._disp_break_pct - self._target_break_pct) > 4e-4:
-            return True
-        # Continuous animations only while their state is active.
-        if self._shield_active and self._disp_shield_pct > 0.01:
-            return True  # shield light sweep
-        if self._in_overdrive:
-            return True  # overdrive pulse
-        if self._breaking_stage > 0:
-            return True  # break-row scanline / bar
-        # Time-bound FX windows.
-        now = time.time()
-        if self._damage_flash_start and (now - self._damage_flash_start) < self.DAMAGE_FLASH:
-            return True
-        if self._break_burst_start and (now - self._break_burst_start) < self.BREAK_BURST_FX_S:
-            return True
-        if self._shield_break_start and (now - self._shield_break_start) < self.SHIELD_VFX_BREAK_S:
-            return True
-        if self._shield_vfx_mode and (now - self._shield_vfx_start) < self._shield_vfx_duration:
-            return True
-        if self._root_pulse_mode and (now - self._root_pulse_start) < self._root_pulse_duration:
-            return True
-        return False
+        return bool(_CY_UI.bosshp_overlay_animating(
+            self._visible,
+            self._fade_alpha, self._fade_target,
+            self._disp_hp_pct, self._target_hp_pct,
+            self._disp_trail_pct, self._target_trail_pct,
+            self._disp_shield_pct, self._target_shield_pct,
+            self._disp_break_pct, self._target_break_pct,
+            bool(self._shield_active), bool(self._in_overdrive),
+            self._breaking_stage, time.time(),
+            self._damage_flash_start, self.DAMAGE_FLASH,
+            self._break_burst_start, self.BREAK_BURST_FX_S,
+            self._shield_break_start, self.SHIELD_VFX_BREAK_S,
+            self._shield_vfx_mode, self._shield_vfx_start,
+            self._shield_vfx_duration, self._root_pulse_mode,
+            self._root_pulse_start, self._root_pulse_duration,
+        ))
 
     @_probe.decorate('ui.bosshp.tick')
     def _tick(self, now: Optional[float] = None) -> None:
@@ -1502,76 +1514,25 @@ class BossHpOverlay:
         are sized below the perceptual threshold so visual quality is
         unaffected.
         """
-        if not self._visible:
-            return None
-        if self.WIDTH <= 0 or self.HEIGHT <= 0:
-            return None
-        # HP/trail/shield/break tweens — 200 buckets (Δ 0.5 % of bar width).
-        hp_q = int(round(self._disp_hp_pct * 200))
-        trail_q = int(round(self._disp_trail_pct * 200))
-        shield_q = int(round(self._disp_shield_pct * 200))
-        break_q = int(round(self._disp_break_pct * 200))
-        # Time-bound FX windows — bucket their age to ~30 ms (60 Hz → ≤ 2 frames).
-        def _age_q(start: float, dur: float) -> int:
-            if not start:
-                return -1
-            age = now - start
-            if age < 0 or age >= dur:
-                return -1
-            return int(age * 33.3)
-        damage_q = _age_q(self._damage_flash_start, self.DAMAGE_FLASH)
-        burst_q = _age_q(self._break_burst_start, self.BREAK_BURST_FX_S)
-        sbreak_q = _age_q(self._shield_break_start, self.SHIELD_BREAK)
-        svfx_q = _age_q(self._shield_vfx_start,
-                         self._shield_vfx_duration) if self._shield_vfx_mode else -1
-        bvfx_q = _age_q(self._break_vfx_start,
-                         self._break_vfx_duration) if self._break_vfx_mode else -1
-        rpulse_q = _age_q(self._root_pulse_start,
-                          self._root_pulse_duration) if self._root_pulse_mode else -1
-        # Continuous animation phases.
-        # Shield sweep cycles ~1.4 s; quantize to 28 buckets (Δ 50 ms,
-        # below the eye’s ability to track a soft moving highlight).
-        if self._shield_active and self._disp_shield_pct > 0.01:
-            shield_sweep_q = int(((now * 0.71) % 1.0) * 28)
-        else:
-            shield_sweep_q = -1
-        # Overdrive pulse ~ sin at 4 Hz → quantize to 32 phase buckets.
-        if self._in_overdrive:
-            od_q = int(((now * 4.0) % 1.0) * 32)
-        else:
-            od_q = -1
-        # Break-row scanline / bar (driven internally by stage > 0).
-        if self._breaking_stage > 0:
-            br_phase_q = int(((now * 1.6) % 1.0) * 24)
-        else:
-            br_phase_q = -1
-        additional_sig = tuple(
-            (
-                str(u.get('name') or ''),
-                int(round(float(u.get('hp_pct') or 0.0) * 100)),
-                int(round(float(u.get('extinction_pct') or 0.0) * 100)),
-                bool(u.get('has_break_data', False)),
-                int(u.get('breaking_stage') or -1),
-                bool(u.get('shield_active', False)),
-                int(round(float(u.get('shield_pct') or 0.0) * 100)),
-            )
-            for u in self._additional_units
-        )
-        return (
-            int(self.WIDTH), int(self.HEIGHT), y_off,
+        return _CY_UI.bosshp_frame_signature(
+            self._visible, self.WIDTH, self.HEIGHT, y_off,
             self._boss_name, self._hp_source,
-            int(self._current_hp), int(self._total_hp),
-            hp_q, trail_q, shield_q, break_q,
-            bool(self._shield_active),
-            int(self._breaking_stage),
-            bool(self._in_overdrive),
-            bool(self._invincible),
-            int(round(self._fade_alpha * 100)),
-            damage_q, burst_q, sbreak_q,
-            svfx_q, bvfx_q, rpulse_q,
-            self._shield_vfx_mode, self._break_vfx_mode, self._root_pulse_mode,
-            shield_sweep_q, od_q, br_phase_q,
-            additional_sig,
+            self._current_hp, self._total_hp,
+            self._disp_hp_pct, self._disp_trail_pct,
+            self._disp_shield_pct, self._disp_break_pct,
+            bool(self._shield_active), self._breaking_stage,
+            bool(self._in_overdrive), bool(self._invincible),
+            self._fade_alpha, now,
+            self._damage_flash_start, self.DAMAGE_FLASH,
+            self._break_burst_start, self.BREAK_BURST_FX_S,
+            self._shield_break_start, self.SHIELD_BREAK,
+            self._shield_vfx_mode, self._shield_vfx_start,
+            self._shield_vfx_duration,
+            self._break_vfx_mode, self._break_vfx_start,
+            self._break_vfx_duration,
+            self._root_pulse_mode, self._root_pulse_start,
+            self._root_pulse_duration,
+            self._additional_units,
         )
 
     def _draw_root_outer_pulse(self, img: Image.Image, y_off: int,
@@ -1601,42 +1562,48 @@ class BossHpOverlay:
                 bloom = 0.38 * (1.0 - (t - 0.42) / 0.58)
             ring_t = min(1.0, age / max(0.001, self.ROOT_PULSE_BREAK_HIT_S * 0.528))
 
-        layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(layer, 'RGBA')
-        if bloom > 0.01:
-            bloom_box = (
-                self.PANEL_X - 28,
-                self.PANEL_Y - 14 + y_off,
-                self.PANEL_X + self.PANEL_W + 28,
-                self.PANEL_Y + self.PANEL_H + 14 + y_off,
-            )
-            bloom_color = (236, 253, 255, int(56 * bloom))
-            draw.rounded_rectangle(bloom_box, radius=16, fill=bloom_color)
-            layer = _gpu_blur(layer, 7)
-        img.alpha_composite(layer)
+        bloom_q = int(bloom * 50)
+        ring_q = int(ring_t * 48)
+        sig = (img.size, y_off, mode, bloom_q, ring_q)
+        if self._outer_pulse_cache is None or self._outer_pulse_sig != sig:
+            layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(layer, 'RGBA')
+            if bloom_q > 0:
+                bloom_box = (
+                    self.PANEL_X - 28,
+                    self.PANEL_Y - 14 + y_off,
+                    self.PANEL_X + self.PANEL_W + 28,
+                    self.PANEL_Y + self.PANEL_H + 14 + y_off,
+                )
+                bloom_color = (236, 253, 255, int(56 * (bloom_q / 50.0)))
+                draw.rounded_rectangle(bloom_box, radius=16, fill=bloom_color)
+                layer = _gpu_blur(layer, 7)
 
-        if ring_t < 1.0:
-            ring = Image.new('RGBA', img.size, (0, 0, 0, 0))
-            rd = ImageDraw.Draw(ring, 'RGBA')
-            scale = 0.92 + 0.16 * ring_t
-            cx = self.PANEL_X + self.PANEL_W / 2.0
-            cy = self.PANEL_Y + self.PANEL_H / 2.0 + y_off
-            half_w = (self.PANEL_W / 2.0 + 20) * scale
-            half_h = (self.PANEL_H / 2.0 + 10) * scale
-            ring_box = (
-                int(round(cx - half_w)),
-                int(round(cy - half_h)),
-                int(round(cx + half_w)),
-                int(round(cy + half_h)),
-            )
-            alpha = int(58 * max(0.0, (1.0 - ring_t) ** 1.2))
-            rd.rounded_rectangle(
-                ring_box,
-                radius=max(12, int(round(12 * scale))),
-                outline=(212, 248, 255, alpha),
-                width=1,
-            )
-            img.alpha_composite(ring)
+            if ring_q < 48:
+                rd = ImageDraw.Draw(layer, 'RGBA')
+                ring_t_q = ring_q / 48.0
+                scale = 0.92 + 0.16 * ring_t_q
+                cx = self.PANEL_X + self.PANEL_W / 2.0
+                cy = self.PANEL_Y + self.PANEL_H / 2.0 + y_off
+                half_w = (self.PANEL_W / 2.0 + 20) * scale
+                half_h = (self.PANEL_H / 2.0 + 10) * scale
+                ring_box = (
+                    int(round(cx - half_w)),
+                    int(round(cy - half_h)),
+                    int(round(cx + half_w)),
+                    int(round(cy + half_h)),
+                )
+                alpha = int(58 * max(0.0, (1.0 - ring_t_q) ** 1.2))
+                rd.rounded_rectangle(
+                    ring_box,
+                    radius=max(12, int(round(12 * scale))),
+                    outline=(212, 248, 255, alpha),
+                    width=1,
+                )
+            self._outer_pulse_cache = layer
+            self._outer_pulse_sig = sig
+
+        img.alpha_composite(self._outer_pulse_cache)
 
     def _draw_root_cover_pulse(self, img: Image.Image, y_off: int,
                                now: float) -> None:
@@ -1658,26 +1625,32 @@ class BossHpOverlay:
             glow = (255, 224, 132)
             strength = 0.24 if t < 0.18 else 0.08
 
-        overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        od = ImageDraw.Draw(overlay, 'RGBA')
-        od.rounded_rectangle(
-            (
-                self.PANEL_X + 2,
-                self.PANEL_Y + 2 + y_off,
-                self.PANEL_X + self.PANEL_W - 3,
-                self.PANEL_Y + self.PANEL_H - 3 + y_off,
-            ),
-            radius=8,
-            fill=(glow[0], glow[1], glow[2], int(42 * strength)),
-        )
-        overlay = _gpu_blur(overlay, 5)
-        mask = self._build_cover_mask()
-        if y_off:
-            mask = mask.transform(
-                mask.size, Image.AFFINE, (1, 0, 0, 0, 1, -y_off),
-                fillcolor=0,
+        strength_q = int(strength * 50)
+        sig = (img.size, y_off, mode, glow, strength_q)
+        if self._cover_pulse_cache is None or self._cover_pulse_sig != sig:
+            overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            od = ImageDraw.Draw(overlay, 'RGBA')
+            od.rounded_rectangle(
+                (
+                    self.PANEL_X + 2,
+                    self.PANEL_Y + 2 + y_off,
+                    self.PANEL_X + self.PANEL_W - 3,
+                    self.PANEL_Y + self.PANEL_H - 3 + y_off,
+                ),
+                radius=8,
+                fill=(glow[0], glow[1], glow[2], int(42 * (strength_q / 50.0))),
             )
-        img.alpha_composite(_clip_alpha(overlay, mask))
+            overlay = _gpu_blur(overlay, 5)
+            mask = self._build_cover_mask()
+            if y_off:
+                mask = mask.transform(
+                    mask.size, Image.AFFINE, (1, 0, 0, 0, 1, -y_off),
+                    fillcolor=0,
+                )
+            self._cover_pulse_cache = _clip_alpha(overlay, mask)
+            self._cover_pulse_sig = sig
+
+        img.alpha_composite(self._cover_pulse_cache)
 
     # ── cover ───────────────────────────────────────────────────────
 

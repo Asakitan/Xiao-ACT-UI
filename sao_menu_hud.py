@@ -139,6 +139,7 @@ class MenuHudFrame:
     stamp_pos: Tuple[int, int]
     stamp_color: str
     stamp_font: Tuple
+    canvas_sig: Tuple[int, ...]
 
 
 class MenuHudSpriteRenderer:
@@ -179,6 +180,19 @@ class MenuHudSpriteRenderer:
         self._stamp_sprite: Optional[Image.Image] = None
         self._stamp_sprite_text: Optional[str] = None
         self._stamp_sprite_size: Tuple[int, int] = (0, 0)
+        self._canvas_frame: Optional[MenuHudFrame] = None
+        self._pil_frame_sig: Optional[Tuple[int, ...]] = None
+        self._pil_frame_cache: Optional[Image.Image] = None
+        self._pil_frame_off: Tuple[int, int] = (0, 0)
+        self._scan_color_hex = _rgba_to_hex(self._CYAN)
+        self._trail_colors_hex = (
+            _rgba_to_hex(self._SCAN_TRAIL[0]),
+            _rgba_to_hex(self._SCAN_TRAIL[1]),
+        )
+        self._dot_color_l_hex = _rgba_to_hex(self._CYAN)
+        self._dot_color_r_hex = _rgba_to_hex(self._GOLD)
+        self._stamp_color_hex = _rgba_to_hex(self._DIM_GOLD)
+        self._stamp_font_spec = _tk_font_spec('sao', 10)
 
     def reset(self) -> None:
         self._static_key = None
@@ -195,6 +209,10 @@ class MenuHudSpriteRenderer:
         self._stamp_sprite = None
         self._stamp_sprite_text = None
         self._stamp_sprite_size = (0, 0)
+        self._canvas_frame = None
+        self._pil_frame_sig = None
+        self._pil_frame_cache = None
+        self._pil_frame_off = (0, 0)
 
     @_probe.decorate('ui.menu.render_canvas')
     def render(self, content_w: int, content_h: int,
@@ -231,6 +249,13 @@ class MenuHudSpriteRenderer:
             self._HUD_MARGIN, self._BRACKET_LEN)
         now = _dt.datetime.now()
         now_second = int(now.timestamp())
+        frame_sig = (
+            content_w, content_h, screen_w, screen_h,
+            cx1, cy1, cx2, cy2, scan_y, dot_y_l, dot_y_r,
+            now_second,
+        )
+        if frame_sig == self._frame_sig and self._canvas_frame is not None:
+            return self._canvas_frame
 
         static_photo = self._get_static_photo(content_w, content_h,
                                               screen_w, screen_h)
@@ -241,7 +266,7 @@ class MenuHudSpriteRenderer:
             self._stamp_second = now_second
             self._stamp_text = now.strftime('%H:%M:%S')
 
-        return MenuHudFrame(
+        frame = MenuHudFrame(
             static_photo=static_photo,
             static_size=self._static_photo_size or (0, 0),
             cx1=cx1, cy1=cy1, cx2=cx2, cy2=cy2,
@@ -249,21 +274,25 @@ class MenuHudSpriteRenderer:
             rail_x_r=cx2 + self._RAIL_OFFSET,
             scan_y=scan_y,
             trail_ys=(scan_y - 2, scan_y - 4),
-            trail_colors=(_rgba_to_hex(self._SCAN_TRAIL[0]),
-                          _rgba_to_hex(self._SCAN_TRAIL[1])),
-            scan_color=_rgba_to_hex(self._CYAN),
+            trail_colors=self._trail_colors_hex,
+            scan_color=self._scan_color_hex,
             dot_y_l=dot_y_l, dot_y_r=dot_y_r,
-            dot_color_l=_rgba_to_hex(self._CYAN),
-            dot_color_r=_rgba_to_hex(self._GOLD),
+            dot_color_l=self._dot_color_l_hex,
+            dot_color_r=self._dot_color_r_hex,
             dot_photo_l=dot_photo_l,
             dot_photo_r=dot_photo_r,
             dot_radius=self._DOT_RADIUS,
             dot_glow_size=dot_photo_l.width() if dot_photo_l else 30,
             stamp_text=self._stamp_text,
             stamp_pos=(cx2 - 2, cy2 + 2),   # Tk text anchor='ne'
-            stamp_color=_rgba_to_hex(self._DIM_GOLD),
-            stamp_font=_tk_font_spec('sao', 10),
+            stamp_color=self._stamp_color_hex,
+            stamp_font=self._stamp_font_spec,
+            canvas_sig=(cx1, cy1, cx2, cy2, scan_y,
+                        dot_y_l, dot_y_r, now_second),
         )
+        self._frame_sig = frame_sig
+        self._canvas_frame = frame
+        return frame
 
     @_probe.decorate('ui.menu.render_pil')
     def render_pil(self, content_w: int, content_h: int,
@@ -317,6 +346,13 @@ class MenuHudSpriteRenderer:
 
         now = _dt.datetime.now()
         now_second = int(now.timestamp())
+        frame_sig = (
+            content_w, content_h, screen_w, screen_h,
+            cx1, cy1, cx2, cy2, scan_y, dot_y_l, dot_y_r,
+            now_second,
+        )
+        if frame_sig == self._pil_frame_sig and self._pil_frame_cache is not None:
+            return self._pil_frame_cache, self._pil_frame_off
         if self._stamp_second != now_second:
             self._stamp_second = now_second
             self._stamp_text = now.strftime('%H:%M:%S')
@@ -324,7 +360,10 @@ class MenuHudSpriteRenderer:
         self._draw_dynamic(frame, cx1, cy1, cx2, cy2,
                            scan_y, dot_y_l, dot_y_r,
                            self._stamp_text)
-        return frame, (-self._PLATE_PAD, -self._PLATE_PAD)
+        self._pil_frame_sig = frame_sig
+        self._pil_frame_cache = frame
+        self._pil_frame_off = (-self._PLATE_PAD, -self._PLATE_PAD)
+        return frame, self._pil_frame_off
 
     def _get_static_photo(self, content_w: int, content_h: int,
                           screen_w: int, screen_h: int) -> ImageTk.PhotoImage:
@@ -831,6 +870,10 @@ class MenuLeftInfoRenderer:
         self._bottom_body_cache: Dict[Tuple[str, int, int], Image.Image] = {}
         self._top_sig: Optional[Tuple] = None
         self._bottom_sig: Optional[Tuple] = None
+        self._top_pil_sig: Optional[Tuple] = None
+        self._bottom_pil_sig: Optional[Tuple] = None
+        self._top_pil_frame: Optional[Image.Image] = None
+        self._bottom_pil_frame: Optional[Image.Image] = None
 
     def reset(self) -> None:
         self._top_photo = None
@@ -841,6 +884,10 @@ class MenuLeftInfoRenderer:
         self._bottom_body_cache.clear()
         self._top_sig = None
         self._bottom_sig = None
+        self._top_pil_sig = None
+        self._bottom_pil_sig = None
+        self._top_pil_frame = None
+        self._bottom_pil_frame = None
 
     @_probe.decorate('ui.menu.plate_top')
     def render_top(self, username: str, width: int, height: int,
@@ -856,12 +903,8 @@ class MenuLeftInfoRenderer:
         # v2.2.26: quantize sweep params so steady frames + several frames
         # near the apex of the sin pulse hit the cache. Without this, even
         # static (sweep_strength=0) ticks rebuilt the entire plate.
-        if sweep_strength > 0.005:
-            sp_q = round(float(sweep_phase) * 16.0) / 16.0
-            ss_q = round(float(sweep_strength) * 16.0) / 16.0
-        else:
-            sp_q = 0.0
-            ss_q = 0.0
+        sp_q, ss_q = _CY_UI.menu_plate_sweep_quantized(
+            sweep_phase, sweep_strength, 1.0)
         sig = (username, width, height, sp_q, ss_q)
         if sig == self._top_sig and self._top_photo is not None:
             return self._top_photo
@@ -885,13 +928,15 @@ class MenuLeftInfoRenderer:
                                sweep_phase: float, sweep_strength: float) -> Image.Image:
         width = max(1, int(width))
         height = max(1, int(height))
-        if sweep_strength > 0.005:
-            sp_q = round(float(sweep_phase) * 16.0) / 16.0
-            ss_q = round(float(sweep_strength) * 16.0) / 16.0
-        else:
-            sp_q = 0.0
-            ss_q = 0.0
-        return self._compose_top_image(username, width, height, sp_q, ss_q)
+        sp_q, ss_q = _CY_UI.menu_plate_sweep_quantized(
+            sweep_phase, sweep_strength, 1.0)
+        sig = (username, width, height, sp_q, ss_q)
+        if sig == self._top_pil_sig and self._top_pil_frame is not None:
+            return self._top_pil_frame
+        image = self._compose_top_image(username, width, height, sp_q, ss_q)
+        self._top_pil_sig = sig
+        self._top_pil_frame = image
+        return image
 
     def _compose_top_image(self, username: str, width: int, height: int,
                            sp_q: float, ss_q: float) -> Image.Image:
@@ -969,13 +1014,8 @@ class MenuLeftInfoRenderer:
                               sweep_phase: float, sweep_strength: float) -> ImageTk.PhotoImage:
         width = max(1, int(width))
         height = max(1, int(height))
-        if sweep_strength > 0.005:
-            sp_q = round(float(sweep_phase) * 16.0) / 16.0
-            # bottom plate gets a softer sweep than top (preserve old 0.82)
-            ss_q = round(float(sweep_strength) * 0.82 * 16.0) / 16.0
-        else:
-            sp_q = 0.0
-            ss_q = 0.0
+        sp_q, ss_q = _CY_UI.menu_plate_sweep_quantized(
+            sweep_phase, sweep_strength, 0.82)
         sig = (description, width, height, sp_q, ss_q)
         if sig == self._bottom_sig and self._bottom_photo is not None:
             return self._bottom_photo
@@ -997,13 +1037,15 @@ class MenuLeftInfoRenderer:
                                   sweep_phase: float, sweep_strength: float) -> Image.Image:
         width = max(1, int(width))
         height = max(1, int(height))
-        if sweep_strength > 0.005:
-            sp_q = round(float(sweep_phase) * 16.0) / 16.0
-            ss_q = round(float(sweep_strength) * 0.82 * 16.0) / 16.0
-        else:
-            sp_q = 0.0
-            ss_q = 0.0
-        return self._compose_bottom_image(description, width, height, sp_q, ss_q)
+        sp_q, ss_q = _CY_UI.menu_plate_sweep_quantized(
+            sweep_phase, sweep_strength, 0.82)
+        sig = (description, width, height, sp_q, ss_q)
+        if sig == self._bottom_pil_sig and self._bottom_pil_frame is not None:
+            return self._bottom_pil_frame
+        image = self._compose_bottom_image(description, width, height, sp_q, ss_q)
+        self._bottom_pil_sig = sig
+        self._bottom_pil_frame = image
+        return image
 
     def _compose_bottom_image(self, description: str, width: int, height: int,
                               sp_q: float, ss_q: float) -> Image.Image:
@@ -1177,10 +1219,14 @@ class PlayerPanelRenderer:
         self._font_cache: Dict[Tuple[str, int, bool], ImageFont.FreeTypeFont] = {}
         self._top_body_cache: Dict[Tuple, Image.Image] = {}
         self._bottom_body_cache: Dict[Tuple, Image.Image] = {}
+        self._top_sig: Optional[Tuple] = None
+        self._top_frame_cache: Optional[Image.Image] = None
 
     def reset(self) -> None:
         self._top_body_cache.clear()
         self._bottom_body_cache.clear()
+        self._top_sig = None
+        self._top_frame_cache = None
 
     # ── top plate ────────────────────────────────────────────────
     @_probe.decorate('ui.menu.player_panel_top')
@@ -1206,13 +1252,23 @@ class PlayerPanelRenderer:
         )
         if height <= 185:
             return body
+        scan_q = round(max(0.0, min(1.0, float(scan_phase))) * 32.0) / 32.0
+        sig = (
+            username, int(level), int(level_extra), int(season_exp),
+            (int(hp[0]), int(hp[1])), (int(sta[0]), int(sta[1])),
+            width, height, scan_q,
+        )
+        if sig == self._top_sig and self._top_frame_cache is not None:
+            return self._top_frame_cache
         # Animated bottom scan dot overlaid on cached body.
         image = body.copy()
         draw = ImageDraw.Draw(image)
         scan_y = height - 16
-        scan_x = 10 + int((width - 20) * max(0.0, min(1.0, float(scan_phase))))
+        scan_x = 10 + int((width - 20) * scan_q)
         draw.rectangle((scan_x - 12, scan_y - 1, scan_x + 12, scan_y + 1),
                        fill=self._CYAN)
+        self._top_sig = sig
+        self._top_frame_cache = image
         return image
 
     def _get_top_body(self, username, level, level_extra, season_exp,

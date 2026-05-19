@@ -42,6 +42,8 @@ from typing import Any, Optional, Tuple
 
 from PIL import Image
 
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+
 from overlay_render_worker import (
     AsyncFrameWorker,
     FrameBuffer,
@@ -274,7 +276,7 @@ class MenuHudOverlay:
         # v2.3.0: phase-quantized dedup. q_phase ticks at 30 Hz; below
         # that quantum, every other 60 Hz tick reuses the previous
         # composed frame (presenter keeps it on the GL surface).
-        q_phase = round(phase * 30.0) / 30.0
+        q_phase = _CY_UI.menu_hud_phase_quantized(phase, False)
         sig = (int(sprite_x), int(sprite_y),
                self._content_w, self._content_h,
                self._screen_w, self._screen_h, q_phase)

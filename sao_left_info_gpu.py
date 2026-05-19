@@ -21,6 +21,7 @@ from typing import Any, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from overlay_render_worker import AsyncFrameWorker
 from perf_probe import probe as _probe
 from sao_menu_hud import MenuLeftInfoRenderer, PlayerPanelRenderer
@@ -181,16 +182,12 @@ class LeftInfoGpuPainter:
         # 2) Build dedup signature. Quantize sweep params identically
         #    to MenuLeftInfoRenderer's internal cache so we submit one
         #    frame per visually-distinct state.
-        if snap.sweep_strength > 0.005:
-            sp_q = round(snap.sweep_phase * 16.0) / 16.0
-            ss_q = round(snap.sweep_strength * 16.0) / 16.0
-        else:
-            sp_q = 0.0
-            ss_q = 0.0
-        sig = (snap.username, snap.description,
-               snap.top_w, snap.top_h,
-               snap.bottom_w, snap.bottom_h,
-               sp_q, ss_q)
+        sig = _CY_UI.left_info_snapshot_sig(
+            snap.username, snap.description,
+            snap.top_w, snap.top_h,
+            snap.bottom_w, snap.bottom_h,
+            snap.sweep_phase, snap.sweep_strength,
+        )
         with self._lock:
             if sig == self._last_sig:
                 return
@@ -654,10 +651,9 @@ class SessionPlayersGpuPainter:
             except Exception:
                 pass
 
-        reveal_q = round(float(snap.reveal) * 24.0) / 24.0
-        sig = (
+        sig = _CY_UI.session_players_snapshot_sig(
             snap.rows, snap.total, snap.self_uid, snap.first_index,
-            snap.w, snap.h, reveal_q,
+            snap.w, snap.h, snap.reveal,
         )
         with self._lock:
             if sig == self._last_sig:
@@ -851,14 +847,12 @@ class PlayerPanelGpuPainter:
 
         # 2) Dedup signature. Quantize scan_phase only when the rail
         #    is visible (top_h > 185); static otherwise.
-        if snap.top_h > 185:
-            scan_q = round(snap.scan_phase * 32.0) / 32.0
-        else:
-            scan_q = 0.0
-        sig = (snap.username, snap.level, snap.level_extra, snap.season_exp,
-               snap.hp, snap.sta, snap.shift_mode,
-               snap.top_w, snap.top_h, snap.bottom_w, snap.bottom_h,
-               scan_q, out_w, out_h)
+        sig = _CY_UI.player_panel_snapshot_sig(
+            snap.username, snap.level, snap.level_extra, snap.season_exp,
+            snap.hp, snap.sta, snap.shift_mode,
+            snap.top_w, snap.top_h, snap.bottom_w, snap.bottom_h,
+            snap.scan_phase, out_w, out_h,
+        )
         with self._lock:
             if sig == self._last_sig:
                 return
@@ -869,7 +863,9 @@ class PlayerPanelGpuPainter:
         renderer = self._renderer
         out_w_l = out_w
         out_h_l = out_h
-        scan_phase_l = scan_q
+        # Signature slot 11 stores the quantized scan phase so the
+        # compose path reuses the exact dedup granularity.
+        scan_phase_l = float(sig[11])
 
         def compose(_now: float) -> Image.Image:
             img = Image.new('RGBA', (out_w_l, out_h_l), (0, 0, 0, 0))

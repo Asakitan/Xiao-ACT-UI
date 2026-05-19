@@ -21,7 +21,7 @@ Functions:
     session_int — defensive int parse
 """
 
-from libc.math cimport exp, floor, sin
+from libc.math cimport exp, floor, sin, pow
 
 
 cdef inline long long _safe_i64(object value, long long default=0):
@@ -48,9 +48,280 @@ cdef inline double _safe_f64(object value, double default=0.0):
         return default
 
 
+cdef inline double _abs_f64(double value):
+    return -value if value < 0.0 else value
+
+
 cpdef long long session_int(object value, long long default=0):
     """Defensive int parse used everywhere session player rows are touched."""
     return _safe_i64(value, default)
+
+
+cpdef tuple stamina_filter_step(object raw_pct_obj, object confidence_obj,
+                                double now, object stable_obj,
+                                object pending_obj, double pending_since,
+                                double drop_lock_until,
+                                double large_delta_threshold,
+                                double large_delta_confirm_s,
+                                double large_delta_stable_epsilon):
+    """Advance the recognition stamina filter state machine by one sample."""
+    cdef double raw_pct = _safe_f64(raw_pct_obj, 0.0)
+    cdef double confidence = _safe_f64(confidence_obj, 0.0)
+    cdef bint has_stable = stable_obj is not None
+    cdef double stable = _safe_f64(stable_obj, 0.0)
+    cdef bint has_pending = pending_obj is not None
+    cdef double pending = _safe_f64(pending_obj, 0.0)
+    cdef double delta
+    cdef double pending_delta
+    if raw_pct < 0.0:
+        raw_pct = 0.0
+    elif raw_pct > 1.0:
+        raw_pct = 1.0
+
+    if not has_stable:
+        if raw_pct >= 0.98:
+            raw_pct = 1.0
+        return (raw_pct, raw_pct, None, 0.0, drop_lock_until)
+
+    if confidence < 0.20:
+        return (stable, stable, pending_obj, pending_since, drop_lock_until)
+
+    if raw_pct > stable and now < drop_lock_until:
+        return (stable, stable, pending_obj, pending_since, drop_lock_until)
+
+    delta = raw_pct - stable
+    if _abs_f64(delta) > large_delta_threshold:
+        if not has_pending:
+            return (stable, stable, raw_pct, now, drop_lock_until)
+
+        pending_delta = raw_pct - pending
+        if _abs_f64(pending_delta) <= large_delta_stable_epsilon:
+            if (now - pending_since) >= large_delta_confirm_s:
+                if raw_pct >= 0.98:
+                    raw_pct = 1.0
+                if raw_pct < (stable - 0.001):
+                    if drop_lock_until < (now + 0.30):
+                        drop_lock_until = now + 0.30
+                return (raw_pct, raw_pct, None, 0.0, drop_lock_until)
+            return (stable, stable, pending, pending_since, drop_lock_until)
+
+        if _abs_f64(raw_pct - stable) <= large_delta_stable_epsilon:
+            return (stable, stable, None, 0.0, drop_lock_until)
+
+        return (stable, stable, raw_pct, now, drop_lock_until)
+
+    if raw_pct >= 0.98:
+        raw_pct = 1.0
+    if raw_pct < (stable - 0.001):
+        if drop_lock_until < (now + 0.30):
+            drop_lock_until = now + 0.30
+    return (raw_pct, raw_pct, None, 0.0, drop_lock_until)
+
+
+cpdef bint dps_overlay_animating(object hide_after_fade,
+                                 object fade_alpha, object fade_target,
+                                 object panel_fx_tier, object rows,
+                                 object disp_total_damage,
+                                 object target_total_damage,
+                                 object disp_total_dps,
+                                 object target_total_dps,
+                                 object disp_total_heal,
+                                 object target_total_heal,
+                                 object disp_total_hps,
+                                 object target_total_hps):
+    """Animation predicate for the DPS overlay."""
+    cdef object row
+    if bool(hide_after_fade):
+        return True
+    if _abs_f64(_safe_f64(fade_alpha, 0.0) - _safe_f64(fade_target, 0.0)) > 1e-3:
+        return True
+    if bool(panel_fx_tier):
+        return True
+    if rows:
+        for row in rows.values():
+            if _abs_f64(_safe_f64(getattr(row, 'disp_dps', 0.0), 0.0)
+                        - _safe_f64(getattr(row, 'target_dps', 0.0), 0.0)) > 0.5:
+                return True
+            if _abs_f64(_safe_f64(getattr(row, 'disp_damage', 0.0), 0.0)
+                        - _safe_f64(getattr(row, 'target_damage', 0.0), 0.0)) > 0.5:
+                return True
+            if _abs_f64(_safe_f64(getattr(row, 'disp_hps', 0.0), 0.0)
+                        - _safe_f64(getattr(row, 'target_hps', 0.0), 0.0)) > 0.5:
+                return True
+            if _abs_f64(_safe_f64(getattr(row, 'disp_heal', 0.0), 0.0)
+                        - _safe_f64(getattr(row, 'target_heal', 0.0), 0.0)) > 0.5:
+                return True
+            if _abs_f64(_safe_f64(getattr(row, 'disp_bar_pct', 0.0), 0.0)
+                        - _safe_f64(getattr(row, 'target_bar_pct', 0.0), 0.0)) > 1e-3:
+                return True
+            if _abs_f64(_safe_f64(getattr(row, 'disp_y', 0.0), 0.0)
+                        - _safe_f64(getattr(row, 'target_y', 0.0), 0.0)) > 5e-4:
+                return True
+            if bool(getattr(row, 'fx_tier', '')):
+                return True
+    if _abs_f64(_safe_f64(disp_total_damage, 0.0)
+                - _safe_f64(target_total_damage, 0.0)) > 0.5:
+        return True
+    if _abs_f64(_safe_f64(disp_total_dps, 0.0)
+                - _safe_f64(target_total_dps, 0.0)) > 0.5:
+        return True
+    if _abs_f64(_safe_f64(disp_total_heal, 0.0)
+                - _safe_f64(target_total_heal, 0.0)) > 0.5:
+        return True
+    if _abs_f64(_safe_f64(disp_total_hps, 0.0)
+                - _safe_f64(target_total_hps, 0.0)) > 0.5:
+        return True
+    return False
+
+
+cpdef bint bosshp_overlay_animating(object visible,
+                                    object fade_alpha, object fade_target,
+                                    object disp_hp_pct, object target_hp_pct,
+                                    object disp_trail_pct, object target_trail_pct,
+                                    object disp_shield_pct, object target_shield_pct,
+                                    object disp_break_pct, object target_break_pct,
+                                    bint shield_active, bint in_overdrive,
+                                    object breaking_stage, object now,
+                                    object damage_flash_start, object damage_flash_dur,
+                                    object break_burst_start, object break_burst_dur,
+                                    object shield_break_start, object shield_break_dur,
+                                    object shield_vfx_mode, object shield_vfx_start,
+                                    object shield_vfx_dur, object root_pulse_mode,
+                                    object root_pulse_start, object root_pulse_dur):
+    """Animation predicate for the BossHP overlay."""
+    cdef double now_f = _safe_f64(now, 0.0)
+    if not bool(visible):
+        return False
+    if _abs_f64(_safe_f64(fade_alpha, 0.0) - _safe_f64(fade_target, 0.0)) > 1e-3:
+        return True
+    if _abs_f64(_safe_f64(disp_hp_pct, 0.0) - _safe_f64(target_hp_pct, 0.0)) > 4e-4:
+        return True
+    if _abs_f64(_safe_f64(disp_trail_pct, 0.0) - _safe_f64(target_trail_pct, 0.0)) > 4e-4:
+        return True
+    if _abs_f64(_safe_f64(disp_shield_pct, 0.0) - _safe_f64(target_shield_pct, 0.0)) > 4e-4:
+        return True
+    if _abs_f64(_safe_f64(disp_break_pct, 0.0) - _safe_f64(target_break_pct, 0.0)) > 4e-4:
+        return True
+    if shield_active and _safe_f64(disp_shield_pct, 0.0) > 0.01:
+        return True
+    if in_overdrive:
+        return True
+    if _safe_i64(breaking_stage, 0) > 0:
+        return True
+    if _fx_age_q(_safe_f64(damage_flash_start, 0.0),
+                 _safe_f64(damage_flash_dur, 0.0), now_f) >= 0:
+        return True
+    if _fx_age_q(_safe_f64(break_burst_start, 0.0),
+                 _safe_f64(break_burst_dur, 0.0), now_f) >= 0:
+        return True
+    if _fx_age_q(_safe_f64(shield_break_start, 0.0),
+                 _safe_f64(shield_break_dur, 0.0), now_f) >= 0:
+        return True
+    if bool(shield_vfx_mode) and _fx_age_q(_safe_f64(shield_vfx_start, 0.0),
+                                           _safe_f64(shield_vfx_dur, 0.0),
+                                           now_f) >= 0:
+        return True
+    if bool(root_pulse_mode) and _fx_age_q(_safe_f64(root_pulse_start, 0.0),
+                                           _safe_f64(root_pulse_dur, 0.0),
+                                           now_f) >= 0:
+        return True
+    return False
+
+
+cdef inline double _decay_toward_value(double cur, double tgt,
+                                       double tick_ms, double tween,
+                                       double eps):
+    cdef double clamped_tween
+    cdef double k
+    if _abs_f64(cur - tgt) < eps:
+        return tgt
+    clamped_tween = tween if tween >= 0.05 else 0.05
+    k = 1.0 - pow(0.05, tick_ms / 1000.0 / clamped_tween)
+    return cur + (tgt - cur) * k
+
+
+cpdef tuple dps_step_totals(object disp_total_damage,
+                            object target_total_damage,
+                            object disp_total_dps, object target_total_dps,
+                            object disp_total_heal, object target_total_heal,
+                            object disp_total_hps, object target_total_hps,
+                            object disp_elapsed, object target_elapsed,
+                            double tick_ms, double num_tween):
+    """Advance the DPS overlay header totals by one tick."""
+    cdef double old_damage = _safe_f64(disp_total_damage, 0.0)
+    cdef double old_dps = _safe_f64(disp_total_dps, 0.0)
+    cdef double old_heal = _safe_f64(disp_total_heal, 0.0)
+    cdef double old_hps = _safe_f64(disp_total_hps, 0.0)
+    cdef double new_damage = _decay_toward_value(
+        old_damage, _safe_f64(target_total_damage, 0.0), tick_ms, num_tween, 0.5)
+    cdef double new_dps = _decay_toward_value(
+        old_dps, _safe_f64(target_total_dps, 0.0), tick_ms, num_tween, 0.5)
+    cdef double new_heal = _decay_toward_value(
+        old_heal, _safe_f64(target_total_heal, 0.0), tick_ms, num_tween, 0.5)
+    cdef double new_hps = _decay_toward_value(
+        old_hps, _safe_f64(target_total_hps, 0.0), tick_ms, num_tween, 0.5)
+    cdef long long new_elapsed = _safe_i64(target_elapsed, 0)
+    cdef bint changed = (
+        new_damage != old_damage or
+        new_dps != old_dps or
+        new_heal != old_heal or
+        new_hps != old_hps or
+        new_elapsed != _safe_i64(disp_elapsed, 0)
+    )
+    return (new_damage, new_dps, new_heal, new_hps, new_elapsed, changed)
+
+
+cpdef bint dps_step_row_state(object row, double now, double tick_ms,
+                              double num_tween, double bar_tween,
+                              double row_tween, double fx_duration):
+    """Advance one DPS row by one tick and return whether it is still animating."""
+    cdef double before_damage = _safe_f64(getattr(row, 'disp_damage', 0.0), 0.0)
+    cdef double before_dps = _safe_f64(getattr(row, 'disp_dps', 0.0), 0.0)
+    cdef double before_heal = _safe_f64(getattr(row, 'disp_heal', 0.0), 0.0)
+    cdef double before_hps = _safe_f64(getattr(row, 'disp_hps', 0.0), 0.0)
+    cdef double before_bar = _safe_f64(getattr(row, 'disp_bar_pct', 0.0), 0.0)
+    cdef double before_y = _safe_f64(getattr(row, 'disp_y', 0.0), 0.0)
+    cdef double after_damage
+    cdef double after_dps
+    cdef double after_heal
+    cdef double after_hps
+    cdef double after_bar
+    cdef double after_y
+    after_damage = _decay_toward_value(
+        before_damage, _safe_f64(getattr(row, 'target_damage', 0.0), 0.0),
+        tick_ms, num_tween, 0.5)
+    after_dps = _decay_toward_value(
+        before_dps, _safe_f64(getattr(row, 'target_dps', 0.0), 0.0),
+        tick_ms, num_tween, 0.5)
+    after_heal = _decay_toward_value(
+        before_heal, _safe_f64(getattr(row, 'target_heal', 0.0), 0.0),
+        tick_ms, num_tween, 0.5)
+    after_hps = _decay_toward_value(
+        before_hps, _safe_f64(getattr(row, 'target_hps', 0.0), 0.0),
+        tick_ms, num_tween, 0.5)
+    after_bar = _decay_toward_value(
+        before_bar, _safe_f64(getattr(row, 'target_bar_pct', 0.0), 0.0),
+        tick_ms, bar_tween, 5e-4)
+    after_y = _decay_toward_value(
+        before_y, _safe_f64(getattr(row, 'target_y', 0.0), 0.0),
+        tick_ms, row_tween, 5e-4)
+    row.disp_damage = after_damage
+    row.disp_dps = after_dps
+    row.disp_heal = after_heal
+    row.disp_hps = after_hps
+    row.disp_bar_pct = after_bar
+    row.disp_y = after_y
+    if bool(getattr(row, 'fx_tier', '')) and (
+            now - _safe_f64(getattr(row, 'fx_start', 0.0), 0.0)) > fx_duration:
+        row.fx_tier = ''
+    return bool(getattr(row, 'fx_tier', '')) or (
+        after_damage != before_damage or
+        after_dps != before_dps or
+        after_heal != before_heal or
+        after_hps != before_hps or
+        after_bar != before_bar or
+        after_y != before_y
+    )
 
 
 cpdef str format_session_power(object value):
@@ -740,6 +1011,351 @@ cpdef tuple menu_bar_snapshot_sig(object strip_w, object strip_h, object snapsho
             <int>len(sig_buttons), tuple(sig_buttons))
 
 
+cpdef tuple popup_child_snapshot_sig(object out_w, object out_h,
+                                     object line_w, object line_h,
+                                     object arrow_w, object fade_t,
+                                     object bg_hex, object rows):
+    """Build the dedup signature for the GPU popup child-bar painter."""
+    cdef list row_sig = []
+    cdef object row
+    cdef int hover_q
+    if rows is not None:
+        for row in rows:
+            hover_q = <int>(_safe_f64(getattr(row, 'hover_t', 0.0), 0.0) * 16.0)
+            row_sig.append((
+                str(getattr(row, 'icon', '') or ''),
+                str(getattr(row, 'label', '') or ''),
+                hover_q,
+                <int>_safe_i64(getattr(row, 'row_w', 0), 0),
+            ))
+    return (
+        <int>_safe_i64(out_w, 0),
+        <int>_safe_i64(out_h, 0),
+        <int>_safe_i64(line_w, 0),
+        <int>_safe_i64(line_h, 0),
+        <int>_safe_i64(arrow_w, 0),
+        <int>(_safe_f64(fade_t, 0.0) * 16.0),
+        str(bg_hex or ''),
+        tuple(row_sig),
+    )
+
+
+cpdef tuple left_info_snapshot_sig(object username, object description,
+                                   object top_w, object top_h,
+                                   object bottom_w, object bottom_h,
+                                   object sweep_phase,
+                                   object sweep_strength):
+    """Build the dedup signature for the GPU left-info painter."""
+    cdef double strength = _safe_f64(sweep_strength, 0.0)
+    cdef double phase = _safe_f64(sweep_phase, 0.0)
+    cdef double sp_q = 0.0
+    cdef double ss_q = 0.0
+    if strength > 0.005:
+        sp_q = <double>_round_pos(phase * 16.0) / 16.0
+        ss_q = <double>_round_pos(strength * 16.0) / 16.0
+    return (
+        str(username or ''),
+        str(description or ''),
+        <int>_safe_i64(top_w, 0),
+        <int>_safe_i64(top_h, 0),
+        <int>_safe_i64(bottom_w, 0),
+        <int>_safe_i64(bottom_h, 0),
+        sp_q,
+        ss_q,
+    )
+
+
+cpdef tuple session_players_snapshot_sig(object rows, object total,
+                                         object self_uid,
+                                         object first_index,
+                                         object width, object height,
+                                         object reveal):
+    """Build the dedup signature for the GPU session-player list painter."""
+    cdef double reveal_q = <double>_round_pos(_safe_f64(reveal, 0.0) * 24.0) / 24.0
+    return (
+        rows if rows is not None else (),
+        <int>_safe_i64(total, 0),
+        str(self_uid or ''),
+        <int>_safe_i64(first_index, 0),
+        <int>_safe_i64(width, 0),
+        <int>_safe_i64(height, 0),
+        reveal_q,
+    )
+
+
+cpdef tuple player_panel_snapshot_sig(object username, object level,
+                                      object level_extra,
+                                      object season_exp, object hp,
+                                      object sta, object shift_mode,
+                                      object top_w, object top_h,
+                                      object bottom_w, object bottom_h,
+                                      object scan_phase, object out_w,
+                                      object out_h):
+    """Build the dedup signature for the GPU player-panel painter."""
+    cdef int top_height = <int>_safe_i64(top_h, 0)
+    cdef double scan_q = 0.0
+    if top_height > 185:
+        scan_q = <double>_round_pos(_safe_f64(scan_phase, 0.0) * 32.0) / 32.0
+    return (
+        str(username or ''),
+        <int>_safe_i64(level, 0),
+        <int>_safe_i64(level_extra, 0),
+        <int>_safe_i64(season_exp, 0),
+        hp if hp is not None else (),
+        sta if sta is not None else (),
+        str(shift_mode or ''),
+        <int>_safe_i64(top_w, 0),
+        top_height,
+        <int>_safe_i64(bottom_w, 0),
+        <int>_safe_i64(bottom_h, 0),
+        scan_q,
+        <int>_safe_i64(out_w, 0),
+        <int>_safe_i64(out_h, 0),
+    )
+
+
+cpdef tuple dps_rows_signature(object rows):
+    """Build the coarse row signature for the DPS overlay."""
+    cdef list row_sig = []
+    cdef object item
+    cdef object row
+    cdef object uid
+    if not rows:
+        return ()
+    try:
+        for item in rows.items():
+            uid = item[0]
+            row = item[1]
+            row_sig.append((
+                uid,
+                <int>_safe_i64(getattr(row, 'target_damage', 0), 0),
+                <int>_safe_i64(getattr(row, 'target_dps', 0), 0),
+                <int>_safe_i64(getattr(row, 'target_heal', 0), 0),
+                <int>_safe_i64(getattr(row, 'target_hps', 0), 0),
+                round(_safe_f64(getattr(row, 'target_bar_pct', 0.0), 0.0), 4),
+                <int>(_safe_f64(getattr(row, 'target_y', 0.0), 0.0) * 1000.0),
+            ))
+    except Exception:
+        return ()
+    return tuple(row_sig)
+
+
+cpdef object dps_detail_signature(object entity):
+    """Build the detail-panel signature for the DPS overlay."""
+    cdef object skills
+    cdef list skill_sig = []
+    cdef object skill
+    cdef int kept = 0
+    if not isinstance(entity, dict):
+        return None
+    skills = entity.get('skills') or []
+    for skill in skills:
+        if kept >= 16:
+            break
+        if not isinstance(skill, dict):
+            continue
+        skill_sig.append((
+            <int>_safe_i64(skill.get('skill_id'), 0),
+            <int>_safe_i64(skill.get('total'), 0),
+            <int>_safe_i64(skill.get('heal_total'), 0),
+            <int>_safe_i64(skill.get('hits'), 0),
+            <int>_safe_i64(skill.get('heal_hits'), 0),
+        ))
+        kept += 1
+    return (
+        <int>_safe_i64(entity.get('uid'), 0),
+        <int>_safe_i64(entity.get('damage_total'), 0),
+        <int>_safe_i64(entity.get('heal_total'), 0),
+        <int>_safe_i64(entity.get('max_hit'), 0),
+        len(skills),
+        tuple(skill_sig),
+    )
+
+
+cpdef tuple hp_idle_signature(object y_off, object fade_alpha,
+                              object hp_group_alpha, object profession,
+                              object name, object uid, object level,
+                              object hp_max, object hp_pct,
+                              object sta_pct, object sta_text,
+                              bint sta_offline, object boss_timer_text,
+                              bint boss_timer_urgent, object clock_q,
+                              object link_q, object tl_pulse_q,
+                              object br_pulse_q, object scan_q,
+                              object outer_q, object cover_q,
+                              object cover_sweep_q, object hover_id,
+                              object hover_hp, object press_id,
+                              object press_hp, object flash_id,
+                              object flash_hp):
+    """Build the steady-state dirty-skip signature for the HP overlay."""
+    cdef double hp_p = _safe_f64(hp_pct, 0.0)
+    cdef double sta_p = _safe_f64(sta_pct, 0.0)
+    cdef int max_int = <int>_round_even(_safe_f64(hp_max, 0.0))
+    cdef int bucket = 1
+    cdef int hp_int
+    cdef int sta_pct_q
+    if hp_p < 0.0:
+        hp_p = 0.0
+    elif hp_p > 1.0:
+        hp_p = 1.0
+    if sta_p < 0.0:
+        sta_p = 0.0
+    elif sta_p > 1.0:
+        sta_p = 1.0
+    if max_int > 0:
+        bucket = max(1, max_int // 1000)
+    hp_int = (<int>_round_even(_safe_f64(hp_max, 0.0) * hp_p) // bucket) * bucket
+    sta_pct_q = <int>_round_even(sta_p * 100.0)
+    return (
+        <int>_safe_i64(y_off, 0),
+        <int>_round_even(_safe_f64(fade_alpha, 0.0) * 100.0),
+        <int>(_safe_f64(hp_group_alpha, 0.0) * 24.0),
+        profession,
+        name,
+        uid,
+        level,
+        hp_int,
+        max_int,
+        sta_pct_q,
+        sta_text,
+        bool(sta_offline),
+        boss_timer_text,
+        bool(boss_timer_urgent),
+        <int>_safe_i64(clock_q, 0),
+        <int>_safe_i64(link_q, 0),
+        <int>_safe_i64(tl_pulse_q, 0),
+        <int>_safe_i64(br_pulse_q, 0),
+        <int>_safe_i64(scan_q, 0),
+        <int>_safe_i64(outer_q, 0),
+        <int>_safe_i64(cover_q, 0),
+        <int>_safe_i64(cover_sweep_q, 0),
+        <int>_safe_i64(hover_id, 0),
+        <int>_safe_i64(hover_hp, 0),
+        <int>_safe_i64(press_id, 0),
+        <int>_safe_i64(press_hp, 0),
+        <int>_safe_i64(flash_id, 0),
+        <int>_safe_i64(flash_hp, 0),
+    )
+
+
+cdef inline int _fx_age_q(double start, double dur, double now):
+    cdef double age
+    if start <= 0.0 or dur <= 0.0:
+        return -1
+    age = now - start
+    if age < 0.0 or age >= dur:
+        return -1
+    return <int>(age * 33.3)
+
+
+cpdef object bosshp_frame_signature(object visible, object width,
+                                    object height, object y_off,
+                                    object boss_name, object hp_source,
+                                    object current_hp, object total_hp,
+                                    object disp_hp_pct,
+                                    object disp_trail_pct,
+                                    object disp_shield_pct,
+                                    object disp_break_pct,
+                                    bint shield_active,
+                                    object breaking_stage,
+                                    bint in_overdrive,
+                                    bint invincible,
+                                    object fade_alpha, object now,
+                                    object damage_flash_start,
+                                    object damage_flash_dur,
+                                    object break_burst_start,
+                                    object break_burst_dur,
+                                    object shield_break_start,
+                                    object shield_break_dur,
+                                    object shield_vfx_mode,
+                                    object shield_vfx_start,
+                                    object shield_vfx_dur,
+                                    object break_vfx_mode,
+                                    object break_vfx_start,
+                                    object break_vfx_dur,
+                                    object root_pulse_mode,
+                                    object root_pulse_start,
+                                    object root_pulse_dur,
+                                    object additional_units):
+    """Build the cached frame signature for the BossHP overlay."""
+    cdef int w = <int>_safe_i64(width, 0)
+    cdef int h = <int>_safe_i64(height, 0)
+    cdef int stage = <int>_safe_i64(breaking_stage, 0)
+    cdef double now_f = _safe_f64(now, 0.0)
+    cdef int damage_q
+    cdef int burst_q
+    cdef int sbreak_q
+    cdef int svfx_q
+    cdef int bvfx_q
+    cdef int rpulse_q
+    cdef int shield_sweep_q = -1
+    cdef int od_q = -1
+    cdef int br_phase_q = -1
+    cdef list add_sig = []
+    cdef object unit
+    if not bool(visible) or w <= 0 or h <= 0:
+        return None
+
+    damage_q = _fx_age_q(_safe_f64(damage_flash_start, 0.0),
+                         _safe_f64(damage_flash_dur, 0.0), now_f)
+    burst_q = _fx_age_q(_safe_f64(break_burst_start, 0.0),
+                        _safe_f64(break_burst_dur, 0.0), now_f)
+    sbreak_q = _fx_age_q(_safe_f64(shield_break_start, 0.0),
+                         _safe_f64(shield_break_dur, 0.0), now_f)
+    if shield_vfx_mode:
+        svfx_q = _fx_age_q(_safe_f64(shield_vfx_start, 0.0),
+                           _safe_f64(shield_vfx_dur, 0.0), now_f)
+    else:
+        svfx_q = -1
+    if break_vfx_mode:
+        bvfx_q = _fx_age_q(_safe_f64(break_vfx_start, 0.0),
+                           _safe_f64(break_vfx_dur, 0.0), now_f)
+    else:
+        bvfx_q = -1
+    if root_pulse_mode:
+        rpulse_q = _fx_age_q(_safe_f64(root_pulse_start, 0.0),
+                             _safe_f64(root_pulse_dur, 0.0), now_f)
+    else:
+        rpulse_q = -1
+    if shield_active and _safe_f64(disp_shield_pct, 0.0) > 0.01:
+        shield_sweep_q = <int>(((now_f * 0.71) % 1.0) * 28.0)
+    if in_overdrive:
+        od_q = <int>(((now_f * 4.0) % 1.0) * 32.0)
+    if stage > 0:
+        br_phase_q = <int>(((now_f * 1.6) % 1.0) * 24.0)
+
+    if additional_units is not None:
+        for unit in additional_units:
+            add_sig.append((
+                str(unit.get('name') or ''),
+                <int>_round_even(_safe_f64(unit.get('hp_pct'), 0.0) * 100.0),
+                <int>_round_even(_safe_f64(unit.get('extinction_pct'), 0.0) * 100.0),
+                bool(unit.get('has_break_data', False)),
+                <int>_safe_i64(unit.get('breaking_stage'), -1),
+                bool(unit.get('shield_active', False)),
+                <int>_round_even(_safe_f64(unit.get('shield_pct'), 0.0) * 100.0),
+            ))
+
+    return (
+        w, h, <int>_safe_i64(y_off, 0),
+        boss_name, hp_source,
+        <int>_safe_i64(current_hp, 0), <int>_safe_i64(total_hp, 0),
+        <int>_round_even(_safe_f64(disp_hp_pct, 0.0) * 200.0),
+        <int>_round_even(_safe_f64(disp_trail_pct, 0.0) * 200.0),
+        <int>_round_even(_safe_f64(disp_shield_pct, 0.0) * 200.0),
+        <int>_round_even(_safe_f64(disp_break_pct, 0.0) * 200.0),
+        bool(shield_active),
+        stage,
+        bool(in_overdrive),
+        bool(invincible),
+        <int>_round_even(_safe_f64(fade_alpha, 0.0) * 100.0),
+        damage_q, burst_q, sbreak_q,
+        svfx_q, bvfx_q, rpulse_q,
+        shield_vfx_mode, break_vfx_mode, root_pulse_mode,
+        shield_sweep_q, od_q, br_phase_q,
+        tuple(add_sig),
+    )
+
+
 cdef inline long _round_even(double v):
     cdef double fl = floor(v)
     cdef double frac = v - fl
@@ -887,6 +1503,372 @@ cpdef double lerp_clamped(double a, double b, double t):
     elif t > 1.0:
         t = 1.0
     return a + (b - a) * t
+
+
+cdef inline str _normalize_hex_rgb(object color):
+    cdef str raw = str(color or '').strip()
+    if raw.startswith('#'):
+        raw = raw[1:]
+    if len(raw) == 8:
+        raw = raw[:6]
+    elif len(raw) == 3:
+        raw = raw[0] * 2 + raw[1] * 2 + raw[2] * 2
+    if len(raw) != 6:
+        return ''
+    return raw.lower()
+
+
+cpdef str lerp_hex_color(object c1, object c2, double t):
+    """RGB hex lerp with support for #rgb / #rrggbb / #rrggbbaa inputs."""
+    cdef str raw1
+    cdef str raw2
+    cdef int r1
+    cdef int g1
+    cdef int b1
+    cdef int r2
+    cdef int g2
+    cdef int b2
+    cdef int r
+    cdef int g
+    cdef int b
+    if t < 0.0:
+        t = 0.0
+    elif t > 1.0:
+        t = 1.0
+    raw1 = _normalize_hex_rgb(c1)
+    raw2 = _normalize_hex_rgb(c2)
+    if not raw1 or not raw2:
+        return str(c1 or '#000000')
+    try:
+        r1 = int(raw1[0:2], 16)
+        g1 = int(raw1[2:4], 16)
+        b1 = int(raw1[4:6], 16)
+        r2 = int(raw2[0:2], 16)
+        g2 = int(raw2[2:4], 16)
+        b2 = int(raw2[4:6], 16)
+    except Exception:
+        return str(c1 or '#000000')
+    r = <int>(r1 + (r2 - r1) * t)
+    g = <int>(g1 + (g2 - g1) * t)
+    b = <int>(b1 + (b2 - b1) * t)
+    return f'#{r:02x}{g:02x}{b:02x}'
+
+
+cpdef tuple menu_circle_palette(bint active, double hover_t,
+                                object circle_border, object active_border,
+                                object circle_bg, object hover_bg,
+                                object circle_icon, object hover_icon,
+                                object active_bg, object active_icon):
+    """Return ``(border, fill, icon)`` for the CPU menu-circle path."""
+    if active:
+        return (str(active_border or ''),
+                str(active_bg or ''),
+                str(active_icon or ''))
+    if hover_t < 0.0:
+        hover_t = 0.0
+    elif hover_t > 1.0:
+        hover_t = 1.0
+    return (
+        lerp_hex_color(circle_border, active_border, hover_t),
+        lerp_hex_color(circle_bg, hover_bg, hover_t),
+        lerp_hex_color(circle_icon, hover_icon, hover_t),
+    )
+
+
+cpdef tuple popup_child_hover_palette(double hover_t,
+                                      object child_bg, object child_hover,
+                                      object child_text,
+                                      object child_hover_fg,
+                                      object child_icon,
+                                      object active_border):
+    """Return ``(bg, fg, icon_fg, ind_color, arr_fg)`` for CPU child-row hover."""
+    if hover_t < 0.0:
+        hover_t = 0.0
+    elif hover_t > 1.0:
+        hover_t = 1.0
+    return (
+        lerp_hex_color(child_bg, child_hover, hover_t),
+        lerp_hex_color(child_text, child_hover_fg, hover_t),
+        lerp_hex_color(child_icon, child_hover_fg, hover_t),
+        lerp_hex_color(child_bg, active_border, hover_t),
+        lerp_hex_color(child_bg, child_hover_fg, hover_t),
+    )
+
+
+cpdef tuple popup_child_fade_palette(double hover_t, double fade_t,
+                                     object fade_bg, object child_bg,
+                                     object child_hover, object child_text,
+                                     object child_hover_fg,
+                                     object child_icon,
+                                     object active_border):
+    """Return ``(bg, fg, icon_fg, ind_color, arr_fg)`` for CPU child-row fade."""
+    cdef str bg_now
+    cdef str fg_now
+    cdef str icon_now
+    cdef str ind_now
+    cdef str arr_now
+    if fade_t < 0.0:
+        fade_t = 0.0
+    elif fade_t > 1.0:
+        fade_t = 1.0
+    bg_now, fg_now, icon_now, ind_now, arr_now = popup_child_hover_palette(
+        hover_t, child_bg, child_hover, child_text,
+        child_hover_fg, child_icon, active_border)
+    return (
+        lerp_hex_color(bg_now, fade_bg, fade_t),
+        lerp_hex_color(fg_now, fade_bg, fade_t),
+        lerp_hex_color(icon_now, fade_bg, fade_t),
+        lerp_hex_color(ind_now, fade_bg, fade_t),
+        lerp_hex_color(arr_now, fade_bg, fade_t),
+    )
+
+
+cpdef tuple popup_child_row_anim_step(double now, double anim_t0,
+                                      object index, double stagger_s,
+                                      double duration_s, object start_w,
+                                      object target_w):
+    """Return ``(width, keep_animating)`` for the CPU child-row width tween."""
+    cdef int idx = <int>_safe_i64(index, 0)
+    cdef int sw = <int>_safe_i64(start_w, 72)
+    cdef int tw = <int>_safe_i64(target_w, 240)
+    cdef double local_t
+    cdef double eased
+    if sw < 1:
+        sw = 1
+    if tw < 1:
+        tw = 1
+    if duration_s <= 0.0:
+        return (tw, False)
+    local_t = (now - anim_t0 - idx * stagger_s) / duration_s
+    if local_t < 0.0:
+        local_t = 0.0
+    elif local_t > 1.0:
+        local_t = 1.0
+    eased = 1.0 - ((1.0 - local_t) * (1.0 - local_t) * (1.0 - local_t))
+    return (<int>_round_even(sw + (tw - sw) * eased), local_t < 1.0)
+
+
+cpdef tuple menu_hud_breath_offsets(double elapsed, bint force_zero):
+    """Return 2px-quantized HUD drift for the CPU menu overlay."""
+    cdef double raw_dx
+    cdef double raw_dy
+    if force_zero:
+        return (0, 0)
+    raw_dx = 4.8 * sin(elapsed * 0.44) + 1.8 * sin(elapsed * 0.96)
+    raw_dy = 3.8 * sin(elapsed * 0.32 + 1.0) + 1.4 * sin(elapsed * 0.79)
+    return (
+        <int>(_round_even(raw_dx / 2.0) * 2),
+        <int>(_round_even(raw_dy / 2.0) * 2),
+    )
+
+
+cpdef double menu_hud_phase_quantized(double elapsed, bint force_full_rate):
+    """Return a cache-friendly HUD phase for the CPU canvas path."""
+    if force_full_rate:
+        return elapsed
+    if elapsed <= 0.0:
+        return 0.0
+    return _round_even(elapsed * 30.0) / 30.0
+
+
+cpdef tuple menu_bar_button_size_step(double now, object current_size,
+                                      bint enter_active, double enter_t0,
+                                      object index, double enter_delay_s,
+                                      double enter_duration_s, object hover_idx,
+                                      double base_size, double size_eps,
+                                      double size_lerp):
+    """Return ``(new_size, keep_animating, cursor_ready)`` for one CPU menu button."""
+    cdef int idx = <int>_safe_i64(index, 0)
+    cdef double cur = _safe_f64(current_size, base_size)
+    cdef double local_t
+    cdef double target
+    cdef double delta
+    cdef int dist
+    if enter_active:
+        if enter_duration_s <= 0.0:
+            local_t = 1.0
+        else:
+            local_t = (now - enter_t0 - idx * enter_delay_s) / enter_duration_s
+        if local_t < 0.0:
+            local_t = 0.0
+        elif local_t > 1.0:
+            local_t = 1.0
+        return (
+            <double>(1 if _round_even(base_size * (1.0 - ((1.0 - local_t) * (1.0 - local_t) * (1.0 - local_t)))) < 1
+                     else _round_even(base_size * (1.0 - ((1.0 - local_t) * (1.0 - local_t) * (1.0 - local_t))))),
+            local_t < 1.0,
+            local_t >= 1.0,
+        )
+    if hover_idx is not None:
+        dist = <int>_safe_i64(hover_idx, -1) - idx
+        if dist < 0:
+            dist = -dist
+        target = base_size * (1.0 + 0.22 * exp(-0.9 * <double>(dist * dist)))
+    else:
+        target = base_size
+    delta = target - cur
+    if delta < 0.0:
+        if -delta > size_eps:
+            return (cur + delta * size_lerp, True, False)
+        return (target, False, False)
+    if delta > size_eps:
+        return (cur + delta * size_lerp, True, False)
+    return (target, False, False)
+
+
+cpdef tuple menu_bar_advance_buttons(object buttons, double now,
+                                     bint enter_active, double enter_t0,
+                                     double enter_delay_s,
+                                     double enter_duration_s,
+                                     object hover_idx, double base_size,
+                                     double size_eps, double size_lerp):
+    """Advance ``btn._size`` across the whole CPU menu bar in one pass.
+
+    Returns ``(keep_animating, ready_indices_tuple)`` where
+    ``ready_indices_tuple`` contains buttons whose enter animation has just
+    reached the steady cursor-ready state.
+    """
+    cdef object btn
+    cdef list ready = []
+    cdef bint keep = False
+    cdef int idx = 0
+    cdef int hi = <int>_safe_i64(hover_idx, -1)
+    cdef int dist
+    cdef double cur
+    cdef double target
+    cdef double delta
+    cdef double local_t
+    cdef double new_size
+    if not buttons:
+        return (False, ())
+    for btn in buttons:
+        cur = _safe_f64(getattr(btn, '_size', base_size), base_size)
+        if enter_active:
+            if enter_duration_s <= 0.0:
+                local_t = 1.0
+            else:
+                local_t = (now - enter_t0 - <double>idx * enter_delay_s) / enter_duration_s
+            if local_t < 0.0:
+                local_t = 0.0
+            elif local_t > 1.0:
+                local_t = 1.0
+            new_size = <double>(1 if _round_even(base_size * (1.0 - ((1.0 - local_t) * (1.0 - local_t) * (1.0 - local_t)))) < 1
+                               else _round_even(base_size * (1.0 - ((1.0 - local_t) * (1.0 - local_t) * (1.0 - local_t)))))
+            btn._size = new_size
+            if local_t < 1.0:
+                keep = True
+            else:
+                ready.append(idx)
+        else:
+            if hover_idx is not None:
+                dist = hi - idx
+                if dist < 0:
+                    dist = -dist
+                target = base_size * (1.0 + 0.22 * exp(-0.9 * <double>(dist * dist)))
+            else:
+                target = base_size
+            delta = target - cur
+            if delta < 0.0:
+                if -delta > size_eps:
+                    btn._size = cur + delta * size_lerp
+                    keep = True
+                else:
+                    btn._size = target
+            elif delta > size_eps:
+                btn._size = cur + delta * size_lerp
+                keep = True
+            else:
+                btn._size = target
+        idx += 1
+    return (keep, tuple(ready))
+
+
+cpdef tuple menu_circle_visual_metrics(double size_f, double max_size):
+    """Return clamped size/offset/signature helpers for CPU menu-circle draw."""
+    cdef int size_px
+    cdef double size_q
+    cdef double off
+    cdef int ioff
+    cdef bint snap
+    if size_f < 1.0:
+        size_f = 1.0
+    if size_f > max_size:
+        size_f = max_size
+    size_px = <int>size_f
+    if size_f > <double>size_px:
+        size_px += 1
+    if size_px < 1:
+        size_px = 1
+    size_q = _round_even(size_f * 4.0) / 4.0
+    off = (max_size - size_f) / 2.0
+    ioff = <int>_round_even(off)
+    snap = _abs_f64(off - <double>ioff) < 0.25
+    return (size_f, size_px, size_q, off, ioff, snap)
+
+
+cpdef tuple menu_plate_sweep_quantized(object sweep_phase,
+                                       object sweep_strength,
+                                       double strength_scale=1.0):
+    """Return quantized ``(phase, strength)`` for CPU menu plate sweeps."""
+    cdef double phase = _safe_f64(sweep_phase, 0.0)
+    cdef double strength = _safe_f64(sweep_strength, 0.0) * strength_scale
+    if strength <= 0.005:
+        return (0.0, 0.0)
+    return (
+        _round_even(phase * 16.0) / 16.0,
+        _round_even(strength * 16.0) / 16.0,
+    )
+
+
+cpdef tuple left_panel_progress_dims(double top_t, double bottom_t,
+                                     object target_w, object top_h,
+                                     object bottom_h, object sweep_phase,
+                                     object sweep_strength):
+    """Return clamped panel progresses, sweep inputs, and pixel sizes."""
+    cdef double tt = top_t
+    cdef double bt = bottom_t
+    cdef double sp = _safe_f64(sweep_phase, 0.0)
+    cdef double ss = _safe_f64(sweep_strength, 0.0)
+    cdef int tw = <int>_safe_i64(target_w, 1)
+    cdef int th = <int>_safe_i64(top_h, 1)
+    cdef int bh = <int>_safe_i64(bottom_h, 1)
+    cdef int out_top_w
+    cdef int out_top_h
+    cdef int out_bottom_w
+    cdef int out_bottom_h
+    cdef double bottom_ref
+    if tt < 0.0:
+        tt = 0.0
+    elif tt > 1.0:
+        tt = 1.0
+    if bt < 0.0:
+        bt = 0.0
+    elif bt > 1.0:
+        bt = 1.0
+    if sp < 0.0:
+        sp = 0.0
+    elif sp > 1.0:
+        sp = 1.0
+    if ss < 0.0:
+        ss = 0.0
+    elif ss > 1.0:
+        ss = 1.0
+    bottom_ref = tt
+    if bt * 0.94 > bottom_ref:
+        bottom_ref = bt * 0.94
+    out_top_w = <int>_round_even(<double>tw * tt)
+    out_top_h = <int>_round_even(<double>th * tt)
+    out_bottom_w = <int>_round_even(<double>tw * bottom_ref)
+    out_bottom_h = <int>_round_even(<double>bh * bt)
+    if out_top_w < 1:
+        out_top_w = 1
+    if out_top_h < 1:
+        out_top_h = 1
+    if out_bottom_w < 1:
+        out_bottom_w = 1
+    if out_bottom_h < 1:
+        out_bottom_h = 1
+    return (tt, bt, sp, ss, out_top_w, out_top_h, out_bottom_w, out_bottom_h)
 
 
 cpdef str bosshp_fmt_hp(object value):

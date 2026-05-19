@@ -38,17 +38,7 @@ _COLORS = BarColors(
 
 
 def _lerp_color(c1: str, c2: str, t: float) -> str:
-    h1 = c1.lstrip('#')[:6]
-    h2 = c2.lstrip('#')[:6]
-    if len(h1) != 6 or len(h2) != 6:
-        return c1
-    r1, g1, b1 = int(h1[0:2], 16), int(h1[2:4], 16), int(h1[4:6], 16)
-    r2, g2, b2 = int(h2[0:2], 16), int(h2[2:4], 16), int(h2[4:6], 16)
-    return '#{:02x}{:02x}{:02x}'.format(
-        int(r1 + (r2 - r1) * t),
-        int(g1 + (g2 - g1) * t),
-        int(b1 + (b2 - b1) * t),
-    )
+    return _CY_UI.lerp_hex_color(c1, c2, t)
 
 
 _COLORS.lerp = _lerp_color

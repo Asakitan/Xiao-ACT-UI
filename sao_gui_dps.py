@@ -1217,30 +1217,15 @@ class DpsOverlay:
             self._registered = False
 
     def _is_animating(self) -> bool:
-        if self._hide_after_fade:
-            return True
-        if abs(self._fade_alpha - self._fade_target) > 1e-3:
-            return True
-        if self._panel_fx_tier:
-            return True
-        for row in self._rows.values():
-            if abs(row.disp_dps - row.target_dps) > 0.5 or \
-               abs(row.disp_damage - row.target_damage) > 0.5 or \
-               abs(row.disp_hps - row.target_hps) > 0.5 or \
-               abs(row.disp_heal - row.target_heal) > 0.5 or \
-               abs(row.disp_bar_pct - row.target_bar_pct) > 1e-3 or \
-               abs(row.disp_y - row.target_y) > 5e-4 or \
-               bool(row.fx_tier):
-                return True
-        if abs(self._disp_total_damage - self._target_total_damage) > 0.5:
-            return True
-        if abs(self._disp_total_dps - self._target_total_dps) > 0.5:
-            return True
-        if abs(self._disp_total_heal - self._target_total_heal) > 0.5:
-            return True
-        if abs(self._disp_total_hps - self._target_total_hps) > 0.5:
-            return True
-        return False
+        return bool(_CY_UI.dps_overlay_animating(
+            self._hide_after_fade,
+            self._fade_alpha, self._fade_target,
+            self._panel_fx_tier, self._rows,
+            self._disp_total_damage, self._target_total_damage,
+            self._disp_total_dps, self._target_total_dps,
+            self._disp_total_heal, self._target_total_heal,
+            self._disp_total_hps, self._target_total_hps,
+        ))
 
     def _compose_signature(self, now: float) -> Optional[tuple]:
         """v2.3.x: coarse fingerprint of frame inputs. Returns None
@@ -1251,38 +1236,12 @@ class DpsOverlay:
         if self._is_animating():
             return None
         try:
-            row_sig = tuple(
-                (uid,
-                 int(row.target_damage),
-                 int(row.target_dps),
-                 int(row.target_heal),
-                 int(row.target_hps),
-                 round(float(row.target_bar_pct), 4),
-                 int(row.target_y * 1000))
-                for uid, row in self._rows.items()
-            )
+            row_sig = _CY_UI.dps_rows_signature(self._rows)
             detail_sig = None
             if self._detail_visible:
                 ent = self._get_detail_entity()
                 if isinstance(ent, dict):
-                    skills = ent.get('skills') or []
-                    skill_sig = tuple(
-                        (int(sk.get('skill_id') or 0),
-                         int(sk.get('total') or 0),
-                         int(sk.get('heal_total') or 0),
-                         int(sk.get('hits') or 0),
-                         int(sk.get('heal_hits') or 0))
-                        for sk in list(skills)[:16]
-                        if isinstance(sk, dict)
-                    )
-                    detail_sig = (
-                        int(ent.get('uid') or 0),
-                        int(ent.get('damage_total') or 0),
-                        int(ent.get('heal_total') or 0),
-                        int(ent.get('max_hit') or 0),
-                        len(skills),
-                        skill_sig,
-                    )
+                    detail_sig = _CY_UI.dps_detail_signature(ent)
             return (
                 int(self._disp_elapsed),  # 1 Hz tick
                 int(self._target_total_damage),
@@ -1398,68 +1357,32 @@ class DpsOverlay:
 
         return animating
 
-    def _decay_toward(self, cur: float, tgt: float, tween: float) -> float:
-        """Exponential approach — covers ~95% of remaining distance in
-        `tween` seconds at TICK_MS frame rate. Cheap ease-out stand-in."""
-        if abs(cur - tgt) < 0.5:
-            return tgt
-        k = 1.0 - pow(0.05, self.TICK_MS / 1000.0 / max(0.05, tween))
-        return cur + (tgt - cur) * k
-
     def _step_toward_totals(self) -> bool:
-        prev = (self._disp_total_damage, self._disp_total_dps,
-                self._disp_total_heal, self._disp_total_hps,
-                self._disp_elapsed)
         # Smoothly tween totals so the header counters slide instead of
         # snapping every snapshot. Elapsed is a clock and stays linear.
-        self._disp_total_damage = self._decay_toward(
-            self._disp_total_damage, self._target_total_damage, self.NUM_TWEEN)
-        self._disp_total_dps = self._decay_toward(
-            self._disp_total_dps, self._target_total_dps, self.NUM_TWEEN)
-        self._disp_total_heal = self._decay_toward(
-            self._disp_total_heal, self._target_total_heal, self.NUM_TWEEN)
-        self._disp_total_hps = self._decay_toward(
-            self._disp_total_hps, self._target_total_hps, self.NUM_TWEEN)
-        self._disp_elapsed = self._target_elapsed
-        return prev != (self._disp_total_damage, self._disp_total_dps,
-                        self._disp_total_heal, self._disp_total_hps,
-                        self._disp_elapsed)
+        (self._disp_total_damage,
+         self._disp_total_dps,
+         self._disp_total_heal,
+         self._disp_total_hps,
+         self._disp_elapsed,
+         changed) = _CY_UI.dps_step_totals(
+            self._disp_total_damage, self._target_total_damage,
+            self._disp_total_dps, self._target_total_dps,
+            self._disp_total_heal, self._target_total_heal,
+            self._disp_total_hps, self._target_total_hps,
+            self._disp_elapsed, self._target_elapsed,
+            self.TICK_MS, self.NUM_TWEEN,
+        )
+        return bool(changed)
 
     def _step_row(self, row: _RowState, now: float) -> bool:
-        before = (row.disp_damage, row.disp_dps, row.disp_heal, row.disp_hps,
-                  row.disp_bar_pct, row.disp_y)
         # Tween numeric values, bar fill, and slot Y so reorders/value
         # changes visibly slide instead of snapping each frame.
-        row.disp_damage = self._decay_toward(
-            row.disp_damage, row.target_damage, self.NUM_TWEEN)
-        row.disp_dps = self._decay_toward(
-            row.disp_dps, row.target_dps, self.NUM_TWEEN)
-        row.disp_heal = self._decay_toward(
-            row.disp_heal, row.target_heal, self.NUM_TWEEN)
-        row.disp_hps = self._decay_toward(
-            row.disp_hps, row.target_hps, self.NUM_TWEEN)
-        # Bar percent uses a tighter epsilon than the 0.5-absolute one
-        # baked into _decay_toward; clamp manually.
-        if abs(row.disp_bar_pct - row.target_bar_pct) < 5e-4:
-            row.disp_bar_pct = row.target_bar_pct
-        else:
-            k = 1.0 - pow(0.05, self.TICK_MS / 1000.0
-                          / max(0.05, self.BAR_TWEEN))
-            row.disp_bar_pct = (row.disp_bar_pct
-                                + (row.target_bar_pct - row.disp_bar_pct) * k)
-        if abs(row.disp_y - row.target_y) < 5e-4:
-            row.disp_y = row.target_y
-        else:
-            k = 1.0 - pow(0.05, self.TICK_MS / 1000.0
-                          / max(0.05, self.ROW_TWEEN))
-            row.disp_y = row.disp_y + (row.target_y - row.disp_y) * k
-        if row.fx_tier:
-            dur = _HIT_FX_TIERS.get(row.fx_tier, (0,))[0]
-            if now - row.fx_start > dur:
-                row.fx_tier = ''
-        after = (row.disp_damage, row.disp_dps, row.disp_heal, row.disp_hps,
-                 row.disp_bar_pct, row.disp_y)
-        return bool(row.fx_tier) or (before != after)
+        fx_duration = _HIT_FX_TIERS.get(row.fx_tier, (0,))[0] if row.fx_tier else 0.0
+        return bool(_CY_UI.dps_step_row_state(
+            row, now, self.TICK_MS, self.NUM_TWEEN,
+            self.BAR_TWEEN, self.ROW_TWEEN, fx_duration,
+        ))
 
     # ──────────────────────────────────────────
     #  Rendering — pixel-for-pixel port of web/dps.html
@@ -2497,23 +2420,56 @@ class DpsOverlay:
 
     @staticmethod
     def _fill_rect(img: Image.Image, box, fill) -> None:
-        overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        ImageDraw.Draw(overlay, 'RGBA').rectangle(box, fill=fill)
-        img.alpha_composite(overlay)
+        x0, y0, x1, y1 = [int(v) for v in box]
+        if x1 < x0:
+            x0, x1 = x1, x0
+        if y1 < y0:
+            y0, y1 = y1, y0
+        w = x1 - x0 + 1
+        h = y1 - y0 + 1
+        if w <= 0 or h <= 0:
+            return
+        overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(overlay, 'RGBA').rectangle(
+            (0, 0, w - 1, h - 1), fill=fill
+        )
+        img.alpha_composite(overlay, (x0, y0))
 
     @staticmethod
     def _fill_rounded_rect(img: Image.Image, box, radius: int, fill) -> None:
-        overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        x0, y0, x1, y1 = [int(v) for v in box]
+        if x1 < x0:
+            x0, x1 = x1, x0
+        if y1 < y0:
+            y0, y1 = y1, y0
+        w = x1 - x0 + 1
+        h = y1 - y0 + 1
+        if w <= 0 or h <= 0:
+            return
+        overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         ImageDraw.Draw(overlay, 'RGBA').rounded_rectangle(
-            box, radius=radius, fill=fill
+            (0, 0, w - 1, h - 1), radius=radius, fill=fill
         )
-        img.alpha_composite(overlay)
+        img.alpha_composite(overlay, (x0, y0))
 
     @staticmethod
     def _fill_polygon(img: Image.Image, poly, fill) -> None:
-        overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
-        ImageDraw.Draw(overlay, 'RGBA').polygon(poly, fill=fill)
-        img.alpha_composite(overlay)
+        if not poly:
+            return
+        xs = [int(p[0]) for p in poly]
+        ys = [int(p[1]) for p in poly]
+        x0 = min(xs)
+        y0 = min(ys)
+        x1 = max(xs)
+        y1 = max(ys)
+        w = x1 - x0 + 1
+        h = y1 - y0 + 1
+        if w <= 0 or h <= 0:
+            return
+        local_poly = [(int(px) - x0, int(py) - y0) for px, py in poly]
+        overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(overlay, 'RGBA').polygon(local_poly, fill=fill)
+        img.alpha_composite(overlay, (x0, y0))
 
     def _draw_tracked(self, draw: ImageDraw.ImageDraw, xy, text: str,
                       font, fill, spacing: float = 1,
