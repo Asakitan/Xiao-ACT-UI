@@ -3,6 +3,25 @@ using System.Collections.Immutable;
 namespace SaoAuto.Core.Automation;
 
 /// <summary>
+/// S141 — immutable, atomically-captured view of one
+/// <see cref="AutoKeySpecRuntime"/> tick. Safe to hand to background
+/// consumers (telemetry, web bridge) without snapshot-copy on the
+/// receiver side.
+/// </summary>
+public readonly record struct AutoKeyRuntimeSnapshot(
+    ImmutableDictionary<string, string> BlockReasons,
+    ImmutableDictionary<string, int> CooldownRemainingMs,
+    ImmutableDictionary<string, int> ReadyForMs,
+    long FireCount)
+{
+    public static AutoKeyRuntimeSnapshot Empty => new(
+        ImmutableDictionary<string, string>.Empty,
+        ImmutableDictionary<string, int>.Empty,
+        ImmutableDictionary<string, int>.Empty,
+        0L);
+}
+
+/// <summary>
 /// S75 — spec-side runtime context. Mirrors the per-tick inputs
 /// that <c>auto_key_engine._conditions_match</c> reads off
 /// <c>game_state</c> + <c>slot_map</c>: every field condition
@@ -107,6 +126,61 @@ public sealed class AutoKeySpecRuntime
     public long FireCount { get; private set; }
 
     /// <summary>
+    /// S139 — per-action diagnostic snapshot from the most recent
+    /// <see cref="Tick"/>. Keys are action ids; values are one of
+    /// <c>disabled</c>, <c>readiness</c>, <c>cooldown</c>,
+    /// <c>conditions</c>, <c>fired</c>, <c>not-evaluated</c>.
+    /// Mirrors the per-action reason strings Python's
+    /// <c>AutoKeyEngine</c> stamps on the legacy debug overlay.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> LastBlockReasons => _lastBlock;
+    private readonly Dictionary<string, string> _lastBlock = new();
+
+    /// <summary>
+    /// S140 — per-action cooldown remaining (ms) from the most recent
+    /// <see cref="Tick"/>. Populated for every action with a positive
+    /// <c>MinRearmMs</c> that has fired at least once during this
+    /// runtime's lifetime. Lets the HUD show a countdown next to the
+    /// "cooldown" entry on <see cref="LastBlockReasons"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, int> LastCooldownRemainingMs => _lastCooldownRemaining;
+    private readonly Dictionary<string, int> _lastCooldownRemaining = new();
+
+    /// <summary>
+    /// S142 — per-action "ready for" duration (ms) from the most
+    /// recent <see cref="Tick"/>. Present for every action whose slot
+    /// is currently ready and has a recorded leading-edge timestamp
+    /// in the readiness gate. Lets the HUD show a "ready 320ms"
+    /// counter beside the action; useful when ReadyDelayMs is non-zero
+    /// to visualise the hysteresis wait.
+    /// </summary>
+    public IReadOnlyDictionary<string, int> LastReadyForMs => _lastReadyFor;
+    private readonly Dictionary<string, int> _lastReadyFor = new();
+
+    /// <summary>
+    /// S141 — atomic snapshot of the live per-tick diagnostics.
+    /// Returns immutable copies of <see cref="LastBlockReasons"/> and
+    /// <see cref="LastCooldownRemainingMs"/> taken under a single lock,
+    /// so background consumers (telemetry, web bridge) get a
+    /// consistent view that won't tear with an in-flight
+    /// <see cref="Tick"/>. The live `IReadOnlyDictionary` properties
+    /// remain unchanged for cheap UI-thread reads where consistency
+    /// isn't critical.
+    /// </summary>
+    public AutoKeyRuntimeSnapshot Snapshot()
+    {
+        lock (_snapshotGate)
+        {
+            return new AutoKeyRuntimeSnapshot(
+                BlockReasons: _lastBlock.ToImmutableDictionary(),
+                CooldownRemainingMs: _lastCooldownRemaining.ToImmutableDictionary(),
+                ReadyForMs: _lastReadyFor.ToImmutableDictionary(),
+                FireCount: FireCount);
+        }
+    }
+    private readonly object _snapshotGate = new();
+
+    /// <summary>
     /// Reset both gates — call on profile switch (matches Python's
     /// <c>invalidate()</c> at line 626).
     /// </summary>
@@ -114,6 +188,12 @@ public sealed class AutoKeySpecRuntime
     {
         _readiness.Reset();
         _cooldown.Reset();
+        lock (_snapshotGate)
+        {
+            _lastBlock.Clear();
+            _lastCooldownRemaining.Clear();
+            _lastReadyFor.Clear();
+        }
     }
 
     /// <summary>
@@ -126,20 +206,46 @@ public sealed class AutoKeySpecRuntime
     public string? Tick(AutoKeyProfileSpecRecord profile, AutoKeySpecContext ctx)
     {
         ArgumentNullException.ThrowIfNull(profile);
+        var reasons = new Dictionary<string, string>(profile.Actions.Length);
+        var cooldowns = new Dictionary<string, int>();
+        var readyFor = new Dictionary<string, int>();
+        string? fired = null;
         foreach (var action in profile.Actions)
         {
-            if (!action.Enabled) continue;
+            if (action.MinRearmMs > 0)
+            {
+                var remain = _cooldown.RemainingMs(action.Id, action.MinRearmMs, ctx.Now);
+                if (remain > 0) cooldowns[action.Id] = remain;
+            }
+            if (!action.Enabled) { reasons[action.Id] = "disabled"; continue; }
+            if (fired is not null) { reasons[action.Id] = "not-evaluated"; continue; }
             var slot = ctx.Slot(action.SlotIndex);
 
-            if (!_readiness.TryFire(action.Id, slot, action.ReadyDelayMs, ctx.Now)) continue;
-            if (!_cooldown.TryFire(action.Id, action.MinRearmMs, ctx.Now)) continue;
-            if (!ConditionEvaluator.Matches(action.Conditions, ctx, action.SlotIndex)) continue;
+            if (!_readiness.TryFire(action.Id, slot, action.ReadyDelayMs, ctx.Now))
+            { reasons[action.Id] = "readiness"; continue; }
+            // gate just confirmed (or recorded) leading-edge ready;
+            // snapshot the "ready for" duration for the HUD.
+            readyFor[action.Id] = _readiness.ReadyForMs(action.Id, ctx.Now);
+            if (!_cooldown.TryFire(action.Id, action.MinRearmMs, ctx.Now))
+            { reasons[action.Id] = "cooldown"; continue; }
+            if (!ConditionEvaluator.Matches(action.Conditions, ctx, action.SlotIndex))
+            { reasons[action.Id] = "conditions"; continue; }
 
             DispatchKey(action);
             FireCount++;
-            return action.Id;
+            reasons[action.Id] = "fired";
+            fired = action.Id;
         }
-        return null;
+        lock (_snapshotGate)
+        {
+            _lastBlock.Clear();
+            foreach (var kv in reasons) _lastBlock[kv.Key] = kv.Value;
+            _lastCooldownRemaining.Clear();
+            foreach (var kv in cooldowns) _lastCooldownRemaining[kv.Key] = kv.Value;
+            _lastReadyFor.Clear();
+            foreach (var kv in readyFor) _lastReadyFor[kv.Key] = kv.Value;
+        }
+        return fired;
     }
 
     private void DispatchKey(AutoKeyActionSpec action)

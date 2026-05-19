@@ -84,6 +84,24 @@ public sealed class AutoKeyReadinessGate
             return _readySince.TryGetValue(actionId, out var since) ? since : null;
     }
 
+    /// <summary>
+    /// S142 — how long (ms) the slot for <paramref name="actionId"/>
+    /// has been continuously ready as of <paramref name="now"/>, or 0
+    /// when no leading-edge timestamp is recorded. Telemetry-friendly
+    /// counterpart to <see cref="TryFire"/>; lets the HUD show
+    /// "ready for 320ms" beside the readiness reason stamped on
+    /// <c>AutoKeySpecRuntime.LastBlockReasons</c>.
+    /// </summary>
+    public int ReadyForMs(string actionId, DateTimeOffset now)
+    {
+        lock (_gate)
+        {
+            if (!_readySince.TryGetValue(actionId, out var since)) return 0;
+            var elapsed = (now - since).TotalMilliseconds;
+            return elapsed <= 0 ? 0 : (int)Math.Floor(elapsed);
+        }
+    }
+
     /// <summary>Forget one action — call on profile switch / action edit.</summary>
     public void Forget(string actionId)
     {

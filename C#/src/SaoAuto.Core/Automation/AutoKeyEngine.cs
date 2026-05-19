@@ -82,6 +82,32 @@ public sealed class AutoKeyCooldownGate
         }
     }
 
+    /// <summary>
+    /// S140 — how many ms remain on the cooldown gate for this action.
+    /// 0 when the action has never fired, when <paramref name="cooldownMs"/> ≤ 0,
+    /// or when the gate would let the action through right now. Used by HUD /
+    /// telemetry to show a per-action countdown alongside the "cooldown"
+    /// block reason stamped on <see cref="AutoKeySpecRuntime.LastBlockReasons"/>.
+    /// </summary>
+    public int RemainingMs(string actionId, int cooldownMs, DateTimeOffset now)
+    {
+        if (cooldownMs <= 0) return 0;
+        lock (_gate)
+        {
+            if (!_lastFire.TryGetValue(actionId, out var last)) return 0;
+            var elapsed = (now - last).TotalMilliseconds;
+            var remain = cooldownMs - elapsed;
+            return remain <= 0 ? 0 : (int)Math.Ceiling(remain);
+        }
+    }
+
+    /// <summary>S140 — last-fire timestamp, or null if never fired. Telemetry-only.</summary>
+    public DateTimeOffset? LastFire(string actionId)
+    {
+        lock (_gate)
+            return _lastFire.TryGetValue(actionId, out var t) ? t : null;
+    }
+
     public void Reset()
     {
         lock (_gate) _lastFire.Clear();

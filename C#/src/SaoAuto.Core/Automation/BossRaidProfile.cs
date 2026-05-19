@@ -18,7 +18,7 @@ namespace SaoAuto.Core.Automation;
 public static class BossRaidProfile
 {
     public const int SchemaVersion = 1;
-    public const string DefaultServerUrl = "";
+    public const string DefaultServerUrl = "http://doi.sakisense.top:15538";
 
     private static readonly string[] AllowedConditionTypes =
         { "hp_pct", "shield_active", "breaking", "always" };
