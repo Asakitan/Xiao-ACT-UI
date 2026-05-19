@@ -48,8 +48,6 @@ public sealed class StaminaOfflineGate
         }
 
         var justWentOffline = false;
-        var justRecovered = false;
-
         if (offlineElapsed >= DebounceSeconds)
         {
             if (nowSeconds < warmupUntil)
@@ -72,7 +70,6 @@ public sealed class StaminaOfflineGate
             {
                 IsOffline = false;
                 OnlineSince = 0.0;
-                justRecovered = true;
                 return new OfflineDecision(false, false, true);
             }
             return new OfflineDecision(true, false, false);

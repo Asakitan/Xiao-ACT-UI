@@ -15,6 +15,8 @@ from typing import Callable, Optional, Tuple
 import cv2
 import numpy as np
 
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+
 from config import (
     BAR_COLORS,
     CAPTURE_FPS_FAST,
@@ -829,42 +831,21 @@ class RecognitionEngine:
 
     def _filter_stamina_pct(self, raw_pct: float, confidence: float) -> float:
         now = time.time()
-        raw_pct = max(0.0, min(1.0, float(raw_pct)))
-        stable = self._sta_filtered_pct
-
-        if stable is None:
-            return self._accept_stamina_pct(raw_pct, now)
-
-        if confidence < 0.20:
-            return float(stable)
-
-        # After a real decrease, ignore any short-term recovery readings for 0.3s.
-        if raw_pct > stable and now < self._sta_drop_lock_until:
-            return float(stable)
-
-        delta = raw_pct - stable
-        if abs(delta) > self._sta_large_delta_threshold:
-            if self._sta_pending_pct is None:
-                self._sta_pending_pct = raw_pct
-                self._sta_pending_since = now
-                return float(stable)
-
-            pending_delta = raw_pct - self._sta_pending_pct
-            if abs(pending_delta) <= self._sta_large_delta_stable_epsilon:
-                if (now - self._sta_pending_since) >= self._sta_large_delta_confirm_s:
-                    return self._accept_stamina_pct(raw_pct, now)
-                return float(stable)
-
-            if abs(raw_pct - stable) <= self._sta_large_delta_stable_epsilon:
-                self._sta_pending_pct = None
-                self._sta_pending_since = 0.0
-                return float(stable)
-
-            self._sta_pending_pct = raw_pct
-            self._sta_pending_since = now
-            return float(stable)
-
-        return self._accept_stamina_pct(raw_pct, now)
+        (result_pct,
+         self._sta_filtered_pct,
+         self._sta_pending_pct,
+         self._sta_pending_since,
+         self._sta_drop_lock_until) = _CY_UI.stamina_filter_step(
+            raw_pct, confidence, now,
+            self._sta_filtered_pct,
+            self._sta_pending_pct,
+            self._sta_pending_since,
+            self._sta_drop_lock_until,
+            self._sta_large_delta_threshold,
+            self._sta_large_delta_confirm_s,
+            self._sta_large_delta_stable_epsilon,
+        )
+        return float(result_pct)
 
     def start(self):
         if self._running:

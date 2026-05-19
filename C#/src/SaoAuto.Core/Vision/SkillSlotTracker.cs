@@ -145,7 +145,7 @@ public sealed class SkillSlotTracker
 
     private sealed class SlotState
     {
-        public SkillSlotBaseline Baseline;
+        public SkillSlotBaseline Baseline = SkillStateClassifier.DefaultBaseline;
         public byte[]? BaselineImage;
         public int BaselineWidth;
         public int BaselineHeight;

@@ -49,6 +49,16 @@ public sealed class RecognitionTickHost : IDisposable
 
     public bool IsRunning => _runner is { IsCompleted: false };
 
+    /// <summary>
+    /// S170 — pause flag mirroring <c>HideSeekTickHost.Suspended</c>
+    /// (S160). When <c>true</c>, the run loop keeps spinning (and
+    /// honors cancellation) but skips <see cref="RecognitionTickEngine.Tick"/>
+    /// + state projection. Lets the HUD toggle vision off without
+    /// tearing the worker task down, since the tick host has no real
+    /// restart path.
+    /// </summary>
+    public bool Suspended { get; set; }
+
     public Task StartAsync(CancellationToken ct = default)
     {
         if (IsRunning) return Task.CompletedTask;
@@ -77,6 +87,11 @@ public sealed class RecognitionTickHost : IDisposable
     public int RunOnceAsync()
     {
         var start = _clock();
+        if (Suspended)
+        {
+            _lastTickStartedAt = start;
+            return (int)Math.Round(Math.Max(_minSleepSeconds, 1.0) * 1000.0);
+        }
         var result = SafeTick();
         Project(result);
         var elapsed = _clock() - start;
@@ -91,11 +106,19 @@ public sealed class RecognitionTickHost : IDisposable
         while (!token.IsCancellationRequested)
         {
             var start = _clock();
-            var result = SafeTick();
-            Project(result);
-            var elapsed = _clock() - start;
-            var period = result.NextFps > 0 ? 1.0 / result.NextFps : 1.0;
-            var sleep = Math.Max(_minSleepSeconds, period - elapsed);
+            double sleep;
+            if (Suspended)
+            {
+                sleep = Math.Max(_minSleepSeconds, 1.0);
+            }
+            else
+            {
+                var result = SafeTick();
+                Project(result);
+                var elapsed = _clock() - start;
+                var period = result.NextFps > 0 ? 1.0 / result.NextFps : 1.0;
+                sleep = Math.Max(_minSleepSeconds, period - elapsed);
+            }
             try { await _delay((int)Math.Round(sleep * 1000.0), token).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }

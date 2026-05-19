@@ -35,6 +35,19 @@ public static class RecognitionPipelineBootstrap
         ILogger? logger = null,
         IWindowEnumerator? enumeratorOverride = null,
         Func<Func<WindowCandidate?>, IFrameCapture>? captureFactory = null)
+        => BuildBundle(settings, states, logger, enumeratorOverride, captureFactory).Host;
+
+    /// <summary>
+    /// S138 — variant that also returns the <see cref="WindowLocator"/>
+    /// so callers (e.g. <c>AutoKeyLifecycle</c>) can bind a real
+    /// foreground probe without re-running window discovery.
+    /// </summary>
+    public static RecognitionBundle BuildBundle(
+        SettingsManager settings,
+        GameStateManager states,
+        ILogger? logger = null,
+        IWindowEnumerator? enumeratorOverride = null,
+        Func<Func<WindowCandidate?>, IFrameCapture>? captureFactory = null)
     {
         if (settings is null) throw new ArgumentNullException(nameof(settings));
         if (states is null) throw new ArgumentNullException(nameof(states));
@@ -64,6 +77,9 @@ public static class RecognitionPipelineBootstrap
         log.LogInformation(
             "recognition pipeline built (roi={Roi}, watched=[{Watched}])",
             staminaRoi, string.Join(',', watched));
-        return host;
+        return new RecognitionBundle(host, locator);
     }
 }
+
+/// <summary>S138 — composite returned by <see cref="RecognitionPipelineBootstrap.BuildBundle"/>.</summary>
+public sealed record RecognitionBundle(RecognitionTickHost Host, WindowLocator Locator);

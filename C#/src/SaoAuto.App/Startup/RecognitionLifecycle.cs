@@ -32,7 +32,24 @@ public sealed class RecognitionLifecycle : IDisposable
         _log = log;
     }
 
-    public bool IsActive => _host is not null;
+    public bool IsActive => _host is not null && !_host.Suspended;
+
+    /// <summary>S170 — pause the underlying tick host without tearing
+    /// it down. Idempotent; no-op when the lifecycle never started.
+    /// <see cref="IsActive"/> flips to <c>false</c>.</summary>
+    public void Suspend()
+    {
+        if (_disposed || _host is null) return;
+        _host.Suspended = true;
+    }
+
+    /// <summary>S170 — resume a previously-suspended tick host.
+    /// Idempotent; no-op when the lifecycle never started.</summary>
+    public void Resume()
+    {
+        if (_disposed || _host is null) return;
+        _host.Suspended = false;
+    }
 
     public static RecognitionLifecycle Start(
         Func<RecognitionTickHost> hostFactory,
