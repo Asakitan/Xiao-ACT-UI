@@ -337,13 +337,13 @@ TEMP_DIR = os.path.join(BASE_DIR, "temp")
 SKILL_BASELINE_DIR = os.path.join(TEMP_DIR, "skill_startup")
 
 # 远程更新服务地址 (可被 settings.json 中 update_host 覆盖). 留空表示禁用更新检查.
-DEFAULT_UPDATE_HOST = ""
+DEFAULT_UPDATE_HOST = "http://doi.sakisense.top:15018"
 UPDATE_CHANNEL = "stable"
 UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.0.3"
+APP_VERSION = "3.1.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,

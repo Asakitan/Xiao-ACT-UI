@@ -1,8 +1,10 @@
 using Microsoft.Extensions.Logging;
 using SaoAuto.App.Startup;
+using SaoAuto.Core.Automation;
 using SaoAuto.Core.Configuration;
 using SaoAuto.Core.Logging;
 using SaoAuto.Core.State;
+using SaoAuto.Core.Vision;
 
 namespace SaoAuto.App.Modes;
 
@@ -37,11 +39,45 @@ public sealed class HeadlessRunner
         // Force one print of the cached snapshot so the operator sees something immediately.
         PrintStateLine(_states.Snapshot);
 
+        using var packets = PacketLifecycle.Start(
+            _settings, _states, _log, cancellationToken);
+
         // S96/S97 — wire the recognition pipeline via the shared
         // best-effort lifecycle. A failure here (no game window, GDI
         // init issue) must not block headless from publishing cache.
+        // S138 — bundle exposes the locator so AutoKey can share the
+        // foreground probe without re-discovering the window.
+        WindowLocator? sharedLocator = null;
         using var recognition = RecognitionLifecycle.Start(
-            () => RecognitionPipelineBootstrap.Build(_settings, _states, _log),
+            () =>
+            {
+                var bundle = RecognitionPipelineBootstrap.BuildBundle(_settings, _states, _log);
+                sharedLocator = bundle.Locator;
+                return bundle.Host;
+            },
+            _log,
+            cancellationToken);
+
+        // S137/S138 — wire the AutoKey tick host via the shared
+        // best-effort lifecycle. Foreground probe derives from the
+        // recognition pipeline's WindowLocator when available.
+        using var autoKey = AutoKeyLifecycle.Start(
+            () => new AutoKeyTickHost(
+                _settings,
+                _states,
+                new AutoKeySpecRuntime(new SendInputKeyDispatcher()),
+                foregroundProbe: sharedLocator is null ? null : GameForegroundProbe.Bind(sharedLocator)),
+            _log,
+            cancellationToken);
+
+        // S153 — HideSeek tick host. Factory throws when no locator is
+        // available or assets are missing; HideSeekLifecycle logs and
+        // continues so headless still runs.
+        using var hideSeek = HideSeekLifecycle.Start(
+            () => HideSeekBootstrap.Build(
+                sharedLocator ?? throw new InvalidOperationException("HideSeek: no shared locator"),
+                ResourcePathResolver.ForCurrentProcess(),
+                log: _log),
             _log,
             cancellationToken);
 

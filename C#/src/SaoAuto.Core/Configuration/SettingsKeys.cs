@@ -12,10 +12,13 @@ public static class SettingsKeys
     public const string WatchedSkillSlots = "watched_skill_slots";
     public const string PanelThemes = "panel_themes";
     public const string MemDataSource = "mem_data_source";
+    public const string CaptureDevice = "capture_device";
     public const string BuffMonEnabled = "buffmon_enabled";
     public const string UpdateCheckEnabled = "update_check_enabled";
     public const string UpdateHost = "update_host";
+    public const string UpdateAutoPoll = "update_auto_poll";
     public const string Roi = "roi";
+    public const string HideSeekToggleHotkey = "hide_seek_toggle_hotkey";
 
     public static readonly IReadOnlyList<string> LegacyPrunedOnSave = new[]
     {
