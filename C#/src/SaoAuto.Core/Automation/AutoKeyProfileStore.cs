@@ -56,8 +56,66 @@ public static class AutoKeyProfileStore
         if (activeId.Length > 0 && !built.Any(p => p.Id == activeId)) activeId = "";
         if (activeId.Length == 0 && built.Length > 0) activeId = built[0].Id;
 
-        return d with { Enabled = enabled, ActiveProfileId = activeId, ServerUrl = serverUrl, Profiles = built };
+        var lastSearch = NormalizeRemoteSearch(raw);
+        return d with
+        {
+            Enabled = enabled,
+            ActiveProfileId = activeId,
+            ServerUrl = serverUrl,
+            Profiles = built,
+            LastRemoteSearch = lastSearch,
+        };
     }
+
+    private static AutoKeyRemoteSearch NormalizeRemoteSearch(JsonElement raw)
+    {
+        if (raw.ValueKind != JsonValueKind.Object
+            || !raw.TryGetProperty("last_remote_search", out var search)
+            || search.ValueKind != JsonValueKind.Object)
+        {
+            return AutoKeyRemoteSearch.Default;
+        }
+        var queryEl = search.TryGetProperty("query", out var q) && q.ValueKind == JsonValueKind.Object
+            ? q
+            : default;
+        var query = new AutoKeyRemoteQuery(
+            Q: ReadStringTrim(queryEl, "q"),
+            ProfileName: ReadStringTrim(queryEl, "profile_name"),
+            PlayerUid: ReadStringTrim(queryEl, "player_uid"),
+            PlayerName: ReadStringTrim(queryEl, "player_name"),
+            ProfessionName: ReadStringTrim(queryEl, "profession_name"),
+            Page: ClampInt(ReadInt(queryEl, "page", 1), 1, int.MaxValue),
+            PageSize: ClampInt(ReadInt(queryEl, "page_size", 20), 1, 100));
+
+        var results = ImmutableArray<JsonElement>.Empty;
+        if (search.TryGetProperty("results", out var resultsEl) && resultsEl.ValueKind == JsonValueKind.Array)
+        {
+            var builder = ImmutableArray.CreateBuilder<JsonElement>();
+            foreach (var item in resultsEl.EnumerateArray())
+                builder.Add(item.Clone());
+            results = builder.ToImmutable();
+        }
+        return new AutoKeyRemoteSearch(
+            Query: query,
+            Results: results,
+            Error: ReadStringTrim(search, "error"),
+            FetchedAt: ReadStringTrim(search, "fetched_at"));
+    }
+
+    private static int ReadInt(JsonElement el, string key, int @default)
+    {
+        if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty(key, out var v)) return @default;
+        return v.ValueKind switch
+        {
+            JsonValueKind.Number when v.TryGetInt32(out var i) => i,
+            JsonValueKind.Number => (int)v.GetDouble(),
+            JsonValueKind.String when int.TryParse(v.GetString(), out var s) => s,
+            _ => @default,
+        };
+    }
+
+    private static int ClampInt(int value, int min, int max)
+        => Math.Max(min, Math.Min(max, value));
 
     public static AutoKeyProfileSpecRecord? FindProfile(AutoKeyConfig config, string profileId)
     {
@@ -286,7 +344,46 @@ public sealed record AutoKeyConfig(
     bool Enabled,
     string ActiveProfileId,
     string ServerUrl,
-    ImmutableArray<AutoKeyProfileSpecRecord> Profiles);
+    ImmutableArray<AutoKeyProfileSpecRecord> Profiles)
+{
+    /// <summary>S181 — Python parity: <c>auto_key.last_remote_search</c>
+    /// captures the last cloud query/results so the editor can repaint
+    /// after restart. Init-only property keeps the positional ctor
+    /// backward-compatible (existing callers default to <see cref="AutoKeyRemoteSearch.Default"/>).</summary>
+    public AutoKeyRemoteSearch LastRemoteSearch { get; init; } = AutoKeyRemoteSearch.Default;
+}
+
+public sealed record AutoKeyRemoteQuery(
+    string Q,
+    string ProfileName,
+    string PlayerUid,
+    string PlayerName,
+    string ProfessionName,
+    int Page,
+    int PageSize)
+{
+    public static readonly AutoKeyRemoteQuery Default = new(
+        Q: string.Empty,
+        ProfileName: string.Empty,
+        PlayerUid: string.Empty,
+        PlayerName: string.Empty,
+        ProfessionName: string.Empty,
+        Page: 1,
+        PageSize: 20);
+}
+
+public sealed record AutoKeyRemoteSearch(
+    AutoKeyRemoteQuery Query,
+    ImmutableArray<System.Text.Json.JsonElement> Results,
+    string Error,
+    string FetchedAt)
+{
+    public static readonly AutoKeyRemoteSearch Default = new(
+        Query: AutoKeyRemoteQuery.Default,
+        Results: ImmutableArray<System.Text.Json.JsonElement>.Empty,
+        Error: string.Empty,
+        FetchedAt: string.Empty);
+}
 
 public sealed record AutoKeyProfileSummary(
     string Id,

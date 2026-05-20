@@ -25,4 +25,16 @@
     <PackageReference Include="Serilog.Sinks.File" />
   </ItemGroup>
 
+  <!-- S185 — copy HUD HTML + assets next to the binary so
+       UiRunner.ResolveHudIndexUrl can find panel.html and
+       HideSeekBootstrap can find its templates. -->
+  <ItemGroup>
+    <Content Include="..\..\..\web\**\*.*" Link="web\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\..\assets\**\*.*" Link="assets\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

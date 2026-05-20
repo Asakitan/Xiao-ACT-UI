@@ -1902,6 +1902,7 @@ class SAOPlayerGUI:
         self._session_players_version = 0
         self._session_players_rows_cache_sig = None
         self._session_players_rows_cache = []
+        self._session_players_last_sync_ts = 0.0
         self._last_session_players_panel_sig = None
         self._last_session_players_panel_push_ts = 0.0
         self._profile_dialog_pending = False
@@ -2858,7 +2859,7 @@ class SAOPlayerGUI:
             self._cancel_dps_idle_reset_after()
             target_uuid = event.get('target_uuid', 0)
             if target_uuid:
-                import time as _t
+                damage_now = time.time()
                 # ── Duplicate-UUID revive (v2.3.14) ─────────────────────
                 # When a server reuses a monster UUID (mob respawn in
                 # the same dungeon, or monster instance churn without a
@@ -2874,12 +2875,12 @@ class SAOPlayerGUI:
                         _m = _bridge.get_monster(target_uuid)
                         if _m is not None and getattr(_m, 'is_dead', False):
                             _m.is_dead = False
-                            _m.last_update = _t.time()
+                            _m.last_update = damage_now
                     except Exception:
                         pass
-                self._bb_recent_targets[target_uuid] = _t.time()
+                self._bb_recent_targets[target_uuid] = damage_now
                 self._bb_last_target_uuid = target_uuid
-                self._bb_last_damage_ts = _t.time()
+                self._bb_last_damage_ts = damage_now
                 self._scene_hide_token = int(getattr(self, '_scene_hide_token', 0) or 0) + 1
                 # Damage is also liveness. Some encounters lock HP while
                 # still accepting hits, so do not let stable-HP hiding win.
@@ -3606,7 +3607,7 @@ class SAOPlayerGUI:
         if self._destroyed or gs is None:
             return
         try:
-            self._sync_session_players_cache(gs)
+            self._sync_session_players_cache(gs, min_interval=0.05)
             level_base = int(getattr(gs, 'level_base', 0) or self._level or 1)
             level_extra = int(getattr(gs, 'level_extra', 0) or 0)
             season_exp = int(getattr(gs, 'season_exp', 0) or 0)
@@ -3677,7 +3678,7 @@ class SAOPlayerGUI:
         """
         # ── DPS tracker: 更新自身玩家信息 ──
         _pp_now = time.time()
-        self._sync_session_players_cache(gs)
+        self._sync_session_players_cache(gs, min_interval=0.05)
         self._sync_boss_hp_revive_hold(gs)
         menu = getattr(self, '_sao_menu', None)
         if menu and getattr(menu, 'visible', False):
@@ -3824,7 +3825,10 @@ class SAOPlayerGUI:
                 _bb_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
                 _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
 
-                _now = time.time()
+                # Reuse the timestamp captured at the top of this method;
+                # all downstream comparisons are seconds-level so the ~ms
+                # of drift between top and here is irrelevant.
+                _now = _pp_now
                 _bb_timeout = self._boss_hp_hold_timeout_s()
                 try:
                     _bb_scene_grace = _now < float(
@@ -4220,10 +4224,8 @@ class SAOPlayerGUI:
                     # ── Commander panel refresh (300 ms) ──
                     try:
                         if self._commander_panel and self._commander_panel.is_visible():
-                            import time as _t
-                            _now = _t.time()
-                            if _now - self._commander_last_push > 0.30:
-                                self._commander_last_push = _now
+                            if _pp_now - self._commander_last_push > 0.30:
+                                self._commander_last_push = _pp_now
                                 self._push_commander_data()
                     except Exception:
                         pass
@@ -4548,7 +4550,21 @@ class SAOPlayerGUI:
         if changed:
             self._session_players_version += 1
 
-    def _sync_session_players_cache(self, gs=None):
+    def _sync_session_players_cache(self, gs=None, min_interval: float = 0.0):
+        """Merge SELF + bridge players into the session cache.
+
+        `min_interval`: skip the work if the previous sync ran within this
+        many seconds. Hot-path callers (_apply_fast_state_update and
+        _push_packet_overlays fire ≥ 10× / s) pass ~0.05 because session-
+        player rows refresh at human-visible cadence; menu/panel callers
+        leave the default 0 so they always see the freshest snapshot.
+        """
+        if min_interval > 0.0:
+            now_chk = time.time()
+            if (now_chk - self._session_players_last_sync_ts) < min_interval:
+                return
+            self._session_players_last_sync_ts = now_chk
+
         self_uid = self._session_self_uid()
         if self_uid > 0 and self_uid != self._session_players_self_uid:
             if self._session_players_self_uid:
@@ -4570,6 +4586,8 @@ class SAOPlayerGUI:
 
         bridge = getattr(self, '_packet_engine', None)
         if not bridge:
+            if min_interval <= 0.0:
+                self._session_players_last_sync_ts = time.time()
             return
         try:
             players = bridge.get_players() or {}
@@ -4583,6 +4601,8 @@ class SAOPlayerGUI:
                 getattr(pdata, 'fight_point', 0) or 0,
                 is_self=bool(uid and uid == self_uid),
             )
+        if min_interval <= 0.0:
+            self._session_players_last_sync_ts = time.time()
 
     @staticmethod
     def _format_session_power(value) -> str:
@@ -4626,6 +4646,10 @@ class SAOPlayerGUI:
         panel = getattr(self, '_session_players_panel', None)
         stack = getattr(self, '_menu_left_stack', None)
         stack_active = bool(getattr(stack, '_active', False)) if stack is not None else False
+        # `already_synced` lets us skip the trailing _sync call when an
+        # earlier show-panel branch (which already forces sync=True via
+        # _get_session_player_rows) ran on this same invocation.
+        already_synced = False
         if not panel and force and stack is not None and stack_active:
             try:
                 panel = stack.show_session_players(
@@ -4633,6 +4657,7 @@ class SAOPlayerGUI:
                     force=True,
                 )
                 self._session_players_panel = panel
+                already_synced = True
             except Exception:
                 panel = None
         if not panel:
@@ -4647,9 +4672,11 @@ class SAOPlayerGUI:
                         force=True,
                     )
                     self._session_players_panel = panel
+                    already_synced = True
             except Exception:
                 pass
-        self._sync_session_players_cache(getattr(self, '_game_state', None))
+        if not already_synced:
+            self._sync_session_players_cache(getattr(self, '_game_state', None))
         sig = (len(self._session_players), self._session_players_version, self._session_self_uid())
         now = time.time()
         if not force and sig == self._last_session_players_panel_sig:
@@ -4720,8 +4747,7 @@ class SAOPlayerGUI:
     def _compute_menu_refresh_signature(self):
         # v2.3.15: cache the signature for 200ms to avoid recomputing
         # on every call from the 16+ _refresh_menu_if_open sites.
-        import time as _sig_time
-        _now = _sig_time.time()
+        _now = time.time()
         if (self._last_menu_refresh_sig is not None
                 and (_now - self._last_menu_refresh_sig_time) < 0.2):
             return self._last_menu_refresh_sig

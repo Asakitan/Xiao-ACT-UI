@@ -26,6 +26,8 @@ _SAO_AUTO = os.path.dirname(_HERE)
 if _SAO_AUTO not in sys.path:
     sys.path.insert(0, _SAO_AUTO)
 
+from mem_probe import cy_memscan as _cy
+
 
 @dataclass
 class CombatReadConfig:
@@ -173,21 +175,22 @@ class MemCombatWatcher:
             if not (0x10000 <= arr_ptr <= 0x7FFFFFFFFFFF):
                 current_buffs = set()
             else:
-                # Read all buff entries in one RPM
+                # Read all buff entries in one RPM, extract IDs in one
+                # Cython call (was a Python for-loop with int.from_bytes(slice)
+                # per buff, hot at 200ms × n_entities cadence).
                 total_bytes = cfg.buff_array_elems_off + \
                               count * cfg.buff_struct_size
                 arr_blob = self.pm.read_bytes(arr_ptr, total_bytes)
-                current_buffs = set()
                 if arr_blob and len(arr_blob) >= total_bytes:
-                    for i in range(count):
-                        base = cfg.buff_array_elems_off + i * cfg.buff_struct_size
-                        if base + cfg.buff_id_field_off + 4 > len(arr_blob):
-                            break
-                        bid = int.from_bytes(
-                            arr_blob[base + cfg.buff_id_field_off:
-                                     base + cfg.buff_id_field_off + 4],
-                            "little")
-                        current_buffs.add(bid)
+                    current_buffs = _cy.extract_buff_ids(
+                        arr_blob,
+                        cfg.buff_array_elems_off,
+                        cfg.buff_struct_size,
+                        cfg.buff_id_field_off,
+                        count,
+                    )
+                else:
+                    current_buffs = set()
         # Diff vs last known
         last = self._buffs_per_entity.get(uuid, set())
         added = current_buffs - last

@@ -1,6 +1,8 @@
 using System.Windows;
 using Microsoft.Extensions.Logging;
 using SaoAuto.App.Hosting;
+using SaoAuto.App.Hotkeys;
+using SaoAuto.App.Menu;
 using SaoAuto.App.Startup;
 using SaoAuto.App.WebBridge;
 using SaoAuto.Core.Automation;
@@ -76,6 +78,47 @@ public sealed class UiRunner
         using var updater = UpdaterLifecycle.Start(_settings, _log);
         webBridge.AttachUpdater(updater);
 
+        // S178 — script-share cloud client for the AutoKey panel.
+        // Constructed unconditionally (best-effort; server unreachable just
+        // means cloud commands reply `{ok:false}`). Owns its own
+        // HttpClient via the default-ctor branch.
+        // S180 — base URLs honor `auto_key.server_url` / `boss_raid.server_url`
+        // from settings (with the canonical defaults as fallback).
+        using var autoKeyCloud = AutoKeyCloudClient.FromSettings(_settings);
+        // S182 — pass settings so successful searches persist as
+        // `auto_key.last_remote_search` for editor restore on next boot.
+        webBridge.AttachAutoKeyCloud(autoKeyCloud, _settings);
+
+        using var bossRaidCloud = BossRaidCloudClient.FromSettings(_settings);
+        // S183 — same persistence shape as S182's auto-key.
+        webBridge.AttachBossRaidCloud(bossRaidCloud, _settings);
+
+        // S193 — sound playback bridge for the pywebview shim.
+        // Catalog points at assets/sounds (deployed by S185); player is
+        // the existing WAV implementation. Skipped silently if the
+        // sounds dir was never deployed (e.g. dev tree without assets).
+        using var sounds = new WavSoundPlayer(logger: _log);
+        var soundsDir = System.IO.Path.Combine(AppContext.BaseDirectory, "assets", "sounds");
+        if (System.IO.Directory.Exists(soundsDir))
+        {
+            webBridge.AttachSound(sounds, new SoundCatalog(soundsDir));
+        }
+        else
+        {
+            _log.LogInformation("sounds directory missing at {Dir}; sound bridge skipped", soundsDir);
+        }
+        webBridge.AttachLegacyUi(
+            logger: _log,
+            exitAction: () =>
+            {
+                try
+                {
+                    System.Windows.Application.Current?.Dispatcher.BeginInvoke(
+                        new Action(() => System.Windows.Application.Current?.Shutdown(0)));
+                }
+                catch { /* swallow */ }
+            });
+
         var application = (System.Windows.Application.Current as App) ?? new App();
         application.DispatcherUnhandledException += (_, e) =>
         {
@@ -129,6 +172,42 @@ public sealed class UiRunner
                 continue;
             }
 
+            // S184 — WebView2 control init + bridge wire-up. The window is
+            // already constructed (placeholder XAML) but `EnsureCoreWebView2Async`
+            // must run on the dispatcher thread after the window is shown.
+            // We hook Loaded → init → bind; tear the binding down on close.
+            IDisposable? webViewBinding = null;
+            if (window is EntityHostWindow ev)
+            {
+                // S196 — same Python-parity HUD geometry as WebView.
+                ev.ApplyHudGeometry(_settings);
+            }
+            if (window is WebViewHostWindow wv)
+            {
+                // S196 — apply the Python-parity HUD geometry (75% wide,
+                // 500 tall, anchored to monitor bottom at hud_offset_x).
+                wv.ApplyHudGeometry(_settings);
+                var startUrl = ResolveHudIndexUrl(_log);
+                wv.Loaded += async (_, _) =>
+                {
+                    try
+                    {
+                        await wv.EnsureWebViewAsync(startUrl);
+                        if (wv.MessageBus is not null)
+                        {
+                            webViewBinding = WebViewBridgeBinder.Bind(
+                                wv.MessageBus, webBridge.HostAdapter, _log);
+                            _log.LogInformation("WebView2 bridge bound");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogError(ex, "WebView2 initialisation failed");
+                    }
+                };
+                wv.Closed += (_, _) => webViewBinding?.Dispose();
+            }
+
             try
             {
                 _log.LogInformation("starting {Mode} host window", modeName);
@@ -172,7 +251,31 @@ public sealed class UiRunner
                     () => recognition.IsActive,
                     start: recognition.Resume,
                     stop: recognition.Suspend);
-                return application.Run(window);
+                // S191 — Win32 global hotkey service + HideSeek toggle
+                // hotkey wiring. ComponentDispatcher hook stays installed
+                // for the lifetime of this `Application.Run` so WM_HOTKEY
+                // messages route through the service before WPF eats them.
+                using var hotkeys = new Win32GlobalHotkeyService();
+                System.Windows.Interop.ThreadMessageEventHandler dispatcherHook =
+                    (ref System.Windows.Interop.MSG msg, ref bool handled) =>
+                {
+                    if (handled) return;
+                    if (hotkeys.ProcessMessage((uint)msg.message, msg.wParam))
+                    {
+                        handled = true;
+                    }
+                };
+                System.Windows.Interop.ComponentDispatcher.ThreadFilterMessage += dispatcherHook;
+                using var hideSeekHotkey = HideSeekHotkeySetup.TryWire(
+                    _settings, hotkeys, hideSeek, _log);
+                try
+                {
+                    return application.Run(window);
+                }
+                finally
+                {
+                    System.Windows.Interop.ComponentDispatcher.ThreadFilterMessage -= dispatcherHook;
+                }
             }
             catch (Exception ex)
             {
@@ -188,5 +291,38 @@ public sealed class UiRunner
             .RunAsync(cancellationToken)
             .GetAwaiter()
             .GetResult();
+    }
+
+    /// <summary>S184 / S192 — locate the canonical SAO HUD page on disk
+    /// so the WebView2 control can load it. <c>hp.html</c> is the
+    /// HP/SP/Burst overlay (the main game HUD); falls back to
+    /// <c>panel.html</c> (music/piano panel) then <c>about:blank</c>.
+    /// Searches a small list of paths relative to the running binary.</summary>
+    public static string? ResolveHudIndexUrl(ILogger log)
+    {
+        var binDir = AppContext.BaseDirectory;
+        string[] names = { "hp.html", "panel.html" };
+        string[] roots =
+        {
+            System.IO.Path.Combine(binDir, "web"),
+            System.IO.Path.Combine(binDir, "..", "..", "..", "..", "..", "..", "web"),
+            System.IO.Path.Combine(binDir, "..", "..", "..", "..", "..", "web"),
+            System.IO.Path.Combine(binDir, "..", "..", "..", "..", "web"),
+        };
+        var candidates = new List<string>(names.Length * roots.Length);
+        foreach (var name in names)
+            foreach (var root in roots)
+                candidates.Add(System.IO.Path.Combine(root, name));
+        foreach (var c in candidates)
+        {
+            try
+            {
+                var full = System.IO.Path.GetFullPath(c);
+                if (System.IO.File.Exists(full)) return new Uri(full).AbsoluteUri;
+            }
+            catch { /* ignore malformed candidates */ }
+        }
+        log.LogInformation("HUD panel.html not found; starting on about:blank");
+        return null;
     }
 }

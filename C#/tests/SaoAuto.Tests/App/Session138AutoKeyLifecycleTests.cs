@@ -88,6 +88,9 @@ public class Session138AutoKeyLifecycleTests : IDisposable
         var validReasons = new HashSet<string>
         {
             "init", "dead", "recognition-off", "background", "idle", "fired",
+            // S184 — empty settings → no active profile → "disabled" is
+            // the natural first-tick state. Was the recurring flake source.
+            "disabled",
         };
         Assert.True(
             validReasons.Contains(lc.LastReason)

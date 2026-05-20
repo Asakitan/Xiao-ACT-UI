@@ -24,6 +24,8 @@ _SAO_AUTO = os.path.dirname(_HERE)
 if _SAO_AUTO not in sys.path:
     sys.path.insert(0, _SAO_AUTO)
 
+from mem_probe import cy_memscan as _cy
+
 
 @dataclass
 class SelfReadConfig:
@@ -174,12 +176,14 @@ class MemSelfWatcher:
         if attr_obj and cfg.cur_hp_off >= 0 and cfg.max_hp_off >= 0:
             attr_blob = self.pm.read_bytes(attr_obj, 0x100)
             if attr_blob:
-                cur_hp = int.from_bytes(
-                    attr_blob[cfg.cur_hp_off:cfg.cur_hp_off + cfg.hp_width],
-                    "little")
-                max_hp = int.from_bytes(
-                    attr_blob[cfg.max_hp_off:cfg.max_hp_off + cfg.hp_width],
-                    "little")
+                # One Cython call for both HP fields amortizes the
+                # cross-language call cost across two unpacks.
+                hp_vals = _cy.unpack_struct_fields(
+                    attr_blob,
+                    [(cfg.cur_hp_off, cfg.hp_width),
+                     (cfg.max_hp_off, cfg.hp_width)],
+                )
+                cur_hp, max_hp = hp_vals[0], hp_vals[1]
 
         # Substruct fields (Phase 1 discovered)
         level = self._read_substruct_field(

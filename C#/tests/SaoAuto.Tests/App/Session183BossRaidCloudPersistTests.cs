@@ -1,0 +1,140 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using SaoAuto.App.WebBridge;
+using SaoAuto.Core.Automation;
+using SaoAuto.Core.Configuration;
+
+namespace SaoAuto.Tests.App;
+
+/// <summary>
+/// S183 — Mirror of S182 for the boss-raid side. Successful
+/// <c>bossraid.cloud.search</c> writes the query + results + UTC
+/// timestamp into <c>boss_raid.last_remote_search</c>.
+/// </summary>
+public class Session183BossRaidCloudPersistTests : IDisposable
+{
+    private readonly string _workDir;
+
+    public Session183BossRaidCloudPersistTests()
+    {
+        _workDir = Path.Combine(Path.GetTempPath(), "saoauto-s183-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(_workDir);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_workDir, recursive: true); } catch { /* swallow */ }
+    }
+
+    private sealed class FakeHandler : HttpMessageHandler
+    {
+        public Func<HttpRequestMessage, HttpResponseMessage> Responder { get; set; } = _ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(Responder(request));
+    }
+
+    private (BridgeRouter router, BossRaidCloudBridge bridge, SettingsManager settings) Build(
+        string body, Func<DateTimeOffset> clock)
+    {
+        var router = new BridgeRouter();
+        var handler = new FakeHandler
+        {
+            Responder = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(body, Encoding.UTF8, "application/json") },
+        };
+        var http = new HttpClient(handler);
+        var client = new BossRaidCloudClient("http://example.com", http);
+        var settingsPath = Path.Combine(_workDir, $"settings-{Guid.NewGuid():N}.json");
+        File.WriteAllText(settingsPath, "{}");
+        var settings = new SettingsManager(settingsPath);
+        var bridge = new BossRaidCloudBridge(router, client, settings, clock);
+        return (router, bridge, settings);
+    }
+
+    private static BridgeMessage Cmd(string name, string payloadJson) =>
+        new(BridgeMessage.TypeCommand, name, JsonSerializer.Deserialize<JsonObject>(payloadJson));
+
+    [Fact]
+    public void SuccessfulSearchPersistsQueryAndResults()
+    {
+        var fixedNow = new DateTimeOffset(2026, 5, 20, 6, 0, 0, TimeSpan.Zero);
+        var (router, bridge, settings) = Build(
+            "{\"results\":[{\"id\":\"b1\"},{\"id\":\"b2\"},{\"id\":\"b3\"}]}",
+            () => fixedNow);
+        using var _ = bridge;
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SearchBossRaids,
+            "{\"query\":{\"q\":\"dragon\",\"page\":3,\"page_size\":50}}"));
+        Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
+
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
+        Assert.Equal("dragon", reloaded.LastRemoteSearch.Query.Q);
+        Assert.Equal(3, reloaded.LastRemoteSearch.Query.Page);
+        Assert.Equal(50, reloaded.LastRemoteSearch.Query.PageSize);
+        Assert.Equal(3, reloaded.LastRemoteSearch.Results.Count);
+        Assert.Equal("2026-05-20T06:00:00Z", reloaded.LastRemoteSearch.FetchedAt);
+    }
+
+    [Fact]
+    public void FailedSearchDoesNotPersist()
+    {
+        var fixedNow = new DateTimeOffset(2026, 5, 20, 0, 0, 0, TimeSpan.Zero);
+        var (router, bridge, settings) = Build(
+            "not-json",
+            () => fixedNow);
+        using var _ = bridge;
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SearchBossRaids,
+            "{\"query\":{\"q\":\"fail\"}}"));
+        // Faithfully: the BossRaidCloudClient's `invalid JSON: ...` path
+        // surfaces as an InvalidOperationException; the bridge collapses
+        // to ok:false.
+        Assert.False(reply!.Payload!["ok"]!.GetValue<bool>());
+
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
+        Assert.Equal(string.Empty, reloaded.LastRemoteSearch.Query.Q);
+    }
+
+    [Fact]
+    public void NoSettingsArgumentSkipsPersistence()
+    {
+        var router = new BridgeRouter();
+        var handler = new FakeHandler
+        {
+            Responder = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent("{\"results\":[]}", Encoding.UTF8, "application/json") },
+        };
+        var http = new HttpClient(handler);
+        using var client = new BossRaidCloudClient("http://example.com", http);
+        using var bridge = new BossRaidCloudBridge(router, client);
+        var reply = router.Dispatch(Cmd(BridgeCommands.SearchBossRaids,
+            "{\"query\":{\"q\":\"x\"}}"));
+        Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
+        // No persistence side effect to verify; merely that the call doesn't NRE.
+    }
+
+    [Fact]
+    public void PersistedSearchPreservesExistingProfiles()
+    {
+        var fixedNow = new DateTimeOffset(2026, 5, 20, 0, 0, 0, TimeSpan.Zero);
+        var (router, bridge, settings) = Build(
+            "{\"results\":[]}",
+            () => fixedNow);
+        using var _ = bridge;
+
+        var seeded = BossRaidProfile.DefaultConfig() with { Enabled = true };
+        BossRaidConfigStore.Save(settings, seeded);
+
+        router.Dispatch(Cmd(BridgeCommands.SearchBossRaids, "{\"query\":{\"q\":\"after-seed\"}}"));
+
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
+        Assert.True(reloaded.Enabled);
+        Assert.Equal("after-seed", reloaded.LastRemoteSearch.Query.Q);
+    }
+}

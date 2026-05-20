@@ -1,28 +1,37 @@
 <Window x:Class="SaoAuto.App.Hosting.WebViewHostWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SaoAuto WebView (placeholder)"
-        Height="600"
-        Width="900"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="SaoAuto HUD"
+        Height="720"
+        Width="1280"
         WindowStartupLocation="CenterScreen"
-        Background="#0E1014"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="True"
+        Topmost="True"
         Foreground="#E8F0FE">
-    <Grid>
-        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-            <TextBlock Text="SaoAuto · WebView host"
-                       FontSize="28" FontWeight="Bold"
-                       HorizontalAlignment="Center"
-                       Foreground="#7AC0FF" />
-            <TextBlock Text="Session 4 placeholder · sao_auto/web HTML loads in Session 9"
-                       FontSize="14"
-                       HorizontalAlignment="Center"
-                       Margin="0,12,0,0"
-                       Opacity="0.75" />
-            <TextBlock x:Name="StatusText"
-                       FontSize="12"
-                       HorizontalAlignment="Center"
-                       Margin="0,16,0,0"
-                       Opacity="0.6" />
+    <Grid Background="Transparent">
+        <wv2:WebView2 x:Name="WebView" DefaultBackgroundColor="Transparent" />
+        <StackPanel x:Name="StatusOverlay"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Center"
+                    IsHitTestVisible="False">
+            <Border CornerRadius="6" Padding="20,12" Background="#80000000">
+                <StackPanel>
+                    <TextBlock Text="SaoAuto · WebView host"
+                               FontSize="20" FontWeight="Bold"
+                               HorizontalAlignment="Center"
+                               Foreground="#7AC0FF" />
+                    <TextBlock x:Name="StatusText"
+                               FontSize="11"
+                               HorizontalAlignment="Center"
+                               Margin="0,8,0,0"
+                               Opacity="0.85"
+                               Foreground="#E8F0FE" />
+                </StackPanel>
+            </Border>
         </StackPanel>
     </Grid>
 </Window>

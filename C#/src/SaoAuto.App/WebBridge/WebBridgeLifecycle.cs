@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using SaoAuto.App.Startup;
 using SaoAuto.Core.Automation;
 using SaoAuto.Core.Configuration;
@@ -32,6 +33,10 @@ public sealed class WebBridgeLifecycle : IDisposable
     private DpsBridge? _dpsBridge;
     private RecognitionStatusBridge? _recognitionBridge;
     private UpdaterBridge? _updaterBridge;
+    private AutoKeyCloudBridge? _autoKeyCloudBridge;
+    private BossRaidCloudBridge? _bossRaidCloudBridge;
+    private SoundBridge? _soundBridge;
+    private LegacyUiBridge? _legacyUiBridge;
     private bool _disposed;
 
     public BridgeEventBroadcaster Broadcaster { get; }
@@ -62,6 +67,11 @@ public sealed class WebBridgeLifecycle : IDisposable
     {
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _publisher.Start(emitInitial);
+        // S190 — register the snapshot pull command. Returns the same
+        // payload shape `state.changed` events emit; HUD pages call it
+        // on first load to paint immediately instead of waiting for the
+        // next change.
+        Router.Register(BridgeCommands.StateSnapshot, _ => _publisher.SnapshotPayload());
     }
 
     /// <summary>
@@ -154,10 +164,63 @@ public sealed class WebBridgeLifecycle : IDisposable
             lifecycle.Apply);
     }
 
+    /// <summary>
+    /// S178 — attach an <see cref="AutoKeyCloudClient"/> so the four
+    /// <c>autokey.cloud.*</c> commands route through <see cref="Router"/>.
+    /// The caller owns the client's lifetime (a shared
+    /// <see cref="HttpClient"/> typically outlives this lifecycle).
+    /// Idempotent: a second call replaces the previous attachment.
+    /// </summary>
+    public void AttachAutoKeyCloud(AutoKeyCloudClient client, SettingsManager? settings = null)
+    {
+        if (client is null) throw new ArgumentNullException(nameof(client));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _autoKeyCloudBridge?.Dispose();
+        _autoKeyCloudBridge = new AutoKeyCloudBridge(Router, client, settings);
+    }
+
+    /// <summary>
+    /// S179 — attach a <see cref="BossRaidCloudClient"/> so the four
+    /// <c>bossraid.cloud.*</c> commands route through <see cref="Router"/>.
+    /// The caller owns the client's lifetime. Idempotent.
+    /// </summary>
+    public void AttachBossRaidCloud(BossRaidCloudClient client, SettingsManager? settings = null)
+    {
+        if (client is null) throw new ArgumentNullException(nameof(client));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _bossRaidCloudBridge?.Dispose();
+        _bossRaidCloudBridge = new BossRaidCloudBridge(Router, client, settings);
+    }
+
+    /// <summary>S193 — attach the sound playback bridge so the
+    /// pywebview-shim's <c>sound.play</c> calls route into the
+    /// in-process <see cref="ISoundPlayer"/>. Idempotent.</summary>
+    public void AttachSound(ISoundPlayer player, SoundCatalog catalog)
+    {
+        if (player is null) throw new ArgumentNullException(nameof(player));
+        if (catalog is null) throw new ArgumentNullException(nameof(catalog));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _soundBridge?.Dispose();
+        _soundBridge = new SoundBridge(Router, player, catalog);
+    }
+
+    /// <summary>S193 — attach the legacy UI command stub so
+    /// pywebview-shim's <c>ui.*</c> calls don't fail. Idempotent.</summary>
+    public void AttachLegacyUi(Microsoft.Extensions.Logging.ILogger? logger = null, Action? exitAction = null)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _legacyUiBridge?.Dispose();
+        _legacyUiBridge = new LegacyUiBridge(Router, logger, exitAction);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        _legacyUiBridge?.Dispose();
+        _soundBridge?.Dispose();
+        _bossRaidCloudBridge?.Dispose();
+        _autoKeyCloudBridge?.Dispose();
         _updaterBridge?.Dispose();
         _recognitionBridge?.Dispose();
         _dpsBridge?.Dispose();

@@ -436,7 +436,7 @@ def upsert_profile(config: Dict[str, Any], profile: Dict[str, Any], activate: bo
 
 def delete_profile(config: Dict[str, Any], profile_id: str) -> Dict[str, Any]:
     profile_id = _string(profile_id)
-    profiles = [item for item in list(config.get("profiles", []) or []) if _string(item.get("id")) != profile_id]
+    profiles = [item for item in (config.get("profiles") or []) if _string(item.get("id")) != profile_id]
     config["profiles"] = profiles
     if _string(config.get("active_profile_id")) == profile_id:
         config["active_profile_id"] = profiles[0]["id"] if profiles else ""
@@ -463,7 +463,7 @@ def clone_profile(config: Dict[str, Any], profile_id: str, author_snapshot: Opti
 
 
 def summarize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
-    actions = list(profile.get("actions", []) or [])
+    actions = profile.get("actions") or []
     return {
         "id": profile.get("id"),
         "profile_name": profile.get("profile_name"),
@@ -486,14 +486,15 @@ def build_auto_key_state(config: Dict[str, Any], engine_status: Optional[Dict[st
         identity_snapshot or {},
         source=_string((identity_snapshot or {}).get("source")) or "unknown",
     )
+    profiles_raw = config.get("profiles") or []
     return {
         "enabled": _coerce_bool(config.get("enabled"), False),
         "active_profile_id": _string(config.get("active_profile_id")),
         "active_profile_name": _string((active or {}).get("profile_name")),
-        "profiles": [summarize_profile(item) for item in list(config.get("profiles", []) or [])],
-        "profiles_full": copy.deepcopy(list(config.get("profiles", []) or [])),
+        "profiles": [summarize_profile(item) for item in profiles_raw],
+        "profiles_full": copy.deepcopy(profiles_raw),
         "active_profile": copy.deepcopy(active) if active else None,
-        "local_profile_count": len(list(config.get("profiles", []) or [])),
+        "local_profile_count": len(profiles_raw),
         "server_url": _string(config.get("server_url")) or DEFAULT_AUTO_KEY_SERVER_URL,
         "identity": identity_state,
         "upload_auth": normalize_upload_auth_state(upload_auth or {}, identity_state=identity_state),
@@ -680,7 +681,7 @@ class AutoKeyEngine:
 
         slot_map = self._slot_map(gs)
         # Evaluate normal profile actions first
-        for action in list(profile.get("actions", []) or []):
+        for action in (profile.get("actions") or []):
             if not _coerce_bool(action.get("enabled"), True):
                 continue
             if self._action_ready(profile, action, gs, slot_map, now):
@@ -752,7 +753,7 @@ class AutoKeyEngine:
         return _coerce_float(slot.get("cooldown_pct"), 1.0, 0.0, 1.0) <= 0.02
 
     def _conditions_match(self, action: Dict[str, Any], gs, slot_map: Dict[int, Dict[str, Any]]) -> bool:
-        for condition in list(action.get("conditions", []) or []):
+        for condition in (action.get("conditions") or []):
             cond_type = _string(condition.get("type")).lower()
             if cond_type == "hp_pct_gte":
                 if float(getattr(gs, "hp_pct", 0.0) or 0.0) < _coerce_float(condition.get("value"), 0.0, 0.0, 1.0):

@@ -19,6 +19,11 @@ public static class SettingsKeys
     public const string UpdateAutoPoll = "update_auto_poll";
     public const string Roi = "roi";
     public const string HideSeekToggleHotkey = "hide_seek_toggle_hotkey";
+    // S196b — HUD horizontal offset (Python `hud_offset_x`, default 0.04 of
+    // monitor width). The rest of the HUD geometry (width 0.75*sw, height
+    // 500, y at bottom) is derived from monitor dimensions every launch
+    // for 1:1 parity with sao_webview.py.
+    public const string HudOffsetX = "hud_offset_x";
 
     public static readonly IReadOnlyList<string> LegacyPrunedOnSave = new[]
     {

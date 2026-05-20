@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using SaoAuto.Core.Configuration;
 
 namespace SaoAuto.Core.Automation;
 
@@ -16,11 +17,30 @@ namespace SaoAuto.Core.Automation;
 /// <c>{"error": "..."}</c> object — same shape as Python so the
 /// caller never has to branch on exception type.
 /// </summary>
-public sealed class BossRaidCloudClient
+public sealed class BossRaidCloudClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly string _baseUrl;
     private readonly bool _ownsHttp;
+
+    /// <summary>S180 — the canonicalised base URL. Useful for callers
+    /// that want to inspect the effective URL without firing a request.</summary>
+    public string BaseUrl => _baseUrl;
+
+    /// <summary>S180 — build a client whose base URL reflects the
+    /// <c>boss_raid.server_url</c> field on disk (falling back to
+    /// <see cref="BossRaidProfile.DefaultServerUrl"/> when missing/blank).
+    /// Caller owns the returned client's lifetime.</summary>
+    public static BossRaidCloudClient FromSettings(
+        SettingsManager settings, HttpClient? http = null, TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var config = BossRaidConfigStore.Load(settings);
+        var url = string.IsNullOrWhiteSpace(config.ServerUrl)
+            ? BossRaidProfile.DefaultServerUrl
+            : config.ServerUrl;
+        return new BossRaidCloudClient(url, http, timeout);
+    }
 
     public BossRaidCloudClient(string baseUrl, HttpClient? http = null, TimeSpan? timeout = null)
     {

@@ -177,6 +177,37 @@ COVER_MID = (236, 238, 240, 255)
 COVER_B = (226, 229, 232, 255)
 COVER_BORDER = (186, 190, 196, 255)
 COVER_BORDER_DEEP = (160, 165, 171, 255)
+
+
+# Three-stop vertical gradient (COVER_A → COVER_MID at 45% → COVER_B).
+# The result depends only on (w, h) + the COVER_* constants, all module
+# invariants — so once built for a given size the same RGBA Image can be
+# reused forever. Both _draw_id_plate_bg and _draw_hp_cover_bg share this.
+_COVER_GRADIENT_CACHE: Dict[Tuple[int, int], Image.Image] = {}
+
+
+def _cover_gradient_image(w: int, h: int) -> Image.Image:
+    key = (int(w), int(h))
+    cached = _COVER_GRADIENT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    grad = np.zeros((h, 1, 4), dtype=np.uint8)
+    ys = np.linspace(0, 1, h)
+    MID = COVER_MID
+    lo = ys < 0.45
+    # vectorize all 3 channels at once
+    for ch in range(3):
+        a, m, b = COVER_A[ch], MID[ch], COVER_B[ch]
+        grad[:, 0, ch] = np.where(
+            lo,
+            a + (m - a) * (ys / 0.45),
+            m + (b - m) * ((ys - 0.45) / 0.55),
+        ).astype(np.uint8)
+    grad[:, 0, 3] = 255
+    img = Image.fromarray(grad, 'RGBA').resize((w, h))
+    _COVER_GRADIENT_CACHE[key] = img
+    return img
+
 BOX_BG = (249, 249, 250, 255)
 TEXT_MAIN = (100, 99, 100, 255)
 TEXT_MUTED = (140, 135, 138, 255)
@@ -1928,29 +1959,9 @@ class HpOverlay:
 
     def _draw_id_plate_bg(self, img: Image.Image, y_off: int) -> None:
         w, h = self.WIDTH, self.HEIGHT
-        # Gradient 175deg ≈ top→bottom-right lean (approx vertical)
-        grad = np.zeros((h, 1, 4), dtype=np.uint8)
-        ys = np.linspace(0, 1, h)
-        mid = np.clip((ys - 0.0) / 0.45, 0, 1)
-        # Three-stop gradient: A (0%) → mid (45%) → B (100%)
-        MID = COVER_MID
-        r = np.where(ys < 0.45,
-                     COVER_A[0] + (MID[0] - COVER_A[0]) * (ys / 0.45),
-                     MID[0] + (COVER_B[0] - MID[0]) *
-                     ((ys - 0.45) / 0.55))
-        g = np.where(ys < 0.45,
-                     COVER_A[1] + (MID[1] - COVER_A[1]) * (ys / 0.45),
-                     MID[1] + (COVER_B[1] - MID[1]) *
-                     ((ys - 0.45) / 0.55))
-        b = np.where(ys < 0.45,
-                     COVER_A[2] + (MID[2] - COVER_A[2]) * (ys / 0.45),
-                     MID[2] + (COVER_B[2] - MID[2]) *
-                     ((ys - 0.45) / 0.55))
-        grad[:, 0, 0] = r
-        grad[:, 0, 1] = g
-        grad[:, 0, 2] = b
-        grad[:, 0, 3] = 255
-        plate = Image.fromarray(grad, 'RGBA').resize((w, h))
+        # Module-level cache: gradient is invariant per (w, h) so we build
+        # the RGBA Image at most once across both id-plate and hp-cover.
+        plate = _cover_gradient_image(w, h)
         mask = self._id_plate_mask(y_off)
 
         # Shadow is drawn earlier by _draw_panel_shadows().
@@ -2257,26 +2268,7 @@ class HpOverlay:
 
     def _draw_hp_cover_bg(self, img: Image.Image, y_off: int) -> None:
         w, h = self.WIDTH, self.HEIGHT
-        grad = np.zeros((h, 1, 4), dtype=np.uint8)
-        ys = np.linspace(0, 1, h)
-        MID = COVER_MID
-        r = np.where(ys < 0.45,
-                     COVER_A[0] + (MID[0] - COVER_A[0]) * (ys / 0.45),
-                     MID[0] + (COVER_B[0] - MID[0]) *
-                     ((ys - 0.45) / 0.55))
-        g = np.where(ys < 0.45,
-                     COVER_A[1] + (MID[1] - COVER_A[1]) * (ys / 0.45),
-                     MID[1] + (COVER_B[1] - MID[1]) *
-                     ((ys - 0.45) / 0.55))
-        b = np.where(ys < 0.45,
-                     COVER_A[2] + (MID[2] - COVER_A[2]) * (ys / 0.45),
-                     MID[2] + (COVER_B[2] - MID[2]) *
-                     ((ys - 0.45) / 0.55))
-        grad[:, 0, 0] = r
-        grad[:, 0, 1] = g
-        grad[:, 0, 2] = b
-        grad[:, 0, 3] = 255
-        cover = Image.fromarray(grad, 'RGBA').resize((w, h))
+        cover = _cover_gradient_image(w, h)
         mask = self._cover_mask(y_off)
 
         # Shadow is drawn earlier by _draw_panel_shadows().

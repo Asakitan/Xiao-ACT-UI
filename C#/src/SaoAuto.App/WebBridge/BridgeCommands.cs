@@ -27,6 +27,11 @@ public static class BridgeCommands
     public const string UpsertAutoKeyProfile = "autokey.profile.upsert";
     public const string ExportAutoKeyProfile = "autokey.profile.export";
     public const string ImportAutoKeyProfile = "autokey.profile.import";
+    // S177 — cloud script-share endpoints (served by AutoKeyCloudBridge).
+    public const string SearchAutoKeyScripts = "autokey.cloud.search";
+    public const string GetAutoKeyScript = "autokey.cloud.get";
+    public const string IssueAutoKeyUploadToken = "autokey.cloud.issue_token";
+    public const string UploadAutoKeyScript = "autokey.cloud.upload";
 
     // BossRaid
     public const string StartBossRaid = "bossraid.start";
@@ -34,6 +39,11 @@ public static class BridgeCommands
     public const string ImportBossRaid = "bossraid.import";
     public const string ExportBossRaid = "bossraid.export";
     public const string OpenRaidEditor = "bossraid.editor.open";
+    // S179 — cloud script-share endpoints (served by BossRaidCloudBridge).
+    public const string SearchBossRaids = "bossraid.cloud.search";
+    public const string GetBossRaid = "bossraid.cloud.get";
+    public const string IssueBossRaidUploadToken = "bossraid.cloud.issue_token";
+    public const string UploadBossRaid = "bossraid.cloud.upload";
 
     // Commander
     public const string OpenCommander = "commander.open";
@@ -47,6 +57,18 @@ public static class BridgeCommands
     // Buff monitor
     public const string SetBuffMonEnabled = "buffmon.set_enabled";
     public const string GetBuffMonEnabled = "buffmon.get_enabled";
+
+    // State pull (S190) — a HUD page that opens mid-run can ask for the
+    // current snapshot instead of waiting for the next state.changed.
+    public const string StateSnapshot = "state.snapshot";
+
+    // Sound + UI surface (S193) — invoked by the pywebview compat shim
+    // so legacy HUD HTML keeps working without rewrites.
+    public const string PlaySound = "sound.play";
+    public const string SetHitRegions = "ui.set_hit_regions";
+    public const string NotifyHpHitRegionsReady = "ui.notify_hp_hit_regions_ready";
+    public const string ExitApplication = "ui.exit";
+    public const string SetPanelVisible = "ui.set_panel_visible";
 
     // Updater
     public const string CheckUpdate = "updater.check";

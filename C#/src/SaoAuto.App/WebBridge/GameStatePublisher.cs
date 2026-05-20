@@ -94,6 +94,16 @@ public sealed class GameStatePublisher : IDisposable
 
     public bool IsActive => _sub is not null;
 
+    /// <summary>S190 — pull a fresh snapshot payload without emitting.
+    /// Mirrors what <see cref="OnState"/> builds, minus the dedup and
+    /// broadcast steps. Used by the <c>state.snapshot</c> bridge
+    /// command so a freshly-opened HUD page can paint immediately.</summary>
+    public JsonObject SnapshotPayload()
+    {
+        var dps = _dpsSnapshotProvider?.Invoke();
+        return StateSnapshotPayload.ToDict(_states.Snapshot, dps);
+    }
+
     public void Start(bool emitInitial = true)
     {
         lock (_gate)

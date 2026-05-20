@@ -108,6 +108,35 @@ if _cy is not None:
             int(n_elements),
         )
 
+    if hasattr(_cy, "unpack_struct_fields_x"):
+        def unpack_struct_fields_x(buf, field_specs):
+            return _cy.unpack_struct_fields_x(buf, field_specs)
+    else:
+        # Cython binary built before Phase 5; fall through to Python impl
+        # via the else-branch shim defined below by aliasing later.
+        unpack_struct_fields_x = None  # type: ignore[assignment]
+
+    if hasattr(_cy, "read_u64_le"):
+        def read_u64_le(buf, off: int) -> int:
+            return _cy.read_u64_le(buf, int(off))
+    else:
+        read_u64_le = None  # type: ignore[assignment]
+
+    if hasattr(_cy, "read_u32_le"):
+        def read_u32_le(buf, off: int) -> int:
+            return _cy.read_u32_le(buf, int(off))
+    else:
+        read_u32_le = None  # type: ignore[assignment]
+
+    if hasattr(_cy, "extract_buff_ids"):
+        def extract_buff_ids(buf, elems_start_off: int, struct_size: int,
+                             id_field_off: int, count: int):
+            return _cy.extract_buff_ids(
+                buf, int(elems_start_off), int(struct_size),
+                int(id_field_off), int(count))
+    else:
+        extract_buff_ids = None  # type: ignore[assignment]
+
     # ────────────────────── Pure-Python fallback ──────────────────────
 else:
     def find_aligned_u64(buf, needle: int, max_hits: int = 1_000_000) -> List[int]:
@@ -271,6 +300,81 @@ else:
                     out.append(int.from_bytes(view[addr:addr + width], "little"))
         return out
 
+    unpack_struct_fields_x = None  # type: ignore[assignment]
+    read_u64_le = None  # type: ignore[assignment]
+    read_u32_le = None  # type: ignore[assignment]
+    extract_buff_ids = None  # type: ignore[assignment]
+
+
+# ──────── Python fallback for Phase-5 helpers (used by both branches) ───────
+#
+# Cython-side: defined when the prebuilt .pyd includes them (hasattr check
+# above). If not present (e.g. .pyd is older than the .pyx update), we still
+# want callers to work — these pure-Python implementations match the Cython
+# semantics so the watchers don't have to branch.
+
+_F32 = struct.Struct("<f")
+_F64 = struct.Struct("<d")
+_U32 = struct.Struct("<I")
+_U64 = struct.Struct("<Q")
+
+
+def _py_unpack_struct_fields_x(buf, field_specs):
+    view = memoryview(buf)
+    n = len(view)
+    out: List[int] = [0] * len(field_specs)
+    for i, spec in enumerate(field_specs):
+        off, width, code = int(spec[0]), int(spec[1]), int(spec[2])
+        if off < 0 or off + width > n:
+            continue
+        if code == 1 and width == 4:
+            out[i] = int(_F32.unpack_from(view, off)[0])
+        elif code == 2 and width == 8:
+            out[i] = int(_F64.unpack_from(view, off)[0])
+        else:
+            out[i] = int.from_bytes(view[off:off + width], "little")
+    return out
+
+
+def _py_read_u64_le(buf, off: int) -> int:
+    view = memoryview(buf)
+    if off < 0 or off + 8 > len(view):
+        return 0
+    return _U64.unpack_from(view, off)[0]
+
+
+def _py_read_u32_le(buf, off: int) -> int:
+    view = memoryview(buf)
+    if off < 0 or off + 4 > len(view):
+        return 0
+    return _U32.unpack_from(view, off)[0]
+
+
+def _py_extract_buff_ids(buf, elems_start_off: int, struct_size: int,
+                         id_field_off: int, count: int):
+    view = memoryview(buf)
+    n = len(view)
+    out: set = set()
+    if count <= 0:
+        return out
+    for i in range(count):
+        idoff = elems_start_off + i * struct_size + id_field_off
+        if idoff < 0 or idoff + 4 > n:
+            break
+        out.add(_U32.unpack_from(view, idoff)[0])
+    return out
+
+
+# Wire up: prefer Cython binding when available, otherwise the Python helper.
+if unpack_struct_fields_x is None:
+    unpack_struct_fields_x = _py_unpack_struct_fields_x
+if read_u64_le is None:
+    read_u64_le = _py_read_u64_le
+if read_u32_le is None:
+    read_u32_le = _py_read_u32_le
+if extract_buff_ids is None:
+    extract_buff_ids = _py_extract_buff_ids
+
 
 __all__ = [
     "cpu_features", "backend", "import_error",
@@ -278,4 +382,5 @@ __all__ = [
     "find_pattern_masked", "narrow_u32_batch", "narrow_u64_batch",
     "find_aligned_u64_with_anchor",
     "unpack_struct_fields", "unpack_array_fields",
+    "unpack_struct_fields_x", "read_u64_le", "read_u32_le", "extract_buff_ids",
 ]

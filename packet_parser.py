@@ -5114,12 +5114,13 @@ class PacketParser:
             picked_ratio, picked_count = max(ratio_counts.items(), key=lambda item: (item[1], item[0]))
             if picked_count >= 2:
                 ratio_value = max(0.0, min(1.0, picked_ratio / 1000.0))
+                now_ts = time.time()
                 if (
                     abs(float(getattr(player, 'stamina_ratio', -1.0) or -1.0) - ratio_value) > 0.001 or
-                    (time.time() - float(getattr(player, 'stamina_ratio_observed_at', 0.0) or 0.0)) > 0.8
+                    (now_ts - float(getattr(player, 'stamina_ratio_observed_at', 0.0) or 0.0)) > 0.8
                 ):
                     player.stamina_ratio = ratio_value
-                    player.stamina_ratio_observed_at = time.time()
+                    player.stamina_ratio_observed_at = now_ts
                     changed = True
                 logger.info(
                     f'[Parser] AttrCollection stamina_ratio={picked_ratio}/1000 '

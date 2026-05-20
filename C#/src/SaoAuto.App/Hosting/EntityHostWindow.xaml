@@ -1,23 +1,29 @@
 <Window x:Class="SaoAuto.App.Hosting.EntityHostWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SaoAuto Entity (placeholder)"
-        Height="450"
-        Width="800"
-        WindowStartupLocation="CenterScreen"
-        Background="#0E1014"
+        Title="SaoAuto Entity"
+        Height="500"
+        Width="1440"
+        WindowStartupLocation="Manual"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="True"
+        Topmost="True"
         Foreground="#E8F0FE">
-    <Grid>
-        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" >
-            <TextBlock Text="SaoAuto · Entity host"
-                       FontSize="28" FontWeight="Bold"
-                       HorizontalAlignment="Center"
-                       Foreground="#7AC0FF" />
-            <TextBlock Text="Session 4 placeholder · SAO popup menu lands in Session 8"
-                       FontSize="14"
-                       HorizontalAlignment="Center"
-                       Margin="0,12,0,0"
-                       Opacity="0.75" />
+    <Grid Background="Transparent">
+        <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="20,0,0,20">
+            <Border CornerRadius="6" Padding="16,10" Background="#80000000">
+                <StackPanel>
+                    <TextBlock Text="SaoAuto · Entity host"
+                               FontSize="18" FontWeight="Bold"
+                               Foreground="#7AC0FF" />
+                    <TextBlock Text="(WPF native HUD — Python parity placeholder)"
+                               FontSize="11"
+                               Margin="0,4,0,0"
+                               Opacity="0.75" />
+                </StackPanel>
+            </Border>
         </StackPanel>
     </Grid>
 </Window>
