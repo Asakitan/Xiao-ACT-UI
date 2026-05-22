@@ -10,6 +10,8 @@ as Python because their dynamic Tk/PIL code does not benefit from whole-file
 Cython compilation and is easier to keep correct in Python.
 """
 
+import numpy as _np
+
 
 cpdef bytes premultiply_bgra_ndarray(object rgba):
     """RGBA ndarray-like object -> premultiplied BGRA bytes.
@@ -315,3 +317,441 @@ cpdef bytes hgrad_bar_rgba_bytes(Py_ssize_t width, Py_ssize_t height,
                 dst[pos + 3] = <unsigned char>al
                 pos += 4
     return bytes(out)
+
+
+# ───────────────────────────────────────────────
+#  STA / bar detection kernels (recognition.py)
+# ───────────────────────────────────────────────
+#
+# v3.1.3: `recognition._detect_stamina_pct` previously did:
+#
+#   pixels = img.astype(np.float32)           # H*W*3*4 byte allocation
+#   diff = pixels - target_bgr[None, None, :] # another allocation
+#   dist = np.sqrt((diff * diff).sum(axis=2)) # sqrt over every pixel
+#   match = dist <= threshold                 # bool mask
+#   col_fill = match.mean(axis=0)             # (W,) per-column ratio
+#   overall_match = float(match.mean())       # scalar
+#
+# All five intermediates can be replaced by one nogil pass that counts
+# per-column matches into a single uint32 buffer using the squared
+# distance test (no sqrt needed). The Python-side post-processing
+# (threshold scanning, near-full extension, confidence math) is left
+# alone — only the per-pixel scan is moved to Cython.
+
+
+cpdef tuple bgr_color_match_column_ratio(object bgr_img,
+                                         int target_b,
+                                         int target_g,
+                                         int target_r,
+                                         double dist_threshold):
+    """Per-column match ratio against a target BGR colour.
+
+    `bgr_img` is a contiguous ``(H, W, 3)`` ``uint8`` numpy array in BGR
+    order (the format ``recognition.py`` already produces). The kernel
+    returns ``(col_fill, overall_ratio)`` where:
+
+      * ``col_fill`` is a length-W ``float32`` ndarray giving the
+        fraction of rows in each column whose euclidean BGR distance to
+        the target is <= ``dist_threshold``.
+      * ``overall_ratio`` is the same fraction taken across the whole
+        image.
+
+    Uses the squared-distance test internally so no sqrt is needed; the
+    threshold is squared once at entry and the rest of the loop is pure
+    integer arithmetic over a typed memoryview.
+    """
+    cdef const unsigned char[:, :, :] src = bgr_img
+    cdef Py_ssize_t h = src.shape[0]
+    cdef Py_ssize_t w = src.shape[1]
+    cdef Py_ssize_t c = src.shape[2]
+    cdef Py_ssize_t y, x
+    cdef int db, dg, dr
+    cdef long long dist_sq
+    cdef long long threshold_sq
+    cdef unsigned long long total_match = 0
+    cdef unsigned long long total_pixels = (<unsigned long long>h) * (<unsigned long long>w)
+
+    if c < 3 or h == 0 or w == 0:
+        return (_np.zeros((max(w, 0),), dtype=_np.float32), 0.0)
+    if target_b < 0 or target_b > 255 or target_g < 0 or target_g > 255 \
+            or target_r < 0 or target_r > 255:
+        raise ValueError('target BGR channels must be in [0, 255]')
+    if dist_threshold < 0:
+        dist_threshold = 0
+    threshold_sq = <long long>(dist_threshold * dist_threshold)
+
+    col_counts_np = _np.zeros((w,), dtype=_np.uint32)
+    cdef unsigned int[:] col_counts = col_counts_np
+
+    with nogil:
+        for y in range(h):
+            for x in range(w):
+                db = <int>src[y, x, 0] - target_b
+                dg = <int>src[y, x, 1] - target_g
+                dr = <int>src[y, x, 2] - target_r
+                dist_sq = (<long long>db) * db + (<long long>dg) * dg + (<long long>dr) * dr
+                if dist_sq <= threshold_sq:
+                    col_counts[x] += 1
+                    total_match += 1
+
+    cdef double inv_h = 1.0 / <double>h
+    col_fill = col_counts_np.astype(_np.float32) * inv_h
+    cdef double overall
+    if total_pixels == 0:
+        overall = 0.0
+    else:
+        overall = <double>total_match / <double>total_pixels
+    return (col_fill, overall)
+
+
+# ───────────────────────────────────────────────
+#  Per-row fill % median (recognition._row_independent_pct)
+# ───────────────────────────────────────────────
+#
+# v3.1.3 round 4: outlier-resistant per-row fill detection. Replaces:
+#
+#   for r in range(n_rows):
+#       rv = val[r, :].astype(np.float32)
+#       rs = sat[r, :].astype(np.float32)
+#       rh_cov = hue_mask[r, :].astype(np.float32)
+#       row_score = 0.78 * (rv / 255.0) + 0.22 * (rs / 255.0)
+#       row_score = np.where(rh_cov >= 0.5, row_score, row_score * 0.80)
+#       row_score = np.convolve(row_score, [1/3, 1/3, 1/3], mode="same")
+#       filled = row_score >= threshold
+#       if np.any(filled):
+#           last_idx = int(np.max(np.where(filled)[0]))
+#           pct = _subpixel_threshold_crossing(row_score, threshold, last_idx) / eff_w
+#           row_pcts.append(clip(pct, 0, 1))
+#   median(row_pcts)
+#
+# This was a Python-level ``for`` loop with three astype copies and a
+# convolve allocation per row. The cython kernel reuses two reusable
+# float64 scratch buffers and walks each row inside a single nogil
+# block (with sub-pixel crossing inlined). Median is computed via a
+# small in-place quickselect on the per-row pct buffer.
+
+
+cdef inline double _row_subpixel_crossing(const double[::1] score,
+                                           Py_ssize_t eff_w,
+                                           double threshold,
+                                           Py_ssize_t last_filled_idx) nogil:
+    """Inlined nogil clone of ``_subpixel_threshold_crossing``."""
+    cdef double s0, s1, frac
+    cdef Py_ssize_t nxt
+    if last_filled_idx >= eff_w - 1:
+        return <double>(last_filled_idx + 1)
+    nxt = last_filled_idx + 1
+    if nxt > eff_w - 1:
+        nxt = eff_w - 1
+    s0 = score[last_filled_idx]
+    s1 = score[nxt]
+    if s0 > threshold and s1 <= threshold and s0 != s1:
+        frac = (s0 - threshold) / (s0 - s1)
+        return <double>last_filled_idx + frac
+    return <double>(last_filled_idx + 1)
+
+
+cdef void _quickselect_median(double[::1] arr, Py_ssize_t count, double *out) nogil:
+    """Median of arr[:count] via standard quickselect (partial sort).
+
+    Sorts in place. ``out`` receives the median. Caller must ensure count > 0.
+    """
+    cdef Py_ssize_t left = 0
+    cdef Py_ssize_t right = count - 1
+    cdef Py_ssize_t lo, hi, mid_target_lo, mid_target_hi
+    cdef Py_ssize_t i, j
+    cdef double pivot, tmp
+    # For even count, median = mean of the two middle items; for odd count,
+    # the middle element. We expose both targets and reuse one quickselect
+    # pass to land both at the right positions (median of medium-sized arrays
+    # is rare-call so even O(n) average is fine).
+    if count == 1:
+        out[0] = arr[0]
+        return
+    mid_target_lo = (count - 1) // 2
+    mid_target_hi = count // 2
+    lo = left
+    hi = right
+    while lo < hi:
+        pivot = arr[(lo + hi) // 2]
+        i = lo
+        j = hi
+        while i <= j:
+            while arr[i] < pivot:
+                i += 1
+            while arr[j] > pivot:
+                j -= 1
+            if i <= j:
+                tmp = arr[i]
+                arr[i] = arr[j]
+                arr[j] = tmp
+                i += 1
+                j -= 1
+        if j >= mid_target_lo and i <= mid_target_hi:
+            break
+        if i <= mid_target_lo:
+            lo = i
+        elif j >= mid_target_hi:
+            hi = j
+        else:
+            break
+    # arr is now partitioned so arr[mid_target_lo] and arr[mid_target_hi] hold
+    # the proper order-statistics in expectation. Run a tiny insertion sort
+    # over the middle window to guarantee correctness on small arrays where
+    # the partition can leave 2–4 stragglers.
+    cdef Py_ssize_t window_lo = max(0, mid_target_lo - 2)
+    cdef Py_ssize_t window_hi = min(count - 1, mid_target_hi + 2)
+    for i in range(window_lo + 1, window_hi + 1):
+        tmp = arr[i]
+        j = i - 1
+        while j >= window_lo and arr[j] > tmp:
+            arr[j + 1] = arr[j]
+            j -= 1
+        arr[j + 1] = tmp
+    if (count & 1) == 1:
+        out[0] = arr[mid_target_lo]
+    else:
+        out[0] = 0.5 * (arr[mid_target_lo] + arr[mid_target_hi])
+
+
+cpdef object row_independent_fill_pct(object val, object sat,
+                                       object hue_mask,
+                                       double threshold):
+    """Per-row fill % median — outlier-resistant version of `_row_independent_pct`.
+
+    ``val`` and ``sat`` are ``(H, W) float32`` HSV channels (val=V, sat=S).
+    ``hue_mask`` is an ``(H, W) bool`` array describing whether each pixel
+    matched the hue/saturation window in the caller.
+
+    Returns the median of per-row fill ratios as a Python ``float``, or
+    ``None`` if fewer than two rows produced a fill (matching the original
+    contract used by ``recognition._detect_bar_pct``).
+    """
+    cdef Py_ssize_t h, w, r, x, last_idx, kept = 0
+    cdef bint has_filled
+    cdef double s, crossing, pct, inv_w, median_out
+    cdef double third = 1.0 / 3.0
+    cdef const float[:, :] val_v
+    cdef const float[:, :] sat_v
+    cdef const unsigned char[:, :] mask_v
+    cdef double[::1] row_score
+    cdef double[::1] smoothed
+    cdef double[::1] pcts
+
+    # Bool ndarrays are 1 byte per element in numpy, but their buffer format
+    # string is '?' rather than 'B' so cython's `unsigned char` memoryview
+    # won't accept them directly. Reinterpret as uint8 view (no copy) when
+    # possible; otherwise force a contiguous uint8 copy.
+    if hasattr(hue_mask, 'dtype') and hue_mask.dtype == _np.bool_:
+        mask_obj = hue_mask.view(_np.uint8)
+    else:
+        mask_obj = _np.ascontiguousarray(hue_mask, dtype=_np.uint8)
+
+    val_v = val
+    sat_v = sat
+    mask_v = mask_obj
+    h = val_v.shape[0]
+    w = val_v.shape[1]
+
+    if h < 2 or w <= 4:
+        return None
+    if not (val_v.shape[0] == sat_v.shape[0] == mask_v.shape[0]
+            and val_v.shape[1] == sat_v.shape[1] == mask_v.shape[1]):
+        raise ValueError('val, sat, hue_mask must share shape (H, W)')
+
+    row_score_np = _np.empty(w, dtype=_np.float64)
+    smoothed_np = _np.empty(w, dtype=_np.float64)
+    pcts_np = _np.empty(h, dtype=_np.float64)
+    row_score = row_score_np
+    smoothed = smoothed_np
+    pcts = pcts_np
+
+    inv_w = 1.0 / <double>w
+
+    with nogil:
+        for r in range(h):
+            # Build per-row score with hue-mask scaling.
+            for x in range(w):
+                s = 0.78 * (<double>val_v[r, x] / 255.0) + 0.22 * (<double>sat_v[r, x] / 255.0)
+                if mask_v[r, x] != 0:
+                    row_score[x] = s
+                else:
+                    row_score[x] = s * 0.80
+
+            # 3-wide moving-average smoothing (np.convolve [1/3,1/3,1/3], mode='same').
+            #   smoothed[0]    = (row[0] + row[1]) / 3
+            #   smoothed[w-1]  = (row[w-2] + row[w-1]) / 3
+            #   smoothed[i]    = (row[i-1] + row[i] + row[i+1]) / 3
+            if w == 1:
+                smoothed[0] = row_score[0] * third
+            else:
+                smoothed[0] = (row_score[0] + row_score[1]) * third
+                smoothed[w - 1] = (row_score[w - 2] + row_score[w - 1]) * third
+                for x in range(1, w - 1):
+                    smoothed[x] = (row_score[x - 1] + row_score[x] + row_score[x + 1]) * third
+
+            # Walk right-to-left to find last filled index.
+            has_filled = False
+            last_idx = -1
+            for x in range(w - 1, -1, -1):
+                if smoothed[x] >= threshold:
+                    last_idx = x
+                    has_filled = True
+                    break
+
+            if not has_filled:
+                continue
+
+            crossing = _row_subpixel_crossing(smoothed, w, threshold, last_idx)
+            pct = crossing * inv_w
+            if pct < 0.0:
+                pct = 0.0
+            elif pct > 1.0:
+                pct = 1.0
+            pcts[kept] = pct
+            kept += 1
+
+    if kept < 2:
+        return None
+
+    # Median over kept rows.
+    with nogil:
+        _quickselect_median(pcts, kept, &median_out)
+    return float(median_out)
+
+
+# ───────────────────────────────────────────────
+#  Gradient-based edge detection (recognition._gradient_edge_pct)
+# ───────────────────────────────────────────────
+#
+# v3.1.3 round 5: the per-bar fill detector calls ``_gradient_edge_pct``
+# once per tick to locate the fill->empty boundary via the sharpest
+# negative gradient. The pure-numpy version allocates three arrays
+# (np.diff, np.convolve, slice) and calls np.argmin per tick. The
+# cython kernel does one nogil pass: derivative + 7-wide smoothing +
+# argmin in the search window + sub-pixel mid-score crossing.
+
+
+cpdef object gradient_edge_pct(object smooth_score, Py_ssize_t eff_w,
+                                double dynamic_range):
+    """Find the fill->empty boundary via the sharpest negative gradient.
+
+    Returns a sub-pixel ``pct in [0, 1]`` as a Python float, or ``None``
+    when no edge stands out enough relative to the dynamic range. This
+    mirrors ``recognition._gradient_edge_pct`` semantics byte-for-byte
+    except for the float64-everywhere precision (the original mixed
+    float32 inputs with float64 intermediates).
+    """
+    cdef const double[::1] ss = smooth_score
+    cdef Py_ssize_t n = ss.shape[0]
+    cdef Py_ssize_t i, j, s_start, s_end
+    cdef double grad_threshold
+    cdef double min_val
+    cdef Py_ssize_t min_idx
+    cdef double seventh = 1.0 / 7.0
+    cdef double s0, s1, frac, mid_score, candidate
+    cdef double r0, r1, r2, r3, r4, r5, r6  # 7-wide window
+
+    if eff_w <= 6 or n != eff_w:
+        # The caller passes eff_w explicitly; n should match smooth_score
+        # length. If they disagree, prefer the conservative empty result.
+        if n != eff_w:
+            return None
+        return None
+    # The numpy gradient has length eff_w - 1
+    cdef Py_ssize_t gn = eff_w - 1
+    if gn < 5:
+        return None
+
+    grad_np = _np.empty(gn, dtype=_np.float64)
+    smooth_grad_np = _np.empty(gn, dtype=_np.float64)
+    cdef double[::1] grad = grad_np
+    cdef double[::1] smooth_grad = smooth_grad_np
+
+    # Search window — match the original semantics:
+    #   s_start = max(2, int(eff_w * 0.03))
+    #   s_end   = max(s_start + 4, eff_w - 1 - max(3, int(eff_w * 0.02)))
+    s_start = <Py_ssize_t>(eff_w * 0.03)
+    if s_start < 2:
+        s_start = 2
+    cdef Py_ssize_t margin_right = <Py_ssize_t>(eff_w * 0.02)
+    if margin_right < 3:
+        margin_right = 3
+    s_end = (eff_w - 1) - margin_right
+    if s_end < s_start + 4:
+        s_end = s_start + 4
+    # `region = smooth_grad[s_start:s_end]` — empty when s_start >= s_end
+    if s_start >= s_end:
+        return None
+    # Also cap s_end to the smooth_grad length so the argmin window stays valid.
+    if s_end > gn:
+        s_end = gn
+    if s_start >= s_end:
+        return None
+
+    with nogil:
+        # np.diff(smooth_score) — grad[i] = ss[i+1] - ss[i] for i in [0, gn)
+        for i in range(gn):
+            grad[i] = ss[i + 1] - ss[i]
+
+        # np.convolve(grad, ones(7)/7, mode='same')
+        #   smooth_grad[i] = (grad[i-3] + .. + grad[i+3]) * (1/7),
+        #   with out-of-range slots treated as 0.
+        for i in range(gn):
+            r0 = grad[i - 3] if i - 3 >= 0 else 0.0
+            r1 = grad[i - 2] if i - 2 >= 0 else 0.0
+            r2 = grad[i - 1] if i - 1 >= 0 else 0.0
+            r3 = grad[i]
+            r4 = grad[i + 1] if i + 1 < gn else 0.0
+            r5 = grad[i + 2] if i + 2 < gn else 0.0
+            r6 = grad[i + 3] if i + 3 < gn else 0.0
+            smooth_grad[i] = (r0 + r1 + r2 + r3 + r4 + r5 + r6) * seventh
+
+        # argmin over smooth_grad[s_start:s_end]
+        min_idx = s_start
+        min_val = smooth_grad[s_start]
+        for i in range(s_start + 1, s_end):
+            if smooth_grad[i] < min_val:
+                min_val = smooth_grad[i]
+                min_idx = i
+
+    # grad_threshold = -max(0.008, dynamic_range * 0.08)
+    grad_threshold = dynamic_range * 0.08
+    if grad_threshold < 0.008:
+        grad_threshold = 0.008
+    grad_threshold = -grad_threshold
+
+    if min_val >= grad_threshold:
+        return None
+
+    # mid_score = (ss[min_idx] + ss[min(min_idx+1, eff_w-1)]) / 2
+    cdef Py_ssize_t nxt = min_idx + 1
+    if nxt > eff_w - 1:
+        nxt = eff_w - 1
+    mid_score = (ss[min_idx] + ss[nxt]) * 0.5
+
+    # Search a narrow window around min_idx for the mid-score crossing.
+    cdef Py_ssize_t j_lo = min_idx - 2
+    cdef Py_ssize_t j_hi = min_idx + 4
+    if j_lo < 0:
+        j_lo = 0
+    if j_hi > eff_w - 1:
+        j_hi = eff_w - 1
+    for j in range(j_lo, j_hi):
+        s0 = ss[j]
+        s1 = ss[j + 1] if j + 1 < eff_w else ss[eff_w - 1]
+        if s0 >= mid_score and mid_score > s1 and s0 != s1:
+            frac = (s0 - mid_score) / (s0 - s1)
+            candidate = (<double>j + frac + 0.5) / <double>eff_w
+            if candidate < 0.0:
+                candidate = 0.0
+            elif candidate > 1.0:
+                candidate = 1.0
+            return float(candidate)
+
+    candidate = <double>(min_idx + 1) / <double>eff_w
+    if candidate < 0.0:
+        candidate = 0.0
+    elif candidate > 1.0:
+        candidate = 1.0
+    return float(candidate)

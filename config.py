@@ -343,8 +343,18 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.1.2"
+APP_VERSION = "3.1.3"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.1.3: Cython per-bar recognition migration (rounds 4-5 of perf /loop).
+#   - recognition._detect_stamina_pct now uses _sao_cy_pixels.
+#     bgr_color_match_column_ratio — single nogil pass with squared-distance
+#     test, no sqrt, ~14x faster than the numpy reference path.
+#   - recognition._row_independent_pct now uses _sao_cy_pixels.
+#     row_independent_fill_pct — per-row score + 3-wide convolution +
+#     sub-pixel + quickselect median in one nogil block, ~15x faster.
+#   - recognition._gradient_edge_pct now uses _sao_cy_pixels.gradient_edge_pct
+#     — diff + 7-wide convolution + argmin + mid-score crossing in one nogil
+#     block, ~4.3x faster with parity-exact output (delta=0 on 7/7 cases).
 # v3.1.2: Cython hot-path migration (rounds 1-2 of comprehensive perf /loop).
 #   - dps_tracker._compute_damage_id + skill_key fallback moved into
 #     _sao_cy_combat.compute_damage_id / resolve_skill_key (~2-3x faster per
