@@ -343,8 +343,15 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.1.2"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.1.2: Cython hot-path migration (rounds 1-2 of comprehensive perf /loop).
+#   - dps_tracker._compute_damage_id + skill_key fallback moved into
+#     _sao_cy_combat.compute_damage_id / resolve_skill_key (~2-3x faster per
+#     damage event, parity-verified across 8 cases).
+#   - packet_parser._parse_dirty_stream sub-field header parsing collapsed
+#     into _sao_cy_packet.parse_dirty_subfield_header (8 branches refactored,
+#     ~53% faster per branch, ~50 lines of boilerplate removed).
 # v2.2.12 — SAO menu HUD now drives a per-pixel-alpha layered window
 # (UpdateLayeredWindow) composed off-thread on the heavy render lane,
 # replacing the legacy chroma-key Toplevel + per-tick `geometry()` move

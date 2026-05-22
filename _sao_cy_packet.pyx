@@ -687,10 +687,11 @@ cpdef tuple compute_skill_cd_ui_state(object total_ms_obj,
     cdef int tmp_cd_pct = <int>_safe_i64(tmp_cd_pct_obj, 0)
     cdef int tmp_cd_fixed = <int>_safe_i64(tmp_cd_fixed_obj, 0)
     cdef int tmp_accel = <int>_safe_i64(tmp_accel_obj, 0)
-    cdef int now_server_ms = <int>_safe_i64(now_server_ms_obj, 0)
-    cdef int now_local_ms = <int>_safe_i64(now_local_ms_obj, 0)
-    cdef int begin_ms = <int>_safe_i64(begin_ms_obj, 0)
-    cdef int last_update_ms = <int>_safe_i64(last_update_ms_obj, 0)
+    # NOTE: ms-since-epoch (e.g. 1.7e12) overflows 32-bit int → must be long long
+    cdef long long now_server_ms = _safe_i64(now_server_ms_obj, 0)
+    cdef long long now_local_ms = _safe_i64(now_local_ms_obj, 0)
+    cdef long long begin_ms = _safe_i64(begin_ms_obj, 0)
+    cdef long long last_update_ms = _safe_i64(last_update_ms_obj, 0)
     cdef double parser_speed = _safe_f64(parser_speed_obj, 0.0)
     cdef double last_use_time = _safe_f64(last_use_time_obj, 0.0)
     cdef double now_t = _safe_f64(now_t_obj, 0.0)
@@ -702,7 +703,7 @@ cpdef tuple compute_skill_cd_ui_state(object total_ms_obj,
     cdef bint has_buff_mods
     cdef bint has_pkt_mods
     cdef double accel_speed_mult
-    cdef int server_elapsed_ms = 0
+    cdef long long server_elapsed_ms = 0
     cdef bint has_server_clock
     cdef double vcd_speed
     cdef double measured_vcd_speed = 0.0
@@ -712,8 +713,8 @@ cpdef tuple compute_skill_cd_ui_state(object total_ms_obj,
     cdef double cooldown_pct = 0.0
     cdef int display_total_ms = 0
     cdef int real_total_cd = 0
-    cdef int local_since_ms = 0
-    cdef int local_elapsed = 0
+    cdef long long local_since_ms = 0
+    cdef long long local_elapsed = 0
     cdef double source_confidence = 0.0
     cdef bint active = False
     cdef str state
@@ -790,7 +791,7 @@ cpdef tuple compute_skill_cd_ui_state(object total_ms_obj,
                 remaining_ms = 0
                 cooldown_pct = 0.0
             elif server_elapsed_ms >= 0:
-                remaining_ms = max(0, real_total_cd - server_elapsed_ms)
+                remaining_ms = <int>max(<long long>0, <long long>real_total_cd - server_elapsed_ms)
                 cooldown_pct = (<double>remaining_ms / <double>real_total_cd) if real_total_cd > 0 else 0.0
                 if cooldown_pct < 0.0:
                     cooldown_pct = 0.0
@@ -802,9 +803,9 @@ cpdef tuple compute_skill_cd_ui_state(object total_ms_obj,
             display_total_ms = max(1, real_total_cd)
             source_confidence = 0.80
         else:
-            local_elapsed = max(0, now_local_ms - last_update_ms)
+            local_elapsed = max(<long long>0, now_local_ms - last_update_ms)
             real_total_cd = <int>(effective_ms / accel_speed_mult) if accel_speed_mult > 0.01 else effective_ms
-            remaining_ms = max(0, real_total_cd - local_elapsed)
+            remaining_ms = <int>max(<long long>0, <long long>real_total_cd - local_elapsed)
             display_total_ms = max(1, real_total_cd)
             cooldown_pct = (<double>remaining_ms / <double>display_total_ms) if display_total_ms > 0 else 0.0
             if cooldown_pct < 0.0:
@@ -1613,3 +1614,61 @@ cpdef object parse_eth_ip_tcp(object raw):
         int(frag_offset),
         bool(more_frag),
     )
+
+
+# ───────────────────────────────────────────────
+#  Dirty-stream sub-field header helper
+# ───────────────────────────────────────────────
+#
+# v2.4.31: ``packet_parser._parse_dirty_stream`` parses ~8 sibling branches
+# (CharBase/UserFightAttr/RoleLevel/SeasonCenter/SeasonMedalInfo/MonsterHuntInfo/
+# DeepSleep/ProfessionList) that all start with the same:
+#
+#     [0xFFFFFFFE marker (4B)] [validation (4B)] [sub_field u32 (4B)]
+#
+# Merging the boilerplate into a single cython call removes 3 Python-side
+# ``read_le_u32_at`` calls and 2 length checks per branch — meaningful when
+# the dirty stream fires many times per second under heavy data churn.
+
+
+cpdef tuple parse_dirty_subfield_header(object data, Py_ssize_t pos):
+    """Parse the common 0xFFFFFFFE marker + 4-byte validation + sub_field u32.
+
+    Returns ``(ok, new_pos, sub_field)``:
+      * ``ok`` is ``True`` only when the marker matched AND 12 bytes were
+        readable from ``pos``;
+      * ``new_pos`` is ``pos + 12`` on success, or the original ``pos`` when
+        the header failed to validate (so callers can decide what to do);
+      * ``sub_field`` is the parsed u32 (0 on failure).
+    """
+    cdef const unsigned char[:] src = data
+    cdef Py_ssize_t n = src.shape[0]
+    cdef unsigned int ident
+    cdef unsigned int sub_field
+    if pos < 0 or pos + 8 > n:
+        return (False, pos, 0)
+    ident = _read_le32(src, pos)
+    if ident != <unsigned int>0xFFFFFFFE:
+        return (False, pos, 0)
+    pos += 8
+    if pos + 4 > n:
+        return (False, pos, 0)
+    sub_field = _read_le32(src, pos)
+    return (True, pos + 4, sub_field)
+
+
+cpdef tuple try_read_le_u32_at(object data, Py_ssize_t pos):
+    """Bounds-checked u32 read.
+
+    Unlike :func:`read_le_u32_at` this does NOT raise on out-of-range — it
+    returns ``(ok, value, new_pos)`` so callers can use a single guard:
+
+        ok, val, pos = try_read_le_u32_at(data, pos)
+        if not ok:
+            return
+    """
+    cdef const unsigned char[:] src = data
+    cdef Py_ssize_t n = src.shape[0]
+    if pos < 0 or pos + 4 > n:
+        return (False, 0, pos)
+    return (True, _read_le32(src, pos), pos + 4)

@@ -85,21 +85,15 @@ def _append_decimal(prefix: int, suffix: int, min_width: int) -> int:
 
 
 def _compute_damage_id(event: Dict[str, Any]) -> int:
-    owner_id = max(0, _safe_int(event.get('skill_id')))
-    if owner_id <= 0:
-        return 0
-    damage_source = _safe_int(event.get('damage_source'), 0)
-    owner_level = max(0, _safe_int(event.get('owner_level'), 0))
-    hit_event_id = max(0, _safe_int(event.get('hit_event_id'), 0))
-    skill_effect_id = owner_id
-    if damage_source > 0:
-        damage_type = 2 if damage_source == 2 else 3
-    else:
-        table = _load_skill_level_to_effect()
-        skill_level_id = owner_id * 100 + owner_level
-        skill_effect_id = table.get(skill_level_id) or table.get(owner_id * 100 + 1) or owner_id
-        damage_type = 1
-    return _append_decimal(_append_decimal(damage_type, skill_effect_id, 0), hit_event_id, 2)
+    # v2.4.31: hot-path migration to Cython. Table is still loaded lazily in
+    # Python so the side-effect / cache lives in one place. The cython helper
+    # accepts ``None`` for the table and falls back to ``owner_id`` itself.
+    return int(_CY_COMBAT.compute_damage_id(event, _load_skill_level_to_effect()))
+
+
+def _resolve_skill_key(event: Dict[str, Any]) -> int:
+    """Mirror dps_tracker bucketing: damage_id, else skill_key, else skill_id."""
+    return int(_CY_COMBAT.resolve_skill_key(event, _load_skill_level_to_effect()))
 
 
 # ═══════════════════════════════════════════════
@@ -291,7 +285,8 @@ class DpsTracker:
         is_absorbed = event.get('is_absorbed', False)
         damage = max(0, _safe_int(event.get('damage')))
         skill_id = _safe_int(event.get('skill_id'))
-        skill_key = _compute_damage_id(event) or _safe_int(event.get('skill_key')) or skill_id
+        # v2.4.31: single cython call merges the damage_id + fallback chain.
+        skill_key = _resolve_skill_key(event) or skill_id
         is_crit = event.get('is_crit', False)
 
         # Prefer parser-provided owner UID. Some damage events route through a

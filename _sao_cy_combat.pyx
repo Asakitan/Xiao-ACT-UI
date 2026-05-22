@@ -451,3 +451,93 @@ cpdef tuple classify_big_hit_tier(object damage,
     if d >= mega:
         return (True, 'mega')
     return (True, 'impact')
+
+
+# ───────────────────────────────────────────────
+#  Damage-event id derivation (formerly _compute_damage_id)
+# ───────────────────────────────────────────────
+
+
+cdef inline long long _append_decimal_ll(long long prefix, long long suffix,
+                                          int min_width) noexcept:
+    cdef long long s = suffix
+    cdef long long temp
+    cdef int digits
+    cdef int width
+    cdef int i
+    cdef long long mult
+    if s < 0:
+        s = 0
+    if s >= 10:
+        digits = 0
+        temp = s
+        while temp > 0:
+            temp //= 10
+            digits += 1
+    else:
+        digits = 1
+    width = digits if digits > min_width else min_width
+    mult = 1
+    for i in range(width):
+        mult *= 10
+    return prefix * mult + s
+
+
+cpdef long long compute_damage_id(dict event, dict skill_effect_table):
+    """Deterministic damage_id used by DPS aggregation.
+
+    Mirrors the pure-Python ``_compute_damage_id`` in ``dps_tracker`` so the
+    output stays bit-stable while the per-event Python overhead disappears.
+
+    Returns 0 when the event has no usable skill_id (matching the original
+    early-exit behaviour).
+    """
+    if event is None:
+        return 0
+    cdef long long owner_id = _safe_i64(event.get('skill_id'))
+    if owner_id <= 0:
+        return 0
+    cdef long long damage_source = _safe_i64(event.get('damage_source'))
+    cdef long long owner_level = _safe_i64(event.get('owner_level'))
+    if owner_level < 0:
+        owner_level = 0
+    cdef long long hit_event_id = _safe_i64(event.get('hit_event_id'))
+    if hit_event_id < 0:
+        hit_event_id = 0
+    cdef long long skill_effect_id = owner_id
+    cdef long long damage_type
+    cdef long long skill_level_id
+    cdef object cand
+    cdef long long cand_i
+    if damage_source > 0:
+        damage_type = 2 if damage_source == 2 else 3
+    else:
+        skill_level_id = owner_id * 100 + owner_level
+        cand_i = 0
+        if skill_effect_table is not None:
+            cand = skill_effect_table.get(skill_level_id)
+            cand_i = _safe_i64(cand)
+            if cand_i <= 0:
+                cand = skill_effect_table.get(owner_id * 100 + 1)
+                cand_i = _safe_i64(cand)
+        if cand_i <= 0:
+            cand_i = owner_id
+        skill_effect_id = cand_i
+        damage_type = 1
+    cdef long long step1 = _append_decimal_ll(damage_type, skill_effect_id, 0)
+    return _append_decimal_ll(step1, hit_event_id, 2)
+
+
+cpdef long long resolve_skill_key(dict event, dict skill_effect_table):
+    """Return the skill_key used by DPS bucketing.
+
+    Mirrors ``skill_key = _compute_damage_id(event) or skill_key_field or skill_id``
+    from ``dps_tracker._process_event`` so the bridge can call it directly.
+    """
+    cdef long long damage_id = compute_damage_id(event, skill_effect_table)
+    if damage_id > 0:
+        return damage_id
+    cdef long long sk = _safe_i64(event.get('skill_key'))
+    if sk > 0:
+        return sk
+    return _safe_i64(event.get('skill_id'))

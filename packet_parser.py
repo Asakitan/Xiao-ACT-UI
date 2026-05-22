@@ -117,6 +117,10 @@ _varint_to_int32 = _CY_PACKET.varint_to_int32
 _decode_string_from_raw = _CY_PACKET.decode_string_from_raw
 _decode_int32_from_raw = _CY_PACKET.raw_varint_to_int32
 _decode_float32_from_raw = _CY_PACKET.decode_float32_from_raw
+# v2.4.31: dirty-stream header helper (collapses 0xFFFFFFFE marker + sub_field
+# read into one cython call across CharBase/UserFightAttr/RoleLevel/...).
+_parse_dirty_subfield_header = _CY_PACKET.parse_dirty_subfield_header
+_try_read_le_u32_at = _CY_PACKET.try_read_le_u32_at
 
 
 def _append_packet_debug(tag: str, payload: Dict[str, Any]):
@@ -3256,16 +3260,9 @@ class PacketParser:
             # Dump full raw hex for deep analysis
             debug_info['full_raw_hex'] = data[pos:].hex()[:256]
             debug_info['remaining_len'] = len(data) - pos
-            if pos + 8 > len(data):
+            ok, pos, sub_field = _parse_dirty_subfield_header(data, pos)
+            if not ok:
                 return
-            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
-            if ident2 != 0xFFFFFFFE:
-                return
-            pos += 8  # skip identifier + validation
-            if pos + 4 > len(data):
-                return
-            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
-            pos += 4
             debug_info['sub_field'] = sub_field
 
             # Complete mapping for ALL sub_fields in CharBaseInfo (from proto)
@@ -3397,16 +3394,9 @@ class PacketParser:
                 debug_info['after_value_len'] = len(data) - pos
 
         elif field_index == 16:  # UserFightAttr
-            if pos + 8 > len(data):
+            ok, pos, sub_field = _parse_dirty_subfield_header(data, pos)
+            if not ok:
                 return
-            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
-            if ident2 != 0xFFFFFFFE:
-                return
-            pos += 8
-            if pos + 4 > len(data):
-                return
-            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
-            pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 1:  # CurHp
                 if pos + 4 > len(data):
@@ -3459,16 +3449,9 @@ class PacketParser:
                 debug_info['raw_hex'] = data[pos:].hex()[:128]
 
         elif field_index == 22:  # RoleLevel
-            if pos + 8 > len(data):
+            ok, pos, sub_field = _parse_dirty_subfield_header(data, pos)
+            if not ok:
                 return
-            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
-            if ident2 != 0xFFFFFFFE:
-                return
-            pos += 8
-            if pos + 4 > len(data):
-                return
-            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
-            pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 1:  # Level
                 if pos + 4 > len(data):
@@ -3485,28 +3468,14 @@ class PacketParser:
                 debug_info['raw_hex'] = data[pos:].hex()[:128]
 
         elif field_index == 50:  # SeasonCenter
-            if pos + 8 > len(data):
+            ok, pos, sub_field = _parse_dirty_subfield_header(data, pos)
+            if not ok:
                 return
-            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
-            if ident2 != 0xFFFFFFFE:
-                return
-            pos += 8
-            if pos + 4 > len(data):
-                return
-            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
-            pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 2:  # BattlePass
-                if pos + 8 > len(data):
+                ok, pos, bp_sub_field = _parse_dirty_subfield_header(data, pos)
+                if not ok:
                     return
-                ident3 = _CY_PACKET.read_le_u32_at(data, pos)
-                if ident3 != 0xFFFFFFFE:
-                    return
-                pos += 8
-                if pos + 4 > len(data):
-                    return
-                bp_sub_field = _CY_PACKET.read_le_u32_at(data, pos)
-                pos += 4
                 debug_info['nested_sub_field'] = bp_sub_field
                 if bp_sub_field == 2 and pos + 4 <= len(data):  # BattlePass.Level
                     battlepass_lv = _CY_PACKET.read_le_u32_at(data, pos)
@@ -3523,28 +3492,14 @@ class PacketParser:
                 debug_info['raw_hex'] = data[pos:].hex()[:128]
 
         elif field_index == 52:  # SeasonMedalInfo
-            if pos + 8 > len(data):
+            ok, pos, sub_field = _parse_dirty_subfield_header(data, pos)
+            if not ok:
                 return
-            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
-            if ident2 != 0xFFFFFFFE:
-                return
-            pos += 8
-            if pos + 4 > len(data):
-                return
-            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
-            pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 3:  # CoreHoleInfo
-                if pos + 8 > len(data):
+                ok, pos, hole_sub_field = _parse_dirty_subfield_header(data, pos)
+                if not ok:
                     return
-                ident3 = _CY_PACKET.read_le_u32_at(data, pos)
-                if ident3 != 0xFFFFFFFE:
-                    return
-                pos += 8
-                if pos + 4 > len(data):
-                    return
-                hole_sub_field = _CY_PACKET.read_le_u32_at(data, pos)
-                pos += 4
                 debug_info['nested_sub_field'] = hole_sub_field
                 if hole_sub_field == 2 and pos + 4 <= len(data):  # HoleLevel
                     medal_lv_raw = _CY_PACKET.read_le_u32_at(data, pos)
@@ -3567,16 +3522,9 @@ class PacketParser:
                 debug_info['raw_hex'] = data[pos:].hex()[:128]
 
         elif field_index == 56:  # MonsterHuntInfo
-            if pos + 8 > len(data):
+            ok, pos, sub_field = _parse_dirty_subfield_header(data, pos)
+            if not ok:
                 return
-            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
-            if ident2 != 0xFFFFFFFE:
-                return
-            pos += 8
-            if pos + 4 > len(data):
-                return
-            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
-            pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 2 and pos + 4 <= len(data):  # CurLevel
                 hunt_lv = _CY_PACKET.read_le_u32_at(data, pos)
@@ -3598,61 +3546,50 @@ class PacketParser:
             debug_info['field_name'] = 'DEEP_SLEEP_LEVEL'
             debug_info['full_raw_hex'] = data[pos:].hex()[:256]
             # Binary dirty format: 0xFFFFFFFE + validation + sub_field + nested data
-            if pos + 8 <= len(data):
-                ident2 = _CY_PACKET.read_le_u32_at(data, pos)
-                if ident2 == 0xFFFFFFFE:
-                    pos += 8  # skip identifier + validation
-                    if pos + 4 <= len(data):
-                        sub_field = _CY_PACKET.read_le_u32_at(data, pos)
-                        pos += 4
-                        debug_info['sub_field'] = sub_field
-                        # sub_field=3 is 深眠心相仪
-                        remaining = data[pos:]
-                        if len(remaining) > 0:
-                            try:
-                                # Use pb2 DeepSleepSeasonEntry for inner protobuf decode
-                                pb = _ensure_pb()
-                                if pb:
-                                    entry = pb.DeepSleepSeasonEntry()
-                                    entry.ParseFromString(remaining)
-                                    ds_lv = entry.Info.Level if entry.HasField('Info') else 0
-                                    ds_exp = entry.Info.CurExp if entry.HasField('Info') else 0
-                                    if ds_lv > 0:
-                                        debug_info['level'] = ds_lv
-                                        debug_info['exp'] = ds_exp
-                                        if sub_field == 3:
-                                            if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
-                                                changed = True
-                                            print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
-                                else:
-                                    # fallback to manual decode
-                                    nested = _decode_fields(remaining)
-                                    ds_data_raw = nested.get(2, [None])[0]
-                                    if isinstance(ds_data_raw, bytes):
-                                        ds_data = _decode_fields(ds_data_raw)
-                                        ds_lv = ds_data.get(1, [0])[0]
-                                        ds_exp = ds_data.get(2, [0])[0]
-                                        if isinstance(ds_lv, int) and ds_lv > 0:
-                                            debug_info['level'] = ds_lv
-                                            debug_info['exp'] = ds_exp
-                                            if sub_field == 3:
-                                                if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
-                                                    changed = True
-                                                print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
-                            except Exception:
-                                debug_info['nested_hex'] = remaining.hex()[:128]
+            _ok_h102, _pos_h102, sub_field = _parse_dirty_subfield_header(data, pos)
+            if _ok_h102:
+                pos = _pos_h102
+                debug_info['sub_field'] = sub_field
+                # sub_field=3 is 深眠心相仪
+                remaining = data[pos:]
+                if len(remaining) > 0:
+                    try:
+                        # Use pb2 DeepSleepSeasonEntry for inner protobuf decode
+                        pb = _ensure_pb()
+                        if pb:
+                            entry = pb.DeepSleepSeasonEntry()
+                            entry.ParseFromString(remaining)
+                            ds_lv = entry.Info.Level if entry.HasField('Info') else 0
+                            ds_exp = entry.Info.CurExp if entry.HasField('Info') else 0
+                            if ds_lv > 0:
+                                debug_info['level'] = ds_lv
+                                debug_info['exp'] = ds_exp
+                                if sub_field == 3:
+                                    if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
+                                        changed = True
+                                    print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
+                        else:
+                            # fallback to manual decode
+                            nested = _decode_fields(remaining)
+                            ds_data_raw = nested.get(2, [None])[0]
+                            if isinstance(ds_data_raw, bytes):
+                                ds_data = _decode_fields(ds_data_raw)
+                                ds_lv = ds_data.get(1, [0])[0]
+                                ds_exp = ds_data.get(2, [0])[0]
+                                if isinstance(ds_lv, int) and ds_lv > 0:
+                                    debug_info['level'] = ds_lv
+                                    debug_info['exp'] = ds_exp
+                                    if sub_field == 3:
+                                        if _set_level_extra_candidate(player, 'deep_sleep', ds_lv):
+                                            changed = True
+                                        print(f'[Parser] DirtyData 深眠心相仪等级 -> Lv.{ds_lv} 经验={ds_exp}', flush=True)
+                    except Exception:
+                        debug_info['nested_hex'] = remaining.hex()[:128]
 
         elif field_index == 61:  # ProfessionList
-            if pos + 8 > len(data):
+            ok, pos, sub_field = _parse_dirty_subfield_header(data, pos)
+            if not ok:
                 return
-            ident2 = _CY_PACKET.read_le_u32_at(data, pos)
-            if ident2 != 0xFFFFFFFE:
-                return
-            pos += 8
-            if pos + 4 > len(data):
-                return
-            sub_field = _CY_PACKET.read_le_u32_at(data, pos)
-            pos += 4
             debug_info['sub_field'] = sub_field
             if sub_field == 1:  # CurProfessionId
                 if pos + 4 > len(data):
