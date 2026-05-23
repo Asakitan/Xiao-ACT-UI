@@ -343,8 +343,43 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.13"
+APP_VERSION = "3.2.14"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.14: damage events + misc helpers mixins (rounds 67-68 of /loop).
+#   sao_gui.py crosses below 525 lines; cumulative reduction reaches
+#   94.6%. MRO depth grows to 19 mixin layers.
+#   Round 67: SAOPlayerGUIDamageEventsMixin (341 lines mixin / 286 net
+#     out). 5 methods covering damage-event normalization + pending-
+#     combat-reset gate:
+#       _maybe_apply_pending_combat_reset (88), _current_player_uid_int
+#       (16), _is_known_friendly_uid (42), _normalize_damage_event_for_self
+#       (47), _normalize_damage_event_target_for_entity (94).
+#     Mixin imports: time only.
+#     sao_gui.py: 1015 -> 729.
+#   Round 68: SAOPlayerGUIMiscMixin (261 lines mixin / 205 net out).
+#     14-method grab-bag of small helpers ≤51 lines each:
+#       _set_icon (5), _create_hp_alpha_strip_windows (5),
+#       _render_hp_strip_image (3), _sync_hp_alpha_strip_windows (4),
+#       _render_hp_shell (4), _render_hp_dynamic (4),
+#       _get_skillfx_layout (51 — biggest; SkillFX layout picker used
+#         by State mixin),
+#       _get_game_window_rect (25), _get_game_window_context (26),
+#       _format_level_text (3), _fade_panel_in (30), _fade_panel_out (39),
+#       _switch_to_old_ui (4), _show_leaderboard (4).
+#     Mixin imports: time + _apply_window_icon from sao_panel_ui.
+#     sao_gui.py: 729 -> 524.
+#   SAOPlayerGUI MRO now has 19 mixin layers (in extraction order):
+#     (Menu, Fisheye, Actions, EngineToggles, DpsTheme, Panels,
+#      StatusUpdater, Dialogs, EngineLifecycle, PacketCallbacks,
+#      FloatHp, FloatHandlers, Lifecycle, PanelFx, LinkAnimation,
+#      DamageEvents, Misc, State, Session). No name conflicts.
+#   Cumulative refactor: 9682 -> 524 = -9158 = -94.6%. sao_gui.py is
+#   8476 lines below the user's 9000-line target and now stands at
+#   just 5.4% of its original size. gui_modules/ holds 40 .py /
+#   ~30270 lines. **The refactor has reached its natural floor —
+#   what remains in sao_gui.py is class skeleton + entry point glue
+#   (__init__, run(), _set_setting/_get_setting, module imports +
+#   helpers, class declaration, __main__).**
 # v3.2.13: panel-fx scheduler + link animations (rounds 64-65 of /loop).
 #   sao_gui.py crosses below 1100 lines; cumulative reduction reaches
 #   89.5%. MRO depth grows to 17 mixin layers.
