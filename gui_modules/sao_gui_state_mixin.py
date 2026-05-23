@@ -307,264 +307,407 @@ class SAOPlayerGUIStateMixin:
                 pass
 
         # ── Boss HP Overlay push (镜像 webview target-based 追踪) ──
-        if self._boss_hp_overlay and gs is not None:
-            try:
-                _bb_raid_active = getattr(gs, 'boss_raid_active', False)
-                _bb_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
-                _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
-
-                # Reuse the timestamp captured at the top of this method;
-                # all downstream comparisons are seconds-level so the ~ms
-                # of drift between top and here is irrelevant.
-                _now = _pp_now
-                _bb_timeout = self._boss_hp_hold_timeout_s()
+        # Round 35: compute dispatched to a daemon worker. The Tk main
+        # thread does only two cheap things here:
+        #   1. enqueue the latest (gs, now) snapshot for the worker (O(1))
+        #   2. consume whatever payload the worker produced LAST tick and
+        #      apply it via overlay.update() on main (the only Tk call)
+        # One tick (~200 ms) of latency is added, well below human
+        # perception, in exchange for moving ~260 lines of compute off
+        # the main thread during heavy combat.
+        if self._boss_hp_overlay is not None and gs is not None:
+            self._ensure_boss_hp_worker()
+            self._enqueue_boss_hp_compute(gs, _pp_now)
+            _bb_payload = self._consume_boss_hp_payload()
+            if _bb_payload is not None:
                 try:
-                    _bb_scene_grace = _now < float(
-                        getattr(self, '_scene_damage_grace_until', 0.0) or 0.0)
+                    self._boss_hp_overlay.update(_bb_payload)
                 except Exception:
-                    _bb_scene_grace = False
-                for uuid in list(self._bb_recent_targets.keys()):
-                    if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout:
-                        self._bb_recent_targets.pop(uuid, None)
+                    pass
 
-                _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
-                if not _has_recent_self_damage and not self._bb_recent_targets:
-                    self._bb_last_target_uuid = 0
-                _bb_last_target_damage_ts = float(
-                    self._bb_recent_targets.get(self._bb_last_target_uuid, 0.0) or 0.0)
-                _bb_target_damage_live = bool(
+    # ------------------------------------------------------------------
+    # Round 34 extraction: pure-compute boss-HP delta helper.
+    # Currently still invoked on the Tk main thread (same-thread call from
+    # _push_packet_overlays — wired up in the round-34 follow-up commit).
+    # Round 35 will swap the call site to a daemon worker + root.after(0,)
+    # re-entry; this method only touches `self.bb_*` state + bridge data
+    # (no Tk widgets), so a single .update() call can stay on main.
+    # ------------------------------------------------------------------
+    @_probe.decorate('ui.compute_boss_hp_delta')
+    def _compute_boss_hp_delta(self, gs, _pp_now):
+        """Compute the boss-HP overlay payload for one tick.
+
+        Returns the dict to pass to ``self._boss_hp_overlay.update(...)``,
+        or ``None`` if no push is needed (sig unchanged, no overlay, or
+        gs missing). Mutates ``self._bb_*`` state in-place to track the
+        target lock + motion sig — these mutations are still on main
+        thread today; round 35 will relocate them when this method
+        moves to a worker.
+        """
+        if not self._boss_hp_overlay or gs is None:
+            return None
+        try:
+            _bb_raid_active = getattr(gs, 'boss_raid_active', False)
+            _bb_mode = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'
+            _bb_src = getattr(gs, 'boss_hp_source', 'none') or 'none'
+
+            _now = _pp_now
+            _bb_timeout = self._boss_hp_hold_timeout_s()
+            try:
+                _bb_scene_grace = _now < float(
+                    getattr(self, '_scene_damage_grace_until', 0.0) or 0.0)
+            except Exception:
+                _bb_scene_grace = False
+            for uuid in list(self._bb_recent_targets.keys()):
+                if _now - self._bb_recent_targets.get(uuid, 0) > _bb_timeout:
+                    self._bb_recent_targets.pop(uuid, None)
+
+            _has_recent_self_damage = (_now - self._bb_last_damage_ts) < _bb_timeout
+            if not _has_recent_self_damage and not self._bb_recent_targets:
+                self._bb_last_target_uuid = 0
+            _bb_last_target_damage_ts = float(
+                self._bb_recent_targets.get(self._bb_last_target_uuid, 0.0) or 0.0)
+            _bb_target_damage_live = bool(
+                self._bb_last_target_uuid
+                and _bb_last_target_damage_ts > 0.0
+                and (_now - _bb_last_target_damage_ts) < _bb_timeout
+            )
+            _bb_has_damage_target = bool(
+                _has_recent_self_damage
+                and _bb_target_damage_live
+            )
+
+            _bb_direct_data = None
+            _bb_direct_hp = 0
+            _bb_direct_max = 0
+            _bb_additional = []
+            _bridge = getattr(self, '_packet_engine', None)
+
+            if not _bb_raid_active:
+                if _bridge and _has_recent_self_damage and self._bb_recent_targets:
+                    _recent_monsters = []
+                    for uuid, dmg_ts in list(self._bb_recent_targets.items()):
+                        if _now - dmg_ts < _bb_timeout:
+                            m = _bridge.get_monster(uuid)
+                            if self._boss_monster_usable(m):
+                                _recent_monsters.append(m)
+                    if _recent_monsters:
+                        def _bb_main_key(_m, _rt=self._bb_recent_targets):
+                            _max_hp = int(getattr(_m, 'max_hp', 0) or 0)
+                            _hp = int(getattr(_m, 'hp', 0) or 0)
+                            _mh_for_pct = _max_hp if _max_hp > 0 else (
+                                _hp if _hp > 0 else 1)
+                            _hp_pct = (_hp / _mh_for_pct) if _mh_for_pct > 0 else 0.0
+                            _last_ts = float(_rt.get(getattr(_m, 'uuid', 0), 0) or 0.0)
+                            return (-_max_hp, -_hp_pct, -_last_ts)
+                        _recent_monsters.sort(key=_bb_main_key)
+                        main_m = _recent_monsters[0]
+                        self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)
+                        _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
+                        _bb_direct_hp = max(0, int(getattr(main_m, 'hp', 0)))
+                        _bb_direct_data = main_m.to_dict() if hasattr(main_m, 'to_dict') else {}
+                        _bb_src = 'packet'
+                        for m in _recent_monsters[1:]:
+                            if len(_bb_additional) >= 4:
+                                break
+                            d = m.to_dict() if hasattr(m, 'to_dict') else {}
+                            _bb_additional.append({
+                                'name': str(d.get('name', 'Unit'))[:20],
+                                'hp_pct': round(float(d.get('hp_pct', 0.0)), 3),
+                                'extinction_pct': round(float(d.get('extinction_pct', 0.0)), 3),
+                                'has_break_data': bool(d.get('has_break_data', False)),
+                                'breaking_stage': int(d.get('breaking_stage', -1)),
+                                'shield_active': bool(d.get('shield_active', False)),
+                                'shield_pct': round(float(d.get('shield_pct', 0.0)), 3),
+                            })
+                elif self._bb_last_target_uuid and not _has_recent_self_damage:
+                    try:
+                        _m = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
+                        if self._boss_monster_usable(_m):
+                            _bb_direct_max = int(getattr(_m, 'max_hp', 0)) or int(getattr(_m, 'hp', 0))
+                            _bb_direct_hp = max(0, int(getattr(_m, 'hp', 0)))
+                            _bb_direct_data = _m.to_dict() if hasattr(_m, 'to_dict') else {}
+                            _bb_src = 'packet'
+                    except Exception:
+                        pass
+
+            if _bb_mode == 'off':
+                _bb_show = False
+            else:
+                _bb_target_locked = bool(
                     self._bb_last_target_uuid
-                    and _bb_last_target_damage_ts > 0.0
-                    and (_now - _bb_last_target_damage_ts) < _bb_timeout
-                )
-                _bb_has_damage_target = bool(
-                    _has_recent_self_damage
+                    and self._bb_last_target_uuid in self._bb_recent_targets
                     and _bb_target_damage_live
                 )
+                _bb_has_tracked_packet_boss = bool(
+                    _bb_direct_data is not None
+                    and (_bb_target_locked or _has_recent_self_damage)
+                )
+                _bb_has_estimated_tracked_boss = bool(
+                    _bb_target_locked
+                    and _bb_src != 'none'
+                    and _has_recent_self_damage
+                    and (getattr(gs, 'boss_current_hp', 0)
+                         or getattr(gs, 'boss_total_hp', 0)
+                         or getattr(gs, 'boss_breaking_stage', -1) != -1)
+                )
+                _bb_has_packet_boss = bool(
+                    _bb_has_tracked_packet_boss
+                    or _bb_has_estimated_tracked_boss
+                )
+                _bb_show = (
+                    (_has_recent_self_damage
+                     or (_bb_raid_active and _bb_has_packet_boss)
+                     or (_bb_scene_grace and _bb_has_tracked_packet_boss))
+                    and (_bb_has_packet_boss
+                         or (_bb_src != 'none'
+                             and _bb_has_damage_target
+                               and (getattr(gs, 'boss_current_hp', 0)
+                                   or getattr(gs, 'boss_total_hp', 0)
+                                   or getattr(gs, 'boss_breaking_stage', -1) != -1)))
+                )
 
-                _bb_direct_data = None
-                _bb_direct_hp = 0
-                _bb_direct_max = 0
-                _bb_additional = []
-                _bridge = getattr(self, '_packet_engine', None)
-                if not _bb_raid_active:
-                    if _bridge and _has_recent_self_damage and self._bb_recent_targets:
-                        _recent_monsters = []
-                        for uuid, dmg_ts in list(self._bb_recent_targets.items()):
-                            if _now - dmg_ts < _bb_timeout:
-                                m = _bridge.get_monster(uuid)
-                                if self._boss_monster_usable(m):
-                                    _recent_monsters.append(m)
-                        if _recent_monsters:
-                            # v2.5.5: prefer the highest-MAX_HP unit as the
-                            # main boss bar — overworld trash next to a real
-                            # boss can sit at higher hp_pct (full) while the
-                            # boss is mid-fight at 28%, so the legacy hp_pct
-                            # DESC ordering picked the wrong unit. Tie-break
-                            # by hp_pct DESC then last-damage recency.
-                            def _bb_main_key(_m, _rt=self._bb_recent_targets):
-                                _max_hp = int(getattr(_m, 'max_hp', 0) or 0)
-                                _hp = int(getattr(_m, 'hp', 0) or 0)
-                                _mh_for_pct = _max_hp if _max_hp > 0 else (
-                                    _hp if _hp > 0 else 1)
-                                _hp_pct = (_hp / _mh_for_pct) if _mh_for_pct > 0 else 0.0
-                                _last_ts = float(_rt.get(getattr(_m, 'uuid', 0), 0) or 0.0)
-                                return (-_max_hp, -_hp_pct, -_last_ts)
-                            _recent_monsters.sort(key=_bb_main_key)
-                            main_m = _recent_monsters[0]
-                            self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)
-                            _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))
-                            _bb_direct_hp = max(0, int(getattr(main_m, 'hp', 0)))
-                            _bb_direct_data = main_m.to_dict() if hasattr(main_m, 'to_dict') else {}
-                            _bb_src = 'packet'
-                            for m in _recent_monsters[1:]:
-                                if len(_bb_additional) >= 4:
-                                    break
-                                d = m.to_dict() if hasattr(m, 'to_dict') else {}
-                                _bb_additional.append({
-                                    'name': str(d.get('name', 'Unit'))[:20],
-                                    'hp_pct': round(float(d.get('hp_pct', 0.0)), 3),
-                                    'extinction_pct': round(float(d.get('extinction_pct', 0.0)), 3),
-                                    'has_break_data': bool(d.get('has_break_data', False)),
-                                    'breaking_stage': int(d.get('breaking_stage', -1)),
-                                    'shield_active': bool(d.get('shield_active', False)),
-                                    'shield_pct': round(float(d.get('shield_pct', 0.0)), 3),
-                                })
-                    elif self._bb_last_target_uuid and not _has_recent_self_damage:
-                        try:
-                            _m = _bridge.get_monster(self._bb_last_target_uuid) if _bridge else None
-                            if self._boss_monster_usable(_m):
-                                _bb_direct_max = int(getattr(_m, 'max_hp', 0)) or int(getattr(_m, 'hp', 0))
-                                _bb_direct_hp = max(0, int(getattr(_m, 'hp', 0)))
-                                _bb_direct_data = _m.to_dict() if hasattr(_m, 'to_dict') else {}
-                                _bb_src = 'packet'
-                        except Exception:
-                            pass
-
-                if _bb_mode == 'off':
-                    _bb_show = False
-                else:
-                    _bb_target_locked = bool(
-                        self._bb_last_target_uuid
-                        and self._bb_last_target_uuid in self._bb_recent_targets
-                        and _bb_target_damage_live
-                    )
-                    _bb_has_tracked_packet_boss = bool(
-                        _bb_direct_data is not None
-                        and (_bb_target_locked or _has_recent_self_damage)
-                    )
-                    _bb_has_estimated_tracked_boss = bool(
-                        _bb_target_locked
-                        and _bb_src != 'none'
-                        and _has_recent_self_damage
-                        and (getattr(gs, 'boss_current_hp', 0)
-                             or getattr(gs, 'boss_total_hp', 0)
-                             or getattr(gs, 'boss_breaking_stage', -1) != -1)
-                    )
-                    _bb_has_packet_boss = bool(
-                        _bb_has_tracked_packet_boss
-                        or _bb_has_estimated_tracked_boss
-                    )
-                    _bb_show = (
-                        (_has_recent_self_damage
-                         or (_bb_raid_active and _bb_has_packet_boss)
-                         or (_bb_scene_grace and _bb_has_tracked_packet_boss))
-                        and (_bb_has_packet_boss
-                             or (_bb_src != 'none'
-                                 and _bb_has_damage_target
-                                   and (getattr(gs, 'boss_current_hp', 0)
-                                       or getattr(gs, 'boss_total_hp', 0)
-                                       or getattr(gs, 'boss_breaking_stage', -1) != -1)))
-                    )
-
-                if _bb_direct_data and not _bb_raid_active:
-                    _bb_hp_pct = _bb_direct_hp / _bb_direct_max if _bb_direct_max > 0 else 1.0
-                    _bb_data = {
-                        'active': _bb_show,
-                        'hp_pct': round(_bb_hp_pct, 3),
-                        'hp_source': _bb_src,
-                        'current_hp': _bb_direct_hp,
-                        'total_hp': _bb_direct_max,
-                        'shield_active': bool(_bb_direct_data.get('shield_active')),
-                        'shield_pct': round(float(_bb_direct_data.get('shield_pct') or 0.0), 3),
-                        'breaking_stage': int(_bb_direct_data.get('breaking_stage') or 0),
-                        'has_break_data': bool(_bb_direct_data.get('has_break_data')),
-                        'extinction_pct': round(float(_bb_direct_data.get('extinction_pct') or 0.0), 3),
-                        'extinction': int(_bb_direct_data.get('extinction') or 0),
-                        'max_extinction': int(_bb_direct_data.get('max_extinction') or 0),
-                        'stop_breaking_ticking': bool(_bb_direct_data.get('stop_breaking_ticking')),
-                        'in_overdrive': bool(_bb_direct_data.get('in_overdrive')),
-                        'invincible': False,
-                        'boss_name': str(_bb_direct_data.get('name', ''))[:20] or '',
-                    }
-                elif _bb_show and not _bb_raid_active:
-                    _bb_target_uuid = int(self._bb_last_target_uuid or 0)
-                    if not _bb_target_uuid and self._bb_recent_targets:
-                        try:
-                            _bb_target_uuid = int(next(iter(self._bb_recent_targets.keys())) or 0)
-                        except Exception:
-                            _bb_target_uuid = 0
-                    _bb_target_label = ''
-                    if _bb_target_uuid:
-                        _bb_target_label = f'{_bb_target_uuid:X}'[-6:]
-                    _bb_data = {
-                        'active': True,
-                        'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
-                        'hp_source': 'estimate',
-                        'current_hp': 0,
-                        'total_hp': 0,
-                        'shield_active': False,
-                        'shield_pct': 0.0,
-                        'breaking_stage': -1,
-                        'has_break_data': False,
-                        'extinction_pct': 0.0,
-                        'extinction': 0,
-                        'max_extinction': 0,
-                        'stop_breaking_ticking': False,
-                        'in_overdrive': False,
-                        'invincible': False,
-                        'boss_name': f'Target {_bb_target_label}' if _bb_target_label else 'Target',
-                    }
-                else:
-                    _bb_breaking_stage_gs = getattr(gs, 'boss_breaking_stage', -1)
-                    _bb_data = {
-                        'active': _bb_show,
-                        'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
-                        'hp_source': _bb_src,
-                        'current_hp': getattr(gs, 'boss_current_hp', 0),
-                        'total_hp': getattr(gs, 'boss_total_hp', 0),
-                        'shield_active': getattr(gs, 'boss_shield_active', False),
-                        'shield_pct': round(getattr(gs, 'boss_shield_pct', 0.0), 3),
-                        'breaking_stage': _bb_breaking_stage_gs,
-                        'has_break_data': _bb_breaking_stage_gs != -1,
-                        'extinction_pct': round(getattr(gs, 'boss_extinction_pct', 0.0), 3),
-                        'extinction': 0,
-                        'max_extinction': 0,
-                        'stop_breaking_ticking': False,
-                        'in_overdrive': getattr(gs, 'boss_in_overdrive', False),
-                        'invincible': getattr(gs, 'boss_invincible', False),
-                        'boss_name': '',
-                    }
-                if _bb_show and not _bb_raid_active:
-                    _bb_hp_motion_sig = (
-                        int(self._bb_last_target_uuid or 0),
-                        str(_bb_data.get('hp_source') or ''),
-                        int(_bb_data.get('current_hp') or 0),
-                        int(_bb_data.get('total_hp') or 0),
-                        round(float(_bb_data.get('hp_pct') or 0.0), 4),
-                        round(float(_bb_data.get('shield_pct') or 0.0), 4),
-                        int(_bb_data.get('breaking_stage') or -1),
-                        round(float(_bb_data.get('extinction_pct') or 0.0), 4),
-                    )
-                    _bb_prev_motion_sig = getattr(self, '_bb_last_hp_motion_sig', None)
-                    _bb_is_new_target = (
-                        _bb_prev_motion_sig is None
-                        or _bb_prev_motion_sig[0] != _bb_hp_motion_sig[0]
-                    )
-                    if _bb_is_new_target:
-                        self._bb_last_hp_motion_sig = _bb_hp_motion_sig
-                        self._bb_last_hp_motion_ts = _now
-                    elif _bb_hp_motion_sig != _bb_prev_motion_sig:
-                        self._bb_last_hp_motion_sig = _bb_hp_motion_sig
-                        self._bb_last_hp_motion_ts = _now
+            if _bb_direct_data and not _bb_raid_active:
+                _bb_hp_pct = _bb_direct_hp / _bb_direct_max if _bb_direct_max > 0 else 1.0
+                _bb_data = {
+                    'active': _bb_show,
+                    'hp_pct': round(_bb_hp_pct, 3),
+                    'hp_source': _bb_src,
+                    'current_hp': _bb_direct_hp,
+                    'total_hp': _bb_direct_max,
+                    'shield_active': bool(_bb_direct_data.get('shield_active')),
+                    'shield_pct': round(float(_bb_direct_data.get('shield_pct') or 0.0), 3),
+                    'breaking_stage': int(_bb_direct_data.get('breaking_stage') or 0),
+                    'has_break_data': bool(_bb_direct_data.get('has_break_data')),
+                    'extinction_pct': round(float(_bb_direct_data.get('extinction_pct') or 0.0), 3),
+                    'extinction': int(_bb_direct_data.get('extinction') or 0),
+                    'max_extinction': int(_bb_direct_data.get('max_extinction') or 0),
+                    'stop_breaking_ticking': bool(_bb_direct_data.get('stop_breaking_ticking')),
+                    'in_overdrive': bool(_bb_direct_data.get('in_overdrive')),
+                    'invincible': False,
+                    'boss_name': str(_bb_direct_data.get('name', ''))[:20] or '',
+                }
+            elif _bb_show and not _bb_raid_active:
+                _bb_target_uuid = int(self._bb_last_target_uuid or 0)
+                if not _bb_target_uuid and self._bb_recent_targets:
                     try:
-                        _bb_stable_hide_raw = self._get_setting(
-                            'boss_hp_stable_hide_s', 2.5)
-                        _bb_stable_hide_s = float(
-                            _bb_stable_hide_raw
-                            if _bb_stable_hide_raw is not None else 2.5)
+                        _bb_target_uuid = int(next(iter(self._bb_recent_targets.keys())) or 0)
                     except Exception:
-                        _bb_stable_hide_s = 2.5
-                    if _bb_stable_hide_s > 0:
-                        _bb_motion_ts = float(
-                            getattr(self, '_bb_last_hp_motion_ts', 0.0) or 0.0)
-                        _bb_damage_ts = float(
-                            getattr(self, '_bb_last_damage_ts', 0.0) or 0.0)
-                        try:
-                            _dps_live_window_s = max(
-                                float(_bb_timeout), float(_bb_stable_hide_s) * 2.0)
-                            _dps_live_for_stable = bool(
-                                self._dps_tracker
-                                and self._dps_tracker.has_recent_damage(_dps_live_window_s))
-                        except Exception:
-                            _dps_live_for_stable = False
-                        _bb_recent_damage_for_stable = (
-                            _bb_damage_ts > 0.0
-                            and (_now - _bb_damage_ts) < _bb_stable_hide_s
-                        )
-                        if (_bb_motion_ts > 0.0
-                                and (_now - _bb_motion_ts) >= _bb_stable_hide_s
-                                and not _bb_recent_damage_for_stable
-                                and not _dps_live_for_stable
-                                and not _bb_scene_grace):
-                            _bb_data['active'] = False
-                _bb_sig = _CY_UI.build_boss_bar_sig(_bb_data, _bb_additional)
-                if _bb_sig != self._last_boss_hp_push_sig:
-                    self._last_boss_hp_push_sig = _bb_sig
-                    _bb_data['additional'] = _bb_additional
-                    self._boss_hp_overlay.update(_bb_data)
+                        _bb_target_uuid = 0
+                _bb_target_label = ''
+                if _bb_target_uuid:
+                    _bb_target_label = f'{_bb_target_uuid:X}'[-6:]
+                _bb_data = {
+                    'active': True,
+                    'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
+                    'hp_source': 'estimate',
+                    'current_hp': 0,
+                    'total_hp': 0,
+                    'shield_active': False,
+                    'shield_pct': 0.0,
+                    'breaking_stage': -1,
+                    'has_break_data': False,
+                    'extinction_pct': 0.0,
+                    'extinction': 0,
+                    'max_extinction': 0,
+                    'stop_breaking_ticking': False,
+                    'in_overdrive': False,
+                    'invincible': False,
+                    'boss_name': f'Target {_bb_target_label}' if _bb_target_label else 'Target',
+                }
+            else:
+                _bb_breaking_stage_gs = getattr(gs, 'boss_breaking_stage', -1)
+                _bb_data = {
+                    'active': _bb_show,
+                    'hp_pct': round(getattr(gs, 'boss_hp_est_pct', 1.0), 3),
+                    'hp_source': _bb_src,
+                    'current_hp': getattr(gs, 'boss_current_hp', 0),
+                    'total_hp': getattr(gs, 'boss_total_hp', 0),
+                    'shield_active': getattr(gs, 'boss_shield_active', False),
+                    'shield_pct': round(getattr(gs, 'boss_shield_pct', 0.0), 3),
+                    'breaking_stage': _bb_breaking_stage_gs,
+                    'has_break_data': _bb_breaking_stage_gs != -1,
+                    'extinction_pct': round(getattr(gs, 'boss_extinction_pct', 0.0), 3),
+                    'extinction': 0,
+                    'max_extinction': 0,
+                    'stop_breaking_ticking': False,
+                    'in_overdrive': getattr(gs, 'boss_in_overdrive', False),
+                    'invincible': getattr(gs, 'boss_invincible', False),
+                    'boss_name': '',
+                }
+            if _bb_show and not _bb_raid_active:
+                _bb_hp_motion_sig = (
+                    int(self._bb_last_target_uuid or 0),
+                    str(_bb_data.get('hp_source') or ''),
+                    int(_bb_data.get('current_hp') or 0),
+                    int(_bb_data.get('total_hp') or 0),
+                    round(float(_bb_data.get('hp_pct') or 0.0), 4),
+                    round(float(_bb_data.get('shield_pct') or 0.0), 4),
+                    int(_bb_data.get('breaking_stage') or -1),
+                    round(float(_bb_data.get('extinction_pct') or 0.0), 4),
+                )
+                _bb_prev_motion_sig = getattr(self, '_bb_last_hp_motion_sig', None)
+                _bb_is_new_target = (
+                    _bb_prev_motion_sig is None
+                    or _bb_prev_motion_sig[0] != _bb_hp_motion_sig[0]
+                )
+                if _bb_is_new_target:
+                    self._bb_last_hp_motion_sig = _bb_hp_motion_sig
+                    self._bb_last_hp_motion_ts = _now
+                elif _bb_hp_motion_sig != _bb_prev_motion_sig:
+                    self._bb_last_hp_motion_sig = _bb_hp_motion_sig
+                    self._bb_last_hp_motion_ts = _now
+                try:
+                    _bb_stable_hide_raw = self._get_setting(
+                        'boss_hp_stable_hide_s', 2.5)
+                    _bb_stable_hide_s = float(
+                        _bb_stable_hide_raw
+                        if _bb_stable_hide_raw is not None else 2.5)
+                except Exception:
+                    _bb_stable_hide_s = 2.5
+                if _bb_stable_hide_s > 0:
+                    _bb_motion_ts = float(
+                        getattr(self, '_bb_last_hp_motion_ts', 0.0) or 0.0)
+                    _bb_damage_ts = float(
+                        getattr(self, '_bb_last_damage_ts', 0.0) or 0.0)
+                    try:
+                        _dps_live_window_s = max(
+                            float(_bb_timeout), float(_bb_stable_hide_s) * 2.0)
+                        _dps_live_for_stable = bool(
+                            self._dps_tracker
+                            and self._dps_tracker.has_recent_damage(_dps_live_window_s))
+                    except Exception:
+                        _dps_live_for_stable = False
+                    _bb_recent_damage_for_stable = (
+                        _bb_damage_ts > 0.0
+                        and (_now - _bb_damage_ts) < _bb_stable_hide_s
+                    )
+                    if (_bb_motion_ts > 0.0
+                            and (_now - _bb_motion_ts) >= _bb_stable_hide_s
+                            and not _bb_recent_damage_for_stable
+                            and not _dps_live_for_stable
+                            and not _bb_scene_grace):
+                        _bb_data['active'] = False
+            _bb_sig = _CY_UI.build_boss_bar_sig(_bb_data, _bb_additional)
+            if _bb_sig != self._last_boss_hp_push_sig:
+                self._last_boss_hp_push_sig = _bb_sig
+                _bb_data['additional'] = _bb_additional
+                return _bb_data
+            return None
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------
+    # Round 35: off-main daemon worker for _compute_boss_hp_delta.
+    #
+    # The boss-HP compute (~260 lines of bridge.get_monster / sort / dict
+    # building / sig hashing) used to run inline on the Tk main thread at
+    # 5 Hz. In heavy combat (4-player commander panel + multi-mob target
+    # tracking + raid bar), this could exceed the 200 ms tick budget,
+    # causing visible UI hitches.
+    #
+    # The worker now consumes (gs, _now) snapshots from a single-slot
+    # mailbox (latest-wins, drop-oldest), computes the overlay payload,
+    # and stashes it in an output slot. The Tk main thread picks up
+    # whatever payload the worker produced on the PREVIOUS tick and
+    # calls _boss_hp_overlay.update() with it. One tick (~200 ms) of
+    # latency is added — imperceptible vs. the human-noticeable jitter
+    # we eliminate.
+    #
+    # Thread safety:
+    #   * _bb_recent_targets dict — written by packet thread (insert on
+    #     damage), now read AND popped by this worker. Worker uses
+    #     `list(self._bb_recent_targets.items())` to snapshot before
+    #     iterating (GIL-atomic per CPython); pop-during-other-write is
+    #     also GIL-safe at the dict-op level.
+    #   * _bb_last_target_uuid / _bb_last_damage_ts / _last_boss_hp_push_sig /
+    #     _bb_last_hp_motion_sig / _bb_last_hp_motion_ts — scalar / tuple
+    #     assignment, GIL-atomic. Cross-tick ordering may differ from
+    #     before but the only visible effect is at most one extra
+    #     "force push" frame, which is harmless (the next tick's sig
+    #     compare absorbs it).
+    #   * gs snapshot reference — already a shallow copy from
+    #     GameStateManager (round-13 design); reading attributes from a
+    #     different thread is safe.
+    # ------------------------------------------------------------------
+    def _ensure_boss_hp_worker(self):
+        if getattr(self, '_boss_hp_worker_started', False):
+            return
+        self._boss_hp_worker_started = True
+        self._boss_hp_worker_signal = threading.Event()
+        self._boss_hp_worker_stop = threading.Event()
+        self._boss_hp_worker_input_lock = threading.Lock()
+        self._boss_hp_worker_input = None
+        self._boss_hp_worker_output_lock = threading.Lock()
+        self._boss_hp_worker_output = None
+        try:
+            t = threading.Thread(
+                target=self._boss_hp_worker_loop,
+                name='sao-boss-hp-worker',
+                daemon=True,
+            )
+            t.start()
+            self._boss_hp_worker_thread = t
+        except Exception:
+            self._boss_hp_worker_started = False
+
+    def _boss_hp_worker_loop(self):
+        signal = self._boss_hp_worker_signal
+        stop = self._boss_hp_worker_stop
+        in_lock = self._boss_hp_worker_input_lock
+        out_lock = self._boss_hp_worker_output_lock
+        while not stop.is_set():
+            if not signal.wait(timeout=1.0):
+                continue
+            signal.clear()
+            if stop.is_set():
+                break
+            with in_lock:
+                inp = self._boss_hp_worker_input
+                self._boss_hp_worker_input = None
+            if inp is None:
+                continue
+            if getattr(self, '_destroyed', False):
+                break
+            gs, now = inp
+            try:
+                payload = self._compute_boss_hp_delta(gs, now)
             except Exception:
-                pass
+                payload = None
+            with out_lock:
+                self._boss_hp_worker_output = payload
+
+    def _enqueue_boss_hp_compute(self, gs, now):
+        """Push the latest (gs, now) into the worker mailbox (latest-wins)
+        and wake the worker. O(1) main-thread cost.
+        """
+        with self._boss_hp_worker_input_lock:
+            self._boss_hp_worker_input = (gs, now)
+        self._boss_hp_worker_signal.set()
+
+    def _consume_boss_hp_payload(self):
+        """Read + clear the worker's latest output slot. Returns the
+        overlay payload dict (to pass to ``self._boss_hp_overlay.update``)
+        or ``None`` if the worker hasn't produced one since last consume.
+        """
+        with self._boss_hp_worker_output_lock:
+            out = self._boss_hp_worker_output
+            self._boss_hp_worker_output = None
+        return out
+
+    def _stop_boss_hp_worker(self):
+        """Signal the worker to exit. Safe to call multiple times.
+        Called from _finalize_close. The thread is daemon so it dies with
+        the process anyway, but explicit shutdown lets it clean up
+        promptly.
+        """
+        if not getattr(self, '_boss_hp_worker_started', False):
+            return
+        try:
+            self._boss_hp_worker_stop.set()
+            self._boss_hp_worker_signal.set()
+        except Exception:
+            pass
 
     @_probe.decorate('ui.recognition_loop')
     def _recognition_loop(self):

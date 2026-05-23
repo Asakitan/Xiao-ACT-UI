@@ -7207,6 +7207,13 @@ void main() {
         # 停止识别引擎
         self._recognition_active = False
         self._cache_loop_stop.set()
+        # Round 35: stop the boss-HP off-main worker before tearing down
+        # overlays (it dereferences self._boss_hp_overlay indirectly via
+        # the compute helper). Safe to call even if never started.
+        try:
+            self._stop_boss_hp_worker()
+        except Exception:
+            pass
         self._stop_recognition_engines()
         # 保存缓存
         if self._state_mgr and self._cfg_settings_ref:

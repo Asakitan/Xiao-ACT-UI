@@ -343,8 +343,36 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.2"
+APP_VERSION = "3.2.3"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.3: COMBAT-LAG FIX — boss-HP compute moved off the Tk main thread
+#   (rounds 34-35 of /loop). Addresses the user's "重战斗卡顿" complaint.
+#   Round 34 (same-thread refactor):
+#     - Extracted the 260-line boss-HP inline compute from
+#       _push_packet_overlays into a new mixin method
+#       _compute_boss_hp_delta(gs, _pp_now). The helper returns the
+#       overlay update dict or None; touches no Tk widget so it's
+#       safe to call from any thread. Pure refactor, no behavior change.
+#   Round 35 (the actual fix):
+#     - Added a daemon worker thread (sao-boss-hp-worker) that consumes
+#       (gs, now) snapshots from a single-slot latest-wins mailbox and
+#       computes the overlay payload off the Tk main thread.
+#     - The 5 Hz recognition loop now only does: enqueue snapshot (O(1))
+#       + consume previous tick's payload + a single overlay.update()
+#       call. The ~260 lines of bridge.get_monster() / sort / dict-build
+#       / sig-hash compute happen on the worker thread.
+#     - Latency tradeoff: boss-HP overlay payload is from PREVIOUS tick
+#       (at most 200 ms behind), well below human visual detection
+#       threshold for HP-bar changes.
+#     - Five new mixin methods: _ensure_boss_hp_worker,
+#       _boss_hp_worker_loop, _enqueue_boss_hp_compute,
+#       _consume_boss_hp_payload, _stop_boss_hp_worker. Shutdown hook
+#       added to SAOPlayerGUI._finalize_close before overlay teardown.
+#     - Out-of-process smoke test verifies start / enqueue / consume /
+#       stop semantics.
+#   sao_gui.py: 7368 → 7375 (+7, just the _stop_boss_hp_worker hook in
+#   _finalize_close). State mixin: 794 → 913 lines (+119, worker
+#   scaffold). Cumulative refactor: 9682 → 7375 = -2307 = -23.8%.
 # v3.2.2: sao_gui refactor reaches the mixin stage (rounds 31-32 of /loop).
 #   The first two SAOPlayerGUI mixins are extracted — this is the
 #   structural turning point: instead of pulling helper classes out
