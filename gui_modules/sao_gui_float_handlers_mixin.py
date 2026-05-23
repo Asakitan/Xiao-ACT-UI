@@ -10,10 +10,6 @@ z-order maintenance + a handful of unrelated small helpers that
 didn't have a natural home in the earlier mixins.
 
 Methods:
-  * _float_click(e) — left-click on the float button (defers to
-    SAO menu toggle; the drag detection is below).
-  * _float_drag(e) — Button-1 motion (drag).
-  * _float_release(e) — Button-1 release (drag end, snap, animation).
   * _float_enter(e) — mouse enter (hover state on).
   * _float_leave(e) — mouse leave (hover state off).
   * _lift_float_loop — periodic root.after lift() loop to keep
@@ -92,40 +88,13 @@ class SAOPlayerGUIFloatHandlersMixin:
             flush=True,
         )
 
-    def _float_click(self, e):
-        self._drag['x'] = e.x_root
-        self._drag['y'] = e.y_root
-        self._drag['dragging'] = False
-        self._stop_float_breath()
-
-    def _float_drag(self, e):
-        dx = abs(e.x_root - self._drag['x'])
-        dy = abs(e.y_root - self._drag['y'])
-        if dx > 5 or dy > 5:
-            self._drag['dragging'] = True
-        if self._drag['dragging']:
-            mx = e.x_root - self._fw // 2
-            my = e.y_root - self._fh // 2
-            self._float.geometry(f'+{mx}+{my}')
-
-    def _float_release(self, e):
-        if self._skip_canvas_click:
-            self._skip_canvas_click = False
-            return
-        if self._drag['dragging']:
-            try:
-                self._breath_base_x = self._float.winfo_x()
-                self._breath_base_y = self._float.winfo_y()
-                self.settings.set('float_x', self._breath_base_x)
-                self.settings.set('float_y', self._breath_base_y)
-                self.settings.save()
-            except Exception:
-                pass
-            self._breath_t0 = time.time()
-            self._breath_active = True
-            self._breath_step()
-        else:
-            self._toggle_sao_menu()
+    # Round 76 of sao_gui split refactor: _float_click / _float_drag /
+    # _float_release were dead code. _create_floating_widget binds the
+    # float button's <Button-1> directly to _toggle_sao_menu (round 56);
+    # these three handlers were never wired to a Tk event and they
+    # referenced self._drag which was never initialized — confirmed via
+    # pre-refactor git blame (always dead, predates the split).
+    # Removed to fix the latent AttributeError + clear the noise.
 
     def _float_enter(self, e):
         """高亮悬浮 HP 组件"""

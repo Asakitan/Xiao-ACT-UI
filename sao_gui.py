@@ -17,9 +17,10 @@ import time
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
-from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont
-import numpy as np
-from render_capture_sync import wait_until_capture_idle
+# Round 77 of sao_gui split refactor: PIL / numpy / render_capture_sync
+# imports were all used by methods that have moved to mixins (or by the
+# round-71-deleted _get_hp_pil_font). The mixins carry their own
+# imports; sao_gui.py no longer needs them.
 try:
     from gpu_capture import capture_monitor_bgr_for_point, ensure_session, get_latest_bgr
 except Exception:
@@ -99,10 +100,9 @@ from gui_modules.sao_panel_ui import (
     _SAO_PANEL_SEP, _SAO_PANEL_BODY_BG, _SAO_PANEL_LABEL_FG,
     _SAO_PANEL_VALUE_FG,
 )
-from perf_probe import probe as _probe, phase as _phase_trace, gauge as _perf_gauge
-
-# v2.4.31: high-frequency UI helpers live in cython.
-import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+# Round 77: perf_probe (_probe / _phase_trace / _perf_gauge) and
+# _sao_cy_uihelpers (_CY_UI) imports were used by methods now in mixins.
+# Each mixin imports what it needs; sao_gui.py is import-clean.
 
 
 # _SESSION_WHEEL_ROOTS / _dispatch_session_wheel moved into

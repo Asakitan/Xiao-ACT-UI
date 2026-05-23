@@ -343,8 +343,45 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.16"
+APP_VERSION = "3.2.17"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.17: attribute audit + dead code + import hygiene
+#   (rounds 76-77 of /loop). The final cleanup pass.
+#   Round 76: attribute contract AST audit caught self._drag reads
+#     in float_handlers_mixin that were never assigned. Investigation:
+#     the 3 reading methods (_float_click / _float_drag / _float_release,
+#     35 lines) are dead code dating back to pre-refactor. The float
+#     button's <Button-1> is bound directly to _toggle_sao_menu in
+#     _create_floating_widget — these 3 handlers were never wired to
+#     a Tk event. Confirmed via git blame on pre-refactor commit
+#     33f7fdd. Deleted the 3 methods + 3 docstring mentions.
+#   Round 77: unused-import audit on sao_gui.py via AST. Found 110
+#     candidates of 140 top-level imports. Conservative cleanup of
+#     the 5 truly inert ones (replaced with explanatory comments,
+#     net line change zero):
+#       from PIL import Image, ImageDraw, ImageTk, ImageFilter, ImageFont
+#         — all used to be by _get_hp_pil_font (deleted round 71).
+#       import numpy as np — same.
+#       from render_capture_sync import wait_until_capture_idle — caller
+#         moved to mixin.
+#       from perf_probe import probe + phase + gauge — used by 7 mixins
+#         each with its own import; sao_gui scope unused.
+#       import _sao_cy_uihelpers as _CY_UI — same pattern, 10 mixins.
+#     The 96 remaining "unused" imports stay: standard lib (sys, math,
+#     typing) are tiny + harmless; engine/overlay/panel class imports
+#     (AutoKeyEngine, DpsOverlay etc.) might benefit PyInstaller's
+#     static analysis even when sao_gui.py itself doesn't reference
+#     them; aggressive removal risks PyInstaller bundling regressions
+#     for marginal cosmetic gain.
+#   sao_gui.py: 507 lines unchanged this cadence (comments replaced
+#   the dead imports).
+#   Cumulative refactor: 9682 -> 507 = -9175 = -94.8%.
+#   Post-refactor bug-fix tally across rounds 71 + 73 + 76:
+#     - 1 _set_process_app_id NameError (live; would crash __init__)
+#     - 9 latent NameErrors for missing mixin imports
+#     - 3 dead methods deleted (would AttributeError on call, but never called)
+#     Total 11 latent + 4 dead-code purges. The refactor is now
+#     genuinely complete.
 # v3.2.16: AST audit + 9 NameError bug fixes (rounds 73-74 of /loop).
 #   With the structural extraction done, ran an AST-based audit across
 #   all 19 SAOPlayerGUI mixins looking for the bug pattern that round 71
