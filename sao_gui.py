@@ -3573,14 +3573,24 @@ class SAOPlayerGUI:
         """Fast path for identity/level updates from packet or vision threads."""
         if self._destroyed or gs is None:
             return
-        # Buff 监视器 (自身): 不走 sig 短路 — buff 几乎每个 tick 都在变, 直接推
+        # Buff 监视器 (自身):
+        # v3.1.9 round 23: state_mgr snapshots are shallow copies (round 13),
+        # so `gs.self_buffs` IS the same list object as the previous snapshot
+        # until the bridge actually pushes a fresh `self_buffs=...` kwarg.
+        # Identity-compare against the cached reference to skip update_buffs
+        # entirely on the ~30-60 Hz of state updates that touch only HP/STA
+        # /skills (saves ~10-20 us each call, ~300-1000 us/sec total).
         try:
             ov = getattr(self, '_self_buff_overlay', None)
             if ov is not None:
-                ov.update_buffs(
-                    list(getattr(gs, 'self_buffs', []) or []),
-                    float(getattr(gs, 'server_time_offset_ms', 0.0) or 0.0),
-                )
+                _raw_buffs = getattr(gs, 'self_buffs', None)
+                _prev_buffs_ref = getattr(self, '_last_self_buffs_ref', None)
+                if _raw_buffs is not _prev_buffs_ref:
+                    self._last_self_buffs_ref = _raw_buffs
+                    ov.update_buffs(
+                        list(_raw_buffs or []),
+                        float(getattr(gs, 'server_time_offset_ms', 0.0) or 0.0),
+                    )
         except Exception:
             pass
 
@@ -4512,7 +4522,15 @@ class SAOPlayerGUI:
         tick()
 
     def _lift_float_loop(self):
-        """SAO 菜单开启时持续将悬浮按钮保持在最上层"""
+        """SAO 菜单开启时持续将悬浮按钮保持在最上层.
+
+        v3.1.9 round 22: cadence bumped from 150 ms (6.7 Hz) to 250 ms
+        (4 Hz). The float button is the small floating HP/status badge
+        and the user can't perceive the 100 ms-longer cover-recovery
+        delay, but cutting the per-second SetWindowPos calls from ~7
+        to ~4 trims ~100-300 us/sec of main-thread work whenever the
+        SAO menu is open.
+        """
         if self._destroyed or not self._lift_loop_active:
             return
         try:
@@ -4521,7 +4539,7 @@ class SAOPlayerGUI:
         except Exception:
             pass
         try:
-            self.root.after(150, self._lift_float_loop)
+            self.root.after(250, self._lift_float_loop)
         except Exception:
             pass
 
@@ -4702,7 +4720,13 @@ class SAOPlayerGUI:
             except Exception:
                 pass
         if not already_synced:
-            self._sync_session_players_cache(getattr(self, '_game_state', None))
+            # v3.1.9 round 21: throttle the inner sync too — when called from
+            # `_push_packet_overlays` (5 Hz when menu visible), the outer call
+            # site already ran a throttled sync at 0.25 s cadence. Passing
+            # `min_interval=0.25` here keeps the same effective rate without
+            # duplicating the bridge.get_players() iteration on every call.
+            self._sync_session_players_cache(
+                getattr(self, '_game_state', None), min_interval=0.25)
         sig = (len(self._session_players), self._session_players_version, self._session_self_uid())
         now = time.time()
         if not force and sig == self._last_session_players_panel_sig:

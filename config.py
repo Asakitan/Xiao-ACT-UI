@@ -343,8 +343,20 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.1.8"
+APP_VERSION = "3.1.9"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.1.9: sao_gui main-thread polish (rounds 21-post / 22 / 23 of /loop).
+#   - _refresh_session_players_panel: inner _sync_session_players_cache
+#     call now also passes min_interval=0.25 (matches the outer call from
+#     _push_packet_overlays). The double-sync when menu was visible is
+#     gone; both call sites share the 4 Hz cadence.
+#   - _lift_float_loop: cadence bumped 150 ms -> 250 ms (~40% fewer
+#     per-sec SetWindowPos calls when the SAO menu is open).
+#   - _on_game_state_update: identity-compare gs.self_buffs against the
+#     last cached reference to skip ov.update_buffs() when the bridge
+#     hasn't pushed a fresh self_buffs list. Works because round-13's
+#     shallow-copy snapshot keeps list refs stable across non-buff
+#     state updates. Saves ~10-20 us per skipped call across 30-60 Hz.
 # v3.1.8: sao_gui main-thread reduction (rounds 19-20 of a new targeted /loop).
 #   - sao_gui._recognition_loop: character_profile.save_profile() (sync
 #     settings.json read+write, 5-50 ms on slow disks) moved to a daemon
