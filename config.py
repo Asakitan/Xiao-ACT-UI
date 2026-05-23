@@ -343,8 +343,53 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.9"
+APP_VERSION = "3.2.10"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.10: two more SAOPlayerGUI mixins extracted (rounds 55-56 of /loop).
+#   sao_gui.py crosses below 2700 lines; cumulative reduction reaches
+#   72.4%. MRO depth grows to 13 mixin layers.
+#   Round 55: SAOPlayerGUIPacketCallbacksMixin (420 lines mixin / 357
+#     net out). 9 methods covering the packet event callback surface:
+#       _send_linked_key (29) — boss-raid alert → Win32 SendInput
+#         keypress via auto_key_engine VK_NAME_MAP.
+#       _on_packet_damage (66) — damage tick callback; updates the
+#         boss-HP target lock + last-damage timestamp.
+#       _is_dead_state (10, cython predicate),
+#       _bump_boss_hp_target_hold (20),
+#       _boss_monster_usable (18, cython + revive side effect),
+#       _sync_boss_hp_revive_hold (7).
+#       _on_monster_update (66) — monster update callback.
+#       _on_boss_event (6) — delegates to boss_raid_engine.
+#       _on_scene_change (136, biggest here) — scene transition;
+#         arm pending combat reset + clear caches.
+#     Cross-mixin refs still work: _boss_monster_usable used by
+#     State mixin's _compute_boss_hp_delta; _send_linked_key used by
+#     EngineLifecycle's _start_recognition; both resolved via MRO.
+#     sao_gui.py: 3439 -> 3082.
+#   Round 56: SAOPlayerGUIFloatHpMixin (469 lines mixin / 408 net out).
+#     20 methods bundling HP overlay context handlers + float button +
+#     breath animations + the 146-line motion blur effect:
+#       HP overlay (6): _refresh_hp_layered, _reset_sta_offline_state,
+#         _should_show_sta_offline, _hp_overlay_on_click,
+#         _hp_overlay_restore_position, _hp_overlay_hide.
+#       Float button + animations (14): _build_float_hud_items,
+#         _set_float_alpha, _animate_float_hud, _start_float_breath,
+#         _breath_step, _stop_float_breath, _attach_panel_float,
+#         _panel_float_shared_tick (69, with @_probe.decorate),
+#         _update_float_display/status/fname/title, _animate_float_to,
+#         _play_motion_blur (146 — radial blur on menu open/close,
+#         background thread screen grab + radial blur + main-thread fade).
+#     Mixin needed `from perf_probe import probe as _probe` for the
+#     @_probe.decorate('ui.panel_float.tick') on shared_tick (caught
+#     by initial NameError, fixed before commit).
+#     sao_gui.py: 3082 -> 2674.
+#   SAOPlayerGUI MRO now has 13 mixin layers (in extraction order):
+#     (Menu, Fisheye, Actions, EngineToggles, DpsTheme, Panels,
+#      StatusUpdater, Dialogs, EngineLifecycle, PacketCallbacks,
+#      FloatHp, State, Session). No name conflicts.
+#   Cumulative refactor: 9682 -> 2674 = -7008 = -72.4%. sao_gui.py is
+#   6326 lines below the user's 9000-line target. gui_modules/ now
+#   holds 30 .py / ~25252 lines.
 # v3.2.9: two more SAOPlayerGUI mixins extracted (rounds 52-53 of /loop).
 #   sao_gui.py crosses below 3500 lines; cumulative reduction reaches
 #   64.5%. MRO depth grows to 11 mixin layers.
