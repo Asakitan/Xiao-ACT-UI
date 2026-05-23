@@ -343,8 +343,32 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.1"
+APP_VERSION = "3.2.2"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.2: sao_gui refactor reaches the mixin stage (rounds 31-32 of /loop).
+#   The first two SAOPlayerGUI mixins are extracted — this is the
+#   structural turning point: instead of pulling helper classes out
+#   around SAOPlayerGUI, the class itself is now being sliced.
+#     - gui_modules/sao_gui_session_mixin.py (208 lines) — 8 in-session
+#       player roster helpers (_merge_session_player,
+#       _sync_session_players_cache, _refresh_session_players_panel,
+#       _toggle_session_players_panel, plus 4 smaller utilities). They
+#       move as a unit because they call each other through self.
+#     - gui_modules/sao_gui_state_mixin.py (770 lines) — the four
+#       methods at the heart of the user's combat-lag complaint:
+#       _on_game_state_update, _apply_fast_state_update,
+#       _push_packet_overlays (HOT PATH; per-tick DPS/Boss/HP/SkillFX
+#       push), and _recognition_loop (200 ms Tk-after-driven loop).
+#       Isolating this cluster sets up the actual combat-lag fix:
+#       round 34+ will introduce a daemon worker that consumes packet
+#       snapshots off-main and re-enters Tk via root.after(0, ...).
+#   SAOPlayerGUI now inherits from (SAOPlayerGUIStateMixin,
+#   SAOPlayerGUISessionMixin); MRO resolves the 12 extracted methods
+#   transparently. py_compile + import sao_gui both clean.
+#   sao_gui.py shrinks 8388 -> 7368 (-1020 net since v3.2.1; cumulative
+#   refactor: 9682 -> 7368 = -2314 = -23.9%). gui_modules/ now holds
+#   978 lines of mixin code on top of the earlier 1338 lines of
+#   extracted helper classes.
 # v3.2.1: sao_gui refactor continues (rounds 27-post / 28 / 29).
 #   Three more extractions to gui_modules/ + a dead-code purge:
 #     - SAOPlayerPanel (471 lines) -> gui_modules/sao_player_panel.py.
