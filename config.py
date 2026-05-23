@@ -343,8 +343,21 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.1.9"
+APP_VERSION = "3.2.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.0: sao_gui structural refactor begins (rounds 25-26 of /loop).
+#   Minor bump signals a visible structural change: sao_gui.py monolith
+#   (9682 lines) is being split into gui_modules/* subpackage. First two
+#   extractions land in this commit:
+#     - gui_modules/sao_hotkey_manager.py (75 lines) — SAOHotkeyManager
+#       moved out; sao_gui re-exports it for backward compatibility.
+#     - gui_modules/sao_session_players_panel.py (598 lines) — the
+#       SESSION PLAYERS left-stack panel + its private wheel-routing
+#       registry helpers (_SESSION_WHEEL_ROOTS, _dispatch_session_wheel)
+#       all moved together so the module is self-contained.
+#   sao_gui.py shrinks 9682 -> 9091 lines (-591 net). Public class names
+#   (`SAOHotkeyManager`, `SAOSessionPlayersPanel`) still importable from
+#   sao_gui so existing call sites and external consumers unaffected.
 # v3.1.9: sao_gui main-thread polish (rounds 21-post / 22 / 23 of /loop).
 #   - _refresh_session_players_panel: inner _sync_session_players_cache
 #     call now also passes min_interval=0.25 (matches the outer call from
