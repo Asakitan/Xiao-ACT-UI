@@ -66,7 +66,11 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
+
+from sao_sound import play_sound
+from sao_theme import ease_out, ease_in_out
 
 
 class SAOPlayerGUILifecycleMixin:

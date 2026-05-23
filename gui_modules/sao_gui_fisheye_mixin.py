@@ -32,8 +32,19 @@ access self.X.
 
 from __future__ import annotations
 
+import threading
 import time
+import tkinter as tk
 from typing import Any, Optional
+
+try:
+    from gpu_capture import (
+        capture_monitor_bgr_for_point, ensure_session, get_latest_bgr,
+    )
+except Exception:
+    capture_monitor_bgr_for_point = None  # type: ignore[assignment]
+    ensure_session = None  # type: ignore[assignment]
+    get_latest_bgr = None  # type: ignore[assignment]
 
 from perf_probe import probe as _probe, gauge as _perf_gauge, phase as _phase_trace
 

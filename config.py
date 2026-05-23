@@ -343,8 +343,23 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.17"
+APP_VERSION = "3.2.18"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.18: runtime-crash fix — 15 missing imports across 7 mixins
+#   (round 80 of /loop). User ran `python main.py` and hit two real
+#   NameError crashes (APP_VERSION_LABEL @ status_updater_mixin:228 and
+#   ease_out @ link_animation_mixin:310). Re-ran AST audit with an
+#   aggressive predicate (round 73's audit had skipped lowercase names
+#   to keep false-positive noise down, which missed all the helper
+#   functions: ease_out, lerp, play_sound, time, math.*, np.*, etc.).
+#   Added time/APP_VERSION_LABEL/SAODialog to status_updater_mixin;
+#   math/numpy/PIL/get_sao_font/ease_out/ease_in_out/lerp to
+#   link_animation_mixin; time/play_sound/ease_out/ease_in_out to
+#   lifecycle_mixin; _CY_UI/ease_out to float_hp_mixin; time to
+#   float_handlers_mixin; threading/tk/gpu_capture helpers to
+#   fisheye_mixin; List/_CY_UI/get_skill_slot_rects/play_sound to
+#   misc_mixin. Verified with 25-second `python main.py` run — all
+#   overlays initialized cleanly, no NameError in trace.
 # v3.2.17: attribute audit + dead code + import hygiene
 #   (rounds 76-77 of /loop). The final cleanup pass.
 #   Round 76: attribute contract AST audit caught self._drag reads

@@ -44,8 +44,12 @@ Required SAOPlayerGUI methods (via MRO):
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+
+from config import get_skill_slot_rects
+from sao_sound import play_sound
 from gui_modules.sao_panel_ui import _apply_window_icon, _set_process_app_id
 
 

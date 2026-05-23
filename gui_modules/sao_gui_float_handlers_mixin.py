@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import ctypes
 import tkinter as tk
+import time
 from typing import Any, Optional
 
 from sao_sound import get_cjk_font

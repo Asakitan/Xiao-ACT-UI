@@ -64,12 +64,14 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
+import time
 import tkinter as tk
 from typing import Any, Callable, Dict, Optional
 
+from config import APP_VERSION_LABEL
 from sao_sound import play_sound, get_sao_font, get_cjk_font
 from sao_theme import (
-    SAOButton, SAOProgressBar, SAOStatusPill,
+    SAOButton, SAOProgressBar, SAOStatusPill, SAODialog,
     _close_alert as _sao_close_dialog,
 )
 from gui_modules.sao_panel_ui import (

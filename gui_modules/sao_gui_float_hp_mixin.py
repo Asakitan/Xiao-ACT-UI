@@ -53,7 +53,10 @@ import time
 import tkinter as tk
 from typing import Any, Optional
 
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+
 from perf_probe import probe as _probe, gauge as _perf_gauge
+from sao_theme import ease_out
 
 
 class SAOPlayerGUIFloatHpMixin:
