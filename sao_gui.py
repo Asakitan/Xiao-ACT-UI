@@ -348,9 +348,11 @@ from gui_modules.sao_gui_engine_toggles_mixin import SAOPlayerGUIEngineTogglesMi
 from gui_modules.sao_gui_dps_theme_mixin import SAOPlayerGUIDpsThemeMixin  # noqa: E402
 from gui_modules.sao_gui_panels_mixin import SAOPlayerGUIPanelsMixin  # noqa: E402
 from gui_modules.sao_gui_status_updater_mixin import SAOPlayerGUIStatusUpdaterMixin  # noqa: E402
+from gui_modules.sao_gui_dialogs_mixin import SAOPlayerGUIDialogsMixin  # noqa: E402
+from gui_modules.sao_gui_engine_lifecycle_mixin import SAOPlayerGUIEngineLifecycleMixin  # noqa: E402
 
 
-class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIActionsMixin, SAOPlayerGUIEngineTogglesMixin, SAOPlayerGUIDpsThemeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIStateMixin, SAOPlayerGUISessionMixin):
+class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIActionsMixin, SAOPlayerGUIEngineTogglesMixin, SAOPlayerGUIDpsThemeMixin, SAOPlayerGUIPanelsMixin, SAOPlayerGUIStatusUpdaterMixin, SAOPlayerGUIDialogsMixin, SAOPlayerGUIEngineLifecycleMixin, SAOPlayerGUIStateMixin, SAOPlayerGUISessionMixin):
     """
     纯悬浮 SAO Utils 风格 GUI — 没有传统窗口！
     - 常驻: 小型悬浮触发按钮 (Toplevel)
@@ -862,118 +864,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
     # ══════════════════════════════════════════════
     #  识别引擎
     # ══════════════════════════════════════════════
-    def _stop_recognition_engines(self):
-        """停止所有识别/数据引擎."""
-        if getattr(self, '_auto_key_engine', None):
-            try: self._auto_key_engine.stop()
-            except Exception: pass
-            self._auto_key_engine = None
-        if getattr(self, '_boss_raid_engine', None):
-            try: self._boss_raid_engine.stop()
-            except Exception: pass
-            self._boss_raid_engine = None
-        self._hide_seek_alert_active = False
-        aid = getattr(self, '_hide_seek_alert_after_id', None)
-        if aid is not None:
-            try: self.root.after_cancel(aid)
-            except Exception: pass
-            self._hide_seek_alert_after_id = None
-        if getattr(self, '_hide_seek_engine', None):
-            try: self._hide_seek_engine.stop()
-            except Exception: pass
-            self._hide_seek_engine = None
-        engines = list(getattr(self, '_recognition_engines', []) or [])
-        if not engines and self._recognition_engine:
-            engines = [self._recognition_engine]
-        for engine in engines:
-            try: engine.stop()
-            except Exception: pass
-        self._recognition_engines = []
-        self._recognition_engine = None
-        self._packet_engine = None
-        self._vision_engine = None
-        self._reset_sta_offline_state()
-
-    def _reconfigure_data_engines(self):
-        """重启 packet/vision 引擎以匹配当前数据源配置."""
-        if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
-            return
-        self._stop_recognition_engines()
-
-        engines = []
-        try:
-            from packet_bridge import PacketBridge
-            # Phase 7: Entity menu reads `mem_data_source` preference
-            # (key intentionally distinct from legacy 'data_source' which is
-            # a packet-vs-vision toggle). Values: 'tcp' (default) | 'memory' |
-            # 'hybrid' | 'auto'. Routes through mem_probe.UnifiedDataSource
-            # for non-tcp modes so Entity menu gets the exact same dataset
-            # the webview menu does.
-            try:
-                _data_source_mode = str(
-                    self._cfg_settings_ref.get('mem_data_source', 'tcp') or 'tcp'
-                ).lower()
-            except Exception:
-                _data_source_mode = 'tcp'
-            packet_engine = PacketBridge(self._state_mgr, self._cfg_settings_ref,
-                                         on_damage=self._on_packet_damage,
-                                         on_monster_update=self._on_monster_update,
-                                         on_boss_event=self._on_boss_event,
-                                         on_scene_change=self._on_scene_change,
-                                         data_source=_data_source_mode)
-            packet_engine.start()
-            engines.append(packet_engine)
-            self._packet_engine = packet_engine
-            print(f'[SAO Entity] Packet bridge started '
-                  f'(data_source={_data_source_mode!r})')
-        except Exception as e:
-            import traceback
-            print(f'[SAO Entity] Packet bridge FAILED: {e}')
-            traceback.print_exc()
-            self._packet_engine = None
-
-        # DPS Tracker
-        try:
-            self._dps_tracker = DpsTracker()
-            # Load skill name mapping (same as webview path)
-            _skill_json = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                'assets', 'skill_names.json',
-            )
-            if os.path.isfile(_skill_json):
-                try:
-                    with open(_skill_json, 'r', encoding='utf-8') as _sf:
-                        _raw = json.load(_sf)
-                    if isinstance(_raw, dict):
-                        self._dps_tracker.set_skill_names(
-                            {int(k): v for k, v in _raw.items()
-                             if str(k).isdigit()}
-                        )
-                        print(f'[SAO Entity] Loaded {len(_raw)} skill names')
-                except Exception as e:
-                    print(f'[SAO Entity] skill_names.json load error: {e}')
-            print('[SAO Entity] DPS tracker initialized')
-        except Exception as e:
-            print(f'[SAO Entity] DPS tracker init failed: {e}')
-            self._dps_tracker = None
-
-        try:
-            from recognition import RecognitionEngine
-            vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
-            vision_engine.start()
-            engines.append(vision_engine)
-            self._vision_engine = vision_engine
-            print('[SAO Entity] Recognition engine started (window vision)')
-        except Exception as e:
-            import traceback
-            print(f'[SAO Entity] Recognition engine FAILED: {e}')
-            traceback.print_exc()
-            self._vision_engine = None
-
-        self._recognition_engines = engines
-        self._recognition_engine = engines[0] if engines else None
-        self._recognition_active = bool(engines)
-
     def _send_linked_key(self, key: str, press_mode: str = "tap",
                          hold_ms: int = 80, press_count: int = 1):
         """发送联动按键 (Boss→AutoKey linkage)."""
@@ -1646,210 +1536,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         except Exception:
             pass
 
-    def _start_recognition(self):
-        """启动游戏数据引擎 (抓包 + 纯识图 + AutoKey + BossRaid)."""
-        try:
-            from game_state import GameStateManager
-            from config import SettingsManager as CfgSettings
-
-            self._state_mgr = GameStateManager()
-            cfg_settings = CfgSettings()
-            self._cfg_settings_ref = cfg_settings
-
-            # v2.1.18: 必须先 subscribe 再 load_cache, 否则 load_cache 内部对订阅者
-            # 的初始通知会因为 _on_game_state_update 还没注册而被丢弃, 导致 entity 面板
-            # 启动时显示不出从 webview 切过来时持久化的角色名/等级/HP 等.
-            try:
-                self._state_mgr.subscribe(self._on_game_state_update)
-            except Exception:
-                pass
-
-            # 加载上次缓存的游戏状态 (立即显示)
-            self._state_mgr.load_cache(cfg_settings)
-
-            # Restore sound settings
-            try:
-                from sao_sound import set_sound_enabled, set_sound_volume
-                _snd_on = cfg_settings.get('sound_enabled', True)
-                _snd_vol = cfg_settings.get('sound_volume', 70)
-                set_sound_enabled(bool(_snd_on) if _snd_on is not None else True)
-                set_sound_volume(int(_snd_vol) if _snd_vol is not None else 70)
-            except Exception:
-                pass
-
-            # 用缓存名替换默认 "Player"
-            cached_name = self._state_mgr.state.player_name
-            if cached_name:
-                self._username = cached_name
-                disp = cached_name
-                if len(disp) > 10:
-                    disp = disp[:9] + '…'
-                self._hp_display_name = disp
-                print(f'[SAO Entity] 从缓存加载角色名: {cached_name}')
-
-            self._reconfigure_data_engines()
-
-            # AutoKey Engine
-            self._auto_key_engine = AutoKeyEngine(
-                self._state_mgr,
-                self._cfg_settings_ref,
-                extra_gate=lambda: bool(getattr(self, '_recognition_active', False)),
-            )
-            self._auto_key_engine.start()
-            try:
-                self._auto_key_engine.set_burst_actions(self._load_autokey_burst_actions())
-            except Exception:
-                pass
-
-            # Boss Raid Engine + AutoKey Linkage
-            self._boss_autokey_linkage = BossAutoKeyLinkage(
-                self._cfg_settings_ref,
-                send_key=self._send_linked_key,
-                on_log=lambda msg: print(msg),
-            )
-
-            def _on_boss_alert_with_linkage(title, message):
-                print(f'[SAO Entity] Boss Alert: {title} — {message}')
-                if self._alert_overlay:
-                    try: self._alert_overlay.show_alert(title, message)
-                    except Exception: pass
-                if self._boss_autokey_linkage:
-                    try:
-                        self._boss_autokey_linkage.on_boss_raid_alert(title, message)
-                    except Exception:
-                        pass
-
-            self._boss_raid_engine = BossRaidEngine(
-                self._state_mgr,
-                self._cfg_settings_ref,
-                on_alert=_on_boss_alert_with_linkage,
-                on_sound=lambda name: play_sound(name),
-            )
-
-            # ── 初始化 ULW 覆盖层 ──
-            # DPS panel mirrors webview: stays hidden on startup regardless of
-            # the `dps_enabled` setting. Combat/report triggers bring it up.
-            self._dps_enabled = bool(self._get_setting('dps_enabled', True))
-            self._dps_visible = False
-            try:
-                self._dps_overlay = DpsOverlay(
-                    self.root,
-                    self._cfg_settings_ref,
-                    request_live_snapshot=self._request_dps_live_snapshot,
-                    show_last_report=self._request_dps_last_report,
-                    reset_dps=self._reset_dps_tracker,
-                    has_last_report=self._get_dps_last_report_available,
-                    request_entity_detail=self._request_dps_entity_detail,
-                    alert=self._show_entity_alert,
-                )
-                self._dps_overlay.set_report_available(
-                    self._get_dps_last_report_available())
-                print('[SAO Entity] DPS overlay initialized (hidden)')
-            except Exception as e:
-                print(f'[SAO Entity] DPS overlay init failed: {e}')
-                self._dps_overlay = None
-
-            try:
-                self._boss_hp_overlay = BossHpOverlay(self.root, self._cfg_settings_ref)
-                print('[SAO Entity] Boss HP overlay initialized')
-            except Exception as e:
-                print(f'[SAO Entity] Boss HP overlay init failed: {e}')
-                self._boss_hp_overlay = None
-
-            self._hp_ov_visible = bool(self._get_setting('hp_ov_enabled', True))
-            try:
-                self._hp_overlay = HpOverlay(
-                    self.root, self._cfg_settings_ref,
-                    on_click=self._hp_overlay_on_click,
-                    on_menu=self._hp_overlay_on_menu,
-                )
-                if self._hp_ov_visible:
-                    self._hp_overlay.show()
-                # Push cached game state to HP overlay immediately
-                if self._state_mgr:
-                    try:
-                        _gs = self._state_mgr.state
-                        if _gs.hp_max > 0:
-                            _hp_lv = int(_gs.level_base or 1)
-                            _hp_lv_extra = int(getattr(_gs, 'level_extra', 0) or 0)
-                            if _hp_lv_extra > 0 and _hp_lv > 0:
-                                _hp_lv_text = f'{_hp_lv}(+{_hp_lv_extra})'
-                            else:
-                                _hp_lv_text = str(_hp_lv)
-                            self._hp_overlay.update_hp(
-                                _gs.hp_current, _gs.hp_max, _hp_lv_text)
-                        if _gs.stamina_max > 0:
-                            self._hp_overlay.update_sta(
-                                _gs.stamina_current, _gs.stamina_max)
-                        self._hp_overlay.set_sta_offline(
-                            self._should_show_sta_offline(_gs)
-                        )
-                        if _gs.player_name:
-                            self._hp_overlay.set_player_info({
-                                'name': _gs.player_name,
-                                'profession': _gs.profession_name or '',
-                                'uid': _gs.player_id or '',
-                            })
-                    except Exception:
-                        pass
-                print('[SAO Entity] Player HP overlay initialized')
-            except Exception as e:
-                print(f'[SAO Entity] Player HP overlay init failed: {e}')
-                self._hp_overlay = None
-
-            try:
-                self._alert_overlay = AlertOverlay(self.root, self._cfg_settings_ref)
-                print('[SAO Entity] Alert overlay initialized')
-            except Exception as e:
-                print(f'[SAO Entity] Alert overlay init failed: {e}')
-                self._alert_overlay = None
-
-            try:
-                self._skillfx_overlay = BurstReadyOverlay(self.root, self._cfg_settings_ref)
-                print('[SAO Entity] SkillFX (Burst) overlay initialized')
-            except Exception as e:
-                print(f'[SAO Entity] SkillFX overlay init failed: {e}')
-                self._skillfx_overlay = None
-
-            try:
-                _bm_on = bool(self._get_setting('buffmon_enabled', True))
-                self._self_buff_overlay = SelfBuffOverlay(
-                    self.root, self._cfg_settings_ref, hp_overlay=self._hp_overlay)
-                self._self_buff_overlay.set_enabled(_bm_on)
-                self._boss_buff_overlay = BossBuffOverlay(
-                    self.root, self._cfg_settings_ref,
-                    boss_hp_overlay=self._boss_hp_overlay)
-                self._boss_buff_overlay.set_enabled(_bm_on)
-                print('[SAO Entity] BuffMon overlays (self/boss) initialized')
-            except Exception as e:
-                print(f'[SAO Entity] BuffMon overlay init failed: {e}')
-                self._self_buff_overlay = None
-                self._boss_buff_overlay = None
-
-            # 启动定时缓存保存 (每30秒)
-            import threading as _thr
-            _stop_evt = self._cache_loop_stop
-            def _cache_loop():
-                while not _stop_evt.is_set():
-                    _stop_evt.wait(30)
-                    if _stop_evt.is_set():
-                        break
-                    try:
-                        self._persist_cached_identity_state(save_now=False)
-                        self._state_mgr.save_cache(self._cfg_settings_ref)
-                    except Exception:
-                        pass
-            _thr.Thread(target=_cache_loop, daemon=True, name='cache_saver').start()
-
-        except Exception as e:
-            print(f'[SAO Entity] Data engine failed: {e}')
-            import traceback; traceback.print_exc()
-            self._recognition_active = False
-
-    # ────────────────────────────────────────────
-    #  SkillFX / Burst Mode Ready helpers
-    # ────────────────────────────────────────────
-
     def _get_skillfx_layout(self, gs=None):
         """Compute the screen-relative layout for the BurstReady overlay.
 
@@ -1980,40 +1666,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
             pass
         # No packet STA available — fall back to vision-driven offline.
         return bool(getattr(gs, 'stamina_offline', False))
-
-    def _persist_cached_identity_state(self, save_now: bool = False):
-        settings = getattr(self, '_cfg_settings_ref', None)
-        if not settings:
-            return
-        cache = dict(settings.get('game_cache', {}) or {})
-        name = str(getattr(self, '_username', '') or '').strip()
-        profession = str(getattr(self, '_profession', '') or '').strip()
-        level_base = int(getattr(self, '_level', 0) or 0)
-        level_extra = int(getattr(self, '_level_extra', 0) or 0)
-        season_exp = int(getattr(self, '_season_exp', 0) or 0)
-        if name:
-            cache['player_name'] = name
-        if profession:
-            cache['profession_name'] = profession
-        if level_base > 0:
-            cache['level_base'] = level_base
-        if level_extra > 0:
-            cache['level_extra'] = level_extra
-        if season_exp > 0:
-            cache['season_exp'] = season_exp
-        gs = getattr(self, '_game_state', None)
-        uid = str(getattr(gs, 'player_id', '') or '').strip() if gs is not None else ''
-        if uid:
-            cache['player_id'] = uid
-        fight_point = int(getattr(gs, 'fight_point', 0) or 0) if gs is not None else 0
-        if fight_point > 0:
-            cache['fight_point'] = fight_point
-        settings.set('game_cache', cache)
-        if save_now:
-            try:
-                settings.save()
-            except Exception:
-                pass
 
     def _start_float_breath(self):
         """idle 状态下轻微上下浮动 (模仿 SAO 菜单呼吸动画)"""
@@ -2267,40 +1919,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
     # all come from the SAOPlayerGUISessionMixin parent class.
 
 
-    def _make_player_panel(self, parent):
-        """工厂: 为 SAO 菜单创建左侧信息面板"""
-        stack = SAOMenuLeftStack(
-            parent,
-            username=self._username or 'Player',
-            profession=self._profession or '',
-            rows_provider=self._get_session_player_rows,
-        )
-        panel = stack.player_panel
-        self._menu_left_stack = stack
-        self._player_panel = panel
-        self._session_players_panel = stack.session_panel
-        try:
-            stack.session_panel.bind_global_wheel_fallback()
-        except Exception:
-            pass
-
-        panel.update_level(self._level, self._level_extra, self._season_exp)
-
-        # HP / STA 数据 (来自识别引擎)
-        panel._sta_hp = getattr(self, '_sta_hp', (0, 0))
-        panel._sta_sta = getattr(self, '_sta_sta', (0, 0))
-
-        # 菜单模式 (从 settings 恢复)
-        saved_mode = self._get_setting('shift_mode', '普通模式')
-        if saved_mode:
-            panel._shift_mode = saved_mode
-
-        # 模式变更 → 自动保存
-        panel._on_mode_change = lambda m: self._set_setting('shift_mode', m)
-
-        self._refresh_session_players_panel(force=True)
-        return stack
-
     def _raise_panel_window(self, panel):
         """把面板提到最前并取焦, 防止被 SAO overlay 或其他 topmost 挡住."""
         if panel is None:
@@ -2403,47 +2021,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         """Left-click on HP panel: open the SAO radial menu (web parity)."""
         try:
             self._toggle_sao_menu(allow_close=True)
-        except Exception:
-            pass
-
-    def _hp_overlay_on_menu(self, x_root: int, y_root: int):
-        """Right-click on HP panel: web-parity context menu."""
-        try:
-            menu = tk.Menu(self.root, tearoff=0,
-                           bg='#cfd0c5', fg='#3c3e32',
-                           activebackground='#e9ddb7',
-                           activeforeground='#aa7814',
-                           relief='flat', bd=1,
-                           activeborderwidth=0,
-                           font=get_cjk_font(9))
-            menu.add_command(
-                label='◆ SAO 菜单',
-                command=self._hp_overlay_on_click,
-            )
-            recog_on = getattr(self, '_recognition_active', False)
-            recog_label = '识别: ON' if recog_on else '识别: OFF'
-            menu.add_command(
-                label=f'◈ {recog_label}',
-                command=self._toggle_recognition_menu,
-            )
-            menu.add_separator()
-            menu.add_command(
-                label='⟲ 复原位置',
-                command=self._hp_overlay_restore_position,
-            )
-            menu.add_command(
-                label='◈ 隐藏 HP 面板',
-                command=self._hp_overlay_hide,
-            )
-            menu.add_separator()
-            menu.add_command(
-                label='✕ 退出',
-                command=self._on_close,
-            )
-            try:
-                menu.tk_popup(x_root, max(0, y_root - 90))
-            finally:
-                menu.grab_release()
         except Exception:
             pass
 
@@ -2688,20 +2265,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
             _resume_overlay_creation()
             raise
 
-    def _show_welcome_then_menu(self):
-        """首次启动: 显示欢迎对话框, 完成后再打开菜单"""
-        def on_profile_done(username, profession):
-            self._username = username
-            self._profession = profession
-            self._update_float_title()
-            # 更新 SAO 菜单的用户信息
-            if self._sao_menu:
-                self._sao_menu.username = username
-                self._sao_menu.description = profession or 'SAO Auto — 游戏辅助 UI'
-            self.root.after(300, self._toggle_sao_menu)
-
-        show_welcome_dialog(self._float, on_done=on_profile_done)
-
     def _update_float_title(self):
         """更新 HP 组件的用户名"""
         try:
@@ -2727,19 +2290,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
             'boss_raid_next_phase': lambda: self.root.after(0, self._boss_raid_next_phase),
         })
 
-    def _show_entity_alert(self, title: str, message: str = '', display_time: float = 5.0):
-        overlay = getattr(self, '_alert_overlay', None)
-        if overlay is not None:
-            try:
-                overlay.show_alert(title, message, display_time=display_time)
-                return
-            except Exception:
-                pass
-        if message:
-            print(f'[SAO Entity] {title}: {message}')
-        else:
-            print(f'[SAO Entity] {title}')
-
     def _set_setting(self, key: str, value):
         """Persist a setting to cfg_settings and save."""
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
@@ -2753,104 +2303,9 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
             return self._cfg_settings_ref.get(key, default)
         return default
 
-    def _switch_to_webview_ui(self):
-        """切换到 WebView UI (sao_webview.py) — 热切换"""
-        def _do_switch():
-            def _launch_next():
-                import gc; gc.collect()
-                time.sleep(0.3)
-                try:
-                    from sao_webview import SAOWebViewGUI
-                    app = SAOWebViewGUI()
-                    app.run()
-                except Exception as e:
-                    print(f"[SAO] Hot switch to WebView failed: {e}")
-                    import traceback; traceback.print_exc()
-
-            self._after_shutdown = _launch_next
-            self._run_exit_animation(after_shutdown=None,
-                                     mode='switch', target_label='SAO WEBVIEW UI')
-
-        SAODialog.ask(self._float, "切换 UI",
-                      "将切换到 SAO WebView UI。\n确定继续吗？",
-                      on_ok=_do_switch)
-
     def _switch_to_old_ui(self):
         """Old UI 已移除 — no-op"""
         pass
-
-    def _show_about(self):
-        if self._sao_menu is not None and self._sao_menu.visible:
-            self._sao_menu.close()
-        try:
-            from sao_updater import get_manager, STATE_AVAILABLE, STATE_READY
-            st = get_manager().snapshot()
-            extra = ''
-            if st.state in (STATE_AVAILABLE, STATE_READY) and st.latest_version:
-                tag = '已下载, 待重启' if st.state == STATE_READY else '可更新'
-                extra = f"\n\n[{tag}] 新版本 v{st.latest_version}"
-        except Exception:
-            extra = ''
-        self.root.after(600, lambda: SAODialog.showinfo(
-            self._float, "关于",
-            f"SAO Auto — 游戏辅助 UI\n{APP_VERSION_LABEL}{extra}\n\n"
-            "Alt+A 打开 SAO 菜单\n"
-            "右键悬浮按钮查看更多选项"))
-
-    def _edit_profile(self):
-        """打开角色资料编辑对话框"""
-        dialog = getattr(self, '_profile_dialog_ref', None)
-        try:
-            dlg_win = getattr(dialog, '_dlg', None)
-            if dlg_win is not None and dlg_win.winfo_exists():
-                dlg_win.lift()
-                dlg_win.focus_force()
-                return
-        except Exception:
-            pass
-        if getattr(self, '_profile_dialog_pending', False):
-            return
-        self._profile_dialog_pending = True
-        if self._sao_menu is not None and self._sao_menu.visible:
-            self._sao_menu.close()
-
-        def on_profile_done(username, profession):
-            self._profile_dialog_pending = False
-            self._profile_dialog_ref = None
-            self._username = username
-            self._profession = profession
-            self._update_float_title()
-            if self._sao_menu:
-                self._sao_menu.username = username
-                self._sao_menu.description = profession or 'SAO Auto — 游戏辅助 UI'
-            if self._player_panel:
-                self._player_panel._username = username
-                self._player_panel._profession = profession
-                if self._player_panel._active:
-                    self._player_panel._redraw_top(
-                        self._player_panel._target_w,
-                        self._player_panel._top_h)
-
-        def _open_profile_dialog():
-            self._profile_dialog_pending = False
-            try:
-                dialog = show_welcome_dialog(self._float, on_done=on_profile_done)
-                self._profile_dialog_ref = dialog
-                dlg_win = getattr(dialog, '_dlg', None)
-                if dlg_win is not None:
-                    def _clear_ref(_event=None, ref=dialog):
-                        if getattr(self, '_profile_dialog_ref', None) is ref:
-                            self._profile_dialog_ref = None
-                        self._profile_dialog_pending = False
-                    try:
-                        dlg_win.bind('<Destroy>', _clear_ref, add='+')
-                    except Exception:
-                        pass
-            except Exception:
-                self._profile_dialog_ref = None
-                self._profile_dialog_pending = False
-
-        self.root.after(600, _open_profile_dialog)
 
     def _show_leaderboard(self):
         """排行榜已移除 — no-op"""

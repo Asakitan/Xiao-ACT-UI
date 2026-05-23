@@ -343,8 +343,51 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.8"
+APP_VERSION = "3.2.9"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.9: two more SAOPlayerGUI mixins extracted (rounds 52-53 of /loop).
+#   sao_gui.py crosses below 3500 lines; cumulative reduction reaches
+#   64.5%. MRO depth grows to 11 mixin layers.
+#   Round 52: SAOPlayerGUIDialogsMixin (268 lines mixin / 196 net out).
+#     7-method grab-bag of UI-construction helpers:
+#       _make_player_panel (34) — factory for SAO menu's left widget
+#         (SAOMenuLeftStack: player panel + session-players panel).
+#       _hp_overlay_on_menu (41) — right-click HP context menu.
+#       _show_welcome_then_menu (14) — first-launch flow.
+#       _show_entity_alert (13) — convenience around alert overlay
+#         (referenced by Panels / EngineToggles / DpsTheme /
+#         EngineLifecycle mixins; resolves via MRO).
+#       _switch_to_webview_ui (22) — confirm + exit + hot restart.
+#       _show_about (18) — about dialog with updater state hint.
+#       _edit_profile (55) — profile editor with anti-double-open guard.
+#     sao_gui.py: 3984 -> 3788.
+#   Round 53: SAOPlayerGUIEngineLifecycleMixin (441 lines mixin / 349
+#     net out). The heaviest single remaining cluster:
+#       _stop_recognition_engines (32) — stops AutoKey/BossRaid/HideSeek/
+#         packet/vision; clears refs.
+#       _reconfigure_data_engines (80) — restarts packet+vision engines
+#         for current mem_data_source setting; loads skill_names.json.
+#       _start_recognition (204 lines — the biggest method here) — full
+#         bring-up: GameStateManager + state + 30s cache thread + 7
+#         overlay windows + AutoKey + BossRaid + linkage.
+#       _persist_cached_identity_state (34) — write identity to game_cache.
+#     __file__ fix: _reconfigure_data_engines's inline
+#       `os.path.dirname(os.path.abspath(__file__))` for the
+#       skill_names.json bundle was replaced with
+#       resource_path('assets', 'skill_names.json'). __file__ now
+#       resolves to gui_modules/ instead of the project root, so the
+#       BUNDLE/BASE_DIR-aware resource_path() helper is the right path.
+#     Mixin imports: os, json, AutoKeyEngine, BossAutoKeyLinkage,
+#       BossRaidEngine, DpsTracker, play_sound, resource_path, + 6
+#       overlay classes from gui_modules.
+#     sao_gui.py: 3788 -> 3439.
+#   SAOPlayerGUI MRO now has 11 mixin layers (in extraction order):
+#     (Menu, Fisheye, Actions, EngineToggles, DpsTheme, Panels,
+#      StatusUpdater, Dialogs, EngineLifecycle, State, Session). No
+#     name conflicts across 11 layers.
+#   Cumulative refactor: 9682 -> 3439 = -6243 = -64.5%. sao_gui.py is
+#   5561 lines below the user's 9000-line target. gui_modules/ now
+#   holds 28 .py / ~24363 lines.
 # v3.2.8: panel-UI helpers extracted + Status+Updater mixin (rounds 49-50
 #   of /loop). sao_gui.py crosses below 4000 lines; cumulative reduction
 #   reaches 58.9%.

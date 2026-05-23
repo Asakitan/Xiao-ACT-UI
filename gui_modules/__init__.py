@@ -29,6 +29,8 @@ from gui_modules.sao_gui_engine_toggles_mixin import SAOPlayerGUIEngineTogglesMi
 from gui_modules.sao_gui_dps_theme_mixin import SAOPlayerGUIDpsThemeMixin
 from gui_modules.sao_gui_panels_mixin import SAOPlayerGUIPanelsMixin
 from gui_modules.sao_gui_status_updater_mixin import SAOPlayerGUIStatusUpdaterMixin
+from gui_modules.sao_gui_dialogs_mixin import SAOPlayerGUIDialogsMixin
+from gui_modules.sao_gui_engine_lifecycle_mixin import SAOPlayerGUIEngineLifecycleMixin
 
 __all__ = [
     'SAOHotkeyManager',
@@ -45,4 +47,6 @@ __all__ = [
     'SAOPlayerGUIDpsThemeMixin',
     'SAOPlayerGUIPanelsMixin',
     'SAOPlayerGUIStatusUpdaterMixin',
+    'SAOPlayerGUIDialogsMixin',
+    'SAOPlayerGUIEngineLifecycleMixin',
 ]
