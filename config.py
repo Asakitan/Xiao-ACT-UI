@@ -343,8 +343,45 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.7"
+APP_VERSION = "3.2.8"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.8: panel-UI helpers extracted + Status+Updater mixin (rounds 49-50
+#   of /loop). sao_gui.py crosses below 4000 lines; cumulative reduction
+#   reaches 58.9%.
+#   Round 49: gui_modules/sao_panel_ui.py (195 lines) — pulls 10
+#     module-level _SAO_PANEL_* color constants + 9 helper funcs out of
+#     sao_gui.py into a focused utility module:
+#       _apply_panel_style (DWM round-corner), _hex_rgba,
+#       _make_panel_close_button (+ _close_btn_photo_cache),
+#       _sao_panel_header, _bind_panel_drag, _sao_panel_body,
+#       _sao_panel_hud_canvas, _sao_row, _sao_pill.
+#     sao_gui.py keeps a single re-import line so all still-resident
+#     panel handlers keep their unqualified usages.
+#     This unblocks _toggle_status_panel and other panel handlers that
+#     previously could not move out (would have been a circular import).
+#     sao_gui.py: 4890 -> 4759. Cumulative refactor crosses -50.0%.
+#   Round 50: gui_modules/sao_gui_status_updater_mixin.py (857 lines mixin
+#     / 775 net out). 20 methods: 2 status-panel handlers + 18 updater
+#     event-chain methods.
+#     Status panel: _toggle_status_panel (85 lines build/destroy),
+#       _update_status_panel (21 lines refresh-from-snapshot).
+#     Updater event chain: _get_update_snapshot, _get_update_view
+#       (139 lines — biggest single method here; snapshot → display tuple
+#       formatter), _ensure_updater_listener, _on_update_snapshot
+#       (root.after dispatch), _mark_update_popup_ready,
+#       _build_update_popup_payload (58), _maybe_show_update_popup,
+#       _start_update_download, _start_update_check, _skip_update_version,
+#       _apply_downloaded_update, _resolve_update_action,
+#       _set_update_button, _close_update_panel, _open_update_panel
+#       (111 lines panel UI builder), _refresh_update_panel,
+#       _check_for_updates_interactive (84), _prompt_update_available.
+#     sao_gui.py: 4759 -> 3984.
+#   SAOPlayerGUI MRO now has 9 mixin layers (in extraction order):
+#     (Menu, Fisheye, Actions, EngineToggles, DpsTheme, Panels,
+#      StatusUpdater, State, Session). No method conflicts.
+#   Cumulative refactor: 9682 -> 3984 = -5698 = -58.9%. sao_gui.py is
+#   5016 lines below the user's 9000-line target. gui_modules/ now
+#   holds 26 .py / ~23654 lines.
 # v3.2.7: two more SAOPlayerGUI mixins extracted (rounds 46-47 of /loop).
 #   sao_gui.py crosses below 4900 lines; cumulative reduction reaches
 #   49.5%. MRO depth grows to 8 mixin layers.
