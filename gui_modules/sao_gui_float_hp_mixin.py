@@ -53,7 +53,7 @@ import time
 import tkinter as tk
 from typing import Any, Optional
 
-from perf_probe import probe as _probe
+from perf_probe import probe as _probe, gauge as _perf_gauge
 
 
 class SAOPlayerGUIFloatHpMixin:

@@ -35,7 +35,7 @@ from __future__ import annotations
 import time
 from typing import Any, Optional
 
-from perf_probe import probe as _probe
+from perf_probe import probe as _probe, gauge as _perf_gauge, phase as _phase_trace
 
 
 class SAOPlayerGUIFisheyeMixin:

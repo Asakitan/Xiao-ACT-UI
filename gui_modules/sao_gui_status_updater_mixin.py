@@ -68,6 +68,10 @@ import tkinter as tk
 from typing import Any, Callable, Dict, Optional
 
 from sao_sound import play_sound, get_sao_font, get_cjk_font
+from sao_theme import (
+    SAOButton, SAOProgressBar, SAOStatusPill,
+    _close_alert as _sao_close_dialog,
+)
 from gui_modules.sao_panel_ui import (
     _apply_panel_style, _sao_panel_header, _bind_panel_drag,
     _sao_panel_body, _sao_panel_hud_canvas, _sao_row, _sao_pill,

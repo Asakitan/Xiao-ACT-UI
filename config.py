@@ -343,8 +343,33 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.15"
+APP_VERSION = "3.2.16"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.16: AST audit + 9 NameError bug fixes (rounds 73-74 of /loop).
+#   With the structural extraction done, ran an AST-based audit across
+#   all 19 SAOPlayerGUI mixins looking for the bug pattern that round 71
+#   caught one instance of: bare-name function calls inside extracted
+#   method bodies where the function wasn't carried over into the
+#   mixin's import block. The audit caught 9 more:
+#     sao_gui_float_hp_mixin.py: _perf_gauge (from perf_probe).
+#     sao_gui_fisheye_mixin.py: _perf_gauge + _phase_trace (perf_probe).
+#     sao_gui_link_animation_mixin.py: _disable_native_window_shadow
+#       (from sao_panel_ui) + SAOLinkStart (from sao_theme).
+#     sao_gui_status_updater_mixin.py: SAOButton + SAOProgressBar +
+#       SAOStatusPill + _sao_close_dialog (all from sao_theme; the
+#       last aliased from _close_alert).
+#   Each one was a NameError waiting to happen at first call. The
+#   bigger mixins (status-updater 857 lines, link-animation 911,
+#   fisheye 1421) had method bodies with helper calls that the
+#   manual extraction missed when adding imports.
+#   Round 74 (verification): bulk py_compile.compile across all
+#   41 gui_modules/*.py + sao_gui + sao_webview + sao_theme + main +
+#   XiaoACTUI.spec = ZERO failures. Runtime construction smoke
+#   blocked by an unrelated pynput/Python 3.11 ctypes
+#   incompatibility (library issue, not refactor regression).
+#   No line-count change to sao_gui.py — pure bug-fix work on the
+#   mixins. Cumulative refactor remains 9682 -> 507 = -94.8%, with
+#   9 latent NameError landmines now defused.
 # v3.2.15: mem_probe cleanup + _set_process_app_id NameError fix
 #   (rounds 70-71 of /loop). Pivot from structural extraction to
 #   cleanup: close out the long-deferred mem_probe directory deletion

@@ -54,6 +54,9 @@ import time
 import tkinter as tk
 from typing import Any, Optional
 
+from sao_theme import SAOLinkStart
+from gui_modules.sao_panel_ui import _disable_native_window_shadow
+
 
 class SAOPlayerGUILinkAnimationMixin:
     """Mixin bundling SAO link-start / link-end full-screen animations."""
