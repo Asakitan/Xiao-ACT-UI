@@ -343,8 +343,20 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.1.3"
+APP_VERSION = "3.1.4"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.1.4: Cython per-bar numerics (rounds 7-8 of comprehensive perf /loop).
+#   - _sao_cy_pixels.box_convolve5_same_f32: 5-wide moving-average
+#     smoothing in nogil, replaces both np.convolve calls in
+#     _detect_bar_pct (~3x faster).
+#   - _sao_cy_pixels.find_last_above_threshold_f32: rightmost-above-
+#     threshold scan with the redundant single-pixel-fill repair
+#     mathematically eliminated; replaces the >=/any/where/max chain
+#     in _detect_bar_pct (~27x faster).
+#   - _sao_cy_pixels.compute_bar_col_score_f32: folds the 8-op
+#     hue_delta / hue_bonus / col_score chain into one nogil pass,
+#     eliminating ~7 temp float32 arrays per bar (~7x faster).
+#   - End-to-end _detect_bar_pct: ~0.33 ms/call (down from ~0.9 baseline).
 # v3.1.3: Cython per-bar recognition migration (rounds 4-5 of perf /loop).
 #   - recognition._detect_stamina_pct now uses _sao_cy_pixels.
 #     bgr_color_match_column_ratio — single nogil pass with squared-distance

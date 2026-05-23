@@ -755,3 +755,277 @@ cpdef object gradient_edge_pct(object smooth_score, Py_ssize_t eff_w,
     elif candidate > 1.0:
         candidate = 1.0
     return float(candidate)
+
+
+# ───────────────────────────────────────────────
+#  Per-column HSV means + hue mask (recognition._detect_bar_pct)
+# ───────────────────────────────────────────────
+#
+# v3.1.4 round 6: ``_detect_bar_pct`` previously did four independent
+# reductions over the sliced (H, eff_w) sample window:
+#
+#     mean_hue = hue.mean(axis=0)
+#     mean_sat = sat.mean(axis=0)
+#     mean_val = val.mean(axis=0)
+#     hue_mask = ((hue >= h_min) & (hue <= h_max) & (sat >= s_floor))
+#     hue_coverage = hue_mask.mean(axis=0)
+#
+# Each .mean(axis=0) walks the (H, eff_w) buffer separately, and the
+# hue_mask computation walks it again to build a bool array. This kernel
+# folds all five outputs into a single nogil pass.
+
+
+cpdef tuple hsv_columns_and_hue_mask(object hsv_window,
+                                      double h_min, double h_max,
+                                      double s_floor):
+    """One-pass per-column means + hue mask over a sliced HSV window.
+
+    ``hsv_window`` is the ``(H, eff_w, 3) uint8`` HSV sample (the slice
+    ``recognition._detect_bar_pct`` builds after horizontal padding).
+
+    Returns ``(mean_hue, mean_sat, mean_val, hue_mask, hue_coverage)``:
+      * ``mean_hue / mean_sat / mean_val`` — ``(eff_w,) float32`` column
+        means matching the original ``ndarray.mean(axis=0)`` output.
+      * ``hue_mask`` — ``(H, eff_w) bool`` per-pixel mask: ``True`` where
+        ``h_min <= hue <= h_max`` and ``sat >= s_floor``.
+      * ``hue_coverage`` — ``(eff_w,) float32`` per-column fraction of
+        rows in ``hue_mask`` (matches ``hue_mask.mean(axis=0)``).
+    """
+    cdef const unsigned char[:, :, :] src = hsv_window
+    cdef Py_ssize_t h = src.shape[0]
+    cdef Py_ssize_t w = src.shape[1]
+    cdef Py_ssize_t c = src.shape[2]
+    cdef Py_ssize_t y, x
+    cdef unsigned int hue_b, sat_b, val_b
+    cdef bint in_mask
+
+    if c < 3:
+        raise ValueError('hsv_window must have a 3-channel third axis')
+
+    sum_h_np = _np.zeros(w, dtype=_np.float64)
+    sum_s_np = _np.zeros(w, dtype=_np.float64)
+    sum_v_np = _np.zeros(w, dtype=_np.float64)
+    mask_count_np = _np.zeros(w, dtype=_np.uint32)
+    hue_mask_np = _np.zeros((h, w), dtype=_np.uint8)
+
+    cdef double[::1] sh = sum_h_np
+    cdef double[::1] ss = sum_s_np
+    cdef double[::1] sv = sum_v_np
+    cdef unsigned int[::1] mc = mask_count_np
+    cdef unsigned char[:, ::1] mask_v = hue_mask_np
+
+    if h == 0 or w == 0:
+        empty_f32 = _np.zeros(w, dtype=_np.float32)
+        return (empty_f32, empty_f32.copy(), empty_f32.copy(),
+                hue_mask_np.astype(_np.bool_), empty_f32.copy())
+
+    with nogil:
+        for y in range(h):
+            for x in range(w):
+                hue_b = src[y, x, 0]
+                sat_b = src[y, x, 1]
+                val_b = src[y, x, 2]
+                sh[x] += <double>hue_b
+                ss[x] += <double>sat_b
+                sv[x] += <double>val_b
+                in_mask = (<double>hue_b >= h_min) and (<double>hue_b <= h_max) and (<double>sat_b >= s_floor)
+                if in_mask:
+                    mask_v[y, x] = 1
+                    mc[x] += 1
+
+    cdef double inv_h = 1.0 / <double>h
+    mean_hue = (sum_h_np * inv_h).astype(_np.float32)
+    mean_sat = (sum_s_np * inv_h).astype(_np.float32)
+    mean_val = (sum_v_np * inv_h).astype(_np.float32)
+    hue_coverage = mask_count_np.astype(_np.float32) * _np.float32(inv_h)
+    return (mean_hue, mean_sat, mean_val, hue_mask_np.astype(_np.bool_), hue_coverage)
+
+
+# ───────────────────────────────────────────────
+#  5-wide moving-average smoothing (recognition._detect_bar_pct)
+# ───────────────────────────────────────────────
+#
+# v3.1.4 round 7: ``_detect_bar_pct`` smooths ``col_score`` and
+# ``hue_coverage`` with a 5-wide box kernel:
+#
+#     smooth_kernel = np.ones((5,), dtype=np.float32) / 5.0
+#     smooth_score  = np.convolve(col_score, smooth_kernel, mode='same')
+#     smooth_hue    = np.convolve(hue_coverage, smooth_kernel, mode='same')
+#
+# Both inputs are float32 1D arrays of length ~eff_w. The single-purpose
+# cython kernel below avoids the kernel-array allocation + the generic
+# FFT/direct path inside numpy and runs the smoothing in one nogil loop.
+# It accumulates in double precision and casts back to float32, so the
+# output matches numpy's float32 convolve to within float quantization.
+
+
+cpdef object box_convolve5_same_f32(object arr):
+    """5-wide moving-average smoothing with ``mode='same'`` edges.
+
+    Mirrors ``np.convolve(arr, ones(5)/5, mode='same')`` for any
+    contiguous ``float32`` 1D input. Returns a fresh ``float32`` ndarray
+    of the same length. Accumulation is in double precision.
+    """
+    cdef const float[::1] src = arr
+    cdef Py_ssize_t n = src.shape[0]
+    cdef Py_ssize_t i
+    cdef double fifth = 1.0 / 5.0
+
+    out_np = _np.empty(n, dtype=_np.float32)
+    cdef float[::1] out = out_np
+
+    if n == 0:
+        return out_np
+    if n == 1:
+        out[0] = <float>(src[0] * fifth)
+        return out_np
+
+    with nogil:
+        if n == 2:
+            out[0] = <float>((src[0] + src[1]) * fifth)
+            out[1] = <float>((src[0] + src[1]) * fifth)
+        elif n == 3:
+            out[0] = <float>((src[0] + src[1] + src[2]) * fifth)
+            out[1] = <float>((src[0] + src[1] + src[2]) * fifth)
+            out[2] = <float>((src[0] + src[1] + src[2]) * fifth)
+        elif n == 4:
+            # full=[a0,a0+a1,a0+a1+a2,a0+a1+a2+a3,a1+a2+a3,a2+a3,a3]/5
+            # mode='same' returns full[(5-1)//2 : (5-1)//2 + n] = full[2:6]
+            out[0] = <float>((src[0] + src[1] + src[2]) * fifth)
+            out[1] = <float>((src[0] + src[1] + src[2] + src[3]) * fifth)
+            out[2] = <float>((src[1] + src[2] + src[3]) * fifth)
+            out[3] = <float>((src[2] + src[3]) * fifth)
+        else:
+            # n >= 5: standard 5-wide with implicit-zero edges
+            out[0] = <float>((src[0] + src[1] + src[2]) * fifth)
+            out[1] = <float>((src[0] + src[1] + src[2] + src[3]) * fifth)
+            for i in range(2, n - 2):
+                out[i] = <float>((src[i - 2] + src[i - 1] + src[i]
+                                   + src[i + 1] + src[i + 2]) * fifth)
+            out[n - 2] = <float>((src[n - 4] + src[n - 3] + src[n - 2]
+                                   + src[n - 1]) * fifth)
+            out[n - 1] = <float>((src[n - 3] + src[n - 2] + src[n - 1]) * fifth)
+    return out_np
+
+
+# ───────────────────────────────────────────────
+#  Rightmost-above-threshold scan (recognition._detect_bar_pct)
+# ───────────────────────────────────────────────
+#
+# v3.1.4 round 8: ``_detect_bar_pct`` finds the last filled column via:
+#
+#     filled = smooth_score >= threshold
+#     if filled.size >= 3:
+#         filled[1:-1] = filled[1:-1] | (filled[:-2] & filled[2:])
+#     if not np.any(filled):
+#         threshold_pct = 0.0
+#     else:
+#         last_idx = int(np.max(np.where(filled)[0]))
+#
+# The "single-pixel-fill repair" turns ``[…, 1, 0, 1, …]`` into ``[…, 1, 1, 1, …]``.
+# That operation can only fill GAPS — it never extends the rightmost True
+# index, because doing so would require ``filled[i+1]`` to be True (and that
+# would already place last_filled ≥ i+1). So we can find the rightmost
+# True index directly without materialising the bool array or running the
+# repair, and the threshold_pct is identical.
+#
+# This kernel collapses the bool allocation + `np.any` + `np.where`/`np.max`
+# combo into a single nogil right-to-left scan.
+
+
+cpdef Py_ssize_t find_last_above_threshold_f32(object smooth_score,
+                                                double threshold):
+    """Return rightmost index ``i`` with ``smooth_score[i] >= threshold``, else -1.
+
+    Mirrors the result of:
+
+        filled = smooth_score >= threshold
+        # optional: filled[1:-1] |= filled[:-2] & filled[2:]
+        np.max(np.where(filled)[0]) if filled.any() else -1
+
+    The optional single-pixel-fill repair is **not needed** to find the
+    rightmost index — it can only turn 0→1 in interior cells, never
+    extending the rightmost 1. See ``_detect_bar_pct`` for context.
+    """
+    cdef const float[::1] src = smooth_score
+    cdef Py_ssize_t n = src.shape[0]
+    cdef Py_ssize_t i
+    cdef Py_ssize_t last = -1
+    if n == 0:
+        return -1
+    with nogil:
+        for i in range(n - 1, -1, -1):
+            if src[i] >= threshold:
+                last = i
+                break
+    return last
+
+
+# ───────────────────────────────────────────────
+#  Combined col_score (recognition._detect_bar_pct)
+# ───────────────────────────────────────────────
+#
+# v3.1.4 round 8: ``_detect_bar_pct`` builds the per-column score with
+# eight chained numpy operations:
+#
+#     hue_delta = np.abs(mean_hue - fill_hue_ref)
+#     hue_delta = np.minimum(hue_delta, 180.0 - hue_delta)
+#     hue_bonus = 1.0 - np.clip(hue_delta / 24.0, 0.0, 1.0)
+#     col_score = 0.78 * (mean_val / 255.0) + 0.22 * (mean_sat / 255.0)
+#     col_score = np.where(hue_coverage >= 0.12, col_score,
+#                          col_score * (0.72 + 0.18 * hue_bonus))
+#
+# Each of those creates a temp float32 array of length eff_w. Folding
+# them into one nogil pass eliminates ~7 temporaries and walks the four
+# input arrays once each.
+
+
+cpdef object compute_bar_col_score_f32(object mean_hue,
+                                        object mean_sat,
+                                        object mean_val,
+                                        object hue_coverage,
+                                        double fill_hue_ref):
+    """Fold _detect_bar_pct's per-column score computation into one pass.
+
+    All four inputs must be contiguous ``float32`` 1D arrays of the same
+    length. Returns a fresh ``float32`` ndarray of that length.
+    """
+    cdef const float[::1] mh = mean_hue
+    cdef const float[::1] ms = mean_sat
+    cdef const float[::1] mv = mean_val
+    cdef const float[::1] hc = hue_coverage
+    cdef Py_ssize_t n = mh.shape[0]
+    cdef Py_ssize_t i
+    cdef double delta, alt, bonus, base, hue_scale
+
+    if (ms.shape[0] != n) or (mv.shape[0] != n) or (hc.shape[0] != n):
+        raise ValueError(
+            'mean_hue, mean_sat, mean_val, hue_coverage must share length')
+
+    out_np = _np.empty(n, dtype=_np.float32)
+    cdef float[::1] out = out_np
+
+    with nogil:
+        for i in range(n):
+            # hue_delta = abs(mean_hue - fill_hue_ref), then wrap around 180
+            delta = <double>mh[i] - fill_hue_ref
+            if delta < 0.0:
+                delta = -delta
+            alt = 180.0 - delta
+            if alt < delta:
+                delta = alt
+            # hue_bonus = 1 - clip(hue_delta / 24, 0, 1)
+            bonus = delta * (1.0 / 24.0)
+            if bonus > 1.0:
+                bonus = 1.0
+            elif bonus < 0.0:
+                bonus = 0.0
+            bonus = 1.0 - bonus
+            # base = 0.78*mean_val/255 + 0.22*mean_sat/255
+            base = (0.78 * <double>mv[i] + 0.22 * <double>ms[i]) * (1.0 / 255.0)
+            # where hue_coverage < 0.12: scale base by (0.72 + 0.18 * bonus)
+            if <double>hc[i] < 0.12:
+                hue_scale = 0.72 + 0.18 * bonus
+                base = base * hue_scale
+            out[i] = <float>base
+    return out_np
