@@ -22,6 +22,8 @@ from gui_modules.sao_menu_left_stack import SAOMenuLeftStack
 from gui_modules.settings_manager import SettingsManager
 from gui_modules.sao_gui_session_mixin import SAOPlayerGUISessionMixin
 from gui_modules.sao_gui_state_mixin import SAOPlayerGUIStateMixin
+from gui_modules.sao_gui_menu_mixin import SAOPlayerGUIMenuMixin
+from gui_modules.sao_gui_fisheye_mixin import SAOPlayerGUIFisheyeMixin
 
 __all__ = [
     'SAOHotkeyManager',
@@ -31,4 +33,6 @@ __all__ = [
     'SettingsManager',
     'SAOPlayerGUISessionMixin',
     'SAOPlayerGUIStateMixin',
+    'SAOPlayerGUIMenuMixin',
+    'SAOPlayerGUIFisheyeMixin',
 ]

@@ -343,8 +343,43 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.4"
+APP_VERSION = "3.2.5"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.5: two more SAOPlayerGUI mixins extracted (rounds 40-41 of /loop).
+#   sao_gui.py crosses below 5600 lines — cumulative reduction now
+#   exceeds 42%.
+#   Round 40: SAOPlayerGUIMenuMixin (566 lines) — the full SAO PopUpMenu
+#     lifecycle. 17 methods, ~488 lines net out of sao_gui.py:
+#       - construction: _setup_sao_menu, _build_menu_children (139),
+#         _build_update_menu_label
+#       - open/close: _toggle_sao_menu, _close_sao_menu_from_background,
+#         _clear_sao_menu_close_pending
+#       - hooks: _on_sao_menu_open, _on_sao_menu_close,
+#         _dismiss_sao_menu_for_panel
+#       - refresh: _refresh_menu_if_open (debounced), _refresh_menu_immediate,
+#         _apply_menu_refresh_if_open
+#       - sig caching: _compute_menu_refresh_signature (200 ms-cached, 78
+#         lines), _get_menu_children_cached, _cancel_pending_menu_refresh
+#       - persistence: _persist_entity_menu_state, _restore_entity_menu_state
+#     sao_gui.py: 7431 -> 6943.
+#   Round 41: SAOPlayerGUIFisheyeMixin (1421 lines) — the persistent GPU
+#     fisheye overlay. 9 methods, 1362 lines net out, including the
+#     SINGLE BIGGEST method in all of SAOPlayerGUI:
+#       - _start_fisheye_overlay (1078 lines) — builds the full GPU
+#         rendering pipeline (PIL capture -> numpy/GPU distortion ->
+#         BGRA bytes -> GpuOverlayWindow + BgraPresenter @60fps) plus
+#         the transparent Tk hit layer and Win32 z-order management
+#       - _stop_fisheye_overlay (74) — daemon shutdown + GPU release
+#       - _run_fisheye_entry (103) — entry-animation flow
+#       - _fisheye_close_suppressed, _release_fisheye_input_zorder,
+#         _destroy_fisheye_hit_layer, _start_fisheye_with_retry,
+#         _any_panel_open, _maybe_stop_fisheye (smaller helpers)
+#     sao_gui.py: 6943 -> 5582.
+#   SAOPlayerGUI now inherits from 4 mixins via MRO:
+#     (MenuMixin, FisheyeMixin, StateMixin, SessionMixin).
+#   Cumulative refactor: 9682 -> 5582 = -4100 = -42.3%. sao_gui.py is
+#   3418 lines below the user's 9000-line target. gui_modules/ now
+#   holds 20 .py / 21672 lines.
 # v3.2.4: file reorganization — ALL sao_gui_*.py satellite modules moved
 #   into gui_modules/ (rounds 37-38 of /loop). Addresses the user's
 #   "用文件夹来把所有的文件归类，包括以前的文件" objective.
