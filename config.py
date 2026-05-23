@@ -343,8 +343,55 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.12"
+APP_VERSION = "3.2.13"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.13: panel-fx scheduler + link animations (rounds 64-65 of /loop).
+#   sao_gui.py crosses below 1100 lines; cumulative reduction reaches
+#   89.5%. MRO depth grows to 17 mixin layers.
+#   Round 64: SAOPlayerGUIPanelFxMixin (210 lines mixin / 158 net out).
+#     2 methods + 2 class attrs + 1 module-level helper:
+#       _make_sao_panel_hud (22, module-level Canvas factory),
+#       _attach_sao_panel_fx (62, register panel + sig cache + auto-
+#         unregister on destroy + start shared tick),
+#       _sao_fx_shared_tick (75, @_probe-decorated staticmethod;
+#         90ms shared tick driving all panels via _CY_UI.sao_fx_coords).
+#     Class attrs _sao_fx_panels and _sao_fx_after_id were declared on
+#     FloatHpMixin since round 56 (vestigial — they had originally been
+#     on SAOPlayerGUI proper and got carried along incidentally).
+#     Round 64 relocates them to their proper home alongside the
+#     methods that use them.
+#     SAOPlayerGUI._sao_fx_* class-attr refs in the methods rewritten
+#     to type(self)._sao_fx_* / type(self_ref)._sao_fx_* (semantics
+#     identical via class-attr lookup; avoids the not-yet-defined
+#     SAOPlayerGUI import cycle).
+#     sao_gui.py: 2023 -> 1865.
+#   Round 65: SAOPlayerGUILinkAnimationMixin (911 lines mixin / 850
+#     net out). The single biggest extraction since round 41 (Fisheye,
+#     1078). The full-screen SAO link-start/link-end overlay animations
+#     + moderngl GPU draw helpers + exit-window enumerator.
+#     12 methods (in source order):
+#       _play_link_start (68 — top-level entry animation),
+#       _init_entry_boot_gl (101 — moderngl context + GLSL shaders),
+#       _draw_entry_boot_gl (31), _create_entry_overlay (30),
+#       _draw_entry_overlay (107), _run_entry_animation (66),
+#       _init_exit_pulse_gl (107), _draw_exit_pulse_gl (31),
+#       _get_exit_banner (17), _create_exit_overlay (42),
+#       _draw_exit_overlay (141 — biggest method in this cluster;
+#         exit animation main loop),
+#       _collect_exit_windows (110 — enumerates every visible Tk
+#         Toplevel + ULW window for the exit fade).
+#     Mixin imports: just time + tkinter at module level. moderngl,
+#       PIL, gpu_overlay_window are inline-imported (matches pattern).
+#     sao_gui.py: 1865 -> 1015.
+#   SAOPlayerGUI MRO now has 17 mixin layers (in extraction order):
+#     (Menu, Fisheye, Actions, EngineToggles, DpsTheme, Panels,
+#      StatusUpdater, Dialogs, EngineLifecycle, PacketCallbacks,
+#      FloatHp, FloatHandlers, Lifecycle, PanelFx, LinkAnimation,
+#      State, Session). No name conflicts.
+#   Cumulative refactor: 9682 -> 1015 = -8667 = -89.5%. sao_gui.py is
+#   7985 lines below the user's 9000-line target. gui_modules/ now
+#   holds 38 .py / ~29664 lines. **The refactor is approaching its
+#   natural floor — most extractable cohesive clusters are out.**
 # v3.2.12: menu widget reorg + lifecycle mixin (rounds 61-62 of /loop).
 #   sao_gui.py crosses below 2100 lines; cumulative reduction reaches
 #   79.1%. MRO depth grows to 15 mixin layers.

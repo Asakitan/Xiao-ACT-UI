@@ -76,10 +76,10 @@ class SAOPlayerGUIFloatHpMixin:
         """(deprecated) 旧 30fps HP 重绘循环已移除 (HpOverlay 自管帧率)。"""
         return
 
-    # v2.3.15: 共享 HUD 装饰动画调度器 — 所有面板共用一个 after(66) 循环，
-    # 替代每个面板独立 after(33)。配合签名缓存，只有坐标真正变化时才重建 Canvas。
-    _sao_fx_panels = []       # [(panel, body_cv, pw, ph)] — 活跃面板列表
-    _sao_fx_after_id = None   # 共享 after ID
+    # Round-64 note: the _sao_fx_panels + _sao_fx_after_id class attrs
+    # were relocated to gui_modules.sao_gui_panel_fx_mixin alongside
+    # the methods that use them (_attach_sao_panel_fx + _sao_fx_shared_tick).
+    # MRO lookup still resolves them via SAOPlayerGUI's inheritance chain.
 
     def _reset_sta_offline_state(self):
         self._sta_offline_armed = False
