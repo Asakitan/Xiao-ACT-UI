@@ -72,12 +72,15 @@ LOCAL_HIDDENIMPORTS = [
 WEBVIEW_PLATFORM_HIDDENIMPORTS = collect_submodules('webview.platforms')
 PROTOBUF_HIDDENIMPORTS = collect_submodules('google.protobuf')
 CLR_LOADER_HIDDENIMPORTS = collect_submodules('clr_loader')
-MEM_PROBE_HIDDENIMPORTS = collect_submodules('mem_probe')
 # Round 38 (v3.2.4): all sao_gui_*.py and SAOPlayerGUI mixins now live in
 # gui_modules/. The individual modules are listed in LOCAL_HIDDENIMPORTS
 # above, but use collect_submodules as a safety net so future additions
 # get picked up automatically.
 GUI_MODULES_HIDDENIMPORTS = collect_submodules('gui_modules')
+# Round 70 (v3.2.15): mem_probe/ directory was removed in round 26.
+# MEM_PROBE_HIDDENIMPORTS, MEM_PROBE_BINARIES, and the ('mem_probe',
+# 'mem_probe') data entry below were all cleaned out together — none
+# of them resolve to anything now that the package is gone.
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
 GPU_RENDER_BINARIES = (
@@ -88,10 +91,6 @@ CYTHON_ACCEL_BINARIES = [
     (path, '.')
     for path in glob(os.path.join(HERE, '_sao_cy*.pyd'))
 ]
-MEM_PROBE_BINARIES = [
-    (path, 'mem_probe')
-    for path in glob(os.path.join(HERE, 'mem_probe', '_sao_cy*.pyd'))
-]
 GPU_RENDER_DATAS = (
     collect_data_files('skia')
     + collect_data_files('moderngl_window')
@@ -101,7 +100,7 @@ GPU_RENDER_DATAS = (
 a = Analysis(
     ['main.py'],
     pathex=[HERE],
-    binaries=GPU_RENDER_BINARIES + CYTHON_ACCEL_BINARIES + MEM_PROBE_BINARIES,
+    binaries=GPU_RENDER_BINARIES + CYTHON_ACCEL_BINARIES,
     datas=[
         # Web UI (HTML + 字体)
         ('web', 'web'),
@@ -109,8 +108,6 @@ a = Analysis(
         ('assets', 'assets'),
         # Protobuf / schema
         ('proto', 'proto'),
-        # Optional memory data source package used by Hybrid/MEM modes.
-        ('mem_probe', 'mem_probe'),
         # GPU SkillFX SDF 片段着色器 (v2.3.8: 之前未打包 → onedir 启动后
         # skillfx_pipeline._load_fragment FileNotFoundError → _tls.failed=True
         # → SkillFX 永远走 CPU/PIL fallback)
@@ -118,7 +115,7 @@ a = Analysis(
         # 图标
         ('icon.ico', '.'),
     ] + GPU_RENDER_DATAS,
-    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + MEM_PROBE_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + [
+    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
         'clr',
         'clr_loader',

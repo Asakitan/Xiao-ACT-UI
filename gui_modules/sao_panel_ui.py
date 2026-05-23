@@ -55,6 +55,18 @@ def _get_icon_path():
     return p if os.path.exists(p) else None
 
 
+def _set_process_app_id(app_id: str):
+    """Set the Windows AppUserModelID for the current process so taskbar
+    grouping uses our app-specific identity instead of the python.exe
+    default. Best-effort; silently no-ops on non-Windows or when the
+    shell32 call fails (older Windows versions etc.).
+    """
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:
+        pass
+
+
 def _apply_window_icon(win):
     """Apply the runtime icon.ico to a Tk Toplevel (both the title bar
     bitmap via iconbitmap and the taskbar HICON via Win32 WM_SETICON

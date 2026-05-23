@@ -104,11 +104,9 @@ def _web_file_uri(filename: str) -> str:
     return Path(os.path.join(WEB_DIR, filename)).resolve().as_uri()
 
 
-def _set_process_app_id(app_id: str):
-    try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
-    except Exception:
-        pass
+# Round 71 of sao_gui split refactor: _set_process_app_id deduplicated —
+# moved into gui_modules.sao_panel_ui alongside the other Win32 helpers.
+from gui_modules.sao_panel_ui import _set_process_app_id  # noqa: E402
 
 
 # ════════════════════════════════════════════════

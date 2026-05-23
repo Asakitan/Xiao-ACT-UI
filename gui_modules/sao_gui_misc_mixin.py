@@ -46,7 +46,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional
 
-from gui_modules.sao_panel_ui import _apply_window_icon
+from gui_modules.sao_panel_ui import _apply_window_icon, _set_process_app_id
 
 
 class SAOPlayerGUIMiscMixin:

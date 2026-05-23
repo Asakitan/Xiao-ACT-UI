@@ -90,6 +90,10 @@ from gui_modules.sao_panel_ui import (
     # Round 59: 4 Win32 helpers moved out of sao_gui.py into sao_panel_ui.
     _get_icon_path, _apply_window_icon, _set_clickthrough_style,
     _disable_native_window_shadow,
+    # Round 71: _set_process_app_id (Win32 taskbar AppUserModelID) moved
+    # alongside the other Win32 helpers; was duplicated here + in
+    # sao_webview.py before.
+    _set_process_app_id,
     _SAO_PANEL_BG, _SAO_PANEL_HEADER_BG, _SAO_PANEL_HEADER_FG,
     _SAO_PANEL_BORDER, _SAO_PANEL_ACCENT, _SAO_PANEL_GOLD,
     _SAO_PANEL_SEP, _SAO_PANEL_BODY_BG, _SAO_PANEL_LABEL_FG,
@@ -165,13 +169,6 @@ GLOBAL_HOTKEY_AVAILABLE = PYNPUT_HOTKEY_AVAILABLE or KEYBOARD_HOTKEY_AVAILABLE
 from gui_modules.settings_manager import SettingsManager  # noqa: E402
 
 
-def _set_process_app_id(app_id: str):
-    try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
-    except Exception:
-        pass
-
-
 _user32 = ctypes.windll.user32
 _gdi32 = ctypes.windll.gdi32
 for _fn, _res, _args in [
@@ -195,20 +192,6 @@ for _fn, _res, _args in [
     _fn.argtypes = _args
 del _fn, _res, _args
 
-
-def _get_hp_pil_font(size, family='sao', _cache={}):
-    """加载 PIL 字体用于 HP 条渲染 (带缓存)。"""
-    key = (family, size)
-    if key in _cache:
-        return _cache[key]
-    fname = 'SAOUI.ttf' if family == 'sao' else 'ZhuZiAYuanJWD.ttf'
-    fp = os.path.join(FONTS_DIR, fname)
-    try:
-        font = ImageFont.truetype(fp, size=size)
-    except Exception:
-        font = ImageFont.load_default()
-    _cache[key] = font
-    return font
 
 
 # SAOHotkeyManager 已迁移到 gui_modules/sao_hotkey_manager.py

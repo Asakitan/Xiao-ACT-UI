@@ -343,8 +343,50 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.14"
+APP_VERSION = "3.2.15"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.15: mem_probe cleanup + _set_process_app_id NameError fix
+#   (rounds 70-71 of /loop). Pivot from structural extraction to
+#   cleanup: close out the long-deferred mem_probe directory deletion
+#   + fix a latent runtime bug that round 68's MiscMixin extraction
+#   introduced.
+#   Round 70: mem_probe directory cleanup.
+#     - 22 mem_probe/* file deletions staged (carried forward in the
+#       git working tree since round 26 when the directory was deleted
+#       on disk).
+#     - XiaoACTUI.spec cleaned: MEM_PROBE_HIDDENIMPORTS (returned []
+#       anyway), MEM_PROBE_BINARIES (glob returned []), the
+#       ('mem_probe', 'mem_probe') data entry, and the
+#       binaries=... + MEM_PROBE_BINARIES / hiddenimports=... +
+#       MEM_PROBE_HIDDENIMPORTS arg pieces all removed.
+#     - build_cython_ext.py: the always-False if-exists wrapper around
+#       the mem_probe._sao_cy_memscan Extension removed.
+#     - packet_bridge.py intentionally NOT changed — its lazy import
+#       in _start_memory_source is only resolved when data_source is
+#       'memory'/'hybrid'/'auto' (default 'tcp' never touches it), and
+#       the existing failure path is already graceful (strict 'memory'
+#       errors with a clear message; 'hybrid'/'auto' fall back to TCP).
+#   Round 71: _set_process_app_id NameError fix + dead-code delete.
+#     - Latent bug: round 68 extracted _set_icon into MiscMixin but
+#       _set_icon references _set_process_app_id as a bare name without
+#       importing it. SAOPlayerGUI.__init__ calls self._set_icon() on
+#       every startup → NameError at app launch.
+#     - Fix: moved _set_process_app_id to gui_modules.sao_panel_ui
+#       (alongside the other Win32 helpers from round 59).
+#     - Deduplicated: sao_gui.py and sao_webview.py each had identical
+#       copies of the same shell32 call; both now `from gui_modules.
+#       sao_panel_ui import _set_process_app_id`. sao_gui.py also
+#       lists it in the panel_ui block re-import.
+#     - MiscMixin gained the import alongside _apply_window_icon.
+#     - Dead code: _get_hp_pil_font in sao_gui.py was defined but
+#       never called (repo-wide grep zero hits). 14 lines removed.
+#     - sao_gui.py: 524 -> 507.
+#   Cumulative refactor: 9682 -> 507 = -9175 = -94.8%. sao_gui.py
+#   stands at 5.2% of its original size, 8493 lines below the user's
+#   9000-line target.
+#   The refactor has reached its natural floor — what remains is
+#   class skeleton + entry-point glue. Continued extractions would
+#   yield diminishing returns + significant risk.
 # v3.2.14: damage events + misc helpers mixins (rounds 67-68 of /loop).
 #   sao_gui.py crosses below 525 lines; cumulative reduction reaches
 #   94.6%. MRO depth grows to 19 mixin layers.
