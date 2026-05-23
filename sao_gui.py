@@ -475,9 +475,11 @@ from gui_modules.sao_gui_session_mixin import SAOPlayerGUISessionMixin  # noqa: 
 from gui_modules.sao_gui_state_mixin import SAOPlayerGUIStateMixin  # noqa: E402
 from gui_modules.sao_gui_menu_mixin import SAOPlayerGUIMenuMixin  # noqa: E402
 from gui_modules.sao_gui_fisheye_mixin import SAOPlayerGUIFisheyeMixin  # noqa: E402
+from gui_modules.sao_gui_actions_mixin import SAOPlayerGUIActionsMixin  # noqa: E402
+from gui_modules.sao_gui_engine_toggles_mixin import SAOPlayerGUIEngineTogglesMixin  # noqa: E402
 
 
-class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIStateMixin, SAOPlayerGUISessionMixin):
+class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUIActionsMixin, SAOPlayerGUIEngineTogglesMixin, SAOPlayerGUIStateMixin, SAOPlayerGUISessionMixin):
     """
     纯悬浮 SAO Utils 风格 GUI — 没有传统窗口！
     - 常驻: 小型悬浮触发按钮 (Toplevel)
@@ -2079,16 +2081,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
 
         return int(hwnd or 0), rect
 
-    def _pick_burst_trigger_slot(self, gs):
-        # v2.4.31: state machine moved to _sao_cy_uihelpers.
-        watched = self._get_setting(
-            'watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9]) or []
-        slots = getattr(gs, 'skill_slots', []) or []
-        prev_slot = int(getattr(self, '_last_burst_slot', 0) or 0)
-        chosen = int(_CY_UI.pick_burst_trigger_slot(slots, watched, prev_slot))
-        self._last_burst_slot = chosen
-        return chosen
-
     def _format_level_text(self, level_base: int, level_extra: int) -> str:
         return _CY_UI.format_level_text(level_base, level_extra, self._level or 1)
 
@@ -2453,68 +2445,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
             win.focus_force()
         except Exception:
             pass
-
-    def _toggle_autokey_panel(self):
-        """打开/关闭 AutoKey 配置面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._autokey_panel:
-            self._autokey_panel = AutoKeyPanel(
-                master=self.root,
-                load_fn=self._load_auto_key_config,
-                save_fn=self._save_auto_key_config,
-                engine_ref=lambda: self._auto_key_engine,
-                on_toggle=self._toggle_auto_script,
-                author_fn=getattr(self, '_auto_key_author_snapshot', None),
-                load_burst_actions=self._load_autokey_burst_actions,
-                save_burst_actions=self._save_autokey_burst_actions,
-            )
-        self._autokey_panel.toggle()
-        self.root.after(120, lambda: self._raise_panel_window(self._autokey_panel))
-
-    def _toggle_bossraid_panel(self):
-        """打开/关闭 BossRaid 配置面板 (tkinter)."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._bossraid_panel:
-            self._bossraid_panel = BossRaidPanel(
-                master=self.root,
-                load_fn=self._load_boss_raid_config,
-                save_fn=self._save_boss_raid_config,
-                engine_ref=lambda: self._boss_raid_engine,
-                on_toggle=self._toggle_boss_raid,
-                on_start=self._toggle_boss_raid,
-                on_next=self._boss_raid_next_phase,
-                on_reset=lambda: (
-                    self._boss_raid_engine.reset() if self._boss_raid_engine else None
-                ),
-            )
-        self._bossraid_panel.toggle()
-        self.root.after(120, lambda: self._raise_panel_window(self._bossraid_panel))
-
-    def _toggle_autokey_detail_panel(self):
-        """Open/close the full AutoKey profile editor."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._autokey_detail_panel:
-            self._autokey_detail_panel = AutoKeyDetailPanel(
-                master=self.root,
-                load_fn=self._load_auto_key_config,
-                save_fn=self._save_auto_key_config,
-                author_fn=getattr(self, '_auto_key_author_snapshot', None),
-            )
-        self._autokey_detail_panel.toggle()
-        self.root.after(120, lambda: self._raise_panel_window(self._autokey_detail_panel))
-
-    def _toggle_bossraid_detail_panel(self):
-        """Open/close the full BossRaid profile editor."""
-        self._dismiss_sao_menu_for_panel()
-        if not self._bossraid_detail_panel:
-            self._bossraid_detail_panel = BossRaidDetailPanel(
-                master=self.root,
-                load_fn=self._load_boss_raid_config,
-                save_fn=self._save_boss_raid_config,
-                author_fn=getattr(self, '_boss_raid_author_snapshot', None),
-            )
-        self._bossraid_detail_panel.toggle()
-        self.root.after(120, lambda: self._raise_panel_window(self._bossraid_detail_panel))
 
     def _toggle_commander_panel(self):
         """打开/关闭 Commander 面板 (tkinter)."""
@@ -3730,38 +3660,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
                 self._reset_sta_offline_state()
         self._refresh_menu_if_open()
 
-    def _toggle_auto_script(self, force_enabled=None):
-        """切换 AutoKey 脚本开关."""
-        config = self._load_auto_key_config()
-        if force_enabled is not None:
-            config['enabled'] = bool(force_enabled)
-        else:
-            config['enabled'] = not bool(config.get('enabled', False))
-        self._save_auto_key_config(config)
-        state_text = 'ON' if config['enabled'] else 'OFF'
-        print(f'[SAO Entity] AUTO KEY: {state_text}')
-        self._refresh_menu_if_open()
-
-    def _toggle_boss_raid(self, force_enabled=None):
-        """切换 Boss Raid 引擎开关."""
-        if not self._boss_raid_engine:
-            return
-        config = self._load_boss_raid_config()
-        if force_enabled is not None:
-            config['enabled'] = bool(force_enabled)
-        else:
-            config['enabled'] = not bool(config.get('enabled', False))
-        self._save_boss_raid_config(config)
-        state_text = 'ON' if config['enabled'] else 'OFF'
-        print(f'[SAO Entity] BOSS RAID: {state_text}')
-        self._refresh_menu_if_open()
-
-    def _boss_raid_next_phase(self):
-        """Boss Raid 下一阶段."""
-        if not self._boss_raid_engine:
-            return
-        self._boss_raid_engine.next_phase()
-
     def _show_entity_alert(self, title: str, message: str = '', display_time: float = 5.0):
         overlay = getattr(self, '_alert_overlay', None)
         if overlay is not None:
@@ -3775,149 +3673,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         else:
             print(f'[SAO Entity] {title}')
 
-    def _toggle_hide_seek(self):
-        """切换自动躲猫猫引擎开关."""
-        if self._hide_seek_engine and self._hide_seek_engine.running:
-            self._stop_hide_seek()
-        else:
-            self._start_hide_seek()
-
-    def _start_hide_seek(self):
-        """启动自动躲猫猫并用 AlertOverlay 保持状态提示."""
-        if self._hide_seek_engine and self._hide_seek_engine.running:
-            return
-        try:
-            from hide_seek_engine import HideSeekEngine
-            from window_locator import WindowLocator
-
-            locator = getattr(self, '_locator', None)
-            if locator is None:
-                locator = WindowLocator()
-
-            engine = HideSeekEngine(locator=locator, on_status=self._on_hide_seek_status)
-            engine.start()
-            self._hide_seek_engine = engine
-            self._hide_seek_alert_active = True
-            self._show_entity_alert('AUTO HIDE & SEEK', '自动躲猫猫已启动', display_time=60.0)
-            self._schedule_hide_seek_alert_refresh()
-            self._refresh_menu_if_open()
-        except Exception as exc:
-            print(f'[SAO Entity] Hide&Seek start failed: {exc}')
-            import traceback
-            traceback.print_exc()
-            self._hide_seek_engine = None
-            self._hide_seek_alert_active = False
-            self._show_entity_alert('AUTO HIDE & SEEK', '启动失败，请检查游戏窗口与模板资源', display_time=4.0)
-            self._refresh_menu_if_open()
-
-    def _stop_hide_seek(self, show_alert: bool = True):
-        """停止自动躲猫猫并取消持久提示刷新."""
-        self._hide_seek_alert_active = False
-        aid = getattr(self, '_hide_seek_alert_after_id', None)
-        if aid is not None:
-            try:
-                self.root.after_cancel(aid)
-            except Exception:
-                pass
-            self._hide_seek_alert_after_id = None
-        engine = self._hide_seek_engine
-        self._hide_seek_engine = None
-        if engine is not None:
-            try:
-                engine.stop()
-            except Exception:
-                pass
-        if show_alert:
-            self._show_entity_alert('AUTO HIDE & SEEK', '自动躲猫猫已关闭', display_time=3.2)
-        self._refresh_menu_if_open()
-
-    def _on_hide_seek_status(self, message: str, step: int):
-        """Hide & Seek 状态回调 — 当前仅用于调试日志."""
-        if message:
-            print(f'[HideSeek] step={step}: {message}')
-
-    def _schedule_hide_seek_alert_refresh(self):
-        aid = getattr(self, '_hide_seek_alert_after_id', None)
-        if aid is not None:
-            try:
-                self.root.after_cancel(aid)
-            except Exception:
-                pass
-        self._hide_seek_alert_after_id = self.root.after(
-            50000, self._refresh_hide_seek_alert)
-
-    def _refresh_hide_seek_alert(self):
-        self._hide_seek_alert_after_id = None
-        if self._destroyed or not getattr(self, '_hide_seek_alert_active', False):
-            return
-        engine = getattr(self, '_hide_seek_engine', None)
-        if engine is None:
-            self._hide_seek_alert_active = False
-            return
-        if not engine.running:
-            print('[SAO Entity] Hide&Seek engine thread is no longer running')
-        self._show_entity_alert('AUTO HIDE & SEEK', '自动躲猫猫运行中', display_time=60.0)
-        self._schedule_hide_seek_alert_refresh()
-
-    # ── AutoKey config helpers ──
-    def _auto_key_settings_ref(self):
-        return self._cfg_settings_ref or self.settings
-
-    def _auto_key_author_snapshot(self):
-        gs = getattr(self, '_game_state', None)
-        if gs is not None:
-            return snapshot_author_from_state(gs)
-        return {'player_uid': '', 'player_name': self._username,
-                'profession_id': 0, 'profession_name': self._profession}
-
-    def _load_auto_key_config(self):
-        ref = self._auto_key_settings_ref()
-        return load_auto_key_config(ref, state_snapshot=self._auto_key_author_snapshot())
-
-    def _save_auto_key_config(self, config):
-        ref = self._auto_key_settings_ref()
-        saved = save_auto_key_config(ref, config)
-        if self._auto_key_engine:
-            self._auto_key_engine.invalidate()
-        return saved
-
-    def _load_autokey_burst_actions(self):
-        actions = self._get_setting('autokey_burst_actions', [])
-        return list(actions or [])
-
-    def _save_autokey_burst_actions(self, actions):
-        normalized = list(actions or [])
-        self._set_setting('autokey_burst_actions', normalized)
-        if self._auto_key_engine:
-            try:
-                self._auto_key_engine.set_burst_actions(normalized)
-            except Exception:
-                pass
-            try:
-                self._auto_key_engine.invalidate()
-            except Exception:
-                pass
-
-    # ── BossRaid config helpers ──
-    def _boss_raid_settings_ref(self):
-        return self._cfg_settings_ref or self.settings
-
-    def _boss_raid_author_snapshot(self):
-        gs = getattr(self, '_game_state', None)
-        if gs is not None:
-            return snapshot_author_from_state(gs)
-        return {'player_uid': '', 'player_name': self._username,
-                'profession_id': 0, 'profession_name': self._profession}
-
-    def _load_boss_raid_config(self):
-        ref = self._boss_raid_settings_ref()
-        return load_boss_raid_config(ref, state_snapshot=self._boss_raid_author_snapshot())
-
-    def _save_boss_raid_config(self, config):
-        ref = self._boss_raid_settings_ref()
-        return save_boss_raid_config(ref, config)
-
-    # ── Settings helper ──
     def _set_setting(self, key: str, value):
         """Persist a setting to cfg_settings and save."""
         if hasattr(self, '_cfg_settings_ref') and self._cfg_settings_ref:
@@ -4149,39 +3904,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
                     ov.set_enabled(new)
             except Exception:
                 pass
-        self._refresh_menu_if_open()
-
-    def _normalize_watched_skill_slots(self, slots):
-        # v2.4.31: cython helper.
-        return _CY_UI.normalize_watched_skill_slots(slots)
-
-    def _reset_burst_tracking_state(self):
-        self._last_burst_ready = False
-        self._last_burst_slot = 0
-        self._last_burst_slot_shown = 0
-
-    def _toggle_burst_enabled(self):
-        cur = bool(self._get_setting('burst_enabled', True))
-        self._set_setting('burst_enabled', not cur)
-        self._reset_burst_tracking_state()
-        self._refresh_menu_if_open()
-
-    def _toggle_burst_slot(self, slot: int):
-        watched = self._normalize_watched_skill_slots(
-            self._get_setting('watched_skill_slots', [1, 2, 3, 4, 5, 6, 7, 8, 9])
-        )
-        if not watched:
-            watched = [1]
-        watched_set = set(watched)
-        if slot in watched_set:
-            if len(watched_set) == 1:
-                self._show_entity_alert('BURST SKILLS', '至少保留一个技能槽', display_time=3.0)
-                return
-            watched_set.remove(slot)
-        else:
-            watched_set.add(slot)
-        self._set_setting('watched_skill_slots', sorted(watched_set))
-        self._reset_burst_tracking_state()
         self._refresh_menu_if_open()
 
     def _cycle_boss_bar_mode(self):

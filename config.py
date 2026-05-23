@@ -343,8 +343,44 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.5"
+APP_VERSION = "3.2.6"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.6: two more SAOPlayerGUI mixins extracted (rounds 43-44 of /loop).
+#   sao_gui.py crosses below 5400 lines; cumulative reduction exceeds 45%.
+#   Round 43: SAOPlayerGUIActionsMixin (214 lines mixin / 152 net out).
+#     Bundles AutoKey + BossRaid clusters because they share the same
+#     shape: toggle_panel + toggle_detail_panel + toggle_engine +
+#     config_loader + config_saver + author_snapshot.
+#     AutoKey (9 methods): _toggle_autokey_panel,
+#       _toggle_autokey_detail_panel, _toggle_auto_script,
+#       _auto_key_settings_ref, _auto_key_author_snapshot,
+#       _load_auto_key_config, _save_auto_key_config,
+#       _load_autokey_burst_actions, _save_autokey_burst_actions.
+#     BossRaid (8 methods): _toggle_bossraid_panel,
+#       _toggle_bossraid_detail_panel, _toggle_boss_raid,
+#       _boss_raid_next_phase, _boss_raid_settings_ref,
+#       _boss_raid_author_snapshot, _load_boss_raid_config,
+#       _save_boss_raid_config.
+#     sao_gui.py: 5582 -> 5430.
+#   Round 44: SAOPlayerGUIEngineTogglesMixin (175 lines mixin / 127 net
+#     out). Bundles HideSeek + Burst — two distinct engine on/off
+#     clusters but the same toggle + refresh pattern.
+#     HideSeek (6 methods): _toggle_hide_seek, _start_hide_seek,
+#       _stop_hide_seek (instantiates HideSeekEngine + WindowLocator,
+#       AlertOverlay persistent UI), _on_hide_seek_status,
+#       _schedule_hide_seek_alert_refresh (50s refresh tick),
+#       _refresh_hide_seek_alert.
+#     Burst (5 methods): _pick_burst_trigger_slot (cython delegate),
+#       _normalize_watched_skill_slots (cython), _reset_burst_tracking_state,
+#       _toggle_burst_enabled, _toggle_burst_slot (preserves ≥1 slot
+#       invariant).
+#     sao_gui.py: 5430 -> 5303.
+#   SAOPlayerGUI now has 6 mixin layers via MRO:
+#     (MenuMixin, FisheyeMixin, ActionsMixin, EngineTogglesMixin,
+#      StateMixin, SessionMixin).
+#   Cumulative refactor: 9682 -> 5303 = -4379 = -45.2%. sao_gui.py is
+#   3697 lines below the user's 9000-line target. gui_modules/ now
+#   holds 22 .py / 22061 lines.
 # v3.2.5: two more SAOPlayerGUI mixins extracted (rounds 40-41 of /loop).
 #   sao_gui.py crosses below 5600 lines — cumulative reduction now
 #   exceeds 42%.
