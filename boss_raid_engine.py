@@ -566,6 +566,16 @@ class BossRaidEngine:
         self._boss_manually_set: bool = False             # user manually pinned the boss
         self._on_entity_update: Optional[Callable] = None # callback for visual editor
 
+        # v3.1.7 round 16: entity-update callback is throttled to 10 Hz max.
+        # `on_damage_event` previously rebuilt + fired the full entity list
+        # on every damage event (500-1000/sec under heavy combat). Per-event
+        # firing now just flips this dirty bit; `_run_loop` drains it at
+        # ≤10 Hz (matches typical UI cadence) so the heavy combat path
+        # avoids 14-field dict construction per event.
+        self._entity_update_dirty: bool = False
+        self._last_entity_update_emit_at: float = 0.0
+        self.ENTITY_UPDATE_MIN_INTERVAL_S: float = 0.10
+
         # Thread
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -820,8 +830,9 @@ class BossRaidEngine:
                     if not event.get("is_heal"):
                         self._total_damage += damage
 
-                # Notify visual editor of entity list change
-                self._fire_entity_update_locked()
+                # Notify visual editor of entity list change — throttled to
+                # ≤10 Hz via `_entity_update_dirty` + `_run_loop` flush.
+                self._entity_update_dirty = True
 
     @_probe.decorate('boss.on_monster_update')
     def on_monster_update(self, monster_data: Dict[str, Any]):
@@ -976,6 +987,28 @@ class BossRaidEngine:
                     self._tick_locked()
                 except Exception as e:
                     print(f"[BossRaid] tick error: {e}")
+                # v3.1.7 round 16: drain any pending entity-update set by
+                # `on_damage_event`. Fires at most once per 250ms loop
+                # iteration; combined with the on_damage_event dirty-bit
+                # this keeps per-event cost down without losing UI updates.
+                self._maybe_flush_entity_update_locked()
+
+    def _maybe_flush_entity_update_locked(self) -> None:
+        if not self._entity_update_dirty:
+            return
+        if self._on_entity_update_cb is None:
+            self._entity_update_dirty = False
+            return
+        now = time.time()
+        if now - self._last_entity_update_emit_at < self.ENTITY_UPDATE_MIN_INTERVAL_S:
+            return  # too soon; keep dirty so a later tick flushes
+        self._last_entity_update_emit_at = now
+        self._entity_update_dirty = False
+        entities = self._get_entities_locked()
+        try:
+            self._on_entity_update_cb(entities)
+        except Exception:
+            pass
 
     def _tick_locked(self):
         now = time.time()

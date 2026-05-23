@@ -676,8 +676,12 @@ class AutoKeyEngine:
         return cfg
 
     def get_status(self) -> Dict[str, Any]:
+        # v3.1.7 round 17: `self._status` is a flat dict of 7 fields with
+        # primitive values (see __init__). Shallow `dict(...)` copy is
+        # equivalent to copy.deepcopy and ~10x faster — matches the
+        # round-10a fix on dps_tracker hit_fx.
         with self._status_lock:
-            return copy.deepcopy(self._status)
+            return dict(self._status)
 
     def _set_status(self, **kwargs):
         with self._status_lock:

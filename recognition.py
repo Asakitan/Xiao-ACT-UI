@@ -421,20 +421,17 @@ def _gradient_edge_pct(smooth_score: np.ndarray, eff_w: int, dynamic_range: floa
 
 
 def _row_independent_pct(
-    hue: np.ndarray, sat: np.ndarray, val: np.ndarray,
-    hue_mask: np.ndarray, fill_hue_ref: float, threshold: float,
+    sat: np.ndarray, val: np.ndarray,
+    hue_mask: np.ndarray, threshold: float,
 ) -> Optional[float]:
     """Compute per-row fill percentage and return the median.
 
     Provides outlier-resistant estimation by treating each row independently.
     Returns None if fewer than 2 usable rows.
 
-    v3.1.3 round 4: delegates the per-row scan + convolution + sub-pixel
-    crossing + median to ``_sao_cy_pixels.row_independent_fill_pct`` (a
-    nogil cython kernel). The hue / fill_hue_ref arguments are kept in the
-    Python signature for callers but are unused — the cython kernel scores
-    by val/sat/mask only, matching the original implementation byte-for-
-    byte except for float32→float64 numerical-precision improvements.
+    v3.1.7 round 15: dropped the unused `hue` / `fill_hue_ref` arguments
+    after the round-4 cython migration of the inner per-row loop. The
+    cython kernel scores by val/sat/mask only.
     """
     n_rows, eff_w = val.shape
     if n_rows < 2 or eff_w <= 4:
@@ -680,12 +677,8 @@ def _detect_bar_pct(img: np.ndarray, color_cfg: dict) -> Tuple[float, float]:
         gradient_pct = _gradient_edge_pct(smooth_score, eff_w, dynamic_range)
 
         # --- Method 2: Per-row median voting ---
-        # `hue` 2D array is no longer kept around (mean_hue/hue_mask are
-        # produced by the cython kernel); the wrapper does not use the
-        # first arg, so pass None to keep the signature stable.
-        row_median_pct = _row_independent_pct(
-            None, sat, val, hue_mask, fill_hue_ref, threshold
-        )
+        # v3.1.7 round 15: wrapper signature trimmed to (sat, val, mask, threshold).
+        row_median_pct = _row_independent_pct(sat, val, hue_mask, threshold)
 
         # --- Method 3: Threshold-based with sub-pixel interpolation ---
         # v3.1.4 round 8: rightmost-above-threshold scan moved to cython.

@@ -343,8 +343,19 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.1.6"
+APP_VERSION = "3.1.7"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.1.7: signature trim + throttle + deepcopy (rounds 15-post / 16 / 17 of perf /loop).
+#   - recognition._row_independent_pct: dropped unused `hue` and
+#     `fill_hue_ref` placeholder args (left over from round 4 cython
+#     migration). Single caller updated.
+#   - boss_raid_engine.BossRaidEngine.on_damage_event: replaced the
+#     per-event _fire_entity_update_locked() (rebuilds full entity dict
+#     each call) with a dirty-bit flip. _run_loop (4 Hz) drains the bit
+#     via _maybe_flush_entity_update_locked() honouring a 10 Hz UI cap.
+#     Saves 2.5-15 ms/sec of damage-handler time under heavy combat.
+#   - auto_key_engine.AutoKeyEngine.get_status: deepcopy -> dict() shallow
+#     copy on a flat 7-field primitive dict (~38x faster: 2605 -> 68 ns).
 # v3.1.6: structural caching + cleanup (rounds 12-post / 13 / 14 of perf /loop).
 #   - dps_tracker: dropped the now-dead _compute_damage_id and
 #     _resolve_skill_key Python wrappers (rounds 1 and 10b inlined them
