@@ -11,7 +11,7 @@ from typing import List, Tuple
 
 from PIL import Image
 
-from sao_child_bar_gpu import (
+from gui_modules.sao_child_bar_gpu import (
     _compose_child_bar, _ChildBarSnapshot, _RowSnapshot, BarColors,
     ROW_STRIDE, ROW_H, LIST_X,
 )

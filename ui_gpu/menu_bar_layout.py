@@ -10,7 +10,7 @@ from typing import List, Tuple
 
 from PIL import Image
 
-from sao_menu_hud import MenuCircleButtonRenderer
+from gui_modules.sao_menu_hud import MenuCircleButtonRenderer
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 # Mirror legacy SAOCircleButton constants

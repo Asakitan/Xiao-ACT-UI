@@ -57,7 +57,10 @@ from perf_probe import probe as _probe
 _BASE = (
     getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
     if getattr(sys, 'frozen', False)
-    else os.path.dirname(os.path.abspath(__file__))
+    # Round 61 of sao_gui split refactor: this file moved from the project
+    # root into gui_modules/, so __file__ now lives one level deeper. Use
+    # dirname twice to keep the dev-mode fallback pointing at sao_auto/.
+    else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
 # v2.1.2-f: 优先使用 config 的 lifted-out 路径解析器, 兼容
 # build_release.bat 把 assets/ 提升到 EXE 顶层的模块化布局.

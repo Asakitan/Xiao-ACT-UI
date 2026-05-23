@@ -10,7 +10,7 @@ from typing import Tuple
 
 from PIL import Image
 
-from sao_menu_hud import MenuHudSpriteRenderer
+from gui_modules.sao_menu_hud import MenuHudSpriteRenderer
 
 _renderer = MenuHudSpriteRenderer()
 

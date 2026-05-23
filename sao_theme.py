@@ -27,7 +27,7 @@ from typing import Any, Optional, Callable, List, Dict, Tuple
 import numpy as np
 from config import APP_VERSION_LABEL, FONTS_DIR
 from sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font
-from sao_menu_hud import (
+from gui_modules.sao_menu_hud import (
     MenuCircleButtonRenderer,
     MenuHudSpriteRenderer,
     MenuLeftInfoRenderer,

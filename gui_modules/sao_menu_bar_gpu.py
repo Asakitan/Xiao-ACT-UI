@@ -40,7 +40,7 @@ from PIL import Image
 
 from overlay_render_worker import AsyncFrameWorker, FrameBuffer
 from perf_probe import phase as _phase_trace, probe as _probe
-from sao_menu_hud import MenuCircleButtonRenderer
+from gui_modules.sao_menu_hud import MenuCircleButtonRenderer
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 try:

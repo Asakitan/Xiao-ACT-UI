@@ -343,8 +343,54 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.11"
+APP_VERSION = "3.2.12"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.12: menu widget reorg + lifecycle mixin (rounds 61-62 of /loop).
+#   sao_gui.py crosses below 2100 lines; cumulative reduction reaches
+#   79.1%. MRO depth grows to 15 mixin layers.
+#   Round 61 (user-driven): the remaining 4 standalone "sao_*" GPU
+#     widget files at the repo root moved into gui_modules/:
+#       sao_menu_hud.py (1505 lines, the renderer hub),
+#       sao_menu_bar_gpu.py (430), sao_left_info_gpu.py (892),
+#       sao_child_bar_gpu.py (550). Total 3377 lines relocated.
+#     Updates: 8 importer lines (sao_theme + 4 cross-imports within
+#       moved files + 3 ui_gpu/*) and 4 new hiddenimports in
+#       XiaoACTUI.spec (replacing the 1 old sao_menu_hud entry).
+#     sao_menu_hud.py's `_BASE = os.path.dirname(os.path.abspath(__file__))`
+#       fallback was rewritten to dirname(dirname(...)) since __file__
+#       now resolves one level deeper.
+#     Circular-import fix: the move exposed an existing latent cycle —
+#       sao_theme → gui_modules.sao_menu_hud → gui_modules/__init__ →
+#       sao_gui_menu_mixin → sao_theme.SAOPopUpMenu. Resolved by removing
+#       the SAOPlayerGUI mixin re-exports from gui_modules/__init__.py.
+#       The mixins are SAOPlayerGUI-internal — they're only imported via
+#       full dotted path in sao_gui.py, so the re-exports were unused
+#       convenience. The standalone helper classes (5 of them) that are
+#       imported as `from gui_modules import X` stay re-exported.
+#   Round 62: SAOPlayerGUILifecycleMixin (398 lines mixin / 324 net out).
+#     7 methods covering ordered teardown + restore-on-startup:
+#       _destroy_hp_alpha_strip_windows (9), _restore_panels (13),
+#       _cleanup_entry_overlay (23), _cleanup_exit_overlay (24),
+#       _finalize_close (128 — ordered destroy sequence: stop loops,
+#         cancel after IDs, remove listeners, unbind hotkeys, stop
+#         fisheye + boss-HP worker, close menu, stop engines, persist
+#         cache, destroy overlays, quit mainloop),
+#       _run_exit_animation (124 — confirm + fade-out + scheduled
+#         _finalize_close after the animation),
+#       _on_close (3 — top-level handler).
+#     `SAOPlayerGUI._sao_fx_after_id` class-attr references in the
+#     extracted block were rewritten to `type(self)._sao_fx_after_id`
+#     so the mixin doesn't need to import the not-yet-defined class
+#     (semantics identical via MRO/class-attr lookup).
+#     sao_gui.py: 2347 -> 2023.
+#   SAOPlayerGUI MRO now has 15 mixin layers (in extraction order):
+#     (Menu, Fisheye, Actions, EngineToggles, DpsTheme, Panels,
+#      StatusUpdater, Dialogs, EngineLifecycle, PacketCallbacks,
+#      FloatHp, FloatHandlers, Lifecycle, State, Session). No name
+#     conflicts.
+#   Cumulative refactor: 9682 -> 2023 = -7659 = -79.1%. sao_gui.py is
+#   6977 lines below the user's 9000-line target. gui_modules/ now
+#   holds 36 .py / ~28543 lines.
 # v3.2.11: float-handlers mixin + Win32 helpers move (rounds 58-59 of
 #   /loop). sao_gui.py crosses below 2400 lines; cumulative reduction
 #   reaches 75.8%. MRO depth grows to 14 mixin layers.

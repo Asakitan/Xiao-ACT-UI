@@ -48,7 +48,7 @@ except Exception:
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from overlay_render_worker import AsyncFrameWorker
 from perf_probe import probe as _probe
-from sao_menu_hud import _PIL_DRAW_LOCK
+from gui_modules.sao_menu_hud import _PIL_DRAW_LOCK
 
 
 # ═══════════════════════════════════════════════
