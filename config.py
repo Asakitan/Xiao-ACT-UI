@@ -343,8 +343,21 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.1.7"
+APP_VERSION = "3.1.8"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.1.8: sao_gui main-thread reduction (rounds 19-20 of a new targeted /loop).
+#   - sao_gui._recognition_loop: character_profile.save_profile() (sync
+#     settings.json read+write, 5-50 ms on slow disks) moved to a daemon
+#     thread on first identity arrival. Main loop no longer pays the
+#     one-frame hitch.
+#   - sao_gui._stop_fisheye_overlay: worker_thread.join(2.0) + GPU window
+#     destroy + presenter release moved to a daemon thread. Main thread
+#     does only the light Tk-bound work + flips running[0]. Legacy Tk
+#     Toplevel destroy re-dispatched back via root.after(0, ...) so
+#     thread-affine widgets stay on the main loop.
+#   - sao_gui._push_packet_overlays: bumped _sync_session_players_cache
+#     min_interval from 0.05 -> 0.25 (effective throttle from never-firing
+#     to 4 Hz). Cuts ~20-50 us/call * ~5 calls/sec main-thread work.
 # v3.1.7: signature trim + throttle + deepcopy (rounds 15-post / 16 / 17 of perf /loop).
 #   - recognition._row_independent_pct: dropped unused `hue` and
 #     `fill_hue_ref` placeholder args (left over from round 4 cython

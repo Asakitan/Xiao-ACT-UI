@@ -3678,7 +3678,12 @@ class SAOPlayerGUI:
         """
         # ── DPS tracker: 更新自身玩家信息 ──
         _pp_now = time.time()
-        self._sync_session_players_cache(gs, min_interval=0.05)
+        # v3.1.8 round 20: throttle the in-session roster sync to 4 Hz.
+        # The recognition_loop calls _push_packet_overlays every 200 ms and
+        # `_session_players` doesn't change faster than humans can join /
+        # leave a raid, so syncing more often than 250 ms is wasted work
+        # on the Tk main thread (~20-50 us each call, ~3-5 calls/sec).
+        self._sync_session_players_cache(gs, min_interval=0.25)
         self._sync_boss_hp_revive_hold(gs)
         menu = getattr(self, '_sao_menu', None)
         if menu and getattr(menu, 'visible', False):
@@ -4239,19 +4244,40 @@ class SAOPlayerGUI:
                         self._hp_display_name = disp
                         self._username = gs.player_name
                     # ── 首次获取完整角色数据时自动保存 ──
+                    # v3.1.8 round 19: save_profile reads + atomically writes
+                    # settings.json (5-50 ms on slow disks). Previously this
+                    # ran inline on the recognition_loop Tk callback and
+                    # could visibly stall the UI for one frame. Off-main
+                    # thread via a daemon thread keeps the main loop smooth.
                     if not self._profile_auto_saved and gs.player_name:
                         self._profile_auto_saved = True
+                        _snap_name = gs.player_name
+                        _snap_prof = gs.profession_name or ''
+                        _snap_lv = gs.level_extra if gs.level_extra > 0 else gs.level_base
+                        _snap_uid = gs.player_id or ''
+
+                        def _save_profile_async(
+                                name=_snap_name, prof=_snap_prof,
+                                lv=_snap_lv, uid=_snap_uid):
+                            try:
+                                from character_profile import save_profile
+                                save_profile(
+                                    username=name,
+                                    profession=prof,
+                                    level=lv if lv > 0 else 1,
+                                    uid=uid,
+                                )
+                                print(f'[SAO-UI] 自动保存角色: {name}, '
+                                      f'职业={prof}, LV={lv}, UID={uid}')
+                            except Exception:
+                                pass
+
                         try:
-                            from character_profile import save_profile
-                            lv = gs.level_extra if gs.level_extra > 0 else gs.level_base
-                            save_profile(
-                                username=gs.player_name,
-                                profession=gs.profession_name or '',
-                                level=lv if lv > 0 else 1,
-                                uid=gs.player_id or '',
-                            )
-                            print(f'[SAO-UI] 自动保存角色: {gs.player_name}, '
-                                  f'职业={gs.profession_name}, LV={lv}, UID={gs.player_id}')
+                            threading.Thread(
+                                target=_save_profile_async,
+                                name='sao-gui-save-profile',
+                                daemon=True,
+                            ).start()
                         except Exception:
                             pass
             except Exception as e:
@@ -7550,46 +7576,74 @@ class SAOPlayerGUI:
 
     @_probe.decorate('ui.fisheye.stop')
     def _stop_fisheye_overlay(self):
-        """销毁持久鱼眼叠加层 (GPU 由后台线程自行释放)."""
+        """销毁持久鱼眼叠加层 (GPU 由后台线程自行释放).
+
+        v3.1.8 round 19: previously this method called ``worker_thread.join(2.0)``
+        and ``gpu_win.destroy()`` inline on the Tk main thread, which could
+        stall the UI for up to ~2 seconds while waiting for the fisheye
+        worker to acknowledge stop. Now: the main thread does only the
+        light Tk-bound work (hit-layer destroy, zorder release) and flips
+        the ``running[0]`` stop bit synchronously, then dispatches the
+        heavy wait + GPU teardown to a daemon thread so the user sees an
+        instant UI response.
+        """
         self._destroy_fisheye_hit_layer()
         ov = self._fisheye_ov
         self._fisheye_ov = None
-        if ov is not None:
-            gpu_win = getattr(ov, 'gpu_win', None)
-            if gpu_win is not None:
-                self._release_fisheye_input_zorder(ov)
-            running = getattr(ov, '_running_ref', None)
-            if running:
-                running[0] = False
-            worker_thread = getattr(ov, '_worker_thread', None)
-            if worker_thread is not None:
+        if ov is None:
+            return
+        gpu_win = getattr(ov, 'gpu_win', None)
+        if gpu_win is not None:
+            # Light Win32 ex-style flip; keep on main for ordering safety.
+            self._release_fisheye_input_zorder(ov)
+        # Tell the worker to stop ASAP — it polls running[0] on every frame.
+        running = getattr(ov, '_running_ref', None)
+        if running:
+            running[0] = False
+        # Heavy cleanup (worker join + GPU destroy + presenter release) on a
+        # daemon thread so the main loop returns immediately. Legacy Tk
+        # Toplevel destroy must still go via root.after so it lands on main.
+        _root = self.root
+
+        def _async_fisheye_shutdown(_ov=ov, _root_ref=_root):
+            worker_thread = getattr(_ov, '_worker_thread', None)
+            if worker_thread is not None and worker_thread.is_alive():
                 try:
+                    worker_thread.join(timeout=2.0)
                     if worker_thread.is_alive():
-                        worker_thread.join(timeout=2.0)
-                        if worker_thread.is_alive():
-                            _phase_trace('fisheye.stop.join_timeout',
-                                         getattr(worker_thread, 'name', 'worker'))
+                        _phase_trace('fisheye.stop.join_timeout',
+                                     getattr(worker_thread, 'name', 'worker'))
                 except Exception:
                     pass
-            # GPU window + presenter cleanup
-            if gpu_win is not None:
+            gw = getattr(_ov, 'gpu_win', None)
+            if gw is not None:
                 try:
-                    gpu_win.destroy()
+                    gw.destroy()
                 except Exception:
                     pass
-            presenter = getattr(ov, 'presenter', None)
+            presenter = getattr(_ov, 'presenter', None)
             if presenter is not None:
                 try:
                     presenter.release()
                 except Exception:
                     pass
-            # Legacy Tk Toplevel handle (older instances) — destroy if present
-            destroy = getattr(ov, 'destroy', None)
-            if callable(destroy):
+            destroy_cb = getattr(_ov, 'destroy', None)
+            if callable(destroy_cb):
+                # Legacy Tk Toplevel — must land on main thread.
                 try:
-                    destroy()
+                    _root_ref.after(0, destroy_cb)
                 except Exception:
                     pass
+
+        try:
+            threading.Thread(
+                target=_async_fisheye_shutdown,
+                name='sao-fisheye-stop',
+                daemon=True,
+            ).start()
+        except Exception:
+            # If thread creation fails, fall back to inline (better than leak).
+            _async_fisheye_shutdown()
 
     # ══════════════════════════════════════════════
     #  LinkStart 入场鱼眼镜头畅变
