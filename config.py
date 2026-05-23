@@ -343,8 +343,42 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.10"
+APP_VERSION = "3.2.11"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.11: float-handlers mixin + Win32 helpers move (rounds 58-59 of
+#   /loop). sao_gui.py crosses below 2400 lines; cumulative reduction
+#   reaches 75.8%. MRO depth grows to 14 mixin layers.
+#   Round 58: SAOPlayerGUIFloatHandlersMixin (193 lines mixin / 137 net
+#     out). 9 methods covering remaining float-button handlers + misc:
+#       _float_click, _float_drag, _float_release, _float_enter,
+#       _float_leave, _lift_float_loop, _raise_panel_window,
+#       _arm_pending_combat_reset, _setup_hotkeys.
+#     _create_floating_widget DEFERRED to round 59 (needs Win32 helpers
+#     moved first to avoid circular import).
+#     sao_gui.py: 2674 -> 2537.
+#   Round 59 phase 1: 4 module-level Win32 helpers (63 lines total)
+#     moved from sao_gui.py to gui_modules/sao_panel_ui.py — natural
+#     cluster with the existing _apply_panel_style:
+#       _get_icon_path, _apply_window_icon (iconbitmap + WM_SETICON),
+#       _set_clickthrough_style (WS_EX_TRANSPARENT),
+#       _disable_native_window_shadow (DWMNCRP_DISABLED).
+#     sao_panel_ui.py grew from 195 -> ~280 lines.
+#     sao_gui.py keeps a single re-import line so callers that still
+#     reference the unqualified names work transparently.
+#   Round 59 phase 2: _create_floating_widget (131 lines, the float
+#     anchor Toplevel constructor) appended to FloatHandlersMixin.
+#     Mixin imports expanded to include tkinter, ctypes, the 2 Win32
+#     helpers, and get_cjk_font; mixin declares its own module-level
+#     _user32 = ctypes.windll.user32 handle (ctypes.windll caches DLL
+#     handles, so this is identical to sao_gui's _user32).
+#     sao_gui.py: 2537 -> 2347.
+#   SAOPlayerGUI MRO now has 14 mixin layers (in extraction order):
+#     (Menu, Fisheye, Actions, EngineToggles, DpsTheme, Panels,
+#      StatusUpdater, Dialogs, EngineLifecycle, PacketCallbacks,
+#      FloatHp, FloatHandlers, State, Session). No name conflicts.
+#   Cumulative refactor: 9682 -> 2347 = -7335 = -75.8%. sao_gui.py is
+#   6653 lines below the user's 9000-line target. gui_modules/ now
+#   holds 31 .py / ~25600 lines.
 # v3.2.10: two more SAOPlayerGUI mixins extracted (rounds 55-56 of /loop).
 #   sao_gui.py crosses below 2700 lines; cumulative reduction reaches
 #   72.4%. MRO depth grows to 13 mixin layers.

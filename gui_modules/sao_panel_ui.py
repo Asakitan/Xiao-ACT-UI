@@ -34,17 +34,86 @@ Contents:
 from __future__ import annotations
 
 import ctypes
+import os
 import tkinter as tk
 from typing import Any, Dict, Tuple
 
 from PIL import Image, ImageDraw, ImageTk
 
+from config import resource_path
 from sao_sound import get_sao_font, get_cjk_font
 
 
 # ── Win32 user32 handle (same as sao_gui's _user32 but local here so
 # this module is self-contained and importable from anywhere) ──
 _user32 = ctypes.windll.user32
+
+
+def _get_icon_path():
+    """Locate the runtime icon.ico path; returns None if missing."""
+    p = resource_path('icon.ico')
+    return p if os.path.exists(p) else None
+
+
+def _apply_window_icon(win):
+    """Apply the runtime icon.ico to a Tk Toplevel (both the title bar
+    bitmap via iconbitmap and the taskbar HICON via Win32 WM_SETICON
+    so the icon shows up in Alt+Tab / taskbar even for overrideredirect
+    Toplevels)."""
+    icon_path = _get_icon_path()
+    if not icon_path:
+        return
+    try:
+        win.iconbitmap(default=icon_path)
+        win.iconbitmap(icon_path)
+    except Exception:
+        pass
+    try:
+        win.update_idletasks()
+        hwnd = int(_user32.GetParent(ctypes.c_void_p(win.winfo_id())))
+        if not hwnd:
+            return
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x10
+        LR_DEFAULTSIZE = 0x40
+        WM_SETICON = 0x80
+        hicon = _user32.LoadImageW(None, icon_path, IMAGE_ICON, 0, 0,
+                                   LR_LOADFROMFILE | LR_DEFAULTSIZE)
+        if hicon:
+            if not hasattr(win, '_taskbar_hicons'):
+                win._taskbar_hicons = []
+            win._taskbar_hicons.append(hicon)
+            _user32.SendMessageW(ctypes.c_void_p(hwnd), WM_SETICON, 0, hicon)
+            _user32.SendMessageW(ctypes.c_void_p(hwnd), WM_SETICON, 1, hicon)
+    except Exception:
+        pass
+
+
+def _set_clickthrough_style(win):
+    """给装饰/条带窗口设置 Win32 透明点击穿透样式。"""
+    try:
+        user32 = ctypes.windll.user32
+        GWL_EXSTYLE = -20
+        WS_EX_LAYERED = 0x00080000
+        WS_EX_TRANSPARENT = 0x00000020
+        WS_EX_TOOLWINDOW = 0x00000080
+        hwnd = user32.GetParent(win.winfo_id()) or win.winfo_id()
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        style |= (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW)
+        user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+    except Exception:
+        pass
+
+
+def _disable_native_window_shadow(win):
+    """关闭透明/异形窗口的系统矩形阴影，避免阴影落到错误区域。"""
+    try:
+        win.update_idletasks()
+        hwnd = int(_user32.GetParent(ctypes.c_void_p(win.winfo_id())) or win.winfo_id())
+        policy = ctypes.c_int(1)  # DWMNCRP_DISABLED
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 2, ctypes.byref(policy), 4)
+    except Exception:
+        pass
 
 
 def _apply_panel_style(panel):

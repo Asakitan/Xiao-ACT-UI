@@ -33,6 +33,7 @@ from gui_modules.sao_gui_dialogs_mixin import SAOPlayerGUIDialogsMixin
 from gui_modules.sao_gui_engine_lifecycle_mixin import SAOPlayerGUIEngineLifecycleMixin
 from gui_modules.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin
 from gui_modules.sao_gui_float_hp_mixin import SAOPlayerGUIFloatHpMixin
+from gui_modules.sao_gui_float_handlers_mixin import SAOPlayerGUIFloatHandlersMixin
 
 __all__ = [
     'SAOHotkeyManager',
@@ -53,4 +54,5 @@ __all__ = [
     'SAOPlayerGUIEngineLifecycleMixin',
     'SAOPlayerGUIPacketCallbacksMixin',
     'SAOPlayerGUIFloatHpMixin',
+    'SAOPlayerGUIFloatHandlersMixin',
 ]
