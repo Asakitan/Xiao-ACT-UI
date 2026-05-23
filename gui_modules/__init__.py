@@ -26,6 +26,8 @@ from gui_modules.sao_gui_menu_mixin import SAOPlayerGUIMenuMixin
 from gui_modules.sao_gui_fisheye_mixin import SAOPlayerGUIFisheyeMixin
 from gui_modules.sao_gui_actions_mixin import SAOPlayerGUIActionsMixin
 from gui_modules.sao_gui_engine_toggles_mixin import SAOPlayerGUIEngineTogglesMixin
+from gui_modules.sao_gui_dps_theme_mixin import SAOPlayerGUIDpsThemeMixin
+from gui_modules.sao_gui_panels_mixin import SAOPlayerGUIPanelsMixin
 
 __all__ = [
     'SAOHotkeyManager',
@@ -39,4 +41,6 @@ __all__ = [
     'SAOPlayerGUIFisheyeMixin',
     'SAOPlayerGUIActionsMixin',
     'SAOPlayerGUIEngineTogglesMixin',
+    'SAOPlayerGUIDpsThemeMixin',
+    'SAOPlayerGUIPanelsMixin',
 ]

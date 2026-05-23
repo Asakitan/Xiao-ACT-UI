@@ -343,8 +343,50 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.6"
+APP_VERSION = "3.2.7"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.7: two more SAOPlayerGUI mixins extracted (rounds 46-47 of /loop).
+#   sao_gui.py crosses below 4900 lines; cumulative reduction reaches
+#   49.5%. MRO depth grows to 8 mixin layers.
+#   Round 46: SAOPlayerGUIDpsThemeMixin (286 lines mixin / 226 net out).
+#     16 DPS methods + 3 Theme methods bound by menu-refresh + overlay-
+#     update pattern.
+#     DPS surface (timeouts, snapshots, report availability, overlay show
+#       paths, reset + toggle): _combat_damage_timeout_s,
+#       _boss_hp_hold_timeout_s, _cancel_dps_idle_reset_after,
+#       _schedule_dps_idle_reset_after_fade, _empty_dps_snapshot,
+#       _get_dps_last_report_available, _sync_dps_report_availability,
+#       _request_dps_live_snapshot, _get_dps_last_report,
+#       _request_dps_last_report, _request_dps_entity_detail,
+#       _show_dps_live_snapshot, _show_dps_last_report,
+#       _reset_dps_tracker, _show_last_dps_report_menu, _toggle_dps_enabled.
+#     Theme switcher: _toggle_panel_theme, _set_all_themes,
+#       _apply_theme_to_overlay. References self._THEME_OVERLAY_MAP
+#       (class attr on SAOPlayerGUI, resolved via MRO).
+#     sao_gui.py: 5303 -> 5077.
+#   Round 47: SAOPlayerGUIPanelsMixin (255 lines mixin / 187 net out).
+#     11 methods covering Commander, panel visibility, small settings:
+#     Commander: _toggle_commander_panel, _push_commander_data (48-line
+#       packet-driven snapshot builder, GUI-level sig-cached).
+#     Panel visibility: _toggle_hide_all_panels (51-line
+#       snapshot+restore across 7 panel handles).
+#     Recognition / sound / buffmon / boss-bar / mem-source / topmost:
+#       _toggle_recognition_menu, _toggle_sound_enabled,
+#       _adj_sound_volume, _toggle_buffmon_enabled, _cycle_boss_bar_mode,
+#       _get_mem_data_source, _cycle_mem_data_source, _toggle_topmost.
+#     Mixin imports: perf_probe.probe (for @_probe.decorate) +
+#       CommanderPanel from the already-relocated gui_modules.
+#     _toggle_status_panel deferred — references 10+ module-level
+#     sao_gui UI helpers (_SAO_PANEL_HEADER_BG, _sao_panel_header,
+#     _bind_panel_drag, etc.); moving it requires either pulling those
+#     helpers along or introducing a circular import.
+#     sao_gui.py: 5077 -> 4890.
+#   SAOPlayerGUI MRO now has 8 mixin layers (in extraction order):
+#     (Menu, Fisheye, Actions, EngineToggles, DpsTheme, Panels,
+#      State, Session). No method conflicts across the chain.
+#   Cumulative refactor: 9682 -> 4890 = -4792 = -49.5%. sao_gui.py is
+#   4110 lines below the user's 9000-line target. gui_modules/ now
+#   holds 24 .py / 22602 lines.
 # v3.2.6: two more SAOPlayerGUI mixins extracted (rounds 43-44 of /loop).
 #   sao_gui.py crosses below 5400 lines; cumulative reduction exceeds 45%.
 #   Round 43: SAOPlayerGUIActionsMixin (214 lines mixin / 152 net out).
