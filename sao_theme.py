@@ -36,7 +36,7 @@ import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 try:
     # v2.2.12: per-pixel-alpha layered window for the HUD layer.
     # Optional: falls back to canvas-native chroma-key path if unavailable.
-    from sao_gui_menu_hud import MenuHudOverlay, gpu_menu_hud_enabled
+    from gui_modules.sao_gui_menu_hud import MenuHudOverlay, gpu_menu_hud_enabled
 except Exception:
     MenuHudOverlay = None  # type: ignore[assignment]
     def gpu_menu_hud_enabled() -> bool:  # type: ignore[no-redef]

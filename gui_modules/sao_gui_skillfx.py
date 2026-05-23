@@ -66,7 +66,7 @@ except Exception:
 
 from perf_probe import probe as _probe
 
-from sao_gui_dps import (
+from gui_modules.sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
     _ease_out_cubic, _lerp,
     GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
@@ -296,7 +296,7 @@ class BurstReadyOverlay:
         if not theme:
             return
         # SkillFX uses module-level constants → mutate the module
-        import sao_gui_skillfx as _mod
+        from gui_modules import sao_gui_skillfx as _mod
         for key, value in theme.items():
             setattr(_mod, key, value)
         self._theme_name = theme_name

@@ -69,16 +69,16 @@ from boss_autokey_linkage import (
     save_linkage_config,
 )
 from dps_tracker import DpsTracker
-from sao_gui_dps import DpsOverlay
-from sao_gui_bosshp import BossHpOverlay
-from sao_gui_hp import HpOverlay
-from sao_gui_alert import AlertOverlay
-from sao_gui_skillfx import BurstReadyOverlay
-from sao_gui_buffmon import SelfBuffOverlay, BossBuffOverlay
-from sao_gui_autokey import AutoKeyPanel
-from sao_gui_bossraid import BossRaidPanel
-from sao_gui_commander import CommanderPanel
-from sao_gui_profile_editors import AutoKeyDetailPanel, BossRaidDetailPanel
+from gui_modules.sao_gui_dps import DpsOverlay
+from gui_modules.sao_gui_bosshp import BossHpOverlay
+from gui_modules.sao_gui_hp import HpOverlay
+from gui_modules.sao_gui_alert import AlertOverlay
+from gui_modules.sao_gui_skillfx import BurstReadyOverlay
+from gui_modules.sao_gui_buffmon import SelfBuffOverlay, BossBuffOverlay
+from gui_modules.sao_gui_autokey import AutoKeyPanel
+from gui_modules.sao_gui_bossraid import BossRaidPanel
+from gui_modules.sao_gui_commander import CommanderPanel
+from gui_modules.sao_gui_profile_editors import AutoKeyDetailPanel, BossRaidDetailPanel
 from perf_probe import probe as _probe, phase as _phase_trace, gauge as _perf_gauge
 
 # v2.4.31: high-frequency UI helpers live in cython.

@@ -75,7 +75,7 @@ def _gpu_hp_enabled() -> bool:
 
 from perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _probe
 
-from sao_gui_dps import (
+from gui_modules.sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
     _has_cjk, _ease_out_cubic, _lerp,
     GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
@@ -714,7 +714,7 @@ class HpOverlay:
         if not theme:
             return
         # HP 用模块级常量，直接 setattr 本模块
-        import sao_gui_hp as _mod
+        from gui_modules import sao_gui_hp as _mod
         for key, value in theme.items():
             setattr(_mod, key, value)
         self._theme_name = theme_name

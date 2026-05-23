@@ -22,14 +22,17 @@ LOCAL_HIDDENIMPORTS = [
     'sao_theme',
     'sao_sound',
     'sao_menu_hud',
-    'sao_gui_alert',
-    'sao_gui_autokey',
-    'sao_gui_bosshp',
-    'sao_gui_bossraid',
-    'sao_gui_commander',
-    'sao_gui_dps',
-    'sao_gui_hp',
-    'sao_gui_skillfx',
+    'gui_modules.sao_gui_alert',
+    'gui_modules.sao_gui_autokey',
+    'gui_modules.sao_gui_bosshp',
+    'gui_modules.sao_gui_bossraid',
+    'gui_modules.sao_gui_buffmon',
+    'gui_modules.sao_gui_commander',
+    'gui_modules.sao_gui_dps',
+    'gui_modules.sao_gui_hp',
+    'gui_modules.sao_gui_menu_hud',
+    'gui_modules.sao_gui_profile_editors',
+    'gui_modules.sao_gui_skillfx',
     'gpu_renderer',
     'overlay_scheduler',
     'overlay_render_worker',
@@ -67,6 +70,11 @@ WEBVIEW_PLATFORM_HIDDENIMPORTS = collect_submodules('webview.platforms')
 PROTOBUF_HIDDENIMPORTS = collect_submodules('google.protobuf')
 CLR_LOADER_HIDDENIMPORTS = collect_submodules('clr_loader')
 MEM_PROBE_HIDDENIMPORTS = collect_submodules('mem_probe')
+# Round 38 (v3.2.4): all sao_gui_*.py and SAOPlayerGUI mixins now live in
+# gui_modules/. The individual modules are listed in LOCAL_HIDDENIMPORTS
+# above, but use collect_submodules as a safety net so future additions
+# get picked up automatically.
+GUI_MODULES_HIDDENIMPORTS = collect_submodules('gui_modules')
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
 GPU_RENDER_BINARIES = (
@@ -107,7 +115,7 @@ a = Analysis(
         # 图标
         ('icon.ico', '.'),
     ] + GPU_RENDER_DATAS,
-    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + MEM_PROBE_HIDDENIMPORTS + [
+    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + MEM_PROBE_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
         'clr',
         'clr_loader',

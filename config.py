@@ -343,8 +343,40 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.3"
+APP_VERSION = "3.2.4"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.4: file reorganization — ALL sao_gui_*.py satellite modules moved
+#   into gui_modules/ (rounds 37-38 of /loop). Addresses the user's
+#   "用文件夹来把所有的文件归类，包括以前的文件" objective.
+#   Round 37 (3 small files): sao_gui_menu_hud (347 lines),
+#     sao_gui_alert (457), sao_gui_commander (363) via git mv. Imports
+#     updated in sao_gui.py + sao_theme.py + XiaoACTUI.spec. Total:
+#     1167 lines moved.
+#   Round 38 (8 files atomic, hub module dependency forced this):
+#     sao_gui_dps.py (3188; hub — imported by 5 other overlay files),
+#     sao_gui_hp.py (3418), sao_gui_bosshp.py (3074),
+#     sao_gui_skillfx.py (1847), sao_gui_buffmon.py (1188),
+#     sao_gui_profile_editors.py (1231), sao_gui_autokey.py (547),
+#     sao_gui_bossraid.py (544). Total: 15037 lines moved.
+#     5 cross-imports updated within gui_modules/ (the hub module
+#     reference in hp / bosshp / skillfx / buffmon / alert).
+#     6 importer lines updated in sao_gui.py.
+#     4 lurking old-path imports caught + fixed:
+#       - gui_modules/sao_gui_hp.py: `import sao_gui_hp as _mod`
+#         self-import for theme setattr (would have ImportError at
+#         runtime on theme-switch toggle)
+#       - gui_modules/sao_gui_skillfx.py: same pattern
+#       - tools/bench_compose.py, tools/spike_skillfx_ab.py (dev tools)
+#   XiaoACTUI.spec hiddenimports: 11 entries updated to gui_modules.X
+#   dotted paths, plus added GUI_MODULES_HIDDENIMPORTS =
+#   collect_submodules('gui_modules') as a catch-all for future
+#   additions.
+#   Final state: 0 sao_gui_*.py files at repo root. gui_modules/ now
+#   holds 19 .py files / 18885 lines covering the full SAO HUD /
+#   overlay / panel layer + the 7 mixin/helper extractions from
+#   earlier rounds. sao_gui.py: 7375 (unchanged — it's the importer,
+#   not the source). Cumulative refactor still 9682 → 7375 = -2307
+#   (-23.8%).
 # v3.2.3: COMBAT-LAG FIX — boss-HP compute moved off the Tk main thread
 #   (rounds 34-35 of /loop). Addresses the user's "重战斗卡顿" complaint.
 #   Round 34 (same-thread refactor):

@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from config import FONTS_DIR
 
-from sao_gui_dps import _ulw_update
+from gui_modules.sao_gui_dps import _ulw_update
 
 _user32 = ctypes.windll.user32
 GWL_EXSTYLE = -20

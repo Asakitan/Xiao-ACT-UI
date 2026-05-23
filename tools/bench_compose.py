@@ -169,7 +169,7 @@ def _bench_inset_shadow() -> None:
         return img, mask
 
     def body_gpu() -> List[float]:
-        import sao_gui_bosshp as bh
+        from gui_modules import sao_gui_bosshp as bh
 
         # Warmup.
         img, mask = make_inputs()

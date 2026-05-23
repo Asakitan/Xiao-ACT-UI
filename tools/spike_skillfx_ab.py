@@ -68,7 +68,7 @@ def render_pil_via_overlay() -> Image.Image:
     root = tk.Tk()
     root.withdraw()
     try:
-        from sao_gui_skillfx import BurstReadyOverlay
+        from gui_modules.sao_gui_skillfx import BurstReadyOverlay
         ov = BurstReadyOverlay(root)
         # Push layout
         ov.set_layout({
