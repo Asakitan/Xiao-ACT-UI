@@ -84,18 +84,6 @@ def _append_decimal(prefix: int, suffix: int, min_width: int) -> int:
     return int(prefix or 0) * (10 ** width) + suffix
 
 
-def _compute_damage_id(event: Dict[str, Any]) -> int:
-    # v2.4.31: hot-path migration to Cython. Table is still loaded lazily in
-    # Python so the side-effect / cache lives in one place. The cython helper
-    # accepts ``None`` for the table and falls back to ``owner_id`` itself.
-    return int(_CY_COMBAT.compute_damage_id(event, _load_skill_level_to_effect()))
-
-
-def _resolve_skill_key(event: Dict[str, Any]) -> int:
-    """Mirror dps_tracker bucketing: damage_id, else skill_key, else skill_id."""
-    return int(_CY_COMBAT.resolve_skill_key(event, _load_skill_level_to_effect()))
-
-
 # ═══════════════════════════════════════════════
 #  Per-Skill / Per-Entity Stats
 # ═══════════════════════════════════════════════

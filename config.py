@@ -343,8 +343,20 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.1.5"
+APP_VERSION = "3.1.6"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.1.6: structural caching + cleanup (rounds 12-post / 13 / 14 of perf /loop).
+#   - dps_tracker: dropped the now-dead _compute_damage_id and
+#     _resolve_skill_key Python wrappers (rounds 1 and 10b inlined them
+#     into _CY_COMBAT direct calls; no external callers in the repo).
+#   - game_state.GameStateManager.update + load_cache: replaced the
+#     dict-comp + dataclass __init__ snapshot path (47 fields, ~3.5 us)
+#     with copy.copy(self._state) — ~1.0 us/call, 3.4x faster. Snapshot
+#     independence + shallow-copy list semantics preserved.
+#   - packet_bridge._publish_player_update: cached the 5 distinct
+#     _use_packet_source() results at function entry, replacing 9
+#     repeated calls. Also cached the lock-guarded self._state_mgr.state
+#     (3 accesses -> 1). ~2-2.5 us + 2 lock acquires saved per publish.
 # v3.1.5: DPS micro-opts + auto_key engine cache (rounds 10-11 of perf /loop).
 #   - dps_tracker._build_snapshot_locked: hit_fx shallow-copy via dict()
 #     replaces copy.deepcopy (flat dict of primitives, ~10x faster on

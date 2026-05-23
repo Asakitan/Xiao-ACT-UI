@@ -294,6 +294,7 @@ def _build_packet_skill_slots(player: PlayerData):
     for slot_idx, skill_level_id in sorted(slot_map.items(), key=lambda item: item[0]):
         # Remap internal slot index to display position (only for non-inferred ProfessionList data)
         display_idx = _remap_slot_index(slot_idx) if not inferred else slot_idx
+        state = 'ready'
         cooldown_pct = 0.0
         active = False
         remaining_ms = 0
@@ -927,18 +928,32 @@ class PacketBridge:
     @_probe.decorate('bridge._publish_player_update')
     def _publish_player_update(self, player: PlayerData, from_tick: bool = False):
         identity_confirmed = bool(getattr(player, 'self_uid_confirmed', False))
+        # v3.1.6 round 14: cache _use_packet_source for the 5 components this
+        # function checks. Each call goes through Settings (lock + dict get +
+        # string check); previously this function paid that 6+ times per
+        # bridge publish. Caching keeps results stable across the function
+        # and reduces the bridge thread's per-event Python overhead.
+        use_identity = self._use_packet_source('identity')
+        use_level = self._use_packet_source('level')
+        use_hp = self._use_packet_source('hp')
+        use_stamina = self._use_packet_source('stamina')
+        use_skills = self._use_packet_source('skills')
+        # Cache the lock-guarded state snapshot too — `_state_mgr.state` is a
+        # @property that acquires the GameStateManager lock on every access.
+        # We read it for stamina_max defaults and skill_slot diff comparison.
+        _state_snap = self._state_mgr.state
         updates = {
             'recognition_ok': True,
             'error_msg': '',
         }
 
-        if player.name and identity_confirmed and self._use_packet_source('identity'):
+        if player.name and identity_confirmed and use_identity:
             updates['player_name'] = player.name
-        if player.uid and identity_confirmed and self._use_packet_source('identity'):
+        if player.uid and identity_confirmed and use_identity:
             updates['player_id'] = str(player.uid)
-        if getattr(player, 'fight_point', 0) > 0 and identity_confirmed and self._use_packet_source('identity'):
+        if getattr(player, 'fight_point', 0) > 0 and identity_confirmed and use_identity:
             updates['fight_point'] = player.fight_point
-        if player.level > 0 and identity_confirmed and self._use_packet_source('level'):
+        if player.level > 0 and identity_confirmed and use_level:
             updates['level_base'] = player.level
 
         # Log once when name/level are missing (tool started after login)
@@ -969,7 +984,7 @@ class PacketBridge:
         # Keep the larger recognized extra level to avoid stale packet values
         # overwriting OCR's newer result.
         _level_extra = max(0, int(getattr(player, 'level_extra', 0) or 0))
-        if identity_confirmed and self._use_packet_source('level') and _level_extra > 0:
+        if identity_confirmed and use_level and _level_extra > 0:
             updates['level_extra'] = _level_extra
             logger.info(
                 f'[Bridge] level_extra={_level_extra} '
@@ -977,18 +992,18 @@ class PacketBridge:
                 f'medal={player.season_medal_level}, hunt={player.monster_hunt_level}, '
                 f'bp={player.battlepass_level}, bp_data={player.battlepass_data_level})'
             )
-        if player.profession_id > 0 and identity_confirmed and self._use_packet_source('identity'):
+        if player.profession_id > 0 and identity_confirmed and use_identity:
             updates['profession_id'] = player.profession_id
             if player.profession:
                 updates['profession_name'] = player.profession
             sub_prof = getattr(player, 'sub_profession', '') or ''
             if sub_prof:
                 updates['sub_profession'] = sub_prof
-        if self._use_packet_source('hp') and player.max_hp > 0 and player.hp > 0:
+        if use_hp and player.max_hp > 0 and player.hp > 0:
             updates['hp_current'] = int(player.hp)
             updates['hp_max'] = int(player.max_hp)
             updates['hp_pct'] = player.hp / player.max_hp
-        elif self._use_packet_source('hp') and player.max_hp > 0 and player.hp == 0:
+        elif use_hp and player.max_hp > 0 and player.hp == 0:
             # 只有来自完整同步 (SyncContainerData) 的 HP=0 才接受
             if getattr(player, 'hp_from_full_sync', False):
                 updates['hp_current'] = 0
@@ -997,9 +1012,9 @@ class PacketBridge:
                 player.hp_from_full_sync = False  # 重置标记
             else:
                 logger.debug(f'[Bridge] 忽略增量 HP=0 更新 (max_hp={player.max_hp})')
-        elif self._use_packet_source('hp') and player.hp == 0 and player.max_hp == 0:
+        elif use_hp and player.hp == 0 and player.max_hp == 0:
             pass  # 未知，不更新
-        elif self._use_packet_source('hp'):
+        elif use_hp:
             updates['hp_current'] = int(player.hp)
 
         global _stamina_max_cached
@@ -1013,14 +1028,14 @@ class PacketBridge:
             )
         packet_sta_max = _sanitize_packet_stamina_max(
             packet_sta_max,
-            int(self._state_mgr.state.stamina_max or _stamina_max_cached or 0),
+            int(_state_snap.stamina_max or _stamina_max_cached or 0),
         )
         if packet_sta_max > 0:
             _stamina_max_cached = packet_sta_max
         else:
-            packet_sta_max = _stamina_max_cached or self._state_mgr.state.stamina_max or 0
+            packet_sta_max = _stamina_max_cached or _state_snap.stamina_max or 0
 
-        if self._use_packet_source('stamina'):
+        if use_stamina:
             packet_sta = None
             energy_priority = 0
             ratio_value = getattr(player, 'stamina_ratio', -1.0)
@@ -1074,10 +1089,10 @@ class PacketBridge:
                     logger.debug(f'[Bridge] ratio-only STA fallback: pct={ratio_value:.3f}')
 
         try:
-            if self._use_packet_source('skills'):
+            if use_skills:
                 skill_slots = _build_packet_skill_slots(player)
                 previous_slots = {}
-                for slot in getattr(self._state_mgr.state, 'skill_slots', []) or []:
+                for slot in getattr(_state_snap, 'skill_slots', []) or []:
                     if not isinstance(slot, dict):
                         continue
                     try:
@@ -1143,7 +1158,7 @@ class PacketBridge:
             if now_save - self._last_save_t >= self._SAVE_CACHE_INTERVAL:
                 if updates.get('level_extra', 0) > 0:
                     _should_save = True
-                elif updates.get('stamina_max', 0) > 0 and int(self._state_mgr.state.stamina_max or 0) > 0:
+                elif updates.get('stamina_max', 0) > 0 and int(_state_snap.stamina_max or 0) > 0:
                     _should_save = True
                 elif updates.get('skill_slots') and len(updates['skill_slots']) > 0:
                     _should_save = True
