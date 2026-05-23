@@ -343,8 +343,23 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.2.1"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.1: sao_gui refactor continues (rounds 27-post / 28 / 29).
+#   Three more extractions to gui_modules/ + a dead-code purge:
+#     - SAOPlayerPanel (471 lines) -> gui_modules/sao_player_panel.py.
+#       This pushed sao_gui.py below the user's 9000-line target.
+#     - SAOMenuLeftStack (117 lines) -> gui_modules/sao_menu_left_stack.py.
+#     - SettingsManager (53 lines) -> gui_modules/settings_manager.py;
+#       CONFIG_FILE resolved via parent-of-parent so dev-mode path
+#       (sao_auto/settings.json) is preserved.
+#   Dead-code purge: _update_layered_win (Win32 layered-window helper,
+#   ~58 lines) + its 4 ctypes structs (_BLENDFUNCTION / _ULW_SIZE /
+#   _ULW_POINT / _BITMAPINFOHEADER). Confirmed unused via repo-wide grep;
+#   other ULW consumers all have their own copies. _user32 / _gdi32
+#   signature setup stays since 32+ call sites in sao_gui still need it.
+#   sao_gui.py shrinks 9091 -> 8388 lines (-703 net since v3.2.0;
+#   cumulative refactor: 9682 -> 8388 = -1294 = -13.4%).
 # v3.2.0: sao_gui structural refactor begins (rounds 25-26 of /loop).
 #   Minor bump signals a visible structural change: sao_gui.py monolith
 #   (9682 lines) is being split into gui_modules/* subpackage. First two
