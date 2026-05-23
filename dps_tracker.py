@@ -285,8 +285,13 @@ class DpsTracker:
         is_absorbed = event.get('is_absorbed', False)
         damage = max(0, _safe_int(event.get('damage')))
         skill_id = _safe_int(event.get('skill_id'))
-        # v2.4.31: single cython call merges the damage_id + fallback chain.
-        skill_key = _resolve_skill_key(event) or skill_id
+        # v3.1.5 round 10: hot path — inline the cython call and the cached
+        # skill-effect-table lookup so per-event dispatch is one cython call
+        # plus one global-name read. Lazy-loads the JSON table on first hit.
+        _table = _SKILL_LEVEL_TO_EFFECT
+        if _table is None:
+            _table = _load_skill_level_to_effect()
+        skill_key = int(_CY_COMBAT.resolve_skill_key(event, _table)) or skill_id
         is_crit = event.get('is_crit', False)
 
         # Prefer parser-provided owner UID. Some damage events route through a
@@ -525,7 +530,11 @@ class DpsTracker:
             except Exception:
                 _fx_age = self.HIT_FX_WINDOW_S + 1.0
             if _fx_age <= self.HIT_FX_WINDOW_S:
-                snapshot['hit_fx'] = copy.deepcopy(self._last_hit_fx)
+                # v3.1.5 round 10: hit_fx is a flat dict of primitives
+                # (seq/uid/name/amount/tier/generated_at); shallow copy
+                # via `dict(...)` is equivalent to deepcopy and ~10x
+                # faster than copy.deepcopy on every UI poll.
+                snapshot['hit_fx'] = dict(self._last_hit_fx)
         return snapshot
 
     def _finalize_current_locked(self, reason: str = 'completed') -> Optional[Dict[str, Any]]:

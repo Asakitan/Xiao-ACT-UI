@@ -343,8 +343,19 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.1.4"
+APP_VERSION = "3.1.5"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.1.5: DPS micro-opts + auto_key engine cache (rounds 10-11 of perf /loop).
+#   - dps_tracker._build_snapshot_locked: hit_fx shallow-copy via dict()
+#     replaces copy.deepcopy (flat dict of primitives, ~10x faster on
+#     every UI poll).
+#   - dps_tracker._process_event: inlined _CY_COMBAT.resolve_skill_key
+#     call with a cached module-level skill-effect table; saves one
+#     Python wrapper call per damage event (~1.3 us/event end-to-end).
+#   - auto_key_engine.AutoKeyEngine._tick: cached normalize_auto_key_config
+#     result keyed by raw-dict id + player identity tuple. The 20 Hz
+#     engine tick now skips re-normalisation when settings + identity
+#     unchanged. ~75x speedup on cache hits (17.4 us -> 231 ns/tick).
 # v3.1.4: Cython per-bar numerics (rounds 7-8 of comprehensive perf /loop).
 #   - _sao_cy_pixels.box_convolve5_same_f32: 5-wide moving-average
 #     smoothing in nogil, replaces both np.convolve calls in

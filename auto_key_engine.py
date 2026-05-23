@@ -609,6 +609,15 @@ class AutoKeyEngine:
             "last_fire_at": 0.0,
             "last_reason": "idle",
         }
+        # v3.1.5 round 11: cache the normalized config so the 20 Hz tick
+        # avoids re-running `normalize_auto_key_config` (which deep-coerces
+        # every profile/action/condition) when settings haven't changed.
+        # Invalidation: `settings.set("auto_key", ...)` replaces the raw
+        # dict, so the id() comparison catches edits. The author key
+        # captures identity-state changes (login / map switch).
+        self._cached_config_raw_id: int = 0
+        self._cached_config_author_key: Tuple[Any, ...] = ()
+        self._cached_config: Optional[Dict[str, Any]] = None
 
     def start(self):
         if self._running:
@@ -628,6 +637,43 @@ class AutoKeyEngine:
         self._ready_since.clear()
         self._last_fire_at.clear()
         self._next_loop_at = 0.0
+        # v3.1.5 round 11: also drop the normalized-config cache so the
+        # next tick re-reads settings (used by UI on save).
+        self._cached_config = None
+        self._cached_config_raw_id = 0
+        self._cached_config_author_key = ()
+
+    def _get_normalized_config(self, gs) -> Dict[str, Any]:
+        """Return the auto-key config, reusing the cached normalized form
+        when neither the raw settings dict nor the author identity has
+        changed. ~20 Hz tick previously paid `normalize_auto_key_config`
+        every iteration."""
+        raw_cfg = self._settings.get("auto_key", {}) or {}
+        raw_id = id(raw_cfg)
+        author_key = (
+            getattr(gs, "player_id", ""),
+            getattr(gs, "player_name", ""),
+            int(getattr(gs, "profession_id", 0) or 0),
+            getattr(gs, "profession_name", ""),
+        )
+        cached = self._cached_config
+        if (cached is not None
+                and raw_id == self._cached_config_raw_id
+                and author_key == self._cached_config_author_key):
+            return cached
+        cfg = normalize_auto_key_config(
+            raw_cfg,
+            state_snapshot={
+                "player_uid": author_key[0],
+                "player_name": author_key[1],
+                "profession_id": author_key[2],
+                "profession_name": author_key[3],
+            },
+        )
+        self._cached_config = cfg
+        self._cached_config_raw_id = raw_id
+        self._cached_config_author_key = author_key
+        return cfg
 
     def get_status(self) -> Dict[str, Any]:
         with self._status_lock:
@@ -650,7 +696,9 @@ class AutoKeyEngine:
 
     def _tick(self, now: float):
         gs = self._state_mgr.state
-        config = load_auto_key_config(self._settings, state_snapshot=snapshot_author_from_state(gs))
+        # v3.1.5 round 11: cached normalized config (re-normalises only
+        # when settings or author identity changes).
+        config = self._get_normalized_config(gs)
         profile = active_profile(config)
         tick_ms = _coerce_int((((profile or {}).get("engine") or {}).get("tick_ms")), 50, 10, 1000)
         self._next_loop_at = now + (tick_ms / 1000.0)

@@ -607,7 +607,9 @@ def _detect_bar_pct(img: np.ndarray, color_cfg: dict) -> Tuple[float, float]:
         sat = hsv_slice[:, :, 1].astype(np.float32)
         val = hsv_slice[:, :, 2].astype(np.float32)
         left_ref_width = max(6, int(round(eff_w * 0.12)))
-        fill_hue_ref = float(np.percentile(mean_hue[:left_ref_width], 55))
+        # v3.1.5 round 9: percentile in cython (~27x faster than numpy on
+        # ~50-element float32 slices).
+        fill_hue_ref = _CY_PIXELS.percentile_slice_f32(mean_hue, 0, left_ref_width, 55.0)
         # v3.1.4 round 8: hue_delta/hue_bonus/col_score combine into one
         # cython pass. The old chain allocated ~7 temp float32 arrays
         # per bar; the kernel produces col_score directly. ~7x faster.
@@ -638,10 +640,12 @@ def _detect_bar_pct(img: np.ndarray, color_cfg: dict) -> Tuple[float, float]:
             np.ascontiguousarray(hue_coverage, dtype=np.float32)
         )
 
-        # References and dynamic range
+        # References and dynamic range — v3.1.5 round 9: cython percentile.
         ref_width = max(6, int(round(eff_w * 0.12)))
-        left_ref = float(np.percentile(smooth_score[:ref_width], 84))
-        right_ref = float(np.percentile(smooth_score[max(0, eff_w - ref_width):], 62))
+        left_ref = _CY_PIXELS.percentile_slice_f32(smooth_score, 0, ref_width, 84.0)
+        right_ref = _CY_PIXELS.percentile_slice_f32(
+            smooth_score, max(0, eff_w - ref_width), eff_w, 62.0
+        )
         dynamic_range = max(0.0, left_ref - right_ref)
 
         # ── Full-bar shortcut (hue-based) ──

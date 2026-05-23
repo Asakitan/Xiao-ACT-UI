@@ -1029,3 +1029,82 @@ cpdef object compute_bar_col_score_f32(object mean_hue,
                 base = base * hue_scale
             out[i] = <float>base
     return out_np
+
+
+# ───────────────────────────────────────────────
+#  Small-array percentile (recognition._detect_bar_pct)
+# ───────────────────────────────────────────────
+#
+# v3.1.5 round 9: ``_detect_bar_pct`` runs three percentile calls per
+# bar on prefix/suffix slices of length ~ref_width (~50 elements):
+#
+#     fill_hue_ref = np.percentile(mean_hue[:left_ref_width], 55)
+#     left_ref     = np.percentile(smooth_score[:ref_width], 84)
+#     right_ref    = np.percentile(smooth_score[-ref_width:], 62)
+#
+# np.percentile on a small float32 slice has ~5-7 µs of Python+dispatch
+# overhead. The cython kernel below copies the slice into a private
+# float64 buffer, sorts in place, and indexes the q-th rank with the
+# same linear interpolation numpy uses by default.
+
+
+cdef void _insertion_sort_double(double[::1] arr, Py_ssize_t n) nogil:
+    """Plain in-place ascending insertion sort. Fast for the small (~50
+    element) slices `_detect_bar_pct` feeds us; ~2.5k ops worst case."""
+    cdef Py_ssize_t i, j
+    cdef double tmp
+    for i in range(1, n):
+        tmp = arr[i]
+        j = i - 1
+        while j >= 0 and arr[j] > tmp:
+            arr[j + 1] = arr[j]
+            j -= 1
+        arr[j + 1] = tmp
+
+
+cpdef double percentile_slice_f32(object arr,
+                                   Py_ssize_t start, Py_ssize_t stop,
+                                   double q):
+    """``np.percentile(arr[start:stop], q)`` with linear interpolation.
+
+    ``arr`` is a contiguous ``float32`` 1D ndarray. ``q`` is in [0, 100].
+    Returns 0.0 when the slice is empty (matches the ``_detect_bar_pct``
+    guard at ``eff_w <= 4``).
+    """
+    cdef const float[::1] src = arr
+    cdef Py_ssize_t n = src.shape[0]
+    cdef Py_ssize_t lo = start
+    cdef Py_ssize_t hi = stop
+    cdef Py_ssize_t k
+    cdef Py_ssize_t i
+
+    if lo < 0:
+        lo = 0
+    if hi > n:
+        hi = n
+    if hi <= lo:
+        return 0.0
+    k = hi - lo
+    if k == 1:
+        return <double>src[lo]
+
+    buf_np = _np.empty(k, dtype=_np.float64)
+    cdef double[::1] buf = buf_np
+
+    with nogil:
+        for i in range(k):
+            buf[i] = <double>src[lo + i]
+        _insertion_sort_double(buf, k)
+
+    # numpy default ``linear`` interpolation:
+    #   rank = q/100 * (k - 1)
+    #   low = floor(rank); frac = rank - low
+    #   result = buf[low] + frac * (buf[low+1] - buf[low])
+    cdef double rank = q * 0.01 * <double>(k - 1)
+    if rank <= 0.0:
+        return buf[0]
+    cdef Py_ssize_t low = <Py_ssize_t>rank
+    if low >= k - 1:
+        return buf[k - 1]
+    cdef double frac = rank - <double>low
+    return buf[low] + frac * (buf[low + 1] - buf[low])
