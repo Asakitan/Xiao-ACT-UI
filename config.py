@@ -343,8 +343,20 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.20"
+APP_VERSION = "3.2.21"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.21: Boss-HP teammate-leak fix.
+#   User reported: "怪物血量会把队友血量算进去" — the boss HP bar
+#   showed a 56.26M max while the real boss on screen only had 1.17M.
+#   Root cause: _is_self_combat_target only checked "is known friendly"
+#   to filter out party heals; but party members who joined the session
+#   milliseconds before their first heal event weren't yet in the
+#   friendly cache → their UUID leaked into _bb_recent_targets → the
+#   boss bar's sort-by-max_hp picked the teammate instead of the boss.
+#   Added a player-suffix hard guard ((uuid & 0xFFFF) == 640 → never
+#   eligible as boss target, regardless of cache state) at both the
+#   write site (sao_gui_packet_callbacks_mixin.py) and the read site
+#   (sao_gui_state_mixin.py) for defense-in-depth.
 # v3.2.20: HOTFIX #2 — found the REAL cause of empty left panel.
 #   Four files still imported the GPU painter modules from top-level
 #   (e.g. `from sao_left_info_gpu import ...`) but those modules had

@@ -388,6 +388,14 @@ class SAOPlayerGUIStateMixin:
                     _recent_monsters = []
                     for uuid, dmg_ts in list(self._bb_recent_targets.items()):
                         if _now - dmg_ts < _bb_timeout:
+                            # Defense-in-depth: never let a player-suffix
+                            # UUID drive the boss bar (suffix 0xFFFF==640
+                            # is the parser's player marker). The damage-
+                            # events mixin already filters these at write
+                            # time, but stale entries pre-fix could still
+                            # be sitting in the dict.
+                            if (int(uuid) & 0xFFFF) == 640:
+                                continue
                             m = _bridge.get_monster(uuid)
                             if self._boss_monster_usable(m):
                                 _recent_monsters.append(m)

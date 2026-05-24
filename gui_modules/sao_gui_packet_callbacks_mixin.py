@@ -103,10 +103,23 @@ class SAOPlayerGUIPacketCallbacksMixin:
             _target_uuid_for_boss_hp
             and self._is_known_friendly_uid(_target_uuid_for_boss_hp)
         )
+        # Hard guard: any UUID with the player suffix (0xFFFF == 640) is
+        # a player, period — even if the "known friendly" cache hasn't
+        # caught them yet (e.g. teammate joined the party milliseconds
+        # before their first heal/buff event). Without this, party-heal
+        # events leak the teammate's UUID into _bb_recent_targets and
+        # the boss bar picks them by max_hp, showing a 50M+ "monster"
+        # while the real boss is only ~1M. See user report 2026-05-24
+        # ("怪物血量会把队友血量算进去").
+        _target_is_player_suffix = bool(
+            _target_uuid_for_boss_hp
+            and (int(_target_uuid_for_boss_hp) & 0xFFFF) == 640
+        )
         _is_self_combat_target = bool(
             event.get('attacker_is_self')
             and _target_uuid_for_boss_hp
             and not _is_friendly_boss_hp_target
+            and not _target_is_player_suffix
             and (
                 event.get('target_is_combat_target', False)
                 or event.get('target_is_monster', False)
