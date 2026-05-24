@@ -343,8 +343,21 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.19"
+APP_VERSION = "3.2.20"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.20: HOTFIX #2 — found the REAL cause of empty left panel.
+#   Four files still imported the GPU painter modules from top-level
+#   (e.g. `from sao_left_info_gpu import ...`) but those modules had
+#   been moved to gui_modules/ in an earlier refactor. The lazy
+#   try/except around those imports silently swallowed
+#   ModuleNotFoundError → _gpu_managed=False → Tk widgets stay at
+#   chroma-key bg with no GPU painter ever painting them →
+#   completely invisible panel. Fixed in:
+#     sao_theme.py (3x: menu_bar_gpu / left_info_gpu / child_bar_gpu)
+#     gui_modules/sao_player_panel.py
+#     gui_modules/sao_session_players_panel.py
+#   Verified: gpu_player_panel_enabled() now returns True instead of
+#   silently False; panel._gpu_managed=True; _PPGP_cls resolves.
 # v3.2.19: HOTFIX — entity-mode left-panel + session-panel restored;
 #   pynput Thread-3 traceback silenced; popup error path no longer
 #   swallows widget-constructor exceptions silently.

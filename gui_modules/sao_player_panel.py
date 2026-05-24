@@ -40,7 +40,7 @@ class SAOPlayerPanel(tk.Frame):
         # final target with bg=chroma (#010101) so the parent shell's
         # ``-transparentcolor`` makes them invisible.
         try:
-            from sao_left_info_gpu import (
+            from gui_modules.sao_left_info_gpu import (
                 PlayerPanelGpuPainter as _PPGP,
                 _PlayerPanelSnapshot as _PPSnap,
                 gpu_player_panel_enabled as _gppen,

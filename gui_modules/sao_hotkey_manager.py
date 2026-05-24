@@ -140,8 +140,10 @@ class SAOHotkeyManager:
                     return
 
     def cleanup(self):
-        if self._listener:
-            try:
-                self._listener.stop()
-            except Exception:
-                pass
+        # The listener thread is daemon=True so it auto-exits when the
+        # main thread terminates. We can't call listener.stop() directly
+        # because pynput 1.8.1's stop() can block forever when the
+        # message-loop thread already crashed (see ctypes.ArgumentError
+        # workaround above). Setting the reference to None and trusting
+        # daemon-thread teardown is enough.
+        self._listener = None

@@ -46,7 +46,7 @@ try:
     # composes the whole 8-button strip into one BGRA frame on a
     # GLFW-backed overlay window; SAOCircleButton stays as an
     # invisible hit-test rectangle when this is active.
-    from sao_menu_bar_gpu import (
+    from gui_modules.sao_menu_bar_gpu import (
         MenuBarGpuPainter,
         BarColorFns,
         _ButtonSnapshot,
@@ -62,7 +62,7 @@ try:
     # v2.3.0 Phase 3+: GPU-presented left info panel. Same pattern as
     # MenuBar: Tk Canvases stay invisible at chroma key, painter owns
     # one GLFW window covering the panel's bounding box.
-    from sao_left_info_gpu import (
+    from gui_modules.sao_left_info_gpu import (
         LeftInfoGpuPainter,
         _LeftInfoSnapshot,
         gpu_left_info_enabled,
@@ -74,7 +74,7 @@ except Exception:
         return False
 try:
     # v2.3.0 Phase 3+++: GPU-presented child (popup submenu) bar.
-    from sao_child_bar_gpu import (
+    from gui_modules.sao_child_bar_gpu import (
         ChildBarGpuPainter,
         _ChildBarSnapshot,
         _RowSnapshot as _ChildRowSnapshot,

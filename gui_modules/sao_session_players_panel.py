@@ -62,7 +62,7 @@ class SAOSessionPlayersPanel(tk.Frame):
 
     def __init__(self, parent, rows_provider=None, **kw):
         try:
-            from sao_left_info_gpu import (
+            from gui_modules.sao_left_info_gpu import (
                 SessionPlayersGpuPainter as _SPGP,
                 _SessionPlayersSnapshot as _SPSnap,
                 gpu_session_players_enabled as _spgen,
