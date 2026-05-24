@@ -364,7 +364,15 @@ class SAOPopUpMenu:
             try:
                 self._left_widget = self.left_widget_factory(self._shell)
                 self._left_widget.pack(anchor='nw')
-            except Exception:
+            except Exception as _lwf_exc:
+                # Visible diagnostic — silent swallowing here previously
+                # made it impossible to spot widget-constructor bugs
+                # like missing imports (see round-83 NameError fix).
+                print(
+                    f'[Popup] left_widget_factory failed: '
+                    f'{type(_lwf_exc).__name__}: {_lwf_exc}',
+                    flush=True,
+                )
                 self._left_widget = None
 
         # Compute popup positions.  Anchor next to anchor_widget if given,

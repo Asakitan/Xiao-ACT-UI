@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import time
 import tkinter as tk
-from typing import Any
+from typing import Any, Optional, Tuple
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from sao_sound import get_sao_font, get_cjk_font
+# Animator imported lazily inside __init__ to break the
+# sao_theme → ui_gpu.popup → sao_player_panel circular import.
 
 
 class SAOPlayerPanel(tk.Frame):
@@ -70,6 +72,7 @@ class SAOPlayerPanel(tk.Frame):
         )
         super().__init__(parent, bg=bg_color, highlightthickness=0, **kw)
         self._active = False
+        from sao_theme import Animator  # lazy: avoids circular import
         self._anim = Animator(self)
         try:
             self._target_w = max(120, int(panel_width or 240))

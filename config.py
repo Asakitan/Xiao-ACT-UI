@@ -343,8 +343,35 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.18"
+APP_VERSION = "3.2.19"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.19: HOTFIX — entity-mode left-panel + session-panel restored;
+#   pynput Thread-3 traceback silenced; popup error path no longer
+#   swallows widget-constructor exceptions silently.
+#
+#   Bug 1+2 (one root cause): SAOPlayerPanel.__init__ called Animator()
+#   without an import. Because ui_gpu/popup.py wraps left_widget_factory
+#   in try/except (silently nulling _left_widget on any error), the user
+#   saw an EMPTY left column with NO traceback — both player panel AND
+#   session-players panel disappeared (because SAOMenuLeftStack.__init__
+#   builds player_panel first and crashes before session_panel is ever
+#   created). Fix: lazy `from sao_theme import Animator` inside __init__
+#   to avoid the circular import (sao_theme → ui_gpu.popup →
+#   sao_player_panel chain). Also added Optional, Tuple to typing import.
+#
+#   Bug 3: pynput 1.8.1 on Python 3.11 has a ctypes-validation bug in
+#   its internal _PeekMessage call ("expected LP__PUMP_MSG instance
+#   instead of pointer to MSG"). The Listener thread dies on first
+#   message-loop tick and prints a noisy 9-line traceback to stderr.
+#   Our SAOHotkeyManager already has a try/except around start(), so
+#   the rest of the GUI runs fine. Fix: install threading.excepthook
+#   that swallows ONLY this specific ctypes.ArgumentError.
+#
+#   Defensive: ui_gpu/popup.py:left_widget_factory now PRINTS a single
+#   diagnostic line (type+message) when the factory raises — previously
+#   the bare `except Exception: pass` made it impossible to spot
+#   widget-constructor bugs like this Animator one without manually
+#   running the factory in isolation.
 # v3.2.18: runtime-crash fix — 15 missing imports across 7 mixins
 #   (round 80 of /loop). User ran `python main.py` and hit two real
 #   NameError crashes (APP_VERSION_LABEL @ status_updater_mixin:228 and

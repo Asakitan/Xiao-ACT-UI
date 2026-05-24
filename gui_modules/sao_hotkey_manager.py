@@ -12,6 +12,9 @@ re-imported here so this module is self-contained.
 
 from __future__ import annotations
 
+import ctypes
+import sys
+import threading
 from typing import Any, Dict
 
 from config import DEFAULT_HOTKEYS
@@ -28,6 +31,42 @@ except ImportError:
     pynput_kb = None  # type: ignore[assignment]
     Key = None  # type: ignore[assignment]
     KeyCode = None  # type: ignore[assignment]
+
+
+# pynput 1.8.1 on Python 3.11+ has a ctypes argument-validation bug in
+# its internal _PeekMessage call (expects LP__PUMP_MSG instance but gets
+# pointer to MSG). The Listener thread dies on first message-loop tick,
+# spewing a noisy traceback to stderr. The error is harmless to our app
+# — hotkeys silently fail to register but no other subsystem depends on
+# them. Install a threading.excepthook that suppresses ONLY this exact
+# traceback so the stderr stays clean.
+_PYNPUT_EXCEPTHOOK_INSTALLED = False
+
+
+def _install_pynput_excepthook() -> None:
+    global _PYNPUT_EXCEPTHOOK_INSTALLED
+    if _PYNPUT_EXCEPTHOOK_INSTALLED:
+        return
+    _PYNPUT_EXCEPTHOOK_INSTALLED = True
+    prev_hook = threading.excepthook
+
+    def _hook(args):
+        exc_type = args.exc_type
+        exc_value = args.exc_value
+        thread_name = getattr(args.thread, 'name', '') if args.thread else ''
+        # Match the exact pynput PeekMessage ctypes failure.
+        if (exc_type is ctypes.ArgumentError
+                and 'LP__PUMP_MSG' in (str(exc_value) or '')):
+            # Quietly swallow — pynput listener thread is done, but our
+            # _start() already has try/except so this is non-fatal.
+            return
+        if prev_hook:
+            prev_hook(args)
+
+    threading.excepthook = _hook
+
+
+_install_pynput_excepthook()
 
 
 class SAOHotkeyManager:
