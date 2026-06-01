@@ -214,6 +214,62 @@ public static class HideSeekTemplateMatcher
         return (output, newW, newH);
     }
 
+    /// <summary>
+    /// HS-01: multi-scale CCOEFF_NORMED fallback. When <see cref="MatchNcc"/>
+    /// at the native template size returns below threshold, rescale the
+    /// template by a fixed set of factors and pick the best score. Mirrors
+    /// Python's multi-scale loop at hide_seek_engine.py:441-485 — used to
+    /// recover detection when the ROI was captured at a different DPI /
+    /// window scale than the bundled template.
+    /// </summary>
+    /// <param name="scales">Pre-sorted set of scale factors; default {0.85,
+    /// 0.92, 1.08, 1.15} matches Python's tuning at hide_seek_engine.py:447.</param>
+    public static MatchResult MatchNccMultiScale(
+        ReadOnlySpan<byte> img, int iw, int ih,
+        ReadOnlySpan<byte> tpl, int tw, int th,
+        double threshold = 0.70,
+        ReadOnlySpan<double> scales = default)
+    {
+        // Native size first — most matches succeed there with no rescale cost.
+        var native = MatchNcc(img, iw, ih, tpl, tw, th, threshold);
+        if (native.Found) return native;
+        // Pre-default the scale set inside the body so the parameter can stay
+        // as a ReadOnlySpan<double> (which can't carry an array default).
+        Span<double> defaultScales = stackalloc double[] { 0.85, 0.92, 1.08, 1.15 };
+        var actualScales = scales.IsEmpty ? defaultScales : scales;
+        var best = native;
+        // Heap-allocate the scratch buffer ONCE sized for the largest scale.
+        var maxScale = 1.0;
+        foreach (var s in actualScales)
+        {
+            if (s > maxScale) maxScale = s;
+        }
+        var maxW = Math.Max(tw, (int)(tw * maxScale + 1));
+        var maxH = Math.Max(th, (int)(th * maxScale + 1));
+        var scratch = new byte[maxW * maxH];
+        foreach (var s in actualScales)
+        {
+            if (s <= 0.05) continue;
+            var sw = Math.Max(1, (int)(tw * s));
+            var sh = Math.Max(1, (int)(th * s));
+            if (sw > iw || sh > ih) continue;
+            // Nearest-neighbour rescale into scratch.
+            for (int y = 0; y < sh; y++)
+            {
+                int sy = Math.Min(th - 1, (int)(y / s));
+                for (int x = 0; x < sw; x++)
+                {
+                    int sx = Math.Min(tw - 1, (int)(x / s));
+                    scratch[y * sw + x] = tpl[sy * tw + sx];
+                }
+            }
+            var attempt = MatchNcc(img, iw, ih, scratch.AsSpan(0, sw * sh), sw, sh, threshold);
+            if (attempt.Score > best.Score) best = attempt;
+            if (best.Found) break; // Short-circuit on first passing scale.
+        }
+        return best;
+    }
+
     private static bool ValidateGeometry(
         ReadOnlySpan<byte> img, int iw, int ih,
         ReadOnlySpan<byte> tpl, int tw, int th)

@@ -113,6 +113,14 @@ public sealed class AutoKeySpecRuntime
     private readonly AutoKeyReadinessGate _readiness;
     private readonly AutoKeyCooldownGate _cooldown;
 
+    // R16: burst-visual virtual actions appended to every profile tick after
+    // the declared actions. Mirrors Python's _burst_visual_actions list set
+    // by set_burst_actions(...) and read back by _get_burst_virtual_actions()
+    // at auto_key_engine.py:929-980. Stored as the typed action spec so the
+    // runtime path is identical to declared actions.
+    private System.Collections.Immutable.ImmutableArray<AutoKeyActionSpec> _burstActions
+        = System.Collections.Immutable.ImmutableArray<AutoKeyActionSpec>.Empty;
+
     public AutoKeySpecRuntime(
         IKeyDispatcher dispatcher,
         AutoKeyReadinessGate? readiness = null,
@@ -124,6 +132,62 @@ public sealed class AutoKeySpecRuntime
     }
 
     public long FireCount { get; private set; }
+
+    /// <summary>R16: install the burst-visual virtual actions for subsequent
+    /// ticks. Mirrors Python's <c>set_burst_actions(list)</c> at
+    /// auto_key_engine.py:929. Each input pair is normalised: out-of-range
+    /// (trigger_slot or action_slot ∉ [1, 9]) entries are dropped, the
+    /// generated key is mapped 1:1 with the slot digit, the condition list
+    /// pins <c>burst_ready_is=true</c> AND <c>slot_state_is=ready</c> on the
+    /// trigger slot, and the fire rules mirror the Python tuning
+    /// (tap × 1, hold 80ms, post-delay 200ms, rearm 500ms).</summary>
+    public void SetBurstActions(IReadOnlyList<(int TriggerSlot, int ActionSlot)> pairs)
+    {
+        if (pairs is null || pairs.Count == 0)
+        {
+            _burstActions = System.Collections.Immutable.ImmutableArray<AutoKeyActionSpec>.Empty;
+            return;
+        }
+        var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<AutoKeyActionSpec>();
+        for (var i = 0; i < pairs.Count; i++)
+        {
+            var trigger = pairs[i].TriggerSlot;
+            var action = pairs[i].ActionSlot;
+            if (trigger < 1 || trigger > 9) continue;
+            if (action < 1 || action > 9) continue;
+            builder.Add(BuildBurstVirtualAction(i, trigger, action));
+        }
+        _burstActions = builder.ToImmutable();
+    }
+
+    /// <summary>R16: read back the installed burst-visual actions. The
+    /// returned specs are the same objects evaluated each tick, so consumers
+    /// must treat them as read-only.</summary>
+    public IReadOnlyList<AutoKeyActionSpec> BurstActions => _burstActions;
+
+    private static AutoKeyActionSpec BuildBurstVirtualAction(
+        int index, int triggerSlot, int actionSlot)
+    {
+        // Slot index → digit key mirrors Python's SLOT_KEY_MAP at line 946.
+        var key = ((char)('0' + actionSlot)).ToString();
+        var conds = System.Collections.Immutable.ImmutableArray.Create<AutoKeyCondition>(
+            new BurstReadyIsCondition(true),
+            new SlotStateIsCondition(triggerSlot, "ready"));
+        return new AutoKeyActionSpec(
+            Id: $"_burst_visual_{index}",
+            Label: $"Burst S{triggerSlot}→S{actionSlot}",
+            Enabled: true,
+            SlotIndex: actionSlot,
+            Key: key,
+            PressMode: "tap",
+            PressCount: 1,
+            PressIntervalMs: 0,
+            HoldMs: 80,
+            ReadyDelayMs: 0,
+            MinRearmMs: 500,
+            PostDelayMs: 200,
+            Conditions: conds);
+    }
 
     /// <summary>
     /// S139 — per-action diagnostic snapshot from the most recent
@@ -206,11 +270,41 @@ public sealed class AutoKeySpecRuntime
     public string? Tick(AutoKeyProfileSpecRecord profile, AutoKeySpecContext ctx)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        var reasons = new Dictionary<string, string>(profile.Actions.Length);
+        var actionCount = profile.Actions.Length + _burstActions.Length;
+        var reasons = new Dictionary<string, string>(actionCount);
         var cooldowns = new Dictionary<string, int>();
         var readyFor = new Dictionary<string, int>();
         string? fired = null;
-        foreach (var action in profile.Actions)
+        // First pass: declared profile actions.
+        fired = EvaluateActions(profile.Actions, ctx, reasons, cooldowns, readyFor, fired);
+        // R16: second pass — burst-visual virtual actions appended at the end
+        // so a declared action that fires this tick still wins. Matches
+        // Python's loop ordering at auto_key_engine.py:760-770.
+        if (_burstActions.Length > 0)
+        {
+            fired = EvaluateActions(_burstActions, ctx, reasons, cooldowns, readyFor, fired);
+        }
+        lock (_snapshotGate)
+        {
+            _lastBlock.Clear();
+            foreach (var kv in reasons) _lastBlock[kv.Key] = kv.Value;
+            _lastCooldownRemaining.Clear();
+            foreach (var kv in cooldowns) _lastCooldownRemaining[kv.Key] = kv.Value;
+            _lastReadyFor.Clear();
+            foreach (var kv in readyFor) _lastReadyFor[kv.Key] = kv.Value;
+        }
+        return fired;
+    }
+
+    private string? EvaluateActions(
+        System.Collections.Immutable.ImmutableArray<AutoKeyActionSpec> actions,
+        AutoKeySpecContext ctx,
+        Dictionary<string, string> reasons,
+        Dictionary<string, int> cooldowns,
+        Dictionary<string, int> readyFor,
+        string? fired)
+    {
+        foreach (var action in actions)
         {
             if (action.MinRearmMs > 0)
             {
@@ -223,8 +317,6 @@ public sealed class AutoKeySpecRuntime
 
             if (!_readiness.TryFire(action.Id, slot, action.ReadyDelayMs, ctx.Now))
             { reasons[action.Id] = "readiness"; continue; }
-            // gate just confirmed (or recorded) leading-edge ready;
-            // snapshot the "ready for" duration for the HUD.
             readyFor[action.Id] = _readiness.ReadyForMs(action.Id, ctx.Now);
             if (!_cooldown.TryFire(action.Id, action.MinRearmMs, ctx.Now))
             { reasons[action.Id] = "cooldown"; continue; }
@@ -235,15 +327,6 @@ public sealed class AutoKeySpecRuntime
             FireCount++;
             reasons[action.Id] = "fired";
             fired = action.Id;
-        }
-        lock (_snapshotGate)
-        {
-            _lastBlock.Clear();
-            foreach (var kv in reasons) _lastBlock[kv.Key] = kv.Value;
-            _lastCooldownRemaining.Clear();
-            foreach (var kv in cooldowns) _lastCooldownRemaining[kv.Key] = kv.Value;
-            _lastReadyFor.Clear();
-            foreach (var kv in readyFor) _lastReadyFor[kv.Key] = kv.Value;
         }
         return fired;
     }

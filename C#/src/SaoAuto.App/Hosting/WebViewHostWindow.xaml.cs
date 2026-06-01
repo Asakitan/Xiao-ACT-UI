@@ -28,7 +28,8 @@ public partial class WebViewHostWindow : Window
     /// shared <see cref="HudGeometry"/> helper.</summary>
     public void ApplyHudGeometry(SaoAuto.Core.Configuration.SettingsManager? settings = null)
     {
-        HudGeometry.Apply(this, settings, _log);
+        // WebView profile is the canonical 500 px HUD.
+        HudGeometry.Apply(this, HudGeometry.Profile.WebView, settings, _log);
     }
 
     /// <summary>S184 — exposed after <see cref="EnsureWebViewAsync"/>

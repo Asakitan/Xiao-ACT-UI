@@ -117,6 +117,38 @@ public sealed record GameState
     public ImmutableArray<DungeonTargetProgress> DungeonTargets { get; init; }
         = ImmutableArray<DungeonTargetProgress>.Empty;
 
+    // ── Scene-change tracking (R8 epic: MSR-1..8 / MAPSWITCH-01..08) ──
+    //
+    // These mirror Python's per-scene memos used by `_emit_scene_change` to
+    // disambiguate hard/restart/transition. The bridge reads PRIOR values
+    // BEFORE overwriting and emits a SceneChangeEvent on diff. Defaults to
+    // 0 mean "not yet observed" — first packet stores without emitting,
+    // matching Python's `if self._last_dungeon_id != 0` guards.
+
+    /// <summary>Last NotifyStartPlayingDungeon dungeon id. Used by
+    /// ApplyDungeonStart (MSR-2 / MAPSWITCH-03) to detect retry vs new
+    /// dungeon. Mirrors Python <c>_last_dungeon_id</c> at packet_parser.py:1495.</summary>
+    public int LastDungeonId { get; init; }
+
+    /// <summary>Last EnterScene SceneBasicId (AttrType 0x155). Used by
+    /// ApplyEnterScene (MSR-3 / MAPSWITCH-07) to drive hard-vs-soft scene
+    /// reset decisions. Mirrors Python <c>_last_scene_id</c> at
+    /// packet_parser.py:1497.</summary>
+    public int LastSceneId { get; init; }
+
+    /// <summary>Composite scene key (MapId, ChannelId, PlaneId, SceneLayer)
+    /// extracted from SyncContainerData.CharSerialize. Used by ApplyContainerSync
+    /// (MAPSWITCH-05) to detect channel / layer / plane switches inside the
+    /// same dungeon. Mirrors Python <c>_last_scene_key</c> at
+    /// packet_parser.py:3128. Layout: high 16 bits MapId, next 16 ChannelId,
+    /// next 16 PlaneId, low 16 SceneLayer.</summary>
+    public long LastSceneKey { get; init; }
+
+    /// <summary>Count of SyncContainerData packets observed in the current
+    /// scene. Mirrors Python <c>_sync_container_count</c> at packet_parser.py:1501.
+    /// Reset on EnterGame (cross-server) and on hard scene change.</summary>
+    public int SyncContainerCount { get; init; }
+
     // ── Near-entity table (S68: from SyncNearEntities) ──
     // Keyed by entity Uuid; value = (EntityType, FirstSeenSeconds).
     // Removed when SyncNearEntities reports a Disappear for the uuid.

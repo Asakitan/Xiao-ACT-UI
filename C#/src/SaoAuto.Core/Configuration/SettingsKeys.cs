@@ -25,6 +25,15 @@ public static class SettingsKeys
     // for 1:1 parity with sao_webview.py.
     public const string HudOffsetX = "hud_offset_x";
 
+    /// <summary>
+    /// R8 / DPS-04: DPS overlay master toggle. Mirrors Python's
+    /// <c>dps_enabled</c> setting at sao_gui_engine_lifecycle_mixin.py:287
+    /// + sao_gui_dps_theme_mixin.py:274-285. Default true; when false the
+    /// per-tick DPS pump (DPS-03) skips show-edge / hides the panel even
+    /// when <see cref="DpsTracker.PollOverlayState"/> reports has-live.
+    /// </summary>
+    public const string DpsEnabled = "dps_enabled";
+
     public static readonly IReadOnlyList<string> LegacyPrunedOnSave = new[]
     {
         "last_file",

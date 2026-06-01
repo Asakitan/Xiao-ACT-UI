@@ -53,11 +53,18 @@ public sealed class WebBridgeLifecycle : IDisposable
 
     public WebBridgeLifecycle(
         GameStateManager states,
-        Func<DpsSnapshot?>? dpsSnapshotProvider = null)
+        Func<DpsSnapshot?>? dpsSnapshotProvider = null,
+        DpsTracker? dpsTracker = null,
+        Func<bool>? dpsEnabledProvider = null)
     {
         if (states is null) throw new ArgumentNullException(nameof(states));
         Broadcaster = new BridgeEventBroadcaster();
-        _publisher = new GameStatePublisher(states, Broadcaster, dpsSnapshotProvider);
+        // R8 / DPS-02/03: pass the live DpsTracker into the publisher so it
+        // can drive show-live / fade-out edges via the per-tick pump. When
+        // null, the publisher falls back to the snapshot-only behaviour
+        // shipped before R8 (no edge, no fade).
+        _publisher = new GameStatePublisher(
+            states, Broadcaster, dpsSnapshotProvider, dpsTracker, dpsEnabledProvider);
         HostAdapter = new BridgeHostAdapter(Router, Broadcaster);
     }
 
@@ -119,11 +126,14 @@ public sealed class WebBridgeLifecycle : IDisposable
     /// may be null when the packet runtime didn't start; the bridge
     /// then returns <c>{error:"dps_unavailable"}</c>. Idempotent.
     /// </summary>
-    public void AttachDps(Action? reset, Func<DpsSnapshot?>? lastReport)
+    public void AttachDps(
+        Action? reset,
+        Func<DpsSnapshot?>? lastReport,
+        SettingsManager? settings = null)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _dpsBridge?.Dispose();
-        _dpsBridge = new DpsBridge(Router, reset, lastReport);
+        _dpsBridge = new DpsBridge(Router, reset, lastReport, settings);
     }
 
     /// <summary>

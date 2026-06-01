@@ -27,6 +27,7 @@ public sealed class SoundCatalog
             ["burst_ready"]  = "burst_ready.wav",
             ["boss_alert"]   = "boss_alert.wav",
             ["boss_phase"]   = "boss_phase.wav",
+            ["boss_prewarn"] = "boss_prewarn.wav",
             ["levelup"]      = "levelup.wav",
         };
 

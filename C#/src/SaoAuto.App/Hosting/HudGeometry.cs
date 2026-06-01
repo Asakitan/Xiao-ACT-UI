@@ -29,27 +29,73 @@ public static class HudGeometry
 {
     public const double HudHeight = 500;
     public const double DefaultOffsetX = 0.04;
+    // F1/F3: WebView and Entity hosts share the same offset but use different
+    // height profiles. WebView is the canonical 500px high HUD; Entity host
+    // (post-port) will use a slimmer 320px profile per Python's parity at
+    // sao_gui_hp.py:898-902. Until Entity overlay panels port natively, both
+    // profiles fall through to HudHeight.
+    public const double EntityHudHeight = HudHeight;
+    public const double WebViewHudHeight = HudHeight;
+
+    public enum Profile
+    {
+        WebView = 0,
+        Entity = 1,
+    }
 
     public readonly record struct Bounds(double X, double Y, double W, double H);
 
     public static Bounds Compute(SettingsManager? settings = null, ILogger? logger = null)
+        => Compute(Profile.WebView, settings, logger, gameWindowHandle: IntPtr.Zero);
+
+    /// <summary>
+    /// F1/F3/F4 monitor-aware compute. When <paramref name="gameWindowHandle"/>
+    /// is non-zero, the HUD is anchored to the monitor containing that hwnd
+    /// (mirrors Python's game-window-aware HudGeometry in sao_webview.py).
+    /// Falls back to <see cref="System.Windows.SystemParameters.PrimaryScreenWidth"/>
+    /// when the lookup fails. Different <see cref="Profile"/> values select
+    /// per-host height / offset tuning.
+    /// </summary>
+    public static Bounds Compute(
+        Profile profile,
+        SettingsManager? settings = null,
+        ILogger? logger = null,
+        IntPtr gameWindowHandle = default)
     {
         var log = logger ?? NullLogger.Instance;
         try
         {
-            var sw = System.Windows.SystemParameters.PrimaryScreenWidth;
-            var sh = System.Windows.SystemParameters.PrimaryScreenHeight;
+            double monLeft = 0, monTop = 0;
+            double monWidth = System.Windows.SystemParameters.PrimaryScreenWidth;
+            double monHeight = System.Windows.SystemParameters.PrimaryScreenHeight;
+            // F1: monitor-aware — when we have a game window, resolve which
+            // monitor contains it and use that monitor's rect. Falls back to
+            // the primary screen on lookup failure.
+            if (gameWindowHandle != IntPtr.Zero
+                && TryGetMonitorRect(gameWindowHandle, out var rect))
+            {
+                monLeft = rect.Left;
+                monTop = rect.Top;
+                monWidth = rect.Right - rect.Left;
+                monHeight = rect.Bottom - rect.Top;
+            }
+
             var offsetX = settings?.Get<double?>(SettingsKeys.HudOffsetX) ?? DefaultOffsetX;
-            if (offsetX < -0.5 || offsetX > 0.95) offsetX = DefaultOffsetX;
+            var height = profile switch
+            {
+                Profile.Entity => EntityHudHeight,
+                _ => WebViewHudHeight,
+            };
 
             var bounds = new Bounds(
-                X: sw * offsetX,
-                Y: sh - HudHeight,
-                W: sw * 0.75,
-                H: HudHeight);
+                X: monLeft + monWidth * offsetX,
+                Y: monTop + monHeight - height,
+                W: monWidth * 0.75,
+                H: height);
             log.LogInformation(
-                "HUD geometry: monitor={Sw}x{Sh}; hud={Hw}x{Hh} @ ({X},{Y}) offset_x={OffsetX}",
-                sw, sh, bounds.W, bounds.H, bounds.X, bounds.Y, offsetX);
+                "HUD geometry [{Profile}]: monitor=({ML},{MT})+{MW}x{MH}; hud={Hw}x{Hh} @ ({X},{Y}) offset_x={OffsetX}",
+                profile, monLeft, monTop, monWidth, monHeight,
+                bounds.W, bounds.H, bounds.X, bounds.Y, offsetX);
             return bounds;
         }
         catch (Exception ex)
@@ -60,10 +106,72 @@ public static class HudGeometry
         }
     }
 
+    /// <summary>F1 helper: resolve the monitor rect containing the given
+    /// window handle. Returns false when the hwnd is bad or MonitorFromWindow
+    /// fails. Output is in physical pixels (matches the SetWindowPos path).</summary>
+    private static bool TryGetMonitorRect(IntPtr hwnd, out RECT rect)
+    {
+        rect = default;
+        try
+        {
+            const uint MONITOR_DEFAULTTONEAREST = 2;
+            var hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            if (hMonitor == IntPtr.Zero) return false;
+            var info = new MONITORINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<MONITORINFO>() };
+            if (!GetMonitorInfo(hMonitor, ref info)) return false;
+            rect = info.rcMonitor;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public uint cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
     public static void Apply(System.Windows.Window window, SettingsManager? settings = null, ILogger? logger = null)
+        => Apply(window, Profile.WebView, settings, logger, gameWindowHandle: IntPtr.Zero);
+
+    /// <summary>
+    /// F1/F3 multi-monitor / Entity-vs-WebView profile-aware Apply.
+    /// When <paramref name="gameWindowHandle"/> is non-zero, the HUD
+    /// anchors to the monitor containing that window. Callers that
+    /// know which profile they are (EntityHostWindow / WebViewHostWindow)
+    /// should pass it so the per-host height profile applies.
+    /// </summary>
+    public static void Apply(
+        System.Windows.Window window,
+        Profile profile,
+        SettingsManager? settings = null,
+        ILogger? logger = null,
+        IntPtr gameWindowHandle = default)
     {
         if (window is null) throw new ArgumentNullException(nameof(window));
-        var b = Compute(settings, logger);
+        var b = Compute(profile, settings, logger, gameWindowHandle);
         window.WindowStartupLocation = System.Windows.WindowStartupLocation.Manual;
         window.Width = b.W;
         window.Height = b.H;
@@ -83,6 +191,18 @@ public static class HudGeometry
     private static readonly IntPtr HWND_TOPMOST = new(-1);
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint SWP_SHOWWINDOW = 0x0040;
+
+    // Extended window style bits — mirrors Python sao_gui_hp.py:898-902
+    // which uses WS_EX_TOOLWINDOW (no taskbar entry + no Alt-Tab) and
+    // WS_EX_NOACTIVATE (don't steal focus on click) for the HUD host.
+    // NOTE: WS_EX_TRANSPARENT (0x20) is intentionally NOT set — Python
+    // toggles it per-frame via cursor-hit-region logic in
+    // sao_webview.py:4115-4191. Setting it statically would make the HUD
+    // permanently un-clickable. WS_EX_LAYERED (0x80000) is redundant
+    // because the XAML uses AllowsTransparency=True (which sets it).
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TOOLWINDOW = 0x00000080;
+    private const int WS_EX_NOACTIVATE = 0x08000000;
 
     private static void ForceGeometryAndTopmost(System.Windows.Window window, Bounds b)
     {
@@ -106,6 +226,15 @@ public static class HudGeometry
             int ph = (int)Math.Round(b.H * sy);
             SetWindowPos(hwnd, HWND_TOPMOST, px, py, pw, ph,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+            // Apply extended-style bits so the HUD behaves like Python's
+            // tk overlay: no taskbar entry, no Alt-Tab, no focus-steal.
+            var ex = GetWindowLong(hwnd, GWL_EXSTYLE);
+            int merged = ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+            if (merged != ex)
+            {
+                SetWindowLong(hwnd, GWL_EXSTYLE, merged);
+            }
         }
         catch { /* swallow — best effort */ }
     }
@@ -114,4 +243,10 @@ public static class HudGeometry
     [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
     private static extern bool SetWindowPos(
         IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+    private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SetWindowLongW")]
+    private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 }

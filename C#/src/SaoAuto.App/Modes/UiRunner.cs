@@ -58,8 +58,34 @@ public sealed class UiRunner
         // The broadcaster has no JS subscriber yet (WebView2 attach
         // pending), but the publisher already streams the typed
         // state.changed payload so a future host attach is one line.
-        using var webBridge = new WebBridgeLifecycle(_states, packets.DpsSnapshotProvider);
+        // R8: also thread the live DpsTracker + dps_enabled provider into
+        // the publisher so the per-tick DPS pump (DPS-02/03/07) can drive
+        // show-live / fade-out edges. The packets host owns the tracker;
+        // the setting is read from SettingsManager (default true).
+        using var webBridge = new WebBridgeLifecycle(
+            _states,
+            packets.DpsSnapshotProvider,
+            packets.DpsTracker,
+            () => _settings.Get<bool?>(SettingsKeys.DpsEnabled) ?? true);
         webBridge.Start();
+        // R8: scene-change subscriber → state.scene_changed bridge event.
+        // Idempotent unsubscribe via using-scope is implicit since the
+        // PacketLifecycle outlives this UiRunner.Run scope.
+        if (packets.PacketBridge is { } pb)
+        {
+            pb.SceneChanged += sc =>
+            {
+                webBridge.Broadcaster.Emit(BridgeEvents.SceneChanged, new System.Text.Json.Nodes.JsonObject
+                {
+                    ["kind"] = sc.Kind.ToString(),
+                    ["reason"] = sc.Reason,
+                    ["preserve_combat"] = sc.PreserveCombat,
+                    ["reset_on_next_damage"] = sc.ResetOnNextDamage,
+                    ["reset_delay_s"] = sc.ResetDelaySeconds,
+                    ["timestamp"] = sc.TimestampSeconds,
+                });
+            };
+        }
 
         // S156 — share a single AutoKeyProfileService across HUD / future
         // editor by constructing it once and registering its bridge
@@ -71,7 +97,7 @@ public sealed class UiRunner
         // runtime (no per-host state); recognition is attached inside
         // the host loop below, once `recognition` is in scope.
         webBridge.AttachBuffMon(_settings);
-        webBridge.AttachDps(packets.ResetDps, packets.DpsSnapshotProvider);
+        webBridge.AttachDps(packets.ResetDps, packets.DpsSnapshotProvider, _settings);
         // S172 — best-effort updater pipeline. Settings-gated by
         // `update_check_enabled` (default false); when off, the bridge
         // surfaces `{error:"unsupported"}` so the HUD button can grey.

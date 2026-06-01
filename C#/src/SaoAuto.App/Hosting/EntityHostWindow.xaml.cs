@@ -20,6 +20,9 @@ public partial class EntityHostWindow : Window
     /// <see cref="HudGeometry.Apply"/>.</summary>
     public void ApplyHudGeometry(SettingsManager? settings = null)
     {
-        HudGeometry.Apply(this, settings, _log);
+        // F2/F5/F6: Entity profile carries a per-host height tuning so
+        // the slim HP/STA overlay HUD doesn't waste the full 500 px once
+        // Entity-side panels port natively.
+        HudGeometry.Apply(this, HudGeometry.Profile.Entity, settings, _log);
     }
 }

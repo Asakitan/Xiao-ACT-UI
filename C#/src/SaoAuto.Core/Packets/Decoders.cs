@@ -119,11 +119,59 @@ public sealed class NotifyStartPlayingDungeonDecoder : IMethodDecoder
 /// </summary>
 public sealed class EnterSceneDecoder : IMethodDecoder
 {
+    // AttrType.SCENE_BASIC_ID — mirrors Python packet_parser.py:311
+    // (0x155 = 341 = AttrSceneBasicId, the canonical SceneBasicId carried
+    // in EnterSceneInfo.SceneAttrs).
+    private const int SceneBasicIdAttr = 0x155;
+
     public int MethodId => NotifyMethod.EnterScene;
 
     public void Decode(ReadOnlySpan<byte> body, double timestampSeconds, Action<ParserEvent> emit)
     {
-        emit(new EnterSceneEvent(timestampSeconds));
+        // PROTO-06 / MAPSWITCH-07: parse EnterSceneInfo so the bridge sees
+        // SceneBasicId (for hard-scene comparison) and PlayerEnt.Uuid (so
+        // ApplyEnterScene can latch self_uid). Mirrors Python's
+        // _on_enter_scene head at packet_parser.py:2334-2376. Falls back to
+        // the bare marker event on any decode failure so non-conforming
+        // bodies still ping subscribers.
+        int sceneBasicId = 0;
+        ulong playerUuid = 0;
+        string sceneGuid = string.Empty;
+        if (!body.IsEmpty)
+        {
+            try
+            {
+                var msg = EnterScene.Parser.ParseFrom(body.ToArray());
+                var info = msg.EnterSceneInfo;
+                if (info is not null)
+                {
+                    sceneGuid = info.SceneGuid ?? string.Empty;
+                    if (info.PlayerEnt is { } pe && pe.Uuid != 0)
+                    {
+                        playerUuid = unchecked((ulong)pe.Uuid);
+                    }
+                    if (info.SceneAttrs is { } attrs)
+                    {
+                        foreach (var a in attrs.Attrs)
+                        {
+                            if (a.Id != SceneBasicIdAttr) continue;
+                            sceneBasicId = CyPacketExtras.DecodeInt32FromRaw(a.RawData.ToByteArray());
+                            if (sceneBasicId != 0) break;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // proto decode failed — fall through and emit the marker.
+            }
+        }
+        emit(new EnterSceneEvent(timestampSeconds)
+        {
+            SceneBasicId = sceneBasicId,
+            PlayerUuid = playerUuid,
+            SceneGuid = sceneGuid,
+        });
     }
 }
 
@@ -187,6 +235,16 @@ public sealed class NotifyBuffChangeDecoder : ProtoMethodDecoder<NotifyBuffChang
     protected override void Project(NotifyBuffChange msg, double timestampSeconds, Action<ParserEvent> emit)
     {
         emit(new BuffChangeEvent(msg.OldBuffId, msg.NewBuffId, timestampSeconds));
+        // PROTO-01: the canonical wipe buff (510072) signals "party wiped —
+        // reset combat on next damage". Emit a sibling SoftSceneRestartEvent
+        // so the bridge can arm a pending DPS / boss-bar reset. Mirrors
+        // Python's `_check_wipe_buff` → `_notify_soft_scene_restart` chain
+        // at packet_parser.py:1756-1772 driven from `_on_notify_buff_change`
+        // at 2234.
+        if (msg.NewBuffId == NotifyMethod.WipeBuffBaseId)
+        {
+            emit(new SoftSceneRestartEvent("notify_buff_change", timestampSeconds));
+        }
     }
 }
 
@@ -674,6 +732,33 @@ public sealed class SyncNearDeltaInfoDecoder : ProtoMethodDecoder<SyncNearDeltaI
                     d.Uuid, d.SkillEffects, timestampSeconds);
                 if (ev is not null) emit(ev);
             }
+
+            // PROTO-05: TempAttrs CDR for non-self players. Mirrors Python's
+            // `_process_temp_attr_collection` branch at packet_parser.py
+            // 3954-3959 for the SyncNearDelta path — every player-uuid
+            // delta with TempAttrs gets a CDR snapshot so BossRaid timing
+            // / teammate-ready estimators see other players' CD modifiers.
+            // Bridge keeps the SelfUuid filter so this never overwrites the
+            // local player's CDR (which still flows from SyncToMeDelta).
+            if (d.TempAttrs is not null && d.TempAttrs.Attrs is not null
+                && CyCombat.IsPlayerUuid((ulong)d.Uuid))
+            {
+                int cdPct = 0, cdFixed = 0, cdAccel = 0;
+                foreach (var ta in d.TempAttrs.Attrs)
+                {
+                    if (ta is null) continue;
+                    switch (ta.Id)
+                    {
+                        case 100: cdPct += ta.Value; break;
+                        case 101: cdFixed += ta.Value; break;
+                        case 103: cdAccel += ta.Value; break;
+                    }
+                }
+                if (cdPct != 0 || cdFixed != 0 || cdAccel != 0)
+                {
+                    emit(new TempAttrCdEvent(d.Uuid, cdPct, cdFixed, cdAccel, timestampSeconds));
+                }
+            }
         }
     }
 }
@@ -727,7 +812,18 @@ public sealed class SyncToMeDeltaInfoDecoder : ProtoMethodDecoder<SyncToMeDeltaI
                     ChargeCount: cd.ChargeCount,
                     SubCdRatio: cd.SubCDRatio,
                     SubCdFixed: cd.SubCDFixed,
-                    AccelerateCdRatio: cd.AccelerateCDRatio));
+                    AccelerateCdRatio: cd.AccelerateCDRatio)
+                {
+                    // SKILL-005: project the state-machine input fields the
+                    // upcoming PacketSkillSlotProjector (SKILL-001) needs.
+                    SkillCdType = (int)cd.SkillCDType,
+                    // MaxCharges defaults to 1 here; charge-skill metadata
+                    // arrives in a follow-up sync containing the max via
+                    // a separate proto field — until that lands we treat
+                    // a positive ChargeCount as "has-charge" with cap=1.
+                    LastVcdUpdateMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    ObservedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                });
             }
         }
         emit(new ToMeDeltaEvent(uuid, hateCount, cds, timestampSeconds));
@@ -1160,8 +1256,31 @@ public sealed class SyncContainerDataDecoder : ProtoMethodDecoder<SyncContainerD
             maxHp = ch.Attr.MaxHp;
             energy = ch.Attr.OriginEnergy;
         }
+        // MAPSWITCH-05: project SceneData.{MapId, ChannelId, PlaneId, SceneLayer}
+        // into a composite SceneKey so the bridge can detect layer / plane /
+        // channel switches inside the same MapId. Layout matches Python's
+        // tuple at packet_parser.py:3126-3127 packed into a single int64:
+        //   high 16 bits = MapId
+        //   next 16 bits = ChannelId
+        //   next 16 bits = PlaneId
+        //   low 16 bits  = SceneLayer
+        // Zero when SceneData is absent — first observation, no comparison.
+        long sceneKey = 0;
+        int mapId = 0;
+        if (ch.SceneData is { } sd)
+        {
+            mapId = (int)sd.MapId;
+            sceneKey = ((long)(uint)sd.MapId << 48)
+                       | ((long)(uint)sd.ChannelId << 32)
+                       | ((long)(uint)sd.PlaneId << 16)
+                       | (uint)sd.SceneLayer;
+        }
         emit(new ContainerSyncEvent(
-            charId, name, level, fightPoint, curHp, maxHp, energy, timestampSeconds));
+            charId, name, level, fightPoint, curHp, maxHp, energy, timestampSeconds)
+        {
+            SceneKey = sceneKey,
+            MapId = mapId,
+        });
     }
 }
 

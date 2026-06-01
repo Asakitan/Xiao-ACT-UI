@@ -7,8 +7,8 @@ public class AppVersionTests
     [Fact]
     public void LabelMatchesVersion()
     {
-        Assert.Equal("3.1.0", AppVersion.Version);
-        Assert.Equal("v3.1.0", AppVersion.Label);
+        Assert.Equal("3.1.1", AppVersion.Version);
+        Assert.Equal("v3.1.1", AppVersion.Label);
     }
 
     [Theory]

@@ -24,6 +24,12 @@ public sealed class HideSeekStateMachine
     private readonly object _gate = new();
     private int _currentStep;
     private DateTimeOffset _lastClickAt = DateTimeOffset.MinValue;
+    // Parity with Python hide_seek_engine.py:196 — tracks the step we just
+    // clicked so cooldown logic can skip fallback to that SAME step briefly
+    // (its UI may still linger on screen). Pure parity field today; no
+    // behavior depends on it yet, but it prevents drift once Python or
+    // diagnostics begin reading it.
+    private int _lastExecutedStep = -1;
 
     public HideSeekStateMachine(
         IReadOnlyList<HideSeekStep> steps,
@@ -50,6 +56,7 @@ public sealed class HideSeekStateMachine
         {
             _currentStep = 0;
             _lastClickAt = DateTimeOffset.MinValue;
+            _lastExecutedStep = -1;
         }
     }
 
@@ -117,6 +124,7 @@ public sealed class HideSeekStateMachine
         lock (_gate)
         {
             _lastClickAt = now;
+            _lastExecutedStep = idx;
             _currentStep = (idx + 1) % _steps.Count;
         }
     }

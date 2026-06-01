@@ -54,6 +54,13 @@ public static class BridgeCommands
     public const string ShowLastDpsReport = "dps.show_last_report";
     public const string ResetCombat = "dps.reset_combat";
 
+    /// <summary>R8 / DPS-04: toggle the DPS overlay master switch. Payload
+    /// <c>{enabled:boolean}</c> writes <see cref="SettingsKeys.DpsEnabled"/>;
+    /// passing no payload returns the current value. Mirrors Python's
+    /// <c>_toggle_dps_enabled</c> at sao_gui_dps_theme_mixin.py:274-285.
+    /// Reply shape: <c>{enabled:boolean}</c>.</summary>
+    public const string DpsToggleEnabled = "dps.toggle_enabled";
+
     // Buff monitor
     public const string SetBuffMonEnabled = "buffmon.set_enabled";
     public const string GetBuffMonEnabled = "buffmon.get_enabled";
@@ -83,6 +90,23 @@ public static class BridgeEvents
     public const string HealthChanged = "state.hp";
     public const string StaminaChanged = "state.stamina";
     public const string DpsSnapshot = "state.dps";
+
+    /// <summary>R8 / DPS-07: emitted when the per-tick DPS pump detects an
+    /// edge — show, fade-out, or visibility-toggle. Payload carries
+    /// <c>action</c> ("show"|"fade_out"|"hide"), the live DPS snapshot
+    /// (<c>total_damage</c>, <c>dps</c>, <c>total_heal</c>,
+    /// <c>total_damage_boss</c>, <c>duration_s</c>), and an <c>enabled</c>
+    /// flag mirroring <c>SettingsKeys.DpsEnabled</c>. Mirrors Python's
+    /// <c>_show_dps_live_snapshot</c> / <c>_hide_dps_overlay</c> bridge
+    /// events at sao_gui_dps_theme_mixin.py:227-285.</summary>
+    public const string DpsOverlay = "state.dps_overlay";
+
+    /// <summary>R8 / scene-change subscriber surface: emitted whenever
+    /// <see cref="SaoAuto.Core.Packets.SceneChangeEvent"/> reaches the
+    /// bridge so JS panels can react (BossHP wipe, DPS panel fade, etc.)
+    /// without polling state. Mirrors Python's <c>_emit_scene_change</c>
+    /// callback at packet_parser.py:1552-1573.</summary>
+    public const string SceneChanged = "state.scene_changed";
     public const string BossHpSnapshot = "state.bosshp";
     public const string BurstReady = "state.burst_ready";
     public const string BuffSnapshot = "state.buffs";

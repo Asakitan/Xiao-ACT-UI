@@ -91,8 +91,72 @@ public sealed record KickOffEvent(double TimestampSeconds) : ParserEvent(Timesta
 public sealed record AllMemberReadyEvent(double TimestampSeconds) : ParserEvent(TimestampSeconds);
 public sealed record CaptainReadyEvent(double TimestampSeconds) : ParserEvent(TimestampSeconds);
 public sealed record DungeonStartEvent(int DungeonId, double TimestampSeconds) : ParserEvent(TimestampSeconds);
-public sealed record EnterSceneEvent(double TimestampSeconds) : ParserEvent(TimestampSeconds);
 public sealed record MatchResultEvent(double TimestampSeconds) : ParserEvent(TimestampSeconds);
+
+/// <summary>
+/// MSR-3 / MAPSWITCH-07 / PROTO-06: extended EnterScene event carrying
+/// the SceneBasicId (AttrType.SCENE_BASIC_ID = 0x155) projected from
+/// EnterSceneInfo.SceneAttrs and the PlayerEnt's Uuid (used by Python's
+/// _on_enter_scene to confirm self_uid). Older callers/tests using the
+/// `(timestampSeconds)` positional ctor stay source-compatible because
+/// the extra slots are init-only with defaults of 0 / empty.
+/// </summary>
+public sealed record EnterSceneEvent(double TimestampSeconds) : ParserEvent(TimestampSeconds)
+{
+    public int SceneBasicId { get; init; }
+    public ulong PlayerUuid { get; init; }
+    public string SceneGuid { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// MSR-5 / MAPSWITCH-01: three-tier scene transition signal mirroring
+/// Python's <c>_emit_scene_change(kind, reason, preserve_combat, ...)</c>
+/// at packet_parser.py:1552-1573. Carries the soft/hard distinction the
+/// DPS / BossHP / encounter consumers need to decide between an immediate
+/// hard reset (server hop, login bounce), a soft restart with deferred
+/// reset on next damage (dungeon retry, wipe buff), or a soft transition
+/// that preserves combat state across layer / channel boundaries.
+/// </summary>
+public enum SceneChangeKind
+{
+    /// <summary>Hard server / session boundary — wipe everything. Mirrors
+    /// Python's `kind='hard'` path (EnterGame on new self_uid, server
+    /// disconnect).</summary>
+    Hard = 0,
+
+    /// <summary>Soft scene restart — combat is preserved but a pending
+    /// reset is armed; first incoming damage flushes the prior encounter
+    /// before opening the new one. Mirrors Python's `kind='restart',
+    /// preserve_combat=True, reset_on_next_damage=True` path (wipe buff
+    /// 510072, same-dungeon retry).</summary>
+    Restart = 1,
+
+    /// <summary>Soft scene transition — combat is preserved and no reset
+    /// arms. Mirrors Python's `kind='transition', preserve_combat=True`
+    /// path (dungeon scene_uuid roll mid-fight, layer/sub-area switch).</summary>
+    Transition = 2,
+}
+
+public sealed record SceneChangeEvent(
+    SceneChangeKind Kind,
+    string Reason,
+    bool PreserveCombat,
+    bool ResetOnNextDamage,
+    double ResetDelaySeconds,
+    double TimestampSeconds) : ParserEvent(TimestampSeconds);
+
+/// <summary>
+/// PROTO-01 (wipe buff): convenience side-channel emitted alongside the
+/// vanilla <see cref="BuffChangeEvent"/> when a NotifyBuffChange carries
+/// the canonical "party wiped — reset on next damage" buff id
+/// (<see cref="NotifyMethod.WipeBuffBaseId"/> = 510072). Bridge subscribers
+/// map this to a soft scene restart per Python's
+/// <c>_notify_soft_scene_restart('notify_buff_change')</c> path
+/// (packet_parser.py:1766).
+/// </summary>
+public sealed record SoftSceneRestartEvent(
+    string Reason,
+    double TimestampSeconds) : ParserEvent(TimestampSeconds);
 public sealed record ServerTimeEvent(
     ulong ServerTimeMs,
     double OffsetMs,
@@ -269,7 +333,20 @@ public sealed record ContainerSyncEvent(
     long CurHp,
     long MaxHp,
     float Energy,
-    double TimestampSeconds) : ParserEvent(TimestampSeconds);
+    double TimestampSeconds) : ParserEvent(TimestampSeconds)
+{
+    /// <summary>MAPSWITCH-05: composite (MapId, ChannelId, PlaneId, SceneLayer)
+    /// packed into an int64 (16 bits each, high → low). Zero when SceneData
+    /// is absent (caller skips comparison). Mirrors Python's
+    /// <c>scene_key = (MapId, ChannelId, PlaneId, SceneLayer)</c> tuple at
+    /// packet_parser.py:3126.</summary>
+    public long SceneKey { get; init; }
+
+    /// <summary>MAPSWITCH-05: high 16 bits of <see cref="SceneKey"/>
+    /// surfaced for convenience; mirrors Python's <c>sd.MapId</c>
+    /// extraction at packet_parser.py:3125.</summary>
+    public int MapId { get; init; }
+}
 
 // ── S67 — Container dirty stream skeleton. Surfaces one
 // (field_index, sub_field, value) tuple per packet using the same
@@ -345,7 +422,36 @@ public sealed record SkillCdSnapshot(
     int ChargeCount,
     int SubCdRatio,
     long SubCdFixed,
-    int AccelerateCdRatio);
+    int AccelerateCdRatio)
+{
+    /// <summary>SKILL-005: ESkillCDType (proto field 4). Drives the state
+    /// machine input in compute_skill_cd_ui_state at _sao_cy_packet.pyx:658
+    /// (different CD types use different ready-threshold semantics).</summary>
+    public int SkillCdType { get; init; }
+
+    /// <summary>SKILL-005: max charges; default 1 mirrors Python's
+    /// `max_charges` fallback at _sao_cy_packet.pyx:330. Charge skills
+    /// (max_charges > 1) treat ChargeCount &gt; 0 as ready regardless of
+    /// remaining ms.</summary>
+    public int MaxCharges { get; init; } = 1;
+
+    /// <summary>SKILL-005: server-clock anchor for VCD interpolation.
+    /// Mirrors Python's `last_vcd_update_ms` at _sao_cy_packet.pyx:330 —
+    /// stamped to server-now on every ApplyToMeDelta so the next compute
+    /// pass can interpolate elapsed VCD against the latest known anchor.</summary>
+    public long LastVcdUpdateMs { get; init; }
+
+    /// <summary>SKILL-005: local-clock fallback anchor when server time
+    /// hasn't been observed yet. Mirrors Python's `observed_at_ms` at
+    /// _sao_cy_packet.pyx:330.</summary>
+    public long ObservedAtMs { get; init; }
+
+    /// <summary>SKILL-005: VCD interpolation speed multiplier (万分比).
+    /// Mirrors Python's `vcd_speed_ratio` at _sao_cy_packet.pyx:331 — when
+    /// non-zero, the compute pass extrapolates VCD by speed×elapsed instead
+    /// of clock-difference. Zero means "use clock difference".</summary>
+    public int VcdSpeedRatio { get; init; }
+}
 
 /// <summary>
 /// One per-resource cooldown row from <c>AoiSyncToMeDelta.FightResCDs</c>.

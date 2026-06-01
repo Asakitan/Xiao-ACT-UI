@@ -17,6 +17,96 @@ namespace SaoAuto.Core.Bridge;
 /// </summary>
 public static class StateMutators
 {
+    /// <summary>
+    /// R8 epic: thread-local collector for derived parser events emitted by
+    /// scene-aware mutators (ApplyDungeonStart, ApplyEnterScene,
+    /// ApplyDungeonData). The PacketBridge wraps each Apply() call by setting
+    /// a fresh List here, then re-applying the collected events through
+    /// itself so a single packet can fan out into the primary
+    /// (DungeonStartEvent) + a derived (SceneChangeEvent) cleanly. Mutators
+    /// that want to emit a derived event call <see cref="EmitDerived"/>.
+    /// </summary>
+    [ThreadStatic] private static List<ParserEvent>? _derivedEvents;
+
+    // MAPSWITCH-06: dungeon target ids the reset-rule helper skips when
+    // detecting new_objective / target_completed signals. Mirrors Python's
+    // _RESET_IGNORE_TARGETS frozenset at packet_parser.py:110-112 — these
+    // are quest-style "watch the player" objectives that fire spuriously
+    // and would otherwise trigger a soft restart every few seconds.
+    private static readonly HashSet<int> _resetIgnoreTargets = new()
+    {
+        1301104, 1301105, 1301106, 6521002, 6521003, 1083, 1302101,
+    };
+
+    // MAPSWITCH-06 / per-instance: the last seen "active" objective id so a
+    // target_completed signal with target_id=0 can be re-attributed back to
+    // the most-recent objective. Mirrors Python's
+    // `self._active_dungeon_target_id` set inside _apply_dungeon_target_reset_rules.
+    [ThreadStatic] private static int _activeDungeonTargetId;
+
+    /// <summary>Begin collecting derived events for the duration of a
+    /// single Apply() call; returns the previous collector so callers can
+    /// nest cleanly. PacketBridge always pairs Begin/End around Apply().</summary>
+    internal static List<ParserEvent>? BeginDerivedCapture(out List<ParserEvent> sink)
+    {
+        var prev = _derivedEvents;
+        sink = new List<ParserEvent>(0);
+        _derivedEvents = sink;
+        return prev;
+    }
+
+    internal static void EndDerivedCapture(List<ParserEvent>? prior)
+    {
+        _derivedEvents = prior;
+    }
+
+    private static void EmitDerived(ParserEvent ev)
+    {
+        _derivedEvents?.Add(ev);
+    }
+
+    /// <summary>
+    /// MAPSWITCH-06: scan a dungeon target list for new_objective /
+    /// target_completed signals and emit a soft scene restart per match.
+    /// Mirrors Python's <c>_apply_dungeon_target_reset_rules</c> at
+    /// packet_parser.py:1610-1647. The ignore set drops quest-style watcher
+    /// targets that would otherwise spuriously trigger every few seconds.
+    /// </summary>
+    private static void EvaluateDungeonTargetResetRules(
+        IReadOnlyList<DungeonTargetProgress> targets,
+        string source,
+        double timestampSeconds)
+    {
+        if (targets is null || targets.Count == 0) return;
+        foreach (var t in targets)
+        {
+            string? reason = null;
+            var effectiveId = t.TargetId;
+            if (t.Complete == 0 && t.Nums == 0)
+            {
+                _activeDungeonTargetId = t.TargetId;
+                reason = "new_objective";
+            }
+            else if (t.Complete == 1 && t.Nums > 0)
+            {
+                if (t.TargetId == 0 && _activeDungeonTargetId != 0)
+                {
+                    effectiveId = _activeDungeonTargetId;
+                }
+                reason = "target_completed";
+            }
+            if (reason is null) continue;
+            if (_resetIgnoreTargets.Contains(effectiveId)) continue;
+            EmitDerived(new SceneChangeEvent(
+                SceneChangeKind.Restart,
+                $"dungeon_{reason}:{source}:target={effectiveId}",
+                PreserveCombat: true,
+                ResetOnNextDamage: true,
+                ResetDelaySeconds: 3.0,
+                TimestampSeconds: timestampSeconds));
+        }
+    }
+
     public static bool Apply(GameStateManager state, ParserEvent ev)
     {
         return ev switch
@@ -29,7 +119,9 @@ public static class StateMutators
             KickOffEvent _ => ApplyKickOff(state),
             EnterGameEvent enter => ApplyEnterGame(state, enter),
             CombatStateEvent cs => ApplyCombatState(state, cs),
-            DungeonStartEvent _ => ApplyDungeonStart(state),
+            DungeonStartEvent ds => ApplyDungeonStart(state, ds),
+            EnterSceneEvent es => ApplyEnterScene(state, es),
+            SceneChangeEvent _ or SoftSceneRestartEvent _ => false, // routed by PacketBridge subscribers
             BuffSnapshotEvent buff => ApplyBuffs(state, buff),
             BossHpEvent boss => ApplyBossHp(state, boss),
             DpsEvent dps => ApplyDps(state, dps),
@@ -129,11 +221,26 @@ public static class StateMutators
 
     private static bool ApplyEnterGame(GameStateManager state, EnterGameEvent ev)
     {
-        state.Update(s => s with
+        // MSR-8: cross-server / re-login transition. When SelfUuid is rolling
+        // to a NEW non-zero value, zero out the per-scene memos (DungeonId,
+        // SceneId, SceneKey, SyncContainerCount) so subsequent decoders treat
+        // the next scene as "first observation" instead of comparing against
+        // stale memos from the prior session. Mirrors Python's reset_scene()
+        // + _on_enter_game reset chain at packet_parser.py:1525-1526 / 2566-2571.
+        state.Update(s =>
         {
-            PacketActive = true,
-            ErrorMsg = string.Empty,
-            SelfUuid = ev.SelfUuid,
+            var crossServer = s.SelfUuid != 0 && s.SelfUuid != ev.SelfUuid;
+            return s with
+            {
+                PacketActive = true,
+                ErrorMsg = string.Empty,
+                SelfUuid = ev.SelfUuid,
+                LastDungeonId = crossServer ? 0 : s.LastDungeonId,
+                LastSceneId = crossServer ? 0 : s.LastSceneId,
+                LastSceneKey = crossServer ? 0 : s.LastSceneKey,
+                SyncContainerCount = crossServer ? 0 : s.SyncContainerCount,
+                DungeonSceneUuid = crossServer ? 0 : s.DungeonSceneUuid,
+            };
         });
         return true;
     }
@@ -144,9 +251,77 @@ public static class StateMutators
         return true;
     }
 
-    private static bool ApplyDungeonStart(GameStateManager state)
+    /// <summary>
+    /// MSR-2 / MAPSWITCH-03: NotifyStartPlayingDungeon handling. When the
+    /// dungeon id changes from a previously-observed value, this is a soft
+    /// scene restart (party finished a different dungeon and pulled the
+    /// next one) — preserve combat, defer DPS / boss-bar reset to the next
+    /// incoming damage event so the encounter still finalizes cleanly.
+    /// Same dungeon id == retry: just clear InCombat for the brief
+    /// pre-pull window. Python branches at packet_parser.py:2488-2541.
+    /// </summary>
+    private static bool ApplyDungeonStart(GameStateManager state, DungeonStartEvent ev)
     {
-        state.Update(s => s with { InCombat = false });
+        SceneChangeEvent? emit = null;
+        state.Update(s =>
+        {
+            var prior = s.LastDungeonId;
+            var isSoftRestart = ev.DungeonId != 0 && prior != 0 && prior != ev.DungeonId;
+            if (isSoftRestart)
+            {
+                emit = new SceneChangeEvent(
+                    SceneChangeKind.Restart,
+                    $"notify_start_playing_dungeon:{prior}->{ev.DungeonId}",
+                    PreserveCombat: true,
+                    ResetOnNextDamage: true,
+                    ResetDelaySeconds: 3.0,
+                    TimestampSeconds: ev.TimestampSeconds);
+            }
+            return s with
+            {
+                // Match Python: don't flip InCombat off on a soft restart so
+                // the prior encounter window stays open until the deferred
+                // reset fires. Hard flip only when we don't have prior
+                // context yet (first dungeon of the session).
+                InCombat = isSoftRestart ? s.InCombat : false,
+                LastDungeonId = ev.DungeonId != 0 ? ev.DungeonId : s.LastDungeonId,
+            };
+        });
+        if (emit is not null) EmitDerived(emit);
+        return true;
+    }
+
+    /// <summary>
+    /// MSR-3 / MAPSWITCH-07: EnterScene with extracted SceneBasicId +
+    /// PlayerUuid. Latches SelfUuid when missing (covers the boot path where
+    /// EnterGame hasn't fired yet) and emits a soft scene transition when
+    /// SceneBasicId rolls. Mirrors Python's _on_enter_scene head at
+    /// packet_parser.py:2334-2376.
+    /// </summary>
+    private static bool ApplyEnterScene(GameStateManager state, EnterSceneEvent ev)
+    {
+        SceneChangeEvent? emit = null;
+        state.Update(s =>
+        {
+            var nextSelf = (s.SelfUuid == 0 && ev.PlayerUuid != 0) ? ev.PlayerUuid : s.SelfUuid;
+            var prior = s.LastSceneId;
+            if (ev.SceneBasicId != 0 && prior != 0 && prior != ev.SceneBasicId)
+            {
+                emit = new SceneChangeEvent(
+                    SceneChangeKind.Transition,
+                    $"enter_scene_basic_id_changed:{prior}->{ev.SceneBasicId}",
+                    PreserveCombat: true,
+                    ResetOnNextDamage: false,
+                    ResetDelaySeconds: 0.0,
+                    TimestampSeconds: ev.TimestampSeconds);
+            }
+            return s with
+            {
+                SelfUuid = nextSelf,
+                LastSceneId = ev.SceneBasicId != 0 ? ev.SceneBasicId : s.LastSceneId,
+            };
+        });
+        if (emit is not null) EmitDerived(emit);
         return true;
     }
 
@@ -288,22 +463,73 @@ public static class StateMutators
 
     private static bool ApplySkillUse(GameStateManager state, SkillUseEvent ev)
     {
-        // Mirrors Python: player.skill_last_use_at[skill_level_id] = ts.
-        state.Update(s => s with
+        // PROTO-02: also try auto-detecting profession from the observed
+        // skill id when SyncContainerData hasn't yet confirmed it. Mirrors
+        // Python's `_remember_seen_skill` + `_try_detect_profession` chain
+        // at packet_parser.py:1866 / 1832. The seen-set is best-effort
+        // observation only; profession + sub-profession get written into
+        // GameState when the reverse table matches.
+        state.Update(s =>
         {
-            SkillLastUseAt = s.SkillLastUseAt.SetItem(ev.SkillLevelId, ev.TimestampSeconds),
+            var nextLastUse = s.SkillLastUseAt.SetItem(ev.SkillLevelId, ev.TimestampSeconds);
+            var nextProfession = s.ProfessionId;
+            var nextProfessionName = s.ProfessionName;
+            // Only auto-detect when profession is currently unknown.
+            if (s.ProfessionId == 0 && ev.SkillLevelId > 0)
+            {
+                var pid = Automation.SkillObserver.DetectProfession(ev.SkillLevelId);
+                if (pid > 0)
+                {
+                    nextProfession = pid;
+                    nextProfessionName = Automation.SkillObserver.ProfessionNames
+                        .TryGetValue(pid, out var pname) ? pname : string.Empty;
+                }
+            }
+            return s with
+            {
+                SkillLastUseAt = nextLastUse,
+                ProfessionId = nextProfession,
+                ProfessionName = nextProfessionName,
+            };
         });
         return true;
     }
 
     private static bool ApplyDungeonData(GameStateManager state, DungeonDataEvent ev)
     {
-        state.Update(s => s with
+        // MSR-4 / MAPSWITCH-04: mid-fight scene-uuid roll signals a soft scene
+        // transition (multi-phase boss layer switch, sub-area swap). Combat
+        // is preserved across the boundary and no DPS reset arms — but the
+        // DPS / boss-bar subscribers need to see the SceneChangeEvent so
+        // stale monster targeting / loot rows can be purged. Mirrors Python's
+        // _on_sync_dungeon_data at packet_parser.py:2421-2446.
+        SceneChangeEvent? emit = null;
+        state.Update(s =>
         {
-            DungeonSceneUuid = ev.SceneUuid,
-            DungeonDifficulty = ev.DungeonDifficulty,
-            DungeonTargets = ev.Targets.ToImmutableArray(),
+            var prior = s.DungeonSceneUuid;
+            if (prior != 0 && ev.SceneUuid != 0 && prior != ev.SceneUuid)
+            {
+                emit = new SceneChangeEvent(
+                    SceneChangeKind.Transition,
+                    $"sync_dungeon_scene_uuid_changed:{prior}->{ev.SceneUuid}",
+                    PreserveCombat: true,
+                    ResetOnNextDamage: false,
+                    ResetDelaySeconds: 0.0,
+                    TimestampSeconds: ev.TimestampSeconds);
+            }
+            return s with
+            {
+                DungeonSceneUuid = ev.SceneUuid,
+                DungeonDifficulty = ev.DungeonDifficulty,
+                DungeonTargets = ev.Targets.ToImmutableArray(),
+            };
         });
+        if (emit is not null) EmitDerived(emit);
+        // MAPSWITCH-06: per-target reset rule scan. Runs after the snapshot
+        // is updated so observers see the new target list before the soft
+        // restart fires. Source label mirrors Python's
+        // `_apply_dungeon_target_reset_rules(targets, 'sync_dungeon_data')`.
+        EvaluateDungeonTargetResetRules(ev.Targets, "sync_dungeon_data", ev.TimestampSeconds);
         return true;
     }
 
@@ -319,6 +545,13 @@ public static class StateMutators
                 ? ev.Targets.ToImmutableArray()
                 : s.DungeonTargets,
         });
+        // MAPSWITCH-06: dirty-data path also fires the target reset rules
+        // when the dirty buffer carried any targets — mirrors Python's
+        // _apply_dungeon_target_reset_rules call inside _on_sync_dungeon_dirty.
+        if (ev.Targets.Count > 0)
+        {
+            EvaluateDungeonTargetResetRules(ev.Targets, "sync_dungeon_dirty_data", ev.TimestampSeconds);
+        }
         return true;
     }
 
@@ -343,12 +576,37 @@ public static class StateMutators
             HpPct = pct,
             LevelBase = ev.Level > 0 ? ev.Level : null,
         };
-        state.ApplyPartial(partial, s => s with
+        // MAPSWITCH-05: detect SceneKey changes inside the same MapId before
+        // overwriting LastSceneKey. A non-zero prior + non-zero new + diff
+        // means the player moved into a different channel / plane / layer
+        // mid-fight (multi-phase boss layer switch); emit a soft transition
+        // so DPS / BossHP subscribers can decide whether to purge stale
+        // monsters / boss rows. Mirrors Python's _notify_soft_scene_transition
+        // call at packet_parser.py:3148-3155.
+        SceneChangeEvent? sceneEmit = null;
+        state.ApplyPartial(partial, s =>
         {
-            PlayerName = string.IsNullOrEmpty(ev.Name) ? s.PlayerName : ev.Name,
-            FightPoint = ev.FightPoint > 0 ? ev.FightPoint : s.FightPoint,
-            PacketActive = true,
+            var prior = s.LastSceneKey;
+            if (ev.SceneKey != 0 && prior != 0 && prior != ev.SceneKey)
+            {
+                sceneEmit = new SceneChangeEvent(
+                    SceneChangeKind.Transition,
+                    "scene_key_changed",
+                    PreserveCombat: true,
+                    ResetOnNextDamage: false,
+                    ResetDelaySeconds: 0.0,
+                    TimestampSeconds: ev.TimestampSeconds);
+            }
+            return s with
+            {
+                PlayerName = string.IsNullOrEmpty(ev.Name) ? s.PlayerName : ev.Name,
+                FightPoint = ev.FightPoint > 0 ? ev.FightPoint : s.FightPoint,
+                PacketActive = true,
+                LastSceneKey = ev.SceneKey != 0 ? ev.SceneKey : s.LastSceneKey,
+                SyncContainerCount = s.SyncContainerCount + 1,
+            };
         });
+        if (sceneEmit is not null) EmitDerived(sceneEmit);
         return true;
     }
 
@@ -656,7 +914,27 @@ public static class StateMutators
                         SubCdRatio = entry.SubCdRatio != 0 ? entry.SubCdRatio : prev.SubCdRatio,
                         SubCdFixed = entry.SubCdFixed != 0 ? entry.SubCdFixed : prev.SubCdFixed,
                         AccelerateCdRatio = entry.AccelerateCdRatio != 0 ? entry.AccelerateCdRatio : prev.AccelerateCdRatio,
+                        // SKILL-005: preserve prior anchor when packet doesn't
+                        // restamp — keeps VCD extrapolation continuous across
+                        // delta packets that only refresh BeginMs/Duration.
+                        SkillCdType = entry.SkillCdType != 0 ? entry.SkillCdType : prev.SkillCdType,
+                        MaxCharges = entry.MaxCharges > 1 ? entry.MaxCharges : prev.MaxCharges,
+                        VcdSpeedRatio = entry.VcdSpeedRatio != 0 ? entry.VcdSpeedRatio : prev.VcdSpeedRatio,
                     };
+                    // SKILL-004: dedupe when the new entry matches `prev` on
+                    // every meaningful field — packet_parser.py:1991-2002 skips
+                    // SetItem so subscribers don't churn on no-op refreshes.
+                    if (entry.BeginMs == prev.BeginMs
+                        && entry.DurationMs == prev.DurationMs
+                        && entry.ValidCdTimeMs == prev.ValidCdTimeMs
+                        && entry.ChargeCount == prev.ChargeCount
+                        && entry.SkillCdType == prev.SkillCdType
+                        && entry.SubCdRatio == prev.SubCdRatio
+                        && entry.SubCdFixed == prev.SubCdFixed
+                        && entry.AccelerateCdRatio == prev.AccelerateCdRatio)
+                    {
+                        continue;
+                    }
                 }
                 dict = dict.SetItem(cd.SkillLevelId, entry);
             }
@@ -803,8 +1081,16 @@ public static class StateMutators
                 changed = true;
                 return s with
                 {
+                    // MSR-6: stamp LastUpdateSeconds so PurgeStaleMonsters
+                    // sees this row as fresh after a buff resync. Otherwise
+                    // a transition-purge mid-fight could drop the boss row
+                    // when the only recent activity was a buff refresh.
                     MonsterDataMap = s.MonsterDataMap.SetItem(
-                        ev.Uuid, md with { BuffList = entries }),
+                        ev.Uuid, md with
+                        {
+                            BuffList = entries,
+                            LastUpdateSeconds = ev.TimestampSeconds,
+                        }),
                 };
             });
             return changed;
@@ -857,7 +1143,13 @@ public static class StateMutators
             changed = true;
             return s with
             {
-                MonsterDataMap = s.MonsterDataMap.SetItem(ev.TargetUuid, newMd),
+                // MSR-6: stamp on death / break / shield-broken events too —
+                // a boss that just died is the most-recent activity even if
+                // no HP delta arrived; we don't want PurgeStaleMonsters to
+                // sweep it on the same transition.
+                MonsterDataMap = s.MonsterDataMap.SetItem(
+                    ev.TargetUuid,
+                    newMd with { LastUpdateSeconds = ev.TimestampSeconds }),
             };
         });
         return changed;

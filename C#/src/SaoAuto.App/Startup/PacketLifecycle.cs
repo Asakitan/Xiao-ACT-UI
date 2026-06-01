@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.IO;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using SaoAuto.Core.Automation;
 using SaoAuto.Core.Bridge;
@@ -43,6 +46,18 @@ public sealed class PacketLifecycle : IDisposable
     public Action? ResetDps =>
         _host is null ? null : _host.ResetDps;
 
+    /// <summary>R8: live DpsTracker so the WebBridge can drive the per-tick
+    /// DPS overlay pump (DPS-02/03/07). Null when the packet runtime
+    /// didn't start — publisher gracefully degrades to snapshot-only.</summary>
+    public DpsTracker? DpsTracker =>
+        _host?.DpsTracker;
+
+    /// <summary>R8: live PacketBridge so the App layer can subscribe to
+    /// <see cref="Core.Bridge.PacketBridge.SceneChanged"/> and fan
+    /// scene-change events through the WebBridge.</summary>
+    public PacketBridge? PacketBridge =>
+        _host?.Bridge;
+
     public static PacketLifecycle Start(
         SettingsManager settings,
         GameStateManager states,
@@ -65,6 +80,7 @@ public sealed class PacketLifecycle : IDisposable
         {
             var source = sourceFactory?.Invoke() ?? CreateSourceFromSettings(settings, log);
             host = new PacketRuntimeHost(states, source, log);
+            TryLoadSkillNames(host.DpsTracker, log);
             host.StartAsync(cancellationToken).GetAwaiter().GetResult();
         }
         catch (Exception ex)
@@ -120,6 +136,50 @@ public sealed class PacketLifecycle : IDisposable
         return new SharpPcapPacketSource(deviceName: requestedDevice);
     }
 
+    /// <summary>
+    /// Load <c>assets/skill_names.json</c> and push it into the tracker.
+    /// Mirrors <c>sao_webview.py:3215-3229</c>: the JSON is a string→string
+    /// map keyed by numeric skill ids; non-numeric keys are dropped.
+    /// Best-effort: failures are logged at warning level and swallowed so
+    /// the packet runtime still starts when the file is missing (e.g. dev
+    /// builds without bundled assets).
+    /// </summary>
+    private static void TryLoadSkillNames(DpsTracker tracker, ILogger log)
+    {
+        // AppContext.BaseDirectory (not Assembly.Location) keeps this working
+        // under AoT / single-file publishes, per the FN-001 plan.
+        var path = Path.Combine(AppContext.BaseDirectory, "assets", "skill_names.json");
+        if (!File.Exists(path))
+        {
+            log.LogDebug("skill_names.json not found at {Path}; skipping load", path);
+            return;
+        }
+        try
+        {
+            var json = File.ReadAllText(path);
+            var raw = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+            if (raw is null || raw.Count == 0)
+            {
+                log.LogInformation("skill_names.json at {Path} contained no entries", path);
+                return;
+            }
+            var map = new Dictionary<long, string>(raw.Count);
+            foreach (var kv in raw)
+            {
+                if (long.TryParse(kv.Key, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+                {
+                    map[id] = kv.Value;
+                }
+            }
+            tracker.SetSkillNames(map);
+            log.LogInformation("Loaded {Count} skill names from {Path}", map.Count, path);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Failed to load skill_names.json from {Path}", path);
+        }
+    }
+
     internal sealed class PacketRuntimeHost : IDisposable
     {
         private readonly IPacketSource _source;
@@ -155,6 +215,18 @@ public sealed class PacketLifecycle : IDisposable
         public DpsSnapshot SnapshotWithSkills() => _bridge.DpsTracker.SnapshotWithSkills();
 
         public void ResetDps() => _bridge.DpsTracker.Reset();
+
+        /// <summary>Internal accessor so <see cref="PacketLifecycle.Start"/>
+        /// can feed the skill-name table into <see cref="DpsTracker"/> right
+        /// after the bridge is wired (mirrors <c>sao_webview.py:3215-3229</c>
+        /// where <c>assets/skill_names.json</c> is pushed via
+        /// <c>set_skill_names</c> immediately after <c>DpsTracker()</c>).</summary>
+        internal DpsTracker DpsTracker => _bridge.DpsTracker;
+
+        /// <summary>R8: expose the live PacketBridge so the UI / WebBridge
+        /// can subscribe to its <see cref="PacketBridge.SceneChanged"/>
+        /// observation event.</summary>
+        internal PacketBridge Bridge => _bridge;
 
         public Task StartAsync(CancellationToken cancellationToken)
         {

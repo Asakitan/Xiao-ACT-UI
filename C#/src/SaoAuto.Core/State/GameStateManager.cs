@@ -1,5 +1,7 @@
+using System.Collections.Immutable;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using SaoAuto.Core.Packets;
 
 namespace SaoAuto.Core.State;
 
@@ -261,6 +263,117 @@ public sealed class GameStateManager
             _listeners.Add(callback);
         }
         return new Subscription(this, callback);
+    }
+
+    /// <summary>
+    /// R8 / DPS-08: force a subscriber fan-out with the current snapshot
+    /// without mutating any field. Mirrors Python's
+    /// <c>GameStateManager._notify_listeners()</c> being callable independently
+    /// of Update(). Used by <see cref="Bridge.PacketBridge"/> after a
+    /// SkillEffectEvent so the DPS overlay pump sees the first damage even
+    /// when StateMutators.ApplySkillEffect returns false (because the target
+    /// uuid has no MonsterDataMap row yet — pre-S128 behaviour).
+    /// </summary>
+    public void PingSubscribers()
+    {
+        GameState snapshot;
+        IReadOnlyList<Action<GameState>> subscribers;
+        lock (_gate)
+        {
+            snapshot = _state;
+            subscribers = _listeners.ToArray();
+        }
+        DispatchNotify(subscribers, snapshot);
+    }
+
+    /// <summary>
+    /// R8 / MSR-1: scene-boundary state purge. Mirrors Python's
+    /// <c>PacketParser.reset_scene()</c> at packet_parser.py:1486-1550 +
+    /// the bridge consumer at sao_webview.py:2717-2723. Clears all
+    /// per-scene observable state (monsters, near-entity table, boss
+    /// summary slots, dungeon targets) under the same atomic snapshot
+    /// so subscribers see one consistent post-reset GameState.
+    ///
+    /// <para><paramref name="preserveCombat"/> = true keeps <c>InCombat</c>,
+    /// <c>SelfBuffs</c>, and <c>DungeonSceneUuid</c> intact so a soft
+    /// transition (layer / scene_uuid roll mid-fight) doesn't blink the
+    /// combat HUD. = false (hard scene) zeroes everything.</para>
+    ///
+    /// <para>Returns the new snapshot so callers can chain reads without
+    /// re-grabbing <see cref="Snapshot"/>.</para>
+    /// </summary>
+    public GameState ResetScene(bool preserveCombat, string reason)
+    {
+        _ = reason; // Reason is for caller-side logging; no state effect here.
+        return Update(s => s with
+        {
+            MonsterDataMap = ImmutableDictionary<long, MonsterData>.Empty,
+            NearEntities = ImmutableDictionary<long, EntityTableEntry>.Empty,
+            BossCurrentHp = 0,
+            BossTotalHp = 0,
+            BossHpEstPct = 1.0,
+            BossHpSource = BossHpSource.None,
+            BossHpLastPacketSeconds = 0.0,
+            BossShieldActive = false,
+            BossShieldPct = 0.0,
+            BossBreakingStage = -1,
+            BossExtinctionPct = 0.0,
+            BossInOverdrive = false,
+            BossInvincible = false,
+            BossTotalDamage = 0,
+            BossDps = 0,
+            BossRaidActive = false,
+            BossRaidPhase = 0,
+            BossRaidPhaseName = string.Empty,
+            BossEnrageRemaining = 0.0,
+            BossTimerText = string.Empty,
+            // R8: DungeonTargets / DungeonFlowState are server-pushed state.
+            // Only wipe on hard scene boundary (cross-server, hard reset).
+            // Soft restarts / transitions keep them because the server has
+            // not retracted them — clearing here would blank the dungeon
+            // objective UI mid-fight (Session64BridgeTests captures this).
+            DungeonTargets = preserveCombat
+                ? s.DungeonTargets
+                : ImmutableArray<DungeonTargetProgress>.Empty,
+            DungeonFlowState = preserveCombat ? s.DungeonFlowState : null,
+            DungeonSceneUuid = preserveCombat ? s.DungeonSceneUuid : 0,
+            InCombat = preserveCombat && s.InCombat,
+            SelfBuffs = preserveCombat ? s.SelfBuffs : ImmutableArray<BuffEntry>.Empty,
+        });
+    }
+
+    /// <summary>
+    /// R8 / MSR-6: prune monsters whose last update is older than
+    /// <paramref name="ttlSeconds"/>. Mirrors Python's
+    /// <c>_purge_stale_monsters_locked(ttl_s)</c> at packet_parser.py:1680-1708.
+    /// Used by soft scene transitions where boss-bar candidates from the
+    /// prior layer would otherwise linger (PROTO-06 / MSR-4 cases).
+    /// Returns the count of rows dropped.
+    /// </summary>
+    public int PurgeStaleMonsters(double ttlSeconds, double nowSeconds)
+    {
+        var dropped = 0;
+        Update(s =>
+        {
+            if (s.MonsterDataMap.IsEmpty) return s;
+            var threshold = nowSeconds - ttlSeconds;
+            var keep = s.MonsterDataMap;
+            foreach (var kv in s.MonsterDataMap)
+            {
+                // Treat rows with LastUpdateSeconds==0 (never stamped) as
+                // fresh — defensive default so legacy paths don't lose
+                // entries on first purge. Python does the same via the
+                // "no last_update" fallback at packet_parser.py:1685.
+                if (kv.Value.LastUpdateSeconds > 0 && kv.Value.LastUpdateSeconds < threshold)
+                {
+                    keep = keep.Remove(kv.Key);
+                    dropped++;
+                }
+            }
+            if (dropped == 0) return s;
+            return s with { MonsterDataMap = keep };
+        });
+        return dropped;
     }
 
     private void Unsubscribe(Action<GameState> callback)

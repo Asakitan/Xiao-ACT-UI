@@ -54,13 +54,30 @@ public sealed class GameStatePublisher : IDisposable
 {
     private const string CaptureTsKey = "capture_ts";
 
+    // R8 / DPS-02 idle threshold for the per-tick pump. Mirrors Python's
+    // <c>poll_overlay_state(idle_timeout_s=15.0)</c> default at
+    // dps_tracker.py:603. After 15s without damage the overlay is told to
+    // fade out; on the next damage event has-live flips back true.
+    private static readonly TimeSpan DpsIdleTimeout = TimeSpan.FromSeconds(15.0);
+
     private readonly GameStateManager _states;
     private readonly BridgeEventBroadcaster _broadcaster;
     private readonly Func<DpsSnapshot?>? _dpsSnapshotProvider;
+    // R8: optional DpsTracker for the show-live edge + scene-change wiring.
+    // Plumbed when the App layer has the live PacketBridge instance.
+    // When null the publisher falls back to the snapshot-provider behavior
+    // it shipped before R8 (no edge, no fade-out, no toggle).
+    private readonly DpsTracker? _dpsTracker;
+    private readonly Func<bool>? _dpsEnabledProvider;
     private readonly object _gate = new();
     private IDisposable? _sub;
     private string? _lastSig;
     private bool _disposed;
+
+    // R8 / DPS-07 edge tracker. Latches whether the panel is currently
+    // shown so the pump only emits the edge on a true transition.
+    private bool _dpsOverlayShown;
+    private DateTimeOffset _lastDpsPollAt;
 
     private bool _hasNarrowSnapshot;
     private double _lastHpPct;
@@ -85,11 +102,15 @@ public sealed class GameStatePublisher : IDisposable
     public GameStatePublisher(
         GameStateManager states,
         BridgeEventBroadcaster broadcaster,
-        Func<DpsSnapshot?>? dpsSnapshotProvider = null)
+        Func<DpsSnapshot?>? dpsSnapshotProvider = null,
+        DpsTracker? dpsTracker = null,
+        Func<bool>? dpsEnabledProvider = null)
     {
         _states = states ?? throw new ArgumentNullException(nameof(states));
         _broadcaster = broadcaster ?? throw new ArgumentNullException(nameof(broadcaster));
         _dpsSnapshotProvider = dpsSnapshotProvider;
+        _dpsTracker = dpsTracker;
+        _dpsEnabledProvider = dpsEnabledProvider;
     }
 
     public bool IsActive => _sub is not null;
@@ -249,5 +270,79 @@ public sealed class GameStatePublisher : IDisposable
                 ["dps"] = state.BossDps,
             });
         }
+
+        // R8 / DPS-03: per-tick DPS overlay pump runs after every state
+        // mutation that reached OnState (which includes the explicit
+        // GameStateManager.PingSubscribers fired by PacketBridge after each
+        // SkillEffectEvent). Skip silently when there's no live DpsTracker
+        // wired — preserves legacy behaviour for the snapshot-only path.
+        PumpDpsOverlay();
+    }
+
+    /// <summary>
+    /// R8 / DPS-02/03/07: per-tick DPS overlay edge pump. Mirrors
+    /// <c>_push_packet_overlays</c>'s DPS branch at
+    /// sao_gui_state_mixin.py:246-318: poll the tracker → check enabled +
+    /// has-live → emit show / fade-out / hide edges through
+    /// <see cref="BridgeEvents.DpsOverlay"/>. JS panels (web/dps.html) own
+    /// the visibility animation; we just drive the edges.
+    /// </summary>
+    public void PumpDpsOverlay()
+    {
+        if (_dpsTracker is null) return;
+        var enabled = _dpsEnabledProvider?.Invoke() ?? true;
+        var poll = _dpsTracker.PollOverlayState(DpsIdleTimeout);
+        bool emitShow = false;
+        bool emitFade = false;
+        bool emitHide = false;
+        lock (_gate)
+        {
+            _lastDpsPollAt = DateTimeOffset.UtcNow;
+            // Edge cases (in priority order):
+            // 1) enabled=false flipped to hidden — make sure JS knows
+            // 2) has-live + not yet shown — emit show edge with snapshot
+            // 3) should-fade-out + currently shown — emit fade edge
+            // No-op when already in steady state.
+            if (!enabled && _dpsOverlayShown)
+            {
+                _dpsOverlayShown = false;
+                emitHide = true;
+            }
+            else if (enabled && poll.HasLive && !_dpsOverlayShown)
+            {
+                _dpsOverlayShown = true;
+                emitShow = true;
+            }
+            else if (enabled && poll.ShouldFadeOut && _dpsOverlayShown)
+            {
+                _dpsOverlayShown = false;
+                emitFade = true;
+            }
+            // Steady-shown: still re-emit when dirty so the DPS panel sees
+            // updated totals between show/fade edges. Matches Python's
+            // `_dps_should_push = dirty or (has_live and ...)` predicate.
+            else if (enabled && _dpsOverlayShown && poll.Dirty)
+            {
+                emitShow = true; // re-use the same edge for live updates
+            }
+        }
+        if (emitShow) EmitDpsOverlay("show", poll.Snapshot, enabled);
+        else if (emitFade) EmitDpsOverlay("fade_out", poll.Snapshot, enabled);
+        else if (emitHide) EmitDpsOverlay("hide", poll.Snapshot, enabled);
+    }
+
+    private void EmitDpsOverlay(string action, DpsSnapshot snap, bool enabled)
+    {
+        _broadcaster.Emit(BridgeEvents.DpsOverlay, new JsonObject
+        {
+            ["action"] = action,
+            ["enabled"] = enabled,
+            ["total_damage"] = snap.TotalDamage,
+            ["total_damage_boss"] = snap.TotalDamageBoss,
+            ["dps"] = snap.Dps,
+            ["total_heal"] = snap.TotalHeal,
+            ["hps"] = snap.Hps,
+            ["duration_s"] = snap.DurationSeconds,
+        });
     }
 }
