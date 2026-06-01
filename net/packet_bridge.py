@@ -6,8 +6,8 @@ PacketBridge 与 RecognitionEngine 接口一致，可直接替换。
 通过 Npcap 抓包获取游戏数据，更新到 GameStateManager。
 
 用法:
-    from game_state import GameStateManager
-    from packet_bridge import PacketBridge
+    from engines.game_state import GameStateManager
+    from net.packet_bridge import PacketBridge
 
     mgr = GameStateManager()
     bridge = PacketBridge(mgr)

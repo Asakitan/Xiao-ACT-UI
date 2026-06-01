@@ -17,7 +17,7 @@ to a couple of attribute checks when the probe is disabled.
 
 Usage
 -----
-    from perf_probe import probe, gauge
+    from utils.perf_probe import probe, gauge
 
     with probe('parser.process_packet'):
         ...

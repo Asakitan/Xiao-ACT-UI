@@ -56,6 +56,11 @@ REORG_PKG_HIDDENIMPORTS = (
     + collect_submodules('sao_theme')
     + collect_submodules('packet_parser')
 )
+# 注: utils.window_effects / vision.skill_recognition 是重构前就无任何代码 import
+# 的孤立模块（已核验 main 分支亦无引用）。PyInstaller noarchive 对「零引用包内子
+# 模块」按依赖图优化不写出 runtime/.pyc（collect_submodules / hiddenimports / a.pure
+# 注入均无法强制），但因全仓无人 import 它们，不影响运行时；一旦未来有代码引用，
+# collect_submodules 即会随引用链收入。
 # Round 70 (v3.2.15): mem_probe/ directory was removed in round 26.
 # MEM_PROBE_HIDDENIMPORTS, MEM_PROBE_BINARIES, and the ('mem_probe',
 # 'mem_probe') data entry below were all cleaned out together — none
