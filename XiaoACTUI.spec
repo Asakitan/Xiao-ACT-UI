@@ -17,56 +17,23 @@ block_cipher = None
 HERE = os.path.dirname(os.path.abspath(SPECPATH))
 
 LOCAL_HIDDENIMPORTS = [
+    # 根目录入口/壳模块（保留扁平名）
     'sao_gui',
     'sao_webview',
-    'sao_theme',
-    'sao_sound',
-    'gui_modules.sao_menu_hud',
-    'gui_modules.sao_menu_bar_gpu',
-    'gui_modules.sao_left_info_gpu',
-    'gui_modules.sao_child_bar_gpu',
-    'gui_modules.sao_gui_alert',
-    'gui_modules.sao_gui_autokey',
-    'gui_modules.sao_gui_bosshp',
-    'gui_modules.sao_gui_bossraid',
-    'gui_modules.sao_gui_buffmon',
-    'gui_modules.sao_gui_commander',
-    'gui_modules.sao_gui_dps',
-    'gui_modules.sao_gui_hp',
-    'gui_modules.sao_gui_menu_hud',
-    'gui_modules.sao_gui_profile_editors',
-    'gui_modules.sao_gui_skillfx',
-    'gpu_renderer',
-    'overlay_scheduler',
-    'overlay_render_worker',
+    'sao_web_panel_common',
+    # Cython 加速器（裸名 import；.pyd 在根，由 CYTHON_ACCEL_BINARIES glob 收集 binaries）
     '_sao_cy_pixels',
     '_sao_cy_combat',
     '_sao_cy_packet',
     '_sao_cy_skillfx',
     '_sao_cy_uihelpers',
-    'window_effects',
-    'install_npcap',
-    'sao_updater',
-    # v2.1.2-h: 抓包链路 — 这些是 sao_gui 内 lazy-import 的, onedir +
-    # noarchive 下 PyInstaller 静态分析有时遗漏 → packet_bridge ImportError
-    'packet_bridge',
-    'packet_capture',
-    'packet_parser',
-    'dps_tracker',
-    'boss_raid_engine',
-    'boss_autokey_linkage',
-    'auto_key_engine',
-    'hide_seek_engine',
-    'character_profile',
-    'recognition',
-    'skill_recognition',
-    'window_locator',
-    'vision_accel',
-    'game_state',
-    'gpu_capture',
     # proto 包 — packet_parser 内 `from proto import star_resonance_pb2`
     'proto',
     'proto.star_resonance_pb2',
+    # reorg 2026-06-02: sao_theme/sao_sound/gpu_*/overlay_*/packet_*/各引擎/recognition/
+    # window_*/sao_updater 等已全部下沉到功能子包 + sao_theme/packet_parser 拆包，
+    # 改由下方 REORG_PKG_HIDDENIMPORTS 的 collect_submodules 自动收集
+    # （含 sao_gui lazy-import 的抓包/识别/GPU 链路，collect_submodules 真导入枚举比静态分析更全）。
 ]
 
 WEBVIEW_PLATFORM_HIDDENIMPORTS = collect_submodules('webview.platforms')
@@ -77,6 +44,18 @@ CLR_LOADER_HIDDENIMPORTS = collect_submodules('clr_loader')
 # above, but use collect_submodules as a safety net so future additions
 # get picked up automatically.
 GUI_MODULES_HIDDENIMPORTS = collect_submodules('gui_modules')
+# reorg 2026-06-02: 运行时模块下沉到功能子包 + sao_theme/packet_parser 拆包，
+# 全部用 collect_submodules 自动收集（真导入枚举子模块，覆盖 lazy-import，避免手列裸名漏一个就 ImportError）。
+REORG_PKG_HIDDENIMPORTS = (
+    collect_submodules('utils')
+    + collect_submodules('render')
+    + collect_submodules('vision')
+    + collect_submodules('net')
+    + collect_submodules('engines')
+    + collect_submodules('updater')
+    + collect_submodules('sao_theme')
+    + collect_submodules('packet_parser')
+)
 # Round 70 (v3.2.15): mem_probe/ directory was removed in round 26.
 # MEM_PROBE_HIDDENIMPORTS, MEM_PROBE_BINARIES, and the ('mem_probe',
 # 'mem_probe') data entry below were all cleaned out together — none
@@ -115,7 +94,7 @@ a = Analysis(
         # 图标
         ('icon.ico', '.'),
     ] + GPU_RENDER_DATAS,
-    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + [
+    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + REORG_PKG_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
         'clr',
         'clr_loader',
