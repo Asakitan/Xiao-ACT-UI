@@ -5,3 +5,4 @@ TestResults/
 *.log
 tools/parity-fixtures/generated/
 docs/
+publish/

@@ -3,22 +3,34 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         Title="SaoAuto HUD"
+        Icon="/icon.ico"
         Height="720"
         Width="1280"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
-        AllowsTransparency="True"
-        Background="Transparent"
+        AllowsTransparency="False"
+        Background="#FF010001"
         ShowInTaskbar="False"
         Topmost="True"
         Foreground="#E8F0FE">
-    <Grid Background="Transparent">
+    <!-- Bug fix (user 2026-06-01, fourth pass): color-key chroma transparency.
+         Background=#FF010001 paints every "should be transparent" pixel as
+         the magic RGB(1,0,1). OnSourceInitialized applies WS_EX_LAYERED +
+         SetLayeredWindowAttributes(LWA_COLORKEY=0x00010001) so the OS
+         compositor chroma-keys those pixels out at the DWM level. Because
+         the window is NOT WS_EX_TRANSPARENT, the WebView2 child HWND still
+         receives mouse input normally — exactly the Python tk
+         `-transparentcolor` / WinForms TransparencyKey pattern used at
+         sao_webview.py:115-163.
+         Inner Grid uses x:Null (NOT Transparent) so WPF hit-test ignores
+         the empty Grid entirely and clicks land on the WebView2 child. -->
+    <Grid Background="{x:Null}">
         <wv2:WebView2 x:Name="WebView" DefaultBackgroundColor="Transparent" />
         <StackPanel x:Name="StatusOverlay"
                     VerticalAlignment="Center"
                     HorizontalAlignment="Center"
                     IsHitTestVisible="False">
-            <Border CornerRadius="6" Padding="20,12" Background="#80000000">
+            <Border CornerRadius="6" Padding="20,12" Background="#FF010001">
                 <StackPanel>
                     <TextBlock Text="SaoAuto · WebView host"
                                FontSize="20" FontWeight="Bold"

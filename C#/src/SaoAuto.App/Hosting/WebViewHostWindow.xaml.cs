@@ -1,5 +1,7 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Web.WebView2.Core;
@@ -22,6 +24,102 @@ public partial class WebViewHostWindow : Window
         {
             StatusText.Text = runtimeStatus;
         }
+    }
+
+    /// <summary>
+    /// Bug fix (user 2026-06-01, fourth pass): WebView click-through + black frame.
+    ///
+    /// History recap: pass-3 tried DwmExtendFrameIntoClientArea(MARGINS=-1)
+    /// to apply the "sheet-of-glass" Aero effect — but that DWM technique
+    /// only chroma-shows-through where the WPF window paints alpha=0
+    /// pixels, and with AllowsTransparency=False the WPF backdrop is fully
+    /// opaque. Result: a 1-2px DWM resize border surrounded the window
+    /// (black-frame artifact) and the page still appeared off because of
+    /// the half-transparent overlay tile.
+    ///
+    /// Correct fix mirrors the Python implementation at
+    /// sao_webview.py:115-163 — apply WS_EX_LAYERED then
+    /// SetLayeredWindowAttributes(hwnd, COLORREF=RGB(1,0,1),
+    /// LWA_COLORKEY). The OS compositor chroma-keys every pixel of that
+    /// exact color into a hole; everything else paints normally. Crucially
+    /// we do NOT set WS_EX_TRANSPARENT, so mouse input still hits the
+    /// WebView2 child HWND for clicks on visible UI. The XAML root uses
+    /// Background=#FF010001 (the magic color) and inner Grid uses x:Null
+    /// to keep WPF hit-test out of the way.
+    ///
+    /// We also strip WS_THICKFRAME|WS_CAPTION|WS_BORDER and OR-in WS_POPUP
+    /// on GWL_STYLE, then SetWindowPos(SWP_FRAMECHANGED) to flush — this
+    /// kills the residual 1-2px DWM resize frame that WindowStyle=None
+    /// alone doesn't remove.
+    ///
+    /// EntityHostWindow keeps AllowsTransparency=True because it has no
+    /// native child HWND — its pure-WPF HP-bar content needs per-pixel
+    /// alpha for the anti-aliased glow.
+    /// </summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        try
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero) return;
+
+            // 1) Apply color-key chroma-transparency via WS_EX_LAYERED + LWA_COLORKEY.
+            //    COLORREF byte order is 0x00BBGGRR, so RGB(1,0,1) → 0x00010001.
+            const int GWL_EXSTYLE = -20;
+            const int GWL_STYLE = -16;
+            const int WS_EX_LAYERED = 0x00080000;
+            const uint LWA_COLORKEY = 0x00000001;
+            const uint COLORREF_KEY = 0x00010001; // BGR of RGB(1, 0, 1)
+
+            var ex = NativeMethods.GetWindowLong(hwnd, GWL_EXSTYLE);
+            var newEx = ex | WS_EX_LAYERED;
+            NativeMethods.SetWindowLong(hwnd, GWL_EXSTYLE, newEx);
+            var keyOk = NativeMethods.SetLayeredWindowAttributes(hwnd, COLORREF_KEY, 0, LWA_COLORKEY);
+            _log.LogInformation(
+                "WebViewHost color-key applied hwnd={Hwnd} ex=0x{Ex:X8} key=0x{Key:X6} ok={Ok}",
+                hwnd, newEx, COLORREF_KEY, keyOk);
+
+            // 2) Strip residual chrome: drop WS_CAPTION|WS_THICKFRAME|WS_BORDER,
+            //    OR-in WS_POPUP, then SWP_FRAMECHANGED so the DWM resizes the
+            //    non-client area to zero. Without this, even WindowStyle=None
+            //    leaves a 1-2px shadow/resize ring around the window.
+            const uint WS_CAPTION = 0x00C00000;
+            const uint WS_THICKFRAME = 0x00040000;
+            const uint WS_BORDER = 0x00800000;
+            const uint WS_POPUP = 0x80000000;
+            const uint SWP_NOMOVE = 0x0002;
+            const uint SWP_NOSIZE = 0x0001;
+            const uint SWP_NOZORDER = 0x0004;
+            const uint SWP_FRAMECHANGED = 0x0020;
+
+            var style = (uint)NativeMethods.GetWindowLong(hwnd, GWL_STYLE);
+            var newStyle = (style & ~(WS_CAPTION | WS_THICKFRAME | WS_BORDER)) | WS_POPUP;
+            NativeMethods.SetWindowLong(hwnd, GWL_STYLE, unchecked((int)newStyle));
+            NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "WebViewHost color-key / frame-strip failed; window will still show but may show chrome");
+        }
+    }
+
+    private static class NativeMethods
+    {
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     }
 
     /// <summary>S196 — apply the Python-parity HUD geometry via the
@@ -111,12 +209,19 @@ public partial class WebViewHostWindow : Window
 
     private static string? ResolveWebAssetPath(string fileName)
     {
+        // Bug fix (user 2026-06-01, fourth pass): the previous candidate list
+        // only had 5/6-dotdot variants — the bin/Release/net8.0-windows/
+        // win-x64/publish layout needs 4 or 7. Without bridge.js loading the
+        // panel buttons look "dead" with zero log signal beyond the WebView2
+        // navigation OK line, which is exactly what the user reported.
         var binDir = AppContext.BaseDirectory;
         string[] candidates =
         {
             Path.Combine(binDir, "web", fileName),
-            Path.Combine(binDir, "..", "..", "..", "..", "..", "..", "web", fileName),
+            Path.Combine(binDir, "..", "..", "..", "..", "web", fileName),
             Path.Combine(binDir, "..", "..", "..", "..", "..", "web", fileName),
+            Path.Combine(binDir, "..", "..", "..", "..", "..", "..", "web", fileName),
+            Path.Combine(binDir, "..", "..", "..", "..", "..", "..", "..", "web", fileName),
         };
         foreach (var c in candidates)
         {

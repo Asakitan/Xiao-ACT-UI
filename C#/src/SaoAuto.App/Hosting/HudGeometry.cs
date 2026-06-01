@@ -198,8 +198,10 @@ public static class HudGeometry
     // NOTE: WS_EX_TRANSPARENT (0x20) is intentionally NOT set — Python
     // toggles it per-frame via cursor-hit-region logic in
     // sao_webview.py:4115-4191. Setting it statically would make the HUD
-    // permanently un-clickable. WS_EX_LAYERED (0x80000) is redundant
-    // because the XAML uses AllowsTransparency=True (which sets it).
+    // permanently un-clickable. WS_EX_LAYERED (0x80000) is set per host:
+    // EntityHostWindow gets it via AllowsTransparency=True in XAML;
+    // WebViewHostWindow does NOT — it uses DWM composition instead
+    // (see Bug fix (user 2026-06-01) note in WebViewHostWindow.xaml.cs).
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_NOACTIVATE = 0x08000000;
@@ -227,8 +229,32 @@ public static class HudGeometry
             SetWindowPos(hwnd, HWND_TOPMOST, px, py, pw, ph,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
+            // Bug fix (user 2026-06-01): WebView click-through.
             // Apply extended-style bits so the HUD behaves like Python's
             // tk overlay: no taskbar entry, no Alt-Tab, no focus-steal.
+            // WS_EX_TOOLWINDOW + WS_EX_NOACTIVATE merge is correct for
+            // both hosts and stays unchanged here.
+            //
+            // Click-through hit-test strategy now differs per host:
+            //   - WebViewHostWindow: uses DWM composition
+            //     (DwmExtendFrameIntoClientArea, called in
+            //     WebViewHostWindow.OnSourceInitialized) — NOT WS_EX_LAYERED.
+            //     Reason: a native WebView2 child HWND breaks the
+            //     layered-window alpha hit-test contract (its DComp
+            //     surface never participates in UpdateLayeredWindow's
+            //     alpha plane, so OS hit-test would treat every WebView2
+            //     pixel as transparent and clicks would fall through).
+            //     DWM composition keeps the HWND non-layered so Windows
+            //     hit-tests against the real HWND tree while pixels with
+            //     alpha=0 still appear transparent via composition.
+            //   - EntityHostWindow: keeps AllowsTransparency=True (which
+            //     sets WS_EX_LAYERED) because its content is pure WPF
+            //     with no child HWND — per-pixel alpha works correctly
+            //     and is needed for the SAO HP-bar anti-aliased glow.
+            // WS_EX_TRANSPARENT is intentionally NOT merged on either
+            // host — Python toggles it per-frame via cursor-hit-region
+            // logic; statically setting it makes the HUD permanently
+            // un-clickable.
             var ex = GetWindowLong(hwnd, GWL_EXSTYLE);
             int merged = ex | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
             if (merged != ex)

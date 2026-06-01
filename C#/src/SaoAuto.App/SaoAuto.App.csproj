@@ -12,6 +12,11 @@
     <UseWPF>true</UseWPF>
     <StartupObject>SaoAuto.App.Program</StartupObject>
     <RootNamespace>SaoAuto.App</RootNamespace>
+    <!-- Bug fix (user 2026-06-01): use the canonical icon.ico bundled
+         next to the Python build so taskbar / Alt-Tab / installer / exe
+         resource all show the same 咲 logo. Resolved relative to this
+         csproj so it travels with source. -->
+    <ApplicationIcon>icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,7 +32,14 @@
 
   <!-- S185 — copy HUD HTML + assets next to the binary so
        UiRunner.ResolveHudIndexUrl can find panel.html and
-       HideSeekBootstrap can find its templates. -->
+       HideSeekBootstrap can find its templates.
+       New (user 2026-06-01): this glob delivers web/fonts/SAOUI.ttf and
+       assets/sounds/LinkStart.SAO.Kirito.* next to the binary, so the
+       WebView2 HUD @font-face and SaoSplashWindow's defensive file://
+       fallback can read them at runtime.
+       Bug fix (user 2026-06-01, third pass): the splash also needs the
+       font as a real WPF <Resource> so pack://application:,,, URIs
+       resolve — see the explicit Resource entries further down. -->
   <ItemGroup>
     <Content Include="..\..\..\web\**\*.*" Link="web\%(RecursiveDir)%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -35,6 +47,19 @@
     <Content Include="..\..\..\assets\**\*.*" Link="assets\%(RecursiveDir)%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- Bug fix (user 2026-06-01): embed icon.ico as a WPF resource so the
+         XAML `Icon="/icon.ico"` URI resolves at runtime + the build sees
+         the file referenced by ApplicationIcon. -->
+    <Resource Include="icon.ico" />
+    <!-- Bug fix (user 2026-06-01, third pass): SAOLinkStart full port.
+         Embed SAOUI.ttf + ZhuZiAYuanJWD.ttf as WPF resources so the
+         splash can resolve them via
+         pack://application:,,,/web/fonts/SAOUI.ttf#SAO UI . The existing
+         <Content Include="..\..\..\web\**\*.*"> glob above still copies
+         loose .ttf files next to the binary for the WebView2 HUD
+         @font-face — the double-include is intentional (negligible cost). -->
+    <Resource Include="..\..\..\web\fonts\SAOUI.ttf" Link="web\fonts\SAOUI.ttf" />
+    <Resource Include="..\..\..\web\fonts\ZhuZiAYuanJWD.ttf" Link="web\fonts\ZhuZiAYuanJWD.ttf" />
   </ItemGroup>
 
 </Project>

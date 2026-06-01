@@ -151,6 +151,39 @@ public sealed class UiRunner
             _log.LogError(e.Exception, "WPF dispatcher unhandled exception");
         };
 
+        // Bug fix (user 2026-06-01, third pass): SAOLinkStart full port.
+        // Bracket the splash.ShowDialog() with an explicit ShutdownMode
+        // swap. App.xaml declares ShutdownMode="OnLastWindowClose"; the
+        // splash is the only live Window when ShowDialog() runs (host
+        // chain hasn't built its window yet), so when the splash closes
+        // WPF auto-shuts the Application before the host can be shown.
+        // OnExplicitShutdown keeps the Application alive across the
+        // splash; we restore the previous mode + clear Application.MainWindow
+        // afterward so the host window becomes the real MainWindow cleanly.
+        // The ~9s 4-phase Storyboard mirrors the Python SAOLinkStart
+        // sequence (sao_theme.py:3564 / sao_webview.py:3618). A 10.5s
+        // safety timer guarantees the splash dismisses itself even if the
+        // animation never raises Completed.
+        if (_settings.GetBool("splash_enabled", true))
+        {
+            var prevShutdownMode = application.ShutdownMode;
+            application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            try
+            {
+                var splash = new SaoSplashWindow();
+                splash.ShowDialog();
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "splash failed; continuing to host");
+            }
+            finally
+            {
+                application.ShutdownMode = prevShutdownMode;
+                application.MainWindow = null;
+            }
+        }
+
         // Honor cancellation by asking the dispatcher to shut down.
         using var ctRegistration = cancellationToken.Register(() =>
         {
@@ -323,19 +356,50 @@ public sealed class UiRunner
     /// so the WebView2 control can load it. <c>hp.html</c> is the
     /// HP/SP/Burst overlay (the main game HUD); falls back to
     /// <c>panel.html</c> (music/piano panel) then <c>about:blank</c>.
-    /// Searches a small list of paths relative to the running binary.</summary>
+    /// Searches a small list of paths relative to the running binary.
+    ///
+    /// Bug fix (user 2026-06-01, fourth pass): widen the dot-dot ladder to
+    /// cover 3/4/5/6/7 levels and add a project-anchored upward walk that
+    /// finds a directory named <c>sao_auto</c> containing
+    /// <c>web/panel.html</c>. If this resolves to <c>about:blank</c> the
+    /// panel buttons literally don't exist in the DOM — which presents
+    /// as "buttons don't work" even with a perfectly transparent host.
+    /// The hard log line at the end is the source-of-truth signal in
+    /// %LOCALAPPDATA%/SaoAuto/logs/saoauto-*.log.</summary>
     public static string? ResolveHudIndexUrl(ILogger log)
     {
         var binDir = AppContext.BaseDirectory;
         string[] names = { "hp.html", "panel.html" };
-        string[] roots =
+        var roots = new List<string>
         {
             System.IO.Path.Combine(binDir, "web"),
-            System.IO.Path.Combine(binDir, "..", "..", "..", "..", "..", "..", "web"),
-            System.IO.Path.Combine(binDir, "..", "..", "..", "..", "..", "web"),
+            System.IO.Path.Combine(binDir, "..", "..", "..", "web"),
             System.IO.Path.Combine(binDir, "..", "..", "..", "..", "web"),
+            System.IO.Path.Combine(binDir, "..", "..", "..", "..", "..", "web"),
+            System.IO.Path.Combine(binDir, "..", "..", "..", "..", "..", "..", "web"),
+            System.IO.Path.Combine(binDir, "..", "..", "..", "..", "..", "..", "..", "web"),
         };
-        var candidates = new List<string>(names.Length * roots.Length);
+
+        // Project-anchored upward walk: look for a dir named "sao_auto"
+        // that contains web/panel.html. Walks at most 12 levels up to
+        // guard against pathological mount points.
+        try
+        {
+            var probe = new System.IO.DirectoryInfo(binDir);
+            for (int i = 0; probe is not null && i < 12; i++, probe = probe.Parent)
+            {
+                var saoAuto = System.IO.Path.Combine(probe.FullName, "sao_auto");
+                var probePanel = System.IO.Path.Combine(saoAuto, "web", "panel.html");
+                if (System.IO.File.Exists(probePanel))
+                {
+                    roots.Add(System.IO.Path.Combine(saoAuto, "web"));
+                    break;
+                }
+            }
+        }
+        catch { /* ignore probe failure */ }
+
+        var candidates = new List<string>(names.Length * roots.Count);
         foreach (var name in names)
             foreach (var root in roots)
                 candidates.Add(System.IO.Path.Combine(root, name));
@@ -344,11 +408,16 @@ public sealed class UiRunner
             try
             {
                 var full = System.IO.Path.GetFullPath(c);
-                if (System.IO.File.Exists(full)) return new Uri(full).AbsoluteUri;
+                if (System.IO.File.Exists(full))
+                {
+                    var url = new Uri(full).AbsoluteUri;
+                    log.LogInformation("HUD index resolved -> {Path}", full);
+                    return url;
+                }
             }
             catch { /* ignore malformed candidates */ }
         }
-        log.LogInformation("HUD panel.html not found; starting on about:blank");
+        log.LogWarning("HUD index not found; starting on about:blank — buttons WILL appear dead until web/panel.html is reachable");
         return null;
     }
 }
