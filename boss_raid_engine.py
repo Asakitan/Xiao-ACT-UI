@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import BASE_DIR
 
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
 
 BOSS_RAID_SCHEMA_VERSION = 1

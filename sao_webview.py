@@ -1138,13 +1138,13 @@ class SAOWebAPI:
     # ── Sound settings ──
     def set_sound_enabled(self, enabled):
         """Global SFX on/off."""
-        from sao_sound import set_sound_enabled
+        from utils.sao_sound import set_sound_enabled
         set_sound_enabled(bool(enabled))
         self._g._set_setting('sound_enabled', bool(enabled))
 
     def set_sound_volume(self, volume_pct):
         """Global volume 0-100."""
-        from sao_sound import set_sound_volume
+        from utils.sao_sound import set_sound_volume
         set_sound_volume(int(volume_pct))
         self._g._set_setting('sound_volume', int(volume_pct))
 
@@ -1611,7 +1611,7 @@ class SAOWebViewGUI:
         # 音效
         self._sound_ok = False
         try:
-            import sao_sound
+            from utils import sao_sound
             self._sao_sound = sao_sound
             self._sound_ok = True
         except Exception:
@@ -2185,7 +2185,7 @@ class SAOWebViewGUI:
             return
         try:
             from hide_seek_engine import HideSeekEngine
-            from window_locator import WindowLocator
+            from utils.window_locator import WindowLocator
             locator = getattr(self, '_locator', None)
             if not locator:
                 locator = WindowLocator()
@@ -3469,7 +3469,7 @@ class SAOWebViewGUI:
             rect = None
 
         try:
-            from window_locator import WindowLocator
+            from utils.window_locator import WindowLocator
             locator = getattr(self, '_locator', None)
             if locator is None:
                 locator = WindowLocator()
@@ -4712,7 +4712,7 @@ class SAOWebViewGUI:
 
             # Restore sound settings
             try:
-                from sao_sound import set_sound_enabled, set_sound_volume
+                from utils.sao_sound import set_sound_enabled, set_sound_volume
                 _snd_on = cfg_settings.get('sound_enabled', True)
                 _snd_vol = cfg_settings.get('sound_volume', 70)
                 set_sound_enabled(bool(_snd_on) if _snd_on is not None else True)
@@ -5824,7 +5824,7 @@ class SAOWebViewGUI:
         client_rect = getattr(gs, 'window_rect', None) if gs else None
         if not client_rect:
             try:
-                from window_locator import WindowLocator
+                from utils.window_locator import WindowLocator
                 client_rect = WindowLocator().get_rect()
             except Exception:
                 client_rect = None
@@ -6894,7 +6894,7 @@ class SAOWebViewGUI:
     def _sync_menu_settings(self):
         """Push current settings to menu so UI toggles reflect saved state."""
         try:
-            from sao_sound import get_sound_enabled, get_sound_volume
+            from utils.sao_sound import get_sound_enabled, get_sound_volume
             cfg = {
                 'watched_slots': self._get_setting('watched_skill_slots', [1,2,3,4,5,6,7,8,9]),
                 'burst_enabled': self._get_setting('burst_enabled', True),

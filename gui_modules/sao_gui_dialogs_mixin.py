@@ -60,7 +60,7 @@ import tkinter as tk
 from typing import Any, Optional
 
 from config import APP_VERSION_LABEL
-from sao_sound import get_cjk_font
+from utils.sao_sound import get_cjk_font
 from sao_theme import SAODialog
 from character_profile import show_welcome_dialog
 from gui_modules.sao_menu_left_stack import SAOMenuLeftStack

@@ -20,7 +20,7 @@ from typing import Callable, Deque, Dict, List, Optional, Tuple
 import gpu_overlay_window as _gow
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import AsyncFrameWorker, FrameBuffer
-from perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _probe
+from utils.perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _probe
 
 from .state import PopupState
 from . import composer, menu_bar_layout, child_bar_layout, hud_layout
@@ -339,7 +339,7 @@ class SAOPopUpMenu:
         # Tk left-widget (and any PIL composer falling back to family
         # names) can resolve them on first paint.
         try:
-            from sao_sound import load_sao_fonts as _lsf
+            from utils.sao_sound import load_sao_fonts as _lsf
             _lsf()
         except Exception:
             pass
@@ -849,7 +849,7 @@ class SAOPopUpMenu:
             return
         _phase_trace('popup.act.sound.begin', f'idx={idx}')
         try:
-            from sao_sound import play_sound as _ps
+            from utils.sao_sound import play_sound as _ps
             _ps('click', volume=0.5)
         except Exception:
             pass
@@ -893,7 +893,7 @@ class SAOPopUpMenu:
             return
         cmd = self._state.child_rows[idx].get('command')
         try:
-            from sao_sound import play_sound as _ps
+            from utils.sao_sound import play_sound as _ps
             _ps('click', volume=0.5)
         except Exception:
             pass

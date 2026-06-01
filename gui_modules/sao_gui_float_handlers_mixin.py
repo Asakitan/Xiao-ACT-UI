@@ -46,7 +46,7 @@ import tkinter as tk
 import time
 from typing import Any, Optional
 
-from sao_sound import get_cjk_font
+from utils.sao_sound import get_cjk_font
 from gui_modules.sao_hotkey_manager import SAOHotkeyManager
 from gui_modules.sao_panel_ui import (
     _apply_window_icon, _disable_native_window_shadow,

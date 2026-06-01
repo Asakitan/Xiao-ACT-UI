@@ -73,7 +73,7 @@ def _gpu_bosshp_enabled() -> bool:
     except Exception:
         return False
 
-from perf_probe import gauge as _perf_gauge, probe as _probe
+from utils.perf_probe import gauge as _perf_gauge, probe as _probe
 
 # Reuse ULW glue + font helpers from sao_gui_dps so we keep the same
 # premultiply path and font cache.

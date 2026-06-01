@@ -68,10 +68,10 @@ TOPLEVEL_MODULES = [
     "gpu_capture", "gpu_compositor", "gpu_overlay_window", "gpu_renderer",
     "hide_seek_engine", "main", "overlay_render_worker", "overlay_scheduler",
     "overlay_subpixel", "packet_bridge", "packet_capture", "packet_parser",
-    "perf_probe", "recognition", "render_capture_sync", "sao_gui", "sao_sound",
+    "utils.perf_probe", "recognition", "render_capture_sync", "sao_gui", "utils.sao_sound",
     "sao_theme", "sao_updater", "sao_web_panel_common", "sao_webview",
     "skill_recognition", "skillfx_jit", "skillfx_pipeline", "update_apply",
-    "vision_accel", "window_effects", "window_locator",
+    "vision_accel", "utils.window_effects", "utils.window_locator",
 ]
 
 GUI_MODULES = [
@@ -293,7 +293,7 @@ def smoke_dps_tracker():
 
 
 def smoke_window_locator():
-    import window_locator
+    from utils import window_locator
     loc = window_locator.WindowLocator()
     rect = loc.get_rect()  # may return None if game window missing
     _ = rect
@@ -309,7 +309,7 @@ def smoke_sao_theme():
 
 
 def smoke_sao_sound():
-    import sao_sound
+    from utils import sao_sound
     # play_sound exists (don't actually play)
     assert callable(getattr(sao_sound, "play_sound", None))
     assert callable(getattr(sao_sound, "get_sao_font", None))

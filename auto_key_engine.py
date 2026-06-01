@@ -15,7 +15,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import BASE_DIR, GAME_PROCESS_NAMES
-from window_locator import WindowLocator, _get_process_name
+from utils.window_locator import WindowLocator, _get_process_name
 
 AUTO_KEY_SCHEMA_VERSION = 1
 DEFAULT_AUTO_KEY_SERVER_URL = "http://doi.sakisense.top:15538"

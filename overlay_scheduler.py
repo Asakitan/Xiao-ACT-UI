@@ -25,7 +25,7 @@ import threading
 import time
 from typing import Callable, Dict, Optional
 
-from perf_probe import gauge as _perf_gauge, probe as _probe
+from utils.perf_probe import gauge as _perf_gauge, probe as _probe
 
 
 _DEFAULT_HZ = 60

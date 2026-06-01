@@ -48,7 +48,7 @@ from character_profile import (
     load_profile, save_profile, get_or_ask_profile,
     show_welcome_dialog, PROFESSION_LIST,
 )
-from sao_sound import play_sound, LevelUpEffect, load_sao_fonts, get_sao_font, get_cjk_font
+from utils.sao_sound import play_sound, LevelUpEffect, load_sao_fonts, get_sao_font, get_cjk_font
 from auto_key_engine import (
     AutoKeyEngine,
     build_auto_key_state,

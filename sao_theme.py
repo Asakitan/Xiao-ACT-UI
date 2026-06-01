@@ -26,7 +26,7 @@ from overlay_subpixel import subpixel_alpha_composite
 from typing import Any, Optional, Callable, List, Dict, Tuple
 import numpy as np
 from config import APP_VERSION_LABEL, FONTS_DIR
-from sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font
+from utils.sao_sound import get_sao_font as _sao_font, get_cjk_font as _cjk_font
 from gui_modules.sao_menu_hud import (
     MenuCircleButtonRenderer,
     MenuHudSpriteRenderer,
@@ -89,7 +89,7 @@ except Exception:
     def gpu_child_bar_enabled() -> bool:  # type: ignore[no-redef]
         return False
 from overlay_scheduler import get_scheduler as _get_scheduler
-from perf_probe import phase as _phase_trace, probe as _probe
+from utils.perf_probe import phase as _phase_trace, probe as _probe
 
 try:
     import moderngl
@@ -658,7 +658,7 @@ class SAOMenuBar(tk.Frame):
         if not item.get('can_active', True):
             return
         try:
-            from sao_sound import play_sound as _ps
+            from utils.sao_sound import play_sound as _ps
             _ps('click', volume=0.5)
         except Exception:
             pass
@@ -1748,7 +1748,7 @@ class SAOChildBar(tk.Frame):
         def enter(e, a=_anim):
             a.animate('hover', 150, lambda t: _update_hover(t))
             try:
-                from sao_sound import play_sound as _ps
+                from utils.sao_sound import play_sound as _ps
                 _ps('click', volume=0.3)
             except Exception:
                 pass
@@ -1766,7 +1766,7 @@ class SAOChildBar(tk.Frame):
 
                 def _click_with_sound(e, c=cmd, label=row_label):
                     try:
-                        from sao_sound import play_sound as _ps
+                        from utils.sao_sound import play_sound as _ps
                         _ps('click', volume=0.5)
                     except Exception:
                         pass
@@ -2710,7 +2710,7 @@ class SAOPopUpMenu:
         name = item.get('name', '')
         if name in self.child_menus:
             try:
-                from sao_sound import play_sound as _ps
+                from utils.sao_sound import play_sound as _ps
                 _ps('submenu', volume=0.5)
             except Exception:
                 pass
@@ -3808,12 +3808,12 @@ void main() {
 
         def _do_play(name):
             try:
-                from sao_sound import play_sound as _ps
+                from utils.sao_sound import play_sound as _ps
                 _ps(name, volume=0.8)
             except Exception:
                 try:
                     _base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-                    from sao_sound import SAO_SOUNDS
+                    from utils.sao_sound import SAO_SOUNDS
                     fname = SAO_SOUNDS.get(name, '')
                     if fname and os.path.isfile(fname):
                         import pygame

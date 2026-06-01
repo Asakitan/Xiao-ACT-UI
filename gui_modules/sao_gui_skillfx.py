@@ -64,7 +64,7 @@ try:
 except Exception:
     pass
 
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 
 from gui_modules.sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
@@ -775,7 +775,7 @@ void main() {
             pass
         self._sync_gl_targets(reset=True)
         try:
-            from sao_sound import play_sound as _play_sound
+            from utils.sao_sound import play_sound as _play_sound
             _play_sound('burst_ready')
         except Exception:
             pass

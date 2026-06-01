@@ -66,7 +66,7 @@ def _gpu_dps_enabled() -> bool:
 
 import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
 
-from perf_probe import gauge as _perf_gauge, probe as _probe
+from utils.perf_probe import gauge as _perf_gauge, probe as _probe
 
 # ═══════════════════════════════════════════════
 #  Win32 / ULW glue
@@ -188,7 +188,7 @@ def _load_font(kind: str, size: int):
     if cached is not None:
         return cached
     try:
-        from sao_sound import load_sao_fonts as _load_sao_fonts
+        from utils.sao_sound import load_sao_fonts as _load_sao_fonts
         _load_sao_fonts()
     except Exception:
         pass

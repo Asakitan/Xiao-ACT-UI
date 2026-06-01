@@ -37,7 +37,7 @@ def _load_font(kind: str, size: int):
     if cached is not None:
         return cached
     try:
-        from sao_sound import load_sao_fonts as _load_sao_fonts
+        from utils.sao_sound import load_sao_fonts as _load_sao_fonts
         _load_sao_fonts()
     except Exception:
         pass

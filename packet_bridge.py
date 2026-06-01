@@ -35,7 +35,7 @@ from packet_parser import (PacketParser, PlayerData, MonsterData,
                            _PROFESSION_PREFIX, _ALL_PROFESSION_PREFIXES)
 from packet_capture import PacketCapture, list_devices, auto_select_device
 
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 
 logger = logging.getLogger('sao_auto.bridge')
 
@@ -589,7 +589,7 @@ class PacketBridge:
 
         # ── Npcap 自动安装 ──
         try:
-            from install_npcap import ensure_npcap, is_npcap_installed
+            from utils.install_npcap import ensure_npcap, is_npcap_installed
             if not is_npcap_installed():
                 self._state_mgr.update(recognition_ok=False,
                                        error_msg='正在自动安装 Npcap...')

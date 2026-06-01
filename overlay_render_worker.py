@@ -37,7 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
 import numpy as np
 from PIL import Image
 
-from perf_probe import gauge as _perf_gauge, phase as _phase_trace
+from utils.perf_probe import gauge as _perf_gauge, phase as _phase_trace
 from render_capture_sync import wait_until_capture_idle
 
 import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]

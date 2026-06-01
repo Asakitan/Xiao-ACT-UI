@@ -10,7 +10,7 @@ import time
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 
 import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
 

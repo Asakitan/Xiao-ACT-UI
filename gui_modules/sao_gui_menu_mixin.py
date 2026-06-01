@@ -41,7 +41,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from config import DEFAULT_HOTKEYS
-from sao_sound import play_sound
+from utils.sao_sound import play_sound
 from sao_theme import SAOPopUpMenu
 
 

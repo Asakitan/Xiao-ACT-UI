@@ -58,7 +58,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 from gui_modules.sao_gui_commander import CommanderPanel
 
 
@@ -190,14 +190,14 @@ class SAOPlayerGUIPanelsMixin:
         self._refresh_menu_if_open()
 
     def _toggle_sound_enabled(self):
-        from sao_sound import set_sound_enabled, get_sound_enabled
+        from utils.sao_sound import set_sound_enabled, get_sound_enabled
         new = not get_sound_enabled()
         set_sound_enabled(new)
         self._set_setting('sound_enabled', new)
         self._refresh_menu_if_open()
 
     def _adj_sound_volume(self, delta: int):
-        from sao_sound import set_sound_volume, get_sound_volume
+        from utils.sao_sound import set_sound_volume, get_sound_volume
         cur = get_sound_volume()
         nv = max(0, min(100, cur + delta))
         set_sound_volume(nv)

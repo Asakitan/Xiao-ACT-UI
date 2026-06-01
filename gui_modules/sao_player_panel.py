@@ -15,7 +15,7 @@ import tkinter as tk
 from typing import Any, Optional, Tuple
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
-from sao_sound import get_sao_font, get_cjk_font
+from utils.sao_sound import get_sao_font, get_cjk_font
 # Animator imported lazily inside __init__ to break the
 # sao_theme → ui_gpu.popup → sao_player_panel circular import.
 

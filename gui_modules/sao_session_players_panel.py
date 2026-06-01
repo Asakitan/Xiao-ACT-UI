@@ -22,7 +22,7 @@ import tkinter as tk
 from typing import Any, Dict
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
-from sao_sound import get_sao_font, get_cjk_font
+from utils.sao_sound import get_sao_font, get_cjk_font
 
 
 # ── Global wheel-routing registry ──────────────────────────────────────

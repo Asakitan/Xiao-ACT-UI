@@ -25,14 +25,14 @@ from config import (
 )
 from render_capture_sync import capture_section
 from vision_accel import cvt_color, gaussian_blur
-from window_locator import WindowLocator
+from utils.window_locator import WindowLocator
 
 try:
     import gpu_capture as _gpu_capture  # type: ignore
 except Exception:
     _gpu_capture = None  # type: ignore
 
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 
 _capture_local = threading.local()
 

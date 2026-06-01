@@ -46,7 +46,7 @@ except Exception:
     ensure_session = None  # type: ignore[assignment]
     get_latest_bgr = None  # type: ignore[assignment]
 
-from perf_probe import probe as _probe, gauge as _perf_gauge, phase as _phase_trace
+from utils.perf_probe import probe as _probe, gauge as _perf_gauge, phase as _phase_trace
 
 
 class SAOPlayerGUIFisheyeMixin:

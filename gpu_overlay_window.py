@@ -49,8 +49,8 @@ from ctypes import wintypes
 from typing import Any, Callable, Dict, List, Optional
 
 try:
-    from perf_probe import phase as _phase_trace  # type: ignore
-    from perf_probe import gauge as _perf_gauge  # type: ignore
+    from utils.perf_probe import phase as _phase_trace  # type: ignore
+    from utils.perf_probe import gauge as _perf_gauge  # type: ignore
 except Exception:  # pragma: no cover
     def _phase_trace(_name: str, _detail: str = '') -> None:  # type: ignore
         return

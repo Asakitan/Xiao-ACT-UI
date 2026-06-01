@@ -25,7 +25,7 @@ from typing import Optional, Tuple, Dict, Any
 import numpy as np
 from PIL import Image, ImageFilter
 
-from perf_probe import phase as _phase_trace
+from utils.perf_probe import phase as _phase_trace
 
 
 _DISABLED = os.environ.get('SAO_GPU_DISABLE', '') == '1'

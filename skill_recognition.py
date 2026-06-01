@@ -17,7 +17,7 @@ from config import (
 )
 from vision_accel import cvt_color, gaussian_blur
 
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 
 _DEFAULT_BASELINE = {
     "inner_v_mean": 150.0,

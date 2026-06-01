@@ -17,7 +17,7 @@ try:
 except Exception:
     _CY_PACKET = None  # type: ignore[assignment]
 
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 
 # 缓存字段名列表
 _CACHE_FIELDS = (

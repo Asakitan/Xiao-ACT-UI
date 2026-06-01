@@ -41,7 +41,7 @@ def _boss_bar_main_key(_m, _recent_targets):
 
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 
 
 class SAOPlayerGUIStateMixin:

@@ -78,7 +78,7 @@ from boss_autokey_linkage import BossAutoKeyLinkage
 from boss_raid_engine import BossRaidEngine
 from config import resource_path
 from dps_tracker import DpsTracker
-from sao_sound import play_sound
+from utils.sao_sound import play_sound
 
 from gui_modules.sao_gui_alert import AlertOverlay
 from gui_modules.sao_gui_bosshp import BossHpOverlay
@@ -224,7 +224,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
 
             # Restore sound settings
             try:
-                from sao_sound import set_sound_enabled, set_sound_volume
+                from utils.sao_sound import set_sound_enabled, set_sound_volume
                 _snd_on = cfg_settings.get('sound_enabled', True)
                 _snd_vol = cfg_settings.get('sound_volume', 70)
                 set_sound_enabled(bool(_snd_on) if _snd_on is not None else True)

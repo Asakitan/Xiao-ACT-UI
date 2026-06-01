@@ -25,7 +25,7 @@ from typing import Optional, Callable, Dict, Any
 logger = logging.getLogger('sao_auto.parser')
 _PACKET_DEBUG_ENABLED = False  # Enable to log raw packet snapshots for field confirmation
 
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 
 import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]

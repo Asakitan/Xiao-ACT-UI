@@ -50,7 +50,7 @@ from overlay_render_worker import (
     submit_ulw_commit,
     drop_pending_ulw_for,
 )
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 from gui_modules.sao_menu_hud import MenuHudSpriteRenderer
 try:
     import gpu_overlay_window as _gow

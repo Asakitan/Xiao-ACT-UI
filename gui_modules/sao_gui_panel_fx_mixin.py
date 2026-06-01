@@ -51,7 +51,7 @@ import time
 import tkinter as tk
 from typing import Any, List, Optional, Tuple
 
-from perf_probe import probe as _probe, gauge as _perf_gauge
+from utils.perf_probe import probe as _probe, gauge as _perf_gauge
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 

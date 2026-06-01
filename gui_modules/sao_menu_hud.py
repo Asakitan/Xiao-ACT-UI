@@ -55,7 +55,7 @@ except Exception:
     _gpu_blur = None
     _gpu_shell = None
 
-from perf_probe import probe as _probe
+from utils.perf_probe import probe as _probe
 
 
 _BASE = (
@@ -104,9 +104,9 @@ def _tk_font_spec(kind: str, size: int) -> Tuple:
     back to a system font if sao_sound.get_sao_font is unavailable."""
     try:
         if kind == 'sao':
-            from sao_sound import get_sao_font as _gs
+            from utils.sao_sound import get_sao_font as _gs
             return _gs(max(6, int(size)))
-        from sao_sound import get_cjk_font as _gc
+        from utils.sao_sound import get_cjk_font as _gc
         return _gc(max(6, int(size)))
     except Exception:
         family = 'Segoe UI' if kind == 'sao' else 'Microsoft YaHei UI'

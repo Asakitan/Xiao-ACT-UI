@@ -41,7 +41,7 @@ from typing import Any, Dict, Tuple
 from PIL import Image, ImageDraw, ImageTk
 
 from config import resource_path
-from sao_sound import get_sao_font, get_cjk_font
+from utils.sao_sound import get_sao_font, get_cjk_font
 
 
 # ── Win32 user32 handle (same as sao_gui's _user32 but local here so

@@ -58,7 +58,7 @@ from typing import Any, Optional
 import numpy as np
 from PIL import Image, ImageTk
 
-from sao_sound import get_sao_font
+from utils.sao_sound import get_sao_font
 from sao_theme import SAOLinkStart, ease_out, ease_in_out, lerp
 from gui_modules.sao_panel_ui import _disable_native_window_shadow
 

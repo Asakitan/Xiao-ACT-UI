@@ -73,7 +73,7 @@ def _gpu_hp_enabled() -> bool:
     except Exception:
         return False
 
-from perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _probe
+from utils.perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _probe
 
 from gui_modules.sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
@@ -3114,7 +3114,7 @@ class HpOverlay:
             return
         self._last_interaction_sound_t = now
         try:
-            from sao_sound import play_sound as _ps
+            from utils.sao_sound import play_sound as _ps
             _ps('click', volume=volume)
         except Exception:
             pass
