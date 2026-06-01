@@ -185,7 +185,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
             self._dps_tracker = None
 
         try:
-            from recognition import RecognitionEngine
+            from vision.recognition import RecognitionEngine
             vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
             vision_engine.start()
             engines.append(vision_engine)

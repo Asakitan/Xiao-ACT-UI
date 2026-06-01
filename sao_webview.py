@@ -2998,7 +2998,7 @@ class SAOWebViewGUI:
             return
         if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
             return
-        from recognition import RecognitionEngine
+        from vision.recognition import RecognitionEngine
         vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
         vision_engine.start()
         self._vision_engine = vision_engine
@@ -3233,7 +3233,7 @@ class SAOWebViewGUI:
             self._dps_tracker = None
 
         try:
-            from recognition import RecognitionEngine
+            from vision.recognition import RecognitionEngine
             vision_engine = RecognitionEngine(self._state_mgr, self._cfg_settings_ref)
             vision_engine.start()
             engines.append(vision_engine)

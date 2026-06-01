@@ -593,7 +593,7 @@ class HideSeekEngine:
     ) -> Optional[np.ndarray]:
         """Capture client area of game window → BGR numpy array."""
         try:
-            from recognition import _capture_hwnd_client
+            from vision.recognition import _capture_hwnd_client
             img, method = _capture_hwnd_client(hwnd, client_rect)
             raw_type = type(img)
             normalized = self._coerce_bgr_array(img)

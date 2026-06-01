@@ -68,10 +68,10 @@ TOPLEVEL_MODULES = [
     "render.gpu_capture", "render.gpu_compositor", "render.gpu_overlay_window", "render.gpu_renderer",
     "hide_seek_engine", "main", "render.overlay_render_worker", "render.overlay_scheduler",
     "render.overlay_subpixel", "packet_bridge", "packet_capture", "packet_parser",
-    "utils.perf_probe", "recognition", "render.render_capture_sync", "sao_gui", "utils.sao_sound",
+    "utils.perf_probe", "vision.recognition", "render.render_capture_sync", "sao_gui", "utils.sao_sound",
     "sao_theme", "sao_updater", "sao_web_panel_common", "sao_webview",
-    "skill_recognition", "render.skillfx_jit", "render.skillfx_pipeline", "update_apply",
-    "vision_accel", "utils.window_effects", "utils.window_locator",
+    "vision.skill_recognition", "render.skillfx_jit", "render.skillfx_pipeline", "update_apply",
+    "vision.vision_accel", "utils.window_effects", "utils.window_locator",
 ]
 
 GUI_MODULES = [
@@ -322,7 +322,7 @@ def smoke_settings_manager():
 
 
 def smoke_skill_recognition():
-    import skill_recognition
+    from vision import skill_recognition
     # Real exports: SkillVisualTracker class + skill-slot rect helpers
     assert hasattr(skill_recognition, "SkillVisualTracker")
     assert callable(skill_recognition.get_skill_slot_rects)
@@ -330,7 +330,7 @@ def smoke_skill_recognition():
 
 
 def smoke_recognition():
-    import recognition
+    from vision import recognition
     # Engine class expected
     assert any(hasattr(recognition, n) for n in
                ("RecognitionEngine", "Recognition", "Vision"))

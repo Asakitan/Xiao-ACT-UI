@@ -7,7 +7,7 @@ from auto_key_engine import AutoKeyEngine
 from config import DEFAULT_HOTKEYS, SettingsManager
 from game_state import GameStateManager
 from packet_bridge import PacketBridge
-from recognition import RecognitionEngine
+from vision.recognition import RecognitionEngine
 
 
 class AutomationCore:

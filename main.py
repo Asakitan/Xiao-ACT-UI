@@ -115,7 +115,7 @@ def run_test():
     """单次截图测试: 截取游戏窗口，执行一次识别，打印结果"""
     from config import SettingsManager
     from game_state import GameStateManager
-    from recognition import RecognitionEngine
+    from vision.recognition import RecognitionEngine
 
     print('=' * 50)
     print('  SAO Auto — 识别测试')
