@@ -261,15 +261,18 @@ def rgb_to_hex(r: int, g: int, b: int) -> str:
     return f'#{r:02x}{g:02x}{b:02x}'
 
 def _strip_alpha(c: str) -> str:
-    """Strip 8-digit RGBA hex to 6-digit RGB (tkinter doesn't support alpha)."""
+    """Strip 8-digit RGBA hex to 6-digit RGB (tkinter doesn't support alpha).
+
+    Retained for backward compatibility with any external callers; new hot
+    paths should call lerp_color directly (the cython kernel normalizes).
+    """
     c = c.strip()
     if c.startswith('#') and len(c) == 9:
         return c[:7]
     return c
 
 
-def lerp_color(c1: str, c2: str, t: float) -> str:
-    return _CY_UI.lerp_hex_color(_strip_alpha(c1), _strip_alpha(c2), t)
+lerp_color = _CY_UI.lerp_hex_color  # cython kernel already strips alpha + normalizes
 
 
 # ──────────────────── 通用动画引擎 ────────────────────
@@ -931,6 +934,11 @@ class SAOLeftInfo(tk.Frame):
         self._gpu_managed: bool = False
         self._gpu_tk_sized: bool = False
         self._cached_screen_xy: Optional[Tuple[int, int]] = None
+        # Q11: cache the last-configured (width, height) tuple so the per-tick
+        # _apply_panel_progresses path can skip 4 Tk.cget() calls during the
+        # 240ms open / close / pulse animation (60Hz tick).
+        self._top_current_size: Tuple[int, int] = (0, 0)
+        self._bottom_current_size: Tuple[int, int] = (0, 0)
 
         self._build()
         self._setup_gpu_painter()
@@ -1045,16 +1053,22 @@ class SAOLeftInfo(tk.Frame):
                                         height=self._top_h)
                     self._bottom.configure(width=self._target_w,
                                            height=self._bottom_h)
+                    self._top_current_size = (self._target_w, self._top_h)
+                    self._bottom_current_size = (self._target_w, self._bottom_h)
                     self._gpu_tk_sized = True
                     self._cached_screen_xy = None
                 except Exception:
                     pass
             self._dispatch_gpu_paint(top_w, top_h, bottom_w, bottom_h)
         else:
-            if (int(self._top.cget('width') or 0), int(self._top.cget('height') or 0)) != (top_w, top_h):
+            _new_top = (top_w, top_h)
+            if self._top_current_size != _new_top:
                 self._top.configure(width=top_w, height=top_h)
-            if (int(self._bottom.cget('width') or 0), int(self._bottom.cget('height') or 0)) != (bottom_w, bottom_h):
+                self._top_current_size = _new_top
+            _new_bot = (bottom_w, bottom_h)
+            if self._bottom_current_size != _new_bot:
                 self._bottom.configure(width=bottom_w, height=bottom_h)
+                self._bottom_current_size = _new_bot
             self._redraw_top(top_w, top_h)
             self._redraw_bottom(bottom_w, bottom_h)
 

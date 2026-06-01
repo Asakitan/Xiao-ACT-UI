@@ -319,6 +319,271 @@ cpdef bytes hgrad_bar_rgba_bytes(Py_ssize_t width, Py_ssize_t height,
     return bytes(out)
 
 
+cpdef bytes hgrad_bar_flat_rgba_bytes(Py_ssize_t width, Py_ssize_t height,
+                                      object ca, object cb):
+    """C2 fix: HP/BossHP horizontal-gradient bar WITHOUT the 1.02→0.88 vertical
+    shade. Identical to hgrad_bar_rgba_bytes except shade is fixed at 1.0,
+    preserving the previous per-column flat fill for the BossHP per-unit HP
+    bar (6 px tall — the y-shade would visibly darken the bottom row ~12%)."""
+    cdef bytearray out
+    cdef unsigned char[:] dst
+    cdef Py_ssize_t y, x, pos = 0
+    cdef double tx
+    cdef int ar, ag, ab, aa, br, bg, bb, ba
+    cdef int rr, gg, bl, al
+    if width <= 0 or height <= 0:
+        return bytes(4)
+    ar = <int>int(ca[0]); ag = <int>int(ca[1]); ab = <int>int(ca[2]); aa = <int>int(ca[3])
+    br = <int>int(cb[0]); bg = <int>int(cb[1]); bb = <int>int(cb[2]); ba = <int>int(cb[3])
+    out = bytearray(width * height * 4)
+    dst = out
+    with nogil:
+        for y in range(height):
+            for x in range(width):
+                tx = (<double>x / <double>(width - 1)) if width > 1 else 0.0
+                rr = <int>(<double>ar + (<double>(br - ar)) * tx)
+                gg = <int>(<double>ag + (<double>(bg - ag)) * tx)
+                bl = <int>(<double>ab + (<double>(bb - ab)) * tx)
+                al = <int>(<double>aa + (<double>(ba - aa)) * tx)
+                if rr < 0: rr = 0
+                elif rr > 255: rr = 255
+                if gg < 0: gg = 0
+                elif gg > 255: gg = 255
+                if bl < 0: bl = 0
+                elif bl > 255: bl = 255
+                if al < 0: al = 0
+                elif al > 255: al = 255
+                dst[pos] = <unsigned char>rr
+                dst[pos + 1] = <unsigned char>gg
+                dst[pos + 2] = <unsigned char>bl
+                dst[pos + 3] = <unsigned char>al
+                pos += 4
+    return bytes(out)
+
+
+cpdef bytes hgrad_bar_fade_rgba_bytes(Py_ssize_t width, Py_ssize_t height,
+                                      Py_ssize_t fw, double frac,
+                                      object ca, object cb):
+    """HP/BossHP horizontal-gradient bar with sub-pixel trailing-column fade.
+
+    H2: fuses what was previously _make_gradient_bar + PIL crop + numpy
+    clip+fromarray for the subpixel_bar_width(fw + frac) case. Returns the
+    raw RGBA bytes of a (fw, height) image where the last column's alpha is
+    scaled by ``frac`` (matching the floor `alpha*frac255//255` semantics of
+    multiply_alpha_*). Caller wraps via Image.frombytes('RGBA', (fw, h)).
+    """
+    cdef bytearray out
+    cdef unsigned char[:] dst
+    cdef Py_ssize_t y, x, pos = 0
+    cdef double tx, shade
+    cdef int ar, ag, ab, aa, br, bg, bb, ba
+    cdef int rr, gg, bl, al, ra
+    cdef int frac255
+    cdef Py_ssize_t denom
+    if width <= 0 or height <= 0 or fw <= 0:
+        return bytes(4)
+    if fw > width:
+        fw = width
+    if frac < 0.0:
+        frac = 0.0
+    elif frac > 1.0:
+        frac = 1.0
+    # C4 fix: truncation, NOT rounding — matches multiply_alpha_*_floor and
+    # the PIL fallback (np.float32 * frac → astype(uint8) truncates).
+    frac255 = <int>(frac * 255.0)
+    if frac255 < 0:
+        frac255 = 0
+    elif frac255 > 255:
+        frac255 = 255
+    ar = <int>int(ca[0]); ag = <int>int(ca[1]); ab = <int>int(ca[2]); aa = <int>int(ca[3])
+    br = <int>int(cb[0]); bg = <int>int(cb[1]); bb = <int>int(cb[2]); ba = <int>int(cb[3])
+    out = bytearray(fw * height * 4)
+    dst = out
+    denom = (width - 1) if width > 1 else 1
+    with nogil:
+        for y in range(height):
+            if height > 1:
+                shade = 1.02 + (0.88 - 1.02) * (<double>y / <double>(height - 1))
+            else:
+                shade = 1.02
+            for x in range(fw):
+                tx = (<double>x / <double>denom) if width > 1 else 0.0
+                rr = <int>((<double>ar + (<double>(br - ar)) * tx) * shade)
+                gg = <int>((<double>ag + (<double>(bg - ag)) * tx) * shade)
+                bl = <int>((<double>ab + (<double>(bb - ab)) * tx) * shade)
+                al = <int>((<double>aa + (<double>(ba - aa)) * tx))
+                if rr < 0: rr = 0
+                elif rr > 255: rr = 255
+                if gg < 0: gg = 0
+                elif gg > 255: gg = 255
+                if bl < 0: bl = 0
+                elif bl > 255: bl = 255
+                if al < 0: al = 0
+                elif al > 255: al = 255
+                if x == fw - 1 and frac255 < 255:
+                    ra = (al * frac255) // 255
+                    al = ra
+                dst[pos] = <unsigned char>rr
+                dst[pos + 1] = <unsigned char>gg
+                dst[pos + 2] = <unsigned char>bl
+                dst[pos + 3] = <unsigned char>al
+                pos += 4
+    return bytes(out)
+
+
+cpdef bytes subpixel_shift_rgba_bytes(object rgba_bytes,
+                                      Py_ssize_t width,
+                                      Py_ssize_t height,
+                                      double fx, double fy):
+    """D1/E1: bilinear sub-pixel shift of an RGBA buffer by (fx, fy) in [0,1).
+
+    Replaces the overlay_subpixel.subpixel_alpha_composite hot path that
+    previously did:
+      Image.new('RGBA', (w+2, h+2)) + alpha_composite + transform(AFFINE,
+                                                                  BILINEAR)
+
+    Outputs a (width, height) buffer; the caller composites at the
+    integer base offset (ix, iy). Out-of-bounds source pixels are treated
+    as transparent (matching the PIL fillcolor=(0,0,0,0) + 1px pad trick).
+
+    Floor RGB blending matches PIL's BILINEAR; alpha uses the same
+    (alpha*weight + alpha*weight)//256 rounding so a sub-pixel shifted
+    sprite's leading edge fades the same as the previous AFFINE path.
+    """
+    cdef const unsigned char[:] src = rgba_bytes
+    cdef bytearray out
+    cdef unsigned char[:] dst
+    cdef Py_ssize_t y, x
+    cdef Py_ssize_t dst_pos, p00, p10, p01, p11
+    cdef double wx0, wx1, wy0, wy1
+    cdef double r, g, b, a
+    cdef int sx, sy
+    cdef int ww00, ww10, ww01, ww11
+    cdef Py_ssize_t stride = width * 4
+    cdef bint use_x0, use_x1, use_y0, use_y1
+    if width <= 0 or height <= 0:
+        return bytes(4)
+    if fx < 0.0:
+        fx = 0.0
+    elif fx >= 1.0:
+        fx = 0.999999
+    if fy < 0.0:
+        fy = 0.0
+    elif fy >= 1.0:
+        fy = 0.999999
+    wx1 = fx
+    wx0 = 1.0 - fx
+    wy1 = fy
+    wy0 = 1.0 - fy
+    # Pre-quantise weights to int (0..256) for fast multiply-shift inside the
+    # nogil block. PIL BILINEAR uses similar fixed-point with 8-bit precision.
+    cdef int qx1 = <int>(wx1 * 256.0 + 0.5)
+    cdef int qx0 = 256 - qx1
+    cdef int qy1 = <int>(wy1 * 256.0 + 0.5)
+    cdef int qy0 = 256 - qy1
+    cdef int w00 = (qx0 * qy0) >> 8
+    cdef int w10 = (qx1 * qy0) >> 8
+    cdef int w01 = (qx0 * qy1) >> 8
+    cdef int w11 = (qx1 * qy1) >> 8
+    out = bytearray(width * height * 4)
+    dst = out
+    with nogil:
+        for y in range(height):
+            for x in range(width):
+                dst_pos = (y * width + x) * 4
+                # Source sample positions: shifting OUTPUT by (+fx,+fy) means
+                # sampling SOURCE at (x - fx, y - fy). The integer base is
+                # (x - 1, y - 1) and (x, y); past the edges sample as zero.
+                sx = x - 1
+                sy = y - 1
+                use_x0 = (sx >= 0)
+                use_x1 = (sx + 1 < width)
+                use_y0 = (sy >= 0)
+                use_y1 = (sy + 1 < height)
+                ww00 = w00 if (use_x0 and use_y0) else 0
+                ww10 = w10 if (use_x1 and use_y0) else 0
+                ww01 = w01 if (use_x0 and use_y1) else 0
+                ww11 = w11 if (use_x1 and use_y1) else 0
+                p00 = (sy * width + sx) * 4 if (use_x0 and use_y0) else 0
+                p10 = (sy * width + (sx + 1)) * 4 if (use_x1 and use_y0) else 0
+                p01 = ((sy + 1) * width + sx) * 4 if (use_x0 and use_y1) else 0
+                p11 = ((sy + 1) * width + (sx + 1)) * 4 if (use_x1 and use_y1) else 0
+                r = 0.0
+                g = 0.0
+                b = 0.0
+                a = 0.0
+                if ww00 > 0:
+                    r += (<int>src[p00]) * ww00
+                    g += (<int>src[p00 + 1]) * ww00
+                    b += (<int>src[p00 + 2]) * ww00
+                    a += (<int>src[p00 + 3]) * ww00
+                if ww10 > 0:
+                    r += (<int>src[p10]) * ww10
+                    g += (<int>src[p10 + 1]) * ww10
+                    b += (<int>src[p10 + 2]) * ww10
+                    a += (<int>src[p10 + 3]) * ww10
+                if ww01 > 0:
+                    r += (<int>src[p01]) * ww01
+                    g += (<int>src[p01 + 1]) * ww01
+                    b += (<int>src[p01 + 2]) * ww01
+                    a += (<int>src[p01 + 3]) * ww01
+                if ww11 > 0:
+                    r += (<int>src[p11]) * ww11
+                    g += (<int>src[p11 + 1]) * ww11
+                    b += (<int>src[p11 + 2]) * ww11
+                    a += (<int>src[p11 + 3]) * ww11
+                dst[dst_pos] = <unsigned char>((<int>(r + 128.0)) >> 8)
+                dst[dst_pos + 1] = <unsigned char>((<int>(g + 128.0)) >> 8)
+                dst[dst_pos + 2] = <unsigned char>((<int>(b + 128.0)) >> 8)
+                dst[dst_pos + 3] = <unsigned char>((<int>(a + 128.0)) >> 8)
+    return bytes(out)
+
+
+cpdef bytes fade_last_column_alpha_rgba_bytes(object rgba_bytes,
+                                              Py_ssize_t width,
+                                              Py_ssize_t height,
+                                              double frac):
+    """Apply a sub-pixel alpha multiplier to the LAST column of an RGBA buffer.
+
+    H2: extracted from overlay_subpixel.subpixel_bar_width when the call site
+    has already built a PIL cropped image and only needs the trailing-column
+    fade. Floor semantics match multiply_alpha_*: alpha = (alpha*frac255)//255.
+    Returns a new bytes (caller wraps via Image.frombytes).
+    """
+    cdef const unsigned char[:] src = rgba_bytes
+    cdef bytearray out
+    cdef unsigned char[:] dst
+    cdef Py_ssize_t y, x, pos
+    cdef Py_ssize_t last_col
+    cdef int frac255
+    cdef int al, ra
+    if width <= 0 or height <= 0:
+        return bytes(4)
+    if frac < 0.0:
+        frac = 0.0
+    elif frac > 1.0:
+        frac = 1.0
+    # C4 fix: truncation, NOT rounding — matches multiply_alpha_*_floor and
+    # the PIL fallback (np.float32 * frac → astype(uint8) truncates).
+    frac255 = <int>(frac * 255.0)
+    if frac255 < 0:
+        frac255 = 0
+    elif frac255 > 255:
+        frac255 = 255
+    out = bytearray(rgba_bytes)
+    dst = out
+    if frac255 >= 255 or width < 1:
+        return bytes(out)
+    last_col = width - 1
+    with nogil:
+        for y in range(height):
+            pos = (y * width + last_col) * 4 + 3
+            al = <int>dst[pos]
+            ra = (al * frac255) // 255
+            dst[pos] = <unsigned char>ra
+    return bytes(out)
+
+
 # ───────────────────────────────────────────────
 #  STA / bar detection kernels (recognition.py)
 # ───────────────────────────────────────────────

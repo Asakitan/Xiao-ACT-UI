@@ -171,3 +171,137 @@ cpdef bytes ring_sweep_rgba(int box, double band_x, double clip_r,
                     dst[i + 3] = _u8(alpha)
                 i += 4
     return bytes(out)
+
+
+cdef inline int _clip_int(int v, int lo, int hi) nogil:
+    if v < lo:
+        return lo
+    if v > hi:
+        return hi
+    return v
+
+
+cpdef bytes sweep_overlay_rgba_bytes(int width, int height,
+                                     int p0x, int p1x, int p2x, int p3x,
+                                     int alpha, int tint_r, int tint_g, int tint_b,
+                                     double blur_radius):
+    """D2/E2: sweep overlay generator for MenuLeftInfoRenderer._apply_sweep.
+
+    Replaces:
+        overlay = Image.new('RGBA', (w, h))
+        ImageDraw.Draw(overlay).polygon(<4 corners>, fill=(tint, alpha))
+        overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+
+    Pipeline (all nogil):
+      1. Raster the 4-vertex convex polygon with edges
+         left:  p0 -> p3   right: p1 -> p2  (top y=0, bottom y=height-1)
+         producing alpha = ``alpha`` inside, 0 outside.
+      2. Approximate Gaussian via 3 passes of separable box blur with
+         radius ceil(blur_radius * 0.83). 3-pass box is within ~5% of a
+         true Gaussian for this use (matches PIL's GaussianBlur internal
+         trick at small sigma).
+      3. Emit RGBA bytes where R/G/B = tint at every pixel (alpha gates
+         visibility on alpha_composite, so a uniform tint everywhere is
+         equivalent for our straight-alpha composite path).
+    """
+    cdef bytearray out
+    cdef unsigned char[:] dst
+    cdef Py_ssize_t y, x, pos, i, j, idx
+    cdef int box_r
+    cdef int pass_i
+    cdef int denom
+    cdef int row_sum
+    cdef int col_sum
+    cdef double inv_h
+    cdef double left_x, right_x
+    cdef int lx, rx
+    cdef int target_alpha
+    cdef int tr, tg, tb
+    if width <= 0 or height <= 0:
+        return bytes(4)
+    target_alpha = _clip_int(<int>alpha, 0, 255)
+    tr = _clip_int(<int>tint_r, 0, 255)
+    tg = _clip_int(<int>tint_g, 0, 255)
+    tb = _clip_int(<int>tint_b, 0, 255)
+    box_r = <int>(blur_radius * 0.83 + 0.5)
+    if box_r < 0:
+        box_r = 0
+    out = bytearray(width * height * 4)
+    dst = out
+    cdef bytearray a0 = bytearray(width * height)
+    cdef bytearray a1 = bytearray(width * height)
+    cdef unsigned char[:] alpha0 = a0
+    cdef unsigned char[:] alpha1 = a1
+    if height > 1:
+        inv_h = 1.0 / <double>(height - 1)
+    else:
+        inv_h = 0.0
+    with nogil:
+        for y in range(height):
+            left_x = <double>p0x + (<double>(p3x - p0x)) * (<double>y * inv_h)
+            right_x = <double>p1x + (<double>(p2x - p1x)) * (<double>y * inv_h)
+            if right_x < left_x:
+                lx = <int>right_x
+                rx = <int>left_x
+            else:
+                lx = <int>left_x
+                rx = <int>right_x
+            if lx < 0:
+                lx = 0
+            if rx >= width:
+                rx = width - 1
+            for x in range(width):
+                if x >= lx and x <= rx:
+                    alpha0[y * width + x] = <unsigned char>target_alpha
+                else:
+                    alpha0[y * width + x] = <unsigned char>0
+        for pass_i in range(3):
+            if box_r <= 0:
+                break
+            denom = 2 * box_r + 1
+            for y in range(height):
+                row_sum = 0
+                for j in range(-box_r, box_r + 1):
+                    idx = j
+                    if idx < 0:
+                        idx = 0
+                    elif idx >= width:
+                        idx = width - 1
+                    row_sum += <int>alpha0[y * width + idx]
+                for x in range(width):
+                    alpha1[y * width + x] = <unsigned char>(row_sum // denom)
+                    idx = x - box_r
+                    if idx < 0:
+                        idx = 0
+                    row_sum -= <int>alpha0[y * width + idx]
+                    idx = x + box_r + 1
+                    if idx >= width:
+                        idx = width - 1
+                    row_sum += <int>alpha0[y * width + idx]
+            for x in range(width):
+                col_sum = 0
+                for i in range(-box_r, box_r + 1):
+                    idx = i
+                    if idx < 0:
+                        idx = 0
+                    elif idx >= height:
+                        idx = height - 1
+                    col_sum += <int>alpha1[idx * width + x]
+                for y in range(height):
+                    alpha0[y * width + x] = <unsigned char>(col_sum // denom)
+                    idx = y - box_r
+                    if idx < 0:
+                        idx = 0
+                    col_sum -= <int>alpha1[idx * width + x]
+                    idx = y + box_r + 1
+                    if idx >= height:
+                        idx = height - 1
+                    col_sum += <int>alpha1[idx * width + x]
+        for y in range(height):
+            for x in range(width):
+                pos = (y * width + x) * 4
+                dst[pos] = <unsigned char>tr
+                dst[pos + 1] = <unsigned char>tg
+                dst[pos + 2] = <unsigned char>tb
+                dst[pos + 3] = alpha0[y * width + x]
+    return bytes(out)

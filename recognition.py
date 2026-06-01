@@ -913,6 +913,10 @@ class RecognitionEngine:
 
     @_probe.decorate('vision.recognition_tick')
     def _tick(self):
+        # Q4: single time.time() sample reused by the STA offline state machine
+        # and the frame-cache freshness check. Tightens the 0.10s STA confirm
+        # window consistency and saves 2-3 syscalls/tick.
+        _tick_now = time.time()
         result = self._locator.find_game_window()
         if result is None:
             _set_capture_target(0, None)
@@ -954,7 +958,7 @@ class RecognitionEngine:
             client_frame, backend = _capture_hwnd_client(hwnd, rect)
             if client_frame is None or client_frame.size == 0:
                 # Primary capture failed — try the cached frame if fresh.
-                _now_cap = time.time()
+                _now_cap = _tick_now
                 if (self._last_good_frame is not None
                         and (_now_cap - self._last_good_frame_time)
                         < self._FRAME_CACHE_TTL):
@@ -975,7 +979,7 @@ class RecognitionEngine:
             else:
                 # Fresh frame — update cache and reset failure state.
                 self._last_good_frame = client_frame
-                self._last_good_frame_time = time.time()
+                self._last_good_frame_time = _tick_now
                 self._capture_fail_count = 0
                 self._capture_error_logged = False
                 if backend != self._capture_backend:
@@ -994,7 +998,7 @@ class RecognitionEngine:
                     # Go OFFLINE after 0.10 s sustained low confidence.
                     # Go ONLINE after 0.10 s sustained good confidence
                     # to prevent rapid OFFLINE/ONLINE oscillation.
-                    _now_sta = time.time()
+                    _now_sta = _tick_now
                     if confidence < 0.12:
                         self._sta_online_since = 0.0
                         if self._sta_offline_since == 0.0:

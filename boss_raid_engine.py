@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from config import BASE_DIR
 
 from perf_probe import probe as _probe
+import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
 
 BOSS_RAID_SCHEMA_VERSION = 1
 DEFAULT_BOSS_RAID_SERVER_URL = "http://doi.sakisense.top:15538"
@@ -766,14 +767,16 @@ class BossRaidEngine:
         with self._lock:
             if self._state != self.STATE_RUNNING:
                 return
-            target_is_monster = event.get("target_is_monster")
-            attacker_is_self = event.get("attacker_is_self")
-            is_immune = event.get("is_immune", False)
-            is_absorbed = event.get("is_absorbed", False)
-            damage = max(0, int(event.get("damage") or 0))
+            # D3: typed cython coercion replaces 5+ int()/bool()/.get() boxings.
+            (target_is_monster, attacker_is_self,
+             is_immune, is_absorbed, _ev_is_heal,
+             damage_ll, target_uuid_ll, target_name) = (
+                _CY_COMBAT.boss_raid_event_coerce(event)
+            )
+            damage = int(damage_ll)
+            target_uuid = int(target_uuid_ll)
 
             if attacker_is_self and target_is_monster:
-                target_uuid = int(event.get("target_uuid", 0))
                 now = time.time()
 
                 # ── Track entity ──
@@ -786,7 +789,7 @@ class BossRaidEngine:
                             role = 'enemy'  # Subsequent = enemy (mechanic add)
                     self._entities[target_uuid] = {
                         'uuid': target_uuid,
-                        'name': _string(event.get('target_name', '')),
+                        'name': target_name,
                         'role': role,
                         'hp': 0, 'max_hp': 0,
                         'damage_dealt': 0,
@@ -808,11 +811,11 @@ class BossRaidEngine:
                 if target_uuid in self._entities:
                     ent = self._entities[target_uuid]
                     ent['last_seen'] = now
-                    if not (is_immune or is_absorbed) and not event.get('is_heal'):
+                    if not (is_immune or is_absorbed) and not _ev_is_heal:
                         ent['damage_dealt'] += damage
                         ent['hit_count'] += 1
                     if not ent.get('name'):
-                        ent['name'] = _string(event.get('target_name', ''))
+                        ent['name'] = target_name
 
                 if is_immune or is_absorbed:
                     # Invincibility detection: consecutive immune/absorbed hits
@@ -827,7 +830,7 @@ class BossRaidEngine:
                     if self._boss_invincible:
                         self._boss_invincible = False
                     self._immune_streak = 0
-                    if not event.get("is_heal"):
+                    if not _ev_is_heal:
                         self._total_damage += damage
 
                 # Notify visual editor of entity list change — throttled to

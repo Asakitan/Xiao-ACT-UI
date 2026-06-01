@@ -127,6 +127,12 @@ class OverlayScheduler:
         self._root = root
         self._jobs: Dict[str, _Job] = {}
         self._jobs_lock = threading.Lock()
+        # Q7: tuple snapshot of jobs, rebuilt under lock on register/unregister.
+        # _tick reads this without acquiring the lock — tuple assignment is
+        # GIL-atomic in CPython so the read sees either the old or the new
+        # tuple, never a torn state. Removes per-frame list() + lock acquire
+        # from the 60-240 Hz hot path.
+        self._jobs_snapshot: tuple = ()
         self._running = False
         self._next_deadline = 0.0
         self._tick_after_id: Optional[str] = None
@@ -187,12 +193,14 @@ class OverlayScheduler:
                  visibility_fn: Optional[Callable[[], bool]] = None) -> None:
         with self._jobs_lock:
             self._jobs[ident] = _Job(ident, tick_fn, animating_fn, visibility_fn)
+            self._jobs_snapshot = tuple(self._jobs.values())
         if not self._running:
             self.start()
 
     def unregister(self, ident: str) -> None:
         with self._jobs_lock:
             self._jobs.pop(ident, None)
+            self._jobs_snapshot = tuple(self._jobs.values())
             should_stop = not self._jobs
         if should_stop:
             self.stop()
@@ -290,8 +298,8 @@ class OverlayScheduler:
         self._frame_idx += 1
         now = time.time()
 
-        with self._jobs_lock:
-            jobs = list(self._jobs.values())
+        # GIL-atomic tuple read; no lock needed.
+        jobs = self._jobs_snapshot
 
         self._poll_worker_wall_pressure()
 

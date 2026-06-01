@@ -245,18 +245,37 @@ def _fmt_int(v: float) -> str:
     return _CY_UI.hp_fmt_int(v)
 
 
+# H5/Q8: global per-glyph width memoization. Heavy combat hits these helpers
+# ~3-4k textlength calls/sec; the textlength C call is fast but the cache
+# hit ratio for HP digits is ~95%. Key is (id(font), ch); font objects are
+# already cached by _load_font so id is stable. Per-file fallback (here:
+# font.size // 2) is preserved on miss.
+_GLYPH_W: Dict[Tuple[int, str], float] = {}
+
+
+def _glyph_w(draw: ImageDraw.ImageDraw, ch: str, font) -> float:
+    key = (id(font), ch)
+    v = _GLYPH_W.get(key)
+    if v is not None:
+        return v
+    try:
+        v = draw.textlength(ch, font=font)
+    except Exception:
+        v = float(font.size // 2)
+    _GLYPH_W[key] = v
+    return v
+
+
 def _draw_tracked(draw: ImageDraw.ImageDraw, xy, text: str,
                   font, fill, spacing: float = 1.0) -> int:
     """CSS letter-spacing: draw glyphs one-by-one. Returns total width."""
     x, y = xy
     x0 = x
+    last_idx = len(text) - 1
     for i, ch in enumerate(text):
         draw.text((x, y), ch, fill=fill, font=font)
-        try:
-            cw = draw.textlength(ch, font=font)
-        except Exception:
-            cw = font.size // 2
-        x += cw + (spacing if i < len(text) - 1 else 0)
+        cw = _glyph_w(draw, ch, font)
+        x += cw + (spacing if i < last_idx else 0)
     return int(x - x0)
 
 
@@ -264,12 +283,9 @@ def _tracked_width(draw: ImageDraw.ImageDraw, text: str,
                    font, spacing: float = 1.0) -> int:
     """Measure width of tracked text without drawing."""
     total = 0.0
+    last_idx = len(text) - 1
     for i, ch in enumerate(text):
-        try:
-            cw = draw.textlength(ch, font=font)
-        except Exception:
-            cw = font.size // 2
-        total += cw + (spacing if i < len(text) - 1 else 0)
+        total += _glyph_w(draw, ch, font) + (spacing if i < last_idx else 0)
     return int(total)
 
 
@@ -722,6 +738,10 @@ class HpOverlay:
         self._panels_cache = None; self._panels_sig = ()
         self._shell_cache = None; self._shell_sig = ()
         self._shadow_cache = None; self._shadow_sig = ()
+        # H3: theme switch invalidates the ID-plate scanline clip cache
+        # (mask geometry can move if panel constants are re-themed).
+        self._id_scanline_clip_cache = None
+        self._id_scanline_band_cache = None
         self._outer_pulse_cache = None; self._outer_pulse_sig = ()
         self._outer_pulse_cache_pos = (0, 0)
         self._cover_pulse_cache = None; self._cover_pulse_sig = ()
@@ -777,6 +797,10 @@ class HpOverlay:
         self._shell_sig = ()
         self._shadow_cache = None
         self._shadow_sig = ()
+        # H3: panel resize invalidates the ID-plate scanline clip cache
+        # (y_off origin shifts so old (y_off, by) keys are stale).
+        self._id_scanline_clip_cache = None
+        self._id_scanline_band_cache = None
         self._outer_pulse_cache = None
         self._outer_pulse_sig = ()
         self._outer_pulse_cache_pos = (0, 0)
@@ -1104,41 +1128,34 @@ class HpOverlay:
             self._registered = False
 
     def _is_animating(self) -> bool:
+        # H1: thin wrapper around _CY_UI.hp_overlay_animating. Precompute the
+        # hover / press / press_flash zone-loop flags here in Python (only 2
+        # zones, dict.get) so the cython kernel takes typed bool flags.
         now = time.time()
-        if abs(self._fade_alpha - self._fade_target) > 1e-3:
-            return True
-        if abs(self._hp_pct_disp - self._hp_pct_target) > 4e-4:
-            return True
-        if abs(self._sta_pct_disp - self._sta_pct_target) > 4e-4:
-            return True
-        if self._sta_offline_pending or self._offline_hide_t > 0.0:
-            return True
-        if self._hp_group_fade_t and (now - self._hp_group_fade_t) < self._hp_group_fade_duration:
-            return True
-        if self._hp_group_restore_t and (now - self._hp_group_restore_t) < self._hp_group_restore_duration:
-            return True
-        if self._boss_timer_urgent and self._boss_timer_text:
-            return True
-        if self._hp_flash_start and (now - self._hp_flash_start) < 0.45:
-            return True
-        if self._hp_last_update_t and (now - self._hp_last_update_t) < 0.55:
-            return True
-        if self._sta_last_update_t and (now - self._sta_last_update_t) < 0.55:
-            return True
+        hover_pending = False
+        press_flash_pending = False
         for zone in ('id', 'hp'):
             hover_target = 1.0 if self._hover_zone == zone else 0.0
             press_target = 1.0 if self._press_zone == zone else 0.0
             if abs(float(self._hover_t.get(zone, 0.0) or 0.0) - hover_target) > 1e-3:
-                return True
+                hover_pending = True
             if abs(float(self._press_t.get(zone, 0.0) or 0.0) - press_target) > 1e-3:
-                return True
+                hover_pending = True
             if float(self._press_flash_t.get(zone, 0.0) or 0.0) > now:
-                return True
-        if self._fade_target >= 1.0 and self._enter_scale_t < 0.999:
-            return True
-        if self._visible and self._fade_target >= 1.0 and not self._exiting:
-            return True
-        return False
+                press_flash_pending = True
+        return _CY_UI.hp_overlay_animating(
+            self._visible, bool(self._exiting),
+            self._fade_alpha, self._fade_target,
+            self._hp_pct_disp, self._hp_pct_target,
+            self._sta_pct_disp, self._sta_pct_target,
+            bool(self._sta_offline_pending), self._offline_hide_t,
+            self._hp_group_fade_t, self._hp_group_fade_duration,
+            self._hp_group_restore_t, self._hp_group_restore_duration,
+            bool(self._boss_timer_urgent and self._boss_timer_text),
+            self._hp_flash_start, self._hp_last_update_t,
+            self._sta_last_update_t, hover_pending, press_flash_pending,
+            self._enter_scale_t, now,
+        )
 
     def _compose_signature(self, now: float, is_animating: Optional[bool] = None) -> Optional[tuple]:
         """Coarse output fingerprint for pre-submit dirty-skip.
@@ -2068,28 +2085,59 @@ class HpOverlay:
 
     def _draw_id_plate_scanline(self, img: Image.Image, y_off: int,
                                 now: float) -> None:
-        """Vertical cyan scan band that travels top→bottom in 3.5 s."""
+        """Vertical cyan scan band that travels top→bottom in 3.5 s.
+
+        H3: cache the FINAL _clip_alpha(band, cropped_mask) image keyed by
+        (y_off, by, band_h) so the per-frame ID plate scanline costs 1 dict
+        get + 1 alpha_composite. The band position quantises to ID_H/3.5s/
+        60Hz ≈ 7-9 distinct by values that repeat 6-9 frames each. Cache
+        is reset on panel resize (clear_panel_cache) and bounded.
+        """
         t = (now - self._spawn_time) / 3.5
         t = t % 1.0
         band_y = int(ID_H * t) + ID_Y + y_off
         band_h = max(6, int(ID_H * 0.14))
-        cache = getattr(self, '_id_scanline_band_cache', {})
-        band = cache.get(band_h)
-        if band is None:
-            arr = np.zeros((band_h, ID_W, 4), dtype=np.uint8)
-            ys = np.linspace(0, 1, band_h)
-            a_env = np.sin(ys * math.pi) * 18
-            arr[:, :, 0] = 104
-            arr[:, :, 1] = 228
-            arr[:, :, 2] = 255
-            arr[:, :, 3] = a_env[:, None].astype(np.uint8)
-            band = Image.fromarray(arr, 'RGBA')
-            cache[band_h] = band
-            self._id_scanline_band_cache = cache
         bx = ID_X
         by = band_y - band_h // 2
-        mask = self._id_plate_mask(y_off).crop((bx, by, bx + ID_W, by + band_h))
-        img.alpha_composite(_clip_alpha(band, mask), (bx, by))
+
+        clip_cache = getattr(self, '_id_scanline_clip_cache', None)
+        if clip_cache is None:
+            clip_cache = {}
+            self._id_scanline_clip_cache = clip_cache
+        # C5 fix: include ID_W and ID_H in the key so any future code path
+        # that mutates the plate constants without going through the theme/
+        # resize clear hooks is self-invalidating.
+        clip_key = (y_off, by, band_h, ID_W, ID_H)
+        clipped = clip_cache.get(clip_key)
+        if clipped is None:
+            band_cache = getattr(self, '_id_scanline_band_cache', None)
+            if band_cache is None:
+                band_cache = {}
+                self._id_scanline_band_cache = band_cache
+            band_key = (band_h, ID_W)
+            band = band_cache.get(band_key)
+            if band is None:
+                arr = np.zeros((band_h, ID_W, 4), dtype=np.uint8)
+                ys = np.linspace(0, 1, band_h)
+                a_env = np.sin(ys * math.pi) * 18
+                arr[:, :, 0] = 104
+                arr[:, :, 1] = 228
+                arr[:, :, 2] = 255
+                arr[:, :, 3] = a_env[:, None].astype(np.uint8)
+                band = Image.fromarray(arr, 'RGBA')
+                band_cache[band_key] = band
+            mask = self._id_plate_mask(y_off).crop((bx, by, bx + ID_W, by + band_h))
+            clipped = _clip_alpha(band, mask)
+            # C6 fix: cap raised to 512 so FADE_IN's transient 9x key-space
+            # expansion (y_off animates 8→0 over 0.6s ≈ ~80 keys/cycle) does
+            # not blow the cap. On overflow drop the oldest half (FIFO) so
+            # we keep recent hot keys and re-warm only ~256 entries on next
+            # cycle instead of paying a full 80-entry warmup.
+            if len(clip_cache) > 512:
+                for _drop_k in list(clip_cache)[:256]:
+                    clip_cache.pop(_drop_k, None)
+            clip_cache[clip_key] = clipped
+        img.alpha_composite(clipped, (bx, by))
 
     def _draw_id_plate_text(self, img: Image.Image, y_off: int,
                             now: float, mode: str = 'both') -> None:

@@ -228,6 +228,79 @@ cpdef bint bosshp_overlay_animating(object visible,
     return False
 
 
+cpdef bint hp_overlay_animating(object visible, bint exiting,
+                                object fade_alpha, object fade_target,
+                                object hp_pct_disp, object hp_pct_target,
+                                object sta_pct_disp, object sta_pct_target,
+                                bint sta_offline_pending,
+                                object offline_hide_t,
+                                object hp_group_fade_t,
+                                object hp_group_fade_duration,
+                                object hp_group_restore_t,
+                                object hp_group_restore_duration,
+                                bint boss_timer_active,
+                                object hp_flash_start,
+                                object hp_last_update_t,
+                                object sta_last_update_t,
+                                bint hover_pending,
+                                bint press_flash_pending,
+                                object enter_scale_t,
+                                object now):
+    """Animation predicate for the HP overlay.
+
+    H1: replaces the 35-line Python ``HpOverlay._is_animating``. Caller
+    precomputes ``hover_pending`` (any zone has |hover_t - hover_target|>1e-3
+    OR |press_t - press_target|>1e-3) and ``press_flash_pending`` (any zone
+    press_flash_t > now) before calling. ``boss_timer_active`` is
+    ``bool(self._boss_timer_urgent and self._boss_timer_text)``. The
+    final ``visible AND fade_target>=1.0 AND not exiting`` short-circuit is
+    kept inside cython so steady-visible always returns True.
+    """
+    cdef double now_f = _safe_f64(now, 0.0)
+    cdef double fa = _safe_f64(fade_alpha, 0.0)
+    cdef double ft = _safe_f64(fade_target, 0.0)
+    cdef double gfade_t
+    cdef double grest_t
+    cdef double flash_t
+    cdef double last_hp
+    cdef double last_sta
+    cdef double hide_t
+
+    if _abs_f64(fa - ft) > 1e-3:
+        return True
+    if _abs_f64(_safe_f64(hp_pct_disp, 0.0) - _safe_f64(hp_pct_target, 0.0)) > 4e-4:
+        return True
+    if _abs_f64(_safe_f64(sta_pct_disp, 0.0) - _safe_f64(sta_pct_target, 0.0)) > 4e-4:
+        return True
+    hide_t = _safe_f64(offline_hide_t, 0.0)
+    if sta_offline_pending or hide_t > 0.0:
+        return True
+    gfade_t = _safe_f64(hp_group_fade_t, 0.0)
+    if gfade_t > 0.0 and (now_f - gfade_t) < _safe_f64(hp_group_fade_duration, 0.0):
+        return True
+    grest_t = _safe_f64(hp_group_restore_t, 0.0)
+    if grest_t > 0.0 and (now_f - grest_t) < _safe_f64(hp_group_restore_duration, 0.0):
+        return True
+    if boss_timer_active:
+        return True
+    flash_t = _safe_f64(hp_flash_start, 0.0)
+    if flash_t > 0.0 and (now_f - flash_t) < 0.45:
+        return True
+    last_hp = _safe_f64(hp_last_update_t, 0.0)
+    if last_hp > 0.0 and (now_f - last_hp) < 0.55:
+        return True
+    last_sta = _safe_f64(sta_last_update_t, 0.0)
+    if last_sta > 0.0 and (now_f - last_sta) < 0.55:
+        return True
+    if hover_pending or press_flash_pending:
+        return True
+    if ft >= 1.0 and _safe_f64(enter_scale_t, 0.0) < 0.999:
+        return True
+    if bool(visible) and ft >= 1.0 and not exiting:
+        return True
+    return False
+
+
 cdef inline double _decay_toward_value(double cur, double tgt,
                                        double tick_ms, double tween,
                                        double eps):
@@ -2264,6 +2337,57 @@ cpdef tuple build_boss_bar_sig(dict data, list additional):
         boss_name,
         tuple(add_items),
     )
+
+
+cdef inline tuple _f2_tuple(object value):
+    """Coerce a 2-component vec input to (double, double). Accepts tuple/list."""
+    cdef double a = 0.0
+    cdef double b = 0.0
+    if value is None:
+        return (0.0, 0.0)
+    try:
+        a = <double>float(value[0])
+        b = <double>float(value[1])
+    except Exception:
+        return (0.0, 0.0)
+    return (a, b)
+
+
+cpdef tuple unpack_skillfx_params(dict params):
+    """D5/E5: typed unpack of the 21 GL uniforms read per skillfx frame.
+
+    Replaces the 21 ``params.get`` + 6 ``tuple(map(float, ...))`` + 13
+    ``float(...)`` calls in ``SkillFXShaderPipeline.render`` /
+    ``render_premultiplied_bytes`` with one cython call that produces a
+    pre-typed tuple. moderngl Uniform.value still drives the GL driver
+    set — that part stays — but the per-frame Python boxing on the way in
+    moves out of the GIL-heavy hot path.
+
+    Returns a 16-tuple, order matches the call sites:
+        (u_time, u_alpha_mul, u_anchor, u_r_out, u_r_in, u_r_core,
+         u_pulse, u_beam_a, u_beam_b, u_beam_h, u_show_age, u_exiting,
+         u_glfx_intensity, u_seed, u_gl_anchor, u_gl_label, u_gl_panel_size)
+    """
+    cdef double u_time = _safe_f64(params.get('time', 0.0), 0.0)
+    cdef double u_alpha_mul = _safe_f64(params.get('alpha_mul', 1.0), 1.0)
+    cdef tuple u_anchor = _f2_tuple(params.get('anchor', (0.0, 0.0)))
+    cdef double u_r_out = _safe_f64(params.get('r_out', 0.0), 0.0)
+    cdef double u_r_in = _safe_f64(params.get('r_in', 0.0), 0.0)
+    cdef double u_r_core = _safe_f64(params.get('r_core', 0.0), 0.0)
+    cdef double u_pulse = _safe_f64(params.get('pulse', 0.5), 0.5)
+    cdef tuple u_beam_a = _f2_tuple(params.get('beam_a', (0.0, 0.0)))
+    cdef tuple u_beam_b = _f2_tuple(params.get('beam_b', (0.0, 0.0)))
+    cdef double u_beam_h = _safe_f64(params.get('beam_h', 30.0), 30.0)
+    cdef double u_show_age = _safe_f64(params.get('show_age', 0.0), 0.0)
+    cdef double u_exiting = 1.0 if params.get('exiting') else 0.0
+    cdef double u_glfx_intensity = _safe_f64(params.get('glfx_intensity', 0.0), 0.0)
+    cdef double u_seed = _safe_f64(params.get('seed', 1.0), 1.0)
+    cdef tuple u_gl_anchor = _f2_tuple(params.get('gl_anchor', (0.0, 0.0)))
+    cdef tuple u_gl_label = _f2_tuple(params.get('gl_label', (0.0, 0.0)))
+    cdef tuple u_gl_panel_size = _f2_tuple(params.get('gl_panel_size', (0.0, 0.0)))
+    return (u_time, u_alpha_mul, u_anchor, u_r_out, u_r_in, u_r_core,
+            u_pulse, u_beam_a, u_beam_b, u_beam_h, u_show_age, u_exiting,
+            u_glfx_intensity, u_seed, u_gl_anchor, u_gl_label, u_gl_panel_size)
 
 
 cpdef list sort_recent_monsters(list monsters, dict recent_targets):

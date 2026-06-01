@@ -43,6 +43,7 @@ import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
 from gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from overlay_scheduler import get_scheduler as _get_scheduler
 from overlay_render_worker import (
@@ -101,6 +102,105 @@ def _clip_alpha(img: Image.Image, mask: Image.Image) -> Image.Image:
     """Return `img` with its alpha multiplied by `mask` (L-mode). Used to
     clip arbitrary layers to the rounded-rect panel interior."""
     return clip_alpha_image(img, mask)
+
+
+# Q6: module-level cache for the 3-stop cover gradient image. The gradient
+# depends only on (W, H, COVER_A, COVER_MID, COVER_B); a theme switch inserts
+# a new key naturally. Each Image is < 50KB.
+_BOSSHP_COVER_GRADIENT_CACHE: Dict[Tuple[int, int, Tuple[int, int, int], Tuple[int, int, int], Tuple[int, int, int]], Image.Image] = {}
+
+# Q9/H4 (static-tier): module-level cache for the additional-units cream BG
+# gradient and the bottom cyan→gold signature line. Both depend only on
+# (ADD_W, ADD_H, COVER_A, COVER_B) / (line_w,) respectively, so the cache
+# converges immediately and stays at <10 entries even across theme switches.
+_BOSSHP_ADD_BG_CACHE: Dict[Tuple[int, int, Tuple[int, int, int], Tuple[int, int, int]], Image.Image] = {}
+_BOSSHP_ADD_MINI_LINE_CACHE: Dict[int, Image.Image] = {}
+
+
+def _bosshp_additional_bg(add_w: int, add_h: int,
+                          cover_a: Tuple[int, int, int],
+                          cover_b: Tuple[int, int, int]) -> Image.Image:
+    """Static cream BG gradient for additional units. Vectorized numpy
+    replaces the per-row Python loop."""
+    key = (add_w, add_h, cover_a, cover_b)
+    hit = _BOSSHP_ADD_BG_CACHE.get(key)
+    if hit is not None:
+        return hit
+    top = np.array(cover_a, dtype=np.float32)
+    bot = np.array(cover_b, dtype=np.float32)
+    ts = np.linspace(0.0, 1.0, add_h, dtype=np.float32)[:, None]
+    blended = top[None, :] * (1.0 - ts) + bot[None, :] * ts
+    bg_arr = np.zeros((add_h, add_w, 4), dtype=np.uint8)
+    bg_arr[:, :, :] = blended[:, None, :].astype(np.uint8)
+    bg = Image.fromarray(bg_arr, 'RGBA')
+    if len(_BOSSHP_ADD_BG_CACHE) >= _BOSSHP_CACHE_MAX:
+        _BOSSHP_ADD_BG_CACHE.pop(next(iter(_BOSSHP_ADD_BG_CACHE)))
+    _BOSSHP_ADD_BG_CACHE[key] = bg
+    return bg
+
+
+def _bosshp_additional_mini_line(line_w: int) -> Image.Image:
+    """Static cyan→gold mini gradient line for additional unit bottom edge."""
+    hit = _BOSSHP_ADD_MINI_LINE_CACHE.get(line_w)
+    if hit is not None:
+        return hit
+    line_arr = np.zeros((1, line_w, 4), dtype=np.uint8)
+    if line_w <= 1:
+        line_arr[0, 0] = (104, 228, 255, 180)
+    else:
+        denom = float(line_w - 1)
+        for ii in range(line_w):
+            t = ii / denom
+            if t < 0.30:
+                a = int(180 * (t / 0.30))
+                line_arr[0, ii] = (104, 228, 255, a)
+            elif t < 0.70:
+                u = (t - 0.30) / 0.40
+                line_arr[0, ii] = (
+                    int(104 + (243 - 104) * u),
+                    int(228 + (175 - 228) * u),
+                    int(255 + (18 - 255) * u),
+                    180,
+                )
+            else:
+                a = int(160 * (1.0 - (t - 0.70) / 0.30))
+                line_arr[0, ii] = (243, 175, 18, max(0, a))
+    img = Image.fromarray(line_arr, 'RGBA')
+    if len(_BOSSHP_ADD_MINI_LINE_CACHE) >= _BOSSHP_CACHE_MAX:
+        _BOSSHP_ADD_MINI_LINE_CACHE.pop(next(iter(_BOSSHP_ADD_MINI_LINE_CACHE)))
+    _BOSSHP_ADD_MINI_LINE_CACHE[line_w] = img
+    return img
+
+
+_BOSSHP_CACHE_MAX = 8  # C8: cap module-level Image caches across theme switches
+
+
+def _bosshp_cover_gradient(w: int, h: int,
+                           cover_a: Tuple[int, int, int],
+                           cover_mid: Tuple[int, int, int],
+                           cover_b: Tuple[int, int, int]) -> Image.Image:
+    key = (w, h, cover_a, cover_mid, cover_b)
+    hit = _BOSSHP_COVER_GRADIENT_CACHE.get(key)
+    if hit is not None:
+        return hit
+    grad = np.zeros((h, 1, 4), dtype=np.uint8)
+    ys = np.linspace(0, 1, h)
+    for chan, src_a, src_b, src_c in (
+        (0, cover_a[0], cover_mid[0], cover_b[0]),
+        (1, cover_a[1], cover_mid[1], cover_b[1]),
+        (2, cover_a[2], cover_mid[2], cover_b[2]),
+    ):
+        upper = src_a + (src_b - src_a) * np.clip(ys / 0.48, 0, 1)
+        lower = src_b + (src_c - src_b) * np.clip((ys - 0.48) / 0.52, 0, 1)
+        grad[:, 0, chan] = np.where(ys <= 0.48, upper, lower)
+    grad[:, 0, 3] = 255
+    cover = Image.fromarray(grad, 'RGBA').resize((w, h))
+    # C8: pop FIFO oldest on overflow so theme tweaks don't slow-leak ~50KB
+    # per unique config across long sessions.
+    if len(_BOSSHP_COVER_GRADIENT_CACHE) >= _BOSSHP_CACHE_MAX:
+        _BOSSHP_COVER_GRADIENT_CACHE.pop(next(iter(_BOSSHP_COVER_GRADIENT_CACHE)))
+    _BOSSHP_COVER_GRADIENT_CACHE[key] = cover
+    return cover
 
 
 def _draw_text_shadow(img: Image.Image, xy, text: str, font,
@@ -1670,19 +1770,9 @@ class BossHpOverlay:
     def _draw_cover(self, img: Image.Image, y_off: int) -> None:
         w, h = self.WIDTH, self.HEIGHT
 
-        # 3-stop 175deg CSS gradient ported to a vertical blend with the same
-        # mid-stop at 48%.
-        grad = np.zeros((h, 1, 4), dtype=np.uint8)
-        ys = np.linspace(0, 1, h)
-        for chan, src_a, src_b, src_c in (
-            (0, self.COVER_A[0], self.COVER_MID[0], self.COVER_B[0]),
-            (1, self.COVER_A[1], self.COVER_MID[1], self.COVER_B[1]),
-            (2, self.COVER_A[2], self.COVER_MID[2], self.COVER_B[2])):
-            upper = src_a + (src_b - src_a) * np.clip(ys / 0.48, 0, 1)
-            lower = src_b + (src_c - src_b) * np.clip((ys - 0.48) / 0.52, 0, 1)
-            grad[:, 0, chan] = np.where(ys <= 0.48, upper, lower)
-        grad[:, 0, 3] = 255
-        cover = Image.fromarray(grad, 'RGBA').resize((w, h))
+        # 3-stop 175deg CSS gradient (cached at module-level by key
+        # (w, h, COVER_A, COVER_MID, COVER_B); theme switch inserts new entry).
+        cover = _bosshp_cover_gradient(w, h, self.COVER_A, self.COVER_MID, self.COVER_B)
 
         mask = self._build_cover_mask()
         if y_off:
@@ -2714,14 +2804,9 @@ class BossHpOverlay:
             local_poly = [(px - x, py - y) for px, py in poly]
             ImageDraw.Draw(mask).polygon(local_poly, fill=255)
 
-            # Background gradient (cream)
-            bg_arr = np.zeros((self.ADD_H, self.ADD_W, 4), dtype=np.uint8)
-            top = np.array(self.COVER_A, dtype=np.float32)
-            bot = np.array(self.COVER_B, dtype=np.float32)
-            for yy in range(self.ADD_H):
-                t = yy / max(1, self.ADD_H - 1)
-                bg_arr[yy, :, :] = (top * (1.0 - t) + bot * t).astype(np.uint8)
-            bg = Image.fromarray(bg_arr, 'RGBA')
+            # Background gradient (cream) — module-level cached.
+            bg = _bosshp_additional_bg(self.ADD_W, self.ADD_H,
+                                       self.COVER_A, self.COVER_B)
             img.alpha_composite(_clip_alpha(bg, mask), (x, y))
 
             # Border + corner highlights
@@ -2731,27 +2816,10 @@ class BossHpOverlay:
                 (x + 9, y + 1, x + self.ADD_W - 2, y + 1),
                 fill=(255, 255, 255, 130), width=1,
             )
-            # Bottom cyan→gold mini gradient line (signature SAO touch)
+            # Bottom cyan→gold mini gradient line (module-level cached).
             line_w = self.ADD_W - 12
             line_y = y + self.ADD_H - 2
-            line_arr = np.zeros((1, line_w, 4), dtype=np.uint8)
-            for ii in range(line_w):
-                t = ii / max(1, line_w - 1)
-                if t < 0.30:
-                    a = int(180 * (t / 0.30))
-                    line_arr[0, ii] = (104, 228, 255, a)
-                elif t < 0.70:
-                    u = (t - 0.30) / 0.40
-                    line_arr[0, ii] = (
-                        int(104 + (243 - 104) * u),
-                        int(228 + (175 - 228) * u),
-                        int(255 + (18 - 255) * u),
-                        180,
-                    )
-                else:
-                    a = int(160 * (1.0 - (t - 0.70) / 0.30))
-                    line_arr[0, ii] = (243, 175, 18, max(0, a))
-            img.alpha_composite(Image.fromarray(line_arr, 'RGBA'),
+            img.alpha_composite(_bosshp_additional_mini_line(line_w),
                                 (x + 6, line_y))
 
             # Layout: name + pct (top row, y0..y15), HP bar (y16..y26), break/status (y28..y36)
@@ -2786,20 +2854,23 @@ class BossHpOverlay:
             if fill_w > 0:
                 # 颜色按 hp_pct 选 — 绿/黄/红
                 if hp_pct > 0.55:
-                    c0, c1 = (211, 234, 124), (154, 211, 52)
+                    c0, c1 = (211, 234, 124, 240), (154, 211, 52, 240)
                 elif hp_pct > 0.25:
-                    c0, c1 = (235, 238, 112), (244, 250, 73)
+                    c0, c1 = (235, 238, 112, 240), (244, 250, 73, 240)
                 else:
-                    c0, c1 = (248, 140, 122), (239, 104, 78)
-                arr = np.zeros((hp_h - 2, fill_w, 4), dtype=np.uint8)
-                for xx in range(fill_w):
-                    t = xx / max(1, fill_w - 1)
-                    arr[:, xx, 0] = int(c0[0] * (1 - t) + c1[0] * t)
-                    arr[:, xx, 1] = int(c0[1] * (1 - t) + c1[1] * t)
-                    arr[:, xx, 2] = int(c0[2] * (1 - t) + c1[2] * t)
-                    arr[:, xx, 3] = 240
-                img.alpha_composite(Image.fromarray(arr, 'RGBA'),
-                                    (hp_x + 1, hp_y + 1))
+                    c0, c1 = (248, 140, 122, 240), (239, 104, 78, 240)
+                # H4: route the per-unit HP fill through the cython kernel.
+                # Use the FLAT variant (no y-shade) to preserve the previous
+                # per-column flat fill exactly — hgrad_bar_rgba_bytes' 1.02→
+                # 0.88 vertical shade would darken the 6px bar's bottom row
+                # by ~12%, which is observable on the red zone.
+                bar_bytes = _CY_PIXELS.hgrad_bar_flat_rgba_bytes(
+                    fill_w, hp_h - 2, c0, c1,
+                )
+                img.alpha_composite(
+                    Image.frombytes('RGBA', (fill_w, hp_h - 2), bar_bytes),
+                    (hp_x + 1, hp_y + 1),
+                )
             # 护盾覆盖
             if bool(unit.get('shield_active')) and float(unit.get('shield_pct') or 0.0) > 0:
                 shield_w = int(round((hp_w - 2) * max(0.0, min(1.0, float(unit.get('shield_pct') or 0.0)))))

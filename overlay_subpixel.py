@@ -26,6 +26,11 @@ from typing import Optional
 import numpy as np
 from PIL import Image
 
+try:
+    import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - module is mandatory at runtime
+    _CY_PIXELS = None  # type: ignore[assignment]
+
 
 _EPS = 1.0 / 512.0
 
@@ -59,11 +64,18 @@ def subpixel_alpha_composite(dst: Image.Image, src: Image.Image,
     w, h = src.size
     if w <= 0 or h <= 0:
         return
-    # PIL's BILINEAR transform clamps to the edge instead of blending with
-    # the fillcolor, so a fractional shift on a solid sprite would leave its
-    # leading edge fully opaque (no anti-aliasing). Pad the source with a
-    # 1 px transparent border first; the bilinear sampler then blends the
-    # outermost row/column down to (1 - frac) * alpha as we want.
+    # D1: cython byte-level bilinear shift replaces the
+    # Image.new(w+2, h+2) + alpha_composite + Image.transform(AFFINE)
+    # pipeline. Out-of-bounds source samples are zero (matches PIL
+    # fillcolor=(0,0,0,0) + 1px transparent pad semantics).
+    if _CY_PIXELS is not None:
+        shifted_bytes = _CY_PIXELS.subpixel_shift_rgba_bytes(
+            src.tobytes(), w, h, fx, fy,
+        )
+        shifted = Image.frombytes('RGBA', (w, h), shifted_bytes)
+        dst.alpha_composite(shifted, (ix, iy))
+        return
+    # Fallback: legacy PIL transform path.
     padded = Image.new('RGBA', (w + 2, h + 2), (0, 0, 0, 0))
     padded.alpha_composite(src, (1, 1))
     shifted = padded.transform(
@@ -95,6 +107,16 @@ def subpixel_bar_width(bar_img: Image.Image,
     cropped = bar_img.crop((0, 0, fw_int, bar_img.height))
     if frac < _EPS or frac > (1.0 - _EPS):
         return cropped
+    # H2: fast path — last-column alpha fade in cython kernel.
+    # Replaces the np.array → astype(float32) → clip → astype(uint8) → fromarray
+    # chain with a single cython byte-level pass (floor `(alpha*frac255)//255`
+    # semantics matching multiply_alpha_*).
+    if _CY_PIXELS is not None:
+        h = cropped.height
+        faded = _CY_PIXELS.fade_last_column_alpha_rgba_bytes(
+            cropped.tobytes(), fw_int, h, frac,
+        )
+        return Image.frombytes('RGBA', (fw_int, h), faded)
     arr = np.array(cropped)
     last = arr[:, fw_int - 1, 3].astype(np.float32) * frac
     arr[:, fw_int - 1, 3] = np.clip(last, 0, 255).astype(np.uint8)

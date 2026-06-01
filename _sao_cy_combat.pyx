@@ -45,10 +45,12 @@ cdef inline double _safe_f64(object value):
         return 0.0
 
 
-cdef inline double _now() nogil:
-    # `time.time()` from Python; cannot run nogil but returning here lets
-    # callers stay typed even when GIL is held.
-    pass
+cdef inline double _now():
+    """Wall-clock seconds since epoch. NOTE: not nogil — calls Python time.time().
+    Previous body was a bare `pass` under nogil which silently returned 0.0;
+    fixed in v3.2.x along with the build_big_hit_fx_event fallback path that
+    depends on a real timestamp when callers pass timestamp <= 0."""
+    return <double>_time.time()
 
 
 cpdef bint is_player_uuid(object uuid):
@@ -146,6 +148,135 @@ cpdef unsigned long long dps_attacker_uid(object attacker_uuid,
     if attacker_is_self and _to_u64(self_uid, &uid):
         return uid
     return 0
+
+
+cpdef tuple classify_damage_event(dict event, object self_uid,
+                                  dict skill_effect_table):
+    """H6: fused per-event classify call.
+
+    Replaces the dps_tracker._process_event boundary that previously made
+    three cython round-trips (dps_target_is_combat + dps_attacker_uid +
+    resolve_skill_key) interleaved with ~10 event.get() + 6 _safe_int() in
+    Python. Returns a tuple of pre-typed primitives:
+
+        (target_uuid, attacker_uid, target_is_combat_target,
+         attacker_is_self, skill_key, skill_id, damage,
+         is_crit, is_heal, is_immune, is_absorbed)
+
+    Caller stays in Python for the EntityStats lifecycle / on_damage callback
+    / monster revive side effects — those need lock/state interaction.
+    """
+    cdef long long target_uuid = _safe_i64(event.get('target_uuid'))
+    cdef long long attacker_uuid = _safe_i64(event.get('attacker_uuid'))
+    cdef bint target_is_player = bool(event.get('target_is_player', False))
+    cdef bint target_is_monster = bool(event.get('target_is_monster', False))
+    cdef bint attacker_is_self = bool(event.get('attacker_is_self', False))
+    cdef bint target_is_combat_arg = bool(event.get('target_is_combat_target', False))
+    cdef bint has_target_is_player = ('target_is_player' in event)
+    cdef bint target_is_combat
+    cdef long long skill_id = _safe_i64(event.get('skill_id'))
+    cdef long long skill_key_ll
+    cdef long long damage_ll = _safe_i64(event.get('damage'))
+    cdef bint is_heal = bool(event.get('is_heal', False))
+    cdef bint is_immune = bool(event.get('is_immune', False))
+    cdef bint is_absorbed = bool(event.get('is_absorbed', False))
+    cdef bint is_crit = bool(event.get('is_crit', False))
+    cdef long long attacker_uid_ll = _safe_i64(event.get('attacker_uid'))
+    cdef unsigned long long attacker_unsigned
+    cdef unsigned long long self_uid_unsigned
+
+    target_is_combat = dps_target_is_combat(
+        target_uuid, has_target_is_player,
+        target_is_player, target_is_monster, target_is_combat_arg,
+    )
+    skill_key_ll = resolve_skill_key(event, skill_effect_table)
+    if skill_key_ll == 0:
+        skill_key_ll = skill_id
+
+    if attacker_uid_ll == 0:
+        if _to_u64(attacker_uuid, &attacker_unsigned):
+            if (attacker_unsigned & 0xFFFF) == 640:
+                attacker_uid_ll = <long long>(attacker_unsigned >> 16)
+        if attacker_uid_ll == 0 and attacker_is_self:
+            if _to_u64(self_uid, &self_uid_unsigned):
+                attacker_uid_ll = <long long>self_uid_unsigned
+    if attacker_is_self:
+        if _to_u64(self_uid, &self_uid_unsigned):
+            attacker_uid_ll = <long long>self_uid_unsigned
+
+    if damage_ll < 0:
+        damage_ll = 0
+
+    return (target_uuid, attacker_uid_ll, target_is_combat,
+            attacker_is_self, skill_key_ll, skill_id, damage_ll,
+            is_crit, is_heal, is_immune, is_absorbed)
+
+
+cpdef tuple boss_raid_event_coerce(dict event):
+    """D3/E3: typed coercion for boss_raid_engine.on_damage_event.
+
+    Replaces the 5+ int()/bool()/event.get() chain at the start of the
+    handler with one cython call returning typed primitives + a stripped
+    target_name string. The handler still owns lifecycle / lock / invincible
+    streak side effects."""
+    cdef bint target_is_monster = bool(event.get('target_is_monster', False))
+    cdef bint attacker_is_self = bool(event.get('attacker_is_self', False))
+    cdef bint is_immune = bool(event.get('is_immune', False))
+    cdef bint is_absorbed = bool(event.get('is_absorbed', False))
+    cdef bint is_heal = bool(event.get('is_heal', False))
+    cdef long long damage_ll = _safe_i64(event.get('damage'))
+    cdef long long target_uuid = _safe_i64(event.get('target_uuid'))
+    cdef str name
+    cdef object raw_name = event.get('target_name', '')
+    if damage_ll < 0:
+        damage_ll = 0
+    # C7 fix: match _string()'s falsy collapse (value or '') so that 0 / False
+    # / None all coerce to '' instead of '0' / 'False' / 'None'. Mirrors the
+    # boss_raid_engine._string helper exactly.
+    if not raw_name:
+        name = ''
+    else:
+        name = str(raw_name).strip()
+    return (target_is_monster, attacker_is_self,
+            is_immune, is_absorbed, is_heal,
+            damage_ll, target_uuid, name)
+
+
+cpdef dict build_big_hit_fx_event(long long seq, object entity_uid,
+                                  object entity_name, object damage,
+                                  str tier, object timestamp):
+    """D4/E4: typed dict builder for dps_tracker._track_big_hit_fx_locked.
+
+    Replaces the in-Python:
+        {
+          'seq': seq, 'uid': int(uid or 0),
+          'name': entity.name or f'Player_{entity.uid}',
+          'amount': int(damage or 0), 'tier': tier,
+          'generated_at': float(timestamp or time.time()),
+        }
+    The dict literal cost itself is unchanged, but the per-field _safe_int /
+    str-or-fallback / float-or-now Python boxings move into cython.
+    """
+    cdef long long uid_ll = _safe_i64(entity_uid)
+    cdef long long amount = _safe_i64(damage)
+    cdef double ts = _safe_f64(timestamp)
+    cdef str name_str
+    if entity_name:
+        name_str = str(entity_name)
+    else:
+        name_str = 'Player_' + str(uid_ll)
+    if amount < 0:
+        amount = 0
+    if ts <= 0.0:
+        ts = _now()
+    return {
+        'seq': seq,
+        'uid': uid_ll,
+        'name': name_str,
+        'amount': amount,
+        'tier': tier,
+        'generated_at': ts,
+    }
 
 
 # ───────────────────────────────────────────────

@@ -253,6 +253,27 @@ def _text_width(draw: ImageDraw.ImageDraw, text: str, font) -> int:
             return len(text) * 6
 
 
+# H5/Q8: per-glyph width memoization. DPS combat sustains ~15-21k textlength
+# calls/sec across _draw_tracked / _draw_tracked_centered / _tracked_text_width
+# (3 inner loops × ~5 rows × 60Hz). Cache key is (id(font), ch); font objects
+# stay alive via _load_font cache so id() is stable across renders.
+# Fallback fb (font.size / 2) is preserved on miss to keep numeric parity.
+_GLYPH_W_DPS: Dict[Tuple[int, str], float] = {}
+
+
+def _glyph_w_dps(draw: ImageDraw.ImageDraw, ch: str, font) -> float:
+    key = (id(font), ch)
+    v = _GLYPH_W_DPS.get(key)
+    if v is not None:
+        return v
+    try:
+        v = draw.textlength(ch, font=font)
+    except Exception:
+        v = font.size / 2
+    _GLYPH_W_DPS[key] = v
+    return v
+
+
 # ═══════════════════════════════════════════════
 #  Formatting (parity with dps.html _fmtNum / _fmtTime)
 # ═══════════════════════════════════════════════
@@ -2483,11 +2504,7 @@ class DpsOverlay:
         acc = 0.0
         for ch in text:
             draw.text((int(round(x + acc)), y), ch, fill=fill, font=font)
-            try:
-                cw = draw.textlength(ch, font=font)
-            except Exception:
-                cw = font.size / 2
-            acc += cw + spacing
+            acc += _glyph_w_dps(draw, ch, font) + spacing
 
     @staticmethod
     def _draw_text_shadow(draw, text, font, color, blur, x, y, spacing):
@@ -2495,10 +2512,7 @@ class DpsOverlay:
         acc = 0.0
         widths = []
         for ch in text:
-            try:
-                cw = draw.textlength(ch, font=font)
-            except Exception:
-                cw = font.size / 2
+            cw = _glyph_w_dps(draw, ch, font)
             widths.append(cw)
             acc += cw + spacing
         tw = int(round(acc)) + blur * 4
@@ -2517,16 +2531,8 @@ class DpsOverlay:
     def _draw_tracked_centered(self, draw: ImageDraw.ImageDraw, text: str,
                                font, fill, cx: int, cy: int,
                                spacing: float = 1) -> None:
-        total = 0.0
-        widths = []
-        for ch in text:
-            try:
-                cw = draw.textlength(ch, font=font)
-            except Exception:
-                cw = font.size / 2
-            widths.append(cw)
-            total += cw + spacing
-        total -= spacing
+        widths = [_glyph_w_dps(draw, ch, font) for ch in text]
+        total = sum(widths) + spacing * (len(widths) - 1 if widths else 0)
         x = cx - total / 2
         acc = 0.0
         for ch, cw in zip(text, widths):
@@ -2536,15 +2542,12 @@ class DpsOverlay:
     def _tracked_text_width(self, draw, text: str, font,
                             spacing: float = 1) -> int:
         """Return the total pixel width of tracked text."""
+        if not text:
+            return 0
         total = 0.0
         for ch in text:
-            try:
-                cw = draw.textlength(ch, font=font)
-            except Exception:
-                cw = font.size / 2
-            total += cw + spacing
-        if text:
-            total -= spacing
+            total += _glyph_w_dps(draw, ch, font) + spacing
+        total -= spacing
         return int(round(total))
 
     def _make_bar(self, bw: int, bh: int,

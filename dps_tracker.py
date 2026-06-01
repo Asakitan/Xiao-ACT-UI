@@ -256,41 +256,21 @@ class DpsTracker:
             self._finalize_current_locked('idle_timeout')
             self._reset_locked()
 
-        target_uuid = _safe_int(event.get('target_uuid'))
-        attacker_uuid = _safe_int(event.get('attacker_uuid'))
-        target_is_player = bool(event.get('target_is_player', False))
-        target_is_monster = event.get('target_is_monster', False)
-        attacker_is_self = event.get('attacker_is_self', False)
-        target_is_combat_target = bool(_CY_COMBAT.dps_target_is_combat(
-            target_uuid,
-            'target_is_player' in event,
-            target_is_player,
-            bool(target_is_monster),
-            bool(event.get('target_is_combat_target', False)),
-        ))
-        is_heal = event.get('is_heal', False)
-        is_immune = event.get('is_immune', False)
-        is_absorbed = event.get('is_absorbed', False)
-        damage = max(0, _safe_int(event.get('damage')))
-        skill_id = _safe_int(event.get('skill_id'))
-        # v3.1.5 round 10: hot path — inline the cython call and the cached
-        # skill-effect-table lookup so per-event dispatch is one cython call
-        # plus one global-name read. Lazy-loads the JSON table on first hit.
+        # H6: single cython call replaces ~10 event.get + 6 _safe_int + 3
+        # round-trips (dps_target_is_combat + dps_attacker_uid + resolve_skill_key).
+        # Lazy-loads the skill-effect table on first hit.
         _table = _SKILL_LEVEL_TO_EFFECT
         if _table is None:
             _table = _load_skill_level_to_effect()
-        skill_key = int(_CY_COMBAT.resolve_skill_key(event, _table)) or skill_id
-        is_crit = event.get('is_crit', False)
-
-        # Prefer parser-provided owner UID. Some damage events route through a
-        # summon/owner field where AttackerUuid is not a normal player UUID.
-        attacker_uid = _safe_int(event.get('attacker_uid'))
-        # Derive attacker_uid from attacker_uuid (uuid >> 16 for player entities)
-        if not attacker_uid:
-            attacker_uid = int(_CY_COMBAT.dps_attacker_uid(
-                attacker_uuid, bool(attacker_is_self), self._self_uid))
-        if attacker_is_self and self._self_uid:
-            attacker_uid = self._self_uid
+        (target_uuid, attacker_uid, target_is_combat_target,
+         attacker_is_self, skill_key, skill_id, damage,
+         is_crit, is_heal, is_immune, is_absorbed) = (
+            _CY_COMBAT.classify_damage_event(event, self._self_uid, _table)
+        )
+        attacker_uid = int(attacker_uid)
+        skill_key = int(skill_key) or int(skill_id)
+        target_is_player = bool(event.get('target_is_player', False))
+        target_is_monster = event.get('target_is_monster', False)
 
         # Skip immune/absorbed for DPS tracking
         if is_immune or is_absorbed or damage <= 0:
@@ -354,14 +334,11 @@ class DpsTracker:
         if not emit:
             return
         self._hit_fx_seq += 1
-        self._last_hit_fx = {
-            'seq': self._hit_fx_seq,
-            'uid': int(entity.uid or 0),
-            'name': entity.name or f'Player_{entity.uid}',
-            'amount': int(damage or 0),
-            'tier': tier,
-            'generated_at': float(timestamp or time.time()),
-        }
+        # D4: cython dict builder pushes the per-field boxing
+        # (int()/str()/float() + or-fallback) into typed cython.
+        self._last_hit_fx = _CY_COMBAT.build_big_hit_fx_event(
+            self._hit_fx_seq, entity.uid, entity.name, damage, tier, timestamp,
+        )
 
     def _get_or_create(self, uid: int, is_self: bool = False) -> EntityStats:
         entity = self._entities.get(uid)

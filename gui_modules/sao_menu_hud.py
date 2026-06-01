@@ -10,6 +10,10 @@ from typing import Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+try:
+    import _sao_cy_skillfx as _CY_SKILLFX  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover
+    _CY_SKILLFX = None  # type: ignore[assignment]
 
 
 # v2.3.3 GIL-safety fix.
@@ -1104,12 +1108,29 @@ class MenuLeftInfoRenderer:
         if sweep_strength <= 0.004 or width < 18 or height < 12:
             return
         sweep_phase = max(0.0, min(1.0, float(sweep_phase)))
-        overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
         center = int((-0.24 + 1.30 * sweep_phase) * width)
         half_w = max(14, int(width * 0.16))
         skew = int(max(4, height * slant))
         alpha = max(6, int(alpha_scale * sweep_strength))
+        # D2: cython polygon raster + 3-pass box blur replaces
+        # Image.new + ImageDraw.polygon + ImageFilter.GaussianBlur. Returns
+        # straight-alpha RGBA bytes — alpha_composite path unchanged.
+        if _CY_SKILLFX is not None:
+            sweep_bytes = _CY_SKILLFX.sweep_overlay_rgba_bytes(
+                width, height,
+                center - half_w,
+                center + int(half_w * 0.28),
+                center + half_w + skew,
+                center - int(half_w * 0.55) + skew,
+                alpha, int(tint[0]), int(tint[1]), int(tint[2]),
+                float(blur_radius),
+            )
+            overlay = Image.frombytes('RGBA', (width, height), sweep_bytes)
+            image.alpha_composite(overlay)
+            return
+        # Fallback: legacy PIL path.
+        overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
         draw.polygon(
             (
                 (center - half_w, 0),
@@ -1119,10 +1140,6 @@ class MenuLeftInfoRenderer:
             ),
             fill=(tint[0], tint[1], tint[2], alpha),
         )
-        # v2.2.26: PIL GaussianBlur is fastest for the small (≤240 px wide)
-        # side panels. Tried _gpu_blur but the upload/download overhead
-        # dwarfs the PIL CPU cost at this size; the cached-sig path below
-        # makes most frames a no-op anyway.
         overlay = overlay.filter(ImageFilter.GaussianBlur(radius=blur_radius))
         image.alpha_composite(overlay)
 

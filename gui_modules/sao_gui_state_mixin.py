@@ -28,6 +28,17 @@ import threading
 import time
 from typing import Any, Dict, List
 
+
+def _boss_bar_main_key(_m, _recent_targets):
+    """Boss-bar primary-target sort key. Hoisted from _compute_boss_hp_delta
+    so the daemon worker doesn't rebind a fresh closure per tick."""
+    _max_hp = int(getattr(_m, 'max_hp', 0) or 0)
+    _hp = int(getattr(_m, 'hp', 0) or 0)
+    _mh_for_pct = _max_hp if _max_hp > 0 else (_hp if _hp > 0 else 1)
+    _hp_pct = (_hp / _mh_for_pct) if _mh_for_pct > 0 else 0.0
+    _last_ts = float(_recent_targets.get(getattr(_m, 'uuid', 0), 0) or 0.0)
+    return (-_max_hp, -_hp_pct, -_last_ts)
+
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from perf_probe import probe as _probe
@@ -400,15 +411,8 @@ class SAOPlayerGUIStateMixin:
                             if self._boss_monster_usable(m):
                                 _recent_monsters.append(m)
                     if _recent_monsters:
-                        def _bb_main_key(_m, _rt=self._bb_recent_targets):
-                            _max_hp = int(getattr(_m, 'max_hp', 0) or 0)
-                            _hp = int(getattr(_m, 'hp', 0) or 0)
-                            _mh_for_pct = _max_hp if _max_hp > 0 else (
-                                _hp if _hp > 0 else 1)
-                            _hp_pct = (_hp / _mh_for_pct) if _mh_for_pct > 0 else 0.0
-                            _last_ts = float(_rt.get(getattr(_m, 'uuid', 0), 0) or 0.0)
-                            return (-_max_hp, -_hp_pct, -_last_ts)
-                        _recent_monsters.sort(key=_bb_main_key)
+                        _rt = self._bb_recent_targets
+                        _recent_monsters.sort(key=lambda _m: _boss_bar_main_key(_m, _rt))
                         main_m = _recent_monsters[0]
                         self._bb_last_target_uuid = getattr(main_m, 'uuid', 0)
                         _bb_direct_max = int(getattr(main_m, 'max_hp', 0)) or int(getattr(main_m, 'hp', 0))

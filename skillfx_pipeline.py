@@ -28,6 +28,16 @@ import numpy as np
 from PIL import Image
 
 import gpu_renderer as _gr
+import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
+
+# C3 fix: do NOT wrap in try/except. _CY_UI is mandatory at runtime — a
+# missing/stale .pyd would silently disable the GPU FX pipeline with a noisy
+# per-frame log instead of failing loudly. If unpack_skillfx_params isn't yet
+# in the compiled .pyd, this assertion fires once at import.
+assert hasattr(_CY_UI, 'unpack_skillfx_params'), (
+    'skillfx_pipeline requires _sao_cy_uihelpers.unpack_skillfx_params; '
+    'rebuild via `python build_cython_ext.py build_ext --inplace`.'
+)
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -115,26 +125,31 @@ class SkillFXShaderPipeline:
                 ctx.viewport = (0, 0, width, height)
                 ctx.clear(0.0, 0.0, 0.0, 0.0)
                 p = self._prog
-                # Required uniforms — get with default no-op for missing
+                # D5: typed cython unpack of the 21 params.get + float/tuple
+                # boxings. The GL uniform .value sets still happen in Python
+                # (moderngl driver call), but the per-field coerce is in cython.
+                (u_time, u_alpha_mul, u_anchor, u_r_out, u_r_in, u_r_core,
+                 u_pulse, u_beam_a, u_beam_b, u_beam_h, u_show_age, u_exiting,
+                 u_glfx_intensity, u_seed, u_gl_anchor, u_gl_label,
+                 u_gl_panel_size) = _CY_UI.unpack_skillfx_params(params)
                 p['u_resolution'].value = (float(width), float(height))
-                p['u_time'].value = float(params.get('time', 0.0))
-                p['u_alpha_mul'].value = float(params.get('alpha_mul', 1.0))
-                p['u_anchor'].value = tuple(map(float, params.get('anchor', (0.0, 0.0))))
-                p['u_r_out'].value = float(params.get('r_out', 0.0))
-                p['u_r_in'].value = float(params.get('r_in', 0.0))
-                p['u_r_core'].value = float(params.get('r_core', 0.0))
-                p['u_pulse'].value = float(params.get('pulse', 0.5))
-                p['u_beam_a'].value = tuple(map(float, params.get('beam_a', (0.0, 0.0))))
-                p['u_beam_b'].value = tuple(map(float, params.get('beam_b', (0.0, 0.0))))
-                p['u_beam_h'].value = float(params.get('beam_h', 30.0))
-                p['u_show_age'].value = float(params.get('show_age', 0.0))
-                p['u_exiting'].value = 1.0 if params.get('exiting') else 0.0
-                p['u_glfx_intensity'].value = float(params.get('glfx_intensity', 0.0))
-                p['u_seed'].value = float(params.get('seed', 1.0))
-                # v2.3.0 (2026-04 fix): legacy lerped GLFX uniforms.
-                p['u_gl_anchor'].value = tuple(map(float, params.get('gl_anchor', (0.0, 0.0))))
-                p['u_gl_label'].value = tuple(map(float, params.get('gl_label', (0.0, 0.0))))
-                p['u_gl_panel_size'].value = tuple(map(float, params.get('gl_panel_size', (0.0, 0.0))))
+                p['u_time'].value = u_time
+                p['u_alpha_mul'].value = u_alpha_mul
+                p['u_anchor'].value = u_anchor
+                p['u_r_out'].value = u_r_out
+                p['u_r_in'].value = u_r_in
+                p['u_r_core'].value = u_r_core
+                p['u_pulse'].value = u_pulse
+                p['u_beam_a'].value = u_beam_a
+                p['u_beam_b'].value = u_beam_b
+                p['u_beam_h'].value = u_beam_h
+                p['u_show_age'].value = u_show_age
+                p['u_exiting'].value = u_exiting
+                p['u_glfx_intensity'].value = u_glfx_intensity
+                p['u_seed'].value = u_seed
+                p['u_gl_anchor'].value = u_gl_anchor
+                p['u_gl_label'].value = u_gl_label
+                p['u_gl_panel_size'].value = u_gl_panel_size
 
                 self._vao.render()
                 data = fbo.read(components=4, alignment=1)
@@ -168,24 +183,29 @@ class SkillFXShaderPipeline:
                 ctx.viewport = (0, 0, width, height)
                 ctx.clear(0.0, 0.0, 0.0, 0.0)
                 p = self._prog
+                # D5: typed cython unpack — same as render() above.
+                (u_time, u_alpha_mul, u_anchor, u_r_out, u_r_in, u_r_core,
+                 u_pulse, u_beam_a, u_beam_b, u_beam_h, u_show_age, u_exiting,
+                 u_glfx_intensity, u_seed, u_gl_anchor, u_gl_label,
+                 u_gl_panel_size) = _CY_UI.unpack_skillfx_params(params)
                 p['u_resolution'].value = (float(width), float(height))
-                p['u_time'].value = float(params.get('time', 0.0))
-                p['u_alpha_mul'].value = float(params.get('alpha_mul', 1.0))
-                p['u_anchor'].value = tuple(map(float, params.get('anchor', (0.0, 0.0))))
-                p['u_r_out'].value = float(params.get('r_out', 0.0))
-                p['u_r_in'].value = float(params.get('r_in', 0.0))
-                p['u_r_core'].value = float(params.get('r_core', 0.0))
-                p['u_pulse'].value = float(params.get('pulse', 0.5))
-                p['u_beam_a'].value = tuple(map(float, params.get('beam_a', (0.0, 0.0))))
-                p['u_beam_b'].value = tuple(map(float, params.get('beam_b', (0.0, 0.0))))
-                p['u_beam_h'].value = float(params.get('beam_h', 30.0))
-                p['u_show_age'].value = float(params.get('show_age', 0.0))
-                p['u_exiting'].value = 1.0 if params.get('exiting') else 0.0
-                p['u_glfx_intensity'].value = float(params.get('glfx_intensity', 0.0))
-                p['u_seed'].value = float(params.get('seed', 1.0))
-                p['u_gl_anchor'].value = tuple(map(float, params.get('gl_anchor', (0.0, 0.0))))
-                p['u_gl_label'].value = tuple(map(float, params.get('gl_label', (0.0, 0.0))))
-                p['u_gl_panel_size'].value = tuple(map(float, params.get('gl_panel_size', (0.0, 0.0))))
+                p['u_time'].value = u_time
+                p['u_alpha_mul'].value = u_alpha_mul
+                p['u_anchor'].value = u_anchor
+                p['u_r_out'].value = u_r_out
+                p['u_r_in'].value = u_r_in
+                p['u_r_core'].value = u_r_core
+                p['u_pulse'].value = u_pulse
+                p['u_beam_a'].value = u_beam_a
+                p['u_beam_b'].value = u_beam_b
+                p['u_beam_h'].value = u_beam_h
+                p['u_show_age'].value = u_show_age
+                p['u_exiting'].value = u_exiting
+                p['u_glfx_intensity'].value = u_glfx_intensity
+                p['u_seed'].value = u_seed
+                p['u_gl_anchor'].value = u_gl_anchor
+                p['u_gl_label'].value = u_gl_label
+                p['u_gl_panel_size'].value = u_gl_panel_size
                 self._vao.render()
                 # GL bottom-up; for ULW (top-down) need flip.
                 data = fbo.read(components=4, alignment=1)

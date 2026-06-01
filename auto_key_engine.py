@@ -618,6 +618,15 @@ class AutoKeyEngine:
         self._cached_config_raw_id: int = 0
         self._cached_config_author_key: Tuple[Any, ...] = ()
         self._cached_config: Optional[Dict[str, Any]] = None
+        # Q5: per-action cond-type cache (lowercase string tuple). Keyed by
+        # python id() of the action dict — invalidated together with
+        # _cached_config because normalize_auto_key_config rebuilds the
+        # action dicts identity-fresh each invalidation cycle.
+        self._action_cond_types: Dict[int, Tuple[str, ...]] = {}
+        # Q5: slot_map cache keyed by id(gs.skill_slots). packet_bridge builds
+        # a fresh list per push, so the cache only hits when no new packet
+        # arrived between ticks — which is most ticks during light combat.
+        self._slot_map_cache: Optional[Tuple[int, Dict[int, Dict[str, Any]]]] = None
 
     def start(self):
         if self._running:
@@ -642,6 +651,8 @@ class AutoKeyEngine:
         self._cached_config = None
         self._cached_config_raw_id = 0
         self._cached_config_author_key = ()
+        self._action_cond_types.clear()
+        self._slot_map_cache = None
 
     def _get_normalized_config(self, gs) -> Dict[str, Any]:
         """Return the auto-key config, reusing the cached normalized form
@@ -670,6 +681,13 @@ class AutoKeyEngine:
                 "profession_name": author_key[3],
             },
         )
+        # C1: config refresh produces brand-new action dicts. CPython is free
+        # to reuse object addresses for the new dicts, so id()-keyed caches
+        # MUST be cleared here — else the len() guard misses same-count
+        # condition lists and serves a stale cond-type tuple, firing the
+        # wrong skill branch.
+        self._action_cond_types.clear()
+        self._slot_map_cache = None
         self._cached_config = cfg
         self._cached_config_raw_id = raw_id
         self._cached_config_author_key = author_key
@@ -773,13 +791,19 @@ class AutoKeyEngine:
             return False
 
     def _slot_map(self, gs) -> Dict[int, Dict[str, Any]]:
+        slots = getattr(gs, "skill_slots", []) or []
+        cached = self._slot_map_cache
+        slots_id = id(slots)
+        if cached is not None and cached[0] == slots_id:
+            return cached[1]
         mapping: Dict[int, Dict[str, Any]] = {}
-        for slot in getattr(gs, "skill_slots", []) or []:
+        for slot in slots:
             if not isinstance(slot, dict):
                 continue
             idx = _coerce_int(slot.get("index"), 0, 0)
             if idx > 0:
                 mapping[idx] = slot
+        self._slot_map_cache = (slots_id, mapping)
         return mapping
 
     def _normalized_slot_state(self, slot: Optional[Dict[str, Any]]) -> str:
@@ -805,8 +829,20 @@ class AutoKeyEngine:
         return _coerce_float(slot.get("cooldown_pct"), 1.0, 0.0, 1.0) <= 0.02
 
     def _conditions_match(self, action: Dict[str, Any], gs, slot_map: Dict[int, Dict[str, Any]]) -> bool:
-        for condition in (action.get("conditions") or []):
-            cond_type = _string(condition.get("type")).lower()
+        conditions = action.get("conditions") or []
+        if not conditions:
+            return True
+        # Q5: per-action cond-type cache. id(action) is stable across ticks
+        # because normalize_auto_key_config produces fresh dicts per
+        # invalidation and the cache is cleared in invalidate(). Storing the
+        # types as a tuple avoids repeated str.lower() per tick.
+        action_key = id(action)
+        cached_types = self._action_cond_types.get(action_key)
+        if cached_types is None or len(cached_types) != len(conditions):
+            cached_types = tuple(_string(c.get("type")).lower() for c in conditions)
+            self._action_cond_types[action_key] = cached_types
+        for idx, condition in enumerate(conditions):
+            cond_type = cached_types[idx]
             if cond_type == "hp_pct_gte":
                 if float(getattr(gs, "hp_pct", 0.0) or 0.0) < _coerce_float(condition.get("value"), 0.0, 0.0, 1.0):
                     return False

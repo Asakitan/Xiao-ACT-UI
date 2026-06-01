@@ -123,6 +123,50 @@ _parse_dirty_subfield_header = _CY_PACKET.parse_dirty_subfield_header
 _try_read_le_u32_at = _CY_PACKET.try_read_le_u32_at
 
 
+_DIRTY_CHARBASE_FIELDS: Dict[int, tuple] = {
+    1:  ('CharId', 'Q'),
+    2:  ('AccountId', 'str'),
+    3:  ('ShowId', 'Q'),
+    4:  ('ServerId', 'I'),
+    5:  ('Name', 'str'),
+    6:  ('Gender', 'I'),
+    7:  ('IsDeleted', 'B'),
+    8:  ('IsForbid', 'B'),
+    9:  ('IsMute', 'B'),
+    10: ('X', 'f'),
+    11: ('Y', 'f'),
+    12: ('Z', 'f'),
+    13: ('Dir', 'f'),
+    14: ('FaceData', 'msg'),
+    15: ('CardId', 'I'),
+    16: ('CreateTime', 'Q'),
+    17: ('OnlineTime', 'Q'),
+    18: ('OfflineTime', 'Q'),
+    19: ('ProfileInfo', 'msg'),
+    20: ('TeamInfo', 'msg'),
+    21: ('CharState', 'Q'),
+    22: ('BodySize', 'I'),
+    23: ('UnionInfo', 'msg'),
+    24: ('PersonalState', 'rep_i32'),
+    25: ('AvatarInfo', 'msg'),
+    26: ('TotalOnlineTime', 'Q'),
+    27: ('OpenId', 'str'),
+    28: ('SdkType', 'I'),
+    29: ('Os', 'I'),
+    31: ('InitProfessionId', 'I'),
+    32: ('LastCalTotalTime', 'Q'),
+    33: ('AreaId', 'I'),
+    34: ('ClientVersion', 'str'),
+    35: ('FightPoint', 'I'),
+    36: ('SumSave', 'Q'),
+    37: ('ClientResourceVersion', 'str'),
+    38: ('LastOfflineTime', 'Q'),
+    39: ('DayAccDurTime', 'I'),
+    40: ('LastAccDurTimestamp', 'Q'),
+    41: ('SaveSerial', 'Q'),
+}
+
+
 def _append_packet_debug(tag: str, payload: Dict[str, Any]):
     """Append a small packet debug snapshot for later field confirmation."""
     if not _PACKET_DEBUG_ENABLED:
@@ -3265,54 +3309,8 @@ class PacketParser:
                 return
             debug_info['sub_field'] = sub_field
 
-            # Complete mapping for ALL sub_fields in CharBaseInfo (from proto)
-            # int64=Q, uint64=Q, int32=I, uint32=I, float=f, bool=B, string=str, enum=I
-            # message types (FaceData, ProfileInfo, CharTeam, UserUnion, AvatarInfo) = 'msg'
-            # repeated int32 = 'rep_i32'
-            _CHARBASE_FIELDS = {
-                1:  ('CharId', 'Q'),         # int64
-                2:  ('AccountId', 'str'),     # string
-                3:  ('ShowId', 'Q'),          # int64
-                4:  ('ServerId', 'I'),        # uint32
-                5:  ('Name', 'str'),          # string
-                6:  ('Gender', 'I'),          # enum EGender
-                7:  ('IsDeleted', 'B'),       # bool
-                8:  ('IsForbid', 'B'),        # bool
-                9:  ('IsMute', 'B'),          # bool
-                10: ('X', 'f'),              # float
-                11: ('Y', 'f'),              # float
-                12: ('Z', 'f'),              # float
-                13: ('Dir', 'f'),            # float
-                14: ('FaceData', 'msg'),     # message FaceData
-                15: ('CardId', 'I'),         # uint32
-                16: ('CreateTime', 'Q'),     # int64
-                17: ('OnlineTime', 'Q'),     # int64
-                18: ('OfflineTime', 'Q'),    # int64
-                19: ('ProfileInfo', 'msg'),  # message ProfileInfo
-                20: ('TeamInfo', 'msg'),     # message CharTeam
-                21: ('CharState', 'Q'),      # uint64
-                22: ('BodySize', 'I'),       # enum EBodySize
-                23: ('UnionInfo', 'msg'),    # message UserUnion
-                24: ('PersonalState', 'rep_i32'),  # repeated int32
-                25: ('AvatarInfo', 'msg'),   # message AvatarInfo
-                26: ('TotalOnlineTime', 'Q'),# uint64
-                27: ('OpenId', 'str'),       # string
-                28: ('SdkType', 'I'),        # int32
-                29: ('Os', 'I'),             # int32
-                31: ('InitProfessionId', 'I'),  # int32
-                32: ('LastCalTotalTime', 'Q'),  # uint64
-                33: ('AreaId', 'I'),         # int32
-                34: ('ClientVersion', 'str'),   # string
-                35: ('FightPoint', 'I'),     # int32
-                36: ('SumSave', 'Q'),        # int64
-                37: ('ClientResourceVersion', 'str'),  # string
-                38: ('LastOfflineTime', 'Q'),   # int64
-                39: ('DayAccDurTime', 'I'),  # int32
-                40: ('LastAccDurTimestamp', 'Q'),  # int64
-                41: ('SaveSerial', 'Q'),     # int64
-            }
-            if sub_field in _CHARBASE_FIELDS:
-                fname, ftype = _CHARBASE_FIELDS[sub_field]
+            if sub_field in _DIRTY_CHARBASE_FIELDS:
+                fname, ftype = _DIRTY_CHARBASE_FIELDS[sub_field]
                 debug_info['sub_name'] = fname
                 if ftype == 'str':
                     if pos + 4 > len(data):
@@ -3862,9 +3860,10 @@ class PacketParser:
                               for c in sync_skill_cds[:5]]
                 if any(v5 > 0 for _, v5, _ in sample_vcd):
                     logger.info(f'[Parser] VCD field5 captured: {sample_vcd}')
-                _append_packet_debug('sync_skill_cd', {
-                    'uid': player.uid, 'skill_cds': sync_skill_cds,
-                })
+                if _PACKET_DEBUG_ENABLED:
+                    _append_packet_debug('sync_skill_cd', {
+                        'uid': player.uid, 'skill_cds': sync_skill_cds,
+                    })
             for fcd in di.FightResCDs:
                 decoded_fight_cd = {
                     'res_id': fcd.ResId,
@@ -3882,7 +3881,7 @@ class PacketParser:
                         'valid_cd_time': decoded_fight_cd['valid_cd_time'],
                         'observed_at_ms': int(time.time() * 1000),
                     }
-            if fight_res_cds:
+            if fight_res_cds and _PACKET_DEBUG_ENABLED:
                 _append_packet_debug('fight_res_cd', {
                     'uid': player.uid, 'fight_res_cds': fight_res_cds,
                 })
@@ -4377,7 +4376,7 @@ class PacketParser:
             monster.last_update = time.time()
             self._notify_monster(monster)
             # Log break-related attrs to packet_debug for diagnosis
-            if (monster.max_extinction > 0 or monster.max_stunned > 0
+            if _PACKET_DEBUG_ENABLED and (monster.max_extinction > 0 or monster.max_stunned > 0
                     or monster.extinction > 0 or monster.stunned > 0
                     or monster.breaking_stage >= 0 or monster.shield_active):
                 _append_packet_debug('monster_break', {
@@ -4820,7 +4819,7 @@ class PacketParser:
                 continue
             int_value = _decode_int32_from_raw(raw_data)
 
-            if self._is_confirmed_self_uid(uid):
+            if _PACKET_DEBUG_ENABLED and self._is_confirmed_self_uid(uid):
                 _append_packet_debug(
                     'attr_collection',
                     {
