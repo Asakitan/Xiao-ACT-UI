@@ -192,7 +192,7 @@ def _start_update_check():
     except Exception:
         pass
     try:
-        from sao_updater import get_manager
+        from updater.sao_updater import get_manager
         get_manager().check_async()
     except Exception as e:
         print(f'[SAO Auto] update check skipped: {e}')
@@ -203,7 +203,7 @@ def _register_apply_on_exit():
     import atexit
     def _hook():
         try:
-            from sao_updater import has_pending_update, schedule_apply_on_exit
+            from updater.sao_updater import has_pending_update, schedule_apply_on_exit
             if has_pending_update():
                 schedule_apply_on_exit()
         except Exception:

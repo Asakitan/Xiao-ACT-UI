@@ -367,14 +367,14 @@ class SAOWebAPI:
     # ---- 远程更新 ----
     def get_update_status(self):
         try:
-            from sao_updater import get_manager
+            from updater.sao_updater import get_manager
             return get_manager().snapshot().to_json()
         except Exception as e:
             return {"state": "error", "error": str(e)}
 
     def check_update(self):
         try:
-            from sao_updater import get_manager
+            from updater.sao_updater import get_manager
             get_manager().check_async()
             return True
         except Exception as e:
@@ -383,7 +383,7 @@ class SAOWebAPI:
 
     def download_update(self):
         try:
-            from sao_updater import get_manager
+            from updater.sao_updater import get_manager
             get_manager().download_async()
             return True
         except Exception as e:
@@ -393,7 +393,7 @@ class SAOWebAPI:
     def apply_update(self):
         """应用已下载的更新包，会退出当前进程。"""
         try:
-            from sao_updater import has_pending_update, schedule_apply_on_exit
+            from updater.sao_updater import has_pending_update, schedule_apply_on_exit
             if not has_pending_update():
                 return False
             if not schedule_apply_on_exit():
@@ -406,7 +406,7 @@ class SAOWebAPI:
 
     def skip_update(self):
         try:
-            from sao_updater import get_manager
+            from updater.sao_updater import get_manager
             get_manager().skip_current()
             return True
         except Exception:
@@ -6774,7 +6774,7 @@ class SAOWebViewGUI:
         """将 UpdateManager 快照推送到 menu (SAO.updateUpdaterState)。"""
         try:
             if snapshot is None:
-                from sao_updater import get_manager
+                from updater.sao_updater import get_manager
                 snapshot = get_manager().snapshot()
             data = snapshot.to_json() if hasattr(snapshot, 'to_json') else dict(snapshot)
             self._eval_menu(f'if(window.SAO&&SAO.updateUpdaterState)SAO.updateUpdaterState({json.dumps(data, ensure_ascii=False)})')
@@ -6792,7 +6792,7 @@ class SAOWebViewGUI:
     def _build_update_popup_payload(self, snapshot=None):
         if snapshot is None:
             try:
-                from sao_updater import get_manager
+                from updater.sao_updater import get_manager
                 snapshot = get_manager().snapshot()
             except Exception:
                 snapshot = None
@@ -6879,7 +6879,7 @@ class SAOWebViewGUI:
         if getattr(self, '_updater_listener_installed', False):
             return
         try:
-            from sao_updater import get_manager
+            from updater.sao_updater import get_manager
             mgr = get_manager()
 
             def _listener(snapshot):

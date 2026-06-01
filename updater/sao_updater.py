@@ -57,7 +57,7 @@ try:
     )
 except Exception:  # pragma: no cover - 仅在最早 bootstrap 失败时
     APP_VERSION = "0.0.0"
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     DEFAULT_UPDATE_HOST = ""
     RUNTIME_DIR = os.path.join(BASE_DIR, "runtime")
     RUNTIME_STAGING_DIR = os.path.join(RUNTIME_DIR, "staging")
@@ -767,7 +767,7 @@ def _resolve_apply_helper() -> str:
             mei = getattr(sys, "_MEIPASS", "")
             if mei:
                 candidates.append(os.path.join(mei, "update_apply.py"))
-        here = os.path.dirname(os.path.abspath(__file__))
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         candidates.append(os.path.join(here, "update_apply.py"))
     except Exception:
         pass

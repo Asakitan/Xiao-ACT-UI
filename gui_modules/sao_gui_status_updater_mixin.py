@@ -194,7 +194,7 @@ class SAOPlayerGUIStatusUpdaterMixin:
 
     def _get_update_snapshot(self):
         try:
-            from sao_updater import get_manager
+            from updater.sao_updater import get_manager
             return get_manager().snapshot()
         except Exception:
             return None
@@ -342,7 +342,7 @@ class SAOPlayerGUIStatusUpdaterMixin:
         if getattr(self, '_update_listener_installed', False):
             return
         try:
-            from sao_updater import get_manager
+            from updater.sao_updater import get_manager
             mgr = get_manager()
         except Exception:
             return
@@ -503,21 +503,21 @@ class SAOPlayerGUIStatusUpdaterMixin:
 
     def _start_update_download(self):
         try:
-            from sao_updater import get_manager
+            from updater.sao_updater import get_manager
             get_manager().download_async()
         except Exception as e:
             SAODialog.showinfo(self._float, '更新', f'下载启动失败: {e}')
 
     def _start_update_check(self):
         try:
-            from sao_updater import get_manager
+            from updater.sao_updater import get_manager
             get_manager().check_async()
         except Exception as e:
             SAODialog.showinfo(self._float, '更新', f'检查失败: {e}')
 
     def _skip_update_version(self):
         try:
-            from sao_updater import get_manager
+            from updater.sao_updater import get_manager
             get_manager().skip_current()
             self._close_update_panel(persist_hidden=True)
         except Exception as e:
@@ -525,7 +525,7 @@ class SAOPlayerGUIStatusUpdaterMixin:
 
     def _apply_downloaded_update(self):
         try:
-            from sao_updater import has_pending_update, schedule_apply_on_exit
+            from updater.sao_updater import has_pending_update, schedule_apply_on_exit
             if not has_pending_update():
                 SAODialog.showinfo(self._float, '更新', '当前没有待应用的更新包。')
                 return
@@ -735,7 +735,7 @@ class SAOPlayerGUIStatusUpdaterMixin:
 
     def _check_for_updates_interactive(self):
         try:
-            from sao_updater import (
+            from updater.sao_updater import (
                 get_manager,
                 STATE_AVAILABLE, STATE_UP_TO_DATE, STATE_READY,
                 STATE_DOWNLOADING, STATE_ERROR,
@@ -818,7 +818,7 @@ class SAOPlayerGUIStatusUpdaterMixin:
         mgr.check_async()
 
     def _prompt_update_available(self, snapshot):
-        from sao_updater import get_manager, STATE_READY, STATE_ERROR
+        from updater.sao_updater import get_manager, STATE_READY, STATE_ERROR
         mgr = get_manager()
         notes = (snapshot.notes or '').strip()
         size_mb = (snapshot.size or 0) / 1024 / 1024

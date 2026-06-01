@@ -69,7 +69,7 @@ TOPLEVEL_MODULES = [
     "engines.hide_seek_engine", "main", "render.overlay_render_worker", "render.overlay_scheduler",
     "render.overlay_subpixel", "net.packet_bridge", "net.packet_capture", "packet_parser",
     "utils.perf_probe", "vision.recognition", "render.render_capture_sync", "sao_gui", "utils.sao_sound",
-    "sao_theme", "sao_updater", "sao_web_panel_common", "sao_webview",
+    "sao_theme", "updater.sao_updater", "sao_web_panel_common", "sao_webview",
     "vision.skill_recognition", "render.skillfx_jit", "render.skillfx_pipeline", "update_apply",
     "vision.vision_accel", "utils.window_effects", "utils.window_locator",
 ]

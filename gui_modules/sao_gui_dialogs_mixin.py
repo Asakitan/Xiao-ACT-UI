@@ -197,7 +197,7 @@ class SAOPlayerGUIDialogsMixin:
         if self._sao_menu is not None and self._sao_menu.visible:
             self._sao_menu.close()
         try:
-            from sao_updater import get_manager, STATE_AVAILABLE, STATE_READY
+            from updater.sao_updater import get_manager, STATE_AVAILABLE, STATE_READY
             st = get_manager().snapshot()
             extra = ''
             if st.state in (STATE_AVAILABLE, STATE_READY) and st.latest_version:

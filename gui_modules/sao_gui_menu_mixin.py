@@ -547,7 +547,7 @@ class SAOPlayerGUIMenuMixin:
 
     def _build_update_menu_label(self) -> str:
         try:
-            from sao_updater import get_manager, STATE_AVAILABLE, STATE_READY, STATE_DOWNLOADING
+            from updater.sao_updater import get_manager, STATE_AVAILABLE, STATE_READY, STATE_DOWNLOADING
             st = get_manager().snapshot()
             if st.state == STATE_READY:
                 return f'更新就绪 v{st.latest_version} (重启应用)'
