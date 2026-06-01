@@ -44,7 +44,7 @@ from PIL import Image
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
-from overlay_render_worker import (
+from render.overlay_render_worker import (
     AsyncFrameWorker,
     FrameBuffer,
     submit_ulw_commit,
@@ -53,7 +53,7 @@ from overlay_render_worker import (
 from utils.perf_probe import probe as _probe
 from gui_modules.sao_menu_hud import MenuHudSpriteRenderer
 try:
-    import gpu_overlay_window as _gow
+    from render import gpu_overlay_window as _gow
 except Exception:
     _gow = None  # type: ignore[assignment]
 

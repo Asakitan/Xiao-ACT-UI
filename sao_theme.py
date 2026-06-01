@@ -22,7 +22,7 @@ import sys
 import ctypes
 import struct
 from PIL import Image, ImageDraw, ImageFilter, ImageTk, ImageEnhance, ImageChops, ImageFont
-from overlay_subpixel import subpixel_alpha_composite
+from render.overlay_subpixel import subpixel_alpha_composite
 from typing import Any, Optional, Callable, List, Dict, Tuple
 import numpy as np
 from config import APP_VERSION_LABEL, FONTS_DIR
@@ -88,7 +88,7 @@ except Exception:
     _ChildBarColors = None  # type: ignore[assignment]
     def gpu_child_bar_enabled() -> bool:  # type: ignore[no-redef]
         return False
-from overlay_scheduler import get_scheduler as _get_scheduler
+from render.overlay_scheduler import get_scheduler as _get_scheduler
 from utils.perf_probe import phase as _phase_trace, probe as _probe
 
 try:

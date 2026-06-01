@@ -38,13 +38,13 @@ from typing import Any, Callable, List, Optional, Tuple
 
 from PIL import Image
 
-from overlay_render_worker import AsyncFrameWorker, FrameBuffer
+from render.overlay_render_worker import AsyncFrameWorker, FrameBuffer
 from utils.perf_probe import phase as _phase_trace, probe as _probe
 from gui_modules.sao_menu_hud import MenuCircleButtonRenderer
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 try:
-    import gpu_overlay_window as _gow
+    from render import gpu_overlay_window as _gow
 except Exception:  # pragma: no cover - optional dep
     _gow = None  # type: ignore[assignment]
 
@@ -233,8 +233,8 @@ class MenuBarGpuPainter:
         # for the WHOLE cb. Reference-counted so nested _create()
         # pauses still nest correctly. See gpu_capture.pause_capture.
         try:
-            from gpu_capture import pause_capture as _wgc_pause
-            from gpu_capture import resume_capture as _wgc_resume
+            from render.gpu_capture import pause_capture as _wgc_pause
+            from render.gpu_capture import resume_capture as _wgc_resume
         except Exception:
             _wgc_pause = None
             _wgc_resume = None

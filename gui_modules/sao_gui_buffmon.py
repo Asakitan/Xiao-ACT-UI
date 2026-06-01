@@ -28,18 +28,18 @@ from gui_modules.sao_gui_dps import (
 )
 
 try:
-    from gpu_renderer import gaussian_blur_rgba as _gpu_blur
+    from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
 except Exception:  # pragma: no cover
     def _gpu_blur(img, radius):
         return img.filter(ImageFilter.GaussianBlur(radius))
 
 # GPU presenter pipeline (sao_left_info_gpu / sao_gui_skillfx 同款)
 try:
-    import gpu_overlay_window as _gow
+    from render import gpu_overlay_window as _gow
 except Exception:  # pragma: no cover
     _gow = None  # type: ignore[assignment]
 try:
-    from overlay_render_worker import AsyncFrameWorker, FrameBuffer
+    from render.overlay_render_worker import AsyncFrameWorker, FrameBuffer
 except Exception:  # pragma: no cover
     AsyncFrameWorker = None  # type: ignore[assignment]
     FrameBuffer = None  # type: ignore[assignment]

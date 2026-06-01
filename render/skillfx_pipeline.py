@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 from PIL import Image
 
-import gpu_renderer as _gr
+from render import gpu_renderer as _gr
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 # C3 fix: do NOT wrap in try/except. _CY_UI is mandatory at runtime — a
@@ -40,7 +40,9 @@ assert hasattr(_CY_UI, 'unpack_skillfx_params'), (
 )
 
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# reorg 2026-06-02: 本模块从根目录下沉到 render/, __file__ 深一层,
+# 故取上一级目录作为项目根 (dev: sao_auto/; frozen: runtime/), shaders/ 均在该层下.
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _resolve_shader_path() -> str:

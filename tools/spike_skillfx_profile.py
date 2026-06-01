@@ -7,8 +7,8 @@ if PARENT not in sys.path:
     sys.path.insert(0, PARENT)
 
 import numpy as np
-import gpu_renderer as gr
-import skillfx_pipeline as sp
+from render import gpu_renderer as gr
+from render import skillfx_pipeline as sp
 
 # Init context + pipeline once
 pipe = sp.get_skillfx_pipeline()

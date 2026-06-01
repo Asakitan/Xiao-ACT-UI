@@ -17,9 +17,9 @@ import tkinter as tk
 from collections import deque
 from typing import Callable, Deque, Dict, List, Optional, Tuple
 
-import gpu_overlay_window as _gow
-from overlay_scheduler import get_scheduler as _get_scheduler
-from overlay_render_worker import AsyncFrameWorker, FrameBuffer
+from render import gpu_overlay_window as _gow
+from render.overlay_scheduler import get_scheduler as _get_scheduler
+from render.overlay_render_worker import AsyncFrameWorker, FrameBuffer
 from utils.perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _probe
 
 from .state import PopupState
@@ -759,8 +759,8 @@ class SAOPopUpMenu:
         if self._click_guard_resume is not None:
             return
         try:
-            from gpu_capture import pause_capture as _wgc_pause
-            from gpu_capture import resume_capture as _wgc_resume
+            from render.gpu_capture import pause_capture as _wgc_pause
+            from render.gpu_capture import resume_capture as _wgc_resume
         except Exception:
             return
         try:

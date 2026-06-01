@@ -361,7 +361,7 @@ class SAOPlayerGUIMenuMixin:
             if menu is not None and getattr(menu, 'visible', False):
                 menu.close()
                 try:
-                    from overlay_scheduler import get_scheduler as _get_sched
+                    from render.overlay_scheduler import get_scheduler as _get_sched
                     _get_sched(self.root).set_menu_open(False)
                 except Exception:
                     pass
@@ -410,7 +410,7 @@ class SAOPlayerGUIMenuMixin:
             self._play_motion_blur(closing=True)
             self._sao_menu.close()
             try:
-                from overlay_scheduler import get_scheduler as _get_sched
+                from render.overlay_scheduler import get_scheduler as _get_sched
                 _get_sched(self.root).set_menu_open(False)
             except Exception:
                 pass
@@ -431,7 +431,7 @@ class SAOPlayerGUIMenuMixin:
             self._sao_menu.child_menus = self._get_menu_children_cached(force=True)
             self._sao_menu.open()
             try:
-                from overlay_scheduler import get_scheduler as _get_sched
+                from render.overlay_scheduler import get_scheduler as _get_sched
                 _get_sched(self.root).set_menu_open(True)
             except Exception:
                 pass

@@ -49,8 +49,8 @@ from typing import Dict, Optional, Tuple, Any, Mapping
 import numpy as np
 from PIL import Image
 
-import gpu_renderer
-from gpu_renderer import _tls, _try_init, _VS_FULLSCREEN
+from render import gpu_renderer
+from render.gpu_renderer import _tls, _try_init, _VS_FULLSCREEN
 
 
 # ─────────────────────────────────────────────────────────────────────

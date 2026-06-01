@@ -65,12 +65,12 @@ def probe(name: str, fn, *args, **kwargs) -> None:
 TOPLEVEL_MODULES = [
     "auto_key_engine", "automation", "boss_autokey_linkage", "boss_raid_engine",
     "character_profile", "config", "dps_tracker", "game_state",
-    "gpu_capture", "gpu_compositor", "gpu_overlay_window", "gpu_renderer",
-    "hide_seek_engine", "main", "overlay_render_worker", "overlay_scheduler",
-    "overlay_subpixel", "packet_bridge", "packet_capture", "packet_parser",
-    "utils.perf_probe", "recognition", "render_capture_sync", "sao_gui", "utils.sao_sound",
+    "render.gpu_capture", "render.gpu_compositor", "render.gpu_overlay_window", "render.gpu_renderer",
+    "hide_seek_engine", "main", "render.overlay_render_worker", "render.overlay_scheduler",
+    "render.overlay_subpixel", "packet_bridge", "packet_capture", "packet_parser",
+    "utils.perf_probe", "recognition", "render.render_capture_sync", "sao_gui", "utils.sao_sound",
     "sao_theme", "sao_updater", "sao_web_panel_common", "sao_webview",
-    "skill_recognition", "skillfx_jit", "skillfx_pipeline", "update_apply",
+    "skill_recognition", "render.skillfx_jit", "render.skillfx_pipeline", "update_apply",
     "vision_accel", "utils.window_effects", "utils.window_locator",
 ]
 

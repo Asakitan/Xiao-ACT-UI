@@ -242,7 +242,7 @@ class OverlayScheduler:
         if (self._wall_poll_frame_idx % 6) != 0:
             return
         try:
-            from overlay_render_worker import peak_recent_worker_wall_ms
+            from render.overlay_render_worker import peak_recent_worker_wall_ms
             peak = peak_recent_worker_wall_ms(window_sec=0.75)
         except Exception:
             return

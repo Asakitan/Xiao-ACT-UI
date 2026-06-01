@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # round-71-deleted _get_hp_pil_font). The mixins carry their own
 # imports; sao_gui.py no longer needs them.
 try:
-    from gpu_capture import capture_monitor_bgr_for_point, ensure_session, get_latest_bgr
+    from render.gpu_capture import capture_monitor_bgr_for_point, ensure_session, get_latest_bgr
 except Exception:
     capture_monitor_bgr_for_point = None  # type: ignore
     ensure_session = None  # type: ignore
@@ -470,7 +470,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         # 上跑 GL；必须在 root.destroy() 之前 join，否则 daemon 线程会被强杀，
         # 留下未释放的 WGL 上下文。
         try:
-            import gpu_overlay_window as _gow
+            from render import gpu_overlay_window as _gow
             if _gow._pump is not None:
                 _gow._pump.shutdown()
         except Exception:

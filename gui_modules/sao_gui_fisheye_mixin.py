@@ -38,7 +38,7 @@ import tkinter as tk
 from typing import Any, Optional
 
 try:
-    from gpu_capture import (
+    from render.gpu_capture import (
         capture_monitor_bgr_for_point, ensure_session, get_latest_bgr,
     )
 except Exception:
@@ -201,7 +201,7 @@ class SAOPlayerGUIFisheyeMixin:
             return
 
         try:
-            import gpu_overlay_window as _gow
+            from render import gpu_overlay_window as _gow
         except Exception:
             _gow = None  # type: ignore[assignment]
         if _gow is None or not _gow.glfw_supported():
@@ -854,7 +854,7 @@ class SAOPlayerGUIFisheyeMixin:
             # around the actual GL calls; the heavy PIL.resize / numpy
             # storm runs without the lock so the pump never blocks long.
             try:
-                from gpu_overlay_window import get_wgl_serialize_lock
+                from render.gpu_overlay_window import get_wgl_serialize_lock
                 _wgl_lock = get_wgl_serialize_lock()
             except Exception:
                 _wgl_lock = None

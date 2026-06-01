@@ -73,7 +73,7 @@ def _get_wgl_serialize_lock() -> Any:
     if _wgl_serialize_lock_ref is not None:
         return _wgl_serialize_lock_ref
     try:
-        from gpu_overlay_window import get_wgl_serialize_lock as _g
+        from render.gpu_overlay_window import get_wgl_serialize_lock as _g
         _wgl_serialize_lock_ref = _g()
     except Exception:
         # Fall back to a private RLock so the `with` statement still works.

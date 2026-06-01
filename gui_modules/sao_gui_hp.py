@@ -42,13 +42,13 @@ import threading
 import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from gpu_renderer import gaussian_blur_rgba as _gpu_blur, render_shell_rgba as _gpu_shell
-from overlay_scheduler import get_scheduler as _get_scheduler
-from overlay_render_worker import (
+from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur, render_shell_rgba as _gpu_shell
+from render.overlay_scheduler import get_scheduler as _get_scheduler
+from render.overlay_render_worker import (
     AsyncFrameWorker, clip_alpha_image, multiply_alpha_image,
     submit_ulw_commit,
 )
-from overlay_subpixel import subpixel_bar_width
+from render.overlay_subpixel import subpixel_bar_width
 
 # v2.3.x: optional GPU presenter (mirrors SkillFX/MenuHud pattern).
 # Env-gated via SAO_GPU_HP (defaults to SAO_GPU_OVERLAY). Falls back to
@@ -56,7 +56,7 @@ from overlay_subpixel import subpixel_bar_width
 # callbacks, preserving drag/tap/context menu while keeping presentation
 # off the ULW path.
 try:
-    import gpu_overlay_window as _gow  # type: ignore[import-untyped]
+    from render import gpu_overlay_window as _gow
 except Exception:
     _gow = None  # type: ignore[assignment]
 
@@ -339,7 +339,7 @@ def _get_thread_compositor():
     if comp is not None:
         return comp
     try:
-        from gpu_compositor import LayerCompositor
+        from render.gpu_compositor import LayerCompositor
         comp = LayerCompositor('hp')
     except Exception:
         comp = None
@@ -358,7 +358,7 @@ def _apply_inset_shadow_gpu(img: Image.Image, mask: Image.Image,
     the CPU path take over on any failure.
     """
     try:
-        from gpu_compositor import LayerCompositor  # noqa: F401
+        from render.gpu_compositor import LayerCompositor  # noqa: F401
     except Exception:
         return False
     try:

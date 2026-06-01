@@ -38,7 +38,7 @@ import numpy as np
 from PIL import Image
 
 from utils.perf_probe import gauge as _perf_gauge, phase as _phase_trace
-from render_capture_sync import wait_until_capture_idle
+from render.render_capture_sync import wait_until_capture_idle
 
 import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
 
@@ -477,7 +477,7 @@ class _RenderLane:
         # v2.2.11 Phase 0: warm up per-thread GL context up-front so the
         # first frame doesn't pay 30-50 ms of lazy WGL init under load.
         try:
-            from gpu_renderer import _try_init as _gpu_warmup
+            from render.gpu_renderer import _try_init as _gpu_warmup
             _gpu_warmup()
         except Exception:
             pass

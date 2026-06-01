@@ -15,7 +15,7 @@ import time
 import threading
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from gpu_renderer import gaussian_blur_rgba as _gpu_blur
+from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from config import FONTS_DIR
 
 from gui_modules.sao_gui_dps import _ulw_update

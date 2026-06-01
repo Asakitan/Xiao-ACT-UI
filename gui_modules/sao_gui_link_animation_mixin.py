@@ -93,7 +93,7 @@ class SAOPlayerGUILinkAnimationMixin:
         fy_start = sh // 2 + 80   # 略低于中心 (文字下方)
 
         try:
-            from gpu_overlay_window import (
+            from render.gpu_overlay_window import (
                 suspend_gpu_overlay_creation as _suspend_gpu_overlays,
                 resume_gpu_overlay_creation as _resume_gpu_overlays,
             )

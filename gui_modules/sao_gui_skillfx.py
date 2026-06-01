@@ -40,21 +40,21 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from gpu_renderer import gaussian_blur_rgba as _gpu_blur
-from gpu_renderer import _render_lock as _gpu_render_lock
-from gpu_renderer import _get_wgl_serialize_lock as _gpu_wgl_lock
-from overlay_scheduler import get_scheduler as _get_scheduler
-from overlay_render_worker import AsyncFrameWorker, FrameBuffer, run_cpu_tasks, submit_ulw_commit
+from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
+from render.gpu_renderer import _render_lock as _gpu_render_lock
+from render.gpu_renderer import _get_wgl_serialize_lock as _gpu_wgl_lock
+from render.overlay_scheduler import get_scheduler as _get_scheduler
+from render.overlay_render_worker import AsyncFrameWorker, FrameBuffer, run_cpu_tasks, submit_ulw_commit
 try:
-    import gpu_overlay_window as _gow
+    from render import gpu_overlay_window as _gow
 except Exception:
     _gow = None  # type: ignore[assignment]
-from overlay_subpixel import subpixel_alpha_composite
-from render_capture_sync import wait_until_capture_idle
-from skillfx_jit import fast_beam_rgba as _jit_fast_beam_rgba
-from skillfx_jit import fast_ring_layer_rgba as _jit_fast_ring_rgba
-from skillfx_jit import fast_ring_sweep_rgba as _jit_fast_sweep_rgba
-from skillfx_jit import warmup as _jit_warmup
+from render.overlay_subpixel import subpixel_alpha_composite
+from render.render_capture_sync import wait_until_capture_idle
+from render.skillfx_jit import fast_beam_rgba as _jit_fast_beam_rgba
+from render.skillfx_jit import fast_ring_layer_rgba as _jit_fast_ring_rgba
+from render.skillfx_jit import fast_ring_sweep_rgba as _jit_fast_sweep_rgba
+from render.skillfx_jit import warmup as _jit_warmup
 
 # Exercise the mandatory Cython kernels off the UI thread so the first burst
 # has all imports and memoryview setup paid before it appears.
@@ -1084,7 +1084,7 @@ void main() {
         fall back to the PIL path.
         """
         try:
-            from skillfx_pipeline import get_skillfx_pipeline
+            from render.skillfx_pipeline import get_skillfx_pipeline
         except Exception:
             return None
         pipe = get_skillfx_pipeline()

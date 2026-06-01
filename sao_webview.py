@@ -69,7 +69,7 @@ from config import (
     resource_path,
 )
 try:
-    from gpu_capture import capture_monitor_bgr_for_point, ensure_session, get_latest_bgr
+    from render.gpu_capture import capture_monitor_bgr_for_point, ensure_session, get_latest_bgr
 except Exception:
     capture_monitor_bgr_for_point = None  # type: ignore
     ensure_session = None  # type: ignore
@@ -3627,7 +3627,7 @@ class SAOWebViewGUI:
             done = threading.Event()
 
             try:
-                from gpu_overlay_window import (
+                from render.gpu_overlay_window import (
                     suspend_gpu_overlay_creation as _suspend_gpu_overlays,
                     resume_gpu_overlay_creation as _resume_gpu_overlays,
                 )

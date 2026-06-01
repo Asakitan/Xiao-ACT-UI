@@ -811,7 +811,7 @@ class GpuOverlayWindow:
         # very next ``Py_BEGIN_ALLOW_THREADS`` checkpoint then aborts
         # with "PyEval_RestoreThread: NULL tstate" (fatal).
         try:
-            import gpu_capture as _gc
+            from render import gpu_capture as _gc
         except Exception:
             _gc = None  # type: ignore[assignment]
         if _gc is not None:

@@ -22,12 +22,12 @@ from typing import Any, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFont
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
-from overlay_render_worker import AsyncFrameWorker
+from render.overlay_render_worker import AsyncFrameWorker
 from utils.perf_probe import probe as _probe
 from gui_modules.sao_menu_hud import MenuLeftInfoRenderer, PlayerPanelRenderer
 
 try:
-    import gpu_overlay_window as _gow
+    from render import gpu_overlay_window as _gow
 except Exception:  # pragma: no cover
     _gow = None  # type: ignore[assignment]
 

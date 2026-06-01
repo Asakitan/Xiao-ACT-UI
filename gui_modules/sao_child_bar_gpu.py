@@ -41,12 +41,12 @@ import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont
 
 try:
-    import gpu_overlay_window as _gow  # type: ignore[import-untyped]
+    from render import gpu_overlay_window as _gow
 except Exception:
     _gow = None  # type: ignore[assignment]
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
-from overlay_render_worker import AsyncFrameWorker
+from render.overlay_render_worker import AsyncFrameWorker
 from utils.perf_probe import probe as _probe
 from gui_modules.sao_menu_hud import _PIL_DRAW_LOCK
 

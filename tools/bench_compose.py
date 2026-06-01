@@ -82,7 +82,7 @@ def _bench_compositor() -> None:
     print('\n[1] LayerCompositor.render — single pass per shader')
 
     def body() -> List[float]:
-        from gpu_compositor import LayerCompositor
+        from render.gpu_compositor import LayerCompositor
 
         comp = LayerCompositor('bench')
         if not comp.available:
@@ -122,7 +122,7 @@ def _bench_blur_tex() -> None:
     print('\n[2] blur_tex (separable, GPU-resident)')
 
     def body() -> List[float]:
-        from gpu_compositor import LayerCompositor
+        from render.gpu_compositor import LayerCompositor
 
         comp = LayerCompositor('bench-blur')
         if not comp.available:

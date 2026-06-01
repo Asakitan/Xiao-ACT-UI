@@ -49,8 +49,8 @@ except Exception:  # pragma: no cover
 _PIL_DRAW_LOCK: threading.RLock = threading.RLock()
 
 try:
-    from gpu_renderer import gaussian_blur_rgba as _gpu_blur
-    from gpu_renderer import render_shell_rgba as _gpu_shell
+    from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
+    from render.gpu_renderer import render_shell_rgba as _gpu_shell
 except Exception:
     _gpu_blur = None
     _gpu_shell = None

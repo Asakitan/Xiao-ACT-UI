@@ -34,12 +34,12 @@ import numpy as np
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
-from gpu_renderer import gaussian_blur_rgba as _gpu_blur
-from overlay_scheduler import get_scheduler as _get_scheduler
-from overlay_render_worker import (
+from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
+from render.overlay_scheduler import get_scheduler as _get_scheduler
+from render.overlay_render_worker import (
     AsyncFrameWorker, multiply_alpha_image, submit_ulw_commit,
 )
-from render_capture_sync import wait_until_capture_idle
+from render.render_capture_sync import wait_until_capture_idle
 from config import FONTS_DIR
 
 # v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_DPS
@@ -47,7 +47,7 @@ from config import FONTS_DIR
 # drag-to-move and tab clicks on this overlay are disabled in GPU
 # mode — use SAO_GPU_DPS=0 for the legacy interactive ULW path.
 try:
-    import gpu_overlay_window as _gow  # type: ignore[import-untyped]
+    from render import gpu_overlay_window as _gow
 except Exception:
     _gow = None  # type: ignore[assignment]
 

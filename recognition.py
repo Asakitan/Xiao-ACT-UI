@@ -23,12 +23,12 @@ from config import (
     CAPTURE_FPS_FAST,
     get_visual_rect_bbox,
 )
-from render_capture_sync import capture_section
+from render.render_capture_sync import capture_section
 from vision_accel import cvt_color, gaussian_blur
 from utils.window_locator import WindowLocator
 
 try:
-    import gpu_capture as _gpu_capture  # type: ignore
+    from render import gpu_capture as _gpu_capture
 except Exception:
     _gpu_capture = None  # type: ignore
 
