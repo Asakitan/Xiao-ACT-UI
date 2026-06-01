@@ -250,7 +250,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
                     else:
                         raw_buffs = monster_data.get('buff_list', None) or []
                         # bridge 不走 monster 路, 这里现场 resolve buff 名字
-                        from packet_bridge import _get_skill_name as _bm_name
+                        from net.packet_bridge import _get_skill_name as _bm_name
                         packed = []
                         for b in raw_buffs:
                             if not isinstance(b, dict):

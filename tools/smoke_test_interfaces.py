@@ -67,7 +67,7 @@ TOPLEVEL_MODULES = [
     "character_profile", "config", "dps_tracker", "game_state",
     "render.gpu_capture", "render.gpu_compositor", "render.gpu_overlay_window", "render.gpu_renderer",
     "hide_seek_engine", "main", "render.overlay_render_worker", "render.overlay_scheduler",
-    "render.overlay_subpixel", "packet_bridge", "packet_capture", "packet_parser",
+    "render.overlay_subpixel", "net.packet_bridge", "net.packet_capture", "packet_parser",
     "utils.perf_probe", "vision.recognition", "render.render_capture_sync", "sao_gui", "utils.sao_sound",
     "sao_theme", "sao_updater", "sao_web_panel_common", "sao_webview",
     "vision.skill_recognition", "render.skillfx_jit", "render.skillfx_pipeline", "update_apply",

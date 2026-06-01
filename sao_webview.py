@@ -1848,7 +1848,7 @@ class SAOWebViewGUI:
         if not getattr(self, '_cfg_settings_ref', None) or not getattr(self, '_state_mgr', None):
             return
         try:
-            from packet_bridge import PacketBridge
+            from net.packet_bridge import PacketBridge
 
             # Phase 7: read mem_data_source preference from settings.
             # Key is `mem_data_source` (not legacy 'data_source' which is
@@ -3182,7 +3182,7 @@ class SAOWebViewGUI:
         engines = list(getattr(self, '_recognition_engines', []) or [])
         if restart_packet or getattr(self, '_packet_engine', None) is None:
             try:
-                from packet_bridge import PacketBridge
+                from net.packet_bridge import PacketBridge
                 # Phase 7: also propagate mem_data_source on restart
                 try:
                     _data_source_mode = str(

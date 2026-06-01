@@ -33,7 +33,7 @@ from packet_parser import (PacketParser, PlayerData, MonsterData,
                            PROFESSION_SKILL_VARIANTS, SUB_PROFESSION_NAMES,
                            _SKILL_TO_PROFESSION,
                            _PROFESSION_PREFIX, _ALL_PROFESSION_PREFIXES)
-from packet_capture import PacketCapture, list_devices, auto_select_device
+from net.packet_capture import PacketCapture, list_devices, auto_select_device
 
 from utils.perf_probe import probe as _probe
 
@@ -52,7 +52,8 @@ def _load_skill_names() -> dict:
         if getattr(sys, 'frozen', False):
             base = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
         else:
-            base = os.path.dirname(os.path.abspath(__file__))
+            # reorg 2026-06-02: 本模块下沉到 net/, __file__ 深一层, 取上一级 (sao_auto/) 作根
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         path = os.path.join(base, 'assets', 'skill_names.json')
         if not os.path.exists(path):
             logger.warning(f'[Bridge] skill_names.json not found at {path}')

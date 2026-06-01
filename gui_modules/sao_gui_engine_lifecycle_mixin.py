@@ -132,7 +132,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
 
         engines = []
         try:
-            from packet_bridge import PacketBridge
+            from net.packet_bridge import PacketBridge
             # Phase 7: Entity menu reads `mem_data_source` preference
             # (key intentionally distinct from legacy 'data_source' which is
             # a packet-vs-vision toggle). Values: 'tcp' (default) | 'memory' |
