@@ -31,7 +31,7 @@ from sao_web_panel_common import (
     place_corner_accents,
 )
 
-from auto_key_engine import (
+from engines.auto_key_engine import (
     clone_profile as clone_auto_key_profile,
     delete_profile as delete_auto_key_profile,
     export_profile_to_default_path as export_auto_key_profile,
@@ -43,7 +43,7 @@ from auto_key_engine import (
     upsert_profile as upsert_auto_key_profile,
 )
 
-from boss_raid_engine import (
+from engines.boss_raid_engine import (
     clone_profile as clone_boss_raid_profile,
     delete_profile as delete_boss_raid_profile,
     export_profile_to_default_path as export_boss_raid_profile,

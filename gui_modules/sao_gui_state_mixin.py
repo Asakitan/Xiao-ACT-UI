@@ -898,7 +898,7 @@ class SAOPlayerGUIStateMixin:
                                 name=_snap_name, prof=_snap_prof,
                                 lv=_snap_lv, uid=_snap_uid):
                             try:
-                                from character_profile import save_profile
+                                from engines.character_profile import save_profile
                                 save_profile(
                                     username=name,
                                     profession=prof,

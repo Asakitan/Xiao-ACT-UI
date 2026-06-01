@@ -3,9 +3,9 @@
 
 import threading
 
-from auto_key_engine import AutoKeyEngine
+from engines.auto_key_engine import AutoKeyEngine
 from config import DEFAULT_HOTKEYS, SettingsManager
-from game_state import GameStateManager
+from engines.game_state import GameStateManager
 from net.packet_bridge import PacketBridge
 from vision.recognition import RecognitionEngine
 

@@ -114,7 +114,7 @@ def _set_dpi_aware():
 def run_test():
     """单次截图测试: 截取游戏窗口，执行一次识别，打印结果"""
     from config import SettingsManager
-    from game_state import GameStateManager
+    from engines.game_state import GameStateManager
     from vision.recognition import RecognitionEngine
 
     print('=' * 50)
@@ -150,8 +150,8 @@ def run_test():
 def run_headless():
     """无 HUD 模式: 仅终端输出识别结果"""
     from config import SettingsManager
-    from game_state import GameState, GameStateManager
-    from automation import AutomationCore
+    from engines.game_state import GameState, GameStateManager
+    from engines.automation import AutomationCore
 
     print('=' * 50)
     print('  SAO Auto — Headless 模式')

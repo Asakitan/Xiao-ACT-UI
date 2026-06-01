@@ -60,7 +60,7 @@ SKILL_TO_ROLE = {
 }
 
 # 配置文件路径（打包后使用 exe 所在目录，开发时使用脚本目录）
-_base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+_base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ── 主配置文件: settings.json (新, 与 sao_webview / config.py 共用) ──
 # 玩家身份字段现在统一缓存在 settings.json 的 "game_cache" 键下,

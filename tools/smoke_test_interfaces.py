@@ -63,10 +63,10 @@ def probe(name: str, fn, *args, **kwargs) -> None:
 # Module lists
 # ---------------------------------------------------------------------------
 TOPLEVEL_MODULES = [
-    "auto_key_engine", "automation", "boss_autokey_linkage", "boss_raid_engine",
-    "character_profile", "config", "dps_tracker", "game_state",
+    "engines.auto_key_engine", "engines.automation", "engines.boss_autokey_linkage", "engines.boss_raid_engine",
+    "engines.character_profile", "config", "engines.dps_tracker", "engines.game_state",
     "render.gpu_capture", "render.gpu_compositor", "render.gpu_overlay_window", "render.gpu_renderer",
-    "hide_seek_engine", "main", "render.overlay_render_worker", "render.overlay_scheduler",
+    "engines.hide_seek_engine", "main", "render.overlay_render_worker", "render.overlay_scheduler",
     "render.overlay_subpixel", "net.packet_bridge", "net.packet_capture", "packet_parser",
     "utils.perf_probe", "vision.recognition", "render.render_capture_sync", "sao_gui", "utils.sao_sound",
     "sao_theme", "sao_updater", "sao_web_panel_common", "sao_webview",
@@ -271,7 +271,7 @@ def smoke_skillfx_beam():
 
 
 def smoke_game_state():
-    import game_state
+    from engines import game_state
     gs = game_state.GameState()
     # write some fields
     gs.window_rect = (0, 0, 1920, 1080)
@@ -285,7 +285,7 @@ def smoke_packet_parser():
 
 
 def smoke_dps_tracker():
-    import dps_tracker
+    from engines import dps_tracker
     cls = getattr(dps_tracker, "DPSTracker", None) or getattr(dps_tracker, "DpsTracker", None)
     assert cls is not None
     inst = cls()

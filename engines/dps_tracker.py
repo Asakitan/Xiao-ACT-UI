@@ -23,7 +23,7 @@ import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
 _BASE_DIR = (
     os.path.dirname(sys.executable)
     if getattr(sys, 'frozen', False)
-    else os.path.dirname(os.path.abspath(__file__))
+    else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
 _PLAYER_CACHE_PATH = os.path.join(_BASE_DIR, 'player_cache.json')
 _SKILL_FIGHT_LEVEL_TABLE_PATH = os.path.join(_BASE_DIR, 'assets', 'SkillFightLevelTable.json')

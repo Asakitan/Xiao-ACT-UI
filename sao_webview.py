@@ -17,7 +17,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 from typing import Any, Dict, List, Optional
 
-from auto_key_engine import (
+from engines.auto_key_engine import (
     AutoKeyCloudClient,
     AutoKeyEngine,
     DEFAULT_AUTO_KEY_SERVER_URL,
@@ -36,7 +36,7 @@ from auto_key_engine import (
     snapshot_author_from_state,
     upsert_profile,
 )
-from boss_raid_engine import (
+from engines.boss_raid_engine import (
     BossRaidCloudClient,
     BossRaidEngine,
     DEFAULT_BOSS_RAID_SERVER_URL,
@@ -52,7 +52,7 @@ from boss_raid_engine import (
     save_boss_raid_config,
     upsert_profile as upsert_br_profile,
 )
-from boss_autokey_linkage import (
+from engines.boss_autokey_linkage import (
     BossAutoKeyLinkage,
     build_linkage_state,
     default_linkage_config,
@@ -61,7 +61,7 @@ from boss_autokey_linkage import (
     normalize_linkage_config,
     save_linkage_config,
 )
-from dps_tracker import DpsTracker
+from engines.dps_tracker import DpsTracker
 from config import (
     DEFAULT_HOTKEYS,
     get_skill_slot_rects,
@@ -1602,7 +1602,7 @@ class SAOWebViewGUI:
         _ensure_webview()
         _set_process_app_id('sao.auto.overlay')
 
-        from character_profile import load_profile
+        from engines.character_profile import load_profile
 
         self.settings = SettingsManager()
         self.settings.set('ui_mode', 'webview')
@@ -1787,7 +1787,7 @@ class SAOWebViewGUI:
                          hold_ms: int = 80, press_count: int = 1):
         """Send a keystroke for boss→autokey linkage, reusing AutoKeyEngine's VK map."""
         try:
-            from auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
+            from engines.auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
             import ctypes
             key = (key or "").strip().upper()
             vk = VK_NAME_MAP.get(key)
@@ -1831,7 +1831,7 @@ class SAOWebViewGUI:
         if getattr(self, '_state_mgr', None) is not None and getattr(self, '_cfg_settings_ref', None):
             return
         try:
-            from game_state import GameStateManager
+            from engines.game_state import GameStateManager
             from config import SettingsManager as CfgSettings
 
             if getattr(self, '_state_mgr', None) is None:
@@ -2155,7 +2155,7 @@ class SAOWebViewGUI:
             self._boss_raid_engine.stop()
             self._eval_menu('SAO.showToast("BOSS RAID: STOPPED")')
         else:
-            from boss_raid_engine import active_profile as br_active_profile
+            from engines.boss_raid_engine import active_profile as br_active_profile
             profile = br_active_profile(config)
             if profile:
                 self._boss_raid_engine.start(profile)
@@ -2184,7 +2184,7 @@ class SAOWebViewGUI:
         if self._hide_seek_engine and self._hide_seek_engine.running:
             return
         try:
-            from hide_seek_engine import HideSeekEngine
+            from engines.hide_seek_engine import HideSeekEngine
             from utils.window_locator import WindowLocator
             locator = getattr(self, '_locator', None)
             if not locator:
@@ -7370,7 +7370,7 @@ class SAOWebViewGUI:
                     if not getattr(self, '_profile_auto_saved', False) and gs.player_name:
                         self._profile_auto_saved = True
                         try:
-                            from character_profile import save_profile
+                            from engines.character_profile import save_profile
                             lv = gs.level_base if gs.level_base > 0 else 1
                             save_profile(
                                 username=gs.player_name,

@@ -67,7 +67,7 @@ class SAOPlayerGUIEngineTogglesMixin:
         if self._hide_seek_engine and self._hide_seek_engine.running:
             return
         try:
-            from hide_seek_engine import HideSeekEngine
+            from engines.hide_seek_engine import HideSeekEngine
             from utils.window_locator import WindowLocator
 
             locator = getattr(self, '_locator', None)

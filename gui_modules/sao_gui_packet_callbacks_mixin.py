@@ -64,7 +64,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
                          hold_ms: int = 80, press_count: int = 1):
         """发送联动按键 (Boss→AutoKey linkage)."""
         try:
-            from auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
+            from engines.auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
             import ctypes as _ct
             key = (key or "").strip().upper()
             vk = VK_NAME_MAP.get(key)

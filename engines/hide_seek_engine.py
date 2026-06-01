@@ -93,13 +93,13 @@ _LIGHT_GRAY = ((200, 200, 200), 55)  # widened tolerance 35→55
 # Debug: save ROI/filtered/template images to temp/debug_hs/
 # Automatically disabled in packaged (frozen) builds.
 _DEBUG_SAVE = not getattr(sys, 'frozen', False)
-_DEBUG_DIR = os.path.join(os.path.dirname(__file__), 'temp', 'debug_hs')
+_DEBUG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'temp', 'debug_hs')
 _DEBUG_INTERVAL_S = 1.0  # minimum seconds between saves per step
 
 try:
     from config import TEMP_DIR as _APP_TEMP_DIR
 except Exception:
-    _APP_TEMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp')
+    _APP_TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'temp')
 _LOG_PATH = os.path.join(_APP_TEMP_DIR, 'hide_seek_engine.log')
 
 STEPS: List[Dict] = [
@@ -184,10 +184,10 @@ class HideSeekEngine:
         try:
             from config import BASE_DIR as _BASE_DIR
         except Exception:
-            _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+            _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         candidates = [
             os.path.join(_BASE_DIR, 'assets'),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets'),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assets'),
         ]
         self._assets_dir = next(
             (p for p in candidates if os.path.isdir(p)), candidates[0])

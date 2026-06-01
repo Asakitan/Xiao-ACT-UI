@@ -25,7 +25,7 @@ import sys
 
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 
-from game_state import GameStateManager, compute_burst_ready
+from engines.game_state import GameStateManager, compute_burst_ready
 from packet_parser import (PacketParser, PlayerData, MonsterData,
                            BuffEventType, DamageType,
                            PROFESSION_NORMAL_ATTACK, PROFESSION_SKILL,

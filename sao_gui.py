@@ -44,12 +44,12 @@ from sao_theme import (
     Animator, lerp, lerp_color, ease_out, ease_in_out,
     _close_alert as _sao_close_dialog,
 )
-from character_profile import (
+from engines.character_profile import (
     load_profile, save_profile, get_or_ask_profile,
     show_welcome_dialog, PROFESSION_LIST,
 )
 from utils.sao_sound import play_sound, LevelUpEffect, load_sao_fonts, get_sao_font, get_cjk_font
-from auto_key_engine import (
+from engines.auto_key_engine import (
     AutoKeyEngine,
     build_auto_key_state,
     build_identity_state,
@@ -58,18 +58,18 @@ from auto_key_engine import (
     save_auto_key_config,
     snapshot_author_from_state,
 )
-from boss_raid_engine import (
+from engines.boss_raid_engine import (
     BossRaidEngine,
     build_boss_raid_state,
     load_boss_raid_config,
     save_boss_raid_config,
 )
-from boss_autokey_linkage import (
+from engines.boss_autokey_linkage import (
     BossAutoKeyLinkage,
     load_linkage_config,
     save_linkage_config,
 )
-from dps_tracker import DpsTracker
+from engines.dps_tracker import DpsTracker
 from gui_modules.sao_gui_dps import DpsOverlay
 from gui_modules.sao_gui_bosshp import BossHpOverlay
 from gui_modules.sao_gui_hp import HpOverlay

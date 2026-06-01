@@ -73,11 +73,11 @@ import json
 import os
 from typing import Any, Optional
 
-from auto_key_engine import AutoKeyEngine
-from boss_autokey_linkage import BossAutoKeyLinkage
-from boss_raid_engine import BossRaidEngine
+from engines.auto_key_engine import AutoKeyEngine
+from engines.boss_autokey_linkage import BossAutoKeyLinkage
+from engines.boss_raid_engine import BossRaidEngine
 from config import resource_path
-from dps_tracker import DpsTracker
+from engines.dps_tracker import DpsTracker
 from utils.sao_sound import play_sound
 
 from gui_modules.sao_gui_alert import AlertOverlay
@@ -204,7 +204,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
     def _start_recognition(self):
         """启动游戏数据引擎 (抓包 + 纯识图 + AutoKey + BossRaid)."""
         try:
-            from game_state import GameStateManager
+            from engines.game_state import GameStateManager
             from config import SettingsManager as CfgSettings
 
             self._state_mgr = GameStateManager()
