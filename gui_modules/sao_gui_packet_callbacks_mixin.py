@@ -240,6 +240,10 @@ class SAOPlayerGUIPacketCallbacksMixin:
                 mgr.on_damage_event(event)
         except Exception:
             pass
+        try:
+            self._push_dps_act_snapshot()
+        except Exception:
+            pass
 
     def _is_dead_state(self, gs) -> bool:
         if gs is None:

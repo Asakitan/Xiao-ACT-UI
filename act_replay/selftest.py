@@ -16,8 +16,11 @@ import json
 from types import SimpleNamespace
 
 from engines.act_trigger_engine import ActTriggerEngine
+from engines.dps_tracker import DpsTracker
+from engines.encounter_manager import EncounterManager
 from engines.game_state import GameStateManager
 from gui_modules.sao_gui_dps_theme_mixin import SAOPlayerGUIDpsThemeMixin
+from gui_modules.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin
 from packet_parser.enums import NotifyMethod
 from packet_parser.parser import PacketParser
 import packet_parser.parser as parser_mod
@@ -103,6 +106,50 @@ class _FakeDpsActGui(SAOPlayerGUIDpsThemeMixin):
         self._encounter_mgr = None
         self._packet_engine = {"data_source": "packet", "running": True}
         self._mem_bridge = {"data_source": "memory", "running": True}
+
+
+class _FakeRuntimeActGui(SAOPlayerGUIPacketCallbacksMixin, SAOPlayerGUIDpsThemeMixin):
+    """No-Tk stand-in for Entity/Tk packet callback → ACT snapshot checks."""
+
+    def __init__(self) -> None:
+        self._dps_tracker = DpsTracker()
+        self._dps_history_store = None
+        self._state_mgr = GameStateManager()
+        self._encounter_mgr = EncounterManager()
+        self._packet_engine = {"data_source": "packet", "running": True}
+        self._mem_bridge = None
+        self._boss_raid_engine = None
+        self._bb_recent_targets = {}
+        self._bb_last_target_uuid = 0
+        self._bb_last_damage_ts = 0.0
+        self._bb_last_hp_motion_ts = 0.0
+        self._scene_hide_token = 0
+        self._last_boss_hp_push_sig = None
+        self._scene_combat_reset_pending = False
+        self._scene_combat_reset_anchor = {}
+        self._pending_combat_reset_deadline = 0.0
+        self._dps_overlay = None
+        self.push_count = 0
+        self.last_snapshot = {}
+
+    def _cancel_dps_idle_reset_after(self):
+        pass
+
+    def _maybe_apply_pending_combat_reset(self, _event, _is_self_combat_target):
+        pass
+
+    def _normalize_damage_event_for_self(self, event):
+        return event
+
+    def _normalize_damage_event_target_for_entity(self, event):
+        return event
+
+    def _is_known_friendly_uid(self, _uid):
+        return False
+
+    def _push_dps_act_snapshot(self):
+        self.push_count += 1
+        self.last_snapshot = self._get_dps_act_snapshot()
 
 
 class _MemoryHistoryStore:
@@ -326,6 +373,31 @@ def _assert_entity_act_source_priority() -> None:
     assert snap.get("sources", {}).get("summary", {}).get("data_source") == "memory", snap
 
 
+def _assert_entity_damage_callback_act_contract() -> None:
+    gui = _FakeRuntimeActGui()
+    event = damage_event(
+        attacker_uid=36668136,
+        attacker_uuid=(36668136 << 16) | 640,
+        attacker_is_self=True,
+        target_uuid=987654321064,
+        target_is_player=False,
+        target_is_monster=True,
+        target_is_combat_target=True,
+        skill_id=1101,
+        skill_key=1101,
+        damage=32100,
+    )
+    gui._on_packet_damage(event)
+    assert gui.push_count == 1, gui.push_count
+    snap = gui.last_snapshot
+    assert snap.get("live", {}).get("total_damage") == 32100, snap
+    assert snap.get("encounter", {}).get("status") == "active", snap
+    assert snap.get("encounter", {}).get("last_damage_event", {}).get("damage") == 32100, snap
+    assert snap.get("render_spec", {}).get("mode") == "live", snap
+    assert snap.get("render_spec", {}).get("totals", {}).get("damage") == 32100, snap
+    assert snap.get("render_spec", {}).get("sources", {}).get("summary", {}).get("data_source") == "packet", snap
+
+
 def _assert_encounter_finalize_contract() -> None:
     self_uid, events = build_demo_events()
     store = _MemoryHistoryStore()
@@ -405,6 +477,7 @@ def main() -> int:
     _assert_game_state_contract()
     _assert_parser_handler_contract()
     _assert_entity_act_source_priority()
+    _assert_entity_damage_callback_act_contract()
     _assert_encounter_finalize_contract()
     _assert_monster_update_act_contract()
     self_uid, events = build_demo_events()
@@ -514,6 +587,7 @@ def main() -> int:
         "game_state_contract": True,
         "parser_handler_contract": True,
         "entity_act_source_priority": True,
+        "entity_damage_callback_act_contract": True,
         "encounter_finalize_contract": True,
         "monster_update_act_contract": True,
         "boss_event_act_contract": True,
