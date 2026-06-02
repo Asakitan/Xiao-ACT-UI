@@ -136,6 +136,22 @@ sao_auto/
 
 离线 ACT replay 自检用于验证 parser 归一化事件、dungeon/scene 元信息、skill lifecycle、Boss HP render spec、DPS snapshot、Entity/WebView packet 回调刷新等合同。
 
+ACT 快照以 TCP 为主数据源，`settings.json` 的 `mem_data_source` 仅用于只读 memory/hybrid 补齐缺失的自身状态字段。双 UI 共享 `render_spec`：`render_spec.rows` 驱动 WebView 与 Entity/Tk 的 live DPS 列表，`sources.summary.data_source` 驱动 ACT 来源 badge，`triggers.emitted` / `triggers.recent` 会在 live 摘要行显示最近一条 ACT alert。
+
+可选 ACT 触发规则通过 `settings.json` 的 `act_trigger_rules` 配置。未配置时不会产生 ACT alert；配置后 WebView 与 Entity/Tk 启动时都会创建同一套 `ActTriggerEngine` 并在每次 live snapshot 中评估。
+
+示例：
+
+```json
+{
+	"act_trigger_rules": [
+		{"id": "boss-low-hp", "type": "boss_hp_pct_below", "threshold": 35, "message": "Boss HP below 35%"},
+		{"id": "boss-event-101", "type": "boss_event_type", "event_type": 101, "message": "Boss event 101"},
+		{"id": "party-damage", "type": "damage_total", "threshold": 1000000, "message": "Party damage 1M"}
+	]
+}
+```
+
 在 `sao_auto` 目录运行：
 
 ```powershell
