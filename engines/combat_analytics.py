@@ -55,6 +55,41 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def boss_state_from_monster_update(monster_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Convert parser ``MonsterData.to_dict()`` payloads into ACT boss fields.
+
+    Runtime BossHP can render a directly attacked monster from packet data even
+    when the BossRaid engine is inactive.  ACT snapshots are GameState-based,
+    so keep the same packet HP/break/shield facts in the shared state without
+    marking the raid engine active.
+    """
+    data = monster_data or {}
+    uuid = _safe_int(data.get("uuid"), 0)
+    hp = max(0, _safe_int(data.get("hp"), 0))
+    max_hp = max(0, _safe_int(data.get("max_hp"), 0))
+    if uuid <= 0 or (hp <= 0 and max_hp <= 0):
+        return {}
+    if bool(data.get("is_dead", False)) and hp <= 0:
+        return {}
+    total = max_hp if max_hp > 0 else hp
+    pct = max(0.0, min(1.0, (hp / total) if total > 0 else 1.0))
+    breaking_stage = _safe_int(data.get("breaking_stage"), -1)
+    if not data.get("has_break_data", False) and breaking_stage < 0:
+        breaking_stage = -1
+    return {
+        "boss_current_hp": hp,
+        "boss_total_hp": total,
+        "boss_hp_est_pct": pct,
+        "boss_hp_source": "packet",
+        "boss_shield_active": bool(data.get("shield_active", False)),
+        "boss_shield_pct": max(0.0, min(1.0, _safe_float(data.get("shield_pct"), 0.0))),
+        "boss_breaking_stage": breaking_stage,
+        "boss_extinction_pct": max(0.0, min(1.0, _safe_float(data.get("extinction_pct"), 0.0))),
+        "boss_in_overdrive": bool(data.get("in_overdrive", False)),
+        "boss_invincible": bool(data.get("invincible", False)),
+    }
+
+
 def _entity_rows(live: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     rows = []
     for index, entity in enumerate((live or {}).get("entities") or [], start=1):
@@ -76,14 +111,28 @@ def _entity_rows(live: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rows
 
 
-def _boss_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _boss_context(context: Optional[Dict[str, Any]],
+                  encounter: Optional[Dict[str, Any]] = None,
+                  live: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     context = context or {}
+    encounter = encounter or {}
+    live = live or {}
+    hp_source = str(context.get("boss_hp_source") or "none")
+    has_packet_boss = bool(
+        hp_source != "none"
+        and (_safe_int(context.get("boss_current_hp"), 0)
+             or _safe_int(context.get("boss_total_hp"), 0))
+    )
+    encounter_active = bool(
+        live.get("encounter_active")
+        or str(encounter.get("status") or "") in ("active", "pending_reset")
+    )
     return {
-        "active": bool(context.get("boss_raid_active", False)),
+        "active": bool(context.get("boss_raid_active", False) or (has_packet_boss and encounter_active)),
         "current_hp": _safe_int(context.get("boss_current_hp"), 0),
         "total_hp": _safe_int(context.get("boss_total_hp"), 0),
         "hp_pct": max(0.0, min(1.0, _safe_float(context.get("boss_hp_est_pct"), 1.0))),
-        "hp_source": str(context.get("boss_hp_source") or "none"),
+        "hp_source": hp_source,
         "shield_active": bool(context.get("boss_shield_active", False)),
         "shield_pct": max(0.0, min(1.0, _safe_float(context.get("boss_shield_pct"), 0.0))),
         "breaking_stage": _safe_int(context.get("boss_breaking_stage"), -1),
@@ -112,7 +161,7 @@ def build_act_render_spec(live: Optional[Dict[str, Any]] = None,
     source = live if is_live or not last_report else last_report
     dungeon_name = str(context.get("dungeon_name") or encounter.get("dungeon_name") or "")
     last_skill = context.get("last_skill_event") or encounter.get("last_skill_event") or {}
-    boss = _boss_context(context)
+    boss = _boss_context(context, encounter, live)
     return {
         "version": 1,
         "mode": "live" if is_live else ("report" if last_report else "empty"),
@@ -251,4 +300,4 @@ def build_act_snapshot(dps_tracker: Any = None,
     }
 
 
-__all__ = ["build_act_render_spec", "build_act_snapshot"]
+__all__ = ["boss_state_from_monster_update", "build_act_render_spec", "build_act_snapshot"]

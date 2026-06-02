@@ -56,9 +56,68 @@ from typing import Any, Optional
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
+from engines.combat_analytics import boss_state_from_monster_update
+
 
 class SAOPlayerGUIPacketCallbacksMixin:
     """Mixin bundling packet event callbacks + boss-HP target helpers."""
+
+    def _push_monster_boss_state_to_act(self, monster_data):
+        """Mirror packet monster HP/break state into GameState for ACT."""
+        try:
+            updates = boss_state_from_monster_update(monster_data)
+            if updates and getattr(self, '_state_mgr', None):
+                self._state_mgr.update(**updates)
+        except Exception:
+            pass
+
+    def _on_skill_event(self, event):
+        """Normalized TCP skill lifecycle event → shared ACT context."""
+        try:
+            self._last_skill_event = dict(event or {})
+            if getattr(self, '_state_mgr', None):
+                self._state_mgr.update(last_skill_event=self._last_skill_event)
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                mgr.on_skill_event(self._last_skill_event)
+        except Exception:
+            pass
+
+    def _on_dungeon_event(self, event):
+        """Normalized TCP dungeon/scene event → shared ACT context."""
+        try:
+            event = dict(event or {})
+            self._last_dungeon_event = event
+            updates = {'last_dungeon_event': event}
+            dungeon_id = int(event.get('dungeon_id') or 0)
+            scene_id = int(event.get('scene_id') or event.get('scene_uuid')
+                           or event.get('cur_map_id') or 0)
+            difficulty = int(event.get('dungeon_difficulty')
+                             or event.get('difficulty')
+                             or event.get('level_id') or 0)
+            if dungeon_id > 0:
+                updates['dungeon_id'] = dungeon_id
+                try:
+                    from tools.tablekit.name_tables import names
+                    resolved = names.dungeon(dungeon_id, default='')
+                    if resolved:
+                        updates['dungeon_name'] = resolved
+                except Exception:
+                    pass
+            if scene_id > 0:
+                updates['dungeon_scene_id'] = scene_id
+            if difficulty > 0:
+                updates['dungeon_difficulty'] = difficulty
+            if getattr(self, '_state_mgr', None):
+                self._state_mgr.update(**updates)
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                event_for_mgr = dict(event)
+                if 'dungeon_name' not in event_for_mgr and updates.get('dungeon_name'):
+                    event_for_mgr['dungeon_name'] = updates.get('dungeon_name')
+                mgr.on_dungeon_event(event_for_mgr)
+        except Exception:
+            pass
 
     def _send_linked_key(self, key: str, press_mode: str = "tap",
                          hold_ms: int = 80, press_count: int = 1):
@@ -161,12 +220,26 @@ class SAOPlayerGUIPacketCallbacksMixin:
                 # still accepting hits, so do not let stable-HP hiding win.
                 self._bb_last_hp_motion_ts = self._bb_last_damage_ts
                 self._last_boss_hp_push_sig = None
+                try:
+                    if _bridge is not None:
+                        _m = _bridge.get_monster(target_uuid)
+                        if _m is not None:
+                            self._push_monster_boss_state_to_act(
+                                _m.to_dict() if hasattr(_m, 'to_dict') else _m)
+                except Exception:
+                    pass
                 if self._dps_tracker:
                     try: self._dps_tracker.set_boss_uuid(target_uuid)
                     except Exception: pass
         if self._dps_tracker:
             try: self._dps_tracker.on_damage_event(event)
             except Exception: pass
+        try:
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                mgr.on_damage_event(event)
+        except Exception:
+            pass
 
     def _is_dead_state(self, gs) -> bool:
         if gs is None:
@@ -236,6 +309,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             if (_uuid and _uuid == int(getattr(self, '_bb_last_target_uuid', 0) or 0)
                     and (_max_hp > 0 or _hp > 0) and (not _is_dead or _hp > 0)):
                 self._last_boss_hp_push_sig = None
+                self._push_monster_boss_state_to_act(monster_data)
         except Exception:
             pass
         # Buff 监视器 (boss): 仅推当前锁定 boss target 的 buff_list
@@ -364,6 +438,12 @@ class SAOPlayerGUIPacketCallbacksMixin:
                 print('[SAO Entity] DPS tracker reset on scene change', flush=True)
             except Exception:
                 pass
+        try:
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                mgr.reset('scene_change')
+        except Exception:
+            pass
         self._dps_visible = False
         self._dps_faded = False
         self._dps_mode = 'hidden'

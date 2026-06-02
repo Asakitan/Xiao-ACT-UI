@@ -64,7 +64,7 @@ from engines.boss_autokey_linkage import (
 from engines.dps_tracker import DpsTracker
 from engines.dps_history import DpsHistoryStore
 from engines.encounter_manager import EncounterManager
-from engines.combat_analytics import build_act_snapshot
+from engines.combat_analytics import boss_state_from_monster_update, build_act_snapshot
 from config import (
     DEFAULT_HOTKEYS,
     get_skill_slot_rects,
@@ -2598,6 +2598,11 @@ class SAOWebViewGUI:
                             f'[WebView] Estimated max_hp from HP on damage: '
                             f'{_m.hp} uuid={target_uuid}'
                         )
+                    if _m is not None and getattr(self, '_state_mgr', None):
+                        updates = boss_state_from_monster_update(
+                            _m.to_dict() if hasattr(_m, 'to_dict') else _m)
+                        if updates:
+                            self._state_mgr.update(**updates)
                 except Exception:
                     pass
         if self._boss_raid_engine:
@@ -2663,6 +2668,10 @@ class SAOWebViewGUI:
                         f'[WebView] Pre-tracked monster target uuid={_uuid} '
                         f'max_hp={_max_hp} hp={_hp} max_ext={_max_ext}'
                     )
+                if _uuid == self._bb_last_target_uuid and getattr(self, '_state_mgr', None):
+                    updates = boss_state_from_monster_update(monster_data)
+                    if updates:
+                        self._state_mgr.update(**updates)
         except Exception:
             pass
 

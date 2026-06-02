@@ -22,7 +22,7 @@ from packet_parser.enums import NotifyMethod
 from packet_parser.parser import PacketParser
 import packet_parser.parser as parser_mod
 
-from .events import boss_state_event, damage_event, dungeon_event, skill_event
+from .events import boss_state_event, damage_event, dungeon_event, monster_update_event, skill_event
 from .harness import ActReplayHarness
 
 
@@ -337,11 +337,64 @@ def _assert_encounter_finalize_contract() -> None:
     assert encounter.get("last_final_report_id") == latest.get("report_id"), encounter
 
 
+def _assert_monster_update_act_contract() -> None:
+    self_uid = 36668136
+    target_uuid = 987654321064
+    harness = ActReplayHarness()
+    harness.set_self_uid(self_uid)
+    snap = harness.replay([
+        monster_update_event(
+            uuid=target_uuid,
+            name="Demo Boss",
+            hp=750000,
+            max_hp=1000000,
+            has_break_data=True,
+            breaking_stage=1,
+            extinction_pct=0.4,
+            shield_active=True,
+            shield_pct=0.2,
+        ),
+        damage_event(
+            attacker_uid=self_uid,
+            attacker_uuid=(self_uid << 16) | 640,
+            attacker_is_self=True,
+            target_uuid=target_uuid,
+            target_is_player=False,
+            target_is_monster=True,
+            target_is_combat_target=True,
+            skill_id=1101,
+            skill_key=1101,
+            damage=1000,
+        ),
+    ])
+    context = snap.get("context") or {}
+    render_boss = (snap.get("render_spec") or {}).get("boss") or {}
+    assert context["boss_current_hp"] == 750000, context
+    assert context["boss_total_hp"] == 1000000, context
+    assert context["boss_hp_est_pct"] == 0.75, context
+    assert context["boss_hp_source"] == "packet", context
+    assert context["boss_raid_active"] is False, context
+    assert context["boss_breaking_stage"] == 1, context
+    assert context["boss_extinction_pct"] == 0.4, context
+    assert context["boss_shield_active"] is True, context
+    assert context["boss_shield_pct"] == 0.2, context
+    assert render_boss["active"] is True, render_boss
+    assert render_boss["current_hp"] == 750000, render_boss
+    assert render_boss["total_hp"] == 1000000, render_boss
+    assert render_boss["hp_pct"] == 0.75, render_boss
+    assert render_boss["hp_source"] == "packet", render_boss
+    assert render_boss["breaking_stage"] == 1, render_boss
+    assert render_boss["extinction_pct"] == 0.4, render_boss
+    assert render_boss["shield_active"] is True, render_boss
+    assert render_boss["shield_pct"] == 0.2, render_boss
+
+
 def main() -> int:
     _assert_game_state_contract()
     _assert_parser_handler_contract()
     _assert_entity_act_source_priority()
     _assert_encounter_finalize_contract()
+    _assert_monster_update_act_contract()
     self_uid, events = build_demo_events()
     target_uuid = int(next(
         (e.get("target_uuid") for e in events if e.get("kind") == "damage"), 0) or 0)
@@ -438,6 +491,7 @@ def main() -> int:
         "parser_handler_contract": True,
         "entity_act_source_priority": True,
         "encounter_finalize_contract": True,
+        "monster_update_act_contract": True,
         "dual_ui_act_meta_bridge": True,
         "dungeon_id": context.get("dungeon_id"),
         "dungeon_scene_id": context.get("dungeon_scene_id"),

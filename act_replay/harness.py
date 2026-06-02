@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Iterable, Optional
 
-from engines.combat_analytics import build_act_snapshot
+from engines.combat_analytics import boss_state_from_monster_update, build_act_snapshot
 from engines.act_trigger_engine import ActTriggerEngine
 from engines.dps_tracker import DpsTracker
 from engines.encounter_manager import EncounterManager
@@ -148,6 +148,16 @@ class ActReplayHarness:
         self.events.append(("boss_state", state))
         return state
 
+    def emit_monster_update(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        event = dict(event or {})
+        event.setdefault("timestamp", time.time())
+        event.setdefault("source", "replay")
+        updates = boss_state_from_monster_update(event)
+        if updates:
+            self.state_mgr.update(**updates)
+        self.events.append(("monster_update", event))
+        return event
+
     def emit_damage_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         event = dict(event or {})
         event.setdefault("timestamp", time.time())
@@ -177,6 +187,8 @@ class ActReplayHarness:
                 self.emit_skill_event(event)
             elif kind in ("boss_state", "boss_attrs", "boss"):
                 self.emit_boss_state(event)
+            elif kind in ("monster_update", "monster", "monster_attrs"):
+                self.emit_monster_update(event)
             elif kind in ("damage", "heal"):
                 self.emit_damage_event(event)
             else:

@@ -34,6 +34,10 @@ def boss_state_event(**payload: Any) -> Dict[str, Any]:
     return normalized_event("boss_state", **payload)
 
 
+def monster_update_event(**payload: Any) -> Dict[str, Any]:
+    return normalized_event("monster_update", **payload)
+
+
 def damage_event(**payload: Any) -> Dict[str, Any]:
     return normalized_event("damage", **payload)
 
@@ -43,5 +47,6 @@ __all__ = [
     "dungeon_event",
     "skill_event",
     "boss_state_event",
+    "monster_update_event",
     "damage_event",
 ]
