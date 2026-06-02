@@ -77,6 +77,7 @@ from engines.auto_key_engine import AutoKeyEngine
 from engines.boss_autokey_linkage import BossAutoKeyLinkage
 from engines.boss_raid_engine import BossRaidEngine
 from config import resource_path
+from engines.act_trigger_engine import ActTriggerEngine
 from engines.dps_history import DpsHistoryStore
 from engines.dps_tracker import DpsTracker
 from engines.encounter_manager import EncounterManager
@@ -175,6 +176,11 @@ class SAOPlayerGUIEngineLifecycleMixin:
             self._dps_history_store = DpsHistoryStore()
             self._dps_tracker = DpsTracker()
             self._encounter_mgr = EncounterManager()
+            try:
+                _act_rules = self._cfg_settings_ref.get('act_trigger_rules', []) or []
+            except Exception:
+                _act_rules = []
+            self._act_trigger_engine = ActTriggerEngine(_act_rules)
             self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
             # Load skill name mapping (same as webview path)
             _skill_json = resource_path('assets', 'skill_names.json')
@@ -196,6 +202,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
             self._dps_history_store = None
             self._dps_tracker = None
             self._encounter_mgr = None
+            self._act_trigger_engine = None
 
         try:
             from vision.recognition import RecognitionEngine

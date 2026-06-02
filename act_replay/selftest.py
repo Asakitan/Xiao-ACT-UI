@@ -120,6 +120,9 @@ class _FakeRuntimeActGui(SAOPlayerGUIPacketCallbacksMixin, SAOPlayerGUIDpsThemeM
         self._encounter_mgr = EncounterManager()
         self._packet_engine = {"data_source": "packet", "running": True}
         self._mem_bridge = None
+        self._act_trigger_engine = ActTriggerEngine([
+            {"id": "runtime_damage_alert", "type": "damage_total", "threshold": 30000},
+        ])
         self._boss_raid_engine = None
         self._bb_recent_targets = {}
         self._bb_last_target_uuid = 0
@@ -168,6 +171,9 @@ class _FakeWebViewRuntimeActGui:
         self._encounter_mgr = EncounterManager()
         self._packet_engine = {"data_source": "packet", "running": True}
         self._mem_bridge = None
+        self._act_trigger_engine = ActTriggerEngine([
+            {"id": "runtime_damage_alert", "type": "damage_total", "threshold": 30000},
+        ])
         self._boss_raid_engine = None
         self._bb_recent_targets = {}
         self._bb_last_target_uuid = 0
@@ -485,6 +491,8 @@ def _assert_entity_damage_callback_act_contract() -> None:
     assert snap.get("render_spec", {}).get("mode") == "live", snap
     assert snap.get("render_spec", {}).get("totals", {}).get("damage") == 32100, snap
     assert snap.get("render_spec", {}).get("sources", {}).get("summary", {}).get("data_source") == "packet", snap
+    trigger_ids = {event.get("rule_id") for event in (snap.get("triggers", {}).get("emitted") or [])}
+    assert "runtime_damage_alert" in trigger_ids, snap
 
 
 def _assert_entity_monster_update_act_contract() -> None:
@@ -532,6 +540,8 @@ def _assert_webview_damage_callback_act_contract() -> None:
     assert snap.get("render_spec", {}).get("mode") == "live", snap
     assert snap.get("render_spec", {}).get("totals", {}).get("damage") == 65400, snap
     assert snap.get("render_spec", {}).get("sources", {}).get("summary", {}).get("data_source") == "packet", snap
+    trigger_ids = {event.get("rule_id") for event in (snap.get("triggers", {}).get("emitted") or [])}
+    assert "runtime_damage_alert" in trigger_ids, snap
 
 
 def _assert_webview_monster_update_act_contract() -> None:

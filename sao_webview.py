@@ -64,6 +64,7 @@ from engines.boss_autokey_linkage import (
 from engines.dps_tracker import DpsTracker
 from engines.dps_history import DpsHistoryStore
 from engines.encounter_manager import EncounterManager
+from engines.act_trigger_engine import ActTriggerEngine
 from engines.combat_analytics import boss_state_from_monster_update, build_act_snapshot
 from config import (
     DEFAULT_HOTKEYS,
@@ -1717,6 +1718,7 @@ class SAOWebViewGUI:
         self._dps_api = None
         self._dps_history_store = None
         self._encounter_mgr = None
+        self._act_trigger_engine = None
         self._dps_last_report_available = False
         self._dps_base_w = 0
         self._dps_base_h = 0
@@ -3365,6 +3367,11 @@ class SAOWebViewGUI:
             self._dps_history_store = DpsHistoryStore()
             self._dps_tracker = DpsTracker()
             self._encounter_mgr = EncounterManager()
+            try:
+                _act_rules = self._cfg_settings_ref.get('act_trigger_rules', []) or []
+            except Exception:
+                _act_rules = []
+            self._act_trigger_engine = ActTriggerEngine(_act_rules)
             self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
             # Load skill name mapping
             _skill_json = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -3386,6 +3393,7 @@ class SAOWebViewGUI:
             self._dps_tracker = None
             self._dps_history_store = None
             self._encounter_mgr = None
+            self._act_trigger_engine = None
 
         try:
             from vision.recognition import RecognitionEngine
@@ -5205,6 +5213,7 @@ class SAOWebViewGUI:
                 history_store=getattr(self, '_dps_history_store', None),
                 state_mgr=getattr(self, '_state_mgr', None),
                 encounter_mgr=getattr(self, '_encounter_mgr', None),
+                trigger_engine=getattr(self, '_act_trigger_engine', None),
                 packet_probe=getattr(self, '_packet_engine', None),
                 memory_probe=getattr(self, '_mem_bridge', None),
                 history_limit=history_limit,

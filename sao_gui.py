@@ -436,6 +436,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         # Initialized in _start_recognition_engines once the data stack is
         # up; stopped in _stop_recognition_engines at top of method.
         self._mem_bridge = None
+        self._act_trigger_engine = None
         self._skillfx_layout = None
         self._self_buff_overlay = None
         self._boss_buff_overlay = None
