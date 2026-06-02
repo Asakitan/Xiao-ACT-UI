@@ -28,6 +28,7 @@ from sao_webview import SAOWebViewGUI
 import packet_parser.parser as parser_mod
 
 from .events import boss_event, boss_state_event, damage_event, dungeon_event, monster_update_event, skill_event
+from .fixture_io import load_fixture_events
 from .harness import ActReplayHarness
 
 
@@ -224,69 +225,15 @@ class _MemoryHistoryStore:
 
 
 def build_demo_events():
-    self_uid = 36668136
-    target_uuid = 987654321064
-    return self_uid, [
-        dungeon_event(
-            "enter_scene",
-            scene_id=155001,
-            scene_guid="demo-scene",
-            connect_guid="demo-connect",
-            player_uid=self_uid,
-        ),
-        dungeon_event(
-            "start_dungeon",
-            dungeon_id=42001,
-            difficulty=3,
-        ),
-        skill_event(
-            "client_use",
-            method_id=0x3002,
-            skill_level_id=110101,
-            target_uuid=target_uuid,
-            caster_uid=self_uid,
-        ),
-        skill_event(
-            "server_stage_end",
-            method_id=0x3004,
-            skill_uuid=777,
-            stage_id=1,
-            new_stage_id=2,
-            condition_id=0,
-        ),
-        boss_state_event(
-            boss_current_hp=900000,
-            boss_total_hp=1000000,
-            boss_raid_active=True,
-            boss_breaking_stage=0,
-            boss_extinction_pct=0.25,
-        ),
-        boss_event(
-            event_type=101,
-            host_uuid=target_uuid,
-            buff_uuid=888001,
-            stage="shield_break",
-            label="Demo boss buff",
-        ),
-        damage_event(
-            attacker_uid=self_uid,
-            attacker_uuid=(self_uid << 16) | 640,
-            attacker_is_self=True,
-            target_uuid=target_uuid,
-            target_is_player=False,
-            target_is_monster=True,
-            target_is_combat_target=True,
-            skill_id=1101,
-            skill_key=1101,
-            damage=123456,
-            is_crit=True,
-        ),
-        skill_event(
-            "server_end",
-            method_id=0x3005,
-            skill_uuid=777,
-        ),
-    ]
+    return load_fixture_events("demo_events")
+
+
+def _assert_fixture_loader_contract() -> None:
+    self_uid, events = build_demo_events()
+    assert self_uid == 36668136, self_uid
+    assert len(events) == 8, events
+    assert events[0].get("kind") == "enter_scene", events[0]
+    assert events[-1].get("kind") == "server_end", events[-1]
 
 
 def _assert_game_state_contract() -> None:
@@ -650,6 +597,7 @@ def _assert_monster_update_act_contract() -> None:
 
 
 def main() -> int:
+    _assert_fixture_loader_contract()
     _assert_game_state_contract()
     _assert_parser_handler_contract()
     _assert_entity_act_source_priority()
@@ -768,6 +716,7 @@ def main() -> int:
     assert live.get("entities"), live
     print(json.dumps({
         "ok": True,
+        "fixture_loader_contract": True,
         "game_state_contract": True,
         "parser_handler_contract": True,
         "entity_act_source_priority": True,

@@ -1,0 +1,9 @@
+{"kind":"meta","self_uid":36668136,"description":"TCP-first ACT replay demo: dungeon + skill + boss + damage"}
+{"kind":"enter_scene","timestamp":1.0,"source":"replay_fixture","scene_id":155001,"scene_guid":"demo-scene","connect_guid":"demo-connect","player_uid":36668136}
+{"kind":"start_dungeon","timestamp":2.0,"source":"replay_fixture","dungeon_id":42001,"difficulty":3}
+{"kind":"client_use","timestamp":3.0,"source":"replay_fixture","method_id":12290,"skill_level_id":110101,"target_uuid":987654321064,"caster_uid":36668136}
+{"kind":"server_stage_end","timestamp":4.0,"source":"replay_fixture","method_id":12292,"skill_uuid":777,"stage_id":1,"new_stage_id":2,"condition_id":0}
+{"kind":"boss_state","timestamp":5.0,"source":"replay_fixture","boss_current_hp":900000,"boss_total_hp":1000000,"boss_raid_active":true,"boss_breaking_stage":0,"boss_extinction_pct":0.25}
+{"kind":"boss_event","timestamp":6.0,"source":"replay_fixture","event_type":101,"host_uuid":987654321064,"buff_uuid":888001,"stage":"shield_break","label":"Demo boss buff"}
+{"kind":"damage","timestamp":7.0,"source":"replay_fixture","attacker_uid":36668136,"attacker_uuid":2403089531520,"attacker_is_self":true,"target_uuid":987654321064,"target_is_player":false,"target_is_monster":true,"target_is_combat_target":true,"skill_id":1101,"skill_key":1101,"damage":123456,"is_crit":true}
+{"kind":"server_end","timestamp":8.0,"source":"replay_fixture","method_id":12293,"skill_uuid":777}
