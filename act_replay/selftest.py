@@ -129,6 +129,7 @@ class _FakeRuntimeActGui(SAOPlayerGUIPacketCallbacksMixin, SAOPlayerGUIDpsThemeM
         self._scene_combat_reset_pending = False
         self._scene_combat_reset_anchor = {}
         self._pending_combat_reset_deadline = 0.0
+        self._boss_buff_overlay = None
         self._dps_overlay = None
         self.push_count = 0
         self.last_snapshot = {}
@@ -147,6 +148,9 @@ class _FakeRuntimeActGui(SAOPlayerGUIPacketCallbacksMixin, SAOPlayerGUIDpsThemeM
 
     def _is_known_friendly_uid(self, _uid):
         return False
+
+    def _boss_monster_usable(self, monster):
+        return bool(monster)
 
     def _push_dps_act_snapshot(self):
         self.push_count += 1
@@ -169,6 +173,7 @@ class _FakeWebViewRuntimeActGui:
         self._bb_last_damage_ts = 0.0
         self._pending_combat_reset_after = 0.0
         self._pending_combat_reset_reason = ''
+        self._last_boss_hp_push_sig = None
         self.push_count = 0
         self.last_snapshot = {}
 
@@ -183,6 +188,9 @@ class _FakeWebViewRuntimeActGui:
 
     def _maybe_apply_pending_combat_reset(self, _event, _is_self_combat_target):
         pass
+
+    def _boss_monster_usable(self, monster):
+        return bool(monster)
 
     def _push_dps_act_snapshot(self):
         self.push_count += 1
@@ -438,6 +446,28 @@ def _assert_entity_damage_callback_act_contract() -> None:
     assert snap.get("render_spec", {}).get("sources", {}).get("summary", {}).get("data_source") == "packet", snap
 
 
+def _assert_entity_monster_update_act_contract() -> None:
+    gui = _FakeRuntimeActGui()
+    target_uuid = 987654321064
+    gui._bb_last_target_uuid = target_uuid
+    gui._on_monster_update(monster_update_event(
+        uuid=target_uuid,
+        hp=450000,
+        max_hp=900000,
+        shield_active=True,
+        shield_pct=0.4,
+        breaking_stage=0,
+        has_break_data=True,
+        extinction_pct=0.2,
+    ))
+    assert gui.push_count == 1, gui.push_count
+    boss = gui.last_snapshot.get("render_spec", {}).get("boss", {})
+    assert boss.get("current_hp") == 450000, gui.last_snapshot
+    assert boss.get("total_hp") == 900000, gui.last_snapshot
+    assert boss.get("hp_pct") == 0.5, gui.last_snapshot
+    assert boss.get("shield_active") is True, gui.last_snapshot
+
+
 def _assert_webview_damage_callback_act_contract() -> None:
     gui = _FakeWebViewRuntimeActGui()
     event = damage_event(
@@ -461,6 +491,28 @@ def _assert_webview_damage_callback_act_contract() -> None:
     assert snap.get("render_spec", {}).get("mode") == "live", snap
     assert snap.get("render_spec", {}).get("totals", {}).get("damage") == 65400, snap
     assert snap.get("render_spec", {}).get("sources", {}).get("summary", {}).get("data_source") == "packet", snap
+
+
+def _assert_webview_monster_update_act_contract() -> None:
+    gui = _FakeWebViewRuntimeActGui()
+    target_uuid = 987654321064
+    gui._bb_last_target_uuid = target_uuid
+    SAOWebViewGUI._on_monster_update(gui, monster_update_event(
+        uuid=target_uuid,
+        hp=450000,
+        max_hp=900000,
+        shield_active=True,
+        shield_pct=0.4,
+        breaking_stage=0,
+        has_break_data=True,
+        extinction_pct=0.2,
+    ))
+    assert gui.push_count == 1, gui.push_count
+    boss = gui.last_snapshot.get("render_spec", {}).get("boss", {})
+    assert boss.get("current_hp") == 450000, gui.last_snapshot
+    assert boss.get("total_hp") == 900000, gui.last_snapshot
+    assert boss.get("hp_pct") == 0.5, gui.last_snapshot
+    assert boss.get("shield_active") is True, gui.last_snapshot
 
 
 def _assert_encounter_finalize_contract() -> None:
@@ -543,7 +595,9 @@ def main() -> int:
     _assert_parser_handler_contract()
     _assert_entity_act_source_priority()
     _assert_entity_damage_callback_act_contract()
+    _assert_entity_monster_update_act_contract()
     _assert_webview_damage_callback_act_contract()
+    _assert_webview_monster_update_act_contract()
     _assert_encounter_finalize_contract()
     _assert_monster_update_act_contract()
     self_uid, events = build_demo_events()
@@ -654,7 +708,9 @@ def main() -> int:
         "parser_handler_contract": True,
         "entity_act_source_priority": True,
         "entity_damage_callback_act_contract": True,
+        "entity_monster_update_act_contract": True,
         "webview_damage_callback_act_contract": True,
+        "webview_monster_update_act_contract": True,
         "encounter_finalize_contract": True,
         "monster_update_act_contract": True,
         "boss_event_act_contract": True,

@@ -2677,6 +2677,7 @@ class SAOWebViewGUI:
                     updates = boss_state_from_monster_update(monster_data)
                     if updates:
                         self._state_mgr.update(**updates)
+                        self._push_dps_act_snapshot()
         except Exception:
             pass
 

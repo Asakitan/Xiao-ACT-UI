@@ -68,6 +68,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             updates = boss_state_from_monster_update(monster_data)
             if updates and getattr(self, '_state_mgr', None):
                 self._state_mgr.update(**updates)
+                self._push_dps_act_snapshot()
         except Exception:
             pass
 
