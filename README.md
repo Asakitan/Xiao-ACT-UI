@@ -158,6 +158,15 @@ ACT 快照以 TCP 为主数据源，`settings.json` 的 `mem_data_source` 仅用
 python -m act_replay.selftest
 ```
 
+需要复放单个 JSONL 事件 fixture 时，可以运行：
+
+```powershell
+python -m act_replay.run_fixture demo_events
+python -m act_replay.run_fixture act_replay\fixtures\demo_events.jsonl --rules .\my-act-rules.json
+```
+
+`run_fixture` 只消费归一化后的 ACT replay 事件，不启动 Npcap、WebView 或 Entity 窗口；适合把真实 TCP 回调导出的事件落成 JSONL 后快速验证 `render_spec`、DPS rows、Boss HP 与 trigger 输出。
+
 这个命令是 3.x TCP-first ACT 栈的首选轻量验证。不要用仓库级 `compileall` 当唯一验证门，因为历史工具目录中可能存在不适合 Python 3.11 直接编译的旧脚本。
 
 常用开发校验：
