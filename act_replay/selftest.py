@@ -423,6 +423,13 @@ def _assert_trigger_rule_normalize_contract() -> None:
     assert event_rule["match"] == "101", event_rule
 
 
+def _assert_live_name_table_contract() -> None:
+    from tools.tablekit.name_tables import NameResolver, _load_live_act_matches
+    assert _load_live_act_matches("buff").get(2203640) == "聚能之力"
+    resolver = NameResolver()
+    assert resolver.buff(2203640, default="") == "聚能之力", resolver.coverage()
+
+
 def _assert_entity_damage_callback_act_contract() -> None:
     gui = _FakeRuntimeActGui()
     event = damage_event(
@@ -604,6 +611,7 @@ def main() -> int:
     _assert_entity_render_rows_contract()
     _assert_entity_trigger_summary_contract()
     _assert_trigger_rule_normalize_contract()
+    _assert_live_name_table_contract()
     _assert_entity_damage_callback_act_contract()
     _assert_entity_monster_update_act_contract()
     _assert_webview_damage_callback_act_contract()
@@ -723,6 +731,7 @@ def main() -> int:
         "entity_render_rows_contract": True,
         "entity_trigger_summary_contract": True,
         "trigger_rule_normalize_contract": True,
+        "live_name_table_contract": True,
         "entity_damage_callback_act_contract": True,
         "entity_monster_update_act_contract": True,
         "webview_damage_callback_act_contract": True,

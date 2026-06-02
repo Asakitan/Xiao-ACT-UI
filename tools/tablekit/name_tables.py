@@ -4,8 +4,9 @@
 
 数据源(按优先级 高->低, 高覆盖低):
   1. assets/name_tables/<kind>.json   ← Bokura 解码器抽出的权威表(最准最全), {id: name}
-  2. StarResonanceDps/DataTools/Data/CN/<Kind>Table.json  ← 社区表(可能不全), {id: {Name:..}}
-  3. assets/skill_names.json          ← 现有部分技能名, {id: name}
+    2. assets/name_tables/live_probe_act_matched_rows.json ← 已锚定 live StringPool/TCP 匹配子集
+    3. StarResonanceDps/DataTools/Data/CN/<Kind>Table.json  ← 社区表(可能不全), {id: {Name:..}}
+    4. assets/skill_names.json          ← 现有部分技能名, {id: name}
 
 kind: skill / monster / buff / dungeon / npc / item ...
 
@@ -31,6 +32,7 @@ _ASSETS = os.path.join(_SAO, "assets")
 _EXTRACTED = os.path.join(_ASSETS, "name_tables")          # 解码器输出
 _DATATOOLS_CN = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Data", "CN")
 _SKILL_NAMES = os.path.join(_ASSETS, "skill_names.json")
+_LIVE_ACT_MATCHES = os.path.join(_EXTRACTED, "live_probe_act_matched_rows.json")
 
 # 每个 kind 的数据源 (高优先级在前)
 _SOURCES = {
@@ -46,6 +48,17 @@ _SOURCES = {
 _FALLBACK_PREFIX = {
     "skill": "技能", "monster": "怪物", "buff": "Buff",
     "dungeon": "地牢", "item": "道具", "npc": "NPC",
+}
+
+_LIVE_ID_SPACE_KIND = {
+    "skill_id": "skill",
+    "skill_id_or_legacy_skill_name_index": "skill",
+    "sub_profession_skill_id": "skill",
+    "buff_id": "buff",
+    "monster_id": "monster",
+    "dungeon_id": "dungeon",
+    "npc_id": "npc",
+    "item_id": "item",
 }
 
 
@@ -72,6 +85,32 @@ def _coerce_table(obj) -> Dict[int, str]:
     return out
 
 
+def _load_live_act_matches(kind: str) -> Dict[int, str]:
+    out: Dict[int, str] = {}
+    if not os.path.isfile(_LIVE_ACT_MATCHES):
+        return out
+    try:
+        with open(_LIVE_ACT_MATCHES, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return out
+    for row in (data.get("rows") if isinstance(data, dict) else []) or []:
+        if str(row.get("confidence") or "") not in {"high", "medium"}:
+            continue
+        match = row.get("primary_match") or {}
+        id_space = str(match.get("id_space") or "")
+        if _LIVE_ID_SPACE_KIND.get(id_space) != kind:
+            continue
+        try:
+            iid = int(match.get("id"))
+        except (TypeError, ValueError):
+            continue
+        text = str(row.get("text") or "").strip()
+        if text:
+            out.setdefault(iid, text)
+    return out
+
+
 class NameResolver:
     def __init__(self):
         self._tables: Dict[str, Dict[int, str]] = {}
@@ -91,6 +130,7 @@ class NameResolver:
                 merged.update(_coerce_table(data))
             except Exception:
                 pass
+        merged.update(_load_live_act_matches(kind))
         self._tables[kind] = merged
         return merged
 
