@@ -69,3 +69,4 @@ mem_probe/anchors.json
 out/
 _cache/
 bin/
+.codex/

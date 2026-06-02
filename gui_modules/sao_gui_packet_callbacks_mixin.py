@@ -369,6 +369,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             self._last_boss_event = dict(event or {})
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(last_boss_event=self._last_boss_event)
+            self._push_dps_act_snapshot()
         except Exception:
             pass
         if self._boss_raid_engine:
