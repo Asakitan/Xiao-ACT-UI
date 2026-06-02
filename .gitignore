@@ -60,12 +60,12 @@ backup/
 update_apply.log
 update_host/releases/
 
-# ── Memory probe research (local only, IL2CPP dumps) ───
-tools/mem_probe/
-
 # ── mem_probe production: keep code, exclude per-user anchor data ───
 mem_probe/anchors.json
 !mem_probe/test_cy_memscan.py
 
 # ── Misc ───────────────────────────────────────────
 .github/
+out/
+_cache/
+bin/

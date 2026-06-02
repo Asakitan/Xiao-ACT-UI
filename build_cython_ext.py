@@ -47,10 +47,17 @@ extensions = [
         name='_sao_cy_uihelpers',
         sources=[os.path.join(HERE, '_sao_cy_uihelpers.pyx')],
     ),
+    # mem_probe: AVX2 accelerated memory scan/pattern search for the
+    # mem_probe tools that import ``mem_probe.cy_memscan``.  Source lives at
+    # the repo root under ``mem_probe/`` so the import name continues to
+    # work and the .pyd gets dropped next to the .pyx via ``build_ext --inplace``.
+    Extension(
+        name='_sao_cy_memscan',
+        sources=[os.path.join(HERE, 'mem_probe', '_sao_cy_memscan.pyx')],
+        extra_compile_args=['/std:c++17'],
+        language='c++',
+    ),
 ]
-# Round 70 (v3.2.15): mem_probe was removed from the runtime in round 26;
-# the conditional rebuild of mem_probe._sao_cy_memscan was always-False
-# after the directory deletion and is removed here.
 
 
 setup(

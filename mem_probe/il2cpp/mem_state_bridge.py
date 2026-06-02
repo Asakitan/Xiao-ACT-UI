@@ -1,0 +1,330 @@
+"""mem_state_bridge - 把 MemSelfStateProvider 接到现有 game_state / dps_tracker.
+
+主程序集成 (在 sao_gui 初始化 packet_engine + dps_tracker 之后):
+
+    from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
+    self._mem_bridge = MemStateBridge(
+        state_mgr=self._state_mgr,        # game_state.GameStateManager
+        dps_tracker=self._dps_tracker,    # 可 None
+    )
+    self._mem_bridge.start()
+
+设计要点:
+  - 内存源失败时自动转 TCP (MemSelfStateProvider 内置)
+  - 任意子组件 (dps_tracker / state_mgr) 缺失都不会崩
+  - 全部回调内部 try/except, 避免回调异常影响内存源主循环
+  - 读不到 bundle 时 start() 不抛, 只把 mode 标 'error' 并打日志
+"""
+from __future__ import annotations
+
+import os
+import sys
+import threading
+import time
+import traceback
+from typing import Any, Callable, Optional
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider
+from mem_probe.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
+
+
+class MemStateBridge:
+    """把内存读出的 self 状态 push 到 game_state / dps_tracker."""
+
+    def __init__(self,
+                 state_mgr: Any = None,
+                 dps_tracker: Any = None,
+                 dps_overlay: Any = None,
+                 hp_overlay: Any = None,
+                 auto_key_engine: Any = None,
+                 boss_raid_engine: Any = None,
+                 packet_bridge: Any = None,
+                 dump_id: str = "ef9ef95a",
+                 enable_extended: bool = True,
+                 on_log: Optional[Callable[[str], None]] = None):
+        self.state_mgr = state_mgr
+        self.dps_tracker = dps_tracker
+        self.dps_overlay = dps_overlay
+        self.hp_overlay = hp_overlay
+        self.auto_key_engine = auto_key_engine
+        self.boss_raid_engine = boss_raid_engine
+        self.packet_bridge = packet_bridge
+        self._on_log = on_log or (lambda m: print(m))
+        self._provider: Optional[MemSelfStateProvider] = None
+        self._dump_id = dump_id
+        self._enable_extended = enable_extended
+
+        # 状态 (供外部查询)
+        self.mode: str = "init"
+        self.last_error: str = ""
+        self.last_uid: int = 0
+        self.last_hp: int = 0
+        self.last_max_hp: int = 0
+        self.last_profession_id: int = 0
+        self.last_char_name: str = ""
+        self.last_skill_cd_count: int = 0
+        self.last_resources: dict = {}
+        self.last_is_dead: bool = False
+
+    # ───────── public ─────────
+
+    def start(self) -> bool:
+        """启动后台线程. 失败返回 False (不抛). 成功返回 True."""
+        if self._provider is not None:
+            return True
+        try:
+            self._provider = MemSelfStateProvider(
+                on_uid_change=self._on_uid,
+                on_hp_change=self._on_hp,
+                on_status_change=self._on_status,
+                on_skill_cd_change=self._on_skill_cd,
+                on_resources_change=self._on_resources,
+                on_profession_change=self._on_profession,
+                on_dead_change=self._on_dead,
+                on_identity_change=self._on_identity,
+                on_stamina_change=self._on_stamina,
+                anchor_source=self._build_anchor_pack,
+                enable_extended=self._enable_extended,
+                dump_id=self._dump_id,
+            )
+            self._provider.start()
+            self._log("[MemBridge] started (memory-first, TCP fallback enabled)")
+            return True
+        except Exception as e:
+            self._log(f"[MemBridge] start failed: {e}")
+            traceback.print_exc()
+            self._provider = None
+            return False
+
+    def stop(self):
+        if self._provider:
+            try:
+                self._provider.stop()
+            except Exception:
+                pass
+            self._provider = None
+
+    def force_mode(self, mode: str):
+        """'tcp' 或 'memory' — 主程序可强制切换."""
+        if self._provider:
+            self._provider.force_mode(mode)
+
+    def _build_anchor_pack(self) -> AnchorPack:
+        """Build a semantic anchor pack from the live PacketBridge parser."""
+        parser = getattr(self.packet_bridge, '_parser', None) if self.packet_bridge is not None else None
+        if parser is None:
+            return AnchorPack()
+        return AnchorMemoryReader.build_anchor_from_parser(parser)
+
+    # ───────── 回调实现 ─────────
+
+    def _log(self, msg: str):
+        try:
+            self._on_log(msg)
+        except Exception:
+            pass
+
+    def _on_uid(self, uid: int):
+        self.last_uid = uid
+        self._log(f"[MemBridge] uid={uid}")
+        # game_state.player_id 是 str
+        if self.state_mgr is not None:
+            try:
+                self.state_mgr.update(player_id=str(uid))
+            except Exception:
+                traceback.print_exc()
+        # dps_tracker
+        if self.dps_tracker is not None:
+            try:
+                self.dps_tracker.set_self_uid(uid)
+            except Exception:
+                traceback.print_exc()
+        if self.dps_overlay is not None:
+            try:
+                self.dps_overlay.set_self_uid(uid)
+            except Exception:
+                traceback.print_exc()
+
+    def _on_hp(self, cur_hp: int, max_hp: int):
+        self.last_hp = cur_hp
+        self.last_max_hp = max_hp
+        # 主推 game_state — 所有面板订阅 GameState 即可
+        if self.state_mgr is not None:
+            try:
+                pct = (float(cur_hp) / float(max_hp)) if max_hp > 0 else 1.0
+                pct = max(0.0, min(1.0, pct))
+                self.state_mgr.update(hp_current=int(cur_hp),
+                                      hp_max=int(max_hp),
+                                      hp_pct=pct)
+            except Exception:
+                traceback.print_exc()
+
+    def _on_stamina(self, cur: int, total: int):
+        # OriginEnergy 字段不是 runtime stamina (实际 stamina 在 EnergyItem.EnergyInfo
+        # MapField 内, 当前未实现). 因此这里只在合理范围内推; 否则等 Phase 2 MapField.
+        if self.state_mgr is None:
+            return
+        if total <= 0 or cur < 0 or cur > total * 4:
+            return  # 数据可疑, 跳过避免污染 GameState
+        try:
+            pct = (float(cur) / float(total)) if total > 0 else 1.0
+            pct = max(0.0, min(1.0, pct))
+            self.state_mgr.update(stamina_current=int(cur),
+                                  stamina_max=int(total),
+                                  stamina_pct=pct,
+                                  stamina_offline=False)
+        except Exception:
+            traceback.print_exc()
+
+    def _on_identity(self, ident: dict):
+        """level_base / season_exp / season_medal_level / fight_point."""
+        if self.state_mgr is None:
+            return
+        try:
+            kw = {}
+            if ident.get('level_base'):
+                kw['level_base'] = int(ident['level_base'])
+            if ident.get('season_exp') is not None:
+                kw['season_exp'] = int(ident['season_exp'])
+            if ident.get('fight_point'):
+                kw['fight_point'] = int(ident['fight_point'])
+            # season_medal_level 不是 GameState 字段; 跳过
+            if kw:
+                self.state_mgr.update(**kw)
+                self._log(f"[MemBridge] identity {kw}")
+        except Exception:
+            traceback.print_exc()
+
+    def _on_profession(self, profession_id: int, char_name: str):
+        self.last_profession_id = profession_id
+        self.last_char_name = char_name
+        self._log(f"[MemBridge] profession={profession_id} name={char_name!r}")
+        if self.state_mgr is not None:
+            try:
+                kw = {"profession_id": int(profession_id)}
+                # 解析职业名 (尽力而为, 失败不阻塞)
+                try:
+                    from packet_parser import PROFESSION_NAMES  # type: ignore
+                    pn = PROFESSION_NAMES.get(int(profession_id), '')
+                    if pn:
+                        kw["profession_name"] = pn
+                except Exception:
+                    pass
+                if char_name:
+                    kw["player_name"] = char_name
+                self.state_mgr.update(**kw)
+            except Exception:
+                traceback.print_exc()
+
+    def _on_skill_cd(self, cds: list):
+        self.last_skill_cd_count = len(cds)
+        # 把 SkillCD list 转成 GameState.skill_slots 格式 (HUD/SkillFX/AutoKey 都用这个)
+        if self.state_mgr is not None:
+            try:
+                from mem_probe.il2cpp.mem_skill_slots import convert as _conv
+                slots = _conv(cds, self.last_profession_id, server_time_offset_ms=None)
+                if slots:
+                    self.state_mgr.update(skill_slots=slots)
+            except Exception:
+                traceback.print_exc()
+        # 兼容旧接口: 如果 autokey 引擎实现了直接吃 SkillCD 的方法, 也喂一份
+        if self.auto_key_engine is not None:
+            for fn_name in ("on_skill_cds_update", "update_skill_cds", "set_skill_cds"):
+                fn = getattr(self.auto_key_engine, fn_name, None)
+                if callable(fn):
+                    try:
+                        fn(cds)
+                    except Exception:
+                        traceback.print_exc()
+                    break
+
+    def _on_resources(self, resources: dict):
+        self.last_resources = dict(resources or {})
+
+    def _on_dead(self, is_dead: bool):
+        self.last_is_dead = bool(is_dead)
+        self._log(f"[MemBridge] dead={is_dead}")
+        if self.boss_raid_engine is not None:
+            fn = getattr(self.boss_raid_engine, "on_self_dead_change", None)
+            if callable(fn):
+                try:
+                    fn(is_dead)
+                except Exception:
+                    traceback.print_exc()
+
+    def _on_status(self, mode: str, err: str):
+        self.mode = mode
+        self.last_error = err
+        if err:
+            self._log(f"[MemBridge] mode={mode!r} err={err!r}")
+        else:
+            self._log(f"[MemBridge] mode={mode!r}")
+        if self.state_mgr is not None:
+            try:
+                self.state_mgr.update(data_source=str(mode or ''))
+            except Exception:
+                pass
+        # 切换 packet_bridge 的权威源状态
+        if self.packet_bridge is not None:
+            fn = getattr(self.packet_bridge, 'set_mem_authoritative', None)
+            if callable(fn):
+                try:
+                    fn(mode == 'memory')
+                except Exception:
+                    pass
+
+    # ───────── 查询 ─────────
+
+    def snapshot(self):
+        """返回内存源的最新原始 SelfSnapshot (含 skill_cds/resources 等)."""
+        if self._provider is None:
+            return None
+        return self._provider.last_snap
+
+    @property
+    def is_memory_active(self) -> bool:
+        return self.mode == "memory"
+
+
+# ───────── selftest ─────────
+
+def _selftest():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--seconds", type=int, default=10)
+    args = p.parse_args()
+
+    class _StubGS:
+        def __init__(self):
+            self.kw = {}
+        def update(self, **kw):
+            self.kw.update(kw)
+            print(f"[gs.update] {kw}")
+
+    class _StubDps:
+        def set_self_uid(self, uid):
+            print(f"[dps.set_self_uid] {uid}")
+
+    gs = _StubGS()
+    dps = _StubDps()
+    br = MemStateBridge(state_mgr=gs, dps_tracker=dps)
+    if not br.start():
+        print("FAIL: bridge did not start")
+        return
+    try:
+        for i in range(args.seconds):
+            time.sleep(1)
+            print(f"  tick {i+1} mode={br.mode} uid={br.last_uid} "
+                  f"hp={br.last_hp}/{br.last_max_hp} cds={br.last_skill_cd_count}")
+    finally:
+        br.stop()
+
+
+if __name__ == "__main__":
+    _selftest()
+

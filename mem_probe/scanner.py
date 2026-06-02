@@ -1,0 +1,190 @@
+"""值搜索 / 多帧收敛.
+
+核心思想:
+    第 1 帧: 全内存搜索目标值 → 拿到 N 个候选地址 (通常成百上千)
+    第 2 帧: 目标值变了之后, 在候选集中再搜新值 → 收敛到 < 10 个
+    第 3 帧: 再变一次 → 通常剩 1 个
+
+公开 API:
+    encode_value(value, dtype) -> bytes    # 拼出 little-endian 字节串
+    scan(pm, value, dtype) -> list[int]    # 全内存首次扫描
+    narrow(pm, addrs, value, dtype) -> list[int]  # 在候选集中再扫
+
+加速:
+    i32/u32/i64/u64 的 scan 内层走 cy_memscan (AVX2: ~16 GB/s).
+    f32/f64/utf16 仍走 bytes.find 标量路径 (调用频次极低)。
+"""
+
+from __future__ import annotations
+
+import struct
+from typing import Iterable, List, Sequence
+
+from mem_probe import cy_memscan as _cy
+from .process import StarProcess
+
+# ───────────────────────── 编码 ─────────────────────────
+# dtype 字符串 → struct 格式; 'utf16' 单独处理
+_STRUCT_FMT = {
+    "i32": "<i",
+    "u32": "<I",
+    "i64": "<q",
+    "u64": "<Q",
+    "f32": "<f",
+    "f64": "<d",
+}
+
+VALID_DTYPES = tuple(_STRUCT_FMT.keys()) + ("utf16",)
+
+
+def encode_value(value, dtype: str) -> bytes:
+    """把一个 Python 值编码成内存里的 little-endian 字节串.
+
+    对 i32/i64, 若 value 超出 signed 范围但落在 unsigned 范围内 (常见于
+    游戏 UID 用 uint64 表示但被解析成 Python int), 自动按 unsigned 编码,
+    bytes 表示一致。
+    """
+    if dtype == "utf16":
+        if not isinstance(value, str):
+            raise TypeError(f"utf16 dtype requires str, got {type(value).__name__}")
+        # 不带 NUL 终结符: 子串匹配更宽容 (允许命中后接其它字符)
+        return value.encode("utf-16-le")
+    fmt = _STRUCT_FMT.get(dtype)
+    if fmt is None:
+        raise ValueError(f"unknown dtype {dtype!r}; valid: {VALID_DTYPES}")
+    # 整型自适应 signed/unsigned
+    if dtype in ("i32", "u32") and isinstance(value, int):
+        v = value & 0xFFFFFFFF
+        return v.to_bytes(4, "little", signed=False)
+    if dtype in ("i64", "u64") and isinstance(value, int):
+        v = value & 0xFFFFFFFFFFFFFFFF
+        return v.to_bytes(8, "little", signed=False)
+    try:
+        return struct.pack(fmt, value)
+    except struct.error as e:
+        raise ValueError(f"value {value!r} not representable as {dtype}: {e}") from e
+
+
+# ───────────────────────── 扫描 ─────────────────────────
+def _find_all_in_chunk(buf: bytes, needle: bytes, *, align: int = 1) -> Iterable[int]:
+    """在一段缓冲里找 needle 的所有偏移."""
+    if not needle:
+        return
+    start = 0
+    n = len(needle)
+    while True:
+        i = buf.find(needle, start)
+        if i < 0:
+            return
+        if align == 1 or (i % align) == 0:
+            yield i
+        start = i + 1
+
+
+def scan(
+    pm: StarProcess,
+    value,
+    dtype: str,
+    *,
+    align: int = 0,
+    max_hits: int = 200_000,
+    max_region_size: int = 256 * 1024 * 1024,
+) -> List[int]:
+    """全内存首次扫描.
+
+    返回所有匹配地址的列表。
+
+    Parameters
+    ----------
+    align: 对齐字节. 0 表示 dtype 默认对齐 (i32/f32=4, i64/f64=8, u32=4 等),
+           1 表示不对齐, 任意字节边界。
+    max_hits: 命中数上限, 超过即停止扫描 (避免内存爆炸; 通常 utf16 短串才会触发)。
+    max_region_size: 跳过过大的区域 (默认 256 MiB), 主要是 GameAssembly.dll
+           的 IL2CPP 元数据段, 静态数据扫描没意义又拖慢速度。
+    """
+    needle = encode_value(value, dtype)
+    if align == 0:
+        align = _default_align(dtype)
+
+    # ── 加速路径: 整型 + 默认对齐 走 cy_memscan AVX2 ──
+    if isinstance(value, int) and align == _default_align(dtype):
+        if dtype in ("i64", "u64"):
+            return _scan_aligned_int(pm, value, max_hits, max_region_size, width=8)
+        if dtype in ("i32", "u32"):
+            return _scan_aligned_int(pm, value, max_hits, max_region_size, width=4)
+
+    # ── 慢路径 (f32/f64/utf16/不对齐): bytes.find ──
+    hits: List[int] = []
+    for region in pm.iter_regions():
+        if region.size > max_region_size:
+            continue
+        buf = pm.read_bytes(region.base, region.size)
+        if buf is None:
+            continue
+        for off in _find_all_in_chunk(buf, needle, align=align):
+            hits.append(region.base + off)
+            if len(hits) >= max_hits:
+                return hits
+    return hits
+
+
+def _scan_aligned_int(
+    pm: StarProcess,
+    value: int,
+    max_hits: int,
+    max_region_size: int,
+    *,
+    width: int,
+) -> List[int]:
+    """对齐 i32/u32/i64/u64 的 cy_memscan 加速路径."""
+    hits: List[int] = []
+    if width == 8:
+        v = value & 0xFFFFFFFFFFFFFFFF
+        find_fn = _cy.find_aligned_u64
+    else:
+        v = value & 0xFFFFFFFF
+        find_fn = _cy.find_aligned_u32
+    for region in pm.iter_regions():
+        if region.size > max_region_size:
+            continue
+        buf = pm.read_bytes(region.base, region.size)
+        if buf is None:
+            continue
+        remaining = max_hits - len(hits)
+        if remaining <= 0:
+            break
+        offs = find_fn(buf, v, max_hits=remaining)
+        for off in offs:
+            hits.append(region.base + off)
+        if len(hits) >= max_hits:
+            return hits
+    return hits
+
+
+def narrow(
+    pm: StarProcess,
+    addrs: Sequence[int],
+    value,
+    dtype: str,
+) -> List[int]:
+    """在已有候选集中再搜目标值, 返回仍然匹配的子集."""
+    needle = encode_value(value, dtype)
+    n = len(needle)
+    out: List[int] = []
+    for addr in addrs:
+        b = pm.read_bytes(addr, n)
+        if b is None:
+            continue
+        if b == needle:
+            out.append(addr)
+    return out
+
+
+def _default_align(dtype: str) -> int:
+    if dtype in ("i32", "u32", "f32"):
+        return 4
+    if dtype in ("i64", "u64", "f64"):
+        return 8
+    if dtype == "utf16":
+        return 2
+    return 1

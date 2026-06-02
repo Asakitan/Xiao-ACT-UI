@@ -172,6 +172,15 @@ class GameState:
     boss_in_overdrive: bool = False
     boss_invincible: bool = False
 
+    # ── ACT / TCP normalized context ──
+    dungeon_id: int = 0
+    dungeon_scene_id: int = 0
+    dungeon_difficulty: int = 0
+    dungeon_name: str = ''
+    last_dungeon_event: dict = field(default_factory=dict)
+    last_skill_event: dict = field(default_factory=dict)
+    last_boss_event: dict = field(default_factory=dict)
+
     # ── 采集元信息 ──
     capture_timestamp: float = 0.0
     recognition_ok: bool = False
@@ -236,6 +245,13 @@ class GameState:
             'boss_extinction_pct': round(self.boss_extinction_pct, 4),
             'boss_in_overdrive': self.boss_in_overdrive,
             'boss_invincible': self.boss_invincible,
+            'dungeon_id': self.dungeon_id,
+            'dungeon_scene_id': self.dungeon_scene_id,
+            'dungeon_difficulty': self.dungeon_difficulty,
+            'dungeon_name': self.dungeon_name,
+            'last_dungeon_event': dict(self.last_dungeon_event or {}),
+            'last_skill_event': dict(self.last_skill_event or {}),
+            'last_boss_event': dict(self.last_boss_event or {}),
             'identity_alert_serial': self.identity_alert_serial,
             'identity_alert_title': self.identity_alert_title,
             'identity_alert_message': self.identity_alert_message,
@@ -256,6 +272,17 @@ class GameStateManager:
     def state(self) -> GameState:
         with self._lock:
             return self._state
+
+    def snapshot(self) -> GameState:
+        """Return a shallow immutable-style copy of the current state.
+
+        Consumers such as ACT analytics and replay tests need a stable view
+        without holding the manager lock while they serialize or render.  The
+        dataclass mostly contains primitives/lists/dicts; callers that mutate
+        nested structures should still copy those structures explicitly.
+        """
+        with self._lock:
+            return _copy.copy(self._state)
 
     @_probe.decorate('state.update')
     def update(self, **kwargs):
@@ -342,6 +369,16 @@ class GameStateManager:
                     if not isinstance(v, (int, float)):
                         continue
                     v = max(0.0, min(1.0, float(v)))
+                elif k in ('dungeon_id', 'dungeon_scene_id', 'dungeon_difficulty'):
+                    if not isinstance(v, int) or v < 0:
+                        continue
+                elif k == 'dungeon_name':
+                    if not isinstance(v, str) or len(v) > 120:
+                        continue
+                elif k in ('last_dungeon_event', 'last_skill_event', 'last_boss_event'):
+                    if not isinstance(v, dict):
+                        continue
+                    v = dict(v)
                 setattr(self._state, k, v)
 
             # ── 更新 prev 追踪值 (仅当值有效时) ──

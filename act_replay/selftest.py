@@ -22,7 +22,7 @@ from packet_parser.enums import NotifyMethod
 from packet_parser.parser import PacketParser
 import packet_parser.parser as parser_mod
 
-from .events import boss_state_event, damage_event, dungeon_event, monster_update_event, skill_event
+from .events import boss_event, boss_state_event, damage_event, dungeon_event, monster_update_event, skill_event
 from .harness import ActReplayHarness
 
 
@@ -158,6 +158,13 @@ def build_demo_events():
             boss_raid_active=True,
             boss_breaking_stage=0,
             boss_extinction_pct=0.25,
+        ),
+        boss_event(
+            event_type=101,
+            host_uuid=target_uuid,
+            buff_uuid=888001,
+            stage="shield_break",
+            label="Demo boss buff",
         ),
         damage_event(
             attacker_uid=self_uid,
@@ -420,6 +427,13 @@ def main() -> int:
             "label": "Boss HP below 95%",
             "message": "Boss HP crossed 95%",
         },
+        {
+            "id": "demo_boss_event_alert",
+            "type": "boss_event_type",
+            "match": 101,
+            "label": "Boss event observed",
+            "message": "Boss buff event propagated into ACT",
+        },
     ])
     harness = ActReplayHarness(
         trigger_engine=trigger_engine,
@@ -438,6 +452,8 @@ def main() -> int:
     assert context["boss_total_hp"] == 1000000, context
     assert context["boss_hp_est_pct"] == 0.9, context
     assert context["boss_hp_source"] == "tcp", context
+    assert context["last_boss_event"].get("event_type") == 101, context
+    assert context["last_boss_event"].get("host_uuid") == target_uuid, context
     assert state["boss_current_hp"] == 900000, state
     assert state["boss_total_hp"] == 1000000, state
     assert state["boss_hp_est_pct"] == 0.9, state
@@ -462,6 +478,8 @@ def main() -> int:
     assert render_spec.get("context", {}).get("dungeon_id") == 42001, render_spec
     assert render_spec.get("context", {}).get("dungeon_scene_id") == 155001, render_spec
     assert render_spec.get("context", {}).get("last_skill_kind") == "server_end", render_spec
+    assert render_spec.get("context", {}).get("last_boss_event_type") == 101, render_spec
+    assert render_spec.get("context", {}).get("last_boss_host_uuid") == target_uuid, render_spec
     assert render_spec.get("totals", {}).get("damage") == 123456, render_spec
     rows = render_spec.get("rows") or []
     assert len(rows) == 1, render_spec
@@ -479,10 +497,11 @@ def main() -> int:
     assert render_spec.get("sources", {}).get("packet", {}).get("running") is True, render_spec
     trigger_events = (triggers.get("emitted") or triggers.get("recent") or [])
     trigger_rule_ids = {str(event.get("rule_id") or "") for event in trigger_events}
-    assert len(trigger_events) >= 3, triggers
+    assert len(trigger_events) >= 4, triggers
     assert "demo_damage_alert" in trigger_rule_ids, triggers
     assert "demo_skill_end" in trigger_rule_ids, triggers
     assert "demo_boss_hp_alert" in trigger_rule_ids, triggers
+    assert "demo_boss_event_alert" in trigger_rule_ids, triggers
     assert live.get("total_damage", 0) == 123456, live
     assert live.get("entities"), live
     print(json.dumps({
@@ -492,10 +511,12 @@ def main() -> int:
         "entity_act_source_priority": True,
         "encounter_finalize_contract": True,
         "monster_update_act_contract": True,
+        "boss_event_act_contract": True,
         "dual_ui_act_meta_bridge": True,
         "dungeon_id": context.get("dungeon_id"),
         "dungeon_scene_id": context.get("dungeon_scene_id"),
         "last_skill_kind": context.get("last_skill_event", {}).get("kind"),
+        "last_boss_event_type": context.get("last_boss_event", {}).get("event_type"),
         "boss_hp_source": state.get("boss_hp_source"),
         "boss_hp_est_pct": state.get("boss_hp_est_pct"),
         "render_boss_hp_source": render_spec.get("boss", {}).get("hp_source"),

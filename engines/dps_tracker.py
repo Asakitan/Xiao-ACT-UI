@@ -135,6 +135,7 @@ class DpsTracker:
         # v2.3.15: fast snapshot cache
         self._snapshot_cache: Optional[Dict[str, Any]] = None
         self._snapshot_cache_ts: float = 0.0
+        self._finalized_hooks: List[Callable[[Dict[str, Any]], None]] = []
         # Player info cache: uid (str) → {name, profession, fight_point}
         self._player_cache: Dict[str, Dict[str, Any]] = {}
         self._player_cache_dirty: bool = False
@@ -236,6 +237,41 @@ class DpsTracker:
     def set_skill_names(self, names: Dict[int, str]):
         with self._lock:
             self._skill_names.update(names)
+
+    def register_finalized_hook(self, callback: Callable[[Dict[str, Any]], None]) -> None:
+        """Register a callback for finalized encounter reports.
+
+        Hooks are invoked outside the DPS lock so history/export work cannot
+        stall packet parsing or the overlay polling path.
+        """
+        if not callable(callback):
+            return
+        with self._lock:
+            if callback not in self._finalized_hooks:
+                self._finalized_hooks.append(callback)
+
+    def unregister_finalized_hook(self, callback: Callable[[Dict[str, Any]], None]) -> None:
+        with self._lock:
+            try:
+                self._finalized_hooks.remove(callback)
+            except ValueError:
+                pass
+
+    def _dispatch_finalized_hooks(self, report: Optional[Dict[str, Any]],
+                                  hooks: Optional[List[Callable[[Dict[str, Any]], None]]] = None) -> None:
+        if not report:
+            return
+        callbacks = list(hooks) if hooks is not None else []
+        if hooks is None:
+            with self._lock:
+                callbacks = list(self._finalized_hooks)
+        if not callbacks:
+            return
+        for cb in callbacks:
+            try:
+                cb(copy.deepcopy(report))
+            except Exception:
+                pass
 
     @_probe.decorate('dps.on_damage_event')
     def on_damage_event(self, event: Dict[str, Any]):
@@ -424,22 +460,32 @@ class DpsTracker:
         self._lock.release()
 
     def reset(self):
+        report = None
+        hooks: List[Callable[[Dict[str, Any]], None]] = []
         with self._lock:
-            self._finalize_current_locked('manual_reset')
+            report = self._finalize_current_locked('manual_reset')
+            if report is not None:
+                hooks = list(self._finalized_hooks)
             self._reset_locked()
+        self._dispatch_finalized_hooks(report, hooks)
 
     def reset_idle_live_data(self, reason: str = 'idle_timeout',
                              expected_last_event_time: float = 0.0) -> bool:
+        report = None
+        hooks: List[Callable[[Dict[str, Any]], None]] = []
         with self._lock:
             if not self._has_meaningful_data_locked():
                 return False
             if expected_last_event_time > 0:
                 if abs(self._last_event_time - expected_last_event_time) > 1e-6:
                     return False
-            if self._finalize_current_locked(reason) is not None:
+            report = self._finalize_current_locked(reason)
+            if report is not None:
                 self._last_finalized_event_time = self._last_event_time
+                hooks = list(self._finalized_hooks)
             self._reset_locked()
-            return True
+        self._dispatch_finalized_hooks(report, hooks)
+        return True
 
     def _reset_locked(self):
         self._entities.clear()
@@ -533,6 +579,8 @@ class DpsTracker:
             return self._last_report is not None
 
     def finalize_if_idle(self, timeout_s: float, reason: str = 'idle_timeout') -> bool:
+        report = None
+        hooks: List[Callable[[Dict[str, Any]], None]] = []
         with self._lock:
             if timeout_s <= 0:
                 return False
@@ -542,11 +590,14 @@ class DpsTracker:
                 return False
             if self._last_finalized_event_time == self._last_event_time:
                 return False
-            finalized = self._finalize_current_locked(reason) is not None
+            report = self._finalize_current_locked(reason)
+            finalized = report is not None
             if finalized:
                 self._last_finalized_event_time = self._last_event_time
+                hooks = list(self._finalized_hooks)
                 self._dirty = True
-            return finalized
+        self._dispatch_finalized_hooks(report, hooks)
+        return finalized
 
     @_probe.decorate('dps.get_snapshot')
     def get_snapshot(self, include_skills: bool = False) -> Dict[str, Any]:
@@ -621,13 +672,17 @@ class DpsTracker:
             'dirty': False,
             'should_fade_out': False,
         }
+        finalized_report = None
+        finalized_hooks: List[Callable[[Dict[str, Any]], None]] = []
         with self._lock:
             # 1) Finalize if idle
             if idle_timeout_s > 0 and self._encounter_start and self._last_event_time:
                 if (now - self._last_event_time) >= idle_timeout_s:
                     if self._last_finalized_event_time != self._last_event_time:
-                        if self._finalize_current_locked('idle_timeout') is not None:
+                        finalized_report = self._finalize_current_locked('idle_timeout')
+                        if finalized_report is not None:
                             self._last_finalized_event_time = self._last_event_time
+                            finalized_hooks = list(self._finalized_hooks)
                             self._dirty = True
 
             # 2) Dirty check
@@ -675,4 +730,5 @@ class DpsTracker:
                         entity.damage_total / max(self._total_damage, 1), 3)
                     result['detail'] = d
 
+        self._dispatch_finalized_hooks(finalized_report, finalized_hooks)
         return result

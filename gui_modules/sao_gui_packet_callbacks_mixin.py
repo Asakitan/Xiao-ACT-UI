@@ -365,6 +365,12 @@ class SAOPlayerGUIPacketCallbacksMixin:
 
     def _on_boss_event(self, event):
         """Boss buff/event callback from packet_parser → boss raid engine."""
+        try:
+            self._last_boss_event = dict(event or {})
+            if getattr(self, '_state_mgr', None):
+                self._state_mgr.update(last_boss_event=self._last_boss_event)
+        except Exception:
+            pass
         if self._boss_raid_engine:
             try: self._boss_raid_engine.on_boss_event(event)
             except Exception: pass

@@ -376,7 +376,8 @@ class PacketBridge:
     def __init__(self, state_mgr: GameStateManager, settings=None, on_damage=None,
                  on_monster_update=None, on_boss_event=None,
                  on_scene_change=None, on_self_update=None,
-                 data_source: str = 'tcp'):
+                 data_source: str = 'tcp',
+                 on_skill_event=None, on_dungeon_event=None):
         """
         data_source:
             'tcp'    — current behavior, full TCP packet parsing
@@ -390,6 +391,8 @@ class PacketBridge:
         self._on_damage = on_damage
         self._on_monster_update = on_monster_update
         self._on_boss_event = on_boss_event
+        self._on_skill_event = on_skill_event
+        self._on_dungeon_event = on_dungeon_event
         self._on_scene_change = on_scene_change  # 场景切换通知 (给 webview 清理 boss HP / DPS)
         self._on_self_update = on_self_update    # mem_probe 引入: SELF 综合更新
         self._data_source_mode = str(data_source or 'tcp').lower()
@@ -639,6 +642,8 @@ class PacketBridge:
             on_damage=self._on_damage,
             on_monster_update=self._on_monster_update,
             on_boss_event=self._on_boss_event,
+            on_skill_event=self._on_skill_event,
+            on_dungeon_event=self._on_dungeon_event,
             on_scene_change=self._on_scene_change,
         )
 

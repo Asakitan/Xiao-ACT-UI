@@ -1812,6 +1812,7 @@ class SAOWebViewGUI:
         self._boss_raid_picker_purpose = ''
         self._last_boss_timer_text = ''
         self._last_boss_timer_urgency = ''
+        self._last_boss_event = {}
 
         # Boss ↔ AutoKey 联动
         self._boss_autokey_linkage = None
@@ -2677,6 +2678,12 @@ class SAOWebViewGUI:
 
     def _on_boss_event(self, event):
         """Boss buff event callback from packet_parser → boss raid engine + boss bar effects."""
+        try:
+            self._last_boss_event = dict(event or {})
+            if getattr(self, '_state_mgr', None):
+                self._state_mgr.update(last_boss_event=self._last_boss_event)
+        except Exception:
+            pass
         if self._boss_raid_engine:
             try:
                 self._boss_raid_engine.on_boss_event(event)

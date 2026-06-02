@@ -74,6 +74,12 @@ class SAOPlayerGUIFloatHandlersMixin:
                 delay_s = 3.0
         self._pending_combat_reset_after = time.time() + max(0.0, delay_s)
         self._pending_combat_reset_reason = reason
+        try:
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                mgr.arm_pending_reset(reason, delay_s=delay_s)
+        except Exception:
+            pass
         self._scene_damage_grace_until = max(
             float(getattr(self, '_scene_damage_grace_until', 0.0) or 0.0),
             time.time() + max(8.0, delay_s + 8.0),

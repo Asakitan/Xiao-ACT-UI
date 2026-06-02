@@ -148,6 +148,14 @@ class ActReplayHarness:
         self.events.append(("boss_state", state))
         return state
 
+    def emit_boss_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        event = dict(event or {})
+        event.setdefault("timestamp", time.time())
+        event.setdefault("source", "replay")
+        self.state_mgr.update(last_boss_event=event)
+        self.events.append(("boss_event", event))
+        return event
+
     def emit_monster_update(self, event: Dict[str, Any]) -> Dict[str, Any]:
         event = dict(event or {})
         event.setdefault("timestamp", time.time())
@@ -187,6 +195,8 @@ class ActReplayHarness:
                 self.emit_skill_event(event)
             elif kind in ("boss_state", "boss_attrs", "boss"):
                 self.emit_boss_state(event)
+            elif kind in ("boss_event", "boss_buff_event", "boss_buff"):
+                self.emit_boss_event(event)
             elif kind in ("monster_update", "monster", "monster_attrs"):
                 self.emit_monster_update(event)
             elif kind in ("damage", "heal"):
@@ -212,6 +222,7 @@ class ActReplayHarness:
         live = snap.get("live") or {}
         assert "last_dungeon_event" in context
         assert "last_skill_event" in context
+        assert "last_boss_event" in context
         assert "status" in (snap.get("encounter") or {})
         assert "entities" in live
         assert "total_damage" in live

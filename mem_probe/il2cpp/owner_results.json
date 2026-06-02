@@ -1,0 +1,21 @@
+{
+  "target": "0x13FBE4F660",
+  "ptr_locations": [
+    "0x446A561F0",
+    "0x4BE321B08",
+    "0x4D00AB560"
+  ],
+  "owners": [
+    {
+      "obj": "0x446A561E0",
+      "off": "0x10",
+      "name": "Zproto.UserFightAttrContainerArchive"
+    },
+    {
+      "obj": "0x4BE321A80",
+      "off": "0x88",
+      "name": "Zproto.CharSerialize"
+    }
+  ],
+  "unknown_count": 1
+}

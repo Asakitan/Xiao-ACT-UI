@@ -343,8 +343,13 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.21"
+APP_VERSION = "3.2.22"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v3.2.22: ACT replay, memory-probe, and live name-table tooling refresh.
+#   Add the read-only mem_probe/IL2CPP runtime inspection pipeline, Cython
+#   memscan accelerator, live localization/name-table extraction diagnostics,
+#   and ACT replay/history helper modules so table and combat-data research can
+#   be validated without touching packet capture or packaged release steps.
 # v3.2.21: Boss-HP teammate-leak fix.
 #   User reported: "怪物血量会把队友血量算进去" — the boss HP bar
 #   showed a 56.26M max while the real boss on screen only had 1.17M.

@@ -52,11 +52,15 @@ class PacketParser:
                  on_monster_update: Optional[Callable[[dict], None]] = None,
                  on_boss_event: Optional[Callable[[dict], None]] = None,
                  on_scene_change: Optional[Callable[[], None]] = None,
-                 preferred_uid: int = 0):
+                 preferred_uid: int = 0,
+                 on_skill_event: Optional[Callable[[dict], None]] = None,
+                 on_dungeon_event: Optional[Callable[[dict], None]] = None):
         self._on_update = on_self_update
         self._on_damage = on_damage   # callback(DamageEvent dict)
         self._on_monster_update = on_monster_update  # callback(MonsterData.to_dict())
         self._on_boss_event = on_boss_event          # callback({event_type, host_uuid, ...})
+        self._on_skill_event = on_skill_event        # callback({kind, skill_uuid, ...})
+        self._on_dungeon_event = on_dungeon_event    # callback({kind, dungeon_id, ...})
         self._on_scene_change = on_scene_change      # callback() — 场景服务器切换时清理
         # Phase 9: optional message-name allowlist for anchor-only TCP mode.
         # When None (default), all messages are processed. When set to a
@@ -347,6 +351,36 @@ class PacketParser:
                 logger.error(f'[Parser] on_scene_change callback error: {e}')
         except Exception as e:
             logger.error(f'[Parser] on_scene_change callback error: {e}')
+
+    def _emit_skill_event(self, kind: str, **payload):
+        """Emit normalized skill lifecycle events for ACT/triggers."""
+        if not self._on_skill_event:
+            return
+        event = {
+            'kind': str(kind or ''),
+            'timestamp': time.time(),
+            'source': 'tcp',
+        }
+        event.update(payload)
+        try:
+            self._on_skill_event(event)
+        except Exception as e:
+            logger.debug(f'[Parser] on_skill_event callback error: {e}')
+
+    def _emit_dungeon_event(self, kind: str, **payload):
+        """Emit normalized dungeon/scene context events for ACT/triggers."""
+        if not self._on_dungeon_event:
+            return
+        event = {
+            'kind': str(kind or ''),
+            'timestamp': time.time(),
+            'source': 'tcp',
+        }
+        event.update(payload)
+        try:
+            self._on_dungeon_event(event)
+        except Exception as e:
+            logger.debug(f'[Parser] on_dungeon_event callback error: {e}')
 
     def _notify_soft_scene_restart(self, reason: str):
         """Notify UI layers about a likely new encounter without clearing monsters.
@@ -1035,6 +1069,14 @@ class PacketParser:
                 'target_uuid': target_uuid,
                 'skill_level_id': skill_level_id,
             })
+            self._emit_skill_event(
+                'client_use',
+                method_id=NotifyMethod.SYNC_CLIENT_USE_SKILL,
+                skill_level_id=int(skill_level_id or 0),
+                target_uuid=int(target_uuid or 0),
+                caster_uid=int(self._current_uid or 0),
+                caster_uuid=int(self._current_uuid or 0),
+            )
             # Record skill use timestamp for CD tracking (caster = current player)
             uid = self._current_uid
             if uid and uid in self._players:
@@ -1060,6 +1102,11 @@ class PacketParser:
             msg.ParseFromString(data)
             logger.debug(f'[Parser] SyncServerSkillEnd(pb2): skill_uuid={msg.SkillUuid}')
             _append_packet_debug('skill_end', {'skill_uuid': msg.SkillUuid})
+            self._emit_skill_event(
+                'server_end',
+                method_id=NotifyMethod.SYNC_SERVER_SKILL_END,
+                skill_uuid=int(msg.SkillUuid or 0),
+            )
         except Exception as e:
             logger.debug(f'[Parser] SyncServerSkillEnd decode error: {e}')
 
@@ -1084,6 +1131,20 @@ class PacketParser:
             logger.debug(
                 f'[Parser] SyncServerSkillStageEnd(pb2): skill_uuid={info.SkillUuid} '
                 f'stage={info.StageId} new_stage={info.NewStageId} cond={info.ConditionId}'
+            )
+            _append_packet_debug('skill_stage_end', {
+                'skill_uuid': int(info.SkillUuid or 0),
+                'stage_id': int(info.StageId or 0),
+                'new_stage_id': int(info.NewStageId or 0),
+                'condition_id': int(info.ConditionId or 0),
+            })
+            self._emit_skill_event(
+                'server_stage_end',
+                method_id=NotifyMethod.SYNC_SERVER_SKILL_STAGE_END,
+                skill_uuid=int(info.SkillUuid or 0),
+                stage_id=int(info.StageId or 0),
+                new_stage_id=int(info.NewStageId or 0),
+                condition_id=int(info.ConditionId or 0),
             )
         except Exception as e:
             logger.debug(f'[Parser] SyncServerSkillStageEnd decode error: {e}')
@@ -1147,6 +1208,14 @@ class PacketParser:
                     'connect_guid': str(info.ConnectGuid or ''),
                     'player_uuid': player_uuid,
                 })
+                self._emit_dungeon_event(
+                    'enter_scene',
+                    scene_id=int(scene_id or 0),
+                    scene_guid=str(info.SceneGuid or ''),
+                    connect_guid=str(info.ConnectGuid or ''),
+                    player_uuid=int(player_uuid or 0),
+                    player_uid=int(self._current_uid or 0),
+                )
         except Exception as e:
             logger.debug(f'[Parser] EnterScene decode error: {e}')
 
@@ -1207,6 +1276,13 @@ class PacketParser:
                     new_scene_key=('dungeon', dungeon_id),
                 )
             self._last_dungeon_id = dungeon_id
+            self._emit_dungeon_event(
+                'sync_dungeon_data',
+                dungeon_id=int(dungeon_id or 0),
+                scene_uuid=int(scene_uuid or 0),
+                dungeon_difficulty=int(dungeon_difficulty or 0),
+                targets=target_debug[:16],
+            )
             if self._current_uid and self._current_uid in self._players:
                 player = self._players[self._current_uid]
                 if dungeon_id > 0:
@@ -1257,6 +1333,13 @@ class PacketParser:
                 'targets': targets[:16],
                 'buffer_len': len(buffer_data),
             },
+        )
+        self._emit_dungeon_event(
+            'sync_dungeon_dirty_data',
+            dungeon_id=int(self._last_dungeon_id or 0),
+            flow_state=int(flow_state or 0),
+            targets=targets[:16],
+            buffer_len=len(buffer_data),
         )
         if targets:
             self._apply_dungeon_target_reset_rules(targets, 'sync_dungeon_dirty_data')
@@ -1310,6 +1393,10 @@ class PacketParser:
                     )
                 self._notify_soft_scene_restart(f'dungeon_id={dungeon_id}')
             self._last_dungeon_id = dungeon_id
+            self._emit_dungeon_event(
+                'start_playing_dungeon',
+                dungeon_id=int(dungeon_id or 0),
+            )
             if self._current_uid and self._current_uid in self._players:
                 player = self._players[self._current_uid]
                 player.dungeon_id = dungeon_id

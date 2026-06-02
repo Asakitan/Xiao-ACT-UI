@@ -77,7 +77,9 @@ from engines.auto_key_engine import AutoKeyEngine
 from engines.boss_autokey_linkage import BossAutoKeyLinkage
 from engines.boss_raid_engine import BossRaidEngine
 from config import resource_path
+from engines.dps_history import DpsHistoryStore
 from engines.dps_tracker import DpsTracker
+from engines.encounter_manager import EncounterManager
 from utils.sao_sound import play_sound
 
 from gui_modules.sao_gui_alert import AlertOverlay
@@ -94,6 +96,10 @@ class SAOPlayerGUIEngineLifecycleMixin:
 
     def _stop_recognition_engines(self):
         """停止所有识别/数据引擎."""
+        if getattr(self, '_mem_bridge', None):
+            try: self._mem_bridge.stop()
+            except Exception: pass
+            self._mem_bridge = None
         if getattr(self, '_auto_key_engine', None):
             try: self._auto_key_engine.stop()
             except Exception: pass
@@ -150,6 +156,8 @@ class SAOPlayerGUIEngineLifecycleMixin:
                                          on_monster_update=self._on_monster_update,
                                          on_boss_event=self._on_boss_event,
                                          on_scene_change=self._on_scene_change,
+                                         on_skill_event=self._on_skill_event,
+                                         on_dungeon_event=self._on_dungeon_event,
                                          data_source=_data_source_mode)
             packet_engine.start()
             engines.append(packet_engine)
@@ -164,7 +172,10 @@ class SAOPlayerGUIEngineLifecycleMixin:
 
         # DPS Tracker
         try:
+            self._dps_history_store = DpsHistoryStore()
             self._dps_tracker = DpsTracker()
+            self._encounter_mgr = EncounterManager()
+            self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
             # Load skill name mapping (same as webview path)
             _skill_json = resource_path('assets', 'skill_names.json')
             if os.path.isfile(_skill_json):
@@ -182,7 +193,9 @@ class SAOPlayerGUIEngineLifecycleMixin:
             print('[SAO Entity] DPS tracker initialized')
         except Exception as e:
             print(f'[SAO Entity] DPS tracker init failed: {e}')
+            self._dps_history_store = None
             self._dps_tracker = None
+            self._encounter_mgr = None
 
         try:
             from vision.recognition import RecognitionEngine
@@ -295,6 +308,8 @@ class SAOPlayerGUIEngineLifecycleMixin:
                     reset_dps=self._reset_dps_tracker,
                     has_last_report=self._get_dps_last_report_available,
                     request_entity_detail=self._request_dps_entity_detail,
+                    list_history=self._request_dps_history,
+                    export_last_report=self._export_last_dps_report,
                     alert=self._show_entity_alert,
                 )
                 self._dps_overlay.set_report_available(
@@ -395,6 +410,32 @@ class SAOPlayerGUIEngineLifecycleMixin:
                     except Exception:
                         pass
             _thr.Thread(target=_cache_loop, daemon=True, name='cache_saver').start()
+
+            # ── Memory bridge: live read-only inspect of Star.exe to push
+            # self UID / HP / level / season_exp / fight_point / profession /
+            # skill CDs into GameState. TCP path remains authoritative; this
+            # is a fast-path that covers the "started after login" gap.
+            try:
+                from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
+                self._mem_bridge = MemStateBridge(
+                    state_mgr=self._state_mgr,
+                    dps_tracker=getattr(self, '_dps_tracker', None),
+                    dps_overlay=getattr(self, '_dps_overlay', None),
+                    hp_overlay=getattr(self, '_hp_overlay', None),
+                    auto_key_engine=getattr(self, '_auto_key_engine', None),
+                    boss_raid_engine=getattr(self, '_boss_raid_engine', None),
+                    packet_bridge=getattr(self, '_packet_engine', None),
+                    dump_id='fdc7111b',
+                    enable_extended=True,
+                    on_log=lambda m: print(f'[MemBridge] {m}'),
+                )
+                if not self._mem_bridge.start():
+                    self._mem_bridge = None
+            except Exception as _mb_exc:
+                import traceback
+                print(f'[MemBridge] init failed: {_mb_exc}')
+                traceback.print_exc()
+                self._mem_bridge = None
 
         except Exception as e:
             print(f'[SAO Entity] Data engine failed: {e}')

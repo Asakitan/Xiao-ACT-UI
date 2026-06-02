@@ -379,6 +379,11 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._boss_raid_engine = None
         self._boss_autokey_linkage = None
         self._dps_tracker = None
+        self._dps_history_store = None
+        self._encounter_mgr = None
+        self._last_skill_event = {}
+        self._last_dungeon_event = {}
+        self._last_boss_event = {}
         self._dps_visible = False
         self._dps_enabled = True
         self._dps_faded = False
@@ -427,6 +432,10 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._hp_overlay = None
         self._alert_overlay = None
         self._skillfx_overlay = None
+        # v3.2.x: MemStateBridge (read-only Star.exe → GameState push).
+        # Initialized in _start_recognition_engines once the data stack is
+        # up; stopped in _stop_recognition_engines at top of method.
+        self._mem_bridge = None
         self._skillfx_layout = None
         self._self_buff_overlay = None
         self._boss_buff_overlay = None

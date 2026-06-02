@@ -161,6 +161,7 @@ def build_act_render_spec(live: Optional[Dict[str, Any]] = None,
     source = live if is_live or not last_report else last_report
     dungeon_name = str(context.get("dungeon_name") or encounter.get("dungeon_name") or "")
     last_skill = context.get("last_skill_event") or encounter.get("last_skill_event") or {}
+    last_boss_event = context.get("last_boss_event") or encounter.get("last_boss_event") or {}
     boss = _boss_context(context, encounter, live)
     return {
         "version": 1,
@@ -175,6 +176,8 @@ def build_act_render_spec(live: Optional[Dict[str, Any]] = None,
                 context.get("dungeon_difficulty") or encounter.get("dungeon_difficulty"), 0),
             "dungeon_name": dungeon_name,
             "last_skill_kind": str(last_skill.get("kind") or ""),
+            "last_boss_event_type": _safe_int(last_boss_event.get("event_type"), 0),
+            "last_boss_host_uuid": _safe_int(last_boss_event.get("host_uuid"), 0),
         },
         "name_resolution": {
             "dungeon_name_source": "resolver" if dungeon_name else "pending_runtime_ztable",
@@ -255,6 +258,7 @@ def build_act_snapshot(dps_tracker: Any = None,
         "dungeon_name": state.get("dungeon_name", ""),
         "last_dungeon_event": state.get("last_dungeon_event") or {},
         "last_skill_event": state.get("last_skill_event") or {},
+        "last_boss_event": state.get("last_boss_event") or {},
         "boss_raid_active": state.get("boss_raid_active", False),
         "boss_raid_phase": state.get("boss_raid_phase", 0),
         "boss_raid_phase_name": state.get("boss_raid_phase_name", ""),
