@@ -682,7 +682,9 @@ def main() -> int:
     rows = render_spec.get("rows") or []
     assert len(rows) == 1, render_spec
     assert rows[0].get("uid") == self_uid, rows
+    assert rows[0].get("rank") == 1, rows
     assert rows[0].get("damage") == 123456, rows
+    assert rows[0].get("heal") == 0, rows
     assert rows[0].get("is_self") is True, rows
     assert render_spec.get("boss", {}).get("current_hp") == 900000, render_spec
     assert render_spec.get("boss", {}).get("total_hp") == 1000000, render_spec
@@ -723,6 +725,7 @@ def main() -> int:
         "boss_hp_est_pct": state.get("boss_hp_est_pct"),
         "render_boss_hp_source": render_spec.get("boss", {}).get("hp_source"),
         "total_damage": live.get("total_damage"),
+        "render_rows": len(render_spec.get("rows") or []),
         "entities": len(live.get("entities") or []),
         "encounter_status": encounter.get("status"),
         "encounter_damage_events": encounter.get("damage_events"),

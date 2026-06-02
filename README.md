@@ -172,6 +172,14 @@ python main.py
 - 战斗重置
 - 空闲自动淡出
 
+### ACT 合同
+
+- TCP 是 ACT 主数据源；内存桥只作为 opt-in/self-state 兜底，不替代伤害、Boss HP、Boss 事件等 TCP 事实。
+- `engines/combat_analytics.py` 统一生成 `render_spec`，WebView 与 Entity/Tk 共享同一份 `context`、`boss`、`sources`、`totals` 与 `rows` 合同。
+- `render_spec.sources.summary.data_source` 会显示 `tcp` / `memory` / `tcp+memory` 等来源摘要；`render_spec.boss.hp_source` 表示 Boss HP 来自 TCP/packet 还是其他兜底。
+- `render_spec.rows` 是双 UI 后续排行榜 1:1 迁移的规范行模型；当前旧 DPS payload 仍保持兼容，ACT metadata badge 与合同自测先行。
+- 本地验证使用 `python -m act_replay.selftest`，覆盖 parser dungeon/skill、damage、monster_update、boss_event、trigger、encounter finalize 与 WebView/Entity 双模式 ACT 刷新。
+
 ## 自建服务端
 
 仓库内自带两类 `FastAPI` 服务端：
