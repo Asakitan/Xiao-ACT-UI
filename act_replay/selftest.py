@@ -23,6 +23,7 @@ from gui_modules.sao_gui_dps_theme_mixin import SAOPlayerGUIDpsThemeMixin
 from gui_modules.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin
 from packet_parser.enums import NotifyMethod
 from packet_parser.parser import PacketParser
+from sao_webview import SAOWebViewGUI
 import packet_parser.parser as parser_mod
 
 from .events import boss_event, boss_state_event, damage_event, dungeon_event, monster_update_event, skill_event
@@ -150,6 +151,45 @@ class _FakeRuntimeActGui(SAOPlayerGUIPacketCallbacksMixin, SAOPlayerGUIDpsThemeM
     def _push_dps_act_snapshot(self):
         self.push_count += 1
         self.last_snapshot = self._get_dps_act_snapshot()
+
+
+class _FakeWebViewRuntimeActGui:
+    """No-window stand-in for WebView packet callback → ACT snapshot checks."""
+
+    def __init__(self) -> None:
+        self._dps_tracker = DpsTracker()
+        self._dps_history_store = None
+        self._state_mgr = GameStateManager()
+        self._encounter_mgr = EncounterManager()
+        self._packet_engine = {"data_source": "packet", "running": True}
+        self._mem_bridge = None
+        self._boss_raid_engine = None
+        self._bb_recent_targets = {}
+        self._bb_last_target_uuid = 0
+        self._bb_last_damage_ts = 0.0
+        self._pending_combat_reset_after = 0.0
+        self._pending_combat_reset_reason = ''
+        self.push_count = 0
+        self.last_snapshot = {}
+
+    def _current_player_uid_int(self):
+        return 36668136
+
+    def _normalize_damage_event_for_self(self, event):
+        return event
+
+    def _normalize_damage_event_target_for_webview(self, event):
+        return event
+
+    def _maybe_apply_pending_combat_reset(self, _event, _is_self_combat_target):
+        pass
+
+    def _push_dps_act_snapshot(self):
+        self.push_count += 1
+        self.last_snapshot = self._build_dps_act_snapshot()
+
+    def _build_dps_act_snapshot(self, history_limit: int = 20):
+        return SAOWebViewGUI._build_dps_act_snapshot(self, history_limit)
 
 
 class _MemoryHistoryStore:
@@ -398,6 +438,31 @@ def _assert_entity_damage_callback_act_contract() -> None:
     assert snap.get("render_spec", {}).get("sources", {}).get("summary", {}).get("data_source") == "packet", snap
 
 
+def _assert_webview_damage_callback_act_contract() -> None:
+    gui = _FakeWebViewRuntimeActGui()
+    event = damage_event(
+        attacker_uid=36668136,
+        attacker_uuid=(36668136 << 16) | 640,
+        attacker_is_self=True,
+        target_uuid=987654321064,
+        target_is_player=False,
+        target_is_monster=True,
+        target_is_combat_target=True,
+        skill_id=1101,
+        skill_key=1101,
+        damage=65400,
+    )
+    SAOWebViewGUI._on_packet_damage(gui, event)
+    assert gui.push_count == 1, gui.push_count
+    snap = gui.last_snapshot
+    assert snap.get("live", {}).get("total_damage") == 65400, snap
+    assert snap.get("encounter", {}).get("status") == "active", snap
+    assert snap.get("encounter", {}).get("last_damage_event", {}).get("damage") == 65400, snap
+    assert snap.get("render_spec", {}).get("mode") == "live", snap
+    assert snap.get("render_spec", {}).get("totals", {}).get("damage") == 65400, snap
+    assert snap.get("render_spec", {}).get("sources", {}).get("summary", {}).get("data_source") == "packet", snap
+
+
 def _assert_encounter_finalize_contract() -> None:
     self_uid, events = build_demo_events()
     store = _MemoryHistoryStore()
@@ -478,6 +543,7 @@ def main() -> int:
     _assert_parser_handler_contract()
     _assert_entity_act_source_priority()
     _assert_entity_damage_callback_act_contract()
+    _assert_webview_damage_callback_act_contract()
     _assert_encounter_finalize_contract()
     _assert_monster_update_act_contract()
     self_uid, events = build_demo_events()
@@ -588,6 +654,7 @@ def main() -> int:
         "parser_handler_contract": True,
         "entity_act_source_priority": True,
         "entity_damage_callback_act_contract": True,
+        "webview_damage_callback_act_contract": True,
         "encounter_finalize_contract": True,
         "monster_update_act_contract": True,
         "boss_event_act_contract": True,

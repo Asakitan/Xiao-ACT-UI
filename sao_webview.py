@@ -2622,6 +2622,10 @@ class SAOWebViewGUI:
                 mgr.on_damage_event(event)
         except Exception:
             pass
+        try:
+            self._push_dps_act_snapshot()
+        except Exception:
+            pass
 
     def _on_monster_update(self, monster_data):
         """Monster update callback from packet_parser → boss raid engine + break bar tracking.
