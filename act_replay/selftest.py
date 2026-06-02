@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from engines.act_trigger_engine import ActTriggerEngine
+from engines.act_trigger_engine import ActTriggerEngine, normalize_trigger_rule
 from engines.dps_tracker import DpsTracker
 from engines.encounter_manager import EncounterManager
 from engines.game_state import GameStateManager
@@ -468,6 +468,14 @@ def _assert_entity_trigger_summary_contract() -> None:
     assert DpsOverlay._act_trigger_text(overlay) == "", overlay._act_snapshot
 
 
+def _assert_trigger_rule_normalize_contract() -> None:
+    hp_rule = normalize_trigger_rule({"id": "hp", "type": "boss_hp_pct_below", "threshold": 35})
+    assert hp_rule["threshold"] == 0.35, hp_rule
+    event_rule = normalize_trigger_rule({"id": "evt", "type": "boss_event_type", "event_type": 101})
+    assert event_rule["threshold"] == 101.0, event_rule
+    assert event_rule["match"] == "101", event_rule
+
+
 def _assert_entity_damage_callback_act_contract() -> None:
     gui = _FakeRuntimeActGui()
     event = damage_event(
@@ -647,6 +655,7 @@ def main() -> int:
     _assert_entity_act_source_priority()
     _assert_entity_render_rows_contract()
     _assert_entity_trigger_summary_contract()
+    _assert_trigger_rule_normalize_contract()
     _assert_entity_damage_callback_act_contract()
     _assert_entity_monster_update_act_contract()
     _assert_webview_damage_callback_act_contract()
@@ -764,6 +773,7 @@ def main() -> int:
         "entity_act_source_priority": True,
         "entity_render_rows_contract": True,
         "entity_trigger_summary_contract": True,
+        "trigger_rule_normalize_contract": True,
         "entity_damage_callback_act_contract": True,
         "entity_monster_update_act_contract": True,
         "webview_damage_callback_act_contract": True,

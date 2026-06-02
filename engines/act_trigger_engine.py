@@ -34,6 +34,13 @@ def _safe_str(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _first_present(src: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in src and src.get(key) is not None:
+            return src.get(key)
+    return None
+
+
 def normalize_trigger_rule(raw: Any, fallback_index: int = 0) -> Dict[str, Any]:
     src = raw if isinstance(raw, dict) else {}
     rule_type = _safe_str(src.get("type") or src.get("trigger_type")).lower()
@@ -47,14 +54,17 @@ def normalize_trigger_rule(raw: Any, fallback_index: int = 0) -> Dict[str, Any]:
         "encounter_start",
     ):
         rule_type = "damage_total"
+    threshold = _safe_float(_first_present(src, "threshold", "value", "event_type"), 0.0)
+    if rule_type == "boss_hp_pct_below" and threshold > 1.0:
+        threshold = threshold / 100.0
     return {
         "id": _safe_str(src.get("id")) or f"act_rule_{fallback_index}",
         "enabled": bool(src.get("enabled", True)),
         "type": rule_type,
         "label": _safe_str(src.get("label")) or rule_type.replace("_", " ").title(),
         "message": _safe_str(src.get("message")),
-        "threshold": _safe_float(src.get("threshold") or src.get("value"), 0.0),
-        "match": _safe_str(src.get("match")),
+        "threshold": threshold,
+        "match": _safe_str(_first_present(src, "match", "event_type", "kind")),
         "cooldown_s": max(0.0, _safe_float(src.get("cooldown_s"), 5.0)),
         "once_per_encounter": bool(src.get("once_per_encounter", True)),
         "severity": _safe_str(src.get("severity")) or "info",
