@@ -1877,6 +1877,20 @@ class DpsOverlay:
         except Exception:
             return ''
 
+    def _act_trigger_text(self) -> str:
+        try:
+            triggers = (self._act_snapshot or {}).get('triggers') or {}
+            events = triggers.get('emitted') or triggers.get('recent') or []
+            if not events:
+                return ''
+            event = events[0] or {}
+            text = str(event.get('message') or event.get('label') or event.get('rule_id') or event.get('trigger_type') or '').strip()
+            if not text:
+                return ''
+            return f'ACT ALERT {text.upper()}'
+        except Exception:
+            return ''
+
     def _draw_header(self, draw: ImageDraw.ImageDraw, img: Image.Image,
                      sx: int, sy: int, sw: int, hh: int) -> None:
         x_left = sx + self.HEADER_PAD_X
@@ -1942,6 +1956,9 @@ class DpsOverlay:
             )
         else:
             summary = 'WAITING FOR COMBAT DATA'
+        trigger_summary = self._act_trigger_text()
+        if trigger_summary and self._view_mode == 'live':
+            summary = f'{summary} · {trigger_summary}'
         font_sum = _load_font('sao', 10)
         self._draw_tracked(draw, (x_left, y + 2),
                            summary, font_sum, self.TEXT_MUTED, 0.85)

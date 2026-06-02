@@ -452,6 +452,16 @@ def _assert_entity_render_rows_contract() -> None:
     assert rows[0]["pct"] == 1000 / 1200, rows
 
 
+def _assert_entity_trigger_summary_contract() -> None:
+    overlay = DpsOverlay.__new__(DpsOverlay)
+    overlay._act_snapshot = {"triggers": {"emitted": [{"message": "Boss shield break"}]}}
+    assert DpsOverlay._act_trigger_text(overlay) == "ACT ALERT BOSS SHIELD BREAK", overlay._act_snapshot
+    overlay._act_snapshot = {"triggers": {"recent": [{"label": "Damage threshold"}]}}
+    assert DpsOverlay._act_trigger_text(overlay) == "ACT ALERT DAMAGE THRESHOLD", overlay._act_snapshot
+    overlay._act_snapshot = {"triggers": {}}
+    assert DpsOverlay._act_trigger_text(overlay) == "", overlay._act_snapshot
+
+
 def _assert_entity_damage_callback_act_contract() -> None:
     gui = _FakeRuntimeActGui()
     event = damage_event(
@@ -626,6 +636,7 @@ def main() -> int:
     _assert_parser_handler_contract()
     _assert_entity_act_source_priority()
     _assert_entity_render_rows_contract()
+    _assert_entity_trigger_summary_contract()
     _assert_entity_damage_callback_act_contract()
     _assert_entity_monster_update_act_contract()
     _assert_webview_damage_callback_act_contract()
@@ -742,6 +753,7 @@ def main() -> int:
         "parser_handler_contract": True,
         "entity_act_source_priority": True,
         "entity_render_rows_contract": True,
+        "entity_trigger_summary_contract": True,
         "entity_damage_callback_act_contract": True,
         "entity_monster_update_act_contract": True,
         "webview_damage_callback_act_contract": True,

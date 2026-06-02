@@ -1640,6 +1640,16 @@ function _renderActMeta() {
     badge.classList.toggle('report', mode === 'REPORT' || mode === 'HISTORY');
 }
 
+function _latestActTriggerText() {
+    var triggers = (_actSnapshot && _actSnapshot.triggers) || {};
+    var events = triggers.emitted || triggers.recent || [];
+    if (!events.length) return '';
+    var ev = events[0] || {};
+    var label = ev.message || ev.label || ev.rule_id || ev.trigger_type || '';
+    if (!label) return '';
+    return 'ACT ALERT ' + String(label).toUpperCase();
+}
+
 function _switchListView() {
     _detailVisible = false;
     _detailUid = 0;
@@ -1668,6 +1678,8 @@ function _renderHeader() {
     } else {
         summary.textContent = 'WAITING FOR COMBAT DATA';
     }
+    var triggerText = _latestActTriggerText();
+    if (triggerText && _viewMode === 'live') summary.textContent += ' · ' + triggerText;
 }
 
 function _renderFooter() {
