@@ -1593,7 +1593,9 @@ function _renderActMeta() {
         return;
     }
     var mode = String(spec.mode || _viewMode || 'live').toUpperCase();
-    var source = (((spec.sources || {}).packet || {}).data_source) || (((_actSnapshot.sources || {}).packet || {}).data_source) || 'tcp';
+    var specSources = (spec.sources || {});
+    var snapSources = ((_actSnapshot && _actSnapshot.sources) || {});
+    var source = ((specSources.summary || {}).data_source) || ((snapSources.summary || {}).data_source) || ((specSources.packet || {}).data_source) || ((snapSources.packet || {}).data_source) || 'tcp';
     var hpSource = ((spec.boss || {}).hp_source) || '';
     var bits = ['ACT V' + String(spec.version || 1), mode, String(source || 'tcp').toUpperCase()];
     if (hpSource && hpSource !== 'none') bits.push('BOSS ' + String(hpSource).toUpperCase());

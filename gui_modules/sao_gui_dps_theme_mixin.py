@@ -237,7 +237,8 @@ class SAOPlayerGUIDpsThemeMixin:
             history_store=getattr(self, '_dps_history_store', None),
             state_mgr=getattr(self, '_state_mgr', None),
             encounter_mgr=getattr(self, '_encounter_mgr', None),
-            source_probe=getattr(self, '_packet_engine', None) or getattr(self, '_mem_bridge', None),
+            packet_probe=getattr(self, '_packet_engine', None),
+            memory_probe=getattr(self, '_mem_bridge', None),
             history_limit=history_limit,
         )
 

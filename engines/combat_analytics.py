@@ -41,6 +41,85 @@ def _source_probe_to_dict(source_probe: Any) -> Dict[str, Any]:
     return out
 
 
+def _source_is_active(source: Dict[str, Any]) -> bool:
+    if not source:
+        return False
+    for key in ("running", "alive", "active", "packet_active"):
+        if key in source:
+            return bool(source.get(key))
+    mode = str(source.get("mode") or source.get("data_source") or "").lower()
+    return bool(mode and mode not in ("none", "error", "disabled", "off"))
+
+
+def _normalize_source(source: Dict[str, Any], fallback_data_source: str) -> Dict[str, Any]:
+    if not source:
+        return {}
+    out = dict(source)
+    if not str(out.get("data_source") or "").strip():
+        out["data_source"] = fallback_data_source
+    return out
+
+
+def _build_sources(source_probe: Any = None,
+                   packet_probe: Any = None,
+                   memory_probe: Any = None) -> Dict[str, Any]:
+    """Build explicit ACT source metadata.
+
+    ``source_probe`` is the legacy single-source argument.  New runtime callers
+    should pass ``packet_probe`` and ``memory_probe`` separately so the UI can
+    display TCP-primary + memory-fallback instead of collapsing both into the
+    packet slot.
+    """
+    legacy = packet_probe is None and memory_probe is None and source_probe is not None
+    packet = _source_probe_to_dict(packet_probe)
+    memory = _source_probe_to_dict(memory_probe)
+    if legacy:
+        probe = _source_probe_to_dict(source_probe)
+        data_source = str(probe.get("data_source") or probe.get("mode") or "").lower()
+        if data_source in ("memory", "mem"):
+            memory = probe
+        else:
+            packet = probe
+    if packet and isinstance(packet.get("mem"), dict) and not memory:
+        memory = dict(packet.get("mem") or {})
+    packet = _normalize_source(packet, "tcp")
+    memory = _normalize_source(memory, "memory")
+
+    sources: Dict[str, Any] = {}
+    if packet:
+        sources["packet"] = packet
+    if memory:
+        sources["memory"] = memory
+    if not sources:
+        return {}
+
+    packet_active = _source_is_active(packet)
+    memory_active = _source_is_active(memory)
+    if packet:
+        primary = "packet"
+    elif memory:
+        primary = "memory"
+    else:
+        primary = "none"
+
+    source_bits: List[str] = []
+    if packet:
+        source_bits.append(str(packet.get("data_source") or "tcp"))
+    if memory:
+        mem_label = str(memory.get("data_source") or memory.get("mode") or "memory")
+        if mem_label not in source_bits:
+            source_bits.append(mem_label)
+    sources["summary"] = {
+        "data_source": "+".join(source_bits) if source_bits else "none",
+        "primary": primary,
+        "hybrid": bool(packet and memory),
+        "packet_active": packet_active,
+        "memory_active": memory_active,
+        "fallbacks": ["memory"] if packet and memory else [],
+    }
+    return sources
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -212,6 +291,8 @@ def build_act_snapshot(dps_tracker: Any = None,
                        encounter_mgr: Any = None,
                        trigger_engine: Any = None,
                        source_probe: Any = None,
+                       packet_probe: Any = None,
+                       memory_probe: Any = None,
                        history_limit: int = 20) -> Dict[str, Any]:
     """Build a single ACT snapshot for UI/API consumers.
 
@@ -273,11 +354,9 @@ def build_act_snapshot(dps_tracker: Any = None,
         "boss_in_overdrive": state.get("boss_in_overdrive", False),
         "boss_invincible": state.get("boss_invincible", False),
     }
-    sources = {
-        "packet": _source_probe_to_dict(source_probe),
-    }
-    if not sources["packet"]:
-        sources = {}
+    sources = _build_sources(source_probe=source_probe,
+                             packet_probe=packet_probe,
+                             memory_probe=memory_probe)
     render_spec = build_act_render_spec(live, last_report, history, context, encounter, sources)
     triggers: Dict[str, Any] = {}
     if trigger_engine is not None:

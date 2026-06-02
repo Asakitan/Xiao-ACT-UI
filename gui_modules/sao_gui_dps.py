@@ -1809,8 +1809,9 @@ class DpsOverlay:
             if not spec:
                 return ''
             sources = spec.get('sources') or (self._act_snapshot or {}).get('sources') or {}
+            summary = sources.get('summary') or {}
             packet = sources.get('packet') or {}
-            source = str(packet.get('data_source') or 'tcp').upper()
+            source = str(summary.get('data_source') or packet.get('data_source') or 'tcp').upper()
             mode = str(spec.get('mode') or self._view_mode or 'live').upper()
             boss = spec.get('boss') or {}
             hp_source = str(boss.get('hp_source') or '')

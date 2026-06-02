@@ -316,9 +316,14 @@ def _assert_entity_act_source_priority() -> None:
     gui = _FakeDpsActGui()
     snap = gui._get_dps_act_snapshot()
     assert snap.get("sources", {}).get("packet", {}).get("data_source") == "packet", snap
+    assert snap.get("sources", {}).get("memory", {}).get("data_source") == "memory", snap
+    assert snap.get("sources", {}).get("summary", {}).get("data_source") == "packet+memory", snap
+    assert snap.get("sources", {}).get("summary", {}).get("hybrid") is True, snap
     gui._packet_engine = None
     snap = gui._get_dps_act_snapshot()
-    assert snap.get("sources", {}).get("packet", {}).get("data_source") == "memory", snap
+    assert "packet" not in snap.get("sources", {}), snap
+    assert snap.get("sources", {}).get("memory", {}).get("data_source") == "memory", snap
+    assert snap.get("sources", {}).get("summary", {}).get("data_source") == "memory", snap
 
 
 def _assert_encounter_finalize_contract() -> None:
