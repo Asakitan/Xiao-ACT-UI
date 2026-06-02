@@ -1,0 +1,254 @@
+# -*- coding: utf-8 -*-
+"""ACT-facing combat analytics snapshot facade."""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+
+def _state_to_dict(state_mgr: Any) -> Dict[str, Any]:
+    if state_mgr is None:
+        return {}
+    try:
+        snap = state_mgr.snapshot()
+        return snap.to_dict() if snap is not None else {}
+    except Exception:
+        return {}
+
+
+def _source_probe_to_dict(source_probe: Any) -> Dict[str, Any]:
+    if source_probe is None:
+        return {}
+    if isinstance(source_probe, dict):
+        return dict(source_probe)
+    health = getattr(source_probe, "health", None)
+    if callable(health):
+        try:
+            return health() or {}
+        except Exception:
+            return {}
+    out: Dict[str, Any] = {}
+    for attr in (
+        "mode", "last_error", "last_uid", "last_hp", "last_max_hp",
+        "last_profession_id", "last_char_name", "last_skill_cd_count",
+        "last_resources", "last_is_dead",
+    ):
+        if hasattr(source_probe, attr):
+            try:
+                out[attr] = getattr(source_probe, attr)
+            except Exception:
+                pass
+    return out
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _entity_rows(live: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows = []
+    for index, entity in enumerate((live or {}).get("entities") or [], start=1):
+        if not isinstance(entity, dict):
+            continue
+        rows.append({
+            "rank": index,
+            "uid": _safe_int(entity.get("uid"), 0),
+            "name": str(entity.get("name") or entity.get("display_name") or "Unknown"),
+            "profession": str(entity.get("profession") or entity.get("profession_name") or ""),
+            "damage": _safe_int(entity.get("damage_total") or entity.get("damage"), 0),
+            "heal": _safe_int(entity.get("heal_total") or entity.get("heal"), 0),
+            "dps": _safe_int(entity.get("dps"), 0),
+            "hps": _safe_int(entity.get("hps"), 0),
+            "damage_pct": _safe_float(entity.get("damage_pct"), 0.0),
+            "crit_rate": _safe_float(entity.get("crit_rate"), 0.0),
+            "is_self": bool(entity.get("is_self", False)),
+        })
+    return rows
+
+
+def _boss_context(context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    context = context or {}
+    return {
+        "active": bool(context.get("boss_raid_active", False)),
+        "current_hp": _safe_int(context.get("boss_current_hp"), 0),
+        "total_hp": _safe_int(context.get("boss_total_hp"), 0),
+        "hp_pct": max(0.0, min(1.0, _safe_float(context.get("boss_hp_est_pct"), 1.0))),
+        "hp_source": str(context.get("boss_hp_source") or "none"),
+        "shield_active": bool(context.get("boss_shield_active", False)),
+        "shield_pct": max(0.0, min(1.0, _safe_float(context.get("boss_shield_pct"), 0.0))),
+        "breaking_stage": _safe_int(context.get("boss_breaking_stage"), -1),
+        "extinction_pct": max(0.0, min(1.0, _safe_float(context.get("boss_extinction_pct"), 0.0))),
+        "in_overdrive": bool(context.get("boss_in_overdrive", False)),
+        "invincible": bool(context.get("boss_invincible", False)),
+        "raid_phase": _safe_int(context.get("boss_raid_phase"), 0),
+        "raid_phase_name": str(context.get("boss_raid_phase_name") or ""),
+    }
+
+
+def build_act_render_spec(live: Optional[Dict[str, Any]] = None,
+                          last_report: Optional[Dict[str, Any]] = None,
+                          history: Optional[List[Dict[str, Any]]] = None,
+                          context: Optional[Dict[str, Any]] = None,
+                          encounter: Optional[Dict[str, Any]] = None,
+                          sources: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Build the shared WebView/Entity ACT render contract."""
+    live = live or {}
+    last_report = last_report or {}
+    history = history or []
+    context = context or {}
+    encounter = encounter or {}
+    sources = sources or {}
+    is_live = bool(live.get("encounter_active") or encounter.get("status") in ("active", "pending_reset"))
+    source = live if is_live or not last_report else last_report
+    dungeon_name = str(context.get("dungeon_name") or encounter.get("dungeon_name") or "")
+    last_skill = context.get("last_skill_event") or encounter.get("last_skill_event") or {}
+    boss = _boss_context(context)
+    return {
+        "version": 1,
+        "mode": "live" if is_live else ("report" if last_report else "empty"),
+        "title": dungeon_name or ("Live Encounter" if is_live else "Last Encounter"),
+        "parity_targets": ["webview", "entity"],
+        "context": {
+            "dungeon_id": _safe_int(context.get("dungeon_id") or encounter.get("dungeon_id"), 0),
+            "dungeon_scene_id": _safe_int(
+                context.get("dungeon_scene_id") or encounter.get("dungeon_scene_id"), 0),
+            "dungeon_difficulty": _safe_int(
+                context.get("dungeon_difficulty") or encounter.get("dungeon_difficulty"), 0),
+            "dungeon_name": dungeon_name,
+            "last_skill_kind": str(last_skill.get("kind") or ""),
+        },
+        "name_resolution": {
+            "dungeon_name_source": "resolver" if dungeon_name else "pending_runtime_ztable",
+            "pending_runtime_ztable": not bool(dungeon_name),
+        },
+        "sources": sources,
+        "boss": boss,
+        "encounter": {
+            "id": str(encounter.get("encounter_id") or ""),
+            "status": str(encounter.get("status") or "idle"),
+            "kind": str(encounter.get("kind") or "unknown"),
+            "duration_s": _safe_float(encounter.get("duration_s") or source.get("elapsed_s"), 0.0),
+            "boss_uuid": _safe_int(encounter.get("boss_uuid"), 0),
+            "target_uuid": _safe_int(encounter.get("target_uuid"), 0),
+        },
+        "totals": {
+            "damage": _safe_int(source.get("total_damage"), 0),
+            "damage_all": _safe_int(source.get("total_damage_all") or source.get("total_damage"), 0),
+            "heal": _safe_int(source.get("total_heal"), 0),
+            "dps": _safe_int(source.get("total_dps"), 0),
+            "hps": _safe_int(source.get("total_hps"), 0),
+            "elapsed_s": _safe_float(source.get("elapsed_s") or encounter.get("duration_s"), 0.0),
+        },
+        "rows": _entity_rows(live if is_live or live else last_report),
+        "history_count": len(history),
+    }
+
+
+def build_act_snapshot(dps_tracker: Any = None,
+                       history_store: Any = None,
+                       state_mgr: Any = None,
+                       encounter_mgr: Any = None,
+                       trigger_engine: Any = None,
+                       source_probe: Any = None,
+                       history_limit: int = 20) -> Dict[str, Any]:
+    """Build a single ACT snapshot for UI/API consumers.
+
+    This function deliberately delegates locking to the source objects so it can
+    be called from pywebview workers without taking unrelated locks together.
+    """
+    live: Optional[Dict[str, Any]] = None
+    last_report: Optional[Dict[str, Any]] = None
+    history = []
+    encounter: Dict[str, Any] = {}
+
+    if dps_tracker is not None:
+        try:
+            live = dps_tracker.get_snapshot(include_skills=True)
+        except Exception:
+            live = None
+        try:
+            last_report = dps_tracker.get_last_report()
+        except Exception:
+            last_report = None
+
+    if history_store is not None:
+        if not last_report:
+            try:
+                last_report = history_store.latest_report()
+            except Exception:
+                last_report = None
+        try:
+            history = history_store.list_reports(history_limit)
+        except Exception:
+            history = []
+
+    if encounter_mgr is not None:
+        try:
+            encounter = encounter_mgr.snapshot() or {}
+        except Exception:
+            encounter = {}
+
+    state = _state_to_dict(state_mgr)
+    context = {
+        "dungeon_id": state.get("dungeon_id", 0),
+        "dungeon_scene_id": state.get("dungeon_scene_id", 0),
+        "dungeon_difficulty": state.get("dungeon_difficulty", 0),
+        "dungeon_name": state.get("dungeon_name", ""),
+        "last_dungeon_event": state.get("last_dungeon_event") or {},
+        "last_skill_event": state.get("last_skill_event") or {},
+        "boss_raid_active": state.get("boss_raid_active", False),
+        "boss_raid_phase": state.get("boss_raid_phase", 0),
+        "boss_raid_phase_name": state.get("boss_raid_phase_name", ""),
+        "boss_hp_est_pct": state.get("boss_hp_est_pct", 1.0),
+        "boss_current_hp": state.get("boss_current_hp", 0),
+        "boss_total_hp": state.get("boss_total_hp", 0),
+        "boss_hp_source": state.get("boss_hp_source", "none"),
+        "boss_shield_active": state.get("boss_shield_active", False),
+        "boss_shield_pct": state.get("boss_shield_pct", 0.0),
+        "boss_breaking_stage": state.get("boss_breaking_stage", -1),
+        "boss_extinction_pct": state.get("boss_extinction_pct", 0.0),
+        "boss_in_overdrive": state.get("boss_in_overdrive", False),
+        "boss_invincible": state.get("boss_invincible", False),
+    }
+    sources = {
+        "packet": _source_probe_to_dict(source_probe),
+    }
+    if not sources["packet"]:
+        sources = {}
+    render_spec = build_act_render_spec(live, last_report, history, context, encounter, sources)
+    triggers: Dict[str, Any] = {}
+    if trigger_engine is not None:
+        try:
+            emitted = trigger_engine.evaluate({"render_spec": render_spec}) or []
+        except Exception:
+            emitted = []
+        try:
+            triggers = trigger_engine.snapshot() or {}
+        except Exception:
+            triggers = {}
+        if emitted:
+            triggers = dict(triggers)
+            triggers["emitted"] = emitted
+    return {
+        "live": live,
+        "last_report": last_report,
+        "history": history,
+        "context": context,
+        "encounter": encounter,
+        "sources": sources,
+        "render_spec": render_spec,
+        "triggers": triggers,
+    }
+
+
+__all__ = ["build_act_render_spec", "build_act_snapshot"]

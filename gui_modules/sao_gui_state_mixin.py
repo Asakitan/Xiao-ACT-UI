@@ -289,8 +289,16 @@ class SAOPlayerGUIStateMixin:
                             except Exception:
                                 pass
                         self._dps_overlay.update(_dps_snap)
+                        try:
+                            self._push_dps_act_snapshot()
+                        except Exception:
+                            pass
                     elif self._dps_overlay and (self._dps_visible or self._dps_mode == 'report'):
                         self._dps_overlay.update(_dps_snap)
+                        try:
+                            self._push_dps_act_snapshot()
+                        except Exception:
+                            pass
 
                 # Entity detail popup
                 if _detail_uid > 0 and _poll['detail'] and self._dps_overlay:

@@ -549,6 +549,22 @@ body{padding:10px}
 }
 .mode-badge.live{color:rgb(82,140,48)}
 .mode-badge.report{color:var(--gold)}
+.act-badge{
+    display:none;
+    align-items:center;
+    gap:5px;
+    padding:2px 7px;
+    min-height:22px;
+    border:1px solid rgba(104,228,255,0.46);
+    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+    background:rgba(104,228,255,0.10);
+    color:rgb(68,144,162);
+    font-size:10px;
+    letter-spacing:1px;
+    text-transform:uppercase;
+}
+.act-badge.show{display:inline-flex}
+.act-badge.report{border-color:rgba(222,166,32,0.58);background:rgba(222,166,32,0.12);color:var(--gold)}
 .summary{
     margin-top:6px;
     font-size:10px;
@@ -1254,6 +1270,7 @@ body{padding:10px}
             <div class="title-row">
                 <div class="title">DPS / HPS</div>
                 <div class="mode-badge live" id="mode-badge">LIVE</div>
+                <div class="act-badge" id="act-badge">ACT V1</div>
             </div>
             <div class="summary" id="summary-text">WAITING FOR COMBAT DATA</div>
         </div>
@@ -1261,6 +1278,8 @@ body{padding:10px}
             <button class="sao-btn secondary active" id="btn-live" type="button" onclick="_activateLive()">LIVE</button>
             <button class="sao-btn detail-toggle" id="btn-detail" type="button" onclick="_toggleDetailMode()">DETAIL</button>
             <button class="sao-btn" id="btn-report" type="button" onclick="_activateReport()">REPORT</button>
+            <button class="sao-btn" id="btn-history" type="button" onclick="_activateHistory()">HISTORY</button>
+            <button class="sao-btn" id="btn-export" type="button" onclick="_exportReport()">EXPORT</button>
             <button class="sao-btn danger" id="btn-reset" type="button" onclick="_reset()">RESET</button>
         </div>
     </div>
@@ -1298,10 +1317,12 @@ var _currentTab = 'damage';
 var _viewMode = 'live';
 var _liveSnapshot = _emptySnapshot();
 var _lastReport = null;
+var _historySnapshot = null;
 var _detailUid = 0;
 var _detailVisible = false;
 var _detailMode = false;
 var _liveDetailCache = {};
+var _actSnapshot = null;
 var _lastHitFxSeq = 0;
 var _pendingHitFx = null;
 var _rowFxTimers = {};
@@ -1369,6 +1390,7 @@ function _buildEntitySub(entity) {
 }
 
 function _currentData() {
+    if (_viewMode === 'history' && _historySnapshot) return _historySnapshot;
     if (_viewMode === 'report' && _lastReport) return _lastReport;
     return _liveSnapshot || _emptySnapshot();
 }
@@ -1548,15 +1570,36 @@ function _requestDetailWindowMode(active) {
 }
 
 function _setMode(mode) {
-    _viewMode = mode === 'report' ? 'report' : 'live';
+    _viewMode = (mode === 'report' || mode === 'history') ? mode : 'live';
     document.getElementById('btn-live').classList.toggle('active', _viewMode === 'live' && !_detailMode);
     document.getElementById('btn-report').classList.toggle('active', _viewMode === 'report' && !_detailMode);
+    var historyBtn = document.getElementById('btn-history');
+    if (historyBtn) historyBtn.classList.toggle('active', _viewMode === 'history' && !_detailMode);
     _syncDetailChrome();
 
     var badge = document.getElementById('mode-badge');
-    badge.textContent = _viewMode === 'report' ? 'LAST REPORT' : 'LIVE';
+    badge.textContent = _viewMode === 'history' ? 'HISTORY' : (_viewMode === 'report' ? 'LAST REPORT' : 'LIVE');
     badge.classList.toggle('live', _viewMode === 'live');
-    badge.classList.toggle('report', _viewMode === 'report');
+    badge.classList.toggle('report', _viewMode === 'report' || _viewMode === 'history');
+}
+
+function _renderActMeta() {
+    var badge = document.getElementById('act-badge');
+    if (!badge) return;
+    var spec = (_actSnapshot && _actSnapshot.render_spec) || null;
+    if (!spec) {
+        badge.classList.remove('show', 'report');
+        badge.textContent = 'ACT V1';
+        return;
+    }
+    var mode = String(spec.mode || _viewMode || 'live').toUpperCase();
+    var source = (((spec.sources || {}).packet || {}).data_source) || (((_actSnapshot.sources || {}).packet || {}).data_source) || 'tcp';
+    var hpSource = ((spec.boss || {}).hp_source) || '';
+    var bits = ['ACT V' + String(spec.version || 1), mode, String(source || 'tcp').toUpperCase()];
+    if (hpSource && hpSource !== 'none') bits.push('BOSS ' + String(hpSource).toUpperCase());
+    badge.textContent = bits.join(' · ');
+    badge.classList.add('show');
+    badge.classList.toggle('report', mode === 'REPORT' || mode === 'HISTORY');
 }
 
 function _switchListView() {
@@ -1573,6 +1616,7 @@ function _switchDetailView() {
 
 function _renderHeader() {
     _setMode(_viewMode);
+    _renderActMeta();
     var data = _currentData();
     var summary = document.getElementById('summary-text');
     if (_viewMode === 'report') {
@@ -1774,6 +1818,12 @@ function showLive(data) {
     _renderAll();
 }
 
+function showActSnapshot(snapshot) {
+    _actSnapshot = snapshot || null;
+    _renderActMeta();
+    _renderHeader();
+}
+
 function updateDps(data) {
     _liveSnapshot = data || _emptySnapshot();
     _captureHitFx(_liveSnapshot);
@@ -1789,6 +1839,18 @@ function showLastReport(report) {
     _lastReport = report || null;
     _clearTransientHitFx();
     _viewMode = 'report';
+    _detailMode = false;
+    _detailVisible = false;
+    _detailUid = 0;
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
+    _renderAll();
+}
+
+function showHistoryReport(report) {
+    _historySnapshot = report || null;
+    _clearTransientHitFx();
+    _viewMode = 'history';
     _detailMode = false;
     _detailVisible = false;
     _detailUid = 0;
@@ -1888,6 +1950,41 @@ function _activateReport() {
     _syncDetailChrome();
     _requestDetailWindowMode(false);
     _renderAll();
+}
+
+function _activateHistory() {
+    _detailMode = false;
+    _detailVisible = false;
+    _detailUid = 0;
+    _syncDetailChrome();
+    _requestDetailWindowMode(false);
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.list_history) {
+        window.pywebview.api.list_history(20).then(function(result) {
+            var data = (typeof result === 'string') ? JSON.parse(result) : result;
+            if (data && data.ok && data.items && data.items.length) {
+                showHistoryReport(data.items[0]);
+            } else {
+                _renderHeader();
+                document.getElementById('summary-text').textContent = 'NO HISTORY AVAILABLE';
+            }
+        }).catch(function() {
+            _renderHeader();
+            document.getElementById('summary-text').textContent = 'NO HISTORY AVAILABLE';
+        });
+    }
+}
+
+function _exportReport() {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.export_last_report) {
+        window.pywebview.api.export_last_report('csv').then(function(result) {
+            var data = (typeof result === 'string') ? JSON.parse(result) : result;
+            document.getElementById('summary-text').textContent = (data && data.ok)
+                ? ('EXPORTED ' + data.path)
+                : ((data && data.message) ? data.message : 'EXPORT FAILED');
+        }).catch(function() {
+            document.getElementById('summary-text').textContent = 'EXPORT FAILED';
+        });
+    }
 }
 
 function _reset() {
@@ -2050,6 +2147,7 @@ window.DpsMeter = {
     updateDps: updateDps,
     updateDetail: updateDetail,
     showLive: showLive,
+    showActSnapshot: showActSnapshot,
     showLastReport: showLastReport,
     fadeOut: fadeOutDps,
     fadeIn: fadeInDps,

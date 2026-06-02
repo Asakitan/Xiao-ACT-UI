@@ -281,6 +281,8 @@ sao_auto/
 ├─ packet_bridge.py        # packet -> GameState / DPS / BossRaid
 ├─ recognition.py          # STA / ROI 识图
 ├─ dps_tracker.py          # DPS / HPS 统计
+├─ engines/combat_analytics.py # WebView / Entity 共用 ACT snapshot
+├─ act_replay/             # 离线 ACT/TCP replay 合同自检模块
 ├─ boss_raid_engine.py     # Boss Raid 阶段、时间轴、状态机
 ├─ boss_autokey_linkage.py # Boss 事件与自动按键联动
 ├─ auto_key_engine.py      # 自动按键引擎与云端客户端
@@ -301,6 +303,16 @@ sao_auto/
 └─ server/
    └─ app.py               # FastAPI 脚本 / BossRaid 服务端
 ```
+
+ACT / TCP 合同开发时可在 `sao_auto` 目录运行轻量自检：
+
+```bash
+python -m act_replay.selftest
+```
+
+该自检覆盖 parser 归一化事件、离线 replay、共享 `render_spec`、Boss HP 触发器，以及 Entity/Tk 的 `packet` 优先、内存桥兜底 source 顺序。
+
+WebView `DpsMeter.showActSnapshot()` 与 Entity/Tk `DpsOverlay.set_act_snapshot()` 会消费同一份 `render_spec` 元信息，用于 ACT 版本、mode、TCP/packet source 与 Boss HP source 徽章；排行榜与上次战斗报告仍沿用原有 live/report payload，避免破坏旧 UI 行为。
 
 ## 更新记录
 ### 2.1.2-e

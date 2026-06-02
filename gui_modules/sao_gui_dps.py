@@ -415,7 +415,7 @@ class DpsOverlay:
     around the `.dps-shell`. Inside the shell:
 
         ┌─ shell (cream gradient, gold/cyan corners, inner highlight border)
-        │   ├─ dps-header   (eyebrow · title+badge · summary · 3 buttons)
+        │   ├─ dps-header   (eyebrow · title+badge · summary · ACT buttons)
         │   ├─ dps-tabs     (Damage | Healing)
         │   ├─ list-frame   (entity rows)
         │   └─ dps-footer   (ELAPSED … | TOTAL …)
@@ -551,6 +551,8 @@ class DpsOverlay:
                  reset_dps=None,
                  has_last_report=None,
                  request_entity_detail=None,
+                 list_history=None,
+                 export_last_report=None,
                  alert=None):
         self.root = root
         self.settings = settings
@@ -559,6 +561,8 @@ class DpsOverlay:
         self._reset_dps_cb = reset_dps
         self._has_last_report_cb = has_last_report
         self._request_entity_detail_cb = request_entity_detail
+        self._list_history_cb = list_history
+        self._export_last_report_cb = export_last_report
         self._alert_cb = alert
         self._win: Optional[tk.Toplevel] = None
         self._hwnd: int = 0
@@ -573,6 +577,7 @@ class DpsOverlay:
         self._last_compose_sig: Optional[tuple] = None
         self._last_snapshot: Optional[dict] = None
         self._last_report: Optional[dict] = None
+        self._act_snapshot: Optional[dict] = None
         self._self_uid = 0
         self._view_mode = 'live'
         self._current_tab = 'damage'
@@ -917,6 +922,10 @@ class DpsOverlay:
 
     def set_report_available(self, available: bool) -> None:
         self._report_available = bool(available) or bool(self._last_report)
+        self._schedule_tick(immediate=True)
+
+    def set_act_snapshot(self, snapshot: Optional[dict]) -> None:
+        self._act_snapshot = dict(snapshot or {}) if snapshot else None
         self._schedule_tick(immediate=True)
 
     def is_report_mode(self) -> bool:
@@ -1276,6 +1285,7 @@ class DpsOverlay:
                 int(self._detail_uid),
                 int(self._detail_w),
                 int(self._detail_h),
+                self._act_badge_text(),
                 detail_sig,
                 round(float(self._fade_alpha), 3),
                 row_sig,
@@ -1793,6 +1803,24 @@ class DpsOverlay:
 
     # --------  Header  --------
 
+    def _act_badge_text(self) -> str:
+        try:
+            spec = (self._act_snapshot or {}).get('render_spec') or {}
+            if not spec:
+                return ''
+            sources = spec.get('sources') or (self._act_snapshot or {}).get('sources') or {}
+            packet = sources.get('packet') or {}
+            source = str(packet.get('data_source') or 'tcp').upper()
+            mode = str(spec.get('mode') or self._view_mode or 'live').upper()
+            boss = spec.get('boss') or {}
+            hp_source = str(boss.get('hp_source') or '')
+            parts = [f"ACT V{int(spec.get('version') or 1)}", mode, source]
+            if hp_source and hp_source != 'none':
+                parts.append(f'BOSS {hp_source.upper()}')
+            return ' · '.join(parts)
+        except Exception:
+            return ''
+
     def _draw_header(self, draw: ImageDraw.ImageDraw, img: Image.Image,
                      sx: int, sy: int, sw: int, hh: int) -> None:
         x_left = sx + self.HEADER_PAD_X
@@ -1831,6 +1859,17 @@ class DpsOverlay:
                              outline=self.HEADER_BADGE_BORDER)
         self._draw_tracked(draw, (bx + 8, by + 4), badge_label,
                            font_badge, badge_color, 1.1)
+        act_label = self._act_badge_text()
+        if act_label:
+            act_text_w = self._tracked_text_width(draw, act_label, font_badge, 1.0)
+            act_w = act_text_w + 14
+            act_x = bx + bw + 6
+            if act_x + act_w <= x_right:
+                self._draw_clip_rect(draw, act_x, by, act_w, bh_,
+                                     fill=(230, 248, 252, 120),
+                                     outline=(60, 160, 190, 150))
+                self._draw_tracked(draw, (act_x + 7, by + 4), act_label,
+                                   font_badge, self.BTN_LIVE_COLOR, 1.0)
         y += self.TITLE_H
 
         # Summary
@@ -1852,15 +1891,12 @@ class DpsOverlay:
                            summary, font_sum, self.TEXT_MUTED, 0.85)
         y += self.SUMMARY_H + 8
 
-        # Button row: LIVE | DETAIL | REPORT | RESET (right-aligned)
+        # Button row: LIVE | DETAIL | REPORT | HISTORY | EXPORT | RESET (right-aligned)
         buttons = self._button_specs()
         btn_font = _load_font('sao', 10)
         # Measure and lay out right-aligned
-        gap = self.BTN_GAP
-        sizes = []
-        for _name, text, _active, _kind, _enabled in buttons:
-            tw = _text_width(draw, text, btn_font)
-            sizes.append(max(62, tw + 18))
+        sizes, gap = self._button_layout_sizes(
+            draw, btn_font, max(1, x_right - x_left))
         total_w = sum(sizes) + gap * (len(sizes) - 1)
         start_x = x_right - total_w
         bx = start_x
@@ -1876,6 +1912,7 @@ class DpsOverlay:
 
     def _button_specs(self) -> List[Tuple[str, str, bool, str, bool]]:
         report_ok = self._report_available or self._has_report_data()
+        history_ok = report_ok or callable(self._list_history_cb)
         detail_label = 'NORMAL' if self._detail_mode else 'DETAIL'
         return [
             ('live', 'LIVE', self._view_mode == 'live' and not self._detail_mode,
@@ -1883,8 +1920,37 @@ class DpsOverlay:
             ('detail', detail_label, bool(self._detail_mode), 'normal', True),
             ('report', 'REPORT', self._view_mode == 'report' and not self._detail_mode,
              'normal', report_ok),
+            ('history', 'HISTORY', False, 'normal', history_ok),
+            ('export', 'EXPORT', False, 'normal', history_ok),
             ('reset', 'RESET', False, 'danger', True),
         ]
+
+    def _button_layout_sizes(self, draw: ImageDraw.ImageDraw, font,
+                             available_w: int) -> Tuple[List[int], int]:
+        sizes = [max(52, _text_width(draw, label, font) + 14)
+                 for _name, label, _active, _kind, _enabled in self._button_specs()]
+        gap = self.BTN_GAP
+        total_w = sum(sizes) + gap * (len(sizes) - 1)
+        if total_w <= available_w:
+            return sizes, gap
+
+        gap = 4
+        sizes = [max(44, _text_width(draw, label, font) + 10)
+                 for _name, label, _active, _kind, _enabled in self._button_specs()]
+        total_w = sum(sizes) + gap * (len(sizes) - 1)
+        if total_w <= available_w:
+            return sizes, gap
+
+        overflow = total_w - available_w
+        reducible = sum(max(0, size - 34) for size in sizes) or 1
+        compact = []
+        for size in sizes:
+            cut = int(round(overflow * max(0, size - 34) / reducible))
+            compact.append(max(34, size - cut))
+        while sum(compact) + gap * (len(compact) - 1) > available_w and compact:
+            idx = max(range(len(compact)), key=lambda i: compact[i])
+            compact[idx] = max(34, compact[idx] - 1)
+        return compact, gap
 
     def _draw_button(self, draw: ImageDraw.ImageDraw, bx: int, by: int,
                      bw: int, bh: int, text: str, active: bool,
@@ -2698,9 +2764,9 @@ class DpsOverlay:
 
         btn_font = _load_font('sao', 10)
         buttons = self._button_specs()
-        sizes = [max(62, _text_width(dummy, label, btn_font) + 18)
-                 for _name, label, _active, _kind, _enabled in buttons]
-        total_w = sum(sizes) + self.BTN_GAP * (len(sizes) - 1)
+        sizes, gap = self._button_layout_sizes(
+            dummy, btn_font, max(1, sw - 2 * self.HEADER_PAD_X))
+        total_w = sum(sizes) + gap * (len(sizes) - 1)
         start_x = sx + sw - self.HEADER_PAD_X - total_w
         start_y = (sy + self.HEADER_PAD_TOP + self.EYEBROW_H + 4
                    + self.TITLE_H + 6 + self.SUMMARY_H + 8)
@@ -2709,7 +2775,7 @@ class DpsOverlay:
         cur_x = start_x
         for (name, _label, _active, _kind, _enabled), bw in zip(buttons, sizes):
             button_regions[name] = (cur_x, start_y, cur_x + bw, start_y + self.BTN_H)
-            cur_x += bw + self.BTN_GAP
+            cur_x += bw + gap
 
         tabs_y = sy + hh + self.TAB_PAD_TOP
         x0 = sx + self.HEADER_PAD_X
@@ -2749,6 +2815,20 @@ class DpsOverlay:
         except Exception:
             pass
 
+    def _notify_export_result(self, ok: bool, message: str) -> None:
+        if not callable(self._alert_cb):
+            return
+        title = 'DPS EXPORT' if ok else 'DPS METER'
+        try:
+            self._alert_cb(title, message, display_time=4.0)
+        except TypeError:
+            try:
+                self._alert_cb(title, message, 4.0)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _activate_live(self) -> None:
         snapshot = None
         if callable(self._request_live_snapshot):
@@ -2770,6 +2850,38 @@ class DpsOverlay:
             report = self._last_report
         if not self.show_last_report(report):
             self._notify_no_report()
+
+    def _activate_history(self) -> None:
+        report = None
+        if callable(self._list_history_cb):
+            try:
+                items = self._list_history_cb(20)
+                if items:
+                    report = items[0]
+            except Exception:
+                report = None
+        if report is None:
+            report = self._last_report
+        if not self.show_last_report(report):
+            self._notify_no_report()
+
+    def _activate_export(self) -> None:
+        if not callable(self._export_last_report_cb):
+            self._notify_export_result(False, 'DPS export is not initialized.')
+            return
+        try:
+            result = self._export_last_report_cb('json')
+        except Exception as exc:
+            self._notify_export_result(False, str(exc))
+            return
+        if isinstance(result, dict):
+            ok = bool(result.get('ok'))
+            path = str(result.get('path') or '')
+            message = path if ok else str(result.get('message') or 'No report to export.')
+        else:
+            ok = bool(result)
+            message = str(result or 'No report to export.')
+        self._notify_export_result(ok, message)
 
     def _activate_reset(self) -> None:
         snapshot = None
@@ -2801,6 +2913,10 @@ class DpsOverlay:
                         self._activate_report()
                     else:
                         self._notify_no_report()
+                elif name == 'history':
+                    self._activate_history()
+                elif name == 'export':
+                    self._activate_export()
                 elif name == 'reset':
                     self._activate_reset()
                 return

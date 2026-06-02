@@ -51,7 +51,10 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Optional
+
+from engines.combat_analytics import build_act_snapshot
 
 
 class SAOPlayerGUIDpsThemeMixin:
@@ -166,10 +169,14 @@ class SAOPlayerGUIDpsThemeMixin:
 
     def _get_dps_last_report_available(self) -> bool:
         tracker = getattr(self, '_dps_tracker', None)
-        if not tracker:
-            return False
+        store = getattr(self, '_dps_history_store', None)
         try:
-            return bool(tracker.has_last_report())
+            if tracker and tracker.has_last_report():
+                return True
+        except Exception:
+            pass
+        try:
+            return bool(store and store.latest_report())
         except Exception:
             return False
 
@@ -195,12 +202,77 @@ class SAOPlayerGUIDpsThemeMixin:
 
     def _get_dps_last_report(self):
         tracker = getattr(self, '_dps_tracker', None)
-        if not tracker:
-            return None
         try:
-            return tracker.get_last_report()
+            report = tracker.get_last_report() if tracker else None
+            if report:
+                return report
+        except Exception:
+            pass
+        store = getattr(self, '_dps_history_store', None)
+        try:
+            return store.latest_report() if store else None
         except Exception:
             return None
+
+    def _on_dps_report_finalized(self, report):
+        """Persist finalized DPS reports for Entity/Tk ACT history/export."""
+        try:
+            store = getattr(self, '_dps_history_store', None)
+            if store is None:
+                return
+
+            def _persist():
+                try:
+                    store.add_report(report)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_persist, daemon=True).start()
+        except Exception:
+            pass
+
+    def _get_dps_act_snapshot(self, history_limit: int = 20):
+        return build_act_snapshot(
+            dps_tracker=getattr(self, '_dps_tracker', None),
+            history_store=getattr(self, '_dps_history_store', None),
+            state_mgr=getattr(self, '_state_mgr', None),
+            encounter_mgr=getattr(self, '_encounter_mgr', None),
+            source_probe=getattr(self, '_packet_engine', None) or getattr(self, '_mem_bridge', None),
+            history_limit=history_limit,
+        )
+
+    def _push_dps_act_snapshot(self):
+        overlay = getattr(self, '_dps_overlay', None)
+        if overlay is None or not hasattr(overlay, 'set_act_snapshot'):
+            return
+        try:
+            overlay.set_act_snapshot(self._get_dps_act_snapshot())
+        except Exception:
+            pass
+
+    def _request_dps_history(self, limit: int = 20):
+        store = getattr(self, '_dps_history_store', None)
+        try:
+            return store.list_reports(int(limit or 20)) if store else []
+        except Exception:
+            return []
+
+    def _export_last_dps_report(self, fmt: str = 'json'):
+        store = getattr(self, '_dps_history_store', None)
+        if store is None:
+            return {'ok': False, 'message': 'DPS history is not initialized.'}
+        tracker = getattr(self, '_dps_tracker', None)
+        try:
+            report = tracker.get_last_report() if tracker else None
+        except Exception:
+            report = None
+        try:
+            path = store.export_report(report=report, fmt=str(fmt or 'json'))
+        except Exception as exc:
+            return {'ok': False, 'message': str(exc)}
+        if not path:
+            return {'ok': False, 'message': 'No report to export.'}
+        return {'ok': True, 'path': path}
 
     def _request_dps_last_report(self):
         report = self._get_dps_last_report()
@@ -233,6 +305,7 @@ class SAOPlayerGUIDpsThemeMixin:
         self._dps_faded = False
         self._dps_mode = 'live'
         self._dps_overlay.show_live(snapshot)
+        self._push_dps_act_snapshot()
         return True
 
     def _show_dps_last_report(self, report=None) -> bool:
@@ -247,7 +320,9 @@ class SAOPlayerGUIDpsThemeMixin:
         self._dps_faded = False
         self._dps_mode = 'report'
         self._dps_overlay.set_report_available(True)
-        return bool(self._dps_overlay.show_last_report(report))
+        shown = bool(self._dps_overlay.show_last_report(report))
+        self._push_dps_act_snapshot()
+        return shown
 
     def _reset_dps_tracker(self):
         tracker = getattr(self, '_dps_tracker', None)
@@ -266,6 +341,34 @@ class SAOPlayerGUIDpsThemeMixin:
         self._show_entity_alert(
             'DPS METER',
             '暂无上一场战斗报告 / No last combat report yet.',
+            display_time=3.0,
+        )
+
+    def _show_dps_history_menu(self):
+        if not self._dps_overlay:
+            return
+        reports = self._request_dps_history(20)
+        report = reports[0] if reports else self._get_dps_last_report()
+        if report and self._show_dps_last_report(report):
+            return
+        self._show_entity_alert(
+            'DPS HISTORY',
+            '暂无历史战斗报告 / No DPS history yet.',
+            display_time=3.0,
+        )
+
+    def _export_last_dps_report_menu(self):
+        result = self._export_last_dps_report('json')
+        if result.get('ok'):
+            self._show_entity_alert(
+                'DPS EXPORT',
+                str(result.get('path') or ''),
+                display_time=4.0,
+            )
+            return
+        self._show_entity_alert(
+            'DPS EXPORT',
+            str(result.get('message') or 'No report to export.'),
             display_time=3.0,
         )
 

@@ -62,6 +62,9 @@ from engines.boss_autokey_linkage import (
     save_linkage_config,
 )
 from engines.dps_tracker import DpsTracker
+from engines.dps_history import DpsHistoryStore
+from engines.encounter_manager import EncounterManager
+from engines.combat_analytics import build_act_snapshot
 from config import (
     DEFAULT_HOTKEYS,
     get_skill_slot_rects,
@@ -1388,6 +1391,7 @@ class DpsWindowAPI:
                     self._g._eval_dps(
                         f'DpsMeter.showLive({json.dumps(tracker.get_snapshot(), ensure_ascii=False)})'
                     )
+                    self._g._push_dps_act_snapshot()
         except Exception:
             pass
 
@@ -1410,6 +1414,7 @@ class DpsWindowAPI:
                 self._g._eval_dps(
                     f'DpsMeter.showLive({json.dumps(snapshot, ensure_ascii=False)})'
                 )
+                self._g._push_dps_act_snapshot()
             except Exception:
                 pass
         threading.Thread(target=_push, daemon=True).start()
@@ -1419,6 +1424,9 @@ class DpsWindowAPI:
             tracker = getattr(self._g, '_dps_tracker', None)
             report = tracker.get_last_report() if tracker else None
             if not report:
+                store = getattr(self._g, '_dps_history_store', None)
+                report = store.latest_report() if store else None
+            if not report:
                 return json.dumps({
                     'ok': False,
                     'message': 'No last combat report yet.',
@@ -1427,7 +1435,41 @@ class DpsWindowAPI:
             self._g._eval_dps(
                 f'DpsMeter.showLastReport({json.dumps(report, ensure_ascii=False)})'
             )
+            self._g._push_dps_act_snapshot()
             return json.dumps({'ok': True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def get_act_snapshot(self):
+        """Return one ACT-facing snapshot with live, report, history, and context."""
+        try:
+            snapshot = self._g._build_dps_act_snapshot() or {}
+            return json.dumps({
+                'ok': True,
+                **snapshot,
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def list_history(self, limit=20):
+        try:
+            store = getattr(self._g, '_dps_history_store', None)
+            items = store.list_reports(int(limit or 20)) if store else []
+            return json.dumps({'ok': True, 'items': items}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def export_last_report(self, fmt='json'):
+        try:
+            store = getattr(self._g, '_dps_history_store', None)
+            tracker = getattr(self._g, '_dps_tracker', None)
+            if store is None:
+                return json.dumps({'ok': False, 'message': 'DPS history is not initialized.'}, ensure_ascii=False)
+            report = tracker.get_last_report() if tracker else None
+            path = store.export_report(report=report, fmt=str(fmt or 'json'))
+            if not path:
+                return json.dumps({'ok': False, 'message': 'No report to export.'}, ensure_ascii=False)
+            return json.dumps({'ok': True, 'path': path}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
@@ -1673,6 +1715,8 @@ class SAOWebViewGUI:
         self._dps_mode = 'hidden'
         self._dps_tracker = None
         self._dps_api = None
+        self._dps_history_store = None
+        self._encounter_mgr = None
         self._dps_last_report_available = False
         self._dps_base_w = 0
         self._dps_base_h = 0
@@ -1867,6 +1911,8 @@ class SAOWebViewGUI:
                 on_damage=self._on_packet_damage,
                 on_monster_update=self._on_monster_update,
                 on_boss_event=self._on_boss_event,
+                on_skill_event=self._on_skill_event,
+                on_dungeon_event=self._on_dungeon_event,
                 on_scene_change=self._on_scene_change,
                 data_source=_data_source_mode,
             )
@@ -2283,6 +2329,12 @@ class SAOWebViewGUI:
         self._pending_combat_reset_reason = reason
         self._last_boss_bar_sig = None
         try:
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                mgr.arm_pending_reset(reason, delay_s=delay_s)
+        except Exception:
+            pass
+        try:
             if self._dps_tracker:
                 self._dps_tracker.invalidate_snapshot_cache()
         except Exception:
@@ -2558,6 +2610,12 @@ class SAOWebViewGUI:
                 self._dps_tracker.on_damage_event(event)
             except Exception:
                 pass
+        try:
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                mgr.on_damage_event(event)
+        except Exception:
+            pass
 
     def _on_monster_update(self, monster_data):
         """Monster update callback from packet_parser → boss raid engine + break bar tracking.
@@ -2632,6 +2690,68 @@ class SAOWebViewGUI:
             js_type = _EVT_MAP.get(evt_type)
             if js_type:
                 self._eval_boss_hp(f'triggerBreakEffect("{js_type}")')
+        except Exception:
+            pass
+
+    def _on_skill_event(self, event):
+        """Skill lifecycle event callback from packet_parser for ACT/triggers."""
+        try:
+            self._last_skill_event = dict(event or {})
+            if getattr(self, '_state_mgr', None):
+                self._state_mgr.update(last_skill_event=self._last_skill_event)
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                mgr.on_skill_event(self._last_skill_event)
+        except Exception:
+            pass
+
+    def _on_dungeon_event(self, event):
+        """Dungeon/scene context callback from packet_parser for ACT/triggers."""
+        try:
+            ev = dict(event or {})
+            self._last_dungeon_event = ev
+            updates = {'last_dungeon_event': ev}
+            dungeon_id = int(ev.get('dungeon_id') or ev.get('scene_uuid') or 0)
+            scene_id = int(ev.get('scene_id') or 0)
+            difficulty = int(ev.get('dungeon_difficulty') or 0)
+            if dungeon_id > 0:
+                updates['dungeon_id'] = dungeon_id
+                try:
+                    from tools.tablekit.name_tables import names
+                    resolved = names.dungeon(dungeon_id, default='')
+                    if resolved:
+                        updates['dungeon_name'] = resolved
+                except Exception:
+                    pass
+            if scene_id > 0:
+                updates['dungeon_scene_id'] = scene_id
+            if difficulty > 0:
+                updates['dungeon_difficulty'] = difficulty
+            if getattr(self, '_state_mgr', None):
+                self._state_mgr.update(**updates)
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                ev_for_mgr = dict(ev)
+                if 'dungeon_name' not in ev_for_mgr and updates.get('dungeon_name'):
+                    ev_for_mgr['dungeon_name'] = updates.get('dungeon_name')
+                mgr.on_dungeon_event(ev_for_mgr)
+        except Exception:
+            pass
+
+    def _on_dps_report_finalized(self, report):
+        """Persist finalized DPS reports for ACT history/export."""
+        try:
+            store = getattr(self, '_dps_history_store', None)
+            if store is None:
+                return
+
+            def _persist():
+                try:
+                    store.add_report(report)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_persist, daemon=True).start()
         except Exception:
             pass
 
@@ -2721,6 +2841,12 @@ class SAOWebViewGUI:
                 print('[SAO] DPS tracker reset on scene change', flush=True)
             except Exception:
                 pass
+        try:
+            mgr = getattr(self, '_encounter_mgr', None)
+            if mgr is not None:
+                mgr.reset('scene_change')
+        except Exception:
+            pass
 
         # 3. Boss raid engine: 仅在非活动时重置
         if self._boss_raid_engine:
@@ -3194,6 +3320,8 @@ class SAOWebViewGUI:
                                              on_damage=self._on_packet_damage,
                                              on_monster_update=self._on_monster_update,
                                              on_boss_event=self._on_boss_event,
+                                             on_skill_event=self._on_skill_event,
+                                             on_dungeon_event=self._on_dungeon_event,
                                              on_scene_change=self._on_scene_change,
                                              data_source=_data_source_mode)
                 packet_engine.start()
@@ -3212,7 +3340,10 @@ class SAOWebViewGUI:
 
         # DPS Tracker
         try:
+            self._dps_history_store = DpsHistoryStore()
             self._dps_tracker = DpsTracker()
+            self._encounter_mgr = EncounterManager()
+            self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
             # Load skill name mapping
             _skill_json = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                        'assets', 'skill_names.json')
@@ -3231,6 +3362,8 @@ class SAOWebViewGUI:
         except Exception as e:
             print(f'[SAO] DPS tracker init failed: {e}')
             self._dps_tracker = None
+            self._dps_history_store = None
+            self._encounter_mgr = None
 
         try:
             from vision.recognition import RecognitionEngine
@@ -5043,6 +5176,32 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
+    def _build_dps_act_snapshot(self, history_limit: int = 20):
+        try:
+            source_probe = getattr(self, '_packet_engine', None) or getattr(self, '_mem_bridge', None)
+            return build_act_snapshot(
+                dps_tracker=getattr(self, '_dps_tracker', None),
+                history_store=getattr(self, '_dps_history_store', None),
+                state_mgr=getattr(self, '_state_mgr', None),
+                encounter_mgr=getattr(self, '_encounter_mgr', None),
+                source_probe=source_probe,
+                history_limit=history_limit,
+            )
+        except Exception:
+            return {}
+
+    def _push_dps_act_snapshot(self):
+        try:
+            if not self.dps_win:
+                return
+            snapshot = self._build_dps_act_snapshot()
+            if snapshot:
+                self._eval_dps(
+                    f'if(window.DpsMeter&&DpsMeter.showActSnapshot)DpsMeter.showActSnapshot({json.dumps(snapshot, ensure_ascii=False)})'
+                )
+        except Exception:
+            pass
+
     def _resize_dps_window(self, width: int, height: int,
                            persist: bool = False):
         try:
@@ -5210,6 +5369,7 @@ class SAOWebViewGUI:
         self._show_dps_window()
         self._dps_mode = 'live'
         self._eval_dps(f'DpsMeter.showLive({json.dumps(snapshot, ensure_ascii=False)})')
+        self._push_dps_act_snapshot()
 
     def _show_dps_last_report(self, report=None) -> bool:
         tracker = getattr(self, '_dps_tracker', None)
@@ -5223,6 +5383,7 @@ class SAOWebViewGUI:
         self._show_dps_window()
         self._dps_mode = 'report'
         self._eval_dps(f'DpsMeter.showLastReport({json.dumps(report, ensure_ascii=False)})')
+        self._push_dps_act_snapshot()
         return True
 
     @staticmethod
@@ -7274,6 +7435,7 @@ class SAOWebViewGUI:
                                     self._eval_dps(
                                         f'DpsMeter.updateDps({json.dumps(_dps_snap, ensure_ascii=False)})'
                                     )
+                                    self._push_dps_act_snapshot()
                             # ── DPS fade-out on idle ──
                             if self._dps_visible and self._dps_mode == 'live':
                                 try:
