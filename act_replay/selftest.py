@@ -19,6 +19,7 @@ from engines.act_trigger_engine import ActTriggerEngine
 from engines.dps_tracker import DpsTracker
 from engines.encounter_manager import EncounterManager
 from engines.game_state import GameStateManager
+from gui_modules.sao_gui_dps import DpsOverlay
 from gui_modules.sao_gui_dps_theme_mixin import SAOPlayerGUIDpsThemeMixin
 from gui_modules.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbacksMixin
 from packet_parser.enums import NotifyMethod
@@ -421,6 +422,36 @@ def _assert_entity_act_source_priority() -> None:
     assert snap.get("sources", {}).get("summary", {}).get("data_source") == "memory", snap
 
 
+def _assert_entity_render_rows_contract() -> None:
+    overlay = DpsOverlay.__new__(DpsOverlay)
+    overlay._act_snapshot = {
+        "render_spec": {
+            "mode": "live",
+            "totals": {"damage": 3000, "heal": 1200},
+            "rows": [
+                {"rank": 1, "uid": 1001, "name": "Alice", "damage": 2000, "heal": 200, "dps": 100, "hps": 10, "is_self": True},
+                {"rank": 2, "uid": 1002, "name": "Bob", "damage": 1000, "heal": 1000, "dps": 50, "hps": 50, "is_self": False},
+            ],
+        }
+    }
+    overlay._view_mode = "live"
+    overlay._current_tab = "damage"
+    overlay._scroll_offset = 0
+    overlay._self_uid = 1001
+    overlay._rows = {}
+    rows = DpsOverlay._build_view_rows(overlay)
+    assert len(rows) == 2, rows
+    assert rows[0]["uid"] == 1001, rows
+    assert rows[0]["amount"] == 2000, rows
+    assert rows[0]["pct"] == 2000 / 3000, rows
+    assert rows[0]["fallback_sub"] == "ACT RENDER ROW", rows
+    overlay._current_tab = "heal"
+    rows = DpsOverlay._build_view_rows(overlay)
+    assert rows[0]["uid"] == 1002, rows
+    assert rows[0]["amount"] == 1000, rows
+    assert rows[0]["pct"] == 1000 / 1200, rows
+
+
 def _assert_entity_damage_callback_act_contract() -> None:
     gui = _FakeRuntimeActGui()
     event = damage_event(
@@ -594,6 +625,7 @@ def main() -> int:
     _assert_game_state_contract()
     _assert_parser_handler_contract()
     _assert_entity_act_source_priority()
+    _assert_entity_render_rows_contract()
     _assert_entity_damage_callback_act_contract()
     _assert_entity_monster_update_act_contract()
     _assert_webview_damage_callback_act_contract()
@@ -709,6 +741,7 @@ def main() -> int:
         "game_state_contract": True,
         "parser_handler_contract": True,
         "entity_act_source_priority": True,
+        "entity_render_rows_contract": True,
         "entity_damage_callback_act_contract": True,
         "entity_monster_update_act_contract": True,
         "webview_damage_callback_act_contract": True,

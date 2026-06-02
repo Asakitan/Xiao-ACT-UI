@@ -1395,6 +1395,42 @@ function _currentData() {
     return _liveSnapshot || _emptySnapshot();
 }
 
+function _actRowsDataFallback(baseData) {
+    var spec = (_actSnapshot && _actSnapshot.render_spec) || null;
+    var rows = (spec && spec.mode === 'live' && spec.rows) || [];
+    if (!rows.length) return baseData || _emptySnapshot();
+    var totals = spec.totals || {};
+    var out = Object.assign({}, baseData || _emptySnapshot());
+    out.encounter_active = spec.mode === 'live';
+    out.elapsed_s = Number(totals.elapsed_s || out.elapsed_s || 0);
+    out.total_damage = Number(totals.damage || out.total_damage || 0);
+    out.total_heal = Number(totals.heal || out.total_heal || 0);
+    out.total_dps = Number(totals.dps || out.total_dps || 0);
+    out.total_hps = Number(totals.hps || out.total_hps || 0);
+    out.entities = rows.map(function(row, idx) {
+        var uid = Number(row.uid || 0);
+        return Object.assign({}, row, {
+            uid: uid,
+            name: row.name || ('Player_' + uid),
+            profession: row.profession || '',
+            damage_total: Number(row.damage || row.damage_total || 0),
+            heal_total: Number(row.heal || row.heal_total || 0),
+            dps: Number(row.dps || 0),
+            hps: Number(row.hps || 0),
+            damage_pct: Number(row.damage_pct || 0),
+            is_self: !!row.is_self,
+            act_rank: Number(row.rank || (idx + 1))
+        });
+    });
+    return out;
+}
+
+function _currentListData() {
+    var data = _currentData();
+    if (_viewMode === 'live') return _actRowsDataFallback(data);
+    return data;
+}
+
 function _hasReport() {
     return !!(_lastReport && _lastReport.entities && _lastReport.entities.length);
 }
@@ -1619,7 +1655,7 @@ function _switchDetailView() {
 function _renderHeader() {
     _setMode(_viewMode);
     _renderActMeta();
-    var data = _currentData();
+    var data = _currentListData();
     var summary = document.getElementById('summary-text');
     if (_viewMode === 'report') {
         if (!_hasReport()) {
@@ -1635,7 +1671,7 @@ function _renderHeader() {
 }
 
 function _renderFooter() {
-    var data = _currentData();
+    var data = _currentListData();
     var left = document.getElementById('footer-left');
     var right = document.getElementById('footer-right');
     if (_viewMode === 'report' && _hasReport()) {
@@ -1649,7 +1685,7 @@ function _renderFooter() {
 
 function _renderList() {
     if (_detailVisible) return;
-    var data = _currentData();
+    var data = _currentListData();
     var entities = ((data && data.entities) || []).slice();
     var frame = document.getElementById('list-frame');
 
@@ -1778,7 +1814,7 @@ function _renderSkillRows(entity) {
 
 function _renderDetail() {
     if (!_detailVisible) return;
-    var data = _currentData();
+    var data = _viewMode === 'live' ? _currentListData() : _currentData();
     var base = _findEntity(data, _detailUid);
     var detail = null;
     if (_viewMode === 'report') {
@@ -1822,8 +1858,12 @@ function showLive(data) {
 
 function showActSnapshot(snapshot) {
     _actSnapshot = snapshot || null;
-    _renderActMeta();
-    _renderHeader();
+    if (_viewMode === 'live') {
+        _renderAll();
+    } else {
+        _renderActMeta();
+        _renderHeader();
+    }
 }
 
 function updateDps(data) {

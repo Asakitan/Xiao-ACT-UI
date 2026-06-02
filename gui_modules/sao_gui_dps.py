@@ -1446,6 +1446,57 @@ class DpsOverlay:
             return max(0, min(self._scroll_offset_report, max(0, total - self.MAX_ROWS)))
         return max(0, min(self._scroll_offset, max(0, len(self._rows) - self.MAX_ROWS)))
 
+    def _act_render_rows(self) -> List[dict]:
+        try:
+            spec = (self._act_snapshot or {}).get('render_spec') or {}
+            if str(spec.get('mode') or '') != 'live':
+                return []
+            rows = spec.get('rows') or []
+            if not isinstance(rows, list):
+                return []
+            return [dict(row) for row in rows if isinstance(row, dict)]
+        except Exception:
+            return []
+
+    def _build_act_view_rows(self, act_rows: List[dict], is_heal: bool) -> List[dict]:
+        rows: List[dict] = []
+        sorted_rows = list(act_rows or [])
+        amount_key = 'heal' if is_heal else 'damage'
+        rate_key = 'hps' if is_heal else 'dps'
+        sorted_rows.sort(
+            key=lambda ent: (float(ent.get(amount_key) or 0), int(ent.get('uid') or 0)),
+            reverse=True,
+        )
+        scroll = max(0, min(self._scroll_offset, max(0, len(sorted_rows) - self.MAX_ROWS)))
+        self._scroll_offset = scroll
+        total = sum(float(ent.get(amount_key) or 0) for ent in sorted_rows)
+        if total <= 0:
+            try:
+                totals = ((self._act_snapshot or {}).get('render_spec') or {}).get('totals') or {}
+                total = float(totals.get('heal' if is_heal else 'damage') or 0)
+            except Exception:
+                total = 0.0
+        max_amount = max([float(ent.get(amount_key) or 0) for ent in sorted_rows], default=0.0)
+        for ent in sorted_rows[scroll: scroll + self.MAX_ROWS]:
+            uid = int(ent.get('uid') or 0)
+            amount = float(ent.get(amount_key) or 0)
+            rows.append({
+                'uid': uid,
+                'name': str(ent.get('name') or f'Player_{uid or 0}'),
+                'profession': str(ent.get('profession') or ''),
+                'fight_point': int(ent.get('fight_point') or 0),
+                'is_self': bool(ent.get('is_self')) or (self._self_uid and uid == self._self_uid),
+                'amount': amount,
+                'rate': float(ent.get(rate_key) or 0),
+                'pct': (amount / total) if total > 0 else float(ent.get('damage_pct') or 0.0),
+                'bar_pct': (amount / max_amount) if max_amount > 0 else 0.0,
+                'is_heal': is_heal,
+                'fx_tier': '',
+                'fx_start': 0.0,
+                'fallback_sub': 'ACT RENDER ROW',
+            })
+        return rows
+
     def _build_view_rows(self) -> List[dict]:
         is_heal = self._current_tab == 'heal'
         rows: List[dict] = []
@@ -1485,6 +1536,10 @@ class DpsOverlay:
                     'fallback_sub': 'LAST REPORT ENTRY',
                 })
             return rows
+
+        act_rows = self._act_render_rows()
+        if act_rows:
+            return self._build_act_view_rows(act_rows, is_heal)
 
         live_rows = list(self._rows.values())
         if is_heal:
