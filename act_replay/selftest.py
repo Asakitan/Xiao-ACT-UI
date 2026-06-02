@@ -407,7 +407,10 @@ def _assert_entity_render_rows_contract() -> None:
 
 def _assert_entity_trigger_summary_contract() -> None:
     overlay = DpsOverlay.__new__(DpsOverlay)
-    overlay._act_snapshot = {"triggers": {"emitted": [{"message": "Boss shield break"}]}}
+    overlay._act_snapshot = {"triggers": {"emitted": [
+        {"message": "Older alert"},
+        {"message": "Boss shield break"},
+    ]}}
     assert DpsOverlay._act_trigger_text(overlay) == "ACT ALERT BOSS SHIELD BREAK", overlay._act_snapshot
     overlay._act_snapshot = {"triggers": {"recent": [{"label": "Damage threshold"}]}}
     assert DpsOverlay._act_trigger_text(overlay) == "ACT ALERT DAMAGE THRESHOLD", overlay._act_snapshot

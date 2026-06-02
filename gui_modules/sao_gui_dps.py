@@ -1880,10 +1880,12 @@ class DpsOverlay:
     def _act_trigger_text(self) -> str:
         try:
             triggers = (self._act_snapshot or {}).get('triggers') or {}
-            events = triggers.get('emitted') or triggers.get('recent') or []
+            emitted = triggers.get('emitted') or []
+            recent = triggers.get('recent') or []
+            events = emitted or recent
             if not events:
                 return ''
-            event = events[0] or {}
+            event = (events[-1] if emitted else events[0]) or {}
             text = str(event.get('message') or event.get('label') or event.get('rule_id') or event.get('trigger_type') or '').strip()
             if not text:
                 return ''

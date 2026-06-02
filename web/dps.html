@@ -1642,9 +1642,11 @@ function _renderActMeta() {
 
 function _latestActTriggerText() {
     var triggers = (_actSnapshot && _actSnapshot.triggers) || {};
-    var events = triggers.emitted || triggers.recent || [];
+    var emitted = triggers.emitted || [];
+    var recent = triggers.recent || [];
+    var events = emitted.length ? emitted : recent;
     if (!events.length) return '';
-    var ev = events[0] || {};
+    var ev = emitted.length ? (events[events.length - 1] || {}) : (events[0] || {});
     var label = ev.message || ev.label || ev.rule_id || ev.trigger_type || '';
     if (!label) return '';
     return 'ACT ALERT ' + String(label).toUpperCase();
