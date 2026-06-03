@@ -1580,7 +1580,7 @@ def _report_preview(snapshot: Mapping[str, Any], report: Mapping[str, Any] | Non
 
 def _normalize_export_format(fmt: str | None) -> str:
     value = str(fmt or "json").strip().lower()
-    return value if value in {"json", "csv"} else "json"
+    return value if value in {"json", "csv", "html"} else "json"
 
 
 def act_report_status(owner: Any, *, limit: int = 20, fmt: str = "json") -> dict[str, Any]:
@@ -1611,7 +1611,7 @@ def act_report_status(owner: Any, *, limit: int = 20, fmt: str = "json") -> dict
         "ok": bool(report or history) and not errors,
         "message": "OK" if not errors else "; ".join(errors),
         "encounter_id": encounter_id,
-        "formats": ["json", "csv"],
+        "formats": ["json", "csv", "html"],
         "selected_format": selected,
         "preview": preview,
         "history": history,

@@ -8,6 +8,7 @@ with atomic file replacement.
 
 import copy
 import csv
+import html
 import json
 import os
 import tempfile
@@ -89,6 +90,94 @@ def _safe_filename_part(value: Any, default: str = "encounter") -> str:
             out.append("_")
     cleaned = "".join(out).strip("_")
     return cleaned or default
+
+
+def _format_number(value: Any) -> str:
+    try:
+        return f"{int(value or 0):,}"
+    except Exception:
+        return "0"
+
+
+def _format_pct(value: Any) -> str:
+    try:
+        num = float(value or 0.0)
+    except Exception:
+        num = 0.0
+    if num <= 1.0:
+        num *= 100.0
+    return f"{num:.1f}%"
+
+
+def _render_html_report(item: Dict[str, Any]) -> str:
+    entities = item.get("entities") if isinstance(item.get("entities"), list) else []
+    rows = []
+    for idx, entity in enumerate(entities, 1):
+        rows.append(
+            "<tr>"
+            f"<td>{idx}</td>"
+            f"<td>{html.escape(str(entity.get('name') or ''))}</td>"
+            f"<td>{html.escape(str(entity.get('profession') or ''))}</td>"
+            f"<td>{_format_number(entity.get('damage_total'))}</td>"
+            f"<td>{_format_number(entity.get('dps'))}</td>"
+            f"<td>{_format_pct(entity.get('damage_pct'))}</td>"
+            f"<td>{_format_number(entity.get('heal_total'))}</td>"
+            f"<td>{_format_number(entity.get('damage_taken'))}</td>"
+            "</tr>"
+        )
+    title = html.escape(str(item.get("encounter_id") or "ACT Encounter Report"))
+    completed = html.escape(str(item.get("completed_local_time") or ""))
+    reason = html.escape(str(item.get("report_reason") or ""))
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SAO Auto ACT Report</title>
+  <style>
+    body {{ font-family: Segoe UI, Arial, sans-serif; margin: 24px; color: #17202a; background: #f7f9fb; }}
+    main {{ max-width: 1080px; margin: 0 auto; background: #fff; border: 1px solid #d9e2ec; padding: 20px; }}
+    h1 {{ margin: 0 0 6px; font-size: 24px; }}
+    .meta {{ color: #52616f; margin-bottom: 18px; }}
+    .summary {{ display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; margin-bottom: 18px; }}
+    .metric {{ border: 1px solid #d9e2ec; padding: 10px; background: #fbfdff; }}
+    .metric b {{ display: block; font-size: 18px; margin-top: 4px; }}
+    table {{ width: 100%; border-collapse: collapse; background: #fff; }}
+    th, td {{ border-bottom: 1px solid #e6edf3; padding: 8px; text-align: right; }}
+    th:nth-child(2), td:nth-child(2), th:nth-child(3), td:nth-child(3) {{ text-align: left; }}
+    th {{ background: #eef4f8; font-weight: 600; }}
+  </style>
+</head>
+<body>
+<main>
+  <h1>SAO Auto ACT Report</h1>
+  <div class="meta">Encounter: {title} · Completed: {completed} · Reason: {reason}</div>
+  <section class="summary">
+    <div class="metric">Damage<b>{total_damage}</b></div>
+    <div class="metric">Heal<b>{total_heal}</b></div>
+    <div class="metric">DPS<b>{total_dps}</b></div>
+    <div class="metric">Elapsed<b>{elapsed:.1f}s</b></div>
+  </section>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Name</th><th>Profession</th><th>Damage</th><th>DPS</th><th>Damage %</th><th>Heal</th><th>Taken</th></tr>
+    </thead>
+    <tbody>
+      {rows}
+    </tbody>
+  </table>
+</main>
+</body>
+</html>
+""".format(
+        title=title,
+        completed=completed,
+        reason=reason,
+        total_damage=_format_number(item.get("total_damage")),
+        total_heal=_format_number(item.get("total_heal")),
+        total_dps=_format_number(item.get("total_dps")),
+        elapsed=_coerce_float(item.get("elapsed_s")),
+        rows="\n      ".join(rows) or "<tr><td colspan=\"8\">No combatant rows</td></tr>",
+    )
 
 
 class DpsHistoryStore:
@@ -189,7 +278,7 @@ class DpsHistoryStore:
             return None
         item = _compact_report(src)
         fmt = str(fmt or "json").strip().lower()
-        if fmt not in ("json", "csv"):
+        if fmt not in ("json", "csv", "html"):
             fmt = "json"
         os.makedirs(DPS_HISTORY_EXPORT_DIR, exist_ok=True)
         stamp = time.strftime(
@@ -217,6 +306,9 @@ class DpsHistoryStore:
                         "report_reason": item.get("report_reason", ""),
                     })
                     writer.writerow(row)
+        elif fmt == "html":
+            with open(path, "w", encoding="utf-8") as fp:
+                fp.write(_render_html_report(item))
         else:
             with open(path, "w", encoding="utf-8") as fp:
                 json.dump(item, fp, ensure_ascii=False, indent=2)

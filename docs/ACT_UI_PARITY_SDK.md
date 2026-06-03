@@ -201,14 +201,14 @@ The shared payload exposes `sources`, `status`, `latency_ms`, `last_event_ms`, a
 `export` is wired through shared `act_platform.runtime` helpers and the existing `DpsHistoryStore` exporter:
 
 - status: `act_report_status(owner, limit=20, fmt="json")`
-- save: `act_report_export(owner, fmt="json" | "csv")`
+- save: `act_report_export(owner, fmt="json" | "csv" | "html")`
 - copy: `act_report_copy(owner, fmt="json")`
 
 WebView route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/导出 Report Export`.
 
 Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报告/导出`.
 
-The shared payload preserves the parity fields `encounter_id`, `formats`, `selected_format`, and `preview`, with additional `history` and `storage_status` fields for user feedback. Entity/Tk uses a low-frequency diagnostic panel with refresh throttling and dirty render signatures; file writing remains in `DpsHistoryStore.export_report()` so UI code does not duplicate export format logic.
+The shared payload preserves the parity fields `encounter_id`, `formats`, `selected_format`, and `preview`, with additional `history` and `storage_status` fields for user feedback. JSON, CSV, and static HTML exports are written by `DpsHistoryStore.export_report()` so UI code does not duplicate export format logic. Entity/Tk uses a low-frequency diagnostic panel with refresh throttling and dirty render signatures.
 
 ## Current history browser surface
 

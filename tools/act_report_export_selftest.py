@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import unittest
+from unittest import mock
 
 from act_platform import runtime
+from engines import dps_history
 
 
 class FakeHistoryStore:
@@ -61,7 +65,7 @@ class ActReportExportTests(unittest.TestCase):
         status = runtime.act_report_status(FakeOwner(), limit=5)
 
         self.assertTrue(status["ok"])
-        self.assertEqual(status["formats"], ["json", "csv"])
+        self.assertEqual(status["formats"], ["json", "csv", "html"])
         self.assertEqual(status["selected_format"], "json")
         self.assertEqual(status["encounter_id"], "enc-1")
         self.assertEqual(status["preview"]["total_damage"], 12000)
@@ -79,6 +83,30 @@ class ActReportExportTests(unittest.TestCase):
         self.assertTrue(copied["ok"])
         self.assertIn("Kirito", copied["text"])
         self.assertEqual(owner._dps_history_store.exported[0][1], "csv")
+
+    def test_html_export_format_is_available(self) -> None:
+        owner = FakeOwner()
+        exported = runtime.act_report_export(owner, fmt="html")
+
+        self.assertTrue(exported["ok"])
+        self.assertEqual(exported["selected_format"], "html")
+        self.assertTrue(exported["path"].endswith(".html"))
+        self.assertEqual(owner._dps_history_store.exported[0][1], "html")
+
+    def test_history_store_writes_static_html_report(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_html_report_") as root:
+            with mock.patch.object(dps_history, "DPS_HISTORY_EXPORT_DIR", root):
+                store = dps_history.DpsHistoryStore(path=os.path.join(root, "history.json"))
+                store.add_report(FakeHistoryStore().report)
+                path = store.export_report(fmt="html")
+                self.assertIsNotNone(path)
+                with open(path or "", "r", encoding="utf-8") as fp:
+                    text = fp.read()
+
+        self.assertIn("<!doctype html>", text.lower())
+        self.assertIn("SAO Auto ACT Report", text)
+        self.assertIn("Kirito", text)
+        self.assertIn("12,000", text)
 
     def test_missing_history_store_is_reported_without_throwing(self) -> None:
         status = runtime.act_report_status(object())
