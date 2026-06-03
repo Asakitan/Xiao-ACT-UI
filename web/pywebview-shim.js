@@ -71,6 +71,15 @@
         toggle_action_log: function () {
             return call('ui.menu_action', { action: 'toggle_action_log' });
         },
+        toggle_death_recap: function () {
+            return call('ui.menu_action', { action: 'toggle_death_recap' });
+        },
+        get_death_recap_status: function (limit, window_s, entity_id) {
+            return call('act.death_recap.status', { limit: limit || 80, window_s: window_s || 8.0, entity_id: entity_id || null });
+        },
+        copy_death_recap: function (limit, window_s, entity_id) {
+            return call('act.death_recap.copy', { limit: limit || 80, window_s: window_s || 8.0, entity_id: entity_id || null });
+        },
         get_data_source_health: function () {
             return call('act.sources.health', {});
         },

@@ -146,6 +146,21 @@ def build_capability_registry() -> dict[str, CapabilitySpec]:
             entity_render_hint="paged/searchable entity table",
         ),
         CapabilitySpec(
+            capability_id="death_recap",
+            title="Death recap",
+            required_actions=("open", "refresh", "filter", "copy"),
+            required_payload_fields=(
+                "encounter_id",
+                "death",
+                "rows",
+                "summary",
+                "window",
+                "filters",
+            ),
+            webview_render_hint="death-window report table",
+            entity_render_hint="compact death recap panel with same summary rows",
+        ),
+        CapabilitySpec(
             capability_id="graph_timeseries",
             title="Graph and timeseries",
             required_actions=("open", "select_metric", "zoom", "filter", "export"),

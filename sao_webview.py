@@ -687,6 +687,15 @@ class SAOWebAPI:
                 self._g._show_action_log()
         threading.Thread(target=_do, daemon=True).start()
 
+    def toggle_death_recap(self):
+        """Show/hide the ACT death-recap overlay."""
+        def _do():
+            if self._g._death_recap_visible:
+                self._g._hide_death_recap()
+            else:
+                self._g._show_death_recap()
+        threading.Thread(target=_do, daemon=True).start()
+
     def toggle_graph_timeseries(self):
         """Show/hide the ACT graph/timeseries overlay."""
         def _do():
@@ -2101,6 +2110,10 @@ class SAOWebViewGUI:
         # ACT Action Log panel
         self.action_log_win = None
         self._action_log_visible = False
+
+        # ACT Death Recap panel
+        self.death_recap_win = None
+        self._death_recap_visible = False
 
         # ACT Graph/Timeseries panel
         self.graph_timeseries_win = None
@@ -4106,6 +4119,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Death Recap — death-window report surface for WebView parity
+        death_recap_url = _web_file_uri('act_death_recap.html')
+        _dr_w = max(720, int(min(_sw, 1920) * 0.44))
+        _dr_h = max(500, int(min(_sh, 1080) * 0.50))
+        _dr_x = max(18, int(monitor_left + (_sw - _dr_w) * 0.32))
+        _dr_y = max(26, int(monitor_top + (_sh - _dr_h) * 0.23))
+        self.death_recap_win = webview.create_window(
+            'SAO-DeathRecap', death_recap_url,
+            width=_dr_w, height=_dr_h,
+            x=_dr_x, y=_dr_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         # ACT Graph/Timeseries — rich chart surface for WebView parity
         graph_timeseries_url = _web_file_uri('act_graph_timeseries.html')
         _gt_w = max(780, int(min(_sw, 1920) * 0.50))
@@ -4757,6 +4788,7 @@ class SAOWebViewGUI:
             ('SAO-ReportExport', '_report_export_visible', None),
             ('SAO-TimelineVCR', '_timeline_vcr_visible', None),
             ('SAO-ActionLog', '_action_log_visible', None),
+            ('SAO-DeathRecap', '_death_recap_visible', None),
             ('SAO-GraphTimeseries', '_graph_timeseries_visible', None),
             ('SAO-CombatantDrilldown', '_combatant_drilldown_visible', None),
             ('SAO-SkillDrilldown', '_skill_drilldown_visible', None),
@@ -5458,6 +5490,14 @@ class SAOWebViewGUI:
                 if self.action_log_win:
                     self._set_window_alpha('SAO-ActionLog', 0.0)
                     self.action_log_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._death_recap_visible = False
+                if self.death_recap_win:
+                    self._set_window_alpha('SAO-DeathRecap', 0.0)
+                    self.death_recap_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -6581,6 +6621,63 @@ class SAOWebViewGUI:
             pass
         self._action_log_visible = False
 
+    # ── ACT Death Recap panel ──
+
+    def _eval_death_recap(self, js):
+        try:
+            if self.death_recap_win:
+                self.death_recap_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_death_recap_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the death-recap panel receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-DeathRecap')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_death_recap(self):
+        try:
+            if self.death_recap_win and not self._death_recap_visible:
+                self._set_window_alpha('SAO-DeathRecap', 0.0)
+                self.death_recap_win.show()
+                self._eval_death_recap('if(window.DeathRecap&&DeathRecap.fadeIn)DeathRecap.fadeIn()')
+                self._eval_death_recap('if(window.DeathRecap&&DeathRecap.refresh)DeathRecap.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-DeathRecap', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._death_recap_visible = True
+                self._ensure_death_recap_clickable()
+                threading.Timer(0.5, self._ensure_death_recap_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_death_recap(self):
+        try:
+            if self.death_recap_win and self._death_recap_visible:
+                self._eval_death_recap('if(window.DeathRecap&&DeathRecap.fadeOut)DeathRecap.fadeOut()')
+                def _finish():
+                    try:
+                        if self.death_recap_win:
+                            self.death_recap_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._death_recap_visible = False
+
     # ── ACT Graph/Timeseries panel ──
 
     def _eval_graph_timeseries(self, js):
@@ -7687,6 +7784,11 @@ class SAOWebViewGUI:
         except Exception:
             pass
         try:
+            if self.death_recap_win:
+                self.death_recap_win.destroy()
+        except Exception:
+            pass
+        try:
             if self.graph_timeseries_win:
                 self.graph_timeseries_win.destroy()
         except Exception:
@@ -8366,6 +8468,7 @@ class SAOWebViewGUI:
             'toggle_report_export': lambda: (self._show_report_export() if not self._report_export_visible else self._hide_report_export()),
             'toggle_timeline_vcr': lambda: (self._show_timeline_vcr() if not self._timeline_vcr_visible else self._hide_timeline_vcr()),
             'toggle_action_log': lambda: (self._show_action_log() if not self._action_log_visible else self._hide_action_log()),
+            'toggle_death_recap': lambda: (self._show_death_recap() if not self._death_recap_visible else self._hide_death_recap()),
             'toggle_graph_timeseries': lambda: (self._show_graph_timeseries() if not self._graph_timeseries_visible else self._hide_graph_timeseries()),
             'toggle_combatant_drilldown': lambda: (self._show_combatant_drilldown() if not self._combatant_drilldown_visible else self._hide_combatant_drilldown()),
             'toggle_skill_drilldown': lambda: (self._show_skill_drilldown() if not self._skill_drilldown_visible else self._hide_skill_drilldown()),

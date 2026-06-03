@@ -283,7 +283,7 @@ The shared payload preserves the parity fields `encounter_id`, `rows`, `columns`
 - status/open: `act_death_recap_status(owner, limit=80, window_s=8.0, entity_id=None)`
 - copy: `act_death_recap_copy(owner, limit=80, window_s=8.0, entity_id=None)`
 
-WebView API surface: `get_death_recap_status(...)` and `copy_death_recap(...)`.
+WebView route: `web/act_death_recap.html`, opened from `SAO Menu > ACT 死亡回放 Death Recap`. It uses `get_death_recap_status(...)` and `copy_death_recap(...)`.
 
 Entity route: `entity://act/death_recap`, opened from `SAO 菜单 > 面板 > ACT死亡回放`.
 
