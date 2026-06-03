@@ -137,6 +137,24 @@
         copy_action_log: function (limit, query, topic) {
             return call('act.action_log.copy', { limit: limit || 80, query: String(query || ''), topic: String(topic || '') });
         },
+        get_graph_timeseries_status: function (metric, limit, query, topic, timeRangeMs) {
+            return call('act.graph.status', { metric: String(metric || ''), limit: limit || 120, query: String(query || ''), topic: String(topic || ''), time_range_ms: timeRangeMs || 0 });
+        },
+        select_graph_metric: function (metric, limit) {
+            return call('act.graph.select_metric', { metric: String(metric || 'damage'), limit: limit || 120 });
+        },
+        zoom_graph_timeseries: function (timeRangeMs, limit) {
+            return call('act.graph.zoom', { time_range_ms: timeRangeMs || 0, limit: limit || 120 });
+        },
+        filter_graph_timeseries: function (query, topic, limit) {
+            return call('act.graph.filter', { query: String(query || ''), topic: String(topic || ''), limit: limit || 120 });
+        },
+        export_graph_timeseries: function (metric, limit, query, topic) {
+            return call('act.graph.export', { metric: String(metric || ''), limit: limit || 120, query: String(query || ''), topic: String(topic || '') });
+        },
+        toggle_graph_timeseries: function () {
+            return call('ui.menu_action', { action: 'toggle_graph_timeseries' });
+        },
         get_plugin_status: function () {
             return call('act.plugins.status', {});
         },

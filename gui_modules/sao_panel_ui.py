@@ -203,8 +203,19 @@ def _make_panel_close_button(parent, command, bg=_SAO_PANEL_HEADER_BG):
     return lbl
 
 
-def _sao_panel_header(parent, title_icon, title_text, close_cmd):
-    """创建 SAO 风格深色标题栏，返回 (header_frame, close_label)"""
+def _sao_panel_header(parent, title_icon, title_text=None, close_cmd=None, on_close=None):
+    """创建 SAO 风格深色标题栏，返回 header。
+
+    Legacy callers pass ``(parent, icon, title, close_cmd)`` and unpack
+    ``(header, close_label)``.  New ACT panels pass ``(parent, title,
+    on_close=...)`` and use the returned object as a frame.  Return a small
+    tuple-like proxy so both styles stay compatible without duplicating panel
+    chrome code.
+    """
+    if title_text is None:
+        title_text = str(title_icon or '')
+        title_icon = '◉'
+    close_cb = on_close or close_cmd or (lambda: None)
     hdr = tk.Frame(parent, bg=_SAO_PANEL_HEADER_BG, height=28)
     hdr.pack(fill=tk.X)
     hdr.pack_propagate(False)
@@ -217,13 +228,53 @@ def _sao_panel_header(parent, title_icon, title_text, close_cmd):
     # 右侧系统标记
     tk.Label(hdr, text='◇', bg=_SAO_PANEL_HEADER_BG, fg='#4a5a6a',
              font=get_sao_font(7)).pack(side=tk.RIGHT, padx=(0, 2))
-    close_lbl = _make_panel_close_button(hdr, close_cmd, bg=_SAO_PANEL_HEADER_BG)
+    close_lbl = _make_panel_close_button(hdr, close_cb, bg=_SAO_PANEL_HEADER_BG)
     close_lbl.pack(side=tk.RIGHT, padx=6)
-    return hdr, close_lbl
+    class _HeaderProxy:
+        def __init__(self, frame, close_button):
+            self.frame = frame
+            self.close_label = close_button
+
+        def __iter__(self):
+            yield self.frame
+            yield self.close_label
+
+        def __getattr__(self, name):
+            return getattr(self.frame, name)
+
+    return _HeaderProxy(hdr, close_lbl)
 
 
-def _bind_panel_drag(hdr, close_lbl, start_fn, move_fn):
+def _bind_panel_drag(hdr, close_lbl=None, start_fn=None, move_fn=None):
     """递归绑定拖拽事件到标题栏的所有子组件 (排除关闭按钮)"""
+    drag_root = None
+    if start_fn is None and move_fn is None and hasattr(close_lbl, 'frame') and hasattr(close_lbl, 'close_label'):
+        drag_root = hdr
+        hdr = close_lbl.frame
+        close_lbl = close_lbl.close_label
+    if hasattr(hdr, 'frame') and hasattr(hdr, 'close_label'):
+        close_lbl = hdr.close_label
+        hdr = hdr.frame
+    if hasattr(close_lbl, 'frame') and hasattr(close_lbl, 'close_label'):
+        close_lbl = close_lbl.close_label
+    if start_fn is None or move_fn is None:
+        root = drag_root or hdr.winfo_toplevel()
+        state = {'x': 0, 'y': 0}
+
+        def start_fn(event):
+            state['x'] = event.x_root
+            state['y'] = event.y_root
+
+        def move_fn(event):
+            try:
+                dx = event.x_root - state['x']
+                dy = event.y_root - state['y']
+                state['x'] = event.x_root
+                state['y'] = event.y_root
+                root.geometry(f'+{root.winfo_x() + dx}+{root.winfo_y() + dy}')
+            except Exception:
+                pass
+
     def _do(w):
         if w is close_lbl:
             return

@@ -250,6 +250,7 @@ class SAOPlayerGUILifecycleMixin:
             self._act_report_export_panel,
             self._act_timeline_vcr_panel,
             self._act_action_log_panel,
+            self._act_graph_timeseries_panel,
         ]:
             try:
                 if pnl:
@@ -274,6 +275,7 @@ class SAOPlayerGUILifecycleMixin:
         self._act_report_export_panel = None
         self._act_timeline_vcr_panel = None
         self._act_action_log_panel = None
+        self._act_graph_timeseries_panel = None
         self._destroy_hp_alpha_strip_windows()
         try:
             if self._float and self._float.winfo_exists():

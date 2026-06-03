@@ -857,6 +857,186 @@ def act_action_log_copy(owner: Any, *, limit: int = 80, query: str = "", topic: 
     }
 
 
+_GRAPH_METRICS = [
+    {"id": "damage", "label": "Damage", "kind": "cumulative", "unit": "damage"},
+    {"id": "heal", "label": "Heal", "kind": "cumulative", "unit": "heal"},
+    {"id": "event_count", "label": "Events", "kind": "cumulative", "unit": "events"},
+    {"id": "boss_hp_pct", "label": "Boss HP %", "kind": "gauge", "unit": "pct"},
+]
+
+
+def _graph_timeseries_state(owner: Any) -> dict[str, Any]:
+    state = getattr(owner, "_act_graph_timeseries_state", None)
+    if not isinstance(state, dict):
+        state = {"metric": "damage", "filters": {"query": "", "topic": ""}, "time_range_ms": 0}
+        try:
+            setattr(owner, "_act_graph_timeseries_state", state)
+        except Exception:
+            pass
+    filters = state.get("filters")
+    if not isinstance(filters, dict):
+        filters = {"query": "", "topic": ""}
+        state["filters"] = filters
+    filters.setdefault("query", "")
+    filters.setdefault("topic", "")
+    state.setdefault("metric", "damage")
+    state.setdefault("time_range_ms", 0)
+    return state
+
+
+def _normalize_graph_metric(metric: str | None) -> str:
+    value = str(metric or "damage").strip().lower()
+    allowed = {str(item["id"]) for item in _GRAPH_METRICS}
+    return value if value in allowed else "damage"
+
+
+def _event_boss_hp_pct(payload: Mapping[str, Any]) -> float | None:
+    for key in ("boss_hp_pct", "hp_pct", "boss_hp_est_pct"):
+        if key in payload:
+            value = _safe_float(payload.get(key), -1.0)
+            if value < 0:
+                continue
+            return max(0.0, min(100.0, value * 100.0 if value <= 1.0 else value))
+    hp = _safe_float(payload.get("hp") or payload.get("boss_current_hp"), -1.0)
+    total = _safe_float(payload.get("max_hp") or payload.get("boss_total_hp"), -1.0)
+    if hp >= 0 and total > 0:
+        return max(0.0, min(100.0, hp * 100.0 / total))
+    return None
+
+
+def _graph_rows_from_events(raw_events: list[dict[str, Any]], *, query: str = "", topic: str = "") -> list[dict[str, Any]]:
+    rows = [_action_log_row(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
+    rows = _filter_action_log_rows(rows, query=query, topic=topic)
+    rows.sort(key=lambda row: (int(row.get("time_ms") or 0), int(row.get("index") or 0)))
+    return rows
+
+
+def _build_graph_series(rows: list[dict[str, Any]], selected_metric: str) -> dict[str, Any]:
+    damage_total = 0.0
+    heal_total = 0.0
+    event_total = 0.0
+    last_boss_hp: float | None = None
+    series: dict[str, Any] = {
+        "damage": {"metric": "damage", "selected": selected_metric == "damage", "points": []},
+        "heal": {"metric": "heal", "selected": selected_metric == "heal", "points": []},
+        "event_count": {"metric": "event_count", "selected": selected_metric == "event_count", "points": []},
+        "boss_hp_pct": {"metric": "boss_hp_pct", "selected": selected_metric == "boss_hp_pct", "points": []},
+    }
+    for row in rows:
+        payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
+        topic = str(row.get("topic") or "")
+        if topic == "damage" or "damage" in payload or "damage_total" in payload:
+            damage_total += _safe_float(payload.get("damage") or payload.get("damage_total") or row.get("value"), 0.0)
+        if topic == "heal" or "heal" in payload or "heal_total" in payload:
+            heal_total += _safe_float(payload.get("heal") or payload.get("heal_total") or row.get("value"), 0.0)
+        event_total += 1.0
+        boss_hp = _event_boss_hp_pct(payload)
+        if boss_hp is not None:
+            last_boss_hp = boss_hp
+        point_base = {"time_ms": int(row.get("time_ms") or 0), "row_id": str(row.get("id") or ""), "topic": topic}
+        series["damage"]["points"].append({**point_base, "value": float(damage_total)})
+        series["heal"]["points"].append({**point_base, "value": float(heal_total)})
+        series["event_count"]["points"].append({**point_base, "value": float(event_total)})
+        if last_boss_hp is not None:
+            series["boss_hp_pct"]["points"].append({**point_base, "value": float(last_boss_hp)})
+    return series
+
+
+def act_graph_timeseries_status(owner: Any, *, metric: str | None = None, limit: int = 120, query: str | None = None, topic: str | None = None, time_range_ms: int | None = None) -> dict[str, Any]:
+    """Return compact ACT graph/timeseries data shared by WebView and Entity/Tk."""
+    state = _graph_timeseries_state(owner)
+    if metric is not None:
+        state["metric"] = _normalize_graph_metric(metric)
+    selected_metric = _normalize_graph_metric(str(state.get("metric") or "damage"))
+    filters = dict(state.get("filters") or {})
+    if query is not None:
+        filters["query"] = str(query or "")
+    if topic is not None:
+        filters["topic"] = str(topic or "")
+    if time_range_ms is not None:
+        state["time_range_ms"] = max(0, int(time_range_ms or 0))
+    row_limit = max(1, min(int(limit or 120), 500))
+    errors: list[str] = []
+    try:
+        raw_events = ensure_act_event_bus(owner).recent_events(row_limit)
+    except Exception as exc:
+        raw_events = []
+        errors.append(str(exc))
+    rows = _graph_rows_from_events(raw_events, query=str(filters.get("query") or ""), topic=str(filters.get("topic") or ""))
+    if int(state.get("time_range_ms") or 0) > 0 and rows:
+        end_ms = max(int(row.get("time_ms") or 0) for row in rows)
+        start_ms = max(0, end_ms - int(state.get("time_range_ms") or 0))
+        rows = [row for row in rows if int(row.get("time_ms") or 0) >= start_ms]
+    series = _build_graph_series(rows, selected_metric)
+    observed_range = 0
+    if rows:
+        observed_range = max(0, max(int(row.get("time_ms") or 0) for row in rows) - min(int(row.get("time_ms") or 0) for row in rows))
+    effective_range = int(state.get("time_range_ms") or 0) or observed_range
+    state["filters"] = filters
+    return {
+        "ok": not errors,
+        "message": "OK" if not errors else "; ".join(errors),
+        "encounter_id": _timeline_encounter_id(owner, state),
+        "selected_metric": selected_metric,
+        "series": series,
+        "metrics": list(_GRAPH_METRICS),
+        "time_range_ms": int(effective_range),
+        "filters": filters,
+        "row_count": len(rows),
+        "errors": errors,
+    }
+
+
+def act_graph_timeseries_select_metric(owner: Any, *, metric: str = "damage", limit: int = 120) -> dict[str, Any]:
+    state = _graph_timeseries_state(owner)
+    state["metric"] = _normalize_graph_metric(metric)
+    return act_graph_timeseries_status(owner, limit=limit)
+
+
+def act_graph_timeseries_zoom(owner: Any, *, time_range_ms: int = 0, limit: int = 120) -> dict[str, Any]:
+    state = _graph_timeseries_state(owner)
+    state["time_range_ms"] = max(0, int(time_range_ms or 0))
+    return act_graph_timeseries_status(owner, limit=limit)
+
+
+def act_graph_timeseries_filter(owner: Any, *, query: str | None = None, topic: str | None = None, limit: int = 120) -> dict[str, Any]:
+    state = _graph_timeseries_state(owner)
+    filters = dict(state.get("filters") or {})
+    if query is not None:
+        filters["query"] = str(query or "")
+    if topic is not None:
+        filters["topic"] = str(topic or "")
+    state["filters"] = filters
+    return act_graph_timeseries_status(owner, limit=limit)
+
+
+def act_graph_timeseries_export(owner: Any, *, metric: str | None = None, limit: int = 120, query: str | None = None, topic: str | None = None) -> dict[str, Any]:
+    status = act_graph_timeseries_status(owner, metric=metric, limit=limit, query=query, topic=topic)
+    payload = {
+        "encounter_id": status.get("encounter_id"),
+        "selected_metric": status.get("selected_metric"),
+        "series": status.get("series") or {},
+        "metrics": status.get("metrics") or [],
+        "time_range_ms": status.get("time_range_ms") or 0,
+        "filters": status.get("filters") or {},
+    }
+    try:
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+    except Exception:
+        text = str(payload)
+    return {
+        "ok": bool(status.get("ok")),
+        "message": status.get("message") or "OK",
+        "text": text,
+        "selected_metric": payload["selected_metric"],
+        "series": payload["series"],
+        "metrics": payload["metrics"],
+        "time_range_ms": payload["time_range_ms"],
+        "filters": payload["filters"],
+        "errors": list(status.get("errors") or []),
+    }
+
+
 def _report_rows_from_snapshot(snapshot: Mapping[str, Any], report: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     render_spec = snapshot.get("render_spec") if isinstance(snapshot, Mapping) else {}
     rows = render_spec.get("rows") if isinstance(render_spec, Mapping) else []
@@ -1119,6 +1299,11 @@ __all__ = [
     "act_action_log_jump_to_time",
     "act_action_log_search",
     "act_action_log_status",
+    "act_graph_timeseries_export",
+    "act_graph_timeseries_filter",
+    "act_graph_timeseries_select_metric",
+    "act_graph_timeseries_status",
+    "act_graph_timeseries_zoom",
     "act_history_delete",
     "act_history_load",
     "act_history_status",

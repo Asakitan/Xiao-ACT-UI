@@ -43,6 +43,7 @@ from typing import Any, Callable, Dict, List, Optional
 from act_platform.runtime import (
     act_action_log_status,
     act_data_source_health,
+    act_graph_timeseries_status,
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_reload,
@@ -212,6 +213,16 @@ class SAOPlayerGUIMenuMixin:
             )
         except Exception:
             action_log_sig = (False, 0, 0, '')
+        try:
+            graph_status = self._get_act_graph_timeseries_menu_status()
+            graph_sig = (
+                bool(graph_status.get('ok')),
+                str(graph_status.get('selected_metric') or ''),
+                int(graph_status.get('row_count') or 0),
+                int(graph_status.get('time_range_ms') or 0),
+            )
+        except Exception:
+            graph_sig = (False, '', 0, 0)
         session_visible = False
         session_count = 0
         session_version = int(getattr(self, '_session_players_version', 0) or 0)
@@ -246,6 +257,7 @@ class SAOPlayerGUIMenuMixin:
             report_sig,
             timeline_sig,
             action_log_sig,
+            graph_sig,
             session_visible,
             session_count,
             session_version,
@@ -350,6 +362,10 @@ class SAOPlayerGUIMenuMixin:
         action_log_status = self._get_act_action_log_menu_status()
         action_log_count = len(action_log_status.get('rows') or [])
         action_log_state = 'READY' if action_log_status.get('ok') else 'EMPTY'
+        graph_status = self._get_act_graph_timeseries_menu_status()
+        graph_metric = str(graph_status.get('selected_metric') or 'damage')
+        graph_count = int(graph_status.get('row_count') or 0)
+        graph_state = 'READY' if graph_status.get('ok') else 'EMPTY'
         session_visible = False
         try:
             stack = getattr(self, '_menu_left_stack', None)
@@ -441,6 +457,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '⬇', 'label': f'ACT报告/导出: {report_state}/{report_total_damage}', 'command': self._toggle_act_report_export_panel},
             {'icon': '▶', 'label': f'ACT时间线/VCR: {timeline_state}/{timeline_count}', 'command': self._toggle_act_timeline_vcr_panel},
             {'icon': '▤', 'label': f'ACT行为日志: {action_log_state}/{action_log_count}', 'command': self._toggle_act_action_log_panel},
+            {'icon': '⌁', 'label': f'ACT图表/曲线: {graph_state}/{graph_metric}/{graph_count}', 'command': self._toggle_act_graph_timeseries_panel},
             {'icon': '↻', 'label': '重载ACT插件', 'command': self._reload_act_plugins_menu},
             {'icon': '◆', 'label': '切换首个ACT插件', 'command': self._toggle_first_act_plugin_menu},
         ])
@@ -501,6 +518,12 @@ class SAOPlayerGUIMenuMixin:
             return act_action_log_status(self, limit=24)
         except Exception as exc:
             return {'ok': False, 'message': str(exc), 'rows': [], 'columns': [], 'filters': {'query': '', 'topic': ''}, 'cursor': {'time_ms': 0, 'row_count': 0}, 'errors': [str(exc)]}
+
+    def _get_act_graph_timeseries_menu_status(self):
+        try:
+            return act_graph_timeseries_status(self, limit=24)
+        except Exception as exc:
+            return {'ok': False, 'message': str(exc), 'selected_metric': 'damage', 'series': {}, 'metrics': [], 'time_range_ms': 0, 'row_count': 0, 'filters': {'query': '', 'topic': ''}, 'errors': [str(exc)]}
 
     def _show_act_plugin_status_menu(self):
         status = self._get_act_plugin_menu_status()

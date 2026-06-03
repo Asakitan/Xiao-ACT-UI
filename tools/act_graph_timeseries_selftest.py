@@ -1,0 +1,80 @@
+# -*- coding: utf-8 -*-
+"""Regression tests for shared ACT graph/timeseries helpers."""
+
+from __future__ import annotations
+
+import json
+import unittest
+
+from act_platform import runtime
+from act_platform.runtime import ensure_act_event_bus
+
+
+class FakeOwner:
+    pass
+
+
+class ActGraphTimeseriesRuntimeTests(unittest.TestCase):
+    def _owner_with_events(self) -> FakeOwner:
+        owner = FakeOwner()
+        bus = ensure_act_event_bus(owner)
+        bus.publish("damage", {"timestamp": 100.0, "attacker": "Kirito", "damage": 1000}, source_name="tcp", source_kind="packet")
+        bus.publish("heal", {"timestamp": 101.0, "name": "Asuna", "heal": 250}, source_name="tcp", source_kind="packet")
+        bus.publish("damage", {"timestamp": 102.0, "attacker": "Kirito", "damage_total": 1500}, source_name="tcp", source_kind="packet")
+        bus.publish("boss", {"timestamp": 103.0, "message": "Boss HP", "boss_hp_pct": 0.72}, source_name="memory", source_kind="runtime")
+        return owner
+
+    def test_graph_status_contains_parity_fields(self) -> None:
+        owner = self._owner_with_events()
+        status = runtime.act_graph_timeseries_status(owner, metric="damage", limit=20)
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["selected_metric"], "damage")
+        self.assertIn("damage", status["series"])
+        self.assertIn("heal", status["series"])
+        self.assertIn("event_count", status["series"])
+        self.assertGreaterEqual(status["time_range_ms"], 3000)
+        self.assertEqual(status["filters"]["query"], "")
+        self.assertIn("encounter_id", status)
+        json.dumps(status, ensure_ascii=False)
+
+    def test_graph_damage_series_is_cumulative_newest_events_sorted_by_time(self) -> None:
+        owner = self._owner_with_events()
+        status = runtime.act_graph_timeseries_status(owner, metric="damage", limit=20)
+        points = status["series"]["damage"]["points"]
+
+        self.assertEqual([point["value"] for point in points], [1000.0, 1000.0, 2500.0, 2500.0])
+        self.assertEqual([point["time_ms"] for point in points], sorted(point["time_ms"] for point in points))
+
+    def test_graph_controls_update_shared_state(self) -> None:
+        owner = self._owner_with_events()
+        selected = runtime.act_graph_timeseries_select_metric(owner, metric="heal")
+        zoomed = runtime.act_graph_timeseries_zoom(owner, time_range_ms=1500)
+        filtered = runtime.act_graph_timeseries_filter(owner, topic="damage", query="Kirito")
+        after = runtime.act_graph_timeseries_status(owner)
+
+        self.assertEqual(selected["selected_metric"], "heal")
+        self.assertEqual(zoomed["time_range_ms"], 1500)
+        self.assertEqual(filtered["filters"]["topic"], "damage")
+        self.assertEqual(after["filters"]["query"], "Kirito")
+
+    def test_graph_export_returns_json_payload(self) -> None:
+        owner = self._owner_with_events()
+        exported = runtime.act_graph_timeseries_export(owner, metric="event_count", limit=3)
+        data = json.loads(exported["text"])
+
+        self.assertTrue(exported["ok"])
+        self.assertEqual(exported["selected_metric"], "event_count")
+        self.assertIn("series", data)
+        self.assertLessEqual(len(data["series"]["event_count"]["points"]), 3)
+
+    def test_empty_graph_is_safe(self) -> None:
+        status = runtime.act_graph_timeseries_status(FakeOwner())
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["series"]["event_count"]["points"], [])
+        self.assertEqual(status["time_range_ms"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

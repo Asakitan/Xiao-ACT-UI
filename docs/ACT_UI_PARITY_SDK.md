@@ -257,6 +257,22 @@ Entity route: `entity://act/action_log`, opened from `SAO 菜单 > 面板 > ACT�
 
 The shared payload preserves the parity fields `encounter_id`, `rows`, `columns`, `filters`, and `cursor`. Rows are compact table entries derived from EventBus envelopes and include cursor highlighting metadata. Entity/Tk keeps rendering bounded to the first 80 rows, refresh-throttled at 350ms, and dirty-signature gated before rebuilding widgets.
 
+## Current graph/timeseries surface
+
+`graph_timeseries` is wired through shared `act_platform.runtime` helpers over compact owner-scoped ACT `EventBus` rows:
+
+- status/open: `act_graph_timeseries_status(owner, metric="damage", limit=120, query=None, topic=None, time_range_ms=None)`
+- select metric: `act_graph_timeseries_select_metric(owner, metric="damage", limit=120)`
+- zoom: `act_graph_timeseries_zoom(owner, time_range_ms=0, limit=120)`
+- filter: `act_graph_timeseries_filter(owner, query=None, topic=None, limit=120)`
+- export: `act_graph_timeseries_export(owner, metric=None, limit=120, query=None, topic=None)`
+
+WebView route: `web/act_graph_timeseries.html`, opened from `SAO Menu > ACT 图表/曲线 Graph`.
+
+Entity route: `entity://act/graph_timeseries`, opened from `SAO 菜单 > 面板 > ACT图表/曲线`.
+
+The shared payload preserves the parity fields `encounter_id`, `series`, `metrics`, `time_range_ms`, and `filters`. Current series are lightweight cumulative curves for `damage`, `heal`, and `event_count`, plus gauge-style `boss_hp_pct` when boss payloads provide HP percentages. WebView owns the richer canvas chart path; Entity/Tk renders a bounded compact bar/table representation with 350ms refresh throttling and dirty signatures so CPU-heavy redraw pressure stays low.
+
 ## Safety notes
 
 Treat the SDK as a delivery gate, not documentation-only metadata. If a feature PR changes ACT behavior, it should update the registry, both UI declarations, and parity tests in the same change.

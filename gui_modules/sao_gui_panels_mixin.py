@@ -62,6 +62,7 @@ from utils.perf_probe import probe as _probe
 from gui_modules.sao_gui_action_log import ActionLogPanel
 from gui_modules.sao_gui_commander import CommanderPanel
 from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
+from gui_modules.sao_gui_graph_timeseries import GraphTimeseriesPanel
 from gui_modules.sao_gui_plugin_manager import PluginManagerPanel
 from gui_modules.sao_gui_report_export import ReportExportPanel
 from gui_modules.sao_gui_timeline_vcr import TimelineVcrPanel
@@ -149,6 +150,17 @@ class SAOPlayerGUIPanelsMixin:
             self._act_action_log_panel.show()
             self.root.after(120, lambda: self._raise_panel_window(self._act_action_log_panel))
 
+    def _toggle_act_graph_timeseries_panel(self):
+        """打开/关闭 ACT 图表/曲线面板 (tkinter)."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._act_graph_timeseries_panel:
+            self._act_graph_timeseries_panel = GraphTimeseriesPanel(self.root, self)
+        if self._act_graph_timeseries_panel.is_visible():
+            self._act_graph_timeseries_panel.hide()
+        else:
+            self._act_graph_timeseries_panel.show()
+            self.root.after(120, lambda: self._raise_panel_window(self._act_graph_timeseries_panel))
+
     @_probe.decorate('ui.commander_push')
     def _push_commander_data(self):
         """Build + push a snapshot to the Commander panel."""
@@ -213,6 +225,7 @@ class SAOPlayerGUIPanelsMixin:
             ('act_report_export', getattr(self._act_report_export_panel, '_win', None)),
             ('act_timeline_vcr', getattr(self._act_timeline_vcr_panel, '_win', None)),
             ('act_action_log', getattr(self._act_action_log_panel, '_win', None)),
+            ('act_graph_timeseries', getattr(self._act_graph_timeseries_panel, '_win', None)),
         ]
 
         if not self._panels_hidden:

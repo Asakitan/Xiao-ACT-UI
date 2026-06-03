@@ -74,6 +74,11 @@ from act_platform.runtime import (
     act_action_log_status,
     act_data_source_diagnose,
     act_data_source_health,
+    act_graph_timeseries_export,
+    act_graph_timeseries_filter,
+    act_graph_timeseries_select_metric,
+    act_graph_timeseries_status,
+    act_graph_timeseries_zoom,
     act_history_delete,
     act_history_load,
     act_history_status,
@@ -474,6 +479,30 @@ class SAOWebAPI:
     def copy_action_log(self, limit=80, query='', topic=''):
         return json.dumps(act_action_log_copy(self._g, limit=int(limit or 80), query=str(query or ''), topic=str(topic or '')), ensure_ascii=False)
 
+    def get_graph_timeseries_status(self, metric=None, limit=120, query=None, topic=None, time_range_ms=None):
+        kwargs = {'limit': int(limit or 120)}
+        if metric is not None:
+            kwargs['metric'] = str(metric or '')
+        if query is not None:
+            kwargs['query'] = str(query or '')
+        if topic is not None:
+            kwargs['topic'] = str(topic or '')
+        if time_range_ms is not None:
+            kwargs['time_range_ms'] = int(time_range_ms or 0)
+        return json.dumps(act_graph_timeseries_status(self._g, **kwargs), ensure_ascii=False)
+
+    def select_graph_metric(self, metric='damage', limit=120):
+        return json.dumps(act_graph_timeseries_select_metric(self._g, metric=str(metric or 'damage'), limit=int(limit or 120)), ensure_ascii=False)
+
+    def zoom_graph_timeseries(self, time_range_ms=0, limit=120):
+        return json.dumps(act_graph_timeseries_zoom(self._g, time_range_ms=int(time_range_ms or 0), limit=int(limit or 120)), ensure_ascii=False)
+
+    def filter_graph_timeseries(self, query=None, topic=None, limit=120):
+        return json.dumps(act_graph_timeseries_filter(self._g, query=None if query is None else str(query or ''), topic=None if topic is None else str(topic or ''), limit=int(limit or 120)), ensure_ascii=False)
+
+    def export_graph_timeseries(self, metric=None, limit=120, query=None, topic=None):
+        return json.dumps(act_graph_timeseries_export(self._g, metric=None if metric is None else str(metric or ''), limit=int(limit or 120), query=None if query is None else str(query or ''), topic=None if topic is None else str(topic or '')), ensure_ascii=False)
+
     def list_plugins(self):
         return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
 
@@ -556,6 +585,15 @@ class SAOWebAPI:
                 self._g._hide_action_log()
             else:
                 self._g._show_action_log()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def toggle_graph_timeseries(self):
+        """Show/hide the ACT graph/timeseries overlay."""
+        def _do():
+            if self._g._graph_timeseries_visible:
+                self._g._hide_graph_timeseries()
+            else:
+                self._g._show_graph_timeseries()
         threading.Thread(target=_do, daemon=True).start()
 
     def switch_to_entity(self):
@@ -1945,6 +1983,10 @@ class SAOWebViewGUI:
         # ACT Action Log panel
         self.action_log_win = None
         self._action_log_visible = False
+
+        # ACT Graph/Timeseries panel
+        self.graph_timeseries_win = None
+        self._graph_timeseries_visible = False
 
         # Hide & Seek engine
         self._hide_seek_engine = None
@@ -3938,6 +3980,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Graph/Timeseries — rich chart surface for WebView parity
+        graph_timeseries_url = _web_file_uri('act_graph_timeseries.html')
+        _gt_w = max(780, int(min(_sw, 1920) * 0.50))
+        _gt_h = max(540, int(min(_sh, 1080) * 0.55))
+        _gt_x = max(16, int(monitor_left + (_sw - _gt_w) * 0.27))
+        _gt_y = max(24, int(monitor_top + (_sh - _gt_h) * 0.22))
+        self.graph_timeseries_win = webview.create_window(
+            'SAO-GraphTimeseries', graph_timeseries_url,
+            width=_gt_w, height=_gt_h,
+            x=_gt_x, y=_gt_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -4535,6 +4595,7 @@ class SAOWebViewGUI:
             ('SAO-ReportExport', '_report_export_visible', None),
             ('SAO-TimelineVCR', '_timeline_vcr_visible', None),
             ('SAO-ActionLog', '_action_log_visible', None),
+            ('SAO-GraphTimeseries', '_graph_timeseries_visible', None),
         ]
         user32 = ctypes.windll.user32
         for title, vis_attr, hwnd_attr in _panels:
@@ -5233,6 +5294,14 @@ class SAOWebViewGUI:
                 if self.action_log_win:
                     self._set_window_alpha('SAO-ActionLog', 0.0)
                     self.action_log_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._graph_timeseries_visible = False
+                if self.graph_timeseries_win:
+                    self._set_window_alpha('SAO-GraphTimeseries', 0.0)
+                    self.graph_timeseries_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -6332,6 +6401,63 @@ class SAOWebViewGUI:
             pass
         self._action_log_visible = False
 
+    # ── ACT Graph/Timeseries panel ──
+
+    def _eval_graph_timeseries(self, js):
+        try:
+            if self.graph_timeseries_win:
+                self.graph_timeseries_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_graph_timeseries_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the graph/timeseries panel receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-GraphTimeseries')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_graph_timeseries(self):
+        try:
+            if self.graph_timeseries_win and not self._graph_timeseries_visible:
+                self._set_window_alpha('SAO-GraphTimeseries', 0.0)
+                self.graph_timeseries_win.show()
+                self._eval_graph_timeseries('if(window.GraphTimeseries&&GraphTimeseries.fadeIn)GraphTimeseries.fadeIn()')
+                self._eval_graph_timeseries('if(window.GraphTimeseries&&GraphTimeseries.refresh)GraphTimeseries.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-GraphTimeseries', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._graph_timeseries_visible = True
+                self._ensure_graph_timeseries_clickable()
+                threading.Timer(0.5, self._ensure_graph_timeseries_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_graph_timeseries(self):
+        try:
+            if self.graph_timeseries_win and self._graph_timeseries_visible:
+                self._eval_graph_timeseries('if(window.GraphTimeseries&&GraphTimeseries.fadeOut)GraphTimeseries.fadeOut()')
+                def _finish():
+                    try:
+                        if self.graph_timeseries_win:
+                            self.graph_timeseries_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._graph_timeseries_visible = False
+
     # ── AutoKey Editor overlay ──
 
     def _eval_autokey_editor(self, js):
@@ -7266,6 +7392,11 @@ class SAOWebViewGUI:
                 self.action_log_win.destroy()
         except Exception:
             pass
+        try:
+            if self.graph_timeseries_win:
+                self.graph_timeseries_win.destroy()
+        except Exception:
+            pass
 
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
         # 热切换时不强杀: _do_hot_switch 需要在 webview.start() 返回后运行
@@ -7931,6 +8062,7 @@ class SAOWebViewGUI:
             'toggle_report_export': lambda: (self._show_report_export() if not self._report_export_visible else self._hide_report_export()),
             'toggle_timeline_vcr': lambda: (self._show_timeline_vcr() if not self._timeline_vcr_visible else self._hide_timeline_vcr()),
             'toggle_action_log': lambda: (self._show_action_log() if not self._action_log_visible else self._hide_action_log()),
+            'toggle_graph_timeseries': lambda: (self._show_graph_timeseries() if not self._graph_timeseries_visible else self._hide_graph_timeseries()),
             'toggle_session_players': self._toggle_session_players_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,
