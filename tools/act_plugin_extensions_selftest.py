@@ -23,6 +23,11 @@ def _field_match_handler(payload):
     }
 
 
+def _mini_formatter(payload):
+    preview = payload.get("preview") or {}
+    return {"text": "mini:" + str(preview.get("total_damage") or 0)}
+
+
 def on_load(ctx):
     registered.append(ctx.register_parser_adapter("star_fixture", {
         "title": "Star fixture parser",
@@ -38,6 +43,11 @@ def on_load(ctx):
         "formats": ["json"],
         "payload_fields": ["total_damage"],
     }, handler=lambda report: report))
+    registered.append(ctx.register_formatter("mini_summary", {
+        "title": "Mini Summary",
+        "formatter": "text",
+        "payload_fields": ["preview"],
+    }, handler=_mini_formatter))
     registered.append(ctx.register_trigger_type("field_match", {
         "label": "Field match",
         "schema": {"field": "string", "match": "string"},
@@ -80,17 +90,22 @@ class ActPluginExtensionTests(unittest.TestCase):
             self.assertEqual(status["extension_counts"], {
                 "parser_adapters": 1,
                 "exporters": 1,
+                "formatters": 1,
                 "trigger_types": 1,
                 "report_views": 1,
                 "timers": 1,
             })
-            self.assertEqual(plugin["extension_count"], 5)
+            self.assertEqual(plugin["extension_count"], 6)
             self.assertEqual(plugin["extensions"]["parser_adapters"], ["star_fixture"])
             self.assertEqual(status["extensions"]["parser_adapters"][0]["game_id"], "star_resonance")
             self.assertEqual(status["extensions"]["parser_adapters"][0]["supported_locales"], ["zh-CN"])
             self.assertEqual(status["extensions"]["exporters"][0]["id"], "summary_json")
             self.assertEqual(status["extensions"]["exporters"][0]["formats"], ["json"])
+            self.assertEqual(status["extensions"]["formatters"][0]["id"], "mini_summary")
             self.assertEqual(status["extensions"]["trigger_types"][0]["schema"]["field"], "string")
+            formatted = manager.invoke_extension("formatters", "mini_summary", {"preview": {"total_damage": 42}})
+            self.assertTrue(formatted["ok"], formatted)
+            self.assertEqual(formatted["result"]["text"], "mini:42")
             invoked = manager.invoke_extension("trigger_types", "field_match", {
                 "rule": {"id": "plugin_field"},
                 "render_spec": {"totals": {"damage": 1}},

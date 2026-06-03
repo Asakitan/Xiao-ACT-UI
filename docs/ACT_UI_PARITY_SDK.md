@@ -43,6 +43,8 @@ Known capability IDs:
 - `encounter_timeline_vcr`
 - `history_browser`
 - `export`
+- `mini_parse`
+- `selective_parsing`
 - `triggers_timers`
 - `plugin_manager`
 - `data_source_health`
@@ -210,6 +212,34 @@ WebView route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/
 Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报告/导出`.
 
 The shared payload preserves the parity fields `encounter_id`, `formats`, `selected_format`, and `preview`, with additional `history` and `storage_status` fields for user feedback. JSON, CSV, static HTML, structured XML, and compressed XML exports are written by `DpsHistoryStore.export_report()` so UI code does not duplicate export format logic. Entity/Tk uses a low-frequency diagnostic panel with refresh throttling and dirty render signatures.
+
+## Current Mini-Parse / clipboard formatter surface
+
+`mini_parse` is wired through shared `act_platform.runtime` helpers over the same report preview payload as export:
+
+- status: `act_mini_parse_status(owner, formatter_id="summary_table")`
+- preview: `act_mini_parse_preview(owner, formatter_id="summary_table")`
+- copy: `act_mini_parse_copy(owner, formatter_id="summary_table")`
+
+The shared payload preserves `formatter_id`, `formatters`, `preview`, `text`, and `errors`. Built-in formatter ids are `summary_table`, `chat_ranking`, and `json`; plugins can add formatter ids with `ctx.register_formatter(...)`.
+
+WebView uses the pywebview API methods `get_mini_parse_status`, `preview_mini_parse`, and `copy_mini_parse`. The shim also exposes `act.mini_parse.status`, `act.mini_parse.preview`, and `act.mini_parse.copy` command names for bridge-driven pages.
+
+Entity route: `entity://act/mini_parse`, currently surfaced through the report/export panel's `Mini Copy` action and the same shared status payload.
+
+## Current Selective Parsing surface
+
+`selective_parsing` is wired through shared `act_platform.runtime` helpers:
+
+- status: `act_selective_parsing_status(owner)`
+- update: `act_selective_parsing_update(owner, policy)`
+- clear/default all: `act_selective_parsing_clear(owner)`
+
+The shared payload preserves `enabled`, `mode`, `policy`, `filters`, and `last_decision`. Default policy is disabled and records all parser events. When enabled, both WebView and Entity call the same `should_record_owner_combat_event(owner, event)` decision before updating ACT DPS/encounter state.
+
+WebView uses the pywebview API methods `get_selective_parsing_status`, `update_selective_parsing`, and `clear_selective_parsing`. The shim also exposes `act.selective_parsing.status`, `act.selective_parsing.update`, and `act.selective_parsing.clear` command names.
+
+Entity route: `entity://act/selective_parsing`, currently surfaced by shared runtime status/actions and the report/export panel status hint when Selective Parsing is active.
 
 ## Current history browser surface
 

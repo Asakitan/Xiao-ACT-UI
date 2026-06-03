@@ -633,7 +633,7 @@ def _assert_act_ui_parity_contract() -> dict:
     report = run_act_ui_parity_selftest()
     summary = report.get("summary") or {}
     assert report.get("ok") is True, report
-    assert summary.get("capability_count") == 13, report
+    assert summary.get("capability_count") == 15, report
     assert summary.get("webview_capability_count") == summary.get("entity_capability_count"), report
     assert summary.get("issue_count") == 0, report
     adapters = report.get("adapters") or {}

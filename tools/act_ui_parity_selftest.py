@@ -41,6 +41,8 @@ class ActUiParityTests(unittest.TestCase):
             "encounter_timeline_vcr",
             "history_browser",
             "export",
+            "mini_parse",
+            "selective_parsing",
             "triggers_timers",
             "plugin_manager",
             "data_source_health",
@@ -93,9 +95,9 @@ class ActUiParityTests(unittest.TestCase):
         report = run_selftest()
 
         self.assertIs(report["ok"], True)
-        self.assertEqual(report["summary"]["capability_count"], 13)
-        self.assertEqual(report["summary"]["webview_capability_count"], 13)
-        self.assertEqual(report["summary"]["entity_capability_count"], 13)
+        self.assertEqual(report["summary"]["capability_count"], 15)
+        self.assertEqual(report["summary"]["webview_capability_count"], 15)
+        self.assertEqual(report["summary"]["entity_capability_count"], 15)
         self.assertEqual(report["summary"]["issue_count"], 0)
         self.assertIn(WEBVIEW_UI, report["adapters"])
         self.assertIn(ENTITY_UI, report["adapters"])

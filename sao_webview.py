@@ -88,6 +88,9 @@ from act_platform.runtime import (
     act_history_delete,
     act_history_load,
     act_history_status,
+    act_mini_parse_copy,
+    act_mini_parse_preview,
+    act_mini_parse_status,
     act_offline_import_file,
     act_offline_import_status,
     act_plugin_disable,
@@ -98,6 +101,9 @@ from act_platform.runtime import (
     act_report_copy,
     act_report_export,
     act_report_status,
+    act_selective_parsing_clear,
+    act_selective_parsing_status,
+    act_selective_parsing_update,
     act_skill_drilldown_back,
     act_skill_drilldown_copy,
     act_skill_drilldown_filter,
@@ -117,6 +123,7 @@ from act_platform.runtime import (
     ensure_act_event_bus,
     ensure_act_plugin_manager,
     publish_owner_event,
+    should_record_owner_combat_event,
 )
 from config import (
     DEFAULT_HOTKEYS,
@@ -435,6 +442,29 @@ class SAOWebAPI:
 
     def copy_report_export(self, fmt='json'):
         return json.dumps(act_report_copy(self._g, fmt=str(fmt or 'json')), ensure_ascii=False)
+
+    def get_mini_parse_status(self, formatter_id='summary_table'):
+        return json.dumps(act_mini_parse_status(self._g, formatter_id=str(formatter_id or 'summary_table')), ensure_ascii=False)
+
+    def preview_mini_parse(self, formatter_id='summary_table'):
+        return json.dumps(act_mini_parse_preview(self._g, formatter_id=str(formatter_id or 'summary_table')), ensure_ascii=False)
+
+    def copy_mini_parse(self, formatter_id='summary_table'):
+        return json.dumps(act_mini_parse_copy(self._g, formatter_id=str(formatter_id or 'summary_table')), ensure_ascii=False)
+
+    def get_selective_parsing_status(self):
+        return json.dumps(act_selective_parsing_status(self._g), ensure_ascii=False)
+
+    def update_selective_parsing(self, policy=None):
+        if isinstance(policy, str):
+            try:
+                policy = json.loads(policy or '{}')
+            except Exception:
+                policy = {}
+        return json.dumps(act_selective_parsing_update(self._g, policy if isinstance(policy, dict) else {}), ensure_ascii=False)
+
+    def clear_selective_parsing(self):
+        return json.dumps(act_selective_parsing_clear(self._g), ensure_ascii=False)
 
     def get_history_status(self, limit=20, query=''):
         return json.dumps(act_history_status(self._g, limit=int(limit or 20), query=str(query or '')), ensure_ascii=False)
@@ -3000,6 +3030,7 @@ class SAOWebViewGUI:
         event = self._normalize_damage_event_for_self(event)
         event = self._normalize_damage_event_target_for_webview(event)
         publish_owner_event(self, 'damage', event, source_name='webview', source_kind='tcp')
+        selective_decision = should_record_owner_combat_event(self, event)
         # Track last self -> non-player combat target damage for boss bar target.
         # BossHP only displays later if packet_parser has usable HP data.
         _is_self_combat_target = bool(
@@ -3030,7 +3061,7 @@ class SAOWebViewGUI:
                 self._bb_last_target_uuid = target_uuid
                 self._bb_last_damage_ts = time.time()
                 # Update DPS tracker boss target for boss-only total filtering
-                if self._dps_tracker:
+                if bool(selective_decision.get('record', True)) and self._dps_tracker:
                     try:
                         self._dps_tracker.set_boss_uuid(target_uuid)
                     except Exception:
@@ -3060,21 +3091,22 @@ class SAOWebViewGUI:
                 self._boss_raid_engine.on_damage_event(event)
             except Exception:
                 pass
-        if self._dps_tracker:
+        if bool(selective_decision.get('record', True)):
+            if self._dps_tracker:
+                try:
+                    self._dps_tracker.on_damage_event(event)
+                except Exception:
+                    pass
             try:
-                self._dps_tracker.on_damage_event(event)
+                mgr = getattr(self, '_encounter_mgr', None)
+                if mgr is not None:
+                    mgr.on_damage_event(event)
             except Exception:
                 pass
-        try:
-            mgr = getattr(self, '_encounter_mgr', None)
-            if mgr is not None:
-                mgr.on_damage_event(event)
-        except Exception:
-            pass
-        try:
-            self._push_dps_act_snapshot()
-        except Exception:
-            pass
+            try:
+                self._push_dps_act_snapshot()
+            except Exception:
+                pass
 
     def _on_monster_update(self, monster_data):
         """Monster update callback from packet_parser → boss raid engine + break bar tracking.

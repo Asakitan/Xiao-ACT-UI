@@ -103,6 +103,7 @@ Plugins can declare these extension kinds during `on_load(ctx)`:
 
 - `parser_adapters`
 - `exporters`
+- `formatters`
 - `trigger_types`
 - `report_views`
 - `timers`
@@ -131,7 +132,23 @@ Every ACT capability has:
 - Entity binding;
 - parity validation.
 
-Current capability ids include live overview, history, export, triggers/timers, plugin manager, data-source health, action log, graph/timeseries, timeline/VCR, combatant drilldown, skill drilldown, death recap, and offline import.
+Current capability ids include live overview, history, export, Mini-Parse/clipboard formatters, Selective Parsing, triggers/timers, plugin manager, data-source health, action log, graph/timeseries, timeline/VCR, combatant drilldown, skill drilldown, death recap, and offline import.
+
+## Selective Parsing
+
+Selective Parsing is a shared runtime policy, not a UI-only filter. The default policy is disabled and records every combat event exactly as before. When enabled, `act_selective_parsing_update(owner, policy)` stores a normalized `act_selective_parsing` policy with modes `self`, `party`, `include`, and `exclude`, plus include/exclude ids, names, source kinds, and topics.
+
+Live WebView and Entity packet callbacks both publish canonical damage/heal events first, keep boss/raid liveness handling intact, then call `should_record_owner_combat_event(owner, event)` before mutating ACT DPS/encounter state. This keeps diagnostics/action observation available while preventing unselected combatants from entering ACT totals. `act_selective_parsing_status(owner)` exposes the active policy, current self/party ids, and the last record/skip decision.
+
+## Mini-Parse And Clipboard Formatters
+
+Mini-Parse uses shared runtime helpers over the same report preview payload as export/history:
+
+- `act_mini_parse_status(owner, formatter_id="summary_table")`
+- `act_mini_parse_preview(owner, formatter_id="summary_table")`
+- `act_mini_parse_copy(owner, formatter_id="summary_table")`
+
+Built-in formatter ids are `summary_table`, `chat_ranking`, and `json`. Plugins can contribute additional compact formatters with `ctx.register_formatter(id, metadata, handler=...)`; handlers receive the Mini-Parse payload and may return either text or a mapping with `text`/`value`. The legacy `act_report_copy(owner, fmt="json")` remains a JSON report payload so existing report/export users and tests are not silently changed.
 
 ## Trigger And Timer Rules
 
@@ -180,10 +197,10 @@ Replay is the contract gate for ACT behavior. When adding a feature that can be 
 Recommended targeted validation from `sao_auto`:
 
 ```powershell
-e:\Py\python.exe -m py_compile act_platform\events.py act_platform\event_bus.py act_platform\runtime.py act_platform\plugins.py act_platform\adapters.py engines\act_trigger_engine.py net\packet_bridge.py
+e:\Py\python.exe -m py_compile act_platform\events.py act_platform\event_bus.py act_platform\runtime.py act_platform\plugins.py act_platform\adapters.py act_platform\selective_parsing.py act_platform\mini_parse.py engines\act_trigger_engine.py net\packet_bridge.py
 e:\Py\python.exe -m act_platform.selftest
 e:\Py\python.exe -m act_replay.selftest
-e:\Py\python.exe -m unittest tools.act_ui_parity_selftest tools.act_trigger_runtime_selftest tools.act_parser_adapter_selftest tools.act_plugin_extensions_selftest
+e:\Py\python.exe -m unittest tools.act_ui_parity_selftest tools.act_selective_parsing_selftest tools.act_mini_parse_selftest tools.act_trigger_runtime_selftest tools.act_parser_adapter_selftest tools.act_plugin_extensions_selftest
 git diff --check
 ```
 
@@ -196,10 +213,12 @@ This matrix defines the current completion line for the automatically implementa
 | Area | Status | Implemented boundary | Regression gate |
 | --- | --- | --- | --- |
 | Shared ACT event runtime | Complete | Canonical event envelopes, bounded EventBus history, replay publication, and shared runtime helpers. | `python -m act_platform.selftest`, `python -m act_replay.selftest` |
-| Plugin SDK/platform | Complete | Plugin discovery, SDK ergonomics, extension registry, plugin status, trigger handlers, parser adapters, and plugin fallback import. | `python -m unittest tools.act_plugin_ergonomics_selftest tools.act_plugin_extensions_selftest tools.act_plugin_examples_selftest tools.act_plugin_capability_selftest` |
+| Plugin SDK/platform | Complete | Plugin discovery, SDK ergonomics, extension registry, plugin status, trigger handlers, parser adapters, Mini-Parse formatters, and plugin fallback import. | `python -m unittest tools.act_plugin_ergonomics_selftest tools.act_plugin_extensions_selftest tools.act_plugin_examples_selftest tools.act_plugin_capability_selftest` |
 | Parser adapters | Complete for built-in/plugin contracts | Built-in TCP adapter, plugin adapter metadata, live packet adapter selection/fallback, and opt-in process isolation. | `python -m unittest tools.act_parser_adapter_selftest` |
 | Dual UI parity | Complete by contract | WebView and Entity/Tk expose the same ACT capability ids, shared actions, and payload fields. | `python -m tools.act_ui_parity`, `python -m unittest tools.act_ui_parity_selftest` |
 | Reports/history/archive | Complete | Rolling JSON history, JSONL archive, SQLite encounter/combatant/action/timeline/trigger/source mirror, search/load/delete, action-history paging/analytics, and JSON/CSV/HTML/XML/compressed XML export/import. | `python -m unittest tools.act_history_selftest tools.act_action_log_selftest tools.act_report_export_selftest tools.act_offline_import_selftest` |
+| Mini-Parse/clipboard | Complete | Built-in compact formatter presets, plugin formatter extension kind, JSON compatibility for legacy report copy, and WebView/Entity copy access. | `python -m unittest tools.act_mini_parse_selftest tools.act_plugin_extensions_selftest tools.act_report_export_selftest` |
+| Selective Parsing | Complete for local policy/filtering | Disabled-by-default record-all policy, self/party/include/exclude filters, shared WebView/Entity damage-recording gate, and runtime status/update/clear helpers. | `python -m unittest tools.act_selective_parsing_selftest tools.act_ui_parity_selftest` |
 | Offline import | Complete for known schemas | Normalized JSON/JSONL/NDJSON replay import, SAO structured XML and compressed XML report round-trip import, and plugin parser-adapter fallback. | `python -m unittest tools.act_offline_import_selftest` |
 | Local dynamic report access | Complete, local-only by default | Read-only HTTP endpoints and WebSocket snapshot/history/action access over the same `DpsHistoryStore`. | `python -m unittest tools.act_server_api_selftest` |
 | Runtime dashboards | Complete by shared helper | Timeline/VCR, graph/timeseries, action log, combatant drilldown, skill drilldown, data-source health, trigger/timer, plugin manager, report/history, offline import, and death recap surfaces. | `python -m unittest tools.act_timeline_selftest tools.act_graph_timeseries_selftest tools.act_death_recap_selftest tools.act_combatant_drilldown_selftest tools.act_skill_drilldown_selftest tools.act_data_source_health_selftest tools.act_trigger_runtime_selftest` |
@@ -212,6 +231,20 @@ Hard-blocked follow-ups:
 - ODBC/FTP export requires destination schema, credentials, and security policy decisions.
 - Native C# ACT providers require concrete provider contracts and runtime integration targets.
 - Manual WebView/Entity smoke requires a live UI/game runtime session.
+
+## ACT Feature Coverage Audit
+
+| ACT-style feature bucket | Current boundary |
+| --- | --- |
+| Encounter DPS/HPS, combatant rows, history, replay, export, report copy | Complete through shared tracker/history/export/runtime helpers. |
+| Advanced panels: action log, death recap, graph/timeseries, timeline/VCR, combatant/skill drilldowns | Complete by shared backend helpers and parity registry. |
+| Trigger/timer rules | Complete for built-in rule types, timer presets, import/export presets, and plugin trigger handlers. |
+| Multi-game/parser authoring | Complete for built-in Star Resonance adapter, plugin parser adapters, live selection/fallback, offline import fallback, and optional process isolation. Real third-party protocols still require samples/contracts. |
+| Selective Parsing | Complete for local ACT recording policy; default remains record all. |
+| Mini-Parse / clipboard presets | Complete for built-in text presets and plugin formatters; legacy JSON report copy remains unchanged. |
+| ODBC/FTP/remote publishing | Blocked until destination schema, credentials handling, and security policy are provided. |
+| Non-SAO ACT XML/pcap/log imports | Blocked until real files or authoritative schemas are provided. |
+| Native C# ACT providers / Logitech LCD | Out of scope without concrete provider contracts/hardware and explicit request. |
 
 ## Open Edges
 

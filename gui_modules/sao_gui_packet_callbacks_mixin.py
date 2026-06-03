@@ -56,7 +56,7 @@ from typing import Any, Optional
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
-from act_platform.runtime import publish_owner_event
+from act_platform.runtime import publish_owner_event, should_record_owner_combat_event
 from engines.combat_analytics import boss_state_from_monster_update
 
 
@@ -159,6 +159,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
         event = self._normalize_damage_event_for_self(event)
         event = self._normalize_damage_event_target_for_entity(event)
         publish_owner_event(self, 'damage', event, source_name='entity', source_kind='tcp')
+        selective_decision = should_record_owner_combat_event(self, event)
         # Track self -> non-player combat target damage for boss bar target.
         # BossHP only displays later if packet_parser has usable HP data.
         try:
@@ -235,22 +236,23 @@ class SAOPlayerGUIPacketCallbacksMixin:
                                 _m.to_dict() if hasattr(_m, 'to_dict') else _m)
                 except Exception:
                     pass
-                if self._dps_tracker:
+                if bool(selective_decision.get('record', True)) and self._dps_tracker:
                     try: self._dps_tracker.set_boss_uuid(target_uuid)
                     except Exception: pass
-        if self._dps_tracker:
-            try: self._dps_tracker.on_damage_event(event)
-            except Exception: pass
-        try:
-            mgr = getattr(self, '_encounter_mgr', None)
-            if mgr is not None:
-                mgr.on_damage_event(event)
-        except Exception:
-            pass
-        try:
-            self._push_dps_act_snapshot()
-        except Exception:
-            pass
+        if bool(selective_decision.get('record', True)):
+            if self._dps_tracker:
+                try: self._dps_tracker.on_damage_event(event)
+                except Exception: pass
+            try:
+                mgr = getattr(self, '_encounter_mgr', None)
+                if mgr is not None:
+                    mgr.on_damage_event(event)
+            except Exception:
+                pass
+            try:
+                self._push_dps_act_snapshot()
+            except Exception:
+                pass
 
     def _is_dead_state(self, gs) -> bool:
         if gs is None:

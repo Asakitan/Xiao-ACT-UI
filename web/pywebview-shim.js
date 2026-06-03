@@ -101,6 +101,24 @@
         copy_report_export: function (fmt) {
             return call('act.report.copy', { fmt: String(fmt || 'json') });
         },
+        get_mini_parse_status: function (formatterId) {
+            return call('act.mini_parse.status', { formatter_id: String(formatterId || 'summary_table') });
+        },
+        preview_mini_parse: function (formatterId) {
+            return call('act.mini_parse.preview', { formatter_id: String(formatterId || 'summary_table') });
+        },
+        copy_mini_parse: function (formatterId) {
+            return call('act.mini_parse.copy', { formatter_id: String(formatterId || 'summary_table') });
+        },
+        get_selective_parsing_status: function () {
+            return call('act.selective_parsing.status', {});
+        },
+        update_selective_parsing: function (policy) {
+            return call('act.selective_parsing.update', { policy: policy || {} });
+        },
+        clear_selective_parsing: function () {
+            return call('act.selective_parsing.clear', {});
+        },
         get_history_status: function (limit, query) {
             return call('act.history.status', { limit: limit || 20, query: String(query || '') });
         },

@@ -16,6 +16,8 @@ from act_platform.runtime import (
     act_report_copy,
     act_report_export,
     act_report_status,
+    act_mini_parse_copy,
+    act_selective_parsing_status,
 )
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
@@ -136,6 +138,24 @@ class ReportExportPanel:
             self.root.clipboard_clear()
             self.root.clipboard_append(text)
             self._status_var.set('Report payload copied to clipboard')
+        except Exception as exc:
+            self._status_var.set(str(exc))
+            result = dict(result)
+            result.update({"ok": False, "message": str(exc)})
+        return dict(result or {})
+
+    def copy_mini_parse(self) -> Dict[str, Any]:
+        try:
+            result = act_mini_parse_copy(self.owner, formatter_id='summary_table')
+        except Exception as exc:
+            result = {"ok": False, "message": str(exc), "text": ""}
+        text = str(result.get('text') or '')
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self._status_var.set('Mini-Parse copied to clipboard')
+            result = dict(result)
+            result['copied'] = True
         except Exception as exc:
             self._status_var.set(str(exc))
             result = dict(result)
@@ -270,6 +290,7 @@ class ReportExportPanel:
             ('导出 XML', self.export_xml),
             ('导出 XML.GZ', self.export_xml_gzip),
             ('导出 XML.ZIP', self.export_xml_zip),
+            ('Mini Copy', self.copy_mini_parse),
             ('复制 Copy', self.copy_snapshot),
             ('关闭 Close', self.hide),
         ):
@@ -344,10 +365,15 @@ class ReportExportPanel:
         errors = status.get('errors') or []
         fmt = str(status.get('selected_format') or self._format_var.get() or 'json').upper()
         self._summary_var.set(f"{fmt} · {int(preview.get('total_damage') or 0)} DMG")
+        try:
+            selective = act_selective_parsing_status(self.owner)
+        except Exception:
+            selective = {}
+        selective_hint = ' · Selective ON' if selective.get('enabled') else ''
         if status.get('path'):
             self._status_var.set(f"Exported: {status.get('path')}")
         else:
-            self._status_var.set(str(status.get('message') or ('OK' if status.get('ok') else f'errors={len(errors)}')))
+            self._status_var.set(str(status.get('message') or ('OK' if status.get('ok') else f'errors={len(errors)}')) + selective_hint)
         render_sig = json.dumps({
             'preview': preview,
             'errors': errors,

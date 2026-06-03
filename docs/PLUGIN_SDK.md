@@ -96,6 +96,7 @@ def on_unload():
 - `ctx.set_defaults(mapping)`: initialize missing plugin settings without overwriting user values.
 - `ctx.register_parser_adapter(id, metadata=None, handler=None)`: declare a parser/game adapter extension.
 - `ctx.register_exporter(id, metadata=None, handler=None)`: declare an exporter extension.
+- `ctx.register_formatter(id, metadata=None, handler=None)`: declare a Mini-Parse/clipboard formatter extension.
 - `ctx.register_trigger_type(id, metadata=None, handler=None)`: declare a plugin trigger type.
 - `ctx.register_report_view(id, metadata=None, handler=None)`: declare a plugin report/detail view.
 - `ctx.register_timer(id, metadata=None, handler=None)`: declare a timer preset/provider extension.
@@ -231,7 +232,7 @@ Supported object keys are `id`/`capability_id`, `title`, `description`, `route`,
 
 ## Extension registry
 
-Plugins can register extension metadata during `on_load(ctx)`. These declarations are exposed through plugin status so WebView and Entity managers can show which plugin contributes parser adapters, exporters, trigger types, report views, or timers. Handlers are kept in-process and are intentionally omitted from JSON status.
+Plugins can register extension metadata during `on_load(ctx)`. These declarations are exposed through plugin status so WebView and Entity managers can show which plugin contributes parser adapters, exporters, Mini-Parse formatters, trigger types, report views, or timers. Handlers are kept in-process and are intentionally omitted from JSON status.
 
 ```python
 def on_load(ctx):
@@ -249,6 +250,17 @@ def on_load(ctx):
     "title": "Summary JSON",
     "formats": ["json"],
     "payload_fields": ["total_damage"],
+  })
+
+  ctx.register_formatter("chat_summary", {
+    "title": "Chat summary",
+    "formatter": "text",
+    "payload_fields": ["preview", "history"],
+  }, handler=lambda payload: {
+    "text": " | ".join(
+      f"#{idx + 1} {row.get('name')} {row.get('damage', 0)}"
+      for idx, row in enumerate((payload.get("preview") or {}).get("top_rows") or [])
+    ) or "No combatants"
   })
 
   ctx.register_trigger_type("burst_gate", {
@@ -273,6 +285,24 @@ def on_load(ctx):
 ```
 
 Extension ids must already be safe ids: lowercase letters/numbers plus `_`, `-`, or `.`. Registered metadata is removed automatically when the plugin unloads.
+
+## Mini-Parse formatter handlers
+
+Formatter handlers registered with `ctx.register_formatter(id, metadata, handler=...)` can be invoked by `act_mini_parse_preview(owner, formatter_id="<id>")` and `act_mini_parse_copy(owner, formatter_id="<id>")`.
+
+The handler receives a copied payload:
+
+```python
+{
+  "encounter_id": "...",
+  "preview": {...},  # same top_rows/totals preview used by report export
+  "history": [...],
+  "report": {...},
+  "status": {...},
+}
+```
+
+Return a string or a dictionary with `text`/`value`. Keep formatter handlers deterministic and fast; built-in formatter ids `summary_table`, `chat_ranking`, and `json` remain available even when no plugin manager is loaded.
 
 ## Trigger handlers
 
@@ -306,6 +336,35 @@ The first-party parser adapter contract lives in `act_platform.adapters`. The bu
 - runtime methods: `start()`, `stop()`, `parse_packet(frame)`, `normalize_event(topic, payload)`, and `health()`
 
 Plugin parser adapters declare equivalent metadata through `ctx.register_parser_adapter(...)`. Passing a handler makes the adapter invokable through `act_platform.adapters.PluginParserAdapter`, which routes calls through `PluginManager.invoke_extension("parser_adapters", ...)` with deep-copied payloads, elapsed-time measurement, exception isolation, and the extension time budget by default.
+
+For multi-game parser authoring, start with a synthetic adapter template rather than a guessed real protocol:
+
+```python
+def parser_handler(payload):
+  op = payload.get("operation")
+  if op in {"start", "stop"}:
+    return {"ok": True}
+  if op == "parse_log_line":
+    line = payload.get("line") or ""
+    # Parse only documented fixture text here. Do not infer production fields
+    # without real samples/schemas from the target game.
+    if "DAMAGE" in line:
+      return {"events": [{"topic": "damage", "payload": {"damage": 1, "actor": "fixture"}}]}
+  return {"events": []}
+
+def on_load(ctx):
+  ctx.register_parser_adapter("fixture_game_log", {
+    "title": "Fixture game log parser",
+    "game_id": "fixture_game",
+    "game_ids": ["fixture_game"],
+    "supported_locales": ["en-US"],
+    "source_kinds": ["log", "fixture"],
+    "isolation": "process",
+    "time_budget_ms": 1000,
+  }, handler=parser_handler)
+```
+
+Real third-party adapters need representative packet/log/report samples or authoritative schemas before they can be marked production-ready.
 
 Parser adapters can opt into subprocess isolation by adding `"isolation": "process"` to their metadata. In that mode `PluginParserAdapter` invokes `python -m act_platform.parser_worker`, reloads the plugin entry in the worker process, calls the registered parser handler through JSON stdin/stdout, and kills the worker if it exceeds the adapter time budget. Process-isolated adapters default to a 1000 ms budget when metadata does not provide `time_budget_ms` or `max_runtime_ms`. `parse_packet` frames cross the process boundary as base64-encoded bytes and are decoded before the handler receives them. This gives stronger containment for untrusted or heavy parser code, with higher per-call startup overhead than the default in-process path.
 

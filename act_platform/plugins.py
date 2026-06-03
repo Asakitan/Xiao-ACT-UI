@@ -22,6 +22,7 @@ MANIFEST_FILE = "plugin.json"
 EXTENSION_KINDS = (
     "parser_adapters",
     "exporters",
+    "formatters",
     "trigger_types",
     "report_views",
     "timers",
@@ -55,6 +56,12 @@ _RUNTIME_ACTION_ALIASES: dict[str, str] = {
     "report_status": "act_report_status",
     "report_export": "act_report_export",
     "report_copy": "act_report_copy",
+    "mini_parse_status": "act_mini_parse_status",
+    "mini_parse_preview": "act_mini_parse_preview",
+    "mini_parse_copy": "act_mini_parse_copy",
+    "selective_parsing_status": "act_selective_parsing_status",
+    "selective_parsing_update": "act_selective_parsing_update",
+    "selective_parsing_clear": "act_selective_parsing_clear",
     "offline_import_status": "act_offline_import_status",
     "offline_import_file": "act_offline_import_file",
     "trigger_status": "act_trigger_status",
@@ -181,6 +188,7 @@ def _normalize_extension(kind: str, plugin_id: str, extension_id: Any,
         "route",
         "render_hint",
         "format",
+        "formatter",
         "scope",
         "label",
         "display_name",
@@ -197,6 +205,7 @@ def _normalize_extension(kind: str, plugin_id: str, extension_id: Any,
         "actions",
         "payload_fields",
         "formats",
+        "examples",
         "permissions",
         "supported_locales",
         "locales",
@@ -559,6 +568,11 @@ class PluginContext:
                           metadata: Optional[Mapping[str, Any]] = None,
                           handler: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
         return self._manager._register_extension("exporters", self._record.plugin_id, exporter_id, metadata, handler)
+
+    def register_formatter(self, formatter_id: str,
+                           metadata: Optional[Mapping[str, Any]] = None,
+                           handler: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
+        return self._manager._register_extension("formatters", self._record.plugin_id, formatter_id, metadata, handler)
 
     def register_trigger_type(self, trigger_type: str,
                               metadata: Optional[Mapping[str, Any]] = None,

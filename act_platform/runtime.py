@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 
 from .event_bus import EventBus
 from .plugins import PluginManager
+from .selective_parsing import normalize_policy, should_record_event
 
 
 def default_plugin_dirs(base_dir: str) -> list[str]:
@@ -39,6 +40,41 @@ def _owner_settings(owner: Any) -> Any:
     return getattr(owner, "_cfg_settings_ref", None) or getattr(owner, "settings", None)
 
 
+def _settings_get(owner: Any, key: str, default: Any = None) -> Any:
+    settings = _owner_settings(owner)
+    try:
+        if isinstance(settings, Mapping):
+            return settings.get(key, default)
+        if settings is not None:
+            return settings.get(key, default)
+    except Exception:
+        pass
+    return default
+
+
+def _settings_set(owner: Any, key: str, value: Any) -> None:
+    settings = _owner_settings(owner)
+    if settings is None:
+        try:
+            setattr(owner, key, value)
+        except Exception:
+            pass
+        return
+    try:
+        if hasattr(settings, "set"):
+            settings.set(key, value)
+        elif isinstance(settings, dict):
+            settings[key] = value
+    except Exception:
+        pass
+    try:
+        save = getattr(settings, "save", None)
+        if callable(save):
+            save()
+    except Exception:
+        pass
+
+
 def _read_trigger_rules(owner: Any) -> list[dict[str, Any]]:
     settings = _owner_settings(owner)
     try:
@@ -53,16 +89,7 @@ def _read_trigger_rules(owner: Any) -> list[dict[str, Any]]:
 
 
 def _write_trigger_rules(owner: Any, rules: list[dict[str, Any]]) -> None:
-    settings = _owner_settings(owner)
-    if settings is not None:
-        try:
-            settings.set("act_trigger_rules", rules)
-        except Exception:
-            pass
-        try:
-            settings.save()
-        except Exception:
-            pass
+    _settings_set(owner, "act_trigger_rules", rules)
     try:
         setattr(owner, "_act_trigger_last_reload_ms", int(time.time() * 1000))
     except Exception:
@@ -231,6 +258,130 @@ def publish_owner_event(owner: Any, topic: str, payload: Optional[Mapping[str, A
         )
     except Exception:
         return None
+
+
+def _self_uid(owner: Any) -> int:
+    tracker = getattr(owner, "_dps_tracker", None) or getattr(owner, "dps_tracker", None)
+    for attr in ("_self_uid", "self_uid"):
+        try:
+            value = int(getattr(tracker, attr) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            pass
+    state = getattr(owner, "_state_mgr", None) or getattr(owner, "state_mgr", None)
+    gs = None
+    getter = getattr(state, "get", None)
+    if callable(getter):
+        try:
+            gs = getter()
+        except Exception:
+            gs = None
+    if gs is None:
+        gs = getattr(state, "state", None)
+    for attr in ("player_id", "uid", "self_uid"):
+        try:
+            value = int(getattr(gs, attr) or 0)
+            if value > 0:
+                return value
+        except Exception:
+            pass
+    return 0
+
+
+def _party_ids(owner: Any) -> set[int]:
+    ids: set[int] = set()
+    bridge = getattr(owner, "_packet_engine", None) or getattr(owner, "_packet_bridge", None)
+    get_players = getattr(bridge, "get_players", None)
+    if callable(get_players):
+        try:
+            players = get_players() or {}
+        except Exception:
+            players = {}
+        if isinstance(players, Mapping):
+            for key, value in players.items():
+                try:
+                    ids.add(int(key))
+                except Exception:
+                    pass
+                if isinstance(value, Mapping):
+                    for field in ("uid", "id", "player_id"):
+                        try:
+                            ids.add(int(value.get(field) or 0))
+                        except Exception:
+                            pass
+                    continue
+                for attr in ("uid", "id", "player_id"):
+                    try:
+                        ids.add(int(getattr(value, attr) or 0))
+                    except Exception:
+                        pass
+    self_uid = _self_uid(owner)
+    if self_uid > 0:
+        ids.add(self_uid)
+    return {uid for uid in ids if uid > 0}
+
+
+def _read_selective_policy(owner: Any) -> dict[str, Any]:
+    raw = _settings_get(owner, "act_selective_parsing", None)
+    if raw is None:
+        raw = getattr(owner, "act_selective_parsing", None)
+    return normalize_policy(raw)
+
+
+def should_record_owner_combat_event(owner: Any, event: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a selective-parsing decision for a live/replay combat event."""
+    decision = should_record_event(
+        event,
+        _read_selective_policy(owner),
+        self_uid=_self_uid(owner),
+        party_ids=_party_ids(owner),
+    )
+    try:
+        setattr(owner, "_act_selective_last_decision", decision.to_dict())
+    except Exception:
+        pass
+    return decision.to_dict()
+
+
+def act_selective_parsing_status(owner: Any) -> dict[str, Any]:
+    policy = _read_selective_policy(owner)
+    last = getattr(owner, "_act_selective_last_decision", {})
+    return {
+        "ok": True,
+        "message": "OK",
+        "enabled": bool(policy.get("enabled")),
+        "mode": str(policy.get("mode") or "all"),
+        "policy": policy,
+        "filters": {
+            "include_ids": list(policy.get("include_ids") or []),
+            "include_names": list(policy.get("include_names") or []),
+            "exclude_ids": list(policy.get("exclude_ids") or []),
+            "exclude_names": list(policy.get("exclude_names") or []),
+            "source_kinds": list(policy.get("source_kinds") or []),
+            "topics": list(policy.get("topics") or []),
+        },
+        "self_uid": _self_uid(owner),
+        "party_ids": sorted(_party_ids(owner)),
+        "last_decision": dict(last) if isinstance(last, Mapping) else {},
+        "errors": [],
+    }
+
+
+def act_selective_parsing_update(owner: Any, policy: Mapping[str, Any] | None = None, **updates: Any) -> dict[str, Any]:
+    merged = dict(_read_selective_policy(owner))
+    if isinstance(policy, Mapping):
+        merged.update(dict(policy))
+    merged.update({key: value for key, value in updates.items() if value is not None})
+    normalized = normalize_policy(merged)
+    _settings_set(owner, "act_selective_parsing", normalized)
+    return act_selective_parsing_status(owner)
+
+
+def act_selective_parsing_clear(owner: Any) -> dict[str, Any]:
+    normalized = normalize_policy({"enabled": False, "mode": "all"})
+    _settings_set(owner, "act_selective_parsing", normalized)
+    return act_selective_parsing_status(owner)
 
 
 def act_plugin_status(owner: Any) -> dict[str, Any]:
@@ -2620,6 +2771,132 @@ def act_report_copy(owner: Any, *, fmt: str = "json") -> dict[str, Any]:
     }
 
 
+def _mini_parse_registry(owner: Any):
+    from .mini_parse import build_default_registry
+
+    registry = getattr(owner, "_act_mini_parse_registry", None)
+    if registry is None:
+        registry = build_default_registry()
+        try:
+            setattr(owner, "_act_mini_parse_registry", registry)
+        except Exception:
+            pass
+    return registry
+
+
+def _mini_parse_payload(owner: Any, *, limit: int = 20) -> dict[str, Any]:
+    status = act_report_status(owner, limit=limit, fmt="json")
+    return {
+        "encounter_id": status.get("encounter_id"),
+        "preview": status.get("preview") or {},
+        "history": status.get("history") or [],
+        "report": _owner_dps_report(owner),
+        "status": status,
+    }
+
+
+def _invoke_plugin_formatter(owner: Any, formatter_id: str, payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+    except Exception:
+        return None
+    invoke = getattr(manager, "invoke_extension", None)
+    if not callable(invoke):
+        return None
+    try:
+        result = invoke("formatters", formatter_id, dict(payload), time_budget_ms=25.0)
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "errors": [str(exc)]}
+    if not isinstance(result, Mapping) or not bool(result.get("ok")):
+        return dict(result) if isinstance(result, Mapping) else None
+    formatted = result.get("result")
+    if isinstance(formatted, Mapping):
+        text = str(formatted.get("text") or formatted.get("value") or "")
+    else:
+        text = str(formatted or "")
+    return {"ok": True, "text": text, "plugin": dict(result)}
+
+
+def _formatter_status_rows(owner: Any) -> list[dict[str, Any]]:
+    rows = _mini_parse_registry(owner).list_formatters()
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+        status = manager.status()
+        for item in status.get("extensions", {}).get("formatters", []) or []:
+            if isinstance(item, Mapping):
+                rows.append({
+                    "id": str(item.get("id") or ""),
+                    "title": str(item.get("title") or item.get("display_name") or item.get("id") or ""),
+                    "description": str(item.get("description") or ""),
+                    "plugin_id": str(item.get("plugin_id") or ""),
+                })
+    except Exception:
+        pass
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        fmt_id = str(row.get("id") or "")
+        if not fmt_id or fmt_id in seen:
+            continue
+        seen.add(fmt_id)
+        out.append(row)
+    return out
+
+
+def act_mini_parse_status(owner: Any, *, formatter_id: str = "summary_table", limit: int = 20) -> dict[str, Any]:
+    formatters = _formatter_status_rows(owner)
+    ids = {str(row.get("id") or "") for row in formatters}
+    selected = str(formatter_id or "summary_table").strip().lower().replace(" ", "_")
+    if selected not in ids:
+        selected = "summary_table"
+    auto_copy = bool(_settings_get(owner, "act_mini_parse_auto_copy", False))
+    payload = _mini_parse_payload(owner, limit=limit)
+    return {
+        "ok": True,
+        "message": "OK",
+        "formatter_id": selected,
+        "formatters": formatters,
+        "preview": payload.get("preview") or {},
+        "auto_copy": auto_copy,
+        "last_text": str(getattr(owner, "_act_mini_parse_last_text", "") or ""),
+        "errors": [],
+    }
+
+
+def act_mini_parse_preview(owner: Any, *, formatter_id: str = "summary_table", limit: int = 20) -> dict[str, Any]:
+    payload = _mini_parse_payload(owner, limit=limit)
+    selected = str(formatter_id or "summary_table").strip().lower().replace(" ", "_")
+    builtin_ids = {str(row.get("id") or "") for row in _mini_parse_registry(owner).list_formatters()}
+    plugin_result = None if selected in builtin_ids else _invoke_plugin_formatter(owner, selected, payload)
+    errors: list[str] = []
+    if isinstance(plugin_result, Mapping) and plugin_result.get("ok"):
+        text = str(plugin_result.get("text") or "")
+    elif isinstance(plugin_result, Mapping) and plugin_result.get("errors"):
+        errors.extend(str(err) for err in plugin_result.get("errors") or [])
+        text = _mini_parse_registry(owner).format(selected, payload)
+    else:
+        text = _mini_parse_registry(owner).format(selected, payload)
+    try:
+        setattr(owner, "_act_mini_parse_last_text", text)
+    except Exception:
+        pass
+    return {
+        "ok": not errors,
+        "message": "OK" if not errors else "; ".join(errors),
+        "formatter_id": selected if selected else "summary_table",
+        "text": text,
+        "preview": payload.get("preview") or {},
+        "errors": errors,
+        "status": act_mini_parse_status(owner, formatter_id=selected, limit=limit),
+    }
+
+
+def act_mini_parse_copy(owner: Any, *, formatter_id: str = "summary_table", limit: int = 20) -> dict[str, Any]:
+    result = act_mini_parse_preview(owner, formatter_id=formatter_id, limit=limit)
+    result["copied"] = False
+    return result
+
+
 def _source_active(source: Mapping[str, Any]) -> bool:
     if not source:
         return False
@@ -2768,6 +3045,9 @@ __all__ = [
     "act_history_delete",
     "act_history_load",
     "act_history_status",
+    "act_mini_parse_copy",
+    "act_mini_parse_preview",
+    "act_mini_parse_status",
     "act_offline_import_file",
     "act_offline_import_status",
     "act_report_copy",
@@ -2785,6 +3065,9 @@ __all__ = [
     "act_plugin_list",
     "act_plugin_reload",
     "act_plugin_status",
+    "act_selective_parsing_clear",
+    "act_selective_parsing_status",
+    "act_selective_parsing_update",
     "act_data_source_diagnose",
     "act_data_source_health",
     "act_trigger_disable",
@@ -2801,5 +3084,6 @@ __all__ = [
     "ensure_act_trigger_engine",
     "project_base_dir",
     "publish_owner_event",
+    "should_record_owner_combat_event",
     "shutdown_act_plugin_manager",
 ]
