@@ -275,7 +275,8 @@ button.close {
             <div class="side-title">SDK QUICK START</div>
             <div class="help">
                 放入 <strong>plugins/&lt;plugin_id&gt;/plugin.json</strong> 与 <strong>plugin.py</strong>。<br/><br/>
-                插件可实现 <strong>on_load(ctx)</strong>、<strong>on_enable()</strong>、<strong>on_disable()</strong>、<strong>on_unload()</strong>，并通过 <strong>ctx.subscribe(topic, callback)</strong> 监听 ACT 事件。
+                插件可实现 <strong>on_load(ctx)</strong>、<strong>on_enable()</strong>、<strong>on_disable()</strong>、<strong>on_unload()</strong>。<br/><br/>
+                推荐用 <strong>@ctx.on("damage")</strong>、<strong>ctx.on_snapshot(cb)</strong>、<strong>ctx.subscribe_once(topic, cb)</strong> 监听事件；用 <strong>ctx.set_defaults({...})</strong> 与 <strong>ctx.setting(key)</strong> 管理插件设置。
             </div>
         </aside>
     </div>

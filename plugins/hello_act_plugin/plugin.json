@@ -6,6 +6,13 @@
   "description": "Example ACT plugin that logs snapshots and encounter summaries.",
   "enabled": true,
   "subscriptions": ["act_snapshot", "encounter_finalized"],
+  "settings_schema": {
+    "log_every_snapshots": {
+      "type": "integer",
+      "default": 25,
+      "description": "Log every N act_snapshot events after the first snapshot."
+    }
+  },
   "capabilities": [
     "plugin_manager"
   ],

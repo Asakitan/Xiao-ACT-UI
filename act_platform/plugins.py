@@ -136,6 +136,15 @@ class PluginContext:
     def log(self, message: Any) -> None:
         self._manager._append_log(self._record.plugin_id, str(message))
 
+    def on(self, topic: str, callback: Optional[Callable[[dict[str, Any]], None]] = None):
+        """Subscribe to an ACT topic, or use as ``@ctx.on('damage')``."""
+        if callback is None:
+            def _decorator(func: Callable[[dict[str, Any]], None]):
+                self.subscribe(topic, func)
+                return func
+            return _decorator
+        return self.subscribe(topic, callback)
+
     def subscribe(self, topic: str, callback: Callable[[dict[str, Any]], None]) -> str:
         def _wrapped(event: dict[str, Any]) -> None:
             try:
@@ -147,6 +156,45 @@ class PluginContext:
         token = self._manager.event_bus.subscribe(topic, _wrapped, owner_id=self._record.plugin_id)
         self._record.subscriptions.append(token)
         return token
+
+    def subscribe_once(self, topic: str, callback: Callable[[dict[str, Any]], None]) -> str:
+        token_box = {"token": ""}
+
+        def _once(event: dict[str, Any]) -> None:
+            token = token_box.get("token") or ""
+            if token:
+                self.unsubscribe(token)
+            callback(event)
+
+        token_box["token"] = self.subscribe(topic, _once)
+        return token_box["token"]
+
+    def unsubscribe(self, token: str) -> bool:
+        token = str(token or "")
+        if not token:
+            return False
+        ok = self._manager.event_bus.unsubscribe(token)
+        if ok:
+            self._record.subscriptions = [item for item in self._record.subscriptions if item != token]
+        return ok
+
+    def on_damage(self, callback: Callable[[dict[str, Any]], None]) -> str:
+        return self.subscribe("damage", callback)
+
+    def on_heal(self, callback: Callable[[dict[str, Any]], None]) -> str:
+        return self.subscribe("heal", callback)
+
+    def on_skill(self, callback: Callable[[dict[str, Any]], None]) -> str:
+        return self.subscribe("skill", callback)
+
+    def on_boss(self, callback: Callable[[dict[str, Any]], None]) -> str:
+        return self.subscribe("boss", callback)
+
+    def on_snapshot(self, callback: Callable[[dict[str, Any]], None]) -> str:
+        return self.subscribe("act_snapshot", callback)
+
+    def on_encounter_finalized(self, callback: Callable[[dict[str, Any]], None]) -> str:
+        return self.subscribe("encounter_finalized", callback)
 
     def emit(self, topic: str, payload: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
         return self._manager.event_bus.publish(
@@ -165,11 +213,43 @@ class PluginContext:
                 self._manager._record_failure(self._record.plugin_id, exc)
         return {}
 
+    def snapshot_value(self, path: str, default: Any = None) -> Any:
+        value: Any = self.get_snapshot()
+        for part in str(path or "").split("."):
+            if not part:
+                continue
+            if isinstance(value, Mapping) and part in value:
+                value = value.get(part)
+            else:
+                return default
+        return value
+
+    def recent_events(self, limit: int = 20, topic: str = "") -> list[dict[str, Any]]:
+        events = self._manager.event_bus.recent_events(limit)
+        topic = str(topic or "")
+        if topic:
+            events = [event for event in events if str(event.get("topic") or "") == topic]
+        return events
+
     def get_setting(self, key: str, default: Any = None) -> Any:
         return self._manager.get_plugin_setting(self._record.plugin_id, key, default)
 
+    def setting(self, key: str, default: Any = None) -> Any:
+        return self.get_setting(key, default)
+
     def set_setting(self, key: str, value: Any) -> None:
         self._manager.set_plugin_setting(self._record.plugin_id, key, value)
+
+    def set_defaults(self, defaults: Mapping[str, Any]) -> None:
+        if not isinstance(defaults, Mapping):
+            return
+        for key, value in defaults.items():
+            key_text = str(key or "")
+            if not key_text:
+                continue
+            sentinel = object()
+            if self.get_setting(key_text, sentinel) is sentinel:
+                self.set_setting(key_text, value)
 
 
 class PluginManager:

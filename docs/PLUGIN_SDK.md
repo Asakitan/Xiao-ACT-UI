@@ -77,14 +77,37 @@ def on_unload():
 
 `ctx` provides:
 
-- `ctx.log(message, level="info")`: write to the plugin status log.
-- `ctx.subscribe(topic, callback)`: subscribe to ACT events.
-- `ctx.emit(topic, payload=None, source=None)`: publish a canonical ACT event.
+- `ctx.log(message)`: write to the plugin status log.
+- `ctx.subscribe(topic, callback)`: subscribe to ACT events and return an unsubscribe token.
+- `ctx.on(topic, callback=None)`: subscribe directly or use decorator form: `@ctx.on("damage")`.
+- `ctx.subscribe_once(topic, callback)`: handle the next event for a topic, then auto-unsubscribe.
+- `ctx.unsubscribe(token)`: remove a previous subscription token.
+- `ctx.on_damage(callback)`, `ctx.on_heal(callback)`, `ctx.on_skill(callback)`, `ctx.on_boss(callback)`, `ctx.on_snapshot(callback)`, `ctx.on_encounter_finalized(callback)`: common topic shortcuts.
+- `ctx.emit(topic, payload=None)`: publish a canonical ACT event from the plugin.
 - `ctx.get_snapshot()`: read a shallow owner snapshot when available.
+- `ctx.snapshot_value("a.b.c", default=None)`: read a dotted path from the snapshot.
+- `ctx.recent_events(limit=20, topic="")`: inspect recent ACT events, optionally filtered by topic.
 - `ctx.get_setting(key, default=None)`: read an owner setting.
+- `ctx.setting(key, default=None)`: shorthand for `get_setting`.
 - `ctx.set_setting(key, value)`: write an owner setting.
+- `ctx.set_defaults(mapping)`: initialize missing plugin settings without overwriting user values.
 
 Callbacks receive one argument: a canonical ACT event envelope.
+
+Decorator style keeps external plugins compact:
+
+```python
+def on_load(ctx):
+  ctx.set_defaults({"damage_threshold": 100000})
+
+  @ctx.on("damage")
+  def log_big_hit(event):
+    damage = int((event.get("payload") or {}).get("damage") or 0)
+    if damage >= ctx.setting("damage_threshold", 100000):
+      ctx.log(f"big hit: {damage}")
+
+  ctx.on_encounter_finalized(lambda event: ctx.log("encounter finalized"))
+```
 
 ## Event envelope
 
@@ -134,7 +157,7 @@ Supported object keys are `id`/`capability_id`, `title`, `description`, `route`,
 
 ## Example plugin
 
-See `plugins/hello_act_plugin/` for a runnable example. It subscribes to `act_snapshot` and `encounter_finalized`, then logs compact status lines in both WebView and Entity plugin manager panels.
+See `plugins/hello_act_plugin/` for a runnable example. It demonstrates `ctx.set_defaults()`, decorator-style `ctx.on("act_snapshot")`, and `ctx.on_encounter_finalized()`, then logs compact status lines in both WebView and Entity plugin manager panels.
 
 ## UI management
 

@@ -12,9 +12,14 @@ _snapshot_count = 0
 def on_load(ctx):
     global _ctx
     _ctx = ctx
+    ctx.set_defaults({"log_every_snapshots": 25})
     ctx.log("hello_act_plugin loaded")
-    ctx.subscribe("act_snapshot", _on_snapshot)
-    ctx.subscribe("encounter_finalized", _on_encounter_finalized)
+
+    @ctx.on("act_snapshot")
+    def _snapshot(event):
+        _on_snapshot(event)
+
+    ctx.on_encounter_finalized(_on_encounter_finalized)
 
 
 def on_enable():
@@ -35,7 +40,9 @@ def on_unload():
 def _on_snapshot(event):
     global _snapshot_count
     _snapshot_count += 1
-    if _snapshot_count == 1 or _snapshot_count % 25 == 0:
+    every = int(_ctx.setting("log_every_snapshots", 25) if _ctx else 25)
+    every = max(1, every)
+    if _snapshot_count == 1 or _snapshot_count % every == 0:
         payload = event.get("payload") or {}
         player = payload.get("player") or payload.get("owner") or {}
         name = player.get("name") or player.get("player_name") or "unknown"
