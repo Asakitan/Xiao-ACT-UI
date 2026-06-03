@@ -160,6 +160,17 @@ The current history store is a rolling encounter store exposed through shared ru
 
 Normalized offline imports are loaded by `act_replay.importer`, replayed through `ActReplayHarness`, finalized into the same DPS report shape as live encounters, and can be persisted with `act_platform.runtime.act_offline_import_file(owner, path, persist=True)`. If the built-in normalized importer rejects a file, the runtime can import SAO structured XML reports as finalized history reports, then fall back to active plugin parser adapters and call their controlled `import_file` operation. The helper returns import metadata, importer/parser ids, replay preview or report preview, the generated/imported report, the persisted history item, and refreshed history status. WebView and Entity expose this through both standalone offline import wizards and their shared report/export panels.
 
+The bundled FastAPI repository server also exposes a local read-only ACT API for dynamic report consumers:
+
+- `GET /api/act/health`
+- `GET /api/act/reports?limit=20&q=`
+- `GET /api/act/reports/latest`
+- `GET /api/act/reports/{index}`
+- `GET /api/act/actions?limit=100&encounter_id=`
+- `WS /ws/act/reports`
+
+These endpoints read the same `DpsHistoryStore` files and SQLite action history. They are localhost-only by default even when the server process binds to `0.0.0.0`; set `SAO_ACT_API_ALLOW_REMOTE=1` only for an explicitly trusted network/debug session.
+
 Replay is the contract gate for ACT behavior. When adding a feature that can be tested without the live game, prefer adding a fixture/selftest path first.
 
 ## Validation
@@ -179,7 +190,7 @@ Do not run release packaging unless explicitly requested. For packaging changes,
 ## Open Edges
 
 - Plugin parser handlers can now be selected for live packet EventBus publishing, offline import fallback, metadata discovery, and opt-in process isolation through `isolation: "process"`. In-process remains the default for low overhead.
-- Offline import supports normalized JSON/JSONL replay files, SAO structured XML report round-trips, and rolling-history persistence; broader pcap/log import plus ACT-compatible compressed XML import/export remain future work.
+- Offline import supports normalized JSON/JSONL replay files, SAO structured XML report round-trips, rolling-history persistence, and local dynamic report reads over HTTP/WebSocket; broader pcap/log import plus ACT-compatible compressed XML import/export remain future work.
 - History has lightweight rolling-store search, an append-only JSONL encounter archive, and an additive SQLite mirror for encounter/combatant/action/timeline/trigger/source metadata rows. The shared action-log surface can now switch between live EventBus rows and SQLite action-history rows by source/encounter filter, page through the result set, and return lightweight topic/actor/target/action analytics. Dedicated timeline/trigger/source-specific history tabs remain future UX work.
 - Manual WebView/Entity smoke still depends on a UI runtime session.
 - Hybrid memory source has conservative policy gates for scan enablement, admin requirement, poll interval, region scan cap, and static fallback control; live game/UI validation remains manual. See `docs/HYBRID_MEMORY_TCP.md`.

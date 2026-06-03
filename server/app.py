@@ -13,9 +13,11 @@ import time
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+from engines.dps_history import DpsHistoryStore
 
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -26,6 +28,7 @@ DB_PATH = os.path.join(DATA_DIR, "scripts.db")
 UPLOAD_SECRET_PATH = os.path.join(DATA_DIR, "upload_secret.txt")
 DEFAULT_UPLOAD_TOKEN_TTL_SECONDS = 15 * 60
 _CACHED_UPLOAD_SECRET = None
+_LOCAL_ACT_HOSTS = {"127.0.0.1", "localhost", "::1", "testserver"}
 
 
 @asynccontextmanager
@@ -68,6 +71,92 @@ class IssueUploadTokenPayload(BaseModel):
 
 def _utc_now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _json_safe(value: Any) -> Any:
+    try:
+        json.dumps(value, ensure_ascii=False, default=str)
+        return value
+    except Exception:
+        pass
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return str(value)
+
+
+def _request_host(request: Request) -> str:
+    forwarded_host = request.headers.get("x-forwarded-host", "").strip()
+    host_header = forwarded_host or request.headers.get("host", "")
+    host = host_header.rsplit("@", 1)[-1].strip().lower()
+    if host.startswith("["):
+        return host.strip("[]").split("]", 1)[0]
+    return host.split(":", 1)[0]
+
+
+def _ensure_local_act_access(request: Request) -> None:
+    if _env_flag("SAO_ACT_API_ALLOW_REMOTE", False):
+        return
+    host = _request_host(request)
+    client_host = str(getattr(getattr(request, "client", None), "host", "") or "").lower()
+    if host in _LOCAL_ACT_HOSTS or client_host in _LOCAL_ACT_HOSTS:
+        return
+    raise HTTPException(status_code=403, detail="ACT read API is localhost-only by default")
+
+
+async def _ensure_local_act_websocket(websocket: WebSocket) -> bool:
+    if _env_flag("SAO_ACT_API_ALLOW_REMOTE", False):
+        return True
+    host_header = (websocket.headers.get("x-forwarded-host", "") or websocket.headers.get("host", "") or "")
+    host_text = host_header.rsplit("@", 1)[-1].strip().lower()
+    if host_text.startswith("["):
+        host = host_text.strip("[]").split("]", 1)[0]
+    else:
+        host = host_text.split(":", 1)[0]
+    client_host = str(getattr(getattr(websocket, "client", None), "host", "") or "").lower()
+    if host in _LOCAL_ACT_HOSTS or client_host in _LOCAL_ACT_HOSTS:
+        return True
+    await websocket.close(code=1008, reason="ACT read API is localhost-only by default")
+    return False
+
+
+def _act_history_store() -> DpsHistoryStore:
+    return DpsHistoryStore()
+
+
+def _act_storage_status(store: DpsHistoryStore, items: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    archive = store.archive_status() if hasattr(store, "archive_status") else {}
+    sqlite = store.sqlite_status() if hasattr(store, "sqlite_status") else {}
+    return {
+        "available": True,
+        "count": len(items or []),
+        "path": str(getattr(store, "path", "") or ""),
+        "archive": _json_safe(archive),
+        "sqlite": _json_safe(sqlite),
+    }
+
+
+def _act_snapshot_payload(store: DpsHistoryStore, *, limit: int = 20) -> Dict[str, Any]:
+    latest = store.latest_report()
+    history = store.list_reports(limit=limit)
+    for idx, item in enumerate(history):
+        if isinstance(item, dict):
+            item.setdefault("_history_index", idx)
+    return {
+        "type": "snapshot",
+        "ok": True,
+        "latest": _json_safe(latest if isinstance(latest, dict) else None),
+        "history": _json_safe(history),
+        "storage_status": _act_storage_status(store, history),
+    }
 
 
 def _upload_secret() -> str:
@@ -268,6 +357,124 @@ def _row_to_detail(row: sqlite3.Row) -> Dict[str, Any]:
 @app.get("/health")
 def health():
     return {"ok": True, "db_path": DB_PATH}
+
+
+@app.get("/api/act/health")
+def act_health(request: Request):
+    _ensure_local_act_access(request)
+    store = _act_history_store()
+    latest = store.latest_report()
+    return {
+        "ok": True,
+        "mode": "local_readonly",
+        "remote_enabled": _env_flag("SAO_ACT_API_ALLOW_REMOTE", False),
+        "latest_available": isinstance(latest, dict),
+        "storage_status": _act_storage_status(store),
+    }
+
+
+@app.get("/api/act/reports")
+def act_reports(
+    request: Request,
+    q: str = Query(default=""),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    _ensure_local_act_access(request)
+    store = _act_history_store()
+    if str(q or "").strip():
+        items = store.search_reports(query=str(q or ""), limit=limit)
+    else:
+        items = store.list_reports(limit=limit)
+        for idx, item in enumerate(items):
+            if isinstance(item, dict):
+                item.setdefault("_history_index", idx)
+    return {
+        "ok": True,
+        "items": _json_safe(items),
+        "filters": {"q": str(q or ""), "limit": int(limit or 20)},
+        "cursor": {"offset": 0, "limit": int(limit or 20), "has_more": False},
+        "storage_status": _act_storage_status(store, items),
+    }
+
+
+@app.get("/api/act/reports/latest")
+def act_latest_report(request: Request):
+    _ensure_local_act_access(request)
+    store = _act_history_store()
+    report = store.latest_report()
+    if not isinstance(report, dict):
+        raise HTTPException(status_code=404, detail="ACT report not found")
+    return {"ok": True, "report": _json_safe(report), "storage_status": _act_storage_status(store, [report])}
+
+
+@app.get("/api/act/reports/{index}")
+def act_report_by_index(request: Request, index: int):
+    _ensure_local_act_access(request)
+    store = _act_history_store()
+    try:
+        report = store.get_report(index=index, newest_first=True)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not isinstance(report, dict):
+        raise HTTPException(status_code=404, detail="ACT report not found")
+    return {"ok": True, "index": int(index or 0), "report": _json_safe(report)}
+
+
+@app.get("/api/act/actions")
+def act_actions(
+    request: Request,
+    encounter_id: str = Query(default=""),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    _ensure_local_act_access(request)
+    store = _act_history_store()
+    rows = store.list_sqlite_actions(limit=limit, encounter_id=encounter_id)
+    return {
+        "ok": True,
+        "items": _json_safe(rows),
+        "filters": {"encounter_id": str(encounter_id or ""), "limit": int(limit or 100)},
+        "cursor": {"offset": 0, "limit": int(limit or 100), "count": len(rows), "has_more": False},
+        "storage_status": _act_storage_status(store),
+    }
+
+
+@app.websocket("/ws/act/reports")
+async def act_report_websocket(websocket: WebSocket):
+    if not await _ensure_local_act_websocket(websocket):
+        return
+    await websocket.accept()
+    try:
+        store = _act_history_store()
+        await websocket.send_json(_act_snapshot_payload(store, limit=20))
+        while True:
+            try:
+                message = await websocket.receive_json()
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                await websocket.send_json({"type": "error", "ok": False, "message": "Invalid JSON message"})
+                continue
+            if not isinstance(message, dict):
+                await websocket.send_json({"type": "error", "ok": False, "message": "Message must be an object"})
+                continue
+            msg_type = str(message.get("type") or "latest").strip().lower()
+            store = _act_history_store()
+            if msg_type in {"ping", "health"}:
+                await websocket.send_json({"type": "pong", "ok": True, "storage_status": _act_storage_status(store)})
+            elif msg_type in {"snapshot", "latest"}:
+                await websocket.send_json(_act_snapshot_payload(store, limit=max(1, min(int(message.get("limit") or 20), 100))))
+            elif msg_type == "history":
+                limit = max(1, min(int(message.get("limit") or 20), 100))
+                items = store.list_reports(limit=limit)
+                await websocket.send_json({"type": "history", "ok": True, "items": _json_safe(items), "storage_status": _act_storage_status(store, items)})
+            elif msg_type == "actions":
+                limit = max(1, min(int(message.get("limit") or 100), 500))
+                rows = store.list_sqlite_actions(limit=limit, encounter_id=str(message.get("encounter_id") or ""))
+                await websocket.send_json({"type": "actions", "ok": True, "items": _json_safe(rows), "cursor": {"offset": 0, "limit": limit, "count": len(rows), "has_more": False}})
+            else:
+                await websocket.send_json({"type": "error", "ok": False, "message": f"Unsupported ACT websocket message type: {msg_type}"})
+    except WebSocketDisconnect:
+        return
 
 
 @app.get("/api/scripts")
