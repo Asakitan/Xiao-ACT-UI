@@ -123,6 +123,24 @@ class ActHistoryRuntimeTests(unittest.TestCase):
                 "elapsed_s": 10,
                 "total_damage": 100,
                 "entities": [{"uid": 1, "name": "A", "damage_total": 100}],
+                "actions": [{
+                    "topic": "damage",
+                    "observed_at": 10.5,
+                    "payload": {
+                        "actor_uid": 1,
+                        "actor_name": "A",
+                        "target_uid": 99,
+                        "target_name": "Boss",
+                        "skill_id": "slash",
+                        "skill_name": "Slash",
+                        "damage": 100,
+                    },
+                    "source_name": "fixture",
+                    "source_kind": "replay",
+                }],
+                "timeline_events": [{"event_type": "phase", "time_ms": 10500, "label": "Phase 1"}],
+                "trigger_events": [{"rule_id": "rule-1", "severity": "info", "message": "Trigger", "time_ms": 10600}],
+                "source_metadata": {"parser_id": "fixture_parser"},
             })
             store.add_report({
                 "encounter_id": "enc-second",
@@ -133,6 +151,7 @@ class ActHistoryRuntimeTests(unittest.TestCase):
             })
             status = store.sqlite_status()
             archived = store.list_sqlite_reports(limit=2)
+            actions = store.list_sqlite_actions(limit=5, encounter_id="enc-first")
             runtime_status = runtime.act_history_status(FakeOwner(store), limit=5)
 
         self.assertTrue(status["available"])
@@ -140,10 +159,19 @@ class ActHistoryRuntimeTests(unittest.TestCase):
         self.assertEqual(status["schema_version"], DPS_HISTORY_SQLITE_SCHEMA_VERSION)
         self.assertEqual(status["encounter_count"], 2)
         self.assertEqual(status["combatant_count"], 2)
+        self.assertEqual(status["action_count"], 1)
+        self.assertEqual(status["timeline_count"], 1)
+        self.assertEqual(status["trigger_count"], 1)
+        self.assertEqual(status["source_metadata_count"], 1)
         self.assertEqual(archived[0]["encounter_id"], "enc-second")
         self.assertEqual(archived[0]["entities"][0]["name"], "B")
         self.assertEqual(archived[0]["_sqlite_schema_version"], DPS_HISTORY_SQLITE_SCHEMA_VERSION)
+        self.assertEqual(actions[0]["topic"], "damage")
+        self.assertEqual(actions[0]["skill_name"], "Slash")
+        self.assertEqual(actions[0]["value"], 100.0)
+        self.assertEqual(actions[0]["payload"]["payload"]["skill_id"], "slash")
         self.assertEqual(runtime_status["storage_status"]["sqlite"]["encounter_count"], 2)
+        self.assertEqual(runtime_status["storage_status"]["sqlite"]["action_count"], 1)
 
     def test_missing_store_is_reported_without_throwing(self) -> None:
         status = runtime.act_history_status(object())

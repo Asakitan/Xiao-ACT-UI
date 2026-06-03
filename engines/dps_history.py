@@ -22,7 +22,7 @@ from config import BASE_DIR
 
 DPS_HISTORY_SCHEMA_VERSION = 1
 DPS_HISTORY_JSONL_SCHEMA_VERSION = 1
-DPS_HISTORY_SQLITE_SCHEMA_VERSION = 1
+DPS_HISTORY_SQLITE_SCHEMA_VERSION = 2
 DEFAULT_HISTORY_LIMIT = 100
 DPS_HISTORY_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "dps_history")
 DPS_HISTORY_PATH = os.path.join(DPS_HISTORY_EXPORT_DIR, "history.json")
@@ -134,6 +134,66 @@ def _format_pct(value: Any) -> str:
     if num <= 1.0:
         num *= 100.0
     return f"{num:.1f}%"
+
+
+def _json_text(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    except Exception:
+        return json.dumps(str(value), ensure_ascii=False)
+
+
+def _list_from_report(report: Dict[str, Any], *keys: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for key in keys:
+        items = report.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict):
+                out.append(copy.deepcopy(item))
+    return out
+
+
+def _event_payload(event: Dict[str, Any]) -> Dict[str, Any]:
+    payload = event.get("payload")
+    return dict(payload) if isinstance(payload, dict) else event
+
+
+def _event_topic(event: Dict[str, Any], default: str = "event") -> str:
+    payload = _event_payload(event)
+    return str(event.get("topic") or payload.get("topic") or payload.get("type") or default)
+
+
+def _event_observed_at(event: Dict[str, Any]) -> float:
+    payload = _event_payload(event)
+    for key in ("observed_at", "timestamp", "time", "created_at"):
+        if key in event:
+            return _coerce_float(event.get(key))
+        if key in payload:
+            return _coerce_float(payload.get(key))
+    time_ms = event.get("time_ms", payload.get("time_ms"))
+    if time_ms is not None:
+        return _coerce_float(time_ms) / 1000.0
+    return 0.0
+
+
+def _event_time_ms(event: Dict[str, Any]) -> int:
+    payload = _event_payload(event)
+    for key in ("time_ms", "cursor_ms", "offset_ms"):
+        if key in event:
+            return _coerce_int(event.get(key))
+        if key in payload:
+            return _coerce_int(payload.get(key))
+    observed_at = _event_observed_at(event)
+    return int(observed_at * 1000) if observed_at > 0 else 0
+
+
+def _event_value(payload: Dict[str, Any]) -> float:
+    for key in ("value", "damage", "damage_total", "heal", "heal_total", "amount"):
+        if key in payload:
+            return _coerce_float(payload.get(key))
+    return 0.0
 
 
 def _render_html_report(item: Dict[str, Any]) -> str:
@@ -396,16 +456,162 @@ class DpsHistoryStore:
             "FOREIGN KEY(encounter_row_id) REFERENCES encounters(id) ON DELETE CASCADE"
             ")"
         )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS actions ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "encounter_row_id INTEGER NOT NULL, "
+            "seq INTEGER NOT NULL, "
+            "topic TEXT NOT NULL, "
+            "action_type TEXT NOT NULL, "
+            "observed_at REAL NOT NULL, "
+            "time_ms INTEGER NOT NULL, "
+            "actor_uid INTEGER NOT NULL, "
+            "actor_name TEXT NOT NULL, "
+            "target_uid INTEGER NOT NULL, "
+            "target_name TEXT NOT NULL, "
+            "skill_id TEXT NOT NULL, "
+            "skill_name TEXT NOT NULL, "
+            "value REAL NOT NULL, "
+            "source_name TEXT NOT NULL, "
+            "source_kind TEXT NOT NULL, "
+            "payload_json TEXT NOT NULL, "
+            "FOREIGN KEY(encounter_row_id) REFERENCES encounters(id) ON DELETE CASCADE"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS timeline_events ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "encounter_row_id INTEGER NOT NULL, "
+            "seq INTEGER NOT NULL, "
+            "event_type TEXT NOT NULL, "
+            "observed_at REAL NOT NULL, "
+            "time_ms INTEGER NOT NULL, "
+            "label TEXT NOT NULL, "
+            "payload_json TEXT NOT NULL, "
+            "FOREIGN KEY(encounter_row_id) REFERENCES encounters(id) ON DELETE CASCADE"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS trigger_events ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "encounter_row_id INTEGER NOT NULL, "
+            "seq INTEGER NOT NULL, "
+            "rule_id TEXT NOT NULL, "
+            "severity TEXT NOT NULL, "
+            "message TEXT NOT NULL, "
+            "observed_at REAL NOT NULL, "
+            "time_ms INTEGER NOT NULL, "
+            "payload_json TEXT NOT NULL, "
+            "FOREIGN KEY(encounter_row_id) REFERENCES encounters(id) ON DELETE CASCADE"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS source_metadata ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "encounter_row_id INTEGER NOT NULL, "
+            "key TEXT NOT NULL, "
+            "value_json TEXT NOT NULL, "
+            "FOREIGN KEY(encounter_row_id) REFERENCES encounters(id) ON DELETE CASCADE"
+            ")"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_encounters_completed_at ON encounters(completed_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_encounters_reason ON encounters(report_reason)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_combatants_encounter ON combatants(encounter_row_id, rank)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_combatants_name ON combatants(name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_actions_encounter_time ON actions(encounter_row_id, time_ms, seq)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_actions_topic ON actions(topic)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_timeline_encounter_time ON timeline_events(encounter_row_id, time_ms, seq)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_trigger_encounter_time ON trigger_events(encounter_row_id, time_ms, seq)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_source_metadata_encounter ON source_metadata(encounter_row_id, key)")
         conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
             ("schema_version", str(DPS_HISTORY_SQLITE_SCHEMA_VERSION)),
         )
 
-    def _append_sqlite_locked(self, item: Dict[str, Any]) -> None:
+    def _append_sqlite_action_rows_locked(self, conn, encounter_row_id: int, report: Dict[str, Any]) -> None:
+        events = _list_from_report(report, "actions", "events", "action_log")
+        for seq, event in enumerate(events, 1):
+            payload = _event_payload(event)
+            conn.execute(
+                "INSERT INTO actions("
+                "encounter_row_id, seq, topic, action_type, observed_at, time_ms, "
+                "actor_uid, actor_name, target_uid, target_name, skill_id, skill_name, "
+                "value, source_name, source_kind, payload_json"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    encounter_row_id,
+                    seq,
+                    _event_topic(event, "action"),
+                    str(payload.get("action_type") or payload.get("kind") or payload.get("type") or _event_topic(event, "action")),
+                    _event_observed_at(event),
+                    _event_time_ms(event),
+                    _coerce_int(payload.get("actor_uid") or payload.get("source_uid") or payload.get("caster_uid")),
+                    str(payload.get("actor_name") or payload.get("source_name") or payload.get("caster_name") or ""),
+                    _coerce_int(payload.get("target_uid") or payload.get("target_id")),
+                    str(payload.get("target_name") or ""),
+                    str(payload.get("skill_id") or payload.get("skill") or ""),
+                    str(payload.get("skill_name") or payload.get("name") or ""),
+                    _event_value(payload),
+                    str(event.get("source_name") or payload.get("source_name") or ""),
+                    str(event.get("source_kind") or payload.get("source_kind") or ""),
+                    _json_text(event),
+                ),
+            )
+
+    def _append_sqlite_timeline_rows_locked(self, conn, encounter_row_id: int, report: Dict[str, Any]) -> None:
+        events = _list_from_report(report, "timeline", "timeline_events")
+        for seq, event in enumerate(events, 1):
+            payload = _event_payload(event)
+            conn.execute(
+                "INSERT INTO timeline_events("
+                "encounter_row_id, seq, event_type, observed_at, time_ms, label, payload_json"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    encounter_row_id,
+                    seq,
+                    str(payload.get("event_type") or payload.get("type") or _event_topic(event, "timeline")),
+                    _event_observed_at(event),
+                    _event_time_ms(event),
+                    str(payload.get("label") or payload.get("message") or payload.get("name") or ""),
+                    _json_text(event),
+                ),
+            )
+
+    def _append_sqlite_trigger_rows_locked(self, conn, encounter_row_id: int, report: Dict[str, Any]) -> None:
+        events = _list_from_report(report, "trigger_events")
+        for seq, event in enumerate(events, 1):
+            payload = _event_payload(event)
+            conn.execute(
+                "INSERT INTO trigger_events("
+                "encounter_row_id, seq, rule_id, severity, message, observed_at, time_ms, payload_json"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    encounter_row_id,
+                    seq,
+                    str(payload.get("rule_id") or payload.get("id") or ""),
+                    str(payload.get("severity") or payload.get("level") or ""),
+                    str(payload.get("message") or payload.get("text") or ""),
+                    _event_observed_at(event),
+                    _event_time_ms(event),
+                    _json_text(event),
+                ),
+            )
+
+    def _append_sqlite_source_metadata_locked(self, conn, encounter_row_id: int, report: Dict[str, Any]) -> None:
+        metadata = report.get("source_metadata")
+        if not isinstance(metadata, dict):
+            metadata = report.get("source")
+        if not isinstance(metadata, dict):
+            metadata = report.get("metadata")
+        if not isinstance(metadata, dict):
+            return
+        for key, value in metadata.items():
+            conn.execute(
+                "INSERT INTO source_metadata(encounter_row_id, key, value_json) VALUES (?, ?, ?)",
+                (encounter_row_id, str(key), _json_text(value)),
+            )
+
+    def _append_sqlite_locked(self, item: Dict[str, Any], raw_report: Optional[Dict[str, Any]] = None) -> None:
         if not self._sqlite_path:
             return
         conn = None
@@ -464,6 +670,11 @@ class DpsHistoryStore:
                         _coerce_int(entity.get("fight_point")),
                     ),
                 )
+            raw = raw_report if isinstance(raw_report, dict) else item
+            self._append_sqlite_action_rows_locked(conn, encounter_row_id, raw)
+            self._append_sqlite_timeline_rows_locked(conn, encounter_row_id, raw)
+            self._append_sqlite_trigger_rows_locked(conn, encounter_row_id, raw)
+            self._append_sqlite_source_metadata_locked(conn, encounter_row_id, raw)
             conn.commit()
             self._last_sqlite_error = ""
         except Exception as exc:
@@ -489,7 +700,7 @@ class DpsHistoryStore:
             self._items = self._items[-self._limit:]
             self._save_locked()
             self._append_archive_locked(item)
-            self._append_sqlite_locked(item)
+            self._append_sqlite_locked(item, raw_report=report)
             return copy.deepcopy(item)
 
     def list_reports(self, limit: int = 20) -> List[Dict[str, Any]]:
@@ -641,9 +852,72 @@ class DpsHistoryStore:
                     pass
         return rows
 
+    def list_sqlite_actions(self, limit: int = 100, encounter_id: str = "") -> List[Dict[str, Any]]:
+        cap = max(1, int(limit or 100))
+        wanted_encounter = str(encounter_id or "").strip()
+        rows: List[Dict[str, Any]] = []
+        with self._lock:
+            if not self._sqlite_path or not os.path.isfile(self._sqlite_path):
+                return []
+            conn = None
+            try:
+                conn = sqlite3.connect(self._sqlite_path)
+                conn.row_factory = sqlite3.Row
+                self._ensure_sqlite_schema_locked(conn)
+                conn.commit()
+                sql = (
+                    "SELECT a.*, e.encounter_id FROM actions a "
+                    "JOIN encounters e ON e.id = a.encounter_row_id "
+                )
+                params: tuple[Any, ...]
+                if wanted_encounter:
+                    sql += "WHERE e.encounter_id = ? "
+                    params = (wanted_encounter, cap)
+                else:
+                    params = (cap,)
+                sql += "ORDER BY e.completed_at DESC, a.time_ms ASC, a.seq ASC LIMIT ?"
+                for row in conn.execute(sql, params):
+                    try:
+                        payload = json.loads(row["payload_json"] or "{}")
+                    except Exception:
+                        payload = {}
+                    rows.append({
+                        "encounter_id": str(row["encounter_id"] or ""),
+                        "seq": _coerce_int(row["seq"]),
+                        "topic": str(row["topic"] or ""),
+                        "action_type": str(row["action_type"] or ""),
+                        "observed_at": _coerce_float(row["observed_at"]),
+                        "time_ms": _coerce_int(row["time_ms"]),
+                        "actor_uid": _coerce_int(row["actor_uid"]),
+                        "actor_name": str(row["actor_name"] or ""),
+                        "target_uid": _coerce_int(row["target_uid"]),
+                        "target_name": str(row["target_name"] or ""),
+                        "skill_id": str(row["skill_id"] or ""),
+                        "skill_name": str(row["skill_name"] or ""),
+                        "value": _coerce_float(row["value"]),
+                        "source_name": str(row["source_name"] or ""),
+                        "source_kind": str(row["source_kind"] or ""),
+                        "payload": payload,
+                    })
+                self._last_sqlite_error = ""
+            except Exception as exc:
+                self._last_sqlite_error = str(exc)
+                return []
+            finally:
+                try:
+                    if conn is not None:
+                        conn.close()
+                except Exception:
+                    pass
+        return rows
+
     def sqlite_status(self) -> Dict[str, Any]:
         encounter_count = 0
         combatant_count = 0
+        action_count = 0
+        timeline_count = 0
+        trigger_count = 0
+        source_metadata_count = 0
         schema_version = 0
         with self._lock:
             exists = bool(self._sqlite_path and os.path.isfile(self._sqlite_path))
@@ -651,6 +925,8 @@ class DpsHistoryStore:
                 conn = None
                 try:
                     conn = sqlite3.connect(self._sqlite_path)
+                    self._ensure_sqlite_schema_locked(conn)
+                    conn.commit()
                     try:
                         schema_version = _coerce_int(conn.execute(
                             "SELECT value FROM meta WHERE key='schema_version'"
@@ -659,6 +935,10 @@ class DpsHistoryStore:
                         schema_version = 0
                     encounter_count = _coerce_int(conn.execute("SELECT COUNT(*) FROM encounters").fetchone()[0])
                     combatant_count = _coerce_int(conn.execute("SELECT COUNT(*) FROM combatants").fetchone()[0])
+                    action_count = _coerce_int(conn.execute("SELECT COUNT(*) FROM actions").fetchone()[0])
+                    timeline_count = _coerce_int(conn.execute("SELECT COUNT(*) FROM timeline_events").fetchone()[0])
+                    trigger_count = _coerce_int(conn.execute("SELECT COUNT(*) FROM trigger_events").fetchone()[0])
+                    source_metadata_count = _coerce_int(conn.execute("SELECT COUNT(*) FROM source_metadata").fetchone()[0])
                     self._last_sqlite_error = ""
                 except Exception as exc:
                     self._last_sqlite_error = str(exc)
@@ -675,6 +955,10 @@ class DpsHistoryStore:
                 "schema_version": schema_version or (DPS_HISTORY_SQLITE_SCHEMA_VERSION if exists and not self._last_sqlite_error else 0),
                 "encounter_count": encounter_count,
                 "combatant_count": combatant_count,
+                "action_count": action_count,
+                "timeline_count": timeline_count,
+                "trigger_count": trigger_count,
+                "source_metadata_count": source_metadata_count,
                 "last_error": self._last_sqlite_error,
             }
 
