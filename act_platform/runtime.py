@@ -652,6 +652,207 @@ def act_history_delete(owner: Any, *, index: int | None = None, clear: bool = Fa
     }
 
 
+def _offline_import_source_probe(source_path: str, fmt: str, event_count: int) -> dict[str, Any]:
+    return {
+        "data_source": "offline_import",
+        "mode": "offline_import",
+        "active": True,
+        "source_path": source_path,
+        "format": fmt,
+        "event_count": int(event_count or 0),
+    }
+
+
+def _finalize_offline_import_report(harness: Any, *, source_path: str, fmt: str,
+                                    event_count: int) -> tuple[dict[str, Any] | None, list[str]]:
+    errors: list[str] = []
+    tracker = getattr(harness, "dps_tracker", None)
+    if tracker is None:
+        return None, ["Replay harness DPS tracker is unavailable"]
+    reset = getattr(tracker, "reset", None)
+    if callable(reset):
+        try:
+            reset()
+        except Exception as exc:
+            errors.append(str(exc))
+    get_last = getattr(tracker, "get_last_report", None)
+    report: Any = None
+    if callable(get_last):
+        try:
+            report = get_last()
+        except Exception as exc:
+            errors.append(str(exc))
+    if not isinstance(report, Mapping):
+        return None, errors or ["No DPS report was produced from imported events"]
+    out = dict(_json_safe(report))
+    out["report_reason"] = "offline_import"
+    out["source_kind"] = "offline_import"
+    out["source_path"] = str(source_path)
+    out["import_format"] = str(fmt or "")
+    out["import_event_count"] = int(event_count or 0)
+    return out, errors
+
+
+def _persist_offline_import_report(store: Any, report: Mapping[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+    add_report = getattr(store, "add_report", None)
+    if not callable(add_report):
+        return None, ["DPS history add API is unavailable"]
+    try:
+        item = add_report(dict(report))
+    except Exception as exc:
+        return None, [str(exc)]
+    if not isinstance(item, Mapping):
+        return None, ["DPS history did not accept imported report"]
+    return dict(_json_safe(item)), []
+
+
+def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
+                            show: bool = False, history_limit: int = 20) -> dict[str, Any]:
+    """Replay a normalized ACT import file and optionally persist it to history."""
+
+    try:
+        from act_replay.harness import ActReplayHarness
+        from act_replay.importer import import_normalized_file
+    except Exception as exc:
+        message = str(exc)
+        return {
+            "ok": False,
+            "message": message,
+            "format": "",
+            "source_path": str(path or ""),
+            "self_uid": 0,
+            "event_count": 0,
+            "persist_requested": bool(persist),
+            "persisted": False,
+            "history_item": None,
+            "preview": {},
+            "snapshot": {},
+            "errors": [message],
+            "status": {},
+        }
+
+    try:
+        summary = import_normalized_file(path)
+    except Exception as exc:
+        message = str(exc)
+        return {
+            "ok": False,
+            "message": message,
+            "format": "",
+            "source_path": str(path or ""),
+            "self_uid": 0,
+            "event_count": 0,
+            "persist_requested": bool(persist),
+            "persisted": False,
+            "history_item": None,
+            "preview": {},
+            "snapshot": {},
+            "errors": [message],
+            "status": {},
+        }
+    if not bool(summary.get("ok")):
+        errors = list(summary.get("errors") or [])
+        message = str(summary.get("message") or "; ".join(errors) or "Offline import failed")
+        return {
+            "ok": False,
+            "message": message,
+            "format": str(summary.get("format") or ""),
+            "source_path": str(summary.get("source_path") or path or ""),
+            "self_uid": int(summary.get("self_uid") or 0),
+            "event_count": int(summary.get("event_count") or 0),
+            "persist_requested": bool(persist),
+            "persisted": False,
+            "history_item": None,
+            "preview": {},
+            "snapshot": {},
+            "errors": errors or [message],
+            "status": {},
+        }
+
+    source_path = str(summary.get("source_path") or path or "")
+    fmt = str(summary.get("format") or "")
+    event_count = int(summary.get("event_count") or 0)
+    events = list(summary.get("events") or [])
+    store = getattr(owner, "_dps_history_store", None) if persist else None
+    errors: list[str] = []
+
+    if persist and store is None:
+        errors.append("DPS history is not initialized")
+
+    source_probe = _offline_import_source_probe(source_path, fmt, event_count)
+    harness = ActReplayHarness(history_store=store, source_probe=source_probe)
+    self_uid = int(summary.get("self_uid") or 0)
+    if self_uid:
+        try:
+            harness.set_self_uid(self_uid)
+        except Exception as exc:
+            errors.append(str(exc))
+    try:
+        snapshot = harness.replay(events)
+    except Exception as exc:
+        message = str(exc)
+        return {
+            "ok": False,
+            "message": message,
+            "format": fmt,
+            "source_path": source_path,
+            "self_uid": self_uid,
+            "event_count": event_count,
+            "persist_requested": bool(persist),
+            "persisted": False,
+            "history_item": None,
+            "preview": {},
+            "snapshot": {},
+            "errors": errors + [message],
+            "status": {},
+        }
+
+    report, finalize_errors = _finalize_offline_import_report(
+        harness,
+        source_path=source_path,
+        fmt=fmt,
+        event_count=event_count,
+    )
+    errors.extend(finalize_errors)
+
+    history_item: dict[str, Any] | None = None
+    if persist and report is not None and store is not None:
+        history_item, persist_errors = _persist_offline_import_report(store, report)
+        errors.extend(persist_errors)
+
+    shown = False
+    if show and report is not None:
+        show_report = getattr(owner, "_show_dps_last_report", None)
+        if callable(show_report):
+            try:
+                shown = bool(show_report(report))
+            except Exception as exc:
+                errors.append(str(exc))
+
+    snapshot_payload = dict(_json_safe(snapshot if isinstance(snapshot, Mapping) else {}))
+    preview = _report_preview(snapshot_payload, report)
+    persisted = bool(history_item)
+    status = act_history_status(owner, limit=history_limit) if persist else {}
+    ok = bool(report is not None and (not persist or persisted) and not errors)
+    return {
+        "ok": ok,
+        "message": "Imported" if ok else "; ".join(errors) or "Offline import did not produce a report",
+        "format": fmt,
+        "source_path": source_path,
+        "self_uid": self_uid,
+        "event_count": event_count,
+        "persist_requested": bool(persist),
+        "persisted": persisted,
+        "shown": shown,
+        "history_item": history_item,
+        "report": dict(_json_safe(report)) if isinstance(report, Mapping) else None,
+        "preview": preview,
+        "snapshot": snapshot_payload,
+        "errors": errors,
+        "status": status,
+    }
+
+
 def _timeline_state(owner: Any) -> dict[str, Any]:
     state = getattr(owner, "_act_timeline_state", None)
     if not isinstance(state, dict):
@@ -1813,6 +2014,7 @@ __all__ = [
     "act_history_delete",
     "act_history_load",
     "act_history_status",
+    "act_offline_import_file",
     "act_report_copy",
     "act_report_export",
     "act_report_status",

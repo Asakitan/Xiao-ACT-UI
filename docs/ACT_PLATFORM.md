@@ -19,14 +19,14 @@ No ACT feature is complete until WebView and Entity can reach the same shared ba
 | --- | --- | --- |
 | Event envelopes | `act_platform/events.py` | Builds canonical ACT event dictionaries with `topic`, `source`, `game_id`, `parser_id`, and copied payloads. |
 | Event bus | `act_platform/event_bus.py` | Synchronous publish/subscribe with bounded recent-event history and callback isolation. |
-| Runtime helpers | `act_platform/runtime.py` | Shared WebView/Entity command helpers for plugins, reports, history, timelines, graphs, drilldowns, data-source health, and triggers. |
+| Runtime helpers | `act_platform/runtime.py` | Shared WebView/Entity command helpers for plugins, reports, history, offline imports, timelines, graphs, drilldowns, data-source health, and triggers. |
 | Plugin SDK | `act_platform/plugins.py` | Discovers plugin folders, loads `plugin.json`, owns `PluginContext`, and exposes plugin status. |
 | Parser adapters | `act_platform/adapters.py` | First-party parser adapter contract and built-in `star_resonance_tcp` wrapper. |
 | Replay | `act_replay/` | Offline event fixtures, replay harness, and platform regression selftest. |
 | Offline import | `act_replay/importer.py` | Loads normalized ACT JSON/JSONL files into replay-ready event lists. |
 | Combat analytics | `engines/combat_analytics.py` | Builds ACT snapshots and render specs from DPS/game state. |
 | Trigger engine | `engines/act_trigger_engine.py` | Shared trigger/timer rule evaluator. |
-| History/export | `engines/dps_history.py` | Rolling encounter persistence plus JSON/CSV export. |
+| History/export | `engines/dps_history.py` | Rolling encounter persistence, lightweight search, and JSON/CSV/HTML export. |
 | TCP bridge | `net/packet_bridge.py` | Owns capture, parser adapter creation, packet callbacks, and data-source health. |
 | Hybrid memory source | `mem_probe/unified_source.py` | Read-only memory self-state bridge used by memory/hybrid/auto modes. |
 
@@ -156,7 +156,9 @@ Preset helpers:
 
 ## Reports, History, And Replay
 
-The current history store is a rolling encounter store exposed through shared runtime helpers. JSON and CSV export remain backed by `DpsHistoryStore`.
+The current history store is a rolling encounter store exposed through shared runtime helpers. JSON, CSV, and static HTML export remain backed by `DpsHistoryStore`.
+
+Normalized offline imports are loaded by `act_replay.importer`, replayed through `ActReplayHarness`, finalized into the same DPS report shape as live encounters, and can be persisted with `act_platform.runtime.act_offline_import_file(owner, path, persist=True)`. The helper returns import metadata, replay preview, the generated report, the persisted history item, and refreshed history status so WebView and Entity can consume the same backend provider once their dedicated import UX is wired.
 
 Replay is the contract gate for ACT behavior. When adding a feature that can be tested without the live game, prefer adding a fixture/selftest path first.
 
@@ -177,7 +179,7 @@ Do not run release packaging unless explicitly requested. For packaging changes,
 ## Open Edges
 
 - Plugin parser and trigger handlers are declared but not invoked by runtime services yet.
-- Offline import supports normalized JSON/JSONL files; broader pcap/log/XML import remains future work.
-- History is not yet a searchable SQLite-style database.
+- Offline import supports normalized JSON/JSONL replay files and rolling-history persistence; broader pcap/log/XML import remains future work.
+- History has lightweight rolling-store search, but is not yet a SQLite-style encounter/action database.
 - Manual WebView/Entity smoke still depends on a UI runtime session.
 - Hybrid memory policy is documented separately in `docs/HYBRID_MEMORY_TCP.md`.

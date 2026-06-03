@@ -225,6 +225,16 @@ Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报�
 
 The shared payload preserves the parity fields `encounters`, `filters`, `cursor`, and `storage_status`. Every listed encounter also carries a stable newest-first `_history_index`, so filtered UI lists can load/delete the intended stored report instead of deleting by filtered-row position. Entity/Tk keeps this low-frequency and dirty-signature gated; destructive actions refresh the cached panel state explicitly rather than polling.
 
+## Current offline import surface
+
+`offline_import` currently has a shared backend provider for normalized replay files:
+
+- import/replay/persist: `act_offline_import_file(owner, path, persist=True, show=False, history_limit=20)`
+
+The helper accepts normalized ACT `.json`, `.jsonl`, and `.ndjson` files, replays them through `ActReplayHarness`, finalizes the replay into the normal DPS report shape, and optionally writes the report into `DpsHistoryStore`. Its response preserves parity fields `source_path`, `format`, `self_uid`, `event_count`, `persisted`, `history_item`, `preview`, `snapshot`, and refreshed `status`.
+
+Dedicated WebView and Entity import pickers are still a UX follow-up. Until that route is defined, both UIs should treat this as the shared backend provider and route imported reports through the existing report/history surfaces after persistence.
+
 ## Current timeline/VCR surface
 
 `encounter_timeline_vcr` is wired through shared `act_platform.runtime` helpers and the owner-scoped ACT `EventBus`:

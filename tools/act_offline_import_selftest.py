@@ -8,12 +8,25 @@ import os
 import tempfile
 import unittest
 
+from act_platform import runtime
 from act_replay.events import damage_event, dungeon_event
 from act_replay.harness import ActReplayHarness
 from act_replay.importer import import_normalized_file, load_normalized_import
+from engines.dps_history import DpsHistoryStore
 
 
 SELF_UID = 36668136
+
+
+class FakeOwner:
+    def __init__(self, store=None):
+        if store is not None:
+            self._dps_history_store = store
+        self.shown = None
+
+    def _show_dps_last_report(self, report=None):
+        self.shown = report
+        return bool(report)
 
 
 def _demo_damage_event(amount: int = 1234) -> dict:
@@ -80,6 +93,62 @@ class ActOfflineImportTests(unittest.TestCase):
         self.assertFalse(summary["ok"])
         self.assertEqual(summary["event_count"], 0)
         self.assertIn("unsupported", summary["message"])
+
+    def test_runtime_import_persists_replayed_report_to_history(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_import_persist_") as root:
+            path = os.path.join(root, "encounter.json")
+            history_path = os.path.join(root, "history.json")
+            store = DpsHistoryStore(path=history_path, limit=5)
+            owner = FakeOwner(store)
+            with open(path, "w", encoding="utf-8") as fp:
+                json.dump({
+                    "self_uid": SELF_UID,
+                    "events": [
+                        dungeon_event("sync_dungeon_data", dungeon_id=42001, scene_uuid=155001),
+                        _demo_damage_event(7654),
+                    ],
+                }, fp, ensure_ascii=False)
+
+            result = runtime.act_offline_import_file(owner, path, show=True)
+            latest = store.latest_report()
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["persisted"], result)
+        self.assertTrue(result["shown"], result)
+        self.assertEqual(result["event_count"], 2)
+        self.assertEqual(result["report"]["report_reason"], "offline_import")
+        self.assertEqual(result["report"]["source_kind"], "offline_import")
+        self.assertEqual(result["history_item"]["report_reason"], "offline_import")
+        self.assertEqual(result["history_item"]["total_damage"], 7654)
+        self.assertEqual(latest["total_damage"], 7654)
+        self.assertEqual(result["status"]["storage_status"]["count"], 1)
+        self.assertEqual((result["snapshot"]["render_spec"]["sources"]["summary"] or {}).get("data_source"), "offline_import")
+
+    def test_runtime_import_reports_missing_history_store_when_persisting(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_import_missing_store_") as root:
+            path = os.path.join(root, "encounter.json")
+            with open(path, "w", encoding="utf-8") as fp:
+                json.dump({"self_uid": SELF_UID, "events": [_demo_damage_event(1111)]}, fp)
+
+            result = runtime.act_offline_import_file(FakeOwner(), path)
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["persisted"])
+        self.assertEqual(result["preview"]["total_damage"], 1111)
+        self.assertIn("DPS history is not initialized", result["message"])
+
+    def test_runtime_import_can_replay_without_persisting(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_import_replay_only_") as root:
+            path = os.path.join(root, "encounter.json")
+            with open(path, "w", encoding="utf-8") as fp:
+                json.dump({"self_uid": SELF_UID, "events": [_demo_damage_event(3333)]}, fp)
+
+            result = runtime.act_offline_import_file(FakeOwner(), path, persist=False)
+
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["persisted"])
+        self.assertEqual(result["preview"]["total_damage"], 3333)
+        self.assertEqual(result["status"], {})
 
 
 if __name__ == "__main__":
