@@ -222,7 +222,7 @@ def act_plugin_reload(owner: Any, plugin_id: str = "") -> dict[str, Any]:
 def _trigger_status_from_rules(owner: Any, rules: list[dict[str, Any]], *,
                                ok: bool = True, message: str = "") -> dict[str, Any]:
     normalized = _normalize_trigger_rules(rules)
-    timers = [rule for rule in normalized if rule.get("type") == "elapsed_s"]
+    timers = [rule for rule in normalized if rule.get("type") in ("elapsed_s", "timer_preset")]
     errors: list[str] = []
     engine_snapshot: dict[str, Any] = {}
     try:
@@ -309,6 +309,75 @@ def act_trigger_reload(owner: Any) -> dict[str, Any]:
         return {"ok": False, "message": str(exc), "errors": [str(exc)], "triggers": [], "timers": []}
 
 
+def _rules_from_preset_payload(payload: Any) -> list[dict[str, Any]]:
+    raw = payload
+    if isinstance(raw, Mapping):
+        raw = raw.get("act_trigger_rules") or raw.get("rules") or raw.get("presets") or []
+    if not isinstance(raw, list):
+        return []
+    return [dict(rule) for rule in raw if isinstance(rule, Mapping)]
+
+
+def act_trigger_export_presets(owner: Any,
+                               rule_ids: Optional[Iterable[str]] = None) -> dict[str, Any]:
+    try:
+        wanted = {str(item or "").strip() for item in (rule_ids or []) if str(item or "").strip()}
+        rules = _normalize_trigger_rules(_read_trigger_rules(owner))
+        if wanted:
+            rules = [rule for rule in rules if str(rule.get("id") or "") in wanted]
+        return {
+            "ok": True,
+            "kind": "act_trigger_presets",
+            "schema_version": 1,
+            "count": len(rules),
+            "rules": rules,
+        }
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "rules": [], "errors": [str(exc)]}
+
+
+def act_trigger_import_presets(owner: Any, payload: Any, *,
+                               replace: bool = False) -> dict[str, Any]:
+    try:
+        incoming = _normalize_trigger_rules(_rules_from_preset_payload(payload))
+        if not incoming:
+            return {"ok": False, "message": "no trigger presets found", "imported_count": 0}
+        existing = _normalize_trigger_rules(_read_trigger_rules(owner))
+        if replace:
+            combined = incoming
+        else:
+            by_id = {str(rule.get("id") or ""): dict(rule) for rule in existing}
+            order = [str(rule.get("id") or "") for rule in existing if str(rule.get("id") or "")]
+            for rule in incoming:
+                rule_id = str(rule.get("id") or "")
+                if rule_id and rule_id not in by_id:
+                    order.append(rule_id)
+                by_id[rule_id] = dict(rule)
+            combined = [by_id[rule_id] for rule_id in order if rule_id in by_id]
+        _write_trigger_rules(owner, combined)
+        status = _trigger_status_from_rules(owner, combined, message="Imported trigger presets")
+        status["ok"] = True
+        status["imported_count"] = len(incoming)
+        status["replace"] = bool(replace)
+        return status
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "imported_count": 0, "errors": [str(exc)]}
+
+
+def _assign_path(src: dict[str, Any], path: str, value: Any) -> None:
+    parts = [part for part in str(path or "").split(".") if part]
+    if not parts:
+        return
+    cur = src
+    for part in parts[:-1]:
+        nxt = cur.get(part)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[part] = nxt
+        cur = nxt
+    cur[parts[-1]] = value
+
+
 def _synthetic_snapshot_for_rule(rule: Mapping[str, Any]) -> dict[str, Any]:
     rule_type = str(rule.get("type") or "")
     threshold = float(rule.get("threshold") or 0.0)
@@ -334,7 +403,27 @@ def _synthetic_snapshot_for_rule(rule: Mapping[str, Any]) -> dict[str, Any]:
         except Exception:
             event_type = 1
         render_spec["context"]["last_boss_event_type"] = event_type
-    return {"render_spec": render_spec}
+    elif rule_type == "timer_preset":
+        duration_s = float(rule.get("duration_s") or threshold or 1.0)
+        render_spec["totals"]["elapsed_s"] = max(1.0, duration_s + 1.0)
+        render_spec["encounter"]["duration_s"] = max(1.0, duration_s + 1.0)
+    snapshot = {"render_spec": render_spec}
+    if rule_type == "field_match":
+        field = str(rule.get("field") or "context.last_skill_kind")
+        value: Any = match or "server_end"
+        operator = str(rule.get("operator") or "")
+        if operator in ("lt", "lte", "<", "<="):
+            value = float(rule.get("threshold") or 0.0) - 1.0
+        elif operator in ("gt", "gte", ">", ">="):
+            value = float(rule.get("threshold") or 0.0) + 1.0
+        if field.startswith("render_spec."):
+            _assign_path(snapshot, field, value)
+        elif field.startswith("source."):
+            _assign_path(snapshot, field, value)
+        else:
+            _assign_path(render_spec, field, value)
+    return snapshot
+
 
 
 def act_trigger_test(owner: Any, rule_id: str) -> dict[str, Any]:
@@ -1737,6 +1826,8 @@ __all__ = [
     "act_data_source_health",
     "act_trigger_disable",
     "act_trigger_enable",
+    "act_trigger_export_presets",
+    "act_trigger_import_presets",
     "act_trigger_reload",
     "act_trigger_status",
     "act_trigger_test",

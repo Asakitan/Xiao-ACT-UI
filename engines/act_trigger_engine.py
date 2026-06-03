@@ -10,10 +10,13 @@ without duplicating trigger logic.
 from __future__ import annotations
 
 import copy
+import re
 import threading
 import time
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+_MISSING = object()
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -41,6 +44,36 @@ def _first_present(src: Dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _path_get(src: Any, path: str, default: Any = _MISSING) -> Any:
+    cur = src
+    for part in [item for item in str(path or "").split(".") if item]:
+        if isinstance(cur, dict):
+            if part not in cur:
+                return default
+            cur = cur.get(part)
+            continue
+        if isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+                continue
+            except Exception:
+                return default
+        return default
+    return cur
+
+
+def _match_root_value(root: Dict[str, Any], render_spec: Dict[str, Any], path: str) -> Any:
+    field = _safe_str(path)
+    if not field:
+        return _MISSING
+    if field.startswith("render_spec."):
+        return _path_get(root, field, _MISSING)
+    value = _path_get(render_spec, field, _MISSING)
+    if value is not _MISSING:
+        return value
+    return _path_get(root, field, _MISSING)
+
+
 def normalize_trigger_rule(raw: Any, fallback_index: int = 0) -> Dict[str, Any]:
     src = raw if isinstance(raw, dict) else {}
     rule_type = _safe_str(src.get("type") or src.get("trigger_type")).lower()
@@ -52,11 +85,23 @@ def normalize_trigger_rule(raw: Any, fallback_index: int = 0) -> Dict[str, Any]:
         "skill_kind",
         "boss_event_type",
         "encounter_start",
+        "field_match",
+        "timer_preset",
     ):
         rule_type = "damage_total"
     threshold = _safe_float(_first_present(src, "threshold", "value", "event_type"), 0.0)
     if rule_type == "boss_hp_pct_below" and threshold > 1.0:
         threshold = threshold / 100.0
+    raw_duration = _first_present(src, "duration_s", "timer_s")
+    if raw_duration is None and rule_type in ("elapsed_s", "timer_preset"):
+        raw_duration = threshold
+    duration_s = max(0.0, _safe_float(raw_duration, 0.0))
+    match_value = _first_present(src, "match", "event_type", "kind")
+    if rule_type == "field_match":
+        match_value = _first_present(src, "match", "value", "expected", "kind")
+    operator = _safe_str(_first_present(src, "operator", "op")).lower()
+    if not operator:
+        operator = "eq" if _safe_str(match_value) else ("gte" if threshold else "exists")
     return {
         "id": _safe_str(src.get("id")) or f"act_rule_{fallback_index}",
         "enabled": bool(src.get("enabled", True)),
@@ -64,7 +109,11 @@ def normalize_trigger_rule(raw: Any, fallback_index: int = 0) -> Dict[str, Any]:
         "label": _safe_str(src.get("label")) or rule_type.replace("_", " ").title(),
         "message": _safe_str(src.get("message")),
         "threshold": threshold,
-        "match": _safe_str(_first_present(src, "match", "event_type", "kind")),
+        "match": _safe_str(match_value),
+        "field": _safe_str(_first_present(src, "field", "field_path", "path")),
+        "operator": operator,
+        "duration_s": duration_s,
+        "scope": _safe_str(src.get("scope")) or "encounter",
         "cooldown_s": max(0.0, _safe_float(src.get("cooldown_s"), 5.0)),
         "once_per_encounter": bool(src.get("once_per_encounter", True)),
         "severity": _safe_str(src.get("severity")) or "info",
@@ -98,14 +147,16 @@ class ActTriggerEngine:
 
     def evaluate(self, act_snapshot: Dict[str, Any], now: Optional[float] = None) -> List[Dict[str, Any]]:
         now_ts = float(now if now is not None else time.time())
-        render_spec = (act_snapshot or {}).get("render_spec") or act_snapshot or {}
+        snapshot_root = dict(act_snapshot or {})
+        render_spec = snapshot_root.get("render_spec") or snapshot_root or {}
+        snapshot_root.setdefault("render_spec", render_spec)
         emitted: List[Dict[str, Any]] = []
         with self._lock:
             encounter_id = self._encounter_key(render_spec)
             for rule in self._rules:
                 if not rule.get("enabled", True):
                     continue
-                if not self._matches(rule, render_spec):
+                if not self._matches(rule, render_spec, snapshot_root):
                     continue
                 fire_key = (encounter_id, str(rule.get("id") or ""))
                 global_key = ("global", str(rule.get("id") or ""))
@@ -145,10 +196,12 @@ class ActTriggerEngine:
         )
 
     @staticmethod
-    def _matches(rule: Dict[str, Any], render_spec: Dict[str, Any]) -> bool:
+    def _matches(rule: Dict[str, Any], render_spec: Dict[str, Any],
+                 snapshot_root: Optional[Dict[str, Any]] = None) -> bool:
         totals = render_spec.get("totals") or {}
         encounter = render_spec.get("encounter") or {}
         context = render_spec.get("context") or {}
+        root = snapshot_root or {"render_spec": render_spec}
         rule_type = str(rule.get("type") or "")
         threshold = _safe_float(rule.get("threshold"), 0.0)
         if rule_type == "damage_total":
@@ -170,6 +223,49 @@ class ActTriggerEngine:
             return event_type > 0 and event_type == _safe_int(rule.get("threshold"), 0)
         if rule_type == "encounter_start":
             return str(encounter.get("status") or "") in ("active", "pending_reset")
+        if rule_type == "timer_preset":
+            duration_s = _safe_float(rule.get("duration_s"), threshold)
+            return _safe_float(totals.get("elapsed_s") or encounter.get("duration_s"), 0.0) >= duration_s
+        if rule_type == "field_match":
+            return ActTriggerEngine._match_field_rule(rule, render_spec, root)
+        return False
+
+    @staticmethod
+    def _match_field_rule(rule: Dict[str, Any], render_spec: Dict[str, Any],
+                          snapshot_root: Dict[str, Any]) -> bool:
+        actual = _match_root_value(snapshot_root, render_spec, str(rule.get("field") or ""))
+        operator = _safe_str(rule.get("operator")).lower() or "exists"
+        if operator == "exists":
+            return actual is not _MISSING and actual not in (None, "")
+        if actual is _MISSING:
+            return False
+        expected_text = _safe_str(rule.get("match"))
+        actual_text = _safe_str(actual)
+        if operator in ("eq", "equals", "=="):
+            return actual_text.lower() == expected_text.lower()
+        if operator in ("ne", "not_equals", "!="):
+            return actual_text.lower() != expected_text.lower()
+        if operator == "contains":
+            if not expected_text:
+                return False
+            return expected_text.lower() in actual_text.lower()
+        if operator == "regex":
+            if not expected_text:
+                return False
+            try:
+                return bool(re.search(expected_text, actual_text))
+            except Exception:
+                return False
+        if operator in ("gt", "gte", "lt", "lte", ">", ">=", "<", "<="):
+            actual_num = _safe_float(actual, 0.0)
+            expected_num = _safe_float(rule.get("threshold"), _safe_float(rule.get("match"), 0.0))
+            if operator in ("gt", ">"):
+                return actual_num > expected_num
+            if operator in ("gte", ">="):
+                return actual_num >= expected_num
+            if operator in ("lt", "<"):
+                return actual_num < expected_num
+            return actual_num <= expected_num
         return False
 
     @staticmethod
@@ -181,7 +277,7 @@ class ActTriggerEngine:
         return {
             "id": uuid.uuid4().hex,
             "rule_id": str(rule.get("id") or ""),
-            "type": "timer" if rule_type == "elapsed_s" else "alert",
+            "type": "timer" if rule_type in ("elapsed_s", "timer_preset") else "alert",
             "trigger_type": rule_type,
             "label": label,
             "message": message,
@@ -189,6 +285,10 @@ class ActTriggerEngine:
             "encounter_id": encounter_id,
             "created_at": now_ts,
             "render_mode": str(render_spec.get("mode") or "empty"),
+            "field": str(rule.get("field") or ""),
+            "match": str(rule.get("match") or ""),
+            "duration_s": _safe_float(rule.get("duration_s"), 0.0),
+            "scope": str(rule.get("scope") or "encounter"),
         }
 
 

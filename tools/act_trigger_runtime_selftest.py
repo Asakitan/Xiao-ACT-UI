@@ -89,13 +89,55 @@ class ActTriggerRuntimeTests(unittest.TestCase):
             {"id": "skill", "type": "skill_kind", "match": "server_end", "message": "skill"},
             {"id": "boss_evt", "type": "boss_event_type", "event_type": 101, "message": "boss event"},
             {"id": "start", "type": "encounter_start", "message": "start"},
+            {
+                "id": "field",
+                "type": "field_match",
+                "field": "context.last_skill_kind",
+                "operator": "eq",
+                "match": "server_end",
+                "message": "field",
+            },
+            {"id": "timer", "type": "timer_preset", "duration_s": 3, "message": "timer"},
         ]
 
-        for rule_id in ("heal", "hp", "skill", "boss_evt", "start"):
+        for rule_id in ("heal", "hp", "skill", "boss_evt", "start", "field", "timer"):
             with self.subTest(rule_id=rule_id):
                 result = runtime.act_trigger_test(owner, rule_id)
                 self.assertTrue(result["ok"], result)
                 self.assertEqual(result["events"][0]["rule_id"], rule_id)
+
+    def test_trigger_preset_export_import_merge_and_replace(self) -> None:
+        owner = FakeOwner()
+
+        exported = runtime.act_trigger_export_presets(owner)
+        self.assertTrue(exported["ok"])
+        self.assertEqual(exported["count"], 2)
+        self.assertEqual(exported["kind"], "act_trigger_presets")
+
+        imported = runtime.act_trigger_import_presets(owner, {
+            "rules": [
+                {
+                    "id": "field",
+                    "type": "field_match",
+                    "field": "totals.damage",
+                    "operator": "gte",
+                    "threshold": 10,
+                    "message": "field",
+                },
+                {"id": "timer", "type": "timer_preset", "duration_s": 8, "message": "timer"},
+            ]
+        })
+        self.assertTrue(imported["ok"], imported)
+        self.assertEqual(imported["imported_count"], 2)
+        self.assertEqual(imported["timer_count"], 2)
+        self.assertIn("timer", [rule["id"] for rule in imported["timers"]])
+
+        replaced = runtime.act_trigger_import_presets(owner, [
+            {"id": "only_timer", "type": "timer_preset", "duration_s": 2}
+        ], replace=True)
+        self.assertTrue(replaced["ok"], replaced)
+        self.assertEqual(replaced["rule_count"], 1)
+        self.assertEqual(replaced["timers"][0]["id"], "only_timer")
 
 
 if __name__ == "__main__":

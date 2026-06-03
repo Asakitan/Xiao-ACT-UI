@@ -172,12 +172,14 @@ python -m act_replay.selftest
 - disable: `act_trigger_disable(owner, rule_id)`
 - reload: `act_trigger_reload(owner)`
 - test: `act_trigger_test(owner, rule_id)`
+- export presets: `act_trigger_export_presets(owner, rule_ids=None)`
+- import presets: `act_trigger_import_presets(owner, payload, replace=False)`
 
 WebView route: `web/trigger_timer_manager.html`, opened from `SAO Menu > ACT 触发/计时 Trigger Timer`.
 
 Entity route: `entity://act/triggers_timers`, opened from `SAO 菜单 > 面板 > ACT触发/计时`.
 
-The current panel reads rules from `settings.json` key `act_trigger_rules`. It supports enable/disable/reload/test and intentionally defers full rule authoring to a later slice.
+The current panel reads rules from `settings.json` key `act_trigger_rules`. It supports enable/disable/reload/test and shared preset import/export helpers. Rule evaluation supports the original summary rules plus `field_match` over dot-path ACT snapshot/render fields and `timer_preset` countdown-style rules.
 
 ## Current data-source health surface
 

@@ -426,6 +426,27 @@ def _assert_trigger_rule_normalize_contract() -> None:
     event_rule = normalize_trigger_rule({"id": "evt", "type": "boss_event_type", "event_type": 101})
     assert event_rule["threshold"] == 101.0, event_rule
     assert event_rule["match"] == "101", event_rule
+    field_rule = normalize_trigger_rule({
+        "id": "field",
+        "type": "field_match",
+        "field": "context.last_skill_kind",
+        "operator": "eq",
+        "match": "server_end",
+    })
+    assert field_rule["field"] == "context.last_skill_kind", field_rule
+    assert field_rule["operator"] == "eq", field_rule
+    timer_rule = normalize_trigger_rule({"id": "timer", "type": "timer_preset", "duration_s": 12})
+    assert timer_rule["type"] == "timer_preset", timer_rule
+    assert timer_rule["duration_s"] == 12.0, timer_rule
+    engine = ActTriggerEngine([field_rule, timer_rule])
+    events = engine.evaluate({"render_spec": {
+        "mode": "test",
+        "encounter": {"id": "field-test", "status": "active", "duration_s": 13},
+        "totals": {"elapsed_s": 13},
+        "context": {"last_skill_kind": "server_end"},
+    }}, now=10.0)
+    event_ids = {event.get("rule_id") for event in events}
+    assert {"field", "timer"}.issubset(event_ids), events
 
 
 def _assert_live_name_table_contract() -> None:
