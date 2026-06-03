@@ -18,6 +18,9 @@ from act_platform.adapters import (
     plugin_parser_adapters,
 )
 from act_platform.plugins import PluginManager
+from act_platform.runtime import ensure_act_event_bus
+from engines.game_state import GameStateManager
+from net.packet_bridge import PacketBridge
 
 
 PLUGIN_PARSER_CODE = r'''
@@ -66,6 +69,73 @@ def on_load(ctx):
         "time_budget_ms": 20,
     }, handler=_parser_handler)
 '''
+
+
+LIVE_PACKET_PARSER_CODE = r'''
+def _packet_parser(payload):
+    op = payload.get("operation")
+    if op == "start":
+        return {"started": True}
+    if op == "stop":
+        return {"stopped": True}
+    if op == "parse_packet":
+        return [
+            {
+                "topic": "damage",
+                "payload": {
+                    "damage": payload.get("frame_len"),
+                    "attacker": "plugin",
+                    "target": "dummy",
+                },
+            }
+        ]
+    return {}
+
+def on_load(ctx):
+    ctx.register_parser_adapter("demo_live_packet", {
+        "title": "Demo Live Packet Parser",
+        "display_name": "Demo Live Packet Parser",
+        "game_id": "demo_game",
+        "source_kinds": ["packet"],
+        "time_budget_ms": 20,
+    }, handler=_packet_parser)
+'''
+
+
+LIVE_LOG_ONLY_PARSER_CODE = r'''
+def _log_parser(payload):
+    return {}
+
+def on_load(ctx):
+    ctx.register_parser_adapter("demo_log_only", {
+        "title": "Demo Log Parser",
+        "game_id": "demo_game",
+        "source_kinds": ["log"],
+    }, handler=_log_parser)
+'''
+
+
+class DictSettings(dict):
+    def get(self, key, default=None):
+        return super().get(key, default)
+
+
+def _write_plugin(root: str, plugin_id: str, code: str) -> PluginManager:
+    plugin_dir = os.path.join(root, plugin_id)
+    os.makedirs(plugin_dir, exist_ok=True)
+    with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
+        json.dump({
+            "id": plugin_id,
+            "name": plugin_id,
+            "version": "0.1.0",
+            "entry": "plugin.py",
+            "enabled": True,
+        }, fp, ensure_ascii=False, indent=2)
+    with open(os.path.join(plugin_dir, "plugin.py"), "w", encoding="utf-8") as fp:
+        fp.write(code)
+    manager = PluginManager(plugin_dirs=[root])
+    manager.discover()
+    return manager
 
 
 class ActParserAdapterTests(unittest.TestCase):
@@ -176,6 +246,59 @@ class ActParserAdapterTests(unittest.TestCase):
         self.assertEqual(normalized["source"]["confidence"], 0.75)
         self.assertEqual(health["plugin_id"], "parser_demo")
         self.assertEqual(health["last_invocation"]["operation"], "normalize_event")
+
+    def test_packet_bridge_selects_live_plugin_packet_adapter(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_live_parser_") as root:
+            manager = _write_plugin(root, "live_parser_demo", LIVE_PACKET_PARSER_CODE)
+            self.assertTrue(manager.load_plugin("live_parser_demo"), manager.status())
+            owner = object()
+            bus = ensure_act_event_bus(owner)
+            seen: list[dict] = []
+            bus.subscribe("damage", seen.append)
+            bridge = PacketBridge(
+                GameStateManager(),
+                DictSettings({
+                    "act_live_parser_adapter_id": "demo_live_packet",
+                    "profession_skill_cache": {"12": {"1": "240130"}},
+                }),
+                plugin_manager=manager,
+                event_bus=bus,
+            )
+
+            selected = bridge._create_live_parser_adapter(preferred_uid=0)
+            selected.start()
+            bridge._process_live_packet_frame(b"abc")
+            health = bridge.health()
+
+        self.assertEqual(selected.adapter_id, "demo_live_packet")
+        self.assertIsNone(bridge._parser)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["schema_version"], 1)
+        self.assertTrue(seen[0]["id"])
+        self.assertEqual(seen[0]["topic"], "damage")
+        self.assertEqual(seen[0]["payload"]["damage"], 3)
+        self.assertEqual(seen[0]["source"]["kind"], "packet")
+        self.assertEqual(seen[0]["source"]["parser_id"], "demo_live_packet")
+        self.assertEqual(health["parser_adapter_selection"]["selected_id"], "demo_live_packet")
+        self.assertEqual(health["parser_adapter_selection"]["mode"], "plugin")
+
+    def test_packet_bridge_falls_back_when_live_plugin_is_not_packet_source(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_live_parser_fallback_") as root:
+            manager = _write_plugin(root, "log_only_demo", LIVE_LOG_ONLY_PARSER_CODE)
+            self.assertTrue(manager.load_plugin("log_only_demo"), manager.status())
+            bridge = PacketBridge(
+                GameStateManager(),
+                DictSettings({"act_live_parser_adapter_id": "demo_log_only"}),
+                plugin_manager=manager,
+            )
+
+            selected = bridge._create_live_parser_adapter(preferred_uid=0)
+            health = bridge.health()
+
+        self.assertIsInstance(selected, StarResonanceParserAdapter)
+        self.assertEqual(selected.adapter_id, "star_resonance_tcp")
+        self.assertEqual(health["parser_adapter_selection"]["selected_id"], "star_resonance_tcp")
+        self.assertIn("does not support packet", health["parser_adapter_selection"]["fallback_reason"])
 
 
 if __name__ == "__main__":

@@ -22,11 +22,19 @@ import math
 import json
 import os
 import sys
+from collections.abc import Mapping
+from typing import Any
 
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 
 from engines.game_state import GameStateManager, compute_burst_ready
-from act_platform.adapters import StarResonanceParserAdapter
+from act_platform.adapters import (
+    StarResonanceParserAdapter,
+    create_plugin_parser_adapter,
+    plugin_parser_adapters,
+)
+from act_platform.event_bus import EventBus
+from act_platform.events import is_event_envelope
 from packet_parser import (PlayerData, MonsterData,
                            BuffEventType, DamageType,
                            PROFESSION_NORMAL_ATTACK, PROFESSION_SKILL,
@@ -378,7 +386,8 @@ class PacketBridge:
                  on_monster_update=None, on_boss_event=None,
                  on_scene_change=None, on_self_update=None,
                  data_source: str = 'tcp',
-                 on_skill_event=None, on_dungeon_event=None):
+                 on_skill_event=None, on_dungeon_event=None,
+                 plugin_manager=None, event_bus: EventBus | None = None):
         """
         data_source:
             'tcp'    — current behavior, full TCP packet parsing
@@ -397,12 +406,20 @@ class PacketBridge:
         self._on_scene_change = on_scene_change  # 场景切换通知 (给 webview 清理 boss HP / DPS)
         self._on_self_update = on_self_update    # mem_probe 引入: SELF 综合更新
         self._data_source_mode = str(data_source or 'tcp').lower()
+        self._plugin_manager = plugin_manager
+        self._event_bus = event_bus if isinstance(event_bus, EventBus) else None
         self._mem_source = None                  # UnifiedDataSource 实例 (lazy)
         self._running = False
 
         # 抓包层
         self._capture = None
         self._parser_adapter = None
+        self._parser_adapter_selection = {
+            "requested_id": "star_resonance_tcp",
+            "selected_id": "star_resonance_tcp",
+            "mode": "builtin",
+            "fallback_reason": "",
+        }
         self._parser = None
         self._thread = None
         self._last_update_t: float = 0
@@ -565,6 +582,7 @@ class PacketBridge:
                 out["parser_adapter"] = self._parser_adapter.health()
             except Exception:
                 out["parser_adapter"] = {"alive": False}
+        out["parser_adapter_selection"] = dict(self._parser_adapter_selection)
         return out
 
     def get_alive_monsters(self) -> list:
@@ -604,6 +622,173 @@ class PacketBridge:
                 )
             except Exception:
                 pass
+
+    def _setting_value(self, key: str, default=None):
+        settings = self._settings
+        if settings is None:
+            return default
+        getter = getattr(settings, 'get', None)
+        if callable(getter):
+            try:
+                return getter(key, default)
+            except Exception:
+                return default
+        if isinstance(settings, dict):
+            return settings.get(key, default)
+        return default
+
+    def _requested_live_parser_adapter_id(self) -> str:
+        for key in ('act_live_parser_adapter_id', 'live_parser_adapter_id', 'parser_adapter_id'):
+            value = str(self._setting_value(key, '') or '').strip()
+            if value:
+                return value
+        return 'star_resonance_tcp'
+
+    def _builtin_live_parser_adapter(self, *, preferred_uid: int,
+                                     requested_id: str = 'star_resonance_tcp',
+                                     fallback_reason: str = ''):
+        adapter = StarResonanceParserAdapter()
+        self._parser = adapter.create_parser(
+            on_self_update=self._on_player_update,
+            preferred_uid=preferred_uid,
+            on_damage=self._on_damage,
+            on_monster_update=self._on_monster_update,
+            on_boss_event=self._on_boss_event,
+            on_skill_event=self._on_skill_event,
+            on_dungeon_event=self._on_dungeon_event,
+            on_scene_change=self._on_scene_change,
+        )
+        self._parser_adapter_selection = {
+            "requested_id": str(requested_id or 'star_resonance_tcp'),
+            "selected_id": adapter.adapter_id,
+            "mode": "builtin",
+            "fallback_reason": str(fallback_reason or ''),
+        }
+        self._parser_adapter = adapter
+        return adapter
+
+    def _create_live_parser_adapter(self, *, preferred_uid: int = 0):
+        """Create the live TCP parser adapter with plugin opt-in + safe fallback.
+
+        The built-in adapter remains the default because it owns the existing
+        PacketParser state used by player/monster cache compatibility methods.
+        Plugin adapters are accepted only when explicitly selected and their
+        metadata declares packet-source support.
+        """
+        requested_id = self._requested_live_parser_adapter_id()
+        if requested_id in ('', 'star_resonance_tcp'):
+            return self._builtin_live_parser_adapter(preferred_uid=preferred_uid, requested_id=requested_id)
+
+        manager = self._plugin_manager
+        if manager is None:
+            return self._builtin_live_parser_adapter(
+                preferred_uid=preferred_uid,
+                requested_id=requested_id,
+                fallback_reason=f"plugin manager unavailable for parser adapter {requested_id}",
+            )
+        try:
+            adapters = plugin_parser_adapters(manager)
+        except Exception as exc:
+            return self._builtin_live_parser_adapter(
+                preferred_uid=preferred_uid,
+                requested_id=requested_id,
+                fallback_reason=f"plugin parser adapter registry failed: {exc}",
+            )
+        meta = next(
+            (item for item in adapters
+             if str(item.get('adapter_id') or item.get('id') or '').strip() == requested_id),
+            None,
+        )
+        if not isinstance(meta, Mapping):
+            return self._builtin_live_parser_adapter(
+                preferred_uid=preferred_uid,
+                requested_id=requested_id,
+                fallback_reason=f"plugin parser adapter not found: {requested_id}",
+            )
+        source_kinds = {str(item or '').strip().lower() for item in (meta.get('source_kinds') or [])}
+        if 'packet' not in source_kinds:
+            return self._builtin_live_parser_adapter(
+                preferred_uid=preferred_uid,
+                requested_id=requested_id,
+                fallback_reason=f"plugin parser adapter {requested_id} does not support packet source",
+            )
+        try:
+            adapter = create_plugin_parser_adapter(manager, requested_id)
+        except Exception as exc:
+            return self._builtin_live_parser_adapter(
+                preferred_uid=preferred_uid,
+                requested_id=requested_id,
+                fallback_reason=f"plugin parser adapter create failed: {exc}",
+            )
+        self._parser = None
+        self._parser_adapter_selection = {
+            "requested_id": requested_id,
+            "selected_id": adapter.adapter_id,
+            "mode": "plugin",
+            "fallback_reason": "",
+            "plugin_id": str(getattr(adapter, 'plugin_id', '') or meta.get('plugin_id') or ''),
+        }
+        self._parser_adapter = adapter
+        return adapter
+
+    def _event_rows_from_adapter_result(self, result: Any) -> list[dict[str, Any]]:
+        if isinstance(result, Mapping):
+            if bool(result.get('ok')) and isinstance(result.get('result'), (Mapping, list, tuple)):
+                return self._event_rows_from_adapter_result(result.get('result'))
+            events = result.get('events')
+            if isinstance(events, (list, tuple)):
+                return [dict(item) for item in events if isinstance(item, Mapping)]
+            event = result.get('event')
+            if isinstance(event, Mapping):
+                return [dict(event)]
+            if result.get('topic'):
+                return [dict(result)]
+            return []
+        if isinstance(result, (list, tuple)):
+            return [dict(item) for item in result if isinstance(item, Mapping)]
+        return []
+
+    def _publish_plugin_parser_events(self, result: Any) -> None:
+        bus = self._event_bus
+        if bus is None:
+            return
+        adapter = self._parser_adapter
+        for row in self._event_rows_from_adapter_result(result):
+            topic = str(row.get('topic') or 'parsed_event')
+            has_envelope_fields = any(key in row for key in ('schema_version', 'source', 'observed_at', 'id'))
+            if is_event_envelope(row) and has_envelope_fields:
+                event = dict(row)
+                source = dict(event.get('source') or {})
+                source.setdefault('name', getattr(adapter, 'adapter_id', 'plugin_parser'))
+                source.setdefault('kind', 'packet')
+                source.setdefault('game_id', getattr(adapter, 'game_id', ''))
+                source.setdefault('parser_id', getattr(adapter, 'adapter_id', ''))
+                event['source'] = source
+                bus.publish(topic, event=event)
+                continue
+            payload = row.get('payload') if isinstance(row.get('payload'), Mapping) else dict(row)
+            bus.publish(
+                topic,
+                payload,
+                source_name=getattr(adapter, 'adapter_id', 'plugin_parser'),
+                source_kind='packet',
+                game_id=getattr(adapter, 'game_id', ''),
+                parser_id=getattr(adapter, 'adapter_id', ''),
+            )
+
+    def _process_live_packet_frame(self, frame: bytes):
+        adapter = self._parser_adapter
+        if adapter is None:
+            return None
+        process = getattr(adapter, 'process_packet', None)
+        if not callable(process):
+            process = getattr(adapter, 'parse_packet', None)
+        if not callable(process):
+            return None
+        result = process(frame)
+        if not isinstance(adapter, StarResonanceParserAdapter):
+            self._publish_plugin_parser_events(result)
+        return result
 
     def _run_inner(self):
         """主运行流程 (实际逻辑)"""
@@ -654,21 +839,11 @@ class PacketBridge:
                 preferred_uid = int(cached_uid)
         except Exception:
             preferred_uid = 0
-        self._parser_adapter = StarResonanceParserAdapter()
-        self._parser = self._parser_adapter.create_parser(
-            on_self_update=self._on_player_update,
-            preferred_uid=preferred_uid,
-            on_damage=self._on_damage,
-            on_monster_update=self._on_monster_update,
-            on_boss_event=self._on_boss_event,
-            on_skill_event=self._on_skill_event,
-            on_dungeon_event=self._on_dungeon_event,
-            on_scene_change=self._on_scene_change,
-        )
+        self._parser_adapter = self._create_live_parser_adapter(preferred_uid=preferred_uid)
         self._parser_adapter.start()
 
         # ── 从 settings 恢复缓存的职业技能映射 ──
-        if self._settings:
+        if self._settings and self._parser is not None:
             cached_prof = self._settings.get('profession_skill_cache')
             if isinstance(cached_prof, dict):
                 for k, v in cached_prof.items():
@@ -682,7 +857,7 @@ class PacketBridge:
 
         # 创建抓包器
         self._capture = PacketCapture(
-            on_game_packet=self._parser_adapter.process_packet,
+            on_game_packet=self._process_live_packet_frame,
             device=dev,
             on_server_change=self._on_server_change,
         )

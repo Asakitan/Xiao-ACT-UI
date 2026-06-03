@@ -249,7 +249,18 @@ The handler receives an `operation` field plus operation-specific data:
 - `import_file`: `path`; return import metadata/events.
 - `normalize_event`: `topic`, `payload`, `source_kind`, `confidence`, and `observed_at`; return a canonical event dict.
 
-Live `PacketBridge` still uses the built-in Star Resonance parser by default. Plugin parser handlers are the controlled runtime bridge for import/log/file adapters and future multi-game parser wiring.
+Live `PacketBridge` uses the built-in Star Resonance parser by default. To opt into a live plugin packet parser, set `act_live_parser_adapter_id` to an active adapter id whose metadata includes `"packet"` in `source_kinds`. WebView and Entity pass the shared plugin manager/event bus into `PacketBridge`, so selected plugin `parse_packet` results can publish canonical ACT events. Unknown, unloaded, or non-packet adapters automatically fall back to `star_resonance_tcp`; inspect `PacketBridge.health()["parser_adapter_selection"]` or the data-source health panel for the selected id and fallback reason.
+
+Live `parse_packet` handlers should return one of these shapes:
+
+```python
+{"events": [{"topic": "damage", "payload": {"damage": 123}}]}
+{"event": {"topic": "skill", "payload": {"skill_name": "Demo"}}}
+{"topic": "boss", "payload": {"message": "phase"}}
+[{"topic": "damage", "payload": {"damage": 456}}]
+```
+
+The current plugin runtime is still in-process: calls are deep-copied, timed, and failure-accounted by `PluginManager.invoke_extension(...)`, but Python code cannot be force-killed mid-call. Keep live parser handlers deterministic and short; external-process parser isolation remains a future hardening path.
 
 ## Example plugin
 

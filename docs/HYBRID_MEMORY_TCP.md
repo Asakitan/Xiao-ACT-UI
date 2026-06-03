@@ -82,6 +82,7 @@ Typical top-level fields:
 - `running`
 - `error_msg`
 - `parser_adapter`
+- `parser_adapter_selection`: requested adapter id, selected adapter id, selection mode (`builtin` or `plugin`), and fallback reason when the live bridge rejects a requested plugin adapter.
 - `mem`
 
 `UnifiedDataSource.health()` includes:

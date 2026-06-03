@@ -93,9 +93,9 @@ source_kinds: packet
 supported_locales: zh-CN
 ```
 
-`PacketBridge` now creates the live `packet_parser.PacketParser` through `StarResonanceParserAdapter`, while preserving `self._parser` for existing compatibility methods such as player cache, monster cache, scene reset, and profession skill cache restore.
+`PacketBridge` now creates the live `packet_parser.PacketParser` through `StarResonanceParserAdapter`, while preserving `self._parser` for existing compatibility methods such as player cache, monster cache, scene reset, and profession skill cache restore. The live bridge defaults to `star_resonance_tcp`; advanced users can opt into a loaded plugin adapter with the `act_live_parser_adapter_id` setting. Live selection accepts only adapters whose metadata includes `packet` in `source_kinds`; missing adapters, unavailable plugin managers, or non-packet adapters fall back to `star_resonance_tcp` and expose the reason through `PacketBridge.health().parser_adapter_selection`.
 
-Plugin parser adapter declarations registered through `ctx.register_parser_adapter(...)` can now be wrapped by `PluginParserAdapter` and invoked through `PluginManager.invoke_extension("parser_adapters", ...)` for controlled `start`, `stop`, `parse_packet`, `parse_log_line`, `import_file`, and `normalize_event` operations. Plugin trigger handlers registered through `ctx.register_trigger_type(...)` can be invoked by `plugin_trigger` rules through the same manager isolation path, with exception isolation, elapsed-time measurement, and time-budget failure accounting.
+Plugin parser adapter declarations registered through `ctx.register_parser_adapter(...)` can now be wrapped by `PluginParserAdapter` and invoked through `PluginManager.invoke_extension("parser_adapters", ...)` for controlled `start`, `stop`, `parse_packet`, `parse_log_line`, `import_file`, and `normalize_event` operations. When selected for live TCP, plugin `parse_packet` results are treated as canonical ACT event rows (`event`, `events`, a single event dict, or a list) and published to the shared EventBus. Plugin trigger handlers registered through `ctx.register_trigger_type(...)` can be invoked by `plugin_trigger` rules through the same manager isolation path, with exception isolation, elapsed-time measurement, and time-budget failure accounting.
 
 ## Plugin Extensions
 
@@ -178,7 +178,7 @@ Do not run release packaging unless explicitly requested. For packaging changes,
 
 ## Open Edges
 
-- Plugin parser handlers remain metadata-only; trigger handlers have in-process isolated invocation, but full external parser runtime wiring remains future work.
+- Plugin parser handlers can now be selected for live packet EventBus publishing, offline import fallback, and metadata discovery. They still run in-process with budget/failure accounting; stronger external-process parser isolation remains future work.
 - Offline import supports normalized JSON/JSONL replay files and rolling-history persistence; broader pcap/log/XML import remains future work.
 - History has lightweight rolling-store search and an append-only JSONL encounter archive, but is not yet a SQLite-style encounter/action database.
 - Manual WebView/Entity smoke still depends on a UI runtime session.

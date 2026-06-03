@@ -161,7 +161,9 @@ class SAOPlayerGUIEngineLifecycleMixin:
                                          on_scene_change=self._on_scene_change,
                                          on_skill_event=self._on_skill_event,
                                          on_dungeon_event=self._on_dungeon_event,
-                                         data_source=_data_source_mode)
+                                         data_source=_data_source_mode,
+                                         plugin_manager=ensure_act_plugin_manager(self, load=True),
+                                         event_bus=ensure_act_event_bus(self))
             packet_engine.start()
             engines.append(packet_engine)
             self._packet_engine = packet_engine
