@@ -354,6 +354,7 @@ button.close {
                 '<div>Subscriptions: <span>' + esc(plugin.subscription_count || 0) + '</span></div>' +
                 '<div>Games: <span>' + esc((plugin.game_ids || []).join(', ') || '-') + '</span></div>' +
                 '<div>Permissions: <span>' + esc((plugin.permissions || []).join(', ') || '-') + '</span></div>' +
+                '<div>Capabilities: <span>' + esc((plugin.capability_ids || []).join(', ') || '-') + '</span></div>' +
                 '<div style="grid-column:1/-1">Entry: <span>' + esc(plugin.entry || '-') + '</span></div>' +
             '</div>' +
             (plugin.last_error ? '<div class="error-box">' + esc(plugin.last_error) + '</div>' : '') +

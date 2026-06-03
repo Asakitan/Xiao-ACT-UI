@@ -275,11 +275,13 @@ class PluginManagerPanel:
     def _format_meta(self, plugin: Mapping[str, Any]) -> str:
         games = ','.join(str(x) for x in (plugin.get('game_ids') or [])) or '-'
         perms = ','.join(str(x) for x in (plugin.get('permissions') or [])) or '-'
+        caps = ','.join(str(x) for x in (plugin.get('capability_ids') or [])) or '-'
         return (
             f"id={plugin.get('id') or '-'}  v{plugin.get('version') or '-'}  "
             f"subs={plugin.get('subscription_count') or 0}  "
             f"fail={plugin.get('failures') or 0}/{plugin.get('event_failures') or 0}\n"
-            f"games={games}  perms={perms}  entry={plugin.get('entry') or '-'}"
+            f"games={games}  perms={perms}  caps={caps}\n"
+            f"entry={plugin.get('entry') or '-'}"
         )
 
     def _action_button(self, parent: tk.Frame, text: str, command: Any, *, enabled: bool = True) -> None:

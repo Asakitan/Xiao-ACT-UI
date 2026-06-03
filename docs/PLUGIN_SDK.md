@@ -24,6 +24,7 @@ plugins/
   "description": "Logs ACT snapshots and encounter summaries.",
   "enabled": true,
   "subscriptions": ["act_snapshot", "encounter_finalized"],
+  "capabilities": ["plugin_manager"],
   "permissions": []
 }
 ```
@@ -36,6 +37,7 @@ Fields:
 - `entry`: Python file inside the plugin folder. Defaults to `plugin.py`.
 - `enabled`: whether the plugin should load automatically.
 - `subscriptions`: optional documentation for topics the plugin listens to.
+- `capabilities`: optional ACT capability IDs or metadata objects exposed by this plugin.
 - `permissions`: reserved for future permission gates.
 
 The loader rejects entry paths that escape the plugin directory.
@@ -113,6 +115,22 @@ Known topics include:
 - `ui_action`
 
 Unknown topics are allowed, but public plugins should prefer the known list for UI parity and future compatibility.
+
+## Capability metadata
+
+Plugins may declare ACT capabilities in `plugin.json` so the manager UI and future parity routers can show what the plugin contributes:
+
+```json
+{
+  "capabilities": [
+    "plugin_manager",
+    {"id": "triggers_timers", "title": "Trigger authoring"},
+    {"capability_id": "export", "actions": ["save"]}
+  ]
+}
+```
+
+Supported object keys are `id`/`capability_id`, `title`, `description`, `route`, `render_hint`, `actions`, and `payload_fields`. Unknown or invalid capability entries are ignored.
 
 ## Example plugin
 

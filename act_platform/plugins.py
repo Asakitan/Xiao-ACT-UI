@@ -28,6 +28,50 @@ def _safe_id(value: Any) -> str:
     return "".join(out).strip("._-")
 
 
+def _normalize_capability(item: Any) -> Optional[dict[str, Any]]:
+    if isinstance(item, str):
+        raw_id = str(item or "").strip()
+        cap_id = _safe_id(raw_id)
+        if cap_id != raw_id:
+            return None
+        return {"id": cap_id} if cap_id else None
+    if not isinstance(item, Mapping):
+        return None
+    raw_id = str(item.get("id") or item.get("capability_id") or "").strip()
+    cap_id = _safe_id(raw_id)
+    if cap_id != raw_id:
+        return None
+    if not cap_id:
+        return None
+    normalized: dict[str, Any] = {"id": cap_id}
+    for key in ("title", "description", "route", "render_hint"):
+        value = item.get(key)
+        if value is not None:
+            normalized[key] = str(value)
+    for key in ("actions", "payload_fields"):
+        value = item.get(key)
+        if isinstance(value, (list, tuple)):
+            normalized[key] = [str(x) for x in value if str(x or "").strip()]
+    return normalized
+
+
+def _normalize_capabilities(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        normalized = _normalize_capability(item)
+        if not normalized:
+            continue
+        cap_id = str(normalized["id"])
+        if cap_id in seen:
+            continue
+        seen.add(cap_id)
+        out.append(normalized)
+    return tuple(out)
+
+
 @dataclass
 class PluginRecord:
     plugin_id: str
@@ -38,6 +82,7 @@ class PluginRecord:
     enabled: bool = True
     game_ids: tuple[str, ...] = ("star_resonance",)
     permissions: tuple[str, ...] = ()
+    capabilities: tuple[dict[str, Any], ...] = ()
     settings_schema: Mapping[str, Any] = field(default_factory=dict)
     module: Optional[ModuleType] = None
     context: Optional["PluginContext"] = None
@@ -62,6 +107,8 @@ class PluginRecord:
             "active": self.active,
             "game_ids": list(self.game_ids),
             "permissions": list(self.permissions),
+            "capabilities": [dict(cap) for cap in self.capabilities],
+            "capability_ids": [str(cap.get("id")) for cap in self.capabilities if cap.get("id")],
             "failures": self.failures,
             "event_failures": self.event_failures,
             "last_error": self.last_error,
@@ -257,11 +304,20 @@ class PluginManager:
         return [self._records[key].to_status() for key in sorted(self._records)]
 
     def status(self) -> dict[str, Any]:
+        capabilities: dict[str, list[str]] = {}
+        for record in self._records.values():
+            for cap in record.capabilities:
+                cap_id = str(cap.get("id") or "")
+                if cap_id:
+                    capabilities.setdefault(cap_id, []).append(record.plugin_id)
+        for cap_id in list(capabilities):
+            capabilities[cap_id] = sorted(set(capabilities[cap_id]))
         return {
             "ok": True,
             "plugin_count": len(self._records),
             "active_count": sum(1 for record in self._records.values() if record.active),
             "plugins": self.list_plugins(),
+            "capabilities": dict(sorted(capabilities.items())),
             "event_bus": self.event_bus.snapshot(),
         }
 
@@ -313,6 +369,7 @@ class PluginManager:
             enabled=bool(manifest.get("enabled", True)),
             game_ids=tuple(str(x) for x in manifest.get("game_ids", ["star_resonance"])),
             permissions=tuple(str(x) for x in manifest.get("permissions", [])),
+            capabilities=_normalize_capabilities(manifest.get("capabilities", [])),
             settings_schema=manifest.get("settings_schema") if isinstance(manifest.get("settings_schema"), dict) else {},
         )
 

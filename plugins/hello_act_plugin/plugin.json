@@ -6,5 +6,8 @@
   "description": "Example ACT plugin that logs snapshots and encounter summaries.",
   "enabled": true,
   "subscriptions": ["act_snapshot", "encounter_finalized"],
+  "capabilities": [
+    "plugin_manager"
+  ],
   "permissions": []
 }
