@@ -1,0 +1,43 @@
+{
+  "id": "star_basic_report_plugin",
+  "name": "Star Basic Report Plugin",
+  "version": "0.1.0",
+  "entry": "plugin.py",
+  "description": "Example ACT plugin that emits compact report summaries and demonstrates once/unsubscribe helpers.",
+  "enabled": true,
+  "subscriptions": [
+    "damage",
+    "act_snapshot",
+    "encounter_started",
+    "encounter_finalized"
+  ],
+  "settings_schema": {
+    "damage_threshold": {
+      "type": "integer",
+      "default": 100000,
+      "description": "Log and emit a summary when a single damage event reaches this value."
+    },
+    "warmup_snapshots": {
+      "type": "integer",
+      "default": 2,
+      "description": "Number of act_snapshot events to inspect before unsubscribing the warmup listener."
+    },
+    "emit_big_hit_events": {
+      "type": "boolean",
+      "default": true,
+      "description": "Publish plugin_report_summary events for threshold damage examples."
+    }
+  },
+  "capabilities": [
+    "plugin_manager",
+    {
+      "id": "report_export",
+      "title": "Basic report summary",
+      "description": "Emits compact plugin_report_summary events from ACT snapshots and encounter summaries.",
+      "actions": [
+        "emit_summary"
+      ]
+    }
+  ],
+  "permissions": []
+}

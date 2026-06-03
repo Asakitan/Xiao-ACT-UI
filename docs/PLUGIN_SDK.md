@@ -9,6 +9,9 @@ plugins/
   hello_act_plugin/
     plugin.json
     plugin.py
+  star_basic_report_plugin/
+    plugin.json
+    plugin.py
 ```
 
 `user_plugins/` has the same layout and is intended for user-installed plugins.
@@ -157,7 +160,9 @@ Supported object keys are `id`/`capability_id`, `title`, `description`, `route`,
 
 ## Example plugin
 
-See `plugins/hello_act_plugin/` for a runnable example. It demonstrates `ctx.set_defaults()`, decorator-style `ctx.on("act_snapshot")`, and `ctx.on_encounter_finalized()`, then logs compact status lines in both WebView and Entity plugin manager panels.
+See `plugins/hello_act_plugin/` for a tiny lifecycle example. It demonstrates `ctx.set_defaults()`, decorator-style `ctx.on("act_snapshot")`, and `ctx.on_encounter_finalized()`, then logs compact status lines in both WebView and Entity plugin manager panels.
+
+See `plugins/star_basic_report_plugin/` for a report-style example. It demonstrates `ctx.subscribe_once()`, explicit `ctx.unsubscribe(token)`, threshold settings, `ctx.snapshot_value()`, and plugin-originated `plugin_report_summary` events.
 
 ## UI management
 
