@@ -237,9 +237,9 @@ The shared payload preserves the parity fields `encounters`, `filters`, `cursor`
 
 The helper accepts normalized ACT `.json`, `.jsonl`, and `.ndjson` files first, then tries SAO structured XML report import, then active plugin parser adapters when the built-in importers reject a file. Imported events replay through `ActReplayHarness`, while XML reports import as finalized compact reports; both paths can be written into `DpsHistoryStore`. Its response preserves parity fields `source_path`, `format`, `importer`, `parser_adapter_id`, `plugin_id`, `self_uid`, `event_count`, `persisted`, `history_item`, `preview`, `snapshot`, and refreshed `status`.
 
-WebView route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/导出 Report Export`; its side panel can choose a normalized replay file or accept a pasted path, import it, and refresh history.
+WebView route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/导出 Report Export`; its side panel can choose a normalized replay file or SAO XML report file, or accept a pasted path, import it, and refresh history.
 
-Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报告/导出`; its import button opens a native file picker, imports the selected replay, and refreshes the same preview/history panel.
+Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报告/导出`; its import button opens a native file picker, imports the selected replay/report, and refreshes the same preview/history panel.
 
 A dedicated standalone import/playback wizard is still a UX follow-up. Until that route is defined, both UIs route imported reports through the existing report/history surfaces after persistence.
 

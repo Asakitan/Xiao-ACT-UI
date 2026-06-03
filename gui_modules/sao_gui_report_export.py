@@ -186,9 +186,10 @@ class ReportExportPanel:
             try:
                 selected = filedialog.askopenfilename(
                     parent=self._win,
-                    title='Import ACT replay',
+                    title='Import ACT replay/report',
                     filetypes=(
-                        ('Normalized ACT replay', '*.json *.jsonl *.ndjson'),
+                        ('ACT replay/report', '*.json *.jsonl *.ndjson *.xml'),
+                        ('SAO ACT XML report', '*.xml'),
                         ('JSON', '*.json'),
                         ('JSONL/NDJSON', '*.jsonl *.ndjson'),
                         ('All files', '*.*'),
