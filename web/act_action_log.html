@@ -46,6 +46,8 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
 .side-title { color: var(--gold); font-size: 12px; letter-spacing: .16em; }
 .row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(117, 205, 255, .16); padding-bottom: 5px; font-size: 12px; color: var(--muted); }
 .row strong { color: var(--text); text-align: right; }
+.pager { display: flex; gap: 8px; }
+.pager button { flex: 1; }
 .empty { display: grid; place-items: center; height: 100%; min-height: 260px; color: var(--muted); text-align: center; line-height: 1.6; }
 .toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
 .toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
@@ -77,9 +79,13 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
             <button type="button" onclick="ActionLog.filter()">过滤 Filter</button>
             <button type="button" onclick="ActionLog.jump()">跳转 Jump</button>
             <button type="button" onclick="ActionLog.copy()">复制 Copy JSON</button>
+            <div class="pager"><button type="button" onclick="ActionLog.prev()">上一页 Prev</button><button type="button" onclick="ActionLog.next()">下一页 Next</button></div>
             <div class="side-title">STATUS</div>
             <div class="row"><span>Encounter</span><strong id="sum-id">live</strong></div>
             <div class="row"><span>Rows</span><strong id="sum-rows">0</strong></div>
+            <div class="row"><span>Total</span><strong id="sum-total">0</strong></div>
+            <div class="row"><span>Page</span><strong id="sum-page">0/0</strong></div>
+            <div class="row"><span>Top Topic</span><strong id="sum-topic">-</strong></div>
             <div class="row"><span>Cursor</span><strong id="sum-cursor">0ms</strong></div>
             <div class="row"><span>Filter</span><strong id="sum-filter">ALL</strong></div>
             <div class="row"><span>Errors</span><strong id="sum-errors">0</strong></div>
@@ -100,6 +106,9 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
     var encounter = document.getElementById('encounter');
     var toastTimer = null;
     var searchTimer = null;
+    var pageLimit = 80;
+    var pageOffset = 0;
+    var lastCursor = {};
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
     function apiCall(name, args) {
@@ -121,10 +130,18 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         var rows = data.rows || [];
         var filters = data.filters || {};
         var cursorState = data.cursor || {};
+        var analytics = data.analytics || {};
+        var page = analytics.page || cursorState || {};
+        var topicGroups = (analytics.groups && analytics.groups.topics) || [];
+        pageOffset = Number(page.offset || cursorState.offset || pageOffset || 0);
+        lastCursor = cursorState || {};
         document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : 'READY';
         document.getElementById('status-pill').style.color = data.ok === false ? 'var(--bad)' : 'var(--muted)';
         document.getElementById('sum-id').textContent = data.encounter_id || data.source || 'live';
         document.getElementById('sum-rows').textContent = String(rows.length || 0);
+        document.getElementById('sum-total').textContent = String(analytics.total_rows || page.total_rows || cursorState.total_row_count || rows.length || 0);
+        document.getElementById('sum-page').textContent = String(page.page_index || cursorState.page_index || 0) + '/' + String(page.page_count || cursorState.page_count || 0);
+        document.getElementById('sum-topic').textContent = topicGroups.length ? (String(topicGroups[0].key || '-') + ' x' + String(topicGroups[0].count || 0)) : '-';
         document.getElementById('sum-cursor').textContent = String(cursorState.time_ms || 0) + 'ms';
         document.getElementById('sum-filter').textContent = (filters.source || data.source || 'live').toUpperCase() + ' · ' + (filters.topic || 'ALL') + (filters.query ? (' / ' + filters.query) : '');
         document.getElementById('sum-errors').textContent = String((data.errors || []).length);
@@ -134,19 +151,21 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         }).join('') + '</tbody></table>';
     }
     window.ActionLog = {
-        refresh: function () { return apiCall('get_action_log_status', [80, query.value || '', topic.value || '', Number(cursor.value || 0), source.value || 'live', encounter.value || '']).then(function (data) { render(data); if (data.ok === false) showToast(data.message || 'Action log failed'); return data; }); },
-        search: function () { return apiCall('search_action_log', [query.value || '', 80, source.value || 'live', encounter.value || '']).then(function (data) { render(data); return data; }); },
-        filter: function () { return apiCall('filter_action_log', [topic.value || '', query.value || '', 80, source.value || 'live', encounter.value || '']).then(function (data) { render(data); return data; }); },
-        jump: function () { return apiCall('jump_action_log_time', [Number(cursor.value || 0), 80, source.value || 'live', encounter.value || '']).then(function (data) { render(data); return data; }); },
-        copy: function () { return apiCall('copy_action_log', [80, query.value || '', topic.value || '', source.value || 'live', encounter.value || '']).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data); showToast('Action log copied'); return data; }); },
+        refresh: function () { return apiCall('get_action_log_status', [pageLimit, query.value || '', topic.value || '', Number(cursor.value || 0), source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data); if (data.ok === false) showToast(data.message || 'Action log failed'); return data; }); },
+        search: function () { pageOffset = 0; return apiCall('search_action_log', [query.value || '', pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data); return data; }); },
+        filter: function () { pageOffset = 0; return apiCall('filter_action_log', [topic.value || '', query.value || '', pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data); return data; }); },
+        jump: function () { return apiCall('jump_action_log_time', [Number(cursor.value || 0), pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data); return data; }); },
+        copy: function () { return apiCall('copy_action_log', [pageLimit, query.value || '', topic.value || '', source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data); showToast('Action log copied'); return data; }); },
+        prev: function () { pageOffset = Math.max(0, pageOffset - pageLimit); return ActionLog.refresh(); },
+        next: function () { if (lastCursor && lastCursor.has_next === false) { showToast('No next page'); return Promise.resolve(lastCursor); } pageOffset += pageLimit; return ActionLog.refresh(); },
         close: function () { apiCall('toggle_action_log'); },
         fadeIn: function () { shell.classList.add('visible'); },
         fadeOut: function () { shell.classList.remove('visible'); }
     };
     query.addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(function () { ActionLog.search(); }, 220); });
     topic.addEventListener('change', function () { ActionLog.filter(); });
-    source.addEventListener('change', function () { ActionLog.refresh(); });
-    encounter.addEventListener('change', function () { ActionLog.refresh(); });
+    source.addEventListener('change', function () { pageOffset = 0; ActionLog.refresh(); });
+    encounter.addEventListener('change', function () { pageOffset = 0; ActionLog.refresh(); });
     setTimeout(function () { shell.classList.add('visible'); ActionLog.refresh(); }, 40);
 })();
 </script>

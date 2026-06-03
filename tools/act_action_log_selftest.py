@@ -35,6 +35,8 @@ class ActActionLogRuntimeTests(unittest.TestCase):
         self.assertEqual(status["columns"][0]["key"], "time_ms")
         self.assertEqual(status["filters"]["query"], "")
         self.assertEqual(status["cursor"]["limit"], 10)
+        self.assertEqual(status["analytics"]["total_rows"], 3)
+        self.assertIn("topics", status["analytics"]["groups"])
         self.assertIn("encounter_id", status)
         json.dumps(status, ensure_ascii=False)
 
@@ -84,6 +86,7 @@ class ActActionLogRuntimeTests(unittest.TestCase):
         self.assertTrue(status["ok"])
         self.assertEqual(status["rows"], [])
         self.assertEqual(status["cursor"]["row_count"], 0)
+        self.assertEqual(status["analytics"]["total_rows"], 0)
 
     def test_action_log_history_source_reads_sqlite_actions(self) -> None:
         with tempfile.TemporaryDirectory(prefix="act_action_history_") as root:
@@ -139,7 +142,101 @@ class ActActionLogRuntimeTests(unittest.TestCase):
         self.assertEqual(status["rows"][0]["label"], "Starburst Stream")
         self.assertEqual(status["rows"][0]["actor"], "Kirito")
         self.assertEqual(status["rows"][0]["encounter_id"], "enc-history")
+        self.assertEqual(status["analytics"]["total_rows"], 1)
         self.assertIn("sqlite", status["storage_status"])
+
+    def test_action_log_history_paginates_and_groups_rows(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_action_history_page_") as root:
+            store = DpsHistoryStore(
+                path=os.path.join(root, "history.json"),
+                archive_path=os.path.join(root, "history.jsonl"),
+                sqlite_path=os.path.join(root, "history.sqlite3"),
+            )
+            store.add_report({
+                "encounter_id": "enc-page",
+                "completed_at": 200.0,
+                "completed_local_time": "2026-06-03 12:00:00",
+                "report_reason": "unit",
+                "encounter_started_at": 100.0,
+                "encounter_ended_at": 112.0,
+                "elapsed_s": 12.0,
+                "total_damage": 444,
+                "total_damage_all": 444,
+                "total_heal": 45,
+                "total_dps": 37,
+                "total_hps": 3,
+                "entities": [],
+                "actions": [
+                    {
+                        "topic": "damage",
+                        "time_ms": 1000,
+                        "source_name": "archive",
+                        "source_kind": "sqlite",
+                        "payload": {
+                            "action_type": "damage",
+                            "actor_name": "Kirito",
+                            "target_name": "Boss",
+                            "skill_name": "Starburst Stream",
+                            "damage": 321,
+                        },
+                    },
+                    {
+                        "topic": "damage",
+                        "time_ms": 2000,
+                        "source_name": "archive",
+                        "source_kind": "sqlite",
+                        "payload": {
+                            "action_type": "damage",
+                            "actor_name": "Kirito",
+                            "target_name": "Boss",
+                            "skill_name": "Linear",
+                            "damage": 123,
+                        },
+                    },
+                    {
+                        "topic": "heal",
+                        "time_ms": 3000,
+                        "source_name": "archive",
+                        "source_kind": "sqlite",
+                        "payload": {
+                            "action_type": "heal",
+                            "actor_name": "Asuna",
+                            "target_name": "Kirito",
+                            "skill_name": "First Aid",
+                            "heal": 45,
+                        },
+                    },
+                ],
+            })
+            owner = FakeOwner()
+            owner._dps_history_store = store
+
+            first = runtime.act_action_log_status(owner, source="history", encounter_id="enc-page", limit=1)
+            second = runtime.act_action_log_status(owner, source="history", encounter_id="enc-page", limit=1, offset=1)
+            clamped = runtime.act_action_log_status(owner, source="history", encounter_id="enc-page", limit=1, offset=99)
+            copied = runtime.act_action_log_copy(owner, limit=1, source="history", encounter_id="enc-page", offset=2)
+
+        self.assertEqual(first["cursor"]["row_count"], 1)
+        self.assertEqual(first["cursor"]["total_row_count"], 3)
+        self.assertEqual(first["cursor"]["page_index"], 1)
+        self.assertEqual(first["cursor"]["page_count"], 3)
+        self.assertTrue(first["cursor"]["has_next"])
+        self.assertEqual(first["rows"][0]["label"], "Starburst Stream")
+        self.assertEqual(second["cursor"]["offset"], 1)
+        self.assertTrue(second["cursor"]["has_previous"])
+        self.assertEqual(second["rows"][0]["label"], "Linear")
+        self.assertEqual(clamped["cursor"]["offset"], 2)
+        self.assertEqual(clamped["rows"][0]["label"], "First Aid")
+        self.assertEqual(first["analytics"]["total_rows"], 3)
+        topics = {item["key"]: item["count"] for item in first["analytics"]["groups"]["topics"]}
+        actors = {item["key"]: item["count"] for item in first["analytics"]["groups"]["actors"]}
+        self.assertEqual(topics["damage"], 2)
+        self.assertEqual(topics["heal"], 1)
+        self.assertEqual(actors["Kirito"], 2)
+        copied_payload = json.loads(copied["text"])
+        self.assertEqual(copied_payload["analytics"]["total_rows"], 3)
+        self.assertEqual(copied_payload["cursor"]["offset"], 2)
+        self.assertEqual(copied_payload["rows"][0]["label"], "First Aid")
 
 
 if __name__ == "__main__":

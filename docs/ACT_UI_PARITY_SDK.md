@@ -268,19 +268,19 @@ The shared payload preserves the parity fields `encounter_id`, `events`, `cursor
 
 `action_log` is wired through shared `act_platform.runtime` helpers over compact owner-scoped ACT `EventBus` rows for live mode and SQLite action-history rows for history mode:
 
-- status/open: `act_action_log_status(owner, limit=80, query="", topic="", cursor_ms=None, source="live", encounter_id="")`
-- search: `act_action_log_search(owner, query="", limit=80, source="live", encounter_id="")`
-- filter: `act_action_log_filter(owner, topic="", query=None, limit=80, source="live", encounter_id="")`
-- jump to time: `act_action_log_jump_to_time(owner, cursor_ms=0, limit=80, source="live", encounter_id="")`
-- copy: `act_action_log_copy(owner, limit=80, query="", topic="", source="live", encounter_id="")`
+- status/open: `act_action_log_status(owner, limit=80, query="", topic="", cursor_ms=None, source="live", encounter_id="", offset=0)`
+- search: `act_action_log_search(owner, query="", limit=80, source="live", encounter_id="", offset=0)`
+- filter: `act_action_log_filter(owner, topic="", query=None, limit=80, source="live", encounter_id="", offset=0)`
+- jump to time: `act_action_log_jump_to_time(owner, cursor_ms=0, limit=80, source="live", encounter_id="", offset=0)`
+- copy: `act_action_log_copy(owner, limit=80, query="", topic="", source="live", encounter_id="", offset=0)`
 
 WebView route: `web/act_action_log.html`, opened from `SAO Menu > ACT 行为日志 Action Log`.
 
 Entity route: `entity://act/action_log`, opened from `SAO 菜单 > 面板 > ACT行为日志`.
 
-Both routes expose a live/history source control. `source="history"` queries `DpsHistoryStore.list_sqlite_actions(...)`, can narrow to an `encounter_id`, and returns the same row/column/cursor shape as live action-log data.
+Both routes expose a live/history source control and previous/next paging. `source="history"` queries `DpsHistoryStore.list_sqlite_actions(...)`, can narrow to an `encounter_id`, and returns the same row/column/cursor shape as live action-log data.
 
-The shared payload preserves the parity fields `encounter_id`, `source`, `rows`, `columns`, `filters`, and `cursor`. Rows are compact table entries derived from EventBus envelopes or SQLite action-history rows and include cursor highlighting metadata. Entity/Tk keeps rendering bounded to the first 80 rows, refresh-throttled at 350ms, and dirty-signature gated before rebuilding widgets.
+The shared payload preserves the parity fields `encounter_id`, `source`, `rows`, `columns`, `filters`, `cursor`, and `analytics`. `cursor` now includes `offset`, `total_row_count`, page index/count, and next/previous flags. `analytics` summarizes total rows, current page, time range, value totals, and grouped topic/actor/target/action counts. Rows are compact table entries derived from EventBus envelopes or SQLite action-history rows and include cursor highlighting metadata. Entity/Tk keeps rendering bounded to the current 80-row page, refresh-throttled at 350ms, and dirty-signature gated before rebuilding widgets.
 
 ## Current death recap surface
 

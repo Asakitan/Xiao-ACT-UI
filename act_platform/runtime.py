@@ -1466,6 +1466,85 @@ def _filter_action_log_rows(rows: list[dict[str, Any]], *, query: str = "", topi
     return out
 
 
+def _action_log_numeric_value(row: Mapping[str, Any]) -> float:
+    value = row.get("value")
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").replace(",", "").strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except Exception:
+        return 0.0
+
+
+def _action_log_group_summary(rows: list[dict[str, Any]], key: str, *, limit: int = 6) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        label = str(row.get(key) or "-").strip() or "-"
+        item = groups.setdefault(label, {
+            "key": label,
+            "count": 0,
+            "total_value": 0.0,
+            "first_time_ms": 0,
+            "last_time_ms": 0,
+        })
+        time_ms = int(row.get("time_ms") or 0)
+        item["count"] = int(item.get("count") or 0) + 1
+        item["total_value"] = float(item.get("total_value") or 0.0) + _action_log_numeric_value(row)
+        if time_ms:
+            first = int(item.get("first_time_ms") or 0)
+            item["first_time_ms"] = time_ms if not first else min(first, time_ms)
+            item["last_time_ms"] = max(int(item.get("last_time_ms") or 0), time_ms)
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (-int(item.get("count") or 0), -float(item.get("total_value") or 0.0), str(item.get("key") or "")),
+    )
+    out: list[dict[str, Any]] = []
+    for item in ordered[:max(1, int(limit or 6))]:
+        copied = dict(item)
+        copied["total_value"] = round(float(copied.get("total_value") or 0.0), 3)
+        out.append(copied)
+    return out
+
+
+def _action_log_analytics(all_rows: list[dict[str, Any]], page_rows: list[dict[str, Any]],
+                          *, offset: int, limit: int) -> dict[str, Any]:
+    times = [int(row.get("time_ms") or 0) for row in all_rows if int(row.get("time_ms") or 0) >= 0]
+    first_time = min(times) if times else 0
+    last_time = max(times) if times else 0
+    total_rows = len(all_rows)
+    page_count = (total_rows + max(1, int(limit or 1)) - 1) // max(1, int(limit or 1)) if total_rows else 0
+    page_index = (max(0, int(offset or 0)) // max(1, int(limit or 1))) + 1 if total_rows else 0
+    return {
+        "total_rows": total_rows,
+        "page": {
+            "offset": max(0, int(offset or 0)),
+            "limit": max(1, int(limit or 1)),
+            "row_count": len(page_rows),
+            "page_index": page_index,
+            "page_count": page_count,
+            "has_previous": max(0, int(offset or 0)) > 0,
+            "has_next": max(0, int(offset or 0)) + len(page_rows) < total_rows,
+        },
+        "time_range_ms": {
+            "first": first_time,
+            "last": last_time,
+            "span": max(0, last_time - first_time),
+        },
+        "totals": {
+            "value": round(sum(_action_log_numeric_value(row) for row in all_rows), 3),
+        },
+        "groups": {
+            "topics": _action_log_group_summary(all_rows, "topic"),
+            "actors": _action_log_group_summary(all_rows, "actor"),
+            "targets": _action_log_group_summary(all_rows, "target"),
+            "actions": _action_log_group_summary(all_rows, "label"),
+        },
+    }
+
+
 def _mark_action_log_cursor(rows: list[dict[str, Any]], cursor_ms: int) -> tuple[list[dict[str, Any]], str]:
     if not rows:
         return rows, ""
@@ -1478,7 +1557,8 @@ def _mark_action_log_cursor(rows: list[dict[str, Any]], cursor_ms: int) -> tuple
 
 def act_action_log_status(owner: Any, *, limit: int = 80, query: str | None = None,
                           topic: str | None = None, cursor_ms: int | None = None,
-                          source: str | None = None, encounter_id: str | None = None) -> dict[str, Any]:
+                          source: str | None = None, encounter_id: str | None = None,
+                          offset: int | None = None) -> dict[str, Any]:
     """Return searchable ACT action-log rows shared by WebView and Entity/Tk."""
     state = _action_log_state(owner)
     filters = dict(state.get("filters") or {})
@@ -1495,8 +1575,12 @@ def act_action_log_status(owner: Any, *, limit: int = 80, query: str | None = No
     cursor = dict(state.get("cursor") or {})
     if cursor_ms is not None:
         cursor["time_ms"] = max(0, int(cursor_ms or 0))
+    if offset is not None:
+        cursor["offset"] = max(0, int(offset or 0))
     row_limit = max(1, min(int(limit or cursor.get("limit") or 80), 500))
+    row_offset = max(0, int(cursor.get("offset") or 0))
     cursor["limit"] = row_limit
+    cursor["offset"] = row_offset
     state["filters"] = filters
     state["cursor"] = cursor
     errors: list[str] = []
@@ -1511,8 +1595,9 @@ def act_action_log_status(owner: Any, *, limit: int = 80, query: str | None = No
             list_actions = getattr(store, "list_sqlite_actions", None)
             if callable(list_actions):
                 try:
+                    fetch_limit = min(max(row_offset + row_limit * 4, row_limit), 5000)
                     raw_actions = list(_json_safe(list_actions(
-                        limit=min(max(row_limit * 4, row_limit), 1000),
+                        limit=fetch_limit,
                         encounter_id=str(filters.get("encounter_id") or ""),
                     ) or []))
                 except Exception as exc:
@@ -1522,34 +1607,50 @@ def act_action_log_status(owner: Any, *, limit: int = 80, query: str | None = No
         rows = [_action_log_history_row(action, idx) for idx, action in enumerate(raw_actions) if isinstance(action, Mapping)]
     else:
         try:
-            raw_events = ensure_act_event_bus(owner).recent_events(row_limit)
+            raw_events = ensure_act_event_bus(owner).recent_events(min(row_offset + row_limit, 1000))
         except Exception as exc:
             raw_events = []
             errors.append(str(exc))
         rows = [_action_log_row(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
     rows = _filter_action_log_rows(rows, query=str(filters.get("query") or ""), topic=str(filters.get("topic") or ""))
-    rows = rows[:row_limit]
-    rows, nearest_id = _mark_action_log_cursor(rows, int(cursor.get("time_ms") or 0))
-    cursor.update({"nearest_row_id": nearest_id, "row_count": len(rows)})
+    total_rows = len(rows)
+    if total_rows and row_offset >= total_rows:
+        row_offset = ((total_rows - 1) // row_limit) * row_limit
+        cursor["offset"] = row_offset
+    page_rows = rows[row_offset:row_offset + row_limit]
+    page_rows, nearest_id = _mark_action_log_cursor(page_rows, int(cursor.get("time_ms") or 0))
+    page_count = (total_rows + row_limit - 1) // row_limit if total_rows else 0
+    cursor.update({
+        "nearest_row_id": nearest_id,
+        "row_count": len(page_rows),
+        "total_row_count": total_rows,
+        "page_index": (row_offset // row_limit) + 1 if total_rows else 0,
+        "page_count": page_count,
+        "has_previous": row_offset > 0,
+        "has_next": row_offset + len(page_rows) < total_rows,
+    })
+    analytics = _action_log_analytics(rows, page_rows, offset=row_offset, limit=row_limit)
     selected_encounter = str(filters.get("encounter_id") or "")
-    if not selected_encounter and rows:
-        selected_encounter = str(rows[0].get("encounter_id") or "")
+    if not selected_encounter and page_rows:
+        selected_encounter = str(page_rows[0].get("encounter_id") or "")
     return {
         "ok": not errors,
         "message": "OK" if not errors else "; ".join(errors),
         "encounter_id": selected_encounter if source_mode == "history" else _timeline_encounter_id(owner, state),
         "source": source_mode,
-        "rows": rows,
+        "rows": page_rows,
         "columns": list(_ACTION_LOG_COLUMNS),
         "filters": filters,
         "cursor": cursor,
+        "analytics": analytics,
         "storage_status": storage_status,
         "errors": errors,
     }
 
 
 def act_action_log_search(owner: Any, *, query: str = "", limit: int = 80,
-                          source: str | None = None, encounter_id: str | None = None) -> dict[str, Any]:
+                          source: str | None = None, encounter_id: str | None = None,
+                          offset: int = 0) -> dict[str, Any]:
     state = _action_log_state(owner)
     filters = dict(state.get("filters") or {})
     filters["query"] = str(query or "")
@@ -1558,12 +1659,15 @@ def act_action_log_search(owner: Any, *, query: str = "", limit: int = 80,
     if encounter_id is not None:
         filters["encounter_id"] = str(encounter_id or "")
     state["filters"] = filters
+    cursor = dict(state.get("cursor") or {})
+    cursor["offset"] = max(0, int(offset or 0))
+    state["cursor"] = cursor
     return act_action_log_status(owner, limit=limit)
 
 
 def act_action_log_filter(owner: Any, *, topic: str = "", query: str | None = None,
                           limit: int = 80, source: str | None = None,
-                          encounter_id: str | None = None) -> dict[str, Any]:
+                          encounter_id: str | None = None, offset: int = 0) -> dict[str, Any]:
     state = _action_log_state(owner)
     filters = dict(state.get("filters") or {})
     filters["topic"] = str(topic or "")
@@ -1574,22 +1678,28 @@ def act_action_log_filter(owner: Any, *, topic: str = "", query: str | None = No
     if encounter_id is not None:
         filters["encounter_id"] = str(encounter_id or "")
     state["filters"] = filters
+    cursor = dict(state.get("cursor") or {})
+    cursor["offset"] = max(0, int(offset or 0))
+    state["cursor"] = cursor
     return act_action_log_status(owner, limit=limit)
 
 
 def act_action_log_jump_to_time(owner: Any, *, cursor_ms: int = 0, limit: int = 80,
-                                source: str | None = None, encounter_id: str | None = None) -> dict[str, Any]:
+                                source: str | None = None, encounter_id: str | None = None,
+                                offset: int | None = None) -> dict[str, Any]:
     state = _action_log_state(owner)
     cursor = dict(state.get("cursor") or {})
     cursor["time_ms"] = max(0, int(cursor_ms or 0))
+    if offset is not None:
+        cursor["offset"] = max(0, int(offset or 0))
     state["cursor"] = cursor
     return act_action_log_status(owner, limit=limit, source=source, encounter_id=encounter_id)
 
 
 def act_action_log_copy(owner: Any, *, limit: int = 80, query: str = "",
                         topic: str = "", source: str | None = None,
-                        encounter_id: str | None = None) -> dict[str, Any]:
-    status = act_action_log_status(owner, limit=limit, query=query, topic=topic, source=source, encounter_id=encounter_id)
+                        encounter_id: str | None = None, offset: int | None = None) -> dict[str, Any]:
+    status = act_action_log_status(owner, limit=limit, query=query, topic=topic, source=source, encounter_id=encounter_id, offset=offset)
     payload = {
         "encounter_id": status.get("encounter_id"),
         "source": status.get("source"),
@@ -1597,6 +1707,7 @@ def act_action_log_copy(owner: Any, *, limit: int = 80, query: str = "",
         "columns": status.get("columns") or [],
         "filters": status.get("filters") or {},
         "cursor": status.get("cursor") or {},
+        "analytics": status.get("analytics") or {},
         "storage_status": status.get("storage_status") or {},
     }
     try:
@@ -1613,6 +1724,7 @@ def act_action_log_copy(owner: Any, *, limit: int = 80, query: str = "",
         "columns": payload["columns"],
         "filters": payload["filters"],
         "cursor": payload["cursor"],
+        "analytics": payload["analytics"],
         "storage_status": payload["storage_status"],
         "errors": list(status.get("errors") or []),
     }

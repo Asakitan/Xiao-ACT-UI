@@ -48,6 +48,7 @@ class ActionLogPanel:
         self._cursor_var = tk.StringVar(value="0")
         self._source_var = tk.StringVar(value="live")
         self._encounter_var = tk.StringVar(value="")
+        self._offset_var = tk.StringVar(value="0")
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
         self._last_rows_sig = ""
@@ -95,6 +96,7 @@ class ActionLogPanel:
             cursor_ms = int(self._cursor_var.get() or 0)
         except Exception:
             cursor_ms = 0
+        offset = self._current_offset()
         try:
             status = act_action_log_status(
                 self.owner,
@@ -104,9 +106,10 @@ class ActionLogPanel:
                 cursor_ms=cursor_ms,
                 source=self._source_var.get(),
                 encounter_id=self._encounter_var.get(),
+                offset=offset,
             )
         except Exception as exc:
-            status = {"ok": False, "message": str(exc), "rows": [], "columns": [], "filters": {"query": self._query_var.get(), "topic": self._topic_var.get()}, "cursor": {"time_ms": cursor_ms, "row_count": 0}, "errors": [str(exc)]}
+            status = {"ok": False, "message": str(exc), "rows": [], "columns": [], "filters": {"query": self._query_var.get(), "topic": self._topic_var.get()}, "cursor": {"time_ms": cursor_ms, "offset": offset, "row_count": 0}, "analytics": {}, "errors": [str(exc)]}
         self._last_status = dict(status or {})
         self._last_refresh_at = now
         self._render_status(self._last_status)
@@ -118,15 +121,18 @@ class ActionLogPanel:
         return self.refresh()
 
     def search(self) -> Dict[str, Any]:
+        self._set_offset(0)
         return self._apply_result(act_action_log_search(
             self.owner,
             query=self._query_var.get(),
             limit=80,
             source=self._source_var.get(),
             encounter_id=self._encounter_var.get(),
+            offset=0,
         ), 'SEARCH APPLIED')
 
     def filter_topic(self) -> Dict[str, Any]:
+        self._set_offset(0)
         return self._apply_result(act_action_log_filter(
             self.owner,
             topic=self._topic_var.get(),
@@ -134,6 +140,7 @@ class ActionLogPanel:
             limit=80,
             source=self._source_var.get(),
             encounter_id=self._encounter_var.get(),
+            offset=0,
         ), 'FILTER APPLIED')
 
     def jump_to_time(self) -> Dict[str, Any]:
@@ -147,6 +154,7 @@ class ActionLogPanel:
             limit=80,
             source=self._source_var.get(),
             encounter_id=self._encounter_var.get(),
+            offset=self._current_offset(),
         ), f'JUMP {cursor_ms}ms')
 
     def copy_json(self) -> Dict[str, Any]:
@@ -158,6 +166,7 @@ class ActionLogPanel:
                 topic=self._topic_var.get(),
                 source=self._source_var.get(),
                 encounter_id=self._encounter_var.get(),
+                offset=self._current_offset(),
             )
         except Exception as exc:
             result = {"ok": False, "message": str(exc), "text": json.dumps(self._last_status, ensure_ascii=False, indent=2)}
@@ -171,6 +180,37 @@ class ActionLogPanel:
             result = dict(result)
             result.update({"ok": False, "message": str(exc)})
         return dict(result or {})
+
+    def previous_page(self) -> Dict[str, Any]:
+        cursor = self._last_status.get('cursor') if isinstance(self._last_status.get('cursor'), Mapping) else {}
+        limit = int(cursor.get('limit') or 80)
+        self._set_offset(max(0, self._current_offset() - limit))
+        return self.force_refresh()
+
+    def next_page(self) -> Dict[str, Any]:
+        cursor = self._last_status.get('cursor') if isinstance(self._last_status.get('cursor'), Mapping) else {}
+        if cursor and cursor.get('has_next') is False:
+            self._status_var.set('No next action-log page')
+            return self._last_status
+        limit = int(cursor.get('limit') or 80)
+        self._set_offset(self._current_offset() + max(1, limit))
+        return self.force_refresh()
+
+    def _refresh_from_start(self) -> Dict[str, Any]:
+        self._set_offset(0)
+        return self.force_refresh()
+
+    def _current_offset(self) -> int:
+        try:
+            return max(0, int(self._offset_var.get() or 0))
+        except Exception:
+            return 0
+
+    def _set_offset(self, value: int) -> None:
+        try:
+            self._offset_var.set(str(max(0, int(value or 0))))
+        except Exception:
+            pass
 
     def _apply_result(self, result: Mapping[str, Any], message: str) -> Dict[str, Any]:
         self._last_status = dict(result or {})
@@ -241,7 +281,7 @@ class ActionLogPanel:
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
         tk.Label(control, text='Source', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.OptionMenu(control, self._source_var, 'live', 'history', command=lambda _v: self.force_refresh()).pack(side='left', padx=(6, 8))
+        tk.OptionMenu(control, self._source_var, 'live', 'history', command=lambda _v: self._refresh_from_start()).pack(side='left', padx=(6, 8))
         tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.Entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
         tk.Label(control, text='Topic', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
@@ -251,7 +291,9 @@ class ActionLogPanel:
         tk.Label(control, text='Cursor ms', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.Entry(control, textvariable=self._cursor_var, width=8).pack(side='left', padx=(6, 6))
         tk.Button(control, text='跳转 Jump', command=self.jump_to_time).pack(side='left', padx=(0, 8))
-        tk.Button(control, text='过滤 Filter', command=self.filter_topic).pack(side='left')
+        tk.Button(control, text='过滤 Filter', command=self.filter_topic).pack(side='left', padx=(0, 8))
+        tk.Button(control, text='上一页 Prev', command=self.previous_page).pack(side='left', padx=(0, 6))
+        tk.Button(control, text='下一页 Next', command=self.next_page).pack(side='left')
 
         tk.Label(
             body,
@@ -279,12 +321,18 @@ class ActionLogPanel:
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         cursor = status.get('cursor') if isinstance(status.get('cursor'), Mapping) else {}
         source = str(status.get('source') or filters.get('source') or 'live')
+        analytics = status.get('analytics') if isinstance(status.get('analytics'), Mapping) else {}
+        page = analytics.get('page') if isinstance(analytics.get('page'), Mapping) else {}
+        total_rows = int(analytics.get('total_rows') or cursor.get('total_row_count') or len(rows))
+        page_index = int(page.get('page_index') or cursor.get('page_index') or 0)
+        page_count = int(page.get('page_count') or cursor.get('page_count') or 0)
+        self._set_offset(int(page.get('offset') or cursor.get('offset') or self._current_offset()))
         self._summary_var.set(
-            f"{len(rows)} ROWS · {source.upper()} · {int(cursor.get('time_ms') or 0)}ms · {filters.get('topic') or 'ALL'}"
+            f"{len(rows)}/{total_rows} ROWS · {source.upper()} · PAGE {page_index}/{page_count} · {filters.get('topic') or 'ALL'}"
         )
         errors = list(status.get('errors') or [])
         self._status_var.set(
-            f"encounter={status.get('encounter_id') or filters.get('encounter_id') or source} · query={filters.get('query') or '-'} · errors={len(errors)}"
+            f"encounter={status.get('encounter_id') or filters.get('encounter_id') or source} · cursor={int(cursor.get('time_ms') or 0)}ms · query={filters.get('query') or '-'} · errors={len(errors)}"
         )
         if self._rows is None:
             return
