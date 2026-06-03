@@ -38,6 +38,7 @@ build/
 # build.ps1 is tracked
 
 # ── IDE / OS ──────────────────────────────────────
+.vscode/handoff/
 .vscode/
 .idea/
 Thumbs.db
