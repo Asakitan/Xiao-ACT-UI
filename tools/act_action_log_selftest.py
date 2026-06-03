@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import unittest
 
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
+from engines.dps_history import DpsHistoryStore
 
 
 class FakeOwner:
@@ -81,6 +84,62 @@ class ActActionLogRuntimeTests(unittest.TestCase):
         self.assertTrue(status["ok"])
         self.assertEqual(status["rows"], [])
         self.assertEqual(status["cursor"]["row_count"], 0)
+
+    def test_action_log_history_source_reads_sqlite_actions(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_action_history_") as root:
+            store = DpsHistoryStore(
+                path=os.path.join(root, "history.json"),
+                archive_path=os.path.join(root, "history.jsonl"),
+                sqlite_path=os.path.join(root, "history.sqlite3"),
+            )
+            store.add_report({
+                "encounter_id": "enc-history",
+                "completed_at": 200.0,
+                "completed_local_time": "2026-06-03 12:00:00",
+                "report_reason": "unit",
+                "encounter_started_at": 100.0,
+                "encounter_ended_at": 112.0,
+                "elapsed_s": 12.0,
+                "total_damage": 321,
+                "total_damage_all": 321,
+                "total_heal": 0,
+                "total_dps": 26,
+                "total_hps": 0,
+                "entities": [],
+                "actions": [{
+                    "topic": "damage",
+                    "time_ms": 1250,
+                    "source_name": "archive",
+                    "source_kind": "sqlite",
+                    "payload": {
+                        "action_type": "damage",
+                        "actor_name": "Kirito",
+                        "target_name": "Boss",
+                        "skill_id": "starburst",
+                        "skill_name": "Starburst Stream",
+                        "damage": 321,
+                    },
+                }],
+            })
+            owner = FakeOwner()
+            owner._dps_history_store = store
+
+            status = runtime.act_action_log_status(
+                owner,
+                source="history",
+                encounter_id="enc-history",
+                query="Starburst",
+                limit=10,
+            )
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["source"], "history")
+        self.assertEqual(status["filters"]["encounter_id"], "enc-history")
+        self.assertEqual(status["cursor"]["row_count"], 1)
+        self.assertEqual(status["rows"][0]["label"], "Starburst Stream")
+        self.assertEqual(status["rows"][0]["actor"], "Kirito")
+        self.assertEqual(status["rows"][0]["encounter_id"], "enc-history")
+        self.assertIn("sqlite", status["storage_status"])
 
 
 if __name__ == "__main__":

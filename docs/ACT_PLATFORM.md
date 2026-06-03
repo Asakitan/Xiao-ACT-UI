@@ -180,6 +180,6 @@ Do not run release packaging unless explicitly requested. For packaging changes,
 
 - Plugin parser handlers can now be selected for live packet EventBus publishing, offline import fallback, and metadata discovery. They still run in-process with budget/failure accounting; stronger external-process parser isolation remains future work.
 - Offline import supports normalized JSON/JSONL replay files, SAO structured XML report round-trips, and rolling-history persistence; broader pcap/log import plus ACT-compatible compressed XML import/export remain future work.
-- History has lightweight rolling-store search, an append-only JSONL encounter archive, and an additive SQLite mirror for encounter/combatant/action/timeline/trigger/source metadata rows. Rich action-history UI/query workflows remain future work.
+- History has lightweight rolling-store search, an append-only JSONL encounter archive, and an additive SQLite mirror for encounter/combatant/action/timeline/trigger/source metadata rows. The shared action-log surface can now switch between live EventBus rows and SQLite action-history rows by source/encounter filter; richer dedicated action-history analytics remain future work.
 - Manual WebView/Entity smoke still depends on a UI runtime session.
 - Hybrid memory source has conservative policy gates for scan enablement, admin requirement, poll interval, region scan cap, and static fallback control; live game/UI validation remains manual. See `docs/HYBRID_MEMORY_TCP.md`.

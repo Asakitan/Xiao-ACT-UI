@@ -32,6 +32,7 @@ button { cursor: pointer; }
 button:hover { box-shadow: 0 0 16px rgba(107, 214, 255, .25); transform: translateY(-1px); }
 button.primary { border-color: rgba(255, 214, 117, .74); color: #fff8da; }
 button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 16px; }
+.side input, .side select { width: 100%; }
 .body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; height: calc(100% - 62px); padding: 12px; }
 .main { min-height: 0; overflow: auto; border: 1px solid rgba(117, 205, 255, .24); border-radius: 10px; background: rgba(8, 14, 22, .42); }
 .table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -70,6 +71,8 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         <main class="main" id="rows"><div class="empty">正在读取 ACT 行为日志...<br/>LOADING ACTION LOG</div></main>
         <aside class="side">
             <div class="side-title">LOG CONTROL</div>
+            <select id="source"><option value="live">LIVE EVENT BUS</option><option value="history">HISTORY SQLITE</option></select>
+            <input id="encounter" type="text" placeholder="encounter id (optional)" />
             <button type="button" onclick="ActionLog.search()">搜索 Search</button>
             <button type="button" onclick="ActionLog.filter()">过滤 Filter</button>
             <button type="button" onclick="ActionLog.jump()">跳转 Jump</button>
@@ -93,6 +96,8 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
     var query = document.getElementById('query');
     var topic = document.getElementById('topic');
     var cursor = document.getElementById('cursor');
+    var source = document.getElementById('source');
+    var encounter = document.getElementById('encounter');
     var toastTimer = null;
     var searchTimer = null;
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -118,28 +123,30 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         var cursorState = data.cursor || {};
         document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : 'READY';
         document.getElementById('status-pill').style.color = data.ok === false ? 'var(--bad)' : 'var(--muted)';
-        document.getElementById('sum-id').textContent = data.encounter_id || 'live';
+        document.getElementById('sum-id').textContent = data.encounter_id || data.source || 'live';
         document.getElementById('sum-rows').textContent = String(rows.length || 0);
         document.getElementById('sum-cursor').textContent = String(cursorState.time_ms || 0) + 'ms';
-        document.getElementById('sum-filter').textContent = (filters.topic || 'ALL') + (filters.query ? (' / ' + filters.query) : '');
+        document.getElementById('sum-filter').textContent = (filters.source || data.source || 'live').toUpperCase() + ' · ' + (filters.topic || 'ALL') + (filters.query ? (' / ' + filters.query) : '');
         document.getElementById('sum-errors').textContent = String((data.errors || []).length);
-        if (!rows.length) { rowsEl.innerHTML = '<div class="empty">暂无 ACT 行为日志。<br/>开始识别或 replay 后会出现事件。</div>'; return; }
+        if (!rows.length) { rowsEl.innerHTML = '<div class="empty">暂无 ACT 行为日志。<br/>live 模式等待事件；history 模式需要 SQLite actions。</div>'; return; }
         rowsEl.innerHTML = '<table class="table"><thead><tr><th>Time</th><th>Topic</th><th>Action</th><th>Value</th><th>Source</th><th>Payload</th></tr></thead><tbody>' + rows.map(function (row) {
             return '<tr class="' + (row.is_cursor ? 'cursor' : '') + '"><td>' + esc(row.time_ms || 0) + 'ms</td><td><span class="topic">' + esc(row.topic || '-') + '</span></td><td>' + esc(row.label || '-') + '</td><td>' + esc(row.value || '') + '</td><td>' + esc(row.source || '-') + '</td><td><div class="payload">actor=' + esc(row.actor || '-') + ' · target=' + esc(row.target || '-') + '</div></td></tr>';
         }).join('') + '</tbody></table>';
     }
     window.ActionLog = {
-        refresh: function () { return apiCall('get_action_log_status', [80, query.value || '', topic.value || '', Number(cursor.value || 0)]).then(function (data) { render(data); if (data.ok === false) showToast(data.message || 'Action log failed'); return data; }); },
-        search: function () { return apiCall('search_action_log', [query.value || '', 80]).then(function (data) { render(data); return data; }); },
-        filter: function () { return apiCall('filter_action_log', [topic.value || '', query.value || '', 80]).then(function (data) { render(data); return data; }); },
-        jump: function () { return apiCall('jump_action_log_time', [Number(cursor.value || 0), 80]).then(function (data) { render(data); return data; }); },
-        copy: function () { return apiCall('copy_action_log', [80, query.value || '', topic.value || '']).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data); showToast('Action log copied'); return data; }); },
+        refresh: function () { return apiCall('get_action_log_status', [80, query.value || '', topic.value || '', Number(cursor.value || 0), source.value || 'live', encounter.value || '']).then(function (data) { render(data); if (data.ok === false) showToast(data.message || 'Action log failed'); return data; }); },
+        search: function () { return apiCall('search_action_log', [query.value || '', 80, source.value || 'live', encounter.value || '']).then(function (data) { render(data); return data; }); },
+        filter: function () { return apiCall('filter_action_log', [topic.value || '', query.value || '', 80, source.value || 'live', encounter.value || '']).then(function (data) { render(data); return data; }); },
+        jump: function () { return apiCall('jump_action_log_time', [Number(cursor.value || 0), 80, source.value || 'live', encounter.value || '']).then(function (data) { render(data); return data; }); },
+        copy: function () { return apiCall('copy_action_log', [80, query.value || '', topic.value || '', source.value || 'live', encounter.value || '']).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data); showToast('Action log copied'); return data; }); },
         close: function () { apiCall('toggle_action_log'); },
         fadeIn: function () { shell.classList.add('visible'); },
         fadeOut: function () { shell.classList.remove('visible'); }
     };
     query.addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(function () { ActionLog.search(); }, 220); });
     topic.addEventListener('change', function () { ActionLog.filter(); });
+    source.addEventListener('change', function () { ActionLog.refresh(); });
+    encounter.addEventListener('change', function () { ActionLog.refresh(); });
     setTimeout(function () { shell.classList.add('visible'); ActionLog.refresh(); }, 40);
 })();
 </script>

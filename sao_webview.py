@@ -512,27 +512,55 @@ class SAOWebAPI:
     def filter_timeline(self, query=''):
         return json.dumps(act_timeline_filter(self._g, query=str(query or '')), ensure_ascii=False)
 
-    def get_action_log_status(self, limit=80, query='', topic='', cursor_ms=None):
+    def get_action_log_status(self, limit=80, query='', topic='', cursor_ms=None, source='live', encounter_id=''):
         kwargs = {
             'limit': int(limit or 80),
             'query': str(query or ''),
             'topic': str(topic or ''),
+            'source': str(source or 'live'),
+            'encounter_id': str(encounter_id or ''),
         }
         if cursor_ms is not None:
             kwargs['cursor_ms'] = int(cursor_ms or 0)
         return json.dumps(act_action_log_status(self._g, **kwargs), ensure_ascii=False)
 
-    def search_action_log(self, query='', limit=80):
-        return json.dumps(act_action_log_search(self._g, query=str(query or ''), limit=int(limit or 80)), ensure_ascii=False)
+    def search_action_log(self, query='', limit=80, source='live', encounter_id=''):
+        return json.dumps(act_action_log_search(
+            self._g,
+            query=str(query or ''),
+            limit=int(limit or 80),
+            source=str(source or 'live'),
+            encounter_id=str(encounter_id or ''),
+        ), ensure_ascii=False)
 
-    def filter_action_log(self, topic='', query=None, limit=80):
-        return json.dumps(act_action_log_filter(self._g, topic=str(topic or ''), query=None if query is None else str(query or ''), limit=int(limit or 80)), ensure_ascii=False)
+    def filter_action_log(self, topic='', query=None, limit=80, source='live', encounter_id=''):
+        return json.dumps(act_action_log_filter(
+            self._g,
+            topic=str(topic or ''),
+            query=None if query is None else str(query or ''),
+            limit=int(limit or 80),
+            source=str(source or 'live'),
+            encounter_id=str(encounter_id or ''),
+        ), ensure_ascii=False)
 
-    def jump_action_log_time(self, cursor_ms=0, limit=80):
-        return json.dumps(act_action_log_jump_to_time(self._g, cursor_ms=int(cursor_ms or 0), limit=int(limit or 80)), ensure_ascii=False)
+    def jump_action_log_time(self, cursor_ms=0, limit=80, source='live', encounter_id=''):
+        return json.dumps(act_action_log_jump_to_time(
+            self._g,
+            cursor_ms=int(cursor_ms or 0),
+            limit=int(limit or 80),
+            source=str(source or 'live'),
+            encounter_id=str(encounter_id or ''),
+        ), ensure_ascii=False)
 
-    def copy_action_log(self, limit=80, query='', topic=''):
-        return json.dumps(act_action_log_copy(self._g, limit=int(limit or 80), query=str(query or ''), topic=str(topic or '')), ensure_ascii=False)
+    def copy_action_log(self, limit=80, query='', topic='', source='live', encounter_id=''):
+        return json.dumps(act_action_log_copy(
+            self._g,
+            limit=int(limit or 80),
+            query=str(query or ''),
+            topic=str(topic or ''),
+            source=str(source or 'live'),
+            encounter_id=str(encounter_id or ''),
+        ), ensure_ascii=False)
 
     def get_death_recap_status(self, limit=80, window_s=8.0, entity_id=None):
         return json.dumps(

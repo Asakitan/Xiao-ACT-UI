@@ -46,6 +46,8 @@ class ActionLogPanel:
         self._query_var = tk.StringVar(value="")
         self._topic_var = tk.StringVar(value="")
         self._cursor_var = tk.StringVar(value="0")
+        self._source_var = tk.StringVar(value="live")
+        self._encounter_var = tk.StringVar(value="")
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
         self._last_rows_sig = ""
@@ -100,6 +102,8 @@ class ActionLogPanel:
                 query=self._query_var.get(),
                 topic=self._topic_var.get(),
                 cursor_ms=cursor_ms,
+                source=self._source_var.get(),
+                encounter_id=self._encounter_var.get(),
             )
         except Exception as exc:
             status = {"ok": False, "message": str(exc), "rows": [], "columns": [], "filters": {"query": self._query_var.get(), "topic": self._topic_var.get()}, "cursor": {"time_ms": cursor_ms, "row_count": 0}, "errors": [str(exc)]}
@@ -108,22 +112,53 @@ class ActionLogPanel:
         self._render_status(self._last_status)
         return self._last_status
 
+    def force_refresh(self) -> Dict[str, Any]:
+        self._last_refresh_at = 0.0
+        self._last_rows_sig = ""
+        return self.refresh()
+
     def search(self) -> Dict[str, Any]:
-        return self._apply_result(act_action_log_search(self.owner, query=self._query_var.get(), limit=80), 'SEARCH APPLIED')
+        return self._apply_result(act_action_log_search(
+            self.owner,
+            query=self._query_var.get(),
+            limit=80,
+            source=self._source_var.get(),
+            encounter_id=self._encounter_var.get(),
+        ), 'SEARCH APPLIED')
 
     def filter_topic(self) -> Dict[str, Any]:
-        return self._apply_result(act_action_log_filter(self.owner, topic=self._topic_var.get(), query=self._query_var.get(), limit=80), 'FILTER APPLIED')
+        return self._apply_result(act_action_log_filter(
+            self.owner,
+            topic=self._topic_var.get(),
+            query=self._query_var.get(),
+            limit=80,
+            source=self._source_var.get(),
+            encounter_id=self._encounter_var.get(),
+        ), 'FILTER APPLIED')
 
     def jump_to_time(self) -> Dict[str, Any]:
         try:
             cursor_ms = int(self._cursor_var.get() or 0)
         except Exception:
             cursor_ms = 0
-        return self._apply_result(act_action_log_jump_to_time(self.owner, cursor_ms=cursor_ms, limit=80), f'JUMP {cursor_ms}ms')
+        return self._apply_result(act_action_log_jump_to_time(
+            self.owner,
+            cursor_ms=cursor_ms,
+            limit=80,
+            source=self._source_var.get(),
+            encounter_id=self._encounter_var.get(),
+        ), f'JUMP {cursor_ms}ms')
 
     def copy_json(self) -> Dict[str, Any]:
         try:
-            result = act_action_log_copy(self.owner, limit=80, query=self._query_var.get(), topic=self._topic_var.get())
+            result = act_action_log_copy(
+                self.owner,
+                limit=80,
+                query=self._query_var.get(),
+                topic=self._topic_var.get(),
+                source=self._source_var.get(),
+                encounter_id=self._encounter_var.get(),
+            )
         except Exception as exc:
             result = {"ok": False, "message": str(exc), "text": json.dumps(self._last_status, ensure_ascii=False, indent=2)}
         text = str(result.get('text') or json.dumps(self._last_status, ensure_ascii=False, indent=2))
@@ -205,10 +240,14 @@ class ActionLogPanel:
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
+        tk.Label(control, text='Source', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
+        tk.OptionMenu(control, self._source_var, 'live', 'history', command=lambda _v: self.force_refresh()).pack(side='left', padx=(6, 8))
         tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._query_var, width=20).pack(side='left', padx=(6, 8))
+        tk.Entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
         tk.Label(control, text='Topic', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.OptionMenu(control, self._topic_var, '', 'damage', 'skill', 'boss', 'trigger', command=lambda _v: self.filter_topic()).pack(side='left', padx=(6, 8))
+        tk.Label(control, text='Encounter', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
+        tk.Entry(control, textvariable=self._encounter_var, width=14).pack(side='left', padx=(6, 8))
         tk.Label(control, text='Cursor ms', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.Entry(control, textvariable=self._cursor_var, width=8).pack(side='left', padx=(6, 6))
         tk.Button(control, text='跳转 Jump', command=self.jump_to_time).pack(side='left', padx=(0, 8))
@@ -239,12 +278,13 @@ class ActionLogPanel:
         rows = list(status.get('rows') or [])
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         cursor = status.get('cursor') if isinstance(status.get('cursor'), Mapping) else {}
+        source = str(status.get('source') or filters.get('source') or 'live')
         self._summary_var.set(
-            f"{len(rows)} ROWS · {int(cursor.get('time_ms') or 0)}ms · {filters.get('topic') or 'ALL'}"
+            f"{len(rows)} ROWS · {source.upper()} · {int(cursor.get('time_ms') or 0)}ms · {filters.get('topic') or 'ALL'}"
         )
         errors = list(status.get('errors') or [])
         self._status_var.set(
-            f"encounter={status.get('encounter_id') or 'live'} · query={filters.get('query') or '-'} · errors={len(errors)}"
+            f"encounter={status.get('encounter_id') or filters.get('encounter_id') or source} · query={filters.get('query') or '-'} · errors={len(errors)}"
         )
         if self._rows is None:
             return
@@ -276,7 +316,7 @@ class ActionLogPanel:
         box.pack(fill='x', pady=8, padx=4)
         tk.Label(
             box,
-            text='暂无 ACT 行为日志\n开始识别或 replay 后会出现事件。',
+            text='暂无 ACT 行为日志\nlive 模式等待事件；history 模式需要 SQLite actions。',
             bg=_SAO_PANEL_BODY_BG,
             fg=_SAO_PANEL_LABEL_FG,
             justify='center',
