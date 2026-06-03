@@ -158,7 +158,7 @@ Preset helpers:
 
 The current history store is a rolling encounter store exposed through shared runtime helpers. `DpsHistoryStore` also appends compact finalized reports to a JSONL archive and an additive SQLite mirror for longer-lived retention. SQLite schema version 2 mirrors encounter/combatant summaries plus optional action rows, timeline events, trigger events, and source metadata when finalized reports include those lists. JSON, CSV, static HTML, and structured XML export remain backed by the compact report shape.
 
-Normalized offline imports are loaded by `act_replay.importer`, replayed through `ActReplayHarness`, finalized into the same DPS report shape as live encounters, and can be persisted with `act_platform.runtime.act_offline_import_file(owner, path, persist=True)`. If the built-in normalized importer rejects a file, the runtime can fall back to active plugin parser adapters and call their controlled `import_file` operation. The helper returns import metadata, importer/parser ids, replay preview, the generated report, the persisted history item, and refreshed history status. WebView and Entity expose this through their shared report/export panels; a richer standalone import/playback wizard remains future work.
+Normalized offline imports are loaded by `act_replay.importer`, replayed through `ActReplayHarness`, finalized into the same DPS report shape as live encounters, and can be persisted with `act_platform.runtime.act_offline_import_file(owner, path, persist=True)`. If the built-in normalized importer rejects a file, the runtime can import SAO structured XML reports as finalized history reports, then fall back to active plugin parser adapters and call their controlled `import_file` operation. The helper returns import metadata, importer/parser ids, replay preview or report preview, the generated/imported report, the persisted history item, and refreshed history status. WebView and Entity expose this through their shared report/export panels; a richer standalone import/playback wizard remains future work.
 
 Replay is the contract gate for ACT behavior. When adding a feature that can be tested without the live game, prefer adding a fixture/selftest path first.
 
@@ -179,7 +179,7 @@ Do not run release packaging unless explicitly requested. For packaging changes,
 ## Open Edges
 
 - Plugin parser handlers can now be selected for live packet EventBus publishing, offline import fallback, and metadata discovery. They still run in-process with budget/failure accounting; stronger external-process parser isolation remains future work.
-- Offline import supports normalized JSON/JSONL replay files and rolling-history persistence; broader pcap/log/XML import and ACT-compatible compressed XML export remain future work.
+- Offline import supports normalized JSON/JSONL replay files, SAO structured XML report round-trips, and rolling-history persistence; broader pcap/log import plus ACT-compatible compressed XML import/export remain future work.
 - History has lightweight rolling-store search, an append-only JSONL encounter archive, and an additive SQLite mirror for encounter/combatant/action/timeline/trigger/source metadata rows. Rich action-history UI/query workflows remain future work.
 - Manual WebView/Entity smoke still depends on a UI runtime session.
 - Hybrid memory source has conservative policy gates for scan enablement, admin requirement, poll interval, region scan cap, and static fallback control; live game/UI validation remains manual. See `docs/HYBRID_MEMORY_TCP.md`.

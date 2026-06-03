@@ -13,7 +13,7 @@ from act_platform.plugins import PluginManager
 from act_replay.events import damage_event, dungeon_event
 from act_replay.harness import ActReplayHarness
 from act_replay.importer import import_normalized_file, load_normalized_import
-from engines.dps_history import DpsHistoryStore
+from engines.dps_history import DpsHistoryStore, load_exported_report_file
 
 
 SELF_UID = 36668136
@@ -226,6 +226,36 @@ class ActOfflineImportTests(unittest.TestCase):
         self.assertEqual(result["event_count"], 1)
         self.assertEqual(result["history_item"]["total_damage"], 5555)
         self.assertEqual(result["preview"]["total_damage"], 5555)
+
+    def test_runtime_import_can_persist_exported_xml_report(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_import_xml_report_") as root:
+            source_store = DpsHistoryStore(path=os.path.join(root, "source_history.json"), limit=5)
+            source_store.add_report({
+                "encounter_id": "xml-encounter",
+                "report_reason": "xml_source",
+                "elapsed_s": 12,
+                "total_damage": 9001,
+                "total_heal": 123,
+                "entities": [{"uid": SELF_UID, "name": "Kirito", "damage_total": 9001, "dps": 750}],
+            })
+            xml_path = source_store.export_report(fmt="xml")
+            parsed = load_exported_report_file(xml_path or "")
+            target_store = DpsHistoryStore(path=os.path.join(root, "target_history.json"), limit=5)
+            owner = FakeOwner(target_store)
+
+            result = runtime.act_offline_import_file(owner, xml_path or "", show=True)
+            latest = target_store.latest_report()
+
+        self.assertEqual(parsed["encounter_id"], "xml-encounter")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["importer"], "exported_report")
+        self.assertEqual(result["format"], "xml")
+        self.assertEqual(result["event_count"], 0)
+        self.assertTrue(result["persisted"])
+        self.assertTrue(result["shown"])
+        self.assertEqual(result["history_item"]["total_damage"], 9001)
+        self.assertEqual(result["preview"]["total_damage"], 9001)
+        self.assertEqual(latest["encounter_id"], "xml-encounter")
 
 
 if __name__ == "__main__":

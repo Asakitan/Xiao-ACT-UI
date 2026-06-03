@@ -312,6 +312,64 @@ def _render_xml_report(item: Dict[str, Any]) -> str:
     return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" + ET.tostring(root, encoding="unicode")
 
 
+def _xml_find_text(parent: Optional[ET.Element], name: str, default: str = "") -> str:
+    if parent is None:
+        return default
+    text = parent.findtext(name)
+    return str(text if text is not None else default)
+
+
+def _coerce_bool_text(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return text in ("1", "true", "yes", "on")
+
+
+def load_exported_xml_report(path: str) -> Dict[str, Any]:
+    tree = ET.parse(path)
+    root = tree.getroot()
+    if root.tag != "sao_act_report":
+        raise ValueError(f"unsupported XML report root: {root.tag}")
+    encounter = root.find("encounter")
+    totals = root.find("totals")
+    entities = []
+    for node in root.findall("combatants/combatant"):
+        entities.append({
+            "uid": _coerce_int(_xml_find_text(node, "uid")),
+            "name": _xml_find_text(node, "name"),
+            "profession": _xml_find_text(node, "profession"),
+            "damage_total": _coerce_int(_xml_find_text(node, "damage_total")),
+            "heal_total": _coerce_int(_xml_find_text(node, "heal_total")),
+            "damage_taken": _coerce_int(_xml_find_text(node, "damage_taken")),
+            "dps": _coerce_int(_xml_find_text(node, "dps")),
+            "hps": _coerce_int(_xml_find_text(node, "hps")),
+            "damage_pct": _coerce_float(_xml_find_text(node, "damage_pct")),
+            "is_self": _coerce_bool_text(_xml_find_text(node, "is_self")),
+            "fight_point": _coerce_int(_xml_find_text(node, "fight_point")),
+        })
+    return {
+        "encounter_id": _xml_find_text(encounter, "encounter_id"),
+        "completed_at": _coerce_float(_xml_find_text(encounter, "completed_at"), time.time()),
+        "completed_local_time": _xml_find_text(encounter, "completed_local_time"),
+        "report_reason": _xml_find_text(encounter, "report_reason", "xml_import"),
+        "encounter_started_at": _coerce_float(_xml_find_text(encounter, "encounter_started_at")),
+        "encounter_ended_at": _coerce_float(_xml_find_text(encounter, "encounter_ended_at")),
+        "elapsed_s": _coerce_float(_xml_find_text(encounter, "elapsed_s")),
+        "total_damage": _coerce_int(_xml_find_text(totals, "total_damage")),
+        "total_damage_all": _coerce_int(_xml_find_text(totals, "total_damage_all")),
+        "total_heal": _coerce_int(_xml_find_text(totals, "total_heal")),
+        "total_dps": _coerce_int(_xml_find_text(totals, "total_dps")),
+        "total_hps": _coerce_int(_xml_find_text(totals, "total_hps")),
+        "entities": entities,
+    }
+
+
+def load_exported_report_file(path: str) -> Dict[str, Any]:
+    suffix = os.path.splitext(str(path or ""))[1].lower()
+    if suffix == ".xml":
+        return load_exported_xml_report(path)
+    raise ValueError(f"unsupported exported report import format: {suffix or path}")
+
+
 class DpsHistoryStore:
     """Thread-safe rolling store for finalized DPS encounter summaries."""
 
@@ -1022,4 +1080,6 @@ __all__ = [
     "DPS_HISTORY_SQLITE_PATH",
     "DPS_HISTORY_SQLITE_SCHEMA_VERSION",
     "DpsHistoryStore",
+    "load_exported_report_file",
+    "load_exported_xml_report",
 ]

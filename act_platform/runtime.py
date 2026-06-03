@@ -785,6 +785,69 @@ def _persist_offline_import_report(store: Any, report: Mapping[str, Any]) -> tup
     return dict(_json_safe(item)), []
 
 
+def _import_exported_report_file(owner: Any, path: str, *, persist: bool,
+                                 show: bool, history_limit: int,
+                                 initial_errors: Iterable[Any] = ()) -> dict[str, Any] | None:
+    try:
+        from engines.dps_history import load_exported_report_file
+    except Exception:
+        return None
+    try:
+        report = load_exported_report_file(path)
+    except Exception:
+        return None
+    if not isinstance(report, Mapping):
+        return None
+    source_path = str(path or "")
+    fmt = os.path.splitext(source_path)[1].lower().lstrip(".") or "report"
+    imported_report = dict(_json_safe(report))
+    imported_report["report_reason"] = str(imported_report.get("report_reason") or "offline_report_import")
+    imported_report["source_kind"] = "offline_report_import"
+    imported_report["source_path"] = source_path
+    imported_report["import_format"] = fmt
+    imported_report["import_event_count"] = 0
+    errors = [str(item) for item in (initial_errors or []) if str(item or "")]
+    store = getattr(owner, "_dps_history_store", None) if persist else None
+    if persist and store is None:
+        errors.append("DPS history is not initialized")
+    history_item: dict[str, Any] | None = None
+    if persist and store is not None:
+        history_item, persist_errors = _persist_offline_import_report(store, imported_report)
+        errors.extend(persist_errors)
+    shown = False
+    if show:
+        show_report = getattr(owner, "_show_dps_last_report", None)
+        if callable(show_report):
+            try:
+                shown = bool(show_report(imported_report))
+            except Exception as exc:
+                errors.append(str(exc))
+    preview = _report_preview({}, imported_report)
+    persisted = bool(history_item)
+    status = act_history_status(owner, limit=history_limit) if persist else {}
+    ok = bool((not persist or persisted) and not errors)
+    return {
+        "ok": ok,
+        "message": "Imported" if ok else "; ".join(errors) or "Offline report import failed",
+        "format": fmt,
+        "source_path": source_path,
+        "self_uid": 0,
+        "event_count": 0,
+        "importer": "exported_report",
+        "parser_adapter_id": "",
+        "plugin_id": "",
+        "persist_requested": bool(persist),
+        "persisted": persisted,
+        "shown": shown,
+        "history_item": history_item,
+        "report": imported_report,
+        "preview": preview,
+        "snapshot": {},
+        "errors": errors,
+        "status": status,
+    }
+
+
 def _plugin_offline_import_summary(owner: Any, path: str, initial_errors: Iterable[Any] = ()) -> tuple[dict[str, Any] | None, list[str]]:
     try:
         from .adapters import create_plugin_parser_adapter, plugin_parser_adapters
@@ -902,6 +965,16 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
         }
     if not bool(summary.get("ok")):
         errors = list(summary.get("errors") or [])
+        report_import = _import_exported_report_file(
+            owner,
+            path,
+            persist=persist,
+            show=show,
+            history_limit=history_limit,
+            initial_errors=(),
+        )
+        if isinstance(report_import, Mapping):
+            return dict(report_import)
         fallback, fallback_errors = _plugin_offline_import_summary(owner, path, errors)
         if isinstance(fallback, Mapping) and bool(fallback.get("ok")):
             summary = fallback

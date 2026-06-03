@@ -227,14 +227,15 @@ The shared payload preserves the parity fields `encounters`, `filters`, `cursor`
 
 ## Current offline import surface
 
-`offline_import` is wired through the existing report/history surfaces and the shared backend provider for normalized replay files, with plugin parser-adapter fallback for unsupported file types:
+`offline_import` is wired through the existing report/history surfaces and the shared backend provider for normalized replay files and SAO structured XML report round-trips, with plugin parser-adapter fallback for unsupported file types:
 
 - import/replay/persist: `act_offline_import_file(owner, path, persist=True, show=False, history_limit=20)`
+- XML report fallback: SAO `sao_act_report` XML exports can be imported as finalized history reports without replay events
 - plugin fallback: active plugin parser adapters can handle unsupported formats through their controlled `import_file` operation
 - WebView chooser/import API: `choose_offline_import_file()` and `import_offline_report(path, persist=True, show=True)`
 - Entity import action: `ReportExportPanel.import_offline_file(path=None)`
 
-The helper accepts normalized ACT `.json`, `.jsonl`, and `.ndjson` files first, then tries active plugin parser adapters when the built-in importer rejects a file. Imported events replay through `ActReplayHarness`, finalize into the normal DPS report shape, and can be written into `DpsHistoryStore`. Its response preserves parity fields `source_path`, `format`, `importer`, `parser_adapter_id`, `plugin_id`, `self_uid`, `event_count`, `persisted`, `history_item`, `preview`, `snapshot`, and refreshed `status`.
+The helper accepts normalized ACT `.json`, `.jsonl`, and `.ndjson` files first, then tries SAO structured XML report import, then active plugin parser adapters when the built-in importers reject a file. Imported events replay through `ActReplayHarness`, while XML reports import as finalized compact reports; both paths can be written into `DpsHistoryStore`. Its response preserves parity fields `source_path`, `format`, `importer`, `parser_adapter_id`, `plugin_id`, `self_uid`, `event_count`, `persisted`, `history_item`, `preview`, `snapshot`, and refreshed `status`.
 
 WebView route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/导出 Report Export`; its side panel can choose a normalized replay file or accept a pasted path, import it, and refresh history.
 
