@@ -152,6 +152,7 @@ class ActOfflineImportTests(unittest.TestCase):
                 }, fp, ensure_ascii=False)
 
             result = runtime.act_offline_import_file(owner, path, show=True)
+            status = runtime.act_offline_import_status(owner)
             latest = store.latest_report()
 
         self.assertTrue(result["ok"], result)
@@ -165,6 +166,11 @@ class ActOfflineImportTests(unittest.TestCase):
         self.assertEqual(latest["total_damage"], 7654)
         self.assertEqual(result["status"]["storage_status"]["count"], 1)
         self.assertEqual((result["snapshot"]["render_spec"]["sources"]["summary"] or {}).get("data_source"), "offline_import")
+        self.assertTrue(status["ok"], status)
+        self.assertIn("json", status["accepted_formats"])
+        self.assertEqual(status["status"], "imported")
+        self.assertEqual(status["last_result"]["source_path"], path)
+        self.assertEqual(status["history"]["storage_status"]["count"], 1)
 
     def test_runtime_import_reports_missing_history_store_when_persisting(self) -> None:
         with tempfile.TemporaryDirectory(prefix="act_import_missing_store_") as root:

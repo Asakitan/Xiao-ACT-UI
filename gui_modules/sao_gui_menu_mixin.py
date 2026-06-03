@@ -505,6 +505,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '⏱', 'label': f'ACT触发/计时: {trigger_total}/{trigger_timers}', 'command': self._toggle_act_trigger_timer_panel},
             {'icon': '◉', 'label': f'ACT数据源健康: {source_label}/{source_health_state}', 'command': self._toggle_act_data_source_health_panel},
             {'icon': '⬇', 'label': f'ACT报告/导出: {report_state}/{report_total_damage}', 'command': self._toggle_act_report_export_panel},
+            {'icon': '⬇', 'label': 'ACT离线导入向导', 'command': self._toggle_act_offline_import_panel},
             {'icon': '▶', 'label': f'ACT时间线/VCR: {timeline_state}/{timeline_count}', 'command': self._toggle_act_timeline_vcr_panel},
             {'icon': '▤', 'label': f'ACT行为日志: {action_log_state}/{action_log_count}', 'command': self._toggle_act_action_log_panel},
             {'icon': '✚', 'label': f'ACT死亡回放: {death_state}/{death_damage}', 'command': self._toggle_act_death_recap_panel},

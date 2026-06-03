@@ -89,6 +89,7 @@ from act_platform.runtime import (
     act_history_load,
     act_history_status,
     act_offline_import_file,
+    act_offline_import_status,
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_list,
@@ -450,7 +451,9 @@ class SAOWebAPI:
     def choose_offline_import_file(self):
         try:
             _ensure_webview()
-            win = getattr(self._g, 'report_export_win', None)
+            win = getattr(self._g, 'offline_import_win', None) if getattr(self._g, '_offline_import_visible', False) else None
+            if win is None:
+                win = getattr(self._g, 'report_export_win', None)
             if win is None:
                 windows = getattr(webview, 'windows', []) if webview is not None else []
                 win = windows[0] if windows else None
@@ -490,6 +493,12 @@ class SAOWebAPI:
             return json.dumps(result, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e), 'errors': [str(e)]}, ensure_ascii=False)
+
+    def get_offline_import_status(self, history_limit=20):
+        try:
+            return json.dumps(act_offline_import_status(self._g, history_limit=int(history_limit or 20)), ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e), 'accepted_formats': [], 'selected_file': '', 'progress': 0.0, 'status': 'error', 'last_result': {}, 'history': {}, 'errors': [str(e)]}, ensure_ascii=False)
 
     def get_timeline_status(self, limit=80, query=''):
         return json.dumps(act_timeline_status(self._g, limit=int(limit or 80), query=str(query or '')), ensure_ascii=False)
@@ -696,6 +705,15 @@ class SAOWebAPI:
                 self._g._hide_report_export()
             else:
                 self._g._show_report_export()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def toggle_offline_import(self):
+        """Show/hide the ACT offline import wizard overlay."""
+        def _do():
+            if self._g._offline_import_visible:
+                self._g._hide_offline_import()
+            else:
+                self._g._show_offline_import()
         threading.Thread(target=_do, daemon=True).start()
 
     def toggle_timeline_vcr(self):
@@ -2131,6 +2149,10 @@ class SAOWebViewGUI:
         # ACT Report/Export panel
         self.report_export_win = None
         self._report_export_visible = False
+
+        # ACT Offline Import panel
+        self.offline_import_win = None
+        self._offline_import_visible = False
 
         # ACT Timeline/VCR panel
         self.timeline_vcr_win = None
@@ -4116,6 +4138,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Offline Import — standalone import/history playback wizard
+        offline_import_url = _web_file_uri('act_offline_import.html')
+        _oi_w = max(700, int(min(_sw, 1920) * 0.44))
+        _oi_h = max(520, int(min(_sh, 1080) * 0.52))
+        _oi_x = max(16, int(monitor_left + (_sw - _oi_w) * 0.42))
+        _oi_y = max(24, int(monitor_top + (_sh - _oi_h) * 0.26))
+        self.offline_import_win = webview.create_window(
+            'SAO-OfflineImport', offline_import_url,
+            width=_oi_w, height=_oi_h,
+            x=_oi_x, y=_oi_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         # ACT Timeline/VCR — shared event timeline controls for WebView parity
         timeline_vcr_url = _web_file_uri('act_timeline_vcr.html')
         _tl_w = max(700, int(min(_sw, 1920) * 0.43))
@@ -4819,6 +4859,7 @@ class SAOWebViewGUI:
             ('SAO-TriggerTimerManager', '_trigger_timer_manager_visible', None),
             ('SAO-DataSourceHealth', '_data_source_health_visible', None),
             ('SAO-ReportExport', '_report_export_visible', None),
+            ('SAO-OfflineImport', '_offline_import_visible', None),
             ('SAO-TimelineVCR', '_timeline_vcr_visible', None),
             ('SAO-ActionLog', '_action_log_visible', None),
             ('SAO-DeathRecap', '_death_recap_visible', None),
@@ -5416,6 +5457,7 @@ class SAOWebViewGUI:
             self._set_window_icon('SAO-TriggerTimerManager')
             self._set_window_icon('SAO-DataSourceHealth')
             self._set_window_icon('SAO-ReportExport')
+            self._set_window_icon('SAO-OfflineImport')
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
             self._set_window_alpha('SAO Alert', 1.0)
@@ -5467,6 +5509,7 @@ class SAOWebViewGUI:
                 self._wait_and_apply_click_through('SAO-TriggerTimerManager', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-DataSourceHealth', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-ReportExport', timeout=0.5)
+                self._wait_and_apply_click_through('SAO-OfflineImport', timeout=0.5)
             except Exception:
                 pass
             # Commander panel must start hidden (explicitly enforce after webview init)
@@ -5507,6 +5550,14 @@ class SAOWebViewGUI:
                 if self.report_export_win:
                     self._set_window_alpha('SAO-ReportExport', 0.0)
                     self.report_export_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._offline_import_visible = False
+                if self.offline_import_win:
+                    self._set_window_alpha('SAO-OfflineImport', 0.0)
+                    self.offline_import_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -6539,6 +6590,63 @@ class SAOWebViewGUI:
         except Exception:
             pass
         self._report_export_visible = False
+
+    # ── ACT Offline Import panel ──
+
+    def _eval_offline_import(self, js):
+        try:
+            if self.offline_import_win:
+                self.offline_import_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_offline_import_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the offline-import panel receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-OfflineImport')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_offline_import(self):
+        try:
+            if self.offline_import_win and not self._offline_import_visible:
+                self._set_window_alpha('SAO-OfflineImport', 0.0)
+                self.offline_import_win.show()
+                self._eval_offline_import('if(window.OfflineImport&&OfflineImport.fadeIn)OfflineImport.fadeIn()')
+                self._eval_offline_import('if(window.OfflineImport&&OfflineImport.refresh)OfflineImport.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-OfflineImport', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._offline_import_visible = True
+                self._ensure_offline_import_clickable()
+                threading.Timer(0.5, self._ensure_offline_import_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_offline_import(self):
+        try:
+            if self.offline_import_win and self._offline_import_visible:
+                self._eval_offline_import('if(window.OfflineImport&&OfflineImport.fadeOut)OfflineImport.fadeOut()')
+                def _finish():
+                    try:
+                        if self.offline_import_win:
+                            self.offline_import_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._offline_import_visible = False
 
     # ── ACT Timeline/VCR panel ──
 
@@ -7730,6 +7838,10 @@ class SAOWebViewGUI:
             self._native_fade_window('SAO-ReportExport', duration_ms=140, steps=8)
         except Exception:
             pass
+        try:
+            self._native_fade_window('SAO-OfflineImport', duration_ms=140, steps=8)
+        except Exception:
+            pass
 
         try:
             self._destroy_all_panels()
@@ -7804,6 +7916,11 @@ class SAOWebViewGUI:
         try:
             if self.report_export_win:
                 self.report_export_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.offline_import_win:
+                self.offline_import_win.destroy()
         except Exception:
             pass
         try:
@@ -8467,6 +8584,7 @@ class SAOWebViewGUI:
             cfg['trigger_timer_manager_visible'] = bool(self._trigger_timer_manager_visible)
             cfg['data_source_health_visible'] = bool(self._data_source_health_visible)
             cfg['report_export_visible'] = bool(self._report_export_visible)
+            cfg['offline_import_visible'] = bool(self._offline_import_visible)
             _hs_engine = getattr(self, '_hide_seek_engine', None)
             cfg['hide_seek_active'] = bool(_hs_engine and _hs_engine.running)
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
@@ -8499,6 +8617,7 @@ class SAOWebViewGUI:
             'toggle_trigger_timer_manager': lambda: (self._show_trigger_timer_manager() if not self._trigger_timer_manager_visible else self._hide_trigger_timer_manager()),
             'toggle_data_source_health': lambda: (self._show_data_source_health() if not self._data_source_health_visible else self._hide_data_source_health()),
             'toggle_report_export': lambda: (self._show_report_export() if not self._report_export_visible else self._hide_report_export()),
+            'toggle_offline_import': lambda: (self._show_offline_import() if not self._offline_import_visible else self._hide_offline_import()),
             'toggle_timeline_vcr': lambda: (self._show_timeline_vcr() if not self._timeline_vcr_visible else self._hide_timeline_vcr()),
             'toggle_action_log': lambda: (self._show_action_log() if not self._action_log_visible else self._hide_action_log()),
             'toggle_death_recap': lambda: (self._show_death_recap() if not self._death_recap_visible else self._hide_death_recap()),

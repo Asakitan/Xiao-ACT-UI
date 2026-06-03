@@ -227,21 +227,24 @@ The shared payload preserves the parity fields `encounters`, `filters`, `cursor`
 
 ## Current offline import surface
 
-`offline_import` is wired through the existing report/history surfaces and the shared backend provider for normalized replay files and SAO structured XML report round-trips, with plugin parser-adapter fallback for unsupported file types:
+`offline_import` is wired through a standalone WebView/Entity wizard plus the existing report/history surfaces and the shared backend provider for normalized replay files and SAO structured XML report round-trips, with plugin parser-adapter fallback for unsupported file types:
 
 - import/replay/persist: `act_offline_import_file(owner, path, persist=True, show=False, history_limit=20)`
+- wizard status: `act_offline_import_status(owner, history_limit=20)`
 - XML report fallback: SAO `sao_act_report` XML exports can be imported as finalized history reports without replay events
 - plugin fallback: active plugin parser adapters can handle unsupported formats through their controlled `import_file` operation
 - WebView chooser/import API: `choose_offline_import_file()` and `import_offline_report(path, persist=True, show=True)`
-- Entity import action: `ReportExportPanel.import_offline_file(path=None)`
+- Entity import actions: `OfflineImportPanel.import_file()` and `ReportExportPanel.import_offline_file(path=None)`
 
 The helper accepts normalized ACT `.json`, `.jsonl`, and `.ndjson` files first, then tries SAO structured XML report import, then active plugin parser adapters when the built-in importers reject a file. Imported events replay through `ActReplayHarness`, while XML reports import as finalized compact reports; both paths can be written into `DpsHistoryStore`. Its response preserves parity fields `source_path`, `format`, `importer`, `parser_adapter_id`, `plugin_id`, `self_uid`, `event_count`, `persisted`, `history_item`, `preview`, `snapshot`, and refreshed `status`.
 
-WebView route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/导出 Report Export`; its side panel can choose a normalized replay file or SAO XML report file, or accept a pasted path, import it, and refresh history.
+Standalone WebView route: `web/act_offline_import.html`, opened from `SAO Menu > ACT 离线导入 Offline Import`; it can choose or accept a path, import it, show last import status/preview, and load recent history reports.
 
-Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报告/导出`; its import button opens a native file picker, imports the selected replay/report, and refreshes the same preview/history panel.
+WebView report/export route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/导出 Report Export`; its side panel can choose a normalized replay file or SAO XML report file, or accept a pasted path, import it, and refresh history.
 
-A dedicated standalone import/playback wizard is still a UX follow-up. Until that route is defined, both UIs route imported reports through the existing report/history surfaces after persistence.
+Standalone Entity route: `entity://act/offline_import`, opened from `SAO 菜单 > 面板 > ACT离线导入向导`; it mirrors the WebView wizard with native file picker, import, status, and history load actions.
+
+Entity report/export route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报告/导出`; its import button opens a native file picker, imports the selected replay/report, and refreshes the same preview/history panel.
 
 ## Current timeline/VCR surface
 

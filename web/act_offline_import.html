@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO ACT Offline Import</title>
+<style>
+:root {
+    --bg: rgba(8, 13, 22, .76);
+    --panel: rgba(18, 33, 52, .90);
+    --line: rgba(117, 205, 255, .48);
+    --gold: rgba(255, 214, 117, .86);
+    --text: rgba(232, 246, 255, .96);
+    --muted: rgba(176, 204, 226, .76);
+    --ok: #7df2bf;
+    --bad: #ff6b82;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; background: transparent; color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; user-select: none; }
+body { padding: 14px; }
+.shell { position: relative; width: 100%; height: calc(100vh - 28px); min-height: 470px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: linear-gradient(135deg, rgba(100, 202, 255, .15), transparent 26%, transparent 70%, rgba(255, 215, 125, .12)), linear-gradient(180deg, rgba(16, 28, 45, .96), rgba(7, 12, 20, .90)); box-shadow: 0 0 34px rgba(88, 199, 255, .22), inset 0 0 28px rgba(109, 216, 255, .10); opacity: 0; transform: translateY(10px) scale(.985); transition: opacity .22s ease, transform .22s ease; }
+.shell.visible { opacity: 1; transform: translateY(0) scale(1); }
+.shell::before { content: ""; pointer-events: none; position: absolute; inset: 0; background: repeating-linear-gradient(180deg, rgba(255,255,255,.035) 0, rgba(255,255,255,.035) 1px, transparent 1px, transparent 7px); mix-blend-mode: screen; }
+.header { height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 8px 18px; border-bottom: 1px solid rgba(117, 205, 255, .35); background: linear-gradient(90deg, rgba(18, 59, 94, .76), rgba(11, 22, 35, .58)); }
+.kicker { letter-spacing: .18em; font-size: 10px; color: var(--gold); text-shadow: 0 0 10px rgba(255, 214, 117, .52); }
+.title { margin-top: 2px; font-size: 20px; font-weight: 700; letter-spacing: .08em; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.pill { min-width: 94px; text-align: center; padding: 5px 9px; border: 1px solid rgba(117, 205, 255, .42); border-radius: 999px; color: var(--muted); background: rgba(8, 14, 22, .62); font-size: 12px; }
+button, input { border: 1px solid rgba(117, 205, 255, .48); background: linear-gradient(180deg, rgba(61, 143, 201, .42), rgba(19, 48, 74, .58)); color: var(--text); border-radius: 8px; padding: 7px 11px; font-size: 12px; font-weight: 600; }
+input { width: 100%; background: rgba(4, 8, 14, .58); font-weight: 400; }
+button { cursor: pointer; white-space: nowrap; }
+button:hover { box-shadow: 0 0 16px rgba(107, 214, 255, .25); transform: translateY(-1px); }
+button.primary { border-color: rgba(255, 214, 117, .74); color: #fff8da; }
+button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 16px; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; height: calc(100% - 62px); padding: 12px; }
+.main { min-height: 0; overflow: auto; border: 1px solid rgba(117, 205, 255, .24); border-radius: 10px; background: rgba(8, 14, 22, .42); padding: 12px; }
+.side { min-height: 0; border: 1px solid rgba(117, 205, 255, .30); border-radius: 10px; background: rgba(8, 14, 22, .52); padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.side-title { color: var(--gold); font-size: 12px; letter-spacing: .16em; }
+.path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(117, 205, 255, .16); padding-bottom: 5px; font-size: 12px; color: var(--muted); }
+.row strong { color: var(--text); text-align: right; }
+.preview { border: 1px solid rgba(117, 205, 255, .22); border-radius: 10px; padding: 12px; background: rgba(4, 8, 14, .44); margin-bottom: 10px; }
+.preview h3 { margin: 0 0 8px; font-size: 14px; color: var(--gold); letter-spacing: .08em; }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.metric { border: 1px solid rgba(117, 205, 255, .18); border-radius: 8px; padding: 9px; background: rgba(12, 24, 38, .50); }
+.metric span { display: block; color: var(--muted); font-size: 11px; }
+.metric strong { display: block; margin-top: 4px; color: var(--text); font-size: 15px; overflow-wrap: anywhere; }
+.history-item { border: 1px solid rgba(117, 205, 255, .20); border-radius: 8px; padding: 9px; background: rgba(12, 24, 38, .46); }
+.history-item strong { color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
+.history-item small { display: block; margin: 4px 0 8px; color: var(--muted); font-size: 11px; }
+.empty { display: grid; place-items: center; height: 100%; min-height: 260px; color: var(--muted); text-align: center; line-height: 1.6; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
+.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,.18); }
+::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+    <div class="header">
+        <div><div class="kicker">ACT OFFLINE PIPELINE</div><div class="title">OFFLINE IMPORT</div></div>
+        <div class="header-actions">
+            <div class="pill" id="status-pill">READY</div>
+            <button class="primary" type="button" onclick="OfflineImport.refresh()">刷新</button>
+            <button class="close" type="button" onclick="OfflineImport.close()">×</button>
+        </div>
+    </div>
+    <div class="body">
+        <main class="main" id="preview"><div class="empty">选择 normalized replay 或 SAO XML report 后导入。<br/>IMPORT REPLAY / REPORT</div></main>
+        <aside class="side">
+            <div class="side-title">IMPORT FILE</div>
+            <div class="path-row">
+                <input id="import-path" type="text" placeholder="replay or XML report path" />
+                <button type="button" onclick="OfflineImport.choose()">选择</button>
+            </div>
+            <button class="primary" type="button" onclick="OfflineImport.importFile()">导入 Import</button>
+            <div class="side-title">STATUS</div>
+            <div class="row"><span>State</span><strong id="sum-state">idle</strong></div>
+            <div class="row"><span>Format</span><strong id="sum-format">--</strong></div>
+            <div class="row"><span>Events</span><strong id="sum-events">0</strong></div>
+            <div class="row"><span>History</span><strong id="sum-history">0</strong></div>
+            <div class="side-title">HISTORY PLAYBACK</div>
+            <div id="history-list"><div class="empty">暂无历史报告</div></div>
+        </aside>
+    </div>
+    <div class="toast" id="toast"></div>
+</div>
+<script>
+(function () {
+    "use strict";
+    var shell = document.getElementById('shell');
+    var preview = document.getElementById('preview');
+    var toast = document.getElementById('toast');
+    var importPath = document.getElementById('import-path');
+    var historyList = document.getElementById('history-list');
+    var toastTimer = null;
+    function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
+    function apiCall(name, args) {
+        var api = window.pywebview && window.pywebview.api;
+        if (api && typeof api[name] === 'function') return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            var cmdMap = {
+                get_offline_import_status: 'act.offline_import.status',
+                choose_offline_import_file: 'act.offline_import.choose_file',
+                import_offline_report: 'act.offline_import.import',
+                load_history_report: 'act.history.load',
+                toggle_offline_import: 'ui.menu_action'
+            };
+            var payload = name === 'toggle_offline_import' ? { action: 'toggle_offline_import' } : { args: args || [] };
+            return window.bridge.cmd(cmdMap[name] || ('act.offline_import.' + name), payload).then(parseResult);
+        }
+        return Promise.resolve({ ok: false, message: 'Offline import API unavailable', errors: ['Offline import API unavailable'] });
+    }
+    function showToast(message) { toast.textContent = String(message || ''); toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800); }
+    function previewHtml(result) {
+        result = result || {};
+        var pv = result.preview || {};
+        if (!Object.keys(result).length) return '<div class="empty">尚未导入文件。<br/>WAITING FOR IMPORT</div>';
+        return '<div class="preview"><h3>IMPORT RESULT</h3><div class="grid">'
+            + '<div class="metric"><span>Encounter</span><strong>' + esc(pv.encounter_id || (result.report || {}).encounter_id || '-') + '</strong></div>'
+            + '<div class="metric"><span>Format</span><strong>' + esc(result.format || '-') + '</strong></div>'
+            + '<div class="metric"><span>Importer</span><strong>' + esc(result.importer || '-') + '</strong></div>'
+            + '<div class="metric"><span>Total Damage</span><strong>' + esc(pv.total_damage || '-') + '</strong></div>'
+            + '<div class="metric"><span>Events</span><strong>' + esc(result.event_count || 0) + '</strong></div>'
+            + '<div class="metric"><span>Persisted</span><strong>' + esc(result.persisted ? 'YES' : 'NO') + '</strong></div>'
+            + '</div></div>';
+    }
+    function renderHistory(history) {
+        var rows = (history && history.encounters) || [];
+        document.getElementById('sum-history').textContent = String(rows.length || 0);
+        if (!rows.length) { historyList.innerHTML = '<div class="empty">暂无历史报告</div>'; return; }
+        historyList.innerHTML = rows.slice(0, 12).map(function (item, i) {
+            var index = item._history_index == null ? i : item._history_index;
+            return '<div class="history-item"><strong>' + esc(item.encounter_id || ('#' + i)) + '</strong><small>'
+                + esc(item.completed_local_time || item.completed_at || '') + ' · dmg=' + esc(item.total_damage || 0)
+                + '</small><button type="button" onclick="OfflineImport.loadHistory(' + Number(index) + ')">加载 Load</button></div>';
+        }).join('');
+    }
+    function render(data) {
+        data = data || {};
+        var last = data.last_result || {};
+        if (data.selected_file && !importPath.value) importPath.value = data.selected_file;
+        document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : String(data.status || 'READY').toUpperCase();
+        document.getElementById('status-pill').style.color = data.ok === false ? 'var(--bad)' : 'var(--muted)';
+        document.getElementById('sum-state').textContent = data.status || 'idle';
+        document.getElementById('sum-format').textContent = last.format || '--';
+        document.getElementById('sum-events').textContent = String(last.event_count || 0);
+        preview.innerHTML = previewHtml(last);
+        renderHistory(data.history || {});
+        if (data.ok === false) showToast(data.message || 'Offline import status failed');
+    }
+    window.OfflineImport = {
+        refresh: function () { return apiCall('get_offline_import_status', [20]).then(function (data) { render(data); return data; }); },
+        choose: function () { return apiCall('choose_offline_import_file', []).then(function (payload) { if (payload.ok && payload.path) { importPath.value = payload.path; showToast('File selected'); } return payload; }); },
+        importFile: function () {
+            var path = String(importPath.value || '').trim();
+            if (!path) { showToast('No import path'); return Promise.resolve({ ok: false, message: 'No import path' }); }
+            return apiCall('import_offline_report', [path, true, true]).then(function (result) { showToast(result.message || (result.ok ? 'Imported' : 'Import failed')); return OfflineImport.refresh().then(function () { return result; }); });
+        },
+        loadHistory: function (index) { return apiCall('load_history_report', [Number(index || 0), true]).then(function (result) { showToast(result.message || (result.ok ? 'Loaded' : 'Load failed')); return OfflineImport.refresh(); }); },
+        close: function () { apiCall('toggle_offline_import'); },
+        fadeIn: function () { shell.classList.add('visible'); },
+        fadeOut: function () { shell.classList.remove('visible'); }
+    };
+    setTimeout(function () { shell.classList.add('visible'); OfflineImport.refresh(); }, 40);
+})();
+</script>
+</body>
+</html>

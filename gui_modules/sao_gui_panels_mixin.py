@@ -65,6 +65,7 @@ from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel
 from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
 from gui_modules.sao_gui_death_recap import DeathRecapPanel
 from gui_modules.sao_gui_graph_timeseries import GraphTimeseriesPanel
+from gui_modules.sao_gui_offline_import import OfflineImportPanel
 from gui_modules.sao_gui_plugin_manager import PluginManagerPanel
 from gui_modules.sao_gui_report_export import ReportExportPanel
 from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
@@ -130,6 +131,17 @@ class SAOPlayerGUIPanelsMixin:
         else:
             self._act_report_export_panel.show()
             self.root.after(120, lambda: self._raise_panel_window(self._act_report_export_panel))
+
+    def _toggle_act_offline_import_panel(self):
+        """打开/关闭 ACT 离线导入面板 (tkinter)."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._act_offline_import_panel:
+            self._act_offline_import_panel = OfflineImportPanel(self.root, self)
+        if self._act_offline_import_panel.is_visible():
+            self._act_offline_import_panel.hide()
+        else:
+            self._act_offline_import_panel.show()
+            self.root.after(120, lambda: self._raise_panel_window(self._act_offline_import_panel))
 
     def _toggle_act_timeline_vcr_panel(self):
         """打开/关闭 ACT 时间线/VCR 面板 (tkinter)."""
@@ -259,6 +271,7 @@ class SAOPlayerGUIPanelsMixin:
             ('act_trigger_timer', getattr(self._act_trigger_timer_panel, '_win', None)),
             ('act_data_source_health', getattr(self._act_data_source_health_panel, '_win', None)),
             ('act_report_export', getattr(self._act_report_export_panel, '_win', None)),
+            ('act_offline_import', getattr(self._act_offline_import_panel, '_win', None)),
             ('act_timeline_vcr', getattr(self._act_timeline_vcr_panel, '_win', None)),
             ('act_action_log', getattr(self._act_action_log_panel, '_win', None)),
             ('act_death_recap', getattr(self._act_death_recap_panel, '_win', None)),

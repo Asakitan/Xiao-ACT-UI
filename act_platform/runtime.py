@@ -913,16 +913,86 @@ def _plugin_offline_import_summary(owner: Any, path: str, initial_errors: Iterab
     return None, errors
 
 
+_OFFLINE_IMPORT_ACCEPTED_FORMATS = ["json", "jsonl", "ndjson", "xml", "plugin"]
+
+
+def _offline_import_state(owner: Any) -> dict[str, Any]:
+    state = getattr(owner, "_act_offline_import_state", None)
+    if not isinstance(state, dict):
+        state = {"selected_file": "", "progress": 0.0, "status": "idle", "last_result": {}}
+        try:
+            setattr(owner, "_act_offline_import_state", state)
+        except Exception:
+            pass
+    state.setdefault("selected_file", "")
+    state.setdefault("progress", 0.0)
+    state.setdefault("status", "idle")
+    state.setdefault("last_result", {})
+    return state
+
+
+def _set_offline_import_state(owner: Any, *, selected_file: str | None = None,
+                              progress: float | None = None, status: str | None = None,
+                              last_result: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    state = _offline_import_state(owner)
+    if selected_file is not None:
+        state["selected_file"] = str(selected_file or "")
+    if progress is not None:
+        state["progress"] = max(0.0, min(float(progress or 0.0), 1.0))
+    if status is not None:
+        state["status"] = str(status or "idle")
+    if last_result is not None:
+        state["last_result"] = dict(_json_safe(last_result))
+        state["progress"] = 1.0
+        state["status"] = "imported" if bool(last_result.get("ok")) else "error"
+        state["selected_file"] = str(last_result.get("source_path") or selected_file or state.get("selected_file") or "")
+    return state
+
+
+def act_offline_import_status(owner: Any, *, history_limit: int = 20) -> dict[str, Any]:
+    """Return standalone offline-import wizard state shared by WebView and Entity/Tk."""
+    state = _offline_import_state(owner)
+    last_result = state.get("last_result") if isinstance(state.get("last_result"), Mapping) else {}
+    errors = list(last_result.get("errors") or []) if isinstance(last_result, Mapping) else []
+    try:
+        history = act_history_status(owner, limit=int(history_limit or 20))
+    except Exception as exc:
+        history = {"ok": False, "message": str(exc), "encounters": [], "errors": [str(exc)]}
+        errors.append(str(exc))
+    return {
+        "ok": not errors,
+        "message": str(last_result.get("message") or "Ready") if isinstance(last_result, Mapping) else "Ready",
+        "accepted_formats": list(_OFFLINE_IMPORT_ACCEPTED_FORMATS),
+        "selected_file": str(state.get("selected_file") or ""),
+        "progress": float(state.get("progress") or 0.0),
+        "status": str(state.get("status") or "idle"),
+        "last_result": dict(_json_safe(last_result)) if isinstance(last_result, Mapping) else {},
+        "history": history,
+        "errors": errors,
+    }
+
+
 def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
                             show: bool = False, history_limit: int = 20) -> dict[str, Any]:
     """Replay a normalized ACT import file and optionally persist it to history."""
+
+    _set_offline_import_state(owner, selected_file=str(path or ""), progress=0.0, status="importing")
+
+    def _finish(result: Mapping[str, Any]) -> dict[str, Any]:
+        state = _set_offline_import_state(
+            owner,
+            selected_file=str(result.get("source_path") or path or ""),
+            last_result=result,
+        )
+        last_result = state.get("last_result") if isinstance(state.get("last_result"), Mapping) else result
+        return dict(last_result)
 
     try:
         from act_replay.harness import ActReplayHarness
         from act_replay.importer import import_normalized_file
     except Exception as exc:
         message = str(exc)
-        return {
+        return _finish({
             "ok": False,
             "message": message,
             "format": "",
@@ -939,13 +1009,13 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
             "importer": "normalized",
             "parser_adapter_id": "",
             "plugin_id": "",
-        }
+        })
 
     try:
         summary = import_normalized_file(path)
     except Exception as exc:
         message = str(exc)
-        return {
+        return _finish({
             "ok": False,
             "message": message,
             "format": "",
@@ -962,7 +1032,7 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
             "importer": "normalized",
             "parser_adapter_id": "",
             "plugin_id": "",
-        }
+        })
     if not bool(summary.get("ok")):
         errors = list(summary.get("errors") or [])
         report_import = _import_exported_report_file(
@@ -974,14 +1044,14 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
             initial_errors=(),
         )
         if isinstance(report_import, Mapping):
-            return dict(report_import)
+            return _finish(dict(report_import))
         fallback, fallback_errors = _plugin_offline_import_summary(owner, path, errors)
         if isinstance(fallback, Mapping) and bool(fallback.get("ok")):
             summary = fallback
         else:
             merged_errors = fallback_errors or errors
             message = str(summary.get("message") or "; ".join(merged_errors) or "Offline import failed")
-            return {
+            return _finish({
                 "ok": False,
                 "message": message,
                 "format": str(summary.get("format") or ""),
@@ -998,7 +1068,7 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
                 "importer": "normalized",
                 "parser_adapter_id": "",
                 "plugin_id": "",
-            }
+            })
 
     source_path = str(summary.get("source_path") or path or "")
     fmt = str(summary.get("format") or "")
@@ -1025,7 +1095,7 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
         snapshot = harness.replay(events)
     except Exception as exc:
         message = str(exc)
-        return {
+        return _finish({
             "ok": False,
             "message": message,
             "format": fmt,
@@ -1042,7 +1112,7 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
             "importer": importer,
             "parser_adapter_id": parser_adapter_id,
             "plugin_id": plugin_id,
-        }
+        })
 
     report, finalize_errors = _finalize_offline_import_report(
         harness,
@@ -1071,7 +1141,7 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
     persisted = bool(history_item)
     status = act_history_status(owner, limit=history_limit) if persist else {}
     ok = bool(report is not None and (not persist or persisted) and not errors)
-    return {
+    return _finish({
         "ok": ok,
         "message": "Imported" if ok else "; ".join(errors) or "Offline import did not produce a report",
         "format": fmt,
@@ -1090,7 +1160,7 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
         "snapshot": snapshot_payload,
         "errors": errors,
         "status": status,
-    }
+    })
 
 
 def _timeline_state(owner: Any) -> dict[str, Any]:
@@ -2577,6 +2647,7 @@ __all__ = [
     "act_history_load",
     "act_history_status",
     "act_offline_import_file",
+    "act_offline_import_status",
     "act_report_copy",
     "act_report_export",
     "act_report_status",

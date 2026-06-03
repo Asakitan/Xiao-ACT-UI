@@ -65,6 +65,9 @@
         toggle_report_export: function () {
             return call('ui.menu_action', { action: 'toggle_report_export' });
         },
+        toggle_offline_import: function () {
+            return call('ui.menu_action', { action: 'toggle_offline_import' });
+        },
         toggle_timeline_vcr: function () {
             return call('ui.menu_action', { action: 'toggle_timeline_vcr' });
         },
@@ -109,6 +112,15 @@
         },
         clear_history_reports: function () {
             return call('act.history.clear', {});
+        },
+        choose_offline_import_file: function () {
+            return call('act.offline_import.choose_file', {});
+        },
+        import_offline_report: function (path, persist, show) {
+            return call('act.offline_import.import', { path: String(path || ''), persist: persist !== false, show: show !== false });
+        },
+        get_offline_import_status: function (historyLimit) {
+            return call('act.offline_import.status', { history_limit: historyLimit || 20 });
         },
         get_timeline_status: function (limit, query) {
             return call('act.timeline.status', { limit: limit || 80, query: String(query || '') });

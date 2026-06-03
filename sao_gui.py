@@ -454,6 +454,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._act_trigger_timer_panel = None  # TriggerTimerManagerPanel
         self._act_data_source_health_panel = None  # DataSourceHealthPanel
         self._act_report_export_panel = None  # ReportExportPanel
+        self._act_offline_import_panel = None  # OfflineImportPanel
         self._act_timeline_vcr_panel = None  # TimelineVcrPanel
         self._act_action_log_panel = None  # ActionLogPanel
         self._act_death_recap_panel = None  # DeathRecapPanel
