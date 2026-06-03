@@ -175,7 +175,7 @@ class AnchorMemoryReader:
     CHAR_SCAN_CHUNK = 8 * 1024 * 1024
     UID_SCAN_CHUNK = 16 * 1024 * 1024
 
-    def __init__(self, process: Optional[StarProcess] = None):
+    def __init__(self, process: Optional[StarProcess] = None, max_scan_regions_mb: int = 0):
         self.pm = process or StarProcess()
         self._cached_regions = None
         self._cache_ts = 0.0
@@ -183,6 +183,9 @@ class AnchorMemoryReader:
         self._resolved_cache: Optional[ResolvedSelf] = None
         self._resolved_cache_uid: int = 0
         self._resolved_cache_ts: float = 0.0
+        self.max_scan_regions_mb = max(0, int(max_scan_regions_mb or 0))
+        self.last_region_scan_bytes: int = 0
+        self.last_region_scan_limited: bool = False
 
     def close(self):
         try:
@@ -193,7 +196,20 @@ class AnchorMemoryReader:
     def _regions(self):
         now = time.time()
         if self._cached_regions is None or (now - self._cache_ts) > self._regen_ttl:
-            self._cached_regions = list(self.pm.iter_regions(only_readable=True, only_private=True))
+            regions = []
+            total_bytes = 0
+            limited = False
+            max_bytes = int(self.max_scan_regions_mb) * 1024 * 1024
+            for region in self.pm.iter_regions(only_readable=True, only_private=True):
+                size = max(0, int(getattr(region, "size", 0) or 0))
+                if max_bytes > 0 and total_bytes + size > max_bytes:
+                    limited = True
+                    break
+                regions.append(region)
+                total_bytes += size
+            self._cached_regions = regions
+            self.last_region_scan_bytes = total_bytes
+            self.last_region_scan_limited = limited
             self._cache_ts = now
         return self._cached_regions
 

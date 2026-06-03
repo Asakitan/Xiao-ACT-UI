@@ -21,6 +21,7 @@ import time
 from typing import Any, Callable, Optional
 
 from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
+from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider
 
 StatusCallback = Callable[[str, str], None]
 SelfCallback = Callable[[dict], None]
@@ -50,11 +51,13 @@ class UnifiedDataSource:
         hp_overlay: Any = None,
         auto_key_engine: Any = None,
         boss_raid_engine: Any = None,
+        settings: Any = None,
         enable_extended: bool = True,
         **_: Any,
     ) -> None:
         self.state_mgr = state_mgr
         self.mode = str(mode or "auto").strip().lower() or "auto"
+        self.settings = settings
         self.packet_bridge = packet_bridge
         self.on_self_update = on_self_update
         self.on_damage = on_damage
@@ -67,6 +70,7 @@ class UnifiedDataSource:
         self._last_error = ""
         self._last_status = "init"
         self._last_snapshot_sig = None
+        self._policy = self._build_policy()
 
         self._bridge = MemStateBridge(
             state_mgr=state_mgr,
@@ -77,6 +81,10 @@ class UnifiedDataSource:
             boss_raid_engine=boss_raid_engine,
             packet_bridge=packet_bridge,
             enable_extended=enable_extended,
+            auto_scan_enabled=bool(self._policy["auto_scan_enabled"]),
+            poll_interval=float(self._policy["auto_scan_interval_s"]),
+            allow_static_fallback=bool(self._policy["allow_static_fallback"]),
+            max_scan_regions_mb=int(self._policy["max_scan_regions_mb"]),
             on_log=self._on_bridge_log,
         )
 
@@ -86,6 +94,10 @@ class UnifiedDataSource:
         """Start the underlying read-only memory self-state bridge."""
         if self._started:
             return True
+        if not self._policy["start_allowed"]:
+            self._last_error = str(self._policy["fallback_reason"] or "memory policy denied startup")
+            self._notify_status("error", self._last_error)
+            return False
         self._notify_status("starting", "")
         try:
             ok = bool(self._bridge.start())
@@ -138,6 +150,7 @@ class UnifiedDataSource:
                 "boss": "tcp_fallback",
                 "scene": "tcp_fallback",
             },
+            "policy": self._policy_health(),
             "self": {
                 "uid": int(getattr(self._bridge, "last_uid", 0) or 0),
                 "hp": int(getattr(self._bridge, "last_hp", 0) or 0),
@@ -217,6 +230,96 @@ class UnifiedDataSource:
             cb(payload)
         except Exception:
             pass
+
+    def _build_policy(self) -> dict:
+        interval = self._float_setting(
+            "mem_auto_scan_interval_s",
+            getattr(MemSelfStateProvider, "POLL_INTERVAL", 0.5),
+        )
+        if interval <= 0:
+            interval = getattr(MemSelfStateProvider, "POLL_INTERVAL", 0.5)
+        interval = max(0.1, min(float(interval), 30.0))
+        require_admin = self._bool_setting("mem_require_admin", False)
+        admin_ok = (not require_admin) or self._is_windows_admin()
+        auto_scan_enabled = self._bool_setting("mem_auto_scan_enabled", True)
+        max_scan_regions_mb = self._int_setting("mem_max_scan_regions_mb", 0)
+        if max_scan_regions_mb < 0:
+            max_scan_regions_mb = 0
+        allow_static_fallback = self._bool_setting("mem_allow_static_fallback", True)
+        show_risk_warning = self._bool_setting("mem_show_risk_warning", True)
+        fallback_reason = ""
+        if not auto_scan_enabled:
+            fallback_reason = "memory auto scan disabled by mem_auto_scan_enabled"
+        elif require_admin and not admin_ok:
+            fallback_reason = "administrator privileges required by mem_require_admin"
+        return {
+            "auto_scan_enabled": bool(auto_scan_enabled),
+            "auto_scan_interval_s": round(float(interval), 3),
+            "require_admin": bool(require_admin),
+            "admin_ok": bool(admin_ok),
+            "max_scan_regions_mb": int(max_scan_regions_mb),
+            "allow_static_fallback": bool(allow_static_fallback),
+            "show_risk_warning": bool(show_risk_warning),
+            "start_allowed": not bool(fallback_reason),
+            "fallback_reason": fallback_reason,
+        }
+
+    def _policy_health(self) -> dict:
+        out = dict(self._policy)
+        try:
+            bridge_policy = self._bridge.policy_status()
+            if isinstance(bridge_policy, dict):
+                out.update(bridge_policy)
+        except Exception:
+            pass
+        return out
+
+    def _setting_value(self, key: str, default: Any = None) -> Any:
+        settings = self.settings
+        if settings is None:
+            return default
+        getter = getattr(settings, "get", None)
+        if callable(getter):
+            try:
+                return getter(key, default)
+            except Exception:
+                return default
+        if isinstance(settings, dict):
+            return settings.get(key, default)
+        return default
+
+    def _bool_setting(self, key: str, default: bool) -> bool:
+        value = self._setting_value(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in ("1", "true", "yes", "on", "enabled"):
+            return True
+        if text in ("0", "false", "no", "off", "disabled"):
+            return False
+        return bool(default)
+
+    def _float_setting(self, key: str, default: float) -> float:
+        try:
+            return float(self._setting_value(key, default))
+        except Exception:
+            return float(default)
+
+    def _int_setting(self, key: str, default: int) -> int:
+        try:
+            return int(float(self._setting_value(key, default)))
+        except Exception:
+            return int(default)
+
+    @staticmethod
+    def _is_windows_admin() -> bool:
+        try:
+            import ctypes
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
 
 
 __all__ = ["UnifiedDataSource"]

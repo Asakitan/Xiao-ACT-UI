@@ -522,6 +522,7 @@ class PacketBridge:
                 on_scene_change=self._on_scene_change,
                 on_status_change=self._on_mem_status_change,
                 packet_bridge=self,
+                settings=self._settings,
             )
             return self._mem_source.start()
         except Exception as e:

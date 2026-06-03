@@ -194,7 +194,7 @@ WebView route: `web/data_source_health.html`, opened from `SAO Menu > ACT 数据
 
 Entity route: `entity://act/data_source_health`, opened from `SAO 菜单 > 面板 > ACT数据源健康`.
 
-The shared payload exposes `sources`, `status`, `latency_ms`, `last_event_ms`, and `errors`. For Entity/Tk, the panel is intentionally low-frequency: refreshes are throttled and source/diagnostic cards use dirty signatures before rebuilding widgets. High-frequency or animated ACT panels should prefer WebView/GPU overlay rendering, with Cython reserved for measured hot arithmetic/signature paths.
+The shared payload exposes `sources`, `status`, `latency_ms`, `last_event_ms`, and `errors`. When memory/hybrid mode is active, `sources.memory.policy` also reports effective scan gates such as auto-scan enablement, poll interval, admin requirement, static fallback, and region scan cap. For Entity/Tk, the panel is intentionally low-frequency: refreshes are throttled and source/diagnostic cards use dirty signatures before rebuilding widgets. High-frequency or animated ACT panels should prefer WebView/GPU overlay rendering, with Cython reserved for measured hot arithmetic/signature paths.
 
 ## Current report/export surface
 

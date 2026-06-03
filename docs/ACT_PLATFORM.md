@@ -182,4 +182,4 @@ Do not run release packaging unless explicitly requested. For packaging changes,
 - Offline import supports normalized JSON/JSONL replay files and rolling-history persistence; broader pcap/log/XML import remains future work.
 - History has lightweight rolling-store search, an append-only JSONL encounter archive, and an additive SQLite encounter/combatant mirror. Full action-level timeline/trigger/source tables remain future work.
 - Manual WebView/Entity smoke still depends on a UI runtime session.
-- Hybrid memory policy is documented separately in `docs/HYBRID_MEMORY_TCP.md`.
+- Hybrid memory source has conservative policy gates for scan enablement, admin requirement, poll interval, region scan cap, and static fallback control; live game/UI validation remains manual. See `docs/HYBRID_MEMORY_TCP.md`.

@@ -46,6 +46,10 @@ class MemStateBridge:
                  packet_bridge: Any = None,
                  dump_id: str = "ef9ef95a",
                  enable_extended: bool = True,
+                 auto_scan_enabled: bool = True,
+                 poll_interval: Optional[float] = None,
+                 allow_static_fallback: bool = True,
+                 max_scan_regions_mb: int = 0,
                  on_log: Optional[Callable[[str], None]] = None):
         self.state_mgr = state_mgr
         self.dps_tracker = dps_tracker
@@ -58,6 +62,10 @@ class MemStateBridge:
         self._provider: Optional[MemSelfStateProvider] = None
         self._dump_id = dump_id
         self._enable_extended = enable_extended
+        self._auto_scan_enabled = bool(auto_scan_enabled)
+        self._poll_interval = poll_interval
+        self._allow_static_fallback = bool(allow_static_fallback)
+        self._max_scan_regions_mb = int(max_scan_regions_mb or 0)
 
         # 状态 (供外部查询)
         self.mode: str = "init"
@@ -90,6 +98,10 @@ class MemStateBridge:
                 on_stamina_change=self._on_stamina,
                 anchor_source=self._build_anchor_pack,
                 enable_extended=self._enable_extended,
+                auto_scan_enabled=self._auto_scan_enabled,
+                poll_interval=self._poll_interval,
+                allow_static_fallback=self._allow_static_fallback,
+                max_scan_regions_mb=self._max_scan_regions_mb,
                 dump_id=self._dump_id,
             )
             self._provider.start()
@@ -285,6 +297,25 @@ class MemStateBridge:
         if self._provider is None:
             return None
         return self._provider.last_snap
+
+    def policy_status(self) -> dict:
+        provider = self._provider
+        out = {
+            "provider_auto_scan_enabled": bool(self._auto_scan_enabled),
+            "provider_poll_interval_s": self._poll_interval,
+            "provider_allow_static_fallback": bool(self._allow_static_fallback),
+            "provider_max_scan_regions_mb": int(self._max_scan_regions_mb),
+        }
+        if provider is not None:
+            fn = getattr(provider, "policy_status", None)
+            if callable(fn):
+                try:
+                    provider_out = fn()
+                    if isinstance(provider_out, dict):
+                        out.update(provider_out)
+                except Exception:
+                    pass
+        return out
 
     @property
     def is_memory_active(self) -> bool:

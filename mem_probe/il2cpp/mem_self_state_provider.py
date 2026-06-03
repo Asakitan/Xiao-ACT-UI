@@ -55,6 +55,10 @@ class MemSelfStateProvider:
                  on_stamina_change: Optional[Callable[[int, int], None]] = None,
                  anchor_source: Optional[Callable[[], AnchorPack]] = None,
                  enable_extended: bool = True,
+                 auto_scan_enabled: bool = True,
+                 poll_interval: Optional[float] = None,
+                 allow_static_fallback: bool = True,
+                 max_scan_regions_mb: int = 0,
                  dump_id: str = "ef9ef95a"):
         self.on_uid_change = on_uid_change
         self.on_hp_change = on_hp_change
@@ -67,6 +71,13 @@ class MemSelfStateProvider:
         self.on_stamina_change = on_stamina_change
         self.anchor_source = anchor_source
         self.enable_extended = enable_extended
+        self.auto_scan_enabled = bool(auto_scan_enabled)
+        try:
+            self.poll_interval = max(0.1, min(float(poll_interval or self.POLL_INTERVAL), 30.0))
+        except Exception:
+            self.poll_interval = float(self.POLL_INTERVAL)
+        self.allow_static_fallback = bool(allow_static_fallback)
+        self.max_scan_regions_mb = max(0, int(max_scan_regions_mb or 0))
         self.dump_id = dump_id
 
         self._src: Optional[StaticDpsSource] = None
@@ -138,11 +149,20 @@ class MemSelfStateProvider:
                 pass
 
     def _loop(self):
+        if not self.auto_scan_enabled:
+            self._set_mode("tcp", "memory auto scan disabled")
+            while not self._stop_evt.is_set():
+                self._stop_evt.wait(self.poll_interval)
+            return
+
         # 第一次启动: 创建 source (打开 GA, 加载 bundle)
         try:
             self._src = StaticDpsSource(dump_id=self.dump_id)
             _ = self._src.sr  # 触发懒加载
-            self._anchor_reader = AnchorMemoryReader(self._src.sr.pm)
+            self._anchor_reader = AnchorMemoryReader(
+                self._src.sr.pm,
+                max_scan_regions_mb=self.max_scan_regions_mb,
+            )
             self._set_mode("memory")
         except Exception as e:
             self._set_mode("error", f"init: {e}")
@@ -153,7 +173,7 @@ class MemSelfStateProvider:
             try:
                 # 当 force 到 tcp 时, 不读内存, 只睡眠
                 if self.mode == "tcp":
-                    time.sleep(self.POLL_INTERVAL)
+                    time.sleep(self.poll_interval)
                     continue
 
                 snap = self._get_snapshot_nowait()
@@ -182,7 +202,7 @@ class MemSelfStateProvider:
                 self._consecutive_fails += 1
                 if self._consecutive_fails >= self.FAIL_THRESHOLD:
                     self._set_mode("tcp", f"poll exc: {e}")
-            self._stop_evt.wait(self.POLL_INTERVAL)
+            self._stop_evt.wait(self.poll_interval)
 
     def _get_snapshot_nowait(self) -> Optional[SelfSnapshot]:
         """Prefer TCP-anchor memory lookup, then fall back to static cache.
@@ -228,6 +248,8 @@ class MemSelfStateProvider:
                             return snap
             except Exception:
                 traceback.print_exc()
+        if not self.allow_static_fallback:
+            return None
         return self._src.get_self_snapshot_nowait() if self._src else None
 
     def _dispatch(self, snap: SelfSnapshot):
@@ -308,6 +330,25 @@ class MemSelfStateProvider:
                     self.on_stamina_change(e_cur, e_tot)
                 except Exception:
                     traceback.print_exc()
+
+    def policy_status(self) -> dict:
+        reader = self._anchor_reader
+        region_mb = 0.0
+        limited = False
+        if reader is not None:
+            try:
+                region_mb = round(float(getattr(reader, "last_region_scan_bytes", 0) or 0) / (1024 * 1024), 3)
+                limited = bool(getattr(reader, "last_region_scan_limited", False))
+            except Exception:
+                pass
+        return {
+            "provider_auto_scan_enabled": bool(self.auto_scan_enabled),
+            "provider_poll_interval_s": round(float(self.poll_interval), 3),
+            "provider_allow_static_fallback": bool(self.allow_static_fallback),
+            "provider_max_scan_regions_mb": int(self.max_scan_regions_mb),
+            "provider_region_scan_mb": region_mb,
+            "provider_region_scan_limited": limited,
+        }
 
 
 # ───────── selftest ─────────

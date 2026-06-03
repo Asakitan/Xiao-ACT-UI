@@ -99,6 +99,7 @@ Typical top-level fields:
 - `started_at`
 - `uptime_s`
 - `watchers`
+- `policy`: effective memory scan gates and provider scan status
 - `self`
 - `snapshot_available`
 
@@ -116,17 +117,17 @@ The data-source health UI should prefer these health fields over guessing from m
 
 Prefer TCP as the default operational mode.
 
-When adding or exposing memory settings, keep these gates visible:
+Implemented memory scan gates:
 
-- `mem_data_source`
-- `mem_auto_scan_enabled`
-- `mem_auto_scan_interval_s`
-- `mem_require_admin`
-- `mem_max_scan_regions_mb`
-- `mem_allow_static_fallback`
-- `mem_show_risk_warning`
+- `mem_data_source`: selects `tcp`, `memory`, `hybrid`, or `auto`.
+- `mem_auto_scan_enabled`: when false, `UnifiedDataSource.start()` fails closed and `hybrid`/`auto` can continue through TCP fallback.
+- `mem_auto_scan_interval_s`: clamps provider polling to `0.1..30.0` seconds.
+- `mem_require_admin`: when true, memory startup is denied unless the current process is elevated.
+- `mem_max_scan_regions_mb`: caps the cached private readable memory region set used by anchor scanning; `0` means uncapped.
+- `mem_allow_static_fallback`: when false, the provider refuses the static bundle fallback and only uses anchored memory hits.
+- `mem_show_risk_warning`: reported in policy health for UI/runtime warning decisions.
 
-If a setting is not implemented yet, do not present it as an active runtime guarantee. Use this list as the policy target for future UI/config work.
+These gates are reported through `UnifiedDataSource.health().policy`, including provider poll interval, static fallback mode, region scan cap, and whether the region list was capped.
 
 ## Troubleshooting
 
