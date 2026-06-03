@@ -96,8 +96,8 @@ class OfflineImportPanel:
                 parent=self._win,
                 title='Import ACT replay/report',
                 filetypes=(
-                    ('ACT replay/report', '*.json *.jsonl *.ndjson *.xml'),
-                    ('SAO ACT XML report', '*.xml'),
+                    ('ACT replay/report', '*.json *.jsonl *.ndjson *.xml *.xml.gz *.xml.zip *.zip'),
+                    ('SAO ACT XML report', '*.xml *.xml.gz *.xml.zip *.zip'),
                     ('JSON', '*.json'),
                     ('JSONL/NDJSON', '*.jsonl *.ndjson'),
                     ('All files', '*.*'),

@@ -461,8 +461,8 @@ class SAOWebAPI:
             if not callable(dialog):
                 raise RuntimeError('File dialog is unavailable')
             file_types = (
-                'ACT replay/report (*.json;*.jsonl;*.ndjson;*.xml)',
-                'SAO ACT XML report (*.xml)',
+                'ACT replay/report (*.json;*.jsonl;*.ndjson;*.xml;*.xml.gz;*.xml.zip;*.zip)',
+                'SAO ACT XML report (*.xml;*.xml.gz;*.xml.zip;*.zip)',
                 'JSON (*.json)',
                 'JSONL/NDJSON (*.jsonl;*.ndjson)',
                 'All files (*.*)',

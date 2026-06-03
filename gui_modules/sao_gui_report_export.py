@@ -118,6 +118,14 @@ class ReportExportPanel:
         self._format_var.set('xml')
         return self._export('xml')
 
+    def export_xml_gzip(self) -> Dict[str, Any]:
+        self._format_var.set('xml.gz')
+        return self._export('xml.gz')
+
+    def export_xml_zip(self) -> Dict[str, Any]:
+        self._format_var.set('xml.zip')
+        return self._export('xml.zip')
+
     def copy_snapshot(self) -> Dict[str, Any]:
         try:
             result = act_report_copy(self.owner, fmt=self._format_var.get())
@@ -188,8 +196,8 @@ class ReportExportPanel:
                     parent=self._win,
                     title='Import ACT replay/report',
                     filetypes=(
-                        ('ACT replay/report', '*.json *.jsonl *.ndjson *.xml'),
-                        ('SAO ACT XML report', '*.xml'),
+                        ('ACT replay/report', '*.json *.jsonl *.ndjson *.xml *.xml.gz *.xml.zip *.zip'),
+                        ('SAO ACT XML report', '*.xml *.xml.gz *.xml.zip *.zip'),
                         ('JSON', '*.json'),
                         ('JSONL/NDJSON', '*.jsonl *.ndjson'),
                         ('All files', '*.*'),
@@ -260,6 +268,8 @@ class ReportExportPanel:
             ('导出 CSV', self.export_csv),
             ('导出 HTML', self.export_html),
             ('导出 XML', self.export_xml),
+            ('导出 XML.GZ', self.export_xml_gzip),
+            ('导出 XML.ZIP', self.export_xml_zip),
             ('复制 Copy', self.copy_snapshot),
             ('关闭 Close', self.hide),
         ):

@@ -154,7 +154,7 @@ input {
         </div>
         <div class="header-actions">
             <div class="pill" id="status-pill">LOADING</div>
-            <select id="fmt"><option value="json">JSON</option><option value="csv">CSV</option><option value="html">HTML</option><option value="xml">XML</option></select>
+            <select id="fmt"><option value="json">JSON</option><option value="csv">CSV</option><option value="html">HTML</option><option value="xml">XML</option><option value="xml.gz">XML.GZ</option><option value="xml.zip">XML.ZIP</option></select>
             <button class="primary" type="button" onclick="ReportExport.refresh()">刷新</button>
             <button type="button" onclick="ReportExport.exportFile()">导出</button>
             <button type="button" onclick="ReportExport.copy()">复制</button>
@@ -171,7 +171,7 @@ input {
             <div class="row"><span>Storage</span><strong id="sum-storage">--</strong></div>
             <div class="side-title">OFFLINE IMPORT</div>
             <div class="import-actions">
-                <input id="import-path" type="text" placeholder="replay or XML report path" />
+                <input id="import-path" type="text" placeholder="replay, XML, XML.GZ, or XML.ZIP report path" />
                 <button type="button" onclick="ReportExport.chooseImportFile()">选择</button>
             </div>
             <button type="button" onclick="ReportExport.importFile()">导入 Import</button>

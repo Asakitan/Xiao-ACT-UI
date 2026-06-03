@@ -7,6 +7,8 @@ import json
 import os
 import tempfile
 import unittest
+import gzip
+import zipfile
 from xml.etree import ElementTree as ET
 from unittest import mock
 
@@ -66,7 +68,7 @@ class ActReportExportTests(unittest.TestCase):
         status = runtime.act_report_status(FakeOwner(), limit=5)
 
         self.assertTrue(status["ok"])
-        self.assertEqual(status["formats"], ["json", "csv", "html", "xml"])
+        self.assertEqual(status["formats"], ["json", "csv", "html", "xml", "xml.gz", "xml.zip"])
         self.assertEqual(status["selected_format"], "json")
         self.assertEqual(status["encounter_id"], "enc-1")
         self.assertEqual(status["preview"]["total_damage"], 12000)
@@ -103,6 +105,18 @@ class ActReportExportTests(unittest.TestCase):
         self.assertTrue(exported["path"].endswith(".xml"))
         self.assertEqual(owner._dps_history_store.exported[0][1], "xml")
 
+    def test_compressed_xml_export_formats_are_available(self) -> None:
+        owner = FakeOwner()
+        gzip_exported = runtime.act_report_export(owner, fmt="xml.gz")
+        zip_exported = runtime.act_report_export(owner, fmt="xml.zip")
+
+        self.assertTrue(gzip_exported["ok"])
+        self.assertEqual(gzip_exported["selected_format"], "xml.gz")
+        self.assertTrue(gzip_exported["path"].endswith(".xml.gz"))
+        self.assertTrue(zip_exported["ok"])
+        self.assertEqual(zip_exported["selected_format"], "xml.zip")
+        self.assertTrue(zip_exported["path"].endswith(".xml.zip"))
+
     def test_history_store_writes_static_html_report(self) -> None:
         with tempfile.TemporaryDirectory(prefix="act_html_report_") as root:
             with mock.patch.object(dps_history, "DPS_HISTORY_EXPORT_DIR", root):
@@ -133,6 +147,26 @@ class ActReportExportTests(unittest.TestCase):
         self.assertEqual(root_node.findtext("totals/total_damage"), "12000")
         names = [node.text for node in root_node.findall("combatants/combatant/name")]
         self.assertIn("Kirito", names)
+
+    def test_history_store_writes_compressed_xml_reports(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_xml_compressed_report_") as root:
+            with mock.patch.object(dps_history, "DPS_HISTORY_EXPORT_DIR", root):
+                store = dps_history.DpsHistoryStore(path=os.path.join(root, "history.json"))
+                store.add_report(FakeHistoryStore().report)
+                gzip_path = store.export_report(fmt="xml.gz")
+                zip_path = store.export_report(fmt="xml.zip")
+                self.assertIsNotNone(gzip_path)
+                self.assertIsNotNone(zip_path)
+                with gzip.open(gzip_path or "", "rt", encoding="utf-8") as fp:
+                    gzip_text = fp.read()
+                with zipfile.ZipFile(zip_path or "", "r") as zf:
+                    names = zf.namelist()
+                    zip_text = zf.read(names[0]).decode("utf-8")
+
+        self.assertTrue(str(gzip_path).endswith(".xml.gz"))
+        self.assertTrue(str(zip_path).endswith(".xml.zip"))
+        self.assertIn("sao_act_report", gzip_text)
+        self.assertIn("sao_act_report", zip_text)
 
     def test_missing_history_store_is_reported_without_throwing(self) -> None:
         status = runtime.act_report_status(object())

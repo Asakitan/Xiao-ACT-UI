@@ -201,14 +201,14 @@ The shared payload exposes `sources`, `status`, `latency_ms`, `last_event_ms`, a
 `export` is wired through shared `act_platform.runtime` helpers and the existing `DpsHistoryStore` exporter:
 
 - status: `act_report_status(owner, limit=20, fmt="json")`
-- save: `act_report_export(owner, fmt="json" | "csv" | "html" | "xml")`
+- save: `act_report_export(owner, fmt="json" | "csv" | "html" | "xml" | "xml.gz" | "xml.zip")`
 - copy: `act_report_copy(owner, fmt="json")`
 
 WebView route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/导出 Report Export`.
 
 Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报告/导出`.
 
-The shared payload preserves the parity fields `encounter_id`, `formats`, `selected_format`, and `preview`, with additional `history` and `storage_status` fields for user feedback. JSON, CSV, static HTML, and structured XML exports are written by `DpsHistoryStore.export_report()` so UI code does not duplicate export format logic. Entity/Tk uses a low-frequency diagnostic panel with refresh throttling and dirty render signatures.
+The shared payload preserves the parity fields `encounter_id`, `formats`, `selected_format`, and `preview`, with additional `history` and `storage_status` fields for user feedback. JSON, CSV, static HTML, structured XML, and compressed XML exports are written by `DpsHistoryStore.export_report()` so UI code does not duplicate export format logic. Entity/Tk uses a low-frequency diagnostic panel with refresh throttling and dirty render signatures.
 
 ## Current history browser surface
 
@@ -231,12 +231,12 @@ The shared payload preserves the parity fields `encounters`, `filters`, `cursor`
 
 - import/replay/persist: `act_offline_import_file(owner, path, persist=True, show=False, history_limit=20)`
 - wizard status: `act_offline_import_status(owner, history_limit=20)`
-- XML report fallback: SAO `sao_act_report` XML exports can be imported as finalized history reports without replay events
+- XML report fallback: SAO `sao_act_report` XML, `xml.gz`, `xml.zip`, and zip-contained XML exports can be imported as finalized history reports without replay events
 - plugin fallback: active plugin parser adapters can handle unsupported formats through their controlled `import_file` operation
 - WebView chooser/import API: `choose_offline_import_file()` and `import_offline_report(path, persist=True, show=True)`
 - Entity import actions: `OfflineImportPanel.import_file()` and `ReportExportPanel.import_offline_file(path=None)`
 
-The helper accepts normalized ACT `.json`, `.jsonl`, and `.ndjson` files first, then tries SAO structured XML report import, then active plugin parser adapters when the built-in importers reject a file. Imported events replay through `ActReplayHarness`, while XML reports import as finalized compact reports; both paths can be written into `DpsHistoryStore`. Its response preserves parity fields `source_path`, `format`, `importer`, `parser_adapter_id`, `plugin_id`, `self_uid`, `event_count`, `persisted`, `history_item`, `preview`, `snapshot`, and refreshed `status`.
+The helper accepts normalized ACT `.json`, `.jsonl`, and `.ndjson` files first, then tries SAO structured XML or compressed XML report import, then active plugin parser adapters when the built-in importers reject a file. Imported events replay through `ActReplayHarness`, while XML reports import as finalized compact reports; both paths can be written into `DpsHistoryStore`. Its response preserves parity fields `source_path`, `format`, `importer`, `parser_adapter_id`, `plugin_id`, `self_uid`, `event_count`, `persisted`, `history_item`, `preview`, `snapshot`, and refreshed `status`.
 
 Standalone WebView route: `web/act_offline_import.html`, opened from `SAO Menu > ACT 离线导入 Offline Import`; it can choose or accept a path, import it, show last import status/preview, and load recent history reports.
 

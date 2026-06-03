@@ -7,6 +7,8 @@ import json
 import os
 import tempfile
 import unittest
+import gzip
+import zipfile
 
 from act_platform import runtime
 from act_platform.plugins import PluginManager
@@ -168,6 +170,8 @@ class ActOfflineImportTests(unittest.TestCase):
         self.assertEqual((result["snapshot"]["render_spec"]["sources"]["summary"] or {}).get("data_source"), "offline_import")
         self.assertTrue(status["ok"], status)
         self.assertIn("json", status["accepted_formats"])
+        self.assertIn("xml.gz", status["accepted_formats"])
+        self.assertIn("xml.zip", status["accepted_formats"])
         self.assertEqual(status["status"], "imported")
         self.assertEqual(status["last_result"]["source_path"], path)
         self.assertEqual(status["history"]["storage_status"]["count"], 1)
@@ -262,6 +266,36 @@ class ActOfflineImportTests(unittest.TestCase):
         self.assertEqual(result["history_item"]["total_damage"], 9001)
         self.assertEqual(result["preview"]["total_damage"], 9001)
         self.assertEqual(latest["encounter_id"], "xml-encounter")
+
+    def test_runtime_import_can_persist_compressed_xml_reports(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_import_compressed_xml_report_") as root:
+            source_store = DpsHistoryStore(path=os.path.join(root, "source_history.json"), limit=5)
+            source_store.add_report({
+                "encounter_id": "xml-compressed-encounter",
+                "report_reason": "xml_source",
+                "elapsed_s": 12,
+                "total_damage": 7777,
+                "entities": [{"uid": SELF_UID, "name": "Kirito", "damage_total": 7777, "dps": 648}],
+            })
+            xml_path = source_store.export_report(fmt="xml") or ""
+            with open(xml_path, "r", encoding="utf-8") as fp:
+                xml_text = fp.read()
+            gzip_path = os.path.join(root, "report.xml.gz")
+            zip_path = os.path.join(root, "report.xml.zip")
+            with gzip.open(gzip_path, "wt", encoding="utf-8") as fp:
+                fp.write(xml_text)
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("report.xml", xml_text)
+            target_store = DpsHistoryStore(path=os.path.join(root, "target_history.json"), limit=5)
+            owner = FakeOwner(target_store)
+
+            gzip_result = runtime.act_offline_import_file(owner, gzip_path, show=False)
+            zip_result = runtime.act_offline_import_file(owner, zip_path, show=False)
+
+        self.assertTrue(gzip_result["ok"], gzip_result)
+        self.assertEqual(gzip_result["format"], "xml.gz")
+        self.assertTrue(zip_result["ok"], zip_result)
+        self.assertEqual(zip_result["format"], "xml.zip")
 
 
 if __name__ == "__main__":

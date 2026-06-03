@@ -799,7 +799,13 @@ def _import_exported_report_file(owner: Any, path: str, *, persist: bool,
     if not isinstance(report, Mapping):
         return None
     source_path = str(path or "")
-    fmt = os.path.splitext(source_path)[1].lower().lstrip(".") or "report"
+    lower_path = source_path.lower()
+    if lower_path.endswith(".xml.gz"):
+        fmt = "xml.gz"
+    elif lower_path.endswith(".xml.zip") or lower_path.endswith(".zip"):
+        fmt = "xml.zip"
+    else:
+        fmt = os.path.splitext(source_path)[1].lower().lstrip(".") or "report"
     imported_report = dict(_json_safe(report))
     imported_report["report_reason"] = str(imported_report.get("report_reason") or "offline_report_import")
     imported_report["source_kind"] = "offline_report_import"
@@ -913,7 +919,7 @@ def _plugin_offline_import_summary(owner: Any, path: str, initial_errors: Iterab
     return None, errors
 
 
-_OFFLINE_IMPORT_ACCEPTED_FORMATS = ["json", "jsonl", "ndjson", "xml", "plugin"]
+_OFFLINE_IMPORT_ACCEPTED_FORMATS = ["json", "jsonl", "ndjson", "xml", "xml.gz", "xml.zip", "zip", "plugin"]
 
 
 def _offline_import_state(owner: Any) -> dict[str, Any]:
@@ -2521,7 +2527,7 @@ def _report_preview(snapshot: Mapping[str, Any], report: Mapping[str, Any] | Non
 
 def _normalize_export_format(fmt: str | None) -> str:
     value = str(fmt or "json").strip().lower()
-    return value if value in {"json", "csv", "html", "xml"} else "json"
+    return value if value in {"json", "csv", "html", "xml", "xml.gz", "xml.zip"} else "json"
 
 
 def act_report_status(owner: Any, *, limit: int = 20, fmt: str = "json") -> dict[str, Any]:
@@ -2552,7 +2558,7 @@ def act_report_status(owner: Any, *, limit: int = 20, fmt: str = "json") -> dict
         "ok": bool(report or history) and not errors,
         "message": "OK" if not errors else "; ".join(errors),
         "encounter_id": encounter_id,
-        "formats": ["json", "csv", "html", "xml"],
+        "formats": ["json", "csv", "html", "xml", "xml.gz", "xml.zip"],
         "selected_format": selected,
         "preview": preview,
         "history": history,

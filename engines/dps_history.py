@@ -8,6 +8,7 @@ with atomic file replacement.
 
 import copy
 import csv
+import gzip
 import html
 import json
 import os
@@ -15,6 +16,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import zipfile
 from typing import Any, Dict, List, Optional
 from xml.etree import ElementTree as ET
 
@@ -327,6 +329,15 @@ def _coerce_bool_text(value: Any) -> bool:
 def load_exported_xml_report(path: str) -> Dict[str, Any]:
     tree = ET.parse(path)
     root = tree.getroot()
+    return _parse_exported_xml_root(root)
+
+
+def _parse_exported_xml_text(text: str) -> Dict[str, Any]:
+    root = ET.fromstring(text)
+    return _parse_exported_xml_root(root)
+
+
+def _parse_exported_xml_root(root: ET.Element) -> Dict[str, Any]:
     if root.tag != "sao_act_report":
         raise ValueError(f"unsupported XML report root: {root.tag}")
     encounter = root.find("encounter")
@@ -364,9 +375,21 @@ def load_exported_xml_report(path: str) -> Dict[str, Any]:
 
 
 def load_exported_report_file(path: str) -> Dict[str, Any]:
-    suffix = os.path.splitext(str(path or ""))[1].lower()
+    text_path = str(path or "")
+    lower_path = text_path.lower()
+    suffix = os.path.splitext(text_path)[1].lower()
     if suffix == ".xml":
         return load_exported_xml_report(path)
+    if lower_path.endswith(".xml.gz"):
+        with gzip.open(text_path, "rt", encoding="utf-8") as fp:
+            return _parse_exported_xml_text(fp.read())
+    if lower_path.endswith(".xml.zip") or suffix == ".zip":
+        with zipfile.ZipFile(text_path, "r") as zf:
+            names = [name for name in zf.namelist() if not name.endswith("/")]
+            xml_names = [name for name in names if name.lower().endswith(".xml")]
+            if not xml_names:
+                raise ValueError("compressed XML report does not contain an XML file")
+            return _parse_exported_xml_text(zf.read(xml_names[0]).decode("utf-8"))
     raise ValueError(f"unsupported exported report import format: {suffix or path}")
 
 
@@ -1027,7 +1050,7 @@ class DpsHistoryStore:
             return None
         item = _compact_report(src)
         fmt = str(fmt or "json").strip().lower()
-        if fmt not in ("json", "csv", "html", "xml"):
+        if fmt not in ("json", "csv", "html", "xml", "xml.gz", "xml.zip"):
             fmt = "json"
         os.makedirs(DPS_HISTORY_EXPORT_DIR, exist_ok=True)
         stamp = time.strftime(
@@ -1061,6 +1084,13 @@ class DpsHistoryStore:
         elif fmt == "xml":
             with open(path, "w", encoding="utf-8") as fp:
                 fp.write(_render_xml_report(item))
+        elif fmt == "xml.gz":
+            with gzip.open(path, "wt", encoding="utf-8") as fp:
+                fp.write(_render_xml_report(item))
+        elif fmt == "xml.zip":
+            xml_name = f"dps_{stamp}_{reason}.xml"
+            with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr(xml_name, _render_xml_report(item))
         else:
             with open(path, "w", encoding="utf-8") as fp:
                 json.dump(item, fp, ensure_ascii=False, indent=2)
