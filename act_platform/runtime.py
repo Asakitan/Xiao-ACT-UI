@@ -1194,6 +1194,193 @@ def act_combatant_drilldown_back(owner: Any) -> dict[str, Any]:
     return act_combatant_drilldown_status(owner)
 
 
+def _skill_drilldown_state(owner: Any) -> dict[str, Any]:
+    state = getattr(owner, "_act_skill_drilldown_state", None)
+    if not isinstance(state, dict):
+        state = {"combatant_id": "", "skill_id": "", "filters": {"query": ""}}
+        try:
+            setattr(owner, "_act_skill_drilldown_state", state)
+        except Exception:
+            pass
+    filters = state.get("filters")
+    if not isinstance(filters, dict):
+        filters = {"query": ""}
+        state["filters"] = filters
+    filters.setdefault("query", "")
+    state.setdefault("combatant_id", "")
+    state.setdefault("skill_id", "")
+    return state
+
+
+def _normalize_skill_id(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _find_skill_detail(detail: Mapping[str, Any], skill_id: str) -> dict[str, Any] | None:
+    target = _normalize_skill_id(skill_id)
+    for skill in list(detail.get("skills") or []):
+        if not isinstance(skill, Mapping):
+            continue
+        current = _normalize_skill_id(skill.get("skill_id") or skill.get("id"))
+        if current and current == target:
+            return dict(_json_safe(skill))
+    return None
+
+
+def _skill_summary(skill: Mapping[str, Any]) -> dict[str, Any]:
+    damage = int(skill.get("total") or skill.get("damage") or skill.get("damage_total") or 0)
+    heal = int(skill.get("heal_total") or skill.get("heal") or 0)
+    is_heal = heal > damage
+    amount = heal if is_heal else damage
+    return {
+        "skill_id": _normalize_skill_id(skill.get("skill_id") or skill.get("id")),
+        "name": str(skill.get("skill_name") or skill.get("name") or skill.get("skill_id") or "Unknown Skill"),
+        "kind": "heal" if is_heal else "damage",
+        "amount": int(amount),
+        "damage": damage,
+        "heal": heal,
+    }
+
+
+def _skill_timeline_refs(owner: Any, *, skill_id: str, query: str = "", limit: int = 80) -> list[dict[str, Any]]:
+    text = str(query or "").strip().lower()
+    target = _normalize_skill_id(skill_id)
+    try:
+        raw_events = ensure_act_event_bus(owner).recent_events(limit)
+    except Exception:
+        raw_events = []
+    refs: list[dict[str, Any]] = []
+    for idx, event in enumerate(raw_events):
+        if not isinstance(event, Mapping):
+            continue
+        row = _action_log_row(event, idx)
+        payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
+        current = _normalize_skill_id(payload.get("skill_id") or payload.get("id"))
+        if current != target:
+            continue
+        ref = {
+            "id": str(row.get("id") or ""),
+            "time_ms": int(row.get("time_ms") or 0),
+            "topic": str(row.get("topic") or ""),
+            "label": str(row.get("label") or ""),
+            "value": row.get("value") or "",
+            "payload": _json_safe(payload),
+        }
+        if text and text not in json.dumps(ref, ensure_ascii=False, default=str).lower():
+            continue
+        refs.append(ref)
+    refs.sort(key=lambda item: int(item.get("time_ms") or 0))
+    return refs
+
+
+def act_skill_drilldown_status(owner: Any, *, combatant_id: str | int | None = None, skill_id: str | int | None = None, query: str | None = None, limit: int = 80) -> dict[str, Any]:
+    """Return one skill drilldown payload shared by WebView and Entity/Tk."""
+    state = _skill_drilldown_state(owner)
+    if combatant_id is not None:
+        state["combatant_id"] = str(combatant_id or "")
+    if skill_id is not None:
+        state["skill_id"] = _normalize_skill_id(skill_id)
+    filters = dict(state.get("filters") or {})
+    if query is not None:
+        filters["query"] = str(query or "")
+    state["filters"] = filters
+    cid = str(state.get("combatant_id") or "")
+    sid = _normalize_skill_id(state.get("skill_id"))
+    if not cid or not sid:
+        return {
+            "ok": True,
+            "message": "No skill selected",
+            "encounter_id": _timeline_encounter_id(owner, state),
+            "combatant_id": cid,
+            "skill_id": sid,
+            "summary": {},
+            "casts": 0,
+            "hits": 0,
+            "crit_rate": 0.0,
+            "timeline_refs": [],
+            "filters": filters,
+            "errors": [],
+        }
+    detail, errors = _find_combatant_detail(owner, cid)
+    skill = _find_skill_detail(detail or {}, sid) if detail else None
+    if skill is None:
+        msg = f"skill not found: {sid}"
+        errors = errors or [msg]
+        if msg not in errors:
+            errors.append(msg)
+        return {
+            "ok": False,
+            "message": "; ".join(errors),
+            "encounter_id": _timeline_encounter_id(owner, state),
+            "combatant_id": cid,
+            "skill_id": sid,
+            "summary": {},
+            "casts": 0,
+            "hits": 0,
+            "crit_rate": 0.0,
+            "timeline_refs": [],
+            "filters": filters,
+            "errors": errors,
+        }
+    summary = _skill_summary(skill)
+    hits = int(skill.get("heal_hits" if summary.get("kind") == "heal" else "hits") or skill.get("hits") or 0)
+    timeline_refs = list(_json_safe(skill.get("timeline_refs") or [])) if isinstance(skill.get("timeline_refs"), list) else []
+    query_text = str(filters.get("query") or "").strip().lower()
+    if query_text:
+        timeline_refs = [
+            ref for ref in timeline_refs
+            if query_text in json.dumps(ref, ensure_ascii=False, default=str).lower()
+        ]
+    live_refs = _skill_timeline_refs(owner, skill_id=sid, query=str(filters.get("query") or ""), limit=limit)
+    timeline_refs.extend(live_refs)
+    timeline_refs.sort(key=lambda item: int(item.get("time_ms") or 0) if isinstance(item, Mapping) else 0)
+    return {
+        "ok": True,
+        "message": "OK",
+        "encounter_id": _timeline_encounter_id(owner, state),
+        "combatant_id": cid,
+        "skill_id": sid,
+        "summary": summary,
+        "casts": int(skill.get("casts") or skill.get("cast_count") or max(1, hits if hits else 0)),
+        "hits": hits,
+        "crit_rate": float(skill.get("crit_rate") or 0.0),
+        "timeline_refs": timeline_refs,
+        "filters": filters,
+        "errors": errors,
+    }
+
+
+def act_skill_drilldown_filter(owner: Any, *, combatant_id: str | int | None = None, skill_id: str | int | None = None, query: str = "", limit: int = 80) -> dict[str, Any]:
+    return act_skill_drilldown_status(owner, combatant_id=combatant_id, skill_id=skill_id, query=query, limit=limit)
+
+
+def act_skill_drilldown_copy(owner: Any, *, combatant_id: str | int | None = None, skill_id: str | int | None = None, query: str | None = None, limit: int = 80) -> dict[str, Any]:
+    status = act_skill_drilldown_status(owner, combatant_id=combatant_id, skill_id=skill_id, query=query, limit=limit)
+    payload = {
+        "encounter_id": status.get("encounter_id"),
+        "combatant_id": status.get("combatant_id"),
+        "skill_id": status.get("skill_id"),
+        "summary": status.get("summary") or {},
+        "casts": status.get("casts") or 0,
+        "hits": status.get("hits") or 0,
+        "crit_rate": status.get("crit_rate") or 0.0,
+        "timeline_refs": status.get("timeline_refs") or [],
+        "filters": status.get("filters") or {},
+    }
+    try:
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+    except Exception:
+        text = str(payload)
+    return {"ok": bool(status.get("ok")), "message": status.get("message") or "OK", "text": text, **payload, "errors": list(status.get("errors") or [])}
+
+
+def act_skill_drilldown_back(owner: Any) -> dict[str, Any]:
+    state = _skill_drilldown_state(owner)
+    state["combatant_id"] = ""
+    state["skill_id"] = ""
+    return act_skill_drilldown_status(owner)
+
+
 def _report_rows_from_snapshot(snapshot: Mapping[str, Any], report: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     render_spec = snapshot.get("render_spec") if isinstance(snapshot, Mapping) else {}
     rows = render_spec.get("rows") if isinstance(render_spec, Mapping) else []
@@ -1455,6 +1642,10 @@ __all__ = [
     "act_combatant_drilldown_filter",
     "act_combatant_drilldown_focus_target",
     "act_combatant_drilldown_status",
+    "act_skill_drilldown_back",
+    "act_skill_drilldown_copy",
+    "act_skill_drilldown_filter",
+    "act_skill_drilldown_status",
     "act_action_log_copy",
     "act_action_log_filter",
     "act_action_log_jump_to_time",

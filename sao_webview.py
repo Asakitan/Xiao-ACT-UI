@@ -94,6 +94,10 @@ from act_platform.runtime import (
     act_report_copy,
     act_report_export,
     act_report_status,
+    act_skill_drilldown_back,
+    act_skill_drilldown_copy,
+    act_skill_drilldown_filter,
+    act_skill_drilldown_status,
     act_timeline_filter,
     act_timeline_pause,
     act_timeline_play,
@@ -519,6 +523,18 @@ class SAOWebAPI:
     def back_combatant_drilldown(self):
         return json.dumps(act_combatant_drilldown_back(self._g), ensure_ascii=False)
 
+    def get_skill_drilldown_status(self, combatant_id=None, skill_id=None, query=None, limit=80):
+        return json.dumps(act_skill_drilldown_status(self._g, combatant_id=combatant_id, skill_id=skill_id, query=query, limit=int(limit or 80)), ensure_ascii=False)
+
+    def filter_skill_drilldown(self, combatant_id=None, skill_id=None, query='', limit=80):
+        return json.dumps(act_skill_drilldown_filter(self._g, combatant_id=combatant_id, skill_id=skill_id, query=str(query or ''), limit=int(limit or 80)), ensure_ascii=False)
+
+    def copy_skill_drilldown(self, combatant_id=None, skill_id=None, query=None, limit=80):
+        return json.dumps(act_skill_drilldown_copy(self._g, combatant_id=combatant_id, skill_id=skill_id, query=query, limit=int(limit or 80)), ensure_ascii=False)
+
+    def back_skill_drilldown(self):
+        return json.dumps(act_skill_drilldown_back(self._g), ensure_ascii=False)
+
     def list_plugins(self):
         return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
 
@@ -619,6 +635,15 @@ class SAOWebAPI:
                 self._g._hide_combatant_drilldown()
             else:
                 self._g._show_combatant_drilldown()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def toggle_skill_drilldown(self):
+        """Show/hide the ACT skill drilldown overlay."""
+        def _do():
+            if self._g._skill_drilldown_visible:
+                self._g._hide_skill_drilldown()
+            else:
+                self._g._show_skill_drilldown()
         threading.Thread(target=_do, daemon=True).start()
 
     def switch_to_entity(self):
@@ -2016,6 +2041,10 @@ class SAOWebViewGUI:
         # ACT Combatant Drilldown panel
         self.combatant_drilldown_win = None
         self._combatant_drilldown_visible = False
+
+        # ACT Skill Drilldown panel
+        self.skill_drilldown_win = None
+        self._skill_drilldown_visible = False
 
         # Hide & Seek engine
         self._hide_seek_engine = None
@@ -4045,6 +4074,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Skill Drilldown — per-skill detail and timeline refs
+        skill_drilldown_url = _web_file_uri('act_skill_drilldown.html')
+        _sd_w = max(720, int(min(_sw, 1920) * 0.45))
+        _sd_h = max(500, int(min(_sh, 1080) * 0.52))
+        _sd_x = max(24, int(monitor_left + (_sw - _sd_w) * 0.34))
+        _sd_y = max(32, int(monitor_top + (_sh - _sd_h) * 0.28))
+        self.skill_drilldown_win = webview.create_window(
+            'SAO-SkillDrilldown', skill_drilldown_url,
+            width=_sd_w, height=_sd_h,
+            x=_sd_x, y=_sd_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -4644,6 +4691,7 @@ class SAOWebViewGUI:
             ('SAO-ActionLog', '_action_log_visible', None),
             ('SAO-GraphTimeseries', '_graph_timeseries_visible', None),
             ('SAO-CombatantDrilldown', '_combatant_drilldown_visible', None),
+            ('SAO-SkillDrilldown', '_skill_drilldown_visible', None),
         ]
         user32 = ctypes.windll.user32
         for title, vis_attr, hwnd_attr in _panels:
@@ -5358,6 +5406,14 @@ class SAOWebViewGUI:
                 if self.combatant_drilldown_win:
                     self._set_window_alpha('SAO-CombatantDrilldown', 0.0)
                     self.combatant_drilldown_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._skill_drilldown_visible = False
+                if self.skill_drilldown_win:
+                    self._set_window_alpha('SAO-SkillDrilldown', 0.0)
+                    self.skill_drilldown_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -6571,6 +6627,63 @@ class SAOWebViewGUI:
             pass
         self._combatant_drilldown_visible = False
 
+    # ── ACT Skill Drilldown panel ──
+
+    def _eval_skill_drilldown(self, js):
+        try:
+            if self.skill_drilldown_win:
+                self.skill_drilldown_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_skill_drilldown_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the skill drilldown panel receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-SkillDrilldown')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_skill_drilldown(self):
+        try:
+            if self.skill_drilldown_win and not self._skill_drilldown_visible:
+                self._set_window_alpha('SAO-SkillDrilldown', 0.0)
+                self.skill_drilldown_win.show()
+                self._eval_skill_drilldown('if(window.SkillDrilldown&&SkillDrilldown.fadeIn)SkillDrilldown.fadeIn()')
+                self._eval_skill_drilldown('if(window.SkillDrilldown&&SkillDrilldown.refresh)SkillDrilldown.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-SkillDrilldown', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._skill_drilldown_visible = True
+                self._ensure_skill_drilldown_clickable()
+                threading.Timer(0.5, self._ensure_skill_drilldown_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_skill_drilldown(self):
+        try:
+            if self.skill_drilldown_win and self._skill_drilldown_visible:
+                self._eval_skill_drilldown('if(window.SkillDrilldown&&SkillDrilldown.fadeOut)SkillDrilldown.fadeOut()')
+                def _finish():
+                    try:
+                        if self.skill_drilldown_win:
+                            self.skill_drilldown_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._skill_drilldown_visible = False
+
     # ── AutoKey Editor overlay ──
 
     def _eval_autokey_editor(self, js):
@@ -7515,6 +7628,11 @@ class SAOWebViewGUI:
                 self.combatant_drilldown_win.destroy()
         except Exception:
             pass
+        try:
+            if self.skill_drilldown_win:
+                self.skill_drilldown_win.destroy()
+        except Exception:
+            pass
 
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
         # 热切换时不强杀: _do_hot_switch 需要在 webview.start() 返回后运行
@@ -8182,6 +8300,7 @@ class SAOWebViewGUI:
             'toggle_action_log': lambda: (self._show_action_log() if not self._action_log_visible else self._hide_action_log()),
             'toggle_graph_timeseries': lambda: (self._show_graph_timeseries() if not self._graph_timeseries_visible else self._hide_graph_timeseries()),
             'toggle_combatant_drilldown': lambda: (self._show_combatant_drilldown() if not self._combatant_drilldown_visible else self._hide_combatant_drilldown()),
+            'toggle_skill_drilldown': lambda: (self._show_skill_drilldown() if not self._skill_drilldown_visible else self._hide_skill_drilldown()),
             'toggle_session_players': self._toggle_session_players_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,

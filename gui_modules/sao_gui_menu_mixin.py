@@ -50,6 +50,7 @@ from act_platform.runtime import (
     act_plugin_reload,
     act_plugin_status,
     act_report_status,
+    act_skill_drilldown_status,
     act_timeline_status,
     act_trigger_status,
     ensure_act_plugin_manager,
@@ -233,6 +234,16 @@ class SAOPlayerGUIMenuMixin:
             )
         except Exception:
             combatant_sig = (False, '', 0)
+        try:
+            skill_status = self._get_act_skill_menu_status()
+            skill_sig = (
+                bool(skill_status.get('ok')),
+                str(skill_status.get('combatant_id') or ''),
+                str(skill_status.get('skill_id') or ''),
+                int(len(skill_status.get('timeline_refs') or [])),
+            )
+        except Exception:
+            skill_sig = (False, '', '', 0)
         session_visible = False
         session_count = 0
         session_version = int(getattr(self, '_session_players_version', 0) or 0)
@@ -269,6 +280,7 @@ class SAOPlayerGUIMenuMixin:
             action_log_sig,
             graph_sig,
             combatant_sig,
+            skill_sig,
             session_visible,
             session_count,
             session_version,
@@ -381,6 +393,10 @@ class SAOPlayerGUIMenuMixin:
         combatant_id = str(combatant_status.get('combatant_id') or 'NONE')
         combatant_count = len(combatant_status.get('skills') or [])
         combatant_state = 'READY' if combatant_status.get('ok') else 'EMPTY'
+        skill_status = self._get_act_skill_menu_status()
+        skill_id = str(skill_status.get('skill_id') or 'NONE')
+        skill_ref_count = len(skill_status.get('timeline_refs') or [])
+        skill_state = 'READY' if skill_status.get('ok') else 'EMPTY'
         session_visible = False
         try:
             stack = getattr(self, '_menu_left_stack', None)
@@ -474,6 +490,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '▤', 'label': f'ACT行为日志: {action_log_state}/{action_log_count}', 'command': self._toggle_act_action_log_panel},
             {'icon': '⌁', 'label': f'ACT图表/曲线: {graph_state}/{graph_metric}/{graph_count}', 'command': self._toggle_act_graph_timeseries_panel},
             {'icon': '◎', 'label': f'ACT成员钻取: {combatant_state}/{combatant_id}/{combatant_count}', 'command': self._toggle_act_combatant_drilldown_panel},
+            {'icon': '✦', 'label': f'ACT技能钻取: {skill_state}/{skill_id}/{skill_ref_count}', 'command': self._toggle_act_skill_drilldown_panel},
             {'icon': '↻', 'label': '重载ACT插件', 'command': self._reload_act_plugins_menu},
             {'icon': '◆', 'label': '切换首个ACT插件', 'command': self._toggle_first_act_plugin_menu},
         ])
@@ -546,6 +563,12 @@ class SAOPlayerGUIMenuMixin:
             return act_combatant_drilldown_status(self)
         except Exception as exc:
             return {'ok': False, 'message': str(exc), 'combatant_id': '', 'summary': {}, 'skills': [], 'incoming': [], 'outgoing': [], 'filters': {'query': '', 'focus_target': ''}, 'errors': [str(exc)]}
+
+    def _get_act_skill_menu_status(self):
+        try:
+            return act_skill_drilldown_status(self, limit=24)
+        except Exception as exc:
+            return {'ok': False, 'message': str(exc), 'combatant_id': '', 'skill_id': '', 'summary': {}, 'casts': 0, 'hits': 0, 'crit_rate': 0.0, 'timeline_refs': [], 'filters': {'query': ''}, 'errors': [str(exc)]}
 
     def _show_act_plugin_status_menu(self):
         status = self._get_act_plugin_menu_status()

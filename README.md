@@ -36,6 +36,7 @@
 - `ACT Action Log` 双 UI 行为日志，基于共享 EventBus 表格行支持搜索、topic 过滤、跳转到时间点和复制 JSON 载荷。
 - `ACT Graph/Timeseries` 双 UI 图表/曲线面板，基于共享 EventBus 生成 damage/heal/event/boss HP 时间序列，支持 metric 选择、topic/query 过滤、时间范围缩放和 JSON 导出。
 - `ACT Combatant Drilldown` 双 UI 战斗成员钻取面板，复用 DPS tracker 的实体明细与技能拆分，支持打开、返回、技能过滤和目标聚焦。
+- `ACT Skill Drilldown` 双 UI 技能钻取面板，复用共享技能明细和 EventBus timeline refs，支持打开、返回、过滤和复制 JSON 载荷。
 - 自动按键 profile、本地导入导出、脚本仓库上传/下载、结构化触发条件。
 - `Commander` 队伍面板、BuffMon、Hide & Seek、置顶/隐藏面板等辅助功能。
 - 远程更新检查、`runtime-delta` / `full-package` 下载、独立 `update.exe` 应用更新并重启主程序。

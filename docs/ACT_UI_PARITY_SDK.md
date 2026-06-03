@@ -288,6 +288,21 @@ Entity route: `entity://act/combatant_drilldown`, opened from `SAO 菜单 > 面�
 
 The shared payload preserves the parity fields `encounter_id`, `combatant_id`, `summary`, `skills`, `incoming`, and `outgoing`. Live details come from `DpsTracker.get_entity_detail(uid)`; report fallback can read stored report entity rows when available. Entity/Tk keeps the surface bounded, refresh-throttled at 350ms, and dirty-signature gated before rebuilding widgets.
 
+## Current skill drilldown surface
+
+`skill_drilldown` is wired through shared `act_platform.runtime` helpers and reuses combatant skill detail plus owner-scoped ACT `EventBus` timeline references:
+
+- status/open: `act_skill_drilldown_status(owner, combatant_id=None, skill_id=None, query=None, limit=80)`
+- back: `act_skill_drilldown_back(owner)`
+- filter: `act_skill_drilldown_filter(owner, combatant_id=None, skill_id=None, query="", limit=80)`
+- copy: `act_skill_drilldown_copy(owner, combatant_id=None, skill_id=None, query=None, limit=80)`
+
+WebView route: `web/act_skill_drilldown.html`, opened from `SAO Menu > ACT 技能 Drilldown`.
+
+Entity route: `entity://act/skill_drilldown`, opened from `SAO 菜单 > 面板 > ACT技能钻取`.
+
+The shared payload preserves the parity fields `encounter_id`, `combatant_id`, `skill_id`, `casts`, `hits`, `crit_rate`, and `timeline_refs`. Static skill facts come from `DpsTracker.get_entity_detail(uid)`; live references are filtered from `EventBus.recent_events()` by `skill_id`. Entity/Tk keeps the surface bounded to 80 timeline refs, refresh-throttled at 350ms, and dirty-signature gated before rebuilding widgets.
+
 ## Safety notes
 
 Treat the SDK as a delivery gate, not documentation-only metadata. If a feature PR changes ACT behavior, it should update the registry, both UI declarations, and parity tests in the same change.

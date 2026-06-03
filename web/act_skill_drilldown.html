@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SAO ACT Skill Drilldown</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; min-height: 100%; background: transparent; color: #e7fbff; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; overflow: hidden; user-select: none; }
+    body { padding: 18px; opacity: 0; transition: opacity 180ms ease; }
+    body.visible { opacity: 1; }
+    .panel {
+      width: min(100%, 880px); min-height: 500px; padding: 18px; position: relative;
+      border: 1px solid rgba(72,239,255,.58);
+      clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 30px, 100% 100%, 30px 100%, 0 calc(100% - 30px));
+      background: linear-gradient(135deg, rgba(4,17,30,.95), rgba(28,36,67,.84)), repeating-linear-gradient(180deg, rgba(255,255,255,.035) 0 1px, transparent 1px 4px);
+      box-shadow: 0 0 28px rgba(0,210,255,.34), inset 0 0 28px rgba(0,210,255,.12);
+    }
+    .panel::before, .panel::after { content:""; position:absolute; left:22px; right:22px; height:2px; background:linear-gradient(90deg,transparent,#48efff,#f9b44a,transparent); opacity:.82; }
+    .panel::before { top:8px; } .panel::after { bottom:8px; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:14px; }
+    h1 { margin:0; font-size:18px; letter-spacing:.12em; text-shadow:0 0 10px rgba(72,239,255,.86); }
+    .sub { color:rgba(223,250,255,.62); font-size:12px; margin-top:4px; }
+    .controls { display:grid; grid-template-columns:110px 110px 1fr 84px 84px 72px 72px; gap:8px; margin-bottom:12px; align-items:center; }
+    input, button { border:1px solid rgba(72,239,255,.45); background:rgba(2,18,32,.74); color:#e8fdff; border-radius:4px; padding:8px 10px; outline:none; font-size:12px; }
+    input::placeholder { color:rgba(223,250,255,.42); }
+    button { cursor:pointer; text-transform:uppercase; letter-spacing:.06em; transition:all 120ms ease; }
+    button:hover { border-color:#f9b44a; box-shadow:0 0 14px rgba(249,180,74,.28); }
+    .close { width:34px; height:34px; padding:0; border-radius:50%; font-size:16px; }
+    .summary { display:grid; grid-template-columns:repeat(6, 1fr); gap:8px; margin-bottom:12px; }
+    .card { border:1px solid rgba(72,239,255,.22); background:rgba(0,11,20,.46); padding:10px; min-height:62px; }
+    .label { color:rgba(223,250,255,.55); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
+    .value { color:#fff7d6; font-size:17px; margin-top:4px; text-shadow:0 0 8px rgba(249,180,74,.28); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .layout { display:grid; grid-template-columns:1fr 260px; gap:12px; }
+    .section { border:1px solid rgba(72,239,255,.22); background:rgba(0,7,16,.44); min-height:275px; padding:10px; overflow:hidden; }
+    .section-title { color:#48efff; font-size:12px; letter-spacing:.12em; margin-bottom:8px; }
+    .event-row { border:1px solid rgba(72,239,255,.13); margin-bottom:7px; background:rgba(255,255,255,.035); padding:8px 10px; display:grid; grid-template-columns:82px 72px 1fr 96px; gap:8px; align-items:center; }
+    .event-time { color:#f9b44a; font-size:12px; }
+    .event-topic { color:#67ffc2; font-size:12px; text-transform:uppercase; }
+    .event-label { color:#f2fdff; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .event-value { color:#fff7d6; font-size:13px; text-align:right; }
+    .mini-row { display:grid; grid-template-columns:82px 1fr; gap:8px; border-top:1px solid rgba(72,239,255,.12); padding:8px 0; font-size:12px; color:rgba(223,250,255,.74); }
+    .empty { color:rgba(223,250,255,.52); text-align:center; padding:60px 8px; }
+    .status { margin-top:10px; color:rgba(223,250,255,.52); font-size:11px; }
+    @media (max-width: 820px) { .controls { grid-template-columns:1fr 1fr; } .summary { grid-template-columns:repeat(2, 1fr); } .layout { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <section class="panel">
+    <header>
+      <div><h1>ACT SKILL DRILLDOWN</h1><div class="sub" id="encounter">encounter: pending</div></div>
+      <button class="close" onclick="SkillDrilldown.close()">×</button>
+    </header>
+    <div class="controls">
+      <input id="combatantId" placeholder="UID" onkeydown="if(event.key==='Enter') SkillDrilldown.refresh()" />
+      <input id="skillId" placeholder="Skill ID" onkeydown="if(event.key==='Enter') SkillDrilldown.refresh()" />
+      <input id="query" placeholder="Timeline filter" onkeydown="if(event.key==='Enter') SkillDrilldown.filter()" />
+      <button onclick="SkillDrilldown.refresh()">Open</button>
+      <button onclick="SkillDrilldown.filter()">Filter</button>
+      <button onclick="SkillDrilldown.copy()">Copy</button>
+      <button onclick="SkillDrilldown.back()">Back</button>
+    </div>
+    <div class="summary" id="summary"></div>
+    <div class="layout">
+      <div class="section"><div class="section-title">TIMELINE REFS</div><div id="timeline"></div></div>
+      <div class="section"><div class="section-title">SKILL FACTS</div><div id="facts"></div></div>
+    </div>
+    <div class="status" id="status">Waiting for combatant and skill id…</div>
+  </section>
+  <script src="pywebview-shim.js"></script>
+  <script>
+    function parseMaybeJson(value) { if (typeof value === 'string') { try { return JSON.parse(value); } catch (_) { return {}; } } return value || {}; }
+    async function callApi(name, fallbackAction, ...args) {
+      if (window.pywebview && window.pywebview.api && typeof window.pywebview.api[name] === 'function') return parseMaybeJson(await window.pywebview.api[name](...args));
+      if (window.bridge && typeof window.bridge.cmd === 'function') return parseMaybeJson(await window.bridge.cmd(fallbackAction, args));
+      return {};
+    }
+    function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+    function fmt(v) { const n = Number(v || 0); if (!Number.isFinite(n)) return esc(v); if (Math.abs(n) >= 1000000) return (n/1000000).toFixed(2)+'m'; if (Math.abs(n) >= 1000) return (n/1000).toFixed(1)+'k'; return String(Math.round(n)); }
+    function pct(v) { return (Number(v || 0) * 100).toFixed(1) + '%'; }
+    window.SkillDrilldown = {
+      last: null,
+      fadeIn() { document.body.classList.add('visible'); },
+      fadeOut() { document.body.classList.remove('visible'); },
+      _cid() { return document.getElementById('combatantId').value.trim(); },
+      _sid() { return document.getElementById('skillId').value.trim(); },
+      _query() { return document.getElementById('query').value; },
+      async refresh() { const status = await callApi('get_skill_drilldown_status', 'act.skill.status', this._cid(), this._sid(), this._query(), 80); this.render(status); },
+      async filter() { const status = await callApi('filter_skill_drilldown', 'act.skill.filter', this._cid(), this._sid(), this._query(), 80); this.render(status); },
+      async copy() { const copied = await callApi('copy_skill_drilldown', 'act.skill.copy', this._cid(), this._sid(), this._query(), 80); this.render(copied); try { await navigator.clipboard.writeText(copied.text || JSON.stringify(copied)); } catch (_) {} },
+      async back() { const status = await callApi('back_skill_drilldown', 'act.skill.back'); document.getElementById('combatantId').value = ''; document.getElementById('skillId').value = ''; this.render(status); },
+      async close() { this.fadeOut(); await callApi('toggle_skill_drilldown', 'ui.menu_action', 'toggle_skill_drilldown'); },
+      render(status) {
+        status = status || {}; this.last = status;
+        const s = status.summary || {}; const refs = status.timeline_refs || []; const filters = status.filters || {};
+        if (status.combatant_id) document.getElementById('combatantId').value = status.combatant_id;
+        if (status.skill_id) document.getElementById('skillId').value = status.skill_id;
+        if (filters.query != null && document.activeElement !== document.getElementById('query')) document.getElementById('query').value = filters.query || '';
+        document.getElementById('encounter').textContent = 'encounter: ' + (status.encounter_id || 'unknown');
+        document.getElementById('summary').innerHTML = [
+          ['Skill', s.name || '-'], ['Kind', s.kind || '-'], ['Amount', fmt(s.amount)], ['Casts', fmt(status.casts)], ['Hits', fmt(status.hits)], ['Crit', pct(status.crit_rate)]
+        ].map(([k,v]) => '<div class="card"><div class="label">'+esc(k)+'</div><div class="value">'+esc(v)+'</div></div>').join('');
+        document.getElementById('timeline').innerHTML = refs.length ? refs.map(ref => '<div class="event-row"><span class="event-time">'+fmt(ref.time_ms)+'ms</span><span class="event-topic">'+esc(ref.topic || '-')+'</span><span class="event-label">'+esc(ref.label || '-')+'</span><span class="event-value">'+esc(fmt(ref.value))+'</span></div>').join('') : '<div class="empty">No timeline refs</div>';
+        document.getElementById('facts').innerHTML = [
+          ['combatant', status.combatant_id || '-'], ['skill_id', status.skill_id || '-'], ['damage', fmt(s.damage)], ['heal', fmt(s.heal)], ['refs', refs.length], ['query', filters.query || '-']
+        ].map(([k,v]) => '<div class="mini-row"><span>'+esc(k)+'</span><span>'+esc(v)+'</span></div>').join('');
+        document.getElementById('status').textContent = (status.ok ? 'OK' : 'ERROR') + ' · ' + (status.message || '') + ' · copied=' + (status.text ? 'yes' : 'no');
+      }
+    };
+    window.addEventListener('load', () => { SkillDrilldown.fadeIn(); SkillDrilldown.refresh(); });
+  </script>
+</body>
+</html>

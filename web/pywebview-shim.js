@@ -170,6 +170,21 @@
         toggle_combatant_drilldown: function () {
             return call('ui.menu_action', { action: 'toggle_combatant_drilldown' });
         },
+        get_skill_drilldown_status: function (combatantId, skillId, query, limit) {
+            return call('act.skill.status', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: limit || 80 });
+        },
+        filter_skill_drilldown: function (combatantId, skillId, query, limit) {
+            return call('act.skill.filter', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: limit || 80 });
+        },
+        copy_skill_drilldown: function (combatantId, skillId, query, limit) {
+            return call('act.skill.copy', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: limit || 80 });
+        },
+        back_skill_drilldown: function () {
+            return call('act.skill.back', {});
+        },
+        toggle_skill_drilldown: function () {
+            return call('ui.menu_action', { action: 'toggle_skill_drilldown' });
+        },
         get_plugin_status: function () {
             return call('act.plugins.status', {});
         },
