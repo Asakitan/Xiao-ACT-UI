@@ -20,6 +20,12 @@ class FakePacketEngine:
             "data_source": "hybrid",
             "running": True,
             "error_msg": "",
+            "parser_adapter_selection": {
+                "requested_id": "demo_live_packet",
+                "selected_id": "star_resonance_tcp",
+                "mode": "builtin",
+                "fallback_reason": "plugin parser adapter demo_live_packet does not support packet source",
+            },
             "mem": {
                 "data_source": "unified",
                 "requested_mode": "hybrid",
@@ -55,6 +61,9 @@ class ActDataSourceHealthTests(unittest.TestCase):
         self.assertIn("summary", payload["sources"])
         self.assertTrue(payload["sources"]["summary"]["hybrid"])
         self.assertEqual(payload["sources"]["packet"]["data_source"], "hybrid")
+        self.assertEqual(payload["sources"]["packet"]["parser_adapter_selection"]["requested_id"], "demo_live_packet")
+        self.assertEqual(payload["sources"]["summary"]["parser_adapter_id"], "star_resonance_tcp")
+        self.assertIn("does not support packet", payload["sources"]["summary"]["parser_adapter_fallback_reason"])
         self.assertEqual(payload["sources"]["memory"]["watchers"]["self"], "memory_first")
         self.assertEqual(payload["latency_ms"], 750)
         self.assertEqual(payload["last_event_ms"], 2000)

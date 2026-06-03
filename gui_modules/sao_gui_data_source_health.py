@@ -369,14 +369,26 @@ class DataSourceHealthPanel:
                 'hybrid': bool(source.get('hybrid')),
                 'packet_active': bool(source.get('packet_active')),
                 'memory_active': bool(source.get('memory_active')),
+                'parser_adapter_selection': source.get('parser_adapter_selection'),
+                'parser_adapter_id': source.get('parser_adapter_id'),
+                'parser_adapter_requested_id': source.get('parser_adapter_requested_id'),
+                'parser_adapter_mode': source.get('parser_adapter_mode'),
+                'parser_adapter_fallback_reason': source.get('parser_adapter_fallback_reason'),
             }
         return json.dumps(compact, ensure_ascii=False, sort_keys=True, default=str)
 
     @staticmethod
     def _format_source(source: Mapping[str, Any]) -> str:
+        selection = source.get('parser_adapter_selection') if isinstance(source.get('parser_adapter_selection'), Mapping) else {}
+        parser_id = selection.get('selected_id') or source.get('parser_adapter_id') or '-'
+        requested_id = selection.get('requested_id') or source.get('parser_adapter_requested_id') or '-'
+        parser_mode = selection.get('mode') or source.get('parser_adapter_mode') or '-'
+        fallback_reason = selection.get('fallback_reason') or source.get('parser_adapter_fallback_reason') or '-'
         return (
             f"data_source={source.get('data_source') or source.get('mode') or '-'}\n"
             f"status={source.get('status') or source.get('mode') or '-'} running={bool(source.get('running'))} alive={bool(source.get('alive'))}\n"
             f"requested={source.get('requested_mode') or '-'} uptime={source.get('uptime_s') or 0}s\n"
+            f"parser={parser_id} requested={requested_id} mode={parser_mode}\n"
+            f"parser_fallback={fallback_reason}\n"
             f"error={source.get('error_msg') or source.get('last_error') or '-'}"
         )

@@ -2297,6 +2297,7 @@ def act_data_source_health(owner: Any, *, now: float | None = None) -> dict[str,
     if isinstance(packet.get("mem"), Mapping):
         memory = dict(packet.pop("mem") or {})
     packet.setdefault("data_source", str(packet.get("data_source") or _owner_mem_data_source(owner) or "tcp"))
+    parser_selection = packet.get("parser_adapter_selection") if isinstance(packet.get("parser_adapter_selection"), Mapping) else {}
 
     packet_active = _source_active(packet)
     memory_active = _source_active(memory)
@@ -2313,6 +2314,11 @@ def act_data_source_health(owner: Any, *, now: float | None = None) -> dict[str,
         "packet_active": packet_active,
         "memory_active": memory_active,
         "fallbacks": ["memory"] if packet and memory else [],
+        "parser_adapter_id": str(parser_selection.get("selected_id") or ""),
+        "parser_adapter_requested_id": str(parser_selection.get("requested_id") or ""),
+        "parser_adapter_mode": str(parser_selection.get("mode") or ""),
+        "parser_adapter_plugin_id": str(parser_selection.get("plugin_id") or ""),
+        "parser_adapter_fallback_reason": str(parser_selection.get("fallback_reason") or ""),
     }
 
     last_update = float(getattr(engine, "_last_update_t", 0.0) or 0.0) if engine is not None else 0.0
@@ -2360,6 +2366,8 @@ def act_data_source_diagnose(owner: Any, *, now: float | None = None) -> dict[st
     summary = sources.get("summary") or {}
     if summary.get("hybrid") and not summary.get("memory_active"):
         diagnostics.append({"level": "warn", "message": "Hybrid mode has memory fallback configured but inactive"})
+    if summary.get("parser_adapter_fallback_reason"):
+        diagnostics.append({"level": "warn", "message": f"Parser adapter fallback: {summary.get('parser_adapter_fallback_reason')}"})
     if int(payload.get("last_event_ms") or 0) > 30000:
         diagnostics.append({"level": "warn", "message": "No player update for more than 30s"})
     out = dict(payload)

@@ -235,6 +235,11 @@ pre { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; user-selec
         Object.keys(watchers).forEach(function (name) {
             watcherHtml += badge(name + ': ' + watchers[name], watchers[name] === 'memory_first' ? 'ok' : 'warn');
         });
+        var selection = source.parser_adapter_selection || {};
+        var parserId = selection.selected_id || source.parser_adapter_id || '-';
+        var requestedParser = selection.requested_id || source.parser_adapter_requested_id || '-';
+        var parserMode = selection.mode || source.parser_adapter_mode || '-';
+        var parserFallback = selection.fallback_reason || source.parser_adapter_fallback_reason || '-';
         var self = source.self || {};
         var extra = self.uid ? '<pre>self uid=' + esc(self.uid) + ' hp=' + esc(self.hp) + '/' + esc(self.max_hp) + ' name=' + esc(self.name || '') + '</pre>' : '';
         return '<article class="' + cls + '">' +
@@ -247,6 +252,10 @@ pre { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; user-selec
             '<div>Error: <span>' + esc(source.error_msg || source.last_error || '-') + '</span></div>' +
             '<div>Requested: <span>' + esc(source.requested_mode || '-') + '</span></div>' +
             '<div>Uptime: <span>' + esc(source.uptime_s || 0) + 's</span></div>' +
+            '<div>Parser: <span>' + esc(parserId) + '</span></div>' +
+            '<div>Parser mode: <span>' + esc(parserMode) + '</span></div>' +
+            '<div>Parser requested: <span>' + esc(requestedParser) + '</span></div>' +
+            '<div>Parser fallback: <span>' + esc(parserFallback) + '</span></div>' +
             '</div>' +
             (watcherHtml ? '<div class="watchers">' + watcherHtml + '</div>' : '') + extra +
             '</article>';
