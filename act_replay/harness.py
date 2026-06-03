@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Iterable, Optional
 
+from act_platform.event_bus import EventBus
 from engines.combat_analytics import boss_state_from_monster_update, build_act_snapshot
 from engines.act_trigger_engine import ActTriggerEngine
 from engines.dps_tracker import DpsTracker
@@ -65,14 +66,30 @@ class ActReplayHarness:
                  encounter_mgr: Optional[EncounterManager] = None,
                  trigger_engine: Optional[ActTriggerEngine] = None,
                  source_probe: Any = None,
-                 history_store: Any = None) -> None:
+                 history_store: Any = None,
+                 event_bus: Optional[EventBus] = None) -> None:
         self.state_mgr = state_mgr or GameStateManager()
         self.dps_tracker = dps_tracker or DpsTracker()
         self.encounter_mgr = encounter_mgr or EncounterManager()
         self.trigger_engine = trigger_engine
         self.source_probe = source_probe
         self.history_store = history_store
+        self.event_bus = event_bus
         self.events = []
+
+    def _publish_event(self, topic: str, payload: Dict[str, Any]) -> None:
+        if self.event_bus is None:
+            return
+        try:
+            self.event_bus.publish(
+                topic,
+                payload,
+                source_name="act_replay",
+                source_kind="replay",
+                parser_id="act_replay.harness",
+            )
+        except Exception:
+            pass
 
     def set_self_uid(self, uid: int) -> None:
         uid = _safe_int(uid)
@@ -120,6 +137,9 @@ class ActReplayHarness:
         except Exception:
             pass
         self.events.append(("dungeon", event))
+        self._publish_event("dungeon", event)
+        if event.get("scene_id") or event.get("scene_uuid") or event.get("cur_map_id"):
+            self._publish_event("scene", event)
         return event
 
     def emit_skill_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
@@ -132,6 +152,7 @@ class ActReplayHarness:
         except Exception:
             pass
         self.events.append(("skill", event))
+        self._publish_event("skill", event)
         return event
 
     def emit_boss_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -146,6 +167,7 @@ class ActReplayHarness:
         if updates:
             self.state_mgr.update(**updates)
         self.events.append(("boss_state", state))
+        self._publish_event("boss_state", state)
         return state
 
     def emit_boss_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
@@ -154,6 +176,7 @@ class ActReplayHarness:
         event.setdefault("source", "replay")
         self.state_mgr.update(last_boss_event=event)
         self.events.append(("boss_event", event))
+        self._publish_event("boss", event)
         return event
 
     def emit_monster_update(self, event: Dict[str, Any]) -> Dict[str, Any]:
@@ -164,6 +187,7 @@ class ActReplayHarness:
         if updates:
             self.state_mgr.update(**updates)
         self.events.append(("monster_update", event))
+        self._publish_event("monster", event)
         return event
 
     def emit_damage_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
@@ -180,6 +204,7 @@ class ActReplayHarness:
             pass
         self.dps_tracker.on_damage_event(event)
         self.events.append(("damage", event))
+        self._publish_event("heal" if event.get("is_heal") else "damage", event)
         return event
 
     def replay(self, events: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
@@ -206,7 +231,7 @@ class ActReplayHarness:
         return self.snapshot()
 
     def snapshot(self) -> Dict[str, Any]:
-        return build_act_snapshot(
+        snap = build_act_snapshot(
             dps_tracker=self.dps_tracker,
             history_store=self.history_store,
             state_mgr=self.state_mgr,
@@ -214,6 +239,8 @@ class ActReplayHarness:
             trigger_engine=self.trigger_engine,
             source_probe=self.source_probe,
         )
+        self._publish_event("act_snapshot", snap)
+        return snap
 
     def assert_minimal_act_contract(self) -> Dict[str, Any]:
         """Raise ``AssertionError`` if the core ACT snapshot contract regresses."""

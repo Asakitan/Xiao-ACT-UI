@@ -66,6 +66,16 @@ from engines.dps_history import DpsHistoryStore
 from engines.encounter_manager import EncounterManager
 from engines.act_trigger_engine import ActTriggerEngine
 from engines.combat_analytics import boss_state_from_monster_update, build_act_snapshot
+from act_platform.runtime import (
+    act_plugin_disable,
+    act_plugin_enable,
+    act_plugin_list,
+    act_plugin_reload,
+    act_plugin_status,
+    ensure_act_event_bus,
+    ensure_act_plugin_manager,
+    publish_owner_event,
+)
 from config import (
     DEFAULT_HOTKEYS,
     get_skill_slot_rects,
@@ -363,6 +373,21 @@ class SAOWebAPI:
             return {"available": True, **engine.health()}
         except Exception as e:
             return {"available": False, "error": str(e)}
+
+    def list_plugins(self):
+        return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
+
+    def get_plugin_status(self):
+        return json.dumps(act_plugin_status(self._g), ensure_ascii=False)
+
+    def enable_plugin(self, plugin_id):
+        return json.dumps(act_plugin_enable(self._g, str(plugin_id or '')), ensure_ascii=False)
+
+    def disable_plugin(self, plugin_id):
+        return json.dumps(act_plugin_disable(self._g, str(plugin_id or '')), ensure_ascii=False)
+
+    def reload_plugins(self, plugin_id=''):
+        return json.dumps(act_plugin_reload(self._g, str(plugin_id or '')), ensure_ascii=False)
 
     def switch_to_entity(self):
         """切换到 Entity (tkinter) UI 模式."""
@@ -1676,6 +1701,8 @@ class SAOWebViewGUI:
         self._recognition_engines = []
         self._packet_engine = None
         self._vision_engine = None
+        self._act_event_bus = None
+        self._act_plugin_manager = None
         self._vision_paused_for_death = False
         self._last_dead_state = False
         self._recog_lock = threading.Lock()  # 保护 _recognition_active 切换
@@ -1886,6 +1913,8 @@ class SAOWebViewGUI:
             if not getattr(self, '_cfg_settings_ref', None):
                 self._cfg_settings_ref = CfgSettings()
             self._state_mgr.load_cache(self._cfg_settings_ref)
+            ensure_act_event_bus(self)
+            ensure_act_plugin_manager(self, load=False)
         except Exception as e:
             print(f'[SAO] Runtime state bootstrap failed: {e}')
 
@@ -2553,6 +2582,7 @@ class SAOWebViewGUI:
         """
         event = self._normalize_damage_event_for_self(event)
         event = self._normalize_damage_event_target_for_webview(event)
+        publish_owner_event(self, 'damage', event, source_name='webview', source_kind='tcp')
         # Track last self -> non-player combat target damage for boss bar target.
         # BossHP only displays later if packet_parser has usable HP data.
         _is_self_combat_target = bool(
@@ -2636,6 +2666,7 @@ class SAOWebViewGUI:
         pre-set the target UUID so the boss bar can immediately display HP
         when the player starts attacking. Also handles break bar pre-tracking.
         """
+        publish_owner_event(self, 'monster', monster_data, source_name='webview', source_kind='tcp')
         if self._boss_raid_engine:
             try:
                 self._boss_raid_engine.on_monster_update(monster_data)
@@ -2690,6 +2721,7 @@ class SAOWebViewGUI:
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(last_boss_event=self._last_boss_event)
             self._push_dps_act_snapshot()
+            publish_owner_event(self, 'boss', self._last_boss_event, source_name='webview', source_kind='tcp')
         except Exception:
             pass
         if self._boss_raid_engine:
@@ -2726,6 +2758,7 @@ class SAOWebViewGUI:
             mgr = getattr(self, '_encounter_mgr', None)
             if mgr is not None:
                 mgr.on_skill_event(self._last_skill_event)
+            publish_owner_event(self, 'skill', self._last_skill_event, source_name='webview', source_kind='tcp')
         except Exception:
             pass
 
@@ -2759,6 +2792,9 @@ class SAOWebViewGUI:
                 if 'dungeon_name' not in ev_for_mgr and updates.get('dungeon_name'):
                     ev_for_mgr['dungeon_name'] = updates.get('dungeon_name')
                 mgr.on_dungeon_event(ev_for_mgr)
+            publish_owner_event(self, 'dungeon', ev, source_name='webview', source_kind='tcp')
+            if scene_id > 0:
+                publish_owner_event(self, 'scene', ev, source_name='webview', source_kind='tcp')
         except Exception:
             pass
 
@@ -3373,6 +3409,8 @@ class SAOWebViewGUI:
                 _act_rules = []
             self._act_trigger_engine = ActTriggerEngine(_act_rules)
             self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
+            ensure_act_event_bus(self)
+            ensure_act_plugin_manager(self, load=True)
             # Load skill name mapping
             _skill_json = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                        'assets', 'skill_names.json')
@@ -5227,6 +5265,7 @@ class SAOWebViewGUI:
                 return
             snapshot = self._build_dps_act_snapshot()
             if snapshot:
+                publish_owner_event(self, 'act_snapshot', snapshot, source_name='webview', source_kind='ui')
                 self._eval_dps(
                     f'if(window.DpsMeter&&DpsMeter.showActSnapshot)DpsMeter.showActSnapshot({json.dumps(snapshot, ensure_ascii=False)})'
                 )

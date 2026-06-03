@@ -81,6 +81,7 @@ from engines.act_trigger_engine import ActTriggerEngine
 from engines.dps_history import DpsHistoryStore
 from engines.dps_tracker import DpsTracker
 from engines.encounter_manager import EncounterManager
+from act_platform.runtime import ensure_act_event_bus, ensure_act_plugin_manager, shutdown_act_plugin_manager
 from utils.sao_sound import play_sound
 
 from gui_modules.sao_gui_alert import AlertOverlay
@@ -109,6 +110,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
             try: self._boss_raid_engine.stop()
             except Exception: pass
             self._boss_raid_engine = None
+        shutdown_act_plugin_manager(self)
         self._hide_seek_alert_active = False
         aid = getattr(self, '_hide_seek_alert_after_id', None)
         if aid is not None:
@@ -182,6 +184,8 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 _act_rules = []
             self._act_trigger_engine = ActTriggerEngine(_act_rules)
             self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
+            ensure_act_event_bus(self)
+            ensure_act_plugin_manager(self, load=True)
             # Load skill name mapping (same as webview path)
             _skill_json = resource_path('assets', 'skill_names.json')
             if os.path.isfile(_skill_json):

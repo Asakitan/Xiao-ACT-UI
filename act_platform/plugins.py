@@ -1,0 +1,369 @@
+# -*- coding: utf-8 -*-
+"""In-process Python plugin manager for ACT platform extensions."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import sys
+import time
+import traceback
+from dataclasses import dataclass, field
+from types import ModuleType
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional
+
+from .event_bus import EventBus
+
+
+MANIFEST_FILE = "plugin.json"
+
+
+def _safe_id(value: Any) -> str:
+    text = str(value or "").strip().replace(" ", "_").lower()
+    out = []
+    for ch in text:
+        if ch.isalnum() or ch in ("_", "-", "."):
+            out.append(ch)
+    return "".join(out).strip("._-")
+
+
+@dataclass
+class PluginRecord:
+    plugin_id: str
+    name: str
+    version: str
+    path: str
+    entry: str
+    enabled: bool = True
+    game_ids: tuple[str, ...] = ("star_resonance",)
+    permissions: tuple[str, ...] = ()
+    settings_schema: Mapping[str, Any] = field(default_factory=dict)
+    module: Optional[ModuleType] = None
+    context: Optional["PluginContext"] = None
+    loaded: bool = False
+    active: bool = False
+    failures: int = 0
+    event_failures: int = 0
+    last_error: str = ""
+    last_loaded_at: float = 0.0
+    subscriptions: list[str] = field(default_factory=list)
+    logs: list[str] = field(default_factory=list)
+
+    def to_status(self) -> dict[str, Any]:
+        return {
+            "id": self.plugin_id,
+            "name": self.name,
+            "version": self.version,
+            "path": self.path,
+            "entry": self.entry,
+            "enabled": self.enabled,
+            "loaded": self.loaded,
+            "active": self.active,
+            "game_ids": list(self.game_ids),
+            "permissions": list(self.permissions),
+            "failures": self.failures,
+            "event_failures": self.event_failures,
+            "last_error": self.last_error,
+            "last_loaded_at": self.last_loaded_at,
+            "subscription_count": len(self.subscriptions),
+            "logs": list(self.logs[-20:]),
+        }
+
+
+class PluginContext:
+    """Small SDK object passed to in-process plugins."""
+
+    def __init__(self, manager: "PluginManager", record: PluginRecord) -> None:
+        self._manager = manager
+        self._record = record
+
+    @property
+    def plugin_id(self) -> str:
+        return self._record.plugin_id
+
+    @property
+    def event_bus(self) -> EventBus:
+        return self._manager.event_bus
+
+    def log(self, message: Any) -> None:
+        self._manager._append_log(self._record.plugin_id, str(message))
+
+    def subscribe(self, topic: str, callback: Callable[[dict[str, Any]], None]) -> str:
+        def _wrapped(event: dict[str, Any]) -> None:
+            try:
+                callback(event)
+            except Exception as exc:
+                self._manager._record_event_failure(self._record.plugin_id, exc)
+                raise
+
+        token = self._manager.event_bus.subscribe(topic, _wrapped, owner_id=self._record.plugin_id)
+        self._record.subscriptions.append(token)
+        return token
+
+    def emit(self, topic: str, payload: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+        return self._manager.event_bus.publish(
+            topic,
+            payload or {},
+            source_name=self._record.plugin_id,
+            source_kind="plugin",
+        )
+
+    def get_snapshot(self) -> dict[str, Any]:
+        provider = self._manager.snapshot_provider
+        if callable(provider):
+            try:
+                return dict(provider() or {})
+            except Exception as exc:
+                self._manager._record_failure(self._record.plugin_id, exc)
+        return {}
+
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        return self._manager.get_plugin_setting(self._record.plugin_id, key, default)
+
+    def set_setting(self, key: str, value: Any) -> None:
+        self._manager.set_plugin_setting(self._record.plugin_id, key, value)
+
+
+class PluginManager:
+    """Discover and manage in-process Python ACT plugins."""
+
+    def __init__(self, plugin_dirs: Optional[Iterable[str]] = None,
+                 event_bus: Optional[EventBus] = None,
+                 snapshot_provider: Optional[Callable[[], Mapping[str, Any]]] = None,
+                 settings: Any = None,
+                 max_failures: int = 3) -> None:
+        self.plugin_dirs = [os.path.abspath(path) for path in (plugin_dirs or []) if path]
+        self.event_bus = event_bus or EventBus()
+        self.snapshot_provider = snapshot_provider
+        self.settings = settings
+        self.max_failures = max(1, int(max_failures or 3))
+        self._records: Dict[str, PluginRecord] = {}
+        self._settings_cache: Dict[str, Dict[str, Any]] = {}
+
+    def discover(self) -> list[PluginRecord]:
+        records: Dict[str, PluginRecord] = {}
+        for root in self.plugin_dirs:
+            if not os.path.isdir(root):
+                continue
+            for name in sorted(os.listdir(root)):
+                plug_dir = os.path.join(root, name)
+                manifest_path = os.path.join(plug_dir, MANIFEST_FILE)
+                if not os.path.isdir(plug_dir) or not os.path.isfile(manifest_path):
+                    continue
+                try:
+                    record = self._read_manifest(plug_dir, manifest_path)
+                except Exception as exc:
+                    plugin_id = _safe_id(name) or f"invalid_{len(records) + 1}"
+                    record = PluginRecord(
+                        plugin_id=plugin_id,
+                        name=name,
+                        version="0",
+                        path=plug_dir,
+                        entry="",
+                        enabled=False,
+                        loaded=False,
+                        active=False,
+                        failures=1,
+                        last_error=f"manifest: {exc}",
+                    )
+                records[record.plugin_id] = record
+        self._records = records
+        return list(self._records.values())
+
+    def load_all(self) -> dict[str, Any]:
+        if not self._records:
+            self.discover()
+        for plugin_id in sorted(self._records):
+            record = self._records[plugin_id]
+            if record.enabled:
+                self.load_plugin(plugin_id)
+        return self.status()
+
+    def load_plugin(self, plugin_id: str) -> bool:
+        record = self._records.get(str(plugin_id or ""))
+        if record is None:
+            return False
+        self.unload_plugin(record.plugin_id)
+        if not record.enabled:
+            return False
+        try:
+            module = self._load_module(record)
+            record.module = module
+            record.context = PluginContext(self, record)
+            self._call_hook(record, "on_load", record.context)
+            self._call_hook(record, "on_enable")
+            record.loaded = True
+            record.active = True
+            record.last_loaded_at = time.time()
+            record.last_error = ""
+            return True
+        except Exception as exc:
+            self._record_failure(record.plugin_id, exc)
+            record.loaded = False
+            record.active = False
+            return False
+
+    def unload_plugin(self, plugin_id: str) -> bool:
+        record = self._records.get(str(plugin_id or ""))
+        if record is None:
+            return False
+        if record.module is not None:
+            try:
+                self._call_hook(record, "on_disable")
+            except Exception:
+                pass
+            try:
+                self._call_hook(record, "on_unload")
+            except Exception:
+                pass
+        for token in list(record.subscriptions):
+            self.event_bus.unsubscribe(token)
+        record.subscriptions.clear()
+        record.module = None
+        record.context = None
+        record.loaded = False
+        record.active = False
+        return True
+
+    def enable_plugin(self, plugin_id: str) -> bool:
+        record = self._records.get(str(plugin_id or ""))
+        if record is None:
+            return False
+        record.enabled = True
+        return self.load_plugin(record.plugin_id)
+
+    def disable_plugin(self, plugin_id: str) -> bool:
+        record = self._records.get(str(plugin_id or ""))
+        if record is None:
+            return False
+        record.enabled = False
+        self.unload_plugin(record.plugin_id)
+        return True
+
+    def reload_plugin(self, plugin_id: str) -> bool:
+        record = self._records.get(str(plugin_id or ""))
+        if record is None:
+            return False
+        return self.load_plugin(record.plugin_id) if record.enabled else False
+
+    def reload_all(self) -> dict[str, Any]:
+        for plugin_id in list(self._records):
+            self.unload_plugin(plugin_id)
+        self.discover()
+        return self.load_all()
+
+    def list_plugins(self) -> list[dict[str, Any]]:
+        return [self._records[key].to_status() for key in sorted(self._records)]
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "plugin_count": len(self._records),
+            "active_count": sum(1 for record in self._records.values() if record.active),
+            "plugins": self.list_plugins(),
+            "event_bus": self.event_bus.snapshot(),
+        }
+
+    def get_plugin_setting(self, plugin_id: str, key: str, default: Any = None) -> Any:
+        if self.settings is not None and hasattr(self.settings, "get"):
+            raw = self.settings.get("act_plugin_settings", {}) or {}
+            if isinstance(raw, dict):
+                return (raw.get(plugin_id) or {}).get(key, default) if isinstance(raw.get(plugin_id), dict) else default
+        return self._settings_cache.get(plugin_id, {}).get(key, default)
+
+    def set_plugin_setting(self, plugin_id: str, key: str, value: Any) -> None:
+        if self.settings is not None and hasattr(self.settings, "get") and hasattr(self.settings, "set"):
+            raw = self.settings.get("act_plugin_settings", {}) or {}
+            if not isinstance(raw, dict):
+                raw = {}
+            plug = raw.get(plugin_id) if isinstance(raw.get(plugin_id), dict) else {}
+            plug[key] = value
+            raw[plugin_id] = plug
+            self.settings.set("act_plugin_settings", raw)
+            save = getattr(self.settings, "save", None)
+            if callable(save):
+                try:
+                    save()
+                except Exception:
+                    pass
+            return
+        self._settings_cache.setdefault(plugin_id, {})[key] = value
+
+    def _read_manifest(self, plug_dir: str, manifest_path: str) -> PluginRecord:
+        with open(manifest_path, "r", encoding="utf-8") as fp:
+            manifest = json.load(fp)
+        plugin_id = _safe_id(manifest.get("id") or os.path.basename(plug_dir))
+        if not plugin_id:
+            raise ValueError("plugin id is required")
+        entry = str(manifest.get("entry") or "plugin.py").strip()
+        if not entry:
+            raise ValueError("plugin entry is required")
+        entry_path = os.path.abspath(os.path.join(plug_dir, entry))
+        if os.path.commonpath([os.path.abspath(plug_dir), entry_path]) != os.path.abspath(plug_dir):
+            raise ValueError("plugin entry must stay inside plugin directory")
+        if not os.path.isfile(entry_path):
+            raise FileNotFoundError(entry)
+        return PluginRecord(
+            plugin_id=plugin_id,
+            name=str(manifest.get("name") or plugin_id),
+            version=str(manifest.get("version") or "0.1.0"),
+            path=plug_dir,
+            entry=entry,
+            enabled=bool(manifest.get("enabled", True)),
+            game_ids=tuple(str(x) for x in manifest.get("game_ids", ["star_resonance"])),
+            permissions=tuple(str(x) for x in manifest.get("permissions", [])),
+            settings_schema=manifest.get("settings_schema") if isinstance(manifest.get("settings_schema"), dict) else {},
+        )
+
+    def _load_module(self, record: PluginRecord) -> ModuleType:
+        entry_path = os.path.abspath(os.path.join(record.path, record.entry))
+        module_name = f"act_plugin_{record.plugin_id.replace('-', '_').replace('.', '_')}"
+        if module_name in sys.modules:
+            del sys.modules[module_name]
+        spec = importlib.util.spec_from_file_location(module_name, entry_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load plugin entry: {entry_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def _call_hook(self, record: PluginRecord, name: str, *args: Any) -> Any:
+        module = record.module
+        hook = getattr(module, name, None) if module is not None else None
+        if not callable(hook):
+            return None
+        try:
+            return hook(*args)
+        except Exception as exc:
+            self._record_failure(record.plugin_id, exc)
+            raise
+
+    def _append_log(self, plugin_id: str, message: str) -> None:
+        record = self._records.get(plugin_id)
+        if record is None:
+            return
+        record.logs.append(f"{time.strftime('%H:%M:%S')} {message}")
+        record.logs = record.logs[-50:]
+
+    def _record_failure(self, plugin_id: str, exc: BaseException) -> None:
+        record = self._records.get(plugin_id)
+        if record is None:
+            return
+        record.failures += 1
+        record.last_error = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+        self._append_log(plugin_id, f"ERROR {record.last_error}")
+        if record.failures >= self.max_failures:
+            record.enabled = False
+            record.active = False
+
+    def _record_event_failure(self, plugin_id: str, exc: BaseException) -> None:
+        record = self._records.get(plugin_id)
+        if record is None:
+            return
+        record.event_failures += 1
+        self._record_failure(plugin_id, exc)
+
+
+__all__ = ["PluginContext", "PluginManager", "PluginRecord"]

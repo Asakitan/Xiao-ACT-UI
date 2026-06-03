@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from act_platform.selftest import run_selftest as run_act_platform_selftest
 from engines.act_trigger_engine import ActTriggerEngine, normalize_trigger_rule
 from engines.dps_tracker import DpsTracker
 from engines.encounter_manager import EncounterManager
@@ -25,6 +26,7 @@ from gui_modules.sao_gui_packet_callbacks_mixin import SAOPlayerGUIPacketCallbac
 from packet_parser.enums import NotifyMethod
 from packet_parser.parser import PacketParser
 from sao_webview import SAOWebViewGUI
+from tools.act_ui_parity import run_selftest as run_act_ui_parity_selftest
 import packet_parser.parser as parser_mod
 
 from .events import boss_event, boss_state_event, damage_event, dungeon_event, monster_update_event, skill_event
@@ -606,6 +608,29 @@ def _assert_monster_update_act_contract() -> None:
     assert render_boss["shield_pct"] == 0.2, render_boss
 
 
+def _assert_act_ui_parity_contract() -> dict:
+    report = run_act_ui_parity_selftest()
+    summary = report.get("summary") or {}
+    assert report.get("ok") is True, report
+    assert summary.get("capability_count") == 12, report
+    assert summary.get("webview_capability_count") == summary.get("entity_capability_count"), report
+    assert summary.get("issue_count") == 0, report
+    adapters = report.get("adapters") or {}
+    assert "webview" in adapters, report
+    assert "entity" in adapters, report
+    return report
+
+
+def _assert_act_platform_contract() -> dict:
+    report = run_act_platform_selftest()
+    assert report.get("ok") is True, report
+    assert report.get("event_bus_contract") is True, report
+    assert report.get("plugin_manager_contract") is True, report
+    assert report.get("replay_event_bus_contract") is True, report
+    assert int(report.get("captured_events") or 0) >= 4, report
+    return report
+
+
 def main() -> int:
     _assert_fixture_loader_contract()
     _assert_game_state_contract()
@@ -621,6 +646,8 @@ def main() -> int:
     _assert_webview_monster_update_act_contract()
     _assert_encounter_finalize_contract()
     _assert_monster_update_act_contract()
+    ui_parity_report = _assert_act_ui_parity_contract()
+    platform_report = _assert_act_platform_contract()
     self_uid, events = build_demo_events()
     target_uuid = int(next(
         (e.get("target_uuid") for e in events if e.get("kind") == "damage"), 0) or 0)
@@ -743,6 +770,11 @@ def main() -> int:
         "monster_update_act_contract": True,
         "boss_event_act_contract": True,
         "dual_ui_act_meta_bridge": True,
+        "act_ui_parity_contract": True,
+        "act_ui_parity_capabilities": ui_parity_report.get("summary", {}).get("capability_count"),
+        "act_platform_contract": True,
+        "act_platform_captured_events": platform_report.get("captured_events"),
+        "act_platform_plugins": platform_report.get("plugin_count"),
         "dungeon_id": context.get("dungeon_id"),
         "dungeon_scene_id": context.get("dungeon_scene_id"),
         "last_skill_kind": context.get("last_skill_event", {}).get("kind"),

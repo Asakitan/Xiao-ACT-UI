@@ -55,6 +55,7 @@ REORG_PKG_HIDDENIMPORTS = (
     + collect_submodules('updater')
     + collect_submodules('sao_theme')
     + collect_submodules('packet_parser')
+    + collect_submodules('act_platform')
 )
 # 注: utils.window_effects / vision.skill_recognition 是重构前就无任何代码 import
 # 的孤立模块（已核验 main 分支亦无引用）。PyInstaller noarchive 对「零引用包内子

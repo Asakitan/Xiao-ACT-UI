@@ -56,6 +56,7 @@ from typing import Any, Optional
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
+from act_platform.runtime import publish_owner_event
 from engines.combat_analytics import boss_state_from_monster_update
 
 
@@ -81,6 +82,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             mgr = getattr(self, '_encounter_mgr', None)
             if mgr is not None:
                 mgr.on_skill_event(self._last_skill_event)
+            publish_owner_event(self, 'skill', self._last_skill_event, source_name='entity', source_kind='tcp')
         except Exception:
             pass
 
@@ -117,6 +119,9 @@ class SAOPlayerGUIPacketCallbacksMixin:
                 if 'dungeon_name' not in event_for_mgr and updates.get('dungeon_name'):
                     event_for_mgr['dungeon_name'] = updates.get('dungeon_name')
                 mgr.on_dungeon_event(event_for_mgr)
+            publish_owner_event(self, 'dungeon', event, source_name='entity', source_kind='tcp')
+            if scene_id > 0:
+                publish_owner_event(self, 'scene', event, source_name='entity', source_kind='tcp')
         except Exception:
             pass
 
@@ -153,6 +158,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
         """Damage event callback from packet_parser → boss raid engine + DPS tracker."""
         event = self._normalize_damage_event_for_self(event)
         event = self._normalize_damage_event_target_for_entity(event)
+        publish_owner_event(self, 'damage', event, source_name='entity', source_kind='tcp')
         # Track self -> non-player combat target damage for boss bar target.
         # BossHP only displays later if packet_parser has usable HP data.
         try:
@@ -303,6 +309,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
 
     def _on_monster_update(self, monster_data):
         """Monster update from packet_parser → boss raid engine + BossHP pretrack."""
+        publish_owner_event(self, 'monster', monster_data, source_name='entity', source_kind='tcp')
         if self._boss_raid_engine:
             try: self._boss_raid_engine.on_monster_update(monster_data)
             except Exception: pass
@@ -375,6 +382,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(last_boss_event=self._last_boss_event)
             self._push_dps_act_snapshot()
+            publish_owner_event(self, 'boss', self._last_boss_event, source_name='entity', source_kind='tcp')
         except Exception:
             pass
         if self._boss_raid_engine:

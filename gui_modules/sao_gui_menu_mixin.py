@@ -40,6 +40,13 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from act_platform.runtime import (
+    act_plugin_disable,
+    act_plugin_enable,
+    act_plugin_reload,
+    act_plugin_status,
+    ensure_act_plugin_manager,
+)
 from config import DEFAULT_HOTKEYS
 from utils.sao_sound import play_sound
 from sao_theme import SAOPopUpMenu
@@ -254,6 +261,9 @@ class SAOPlayerGUIMenuMixin:
         mem_mode = self._get_mem_data_source()
         mem_mode_labels = {'tcp': 'TCP', 'memory': 'MEM', 'hybrid': 'HYBRID', 'auto': 'AUTO'}
         mem_mode_disp = mem_mode_labels.get(mem_mode, mem_mode.upper())
+        plugin_status = self._get_act_plugin_menu_status()
+        plugin_total = int(plugin_status.get('plugin_count', 0) or 0)
+        plugin_active = int(plugin_status.get('active_count', 0) or 0)
         session_visible = False
         try:
             stack = getattr(self, '_menu_left_stack', None)
@@ -338,6 +348,9 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '◇', 'label': f'Boss血条: {boss_bar_disp}', 'command': self._cycle_boss_bar_mode},
             {'icon': '✦', 'label': f'Buff监视器: {"ON" if buffmon_on else "OFF"}', 'command': self._toggle_buffmon_enabled},
             {'icon': '◆', 'label': f'Hybrid数据源: {mem_mode_disp}', 'command': self._cycle_mem_data_source},
+            {'icon': '☌', 'label': f'ACT插件: {plugin_active}/{plugin_total}', 'command': self._show_act_plugin_status_menu},
+            {'icon': '↻', 'label': '重载ACT插件', 'command': self._reload_act_plugins_menu},
+            {'icon': '◆', 'label': '切换首个ACT插件', 'command': self._toggle_first_act_plugin_menu},
         ])
 
         return {
@@ -359,6 +372,56 @@ class SAOPlayerGUIMenuMixin:
                 {'icon': '✕', 'label': '退出', 'command': self._on_close},
             ],
         }
+
+    def _get_act_plugin_menu_status(self):
+        try:
+            ensure_act_plugin_manager(self, load=False)
+            return act_plugin_status(self)
+        except Exception as exc:
+            return {'ok': False, 'message': str(exc), 'plugin_count': 0, 'active_count': 0, 'plugins': []}
+
+    def _show_act_plugin_status_menu(self):
+        status = self._get_act_plugin_menu_status()
+        plugins = status.get('plugins') or []
+        if not plugins:
+            self._show_entity_alert('ACT PLUGINS', '未发现插件；可放入 plugins/<id>/plugin.json', display_time=4.0)
+            return status
+        lines = []
+        for plug in plugins[:8]:
+            state = 'ON' if plug.get('active') else ('OFF' if plug.get('enabled') else 'DISABLED')
+            lines.append(f"{plug.get('id')}: {state} v{plug.get('version')}")
+        self._show_entity_alert('ACT PLUGINS', '\n'.join(lines), display_time=5.0)
+        return status
+
+    def _reload_act_plugins_menu(self):
+        result = act_plugin_reload(self)
+        status = result if isinstance(result, dict) else self._get_act_plugin_menu_status()
+        self._show_entity_alert(
+            'ACT PLUGINS',
+            f"重载完成: {status.get('active_count', 0)}/{status.get('plugin_count', 0)} active",
+            display_time=3.2,
+        )
+        self._refresh_menu_if_open(force=True)
+        return status
+
+    def _toggle_first_act_plugin_menu(self):
+        status = self._get_act_plugin_menu_status()
+        plugins = status.get('plugins') or []
+        if not plugins:
+            self._show_entity_alert('ACT PLUGINS', '未发现可切换插件', display_time=3.0)
+            return status
+        plugin_id = str(plugins[0].get('id') or '')
+        if not plugin_id:
+            return status
+        if plugins[0].get('enabled'):
+            result = act_plugin_disable(self, plugin_id)
+            action = 'DISABLED'
+        else:
+            result = act_plugin_enable(self, plugin_id)
+            action = 'ENABLED'
+        self._show_entity_alert('ACT PLUGINS', f'{plugin_id}: {action}', display_time=3.0)
+        self._refresh_menu_if_open(force=True)
+        return result
 
     def _dismiss_sao_menu_for_panel(self):
         """SAO 菜单关掉再弹面板, 避免 topmost overlay 压在面板上看不见."""

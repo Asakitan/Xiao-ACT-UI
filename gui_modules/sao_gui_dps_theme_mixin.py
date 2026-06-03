@@ -55,6 +55,7 @@ import threading
 from typing import Any, Optional
 
 from engines.combat_analytics import build_act_snapshot
+from act_platform.runtime import publish_owner_event
 
 
 class SAOPlayerGUIDpsThemeMixin:
@@ -248,7 +249,9 @@ class SAOPlayerGUIDpsThemeMixin:
         if overlay is None or not hasattr(overlay, 'set_act_snapshot'):
             return
         try:
-            overlay.set_act_snapshot(self._get_dps_act_snapshot())
+            snapshot = self._get_dps_act_snapshot()
+            publish_owner_event(self, 'act_snapshot', snapshot, source_name='entity', source_kind='ui')
+            overlay.set_act_snapshot(snapshot)
         except Exception:
             pass
 
