@@ -545,8 +545,14 @@ def act_history_status(owner: Any, *, limit: int = 20, query: str = "") -> dict[
     store, errors = _owner_history_store(owner)
     encounters: list[Any] = []
     if store is not None:
+        search_reports = getattr(store, "search_reports", None)
         list_reports = getattr(store, "list_reports", None)
-        if callable(list_reports):
+        if callable(search_reports):
+            try:
+                encounters = list(_json_safe(search_reports(query=str(query or ""), limit=int(limit or 20)) or []))
+            except Exception as exc:
+                errors.append(str(exc))
+        elif callable(list_reports):
             try:
                 encounters = list(_json_safe(list_reports(int(limit or 20)) or []))
                 for idx, item in enumerate(encounters):
@@ -557,7 +563,7 @@ def act_history_status(owner: Any, *, limit: int = 20, query: str = "") -> dict[
         else:
             errors.append("DPS history list API is unavailable")
     text = str(query or "").strip().lower()
-    if text:
+    if text and not callable(getattr(store, "search_reports", None)):
         encounters = [
             item for item in encounters
             if text in json.dumps(item, ensure_ascii=False, default=str).lower()

@@ -78,6 +78,15 @@ class ActHistoryRuntimeTests(unittest.TestCase):
         self.assertEqual(deleted["deleted"]["report_reason"], "first")
         self.assertEqual([item["report_reason"] for item in remaining["encounters"]], ["second"])
 
+    def test_history_search_matches_combatant_fields(self) -> None:
+        owner = FakeOwner(self._store())
+        filtered = runtime.act_history_status(owner, query="B")
+
+        self.assertTrue(filtered["ok"])
+        self.assertEqual(len(filtered["encounters"]), 1)
+        self.assertEqual(filtered["encounters"][0]["report_reason"], "second")
+        self.assertEqual(filtered["encounters"][0]["_history_index"], 0)
+
     def test_missing_store_is_reported_without_throwing(self) -> None:
         status = runtime.act_history_status(object())
         loaded = runtime.act_history_load(object(), index=0)

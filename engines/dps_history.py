@@ -78,6 +78,27 @@ def _compact_report(report: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _history_search_text(item: Dict[str, Any]) -> str:
+    pieces = [
+        item.get("encounter_id"),
+        item.get("completed_local_time"),
+        item.get("report_reason"),
+        item.get("total_damage"),
+        item.get("total_heal"),
+    ]
+    entities = item.get("entities") if isinstance(item.get("entities"), list) else []
+    for entity in entities:
+        if isinstance(entity, dict):
+            pieces.extend([
+                entity.get("uid"),
+                entity.get("name"),
+                entity.get("profession"),
+                entity.get("damage_total"),
+                entity.get("heal_total"),
+            ])
+    return " ".join(str(part or "") for part in pieces).lower()
+
+
 def _safe_filename_part(value: Any, default: str = "encounter") -> str:
     text = str(value or default).strip().replace(" ", "_")
     out = []
@@ -242,6 +263,22 @@ class DpsHistoryStore:
         cap = max(1, min(int(limit or 20), self._limit))
         with self._lock:
             return copy.deepcopy(list(reversed(self._items[-cap:])))
+
+    def search_reports(self, query: str = "", limit: int = 20) -> List[Dict[str, Any]]:
+        cap = max(1, min(int(limit or 20), self._limit))
+        text = str(query or "").strip().lower()
+        out: List[Dict[str, Any]] = []
+        with self._lock:
+            indexed = list(enumerate(self._items))
+            for internal_index, item in reversed(indexed):
+                if text and text not in _history_search_text(item):
+                    continue
+                row = copy.deepcopy(item)
+                row["_history_index"] = len(self._items) - 1 - internal_index
+                out.append(row)
+                if len(out) >= cap:
+                    break
+        return out
 
     def _internal_index_locked(self, index: int, *, newest_first: bool = True) -> int:
         pos = int(index or 0)
