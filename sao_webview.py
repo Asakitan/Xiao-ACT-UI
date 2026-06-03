@@ -69,6 +69,9 @@ from engines.combat_analytics import boss_state_from_monster_update, build_act_s
 from act_platform.runtime import (
     act_data_source_diagnose,
     act_data_source_health,
+    act_history_delete,
+    act_history_load,
+    act_history_status,
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_list,
@@ -403,6 +406,18 @@ class SAOWebAPI:
 
     def copy_report_export(self, fmt='json'):
         return json.dumps(act_report_copy(self._g, fmt=str(fmt or 'json')), ensure_ascii=False)
+
+    def get_history_status(self, limit=20, query=''):
+        return json.dumps(act_history_status(self._g, limit=int(limit or 20), query=str(query or '')), ensure_ascii=False)
+
+    def load_history_report(self, index=0, show=True):
+        return json.dumps(act_history_load(self._g, index=int(index or 0), show=bool(show)), ensure_ascii=False)
+
+    def delete_history_report(self, index=0):
+        return json.dumps(act_history_delete(self._g, index=int(index or 0)), ensure_ascii=False)
+
+    def clear_history_reports(self):
+        return json.dumps(act_history_delete(self._g, clear=True), ensure_ascii=False)
 
     def list_plugins(self):
         return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
@@ -1559,26 +1574,11 @@ class DpsWindowAPI:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
     def list_history(self, limit=20):
-        try:
-            store = getattr(self._g, '_dps_history_store', None)
-            items = store.list_reports(int(limit or 20)) if store else []
-            return json.dumps({'ok': True, 'items': items}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+        payload = act_history_status(self._g, limit=int(limit or 20))
+        return json.dumps({**payload, 'items': payload.get('encounters') or []}, ensure_ascii=False)
 
     def export_last_report(self, fmt='json'):
-        try:
-            store = getattr(self._g, '_dps_history_store', None)
-            tracker = getattr(self._g, '_dps_tracker', None)
-            if store is None:
-                return json.dumps({'ok': False, 'message': 'DPS history is not initialized.'}, ensure_ascii=False)
-            report = tracker.get_last_report() if tracker else None
-            path = store.export_report(report=report, fmt=str(fmt or 'json'))
-            if not path:
-                return json.dumps({'ok': False, 'message': 'No report to export.'}, ensure_ascii=False)
-            return json.dumps({'ok': True, 'path': path}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+        return json.dumps(act_report_export(self._g, fmt=str(fmt or 'json')), ensure_ascii=False)
 
     def get_entity_detail(self, uid):
         """Fetch detailed entity stats (with skill breakdown) and push to JS."""

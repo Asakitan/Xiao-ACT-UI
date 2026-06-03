@@ -83,6 +83,18 @@
         copy_report_export: function (fmt) {
             return call('act.report.copy', { fmt: String(fmt || 'json') });
         },
+        get_history_status: function (limit, query) {
+            return call('act.history.status', { limit: limit || 20, query: String(query || '') });
+        },
+        load_history_report: function (index, show) {
+            return call('act.history.load', { index: index || 0, show: show !== false });
+        },
+        delete_history_report: function (index) {
+            return call('act.history.delete', { index: index || 0 });
+        },
+        clear_history_reports: function () {
+            return call('act.history.clear', {});
+        },
         get_plugin_status: function () {
             return call('act.plugins.status', {});
         },

@@ -31,6 +31,7 @@
 - `ACT Triggers/Timers` 双 UI 管理面板，支持从 `act_trigger_rules` 查看、启用/禁用、重载与合成测试触发器。
 - `ACT Data Source Health` 双 UI 健康面板，展示 TCP / hybrid / memory fallback 的运行状态、延迟、最近事件间隔、诊断与可复制 JSON 快照。
 - `ACT Report/Export` 双 UI 报告导出面板，复用 `DpsHistoryStore` 输出 JSON/CSV，并提供报告预览、历史摘要与复制载荷。
+- `ACT History Browser` 双 UI 历史浏览能力，支持搜索/过滤、载入历史报告、删除单条记录与清空历史，并通过共享 runtime 保持 WebView 与 Entity/Tk 行为一致。
 - 自动按键 profile、本地导入导出、脚本仓库上传/下载、结构化触发条件。
 - `Commander` 队伍面板、BuffMon、Hide & Seek、置顶/隐藏面板等辅助功能。
 - 远程更新检查、`runtime-delta` / `full-package` 下载、独立 `update.exe` 应用更新并重启主程序。

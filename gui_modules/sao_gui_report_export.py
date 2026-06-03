@@ -8,7 +8,13 @@ import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
-from act_platform.runtime import act_report_copy, act_report_export, act_report_status
+from act_platform.runtime import (
+    act_history_delete,
+    act_history_load,
+    act_report_copy,
+    act_report_export,
+    act_report_status,
+)
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -132,6 +138,38 @@ class ReportExportPanel:
         self._render_status(self._last_status)
         return self._last_status
 
+    def load_history(self, index: int) -> Dict[str, Any]:
+        try:
+            result = act_history_load(self.owner, index=int(index or 0), show=True)
+        except Exception as exc:
+            result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
+        self._status_var.set(str(result.get('message') or ('Loaded' if result.get('ok') else 'Load failed')))
+        self._last_refresh_at = 0.0
+        self.refresh()
+        return dict(result or {})
+
+    def delete_history(self, index: int) -> Dict[str, Any]:
+        try:
+            result = act_history_delete(self.owner, index=int(index or 0))
+        except Exception as exc:
+            result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
+        self._status_var.set(str(result.get('message') or ('Deleted' if result.get('ok') else 'Delete failed')))
+        self._last_refresh_at = 0.0
+        self._last_history_sig = ""
+        self.refresh()
+        return dict(result or {})
+
+    def clear_history(self) -> Dict[str, Any]:
+        try:
+            result = act_history_delete(self.owner, clear=True)
+        except Exception as exc:
+            result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
+        self._status_var.set(str(result.get('message') or ('Cleared' if result.get('ok') else 'Clear failed')))
+        self._last_refresh_at = 0.0
+        self._last_history_sig = ""
+        self.refresh()
+        return dict(result or {})
+
     def _exists(self) -> bool:
         try:
             return bool(self._win and self._win.winfo_exists())
@@ -226,6 +264,19 @@ class ReportExportPanel:
             fg=_SAO_PANEL_GOLD,
             font=('Segoe UI', 10, 'bold'),
         ).pack(fill='x', pady=(2, 8))
+        tk.Button(
+            right,
+            text='清空历史 Clear All',
+            command=self.clear_history,
+            bg=_SAO_PANEL_HEADER_BG,
+            fg=_SAO_PANEL_HEADER_FG,
+            activebackground=_SAO_PANEL_ACCENT,
+            activeforeground='white',
+            relief='flat',
+            bd=0,
+            padx=8,
+            pady=4,
+        ).pack(fill='x', pady=(0, 8))
         self._history = tk.Frame(right, bg=_SAO_PANEL_BODY_BG)
         self._history.pack(fill='both', expand=True)
         win.protocol('WM_DELETE_WINDOW', self.hide)
@@ -335,9 +386,10 @@ class ReportExportPanel:
                 pady=20,
             ).pack(fill='x')
             return
-        for item in history[:12]:
+        for idx, item in enumerate(history[:12]):
             if not isinstance(item, Mapping):
                 continue
+            history_index = int(item.get('_history_index') if item.get('_history_index') is not None else idx)
             box = tk.Frame(self._history, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             box.pack(fill='x', pady=4)
             tk.Label(
@@ -351,6 +403,25 @@ class ReportExportPanel:
                 padx=8,
                 pady=7,
             ).pack(fill='x')
+            actions = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+            actions.pack(fill='x', padx=6, pady=(0, 6))
+            for label, command in (
+                ('载入 Load', lambda i=history_index: self.load_history(i)),
+                ('删除 Delete', lambda i=history_index: self.delete_history(i)),
+            ):
+                tk.Button(
+                    actions,
+                    text=label,
+                    command=command,
+                    bg=_SAO_PANEL_HEADER_BG,
+                    fg=_SAO_PANEL_HEADER_FG,
+                    activebackground=_SAO_PANEL_ACCENT,
+                    activeforeground='white',
+                    relief='flat',
+                    bd=0,
+                    padx=6,
+                    pady=3,
+                ).pack(side='left', fill='x', expand=True, padx=(0, 4))
 
     def _empty_box(self, message: str) -> None:
         if self._rows is None:

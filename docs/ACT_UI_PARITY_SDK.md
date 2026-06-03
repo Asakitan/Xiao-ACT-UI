@@ -208,6 +208,21 @@ Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报�
 
 The shared payload preserves the parity fields `encounter_id`, `formats`, `selected_format`, and `preview`, with additional `history` and `storage_status` fields for user feedback. Entity/Tk uses a low-frequency diagnostic panel with refresh throttling and dirty render signatures; file writing remains in `DpsHistoryStore.export_report()` so UI code does not duplicate export format logic.
 
+## Current history browser surface
+
+`history_browser` is wired through shared `act_platform.runtime` helpers and the existing rolling `DpsHistoryStore`:
+
+- status/search/filter: `act_history_status(owner, limit=20, query="")`
+- load: `act_history_load(owner, index=0, show=True)`
+- delete one encounter: `act_history_delete(owner, index=0)`
+- clear all encounters: `act_history_delete(owner, clear=True)`
+
+WebView route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/导出 Report Export`; its history sidebar supports search, load, delete, and clear actions.
+
+Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报告/导出`; its history sidebar exposes equivalent load/delete/clear controls.
+
+The shared payload preserves the parity fields `encounters`, `filters`, `cursor`, and `storage_status`. Every listed encounter also carries a stable newest-first `_history_index`, so filtered UI lists can load/delete the intended stored report instead of deleting by filtered-row position. Entity/Tk keeps this low-frequency and dirty-signature gated; destructive actions refresh the cached panel state explicitly rather than polling.
+
 ## Safety notes
 
 Treat the SDK as a delivery gate, not documentation-only metadata. If a feature PR changes ACT behavior, it should update the registry, both UI declarations, and parity tests in the same change.

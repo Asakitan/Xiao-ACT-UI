@@ -61,6 +61,7 @@ def _sanitize_entity(entity: Any) -> Dict[str, Any]:
 def _compact_report(report: Dict[str, Any]) -> Dict[str, Any]:
     entities = report.get("entities") if isinstance(report.get("entities"), list) else []
     return {
+        "encounter_id": str(report.get("encounter_id") or report.get("id") or ""),
         "completed_at": _coerce_float(report.get("completed_at"), time.time()),
         "completed_local_time": str(report.get("completed_local_time") or ""),
         "report_reason": str(report.get("report_reason") or "completed"),
@@ -152,6 +153,28 @@ class DpsHistoryStore:
         cap = max(1, min(int(limit or 20), self._limit))
         with self._lock:
             return copy.deepcopy(list(reversed(self._items[-cap:])))
+
+    def _internal_index_locked(self, index: int, *, newest_first: bool = True) -> int:
+        pos = int(index or 0)
+        if pos < 0 or pos >= len(self._items):
+            raise IndexError("history report index out of range")
+        return len(self._items) - 1 - pos if newest_first else pos
+
+    def get_report(self, index: int = 0, *, newest_first: bool = True) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            if not self._items:
+                return None
+            internal_index = self._internal_index_locked(index, newest_first=newest_first)
+            return copy.deepcopy(self._items[internal_index])
+
+    def delete_report(self, index: int = 0, *, newest_first: bool = True) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            if not self._items:
+                return None
+            internal_index = self._internal_index_locked(index, newest_first=newest_first)
+            deleted = self._items.pop(internal_index)
+            self._save_locked()
+            return copy.deepcopy(deleted)
 
     def latest_report(self) -> Optional[Dict[str, Any]]:
         with self._lock:

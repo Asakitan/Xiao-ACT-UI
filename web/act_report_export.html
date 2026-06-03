@@ -93,6 +93,15 @@ button { cursor: pointer; }
 button:hover { box-shadow: 0 0 16px rgba(107, 214, 255, .25); transform: translateY(-1px); }
 button.primary { border-color: rgba(255, 214, 117, .74); color: #fff8da; }
 button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 16px; }
+input {
+    width: 100%;
+    border: 1px solid rgba(117, 205, 255, .34);
+    border-radius: 8px;
+    background: rgba(4, 8, 14, .58);
+    color: var(--text);
+    padding: 7px 9px;
+    font-size: 12px;
+}
 .body {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 310px;
@@ -123,6 +132,8 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
 .row strong { color: var(--text); text-align: right; }
 .history { flex: 1; min-height: 0; overflow: auto; font-size: 11px; color: var(--muted); line-height: 1.45; }
 .history-item { border: 1px solid rgba(117, 205, 255, .20); border-radius: 8px; padding: 7px; margin-bottom: 6px; background: rgba(7, 12, 20, .42); user-select: text; }
+.history-actions { display: flex; gap: 5px; margin-top: 7px; }
+.history-actions button { flex: 1; padding: 5px 7px; font-size: 11px; }
 .empty { display: grid; place-items: center; height: 100%; min-height: 240px; color: var(--muted); border: 1px dashed rgba(117, 205, 255, .28); border-radius: 10px; text-align: center; line-height: 1.6; }
 .toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
 .toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
@@ -156,6 +167,8 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
             <div class="row"><span>History</span><strong id="sum-count">0</strong></div>
             <div class="row"><span>Storage</span><strong id="sum-storage">--</strong></div>
             <div class="side-title">HISTORY</div>
+            <input id="history-query" type="text" placeholder="搜索历史 / Search" />
+            <button type="button" onclick="ReportExport.clearHistory()">清空历史 Clear</button>
             <div class="history" id="history-list">暂无历史报告</div>
         </aside>
     </div>
@@ -171,8 +184,10 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
     var toast = document.getElementById('toast');
     var statusPill = document.getElementById('status-pill');
     var fmtSelect = document.getElementById('fmt');
+    var historyQuery = document.getElementById('history-query');
     var toastTimer = null;
     var lastPayload = null;
+    var searchTimer = null;
 
     function esc(value) {
         return String(value == null ? '' : value)
@@ -197,6 +212,10 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
                 get_report_export_status: 'act.report.status',
                 export_last_report: 'act.report.export',
                 copy_report_export: 'act.report.copy',
+                get_history_status: 'act.history.status',
+                load_history_report: 'act.history.load',
+                delete_history_report: 'act.history.delete',
+                clear_history_reports: 'act.history.clear',
                 toggle_report_export: 'ui.menu_action'
             };
             var payload = name === 'toggle_report_export' ? { action: 'toggle_report_export' } : { args: args || [] };
@@ -231,8 +250,9 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
             historyList.textContent = '暂无历史报告';
             return;
         }
-        historyList.innerHTML = items.slice(0, 12).map(function (item) {
-            return '<div class="history-item"><strong>' + esc(item.completed_local_time || item.report_reason || 'Encounter') + '</strong><br/>damage=' + esc(item.total_damage || 0) + ' · dps=' + esc(item.total_dps || 0) + '<br/><small>' + esc((item.elapsed_s || 0) + 's') + '</small></div>';
+        historyList.innerHTML = items.slice(0, 12).map(function (item, idx) {
+            var historyIndex = Number.isFinite(Number(item._history_index)) ? Number(item._history_index) : idx;
+            return '<div class="history-item"><strong>' + esc(item.completed_local_time || item.report_reason || 'Encounter') + '</strong><br/>damage=' + esc(item.total_damage || 0) + ' · dps=' + esc(item.total_dps || 0) + '<br/><small>' + esc((item.elapsed_s || 0) + 's') + '</small><div class="history-actions"><button type="button" onclick="ReportExport.loadHistory(' + historyIndex + ')">载入</button><button type="button" onclick="ReportExport.deleteHistory(' + historyIndex + ')">删除</button></div></div>';
         }).join('');
     }
 
@@ -271,7 +291,15 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
 
     window.ReportExport = {
         refresh: function () {
+            var query = historyQuery ? historyQuery.value : '';
             return apiCall('get_report_export_status', [20, fmt()]).then(function (payload) {
+                if (!query) return payload;
+                return apiCall('get_history_status', [20, query]).then(function (historyPayload) {
+                    payload.history = historyPayload.encounters || [];
+                    payload.storage_status = historyPayload.storage_status || payload.storage_status || {};
+                    return payload;
+                });
+            }).then(function (payload) {
                 render(payload);
                 return payload;
             }).catch(function (err) {
@@ -291,12 +319,38 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
                 return copyText(text).then(function () { showToast(payload.ok ? '报告已复制' : (payload.message || '已复制当前状态')); });
             });
         },
+        loadHistory: function (index) {
+            return apiCall('load_history_report', [index || 0, true]).then(function (payload) {
+                showToast(payload.ok ? '历史报告已载入' : (payload.message || '载入失败'));
+                return ReportExport.refresh();
+            });
+        },
+        deleteHistory: function (index) {
+            if (!confirm('删除这条历史报告？')) return Promise.resolve();
+            return apiCall('delete_history_report', [index || 0]).then(function (payload) {
+                showToast(payload.ok ? '历史报告已删除' : (payload.message || '删除失败'));
+                return ReportExport.refresh();
+            });
+        },
+        clearHistory: function () {
+            if (!confirm('清空全部历史报告？')) return Promise.resolve();
+            return apiCall('clear_history_reports', []).then(function (payload) {
+                showToast(payload.ok ? '历史已清空' : (payload.message || '清空失败'));
+                return ReportExport.refresh();
+            });
+        },
         close: function () { apiCall('toggle_report_export'); },
         fadeIn: function () { shell.classList.add('visible'); },
         fadeOut: function () { shell.classList.remove('visible'); }
     };
 
     fmtSelect.addEventListener('change', function () { ReportExport.refresh(); });
+    if (historyQuery) {
+        historyQuery.addEventListener('input', function () {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(function () { ReportExport.refresh(); }, 220);
+        });
+    }
     setTimeout(function () {
         shell.classList.add('visible');
         window.ReportExport.refresh();

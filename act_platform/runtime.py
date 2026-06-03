@@ -415,6 +415,141 @@ def _owner_dps_report(owner: Any) -> dict[str, Any] | None:
     return None
 
 
+def _owner_history_store(owner: Any) -> tuple[Any, list[str]]:
+    store = getattr(owner, "_dps_history_store", None)
+    if store is None:
+        return None, ["DPS history is not initialized"]
+    return store, []
+
+
+def _history_storage_status(store: Any, encounters: list[Any] | None = None) -> dict[str, Any]:
+    items = encounters if isinstance(encounters, list) else []
+    return {
+        "available": bool(store is not None),
+        "count": len(items),
+        "path": str(getattr(store, "path", "") or ""),
+    }
+
+
+def _history_load_report(store: Any, index: int = 0) -> dict[str, Any] | None:
+    get_report = getattr(store, "get_report", None)
+    if callable(get_report):
+        report = get_report(int(index or 0))
+        return dict(_json_safe(report)) if isinstance(report, Mapping) else None
+    reports = getattr(store, "list_reports", None)
+    if callable(reports):
+        items = list(reports(max(int(index or 0) + 1, 1)) or [])
+        if 0 <= int(index or 0) < len(items) and isinstance(items[int(index or 0)], Mapping):
+            return dict(_json_safe(items[int(index or 0)]))
+    return None
+
+
+def act_history_status(owner: Any, *, limit: int = 20, query: str = "") -> dict[str, Any]:
+    """Return ACT history browser payload shared by WebView and Entity/Tk."""
+    store, errors = _owner_history_store(owner)
+    encounters: list[Any] = []
+    if store is not None:
+        list_reports = getattr(store, "list_reports", None)
+        if callable(list_reports):
+            try:
+                encounters = list(_json_safe(list_reports(int(limit or 20)) or []))
+                for idx, item in enumerate(encounters):
+                    if isinstance(item, dict):
+                        item.setdefault("_history_index", idx)
+            except Exception as exc:
+                errors.append(str(exc))
+        else:
+            errors.append("DPS history list API is unavailable")
+    text = str(query or "").strip().lower()
+    if text:
+        encounters = [
+            item for item in encounters
+            if text in json.dumps(item, ensure_ascii=False, default=str).lower()
+        ]
+    return {
+        "ok": bool(store is not None and not errors),
+        "message": "OK" if not errors else "; ".join(errors),
+        "encounters": encounters,
+        "filters": {"query": str(query or ""), "limit": int(limit or 20)},
+        "cursor": {"offset": 0, "limit": int(limit or 20), "has_more": False},
+        "storage_status": _history_storage_status(store, encounters),
+        "errors": errors,
+    }
+
+
+def act_history_load(owner: Any, *, index: int = 0, show: bool = True) -> dict[str, Any]:
+    """Load one finalized encounter report from history and optionally show it."""
+    store, errors = _owner_history_store(owner)
+    if store is None:
+        return {
+            "ok": False,
+            "message": "; ".join(errors),
+            "report": None,
+            "preview": {},
+            "errors": errors,
+        }
+    try:
+        report = _history_load_report(store, int(index or 0))
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "report": None, "preview": {}, "errors": [str(exc)]}
+    if not isinstance(report, Mapping):
+        return {"ok": False, "message": "History report not found", "report": None, "preview": {}, "errors": ["History report not found"]}
+    shown = False
+    if show:
+        show_report = getattr(owner, "_show_dps_last_report", None)
+        if callable(show_report):
+            try:
+                shown = bool(show_report(report))
+            except Exception as exc:
+                errors.append(str(exc))
+    preview = _report_preview({}, report)
+    return {
+        "ok": not errors,
+        "message": "Loaded" if not errors else "; ".join(errors),
+        "index": int(index or 0),
+        "shown": shown,
+        "report": dict(_json_safe(report)),
+        "preview": preview,
+        "errors": errors,
+        "status": act_history_status(owner),
+    }
+
+
+def act_history_delete(owner: Any, *, index: int | None = None, clear: bool = False) -> dict[str, Any]:
+    """Delete a finalized encounter from history, or clear history when explicit."""
+    store, errors = _owner_history_store(owner)
+    if store is None:
+        return {"ok": False, "message": "; ".join(errors), "deleted": None, "errors": errors}
+    deleted: Any = None
+    try:
+        if clear:
+            clear_fn = getattr(store, "clear", None)
+            if not callable(clear_fn):
+                raise RuntimeError("DPS history clear API is unavailable")
+            clear_fn()
+            message = "History cleared"
+        else:
+            if index is None:
+                return {"ok": False, "message": "history index is required", "deleted": None, "errors": ["history index is required"]}
+            delete_report = getattr(store, "delete_report", None)
+            if callable(delete_report):
+                deleted = delete_report(int(index or 0))
+            else:
+                raise RuntimeError("DPS history delete API is unavailable")
+            if not isinstance(deleted, Mapping):
+                return {"ok": False, "message": "History report not found", "deleted": None, "errors": ["History report not found"]}
+            message = "History report deleted"
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "deleted": None, "errors": [str(exc)]}
+    return {
+        "ok": True,
+        "message": message,
+        "deleted": _json_safe(deleted) if isinstance(deleted, Mapping) else None,
+        "errors": [],
+        "status": act_history_status(owner),
+    }
+
+
 def _report_rows_from_snapshot(snapshot: Mapping[str, Any], report: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     render_spec = snapshot.get("render_spec") if isinstance(snapshot, Mapping) else {}
     rows = render_spec.get("rows") if isinstance(render_spec, Mapping) else []
@@ -490,6 +625,9 @@ def act_report_status(owner: Any, *, limit: int = 20, fmt: str = "json") -> dict
         errors.append("No DPS report is available")
     preview = _report_preview(snapshot, report)
     encounter_id = str(preview.get("encounter_id") or "latest")
+    history_payload = act_history_status(owner, limit=limit)
+    if history_payload.get("storage_status", {}).get("available"):
+        history = list(history_payload.get("encounters") or history)
     return {
         "ok": bool(report or history) and not errors,
         "message": "OK" if not errors else "; ".join(errors),
@@ -669,6 +807,9 @@ def act_data_source_diagnose(owner: Any, *, now: float | None = None) -> dict[st
 
 
 __all__ = [
+    "act_history_delete",
+    "act_history_load",
+    "act_history_status",
     "act_report_copy",
     "act_report_export",
     "act_report_status",
