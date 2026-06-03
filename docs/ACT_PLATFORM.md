@@ -9,7 +9,7 @@ No ACT feature is complete until WebView and Entity can reach the same shared ba
 - Keep TCP packet parsing as the live combat ground truth.
 - Publish stable ACT event envelopes for plugins, replay, history, triggers, and UI tools.
 - Keep WebView and Entity 1:1 through a capability parity contract.
-- Let plugins declare extensions without mutating engine internals directly.
+- Let plugins declare extensions through stable metadata, and let trusted in-process plugins use documented engine handles when they intentionally need deeper access.
 - Keep memory probing conservative, opt-in, read-only, and observable.
 - Validate every ACT change with targeted selftests instead of broad repo-wide compile runs.
 
@@ -20,7 +20,7 @@ No ACT feature is complete until WebView and Entity can reach the same shared ba
 | Event envelopes | `act_platform/events.py` | Builds canonical ACT event dictionaries with `topic`, `source`, `game_id`, `parser_id`, and copied payloads. |
 | Event bus | `act_platform/event_bus.py` | Synchronous publish/subscribe with bounded recent-event history and callback isolation. |
 | Runtime helpers | `act_platform/runtime.py` | Shared WebView/Entity command helpers for plugins, reports, history, offline imports, timelines, action logs, death recaps, graphs, drilldowns, data-source health, and triggers. |
-| Plugin SDK | `act_platform/plugins.py` | Discovers plugin folders, loads `plugin.json`, owns `PluginContext`, and exposes plugin status. |
+| Plugin SDK | `act_platform/plugins.py` | Discovers plugin folders, loads `plugin.json`, owns `PluginContext`, exposes plugin status, and provides trusted `EngineAccess` handles for power plugins. |
 | Parser adapters | `act_platform/adapters.py` | First-party parser adapter contract and built-in `star_resonance_tcp` wrapper. |
 | Replay | `act_replay/` | Offline event fixtures, replay harness, and platform regression selftest. |
 | Offline import | `act_replay/importer.py` | Loads normalized ACT JSON/JSONL files into replay-ready event lists. |
@@ -108,6 +108,8 @@ Plugins can declare these extension kinds during `on_load(ctx)`:
 - `timers`
 
 Plugin status exposes registered extension metadata and per-plugin extension counts. Extension handlers stay in-process and are intentionally omitted from JSON status.
+
+Trusted in-process plugins also receive `ctx.engine`/`ctx.owner` through `PluginContext`. `EngineAccess` exposes documented handles for the current owner, event bus, settings, plugin manager, DPS tracker, history store, trigger engine, packet bridge, memory bridge, auto-key engine, boss/raid engine, and related runtime actions. This is intentionally high-freedom because in-process Python can already import project modules; the SDK makes that power explicit and inspectable through `PluginManager.status()["engine_access"]`. Process-isolated parser adapters remain JSON-payload-only and do not receive direct engine handles.
 
 Load/unload behavior:
 

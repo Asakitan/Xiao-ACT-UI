@@ -3,7 +3,7 @@
 
 from .event_bus import EventBus
 from .events import ACT_EVENT_TOPICS, ACT_EVENT_SCHEMA_VERSION, make_event
-from .plugins import PluginContext, PluginManager
+from .plugins import EngineAccess, PluginContext, PluginManager
 from .adapters import (
     ParserAdapter,
     ParserAdapterMetadata,
@@ -19,6 +19,7 @@ __all__ = [
     "ACT_EVENT_SCHEMA_VERSION",
     "ACT_EVENT_TOPICS",
     "EventBus",
+    "EngineAccess",
     "ParserAdapter",
     "ParserAdapterMetadata",
     "PluginContext",

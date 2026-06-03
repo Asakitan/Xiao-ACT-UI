@@ -41,7 +41,7 @@ Fields:
 - `enabled`: whether the plugin should load automatically.
 - `subscriptions`: optional documentation for topics the plugin listens to.
 - `capabilities`: optional ACT capability IDs or metadata objects exposed by this plugin.
-- `permissions`: reserved for future permission gates.
+- `permissions`: optional declaration for audit/UI review. Use `"engine_access"` when a trusted in-process plugin intentionally touches `ctx.engine`/`ctx.owner`; this is not a sandbox boundary.
 
 The loader rejects entry paths that escape the plugin directory.
 
@@ -99,6 +99,12 @@ def on_unload():
 - `ctx.register_trigger_type(id, metadata=None, handler=None)`: declare a plugin trigger type.
 - `ctx.register_report_view(id, metadata=None, handler=None)`: declare a plugin report/detail view.
 - `ctx.register_timer(id, metadata=None, handler=None)`: declare a timer preset/provider extension.
+- `ctx.owner`: return the live WebView/Entity owner object when this in-process plugin is attached to a UI runtime.
+- `ctx.engine`: high-freedom trusted bridge for direct project engine access.
+- `ctx.get_engine(name, default=None)`: read a named engine handle if available.
+- `ctx.require_engine(name)`: read a named engine handle or raise a clear error.
+- `ctx.call_engine(name, method, *args, **kwargs)`: call a method on a named engine handle.
+- `ctx.call_runtime(action, *args, **kwargs)`: call a shared `act_platform.runtime` action against `ctx.owner`.
 
 Callbacks receive one argument: a canonical ACT event envelope.
 
@@ -116,6 +122,66 @@ def on_load(ctx):
 
   ctx.on_encounter_finalized(lambda event: ctx.log("encounter finalized"))
 ```
+
+## Trusted engine access
+
+In-process plugins are trusted Python code. They run in the same interpreter as SAO Auto and can import project modules directly, so the SDK exposes an explicit high-freedom bridge instead of forcing plugins to guess private owner attributes.
+
+Use this API for user-installed power plugins, diagnostics, custom report panels, automated testing helpers, or advanced integrations that need real project internals. Keep event callbacks fast: long-running work should move to a worker thread/process or a process-isolated parser adapter.
+
+```python
+def on_load(ctx):
+  ctx.log("available engines: " + ",".join(ctx.engine.available()))
+
+  tracker = ctx.require_engine("dps_tracker")
+  history = ctx.get_engine("history_store")
+  report_status = ctx.call_runtime("report_status")
+
+  ctx.register_report_view("engine_diagnostics", {
+    "title": "Engine diagnostics",
+    "route": "plugin://my_plugin/engine_diagnostics",
+    "payload_fields": ["handles", "report_status"],
+  }, handler=lambda payload: {
+    "ok": True,
+    "handles": ctx.engine.handles(),
+    "report_status": report_status,
+    "tracker_type": type(tracker).__name__,
+    "history_type": type(history).__name__ if history else "missing",
+  })
+```
+
+Named handles currently include:
+
+| Handle | Typical owner attribute(s) | Purpose |
+| --- | --- | --- |
+| `owner` | current owner object | Full UI/runtime owner object. |
+| `event_bus` | plugin manager event bus | Publish/subscribe canonical ACT events. |
+| `plugin_manager` | current plugin manager | Discovery, status, extension invocation. |
+| `settings` | owner settings object | Read/write shared settings. |
+| `game_state` | `_game_state`, `game_state` | Live game/session state. |
+| `state_manager` | `_state_mgr`, `state_mgr` | GUI/runtime state manager. |
+| `dps_tracker` | `_dps_tracker`, `dps_tracker` | Live DPS/encounter tracker. |
+| `history_store` | `_dps_history_store`, `dps_history_store` | ACT report history/import/export store. |
+| `encounter_manager` | `_encounter_mgr`, `encounter_mgr` | Encounter lifecycle manager. |
+| `trigger_engine` | `_act_trigger_engine`, `act_trigger_engine` | ACT trigger/timer engine. |
+| `packet_bridge` | `_packet_engine`, `_packet_bridge` | Live packet capture/parser bridge. |
+| `memory_bridge` | `_mem_bridge`, `mem_bridge` | Memory/TCP bridge integration. |
+| `auto_key_engine` | `_auto_key_engine`, `auto_key_engine` | Auto-key runtime integration. |
+| `boss_raid_engine` | `_boss_raid_engine`, `boss_raid_engine` | Boss/raid helper integration. |
+
+`ctx.engine` helpers:
+
+- `ctx.engine.handles()`: return availability/type metadata for all documented handles.
+- `ctx.engine.available()`: list currently available handle names.
+- `ctx.engine.get(name, default=None)` / `ctx.engine.require(name)`: read a handle.
+- `ctx.engine.owner_attr(name, default=None)` / `ctx.engine.set_owner_attr(name, value)`: inspect or edit owner attributes.
+- `ctx.engine.call_owner(method, *args, **kwargs)`: call a method on the owner.
+- `ctx.engine.call(engine_name, method, *args, **kwargs)`: call a method on a named engine.
+- `ctx.engine.runtime(action, *args, **kwargs)`: call shared ACT runtime helpers such as `plugin_status`, `report_status`, `report_export`, `history_status`, `offline_import_file`, `trigger_status`, `timeline_status`, `action_log_status`, `death_recap_status`, `graph_timeseries_status`, `combatant_drilldown_status`, `skill_drilldown_status`, and `data_source_health`.
+- `ctx.engine.import_module("engines.combat_analytics")`: import project modules from a plugin.
+- `ctx.engine.snapshot()`: read the same owner snapshot as `ctx.get_snapshot()`.
+
+Process-isolated parser adapters do not receive direct engine handles. They communicate by JSON payload only, which keeps untrusted or heavy parsing code away from UI/runtime objects.
 
 ## Event envelope
 

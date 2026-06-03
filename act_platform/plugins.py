@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import importlib
 import importlib.util
 import json
 import os
@@ -25,6 +26,63 @@ EXTENSION_KINDS = (
     "report_views",
     "timers",
 )
+
+
+_ENGINE_HANDLE_ALIASES: dict[str, tuple[str, ...]] = {
+    "owner": (),
+    "event_bus": (),
+    "plugin_manager": (),
+    "settings": (),
+    "game_state": ("_game_state", "game_state"),
+    "state_manager": ("_state_mgr", "state_mgr", "state_manager"),
+    "dps_tracker": ("_dps_tracker", "dps_tracker", "tracker", "dps"),
+    "history_store": ("_dps_history_store", "dps_history_store", "history", "store"),
+    "encounter_manager": ("_encounter_mgr", "encounter_mgr", "encounter_manager"),
+    "trigger_engine": ("_act_trigger_engine", "act_trigger_engine", "trigger_engine"),
+    "packet_bridge": ("_packet_engine", "_packet_bridge", "packet_engine", "packet_bridge"),
+    "memory_bridge": ("_mem_bridge", "mem_bridge", "memory_bridge"),
+    "auto_key_engine": ("_auto_key_engine", "auto_key_engine"),
+    "boss_raid_engine": ("_boss_raid_engine", "boss_raid_engine"),
+}
+
+
+_RUNTIME_ACTION_ALIASES: dict[str, str] = {
+    "plugin_status": "act_plugin_status",
+    "plugin_list": "act_plugin_list",
+    "history_status": "act_history_status",
+    "history_load": "act_history_load",
+    "history_delete": "act_history_delete",
+    "report_status": "act_report_status",
+    "report_export": "act_report_export",
+    "report_copy": "act_report_copy",
+    "offline_import_status": "act_offline_import_status",
+    "offline_import_file": "act_offline_import_file",
+    "trigger_status": "act_trigger_status",
+    "trigger_enable": "act_trigger_enable",
+    "trigger_disable": "act_trigger_disable",
+    "trigger_reload": "act_trigger_reload",
+    "trigger_test": "act_trigger_test",
+    "trigger_export_presets": "act_trigger_export_presets",
+    "trigger_import_presets": "act_trigger_import_presets",
+    "timeline_status": "act_timeline_status",
+    "timeline_play": "act_timeline_play",
+    "timeline_pause": "act_timeline_pause",
+    "timeline_seek": "act_timeline_seek",
+    "timeline_step": "act_timeline_step",
+    "action_log_status": "act_action_log_status",
+    "action_log_copy": "act_action_log_copy",
+    "death_recap_status": "act_death_recap_status",
+    "death_recap_copy": "act_death_recap_copy",
+    "graph_timeseries_status": "act_graph_timeseries_status",
+    "graph_timeseries_export": "act_graph_timeseries_export",
+    "combatant_drilldown_status": "act_combatant_drilldown_status",
+    "skill_drilldown_status": "act_skill_drilldown_status",
+    "data_source_health": "act_data_source_health",
+    "data_source_diagnose": "act_data_source_diagnose",
+}
+
+
+_MISSING = object()
 
 
 def _safe_id(value: Any) -> str:
@@ -88,6 +146,17 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_json_safe(item) for item in value if not callable(item)]
     return str(value)
+
+
+def _normalize_engine_name(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(".", "_")
+
+
+def _type_name(value: Any) -> str:
+    if value is None:
+        return ""
+    cls = type(value)
+    return f"{cls.__module__}.{cls.__name__}"
 
 
 def _normalize_extension(kind: str, plugin_id: str, extension_id: Any,
@@ -198,12 +267,146 @@ class PluginRecord:
         }
 
 
+class EngineAccess:
+    """Trusted in-process plugin bridge to SAO Auto owner/runtime engines."""
+
+    def __init__(self, manager: "PluginManager", record: Optional[PluginRecord] = None) -> None:
+        self._manager = manager
+        self._record = record
+
+    @property
+    def owner(self) -> Any:
+        provider = getattr(self._manager, "owner_provider", None)
+        if callable(provider):
+            try:
+                return provider()
+            except Exception:
+                return None
+        return None
+
+    @property
+    def plugin_manager(self) -> "PluginManager":
+        return self._manager
+
+    @property
+    def event_bus(self) -> EventBus:
+        return self._manager.event_bus
+
+    @property
+    def settings(self) -> Any:
+        return self._manager.settings
+
+    def handles(self) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for name in _ENGINE_HANDLE_ALIASES:
+            handle = self.get(name, None)
+            out[name] = {
+                "available": handle is not None,
+                "type": _type_name(handle),
+            }
+        return out
+
+    def available(self) -> list[str]:
+        return [name for name, meta in self.handles().items() if meta.get("available")]
+
+    def get(self, name: str, default: Any = None) -> Any:
+        key = _normalize_engine_name(name)
+        if key == "owner":
+            owner = self.owner
+            return owner if owner is not None else default
+        if key == "event_bus":
+            return self.event_bus
+        if key == "plugin_manager":
+            return self.plugin_manager
+        if key == "settings":
+            return self.settings if self.settings is not None else default
+        owner = self.owner
+        if owner is None:
+            return default
+        for canonical, aliases in _ENGINE_HANDLE_ALIASES.items():
+            alias_keys = {_normalize_engine_name(alias) for alias in aliases}
+            if key != canonical and key not in alias_keys:
+                continue
+            for attr in aliases:
+                try:
+                    value = getattr(owner, attr)
+                except Exception:
+                    continue
+                if value is not None:
+                    return value
+            return default
+        try:
+            value = getattr(owner, str(name))
+        except Exception:
+            return default
+        return value if value is not None else default
+
+    def require(self, name: str) -> Any:
+        value = self.get(name, _MISSING)
+        if value is _MISSING or value is None:
+            raise RuntimeError(f"engine handle is unavailable: {name}")
+        return value
+
+    def owner_attr(self, name: str, default: Any = None) -> Any:
+        owner = self.owner
+        if owner is None:
+            return default
+        try:
+            return getattr(owner, str(name))
+        except Exception:
+            return default
+
+    def set_owner_attr(self, name: str, value: Any) -> None:
+        owner = self.require("owner")
+        setattr(owner, str(name), value)
+
+    def call_owner(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        owner = self.require("owner")
+        fn = getattr(owner, str(method or ""), None)
+        if not callable(fn):
+            raise AttributeError(f"owner method is unavailable: {method}")
+        return fn(*args, **kwargs)
+
+    def call(self, engine_name: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        handle = self.require(engine_name)
+        fn = getattr(handle, str(method or ""), None)
+        if not callable(fn):
+            raise AttributeError(f"{engine_name}.{method} is unavailable")
+        return fn(*args, **kwargs)
+
+    def runtime(self, action: str, *args: Any, **kwargs: Any) -> Any:
+        owner = self.require("owner")
+        action_key = _normalize_engine_name(action)
+        fn_name = _RUNTIME_ACTION_ALIASES.get(action_key) or str(action or "").strip()
+        if not fn_name.startswith("act_") and not fn_name.startswith("ensure_act_"):
+            fn_name = f"act_{fn_name}"
+        module = importlib.import_module("act_platform.runtime")
+        fn = getattr(module, fn_name, None)
+        if not callable(fn):
+            raise AttributeError(f"runtime action is unavailable: {action}")
+        return fn(owner, *args, **kwargs)
+
+    invoke_runtime = runtime
+    call_runtime = runtime
+
+    def import_module(self, module_name: str) -> Any:
+        return importlib.import_module(str(module_name or ""))
+
+    def snapshot(self) -> dict[str, Any]:
+        provider = self._manager.snapshot_provider
+        if callable(provider):
+            result = provider() or {}
+            return dict(result) if isinstance(result, Mapping) else {}
+        return {}
+
+
 class PluginContext:
     """Small SDK object passed to in-process plugins."""
 
     def __init__(self, manager: "PluginManager", record: PluginRecord) -> None:
         self._manager = manager
         self._record = record
+        self.engine = EngineAccess(manager, record)
 
     @property
     def plugin_id(self) -> str:
@@ -212,6 +415,22 @@ class PluginContext:
     @property
     def event_bus(self) -> EventBus:
         return self._manager.event_bus
+
+    @property
+    def owner(self) -> Any:
+        return self.engine.owner
+
+    def get_engine(self, name: str, default: Any = None) -> Any:
+        return self.engine.get(name, default)
+
+    def require_engine(self, name: str) -> Any:
+        return self.engine.require(name)
+
+    def call_engine(self, engine_name: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        return self.engine.call(engine_name, method, *args, **kwargs)
+
+    def call_runtime(self, action: str, *args: Any, **kwargs: Any) -> Any:
+        return self.engine.runtime(action, *args, **kwargs)
 
     def log(self, message: Any) -> None:
         self._manager._append_log(self._record.plugin_id, str(message))
@@ -363,11 +582,13 @@ class PluginManager:
     def __init__(self, plugin_dirs: Optional[Iterable[str]] = None,
                  event_bus: Optional[EventBus] = None,
                  snapshot_provider: Optional[Callable[[], Mapping[str, Any]]] = None,
+                 owner_provider: Optional[Callable[[], Any]] = None,
                  settings: Any = None,
                  max_failures: int = 3) -> None:
         self.plugin_dirs = [os.path.abspath(path) for path in (plugin_dirs or []) if path]
         self.event_bus = event_bus or EventBus()
         self.snapshot_provider = snapshot_provider
+        self.owner_provider = owner_provider
         self.settings = settings
         self.max_failures = max(1, int(max_failures or 3))
         self._records: Dict[str, PluginRecord] = {}
@@ -590,7 +811,17 @@ class PluginManager:
                 kind: len(bucket)
                 for kind, bucket in self._extensions.items()
             },
+            "engine_access": self.engine_status(),
             "event_bus": self.event_bus.snapshot(),
+        }
+
+    def engine_status(self) -> dict[str, Any]:
+        access = EngineAccess(self)
+        return {
+            "trusted_in_process": True,
+            "owner_available": access.owner is not None,
+            "available": access.available(),
+            "handles": access.handles(),
         }
 
     def get_plugin_setting(self, plugin_id: str, key: str, default: Any = None) -> Any:
@@ -727,4 +958,4 @@ class PluginManager:
         self._record_failure(plugin_id, exc)
 
 
-__all__ = ["PluginContext", "PluginManager", "PluginRecord"]
+__all__ = ["EngineAccess", "PluginContext", "PluginManager", "PluginRecord"]

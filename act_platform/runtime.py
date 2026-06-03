@@ -164,6 +164,7 @@ def build_plugin_manager(
     base_dir: str,
     event_bus: Optional[EventBus] = None,
     snapshot_provider: Optional[Callable[[], Mapping[str, Any]]] = None,
+    owner_provider: Optional[Callable[[], Any]] = None,
     settings: Any = None,
     plugin_dirs: Optional[Iterable[str]] = None,
 ) -> PluginManager:
@@ -171,6 +172,7 @@ def build_plugin_manager(
         plugin_dirs=list(plugin_dirs or default_plugin_dirs(base_dir)),
         event_bus=event_bus or EventBus(),
         snapshot_provider=snapshot_provider,
+        owner_provider=owner_provider,
         settings=settings,
     )
     manager.discover()
@@ -186,6 +188,7 @@ def ensure_act_plugin_manager(owner: Any, *, load: bool = False,
             base_dir=project_base_dir(),
             event_bus=bus,
             snapshot_provider=_owner_snapshot_provider(owner),
+            owner_provider=lambda owner=owner: owner,
             settings=_owner_settings(owner),
             plugin_dirs=plugin_dirs,
         )
@@ -196,6 +199,7 @@ def ensure_act_plugin_manager(owner: Any, *, load: bool = False,
     else:
         manager.event_bus = bus
         manager.snapshot_provider = _owner_snapshot_provider(owner)
+        manager.owner_provider = lambda owner=owner: owner
         manager.settings = _owner_settings(owner)
         if plugin_dirs is not None:
             manager.plugin_dirs = [os.path.abspath(path) for path in plugin_dirs if path]
