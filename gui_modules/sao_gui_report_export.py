@@ -110,6 +110,14 @@ class ReportExportPanel:
         self._format_var.set('csv')
         return self._export('csv')
 
+    def export_html(self) -> Dict[str, Any]:
+        self._format_var.set('html')
+        return self._export('html')
+
+    def export_xml(self) -> Dict[str, Any]:
+        self._format_var.set('xml')
+        return self._export('xml')
+
     def copy_snapshot(self) -> Dict[str, Any]:
         try:
             result = act_report_copy(self.owner, fmt=self._format_var.get())
@@ -249,6 +257,8 @@ class ReportExportPanel:
             ('导入 Import', self.import_offline_file),
             ('导出 JSON', self.export_json),
             ('导出 CSV', self.export_csv),
+            ('导出 HTML', self.export_html),
+            ('导出 XML', self.export_xml),
             ('复制 Copy', self.copy_snapshot),
             ('关闭 Close', self.hide),
         ):

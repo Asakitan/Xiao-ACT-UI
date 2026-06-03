@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+from xml.etree import ElementTree as ET
 from unittest import mock
 
 from act_platform import runtime
@@ -65,7 +66,7 @@ class ActReportExportTests(unittest.TestCase):
         status = runtime.act_report_status(FakeOwner(), limit=5)
 
         self.assertTrue(status["ok"])
-        self.assertEqual(status["formats"], ["json", "csv", "html"])
+        self.assertEqual(status["formats"], ["json", "csv", "html", "xml"])
         self.assertEqual(status["selected_format"], "json")
         self.assertEqual(status["encounter_id"], "enc-1")
         self.assertEqual(status["preview"]["total_damage"], 12000)
@@ -93,6 +94,15 @@ class ActReportExportTests(unittest.TestCase):
         self.assertTrue(exported["path"].endswith(".html"))
         self.assertEqual(owner._dps_history_store.exported[0][1], "html")
 
+    def test_xml_export_format_is_available(self) -> None:
+        owner = FakeOwner()
+        exported = runtime.act_report_export(owner, fmt="xml")
+
+        self.assertTrue(exported["ok"])
+        self.assertEqual(exported["selected_format"], "xml")
+        self.assertTrue(exported["path"].endswith(".xml"))
+        self.assertEqual(owner._dps_history_store.exported[0][1], "xml")
+
     def test_history_store_writes_static_html_report(self) -> None:
         with tempfile.TemporaryDirectory(prefix="act_html_report_") as root:
             with mock.patch.object(dps_history, "DPS_HISTORY_EXPORT_DIR", root):
@@ -107,6 +117,22 @@ class ActReportExportTests(unittest.TestCase):
         self.assertIn("SAO Auto ACT Report", text)
         self.assertIn("Kirito", text)
         self.assertIn("12,000", text)
+
+    def test_history_store_writes_xml_report(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_xml_report_") as root:
+            with mock.patch.object(dps_history, "DPS_HISTORY_EXPORT_DIR", root):
+                store = dps_history.DpsHistoryStore(path=os.path.join(root, "history.json"))
+                store.add_report(FakeHistoryStore().report)
+                path = store.export_report(fmt="xml")
+                self.assertIsNotNone(path)
+                self.assertTrue(str(path).endswith(".xml"))
+                tree = ET.parse(path or "")
+                root_node = tree.getroot()
+
+        self.assertEqual(root_node.tag, "sao_act_report")
+        self.assertEqual(root_node.findtext("totals/total_damage"), "12000")
+        names = [node.text for node in root_node.findall("combatants/combatant/name")]
+        self.assertIn("Kirito", names)
 
     def test_missing_history_store_is_reported_without_throwing(self) -> None:
         status = runtime.act_report_status(object())

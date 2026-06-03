@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Dict, List, Optional
+from xml.etree import ElementTree as ET
 
 from config import BASE_DIR
 
@@ -204,6 +205,51 @@ def _render_html_report(item: Dict[str, Any]) -> str:
         elapsed=_coerce_float(item.get("elapsed_s")),
         rows="\n      ".join(rows) or "<tr><td colspan=\"8\">No combatant rows</td></tr>",
     )
+
+
+def _xml_child(parent: ET.Element, name: str, value: Any) -> ET.Element:
+    child = ET.SubElement(parent, name)
+    child.text = str(value if value is not None else "")
+    return child
+
+
+def _render_xml_report(item: Dict[str, Any]) -> str:
+    root = ET.Element("sao_act_report", {"schema_version": str(DPS_HISTORY_SCHEMA_VERSION)})
+    encounter = ET.SubElement(root, "encounter")
+    for key in (
+        "encounter_id",
+        "completed_at",
+        "completed_local_time",
+        "report_reason",
+        "encounter_started_at",
+        "encounter_ended_at",
+        "elapsed_s",
+    ):
+        _xml_child(encounter, key, item.get(key))
+    totals = ET.SubElement(root, "totals")
+    for key in ("total_damage", "total_damage_all", "total_heal", "total_dps", "total_hps"):
+        _xml_child(totals, key, item.get(key))
+    combatants = ET.SubElement(root, "combatants")
+    entities = item.get("entities") if isinstance(item.get("entities"), list) else []
+    for rank, entity in enumerate(entities, 1):
+        if not isinstance(entity, dict):
+            continue
+        row = ET.SubElement(combatants, "combatant", {"rank": str(rank)})
+        for key in (
+            "uid",
+            "name",
+            "profession",
+            "damage_total",
+            "heal_total",
+            "damage_taken",
+            "dps",
+            "hps",
+            "damage_pct",
+            "is_self",
+            "fight_point",
+        ):
+            _xml_child(row, key, entity.get(key))
+    return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" + ET.tostring(root, encoding="unicode")
 
 
 class DpsHistoryStore:
@@ -639,7 +685,7 @@ class DpsHistoryStore:
             return None
         item = _compact_report(src)
         fmt = str(fmt or "json").strip().lower()
-        if fmt not in ("json", "csv", "html"):
+        if fmt not in ("json", "csv", "html", "xml"):
             fmt = "json"
         os.makedirs(DPS_HISTORY_EXPORT_DIR, exist_ok=True)
         stamp = time.strftime(
@@ -670,6 +716,9 @@ class DpsHistoryStore:
         elif fmt == "html":
             with open(path, "w", encoding="utf-8") as fp:
                 fp.write(_render_html_report(item))
+        elif fmt == "xml":
+            with open(path, "w", encoding="utf-8") as fp:
+                fp.write(_render_xml_report(item))
         else:
             with open(path, "w", encoding="utf-8") as fp:
                 json.dump(item, fp, ensure_ascii=False, indent=2)
