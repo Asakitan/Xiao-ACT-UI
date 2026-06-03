@@ -26,7 +26,8 @@ import sys
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 
 from engines.game_state import GameStateManager, compute_burst_ready
-from packet_parser import (PacketParser, PlayerData, MonsterData,
+from act_platform.adapters import StarResonanceParserAdapter
+from packet_parser import (PlayerData, MonsterData,
                            BuffEventType, DamageType,
                            PROFESSION_NORMAL_ATTACK, PROFESSION_SKILL,
                            PROFESSION_ULTIMATE, PROFESSION_NAMES,
@@ -401,6 +402,7 @@ class PacketBridge:
 
         # 抓包层
         self._capture = None
+        self._parser_adapter = None
         self._parser = None
         self._thread = None
         self._last_update_t: float = 0
@@ -533,6 +535,11 @@ class PacketBridge:
                 self._capture.stop()
             except Exception:
                 pass
+        if self._parser_adapter is not None:
+            try:
+                self._parser_adapter.stop()
+            except Exception:
+                pass
         if self._thread:
             self._thread.join(timeout=3)
             self._thread = None
@@ -553,6 +560,11 @@ class PacketBridge:
                 out["mem"] = self._mem_source.health()
             except Exception:
                 out["mem"] = {"alive": False}
+        if self._parser_adapter is not None:
+            try:
+                out["parser_adapter"] = self._parser_adapter.health()
+            except Exception:
+                out["parser_adapter"] = {"alive": False}
         return out
 
     def get_alive_monsters(self) -> list:
@@ -642,7 +654,8 @@ class PacketBridge:
                 preferred_uid = int(cached_uid)
         except Exception:
             preferred_uid = 0
-        self._parser = PacketParser(
+        self._parser_adapter = StarResonanceParserAdapter()
+        self._parser = self._parser_adapter.create_parser(
             on_self_update=self._on_player_update,
             preferred_uid=preferred_uid,
             on_damage=self._on_damage,
@@ -652,6 +665,7 @@ class PacketBridge:
             on_dungeon_event=self._on_dungeon_event,
             on_scene_change=self._on_scene_change,
         )
+        self._parser_adapter.start()
 
         # ── 从 settings 恢复缓存的职业技能映射 ──
         if self._settings:
@@ -668,7 +682,7 @@ class PacketBridge:
 
         # 创建抓包器
         self._capture = PacketCapture(
-            on_game_packet=self._parser.process_packet,
+            on_game_packet=self._parser_adapter.process_packet,
             device=dev,
             on_server_change=self._on_server_change,
         )

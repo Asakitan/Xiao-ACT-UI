@@ -10,6 +10,7 @@ import tempfile
 from act_replay.events import damage_event, dungeon_event, skill_event
 from act_replay.harness import ActReplayHarness
 
+from .adapters import StarResonanceParserAdapter, built_in_parser_adapters
 from .event_bus import EventBus
 from .plugins import PluginManager
 
@@ -53,6 +54,18 @@ def run_selftest() -> dict:
     bus.publish("damage", {"damage": 7}, source_name="selftest", source_kind="unit")
     assert direct_events and direct_events[0]["payload"]["damage"] == 7, direct_events
 
+    adapter = StarResonanceParserAdapter()
+    parser = adapter.create_parser(on_self_update=lambda player: None, preferred_uid=36668136)
+    adapter.start()
+    adapter.parse_packet(b"\x00")
+    parser_event = adapter.normalize_event("damage", {"damage": 3})
+    parser_health = adapter.health()
+    assert built_in_parser_adapters()[0]["adapter_id"] == "star_resonance_tcp", built_in_parser_adapters()
+    assert parser is adapter.parser, parser_health
+    assert parser_event["source"]["parser_id"] == "star_resonance_tcp", parser_event
+    assert parser_health["parser_created"] is True, parser_health
+    assert parser_health["packet_frames"] == 1, parser_health
+
     with tempfile.TemporaryDirectory(prefix="act_plugin_selftest_") as root:
         _write_demo_plugin(root)
         manager = PluginManager(plugin_dirs=[root], event_bus=bus)
@@ -91,11 +104,13 @@ def run_selftest() -> dict:
         "ok": True,
         "event_bus_contract": True,
         "plugin_manager_contract": True,
+        "parser_adapter_contract": True,
         "replay_event_bus_contract": True,
         "published": bus.snapshot().get("published"),
         "plugin_count": status.get("plugin_count"),
         "active_count_after_disable": status.get("active_count"),
         "captured_events": len(captured),
+        "built_in_parser_adapters": len(built_in_parser_adapters()),
     }
 
 

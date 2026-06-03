@@ -171,7 +171,10 @@ Plugins can register extension metadata during `on_load(ctx)`. These declaration
 def on_load(ctx):
   ctx.register_parser_adapter("star_fixture", {
     "title": "Star fixture parser",
+    "display_name": "Star fixture parser",
+    "game_id": "star_resonance",
     "game_ids": ["star_resonance"],
+    "supported_locales": ["zh-CN"],
     "source_kinds": ["fixture", "packet"],
     "priority": 5,
   })
@@ -199,6 +202,17 @@ def on_load(ctx):
 ```
 
 Extension ids must already be safe ids: lowercase letters/numbers plus `_`, `-`, or `.`. Registered metadata is removed automatically when the plugin unloads.
+
+## Parser adapters
+
+The first-party parser adapter contract lives in `act_platform.adapters`. The built-in Star Resonance TCP parser is exposed as `star_resonance_tcp` with:
+
+- `game_id`: `star_resonance`
+- `source_kinds`: `["packet"]`
+- `supported_locales`: `["zh-CN"]`
+- runtime methods: `start()`, `stop()`, `parse_packet(frame)`, `normalize_event(topic, payload)`, and `health()`
+
+Plugin parser adapters should declare equivalent metadata through `ctx.register_parser_adapter(...)`. The runtime handler wiring is reserved for future external parsers; today the metadata is visible through plugin status so both WebView and Entity can show advertised game/parser support.
 
 ## Example plugin
 

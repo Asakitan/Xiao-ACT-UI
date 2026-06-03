@@ -18,7 +18,10 @@ registered = []
 def on_load(ctx):
     registered.append(ctx.register_parser_adapter("star_fixture", {
         "title": "Star fixture parser",
+        "display_name": "Star fixture parser",
+        "game_id": "star_resonance",
         "game_ids": ["star_resonance"],
+        "supported_locales": ["zh-CN"],
         "source_kinds": ["fixture", "packet"],
         "priority": 5,
     }))
@@ -75,6 +78,8 @@ class ActPluginExtensionTests(unittest.TestCase):
             })
             self.assertEqual(plugin["extension_count"], 5)
             self.assertEqual(plugin["extensions"]["parser_adapters"], ["star_fixture"])
+            self.assertEqual(status["extensions"]["parser_adapters"][0]["game_id"], "star_resonance")
+            self.assertEqual(status["extensions"]["parser_adapters"][0]["supported_locales"], ["zh-CN"])
             self.assertEqual(status["extensions"]["exporters"][0]["id"], "summary_json")
             self.assertEqual(status["extensions"]["exporters"][0]["formats"], ["json"])
             self.assertEqual(status["extensions"]["trigger_types"][0]["schema"]["field"], "string")

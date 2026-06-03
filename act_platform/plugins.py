@@ -113,11 +113,22 @@ def _normalize_extension(kind: str, plugin_id: str, extension_id: Any,
         "format",
         "scope",
         "label",
+        "display_name",
+        "game_id",
     ):
         value = src.get(key)
         if value is not None:
             normalized[key] = str(value)
-    for key in ("game_ids", "source_kinds", "actions", "payload_fields", "formats", "permissions"):
+    for key in (
+        "game_ids",
+        "source_kinds",
+        "actions",
+        "payload_fields",
+        "formats",
+        "permissions",
+        "supported_locales",
+        "locales",
+    ):
         value = src.get(key)
         if isinstance(value, (list, tuple, set)):
             normalized[key] = [str(item) for item in value if str(item or "").strip()]
