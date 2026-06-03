@@ -239,7 +239,9 @@ The first-party parser adapter contract lives in `act_platform.adapters`. The bu
 - `supported_locales`: `["zh-CN"]`
 - runtime methods: `start()`, `stop()`, `parse_packet(frame)`, `normalize_event(topic, payload)`, and `health()`
 
-Plugin parser adapters declare equivalent metadata through `ctx.register_parser_adapter(...)`. Passing a handler makes the adapter invokable through `act_platform.adapters.PluginParserAdapter`, which routes calls through `PluginManager.invoke_extension("parser_adapters", ...)` with deep-copied payloads, elapsed-time measurement, exception isolation, and the extension time budget.
+Plugin parser adapters declare equivalent metadata through `ctx.register_parser_adapter(...)`. Passing a handler makes the adapter invokable through `act_platform.adapters.PluginParserAdapter`, which routes calls through `PluginManager.invoke_extension("parser_adapters", ...)` with deep-copied payloads, elapsed-time measurement, exception isolation, and the extension time budget by default.
+
+Parser adapters can opt into subprocess isolation by adding `"isolation": "process"` to their metadata. In that mode `PluginParserAdapter` invokes `python -m act_platform.parser_worker`, reloads the plugin entry in the worker process, calls the registered parser handler through JSON stdin/stdout, and kills the worker if it exceeds the adapter time budget. Process-isolated adapters default to a 1000 ms budget when metadata does not provide `time_budget_ms` or `max_runtime_ms`. `parse_packet` frames cross the process boundary as base64-encoded bytes and are decoded before the handler receives them. This gives stronger containment for untrusted or heavy parser code, with higher per-call startup overhead than the default in-process path.
 
 The handler receives an `operation` field plus operation-specific data:
 
@@ -260,7 +262,7 @@ Live `parse_packet` handlers should return one of these shapes:
 [{"topic": "damage", "payload": {"damage": 456}}]
 ```
 
-The current plugin runtime is still in-process: calls are deep-copied, timed, and failure-accounted by `PluginManager.invoke_extension(...)`, but Python code cannot be force-killed mid-call. Keep live parser handlers deterministic and short; external-process parser isolation remains a future hardening path.
+The default plugin runtime is still in-process: calls are deep-copied, timed, and failure-accounted by `PluginManager.invoke_extension(...)`, but Python code cannot be force-killed mid-call. Keep live parser handlers deterministic and short unless they opt into `"isolation": "process"` and accept the extra worker startup cost.
 
 ## Example plugin
 

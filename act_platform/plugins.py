@@ -116,6 +116,8 @@ def _normalize_extension(kind: str, plugin_id: str, extension_id: Any,
         "label",
         "display_name",
         "game_id",
+        "isolation",
+        "isolation_mode",
     ):
         value = src.get(key)
         if value is not None:

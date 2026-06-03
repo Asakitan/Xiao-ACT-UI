@@ -4,6 +4,11 @@
 from __future__ import annotations
 
 import copy
+import base64
+import json
+import os
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 
@@ -45,6 +50,16 @@ def _event_rows(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, (list, tuple)):
         return [dict(item) for item in value if isinstance(item, Mapping)]
     return []
+
+
+def _json_worker_safe(value: Any) -> Any:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {"__act_bytes_b64__": base64.b64encode(bytes(value)).decode("ascii")}
+    if isinstance(value, Mapping):
+        return {str(key): _json_worker_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_worker_safe(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -237,47 +252,142 @@ class PluginParserAdapter(ParserAdapter):
         super().__init__(meta)
         self.manager = manager
         self.plugin_id = str(raw.get("plugin_id") or "")
+        self.isolation = str(raw.get("isolation") or raw.get("isolation_mode") or "in_process").strip().lower()
+        if self.isolation in {"process", "external_process", "subprocess"}:
+            self.isolation = "process"
+        else:
+            self.isolation = "in_process"
         budget = raw.get("time_budget_ms") if isinstance(raw, Mapping) else None
         if budget is None and isinstance(raw, Mapping):
             budget = raw.get("max_runtime_ms")
-        self.time_budget_ms = _safe_float(budget, time_budget_ms)
+        default_budget = 1000.0 if self.isolation == "process" else time_budget_ms
+        self.time_budget_ms = _safe_float(budget, default_budget)
         self._last_invocation: dict[str, Any] = {}
+
+    def _plugin_path(self) -> str:
+        records = getattr(self.manager, "_records", {})
+        record = records.get(self.plugin_id) if isinstance(records, Mapping) else None
+        return str(getattr(record, "path", "") or "")
+
+    def _record_process_failure(self, message: str) -> None:
+        record_failure = getattr(self.manager, "_record_failure", None)
+        if callable(record_failure) and self.plugin_id:
+            try:
+                record_failure(self.plugin_id, RuntimeError(str(message or "process parser adapter failed")))
+            except Exception:
+                pass
+
+    def _invoke_process(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        plugin_path = self._plugin_path()
+        if not plugin_path or not os.path.isdir(plugin_path):
+            message = "plugin path is unavailable for process-isolated parser adapter"
+            self._record_process_failure(message)
+            return {
+                "ok": False,
+                "plugin_id": self.plugin_id,
+                "extension_id": self.adapter_id,
+                "message": message,
+                "errors": [message],
+                "isolation": "process",
+            }
+        payload = {
+            "plugin_path": plugin_path,
+            "adapter_id": self.adapter_id,
+            "payload": _json_worker_safe(dict(request)),
+        }
+        timeout_s = max(0.1, float(self.time_budget_ms or 25.0) / 1000.0)
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "act_platform.parser_worker"],
+                input=json.dumps(payload, ensure_ascii=False),
+                text=True,
+                encoding="utf-8",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout_s,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            message = f"process parser adapter exceeded budget: > {self.time_budget_ms:.1f}ms"
+            self._record_process_failure(message)
+            return {
+                "ok": False,
+                "plugin_id": self.plugin_id,
+                "extension_id": self.adapter_id,
+                "time_budget_ms": self.time_budget_ms,
+                "timed_out": True,
+                "message": message,
+                "errors": [message],
+                "isolation": "process",
+            }
+        except Exception as exc:
+            message = str(exc)
+            self._record_process_failure(message)
+            return {
+                "ok": False,
+                "plugin_id": self.plugin_id,
+                "extension_id": self.adapter_id,
+                "message": message,
+                "errors": [message],
+                "isolation": "process",
+            }
+        try:
+            result = json.loads(proc.stdout or "{}")
+        except Exception:
+            result = {}
+        if proc.returncode != 0 and not result:
+            message = (proc.stderr or "").strip() or f"worker exited with {proc.returncode}"
+            result = {"ok": False, "message": message, "errors": [message]}
+        if not isinstance(result, Mapping):
+            result = {"ok": False, "message": "worker returned non-object result", "errors": ["worker returned non-object result"]}
+        out = dict(result)
+        out.setdefault("plugin_id", self.plugin_id)
+        out.setdefault("extension_id", self.adapter_id)
+        out.setdefault("time_budget_ms", self.time_budget_ms)
+        out["isolation"] = "process"
+        if not bool(out.get("ok")):
+            self._record_process_failure(str(out.get("message") or "; ".join(out.get("errors") or []) or "process parser adapter failed"))
+        return out
 
     def invoke(self, operation: str, payload: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
         request = {"operation": str(operation or "")}
         if isinstance(payload, Mapping):
             request.update(copy.deepcopy(dict(payload)))
-        invoke_extension = getattr(self.manager, "invoke_extension", None)
-        if not callable(invoke_extension):
-            result = {
-                "ok": False,
-                "plugin_id": self.plugin_id,
-                "extension_id": self.adapter_id,
-                "message": "plugin manager cannot invoke extensions",
-                "errors": ["plugin manager cannot invoke extensions"],
-            }
+        if self.isolation == "process":
+            result = self._invoke_process(request)
         else:
-            result = invoke_extension(
-                "parser_adapters",
-                self.adapter_id,
-                request,
-                time_budget_ms=self.time_budget_ms,
-            )
-            if not isinstance(result, Mapping):
+            invoke_extension = getattr(self.manager, "invoke_extension", None)
+            if not callable(invoke_extension):
                 result = {
                     "ok": False,
                     "plugin_id": self.plugin_id,
                     "extension_id": self.adapter_id,
-                    "message": "parser adapter handler returned a non-mapping invocation envelope",
-                    "errors": ["invalid invocation envelope"],
-                    "result": result,
+                    "message": "plugin manager cannot invoke extensions",
+                    "errors": ["plugin manager cannot invoke extensions"],
                 }
+            else:
+                result = invoke_extension(
+                    "parser_adapters",
+                    self.adapter_id,
+                    request,
+                    time_budget_ms=self.time_budget_ms,
+                )
+                if not isinstance(result, Mapping):
+                    result = {
+                        "ok": False,
+                        "plugin_id": self.plugin_id,
+                        "extension_id": self.adapter_id,
+                        "message": "parser adapter handler returned a non-mapping invocation envelope",
+                        "errors": ["invalid invocation envelope"],
+                        "result": result,
+                    }
         self._last_invocation = {
             "operation": request["operation"],
             "ok": bool(result.get("ok")),
             "elapsed_ms": result.get("elapsed_ms"),
             "time_budget_ms": result.get("time_budget_ms", self.time_budget_ms),
             "timed_out": bool(result.get("timed_out")),
+            "isolation": self.isolation,
             "errors": list(result.get("errors") or []),
         }
         return dict(result)
@@ -339,6 +449,7 @@ class PluginParserAdapter(ParserAdapter):
             "plugin_id": self.plugin_id,
             "extension_id": self.adapter_id,
             "handler_kind": "parser_adapters",
+            "isolation": self.isolation,
             "last_invocation": dict(self._last_invocation),
         })
         return out
@@ -366,7 +477,7 @@ def plugin_parser_adapters(manager: Any) -> list[dict[str, Any]]:
         if not isinstance(row, Mapping):
             continue
         item = ParserAdapterMetadata.from_mapping(row).to_dict()
-        for key in ("plugin_id", "time_budget_ms", "max_runtime_ms"):
+        for key in ("plugin_id", "time_budget_ms", "max_runtime_ms", "isolation", "isolation_mode"):
             if key in row:
                 item[key] = row[key]
         out.append(item)

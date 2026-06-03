@@ -115,6 +115,30 @@ def on_load(ctx):
 '''
 
 
+PROCESS_PARSER_CODE = r'''
+def _process_parser(payload):
+    op = payload.get("operation")
+    if op == "start":
+        return {"started": True, "worker": True}
+    if op == "stop":
+        return {"stopped": True, "worker": True}
+    if op == "parse_packet":
+        frame = payload.get("frame") or b""
+        return {"frame_len": len(frame), "frame_len_field": payload.get("frame_len"), "frame_type": type(frame).__name__}
+    return {"operation": op}
+
+def on_load(ctx):
+    ctx.register_parser_adapter("process_parser", {
+        "title": "Process Parser",
+        "display_name": "Process Parser",
+        "game_id": "demo_game",
+        "source_kinds": ["packet"],
+        "time_budget_ms": 2000,
+        "isolation": "process",
+    }, handler=_process_parser)
+'''
+
+
 class DictSettings(dict):
     def get(self, key, default=None):
         return super().get(key, default)
@@ -246,6 +270,28 @@ class ActParserAdapterTests(unittest.TestCase):
         self.assertEqual(normalized["source"]["confidence"], 0.75)
         self.assertEqual(health["plugin_id"], "parser_demo")
         self.assertEqual(health["last_invocation"]["operation"], "normalize_event")
+
+    def test_plugin_parser_adapter_can_run_in_process_isolation(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_plugin_process_parser_") as root:
+            manager = _write_plugin(root, "process_demo", PROCESS_PARSER_CODE)
+            self.assertTrue(manager.load_plugin("process_demo"), manager.status())
+            metadata = plugin_parser_adapters(manager)
+            process_meta = [row for row in metadata if row["adapter_id"] == "process_parser"][0]
+
+            adapter = create_plugin_parser_adapter(manager, "process_parser")
+            started = adapter.start()
+            parsed = adapter.parse_packet(b"abc")
+            health = adapter.health()
+
+        self.assertIs(started, adapter)
+        self.assertEqual(process_meta["isolation"], "process")
+        self.assertTrue(parsed["ok"], parsed)
+        self.assertEqual(parsed["isolation"], "process")
+        self.assertEqual(parsed["result"]["frame_len"], 3)
+        self.assertEqual(parsed["result"]["frame_len_field"], 3)
+        self.assertEqual(parsed["result"]["frame_type"], "bytes")
+        self.assertEqual(health["isolation"], "process")
+        self.assertEqual(health["last_invocation"]["isolation"], "process")
 
     def test_packet_bridge_selects_live_plugin_packet_adapter(self) -> None:
         with tempfile.TemporaryDirectory(prefix="act_live_parser_") as root:
