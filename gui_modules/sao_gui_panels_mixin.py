@@ -63,6 +63,7 @@ from gui_modules.sao_gui_action_log import ActionLogPanel
 from gui_modules.sao_gui_commander import CommanderPanel
 from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel
 from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
+from gui_modules.sao_gui_death_recap import DeathRecapPanel
 from gui_modules.sao_gui_graph_timeseries import GraphTimeseriesPanel
 from gui_modules.sao_gui_plugin_manager import PluginManagerPanel
 from gui_modules.sao_gui_report_export import ReportExportPanel
@@ -151,6 +152,17 @@ class SAOPlayerGUIPanelsMixin:
         else:
             self._act_action_log_panel.show()
             self.root.after(120, lambda: self._raise_panel_window(self._act_action_log_panel))
+
+    def _toggle_act_death_recap_panel(self):
+        """打开/关闭 ACT 死亡回放面板 (tkinter)."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._act_death_recap_panel:
+            self._act_death_recap_panel = DeathRecapPanel(self.root, self)
+        if self._act_death_recap_panel.is_visible():
+            self._act_death_recap_panel.hide()
+        else:
+            self._act_death_recap_panel.show()
+            self.root.after(120, lambda: self._raise_panel_window(self._act_death_recap_panel))
 
     def _toggle_act_graph_timeseries_panel(self):
         """打开/关闭 ACT 图表/曲线面板 (tkinter)."""
@@ -249,6 +261,7 @@ class SAOPlayerGUIPanelsMixin:
             ('act_report_export', getattr(self._act_report_export_panel, '_win', None)),
             ('act_timeline_vcr', getattr(self._act_timeline_vcr_panel, '_win', None)),
             ('act_action_log', getattr(self._act_action_log_panel, '_win', None)),
+            ('act_death_recap', getattr(self._act_death_recap_panel, '_win', None)),
             ('act_graph_timeseries', getattr(self._act_graph_timeseries_panel, '_win', None)),
             ('act_combatant_drilldown', getattr(self._act_combatant_drilldown_panel, '_win', None)),
             ('act_skill_drilldown', getattr(self._act_skill_drilldown_panel, '_win', None)),

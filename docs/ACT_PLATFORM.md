@@ -19,7 +19,7 @@ No ACT feature is complete until WebView and Entity can reach the same shared ba
 | --- | --- | --- |
 | Event envelopes | `act_platform/events.py` | Builds canonical ACT event dictionaries with `topic`, `source`, `game_id`, `parser_id`, and copied payloads. |
 | Event bus | `act_platform/event_bus.py` | Synchronous publish/subscribe with bounded recent-event history and callback isolation. |
-| Runtime helpers | `act_platform/runtime.py` | Shared WebView/Entity command helpers for plugins, reports, history, offline imports, timelines, graphs, drilldowns, data-source health, and triggers. |
+| Runtime helpers | `act_platform/runtime.py` | Shared WebView/Entity command helpers for plugins, reports, history, offline imports, timelines, action logs, death recaps, graphs, drilldowns, data-source health, and triggers. |
 | Plugin SDK | `act_platform/plugins.py` | Discovers plugin folders, loads `plugin.json`, owns `PluginContext`, and exposes plugin status. |
 | Parser adapters | `act_platform/adapters.py` | First-party parser adapter contract and built-in `star_resonance_tcp` wrapper. |
 | Replay | `act_replay/` | Offline event fixtures, replay harness, and platform regression selftest. |
@@ -51,7 +51,7 @@ ACT event path:
 parser/replay/runtime callback
   -> act_platform.events.make_event(...)
   -> EventBus.publish(...)
-  -> plugins, action log, graph/timeseries, timeline/VCR, trigger consumers
+  -> plugins, action log, death recap, graph/timeseries, timeline/VCR, trigger consumers
 ```
 
 Replay path:

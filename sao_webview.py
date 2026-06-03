@@ -78,6 +78,8 @@ from act_platform.runtime import (
     act_combatant_drilldown_status,
     act_data_source_diagnose,
     act_data_source_health,
+    act_death_recap_copy,
+    act_death_recap_status,
     act_graph_timeseries_export,
     act_graph_timeseries_filter,
     act_graph_timeseries_select_metric,
@@ -530,6 +532,28 @@ class SAOWebAPI:
 
     def copy_action_log(self, limit=80, query='', topic=''):
         return json.dumps(act_action_log_copy(self._g, limit=int(limit or 80), query=str(query or ''), topic=str(topic or '')), ensure_ascii=False)
+
+    def get_death_recap_status(self, limit=80, window_s=8.0, entity_id=None):
+        return json.dumps(
+            act_death_recap_status(
+                self._g,
+                limit=int(limit or 80),
+                window_s=float(window_s or 8.0),
+                entity_id=entity_id,
+            ),
+            ensure_ascii=False,
+        )
+
+    def copy_death_recap(self, limit=80, window_s=8.0, entity_id=None):
+        return json.dumps(
+            act_death_recap_copy(
+                self._g,
+                limit=int(limit or 80),
+                window_s=float(window_s or 8.0),
+                entity_id=entity_id,
+            ),
+            ensure_ascii=False,
+        )
 
     def get_graph_timeseries_status(self, metric=None, limit=120, query=None, topic=None, time_range_ms=None):
         kwargs = {'limit': int(limit or 120)}

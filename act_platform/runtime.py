@@ -1371,6 +1371,222 @@ def act_action_log_copy(owner: Any, *, limit: int = 80, query: str = "", topic: 
     }
 
 
+_DEATH_RECAP_COLUMNS = [
+    {"key": "relative_ms", "label": "Delta", "width": 90},
+    {"key": "time_ms", "label": "Time", "width": 90},
+    {"key": "kind", "label": "Kind", "width": 140},
+    {"key": "actor", "label": "Actor", "width": 160},
+    {"key": "target", "label": "Target", "width": 160},
+    {"key": "amount", "label": "Amount", "width": 110},
+]
+
+
+def _first_text(payload: Mapping[str, Any], keys: Iterable[str]) -> str:
+    for key in keys:
+        value = payload.get(key)
+        if value is not None and str(value or "").strip():
+            return str(value)
+    return ""
+
+
+def _first_int(payload: Mapping[str, Any], keys: Iterable[str]) -> int:
+    for key in keys:
+        value = payload.get(key)
+        try:
+            if value is not None and str(value or "").strip():
+                return int(value)
+        except Exception:
+            continue
+    return 0
+
+
+def _death_target_id(payload: Mapping[str, Any]) -> int:
+    return _first_int(payload, (
+        "target_uid", "victim_uid", "combatant_id", "player_uid", "self_uid",
+        "uid", "target_id", "victim_id",
+    ))
+
+
+def _death_target_name(payload: Mapping[str, Any]) -> str:
+    return _first_text(payload, ("target", "victim", "combatant", "player", "name"))
+
+
+def _is_death_signal(event: Mapping[str, Any]) -> bool:
+    payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+    topic = str(event.get("topic") or "").lower()
+    if "death" in topic or topic in {"dead", "defeat", "defeated", "player_dead"}:
+        return True
+    for key in ("is_dead", "dead", "death", "defeated"):
+        if bool(payload.get(key)):
+            return True
+    hp = _first_int(payload, ("hp", "current_hp", "target_hp", "player_hp"))
+    max_hp = _first_int(payload, ("max_hp", "target_max_hp", "player_max_hp"))
+    return bool(max_hp > 0 and hp <= 0 and topic in {"self_state", "damage", "monster", "boss"})
+
+
+def _matches_death_target(payload: Mapping[str, Any], target_id: int, target_name: str = "") -> bool:
+    if not target_id and not target_name:
+        return True
+    if bool(payload.get("target_is_self") or payload.get("victim_is_self") or payload.get("is_self")):
+        return True
+    candidates = (
+        "target_uid", "victim_uid", "combatant_id", "player_uid", "self_uid",
+        "target_id", "victim_id", "uid",
+    )
+    if target_id and any(_first_int(payload, (key,)) == target_id for key in candidates):
+        return True
+    if target_name:
+        text = _death_target_name(payload).lower()
+        if text and text == target_name.lower():
+            return True
+    return False
+
+
+def _death_recap_row(event: Mapping[str, Any], index: int, death_time_ms: int, target_id: int, target_name: str) -> dict[str, Any]:
+    row = _action_log_row(event, index)
+    payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
+    topic = str(row.get("topic") or "").lower()
+    amount = _first_int(payload, ("damage", "damage_total", "heal", "heal_total", "shield", "mitigation", "absorbed"))
+    kind = topic or "event"
+    if _is_death_signal(event):
+        kind = "death"
+    elif topic == "damage" and _matches_death_target(payload, target_id, target_name):
+        kind = "incoming_damage"
+    elif topic == "heal" and _matches_death_target(payload, target_id, target_name):
+        kind = "healing"
+    elif (
+        ("shield" in topic or payload.get("shield") is not None or payload.get("absorbed") is not None)
+        and _matches_death_target(payload, target_id, target_name)
+    ):
+        kind = "shield"
+    elif (
+        ("mitigation" in topic or payload.get("mitigation") is not None)
+        and _matches_death_target(payload, target_id, target_name)
+    ):
+        kind = "mitigation"
+    row.update({
+        "relative_ms": int(row.get("time_ms") or 0) - int(death_time_ms or 0),
+        "kind": kind,
+        "amount": amount,
+        "is_death": kind == "death",
+    })
+    return row
+
+
+def _death_recap_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "event_count": len(rows),
+        "incoming_damage": sum(int(row.get("amount") or 0) for row in rows if row.get("kind") == "incoming_damage"),
+        "healing": sum(int(row.get("amount") or 0) for row in rows if row.get("kind") == "healing"),
+        "shield": sum(int(row.get("amount") or 0) for row in rows if row.get("kind") == "shield"),
+        "mitigation": sum(int(row.get("amount") or 0) for row in rows if row.get("kind") == "mitigation"),
+        "death_events": sum(1 for row in rows if row.get("kind") == "death"),
+    }
+
+
+def act_death_recap_status(owner: Any, *, limit: int = 80, window_s: float = 8.0,
+                           entity_id: Any = None) -> dict[str, Any]:
+    """Return a compact death-recap window from recent ACT events."""
+    row_limit = max(1, min(int(limit or 80), 500))
+    window_ms = max(1000, int(float(window_s or 8.0) * 1000.0))
+    requested_id = _coerce_int(entity_id, 0) if entity_id is not None else 0
+    errors: list[str] = []
+    try:
+        raw_events = ensure_act_event_bus(owner).recent_events(max(row_limit * 4, 120))
+    except Exception as exc:
+        raw_events = []
+        errors.append(str(exc))
+    deaths: list[Mapping[str, Any]] = []
+    for event in raw_events:
+        if not isinstance(event, Mapping) or not _is_death_signal(event):
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        if requested_id and _death_target_id(payload) != requested_id:
+            continue
+        deaths.append(event)
+    if not deaths:
+        return {
+            "ok": not errors,
+            "message": "No death event found" if not errors else "; ".join(errors),
+            "encounter_id": _timeline_encounter_id(owner, {}),
+            "death": None,
+            "rows": [],
+            "columns": list(_DEATH_RECAP_COLUMNS),
+            "summary": _death_recap_summary([]),
+            "window": {"before_ms": window_ms, "after_ms": min(2000, window_ms), "center_ms": 0},
+            "filters": {"entity_id": str(entity_id or ""), "limit": row_limit, "window_s": float(window_s or 8.0)},
+            "errors": errors,
+        }
+    death_event = deaths[0]
+    death_payload = death_event.get("payload") if isinstance(death_event.get("payload"), Mapping) else {}
+    death_compact = _compact_timeline_event(death_event, 0)
+    death_time_ms = int(death_compact.get("time_ms") or 0)
+    target_id = _death_target_id(death_payload) or requested_id
+    target_name = _death_target_name(death_payload)
+    start_ms = max(0, death_time_ms - window_ms)
+    end_ms = death_time_ms + min(2000, window_ms)
+    rows: list[dict[str, Any]] = []
+    for idx, event in enumerate(raw_events):
+        if not isinstance(event, Mapping):
+            continue
+        compact = _compact_timeline_event(event, idx)
+        time_ms = int(compact.get("time_ms") or 0)
+        if time_ms < start_ms or time_ms > end_ms:
+            continue
+        row = _death_recap_row(event, idx, death_time_ms, target_id, target_name)
+        rows.append(row)
+    rows.sort(key=lambda row: (int(row.get("time_ms") or 0), int(row.get("index") or 0)))
+    rows = rows[-row_limit:]
+    death = {
+        "time_ms": death_time_ms,
+        "entity_id": str(target_id or ""),
+        "name": target_name,
+        "topic": str(death_event.get("topic") or ""),
+        "payload": _json_safe(death_payload),
+    }
+    return {
+        "ok": not errors,
+        "message": "OK" if not errors else "; ".join(errors),
+        "encounter_id": _timeline_encounter_id(owner, {}),
+        "death": death,
+        "rows": rows,
+        "columns": list(_DEATH_RECAP_COLUMNS),
+        "summary": _death_recap_summary(rows),
+        "window": {"before_ms": window_ms, "after_ms": min(2000, window_ms), "center_ms": death_time_ms},
+        "filters": {"entity_id": str(entity_id or ""), "limit": row_limit, "window_s": float(window_s or 8.0)},
+        "errors": errors,
+    }
+
+
+def act_death_recap_copy(owner: Any, *, limit: int = 80, window_s: float = 8.0,
+                         entity_id: Any = None) -> dict[str, Any]:
+    status = act_death_recap_status(owner, limit=limit, window_s=window_s, entity_id=entity_id)
+    payload = {
+        "encounter_id": status.get("encounter_id"),
+        "death": status.get("death"),
+        "summary": status.get("summary") or {},
+        "rows": status.get("rows") or [],
+        "window": status.get("window") or {},
+        "filters": status.get("filters") or {},
+    }
+    try:
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+    except Exception:
+        text = str(payload)
+    return {
+        "ok": bool(status.get("ok")),
+        "message": status.get("message") or "OK",
+        "encounter_id": payload["encounter_id"],
+        "text": text,
+        "death": payload["death"],
+        "summary": payload["summary"],
+        "rows": payload["rows"],
+        "window": payload["window"],
+        "filters": payload["filters"],
+        "errors": list(status.get("errors") or []),
+    }
+
+
 _GRAPH_METRICS = [
     {"id": "damage", "label": "Damage", "kind": "cumulative", "unit": "damage"},
     {"id": "heal", "label": "Heal", "kind": "cumulative", "unit": "heal"},
@@ -2165,6 +2381,8 @@ __all__ = [
     "act_action_log_jump_to_time",
     "act_action_log_search",
     "act_action_log_status",
+    "act_death_recap_copy",
+    "act_death_recap_status",
     "act_graph_timeseries_export",
     "act_graph_timeseries_filter",
     "act_graph_timeseries_select_metric",

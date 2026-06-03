@@ -276,6 +276,19 @@ Entity route: `entity://act/action_log`, opened from `SAO 菜单 > 面板 > ACT�
 
 The shared payload preserves the parity fields `encounter_id`, `rows`, `columns`, `filters`, and `cursor`. Rows are compact table entries derived from EventBus envelopes and include cursor highlighting metadata. Entity/Tk keeps rendering bounded to the first 80 rows, refresh-throttled at 350ms, and dirty-signature gated before rebuilding widgets.
 
+## Current death recap surface
+
+`death_recap` is wired through shared `act_platform.runtime` helpers over compact owner-scoped ACT `EventBus` rows:
+
+- status/open: `act_death_recap_status(owner, limit=80, window_s=8.0, entity_id=None)`
+- copy: `act_death_recap_copy(owner, limit=80, window_s=8.0, entity_id=None)`
+
+WebView API surface: `get_death_recap_status(...)` and `copy_death_recap(...)`.
+
+Entity route: `entity://act/death_recap`, opened from `SAO 菜单 > 面板 > ACT死亡回放`.
+
+The shared payload preserves the parity fields `encounter_id`, `death`, `rows`, `columns`, `summary`, `window`, and `filters`. The runtime finds the latest death signal from `death` topics, `is_dead/dead` flags, or `hp=0` self/monster state, then summarizes incoming damage, healing, shield, and mitigation around the configured window. Entity/Tk keeps the panel bounded to 80 rows with 350ms refresh throttling.
+
 ## Current graph/timeseries surface
 
 `graph_timeseries` is wired through shared `act_platform.runtime` helpers over compact owner-scoped ACT `EventBus` rows:

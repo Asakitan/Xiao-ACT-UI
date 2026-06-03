@@ -250,6 +250,7 @@ class SAOPlayerGUILifecycleMixin:
             self._act_report_export_panel,
             self._act_timeline_vcr_panel,
             self._act_action_log_panel,
+            self._act_death_recap_panel,
             self._act_graph_timeseries_panel,
             self._act_combatant_drilldown_panel,
             self._act_skill_drilldown_panel,
@@ -277,6 +278,7 @@ class SAOPlayerGUILifecycleMixin:
         self._act_report_export_panel = None
         self._act_timeline_vcr_panel = None
         self._act_action_log_panel = None
+        self._act_death_recap_panel = None
         self._act_graph_timeseries_panel = None
         self._act_combatant_drilldown_panel = None
         self._act_skill_drilldown_panel = None
@@ -417,4 +419,3 @@ class SAOPlayerGUILifecycleMixin:
 
     def _on_close(self):
         self._run_exit_animation(mode='exit', target_label='Desktop')
-

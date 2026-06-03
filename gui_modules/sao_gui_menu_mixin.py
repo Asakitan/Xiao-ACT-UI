@@ -44,6 +44,7 @@ from act_platform.runtime import (
     act_action_log_status,
     act_combatant_drilldown_status,
     act_data_source_health,
+    act_death_recap_status,
     act_graph_timeseries_status,
     act_plugin_disable,
     act_plugin_enable,
@@ -216,6 +217,18 @@ class SAOPlayerGUIMenuMixin:
         except Exception:
             action_log_sig = (False, 0, 0, '')
         try:
+            death_status = self._get_act_death_recap_menu_status()
+            death_summary = death_status.get('summary') or {}
+            death = death_status.get('death') or {}
+            death_sig = (
+                bool(death_status.get('ok')),
+                str((death or {}).get('entity_id') or ''),
+                int(death_summary.get('incoming_damage') or 0),
+                int(death_summary.get('death_events') or 0),
+            )
+        except Exception:
+            death_sig = (False, '', 0, 0)
+        try:
             graph_status = self._get_act_graph_timeseries_menu_status()
             graph_sig = (
                 bool(graph_status.get('ok')),
@@ -278,6 +291,7 @@ class SAOPlayerGUIMenuMixin:
             report_sig,
             timeline_sig,
             action_log_sig,
+            death_sig,
             graph_sig,
             combatant_sig,
             skill_sig,
@@ -385,6 +399,11 @@ class SAOPlayerGUIMenuMixin:
         action_log_status = self._get_act_action_log_menu_status()
         action_log_count = len(action_log_status.get('rows') or [])
         action_log_state = 'READY' if action_log_status.get('ok') else 'EMPTY'
+        death_status = self._get_act_death_recap_menu_status()
+        death_summary = death_status.get('summary') or {}
+        death_damage = int(death_summary.get('incoming_damage') or 0)
+        death_events = int(death_summary.get('death_events') or 0)
+        death_state = 'READY' if death_events else 'EMPTY'
         graph_status = self._get_act_graph_timeseries_menu_status()
         graph_metric = str(graph_status.get('selected_metric') or 'damage')
         graph_count = int(graph_status.get('row_count') or 0)
@@ -488,6 +507,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '⬇', 'label': f'ACT报告/导出: {report_state}/{report_total_damage}', 'command': self._toggle_act_report_export_panel},
             {'icon': '▶', 'label': f'ACT时间线/VCR: {timeline_state}/{timeline_count}', 'command': self._toggle_act_timeline_vcr_panel},
             {'icon': '▤', 'label': f'ACT行为日志: {action_log_state}/{action_log_count}', 'command': self._toggle_act_action_log_panel},
+            {'icon': '✚', 'label': f'ACT死亡回放: {death_state}/{death_damage}', 'command': self._toggle_act_death_recap_panel},
             {'icon': '⌁', 'label': f'ACT图表/曲线: {graph_state}/{graph_metric}/{graph_count}', 'command': self._toggle_act_graph_timeseries_panel},
             {'icon': '◎', 'label': f'ACT成员钻取: {combatant_state}/{combatant_id}/{combatant_count}', 'command': self._toggle_act_combatant_drilldown_panel},
             {'icon': '✦', 'label': f'ACT技能钻取: {skill_state}/{skill_id}/{skill_ref_count}', 'command': self._toggle_act_skill_drilldown_panel},
@@ -551,6 +571,12 @@ class SAOPlayerGUIMenuMixin:
             return act_action_log_status(self, limit=24)
         except Exception as exc:
             return {'ok': False, 'message': str(exc), 'rows': [], 'columns': [], 'filters': {'query': '', 'topic': ''}, 'cursor': {'time_ms': 0, 'row_count': 0}, 'errors': [str(exc)]}
+
+    def _get_act_death_recap_menu_status(self):
+        try:
+            return act_death_recap_status(self, limit=24)
+        except Exception as exc:
+            return {'ok': False, 'message': str(exc), 'death': None, 'rows': [], 'summary': {'incoming_damage': 0, 'death_events': 0}, 'errors': [str(exc)]}
 
     def _get_act_graph_timeseries_menu_status(self):
         try:
