@@ -46,6 +46,7 @@ Known capability IDs:
 - `triggers_timers`
 - `plugin_manager`
 - `data_source_health`
+- `death_recap`
 - `offline_import`
 
 ## Adapter contract

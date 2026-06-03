@@ -26,7 +26,7 @@ No ACT feature is complete until WebView and Entity can reach the same shared ba
 | Offline import | `act_replay/importer.py` | Loads normalized ACT JSON/JSONL files into replay-ready event lists. |
 | Combat analytics | `engines/combat_analytics.py` | Builds ACT snapshots and render specs from DPS/game state. |
 | Trigger engine | `engines/act_trigger_engine.py` | Shared trigger/timer rule evaluator. |
-| History/export | `engines/dps_history.py` | Rolling encounter persistence, append-only JSONL archive, lightweight search, and JSON/CSV/HTML/XML export. |
+| History/export | `engines/dps_history.py` | Rolling encounter persistence, append-only JSONL archive, lightweight search, and JSON/CSV/HTML/XML plus compressed XML export/import. |
 | TCP bridge | `net/packet_bridge.py` | Owns capture, parser adapter creation, packet callbacks, and data-source health. |
 | Hybrid memory source | `mem_probe/unified_source.py` | Read-only memory self-state bridge used by memory/hybrid/auto modes. |
 
@@ -129,7 +129,7 @@ Every ACT capability has:
 - Entity binding;
 - parity validation.
 
-Current capability ids include live overview, history, export, triggers/timers, plugin manager, data-source health, action log, graph/timeseries, timeline/VCR, combatant drilldown, skill drilldown, and offline import.
+Current capability ids include live overview, history, export, triggers/timers, plugin manager, data-source health, action log, graph/timeseries, timeline/VCR, combatant drilldown, skill drilldown, death recap, and offline import.
 
 ## Trigger And Timer Rules
 
@@ -186,6 +186,30 @@ git diff --check
 ```
 
 Do not run release packaging unless explicitly requested. For packaging changes, keep `XiaoACTUI.spec` hidden imports aligned with new ACT packages and Cython scanner modules.
+
+## Plan Completion Matrix
+
+This matrix defines the current completion line for the automatically implementable ACT platform plan. Items marked complete have shared backend APIs, WebView/Entity parity where user-facing, and offline regression coverage. Items marked blocked need concrete external input before implementation can be reliable.
+
+| Area | Status | Implemented boundary | Regression gate |
+| --- | --- | --- | --- |
+| Shared ACT event runtime | Complete | Canonical event envelopes, bounded EventBus history, replay publication, and shared runtime helpers. | `python -m act_platform.selftest`, `python -m act_replay.selftest` |
+| Plugin SDK/platform | Complete | Plugin discovery, SDK ergonomics, extension registry, plugin status, trigger handlers, parser adapters, and plugin fallback import. | `python -m unittest tools.act_plugin_ergonomics_selftest tools.act_plugin_extensions_selftest tools.act_plugin_examples_selftest tools.act_plugin_capability_selftest` |
+| Parser adapters | Complete for built-in/plugin contracts | Built-in TCP adapter, plugin adapter metadata, live packet adapter selection/fallback, and opt-in process isolation. | `python -m unittest tools.act_parser_adapter_selftest` |
+| Dual UI parity | Complete by contract | WebView and Entity/Tk expose the same ACT capability ids, shared actions, and payload fields. | `python -m tools.act_ui_parity`, `python -m unittest tools.act_ui_parity_selftest` |
+| Reports/history/archive | Complete | Rolling JSON history, JSONL archive, SQLite encounter/combatant/action/timeline/trigger/source mirror, search/load/delete, action-history paging/analytics, and JSON/CSV/HTML/XML/compressed XML export/import. | `python -m unittest tools.act_history_selftest tools.act_action_log_selftest tools.act_report_export_selftest tools.act_offline_import_selftest` |
+| Offline import | Complete for known schemas | Normalized JSON/JSONL/NDJSON replay import, SAO structured XML and compressed XML report round-trip import, and plugin parser-adapter fallback. | `python -m unittest tools.act_offline_import_selftest` |
+| Local dynamic report access | Complete, local-only by default | Read-only HTTP endpoints and WebSocket snapshot/history/action access over the same `DpsHistoryStore`. | `python -m unittest tools.act_server_api_selftest` |
+| Runtime dashboards | Complete by shared helper | Timeline/VCR, graph/timeseries, action log, combatant drilldown, skill drilldown, data-source health, trigger/timer, plugin manager, report/history, offline import, and death recap surfaces. | `python -m unittest tools.act_timeline_selftest tools.act_graph_timeseries_selftest tools.act_death_recap_selftest tools.act_combatant_drilldown_selftest tools.act_skill_drilldown_selftest tools.act_data_source_health_selftest tools.act_trigger_runtime_selftest` |
+| Hybrid TCP+memory mode | Complete for policy/scaffold | Conservative scan gates, source health reporting, TCP fallback, and memory/hybrid policy exposure. | `python -m act_replay.selftest`; live validation remains manual |
+| Entity/Tk performance guardrails | Complete for current panels | ACT Entity panels use throttled refreshes, bounded row counts, and dirty signatures; WebView/GPU remains preferred for high-frequency or animated views. | Targeted UI module `py_compile` plus manual runtime smoke when available |
+
+Hard-blocked follow-ups:
+
+- Third-party pcap/log import and non-SAO ACT compressed XML variants require real samples or authoritative schemas.
+- ODBC/FTP export requires destination schema, credentials, and security policy decisions.
+- Native C# ACT providers require concrete provider contracts and runtime integration targets.
+- Manual WebView/Entity smoke requires a live UI/game runtime session.
 
 ## Open Edges
 
