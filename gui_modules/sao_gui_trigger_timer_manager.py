@@ -1,0 +1,346 @@
+# -*- coding: utf-8 -*-
+"""Entity-mode ACT trigger/timer manager panel."""
+
+from __future__ import annotations
+
+import tkinter as tk
+from typing import Any, Dict, Mapping, Optional
+
+from act_platform.runtime import (
+    act_trigger_disable,
+    act_trigger_enable,
+    act_trigger_reload,
+    act_trigger_status,
+    act_trigger_test,
+)
+from gui_modules.sao_panel_ui import (
+    _SAO_PANEL_ACCENT,
+    _SAO_PANEL_BG,
+    _SAO_PANEL_BODY_BG,
+    _SAO_PANEL_BORDER,
+    _SAO_PANEL_GOLD,
+    _SAO_PANEL_HEADER_BG,
+    _SAO_PANEL_HEADER_FG,
+    _SAO_PANEL_LABEL_FG,
+    _SAO_PANEL_SEP,
+    _SAO_PANEL_VALUE_FG,
+    _apply_window_icon,
+    _bind_panel_drag,
+    _sao_panel_body,
+    _sao_panel_header,
+    _sao_pill,
+)
+
+
+class TriggerTimerManagerPanel:
+    """SAO-styled Toplevel for ACT alert/timer rule management."""
+
+    def __init__(self, root: tk.Misc, owner: Any):
+        self.root = root
+        self.owner = owner
+        self._win: Optional[tk.Toplevel] = None
+        self._list: Optional[tk.Frame] = None
+        self._recent: Optional[tk.Frame] = None
+        self._summary_var = tk.StringVar(value="0 RULES")
+        self._status_var = tk.StringVar(value="Ready")
+        self._last_status: Dict[str, Any] = {}
+
+    def show(self) -> None:
+        if self._win is None or not self._exists():
+            self._build()
+        if self._win is None:
+            return
+        try:
+            self._win.deiconify()
+            self._win.lift()
+            self._win.attributes('-topmost', True)
+            self._win.after(220, lambda: self._win and self._win.attributes('-topmost', False))
+        except Exception:
+            pass
+        self.refresh()
+
+    def hide(self) -> None:
+        if self._win is None:
+            return
+        try:
+            self._win.withdraw()
+        except Exception:
+            pass
+
+    def destroy(self) -> None:
+        if self._win is not None:
+            try:
+                self._win.destroy()
+            except Exception:
+                pass
+        self._win = None
+        self._list = None
+        self._recent = None
+
+    def is_visible(self) -> bool:
+        return bool(self._win is not None and self._exists() and self._win.state() != 'withdrawn')
+
+    def refresh(self) -> Dict[str, Any]:
+        try:
+            status = act_trigger_status(self.owner)
+        except Exception as exc:
+            status = {"ok": False, "message": str(exc), "triggers": [], "timers": [], "recent": [], "errors": [str(exc)]}
+        self._last_status = dict(status or {})
+        self._render_status(self._last_status)
+        return self._last_status
+
+    def _exists(self) -> bool:
+        try:
+            return bool(self._win and self._win.winfo_exists())
+        except Exception:
+            return False
+
+    def _build(self) -> None:
+        win = tk.Toplevel(self.root)
+        self._win = win
+        win.title('SAO ACT Trigger Timer Manager')
+        win.geometry('820x560+190+140')
+        win.minsize(660, 430)
+        win.configure(bg=_SAO_PANEL_BG)
+        try:
+            win.overrideredirect(False)
+            win.attributes('-alpha', 0.97)
+        except Exception:
+            pass
+        try:
+            _apply_window_icon(win)
+        except Exception:
+            pass
+        header = _sao_panel_header(win, 'ACT TRIGGERS / TIMERS', on_close=self.hide)
+        header.pack(fill='x')
+        _bind_panel_drag(win, header)
+
+        body = _sao_panel_body(win)
+        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+
+        toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
+        toolbar.pack(fill='x', padx=12, pady=(10, 8))
+        _sao_pill(toolbar, 'ALERT SDK').pack(side='left')
+        tk.Label(
+            toolbar,
+            textvariable=self._summary_var,
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_GOLD,
+            font=('Segoe UI', 10, 'bold'),
+        ).pack(side='left', padx=(12, 0))
+        for label, cmd in (
+            ('刷新 Refresh', self.refresh),
+            ('重载 Reload', self._reload),
+            ('关闭 Close', self.hide),
+        ):
+            tk.Button(
+                toolbar,
+                text=label,
+                command=cmd,
+                bg=_SAO_PANEL_HEADER_BG,
+                fg=_SAO_PANEL_HEADER_FG,
+                activebackground=_SAO_PANEL_ACCENT,
+                activeforeground='white',
+                relief='flat',
+                bd=0,
+                padx=10,
+                pady=4,
+            ).pack(side='right', padx=(6, 0))
+
+        tk.Label(
+            body,
+            textvariable=self._status_var,
+            anchor='w',
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_LABEL_FG,
+            font=('Segoe UI', 9),
+        ).pack(fill='x', padx=12, pady=(0, 6))
+
+        outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
+        outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
+
+        canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        scroll = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
+        self._list = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
+        self._list.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.create_window((0, 0), window=self._list, anchor='nw')
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side='left', fill='both', expand=True)
+        scroll.pack(side='right', fill='y')
+        win.protocol('WM_DELETE_WINDOW', self.hide)
+
+    def _render_status(self, status: Mapping[str, Any]) -> None:
+        rules = list(status.get('triggers') or [])
+        timers = list(status.get('timers') or [])
+        self._summary_var.set(f'{len(rules)} RULES / {len(timers)} TIMERS')
+        errors = status.get('errors') or []
+        message = status.get('message') or ('OK' if status.get('ok', True) else 'Trigger manager unavailable')
+        if errors:
+            message = f"{message} · errors={len(errors)}"
+        self._status_var.set(str(message))
+        if self._list is None:
+            return
+        for child in list(self._list.winfo_children()):
+            child.destroy()
+        if not rules:
+            self._render_empty()
+            return
+        for rule in rules:
+            self._render_rule(rule)
+        self._render_recent(status)
+
+    def _render_empty(self) -> None:
+        if self._list is None:
+            return
+        box = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+        box.pack(fill='x', pady=8, padx=4)
+        tk.Label(
+            box,
+            text='未配置 ACT 触发器\n在 settings.json 的 act_trigger_rules 中添加规则后刷新。',
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_LABEL_FG,
+            justify='center',
+            font=('Segoe UI', 10),
+            pady=28,
+        ).pack(fill='x')
+
+    def _render_rule(self, rule: Mapping[str, Any]) -> None:
+        if self._list is None:
+            return
+        rule_id = str(rule.get('id') or '')
+        enabled = bool(rule.get('enabled'))
+        is_timer = str(rule.get('type') or '') == 'elapsed_s'
+        border = _SAO_PANEL_GOLD if is_timer else (_SAO_PANEL_BORDER if enabled else _SAO_PANEL_SEP)
+        card = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=border)
+        card.pack(fill='x', pady=6, padx=4)
+
+        top = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
+        top.pack(fill='x', padx=10, pady=(8, 2))
+        tk.Label(
+            top,
+            text=str(rule.get('label') or rule_id),
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_VALUE_FG,
+            anchor='w',
+            font=('Segoe UI', 11, 'bold'),
+        ).pack(side='left', fill='x', expand=True)
+        _sao_pill(top, 'TIMER' if is_timer else ('ENABLED' if enabled else 'DISABLED')).pack(side='right')
+
+        meta = tk.Label(
+            card,
+            text=self._format_rule(rule),
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_LABEL_FG,
+            anchor='w',
+            justify='left',
+            font=('Consolas', 9),
+        )
+        meta.pack(fill='x', padx=10, pady=(2, 4))
+
+        message = str(rule.get('message') or '').strip()
+        if message:
+            tk.Label(
+                card,
+                text=message,
+                bg='#07111c',
+                fg='#bfe6ff',
+                anchor='w',
+                justify='left',
+                wraplength=730,
+                font=('Segoe UI', 9),
+                padx=8,
+                pady=5,
+            ).pack(fill='x', padx=10, pady=(0, 6))
+
+        actions = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
+        actions.pack(fill='x', padx=10, pady=(0, 9))
+        self._action_button(actions, '启用 Enable', lambda rid=rule_id: self._enable(rid), enabled=not enabled)
+        self._action_button(actions, '禁用 Disable', lambda rid=rule_id: self._disable(rid), enabled=enabled)
+        self._action_button(actions, '测试 Test', lambda rid=rule_id: self._test(rid), enabled=True)
+
+    def _render_recent(self, status: Mapping[str, Any]) -> None:
+        if self._list is None:
+            return
+        events = list(status.get('recent') or [])[:6]
+        if not events:
+            return
+        box = tk.Frame(self._list, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+        box.pack(fill='x', pady=(10, 4), padx=4)
+        tk.Label(
+            box,
+            text='RECENT EVENTS',
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_GOLD,
+            anchor='w',
+            font=('Segoe UI', 10, 'bold'),
+            padx=10,
+            pady=6,
+        ).pack(fill='x')
+        for event in events:
+            text = f"{event.get('label') or event.get('rule_id')}: {event.get('message') or ''}"
+            tk.Label(
+                box,
+                text=text,
+                bg=_SAO_PANEL_BODY_BG,
+                fg=_SAO_PANEL_LABEL_FG,
+                anchor='w',
+                justify='left',
+                wraplength=730,
+                font=('Consolas', 8),
+                padx=10,
+                pady=3,
+            ).pack(fill='x')
+
+    def _format_rule(self, rule: Mapping[str, Any]) -> str:
+        return (
+            f"id={rule.get('id') or '-'}  type={rule.get('type') or '-'}  "
+            f"threshold={rule.get('threshold')}  match={rule.get('match') or '-'}\n"
+            f"cooldown={rule.get('cooldown_s') or 0}s  "
+            f"once={'yes' if rule.get('once_per_encounter') else 'no'}  "
+            f"severity={rule.get('severity') or 'info'}"
+        )
+
+    def _action_button(self, parent: tk.Frame, text: str, command: Any, *, enabled: bool = True) -> None:
+        tk.Button(
+            parent,
+            text=text,
+            command=command,
+            state=('normal' if enabled else 'disabled'),
+            bg=_SAO_PANEL_HEADER_BG,
+            fg=_SAO_PANEL_HEADER_FG,
+            disabledforeground='#6e8190',
+            activebackground=_SAO_PANEL_ACCENT,
+            activeforeground='white',
+            relief='flat',
+            bd=0,
+            padx=9,
+            pady=3,
+        ).pack(side='left', padx=(0, 7))
+
+    def _reload(self) -> None:
+        result = act_trigger_reload(self.owner)
+        if isinstance(result, Mapping) and result.get('ok') is False:
+            self._status_var.set(str(result.get('message') or 'Reload failed'))
+        self.refresh()
+
+    def _enable(self, rule_id: str) -> None:
+        result = act_trigger_enable(self.owner, rule_id)
+        if isinstance(result, Mapping) and result.get('ok') is False:
+            self._status_var.set(str(result.get('message') or 'Enable failed'))
+        self.refresh()
+
+    def _disable(self, rule_id: str) -> None:
+        result = act_trigger_disable(self.owner, rule_id)
+        if isinstance(result, Mapping) and result.get('ok') is False:
+            self._status_var.set(str(result.get('message') or 'Disable failed'))
+        self.refresh()
+
+    def _test(self, rule_id: str) -> None:
+        result = act_trigger_test(self.owner, rule_id)
+        if isinstance(result, Mapping):
+            count = len(result.get('events') or [])
+            self._status_var.set(str(result.get('message') or f'Test events: {count}'))
+        self.refresh()
+
+
+__all__ = ["TriggerTimerManagerPanel"]

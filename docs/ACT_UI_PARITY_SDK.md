@@ -163,6 +163,22 @@ python -m act_replay.selftest
 - Both UIs must preserve the same capability IDs, operations, shared payload fields, and acceptance gates.
 - Plugin manager, history, export, trigger/timer, data-source health, and offline import capabilities are all part of the parity gate.
 
+## Current trigger/timer management surface
+
+`triggers_timers` is wired through shared `act_platform.runtime` helpers so WebView and Entity call the same rule backend:
+
+- status: `act_trigger_status(owner)`
+- enable: `act_trigger_enable(owner, rule_id)`
+- disable: `act_trigger_disable(owner, rule_id)`
+- reload: `act_trigger_reload(owner)`
+- test: `act_trigger_test(owner, rule_id)`
+
+WebView route: `web/trigger_timer_manager.html`, opened from `SAO Menu > ACT 触发/计时 Trigger Timer`.
+
+Entity route: `entity://act/triggers_timers`, opened from `SAO 菜单 > 面板 > ACT触发/计时`.
+
+The current panel reads rules from `settings.json` key `act_trigger_rules`. It supports enable/disable/reload/test and intentionally defers full rule authoring to a later slice.
+
 ## Safety notes
 
 Treat the SDK as a delivery gate, not documentation-only metadata. If a feature PR changes ACT behavior, it should update the registry, both UI declarations, and parity tests in the same change.

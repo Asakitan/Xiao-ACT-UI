@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from .event_bus import EventBus
@@ -35,6 +36,61 @@ def ensure_act_event_bus(owner: Any) -> EventBus:
 
 def _owner_settings(owner: Any) -> Any:
     return getattr(owner, "_cfg_settings_ref", None) or getattr(owner, "settings", None)
+
+
+def _read_trigger_rules(owner: Any) -> list[dict[str, Any]]:
+    settings = _owner_settings(owner)
+    try:
+        raw = settings.get("act_trigger_rules", []) if settings is not None else []
+    except Exception:
+        raw = []
+    if isinstance(raw, Mapping):
+        raw = raw.get("act_trigger_rules") or raw.get("rules") or []
+    if not isinstance(raw, list):
+        return []
+    return [dict(rule) for rule in raw if isinstance(rule, Mapping)]
+
+
+def _write_trigger_rules(owner: Any, rules: list[dict[str, Any]]) -> None:
+    settings = _owner_settings(owner)
+    if settings is not None:
+        try:
+            settings.set("act_trigger_rules", rules)
+        except Exception:
+            pass
+        try:
+            settings.save()
+        except Exception:
+            pass
+    try:
+        setattr(owner, "_act_trigger_last_reload_ms", int(time.time() * 1000))
+    except Exception:
+        pass
+    try:
+        engine = ensure_act_trigger_engine(owner)
+        engine.set_rules(rules)
+    except Exception:
+        pass
+
+
+def _normalize_trigger_rules(rules: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    from engines.act_trigger_engine import normalize_trigger_rule
+
+    return [normalize_trigger_rule(rule, idx) for idx, rule in enumerate(rules or [], 1)]
+
+
+def ensure_act_trigger_engine(owner: Any):
+    from engines.act_trigger_engine import ActTriggerEngine
+
+    engine = getattr(owner, "_act_trigger_engine", None)
+    if isinstance(engine, ActTriggerEngine):
+        return engine
+    engine = ActTriggerEngine(_read_trigger_rules(owner))
+    try:
+        setattr(owner, "_act_trigger_engine", engine)
+    except Exception:
+        pass
+    return engine
 
 
 def _owner_snapshot_provider(owner: Any) -> Callable[[], Mapping[str, Any]]:
@@ -162,16 +218,167 @@ def act_plugin_reload(owner: Any, plugin_id: str = "") -> dict[str, Any]:
         return {"ok": False, "message": str(exc)}
 
 
+def _trigger_status_from_rules(owner: Any, rules: list[dict[str, Any]], *,
+                               ok: bool = True, message: str = "") -> dict[str, Any]:
+    normalized = _normalize_trigger_rules(rules)
+    timers = [rule for rule in normalized if rule.get("type") == "elapsed_s"]
+    errors: list[str] = []
+    engine_snapshot: dict[str, Any] = {}
+    try:
+        engine_snapshot = ensure_act_trigger_engine(owner).snapshot(limit=12)
+    except Exception as exc:
+        errors.append(str(exc))
+    return {
+        "ok": bool(ok) and not errors,
+        "message": message,
+        "enabled": bool(normalized),
+        "rule_count": len(normalized),
+        "trigger_count": len(normalized),
+        "timer_count": len(timers),
+        "triggers": normalized,
+        "timers": timers,
+        "recent": list(engine_snapshot.get("recent") or []),
+        "last_reload_ms": int(getattr(owner, "_act_trigger_last_reload_ms", 0) or 0),
+        "errors": errors,
+    }
+
+
+def act_trigger_status(owner: Any) -> dict[str, Any]:
+    try:
+        return _trigger_status_from_rules(owner, _read_trigger_rules(owner), message="OK")
+    except Exception as exc:
+        return {
+            "ok": False,
+            "message": str(exc),
+            "enabled": False,
+            "rule_count": 0,
+            "trigger_count": 0,
+            "timer_count": 0,
+            "triggers": [],
+            "timers": [],
+            "recent": [],
+            "last_reload_ms": 0,
+            "errors": [str(exc)],
+        }
+
+
+def _set_trigger_rule_enabled(owner: Any, rule_id: str, enabled: bool) -> dict[str, Any]:
+    target = str(rule_id or "").strip()
+    if not target:
+        return {"ok": False, "message": "rule id is required"}
+    rules = _read_trigger_rules(owner)
+    found = False
+    normalized = _normalize_trigger_rules(rules)
+    for index, rule in enumerate(rules):
+        current_id = str((normalized[index] if index < len(normalized) else rule).get("id") or "")
+        if current_id == target:
+            rule["enabled"] = bool(enabled)
+            found = True
+            break
+    if not found:
+        return {"ok": False, "message": f"trigger rule not found: {target}"}
+    _write_trigger_rules(owner, rules)
+    action = "enabled" if enabled else "disabled"
+    status = _trigger_status_from_rules(owner, rules, message=f"{target} {action}")
+    status["ok"] = True
+    return status
+
+
+def act_trigger_enable(owner: Any, rule_id: str) -> dict[str, Any]:
+    return _set_trigger_rule_enabled(owner, rule_id, True)
+
+
+def act_trigger_disable(owner: Any, rule_id: str) -> dict[str, Any]:
+    return _set_trigger_rule_enabled(owner, rule_id, False)
+
+
+def act_trigger_reload(owner: Any) -> dict[str, Any]:
+    try:
+        rules = _read_trigger_rules(owner)
+        try:
+            ensure_act_trigger_engine(owner).set_rules(rules)
+        except Exception:
+            pass
+        try:
+            setattr(owner, "_act_trigger_last_reload_ms", int(time.time() * 1000))
+        except Exception:
+            pass
+        return _trigger_status_from_rules(owner, rules, message="Reloaded")
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "errors": [str(exc)], "triggers": [], "timers": []}
+
+
+def _synthetic_snapshot_for_rule(rule: Mapping[str, Any]) -> dict[str, Any]:
+    rule_type = str(rule.get("type") or "")
+    threshold = float(rule.get("threshold") or 0.0)
+    match = str(rule.get("match") or "")
+    render_spec: dict[str, Any] = {
+        "mode": "synthetic",
+        "encounter": {"id": "act-trigger-test", "status": "active", "duration_s": max(1.0, threshold + 1.0)},
+        "totals": {"damage": 0.0, "heal": 0.0, "elapsed_s": max(1.0, threshold + 1.0)},
+        "context": {},
+        "boss": {},
+    }
+    if rule_type == "damage_total":
+        render_spec["totals"]["damage"] = max(1.0, threshold + 1.0)
+    elif rule_type == "heal_total":
+        render_spec["totals"]["heal"] = max(1.0, threshold + 1.0)
+    elif rule_type == "boss_hp_pct_below":
+        render_spec["boss"]["hp_pct"] = min(max(threshold, 0.0), 1.0)
+    elif rule_type == "skill_kind":
+        render_spec["context"]["last_skill_kind"] = match or "server_end"
+    elif rule_type == "boss_event_type":
+        try:
+            event_type = int(match or threshold or 1)
+        except Exception:
+            event_type = 1
+        render_spec["context"]["last_boss_event_type"] = event_type
+    return {"render_spec": render_spec}
+
+
+def act_trigger_test(owner: Any, rule_id: str) -> dict[str, Any]:
+    target = str(rule_id or "").strip()
+    if not target:
+        return {"ok": False, "message": "rule id is required", "events": []}
+    try:
+        from engines.act_trigger_engine import ActTriggerEngine
+
+        rules = _normalize_trigger_rules(_read_trigger_rules(owner))
+        rule = next((item for item in rules if str(item.get("id") or "") == target), None)
+        if rule is None:
+            return {"ok": False, "message": f"trigger rule not found: {target}", "events": []}
+        enabled_rule = dict(rule)
+        enabled_rule["enabled"] = True
+        enabled_rule["cooldown_s"] = 0.0
+        enabled_rule["once_per_encounter"] = False
+        engine = ActTriggerEngine([enabled_rule])
+        events = engine.evaluate(_synthetic_snapshot_for_rule(enabled_rule), now=time.time())
+        return {
+            "ok": bool(events),
+            "message": "Test event emitted" if events else "Rule did not match synthetic snapshot",
+            "events": events,
+            "status": act_trigger_status(owner),
+        }
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "events": [], "errors": [str(exc)]}
+
+
 __all__ = [
     "act_plugin_disable",
     "act_plugin_enable",
     "act_plugin_list",
     "act_plugin_reload",
     "act_plugin_status",
+    "act_trigger_disable",
+    "act_trigger_enable",
+    "act_trigger_reload",
+    "act_trigger_status",
+    "act_trigger_test",
     "build_plugin_manager",
     "default_plugin_dirs",
     "ensure_act_event_bus",
     "ensure_act_plugin_manager",
+    "ensure_act_trigger_engine",
     "project_base_dir",
     "publish_owner_event",
     "shutdown_act_plugin_manager",

@@ -45,6 +45,7 @@ from act_platform.runtime import (
     act_plugin_enable,
     act_plugin_reload,
     act_plugin_status,
+    act_trigger_status,
     ensure_act_plugin_manager,
 )
 from config import DEFAULT_HOTKEYS
@@ -149,6 +150,22 @@ class SAOPlayerGUIMenuMixin:
         boss_bar_mode = str(self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid')
         mem_data_source = self._get_mem_data_source()
         update_label = self._build_update_menu_label()
+        try:
+            plugin_status = self._get_act_plugin_menu_status()
+            plugin_sig = (
+                int(plugin_status.get('plugin_count', 0) or 0),
+                int(plugin_status.get('active_count', 0) or 0),
+            )
+        except Exception:
+            plugin_sig = (0, 0)
+        try:
+            trigger_status = self._get_act_trigger_menu_status()
+            trigger_sig = (
+                int(trigger_status.get('rule_count', 0) or 0),
+                int(trigger_status.get('timer_count', 0) or 0),
+            )
+        except Exception:
+            trigger_sig = (0, 0)
         session_visible = False
         session_count = 0
         session_version = int(getattr(self, '_session_players_version', 0) or 0)
@@ -177,6 +194,8 @@ class SAOPlayerGUIMenuMixin:
             mem_data_source,
             bool(self._panels_hidden),
             update_label,
+            plugin_sig,
+            trigger_sig,
             session_visible,
             session_count,
             session_version,
@@ -264,6 +283,9 @@ class SAOPlayerGUIMenuMixin:
         plugin_status = self._get_act_plugin_menu_status()
         plugin_total = int(plugin_status.get('plugin_count', 0) or 0)
         plugin_active = int(plugin_status.get('active_count', 0) or 0)
+        trigger_status = self._get_act_trigger_menu_status()
+        trigger_total = int(trigger_status.get('rule_count', 0) or 0)
+        trigger_timers = int(trigger_status.get('timer_count', 0) or 0)
         session_visible = False
         try:
             stack = getattr(self, '_menu_left_stack', None)
@@ -350,6 +372,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '◆', 'label': f'Hybrid数据源: {mem_mode_disp}', 'command': self._cycle_mem_data_source},
             {'icon': '☌', 'label': f'ACT插件: {plugin_active}/{plugin_total}', 'command': self._show_act_plugin_status_menu},
             {'icon': '☌', 'label': 'ACT插件管理面板', 'command': self._toggle_act_plugin_manager_panel},
+            {'icon': '⏱', 'label': f'ACT触发/计时: {trigger_total}/{trigger_timers}', 'command': self._toggle_act_trigger_timer_panel},
             {'icon': '↻', 'label': '重载ACT插件', 'command': self._reload_act_plugins_menu},
             {'icon': '◆', 'label': '切换首个ACT插件', 'command': self._toggle_first_act_plugin_menu},
         ])
@@ -380,6 +403,12 @@ class SAOPlayerGUIMenuMixin:
             return act_plugin_status(self)
         except Exception as exc:
             return {'ok': False, 'message': str(exc), 'plugin_count': 0, 'active_count': 0, 'plugins': []}
+
+    def _get_act_trigger_menu_status(self):
+        try:
+            return act_trigger_status(self)
+        except Exception as exc:
+            return {'ok': False, 'message': str(exc), 'rule_count': 0, 'timer_count': 0, 'triggers': [], 'timers': []}
 
     def _show_act_plugin_status_menu(self):
         status = self._get_act_plugin_menu_status()

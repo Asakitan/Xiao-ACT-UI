@@ -56,6 +56,9 @@
         toggle_plugin_manager: function () {
             return call('ui.menu_action', { action: 'toggle_plugin_manager' });
         },
+        toggle_trigger_timer_manager: function () {
+            return call('ui.menu_action', { action: 'toggle_trigger_timer_manager' });
+        },
         get_plugin_status: function () {
             return call('act.plugins.status', {});
         },
@@ -71,6 +74,21 @@
         reload_plugins: function (pluginId) {
             var payload = pluginId ? { plugin_id: String(pluginId || '') } : {};
             return call('act.plugins.reload', payload);
+        },
+        get_trigger_status: function () {
+            return call('act.triggers.status', {});
+        },
+        enable_trigger: function (ruleId) {
+            return call('act.triggers.enable', { rule_id: String(ruleId || '') });
+        },
+        disable_trigger: function (ruleId) {
+            return call('act.triggers.disable', { rule_id: String(ruleId || '') });
+        },
+        reload_triggers: function () {
+            return call('act.triggers.reload', {});
+        },
+        test_trigger: function (ruleId) {
+            return call('act.triggers.test', { rule_id: String(ruleId || '') });
         },
         // Generic escape hatch: any unhandled name routes through
         // `ui.legacy_call` so the C# side can log + decide.

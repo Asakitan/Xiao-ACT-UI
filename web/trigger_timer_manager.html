@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO ACT Trigger Timer Manager</title>
+<style>
+:root {
+    --bg: rgba(9, 14, 24, 0.74);
+    --panel: rgba(19, 34, 54, 0.9);
+    --panel2: rgba(7, 12, 20, 0.74);
+    --line: rgba(117, 205, 255, 0.50);
+    --gold: rgba(255, 214, 117, 0.82);
+    --text: rgba(232, 246, 255, 0.96);
+    --muted: rgba(176, 204, 226, 0.78);
+    --danger: #ff6b82;
+    --ok: #7df2bf;
+    --warn: #ffd46f;
+}
+* { box-sizing: border-box; }
+html, body {
+    margin: 0;
+    width: 100%;
+    min-height: 100%;
+    background: transparent;
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    overflow: hidden;
+    user-select: none;
+}
+body { padding: 14px; }
+.shell {
+    position: relative;
+    width: 100%;
+    height: calc(100vh - 28px);
+    min-height: 460px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    background:
+        linear-gradient(135deg, rgba(100, 202, 255, .16), transparent 20%, transparent 70%, rgba(255, 215, 125, .12)),
+        linear-gradient(180deg, rgba(16, 28, 45, .95), rgba(7, 12, 20, .88));
+    box-shadow: 0 0 34px rgba(88, 199, 255, .22), inset 0 0 28px rgba(109, 216, 255, .10);
+    opacity: 0;
+    transform: translateY(10px) scale(.985);
+    transition: opacity .22s ease, transform .22s ease;
+}
+.shell.visible { opacity: 1; transform: translateY(0) scale(1); }
+.shell::before {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(180deg, rgba(255,255,255,.035) 0, rgba(255,255,255,.035) 1px, transparent 1px, transparent 7px);
+    mix-blend-mode: screen;
+}
+.header {
+    height: 58px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px 8px 18px;
+    border-bottom: 1px solid rgba(117, 205, 255, .35);
+    background: linear-gradient(90deg, rgba(18, 59, 94, .76), rgba(11, 22, 35, .58));
+}
+.title-block { display: flex; flex-direction: column; gap: 2px; }
+.kicker { letter-spacing: .18em; font-size: 10px; color: var(--gold); text-shadow: 0 0 10px rgba(255, 214, 117, .52); }
+.title { font-size: 20px; font-weight: 700; letter-spacing: .08em; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.pill {
+    min-width: 94px;
+    text-align: center;
+    padding: 5px 9px;
+    border: 1px solid rgba(117, 205, 255, .42);
+    border-radius: 999px;
+    color: var(--muted);
+    background: rgba(8, 14, 22, .62);
+    font-size: 12px;
+}
+button {
+    border: 1px solid rgba(117, 205, 255, .48);
+    background: linear-gradient(180deg, rgba(61, 143, 201, .42), rgba(19, 48, 74, .58));
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 11px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+button:hover { transform: translateY(-1px); box-shadow: 0 0 16px rgba(107, 214, 255, .25); }
+button:active { transform: translateY(0); }
+button.primary { border-color: rgba(255, 214, 117, .74); color: #fff8da; }
+button.danger { border-color: rgba(255, 107, 130, .70); }
+button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 16px; }
+.body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 12px;
+    height: calc(100% - 58px);
+    padding: 12px;
+}
+.list { min-height: 0; overflow: auto; padding-right: 4px; }
+.card {
+    margin-bottom: 10px;
+    border: 1px solid rgba(117, 205, 255, .34);
+    border-left: 3px solid rgba(117, 205, 255, .75);
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(27, 46, 68, .86), rgba(9, 16, 26, .82));
+    box-shadow: inset 0 0 18px rgba(117, 205, 255, .06);
+    padding: 12px;
+}
+.card.off { border-left-color: rgba(160, 164, 170, .72); opacity: .84; }
+.card.timer { border-left-color: var(--gold); }
+.card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.name { font-size: 16px; font-weight: 700; letter-spacing: .04em; }
+.id { margin-top: 2px; font-size: 11px; color: var(--muted); word-break: break-all; }
+.badges { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+.badge { border: 1px solid rgba(117, 205, 255, .38); border-radius: 999px; padding: 3px 7px; font-size: 10px; color: var(--muted); background: rgba(8, 14, 22, .44); }
+.badge.ok { color: var(--ok); border-color: rgba(125,242,191,.62); }
+.badge.warn { color: var(--warn); border-color: rgba(255,212,111,.62); }
+.badge.bad { color: var(--danger); border-color: rgba(255,107,130,.62); }
+.meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; margin: 10px 0; font-size: 11px; color: var(--muted); }
+.meta span { color: var(--text); }
+.message { margin-top: 8px; color: rgba(232, 246, 255, .9); font-size: 12px; user-select: text; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.side { min-height: 0; border: 1px solid rgba(117, 205, 255, .30); border-radius: 10px; background: rgba(8, 14, 22, .52); padding: 12px; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+.side-title { color: var(--gold); font-size: 12px; letter-spacing: .16em; }
+.summary { display: grid; gap: 8px; }
+.row { display: flex; justify-content: space-between; border-bottom: 1px solid rgba(117, 205, 255, .16); padding-bottom: 5px; font-size: 12px; color: var(--muted); }
+.row strong { color: var(--text); }
+.recent { flex: 1; min-height: 0; overflow: auto; font-size: 11px; color: var(--muted); line-height: 1.45; }
+.recent-item { border: 1px solid rgba(117, 205, 255, .20); border-radius: 8px; padding: 7px; margin-bottom: 6px; background: rgba(7, 12, 20, .42); }
+.help { font-size: 12px; line-height: 1.55; color: var(--muted); }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
+.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+.empty { display: grid; place-items: center; height: 100%; min-height: 260px; color: var(--muted); border: 1px dashed rgba(117, 205, 255, .28); border-radius: 10px; text-align: center; line-height: 1.6; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,.18); }
+::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+    <div class="header">
+        <div class="title-block">
+            <div class="kicker">ACT ALERT AUTHORING</div>
+            <div class="title">TRIGGERS & TIMERS</div>
+        </div>
+        <div class="header-actions">
+            <div class="pill" id="trigger-count">0 RULES</div>
+            <button class="primary" type="button" onclick="TriggerTimerManager.refresh()">刷新 Refresh</button>
+            <button type="button" onclick="TriggerTimerManager.reload()">重载 Reload</button>
+            <button class="close" type="button" onclick="TriggerTimerManager.close()">×</button>
+        </div>
+    </div>
+    <div class="body">
+        <div class="list" id="rule-list"><div class="empty">正在读取触发器...<br/>LOADING RULES</div></div>
+        <aside class="side">
+            <div class="side-title">RUNTIME STATUS</div>
+            <div class="summary">
+                <div class="row"><span>Rules</span><strong id="sum-rules">0</strong></div>
+                <div class="row"><span>Timers</span><strong id="sum-timers">0</strong></div>
+                <div class="row"><span>Enabled</span><strong id="sum-enabled">NO</strong></div>
+                <div class="row"><span>Reload</span><strong id="sum-reload">0</strong></div>
+                <div class="row"><span>Errors</span><strong id="sum-errors">0</strong></div>
+            </div>
+            <div class="side-title">RECENT EVENTS</div>
+            <div class="recent" id="recent-list">暂无事件</div>
+            <div class="side-title">RULE SOURCE</div>
+            <div class="help">规则来自 <strong>settings.json</strong> 的 <strong>act_trigger_rules</strong>。当前面板支持启用、禁用、重载和合成测试事件；编辑器会在后续切片补上。</div>
+        </aside>
+    </div>
+    <div class="toast" id="toast"></div>
+</div>
+<script>
+(function () {
+    "use strict";
+
+    var shell = document.getElementById('shell');
+    var list = document.getElementById('rule-list');
+    var recentList = document.getElementById('recent-list');
+    var toast = document.getElementById('toast');
+    var toastTimer = null;
+
+    function esc(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function parseResult(result) {
+        if (typeof result === 'string') {
+            try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; }
+        }
+        return result || {};
+    }
+
+    function apiCall(name, args) {
+        var api = window.pywebview && window.pywebview.api;
+        if (api && typeof api[name] === 'function') {
+            return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
+        }
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            var cmdMap = {
+                get_trigger_status: 'act.triggers.status',
+                enable_trigger: 'act.triggers.enable',
+                disable_trigger: 'act.triggers.disable',
+                reload_triggers: 'act.triggers.reload',
+                test_trigger: 'act.triggers.test'
+            };
+            return window.bridge.cmd(cmdMap[name] || ('act.triggers.' + name), { args: args || [] }).then(parseResult);
+        }
+        return Promise.resolve({ ok: false, message: 'Trigger API unavailable' });
+    }
+
+    function showToast(message) {
+        toast.textContent = String(message || '');
+        toast.classList.add('visible');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800);
+    }
+
+    function badge(label, cls) {
+        return '<span class="badge ' + (cls || '') + '">' + esc(label) + '</span>';
+    }
+
+    function jsArg(value) {
+        return JSON.stringify(String(value == null ? '' : value));
+    }
+
+    function ruleKind(rule) {
+        return rule.type === 'elapsed_s' ? 'timer' : 'trigger';
+    }
+
+    function renderRule(rule) {
+        var enabled = !!rule.enabled;
+        var kind = ruleKind(rule);
+        var idArg = jsArg(rule.id);
+        var cls = 'card ' + kind + (enabled ? '' : ' off');
+        var badges = [badge(enabled ? 'ENABLED' : 'DISABLED', enabled ? 'ok' : ''), badge(kind.toUpperCase(), kind === 'timer' ? 'warn' : '')];
+        var actions = '';
+        actions += '<button type="button" class="primary" onclick="TriggerTimerManager.enable(' + idArg + ')"' + (enabled ? ' disabled' : '') + '>启用 Enable</button>';
+        actions += '<button type="button" class="danger" onclick="TriggerTimerManager.disable(' + idArg + ')"' + (enabled ? '' : ' disabled') + '>禁用 Disable</button>';
+        actions += '<button type="button" onclick="TriggerTimerManager.test(' + idArg + ')">测试 Test</button>';
+        return '<article class="' + cls + '">' +
+            '<div class="card-top"><div><div class="name">' + esc(rule.label || rule.id) + '</div><div class="id">' + esc(rule.id || '') + '</div></div><div class="badges">' + badges.join('') + '</div></div>' +
+            '<div class="meta">' +
+                '<div>Type: <span>' + esc(rule.type || '-') + '</span></div>' +
+                '<div>Threshold: <span>' + esc(rule.threshold) + '</span></div>' +
+                '<div>Match: <span>' + esc(rule.match || '-') + '</span></div>' +
+                '<div>Cooldown: <span>' + esc(rule.cooldown_s || 0) + 's</span></div>' +
+                '<div>Once: <span>' + esc(rule.once_per_encounter ? 'encounter' : 'repeat') + '</span></div>' +
+                '<div>Severity: <span>' + esc(rule.severity || 'info') + '</span></div>' +
+            '</div>' +
+            '<div class="message">' + esc(rule.message || 'No message') + '</div>' +
+            '<div class="actions">' + actions + '</div>' +
+        '</article>';
+    }
+
+    function renderRecent(events) {
+        if (!events || !events.length) {
+            recentList.textContent = '暂无事件';
+            return;
+        }
+        recentList.innerHTML = events.slice(0, 12).map(function (ev) {
+            return '<div class="recent-item"><strong>' + esc(ev.label || ev.rule_id || ev.id) + '</strong><br/>' + esc(ev.message || '') + '<br/><small>' + esc(ev.trigger_type || ev.type || '') + '</small></div>';
+        }).join('');
+    }
+
+    function render(data) {
+        var rules = Array.isArray(data.triggers) ? data.triggers : [];
+        document.getElementById('sum-rules').textContent = String(data.rule_count != null ? data.rule_count : rules.length);
+        document.getElementById('sum-timers').textContent = String(data.timer_count || ((data.timers || []).length || 0));
+        document.getElementById('sum-enabled').textContent = data.enabled ? 'YES' : 'NO';
+        document.getElementById('sum-reload').textContent = String(data.last_reload_ms || 0);
+        document.getElementById('sum-errors').textContent = String((data.errors || []).length);
+        document.getElementById('trigger-count').textContent = String(data.rule_count != null ? data.rule_count : rules.length) + ' RULES';
+        renderRecent(data.recent || []);
+        if (!rules.length) {
+            list.innerHTML = '<div class="empty">未配置 ACT 触发器。<br/>在 settings.json 中添加 act_trigger_rules 后刷新。</div>';
+            return;
+        }
+        list.innerHTML = rules.map(renderRule).join('');
+    }
+
+    var TriggerTimerManager = {
+        fadeIn: function () { requestAnimationFrame(function () { shell.classList.add('visible'); }); },
+        fadeOut: function () { shell.classList.remove('visible'); },
+        refresh: function () {
+            return apiCall('get_trigger_status', []).then(function (data) {
+                render(data);
+                if (data.ok === false) showToast(data.message || 'Trigger API failed');
+                return data;
+            });
+        },
+        reload: function () {
+            return apiCall('reload_triggers', []).then(function (data) {
+                showToast(data.ok === false ? (data.message || 'Reload failed') : '触发器已重载');
+                render(data.status || data);
+                return data;
+            });
+        },
+        enable: function (id) {
+            return apiCall('enable_trigger', [id]).then(function (data) {
+                showToast(data.ok === false ? (data.message || 'Enable failed') : id + ' enabled');
+                render(data.status || data);
+                return data;
+            });
+        },
+        disable: function (id) {
+            return apiCall('disable_trigger', [id]).then(function (data) {
+                showToast(data.ok === false ? (data.message || 'Disable failed') : id + ' disabled');
+                render(data.status || data);
+                return data;
+            });
+        },
+        test: function (id) {
+            return apiCall('test_trigger', [id]).then(function (data) {
+                var count = (data.events || []).length;
+                showToast(data.ok === false ? (data.message || 'Test failed') : ('测试事件 ' + count + ' 个'));
+                return TriggerTimerManager.refresh();
+            });
+        },
+        close: function () {
+            var api = window.pywebview && window.pywebview.api;
+            TriggerTimerManager.fadeOut();
+            setTimeout(function () {
+                if (api && typeof api.menu_action === 'function') api.menu_action('toggle_trigger_timer_manager');
+                else if (api && typeof api.toggle_trigger_timer_manager === 'function') api.toggle_trigger_timer_manager();
+            }, 120);
+        },
+        updateStatus: function (data) { render(parseResult(data)); }
+    };
+
+    window.TriggerTimerManager = TriggerTimerManager;
+    window.addEventListener('pywebviewready', function () { TriggerTimerManager.refresh(); });
+    setTimeout(function () {
+        TriggerTimerManager.fadeIn();
+        TriggerTimerManager.refresh();
+    }, 120);
+})();
+</script>
+</body>
+</html>

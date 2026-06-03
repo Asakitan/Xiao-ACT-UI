@@ -72,6 +72,11 @@ from act_platform.runtime import (
     act_plugin_list,
     act_plugin_reload,
     act_plugin_status,
+    act_trigger_disable,
+    act_trigger_enable,
+    act_trigger_reload,
+    act_trigger_status,
+    act_trigger_test,
     ensure_act_event_bus,
     ensure_act_plugin_manager,
     publish_owner_event,
@@ -389,6 +394,21 @@ class SAOWebAPI:
     def reload_plugins(self, plugin_id=''):
         return json.dumps(act_plugin_reload(self._g, str(plugin_id or '')), ensure_ascii=False)
 
+    def get_trigger_status(self):
+        return json.dumps(act_trigger_status(self._g), ensure_ascii=False)
+
+    def enable_trigger(self, rule_id):
+        return json.dumps(act_trigger_enable(self._g, str(rule_id or '')), ensure_ascii=False)
+
+    def disable_trigger(self, rule_id):
+        return json.dumps(act_trigger_disable(self._g, str(rule_id or '')), ensure_ascii=False)
+
+    def reload_triggers(self):
+        return json.dumps(act_trigger_reload(self._g), ensure_ascii=False)
+
+    def test_trigger(self, rule_id):
+        return json.dumps(act_trigger_test(self._g, str(rule_id or '')), ensure_ascii=False)
+
     def toggle_plugin_manager(self):
         """Show/hide the ACT plugin manager overlay."""
         def _do():
@@ -396,6 +416,15 @@ class SAOWebAPI:
                 self._g._hide_plugin_manager()
             else:
                 self._g._show_plugin_manager()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def toggle_trigger_timer_manager(self):
+        """Show/hide the ACT trigger/timer manager overlay."""
+        def _do():
+            if self._g._trigger_timer_manager_visible:
+                self._g._hide_trigger_timer_manager()
+            else:
+                self._g._show_trigger_timer_manager()
         threading.Thread(target=_do, daemon=True).start()
 
     def switch_to_entity(self):
@@ -1780,6 +1809,10 @@ class SAOWebViewGUI:
         # ACT Plugin Manager panel
         self.plugin_manager_win = None
         self._plugin_manager_visible = False
+
+        # ACT Trigger/Timer Manager panel
+        self.trigger_timer_win = None
+        self._trigger_timer_manager_visible = False
 
         # Hide & Seek engine
         self._hide_seek_engine = None
@@ -3683,6 +3716,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Trigger/Timer Manager — same API surface as Entity/Tk panel
+        trigger_timer_url = _web_file_uri('trigger_timer_manager.html')
+        _tt_w = max(640, int(min(_sw, 1920) * 0.40))
+        _tt_h = max(520, int(min(_sh, 1080) * 0.52))
+        _tt_x = max(16, int(monitor_left + (_sw - _tt_w) * 0.58))
+        _tt_y = max(24, int(monitor_top + (_sh - _tt_h) * 0.23))
+        self.trigger_timer_win = webview.create_window(
+            'SAO-TriggerTimerManager', trigger_timer_url,
+            width=_tt_w, height=_tt_h,
+            x=_tt_x, y=_tt_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -4275,6 +4326,7 @@ class SAOWebViewGUI:
             ('SAO-AutoKeyEditor', '_autokey_editor_visible', None),
             ('SAO-Commander', '_commander_visible', None),
             ('SAO-PluginManager', '_plugin_manager_visible', None),
+            ('SAO-TriggerTimerManager', '_trigger_timer_manager_visible', None),
         ]
         user32 = ctypes.windll.user32
         for title, vis_attr, hwnd_attr in _panels:
@@ -4863,6 +4915,7 @@ class SAOWebViewGUI:
             self._set_window_icon('SAO-AutoKeyEditor')
             self._set_window_icon('SAO-Commander')
             self._set_window_icon('SAO-PluginManager')
+            self._set_window_icon('SAO-TriggerTimerManager')
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
             self._set_window_alpha('SAO Alert', 1.0)
@@ -4911,6 +4964,7 @@ class SAOWebViewGUI:
                 self._wait_and_apply_click_through('SAO-AutoKeyEditor', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-Commander', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-PluginManager', timeout=0.5)
+                self._wait_and_apply_click_through('SAO-TriggerTimerManager', timeout=0.5)
             except Exception:
                 pass
             # Commander panel must start hidden (explicitly enforce after webview init)
@@ -4927,6 +4981,14 @@ class SAOWebViewGUI:
                 if self.plugin_manager_win:
                     self._set_window_alpha('SAO-PluginManager', 0.0)
                     self.plugin_manager_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._trigger_timer_manager_visible = False
+                if self.trigger_timer_win:
+                    self._set_window_alpha('SAO-TriggerTimerManager', 0.0)
+                    self.trigger_timer_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -5740,6 +5802,63 @@ class SAOWebViewGUI:
         except Exception:
             pass
         self._plugin_manager_visible = False
+
+    # ── ACT Trigger/Timer Manager panel ──
+
+    def _eval_trigger_timer_manager(self, js):
+        try:
+            if self.trigger_timer_win:
+                self.trigger_timer_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_trigger_timer_manager_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the trigger/timer manager receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-TriggerTimerManager')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_trigger_timer_manager(self):
+        try:
+            if self.trigger_timer_win and not self._trigger_timer_manager_visible:
+                self._set_window_alpha('SAO-TriggerTimerManager', 0.0)
+                self.trigger_timer_win.show()
+                self._eval_trigger_timer_manager('if(window.TriggerTimerManager&&TriggerTimerManager.fadeIn)TriggerTimerManager.fadeIn()')
+                self._eval_trigger_timer_manager('if(window.TriggerTimerManager&&TriggerTimerManager.refresh)TriggerTimerManager.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-TriggerTimerManager', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._trigger_timer_manager_visible = True
+                self._ensure_trigger_timer_manager_clickable()
+                threading.Timer(0.5, self._ensure_trigger_timer_manager_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_trigger_timer_manager(self):
+        try:
+            if self.trigger_timer_win and self._trigger_timer_manager_visible:
+                self._eval_trigger_timer_manager('if(window.TriggerTimerManager&&TriggerTimerManager.fadeOut)TriggerTimerManager.fadeOut()')
+                def _finish():
+                    try:
+                        if self.trigger_timer_win:
+                            self.trigger_timer_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._trigger_timer_manager_visible = False
 
     # ── AutoKey Editor overlay ──
 
@@ -7266,6 +7385,7 @@ class SAOWebViewGUI:
             cfg['autokey_editor_visible'] = bool(self._autokey_editor_visible)
             cfg['commander_visible'] = bool(self._commander_visible)
             cfg['plugin_manager_visible'] = bool(self._plugin_manager_visible)
+            cfg['trigger_timer_manager_visible'] = bool(self._trigger_timer_manager_visible)
             _hs_engine = getattr(self, '_hide_seek_engine', None)
             cfg['hide_seek_active'] = bool(_hs_engine and _hs_engine.running)
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
@@ -7295,6 +7415,7 @@ class SAOWebViewGUI:
             'toggle_autokey_editor': lambda: (self._show_autokey_editor() if not self._autokey_editor_visible else self._hide_autokey_editor()),
             'toggle_commander': lambda: (self._show_commander() if not self._commander_visible else self._hide_commander()),
             'toggle_plugin_manager': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
+            'toggle_trigger_timer_manager': lambda: (self._show_trigger_timer_manager() if not self._trigger_timer_manager_visible else self._hide_trigger_timer_manager()),
             'toggle_session_players': self._toggle_session_players_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,

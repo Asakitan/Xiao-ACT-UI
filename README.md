@@ -28,6 +28,7 @@
 - 独立 `DPS / HPS` 面板、排行榜、单人明细、技能拆分、上次战斗报告与历史报告。
 - `Burst Ready`、SkillFX、菜单粒子、扫描线、浮动面板等 SAO 风格视觉效果。
 - `Boss Raid` 阶段计时、时间轴提醒、狂暴倒计时与 Boss ↔ AutoKey 联动。
+- `ACT Triggers/Timers` 双 UI 管理面板，支持从 `act_trigger_rules` 查看、启用/禁用、重载与合成测试触发器。
 - 自动按键 profile、本地导入导出、脚本仓库上传/下载、结构化触发条件。
 - `Commander` 队伍面板、BuffMon、Hide & Seek、置顶/隐藏面板等辅助功能。
 - 远程更新检查、`runtime-delta` / `full-package` 下载、独立 `update.exe` 应用更新并重启主程序。
