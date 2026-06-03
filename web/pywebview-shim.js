@@ -155,6 +155,21 @@
         toggle_graph_timeseries: function () {
             return call('ui.menu_action', { action: 'toggle_graph_timeseries' });
         },
+        get_combatant_drilldown_status: function (combatantId, query, focusTarget) {
+            return call('act.combatant.status', { combatant_id: String(combatantId || ''), query: String(query || ''), focus_target: String(focusTarget || '') });
+        },
+        filter_combatant_drilldown: function (combatantId, query) {
+            return call('act.combatant.filter', { combatant_id: String(combatantId || ''), query: String(query || '') });
+        },
+        focus_combatant_target: function (combatantId, targetId) {
+            return call('act.combatant.focus_target', { combatant_id: String(combatantId || ''), target_id: String(targetId || '') });
+        },
+        back_combatant_drilldown: function () {
+            return call('act.combatant.back', {});
+        },
+        toggle_combatant_drilldown: function () {
+            return call('ui.menu_action', { action: 'toggle_combatant_drilldown' });
+        },
         get_plugin_status: function () {
             return call('act.plugins.status', {});
         },

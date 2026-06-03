@@ -72,6 +72,10 @@ from act_platform.runtime import (
     act_action_log_jump_to_time,
     act_action_log_search,
     act_action_log_status,
+    act_combatant_drilldown_back,
+    act_combatant_drilldown_filter,
+    act_combatant_drilldown_focus_target,
+    act_combatant_drilldown_status,
     act_data_source_diagnose,
     act_data_source_health,
     act_graph_timeseries_export,
@@ -503,6 +507,18 @@ class SAOWebAPI:
     def export_graph_timeseries(self, metric=None, limit=120, query=None, topic=None):
         return json.dumps(act_graph_timeseries_export(self._g, metric=None if metric is None else str(metric or ''), limit=int(limit or 120), query=None if query is None else str(query or ''), topic=None if topic is None else str(topic or '')), ensure_ascii=False)
 
+    def get_combatant_drilldown_status(self, combatant_id=None, query=None, focus_target=None):
+        return json.dumps(act_combatant_drilldown_status(self._g, combatant_id=combatant_id, query=query, focus_target=focus_target), ensure_ascii=False)
+
+    def filter_combatant_drilldown(self, combatant_id=None, query=''):
+        return json.dumps(act_combatant_drilldown_filter(self._g, combatant_id=combatant_id, query=str(query or '')), ensure_ascii=False)
+
+    def focus_combatant_target(self, combatant_id=None, target_id=''):
+        return json.dumps(act_combatant_drilldown_focus_target(self._g, combatant_id=combatant_id, target_id=str(target_id or '')), ensure_ascii=False)
+
+    def back_combatant_drilldown(self):
+        return json.dumps(act_combatant_drilldown_back(self._g), ensure_ascii=False)
+
     def list_plugins(self):
         return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
 
@@ -594,6 +610,15 @@ class SAOWebAPI:
                 self._g._hide_graph_timeseries()
             else:
                 self._g._show_graph_timeseries()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def toggle_combatant_drilldown(self):
+        """Show/hide the ACT combatant drilldown overlay."""
+        def _do():
+            if self._g._combatant_drilldown_visible:
+                self._g._hide_combatant_drilldown()
+            else:
+                self._g._show_combatant_drilldown()
         threading.Thread(target=_do, daemon=True).start()
 
     def switch_to_entity(self):
@@ -1987,6 +2012,10 @@ class SAOWebViewGUI:
         # ACT Graph/Timeseries panel
         self.graph_timeseries_win = None
         self._graph_timeseries_visible = False
+
+        # ACT Combatant Drilldown panel
+        self.combatant_drilldown_win = None
+        self._combatant_drilldown_visible = False
 
         # Hide & Seek engine
         self._hide_seek_engine = None
@@ -3998,6 +4027,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Combatant Drilldown — per-combatant detail surface
+        combatant_drilldown_url = _web_file_uri('act_combatant_drilldown.html')
+        _cd_w = max(720, int(min(_sw, 1920) * 0.46))
+        _cd_h = max(520, int(min(_sh, 1080) * 0.54))
+        _cd_x = max(20, int(monitor_left + (_sw - _cd_w) * 0.31))
+        _cd_y = max(28, int(monitor_top + (_sh - _cd_h) * 0.25))
+        self.combatant_drilldown_win = webview.create_window(
+            'SAO-CombatantDrilldown', combatant_drilldown_url,
+            width=_cd_w, height=_cd_h,
+            x=_cd_x, y=_cd_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -4596,6 +4643,7 @@ class SAOWebViewGUI:
             ('SAO-TimelineVCR', '_timeline_vcr_visible', None),
             ('SAO-ActionLog', '_action_log_visible', None),
             ('SAO-GraphTimeseries', '_graph_timeseries_visible', None),
+            ('SAO-CombatantDrilldown', '_combatant_drilldown_visible', None),
         ]
         user32 = ctypes.windll.user32
         for title, vis_attr, hwnd_attr in _panels:
@@ -5302,6 +5350,14 @@ class SAOWebViewGUI:
                 if self.graph_timeseries_win:
                     self._set_window_alpha('SAO-GraphTimeseries', 0.0)
                     self.graph_timeseries_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._combatant_drilldown_visible = False
+                if self.combatant_drilldown_win:
+                    self._set_window_alpha('SAO-CombatantDrilldown', 0.0)
+                    self.combatant_drilldown_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -6458,6 +6514,63 @@ class SAOWebViewGUI:
             pass
         self._graph_timeseries_visible = False
 
+    # ── ACT Combatant Drilldown panel ──
+
+    def _eval_combatant_drilldown(self, js):
+        try:
+            if self.combatant_drilldown_win:
+                self.combatant_drilldown_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_combatant_drilldown_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the combatant drilldown panel receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-CombatantDrilldown')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_combatant_drilldown(self):
+        try:
+            if self.combatant_drilldown_win and not self._combatant_drilldown_visible:
+                self._set_window_alpha('SAO-CombatantDrilldown', 0.0)
+                self.combatant_drilldown_win.show()
+                self._eval_combatant_drilldown('if(window.CombatantDrilldown&&CombatantDrilldown.fadeIn)CombatantDrilldown.fadeIn()')
+                self._eval_combatant_drilldown('if(window.CombatantDrilldown&&CombatantDrilldown.refresh)CombatantDrilldown.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-CombatantDrilldown', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._combatant_drilldown_visible = True
+                self._ensure_combatant_drilldown_clickable()
+                threading.Timer(0.5, self._ensure_combatant_drilldown_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_combatant_drilldown(self):
+        try:
+            if self.combatant_drilldown_win and self._combatant_drilldown_visible:
+                self._eval_combatant_drilldown('if(window.CombatantDrilldown&&CombatantDrilldown.fadeOut)CombatantDrilldown.fadeOut()')
+                def _finish():
+                    try:
+                        if self.combatant_drilldown_win:
+                            self.combatant_drilldown_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._combatant_drilldown_visible = False
+
     # ── AutoKey Editor overlay ──
 
     def _eval_autokey_editor(self, js):
@@ -7397,6 +7510,11 @@ class SAOWebViewGUI:
                 self.graph_timeseries_win.destroy()
         except Exception:
             pass
+        try:
+            if self.combatant_drilldown_win:
+                self.combatant_drilldown_win.destroy()
+        except Exception:
+            pass
 
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
         # 热切换时不强杀: _do_hot_switch 需要在 webview.start() 返回后运行
@@ -8063,6 +8181,7 @@ class SAOWebViewGUI:
             'toggle_timeline_vcr': lambda: (self._show_timeline_vcr() if not self._timeline_vcr_visible else self._hide_timeline_vcr()),
             'toggle_action_log': lambda: (self._show_action_log() if not self._action_log_visible else self._hide_action_log()),
             'toggle_graph_timeseries': lambda: (self._show_graph_timeseries() if not self._graph_timeseries_visible else self._hide_graph_timeseries()),
+            'toggle_combatant_drilldown': lambda: (self._show_combatant_drilldown() if not self._combatant_drilldown_visible else self._hide_combatant_drilldown()),
             'toggle_session_players': self._toggle_session_players_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,

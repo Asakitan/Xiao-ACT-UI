@@ -273,6 +273,21 @@ Entity route: `entity://act/graph_timeseries`, opened from `SAO 菜单 > 面板 
 
 The shared payload preserves the parity fields `encounter_id`, `series`, `metrics`, `time_range_ms`, and `filters`. Current series are lightweight cumulative curves for `damage`, `heal`, and `event_count`, plus gauge-style `boss_hp_pct` when boss payloads provide HP percentages. WebView owns the richer canvas chart path; Entity/Tk renders a bounded compact bar/table representation with 350ms refresh throttling and dirty signatures so CPU-heavy redraw pressure stays low.
 
+## Current combatant drilldown surface
+
+`combatant_drilldown` is wired through shared `act_platform.runtime` helpers and reuses existing DPS tracker entity detail data:
+
+- status/open: `act_combatant_drilldown_status(owner, combatant_id=None, query=None, focus_target=None)`
+- back: `act_combatant_drilldown_back(owner)`
+- filter: `act_combatant_drilldown_filter(owner, combatant_id=None, query="")`
+- focus target: `act_combatant_drilldown_focus_target(owner, combatant_id=None, target_id="")`
+
+WebView route: `web/act_combatant_drilldown.html`, opened from `SAO Menu > ACT 战斗成员 Drilldown`.
+
+Entity route: `entity://act/combatant_drilldown`, opened from `SAO 菜单 > 面板 > ACT成员钻取`.
+
+The shared payload preserves the parity fields `encounter_id`, `combatant_id`, `summary`, `skills`, `incoming`, and `outgoing`. Live details come from `DpsTracker.get_entity_detail(uid)`; report fallback can read stored report entity rows when available. Entity/Tk keeps the surface bounded, refresh-throttled at 350ms, and dirty-signature gated before rebuilding widgets.
+
 ## Safety notes
 
 Treat the SDK as a delivery gate, not documentation-only metadata. If a feature PR changes ACT behavior, it should update the registry, both UI declarations, and parity tests in the same change.

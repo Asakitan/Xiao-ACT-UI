@@ -1037,6 +1037,163 @@ def act_graph_timeseries_export(owner: Any, *, metric: str | None = None, limit:
     }
 
 
+def _combatant_drilldown_state(owner: Any) -> dict[str, Any]:
+    state = getattr(owner, "_act_combatant_drilldown_state", None)
+    if not isinstance(state, dict):
+        state = {"combatant_id": "", "filters": {"query": "", "focus_target": ""}}
+        try:
+            setattr(owner, "_act_combatant_drilldown_state", state)
+        except Exception:
+            pass
+    filters = state.get("filters")
+    if not isinstance(filters, dict):
+        filters = {"query": "", "focus_target": ""}
+        state["filters"] = filters
+    filters.setdefault("query", "")
+    filters.setdefault("focus_target", "")
+    state.setdefault("combatant_id", "")
+    return state
+
+
+def _find_combatant_detail(owner: Any, combatant_id: str) -> tuple[dict[str, Any] | None, list[str]]:
+    errors: list[str] = []
+    try:
+        uid = int(str(combatant_id or "0"), 0)
+    except Exception:
+        uid = 0
+    tracker = getattr(owner, "_dps_tracker", None)
+    get_detail = getattr(tracker, "get_entity_detail", None)
+    if uid and callable(get_detail):
+        try:
+            detail = get_detail(uid)
+            if isinstance(detail, Mapping):
+                return dict(_json_safe(detail)), errors
+        except Exception as exc:
+            errors.append(str(exc))
+    report = _owner_dps_report(owner)
+    for row in list((report or {}).get("entities") or []):
+        if isinstance(row, Mapping) and str(row.get("uid") or row.get("id") or "") == str(combatant_id):
+            return dict(_json_safe(row)), errors
+    return None, errors or [f"combatant not found: {combatant_id}"]
+
+
+def _combatant_summary(detail: Mapping[str, Any]) -> dict[str, Any]:
+    damage = int(detail.get("damage") or detail.get("damage_total") or 0)
+    heal = int(detail.get("heal") or detail.get("heal_total") or 0)
+    return {
+        "uid": str(detail.get("uid") or detail.get("id") or ""),
+        "name": str(detail.get("name") or detail.get("display_name") or "Unknown"),
+        "profession": str(detail.get("profession") or detail.get("profession_name") or ""),
+        "damage": damage,
+        "heal": heal,
+        "dps": int(detail.get("dps") or 0),
+        "hps": int(detail.get("hps") or 0),
+        "damage_pct": float(detail.get("damage_pct") or 0.0),
+        "crit_rate": float(detail.get("crit_rate") or 0.0),
+        "is_self": bool(detail.get("is_self")),
+    }
+
+
+def _combatant_skill_rows(detail: Mapping[str, Any], *, query: str = "") -> list[dict[str, Any]]:
+    text = str(query or "").strip().lower()
+    rows: list[dict[str, Any]] = []
+    for index, skill in enumerate(list(detail.get("skills") or []), 1):
+        if not isinstance(skill, Mapping):
+            continue
+        damage = int(skill.get("total") or skill.get("damage") or skill.get("damage_total") or 0)
+        heal = int(skill.get("heal_total") or skill.get("heal") or 0)
+        is_heal = heal > damage
+        amount = heal if is_heal else damage
+        row = {
+            "rank": index,
+            "skill_id": str(skill.get("skill_id") or skill.get("id") or ""),
+            "name": str(skill.get("skill_name") or skill.get("name") or skill.get("skill_id") or "Unknown Skill"),
+            "kind": "heal" if is_heal else "damage",
+            "amount": int(amount),
+            "damage": damage,
+            "heal": heal,
+            "hits": int(skill.get("heal_hits" if is_heal else "hits") or skill.get("hits") or 0),
+            "crit_rate": float(skill.get("crit_rate") or 0.0),
+        }
+        if text and text not in json.dumps(row, ensure_ascii=False, default=str).lower():
+            continue
+        rows.append(row)
+    rows.sort(key=lambda item: int(item.get("amount") or 0), reverse=True)
+    for rank, row in enumerate(rows, 1):
+        row["rank"] = rank
+    return rows
+
+
+def act_combatant_drilldown_status(owner: Any, *, combatant_id: str | int | None = None, query: str | None = None, focus_target: str | int | None = None) -> dict[str, Any]:
+    """Return one combatant drilldown payload shared by WebView and Entity/Tk."""
+    state = _combatant_drilldown_state(owner)
+    if combatant_id is not None:
+        state["combatant_id"] = str(combatant_id or "")
+    filters = dict(state.get("filters") or {})
+    if query is not None:
+        filters["query"] = str(query or "")
+    if focus_target is not None:
+        filters["focus_target"] = str(focus_target or "")
+    state["filters"] = filters
+    cid = str(state.get("combatant_id") or "")
+    if not cid:
+        return {
+            "ok": True,
+            "message": "No combatant selected",
+            "encounter_id": _timeline_encounter_id(owner, state),
+            "combatant_id": "",
+            "summary": {},
+            "skills": [],
+            "incoming": [],
+            "outgoing": [],
+            "filters": filters,
+            "errors": [],
+        }
+    detail, errors = _find_combatant_detail(owner, cid)
+    if detail is None:
+        return {
+            "ok": False,
+            "message": "; ".join(errors),
+            "encounter_id": _timeline_encounter_id(owner, state),
+            "combatant_id": cid,
+            "summary": {},
+            "skills": [],
+            "incoming": [],
+            "outgoing": [],
+            "filters": filters,
+            "errors": errors,
+        }
+    skills = _combatant_skill_rows(detail, query=str(filters.get("query") or ""))
+    outgoing = [{"kind": row.get("kind"), "name": row.get("name"), "amount": row.get("amount"), "hits": row.get("hits")} for row in skills[:12]]
+    incoming = list(_json_safe(detail.get("incoming") or [])) if isinstance(detail.get("incoming"), list) else []
+    return {
+        "ok": True,
+        "message": "OK",
+        "encounter_id": _timeline_encounter_id(owner, state),
+        "combatant_id": cid,
+        "summary": _combatant_summary(detail),
+        "skills": skills,
+        "incoming": incoming,
+        "outgoing": outgoing,
+        "filters": filters,
+        "errors": errors,
+    }
+
+
+def act_combatant_drilldown_filter(owner: Any, *, combatant_id: str | int | None = None, query: str = "") -> dict[str, Any]:
+    return act_combatant_drilldown_status(owner, combatant_id=combatant_id, query=query)
+
+
+def act_combatant_drilldown_focus_target(owner: Any, *, combatant_id: str | int | None = None, target_id: str | int = "") -> dict[str, Any]:
+    return act_combatant_drilldown_status(owner, combatant_id=combatant_id, focus_target=target_id)
+
+
+def act_combatant_drilldown_back(owner: Any) -> dict[str, Any]:
+    state = _combatant_drilldown_state(owner)
+    state["combatant_id"] = ""
+    return act_combatant_drilldown_status(owner)
+
+
 def _report_rows_from_snapshot(snapshot: Mapping[str, Any], report: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     render_spec = snapshot.get("render_spec") if isinstance(snapshot, Mapping) else {}
     rows = render_spec.get("rows") if isinstance(render_spec, Mapping) else []
@@ -1294,6 +1451,10 @@ def act_data_source_diagnose(owner: Any, *, now: float | None = None) -> dict[st
 
 
 __all__ = [
+    "act_combatant_drilldown_back",
+    "act_combatant_drilldown_filter",
+    "act_combatant_drilldown_focus_target",
+    "act_combatant_drilldown_status",
     "act_action_log_copy",
     "act_action_log_filter",
     "act_action_log_jump_to_time",
