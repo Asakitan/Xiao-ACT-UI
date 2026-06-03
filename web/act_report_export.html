@@ -134,6 +134,9 @@ input {
 .history-item { border: 1px solid rgba(117, 205, 255, .20); border-radius: 8px; padding: 7px; margin-bottom: 6px; background: rgba(7, 12, 20, .42); user-select: text; }
 .history-actions { display: flex; gap: 5px; margin-top: 7px; }
 .history-actions button { flex: 1; padding: 5px 7px; font-size: 11px; }
+.import-actions { display: flex; gap: 6px; align-items: center; }
+.import-actions input { flex: 1; min-width: 0; }
+.import-actions button { flex: 0 0 auto; padding: 7px 9px; }
 .empty { display: grid; place-items: center; height: 100%; min-height: 240px; color: var(--muted); border: 1px dashed rgba(117, 205, 255, .28); border-radius: 10px; text-align: center; line-height: 1.6; }
 .toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
 .toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
@@ -166,6 +169,12 @@ input {
             <div class="row"><span>Format</span><strong id="sum-format">JSON</strong></div>
             <div class="row"><span>History</span><strong id="sum-count">0</strong></div>
             <div class="row"><span>Storage</span><strong id="sum-storage">--</strong></div>
+            <div class="side-title">OFFLINE IMPORT</div>
+            <div class="import-actions">
+                <input id="import-path" type="text" placeholder="normalized replay path" />
+                <button type="button" onclick="ReportExport.chooseImportFile()">选择</button>
+            </div>
+            <button type="button" onclick="ReportExport.importFile()">导入 Import</button>
             <div class="side-title">HISTORY</div>
             <input id="history-query" type="text" placeholder="搜索历史 / Search" />
             <button type="button" onclick="ReportExport.clearHistory()">清空历史 Clear</button>
@@ -185,6 +194,7 @@ input {
     var statusPill = document.getElementById('status-pill');
     var fmtSelect = document.getElementById('fmt');
     var historyQuery = document.getElementById('history-query');
+    var importPath = document.getElementById('import-path');
     var toastTimer = null;
     var lastPayload = null;
     var searchTimer = null;
@@ -216,6 +226,8 @@ input {
                 load_history_report: 'act.history.load',
                 delete_history_report: 'act.history.delete',
                 clear_history_reports: 'act.history.clear',
+                choose_offline_import_file: 'act.offline_import.choose_file',
+                import_offline_report: 'act.offline_import.import',
                 toggle_report_export: 'ui.menu_action'
             };
             var payload = name === 'toggle_report_export' ? { action: 'toggle_report_export' } : { args: args || [] };
@@ -336,6 +348,28 @@ input {
             if (!confirm('清空全部历史报告？')) return Promise.resolve();
             return apiCall('clear_history_reports', []).then(function (payload) {
                 showToast(payload.ok ? '历史已清空' : (payload.message || '清空失败'));
+                return ReportExport.refresh();
+            });
+        },
+        chooseImportFile: function () {
+            return apiCall('choose_offline_import_file', []).then(function (payload) {
+                if (payload.ok && payload.path && importPath) {
+                    importPath.value = payload.path;
+                    showToast('已选择导入文件');
+                } else if (!payload.cancelled) {
+                    showToast(payload.message || '选择文件失败');
+                }
+                return payload;
+            });
+        },
+        importFile: function () {
+            var path = importPath ? importPath.value.trim() : '';
+            if (!path) {
+                showToast('请先选择导入文件');
+                return Promise.resolve({ ok: false, message: 'No import file selected' });
+            }
+            return apiCall('import_offline_report', [path, true, true]).then(function (payload) {
+                showToast(payload.ok ? ('导入完成 ' + (payload.event_count || 0) + ' events') : (payload.message || '导入失败'));
                 return ReportExport.refresh();
             });
         },

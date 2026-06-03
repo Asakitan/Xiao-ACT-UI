@@ -86,6 +86,7 @@ from act_platform.runtime import (
     act_history_delete,
     act_history_load,
     act_history_status,
+    act_offline_import_file,
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_list,
@@ -443,6 +444,49 @@ class SAOWebAPI:
 
     def clear_history_reports(self):
         return json.dumps(act_history_delete(self._g, clear=True), ensure_ascii=False)
+
+    def choose_offline_import_file(self):
+        try:
+            _ensure_webview()
+            win = getattr(self._g, 'report_export_win', None)
+            if win is None:
+                windows = getattr(webview, 'windows', []) if webview is not None else []
+                win = windows[0] if windows else None
+            dialog = getattr(win, 'create_file_dialog', None)
+            if not callable(dialog):
+                raise RuntimeError('File dialog is unavailable')
+            file_types = (
+                'Normalized ACT replay (*.json;*.jsonl;*.ndjson)',
+                'JSON (*.json)',
+                'JSONL/NDJSON (*.jsonl;*.ndjson)',
+                'All files (*.*)',
+            )
+            try:
+                paths = dialog(
+                    getattr(webview, 'OPEN_DIALOG', 10),
+                    allow_multiple=False,
+                    file_types=file_types,
+                )
+            except TypeError:
+                paths = dialog(getattr(webview, 'OPEN_DIALOG', 10), '', False, '', file_types)
+            if not paths:
+                return json.dumps({'ok': False, 'cancelled': True, 'path': '', 'message': 'No file selected'}, ensure_ascii=False)
+            path = paths if isinstance(paths, str) else list(paths)[0]
+            return json.dumps({'ok': True, 'path': str(path)}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'path': '', 'message': str(e), 'errors': [str(e)]}, ensure_ascii=False)
+
+    def import_offline_report(self, path, persist=True, show=True):
+        try:
+            result = act_offline_import_file(
+                self._g,
+                str(path or ''),
+                persist=bool(persist),
+                show=bool(show),
+            )
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e), 'errors': [str(e)]}, ensure_ascii=False)
 
     def get_timeline_status(self, limit=80, query=''):
         return json.dumps(act_timeline_status(self._g, limit=int(limit or 80), query=str(query or '')), ensure_ascii=False)

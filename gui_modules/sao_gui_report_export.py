@@ -6,11 +6,13 @@ from __future__ import annotations
 import json
 import time
 import tkinter as tk
+from tkinter import filedialog
 from typing import Any, Dict, Mapping, Optional
 
 from act_platform.runtime import (
     act_history_delete,
     act_history_load,
+    act_offline_import_file,
     act_report_copy,
     act_report_export,
     act_report_status,
@@ -170,6 +172,39 @@ class ReportExportPanel:
         self.refresh()
         return dict(result or {})
 
+    def import_offline_file(self, path: str | None = None) -> Dict[str, Any]:
+        selected = str(path or '').strip()
+        if not selected:
+            try:
+                selected = filedialog.askopenfilename(
+                    parent=self._win,
+                    title='Import ACT replay',
+                    filetypes=(
+                        ('Normalized ACT replay', '*.json *.jsonl *.ndjson'),
+                        ('JSON', '*.json'),
+                        ('JSONL/NDJSON', '*.jsonl *.ndjson'),
+                        ('All files', '*.*'),
+                    ),
+                )
+            except Exception as exc:
+                result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
+                self._status_var.set(str(exc))
+                return result
+        if not selected:
+            result = {"ok": False, "cancelled": True, "message": "No file selected", "errors": []}
+            self._status_var.set('Import cancelled')
+            return result
+        try:
+            result = act_offline_import_file(self.owner, selected, persist=True, show=True)
+        except Exception as exc:
+            result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
+        self._status_var.set(str(result.get('message') or ('Imported' if result.get('ok') else 'Import failed')))
+        self._last_refresh_at = 0.0
+        self._last_history_sig = ""
+        self._last_render_sig = ""
+        self.refresh()
+        return dict(result or {})
+
     def _exists(self) -> bool:
         try:
             return bool(self._win and self._win.winfo_exists())
@@ -211,6 +246,7 @@ class ReportExportPanel:
         ).pack(side='left', padx=(12, 0))
         for label, cmd in (
             ('刷新 Refresh', self.refresh),
+            ('导入 Import', self.import_offline_file),
             ('导出 JSON', self.export_json),
             ('导出 CSV', self.export_csv),
             ('复制 Copy', self.copy_snapshot),
