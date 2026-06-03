@@ -156,7 +156,7 @@ Preset helpers:
 
 ## Reports, History, And Replay
 
-The current history store is a rolling encounter store exposed through shared runtime helpers. `DpsHistoryStore` also appends compact finalized reports to a JSONL archive for longer-lived encounter retention. JSON, CSV, and static HTML export remain backed by the compact report shape.
+The current history store is a rolling encounter store exposed through shared runtime helpers. `DpsHistoryStore` also appends compact finalized reports to a JSONL archive and an additive SQLite mirror for longer-lived encounter/combatant retention. JSON, CSV, and static HTML export remain backed by the compact report shape.
 
 Normalized offline imports are loaded by `act_replay.importer`, replayed through `ActReplayHarness`, finalized into the same DPS report shape as live encounters, and can be persisted with `act_platform.runtime.act_offline_import_file(owner, path, persist=True)`. If the built-in normalized importer rejects a file, the runtime can fall back to active plugin parser adapters and call their controlled `import_file` operation. The helper returns import metadata, importer/parser ids, replay preview, the generated report, the persisted history item, and refreshed history status. WebView and Entity expose this through their shared report/export panels; a richer standalone import/playback wizard remains future work.
 
@@ -180,6 +180,6 @@ Do not run release packaging unless explicitly requested. For packaging changes,
 
 - Plugin parser handlers can now be selected for live packet EventBus publishing, offline import fallback, and metadata discovery. They still run in-process with budget/failure accounting; stronger external-process parser isolation remains future work.
 - Offline import supports normalized JSON/JSONL replay files and rolling-history persistence; broader pcap/log/XML import remains future work.
-- History has lightweight rolling-store search and an append-only JSONL encounter archive, but is not yet a SQLite-style encounter/action database.
+- History has lightweight rolling-store search, an append-only JSONL encounter archive, and an additive SQLite encounter/combatant mirror. Full action-level timeline/trigger/source tables remain future work.
 - Manual WebView/Entity smoke still depends on a UI runtime session.
 - Hybrid memory policy is documented separately in `docs/HYBRID_MEMORY_TCP.md`.

@@ -590,11 +590,19 @@ def _history_storage_status(store: Any, encounters: list[Any] | None = None) -> 
             archive = dict(_json_safe(archive_status() or {}))
         except Exception as exc:
             archive = {"available": False, "path": str(getattr(store, "archive_path", "") or ""), "last_error": str(exc)}
+    sqlite: dict[str, Any] = {}
+    sqlite_status = getattr(store, "sqlite_status", None)
+    if callable(sqlite_status):
+        try:
+            sqlite = dict(_json_safe(sqlite_status() or {}))
+        except Exception as exc:
+            sqlite = {"available": False, "path": str(getattr(store, "sqlite_path", "") or ""), "last_error": str(exc)}
     return {
         "available": bool(store is not None),
         "count": len(items),
         "path": str(getattr(store, "path", "") or ""),
         "archive": archive,
+        "sqlite": sqlite,
     }
 
 

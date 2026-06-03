@@ -9,7 +9,11 @@ import tempfile
 import unittest
 
 from act_platform import runtime
-from engines.dps_history import DpsHistoryStore, DPS_HISTORY_JSONL_SCHEMA_VERSION
+from engines.dps_history import (
+    DpsHistoryStore,
+    DPS_HISTORY_JSONL_SCHEMA_VERSION,
+    DPS_HISTORY_SQLITE_SCHEMA_VERSION,
+)
 
 
 class FakeOwner:
@@ -107,6 +111,39 @@ class ActHistoryRuntimeTests(unittest.TestCase):
         self.assertEqual(archived[0]["report_reason"], "second")
         self.assertEqual(archived[0]["_archive_schema_version"], DPS_HISTORY_JSONL_SCHEMA_VERSION)
         self.assertTrue(archived[0]["_archived_at"])
+
+    def test_history_store_appends_sqlite_archive(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_history_sqlite_") as root:
+            path = os.path.join(root, "history.json")
+            sqlite_path = os.path.join(root, "history.sqlite3")
+            store = DpsHistoryStore(path=path, sqlite_path=sqlite_path, limit=10)
+            store.add_report({
+                "encounter_id": "enc-first",
+                "report_reason": "first",
+                "elapsed_s": 10,
+                "total_damage": 100,
+                "entities": [{"uid": 1, "name": "A", "damage_total": 100}],
+            })
+            store.add_report({
+                "encounter_id": "enc-second",
+                "report_reason": "second",
+                "elapsed_s": 20,
+                "total_damage": 200,
+                "entities": [{"uid": 2, "name": "B", "damage_total": 200}],
+            })
+            status = store.sqlite_status()
+            archived = store.list_sqlite_reports(limit=2)
+            runtime_status = runtime.act_history_status(FakeOwner(store), limit=5)
+
+        self.assertTrue(status["available"])
+        self.assertTrue(status["exists"])
+        self.assertEqual(status["schema_version"], DPS_HISTORY_SQLITE_SCHEMA_VERSION)
+        self.assertEqual(status["encounter_count"], 2)
+        self.assertEqual(status["combatant_count"], 2)
+        self.assertEqual(archived[0]["encounter_id"], "enc-second")
+        self.assertEqual(archived[0]["entities"][0]["name"], "B")
+        self.assertEqual(archived[0]["_sqlite_schema_version"], DPS_HISTORY_SQLITE_SCHEMA_VERSION)
+        self.assertEqual(runtime_status["storage_status"]["sqlite"]["encounter_count"], 2)
 
     def test_missing_store_is_reported_without_throwing(self) -> None:
         status = runtime.act_history_status(object())

@@ -11,6 +11,7 @@ import csv
 import html
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -20,10 +21,12 @@ from config import BASE_DIR
 
 DPS_HISTORY_SCHEMA_VERSION = 1
 DPS_HISTORY_JSONL_SCHEMA_VERSION = 1
+DPS_HISTORY_SQLITE_SCHEMA_VERSION = 1
 DEFAULT_HISTORY_LIMIT = 100
 DPS_HISTORY_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "dps_history")
 DPS_HISTORY_PATH = os.path.join(DPS_HISTORY_EXPORT_DIR, "history.json")
 DPS_HISTORY_JSONL_PATH = os.path.join(DPS_HISTORY_EXPORT_DIR, "history.jsonl")
+DPS_HISTORY_SQLITE_PATH = os.path.join(DPS_HISTORY_EXPORT_DIR, "history.sqlite3")
 
 
 def _utc_now_iso() -> str:
@@ -207,17 +210,24 @@ class DpsHistoryStore:
     """Thread-safe rolling store for finalized DPS encounter summaries."""
 
     def __init__(self, path: str = DPS_HISTORY_PATH, limit: int = DEFAULT_HISTORY_LIMIT,
-                 archive_path: Optional[str] = None):
+                 archive_path: Optional[str] = None,
+                 sqlite_path: Optional[str] = None):
         self._path = path
         self._archive_path = (
             str(archive_path)
             if archive_path is not None
             else os.path.splitext(str(path or DPS_HISTORY_PATH))[0] + ".jsonl"
         )
+        self._sqlite_path = (
+            str(sqlite_path)
+            if sqlite_path is not None
+            else os.path.splitext(str(path or DPS_HISTORY_PATH))[0] + ".sqlite3"
+        )
         self._limit = max(1, int(limit or DEFAULT_HISTORY_LIMIT))
         self._lock = threading.RLock()
         self._items: List[Dict[str, Any]] = []
         self._last_archive_error = ""
+        self._last_sqlite_error = ""
         self._load()
 
     @property
@@ -227,6 +237,10 @@ class DpsHistoryStore:
     @property
     def archive_path(self) -> str:
         return self._archive_path
+
+    @property
+    def sqlite_path(self) -> str:
+        return self._sqlite_path
 
     def _load(self) -> None:
         try:
@@ -280,6 +294,146 @@ class DpsHistoryStore:
         except Exception as exc:
             self._last_archive_error = str(exc)
 
+    def _sqlite_connect_locked(self):
+        if not self._sqlite_path:
+            return None
+        sqlite_dir = os.path.dirname(self._sqlite_path)
+        if sqlite_dir:
+            os.makedirs(sqlite_dir, exist_ok=True)
+        conn = sqlite3.connect(self._sqlite_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+
+    def _ensure_sqlite_schema_locked(self, conn) -> None:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS meta ("
+            "key TEXT PRIMARY KEY, "
+            "value TEXT NOT NULL"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS encounters ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "encounter_id TEXT NOT NULL, "
+            "completed_at REAL NOT NULL, "
+            "completed_local_time TEXT NOT NULL, "
+            "report_reason TEXT NOT NULL, "
+            "encounter_started_at REAL NOT NULL, "
+            "encounter_ended_at REAL NOT NULL, "
+            "elapsed_s REAL NOT NULL, "
+            "total_damage INTEGER NOT NULL, "
+            "total_damage_all INTEGER NOT NULL, "
+            "total_heal INTEGER NOT NULL, "
+            "total_dps INTEGER NOT NULL, "
+            "total_hps INTEGER NOT NULL, "
+            "payload_json TEXT NOT NULL, "
+            "archived_at TEXT NOT NULL"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS combatants ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "encounter_row_id INTEGER NOT NULL, "
+            "rank INTEGER NOT NULL, "
+            "uid INTEGER NOT NULL, "
+            "name TEXT NOT NULL, "
+            "profession TEXT NOT NULL, "
+            "damage_total INTEGER NOT NULL, "
+            "heal_total INTEGER NOT NULL, "
+            "damage_taken INTEGER NOT NULL, "
+            "dps INTEGER NOT NULL, "
+            "hps INTEGER NOT NULL, "
+            "damage_pct REAL NOT NULL, "
+            "is_self INTEGER NOT NULL, "
+            "fight_point INTEGER NOT NULL, "
+            "FOREIGN KEY(encounter_row_id) REFERENCES encounters(id) ON DELETE CASCADE"
+            ")"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_encounters_completed_at ON encounters(completed_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_encounters_reason ON encounters(report_reason)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_combatants_encounter ON combatants(encounter_row_id, rank)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_combatants_name ON combatants(name)")
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
+            ("schema_version", str(DPS_HISTORY_SQLITE_SCHEMA_VERSION)),
+        )
+
+    def _append_sqlite_locked(self, item: Dict[str, Any]) -> None:
+        if not self._sqlite_path:
+            return
+        conn = None
+        try:
+            conn = self._sqlite_connect_locked()
+            if conn is None:
+                return
+            self._ensure_sqlite_schema_locked(conn)
+            archived_at = _utc_now_iso()
+            cur = conn.execute(
+                "INSERT INTO encounters("
+                "encounter_id, completed_at, completed_local_time, report_reason, "
+                "encounter_started_at, encounter_ended_at, elapsed_s, total_damage, "
+                "total_damage_all, total_heal, total_dps, total_hps, payload_json, archived_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(item.get("encounter_id") or ""),
+                    _coerce_float(item.get("completed_at")),
+                    str(item.get("completed_local_time") or ""),
+                    str(item.get("report_reason") or ""),
+                    _coerce_float(item.get("encounter_started_at")),
+                    _coerce_float(item.get("encounter_ended_at")),
+                    _coerce_float(item.get("elapsed_s")),
+                    _coerce_int(item.get("total_damage")),
+                    _coerce_int(item.get("total_damage_all")),
+                    _coerce_int(item.get("total_heal")),
+                    _coerce_int(item.get("total_dps")),
+                    _coerce_int(item.get("total_hps")),
+                    json.dumps(item, ensure_ascii=False, separators=(",", ":")),
+                    archived_at,
+                ),
+            )
+            encounter_row_id = int(cur.lastrowid or 0)
+            entities = item.get("entities") if isinstance(item.get("entities"), list) else []
+            for rank, entity in enumerate(entities, 1):
+                if not isinstance(entity, dict):
+                    continue
+                conn.execute(
+                    "INSERT INTO combatants("
+                    "encounter_row_id, rank, uid, name, profession, damage_total, heal_total, "
+                    "damage_taken, dps, hps, damage_pct, is_self, fight_point"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        encounter_row_id,
+                        rank,
+                        _coerce_int(entity.get("uid")),
+                        str(entity.get("name") or ""),
+                        str(entity.get("profession") or ""),
+                        _coerce_int(entity.get("damage_total")),
+                        _coerce_int(entity.get("heal_total")),
+                        _coerce_int(entity.get("damage_taken")),
+                        _coerce_int(entity.get("dps")),
+                        _coerce_int(entity.get("hps")),
+                        _coerce_float(entity.get("damage_pct")),
+                        1 if entity.get("is_self") else 0,
+                        _coerce_int(entity.get("fight_point")),
+                    ),
+                )
+            conn.commit()
+            self._last_sqlite_error = ""
+        except Exception as exc:
+            self._last_sqlite_error = str(exc)
+            try:
+                if conn is not None:
+                    conn.rollback()
+            except Exception:
+                pass
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
     def add_report(self, report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(report, dict):
             return None
@@ -289,6 +443,7 @@ class DpsHistoryStore:
             self._items = self._items[-self._limit:]
             self._save_locked()
             self._append_archive_locked(item)
+            self._append_sqlite_locked(item)
             return copy.deepcopy(item)
 
     def list_reports(self, limit: int = 20) -> List[Dict[str, Any]]:
@@ -383,6 +538,100 @@ class DpsHistoryStore:
             "last_error": self._last_archive_error,
         }
 
+    def list_sqlite_reports(self, limit: int = 100) -> List[Dict[str, Any]]:
+        cap = max(1, int(limit or 100))
+        rows: List[Dict[str, Any]] = []
+        with self._lock:
+            if not self._sqlite_path or not os.path.isfile(self._sqlite_path):
+                return []
+            conn = None
+            try:
+                conn = sqlite3.connect(self._sqlite_path)
+                conn.row_factory = sqlite3.Row
+                for row in conn.execute(
+                    "SELECT id, payload_json, archived_at FROM encounters ORDER BY completed_at DESC, id DESC LIMIT ?",
+                    (cap,),
+                ):
+                    try:
+                        item = json.loads(row["payload_json"] or "{}")
+                    except Exception:
+                        item = {}
+                    if not isinstance(item, dict):
+                        item = {}
+                    if not isinstance(item.get("entities"), list):
+                        entities = []
+                        for combatant in conn.execute(
+                            "SELECT uid, name, profession, damage_total, heal_total, damage_taken, dps, hps, damage_pct, is_self, fight_point "
+                            "FROM combatants WHERE encounter_row_id=? ORDER BY rank ASC, id ASC",
+                            (int(row["id"] or 0),),
+                        ):
+                            entities.append({
+                                "uid": _coerce_int(combatant["uid"]),
+                                "name": str(combatant["name"] or ""),
+                                "profession": str(combatant["profession"] or ""),
+                                "damage_total": _coerce_int(combatant["damage_total"]),
+                                "heal_total": _coerce_int(combatant["heal_total"]),
+                                "damage_taken": _coerce_int(combatant["damage_taken"]),
+                                "dps": _coerce_int(combatant["dps"]),
+                                "hps": _coerce_int(combatant["hps"]),
+                                "damage_pct": _coerce_float(combatant["damage_pct"]),
+                                "is_self": bool(combatant["is_self"]),
+                                "fight_point": _coerce_int(combatant["fight_point"]),
+                            })
+                        item["entities"] = entities
+                    item.setdefault("_sqlite_schema_version", DPS_HISTORY_SQLITE_SCHEMA_VERSION)
+                    item.setdefault("_sqlite_row_id", _coerce_int(row["id"]))
+                    item.setdefault("_sqlite_archived_at", str(row["archived_at"] or ""))
+                    rows.append(item)
+                self._last_sqlite_error = ""
+            except Exception as exc:
+                self._last_sqlite_error = str(exc)
+                return []
+            finally:
+                try:
+                    if conn is not None:
+                        conn.close()
+                except Exception:
+                    pass
+        return rows
+
+    def sqlite_status(self) -> Dict[str, Any]:
+        encounter_count = 0
+        combatant_count = 0
+        schema_version = 0
+        with self._lock:
+            exists = bool(self._sqlite_path and os.path.isfile(self._sqlite_path))
+            if exists:
+                conn = None
+                try:
+                    conn = sqlite3.connect(self._sqlite_path)
+                    try:
+                        schema_version = _coerce_int(conn.execute(
+                            "SELECT value FROM meta WHERE key='schema_version'"
+                        ).fetchone()[0])
+                    except Exception:
+                        schema_version = 0
+                    encounter_count = _coerce_int(conn.execute("SELECT COUNT(*) FROM encounters").fetchone()[0])
+                    combatant_count = _coerce_int(conn.execute("SELECT COUNT(*) FROM combatants").fetchone()[0])
+                    self._last_sqlite_error = ""
+                except Exception as exc:
+                    self._last_sqlite_error = str(exc)
+                finally:
+                    try:
+                        if conn is not None:
+                            conn.close()
+                    except Exception:
+                        pass
+            return {
+                "available": bool(self._sqlite_path),
+                "path": str(self._sqlite_path or ""),
+                "exists": exists,
+                "schema_version": schema_version or (DPS_HISTORY_SQLITE_SCHEMA_VERSION if exists and not self._last_sqlite_error else 0),
+                "encounter_count": encounter_count,
+                "combatant_count": combatant_count,
+                "last_error": self._last_sqlite_error,
+            }
+
     def export_report(self, report: Optional[Dict[str, Any]] = None,
                       fmt: str = "json") -> Optional[str]:
         src = report if isinstance(report, dict) else self.latest_report()
@@ -437,5 +686,7 @@ __all__ = [
     "DPS_HISTORY_JSONL_PATH",
     "DPS_HISTORY_JSONL_SCHEMA_VERSION",
     "DPS_HISTORY_PATH",
+    "DPS_HISTORY_SQLITE_PATH",
+    "DPS_HISTORY_SQLITE_SCHEMA_VERSION",
     "DpsHistoryStore",
 ]
