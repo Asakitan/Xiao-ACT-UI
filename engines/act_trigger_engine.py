@@ -14,7 +14,7 @@ import re
 import threading
 import time
 import uuid
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 _MISSING = object()
 
@@ -87,8 +87,12 @@ def normalize_trigger_rule(raw: Any, fallback_index: int = 0) -> Dict[str, Any]:
         "encounter_start",
         "field_match",
         "timer_preset",
+        "plugin_trigger",
     ):
         rule_type = "damage_total"
+    plugin_trigger_type = _safe_str(_first_present(src, "plugin_trigger_type", "extension_id", "extension"))
+    if rule_type == "plugin_trigger" and not plugin_trigger_type:
+        plugin_trigger_type = _safe_str(src.get("handler") or src.get("handler_id"))
     threshold = _safe_float(_first_present(src, "threshold", "value", "event_type"), 0.0)
     if rule_type == "boss_hp_pct_below" and threshold > 1.0:
         threshold = threshold / 100.0
@@ -111,8 +115,10 @@ def normalize_trigger_rule(raw: Any, fallback_index: int = 0) -> Dict[str, Any]:
         "threshold": threshold,
         "match": _safe_str(match_value),
         "field": _safe_str(_first_present(src, "field", "field_path", "path")),
+        "plugin_trigger_type": plugin_trigger_type,
         "operator": operator,
         "duration_s": duration_s,
+        "time_budget_ms": max(0.0, _safe_float(_first_present(src, "time_budget_ms", "max_runtime_ms"), 25.0)),
         "scope": _safe_str(src.get("scope")) or "encounter",
         "cooldown_s": max(0.0, _safe_float(src.get("cooldown_s"), 5.0)),
         "once_per_encounter": bool(src.get("once_per_encounter", True)),
@@ -124,14 +130,25 @@ class ActTriggerEngine:
     """Thread-safe evaluator for ACT alert/timer rules."""
 
     def __init__(self, rules: Optional[Iterable[Dict[str, Any]]] = None,
-                 max_recent: int = 100) -> None:
+                 max_recent: int = 100,
+                 plugin_trigger_evaluator: Optional[Callable[..., Any]] = None,
+                 plugin_time_budget_ms: float = 25.0) -> None:
         self._lock = threading.RLock()
         self._rules: List[Dict[str, Any]] = []
         self._last_fire_ts: Dict[Tuple[str, str], float] = {}
         self._fired_in_encounter: set[Tuple[str, str]] = set()
         self._recent_events: List[Dict[str, Any]] = []
         self._max_recent = max(1, int(max_recent or 100))
+        self._plugin_trigger_evaluator = plugin_trigger_evaluator
+        self._plugin_time_budget_ms = max(0.0, _safe_float(plugin_time_budget_ms, 25.0))
         self.set_rules(rules or [])
+
+    def set_plugin_trigger_evaluator(self, evaluator: Optional[Callable[..., Any]],
+                                     *, time_budget_ms: float | None = None) -> None:
+        with self._lock:
+            self._plugin_trigger_evaluator = evaluator if callable(evaluator) else None
+            if time_budget_ms is not None:
+                self._plugin_time_budget_ms = max(0.0, _safe_float(time_budget_ms, self._plugin_time_budget_ms))
 
     def set_rules(self, rules: Iterable[Dict[str, Any]]) -> None:
         with self._lock:
@@ -195,8 +212,7 @@ class ActTriggerEngine:
             _safe_int(ctx.get("dungeon_scene_id"), 0),
         )
 
-    @staticmethod
-    def _matches(rule: Dict[str, Any], render_spec: Dict[str, Any],
+    def _matches(self, rule: Dict[str, Any], render_spec: Dict[str, Any],
                  snapshot_root: Optional[Dict[str, Any]] = None) -> bool:
         totals = render_spec.get("totals") or {}
         encounter = render_spec.get("encounter") or {}
@@ -228,6 +244,8 @@ class ActTriggerEngine:
             return _safe_float(totals.get("elapsed_s") or encounter.get("duration_s"), 0.0) >= duration_s
         if rule_type == "field_match":
             return ActTriggerEngine._match_field_rule(rule, render_spec, root)
+        if rule_type == "plugin_trigger":
+            return self._match_plugin_rule(rule, render_spec, root)
         return False
 
     @staticmethod
@@ -268,20 +286,61 @@ class ActTriggerEngine:
             return actual_num <= expected_num
         return False
 
+    def _match_plugin_rule(self, rule: Dict[str, Any], render_spec: Dict[str, Any],
+                           snapshot_root: Dict[str, Any]) -> bool:
+        trigger_type = _safe_str(rule.get("plugin_trigger_type"))
+        evaluator = self._plugin_trigger_evaluator
+        if not trigger_type or not callable(evaluator):
+            rule["_plugin_last_result"] = {"ok": False, "message": "plugin trigger evaluator is unavailable"}
+            return False
+        payload = {
+            "rule": {
+                key: copy.deepcopy(value)
+                for key, value in rule.items()
+                if not str(key).startswith("_")
+            },
+            "render_spec": copy.deepcopy(render_spec),
+            "snapshot": copy.deepcopy(snapshot_root),
+        }
+        try:
+            result = evaluator(
+                trigger_type,
+                payload,
+                _safe_float(rule.get("time_budget_ms"), self._plugin_time_budget_ms),
+            )
+        except Exception as exc:
+            rule["_plugin_last_result"] = {"ok": False, "message": str(exc), "errors": [str(exc)]}
+            return False
+        if isinstance(result, Mapping):
+            rule["_plugin_last_result"] = dict(result)
+            if not bool(result.get("ok", True)):
+                return False
+            if "matched" in result:
+                return bool(result.get("matched"))
+            if "match" in result:
+                return bool(result.get("match"))
+            if "result" in result:
+                return bool(result.get("result"))
+            return False
+        matched = bool(result)
+        rule["_plugin_last_result"] = {"ok": True, "matched": matched}
+        return matched
+
     @staticmethod
     def _build_event(rule: Dict[str, Any], render_spec: Dict[str, Any],
                      now_ts: float, encounter_id: str) -> Dict[str, Any]:
         rule_type = str(rule.get("type") or "")
+        plugin_result = rule.get("_plugin_last_result") if isinstance(rule.get("_plugin_last_result"), Mapping) else {}
         label = str(rule.get("label") or rule_type)
-        message = str(rule.get("message") or label)
-        return {
+        message = str(plugin_result.get("message") or rule.get("message") or label)
+        event = {
             "id": uuid.uuid4().hex,
             "rule_id": str(rule.get("id") or ""),
             "type": "timer" if rule_type in ("elapsed_s", "timer_preset") else "alert",
             "trigger_type": rule_type,
             "label": label,
             "message": message,
-            "severity": str(rule.get("severity") or "info"),
+            "severity": str(plugin_result.get("severity") or rule.get("severity") or "info"),
             "encounter_id": encounter_id,
             "created_at": now_ts,
             "render_mode": str(render_spec.get("mode") or "empty"),
@@ -290,6 +349,14 @@ class ActTriggerEngine:
             "duration_s": _safe_float(rule.get("duration_s"), 0.0),
             "scope": str(rule.get("scope") or "encounter"),
         }
+        if rule_type == "plugin_trigger":
+            event.update({
+                "plugin_trigger_type": str(rule.get("plugin_trigger_type") or ""),
+                "plugin_id": str(plugin_result.get("plugin_id") or ""),
+                "extension_id": str(plugin_result.get("extension_id") or ""),
+                "handler_elapsed_ms": _safe_float(plugin_result.get("elapsed_ms"), 0.0),
+            })
+        return event
 
 
 __all__ = ["ActTriggerEngine", "normalize_trigger_rule"]

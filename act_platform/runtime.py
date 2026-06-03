@@ -80,17 +80,68 @@ def _normalize_trigger_rules(rules: Iterable[Mapping[str, Any]]) -> list[dict[st
     return [normalize_trigger_rule(rule, idx) for idx, rule in enumerate(rules or [], 1)]
 
 
+def _plugin_trigger_result(invoked: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(invoked or {})
+    result = out.get("result")
+    if isinstance(result, Mapping):
+        for key in ("message", "severity", "label"):
+            if result.get(key) is not None:
+                out[key] = result.get(key)
+        if "matched" in result:
+            out["matched"] = bool(result.get("matched"))
+        elif "match" in result:
+            out["matched"] = bool(result.get("match"))
+        elif "result" in result:
+            out["matched"] = bool(result.get("result"))
+        else:
+            out.setdefault("matched", False)
+    else:
+        out["matched"] = bool(result)
+    return out
+
+
+def _plugin_trigger_evaluator(owner: Any):
+    def _evaluate(trigger_type: str, payload: Mapping[str, Any], time_budget_ms: float = 25.0) -> dict[str, Any]:
+        manager = ensure_act_plugin_manager(owner)
+        invoke = getattr(manager, "invoke_extension", None)
+        if not callable(invoke):
+            return {"ok": False, "matched": False, "message": "plugin extension invocation is unavailable"}
+        invoked = invoke(
+            "trigger_types",
+            str(trigger_type or ""),
+            payload,
+            time_budget_ms=float(time_budget_ms or 25.0),
+        )
+        return _plugin_trigger_result(invoked if isinstance(invoked, Mapping) else {})
+
+    return _evaluate
+
+
+def _configure_trigger_engine_plugins(owner: Any, engine: Any) -> None:
+    setter = getattr(engine, "set_plugin_trigger_evaluator", None)
+    if callable(setter):
+        try:
+            setter(_plugin_trigger_evaluator(owner))
+        except Exception:
+            pass
+
+
 def ensure_act_trigger_engine(owner: Any):
     from engines.act_trigger_engine import ActTriggerEngine
 
     engine = getattr(owner, "_act_trigger_engine", None)
     if isinstance(engine, ActTriggerEngine):
+        _configure_trigger_engine_plugins(owner, engine)
         return engine
-    engine = ActTriggerEngine(_read_trigger_rules(owner))
+    engine = ActTriggerEngine(
+        _read_trigger_rules(owner),
+        plugin_trigger_evaluator=_plugin_trigger_evaluator(owner),
+    )
     try:
         setattr(owner, "_act_trigger_engine", engine)
     except Exception:
         pass
+    _configure_trigger_engine_plugins(owner, engine)
     return engine
 
 
@@ -407,6 +458,8 @@ def _synthetic_snapshot_for_rule(rule: Mapping[str, Any]) -> dict[str, Any]:
         duration_s = float(rule.get("duration_s") or threshold or 1.0)
         render_spec["totals"]["elapsed_s"] = max(1.0, duration_s + 1.0)
         render_spec["encounter"]["duration_s"] = max(1.0, duration_s + 1.0)
+    elif rule_type == "plugin_trigger":
+        render_spec["totals"]["damage"] = max(1.0, threshold + 1.0)
     snapshot = {"render_spec": render_spec}
     if rule_type == "field_match":
         field = str(rule.get("field") or "context.last_skill_kind")
@@ -441,7 +494,10 @@ def act_trigger_test(owner: Any, rule_id: str) -> dict[str, Any]:
         enabled_rule["enabled"] = True
         enabled_rule["cooldown_s"] = 0.0
         enabled_rule["once_per_encounter"] = False
-        engine = ActTriggerEngine([enabled_rule])
+        engine = ActTriggerEngine(
+            [enabled_rule],
+            plugin_trigger_evaluator=_plugin_trigger_evaluator(owner),
+        )
         events = engine.evaluate(_synthetic_snapshot_for_rule(enabled_rule), now=time.time())
         return {
             "ok": bool(events),

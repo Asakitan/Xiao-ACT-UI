@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -132,7 +133,7 @@ def _normalize_extension(kind: str, plugin_id: str, extension_id: Any,
         value = src.get(key)
         if isinstance(value, (list, tuple, set)):
             normalized[key] = [str(item) for item in value if str(item or "").strip()]
-    for key in ("priority", "duration_s", "cooldown_s"):
+    for key in ("priority", "duration_s", "cooldown_s", "time_budget_ms", "max_runtime_ms"):
         value = src.get(key)
         if value is not None:
             try:
@@ -503,6 +504,68 @@ class PluginManager:
         return {
             ext_kind: [dict(bucket[key]) for key in sorted(bucket)]
             for ext_kind, bucket in self._extensions.items()
+        }
+
+    def invoke_extension(self, kind: str, extension_id: str,
+                         payload: Optional[Mapping[str, Any]] = None, *,
+                         time_budget_ms: float = 25.0) -> dict[str, Any]:
+        kind = str(kind or "")
+        ext_id = str(extension_id or "").strip()
+        meta = self._extensions.get(kind, {}).get(ext_id)
+        if not isinstance(meta, Mapping):
+            return {"ok": False, "message": f"extension not found: {kind}/{ext_id}", "errors": ["extension not found"]}
+        plugin_id = str(meta.get("plugin_id") or "")
+        record = self._records.get(plugin_id)
+        if record is None or not record.loaded or not record.active or not record.enabled:
+            return {"ok": False, "plugin_id": plugin_id, "extension_id": ext_id, "message": "plugin is not active", "errors": ["plugin is not active"]}
+        handler = self._extension_handlers.get((kind, ext_id))
+        if not callable(handler):
+            return {"ok": False, "plugin_id": plugin_id, "extension_id": ext_id, "message": "extension handler is unavailable", "errors": ["extension handler is unavailable"]}
+        budget_value = meta.get("time_budget_ms")
+        if budget_value is None:
+            budget_value = meta.get("max_runtime_ms")
+        if budget_value is None:
+            budget_value = time_budget_ms
+        if budget_value is None:
+            budget_value = 25.0
+        budget = float(budget_value)
+        started = time.perf_counter()
+        try:
+            result = handler(copy.deepcopy(dict(payload or {})))
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            self._record_failure(plugin_id, exc)
+            return {
+                "ok": False,
+                "plugin_id": plugin_id,
+                "extension_id": ext_id,
+                "elapsed_ms": elapsed_ms,
+                "time_budget_ms": budget,
+                "message": str(exc),
+                "errors": [str(exc)],
+            }
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        if budget > 0 and elapsed_ms > budget:
+            exc = TimeoutError(f"extension handler exceeded budget: {elapsed_ms:.1f}ms > {budget:.1f}ms")
+            self._record_failure(plugin_id, exc)
+            return {
+                "ok": False,
+                "plugin_id": plugin_id,
+                "extension_id": ext_id,
+                "elapsed_ms": elapsed_ms,
+                "time_budget_ms": budget,
+                "timed_out": True,
+                "message": str(exc),
+                "errors": [str(exc)],
+            }
+        return {
+            "ok": True,
+            "plugin_id": plugin_id,
+            "extension_id": ext_id,
+            "elapsed_ms": elapsed_ms,
+            "time_budget_ms": budget,
+            "result": _json_safe(result),
+            "errors": [],
         }
 
     def status(self) -> dict[str, Any]:

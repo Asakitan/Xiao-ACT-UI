@@ -165,7 +165,7 @@ Supported object keys are `id`/`capability_id`, `title`, `description`, `route`,
 
 ## Extension registry
 
-Plugins can register extension metadata during `on_load(ctx)`. These declarations are exposed through plugin status so WebView and Entity managers can show which plugin contributes parser adapters, exporters, trigger types, report views, or timers. Handlers are kept in-process for future runtime wiring and are intentionally omitted from JSON status.
+Plugins can register extension metadata during `on_load(ctx)`. These declarations are exposed through plugin status so WebView and Entity managers can show which plugin contributes parser adapters, exporters, trigger types, report views, or timers. Handlers are kept in-process and are intentionally omitted from JSON status.
 
 ```python
 def on_load(ctx):
@@ -185,9 +185,14 @@ def on_load(ctx):
     "payload_fields": ["total_damage"],
   })
 
-  ctx.register_trigger_type("field_match", {
-    "label": "Field match",
+  ctx.register_trigger_type("burst_gate", {
+    "label": "Burst gate",
     "schema": {"field": "string", "match": "string"},
+    "time_budget_ms": 25,
+  }, handler=lambda payload: {
+    "matched": (payload.get("render_spec", {}).get("totals", {}).get("damage", 0) >= payload.get("rule", {}).get("threshold", 0)),
+    "message": "Burst gate matched",
+    "severity": "warn",
   })
 
   ctx.register_report_view("compact_report", {
@@ -202,6 +207,28 @@ def on_load(ctx):
 ```
 
 Extension ids must already be safe ids: lowercase letters/numbers plus `_`, `-`, or `.`. Registered metadata is removed automatically when the plugin unloads.
+
+## Trigger handlers
+
+Trigger handlers registered with `ctx.register_trigger_type(id, metadata, handler=...)` can be used by ACT trigger rules with `type: "plugin_trigger"` and `plugin_trigger_type: "<id>"`.
+
+The handler receives one copied payload:
+
+```python
+{
+  "rule": {...},          # normalized trigger rule
+  "render_spec": {...},   # current ACT render payload
+  "snapshot": {...},      # full ACT snapshot root
+}
+```
+
+Return `True` to match, `False` to ignore, or a dictionary such as:
+
+```python
+{"matched": True, "message": "Burst window", "severity": "warn"}
+```
+
+`PluginManager.invoke_extension(...)` records exceptions and elapsed time. If a handler exceeds `time_budget_ms` or `max_runtime_ms`, the call is treated as failed and contributes to the plugin failure counter. In-process Python cannot forcibly stop already-running code, so handlers must stay small and deterministic.
 
 ## Parser adapters
 

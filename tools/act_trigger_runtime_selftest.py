@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import unittest
 
 from act_platform import runtime
+from act_platform.plugins import PluginManager
 
 
 class FakeSettings:
@@ -41,12 +45,41 @@ class FakeSettings:
 
 
 class FakeOwner:
-    def __init__(self):
+    def __init__(self, plugin_manager=None):
         self._cfg_settings_ref = FakeSettings()
         self._act_trigger_engine = None
+        if plugin_manager is not None:
+            self._act_plugin_manager = plugin_manager
 
 
 class ActTriggerRuntimeTests(unittest.TestCase):
+    def _plugin_manager_with_trigger(self, root: str) -> PluginManager:
+        plugin_dir = os.path.join(root, "trigger_demo")
+        os.makedirs(plugin_dir, exist_ok=True)
+        with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
+            json.dump({
+                "id": "trigger_demo",
+                "name": "Trigger Demo",
+                "version": "0.1.0",
+                "entry": "plugin.py",
+                "enabled": True,
+            }, fp, ensure_ascii=False, indent=2)
+        with open(os.path.join(plugin_dir, "plugin.py"), "w", encoding="utf-8") as fp:
+            fp.write(
+                'def _plugin_gate(payload):\n'
+                '    rule = payload.get("rule") or {}\n'
+                '    render = payload.get("render_spec") or {}\n'
+                '    totals = render.get("totals") or {}\n'
+                '    matched = float(totals.get("damage") or 0) >= float(rule.get("threshold") or 0)\n'
+                '    return {"matched": matched, "message": "plugin gate matched", "severity": "warn"}\n'
+                'def on_load(ctx):\n'
+                '    ctx.register_trigger_type("plugin_gate", {"label": "Plugin Gate"}, handler=_plugin_gate)\n'
+            )
+        manager = PluginManager(plugin_dirs=[root], max_failures=2)
+        manager.discover()
+        self.assertTrue(manager.load_plugin("trigger_demo"), manager.status())
+        return manager
+
     def test_status_enable_disable_reload_and_test_event(self) -> None:
         owner = FakeOwner()
 
@@ -105,6 +138,34 @@ class ActTriggerRuntimeTests(unittest.TestCase):
                 result = runtime.act_trigger_test(owner, rule_id)
                 self.assertTrue(result["ok"], result)
                 self.assertEqual(result["events"][0]["rule_id"], rule_id)
+
+    def test_plugin_trigger_handler_can_emit_test_event(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_trigger_plugin_") as root:
+            manager = self._plugin_manager_with_trigger(root)
+            owner = FakeOwner(manager)
+            owner._cfg_settings_ref.data["act_trigger_rules"] = [
+                {
+                    "id": "plugin_gate_rule",
+                    "type": "plugin_trigger",
+                    "plugin_trigger_type": "plugin_gate",
+                    "threshold": 100,
+                    "message": "fallback message",
+                    "enabled": True,
+                    "cooldown_s": 0,
+                    "once_per_encounter": False,
+                }
+            ]
+
+            result = runtime.act_trigger_test(owner, "plugin_gate_rule")
+
+        self.assertTrue(result["ok"], result)
+        event = result["events"][0]
+        self.assertEqual(event["rule_id"], "plugin_gate_rule")
+        self.assertEqual(event["trigger_type"], "plugin_trigger")
+        self.assertEqual(event["plugin_trigger_type"], "plugin_gate")
+        self.assertEqual(event["plugin_id"], "trigger_demo")
+        self.assertEqual(event["message"], "plugin gate matched")
+        self.assertEqual(event["severity"], "warn")
 
     def test_trigger_preset_export_import_merge_and_replace(self) -> None:
         owner = FakeOwner()

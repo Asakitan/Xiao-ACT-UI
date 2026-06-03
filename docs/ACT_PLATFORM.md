@@ -95,7 +95,7 @@ supported_locales: zh-CN
 
 `PacketBridge` now creates the live `packet_parser.PacketParser` through `StarResonanceParserAdapter`, while preserving `self._parser` for existing compatibility methods such as player cache, monster cache, scene reset, and profession skill cache restore.
 
-Plugin parser adapter declarations are currently metadata-only through `ctx.register_parser_adapter(...)`. Runtime execution of plugin parser handlers is reserved for a later slice and must include time-budget and fault-isolation rules.
+Plugin parser adapter declarations are currently metadata-only through `ctx.register_parser_adapter(...)`. Plugin trigger handlers registered through `ctx.register_trigger_type(...)` can be invoked by `plugin_trigger` rules through `PluginManager.invoke_extension(...)`, with exception isolation, elapsed-time measurement, and time-budget failure accounting.
 
 ## Plugin Extensions
 
@@ -178,7 +178,7 @@ Do not run release packaging unless explicitly requested. For packaging changes,
 
 ## Open Edges
 
-- Plugin parser and trigger handlers are declared but not invoked by runtime services yet.
+- Plugin parser handlers remain metadata-only; trigger handlers have in-process isolated invocation, but full external parser runtime wiring remains future work.
 - Offline import supports normalized JSON/JSONL replay files and rolling-history persistence; broader pcap/log/XML import remains future work.
 - History has lightweight rolling-store search, but is not yet a SQLite-style encounter/action database.
 - Manual WebView/Entity smoke still depends on a UI runtime session.
