@@ -41,6 +41,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from act_platform.runtime import (
+    act_data_source_health,
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_reload,
@@ -166,6 +167,17 @@ class SAOPlayerGUIMenuMixin:
             )
         except Exception:
             trigger_sig = (0, 0)
+        try:
+            source_status = self._get_act_data_source_menu_status()
+            source_summary = source_status.get('sources', {}).get('summary', {})
+            source_sig = (
+                str(source_status.get('status') or ''),
+                str(source_summary.get('data_source') or ''),
+                bool(source_summary.get('packet_active')),
+                bool(source_summary.get('memory_active')),
+            )
+        except Exception:
+            source_sig = ('missing', '', False, False)
         session_visible = False
         session_count = 0
         session_version = int(getattr(self, '_session_players_version', 0) or 0)
@@ -196,6 +208,7 @@ class SAOPlayerGUIMenuMixin:
             update_label,
             plugin_sig,
             trigger_sig,
+            source_sig,
             session_visible,
             session_count,
             session_version,
@@ -286,6 +299,10 @@ class SAOPlayerGUIMenuMixin:
         trigger_status = self._get_act_trigger_menu_status()
         trigger_total = int(trigger_status.get('rule_count', 0) or 0)
         trigger_timers = int(trigger_status.get('timer_count', 0) or 0)
+        source_status = self._get_act_data_source_menu_status()
+        source_summary = source_status.get('sources', {}).get('summary', {})
+        source_label = str(source_summary.get('data_source') or source_status.get('requested_mode') or mem_mode_disp).upper()
+        source_health_state = str(source_status.get('status') or 'missing').upper()
         session_visible = False
         try:
             stack = getattr(self, '_menu_left_stack', None)
@@ -373,6 +390,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '☌', 'label': f'ACT插件: {plugin_active}/{plugin_total}', 'command': self._show_act_plugin_status_menu},
             {'icon': '☌', 'label': 'ACT插件管理面板', 'command': self._toggle_act_plugin_manager_panel},
             {'icon': '⏱', 'label': f'ACT触发/计时: {trigger_total}/{trigger_timers}', 'command': self._toggle_act_trigger_timer_panel},
+            {'icon': '◉', 'label': f'ACT数据源健康: {source_label}/{source_health_state}', 'command': self._toggle_act_data_source_health_panel},
             {'icon': '↻', 'label': '重载ACT插件', 'command': self._reload_act_plugins_menu},
             {'icon': '◆', 'label': '切换首个ACT插件', 'command': self._toggle_first_act_plugin_menu},
         ])
@@ -409,6 +427,12 @@ class SAOPlayerGUIMenuMixin:
             return act_trigger_status(self)
         except Exception as exc:
             return {'ok': False, 'message': str(exc), 'rule_count': 0, 'timer_count': 0, 'triggers': [], 'timers': []}
+
+    def _get_act_data_source_menu_status(self):
+        try:
+            return act_data_source_health(self)
+        except Exception as exc:
+            return {'ok': False, 'status': 'error', 'message': str(exc), 'sources': {'summary': {}}, 'latency_ms': 0, 'last_event_ms': 0, 'errors': [str(exc)]}
 
     def _show_act_plugin_status_menu(self):
         status = self._get_act_plugin_menu_status()

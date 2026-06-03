@@ -59,6 +59,18 @@
         toggle_trigger_timer_manager: function () {
             return call('ui.menu_action', { action: 'toggle_trigger_timer_manager' });
         },
+        toggle_data_source_health: function () {
+            return call('ui.menu_action', { action: 'toggle_data_source_health' });
+        },
+        get_data_source_health: function () {
+            return call('act.sources.health', {});
+        },
+        diagnose_data_source: function () {
+            return call('act.sources.diagnose', {});
+        },
+        copy_data_source_health: function () {
+            return call('act.sources.copy', {});
+        },
         get_plugin_status: function () {
             return call('act.plugins.status', {});
         },

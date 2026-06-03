@@ -67,6 +67,8 @@ from engines.encounter_manager import EncounterManager
 from engines.act_trigger_engine import ActTriggerEngine
 from engines.combat_analytics import boss_state_from_monster_update, build_act_snapshot
 from act_platform.runtime import (
+    act_data_source_diagnose,
+    act_data_source_health,
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_list,
@@ -372,12 +374,23 @@ class SAOWebAPI:
     def getDataSourceHealth(self):
         """Phase 10: webview menu diagnostic — exposes mem_probe / TCP health."""
         try:
-            engine = getattr(self._g, '_packet_engine', None)
-            if engine is None or not hasattr(engine, 'health'):
-                return {"available": False, "reason": "no packet engine"}
-            return {"available": True, **engine.health()}
+            return act_data_source_health(self._g)
         except Exception as e:
             return {"available": False, "error": str(e)}
+
+    def get_data_source_health(self):
+        return json.dumps(act_data_source_health(self._g), ensure_ascii=False)
+
+    def diagnose_data_source(self):
+        return json.dumps(act_data_source_diagnose(self._g), ensure_ascii=False)
+
+    def copy_data_source_health(self):
+        payload = act_data_source_diagnose(self._g)
+        return json.dumps({
+            'ok': True,
+            'text': json.dumps(payload, ensure_ascii=False, indent=2),
+            'status': payload,
+        }, ensure_ascii=False)
 
     def list_plugins(self):
         return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
@@ -425,6 +438,15 @@ class SAOWebAPI:
                 self._g._hide_trigger_timer_manager()
             else:
                 self._g._show_trigger_timer_manager()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def toggle_data_source_health(self):
+        """Show/hide the ACT data-source health overlay."""
+        def _do():
+            if self._g._data_source_health_visible:
+                self._g._hide_data_source_health()
+            else:
+                self._g._show_data_source_health()
         threading.Thread(target=_do, daemon=True).start()
 
     def switch_to_entity(self):
@@ -1813,6 +1835,10 @@ class SAOWebViewGUI:
         # ACT Trigger/Timer Manager panel
         self.trigger_timer_win = None
         self._trigger_timer_manager_visible = False
+
+        # ACT Data Source Health panel
+        self.data_source_health_win = None
+        self._data_source_health_visible = False
 
         # Hide & Seek engine
         self._hide_seek_engine = None
@@ -3734,6 +3760,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Data Source Health — observability panel for PacketBridge + memory fallback
+        data_source_health_url = _web_file_uri('data_source_health.html')
+        _dh_w = max(640, int(min(_sw, 1920) * 0.40))
+        _dh_h = max(500, int(min(_sh, 1080) * 0.50))
+        _dh_x = max(16, int(monitor_left + (_sw - _dh_w) * 0.45))
+        _dh_y = max(24, int(monitor_top + (_sh - _dh_h) * 0.28))
+        self.data_source_health_win = webview.create_window(
+            'SAO-DataSourceHealth', data_source_health_url,
+            width=_dh_w, height=_dh_h,
+            x=_dh_x, y=_dh_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -4327,6 +4371,7 @@ class SAOWebViewGUI:
             ('SAO-Commander', '_commander_visible', None),
             ('SAO-PluginManager', '_plugin_manager_visible', None),
             ('SAO-TriggerTimerManager', '_trigger_timer_manager_visible', None),
+            ('SAO-DataSourceHealth', '_data_source_health_visible', None),
         ]
         user32 = ctypes.windll.user32
         for title, vis_attr, hwnd_attr in _panels:
@@ -4916,6 +4961,7 @@ class SAOWebViewGUI:
             self._set_window_icon('SAO-Commander')
             self._set_window_icon('SAO-PluginManager')
             self._set_window_icon('SAO-TriggerTimerManager')
+            self._set_window_icon('SAO-DataSourceHealth')
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
             self._set_window_alpha('SAO Alert', 1.0)
@@ -4965,6 +5011,7 @@ class SAOWebViewGUI:
                 self._wait_and_apply_click_through('SAO-Commander', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-PluginManager', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-TriggerTimerManager', timeout=0.5)
+                self._wait_and_apply_click_through('SAO-DataSourceHealth', timeout=0.5)
             except Exception:
                 pass
             # Commander panel must start hidden (explicitly enforce after webview init)
@@ -4989,6 +5036,14 @@ class SAOWebViewGUI:
                 if self.trigger_timer_win:
                     self._set_window_alpha('SAO-TriggerTimerManager', 0.0)
                     self.trigger_timer_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._data_source_health_visible = False
+                if self.data_source_health_win:
+                    self._set_window_alpha('SAO-DataSourceHealth', 0.0)
+                    self.data_source_health_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -5860,6 +5915,63 @@ class SAOWebViewGUI:
             pass
         self._trigger_timer_manager_visible = False
 
+    # ── ACT Data Source Health panel ──
+
+    def _eval_data_source_health(self, js):
+        try:
+            if self.data_source_health_win:
+                self.data_source_health_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_data_source_health_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the data-source health panel receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-DataSourceHealth')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_data_source_health(self):
+        try:
+            if self.data_source_health_win and not self._data_source_health_visible:
+                self._set_window_alpha('SAO-DataSourceHealth', 0.0)
+                self.data_source_health_win.show()
+                self._eval_data_source_health('if(window.DataSourceHealth&&DataSourceHealth.fadeIn)DataSourceHealth.fadeIn()')
+                self._eval_data_source_health('if(window.DataSourceHealth&&DataSourceHealth.refresh)DataSourceHealth.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-DataSourceHealth', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._data_source_health_visible = True
+                self._ensure_data_source_health_clickable()
+                threading.Timer(0.5, self._ensure_data_source_health_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_data_source_health(self):
+        try:
+            if self.data_source_health_win and self._data_source_health_visible:
+                self._eval_data_source_health('if(window.DataSourceHealth&&DataSourceHealth.fadeOut)DataSourceHealth.fadeOut()')
+                def _finish():
+                    try:
+                        if self.data_source_health_win:
+                            self.data_source_health_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._data_source_health_visible = False
+
     # ── AutoKey Editor overlay ──
 
     def _eval_autokey_editor(self, js):
@@ -6696,6 +6808,14 @@ class SAOWebViewGUI:
             self._native_fade_window('SAO-PluginManager', duration_ms=140, steps=8)
         except Exception:
             pass
+        try:
+            self._native_fade_window('SAO-TriggerTimerManager', duration_ms=140, steps=8)
+        except Exception:
+            pass
+        try:
+            self._native_fade_window('SAO-DataSourceHealth', duration_ms=140, steps=8)
+        except Exception:
+            pass
 
         try:
             self._destroy_all_panels()
@@ -6755,6 +6875,16 @@ class SAOWebViewGUI:
         try:
             if self.plugin_manager_win:
                 self.plugin_manager_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.trigger_timer_win:
+                self.trigger_timer_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.data_source_health_win:
+                self.data_source_health_win.destroy()
         except Exception:
             pass
 
@@ -7386,6 +7516,7 @@ class SAOWebViewGUI:
             cfg['commander_visible'] = bool(self._commander_visible)
             cfg['plugin_manager_visible'] = bool(self._plugin_manager_visible)
             cfg['trigger_timer_manager_visible'] = bool(self._trigger_timer_manager_visible)
+            cfg['data_source_health_visible'] = bool(self._data_source_health_visible)
             _hs_engine = getattr(self, '_hide_seek_engine', None)
             cfg['hide_seek_active'] = bool(_hs_engine and _hs_engine.running)
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
@@ -7416,6 +7547,7 @@ class SAOWebViewGUI:
             'toggle_commander': lambda: (self._show_commander() if not self._commander_visible else self._hide_commander()),
             'toggle_plugin_manager': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
             'toggle_trigger_timer_manager': lambda: (self._show_trigger_timer_manager() if not self._trigger_timer_manager_visible else self._hide_trigger_timer_manager()),
+            'toggle_data_source_health': lambda: (self._show_data_source_health() if not self._data_source_health_visible else self._hide_data_source_health()),
             'toggle_session_players': self._toggle_session_players_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,

@@ -363,12 +363,140 @@ def act_trigger_test(owner: Any, rule_id: str) -> dict[str, Any]:
         return {"ok": False, "message": str(exc), "events": [], "errors": [str(exc)]}
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return str(value)
+
+
+def _source_active(source: Mapping[str, Any]) -> bool:
+    if not source:
+        return False
+    for key in ("running", "alive", "active", "started", "is_memory_active"):
+        if key in source:
+            return bool(source.get(key))
+    status = str(source.get("status") or source.get("mode") or "").lower()
+    return bool(status and status not in ("error", "missing", "stopped", "disabled", "off"))
+
+
+def _owner_mem_data_source(owner: Any) -> str:
+    settings = _owner_settings(owner)
+    default = "tcp"
+    try:
+        if isinstance(settings, Mapping):
+            return str(settings.get("mem_data_source", default) or default).lower()
+        if settings is not None:
+            return str(settings.get("mem_data_source", default) or default).lower()
+    except Exception:
+        pass
+    return default
+
+
+def act_data_source_health(owner: Any, *, now: float | None = None) -> dict[str, Any]:
+    """Return a parity-friendly data source health payload for both UIs."""
+    now_ts = float(now if now is not None else time.time())
+    engine = getattr(owner, "_packet_engine", None)
+    errors: list[str] = []
+    raw: dict[str, Any] = {}
+    if engine is None:
+        errors.append("no packet engine")
+    else:
+        health = getattr(engine, "health", None)
+        if callable(health):
+            try:
+                raw = dict(health() or {})
+            except Exception as exc:
+                errors.append(str(exc))
+        else:
+            errors.append("packet engine has no health()")
+    raw = _json_safe(raw if isinstance(raw, Mapping) else {})
+    packet = dict(raw)
+    memory = {}
+    if isinstance(packet.get("mem"), Mapping):
+        memory = dict(packet.pop("mem") or {})
+    packet.setdefault("data_source", str(packet.get("data_source") or _owner_mem_data_source(owner) or "tcp"))
+
+    packet_active = _source_active(packet)
+    memory_active = _source_active(memory)
+    sources: dict[str, Any] = {}
+    if packet or engine is not None:
+        sources["packet"] = packet
+    if memory:
+        memory.setdefault("data_source", str(memory.get("data_source") or "memory"))
+        sources["memory"] = memory
+    sources["summary"] = {
+        "data_source": packet.get("data_source") or _owner_mem_data_source(owner),
+        "primary": "packet" if packet else ("memory" if memory else "none"),
+        "hybrid": bool(packet and memory),
+        "packet_active": packet_active,
+        "memory_active": memory_active,
+        "fallbacks": ["memory"] if packet and memory else [],
+    }
+
+    last_update = float(getattr(engine, "_last_update_t", 0.0) or 0.0) if engine is not None else 0.0
+    last_raw = float(getattr(engine, "_last_capture_raw_seen_ts", 0.0) or 0.0) if engine is not None else 0.0
+    latency_ms = int(max(0.0, (now_ts - last_raw) * 1000.0)) if last_raw else 0
+    last_event_ms = int(max(0.0, (now_ts - last_update) * 1000.0)) if last_update else 0
+
+    error_msg = str(packet.get("error_msg") or packet.get("last_error") or "").strip()
+    if error_msg:
+        errors.append(error_msg)
+    if engine is None:
+        status = "missing"
+    elif errors:
+        status = "error"
+    elif packet_active or memory_active:
+        status = "running"
+    else:
+        status = "stopped"
+    return {
+        "ok": bool(engine is not None and not errors),
+        "available": bool(engine is not None),
+        "status": status,
+        "sources": sources,
+        "latency_ms": latency_ms,
+        "last_event_ms": last_event_ms,
+        "errors": errors,
+        "requested_mode": _owner_mem_data_source(owner),
+        "recognition_active": bool(getattr(owner, "_recognition_active", False)),
+        "generated_at": now_ts,
+    }
+
+
+def act_data_source_diagnose(owner: Any, *, now: float | None = None) -> dict[str, Any]:
+    """Return health plus user-facing diagnostic hints."""
+    payload = act_data_source_health(owner, now=now)
+    diagnostics: list[dict[str, str]] = []
+    if not payload.get("available"):
+        diagnostics.append({"level": "error", "message": "PacketBridge is not started"})
+    elif payload.get("errors"):
+        for err in payload.get("errors") or []:
+            diagnostics.append({"level": "error", "message": str(err)})
+    else:
+        diagnostics.append({"level": "info", "message": "Data source health is nominal"})
+    sources = payload.get("sources") or {}
+    summary = sources.get("summary") or {}
+    if summary.get("hybrid") and not summary.get("memory_active"):
+        diagnostics.append({"level": "warn", "message": "Hybrid mode has memory fallback configured but inactive"})
+    if int(payload.get("last_event_ms") or 0) > 30000:
+        diagnostics.append({"level": "warn", "message": "No player update for more than 30s"})
+    out = dict(payload)
+    out["diagnostics"] = diagnostics
+    return out
+
+
 __all__ = [
     "act_plugin_disable",
     "act_plugin_enable",
     "act_plugin_list",
     "act_plugin_reload",
     "act_plugin_status",
+    "act_data_source_diagnose",
+    "act_data_source_health",
     "act_trigger_disable",
     "act_trigger_enable",
     "act_trigger_reload",

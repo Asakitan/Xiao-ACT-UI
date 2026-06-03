@@ -41,6 +41,7 @@
 
 - Preserve SAO visual style, effects, scanlines, animations, and intended 60 FPS behavior unless the user explicitly asks to simplify visuals.
 - Optimize by reducing redundant work: caching, dirty signatures, deduplicated overlay pushes, scheduler gating, worker decoupling, and GPU paths where appropriate.
+- For Entity/Tk panels, assume CPU drawing can become a bottleneck: throttle refreshes, use dirty signatures before rebuilding widgets, avoid high-frequency `destroy()`/recreate loops, move heavy arithmetic/signature work into existing Cython helpers when it is hot, and prefer WebView/GPU overlay rendering for animated or frequently-updated panels.
 - Do not treat “idle looks fine” as proof for performance fixes. Heavy-combat paths, worker backlog, animation gating, capture locks, and visible-panel scheduling are common failure points.
 - DXGI desktop duplication objects are thread-affine. Do not share a `DxgiDuplicationSession` across threads.
 - Entity reminder/alert popups should use `sao_gui_alert.AlertOverlay` by default.

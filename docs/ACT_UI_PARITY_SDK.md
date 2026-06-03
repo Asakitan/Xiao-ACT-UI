@@ -179,6 +179,21 @@ Entity route: `entity://act/triggers_timers`, opened from `SAO 菜单 > 面板 >
 
 The current panel reads rules from `settings.json` key `act_trigger_rules`. It supports enable/disable/reload/test and intentionally defers full rule authoring to a later slice.
 
+## Current data-source health surface
+
+`data_source_health` is wired through shared `act_platform.runtime` helpers so WebView and Entity/Tk inspect the same PacketBridge + memory fallback snapshot:
+
+- status: `act_data_source_health(owner)`
+- refresh: `act_data_source_health(owner)`
+- diagnose: `act_data_source_diagnose(owner)`
+- copy: copies the JSON health/diagnostic payload
+
+WebView route: `web/data_source_health.html`, opened from `SAO Menu > ACT 数据源健康 Data Source Health`.
+
+Entity route: `entity://act/data_source_health`, opened from `SAO 菜单 > 面板 > ACT数据源健康`.
+
+The shared payload exposes `sources`, `status`, `latency_ms`, `last_event_ms`, and `errors`. For Entity/Tk, the panel is intentionally low-frequency: refreshes are throttled and source/diagnostic cards use dirty signatures before rebuilding widgets. High-frequency or animated ACT panels should prefer WebView/GPU overlay rendering, with Cython reserved for measured hot arithmetic/signature paths.
+
 ## Safety notes
 
 Treat the SDK as a delivery gate, not documentation-only metadata. If a feature PR changes ACT behavior, it should update the registry, both UI declarations, and parity tests in the same change.
