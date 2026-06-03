@@ -62,6 +62,7 @@ from utils.perf_probe import probe as _probe
 from gui_modules.sao_gui_commander import CommanderPanel
 from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
 from gui_modules.sao_gui_plugin_manager import PluginManagerPanel
+from gui_modules.sao_gui_report_export import ReportExportPanel
 from gui_modules.sao_gui_trigger_timer_manager import TriggerTimerManagerPanel
 
 
@@ -112,6 +113,17 @@ class SAOPlayerGUIPanelsMixin:
         else:
             self._act_data_source_health_panel.show()
             self.root.after(120, lambda: self._raise_panel_window(self._act_data_source_health_panel))
+
+    def _toggle_act_report_export_panel(self):
+        """打开/关闭 ACT 报告/导出面板 (tkinter)."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._act_report_export_panel:
+            self._act_report_export_panel = ReportExportPanel(self.root, self)
+        if self._act_report_export_panel.is_visible():
+            self._act_report_export_panel.hide()
+        else:
+            self._act_report_export_panel.show()
+            self.root.after(120, lambda: self._raise_panel_window(self._act_report_export_panel))
 
     @_probe.decorate('ui.commander_push')
     def _push_commander_data(self):
@@ -174,6 +186,7 @@ class SAOPlayerGUIPanelsMixin:
             ('act_plugin_manager', getattr(self._act_plugin_manager_panel, '_win', None)),
             ('act_trigger_timer', getattr(self._act_trigger_timer_panel, '_win', None)),
             ('act_data_source_health', getattr(self._act_data_source_health_panel, '_win', None)),
+            ('act_report_export', getattr(self._act_report_export_panel, '_win', None)),
         ]
 
         if not self._panels_hidden:

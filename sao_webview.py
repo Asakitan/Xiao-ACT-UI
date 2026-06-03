@@ -74,6 +74,9 @@ from act_platform.runtime import (
     act_plugin_list,
     act_plugin_reload,
     act_plugin_status,
+    act_report_copy,
+    act_report_export,
+    act_report_status,
     act_trigger_disable,
     act_trigger_enable,
     act_trigger_reload,
@@ -392,6 +395,15 @@ class SAOWebAPI:
             'status': payload,
         }, ensure_ascii=False)
 
+    def get_report_export_status(self, limit=20, fmt='json'):
+        return json.dumps(act_report_status(self._g, limit=int(limit or 20), fmt=str(fmt or 'json')), ensure_ascii=False)
+
+    def export_last_report(self, fmt='json'):
+        return json.dumps(act_report_export(self._g, fmt=str(fmt or 'json')), ensure_ascii=False)
+
+    def copy_report_export(self, fmt='json'):
+        return json.dumps(act_report_copy(self._g, fmt=str(fmt or 'json')), ensure_ascii=False)
+
     def list_plugins(self):
         return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
 
@@ -447,6 +459,15 @@ class SAOWebAPI:
                 self._g._hide_data_source_health()
             else:
                 self._g._show_data_source_health()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def toggle_report_export(self):
+        """Show/hide the ACT report/export overlay."""
+        def _do():
+            if self._g._report_export_visible:
+                self._g._hide_report_export()
+            else:
+                self._g._show_report_export()
         threading.Thread(target=_do, daemon=True).start()
 
     def switch_to_entity(self):
@@ -1839,6 +1860,10 @@ class SAOWebViewGUI:
         # ACT Data Source Health panel
         self.data_source_health_win = None
         self._data_source_health_visible = False
+
+        # ACT Report/Export panel
+        self.report_export_win = None
+        self._report_export_visible = False
 
         # Hide & Seek engine
         self._hide_seek_engine = None
@@ -3778,6 +3803,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Report/Export — shared report exporter surface for WebView + Entity parity
+        report_export_url = _web_file_uri('act_report_export.html')
+        _re_w = max(680, int(min(_sw, 1920) * 0.42))
+        _re_h = max(520, int(min(_sh, 1080) * 0.52))
+        _re_x = max(16, int(monitor_left + (_sw - _re_w) * 0.40))
+        _re_y = max(24, int(monitor_top + (_sh - _re_h) * 0.24))
+        self.report_export_win = webview.create_window(
+            'SAO-ReportExport', report_export_url,
+            width=_re_w, height=_re_h,
+            x=_re_x, y=_re_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -4372,6 +4415,7 @@ class SAOWebViewGUI:
             ('SAO-PluginManager', '_plugin_manager_visible', None),
             ('SAO-TriggerTimerManager', '_trigger_timer_manager_visible', None),
             ('SAO-DataSourceHealth', '_data_source_health_visible', None),
+            ('SAO-ReportExport', '_report_export_visible', None),
         ]
         user32 = ctypes.windll.user32
         for title, vis_attr, hwnd_attr in _panels:
@@ -4962,6 +5006,7 @@ class SAOWebViewGUI:
             self._set_window_icon('SAO-PluginManager')
             self._set_window_icon('SAO-TriggerTimerManager')
             self._set_window_icon('SAO-DataSourceHealth')
+            self._set_window_icon('SAO-ReportExport')
             # 菜单窗口在启动阶段保持完全透明, 避免偶发白色方框闪现
             self._set_window_alpha('SAO Menu', 0.0)
             self._set_window_alpha('SAO Alert', 1.0)
@@ -5012,6 +5057,7 @@ class SAOWebViewGUI:
                 self._wait_and_apply_click_through('SAO-PluginManager', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-TriggerTimerManager', timeout=0.5)
                 self._wait_and_apply_click_through('SAO-DataSourceHealth', timeout=0.5)
+                self._wait_and_apply_click_through('SAO-ReportExport', timeout=0.5)
             except Exception:
                 pass
             # Commander panel must start hidden (explicitly enforce after webview init)
@@ -5044,6 +5090,14 @@ class SAOWebViewGUI:
                 if self.data_source_health_win:
                     self._set_window_alpha('SAO-DataSourceHealth', 0.0)
                     self.data_source_health_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._report_export_visible = False
+                if self.report_export_win:
+                    self._set_window_alpha('SAO-ReportExport', 0.0)
+                    self.report_export_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -5972,6 +6026,63 @@ class SAOWebViewGUI:
             pass
         self._data_source_health_visible = False
 
+    # ── ACT Report/Export panel ──
+
+    def _eval_report_export(self, js):
+        try:
+            if self.report_export_win:
+                self.report_export_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_report_export_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the report/export panel receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-ReportExport')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_report_export(self):
+        try:
+            if self.report_export_win and not self._report_export_visible:
+                self._set_window_alpha('SAO-ReportExport', 0.0)
+                self.report_export_win.show()
+                self._eval_report_export('if(window.ReportExport&&ReportExport.fadeIn)ReportExport.fadeIn()')
+                self._eval_report_export('if(window.ReportExport&&ReportExport.refresh)ReportExport.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-ReportExport', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._report_export_visible = True
+                self._ensure_report_export_clickable()
+                threading.Timer(0.5, self._ensure_report_export_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_report_export(self):
+        try:
+            if self.report_export_win and self._report_export_visible:
+                self._eval_report_export('if(window.ReportExport&&ReportExport.fadeOut)ReportExport.fadeOut()')
+                def _finish():
+                    try:
+                        if self.report_export_win:
+                            self.report_export_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._report_export_visible = False
+
     # ── AutoKey Editor overlay ──
 
     def _eval_autokey_editor(self, js):
@@ -6816,6 +6927,10 @@ class SAOWebViewGUI:
             self._native_fade_window('SAO-DataSourceHealth', duration_ms=140, steps=8)
         except Exception:
             pass
+        try:
+            self._native_fade_window('SAO-ReportExport', duration_ms=140, steps=8)
+        except Exception:
+            pass
 
         try:
             self._destroy_all_panels()
@@ -6885,6 +7000,11 @@ class SAOWebViewGUI:
         try:
             if self.data_source_health_win:
                 self.data_source_health_win.destroy()
+        except Exception:
+            pass
+        try:
+            if self.report_export_win:
+                self.report_export_win.destroy()
         except Exception:
             pass
 
@@ -7517,6 +7637,7 @@ class SAOWebViewGUI:
             cfg['plugin_manager_visible'] = bool(self._plugin_manager_visible)
             cfg['trigger_timer_manager_visible'] = bool(self._trigger_timer_manager_visible)
             cfg['data_source_health_visible'] = bool(self._data_source_health_visible)
+            cfg['report_export_visible'] = bool(self._report_export_visible)
             _hs_engine = getattr(self, '_hide_seek_engine', None)
             cfg['hide_seek_active'] = bool(_hs_engine and _hs_engine.running)
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
@@ -7548,6 +7669,7 @@ class SAOWebViewGUI:
             'toggle_plugin_manager': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
             'toggle_trigger_timer_manager': lambda: (self._show_trigger_timer_manager() if not self._trigger_timer_manager_visible else self._hide_trigger_timer_manager()),
             'toggle_data_source_health': lambda: (self._show_data_source_health() if not self._data_source_health_visible else self._hide_data_source_health()),
+            'toggle_report_export': lambda: (self._show_report_export() if not self._report_export_visible else self._hide_report_export()),
             'toggle_session_players': self._toggle_session_players_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,

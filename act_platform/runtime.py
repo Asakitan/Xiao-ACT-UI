@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 import time
 from typing import Any, Callable, Iterable, Mapping, Optional
 
@@ -373,6 +374,184 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _owner_act_snapshot(owner: Any, *, history_limit: int = 20) -> dict[str, Any]:
+    for name in ("_build_dps_act_snapshot", "_get_dps_act_snapshot"):
+        fn = getattr(owner, name, None)
+        if callable(fn):
+            try:
+                snap = fn(history_limit=history_limit)
+            except TypeError:
+                try:
+                    snap = fn()
+                except Exception:
+                    snap = {}
+            except Exception:
+                snap = {}
+            if isinstance(snap, Mapping):
+                return dict(_json_safe(snap))
+    return {}
+
+
+def _owner_dps_report(owner: Any) -> dict[str, Any] | None:
+    tracker = getattr(owner, "_dps_tracker", None)
+    if tracker is not None:
+        get_last = getattr(tracker, "get_last_report", None)
+        if callable(get_last):
+            try:
+                report = get_last()
+                if isinstance(report, Mapping):
+                    return dict(_json_safe(report))
+            except Exception:
+                pass
+    store = getattr(owner, "_dps_history_store", None)
+    latest = getattr(store, "latest_report", None)
+    if callable(latest):
+        try:
+            report = latest()
+            if isinstance(report, Mapping):
+                return dict(_json_safe(report))
+        except Exception:
+            pass
+    return None
+
+
+def _report_rows_from_snapshot(snapshot: Mapping[str, Any], report: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    render_spec = snapshot.get("render_spec") if isinstance(snapshot, Mapping) else {}
+    rows = render_spec.get("rows") if isinstance(render_spec, Mapping) else []
+    if not rows and isinstance(report, Mapping):
+        rows = report.get("entities") or []
+    out: list[dict[str, Any]] = []
+    for index, row in enumerate(rows or [], 1):
+        if not isinstance(row, Mapping):
+            continue
+        out.append({
+            "rank": int(row.get("rank") or index),
+            "uid": int(row.get("uid") or 0),
+            "name": str(row.get("name") or ""),
+            "profession": str(row.get("profession") or ""),
+            "damage": int(row.get("damage") or row.get("damage_total") or 0),
+            "heal": int(row.get("heal") or row.get("heal_total") or 0),
+            "dps": int(row.get("dps") or 0),
+            "hps": int(row.get("hps") or 0),
+            "damage_pct": float(row.get("damage_pct") or 0.0),
+            "is_self": bool(row.get("is_self")),
+        })
+    return out
+
+
+def _report_preview(snapshot: Mapping[str, Any], report: Mapping[str, Any] | None) -> dict[str, Any]:
+    render_spec = snapshot.get("render_spec") if isinstance(snapshot, Mapping) else {}
+    if not isinstance(render_spec, Mapping):
+        render_spec = {}
+    encounter = render_spec.get("encounter") if isinstance(render_spec.get("encounter"), Mapping) else {}
+    totals = render_spec.get("totals") if isinstance(render_spec.get("totals"), Mapping) else {}
+    report = report if isinstance(report, Mapping) else {}
+    rows = _report_rows_from_snapshot(snapshot, report)
+    total_damage = int(totals.get("damage") or report.get("total_damage") or 0)
+    total_heal = int(totals.get("heal") or report.get("total_heal") or 0)
+    elapsed_s = float(totals.get("elapsed_s") or encounter.get("duration_s") or report.get("elapsed_s") or 0.0)
+    return {
+        "title": str(render_spec.get("title") or report.get("report_reason") or "Last Encounter"),
+        "encounter_id": str(encounter.get("id") or report.get("encounter_id") or ""),
+        "status": str(encounter.get("status") or ("report" if report else "empty")),
+        "elapsed_s": elapsed_s,
+        "total_damage": total_damage,
+        "total_heal": total_heal,
+        "total_dps": int(totals.get("dps") or report.get("total_dps") or (total_damage / elapsed_s if elapsed_s > 0 else 0)),
+        "total_hps": int(totals.get("hps") or report.get("total_hps") or (total_heal / elapsed_s if elapsed_s > 0 else 0)),
+        "combatant_count": len(rows),
+        "top_rows": rows[:8],
+    }
+
+
+def _normalize_export_format(fmt: str | None) -> str:
+    value = str(fmt or "json").strip().lower()
+    return value if value in {"json", "csv"} else "json"
+
+
+def act_report_status(owner: Any, *, limit: int = 20, fmt: str = "json") -> dict[str, Any]:
+    """Return export-ready report status and preview for both ACT UIs."""
+    selected = _normalize_export_format(fmt)
+    errors: list[str] = []
+    store = getattr(owner, "_dps_history_store", None)
+    if store is None:
+        errors.append("DPS history is not initialized")
+    snapshot = _owner_act_snapshot(owner, history_limit=limit)
+    report = _owner_dps_report(owner)
+    history: list[Any] = []
+    if store is not None:
+        list_reports = getattr(store, "list_reports", None)
+        if callable(list_reports):
+            try:
+                history = list(_json_safe(list_reports(int(limit or 20)) or []))
+            except Exception as exc:
+                errors.append(str(exc))
+    if not report and not history:
+        errors.append("No DPS report is available")
+    preview = _report_preview(snapshot, report)
+    encounter_id = str(preview.get("encounter_id") or "latest")
+    return {
+        "ok": bool(report or history) and not errors,
+        "message": "OK" if not errors else "; ".join(errors),
+        "encounter_id": encounter_id,
+        "formats": ["json", "csv"],
+        "selected_format": selected,
+        "preview": preview,
+        "history": history,
+        "storage_status": {
+            "available": bool(store is not None),
+            "count": len(history),
+            "path": str(getattr(store, "path", "") or ""),
+        },
+        "errors": errors,
+    }
+
+
+def act_report_export(owner: Any, *, fmt: str = "json") -> dict[str, Any]:
+    """Save the latest ACT/DPS report using the existing DpsHistoryStore exporter."""
+    selected = _normalize_export_format(fmt)
+    store = getattr(owner, "_dps_history_store", None)
+    if store is None:
+        return {"ok": False, "message": "DPS history is not initialized.", "errors": ["DPS history is not initialized"], "selected_format": selected}
+    export = getattr(store, "export_report", None)
+    if not callable(export):
+        return {"ok": False, "message": "DPS history exporter is unavailable.", "errors": ["DPS history exporter is unavailable"], "selected_format": selected}
+    report = _owner_dps_report(owner)
+    try:
+        path = export(report=report, fmt=selected)
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "errors": [str(exc)], "selected_format": selected}
+    if not path:
+        return {"ok": False, "message": "No report to export.", "errors": ["No report to export"], "selected_format": selected}
+    status = act_report_status(owner, fmt=selected)
+    status.update({"ok": True, "message": "Exported", "path": str(path), "selected_format": selected, "errors": []})
+    return status
+
+
+def act_report_copy(owner: Any, *, fmt: str = "json") -> dict[str, Any]:
+    """Return a clipboard-friendly JSON report payload without writing a file."""
+    selected = _normalize_export_format(fmt)
+    status = act_report_status(owner, fmt=selected)
+    payload = {
+        "encounter_id": status.get("encounter_id"),
+        "format": selected,
+        "preview": status.get("preview") or {},
+        "history": status.get("history") or [],
+    }
+    try:
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+    except Exception:
+        text = str(payload)
+    return {
+        "ok": bool(status.get("ok")),
+        "message": status.get("message") or "OK",
+        "text": text,
+        "selected_format": selected,
+        "preview": status.get("preview") or {},
+        "errors": list(status.get("errors") or []),
+    }
+
+
 def _source_active(source: Mapping[str, Any]) -> bool:
     if not source:
         return False
@@ -490,6 +669,9 @@ def act_data_source_diagnose(owner: Any, *, now: float | None = None) -> dict[st
 
 
 __all__ = [
+    "act_report_copy",
+    "act_report_export",
+    "act_report_status",
     "act_plugin_disable",
     "act_plugin_enable",
     "act_plugin_list",

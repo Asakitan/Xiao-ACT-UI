@@ -194,6 +194,20 @@ Entity route: `entity://act/data_source_health`, opened from `SAO 菜单 > 面�
 
 The shared payload exposes `sources`, `status`, `latency_ms`, `last_event_ms`, and `errors`. For Entity/Tk, the panel is intentionally low-frequency: refreshes are throttled and source/diagnostic cards use dirty signatures before rebuilding widgets. High-frequency or animated ACT panels should prefer WebView/GPU overlay rendering, with Cython reserved for measured hot arithmetic/signature paths.
 
+## Current report/export surface
+
+`export` is wired through shared `act_platform.runtime` helpers and the existing `DpsHistoryStore` exporter:
+
+- status: `act_report_status(owner, limit=20, fmt="json")`
+- save: `act_report_export(owner, fmt="json" | "csv")`
+- copy: `act_report_copy(owner, fmt="json")`
+
+WebView route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/导出 Report Export`.
+
+Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报告/导出`.
+
+The shared payload preserves the parity fields `encounter_id`, `formats`, `selected_format`, and `preview`, with additional `history` and `storage_status` fields for user feedback. Entity/Tk uses a low-frequency diagnostic panel with refresh throttling and dirty render signatures; file writing remains in `DpsHistoryStore.export_report()` so UI code does not duplicate export format logic.
+
 ## Safety notes
 
 Treat the SDK as a delivery gate, not documentation-only metadata. If a feature PR changes ACT behavior, it should update the registry, both UI declarations, and parity tests in the same change.

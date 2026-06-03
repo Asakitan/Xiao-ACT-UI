@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO ACT Report Export</title>
+<style>
+:root {
+    --bg: rgba(8, 13, 22, .76);
+    --panel: rgba(18, 33, 52, .90);
+    --panel2: rgba(6, 11, 18, .72);
+    --line: rgba(117, 205, 255, .48);
+    --gold: rgba(255, 214, 117, .86);
+    --text: rgba(232, 246, 255, .96);
+    --muted: rgba(176, 204, 226, .76);
+    --ok: #7df2bf;
+    --warn: #ffd46f;
+    --bad: #ff6b82;
+}
+* { box-sizing: border-box; }
+html, body {
+    margin: 0;
+    width: 100%;
+    min-height: 100%;
+    overflow: hidden;
+    background: transparent;
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    user-select: none;
+}
+body { padding: 14px; }
+.shell {
+    position: relative;
+    width: 100%;
+    height: calc(100vh - 28px);
+    min-height: 450px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    background:
+        radial-gradient(circle at 85% 12%, rgba(255, 214, 117, .16), transparent 25%),
+        linear-gradient(135deg, rgba(100, 202, 255, .15), transparent 24%, transparent 70%, rgba(255, 215, 125, .12)),
+        linear-gradient(180deg, rgba(16, 28, 45, .96), rgba(7, 12, 20, .90));
+    box-shadow: 0 0 34px rgba(88, 199, 255, .22), inset 0 0 28px rgba(109, 216, 255, .10);
+    opacity: 0;
+    transform: translateY(10px) scale(.985);
+    transition: opacity .22s ease, transform .22s ease;
+}
+.shell.visible { opacity: 1; transform: translateY(0) scale(1); }
+.shell::before {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(180deg, rgba(255,255,255,.035) 0, rgba(255,255,255,.035) 1px, transparent 1px, transparent 7px);
+    mix-blend-mode: screen;
+}
+.header {
+    height: 58px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px 8px 18px;
+    border-bottom: 1px solid rgba(117, 205, 255, .35);
+    background: linear-gradient(90deg, rgba(18, 59, 94, .76), rgba(11, 22, 35, .58));
+}
+.kicker { letter-spacing: .18em; font-size: 10px; color: var(--gold); text-shadow: 0 0 10px rgba(255, 214, 117, .52); }
+.title { margin-top: 2px; font-size: 20px; font-weight: 700; letter-spacing: .08em; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.pill, .badge {
+    border: 1px solid rgba(117, 205, 255, .42);
+    border-radius: 999px;
+    color: var(--muted);
+    background: rgba(8, 14, 22, .62);
+    font-size: 12px;
+}
+.pill { min-width: 94px; text-align: center; padding: 5px 9px; }
+.badge { display: inline-block; padding: 3px 7px; font-size: 10px; }
+.badge.ok { color: var(--ok); border-color: rgba(125,242,191,.62); }
+.badge.warn { color: var(--warn); border-color: rgba(255,212,111,.62); }
+.badge.bad { color: var(--bad); border-color: rgba(255,107,130,.62); }
+button, select {
+    border: 1px solid rgba(117, 205, 255, .48);
+    background: linear-gradient(180deg, rgba(61, 143, 201, .42), rgba(19, 48, 74, .58));
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 11px;
+    font-size: 12px;
+    font-weight: 600;
+}
+button { cursor: pointer; }
+button:hover { box-shadow: 0 0 16px rgba(107, 214, 255, .25); transform: translateY(-1px); }
+button.primary { border-color: rgba(255, 214, 117, .74); color: #fff8da; }
+button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 16px; }
+.body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 310px;
+    gap: 12px;
+    height: calc(100% - 58px);
+    padding: 12px;
+}
+.main { min-height: 0; overflow: auto; padding-right: 4px; }
+.card {
+    margin-bottom: 10px;
+    border: 1px solid rgba(117, 205, 255, .34);
+    border-left: 3px solid rgba(255, 214, 117, .76);
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(27, 46, 68, .86), rgba(9, 16, 26, .82));
+    padding: 12px;
+}
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.metric { border: 1px solid rgba(117, 205, 255, .22); border-radius: 9px; padding: 9px; background: rgba(8, 14, 22, .48); }
+.metric .label { color: var(--muted); font-size: 11px; }
+.metric .value { margin-top: 4px; color: var(--gold); font-size: 18px; font-weight: 700; }
+.table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.table th, .table td { padding: 7px 8px; border-bottom: 1px solid rgba(117, 205, 255, .14); text-align: left; }
+.table th { color: var(--gold); font-size: 11px; letter-spacing: .08em; }
+.table td { color: var(--text); user-select: text; }
+.side { min-height: 0; border: 1px solid rgba(117, 205, 255, .30); border-radius: 10px; background: rgba(8, 14, 22, .52); padding: 12px; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+.side-title { color: var(--gold); font-size: 12px; letter-spacing: .16em; }
+.row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(117, 205, 255, .16); padding-bottom: 5px; font-size: 12px; color: var(--muted); }
+.row strong { color: var(--text); text-align: right; }
+.history { flex: 1; min-height: 0; overflow: auto; font-size: 11px; color: var(--muted); line-height: 1.45; }
+.history-item { border: 1px solid rgba(117, 205, 255, .20); border-radius: 8px; padding: 7px; margin-bottom: 6px; background: rgba(7, 12, 20, .42); user-select: text; }
+.empty { display: grid; place-items: center; height: 100%; min-height: 240px; color: var(--muted); border: 1px dashed rgba(117, 205, 255, .28); border-radius: 10px; text-align: center; line-height: 1.6; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
+.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,.18); }
+::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+    <div class="header">
+        <div>
+            <div class="kicker">ACT REPORT DELIVERY</div>
+            <div class="title">REPORT / EXPORT</div>
+        </div>
+        <div class="header-actions">
+            <div class="pill" id="status-pill">LOADING</div>
+            <select id="fmt"><option value="json">JSON</option><option value="csv">CSV</option></select>
+            <button class="primary" type="button" onclick="ReportExport.refresh()">刷新</button>
+            <button type="button" onclick="ReportExport.exportFile()">导出</button>
+            <button type="button" onclick="ReportExport.copy()">复制</button>
+            <button class="close" type="button" onclick="ReportExport.close()">×</button>
+        </div>
+    </div>
+    <div class="body">
+        <main class="main" id="preview"><div class="empty">正在读取 ACT 报告...<br/>LOADING REPORT</div></main>
+        <aside class="side">
+            <div class="side-title">EXPORT SUMMARY</div>
+            <div class="row"><span>Encounter</span><strong id="sum-id">--</strong></div>
+            <div class="row"><span>Format</span><strong id="sum-format">JSON</strong></div>
+            <div class="row"><span>History</span><strong id="sum-count">0</strong></div>
+            <div class="row"><span>Storage</span><strong id="sum-storage">--</strong></div>
+            <div class="side-title">HISTORY</div>
+            <div class="history" id="history-list">暂无历史报告</div>
+        </aside>
+    </div>
+    <div class="toast" id="toast"></div>
+</div>
+<script>
+(function () {
+    "use strict";
+
+    var shell = document.getElementById('shell');
+    var preview = document.getElementById('preview');
+    var historyList = document.getElementById('history-list');
+    var toast = document.getElementById('toast');
+    var statusPill = document.getElementById('status-pill');
+    var fmtSelect = document.getElementById('fmt');
+    var toastTimer = null;
+    var lastPayload = null;
+
+    function esc(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function parseResult(result) {
+        if (typeof result === 'string') {
+            try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; }
+        }
+        return result || {};
+    }
+
+    function apiCall(name, args) {
+        var api = window.pywebview && window.pywebview.api;
+        if (api && typeof api[name] === 'function') {
+            return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
+        }
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            var cmdMap = {
+                get_report_export_status: 'act.report.status',
+                export_last_report: 'act.report.export',
+                copy_report_export: 'act.report.copy',
+                toggle_report_export: 'ui.menu_action'
+            };
+            var payload = name === 'toggle_report_export' ? { action: 'toggle_report_export' } : { args: args || [] };
+            return window.bridge.cmd(cmdMap[name] || ('act.report.' + name), payload).then(parseResult);
+        }
+        return Promise.resolve({ ok: false, message: 'Report/export API unavailable', errors: ['Report/export API unavailable'] });
+    }
+
+    function showToast(message) {
+        toast.textContent = String(message || '');
+        toast.classList.add('visible');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800);
+    }
+
+    function fmt() { return fmtSelect.value || 'json'; }
+
+    function metric(label, value) {
+        return '<div class="metric"><div class="label">' + esc(label) + '</div><div class="value">' + esc(value) + '</div></div>';
+    }
+
+    function renderRows(rows) {
+        if (!rows || !rows.length) return '<div class="empty">暂无战斗成员数据</div>';
+        return '<table class="table"><thead><tr><th>#</th><th>Name</th><th>Damage</th><th>DPS</th><th>Heal</th></tr></thead><tbody>' +
+            rows.map(function (row, idx) {
+                return '<tr><td>' + esc(row.rank || idx + 1) + '</td><td>' + esc(row.name || row.uid || '-') + '</td><td>' + esc(row.damage || 0) + '</td><td>' + esc(row.dps || 0) + '</td><td>' + esc(row.heal || 0) + '</td></tr>';
+            }).join('') + '</tbody></table>';
+    }
+
+    function renderHistory(items) {
+        if (!items || !items.length) {
+            historyList.textContent = '暂无历史报告';
+            return;
+        }
+        historyList.innerHTML = items.slice(0, 12).map(function (item) {
+            return '<div class="history-item"><strong>' + esc(item.completed_local_time || item.report_reason || 'Encounter') + '</strong><br/>damage=' + esc(item.total_damage || 0) + ' · dps=' + esc(item.total_dps || 0) + '<br/><small>' + esc((item.elapsed_s || 0) + 's') + '</small></div>';
+        }).join('');
+    }
+
+    function render(payload) {
+        payload = payload || {};
+        lastPayload = payload;
+        var p = payload.preview || {};
+        var rows = p.top_rows || [];
+        statusPill.textContent = payload.ok ? 'READY' : 'MISSING';
+        statusPill.style.color = payload.ok ? 'var(--ok)' : 'var(--bad)';
+        document.getElementById('sum-id').textContent = payload.encounter_id || '--';
+        document.getElementById('sum-format').textContent = (payload.selected_format || fmt()).toUpperCase();
+        document.getElementById('sum-count').textContent = String((payload.storage_status || {}).count || (payload.history || []).length || 0);
+        document.getElementById('sum-storage').textContent = (payload.storage_status || {}).available ? 'READY' : 'N/A';
+        renderHistory(payload.history || []);
+        if (!payload.ok && (!rows.length && !(payload.history || []).length)) {
+            preview.innerHTML = '<div class="empty">' + esc(payload.message || '暂无可导出的 ACT 报告') + '</div>';
+            return;
+        }
+        preview.innerHTML = '<section class="card"><div class="metric-grid">' +
+            metric('Damage', p.total_damage || 0) + metric('DPS', p.total_dps || 0) +
+            metric('Heal', p.total_heal || 0) + metric('Duration', (p.elapsed_s || 0) + 's') +
+            '</div></section><section class="card"><div style="color:var(--gold);font-size:12px;letter-spacing:.12em;margin-bottom:8px;">TOP COMBATANTS</div>' + renderRows(rows) + '</section>';
+    }
+
+    function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+        var area = document.createElement('textarea');
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        document.body.removeChild(area);
+        return Promise.resolve();
+    }
+
+    window.ReportExport = {
+        refresh: function () {
+            return apiCall('get_report_export_status', [20, fmt()]).then(function (payload) {
+                render(payload);
+                return payload;
+            }).catch(function (err) {
+                render({ ok: false, message: String(err), errors: [String(err)] });
+            });
+        },
+        exportFile: function () {
+            return apiCall('export_last_report', [fmt()]).then(function (payload) {
+                render(payload);
+                showToast(payload.ok ? ('导出完成 ' + (payload.path || '')) : (payload.message || '导出失败'));
+                return payload;
+            });
+        },
+        copy: function () {
+            return apiCall('copy_report_export', [fmt()]).then(function (payload) {
+                var text = payload.text || JSON.stringify(lastPayload || {}, null, 2);
+                return copyText(text).then(function () { showToast(payload.ok ? '报告已复制' : (payload.message || '已复制当前状态')); });
+            });
+        },
+        close: function () { apiCall('toggle_report_export'); },
+        fadeIn: function () { shell.classList.add('visible'); },
+        fadeOut: function () { shell.classList.remove('visible'); }
+    };
+
+    fmtSelect.addEventListener('change', function () { ReportExport.refresh(); });
+    setTimeout(function () {
+        shell.classList.add('visible');
+        window.ReportExport.refresh();
+    }, 40);
+})();
+</script>
+</body>
+</html>
