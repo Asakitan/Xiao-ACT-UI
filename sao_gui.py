@@ -79,6 +79,7 @@ from gui_modules.sao_gui_buffmon import SelfBuffOverlay, BossBuffOverlay
 from gui_modules.sao_gui_autokey import AutoKeyPanel
 from gui_modules.sao_gui_bossraid import BossRaidPanel
 from gui_modules.sao_gui_commander import CommanderPanel
+from gui_modules.sao_gui_plugin_manager import PluginManagerPanel
 from gui_modules.sao_gui_profile_editors import AutoKeyDetailPanel, BossRaidDetailPanel
 # Panel UI helpers (constants + builders) extracted in round 49 of the
 # sao_gui split refactor. Re-import the names that the rest of sao_gui.py
@@ -449,6 +450,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._autokey_detail_panel = None
         self._bossraid_detail_panel = None
         self._commander_panel = None  # CommanderPanel
+        self._act_plugin_manager_panel = None  # PluginManagerPanel
         self._commander_last_push = 0.0
 
         self._sao_menu = None  # lazy-init on first _toggle_sao_menu()

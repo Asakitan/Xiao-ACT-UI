@@ -453,7 +453,7 @@ class PacketBridge:
         """启动抓包，后台线程运行.
 
         data_source='memory'  → 跑 UnifiedDataSource, 不启动 TCP 抓包/伤害兜底
-        data_source='hybrid'  → UnifiedDataSource 内部启 PATH-B damage-only TCP
+        data_source='hybrid'  → UnifiedDataSource 补自身状态 + 保留 TCP 战斗/实体/Boss 兜底
         data_source='auto'    → 尝试 memory; 失败则降级 TCP
         data_source='tcp'     → 当前默认行为, 完整 TCP 抓包
         """
@@ -462,18 +462,23 @@ class PacketBridge:
         self._running = True
         mode = self._data_source_mode
         if mode in ('memory', 'hybrid', 'auto'):
-            if self._start_memory_source():
-                # memory 启动成功, 不启 TCP
+            mem_ok = self._start_memory_source()
+            if mem_ok and mode != 'hybrid':
+                # memory/auto 启动成功时沿用 memory-first 语义; hybrid 继续启 TCP 兜底
                 return
-            elif mode == 'memory':
+            elif not mem_ok and mode == 'memory':
                 # 严格 memory 模式失败, 报错不降级
                 self._error_msg = "memory data_source failed to start"
                 self._running = False
                 return
-            # auto 模式: fall through 到 TCP
+            # hybrid/auto 模式: memory 失败时 fall through 到 TCP;
+            # hybrid 成功时也继续启动 TCP, 保留 boss/entity/damage 兜底.
             try:
                 from config import logger as _logger  # type: ignore
-                _logger.warning("[bridge] memory source failed; falling back to TCP")
+                if mem_ok:
+                    _logger.info("[bridge] hybrid memory source started; keeping TCP fallback active")
+                else:
+                    _logger.warning("[bridge] memory source failed; falling back to TCP")
             except Exception:
                 pass
         self._thread = threading.Thread(target=self._run, daemon=True,
@@ -497,6 +502,7 @@ class PacketBridge:
                 on_boss_event=self._on_boss_event,
                 on_scene_change=self._on_scene_change,
                 on_status_change=self._on_mem_status_change,
+                packet_bridge=self,
             )
             return self._mem_source.start()
         except Exception as e:

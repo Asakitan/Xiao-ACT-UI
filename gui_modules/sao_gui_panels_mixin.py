@@ -60,6 +60,7 @@ from typing import Any, Optional
 
 from utils.perf_probe import probe as _probe
 from gui_modules.sao_gui_commander import CommanderPanel
+from gui_modules.sao_gui_plugin_manager import PluginManagerPanel
 
 
 class SAOPlayerGUIPanelsMixin:
@@ -76,6 +77,17 @@ class SAOPlayerGUIPanelsMixin:
             self._commander_panel.show()
             self._push_commander_data()
             self.root.after(120, lambda: self._raise_panel_window(self._commander_panel))
+
+    def _toggle_act_plugin_manager_panel(self):
+        """打开/关闭 ACT 插件管理面板 (tkinter)."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._act_plugin_manager_panel:
+            self._act_plugin_manager_panel = PluginManagerPanel(self.root, self)
+        if self._act_plugin_manager_panel.is_visible():
+            self._act_plugin_manager_panel.hide()
+        else:
+            self._act_plugin_manager_panel.show()
+            self.root.after(120, lambda: self._raise_panel_window(self._act_plugin_manager_panel))
 
     @_probe.decorate('ui.commander_push')
     def _push_commander_data(self):
@@ -135,6 +147,7 @@ class SAOPlayerGUIPanelsMixin:
             ('autokey_detail', getattr(self._autokey_detail_panel, '_win', None)),
             ('bossraid_detail', getattr(self._bossraid_detail_panel, '_win', None)),
             ('commander', getattr(self._commander_panel, '_win', None)),
+            ('act_plugin_manager', getattr(self._act_plugin_manager_panel, '_win', None)),
         ]
 
         if not self._panels_hidden:

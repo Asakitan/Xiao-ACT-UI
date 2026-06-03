@@ -1,0 +1,10 @@
+{
+  "id": "hello_act_plugin",
+  "name": "Hello ACT Plugin",
+  "version": "0.1.0",
+  "entry": "plugin.py",
+  "description": "Example ACT plugin that logs snapshots and encounter summaries.",
+  "enabled": true,
+  "subscriptions": ["act_snapshot", "encounter_finalized"],
+  "permissions": []
+}

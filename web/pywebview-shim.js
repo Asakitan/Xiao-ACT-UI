@@ -10,6 +10,7 @@
 //   pywebview.api.notify_hp_hit_regions_ready()
 //   pywebview.api.exit_application()
 //   pywebview.api.set_panel_visible(panel, visible)
+//   pywebview.api.menu_action(action)
 //
 // Each method returns a Promise. Callers that ignore the return
 // value (the common case) see no change in behaviour; callers that
@@ -48,6 +49,28 @@
         },
         set_panel_visible: function (panel, visible) {
             return call('ui.set_panel_visible', { panel: String(panel || ''), visible: !!visible });
+        },
+        menu_action: function (action) {
+            return call('ui.menu_action', { action: String(action || '') });
+        },
+        toggle_plugin_manager: function () {
+            return call('ui.menu_action', { action: 'toggle_plugin_manager' });
+        },
+        get_plugin_status: function () {
+            return call('act.plugins.status', {});
+        },
+        list_plugins: function () {
+            return call('act.plugins.list', {});
+        },
+        enable_plugin: function (pluginId) {
+            return call('act.plugins.enable', { plugin_id: String(pluginId || '') });
+        },
+        disable_plugin: function (pluginId) {
+            return call('act.plugins.disable', { plugin_id: String(pluginId || '') });
+        },
+        reload_plugins: function (pluginId) {
+            var payload = pluginId ? { plugin_id: String(pluginId || '') } : {};
+            return call('act.plugins.reload', payload);
         },
         // Generic escape hatch: any unhandled name routes through
         // `ui.legacy_call` so the C# side can log + decide.

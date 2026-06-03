@@ -349,6 +349,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '✦', 'label': f'Buff监视器: {"ON" if buffmon_on else "OFF"}', 'command': self._toggle_buffmon_enabled},
             {'icon': '◆', 'label': f'Hybrid数据源: {mem_mode_disp}', 'command': self._cycle_mem_data_source},
             {'icon': '☌', 'label': f'ACT插件: {plugin_active}/{plugin_total}', 'command': self._show_act_plugin_status_menu},
+            {'icon': '☌', 'label': 'ACT插件管理面板', 'command': self._toggle_act_plugin_manager_panel},
             {'icon': '↻', 'label': '重载ACT插件', 'command': self._reload_act_plugins_menu},
             {'icon': '◆', 'label': '切换首个ACT插件', 'command': self._toggle_first_act_plugin_menu},
         ])
