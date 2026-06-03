@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 
@@ -28,6 +29,22 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return float(default)
+
+
+def _event_rows(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, Mapping):
+        events = value.get("events")
+        if isinstance(events, (list, tuple)):
+            return [dict(item) for item in events if isinstance(item, Mapping)]
+        event = value.get("event")
+        if isinstance(event, Mapping):
+            return [dict(event)]
+        if value.get("topic"):
+            return [dict(value)]
+        return []
+    if isinstance(value, (list, tuple)):
+        return [dict(item) for item in value if isinstance(item, Mapping)]
+    return []
 
 
 @dataclass(frozen=True)
@@ -210,6 +227,123 @@ class StarResonanceParserAdapter(ParserAdapter):
         return out
 
 
+class PluginParserAdapter(ParserAdapter):
+    """Controlled runtime wrapper for plugin-declared parser adapters."""
+
+    def __init__(self, manager: Any, metadata: Mapping[str, Any] | ParserAdapterMetadata,
+                 *, time_budget_ms: float = 25.0) -> None:
+        raw = metadata if isinstance(metadata, Mapping) else {}
+        meta = metadata if isinstance(metadata, ParserAdapterMetadata) else ParserAdapterMetadata.from_mapping(raw)
+        super().__init__(meta)
+        self.manager = manager
+        self.plugin_id = str(raw.get("plugin_id") or "")
+        budget = raw.get("time_budget_ms") if isinstance(raw, Mapping) else None
+        if budget is None and isinstance(raw, Mapping):
+            budget = raw.get("max_runtime_ms")
+        self.time_budget_ms = _safe_float(budget, time_budget_ms)
+        self._last_invocation: dict[str, Any] = {}
+
+    def invoke(self, operation: str, payload: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+        request = {"operation": str(operation or "")}
+        if isinstance(payload, Mapping):
+            request.update(copy.deepcopy(dict(payload)))
+        invoke_extension = getattr(self.manager, "invoke_extension", None)
+        if not callable(invoke_extension):
+            result = {
+                "ok": False,
+                "plugin_id": self.plugin_id,
+                "extension_id": self.adapter_id,
+                "message": "plugin manager cannot invoke extensions",
+                "errors": ["plugin manager cannot invoke extensions"],
+            }
+        else:
+            result = invoke_extension(
+                "parser_adapters",
+                self.adapter_id,
+                request,
+                time_budget_ms=self.time_budget_ms,
+            )
+            if not isinstance(result, Mapping):
+                result = {
+                    "ok": False,
+                    "plugin_id": self.plugin_id,
+                    "extension_id": self.adapter_id,
+                    "message": "parser adapter handler returned a non-mapping invocation envelope",
+                    "errors": ["invalid invocation envelope"],
+                    "result": result,
+                }
+        self._last_invocation = {
+            "operation": request["operation"],
+            "ok": bool(result.get("ok")),
+            "elapsed_ms": result.get("elapsed_ms"),
+            "time_budget_ms": result.get("time_budget_ms", self.time_budget_ms),
+            "timed_out": bool(result.get("timed_out")),
+            "errors": list(result.get("errors") or []),
+        }
+        return dict(result)
+
+    def start(self) -> "PluginParserAdapter":
+        result = self.invoke("start")
+        self.started = bool(result.get("ok"))
+        return self
+
+    def stop(self) -> None:
+        if self.started:
+            self.invoke("stop")
+        super().stop()
+
+    def parse_packet(self, frame: bytes) -> dict[str, Any]:
+        frame_bytes = bytes(frame or b"")
+        return self.invoke("parse_packet", {
+            "frame": frame_bytes,
+            "frame_len": len(frame_bytes),
+        })
+
+    def parse_log_line(self, line: str) -> list[dict[str, Any]]:
+        result = self.invoke("parse_log_line", {"line": str(line or "")})
+        return _event_rows(result.get("result")) if result.get("ok") else []
+
+    def import_file(self, path: str) -> dict[str, Any]:
+        return self.invoke("import_file", {"path": str(path or "")})
+
+    def normalize_event(
+        self,
+        topic: str,
+        payload: Optional[Mapping[str, Any]] = None,
+        *,
+        source_kind: str = "packet",
+        confidence: float = 1.0,
+        observed_at: Optional[float] = None,
+    ) -> dict[str, Any]:
+        result = self.invoke("normalize_event", {
+            "topic": str(topic or ""),
+            "payload": copy.deepcopy(dict(payload or {})),
+            "source_kind": str(source_kind or "packet"),
+            "confidence": float(confidence),
+            "observed_at": observed_at,
+        })
+        normalized = result.get("result") if result.get("ok") else None
+        if isinstance(normalized, Mapping):
+            return dict(normalized)
+        return super().normalize_event(
+            topic,
+            payload,
+            source_kind=source_kind,
+            confidence=confidence,
+            observed_at=observed_at,
+        )
+
+    def health(self) -> dict[str, Any]:
+        out = super().health()
+        out.update({
+            "plugin_id": self.plugin_id,
+            "extension_id": self.adapter_id,
+            "handler_kind": "parser_adapters",
+            "last_invocation": dict(self._last_invocation),
+        })
+        return out
+
+
 def built_in_parser_adapters() -> list[dict[str, Any]]:
     return [STAR_RESONANCE_PARSER_METADATA.to_dict()]
 
@@ -220,11 +354,44 @@ def create_builtin_parser_adapter(adapter_id: str = "star_resonance_tcp") -> Par
     raise KeyError(f"unknown built-in parser adapter: {adapter_id}")
 
 
+def plugin_parser_adapters(manager: Any) -> list[dict[str, Any]]:
+    list_extensions = getattr(manager, "list_extensions", None)
+    if not callable(list_extensions):
+        return []
+    rows = list_extensions("parser_adapters")
+    if not isinstance(rows, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        item = ParserAdapterMetadata.from_mapping(row).to_dict()
+        for key in ("plugin_id", "time_budget_ms", "max_runtime_ms"):
+            if key in row:
+                item[key] = row[key]
+        out.append(item)
+    return out
+
+
+def create_plugin_parser_adapter(manager: Any, adapter_id: str) -> PluginParserAdapter:
+    target = str(adapter_id or "").strip()
+    list_extensions = getattr(manager, "list_extensions", None)
+    rows = list_extensions("parser_adapters") if callable(list_extensions) else []
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, Mapping) and str(row.get("id") or row.get("adapter_id") or "") == target:
+                return PluginParserAdapter(manager, row)
+    raise KeyError(f"unknown plugin parser adapter: {target}")
+
+
 __all__ = [
     "ParserAdapter",
     "ParserAdapterMetadata",
+    "PluginParserAdapter",
     "STAR_RESONANCE_PARSER_METADATA",
     "StarResonanceParserAdapter",
     "built_in_parser_adapters",
     "create_builtin_parser_adapter",
+    "create_plugin_parser_adapter",
+    "plugin_parser_adapters",
 ]

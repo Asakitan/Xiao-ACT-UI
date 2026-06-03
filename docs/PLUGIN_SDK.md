@@ -239,7 +239,17 @@ The first-party parser adapter contract lives in `act_platform.adapters`. The bu
 - `supported_locales`: `["zh-CN"]`
 - runtime methods: `start()`, `stop()`, `parse_packet(frame)`, `normalize_event(topic, payload)`, and `health()`
 
-Plugin parser adapters should declare equivalent metadata through `ctx.register_parser_adapter(...)`. The runtime handler wiring is reserved for future external parsers; today the metadata is visible through plugin status so both WebView and Entity can show advertised game/parser support.
+Plugin parser adapters declare equivalent metadata through `ctx.register_parser_adapter(...)`. Passing a handler makes the adapter invokable through `act_platform.adapters.PluginParserAdapter`, which routes calls through `PluginManager.invoke_extension("parser_adapters", ...)` with deep-copied payloads, elapsed-time measurement, exception isolation, and the extension time budget.
+
+The handler receives an `operation` field plus operation-specific data:
+
+- `start` / `stop`: lifecycle calls.
+- `parse_packet`: `frame` bytes and `frame_len`.
+- `parse_log_line`: `line` text; return an event dict, a list of event dicts, or `{ "events": [...] }`.
+- `import_file`: `path`; return import metadata/events.
+- `normalize_event`: `topic`, `payload`, `source_kind`, `confidence`, and `observed_at`; return a canonical event dict.
+
+Live `PacketBridge` still uses the built-in Star Resonance parser by default. Plugin parser handlers are the controlled runtime bridge for import/log/file adapters and future multi-game parser wiring.
 
 ## Example plugin
 

@@ -7,9 +7,12 @@ from .plugins import PluginContext, PluginManager
 from .adapters import (
     ParserAdapter,
     ParserAdapterMetadata,
+    PluginParserAdapter,
     StarResonanceParserAdapter,
     built_in_parser_adapters,
     create_builtin_parser_adapter,
+    create_plugin_parser_adapter,
+    plugin_parser_adapters,
 )
 
 __all__ = [
@@ -20,8 +23,11 @@ __all__ = [
     "ParserAdapterMetadata",
     "PluginContext",
     "PluginManager",
+    "PluginParserAdapter",
     "StarResonanceParserAdapter",
     "built_in_parser_adapters",
     "create_builtin_parser_adapter",
+    "create_plugin_parser_adapter",
+    "plugin_parser_adapters",
     "make_event",
 ]

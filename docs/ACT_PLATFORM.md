@@ -95,7 +95,7 @@ supported_locales: zh-CN
 
 `PacketBridge` now creates the live `packet_parser.PacketParser` through `StarResonanceParserAdapter`, while preserving `self._parser` for existing compatibility methods such as player cache, monster cache, scene reset, and profession skill cache restore.
 
-Plugin parser adapter declarations are currently metadata-only through `ctx.register_parser_adapter(...)`. Plugin trigger handlers registered through `ctx.register_trigger_type(...)` can be invoked by `plugin_trigger` rules through `PluginManager.invoke_extension(...)`, with exception isolation, elapsed-time measurement, and time-budget failure accounting.
+Plugin parser adapter declarations registered through `ctx.register_parser_adapter(...)` can now be wrapped by `PluginParserAdapter` and invoked through `PluginManager.invoke_extension("parser_adapters", ...)` for controlled `start`, `stop`, `parse_packet`, `parse_log_line`, `import_file`, and `normalize_event` operations. Plugin trigger handlers registered through `ctx.register_trigger_type(...)` can be invoked by `plugin_trigger` rules through the same manager isolation path, with exception isolation, elapsed-time measurement, and time-budget failure accounting.
 
 ## Plugin Extensions
 
