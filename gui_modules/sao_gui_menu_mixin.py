@@ -47,6 +47,7 @@ from act_platform.runtime import (
     act_plugin_reload,
     act_plugin_status,
     act_report_status,
+    act_timeline_status,
     act_trigger_status,
     ensure_act_plugin_manager,
 )
@@ -190,6 +191,16 @@ class SAOPlayerGUIMenuMixin:
             )
         except Exception:
             report_sig = (False, '', 0, 0)
+        try:
+            timeline_status = self._get_act_timeline_menu_status()
+            timeline_sig = (
+                bool(timeline_status.get('ok')),
+                int(len(timeline_status.get('events') or [])),
+                int(timeline_status.get('cursor_ms') or 0),
+                bool(timeline_status.get('playing')),
+            )
+        except Exception:
+            timeline_sig = (False, 0, 0, False)
         session_visible = False
         session_count = 0
         session_version = int(getattr(self, '_session_players_version', 0) or 0)
@@ -222,6 +233,7 @@ class SAOPlayerGUIMenuMixin:
             trigger_sig,
             source_sig,
             report_sig,
+            timeline_sig,
             session_visible,
             session_count,
             session_version,
@@ -320,6 +332,9 @@ class SAOPlayerGUIMenuMixin:
         report_preview = report_status.get('preview') or {}
         report_total_damage = int(report_preview.get('total_damage') or 0)
         report_state = 'READY' if report_status.get('ok') else 'EMPTY'
+        timeline_status = self._get_act_timeline_menu_status()
+        timeline_count = len(timeline_status.get('events') or [])
+        timeline_state = 'PLAY' if timeline_status.get('playing') else 'READY'
         session_visible = False
         try:
             stack = getattr(self, '_menu_left_stack', None)
@@ -409,6 +424,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '⏱', 'label': f'ACT触发/计时: {trigger_total}/{trigger_timers}', 'command': self._toggle_act_trigger_timer_panel},
             {'icon': '◉', 'label': f'ACT数据源健康: {source_label}/{source_health_state}', 'command': self._toggle_act_data_source_health_panel},
             {'icon': '⬇', 'label': f'ACT报告/导出: {report_state}/{report_total_damage}', 'command': self._toggle_act_report_export_panel},
+            {'icon': '▶', 'label': f'ACT时间线/VCR: {timeline_state}/{timeline_count}', 'command': self._toggle_act_timeline_vcr_panel},
             {'icon': '↻', 'label': '重载ACT插件', 'command': self._reload_act_plugins_menu},
             {'icon': '◆', 'label': '切换首个ACT插件', 'command': self._toggle_first_act_plugin_menu},
         ])
@@ -457,6 +473,12 @@ class SAOPlayerGUIMenuMixin:
             return act_report_status(self, limit=12)
         except Exception as exc:
             return {'ok': False, 'message': str(exc), 'preview': {}, 'history': [], 'errors': [str(exc)], 'storage_status': {'count': 0}}
+
+    def _get_act_timeline_menu_status(self):
+        try:
+            return act_timeline_status(self, limit=24)
+        except Exception as exc:
+            return {'ok': False, 'message': str(exc), 'events': [], 'cursor_ms': 0, 'speed': 1.0, 'playing': False, 'filters': {'query': ''}, 'errors': [str(exc)]}
 
     def _show_act_plugin_status_menu(self):
         status = self._get_act_plugin_menu_status()

@@ -454,6 +454,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._act_trigger_timer_panel = None  # TriggerTimerManagerPanel
         self._act_data_source_health_panel = None  # DataSourceHealthPanel
         self._act_report_export_panel = None  # ReportExportPanel
+        self._act_timeline_vcr_panel = None  # TimelineVcrPanel
         self._commander_last_push = 0.0
 
         self._sao_menu = None  # lazy-init on first _toggle_sao_menu()

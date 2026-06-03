@@ -223,6 +223,24 @@ Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报�
 
 The shared payload preserves the parity fields `encounters`, `filters`, `cursor`, and `storage_status`. Every listed encounter also carries a stable newest-first `_history_index`, so filtered UI lists can load/delete the intended stored report instead of deleting by filtered-row position. Entity/Tk keeps this low-frequency and dirty-signature gated; destructive actions refresh the cached panel state explicitly rather than polling.
 
+## Current timeline/VCR surface
+
+`encounter_timeline_vcr` is wired through shared `act_platform.runtime` helpers and the owner-scoped ACT `EventBus`:
+
+- status/open: `act_timeline_status(owner, limit=80, query="")`
+- play: `act_timeline_play(owner, speed=1.0)`
+- pause: `act_timeline_pause(owner)`
+- step: `act_timeline_step(owner, delta_ms=1000)`
+- seek: `act_timeline_seek(owner, cursor_ms=0)`
+- set speed: `act_timeline_set_speed(owner, speed=1.0)`
+- filter: `act_timeline_filter(owner, query="")`
+
+WebView route: `web/act_timeline_vcr.html`, opened from `SAO Menu > ACT 时间线/VCR Timeline`.
+
+Entity route: `entity://act/encounter_timeline_vcr`, opened from `SAO 菜单 > 面板 > ACT时间线/VCR`.
+
+The shared payload preserves the parity fields `encounter_id`, `events`, `cursor_ms`, `speed`, and `filters`. Event rows are compact envelopes derived from `EventBus.recent_events()` so UI code does not parse packet payloads directly. Entity/Tk keeps the panel low-frequency with a 350ms refresh throttle and dirty event signatures before rebuilding widgets; animated or high-frequency playback visuals should move to WebView/GPU paths before adding more Tk redraw pressure.
+
 ## Safety notes
 
 Treat the SDK as a delivery gate, not documentation-only metadata. If a feature PR changes ACT behavior, it should update the registry, both UI declarations, and parity tests in the same change.

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO ACT Timeline VCR</title>
+<style>
+:root {
+    --bg: rgba(8, 13, 22, .76);
+    --panel: rgba(18, 33, 52, .90);
+    --panel2: rgba(6, 11, 18, .72);
+    --line: rgba(117, 205, 255, .48);
+    --gold: rgba(255, 214, 117, .86);
+    --text: rgba(232, 246, 255, .96);
+    --muted: rgba(176, 204, 226, .76);
+    --ok: #7df2bf;
+    --bad: #ff6b82;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; background: transparent; color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; user-select: none; }
+body { padding: 14px; }
+.shell { position: relative; width: 100%; height: calc(100vh - 28px); min-height: 460px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: radial-gradient(circle at 80% 14%, rgba(255, 214, 117, .15), transparent 24%), linear-gradient(135deg, rgba(100, 202, 255, .15), transparent 24%, transparent 70%, rgba(255, 215, 125, .12)), linear-gradient(180deg, rgba(16, 28, 45, .96), rgba(7, 12, 20, .90)); box-shadow: 0 0 34px rgba(88, 199, 255, .22), inset 0 0 28px rgba(109, 216, 255, .10); opacity: 0; transform: translateY(10px) scale(.985); transition: opacity .22s ease, transform .22s ease; }
+.shell.visible { opacity: 1; transform: translateY(0) scale(1); }
+.shell::before { content: ""; pointer-events: none; position: absolute; inset: 0; background: repeating-linear-gradient(180deg, rgba(255,255,255,.035) 0, rgba(255,255,255,.035) 1px, transparent 1px, transparent 7px); mix-blend-mode: screen; }
+.header { height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 8px 18px; border-bottom: 1px solid rgba(117, 205, 255, .35); background: linear-gradient(90deg, rgba(18, 59, 94, .76), rgba(11, 22, 35, .58)); }
+.kicker { letter-spacing: .18em; font-size: 10px; color: var(--gold); text-shadow: 0 0 10px rgba(255, 214, 117, .52); }
+.title { margin-top: 2px; font-size: 20px; font-weight: 700; letter-spacing: .08em; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.pill { min-width: 94px; text-align: center; padding: 5px 9px; border: 1px solid rgba(117, 205, 255, .42); border-radius: 999px; color: var(--muted); background: rgba(8, 14, 22, .62); font-size: 12px; }
+button, input, select { border: 1px solid rgba(117, 205, 255, .48); background: linear-gradient(180deg, rgba(61, 143, 201, .42), rgba(19, 48, 74, .58)); color: var(--text); border-radius: 8px; padding: 7px 11px; font-size: 12px; font-weight: 600; }
+input { width: 190px; background: rgba(4, 8, 14, .58); font-weight: 400; }
+button { cursor: pointer; }
+button:hover { box-shadow: 0 0 16px rgba(107, 214, 255, .25); transform: translateY(-1px); }
+button.primary { border-color: rgba(255, 214, 117, .74); color: #fff8da; }
+button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 16px; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; height: calc(100% - 58px); padding: 12px; }
+.main { min-height: 0; overflow: auto; padding-right: 4px; }
+.side { min-height: 0; border: 1px solid rgba(117, 205, 255, .30); border-radius: 10px; background: rgba(8, 14, 22, .52); padding: 12px; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+.side-title { color: var(--gold); font-size: 12px; letter-spacing: .16em; }
+.row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(117, 205, 255, .16); padding-bottom: 5px; font-size: 12px; color: var(--muted); }
+.row strong { color: var(--text); text-align: right; }
+.event { margin-bottom: 8px; border: 1px solid rgba(117, 205, 255, .28); border-left: 3px solid rgba(117, 205, 255, .75); border-radius: 10px; background: linear-gradient(180deg, rgba(27, 46, 68, .82), rgba(9, 16, 26, .78)); padding: 10px 12px; user-select: text; }
+.event.damage { border-left-color: #ff8a74; }
+.event.heal { border-left-color: #7df2bf; }
+.event.skill { border-left-color: var(--gold); }
+.event.boss, .event.boss_state { border-left-color: #c38bff; }
+.event-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.event-title { font-size: 14px; color: var(--text); font-weight: 700; }
+.event-topic { color: var(--gold); font-size: 11px; letter-spacing: .10em; }
+.event-meta { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.empty { display: grid; place-items: center; height: 100%; min-height: 260px; color: var(--muted); border: 1px dashed rgba(117, 205, 255, .28); border-radius: 10px; text-align: center; line-height: 1.6; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
+.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,.18); }
+::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+    <div class="header">
+        <div><div class="kicker">ACT ENCOUNTER TIMELINE</div><div class="title">TIMELINE / VCR</div></div>
+        <div class="header-actions">
+            <div class="pill" id="status-pill">READY</div>
+            <input id="query" type="text" placeholder="搜索事件 / Search" />
+            <select id="speed"><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option></select>
+            <button class="primary" type="button" onclick="TimelineVcr.refresh()">刷新</button>
+            <button class="close" type="button" onclick="TimelineVcr.close()">×</button>
+        </div>
+    </div>
+    <div class="body">
+        <main class="main" id="event-list"><div class="empty">正在读取 ACT 时间线...<br/>LOADING TIMELINE</div></main>
+        <aside class="side">
+            <div class="side-title">VCR CONTROL</div>
+            <button type="button" onclick="TimelineVcr.play()">播放 Play</button>
+            <button type="button" onclick="TimelineVcr.pause()">暂停 Pause</button>
+            <button type="button" onclick="TimelineVcr.step(-1000)">后退 Step -1s</button>
+            <button type="button" onclick="TimelineVcr.step(1000)">前进 Step +1s</button>
+            <button type="button" onclick="TimelineVcr.seek(0)">回到 0ms</button>
+            <div class="side-title">STATUS</div>
+            <div class="row"><span>Events</span><strong id="sum-events">0</strong></div>
+            <div class="row"><span>Cursor</span><strong id="sum-cursor">0ms</strong></div>
+            <div class="row"><span>Speed</span><strong id="sum-speed">1x</strong></div>
+            <div class="row"><span>Playing</span><strong id="sum-playing">NO</strong></div>
+            <div class="row"><span>Errors</span><strong id="sum-errors">0</strong></div>
+        </aside>
+    </div>
+    <div class="toast" id="toast"></div>
+</div>
+<script>
+(function () {
+    "use strict";
+    var shell = document.getElementById('shell');
+    var list = document.getElementById('event-list');
+    var toast = document.getElementById('toast');
+    var query = document.getElementById('query');
+    var speed = document.getElementById('speed');
+    var toastTimer = null;
+    var searchTimer = null;
+
+    function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
+    function apiCall(name, args) {
+        var api = window.pywebview && window.pywebview.api;
+        if (api && typeof api[name] === 'function') return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            var cmdMap = {
+                get_timeline_status: 'act.timeline.status', play_timeline: 'act.timeline.play', pause_timeline: 'act.timeline.pause',
+                step_timeline: 'act.timeline.step', seek_timeline: 'act.timeline.seek', set_timeline_speed: 'act.timeline.speed', filter_timeline: 'act.timeline.filter',
+                toggle_timeline_vcr: 'ui.menu_action'
+            };
+            var payload = name === 'toggle_timeline_vcr' ? { action: 'toggle_timeline_vcr' } : { args: args || [] };
+            return window.bridge.cmd(cmdMap[name] || ('act.timeline.' + name), payload).then(parseResult);
+        }
+        return Promise.resolve({ ok: false, message: 'Timeline API unavailable', events: [] });
+    }
+    function showToast(message) { toast.textContent = String(message || ''); toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800); }
+    function render(data) {
+        data = data || {};
+        var events = data.events || [];
+        document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : (data.playing ? 'PLAYING' : 'READY');
+        document.getElementById('status-pill').style.color = data.ok === false ? 'var(--bad)' : (data.playing ? 'var(--ok)' : 'var(--muted)');
+        document.getElementById('sum-events').textContent = String(events.length || 0);
+        document.getElementById('sum-cursor').textContent = String(data.cursor_ms || 0) + 'ms';
+        document.getElementById('sum-speed').textContent = String(data.speed || 1) + 'x';
+        document.getElementById('sum-playing').textContent = data.playing ? 'YES' : 'NO';
+        document.getElementById('sum-errors').textContent = String((data.errors || []).length);
+        if (!events.length) { list.innerHTML = '<div class="empty">暂无 ACT 时间线事件。<br/>开始识别或 replay 后会出现事件。</div>'; return; }
+        list.innerHTML = events.map(function (ev) {
+            return '<article class="event ' + esc(ev.topic || '') + '"><div class="event-top"><div class="event-title">' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ev.topic || '-') + '</div></div><div class="event-meta">t=' + esc(ev.time_ms || 0) + 'ms · source=' + esc(ev.source || '-') + ' · value=' + esc(ev.value || '') + '</div></article>';
+        }).join('');
+    }
+    window.TimelineVcr = {
+        refresh: function () { return apiCall('get_timeline_status', [80, query.value || '']).then(function (data) { render(data); if (data.ok === false) showToast(data.message || 'Timeline failed'); return data; }); },
+        play: function () { return apiCall('play_timeline', [Number(speed.value || 1)]).then(function (data) { render(data); showToast('VCR playing'); return data; }); },
+        pause: function () { return apiCall('pause_timeline', []).then(function (data) { render(data); showToast('VCR paused'); return data; }); },
+        step: function (delta) { return apiCall('step_timeline', [delta || 1000]).then(function (data) { render(data); return data; }); },
+        seek: function (cursorMs) { return apiCall('seek_timeline', [cursorMs || 0]).then(function (data) { render(data); return data; }); },
+        close: function () { apiCall('toggle_timeline_vcr'); },
+        fadeIn: function () { shell.classList.add('visible'); },
+        fadeOut: function () { shell.classList.remove('visible'); }
+    };
+    speed.addEventListener('change', function () { apiCall('set_timeline_speed', [Number(speed.value || 1)]).then(render); });
+    query.addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(function () { apiCall('filter_timeline', [query.value || '']).then(render); }, 220); });
+    setTimeout(function () { shell.classList.add('visible'); TimelineVcr.refresh(); }, 40);
+})();
+</script>
+</body>
+</html>

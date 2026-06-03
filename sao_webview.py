@@ -80,6 +80,13 @@ from act_platform.runtime import (
     act_report_copy,
     act_report_export,
     act_report_status,
+    act_timeline_filter,
+    act_timeline_pause,
+    act_timeline_play,
+    act_timeline_seek,
+    act_timeline_set_speed,
+    act_timeline_status,
+    act_timeline_step,
     act_trigger_disable,
     act_trigger_enable,
     act_trigger_reload,
@@ -419,6 +426,27 @@ class SAOWebAPI:
     def clear_history_reports(self):
         return json.dumps(act_history_delete(self._g, clear=True), ensure_ascii=False)
 
+    def get_timeline_status(self, limit=80, query=''):
+        return json.dumps(act_timeline_status(self._g, limit=int(limit or 80), query=str(query or '')), ensure_ascii=False)
+
+    def play_timeline(self, speed=1.0):
+        return json.dumps(act_timeline_play(self._g, speed=float(speed or 1.0)), ensure_ascii=False)
+
+    def pause_timeline(self):
+        return json.dumps(act_timeline_pause(self._g), ensure_ascii=False)
+
+    def step_timeline(self, delta_ms=1000):
+        return json.dumps(act_timeline_step(self._g, delta_ms=int(delta_ms or 0)), ensure_ascii=False)
+
+    def seek_timeline(self, cursor_ms=0):
+        return json.dumps(act_timeline_seek(self._g, cursor_ms=int(cursor_ms or 0)), ensure_ascii=False)
+
+    def set_timeline_speed(self, speed=1.0):
+        return json.dumps(act_timeline_set_speed(self._g, speed=float(speed or 1.0)), ensure_ascii=False)
+
+    def filter_timeline(self, query=''):
+        return json.dumps(act_timeline_filter(self._g, query=str(query or '')), ensure_ascii=False)
+
     def list_plugins(self):
         return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
 
@@ -483,6 +511,15 @@ class SAOWebAPI:
                 self._g._hide_report_export()
             else:
                 self._g._show_report_export()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def toggle_timeline_vcr(self):
+        """Show/hide the ACT timeline/VCR overlay."""
+        def _do():
+            if self._g._timeline_vcr_visible:
+                self._g._hide_timeline_vcr()
+            else:
+                self._g._show_timeline_vcr()
         threading.Thread(target=_do, daemon=True).start()
 
     def switch_to_entity(self):
@@ -1864,6 +1901,10 @@ class SAOWebViewGUI:
         # ACT Report/Export panel
         self.report_export_win = None
         self._report_export_visible = False
+
+        # ACT Timeline/VCR panel
+        self.timeline_vcr_win = None
+        self._timeline_vcr_visible = False
 
         # Hide & Seek engine
         self._hide_seek_engine = None
@@ -3821,6 +3862,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Timeline/VCR — shared event timeline controls for WebView parity
+        timeline_vcr_url = _web_file_uri('act_timeline_vcr.html')
+        _tl_w = max(700, int(min(_sw, 1920) * 0.43))
+        _tl_h = max(520, int(min(_sh, 1080) * 0.52))
+        _tl_x = max(16, int(monitor_left + (_sw - _tl_w) * 0.34))
+        _tl_y = max(24, int(monitor_top + (_sh - _tl_h) * 0.18))
+        self.timeline_vcr_win = webview.create_window(
+            'SAO-TimelineVCR', timeline_vcr_url,
+            width=_tl_w, height=_tl_h,
+            x=_tl_x, y=_tl_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -4416,6 +4475,7 @@ class SAOWebViewGUI:
             ('SAO-TriggerTimerManager', '_trigger_timer_manager_visible', None),
             ('SAO-DataSourceHealth', '_data_source_health_visible', None),
             ('SAO-ReportExport', '_report_export_visible', None),
+            ('SAO-TimelineVCR', '_timeline_vcr_visible', None),
         ]
         user32 = ctypes.windll.user32
         for title, vis_attr, hwnd_attr in _panels:
@@ -5098,6 +5158,14 @@ class SAOWebViewGUI:
                 if self.report_export_win:
                     self._set_window_alpha('SAO-ReportExport', 0.0)
                     self.report_export_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._timeline_vcr_visible = False
+                if self.timeline_vcr_win:
+                    self._set_window_alpha('SAO-TimelineVCR', 0.0)
+                    self.timeline_vcr_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -6083,6 +6151,63 @@ class SAOWebViewGUI:
             pass
         self._report_export_visible = False
 
+    # ── ACT Timeline/VCR panel ──
+
+    def _eval_timeline_vcr(self, js):
+        try:
+            if self.timeline_vcr_win:
+                self.timeline_vcr_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_timeline_vcr_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the timeline/VCR panel receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-TimelineVCR')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_timeline_vcr(self):
+        try:
+            if self.timeline_vcr_win and not self._timeline_vcr_visible:
+                self._set_window_alpha('SAO-TimelineVCR', 0.0)
+                self.timeline_vcr_win.show()
+                self._eval_timeline_vcr('if(window.TimelineVcr&&TimelineVcr.fadeIn)TimelineVcr.fadeIn()')
+                self._eval_timeline_vcr('if(window.TimelineVcr&&TimelineVcr.refresh)TimelineVcr.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-TimelineVCR', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._timeline_vcr_visible = True
+                self._ensure_timeline_vcr_clickable()
+                threading.Timer(0.5, self._ensure_timeline_vcr_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_timeline_vcr(self):
+        try:
+            if self.timeline_vcr_win and self._timeline_vcr_visible:
+                self._eval_timeline_vcr('if(window.TimelineVcr&&TimelineVcr.fadeOut)TimelineVcr.fadeOut()')
+                def _finish():
+                    try:
+                        if self.timeline_vcr_win:
+                            self.timeline_vcr_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._timeline_vcr_visible = False
+
     # ── AutoKey Editor overlay ──
 
     def _eval_autokey_editor(self, js):
@@ -7007,6 +7132,11 @@ class SAOWebViewGUI:
                 self.report_export_win.destroy()
         except Exception:
             pass
+        try:
+            if self.timeline_vcr_win:
+                self.timeline_vcr_win.destroy()
+        except Exception:
+            pass
 
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
         # 热切换时不强杀: _do_hot_switch 需要在 webview.start() 返回后运行
@@ -7670,6 +7800,7 @@ class SAOWebViewGUI:
             'toggle_trigger_timer_manager': lambda: (self._show_trigger_timer_manager() if not self._trigger_timer_manager_visible else self._hide_trigger_timer_manager()),
             'toggle_data_source_health': lambda: (self._show_data_source_health() if not self._data_source_health_visible else self._hide_data_source_health()),
             'toggle_report_export': lambda: (self._show_report_export() if not self._report_export_visible else self._hide_report_export()),
+            'toggle_timeline_vcr': lambda: (self._show_timeline_vcr() if not self._timeline_vcr_visible else self._hide_timeline_vcr()),
             'toggle_session_players': self._toggle_session_players_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,

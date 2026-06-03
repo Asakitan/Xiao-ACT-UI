@@ -245,6 +245,10 @@ class SAOPlayerGUILifecycleMixin:
             self._bossraid_detail_panel,
             self._commander_panel,
             self._act_plugin_manager_panel,
+            self._act_trigger_timer_panel,
+            self._act_data_source_health_panel,
+            self._act_report_export_panel,
+            self._act_timeline_vcr_panel,
         ]:
             try:
                 if pnl:
@@ -264,6 +268,10 @@ class SAOPlayerGUILifecycleMixin:
         self._bossraid_detail_panel = None
         self._commander_panel = None
         self._act_plugin_manager_panel = None
+        self._act_trigger_timer_panel = None
+        self._act_data_source_health_panel = None
+        self._act_report_export_panel = None
+        self._act_timeline_vcr_panel = None
         self._destroy_hp_alpha_strip_windows()
         try:
             if self._float and self._float.winfo_exists():

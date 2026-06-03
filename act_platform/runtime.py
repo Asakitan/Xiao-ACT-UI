@@ -374,6 +374,13 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
 def _owner_act_snapshot(owner: Any, *, history_limit: int = 20) -> dict[str, Any]:
     for name in ("_build_dps_act_snapshot", "_get_dps_act_snapshot"):
         fn = getattr(owner, name, None)
@@ -548,6 +555,142 @@ def act_history_delete(owner: Any, *, index: int | None = None, clear: bool = Fa
         "errors": [],
         "status": act_history_status(owner),
     }
+
+
+def _timeline_state(owner: Any) -> dict[str, Any]:
+    state = getattr(owner, "_act_timeline_state", None)
+    if not isinstance(state, dict):
+        state = {"playing": False, "cursor_ms": 0, "speed": 1.0, "filters": {"query": ""}}
+        try:
+            setattr(owner, "_act_timeline_state", state)
+        except Exception:
+            pass
+    state.setdefault("playing", False)
+    state.setdefault("cursor_ms", 0)
+    state.setdefault("speed", 1.0)
+    filters = state.get("filters")
+    if not isinstance(filters, dict):
+        filters = {"query": ""}
+        state["filters"] = filters
+    filters.setdefault("query", "")
+    return state
+
+
+def _compact_timeline_event(event: Mapping[str, Any], index: int = 0) -> dict[str, Any]:
+    payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+    source = event.get("source") if isinstance(event.get("source"), Mapping) else {}
+    topic = str(event.get("topic") or "")
+    observed_at = _safe_float(event.get("observed_at") or (payload or {}).get("timestamp") or 0.0)
+    label = str(
+        (payload or {}).get("message")
+        or (payload or {}).get("skill")
+        or (payload or {}).get("skill_name")
+        or (payload or {}).get("attacker")
+        or (payload or {}).get("name")
+        or topic
+    )
+    value = (
+        (payload or {}).get("damage")
+        or (payload or {}).get("damage_total")
+        or (payload or {}).get("heal")
+        or (payload or {}).get("event_type")
+        or ""
+    )
+    return {
+        "index": int(index),
+        "id": str(event.get("id") or ""),
+        "topic": topic,
+        "observed_at": observed_at,
+        "time_ms": int(max(0.0, observed_at) * 1000.0) if observed_at else 0,
+        "label": label,
+        "value": value,
+        "source": str(source.get("name") or source.get("kind") or ""),
+        "payload": _json_safe(payload),
+    }
+
+
+def _timeline_encounter_id(owner: Any, state: Mapping[str, Any]) -> str:
+    for attr in ("_encounter_id", "encounter_id"):
+        value = getattr(owner, attr, "")
+        if value:
+            return str(value)
+    mgr = getattr(owner, "_encounter_mgr", None)
+    for attr in ("encounter_id", "current_encounter_id", "id"):
+        value = getattr(mgr, attr, "") if mgr is not None else ""
+        if value:
+            return str(value)
+    return str(state.get("encounter_id") or "live")
+
+
+def act_timeline_status(owner: Any, *, limit: int = 80, query: str = "") -> dict[str, Any]:
+    """Return compact ACT timeline/VCR state shared by WebView and Entity/Tk."""
+    state = _timeline_state(owner)
+    errors: list[str] = []
+    encounter_id = _timeline_encounter_id(owner, state)
+    try:
+        raw_events = ensure_act_event_bus(owner).recent_events(max(1, min(int(limit or 80), 500)))
+    except Exception as exc:
+        raw_events = []
+        errors.append(str(exc))
+    events = [_compact_timeline_event(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
+    text = str(query or state.get("filters", {}).get("query") or "").strip().lower()
+    if text:
+        events = [
+            event for event in events
+            if text in json.dumps(event, ensure_ascii=False, default=str).lower()
+        ]
+    filters = dict(state.get("filters") or {})
+    filters.update({"query": str(query or filters.get("query") or ""), "limit": int(limit or 80)})
+    return {
+        "ok": not errors,
+        "message": "OK" if not errors else "; ".join(errors),
+        "encounter_id": encounter_id,
+        "events": events,
+        "cursor_ms": int(state.get("cursor_ms") or 0),
+        "speed": float(state.get("speed") or 1.0),
+        "playing": bool(state.get("playing")),
+        "filters": filters,
+        "errors": errors,
+    }
+
+
+def act_timeline_play(owner: Any, *, speed: float | None = None) -> dict[str, Any]:
+    state = _timeline_state(owner)
+    if speed is not None:
+        state["speed"] = max(0.1, min(float(speed or 1.0), 8.0))
+    state["playing"] = True
+    return act_timeline_status(owner)
+
+
+def act_timeline_pause(owner: Any) -> dict[str, Any]:
+    state = _timeline_state(owner)
+    state["playing"] = False
+    return act_timeline_status(owner)
+
+
+def act_timeline_seek(owner: Any, *, cursor_ms: int = 0) -> dict[str, Any]:
+    state = _timeline_state(owner)
+    state["cursor_ms"] = max(0, int(cursor_ms or 0))
+    return act_timeline_status(owner)
+
+
+def act_timeline_step(owner: Any, *, delta_ms: int = 1000) -> dict[str, Any]:
+    state = _timeline_state(owner)
+    state["cursor_ms"] = max(0, int(state.get("cursor_ms") or 0) + int(delta_ms or 0))
+    state["playing"] = False
+    return act_timeline_status(owner)
+
+
+def act_timeline_set_speed(owner: Any, *, speed: float = 1.0) -> dict[str, Any]:
+    state = _timeline_state(owner)
+    state["speed"] = max(0.1, min(float(speed or 1.0), 8.0))
+    return act_timeline_status(owner)
+
+
+def act_timeline_filter(owner: Any, *, query: str = "") -> dict[str, Any]:
+    state = _timeline_state(owner)
+    state["filters"] = {"query": str(query or "")}
+    return act_timeline_status(owner, query=query)
 
 
 def _report_rows_from_snapshot(snapshot: Mapping[str, Any], report: Mapping[str, Any] | None) -> list[dict[str, Any]]:
@@ -813,6 +956,13 @@ __all__ = [
     "act_report_copy",
     "act_report_export",
     "act_report_status",
+    "act_timeline_filter",
+    "act_timeline_pause",
+    "act_timeline_play",
+    "act_timeline_seek",
+    "act_timeline_set_speed",
+    "act_timeline_status",
+    "act_timeline_step",
     "act_plugin_disable",
     "act_plugin_enable",
     "act_plugin_list",

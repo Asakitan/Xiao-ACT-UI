@@ -65,6 +65,9 @@
         toggle_report_export: function () {
             return call('ui.menu_action', { action: 'toggle_report_export' });
         },
+        toggle_timeline_vcr: function () {
+            return call('ui.menu_action', { action: 'toggle_timeline_vcr' });
+        },
         get_data_source_health: function () {
             return call('act.sources.health', {});
         },
@@ -94,6 +97,27 @@
         },
         clear_history_reports: function () {
             return call('act.history.clear', {});
+        },
+        get_timeline_status: function (limit, query) {
+            return call('act.timeline.status', { limit: limit || 80, query: String(query || '') });
+        },
+        play_timeline: function (speed) {
+            return call('act.timeline.play', { speed: speed || 1 });
+        },
+        pause_timeline: function () {
+            return call('act.timeline.pause', {});
+        },
+        step_timeline: function (deltaMs) {
+            return call('act.timeline.step', { delta_ms: deltaMs || 1000 });
+        },
+        seek_timeline: function (cursorMs) {
+            return call('act.timeline.seek', { cursor_ms: cursorMs || 0 });
+        },
+        set_timeline_speed: function (speed) {
+            return call('act.timeline.speed', { speed: speed || 1 });
+        },
+        filter_timeline: function (query) {
+            return call('act.timeline.filter', { query: String(query || '') });
         },
         get_plugin_status: function () {
             return call('act.plugins.status', {});
