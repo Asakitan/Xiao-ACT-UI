@@ -576,10 +576,18 @@ def _owner_history_store(owner: Any) -> tuple[Any, list[str]]:
 
 def _history_storage_status(store: Any, encounters: list[Any] | None = None) -> dict[str, Any]:
     items = encounters if isinstance(encounters, list) else []
+    archive: dict[str, Any] = {}
+    archive_status = getattr(store, "archive_status", None)
+    if callable(archive_status):
+        try:
+            archive = dict(_json_safe(archive_status() or {}))
+        except Exception as exc:
+            archive = {"available": False, "path": str(getattr(store, "archive_path", "") or ""), "last_error": str(exc)}
     return {
         "available": bool(store is not None),
         "count": len(items),
         "path": str(getattr(store, "path", "") or ""),
+        "archive": archive,
     }
 
 

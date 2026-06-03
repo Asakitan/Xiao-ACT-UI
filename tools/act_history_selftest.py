@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from act_platform import runtime
-from engines.dps_history import DpsHistoryStore
+from engines.dps_history import DpsHistoryStore, DPS_HISTORY_JSONL_SCHEMA_VERSION
 
 
 class FakeOwner:
@@ -86,6 +86,27 @@ class ActHistoryRuntimeTests(unittest.TestCase):
         self.assertEqual(len(filtered["encounters"]), 1)
         self.assertEqual(filtered["encounters"][0]["report_reason"], "second")
         self.assertEqual(filtered["encounters"][0]["_history_index"], 0)
+
+    def test_history_store_appends_jsonl_archive(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_history_jsonl_") as root:
+            path = os.path.join(root, "history.json")
+            archive_path = os.path.join(root, "history.jsonl")
+            store = DpsHistoryStore(path=path, archive_path=archive_path, limit=10)
+            store.add_report({"report_reason": "first", "elapsed_s": 10, "total_damage": 100, "entities": [{"uid": 1, "name": "A", "damage_total": 100}]})
+            store.add_report({"report_reason": "second", "elapsed_s": 20, "total_damage": 200, "entities": [{"uid": 2, "name": "B", "damage_total": 200}]})
+            status = store.archive_status()
+            archived = store.list_archive_reports(limit=1)
+            with open(archive_path, "r", encoding="utf-8") as fp:
+                lines = [json.loads(line) for line in fp if line.strip()]
+
+        self.assertTrue(status["available"])
+        self.assertTrue(status["exists"])
+        self.assertEqual(status["count"], 2)
+        self.assertEqual(lines[0]["schema_version"], DPS_HISTORY_JSONL_SCHEMA_VERSION)
+        self.assertEqual(lines[0]["report"]["report_reason"], "first")
+        self.assertEqual(archived[0]["report_reason"], "second")
+        self.assertEqual(archived[0]["_archive_schema_version"], DPS_HISTORY_JSONL_SCHEMA_VERSION)
+        self.assertTrue(archived[0]["_archived_at"])
 
     def test_missing_store_is_reported_without_throwing(self) -> None:
         status = runtime.act_history_status(object())

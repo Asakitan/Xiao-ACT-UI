@@ -19,9 +19,11 @@ from typing import Any, Dict, List, Optional
 from config import BASE_DIR
 
 DPS_HISTORY_SCHEMA_VERSION = 1
+DPS_HISTORY_JSONL_SCHEMA_VERSION = 1
 DEFAULT_HISTORY_LIMIT = 100
 DPS_HISTORY_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "dps_history")
 DPS_HISTORY_PATH = os.path.join(DPS_HISTORY_EXPORT_DIR, "history.json")
+DPS_HISTORY_JSONL_PATH = os.path.join(DPS_HISTORY_EXPORT_DIR, "history.jsonl")
 
 
 def _utc_now_iso() -> str:
@@ -204,16 +206,27 @@ def _render_html_report(item: Dict[str, Any]) -> str:
 class DpsHistoryStore:
     """Thread-safe rolling store for finalized DPS encounter summaries."""
 
-    def __init__(self, path: str = DPS_HISTORY_PATH, limit: int = DEFAULT_HISTORY_LIMIT):
+    def __init__(self, path: str = DPS_HISTORY_PATH, limit: int = DEFAULT_HISTORY_LIMIT,
+                 archive_path: Optional[str] = None):
         self._path = path
+        self._archive_path = (
+            str(archive_path)
+            if archive_path is not None
+            else os.path.splitext(str(path or DPS_HISTORY_PATH))[0] + ".jsonl"
+        )
         self._limit = max(1, int(limit or DEFAULT_HISTORY_LIMIT))
         self._lock = threading.RLock()
         self._items: List[Dict[str, Any]] = []
+        self._last_archive_error = ""
         self._load()
 
     @property
     def path(self) -> str:
         return self._path
+
+    @property
+    def archive_path(self) -> str:
+        return self._archive_path
 
     def _load(self) -> None:
         try:
@@ -249,6 +262,24 @@ class DpsHistoryStore:
             except Exception:
                 pass
 
+    def _append_archive_locked(self, item: Dict[str, Any]) -> None:
+        if not self._archive_path:
+            return
+        try:
+            archive_dir = os.path.dirname(self._archive_path)
+            if archive_dir:
+                os.makedirs(archive_dir, exist_ok=True)
+            record = {
+                "schema_version": DPS_HISTORY_JSONL_SCHEMA_VERSION,
+                "archived_at": _utc_now_iso(),
+                "report": copy.deepcopy(item),
+            }
+            with open(self._archive_path, "a", encoding="utf-8") as fp:
+                fp.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+            self._last_archive_error = ""
+        except Exception as exc:
+            self._last_archive_error = str(exc)
+
     def add_report(self, report: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(report, dict):
             return None
@@ -257,6 +288,7 @@ class DpsHistoryStore:
             self._items.append(item)
             self._items = self._items[-self._limit:]
             self._save_locked()
+            self._append_archive_locked(item)
             return copy.deepcopy(item)
 
     def list_reports(self, limit: int = 20) -> List[Dict[str, Any]]:
@@ -307,6 +339,49 @@ class DpsHistoryStore:
             if not self._items:
                 return None
             return copy.deepcopy(self._items[-1])
+
+    def list_archive_reports(self, limit: int = 100) -> List[Dict[str, Any]]:
+        cap = max(1, int(limit or 100))
+        if not self._archive_path or not os.path.isfile(self._archive_path):
+            return []
+        rows: List[Dict[str, Any]] = []
+        try:
+            with open(self._archive_path, "r", encoding="utf-8") as fp:
+                for line in fp:
+                    text = line.strip()
+                    if not text:
+                        continue
+                    try:
+                        record = json.loads(text)
+                    except Exception:
+                        continue
+                    report = record.get("report") if isinstance(record, dict) else None
+                    if isinstance(report, dict):
+                        item = copy.deepcopy(report)
+                        item.setdefault("_archive_schema_version", _coerce_int(record.get("schema_version")))
+                        item.setdefault("_archived_at", str(record.get("archived_at") or ""))
+                        rows.append(item)
+        except Exception as exc:
+            self._last_archive_error = str(exc)
+            return []
+        return list(reversed(rows[-cap:]))
+
+    def archive_status(self) -> Dict[str, Any]:
+        count = 0
+        exists = bool(self._archive_path and os.path.isfile(self._archive_path))
+        if exists:
+            try:
+                with open(self._archive_path, "r", encoding="utf-8") as fp:
+                    count = sum(1 for line in fp if line.strip())
+            except Exception as exc:
+                self._last_archive_error = str(exc)
+        return {
+            "available": bool(self._archive_path),
+            "path": str(self._archive_path or ""),
+            "exists": exists,
+            "count": count,
+            "last_error": self._last_archive_error,
+        }
 
     def export_report(self, report: Optional[Dict[str, Any]] = None,
                       fmt: str = "json") -> Optional[str]:
@@ -359,6 +434,8 @@ class DpsHistoryStore:
 
 __all__ = [
     "DPS_HISTORY_EXPORT_DIR",
+    "DPS_HISTORY_JSONL_PATH",
+    "DPS_HISTORY_JSONL_SCHEMA_VERSION",
     "DPS_HISTORY_PATH",
     "DpsHistoryStore",
 ]

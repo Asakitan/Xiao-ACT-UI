@@ -26,7 +26,7 @@ No ACT feature is complete until WebView and Entity can reach the same shared ba
 | Offline import | `act_replay/importer.py` | Loads normalized ACT JSON/JSONL files into replay-ready event lists. |
 | Combat analytics | `engines/combat_analytics.py` | Builds ACT snapshots and render specs from DPS/game state. |
 | Trigger engine | `engines/act_trigger_engine.py` | Shared trigger/timer rule evaluator. |
-| History/export | `engines/dps_history.py` | Rolling encounter persistence, lightweight search, and JSON/CSV/HTML export. |
+| History/export | `engines/dps_history.py` | Rolling encounter persistence, append-only JSONL archive, lightweight search, and JSON/CSV/HTML export. |
 | TCP bridge | `net/packet_bridge.py` | Owns capture, parser adapter creation, packet callbacks, and data-source health. |
 | Hybrid memory source | `mem_probe/unified_source.py` | Read-only memory self-state bridge used by memory/hybrid/auto modes. |
 
@@ -156,7 +156,7 @@ Preset helpers:
 
 ## Reports, History, And Replay
 
-The current history store is a rolling encounter store exposed through shared runtime helpers. JSON, CSV, and static HTML export remain backed by `DpsHistoryStore`.
+The current history store is a rolling encounter store exposed through shared runtime helpers. `DpsHistoryStore` also appends compact finalized reports to a JSONL archive for longer-lived encounter retention. JSON, CSV, and static HTML export remain backed by the compact report shape.
 
 Normalized offline imports are loaded by `act_replay.importer`, replayed through `ActReplayHarness`, finalized into the same DPS report shape as live encounters, and can be persisted with `act_platform.runtime.act_offline_import_file(owner, path, persist=True)`. The helper returns import metadata, replay preview, the generated report, the persisted history item, and refreshed history status. WebView and Entity expose this through their shared report/export panels; a richer standalone import/playback wizard remains future work.
 
@@ -180,6 +180,6 @@ Do not run release packaging unless explicitly requested. For packaging changes,
 
 - Plugin parser handlers remain metadata-only; trigger handlers have in-process isolated invocation, but full external parser runtime wiring remains future work.
 - Offline import supports normalized JSON/JSONL replay files and rolling-history persistence; broader pcap/log/XML import remains future work.
-- History has lightweight rolling-store search, but is not yet a SQLite-style encounter/action database.
+- History has lightweight rolling-store search and an append-only JSONL encounter archive, but is not yet a SQLite-style encounter/action database.
 - Manual WebView/Entity smoke still depends on a UI runtime session.
 - Hybrid memory policy is documented separately in `docs/HYBRID_MEMORY_TCP.md`.

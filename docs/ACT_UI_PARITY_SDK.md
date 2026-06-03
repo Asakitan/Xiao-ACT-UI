@@ -223,7 +223,7 @@ WebView route: `web/act_report_export.html`, opened from `SAO Menu > ACT 报告/
 
 Entity route: `entity://act/export`, opened from `SAO 菜单 > 面板 > ACT报告/导出`; its history sidebar exposes equivalent load/delete/clear controls.
 
-The shared payload preserves the parity fields `encounters`, `filters`, `cursor`, and `storage_status`. Every listed encounter also carries a stable newest-first `_history_index`, so filtered UI lists can load/delete the intended stored report instead of deleting by filtered-row position. Entity/Tk keeps this low-frequency and dirty-signature gated; destructive actions refresh the cached panel state explicitly rather than polling.
+The shared payload preserves the parity fields `encounters`, `filters`, `cursor`, and `storage_status`. `storage_status.archive` exposes the append-only JSONL archive path/count when the current store supports it. Every listed encounter also carries a stable newest-first `_history_index`, so filtered UI lists can load/delete the intended stored report instead of deleting by filtered-row position. Entity/Tk keeps this low-frequency and dirty-signature gated; destructive actions refresh the cached panel state explicitly rather than polling.
 
 ## Current offline import surface
 
