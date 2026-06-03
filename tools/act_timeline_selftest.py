@@ -8,6 +8,7 @@ import unittest
 
 from act_platform.runtime import ensure_act_event_bus
 from act_platform import runtime
+from act_replay.fixture_io import load_fixture_events
 
 
 class FakeOwner:
@@ -72,6 +73,24 @@ class ActTimelineRuntimeTests(unittest.TestCase):
 
         self.assertTrue(status["ok"])
         self.assertIsInstance(status["events"][0]["time_ms"], int)
+
+    def test_replay_fixture_reconstructs_snapshot_at_cursor(self) -> None:
+        self_uid, events = load_fixture_events("demo_events")
+        owner = FakeOwner()
+        owner._act_timeline_replay_events = events
+        owner._act_timeline_replay_self_uid = self_uid
+
+        before_damage = runtime.act_timeline_seek(owner, cursor_ms=5500)
+        after_damage = runtime.act_timeline_seek(owner, cursor_ms=6000)
+
+        self.assertTrue(before_damage["ok"])
+        self.assertTrue(before_damage["replay"]["enabled"])
+        self.assertEqual(before_damage["replay"]["event_count"], 8)
+        self.assertEqual(before_damage["replay"]["replayed_event_count"], 6)
+        self.assertEqual(before_damage["replay_snapshot"]["live"]["total_damage"], 0)
+        self.assertEqual(after_damage["replay"]["replayed_event_count"], 7)
+        self.assertEqual(after_damage["replay_snapshot"]["live"]["total_damage"], 123456)
+        self.assertTrue(any(event["is_cursor"] for event in after_damage["events"]))
 
 
 if __name__ == "__main__":

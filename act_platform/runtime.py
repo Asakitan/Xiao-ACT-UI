@@ -622,25 +622,83 @@ def _timeline_encounter_id(owner: Any, state: Mapping[str, Any]) -> str:
     return str(state.get("encounter_id") or "live")
 
 
+def _timeline_replay_events(owner: Any) -> tuple[list[Mapping[str, Any]], int]:
+    provider = (
+        getattr(owner, "_act_timeline_replay_events", None)
+        or getattr(owner, "act_timeline_replay_events", None)
+        or getattr(owner, "_act_replay_events", None)
+    )
+    events = provider() if callable(provider) else provider
+    if not isinstance(events, list):
+        return [], 0
+    self_uid = (
+        getattr(owner, "_act_timeline_replay_self_uid", 0)
+        or getattr(owner, "act_timeline_replay_self_uid", 0)
+        or getattr(owner, "_act_replay_self_uid", 0)
+    )
+    try:
+        uid = int(self_uid or 0)
+    except Exception:
+        uid = 0
+    return [event for event in events if isinstance(event, Mapping)], uid
+
+
+def _timeline_replay_status(owner: Any, *, state: Mapping[str, Any], limit: int, query: str) -> Optional[dict[str, Any]]:
+    replay_events, self_uid = _timeline_replay_events(owner)
+    if not replay_events:
+        return None
+    from act_replay.timeline import replay_timeline_status
+
+    return replay_timeline_status(
+        replay_events,
+        self_uid=self_uid,
+        cursor_ms=int(state.get("cursor_ms") or 0),
+        limit=limit,
+        query=query,
+    )
+
+
 def act_timeline_status(owner: Any, *, limit: int = 80, query: str = "") -> dict[str, Any]:
     """Return compact ACT timeline/VCR state shared by WebView and Entity/Tk."""
     state = _timeline_state(owner)
     errors: list[str] = []
     encounter_id = _timeline_encounter_id(owner, state)
+    filters = dict(state.get("filters") or {})
+    query_text = str(query or filters.get("query") or "")
+    row_limit = max(1, min(int(limit or 80), 500))
     try:
-        raw_events = ensure_act_event_bus(owner).recent_events(max(1, min(int(limit or 80), 500)))
+        replay_status = _timeline_replay_status(owner, state=state, limit=row_limit, query=query_text)
+    except Exception as exc:
+        replay_status = None
+        errors.append(str(exc))
+    if replay_status is not None:
+        replay_errors = list(replay_status.get("errors") or [])
+        all_errors = errors + replay_errors
+        replay_filters = dict(replay_status.get("filters") or {})
+        replay_filters.update({"query": query_text, "limit": row_limit})
+        replay_status.update({
+            "ok": not all_errors,
+            "message": "OK" if not all_errors else "; ".join(all_errors),
+            "encounter_id": encounter_id,
+            "speed": float(state.get("speed") or 1.0),
+            "playing": bool(state.get("playing")),
+            "filters": replay_filters,
+            "errors": all_errors,
+        })
+        return replay_status
+    try:
+        raw_events = ensure_act_event_bus(owner).recent_events(row_limit)
     except Exception as exc:
         raw_events = []
         errors.append(str(exc))
     events = [_compact_timeline_event(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
-    text = str(query or state.get("filters", {}).get("query") or "").strip().lower()
+    text = query_text.strip().lower()
     if text:
         events = [
             event for event in events
             if text in json.dumps(event, ensure_ascii=False, default=str).lower()
         ]
-    filters = dict(state.get("filters") or {})
-    filters.update({"query": str(query or filters.get("query") or ""), "limit": int(limit or 80)})
+    filters.update({"query": query_text, "limit": row_limit})
     return {
         "ok": not errors,
         "message": "OK" if not errors else "; ".join(errors),
@@ -650,6 +708,7 @@ def act_timeline_status(owner: Any, *, limit: int = 80, query: str = "") -> dict
         "speed": float(state.get("speed") or 1.0),
         "playing": bool(state.get("playing")),
         "filters": filters,
+        "replay": {"enabled": False},
         "errors": errors,
     }
 
