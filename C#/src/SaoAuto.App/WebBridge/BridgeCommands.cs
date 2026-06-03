@@ -81,6 +81,63 @@ public static class BridgeCommands
     public const string CheckUpdate = "updater.check";
     public const string DownloadUpdate = "updater.download";
     public const string ApplyUpdate = "updater.apply";
+
+    // ACT platform commands used by pywebview-shim.js when hosted by
+    // native WebView2 instead of Python pywebview.
+    public const string ActSourcesHealth = "act.sources.health";
+    public const string ActSourcesDiagnose = "act.sources.diagnose";
+    public const string ActSourcesCopy = "act.sources.copy";
+
+    public const string ActReportStatus = "act.report.status";
+    public const string ActReportExport = "act.report.export";
+    public const string ActReportCopy = "act.report.copy";
+
+    public const string ActHistoryStatus = "act.history.status";
+    public const string ActHistoryLoad = "act.history.load";
+    public const string ActHistoryDelete = "act.history.delete";
+    public const string ActHistoryClear = "act.history.clear";
+
+    public const string ActTimelineStatus = "act.timeline.status";
+    public const string ActTimelinePlay = "act.timeline.play";
+    public const string ActTimelinePause = "act.timeline.pause";
+    public const string ActTimelineStep = "act.timeline.step";
+    public const string ActTimelineSeek = "act.timeline.seek";
+    public const string ActTimelineSpeed = "act.timeline.speed";
+    public const string ActTimelineFilter = "act.timeline.filter";
+
+    public const string ActActionLogStatus = "act.action_log.status";
+    public const string ActActionLogSearch = "act.action_log.search";
+    public const string ActActionLogFilter = "act.action_log.filter";
+    public const string ActActionLogJumpToTime = "act.action_log.jump_to_time";
+    public const string ActActionLogCopy = "act.action_log.copy";
+
+    public const string ActGraphStatus = "act.graph.status";
+    public const string ActGraphSelectMetric = "act.graph.select_metric";
+    public const string ActGraphZoom = "act.graph.zoom";
+    public const string ActGraphFilter = "act.graph.filter";
+    public const string ActGraphExport = "act.graph.export";
+
+    public const string ActCombatantStatus = "act.combatant.status";
+    public const string ActCombatantFilter = "act.combatant.filter";
+    public const string ActCombatantFocusTarget = "act.combatant.focus_target";
+    public const string ActCombatantBack = "act.combatant.back";
+
+    public const string ActSkillStatus = "act.skill.status";
+    public const string ActSkillFilter = "act.skill.filter";
+    public const string ActSkillCopy = "act.skill.copy";
+    public const string ActSkillBack = "act.skill.back";
+
+    public const string ActPluginsStatus = "act.plugins.status";
+    public const string ActPluginsList = "act.plugins.list";
+    public const string ActPluginsEnable = "act.plugins.enable";
+    public const string ActPluginsDisable = "act.plugins.disable";
+    public const string ActPluginsReload = "act.plugins.reload";
+
+    public const string ActTriggersStatus = "act.triggers.status";
+    public const string ActTriggersEnable = "act.triggers.enable";
+    public const string ActTriggersDisable = "act.triggers.disable";
+    public const string ActTriggersReload = "act.triggers.reload";
+    public const string ActTriggersTest = "act.triggers.test";
 }
 
 /// <summary>Canonical bridge event names emitted from C# to JS.</summary>

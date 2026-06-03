@@ -37,6 +37,7 @@ public sealed class WebBridgeLifecycle : IDisposable
     private BossRaidCloudBridge? _bossRaidCloudBridge;
     private SoundBridge? _soundBridge;
     private LegacyUiBridge? _legacyUiBridge;
+    private ActBridge? _actBridge;
     private bool _disposed;
 
     public BridgeEventBroadcaster Broadcaster { get; }
@@ -223,10 +224,22 @@ public sealed class WebBridgeLifecycle : IDisposable
         _legacyUiBridge = new LegacyUiBridge(Router, logger, exitAction);
     }
 
+    /// <summary>S194 — attach ACT platform command handlers for shared
+    /// WebView panels. When <paramref name="handler"/> is null, commands
+    /// return structured <c>{error:"act_unavailable"}</c> instead of
+    /// falling through as unknown commands. Idempotent.</summary>
+    public void AttachAct(ActBridge.ActCommandHandler? handler = null)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _actBridge?.Dispose();
+        _actBridge = new ActBridge(Router, handler);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        _actBridge?.Dispose();
         _legacyUiBridge?.Dispose();
         _soundBridge?.Dispose();
         _bossRaidCloudBridge?.Dispose();
