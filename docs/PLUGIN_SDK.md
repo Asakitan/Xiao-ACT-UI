@@ -94,6 +94,11 @@ def on_unload():
 - `ctx.setting(key, default=None)`: shorthand for `get_setting`.
 - `ctx.set_setting(key, value)`: write an owner setting.
 - `ctx.set_defaults(mapping)`: initialize missing plugin settings without overwriting user values.
+- `ctx.register_parser_adapter(id, metadata=None, handler=None)`: declare a parser/game adapter extension.
+- `ctx.register_exporter(id, metadata=None, handler=None)`: declare an exporter extension.
+- `ctx.register_trigger_type(id, metadata=None, handler=None)`: declare a plugin trigger type.
+- `ctx.register_report_view(id, metadata=None, handler=None)`: declare a plugin report/detail view.
+- `ctx.register_timer(id, metadata=None, handler=None)`: declare a timer preset/provider extension.
 
 Callbacks receive one argument: a canonical ACT event envelope.
 
@@ -158,11 +163,48 @@ Plugins may declare ACT capabilities in `plugin.json` so the manager UI and futu
 
 Supported object keys are `id`/`capability_id`, `title`, `description`, `route`, `render_hint`, `actions`, and `payload_fields`. Unknown or invalid capability entries are ignored.
 
+## Extension registry
+
+Plugins can register extension metadata during `on_load(ctx)`. These declarations are exposed through plugin status so WebView and Entity managers can show which plugin contributes parser adapters, exporters, trigger types, report views, or timers. Handlers are kept in-process for future runtime wiring and are intentionally omitted from JSON status.
+
+```python
+def on_load(ctx):
+  ctx.register_parser_adapter("star_fixture", {
+    "title": "Star fixture parser",
+    "game_ids": ["star_resonance"],
+    "source_kinds": ["fixture", "packet"],
+    "priority": 5,
+  })
+
+  ctx.register_exporter("summary_json", {
+    "title": "Summary JSON",
+    "formats": ["json"],
+    "payload_fields": ["total_damage"],
+  })
+
+  ctx.register_trigger_type("field_match", {
+    "label": "Field match",
+    "schema": {"field": "string", "match": "string"},
+  })
+
+  ctx.register_report_view("compact_report", {
+    "route": "plugin://my_plugin/compact",
+    "actions": ["open", "copy"],
+  })
+
+  ctx.register_timer("burst_window", {
+    "duration_s": 12,
+    "scope": "encounter",
+  })
+```
+
+Extension ids must already be safe ids: lowercase letters/numbers plus `_`, `-`, or `.`. Registered metadata is removed automatically when the plugin unloads.
+
 ## Example plugin
 
 See `plugins/hello_act_plugin/` for a tiny lifecycle example. It demonstrates `ctx.set_defaults()`, decorator-style `ctx.on("act_snapshot")`, and `ctx.on_encounter_finalized()`, then logs compact status lines in both WebView and Entity plugin manager panels.
 
-See `plugins/star_basic_report_plugin/` for a report-style example. It demonstrates `ctx.subscribe_once()`, explicit `ctx.unsubscribe(token)`, threshold settings, `ctx.snapshot_value()`, and plugin-originated `plugin_report_summary` events.
+See `plugins/star_basic_report_plugin/` for a report-style example. It demonstrates `ctx.subscribe_once()`, explicit `ctx.unsubscribe(token)`, threshold settings, `ctx.snapshot_value()`, extension registration, and plugin-originated `plugin_report_summary` events.
 
 ## UI management
 

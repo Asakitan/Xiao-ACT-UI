@@ -17,6 +17,13 @@ from .event_bus import EventBus
 
 
 MANIFEST_FILE = "plugin.json"
+EXTENSION_KINDS = (
+    "parser_adapters",
+    "exporters",
+    "trigger_types",
+    "report_views",
+    "timers",
+)
 
 
 def _safe_id(value: Any) -> str:
@@ -72,6 +79,62 @@ def _normalize_capabilities(value: Any) -> tuple[dict[str, Any], ...]:
     return tuple(out)
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(val) for key, val in value.items() if not callable(val)}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value if not callable(item)]
+    return str(value)
+
+
+def _normalize_extension(kind: str, plugin_id: str, extension_id: Any,
+                         metadata: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    kind = str(kind or "")
+    if kind not in EXTENSION_KINDS:
+        raise ValueError(f"unsupported extension kind: {kind}")
+    raw_id = str(extension_id or "").strip()
+    ext_id = _safe_id(raw_id)
+    if not ext_id or ext_id != raw_id:
+        raise ValueError(f"invalid extension id: {raw_id!r}")
+    src = dict(metadata or {}) if isinstance(metadata, Mapping) else {}
+    normalized: dict[str, Any] = {
+        "id": ext_id,
+        "kind": kind,
+        "plugin_id": str(plugin_id or ""),
+    }
+    for key in (
+        "title",
+        "description",
+        "version",
+        "route",
+        "render_hint",
+        "format",
+        "scope",
+        "label",
+    ):
+        value = src.get(key)
+        if value is not None:
+            normalized[key] = str(value)
+    for key in ("game_ids", "source_kinds", "actions", "payload_fields", "formats", "permissions"):
+        value = src.get(key)
+        if isinstance(value, (list, tuple, set)):
+            normalized[key] = [str(item) for item in value if str(item or "").strip()]
+    for key in ("priority", "duration_s", "cooldown_s"):
+        value = src.get(key)
+        if value is not None:
+            try:
+                normalized[key] = float(value)
+            except Exception:
+                pass
+    for key in ("schema", "settings_schema"):
+        value = src.get(key)
+        if isinstance(value, Mapping):
+            normalized[key] = _json_safe(value)
+    return normalized
+
+
 @dataclass
 class PluginRecord:
     plugin_id: str
@@ -93,6 +156,7 @@ class PluginRecord:
     last_error: str = ""
     last_loaded_at: float = 0.0
     subscriptions: list[str] = field(default_factory=list)
+    extensions: dict[str, list[str]] = field(default_factory=dict)
     logs: list[str] = field(default_factory=list)
 
     def to_status(self) -> dict[str, Any]:
@@ -114,6 +178,8 @@ class PluginRecord:
             "last_error": self.last_error,
             "last_loaded_at": self.last_loaded_at,
             "subscription_count": len(self.subscriptions),
+            "extensions": {kind: list(ids) for kind, ids in sorted(self.extensions.items()) if ids},
+            "extension_count": sum(len(ids) for ids in self.extensions.values()),
             "logs": list(self.logs[-20:]),
         }
 
@@ -251,6 +317,31 @@ class PluginContext:
             if self.get_setting(key_text, sentinel) is sentinel:
                 self.set_setting(key_text, value)
 
+    def register_parser_adapter(self, adapter_id: str,
+                                metadata: Optional[Mapping[str, Any]] = None,
+                                handler: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
+        return self._manager._register_extension("parser_adapters", self._record.plugin_id, adapter_id, metadata, handler)
+
+    def register_exporter(self, exporter_id: str,
+                          metadata: Optional[Mapping[str, Any]] = None,
+                          handler: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
+        return self._manager._register_extension("exporters", self._record.plugin_id, exporter_id, metadata, handler)
+
+    def register_trigger_type(self, trigger_type: str,
+                              metadata: Optional[Mapping[str, Any]] = None,
+                              handler: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
+        return self._manager._register_extension("trigger_types", self._record.plugin_id, trigger_type, metadata, handler)
+
+    def register_report_view(self, view_id: str,
+                             metadata: Optional[Mapping[str, Any]] = None,
+                             handler: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
+        return self._manager._register_extension("report_views", self._record.plugin_id, view_id, metadata, handler)
+
+    def register_timer(self, timer_id: str,
+                       metadata: Optional[Mapping[str, Any]] = None,
+                       handler: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
+        return self._manager._register_extension("timers", self._record.plugin_id, timer_id, metadata, handler)
+
 
 class PluginManager:
     """Discover and manage in-process Python ACT plugins."""
@@ -267,8 +358,12 @@ class PluginManager:
         self.max_failures = max(1, int(max_failures or 3))
         self._records: Dict[str, PluginRecord] = {}
         self._settings_cache: Dict[str, Dict[str, Any]] = {}
+        self._extensions: Dict[str, Dict[str, dict[str, Any]]] = {kind: {} for kind in EXTENSION_KINDS}
+        self._extension_handlers: Dict[tuple[str, str], Callable[..., Any]] = {}
 
     def discover(self) -> list[PluginRecord]:
+        self._extensions = {kind: {} for kind in EXTENSION_KINDS}
+        self._extension_handlers.clear()
         records: Dict[str, PluginRecord] = {}
         for root in self.plugin_dirs:
             if not os.path.isdir(root):
@@ -327,6 +422,12 @@ class PluginManager:
             return True
         except Exception as exc:
             self._record_failure(record.plugin_id, exc)
+            for token in list(record.subscriptions):
+                self.event_bus.unsubscribe(token)
+            record.subscriptions.clear()
+            self._unregister_plugin_extensions(record.plugin_id)
+            record.module = None
+            record.context = None
             record.loaded = False
             record.active = False
             return False
@@ -347,6 +448,7 @@ class PluginManager:
         for token in list(record.subscriptions):
             self.event_bus.unsubscribe(token)
         record.subscriptions.clear()
+        self._unregister_plugin_extensions(record.plugin_id)
         record.module = None
         record.context = None
         record.loaded = False
@@ -383,6 +485,15 @@ class PluginManager:
     def list_plugins(self) -> list[dict[str, Any]]:
         return [self._records[key].to_status() for key in sorted(self._records)]
 
+    def list_extensions(self, kind: str = "") -> dict[str, list[dict[str, Any]]] | list[dict[str, Any]]:
+        if kind:
+            bucket = self._extensions.get(str(kind or ""), {})
+            return [dict(bucket[key]) for key in sorted(bucket)]
+        return {
+            ext_kind: [dict(bucket[key]) for key in sorted(bucket)]
+            for ext_kind, bucket in self._extensions.items()
+        }
+
     def status(self) -> dict[str, Any]:
         capabilities: dict[str, list[str]] = {}
         for record in self._records.values():
@@ -398,6 +509,11 @@ class PluginManager:
             "active_count": sum(1 for record in self._records.values() if record.active),
             "plugins": self.list_plugins(),
             "capabilities": dict(sorted(capabilities.items())),
+            "extensions": self.list_extensions(),
+            "extension_counts": {
+                kind: len(bucket)
+                for kind, bucket in self._extensions.items()
+            },
             "event_bus": self.event_bus.snapshot(),
         }
 
@@ -425,6 +541,38 @@ class PluginManager:
                     pass
             return
         self._settings_cache.setdefault(plugin_id, {})[key] = value
+
+    def _register_extension(self, kind: str, plugin_id: str, extension_id: str,
+                            metadata: Optional[Mapping[str, Any]] = None,
+                            handler: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
+        record = self._records.get(str(plugin_id or ""))
+        if record is None:
+            raise ValueError(f"plugin is not loaded: {plugin_id}")
+        normalized = _normalize_extension(kind, record.plugin_id, extension_id, metadata)
+        bucket = self._extensions.setdefault(kind, {})
+        existing = bucket.get(normalized["id"])
+        if existing and str(existing.get("plugin_id") or "") != record.plugin_id:
+            raise ValueError(f"extension id already registered: {kind}/{normalized['id']}")
+        bucket[normalized["id"]] = normalized
+        ids = record.extensions.setdefault(kind, [])
+        if normalized["id"] not in ids:
+            ids.append(normalized["id"])
+            ids.sort()
+        if callable(handler):
+            self._extension_handlers[(kind, normalized["id"])] = handler
+        else:
+            self._extension_handlers.pop((kind, normalized["id"]), None)
+        return dict(normalized)
+
+    def _unregister_plugin_extensions(self, plugin_id: str) -> None:
+        record = self._records.get(str(plugin_id or ""))
+        for kind, bucket in self._extensions.items():
+            stale = [ext_id for ext_id, item in bucket.items() if str(item.get("plugin_id") or "") == str(plugin_id or "")]
+            for ext_id in stale:
+                bucket.pop(ext_id, None)
+                self._extension_handlers.pop((kind, ext_id), None)
+        if record is not None:
+            record.extensions.clear()
 
     def _read_manifest(self, plug_dir: str, manifest_path: str) -> PluginRecord:
         with open(manifest_path, "r", encoding="utf-8") as fp:

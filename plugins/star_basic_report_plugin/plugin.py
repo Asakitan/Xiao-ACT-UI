@@ -27,6 +27,17 @@ def on_load(ctx):
         "emit_big_hit_events": True,
     })
     ctx.log("star_basic_report_plugin loaded")
+    ctx.register_report_view("star_basic_summary", {
+        "title": "Star basic summary",
+        "description": "Compact big-hit and encounter summary emitted by the bundled example plugin.",
+        "route": "plugin://star_basic_report_plugin/summary",
+        "payload_fields": ["kind", "encounter_id", "total_damage", "big_hits"],
+    })
+    ctx.register_exporter("star_basic_summary_json", {
+        "title": "Star basic summary JSON",
+        "formats": ["json"],
+        "payload_fields": ["kind", "actor", "skill", "damage", "total_damage"],
+    })
 
     ctx.subscribe_once("encounter_started", _on_first_encounter_started)
     _warmup_token = ctx.subscribe("act_snapshot", _on_warmup_snapshot)
