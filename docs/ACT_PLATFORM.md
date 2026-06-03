@@ -158,7 +158,7 @@ Preset helpers:
 
 The current history store is a rolling encounter store exposed through shared runtime helpers. `DpsHistoryStore` also appends compact finalized reports to a JSONL archive for longer-lived encounter retention. JSON, CSV, and static HTML export remain backed by the compact report shape.
 
-Normalized offline imports are loaded by `act_replay.importer`, replayed through `ActReplayHarness`, finalized into the same DPS report shape as live encounters, and can be persisted with `act_platform.runtime.act_offline_import_file(owner, path, persist=True)`. The helper returns import metadata, replay preview, the generated report, the persisted history item, and refreshed history status. WebView and Entity expose this through their shared report/export panels; a richer standalone import/playback wizard remains future work.
+Normalized offline imports are loaded by `act_replay.importer`, replayed through `ActReplayHarness`, finalized into the same DPS report shape as live encounters, and can be persisted with `act_platform.runtime.act_offline_import_file(owner, path, persist=True)`. If the built-in normalized importer rejects a file, the runtime can fall back to active plugin parser adapters and call their controlled `import_file` operation. The helper returns import metadata, importer/parser ids, replay preview, the generated report, the persisted history item, and refreshed history status. WebView and Entity expose this through their shared report/export panels; a richer standalone import/playback wizard remains future work.
 
 Replay is the contract gate for ACT behavior. When adding a feature that can be tested without the live game, prefer adding a fixture/selftest path first.
 

@@ -526,6 +526,13 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _coerce_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
 def _owner_act_snapshot(owner: Any, *, history_limit: int = 20) -> dict[str, Any]:
     for name in ("_build_dps_act_snapshot", "_get_dps_act_snapshot"):
         fn = getattr(owner, name, None)
@@ -770,6 +777,71 @@ def _persist_offline_import_report(store: Any, report: Mapping[str, Any]) -> tup
     return dict(_json_safe(item)), []
 
 
+def _plugin_offline_import_summary(owner: Any, path: str, initial_errors: Iterable[Any] = ()) -> tuple[dict[str, Any] | None, list[str]]:
+    try:
+        from .adapters import create_plugin_parser_adapter, plugin_parser_adapters
+    except Exception as exc:
+        return None, [str(exc)]
+    errors = [str(item) for item in (initial_errors or []) if str(item or "")]
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+    except Exception as exc:
+        errors.append(str(exc))
+        return None, errors
+    adapters = plugin_parser_adapters(manager)
+    if not adapters:
+        errors.append("No plugin parser adapters are available")
+        return None, errors
+    for meta in sorted(adapters, key=lambda item: _safe_float(item.get("priority"), 0.0), reverse=True):
+        adapter_id = str(meta.get("adapter_id") or meta.get("id") or "").strip()
+        if not adapter_id:
+            continue
+        try:
+            adapter = create_plugin_parser_adapter(manager, adapter_id)
+            invoked = adapter.import_file(path)
+        except Exception as exc:
+            errors.append(f"{adapter_id}: {exc}")
+            continue
+        invoked_map = invoked if isinstance(invoked, Mapping) else {}
+        if not bool(invoked_map.get("ok")):
+            msg = str(invoked_map.get("message") or "; ".join(invoked_map.get("errors") or []) or "plugin import failed")
+            errors.append(f"{adapter_id}: {msg}")
+            continue
+        result = invoked_map.get("result")
+        if not isinstance(result, Mapping):
+            errors.append(f"{adapter_id}: import_file did not return an object")
+            continue
+        if result.get("ok") is False:
+            msg = str(result.get("message") or result.get("reason") or "plugin import did not match")
+            errors.append(f"{adapter_id}: {msg}")
+            continue
+        raw_events = result.get("events") or result.get("act_replay_events") or result.get("items") or []
+        if not isinstance(raw_events, list):
+            errors.append(f"{adapter_id}: import_file events must be an array")
+            continue
+        events = [dict(_json_safe(event)) for event in raw_events if isinstance(event, Mapping)]
+        if len(events) != len(raw_events):
+            errors.append(f"{adapter_id}: import_file returned non-object events")
+            continue
+        meta_obj = result.get("metadata") if isinstance(result.get("metadata"), Mapping) else {}
+        suffix = os.path.splitext(str(path or ""))[1].lower().lstrip(".")
+        fmt = str(result.get("format") or result.get("source_format") or suffix or "plugin")
+        return {
+            "ok": True,
+            "format": fmt,
+            "source_path": str(result.get("source_path") or result.get("path") or path or ""),
+            "self_uid": _coerce_int(result.get("self_uid") or meta_obj.get("self_uid"), 0),
+            "event_count": len(events),
+            "events": events,
+            "errors": [],
+            "warnings": errors,
+            "importer": "plugin_parser_adapter",
+            "parser_adapter_id": adapter_id,
+            "plugin_id": str(getattr(adapter, "plugin_id", "") or meta.get("plugin_id") or ""),
+        }, []
+    return None, errors
+
+
 def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
                             show: bool = False, history_limit: int = 20) -> dict[str, Any]:
     """Replay a normalized ACT import file and optionally persist it to history."""
@@ -793,6 +865,9 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
             "snapshot": {},
             "errors": [message],
             "status": {},
+            "importer": "normalized",
+            "parser_adapter_id": "",
+            "plugin_id": "",
         }
 
     try:
@@ -813,30 +888,44 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
             "snapshot": {},
             "errors": [message],
             "status": {},
+            "importer": "normalized",
+            "parser_adapter_id": "",
+            "plugin_id": "",
         }
     if not bool(summary.get("ok")):
         errors = list(summary.get("errors") or [])
-        message = str(summary.get("message") or "; ".join(errors) or "Offline import failed")
-        return {
-            "ok": False,
-            "message": message,
-            "format": str(summary.get("format") or ""),
-            "source_path": str(summary.get("source_path") or path or ""),
-            "self_uid": int(summary.get("self_uid") or 0),
-            "event_count": int(summary.get("event_count") or 0),
-            "persist_requested": bool(persist),
-            "persisted": False,
-            "history_item": None,
-            "preview": {},
-            "snapshot": {},
-            "errors": errors or [message],
-            "status": {},
-        }
+        fallback, fallback_errors = _plugin_offline_import_summary(owner, path, errors)
+        if isinstance(fallback, Mapping) and bool(fallback.get("ok")):
+            summary = fallback
+        else:
+            merged_errors = fallback_errors or errors
+            message = str(summary.get("message") or "; ".join(merged_errors) or "Offline import failed")
+            return {
+                "ok": False,
+                "message": message,
+                "format": str(summary.get("format") or ""),
+                "source_path": str(summary.get("source_path") or path or ""),
+                "self_uid": int(summary.get("self_uid") or 0),
+                "event_count": int(summary.get("event_count") or 0),
+                "persist_requested": bool(persist),
+                "persisted": False,
+                "history_item": None,
+                "preview": {},
+                "snapshot": {},
+                "errors": merged_errors or [message],
+                "status": {},
+                "importer": "normalized",
+                "parser_adapter_id": "",
+                "plugin_id": "",
+            }
 
     source_path = str(summary.get("source_path") or path or "")
     fmt = str(summary.get("format") or "")
     event_count = int(summary.get("event_count") or 0)
     events = list(summary.get("events") or [])
+    importer = str(summary.get("importer") or "normalized")
+    parser_adapter_id = str(summary.get("parser_adapter_id") or "")
+    plugin_id = str(summary.get("plugin_id") or "")
     store = getattr(owner, "_dps_history_store", None) if persist else None
     errors: list[str] = []
 
@@ -869,6 +958,9 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
             "snapshot": {},
             "errors": errors + [message],
             "status": {},
+            "importer": importer,
+            "parser_adapter_id": parser_adapter_id,
+            "plugin_id": plugin_id,
         }
 
     report, finalize_errors = _finalize_offline_import_report(
@@ -905,6 +997,9 @@ def act_offline_import_file(owner: Any, path: str, *, persist: bool = True,
         "source_path": source_path,
         "self_uid": self_uid,
         "event_count": event_count,
+        "importer": importer,
+        "parser_adapter_id": parser_adapter_id,
+        "plugin_id": plugin_id,
         "persist_requested": bool(persist),
         "persisted": persisted,
         "shown": shown,

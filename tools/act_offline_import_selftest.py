@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 from act_platform import runtime
+from act_platform.plugins import PluginManager
 from act_replay.events import damage_event, dungeon_event
 from act_replay.harness import ActReplayHarness
 from act_replay.importer import import_normalized_file, load_normalized_import
@@ -41,6 +42,47 @@ def _demo_damage_event(amount: int = 1234) -> dict:
         skill_key=1101,
         damage=amount,
     )
+
+
+PLUGIN_IMPORT_CODE = r'''
+from act_replay.events import damage_event
+
+SELF_UID = 36668136
+
+def _plugin_import(payload):
+    if payload.get("operation") != "import_file":
+        return {"ok": True}
+    path = str(payload.get("path") or "")
+    if not path.endswith(".demoact"):
+        return {"ok": False, "message": "unsupported demo import"}
+    return {
+        "ok": True,
+        "format": "demoact",
+        "source_path": path,
+        "self_uid": SELF_UID,
+        "events": [
+            damage_event(
+                attacker_uid=SELF_UID,
+                attacker_uuid=(SELF_UID << 16) | 640,
+                attacker_is_self=True,
+                target_uuid=987654321064,
+                target_is_monster=True,
+                target_is_combat_target=True,
+                skill_id=1101,
+                skill_key=1101,
+                damage=5555,
+            )
+        ],
+    }
+
+def on_load(ctx):
+    ctx.register_parser_adapter("demo_file_importer", {
+        "title": "Demo file importer",
+        "game_id": "star_resonance",
+        "source_kinds": ["file"],
+        "priority": 20,
+    }, handler=_plugin_import)
+'''
 
 
 class ActOfflineImportTests(unittest.TestCase):
@@ -149,6 +191,41 @@ class ActOfflineImportTests(unittest.TestCase):
         self.assertFalse(result["persisted"])
         self.assertEqual(result["preview"]["total_damage"], 3333)
         self.assertEqual(result["status"], {})
+
+    def test_runtime_import_falls_back_to_plugin_parser_adapter(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_import_plugin_") as root:
+            plugin_dir = os.path.join(root, "demo_import_plugin")
+            os.makedirs(plugin_dir, exist_ok=True)
+            with open(os.path.join(plugin_dir, "plugin.json"), "w", encoding="utf-8") as fp:
+                json.dump({
+                    "id": "demo_import_plugin",
+                    "name": "Demo Import Plugin",
+                    "version": "0.1.0",
+                    "entry": "plugin.py",
+                    "enabled": True,
+                }, fp, ensure_ascii=False, indent=2)
+            with open(os.path.join(plugin_dir, "plugin.py"), "w", encoding="utf-8") as fp:
+                fp.write(PLUGIN_IMPORT_CODE)
+            path = os.path.join(root, "encounter.demoact")
+            with open(path, "w", encoding="utf-8") as fp:
+                fp.write("demo plugin import")
+            history_path = os.path.join(root, "history.json")
+            store = DpsHistoryStore(path=history_path, limit=5)
+            manager = PluginManager(plugin_dirs=[root])
+            manager.discover()
+            owner = FakeOwner(store)
+            owner._act_plugin_manager = manager
+
+            result = runtime.act_offline_import_file(owner, path, show=False)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["importer"], "plugin_parser_adapter")
+        self.assertEqual(result["parser_adapter_id"], "demo_file_importer")
+        self.assertEqual(result["plugin_id"], "demo_import_plugin")
+        self.assertEqual(result["format"], "demoact")
+        self.assertEqual(result["event_count"], 1)
+        self.assertEqual(result["history_item"]["total_damage"], 5555)
+        self.assertEqual(result["preview"]["total_damage"], 5555)
 
 
 if __name__ == "__main__":
