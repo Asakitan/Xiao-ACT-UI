@@ -67,6 +67,11 @@ from engines.encounter_manager import EncounterManager
 from engines.act_trigger_engine import ActTriggerEngine
 from engines.combat_analytics import boss_state_from_monster_update, build_act_snapshot
 from act_platform.runtime import (
+    act_action_log_copy,
+    act_action_log_filter,
+    act_action_log_jump_to_time,
+    act_action_log_search,
+    act_action_log_status,
     act_data_source_diagnose,
     act_data_source_health,
     act_history_delete,
@@ -447,6 +452,28 @@ class SAOWebAPI:
     def filter_timeline(self, query=''):
         return json.dumps(act_timeline_filter(self._g, query=str(query or '')), ensure_ascii=False)
 
+    def get_action_log_status(self, limit=80, query='', topic='', cursor_ms=None):
+        kwargs = {
+            'limit': int(limit or 80),
+            'query': str(query or ''),
+            'topic': str(topic or ''),
+        }
+        if cursor_ms is not None:
+            kwargs['cursor_ms'] = int(cursor_ms or 0)
+        return json.dumps(act_action_log_status(self._g, **kwargs), ensure_ascii=False)
+
+    def search_action_log(self, query='', limit=80):
+        return json.dumps(act_action_log_search(self._g, query=str(query or ''), limit=int(limit or 80)), ensure_ascii=False)
+
+    def filter_action_log(self, topic='', query=None, limit=80):
+        return json.dumps(act_action_log_filter(self._g, topic=str(topic or ''), query=None if query is None else str(query or ''), limit=int(limit or 80)), ensure_ascii=False)
+
+    def jump_action_log_time(self, cursor_ms=0, limit=80):
+        return json.dumps(act_action_log_jump_to_time(self._g, cursor_ms=int(cursor_ms or 0), limit=int(limit or 80)), ensure_ascii=False)
+
+    def copy_action_log(self, limit=80, query='', topic=''):
+        return json.dumps(act_action_log_copy(self._g, limit=int(limit or 80), query=str(query or ''), topic=str(topic or '')), ensure_ascii=False)
+
     def list_plugins(self):
         return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
 
@@ -520,6 +547,15 @@ class SAOWebAPI:
                 self._g._hide_timeline_vcr()
             else:
                 self._g._show_timeline_vcr()
+        threading.Thread(target=_do, daemon=True).start()
+
+    def toggle_action_log(self):
+        """Show/hide the ACT action-log overlay."""
+        def _do():
+            if self._g._action_log_visible:
+                self._g._hide_action_log()
+            else:
+                self._g._show_action_log()
         threading.Thread(target=_do, daemon=True).start()
 
     def switch_to_entity(self):
@@ -1905,6 +1941,10 @@ class SAOWebViewGUI:
         # ACT Timeline/VCR panel
         self.timeline_vcr_win = None
         self._timeline_vcr_visible = False
+
+        # ACT Action Log panel
+        self.action_log_win = None
+        self._action_log_visible = False
 
         # Hide & Seek engine
         self._hide_seek_engine = None
@@ -3880,6 +3920,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Action Log — searchable EventBus table for WebView parity
+        action_log_url = _web_file_uri('act_action_log.html')
+        _al_w = max(760, int(min(_sw, 1920) * 0.48))
+        _al_h = max(520, int(min(_sh, 1080) * 0.54))
+        _al_x = max(16, int(monitor_left + (_sw - _al_w) * 0.30))
+        _al_y = max(24, int(monitor_top + (_sh - _al_h) * 0.20))
+        self.action_log_win = webview.create_window(
+            'SAO-ActionLog', action_log_url,
+            width=_al_w, height=_al_h,
+            x=_al_x, y=_al_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         webview.start(self._on_webview_started, debug=False)
 
         # ── Phase 3: 热切换 ──
@@ -4476,6 +4534,7 @@ class SAOWebViewGUI:
             ('SAO-DataSourceHealth', '_data_source_health_visible', None),
             ('SAO-ReportExport', '_report_export_visible', None),
             ('SAO-TimelineVCR', '_timeline_vcr_visible', None),
+            ('SAO-ActionLog', '_action_log_visible', None),
         ]
         user32 = ctypes.windll.user32
         for title, vis_attr, hwnd_attr in _panels:
@@ -5166,6 +5225,14 @@ class SAOWebViewGUI:
                 if self.timeline_vcr_win:
                     self._set_window_alpha('SAO-TimelineVCR', 0.0)
                     self.timeline_vcr_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._action_log_visible = False
+                if self.action_log_win:
+                    self._set_window_alpha('SAO-ActionLog', 0.0)
+                    self.action_log_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -6208,6 +6275,63 @@ class SAOWebViewGUI:
             pass
         self._timeline_vcr_visible = False
 
+    # ── ACT Action Log panel ──
+
+    def _eval_action_log(self, js):
+        try:
+            if self.action_log_win:
+                self.action_log_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_action_log_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the action-log panel receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-ActionLog')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_action_log(self):
+        try:
+            if self.action_log_win and not self._action_log_visible:
+                self._set_window_alpha('SAO-ActionLog', 0.0)
+                self.action_log_win.show()
+                self._eval_action_log('if(window.ActionLog&&ActionLog.fadeIn)ActionLog.fadeIn()')
+                self._eval_action_log('if(window.ActionLog&&ActionLog.refresh)ActionLog.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-ActionLog', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._action_log_visible = True
+                self._ensure_action_log_clickable()
+                threading.Timer(0.5, self._ensure_action_log_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_action_log(self):
+        try:
+            if self.action_log_win and self._action_log_visible:
+                self._eval_action_log('if(window.ActionLog&&ActionLog.fadeOut)ActionLog.fadeOut()')
+                def _finish():
+                    try:
+                        if self.action_log_win:
+                            self.action_log_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._action_log_visible = False
+
     # ── AutoKey Editor overlay ──
 
     def _eval_autokey_editor(self, js):
@@ -7137,6 +7261,11 @@ class SAOWebViewGUI:
                 self.timeline_vcr_win.destroy()
         except Exception:
             pass
+        try:
+            if self.action_log_win:
+                self.action_log_win.destroy()
+        except Exception:
+            pass
 
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
         # 热切换时不强杀: _do_hot_switch 需要在 webview.start() 返回后运行
@@ -7801,6 +7930,7 @@ class SAOWebViewGUI:
             'toggle_data_source_health': lambda: (self._show_data_source_health() if not self._data_source_health_visible else self._hide_data_source_health()),
             'toggle_report_export': lambda: (self._show_report_export() if not self._report_export_visible else self._hide_report_export()),
             'toggle_timeline_vcr': lambda: (self._show_timeline_vcr() if not self._timeline_vcr_visible else self._hide_timeline_vcr()),
+            'toggle_action_log': lambda: (self._show_action_log() if not self._action_log_visible else self._hide_action_log()),
             'toggle_session_players': self._toggle_session_players_menu,
             'switch_to_entity': lambda: self._transition_with_animation('entity'),
             'exit': self._exit_with_animation,

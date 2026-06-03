@@ -33,6 +33,7 @@
 - `ACT Report/Export` 双 UI 报告导出面板，复用 `DpsHistoryStore` 输出 JSON/CSV，并提供报告预览、历史摘要与复制载荷。
 - `ACT History Browser` 双 UI 历史浏览能力，支持搜索/过滤、载入历史报告、删除单条记录与清空历史，并通过共享 runtime 保持 WebView 与 Entity/Tk 行为一致。
 - `ACT Timeline/VCR` 双 UI 时间线面板，基于共享 ACT EventBus 展示 encounter 事件流，并提供播放、暂停、步进、seek、倍速和过滤控制。
+- `ACT Action Log` 双 UI 行为日志，基于共享 EventBus 表格行支持搜索、topic 过滤、跳转到时间点和复制 JSON 载荷。
 - 自动按键 profile、本地导入导出、脚本仓库上传/下载、结构化触发条件。
 - `Commander` 队伍面板、BuffMon、Hide & Seek、置顶/隐藏面板等辅助功能。
 - 远程更新检查、`runtime-delta` / `full-package` 下载、独立 `update.exe` 应用更新并重启主程序。

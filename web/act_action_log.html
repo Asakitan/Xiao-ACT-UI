@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO ACT Action Log</title>
+<style>
+:root {
+    --bg: rgba(8, 13, 22, .76);
+    --panel: rgba(18, 33, 52, .90);
+    --line: rgba(117, 205, 255, .48);
+    --gold: rgba(255, 214, 117, .86);
+    --text: rgba(232, 246, 255, .96);
+    --muted: rgba(176, 204, 226, .76);
+    --ok: #7df2bf;
+    --bad: #ff6b82;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; background: transparent; color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; user-select: none; }
+body { padding: 14px; }
+.shell { position: relative; width: 100%; height: calc(100vh - 28px); min-height: 470px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: radial-gradient(circle at 82% 12%, rgba(255, 214, 117, .16), transparent 24%), linear-gradient(135deg, rgba(100, 202, 255, .15), transparent 24%, transparent 70%, rgba(255, 215, 125, .12)), linear-gradient(180deg, rgba(16, 28, 45, .96), rgba(7, 12, 20, .90)); box-shadow: 0 0 34px rgba(88, 199, 255, .22), inset 0 0 28px rgba(109, 216, 255, .10); opacity: 0; transform: translateY(10px) scale(.985); transition: opacity .22s ease, transform .22s ease; }
+.shell.visible { opacity: 1; transform: translateY(0) scale(1); }
+.shell::before { content: ""; pointer-events: none; position: absolute; inset: 0; background: repeating-linear-gradient(180deg, rgba(255,255,255,.035) 0, rgba(255,255,255,.035) 1px, transparent 1px, transparent 7px); mix-blend-mode: screen; }
+.header { height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 8px 18px; border-bottom: 1px solid rgba(117, 205, 255, .35); background: linear-gradient(90deg, rgba(18, 59, 94, .76), rgba(11, 22, 35, .58)); }
+.kicker { letter-spacing: .18em; font-size: 10px; color: var(--gold); text-shadow: 0 0 10px rgba(255, 214, 117, .52); }
+.title { margin-top: 2px; font-size: 20px; font-weight: 700; letter-spacing: .08em; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.pill { min-width: 94px; text-align: center; padding: 5px 9px; border: 1px solid rgba(117, 205, 255, .42); border-radius: 999px; color: var(--muted); background: rgba(8, 14, 22, .62); font-size: 12px; }
+button, input, select { border: 1px solid rgba(117, 205, 255, .48); background: linear-gradient(180deg, rgba(61, 143, 201, .42), rgba(19, 48, 74, .58)); color: var(--text); border-radius: 8px; padding: 7px 11px; font-size: 12px; font-weight: 600; }
+input { width: 170px; background: rgba(4, 8, 14, .58); font-weight: 400; }
+button { cursor: pointer; }
+button:hover { box-shadow: 0 0 16px rgba(107, 214, 255, .25); transform: translateY(-1px); }
+button.primary { border-color: rgba(255, 214, 117, .74); color: #fff8da; }
+button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 16px; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; height: calc(100% - 62px); padding: 12px; }
+.main { min-height: 0; overflow: auto; border: 1px solid rgba(117, 205, 255, .24); border-radius: 10px; background: rgba(8, 14, 22, .42); }
+.table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.table th, .table td { padding: 8px 9px; border-bottom: 1px solid rgba(117, 205, 255, .14); text-align: left; vertical-align: top; }
+.table th { position: sticky; top: 0; z-index: 1; background: rgba(13, 31, 49, .94); color: var(--gold); font-size: 11px; letter-spacing: .08em; }
+.table td { color: var(--text); user-select: text; }
+.table tr.cursor td { background: rgba(255, 214, 117, .12); box-shadow: inset 3px 0 0 rgba(255, 214, 117, .86); }
+.topic { color: var(--gold); font-size: 11px; letter-spacing: .08em; }
+.payload { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.side { min-height: 0; border: 1px solid rgba(117, 205, 255, .30); border-radius: 10px; background: rgba(8, 14, 22, .52); padding: 12px; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+.side-title { color: var(--gold); font-size: 12px; letter-spacing: .16em; }
+.row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(117, 205, 255, .16); padding-bottom: 5px; font-size: 12px; color: var(--muted); }
+.row strong { color: var(--text); text-align: right; }
+.empty { display: grid; place-items: center; height: 100%; min-height: 260px; color: var(--muted); text-align: center; line-height: 1.6; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
+.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,.18); }
+::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+    <div class="header">
+        <div><div class="kicker">ACT ACTION STREAM</div><div class="title">ACTION LOG</div></div>
+        <div class="header-actions">
+            <div class="pill" id="status-pill">READY</div>
+            <input id="query" type="text" placeholder="搜索 / Search" />
+            <select id="topic"><option value="">ALL</option><option value="damage">DAMAGE</option><option value="skill">SKILL</option><option value="boss">BOSS</option><option value="trigger">TRIGGER</option></select>
+            <input id="cursor" type="number" min="0" value="0" title="jump to ms" />
+            <button class="primary" type="button" onclick="ActionLog.refresh()">刷新</button>
+            <button class="close" type="button" onclick="ActionLog.close()">×</button>
+        </div>
+    </div>
+    <div class="body">
+        <main class="main" id="rows"><div class="empty">正在读取 ACT 行为日志...<br/>LOADING ACTION LOG</div></main>
+        <aside class="side">
+            <div class="side-title">LOG CONTROL</div>
+            <button type="button" onclick="ActionLog.search()">搜索 Search</button>
+            <button type="button" onclick="ActionLog.filter()">过滤 Filter</button>
+            <button type="button" onclick="ActionLog.jump()">跳转 Jump</button>
+            <button type="button" onclick="ActionLog.copy()">复制 Copy JSON</button>
+            <div class="side-title">STATUS</div>
+            <div class="row"><span>Encounter</span><strong id="sum-id">live</strong></div>
+            <div class="row"><span>Rows</span><strong id="sum-rows">0</strong></div>
+            <div class="row"><span>Cursor</span><strong id="sum-cursor">0ms</strong></div>
+            <div class="row"><span>Filter</span><strong id="sum-filter">ALL</strong></div>
+            <div class="row"><span>Errors</span><strong id="sum-errors">0</strong></div>
+        </aside>
+    </div>
+    <div class="toast" id="toast"></div>
+</div>
+<script>
+(function () {
+    "use strict";
+    var shell = document.getElementById('shell');
+    var rowsEl = document.getElementById('rows');
+    var toast = document.getElementById('toast');
+    var query = document.getElementById('query');
+    var topic = document.getElementById('topic');
+    var cursor = document.getElementById('cursor');
+    var toastTimer = null;
+    var searchTimer = null;
+    function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
+    function apiCall(name, args) {
+        var api = window.pywebview && window.pywebview.api;
+        if (api && typeof api[name] === 'function') return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
+        if (window.bridge && typeof window.bridge.cmd === 'function') {
+            var cmdMap = {
+                get_action_log_status: 'act.action_log.status', search_action_log: 'act.action_log.search', filter_action_log: 'act.action_log.filter',
+                jump_action_log_time: 'act.action_log.jump_to_time', copy_action_log: 'act.action_log.copy', toggle_action_log: 'ui.menu_action'
+            };
+            var payload = name === 'toggle_action_log' ? { action: 'toggle_action_log' } : { args: args || [] };
+            return window.bridge.cmd(cmdMap[name] || ('act.action_log.' + name), payload).then(parseResult);
+        }
+        return Promise.resolve({ ok: false, message: 'Action log API unavailable', rows: [] });
+    }
+    function showToast(message) { toast.textContent = String(message || ''); toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(function () { toast.classList.remove('visible'); }, 1800); }
+    function render(data) {
+        data = data || {};
+        var rows = data.rows || [];
+        var filters = data.filters || {};
+        var cursorState = data.cursor || {};
+        document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : 'READY';
+        document.getElementById('status-pill').style.color = data.ok === false ? 'var(--bad)' : 'var(--muted)';
+        document.getElementById('sum-id').textContent = data.encounter_id || 'live';
+        document.getElementById('sum-rows').textContent = String(rows.length || 0);
+        document.getElementById('sum-cursor').textContent = String(cursorState.time_ms || 0) + 'ms';
+        document.getElementById('sum-filter').textContent = (filters.topic || 'ALL') + (filters.query ? (' / ' + filters.query) : '');
+        document.getElementById('sum-errors').textContent = String((data.errors || []).length);
+        if (!rows.length) { rowsEl.innerHTML = '<div class="empty">暂无 ACT 行为日志。<br/>开始识别或 replay 后会出现事件。</div>'; return; }
+        rowsEl.innerHTML = '<table class="table"><thead><tr><th>Time</th><th>Topic</th><th>Action</th><th>Value</th><th>Source</th><th>Payload</th></tr></thead><tbody>' + rows.map(function (row) {
+            return '<tr class="' + (row.is_cursor ? 'cursor' : '') + '"><td>' + esc(row.time_ms || 0) + 'ms</td><td><span class="topic">' + esc(row.topic || '-') + '</span></td><td>' + esc(row.label || '-') + '</td><td>' + esc(row.value || '') + '</td><td>' + esc(row.source || '-') + '</td><td><div class="payload">actor=' + esc(row.actor || '-') + ' · target=' + esc(row.target || '-') + '</div></td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+    window.ActionLog = {
+        refresh: function () { return apiCall('get_action_log_status', [80, query.value || '', topic.value || '', Number(cursor.value || 0)]).then(function (data) { render(data); if (data.ok === false) showToast(data.message || 'Action log failed'); return data; }); },
+        search: function () { return apiCall('search_action_log', [query.value || '', 80]).then(function (data) { render(data); return data; }); },
+        filter: function () { return apiCall('filter_action_log', [topic.value || '', query.value || '', 80]).then(function (data) { render(data); return data; }); },
+        jump: function () { return apiCall('jump_action_log_time', [Number(cursor.value || 0), 80]).then(function (data) { render(data); return data; }); },
+        copy: function () { return apiCall('copy_action_log', [80, query.value || '', topic.value || '']).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data); showToast('Action log copied'); return data; }); },
+        close: function () { apiCall('toggle_action_log'); },
+        fadeIn: function () { shell.classList.add('visible'); },
+        fadeOut: function () { shell.classList.remove('visible'); }
+    };
+    query.addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(function () { ActionLog.search(); }, 220); });
+    topic.addEventListener('change', function () { ActionLog.filter(); });
+    setTimeout(function () { shell.classList.add('visible'); ActionLog.refresh(); }, 40);
+})();
+</script>
+</body>
+</html>

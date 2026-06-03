@@ -68,6 +68,9 @@
         toggle_timeline_vcr: function () {
             return call('ui.menu_action', { action: 'toggle_timeline_vcr' });
         },
+        toggle_action_log: function () {
+            return call('ui.menu_action', { action: 'toggle_action_log' });
+        },
         get_data_source_health: function () {
             return call('act.sources.health', {});
         },
@@ -118,6 +121,21 @@
         },
         filter_timeline: function (query) {
             return call('act.timeline.filter', { query: String(query || '') });
+        },
+        get_action_log_status: function (limit, query, topic, cursorMs) {
+            return call('act.action_log.status', { limit: limit || 80, query: String(query || ''), topic: String(topic || ''), cursor_ms: cursorMs || 0 });
+        },
+        search_action_log: function (query, limit) {
+            return call('act.action_log.search', { query: String(query || ''), limit: limit || 80 });
+        },
+        filter_action_log: function (topic, query, limit) {
+            return call('act.action_log.filter', { topic: String(topic || ''), query: String(query || ''), limit: limit || 80 });
+        },
+        jump_action_log_time: function (cursorMs, limit) {
+            return call('act.action_log.jump_to_time', { cursor_ms: cursorMs || 0, limit: limit || 80 });
+        },
+        copy_action_log: function (limit, query, topic) {
+            return call('act.action_log.copy', { limit: limit || 80, query: String(query || ''), topic: String(topic || '') });
         },
         get_plugin_status: function () {
             return call('act.plugins.status', {});

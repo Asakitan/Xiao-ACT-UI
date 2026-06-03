@@ -241,6 +241,22 @@ Entity route: `entity://act/encounter_timeline_vcr`, opened from `SAO 菜单 > �
 
 The shared payload preserves the parity fields `encounter_id`, `events`, `cursor_ms`, `speed`, and `filters`. Event rows are compact envelopes derived from `EventBus.recent_events()` so UI code does not parse packet payloads directly. Entity/Tk keeps the panel low-frequency with a 350ms refresh throttle and dirty event signatures before rebuilding widgets; animated or high-frequency playback visuals should move to WebView/GPU paths before adding more Tk redraw pressure.
 
+## Current action-log surface
+
+`action_log` is wired through shared `act_platform.runtime` helpers over compact owner-scoped ACT `EventBus` rows:
+
+- status/open: `act_action_log_status(owner, limit=80, query="", topic="", cursor_ms=None)`
+- search: `act_action_log_search(owner, query="", limit=80)`
+- filter: `act_action_log_filter(owner, topic="", query=None, limit=80)`
+- jump to time: `act_action_log_jump_to_time(owner, cursor_ms=0, limit=80)`
+- copy: `act_action_log_copy(owner, limit=80, query="", topic="")`
+
+WebView route: `web/act_action_log.html`, opened from `SAO Menu > ACT 行为日志 Action Log`.
+
+Entity route: `entity://act/action_log`, opened from `SAO 菜单 > 面板 > ACT行为日志`.
+
+The shared payload preserves the parity fields `encounter_id`, `rows`, `columns`, `filters`, and `cursor`. Rows are compact table entries derived from EventBus envelopes and include cursor highlighting metadata. Entity/Tk keeps rendering bounded to the first 80 rows, refresh-throttled at 350ms, and dirty-signature gated before rebuilding widgets.
+
 ## Safety notes
 
 Treat the SDK as a delivery gate, not documentation-only metadata. If a feature PR changes ACT behavior, it should update the registry, both UI declarations, and parity tests in the same change.

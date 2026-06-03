@@ -693,6 +693,170 @@ def act_timeline_filter(owner: Any, *, query: str = "") -> dict[str, Any]:
     return act_timeline_status(owner, query=query)
 
 
+_ACTION_LOG_COLUMNS = [
+    {"key": "time_ms", "label": "Time", "width": 90},
+    {"key": "topic", "label": "Topic", "width": 110},
+    {"key": "label", "label": "Action", "width": 220},
+    {"key": "value", "label": "Value", "width": 110},
+    {"key": "source", "label": "Source", "width": 120},
+]
+
+
+def _action_log_state(owner: Any) -> dict[str, Any]:
+    state = getattr(owner, "_act_action_log_state", None)
+    if not isinstance(state, dict):
+        state = {"filters": {"query": "", "topic": ""}, "cursor": {"time_ms": 0, "offset": 0, "limit": 80}}
+        try:
+            setattr(owner, "_act_action_log_state", state)
+        except Exception:
+            pass
+    filters = state.get("filters")
+    if not isinstance(filters, dict):
+        filters = {"query": "", "topic": ""}
+        state["filters"] = filters
+    filters.setdefault("query", "")
+    filters.setdefault("topic", "")
+    cursor = state.get("cursor")
+    if not isinstance(cursor, dict):
+        cursor = {"time_ms": 0, "offset": 0, "limit": 80}
+        state["cursor"] = cursor
+    cursor.setdefault("time_ms", 0)
+    cursor.setdefault("offset", 0)
+    cursor.setdefault("limit", 80)
+    return state
+
+
+def _action_log_row(event: Mapping[str, Any], index: int = 0) -> dict[str, Any]:
+    compact = _compact_timeline_event(event, index)
+    payload = compact.get("payload") if isinstance(compact.get("payload"), Mapping) else {}
+    actor = str(payload.get("attacker") or payload.get("actor") or payload.get("source") or payload.get("name") or "")
+    target = str(payload.get("target") or payload.get("victim") or payload.get("boss") or "")
+    row_id = compact.get("id") or f"{compact.get('topic')}:{compact.get('time_ms')}:{index}"
+    return {
+        "index": int(index),
+        "id": str(row_id),
+        "time_ms": int(compact.get("time_ms") or 0),
+        "topic": str(compact.get("topic") or ""),
+        "label": str(compact.get("label") or ""),
+        "value": compact.get("value") or "",
+        "source": str(compact.get("source") or ""),
+        "actor": actor,
+        "target": target,
+        "payload": _json_safe(payload),
+        "is_cursor": False,
+    }
+
+
+def _filter_action_log_rows(rows: list[dict[str, Any]], *, query: str = "", topic: str = "") -> list[dict[str, Any]]:
+    text = str(query or "").strip().lower()
+    topic_text = str(topic or "").strip().lower()
+    out = rows
+    if topic_text:
+        out = [row for row in out if str(row.get("topic") or "").lower() == topic_text]
+    if text:
+        out = [row for row in out if text in json.dumps(row, ensure_ascii=False, default=str).lower()]
+    return out
+
+
+def _mark_action_log_cursor(rows: list[dict[str, Any]], cursor_ms: int) -> tuple[list[dict[str, Any]], str]:
+    if not rows:
+        return rows, ""
+    nearest = min(rows, key=lambda row: abs(int(row.get("time_ms") or 0) - int(cursor_ms or 0)))
+    nearest_id = str(nearest.get("id") or "")
+    for row in rows:
+        row["is_cursor"] = str(row.get("id") or "") == nearest_id
+    return rows, nearest_id
+
+
+def act_action_log_status(owner: Any, *, limit: int = 80, query: str | None = None, topic: str | None = None, cursor_ms: int | None = None) -> dict[str, Any]:
+    """Return searchable ACT action-log rows shared by WebView and Entity/Tk."""
+    state = _action_log_state(owner)
+    filters = dict(state.get("filters") or {})
+    if query is not None:
+        filters["query"] = str(query or "")
+    if topic is not None:
+        filters["topic"] = str(topic or "")
+    cursor = dict(state.get("cursor") or {})
+    if cursor_ms is not None:
+        cursor["time_ms"] = max(0, int(cursor_ms or 0))
+    row_limit = max(1, min(int(limit or cursor.get("limit") or 80), 500))
+    cursor["limit"] = row_limit
+    state["filters"] = filters
+    state["cursor"] = cursor
+    errors: list[str] = []
+    try:
+        raw_events = ensure_act_event_bus(owner).recent_events(row_limit)
+    except Exception as exc:
+        raw_events = []
+        errors.append(str(exc))
+    rows = [_action_log_row(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
+    rows = _filter_action_log_rows(rows, query=str(filters.get("query") or ""), topic=str(filters.get("topic") or ""))
+    rows, nearest_id = _mark_action_log_cursor(rows, int(cursor.get("time_ms") or 0))
+    cursor.update({"nearest_row_id": nearest_id, "row_count": len(rows)})
+    return {
+        "ok": not errors,
+        "message": "OK" if not errors else "; ".join(errors),
+        "encounter_id": _timeline_encounter_id(owner, state),
+        "rows": rows,
+        "columns": list(_ACTION_LOG_COLUMNS),
+        "filters": filters,
+        "cursor": cursor,
+        "errors": errors,
+    }
+
+
+def act_action_log_search(owner: Any, *, query: str = "", limit: int = 80) -> dict[str, Any]:
+    state = _action_log_state(owner)
+    filters = dict(state.get("filters") or {})
+    filters["query"] = str(query or "")
+    state["filters"] = filters
+    return act_action_log_status(owner, limit=limit)
+
+
+def act_action_log_filter(owner: Any, *, topic: str = "", query: str | None = None, limit: int = 80) -> dict[str, Any]:
+    state = _action_log_state(owner)
+    filters = dict(state.get("filters") or {})
+    filters["topic"] = str(topic or "")
+    if query is not None:
+        filters["query"] = str(query or "")
+    state["filters"] = filters
+    return act_action_log_status(owner, limit=limit)
+
+
+def act_action_log_jump_to_time(owner: Any, *, cursor_ms: int = 0, limit: int = 80) -> dict[str, Any]:
+    state = _action_log_state(owner)
+    cursor = dict(state.get("cursor") or {})
+    cursor["time_ms"] = max(0, int(cursor_ms or 0))
+    state["cursor"] = cursor
+    return act_action_log_status(owner, limit=limit)
+
+
+def act_action_log_copy(owner: Any, *, limit: int = 80, query: str = "", topic: str = "") -> dict[str, Any]:
+    status = act_action_log_status(owner, limit=limit, query=query, topic=topic)
+    payload = {
+        "encounter_id": status.get("encounter_id"),
+        "rows": status.get("rows") or [],
+        "columns": status.get("columns") or [],
+        "filters": status.get("filters") or {},
+        "cursor": status.get("cursor") or {},
+    }
+    try:
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+    except Exception:
+        text = str(payload)
+    return {
+        "ok": bool(status.get("ok")),
+        "message": status.get("message") or "OK",
+        "encounter_id": payload["encounter_id"],
+        "text": text,
+        "rows": payload["rows"],
+        "columns": payload["columns"],
+        "filters": payload["filters"],
+        "cursor": payload["cursor"],
+        "errors": list(status.get("errors") or []),
+    }
+
+
 def _report_rows_from_snapshot(snapshot: Mapping[str, Any], report: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     render_spec = snapshot.get("render_spec") if isinstance(snapshot, Mapping) else {}
     rows = render_spec.get("rows") if isinstance(render_spec, Mapping) else []
@@ -950,6 +1114,11 @@ def act_data_source_diagnose(owner: Any, *, now: float | None = None) -> dict[st
 
 
 __all__ = [
+    "act_action_log_copy",
+    "act_action_log_filter",
+    "act_action_log_jump_to_time",
+    "act_action_log_search",
+    "act_action_log_status",
     "act_history_delete",
     "act_history_load",
     "act_history_status",
