@@ -23,6 +23,7 @@ No ACT feature is complete until WebView and Entity can reach the same shared ba
 | Plugin SDK | `act_platform/plugins.py` | Discovers plugin folders, loads `plugin.json`, owns `PluginContext`, and exposes plugin status. |
 | Parser adapters | `act_platform/adapters.py` | First-party parser adapter contract and built-in `star_resonance_tcp` wrapper. |
 | Replay | `act_replay/` | Offline event fixtures, replay harness, and platform regression selftest. |
+| Offline import | `act_replay/importer.py` | Loads normalized ACT JSON/JSONL files into replay-ready event lists. |
 | Combat analytics | `engines/combat_analytics.py` | Builds ACT snapshots and render specs from DPS/game state. |
 | Trigger engine | `engines/act_trigger_engine.py` | Shared trigger/timer rule evaluator. |
 | History/export | `engines/dps_history.py` | Rolling encounter persistence plus JSON/CSV export. |
@@ -176,7 +177,7 @@ Do not run release packaging unless explicitly requested. For packaging changes,
 ## Open Edges
 
 - Plugin parser and trigger handlers are declared but not invoked by runtime services yet.
-- Offline import is still replay-fixture focused; broader pcap/log/XML import remains future work.
+- Offline import supports normalized JSON/JSONL files; broader pcap/log/XML import remains future work.
 - History is not yet a searchable SQLite-style database.
 - Manual WebView/Entity smoke still depends on a UI runtime session.
 - Hybrid memory policy is documented separately in `docs/HYBRID_MEMORY_TCP.md`.

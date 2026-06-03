@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Run an ACT replay JSONL fixture and print the resulting snapshot summary."""
+"""Run a normalized ACT replay JSON/JSONL fixture and print a summary."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ from typing import Any, Dict
 
 from engines.act_trigger_engine import ActTriggerEngine
 
-from .fixture_io import load_events_jsonl, load_fixture_events
+from .fixture_io import load_fixture_events
 from .harness import ActReplayHarness
+from .importer import load_normalized_import
 
 
 def _summary(snapshot: Dict[str, Any]) -> Dict[str, Any]:
@@ -34,7 +35,7 @@ def _summary(snapshot: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Replay a normalized ACT JSONL fixture")
+    parser = argparse.ArgumentParser(description="Replay a normalized ACT JSON/JSONL fixture")
     parser.add_argument("fixture", nargs="?", default="demo_events", help="fixture name or JSONL path")
     parser.add_argument("--rules", help="optional JSON file containing an act_trigger_rules array or a rule list")
     parser.add_argument("--self-uid", type=int, default=0, help="override self UID")
@@ -43,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
 
     candidate = Path(args.fixture)
     if candidate.exists():
-        self_uid, events = load_events_jsonl(candidate)
+        self_uid, events = load_normalized_import(candidate)
     else:
         self_uid, events = load_fixture_events(args.fixture)
     if args.self_uid > 0:
