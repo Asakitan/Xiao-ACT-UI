@@ -7,6 +7,7 @@ SAO Auto — 游戏窗口定位
 
 import ctypes
 import ctypes.wintypes
+import re
 import threading
 from typing import Optional, Tuple, List
 
@@ -134,6 +135,27 @@ def _get_process_name(hwnd: int) -> str:
     return ''
 
 
+def _keyword_matches_title(keyword: str, title_lower: str) -> bool:
+    """Return True when a configured title keyword safely matches a title.
+
+    ASCII keywords such as ``Star`` must match on alphanumeric word
+    boundaries.  A plain substring check treats ``link_start.py`` as a
+    game window because it contains ``star`` inside ``start``.
+    Non-ASCII keywords keep the historical substring behavior.
+    """
+    kw = (keyword or '').strip().lower()
+    if not kw:
+        return False
+    if kw.isascii() and any(ch.isalnum() for ch in kw):
+        return re.search(rf'(?<![a-z0-9]){re.escape(kw)}(?![a-z0-9])', title_lower) is not None
+    return kw in title_lower
+
+
+def _matches_process_name(exe: str, process_names: List[str]) -> bool:
+    """Return True when ``exe`` is one of the configured game processes."""
+    return bool(exe) and exe.lower() in process_names
+
+
 class WindowLocator:
     """游戏窗口定位器"""
 
@@ -147,15 +169,16 @@ class WindowLocator:
 
     def _match(self, hwnd: int, title: str) -> bool:
         """标题关键词 **或** 进程名匹配 → True"""
+        return self._match_process(hwnd) or self._match_title(title)
+
+    def _match_process(self, hwnd: int) -> bool:
+        if not self._process_names:
+            return False
+        return _matches_process_name(_get_process_name(hwnd), self._process_names)
+
+    def _match_title(self, title: str) -> bool:
         title_lower = title.lower()
-        for kw in self._keywords:
-            if kw.lower() in title_lower:
-                return True
-        if self._process_names:
-            exe = _get_process_name(hwnd)
-            if exe and exe in self._process_names:
-                return True
-        return False
+        return any(_keyword_matches_title(kw, title_lower) for kw in self._keywords)
 
     def find_game_window(self) -> Optional[Tuple[int, str, tuple]]:
         """
@@ -174,12 +197,30 @@ class WindowLocator:
                         self._cached_rect = cr
                         buf = ctypes.create_unicode_buffer(256)
                         user32.GetWindowTextW(self._cached_hwnd, buf, 256)
-                        return (self._cached_hwnd, buf.value, cr)
+                        if self._match_process(self._cached_hwnd):
+                            return (self._cached_hwnd, buf.value, cr)
+                        if not self._process_names and self._match_title(buf.value):
+                            return (self._cached_hwnd, buf.value, cr)
+            self._cached_hwnd = 0
+            self._cached_rect = None
 
-        # 全量枚举 — 标题关键词 + 进程名双重匹配
+        # 全量枚举 — 优先精确进程名，标题关键词只作为兜底。
         windows = _enum_windows()
         for hwnd, title, rect in windows:
-            if self._match(hwnd, title):
+            if self._match_process(hwnd):
+                self._cached_hwnd = hwnd
+                self._cached_rect = rect
+                if self._log_once:
+                    self._log_once = False
+                    w, h = rect[2] - rect[0], rect[3] - rect[1]
+                    exe = _get_process_name(hwnd)
+                    print(f'[识别] 找到游戏窗口: "{title}" [{exe}] '
+                          f'client={rect[0]},{rect[1]}→{rect[2]},{rect[3]} '
+                          f'({w}x{h})')
+                return (hwnd, title, rect)
+
+        for hwnd, title, rect in windows:
+            if self._match_title(title):
                 self._cached_hwnd = hwnd
                 self._cached_rect = rect
                 if self._log_once:
