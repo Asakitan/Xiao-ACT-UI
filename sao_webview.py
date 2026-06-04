@@ -4508,8 +4508,10 @@ class SAOWebViewGUI:
             _gpu_overlays_suspended = False
             if _suspend_gpu_overlays is not None:
                 try:
-                    _suspend_gpu_overlays()
-                    _gpu_overlays_suspended = True
+                    # LinkStart now owns a direct GLFW/ModernGL presentation
+                    # window when available; suspending new GPU overlays here
+                    # would force it back to the old FBO.read -> Tk path.
+                    _gpu_overlays_suspended = False
                 except Exception:
                     _gpu_overlays_suspended = False
 
