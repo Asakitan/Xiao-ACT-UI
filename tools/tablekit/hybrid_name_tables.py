@@ -28,17 +28,23 @@ _SR_WPF_MONSTER = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAnaly
 _SR_OLD_MONSTER = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Old", "Data", "monster")
 
 _RUNTIME_KINDS = (
-    "skill", "field_marker", "boss_skill",
+    "skill", "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
+    "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill",
     "dungeon", "monster", "boss",
-    "boss_mechanic", "boss_status",
-    "buff", "player_buff", "factor_buff", "event",
+    "boss_mechanic",
+    "buff", "player_buff", "factor_buff", "profession_skill_buff", "event",
 )
 _KIND_FILENAMES = {kind: os.path.join(_NAME_TABLES, f"{kind}.json") for kind in _RUNTIME_KINDS}
 _CLASSIFIED_KINDS = {
-    "skill", "field_marker", "boss_skill", "boss", "boss_mechanic", "boss_status",
-    "buff", "player_buff", "factor_buff", "event",
+    "skill", "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
+    "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill",
+    "boss", "boss_mechanic", "buff", "player_buff", "factor_buff", "profession_skill_buff", "event",
 }
-_FALLBACK_PREFIXES = ("技能#", "怪物#", "Boss#", "地牢#", "Buff#", "机制#", "状态#", "事件#", "场地标记#", "NPC#", "道具#")
+_FALLBACK_PREFIXES = (
+    "技能#", "场地标记#", "Boss技能#", "幻想技能#", "肉鸽词条#", "职业技能#",
+    "剧情表演#", "虚拟体技能#", "Boss机制技能#", "怪物#", "Boss#", "地牢#",
+    "Buff#", "玩家Buff#", "因子Buff#", "职业技能Buff#", "事件#", "机制#", "NPC#", "道具#",
+)
 _CONFIDENCE_RANK = {
     "static": 50,
     "curated": 45,
@@ -175,7 +181,9 @@ def _classified_entries(kind: str) -> dict[str, dict[str, str]]:
         classifier._SR_OLD_MONSTER = _SR_OLD_MONSTER
         for name in (
             "skill_table", "buff_table", "monster_table", "skill_fallback_names",
-            "buff_fallback_names", "monster_names", "boss_monster_ids", "boss_skill_ids", "load_classified_tables",
+            "buff_fallback_names", "monster_names", "boss_monster_ids", "boss_skill_ids",
+            "aoyi_skill_names", "damage_attr_names", "profession_skill_ids", "ultimate_skill_ids",
+            "load_classified_tables",
         ):
             fn = getattr(classifier, name, None)
             clear = getattr(fn, "cache_clear", None)
@@ -277,7 +285,7 @@ def _semantic_cache_entries(cache: Any, kind: str) -> dict[str, dict[str, str]]:
     for source_kind in ("skill", "buff"):
         for key, value in _coerce_name_map(by_kind.get(source_kind) or {}).items():
             classified = _classify_cache_kind(source_kind, key)
-            if classified == kind or (kind == "buff" and classified in {"buff", "player_buff", "factor_buff"}):
+            if classified == kind or (kind == "buff" and classified in {"buff", "player_buff", "factor_buff", "profession_skill_buff"}):
                 out[key] = value
     return out
 

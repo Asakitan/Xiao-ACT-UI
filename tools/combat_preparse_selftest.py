@@ -43,10 +43,23 @@ class CombatPreparseTests(unittest.TestCase):
 
         self.assertEqual(fact["skill_id"], 2406)
         self.assertEqual(fact["skill_role"], "sub_profession_skill")
-        self.assertEqual(fact["skill_category"], "skill")
+        self.assertEqual(fact["skill_category"], "profession_skill")
+        self.assertEqual(fact["skill_kind"], "profession_skill")
         self.assertEqual(fact["profession_id"], 12)
         self.assertEqual(fact["sub_profession"], "光盾")
         self.assertTrue(fact["display_name"])
+
+    def test_skill_event_exposes_refined_category_booleans(self) -> None:
+        ultimate = enrich_skill_event({"skill_id": 1713})
+        scripted = enrich_skill_event({"skill_id": 100324})
+        mechanic = enrich_skill_event({"skill_id": 510074})
+
+        self.assertEqual(ultimate["skill_category"], "ultimate_skill")
+        self.assertTrue(ultimate["is_ultimate"])
+        self.assertEqual(scripted["skill_category"], "scripted_skill")
+        self.assertTrue(scripted["is_scripted_skill"])
+        self.assertEqual(mechanic["skill_category"], "boss_mechanic_skill")
+        self.assertTrue(mechanic["is_boss_mechanic_skill"])
 
     def test_packet_bridge_skill_name_prefers_name_resolver(self) -> None:
         with mock.patch.object(packet_bridge_module._NAME_RESOLVER, "skill", side_effect=lambda skill_id, default="": "统一技能名" if int(skill_id) == 2414 else default):
@@ -71,7 +84,7 @@ class CombatPreparseTests(unittest.TestCase):
 
         self.assertEqual(fact["boss_mechanic_key"], "shield_broken")
         self.assertEqual(fact["boss_mechanic_label"], "护盾破裂")
-        self.assertEqual(fact["boss_status_name"], "护盾破裂")
+        self.assertNotIn("boss_status_name", fact)
         self.assertEqual(fact["trigger_family"], "shield")
         self.assertEqual(fact["host_uuid"], 123)
 
@@ -106,6 +119,32 @@ class CombatPreparseTests(unittest.TestCase):
         finally:
             engine.stop()
 
+    def test_bossraid_skill_category_trigger_advances_phase(self) -> None:
+        state = GameStateManager()
+        engine = BossRaidEngine(state, settings={})
+        profile = {
+            "profile_name": "skill category boss",
+            "phases": [
+                {"name": "P1", "trigger": {"type": "manual", "value": 0}, "timelines": []},
+                {"name": "P2", "trigger": {"type": "boss_mechanic_skill", "value": "boss_mechanic_skill"}, "timelines": []},
+            ],
+        }
+
+        self.assertEqual(normalize_phase_trigger({"type": "boss_mechanic_skill", "value": "boss_mechanic_skill"})["value"], "boss_mechanic_skill")
+        engine.start(profile)
+        try:
+            engine.on_boss_event({
+                    "event_type": 999,
+                    "skill_id": 510074,
+                    "skill_name": "英雄本通用致死点名",
+                "skill_category": "boss_mechanic_skill",
+            })
+            status = engine.get_status()
+
+            self.assertEqual(status["phase_idx"], 1)
+        finally:
+            engine.stop()
+
     def test_monster_event_summarizes_combat_mechanics(self) -> None:
         fact = enrich_monster_event({
             "uuid": 999,
@@ -133,7 +172,13 @@ class CombatPreparseTests(unittest.TestCase):
         state.update(
             dungeon_id=42001,
             dungeon_name="测试副本",
-            last_skill_event={"skill_id": 2406, "skill_name": "先锋追击", "skill_role": "sub_profession_skill"},
+            last_skill_event={
+                "skill_id": 2406,
+                "skill_name": "先锋追击",
+                "skill_role": "sub_profession_skill",
+                "skill_category": "profession_skill",
+                "combat_fact": enrich_skill_event({"skill_id": 2406, "skill_name": "先锋追击"}),
+            },
             last_boss_event={"event_type": 47, "boss_mechanic_key": "shield_broken", "trigger_family": "shield"},
         )
         engine = AutoKeyEngine(state, settings={})
@@ -142,6 +187,7 @@ class CombatPreparseTests(unittest.TestCase):
             "conditions": [
                 normalize_condition({"type": "dungeon_is", "value": "测试副本"}),
                 normalize_condition({"type": "last_skill_is", "value": "2406"}),
+                normalize_condition({"type": "last_skill_category_is", "value": "profession_skill"}),
                 normalize_condition({"type": "boss_mechanic_is", "value": "shield_broken"}),
                 normalize_condition({"type": "boss_mechanic_family_is", "value": "shield"}),
             ],
@@ -170,7 +216,8 @@ class CombatPreparseTests(unittest.TestCase):
 
         self.assertEqual(seen["skill"]["skill_id"], 2406)
         self.assertEqual(seen["skill"]["skill_role"], "sub_profession_skill")
-        self.assertEqual(seen["skill"]["skill_category"], "skill")
+        self.assertEqual(seen["skill"]["skill_category"], "profession_skill")
+        self.assertEqual(seen["skill"]["skill_kind"], "profession_skill")
         self.assertIn("combat_fact", seen["dungeon"])
         self.assertIn("shield", seen["monster"].get("mechanics") or [])
         self.assertEqual(seen["boss"]["boss_mechanic_key"], "shield_broken")
@@ -182,7 +229,7 @@ class CombatPreparseTests(unittest.TestCase):
             context={
                 "dungeon_id": 42001,
                 "dungeon_name": "测试副本",
-                "last_skill_event": {"combat_fact": {"skill_id": 2406, "skill_name": "先锋追击", "skill_role": "sub_profession_skill"}},
+                "last_skill_event": {"combat_fact": {"skill_id": 2406, "skill_name": "先锋追击", "skill_role": "sub_profession_skill", "skill_category": "profession_skill", "skill_kind": "profession_skill"}},
                 "last_boss_event": {"combat_fact": {"event_type": 47, "boss_mechanic_key": "shield_broken", "boss_mechanic_label": "护盾破裂", "trigger_family": "shield"}},
             },
         )
@@ -190,6 +237,8 @@ class CombatPreparseTests(unittest.TestCase):
         ctx = spec["context"]
         self.assertEqual(ctx["last_skill_id"], 2406)
         self.assertEqual(ctx["last_skill_role"], "sub_profession_skill")
+        self.assertEqual(ctx["last_skill_category"], "profession_skill")
+        self.assertEqual(ctx["last_skill_kind"], "profession_skill")
         self.assertEqual(ctx["last_boss_mechanic_key"], "shield_broken")
         self.assertEqual(ctx["last_boss_trigger_family"], "shield")
 

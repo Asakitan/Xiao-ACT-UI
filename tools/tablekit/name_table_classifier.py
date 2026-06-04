@@ -11,6 +11,7 @@ import os
 import re
 from functools import lru_cache
 from typing import Any, Mapping
+import importlib
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SAO = os.path.dirname(os.path.dirname(_HERE))
@@ -26,16 +27,28 @@ _SR_OLD_MONSTER = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Old", "D
 SKILL_KIND = "skill"
 FIELD_MARKER_KIND = "field_marker"
 BOSS_SKILL_KIND = "boss_skill"
+ULTIMATE_SKILL_KIND = "ultimate_skill"
+ROGUELIKE_AFFIX_KIND = "roguelike_affix"
+PROFESSION_SKILL_KIND = "profession_skill"
+SCRIPTED_SKILL_KIND = "scripted_skill"
+VIRTUAL_SKILL_KIND = "virtual_skill"
+BOSS_MECHANIC_SKILL_KIND = "boss_mechanic_skill"
 BUFF_KIND = "buff"
 PLAYER_BUFF_KIND = "player_buff"
 FACTOR_BUFF_KIND = "factor_buff"
+PROFESSION_SKILL_BUFF_KIND = "profession_skill_buff"
 EVENT_KIND = "event"
-BOSS_STATUS_KIND = "boss_status"
 BOSS_MECHANIC_KIND = "boss_mechanic"
 
 _FIELD_MARKER_RE = re.compile(r"(场地标记|场地|地面|范围标记)")
-_EVENT_RE = re.compile(r"(事件|Event|event|触发事件|剧情|玩法事件|任务事件)")
-_BOSS_STATUS_RE = re.compile(r"(主体死亡|部位死亡|部位状态变化|护盾破裂|霸体破裂|进入破防|进入碎裂状态)")
+_EVENT_RE = re.compile(r"(事件|Event|event|触发事件|玩法事件|任务事件)")
+_SCRIPTED_RE = re.compile(r"(剧情|表演|演出|锁定追击|空降|过场|脚本|idle|Idle|IDLE)")
+_VIRTUAL_RE = re.compile(r"(虚拟体|虚拟|dummy|Dummy|DUMMY|VFX|vfx|假子弹|假体)")
+_ULTIMATE_RE = re.compile(r"(奥义|幻想|终极|绝技|大招|ULT|ult)")
+_ROGUELIKE_RE = re.compile(r"(肉鸽词条|大秘境词条|词条|赛季词缀|赛季词条)")
+_BOSS_MECHANIC_SKILL_RE = re.compile(r"(读条|点名|分摊|致死|转阶段|阶段转换|机制杀|机制|踩塔|连线|全场|秒杀|破盾|破防|锁血|斩杀|狂暴)")
+_PROFESSION_BUFF_RE = re.compile(r"(职业|专精|天赋|流派|普攻|特攻|特殊攻击|大招|奥义|终技|技能强化|替换技能|派生|分支|圣令|气刃|寒冰能量|光铸|种子|协奏|狂音|雷之印|恩格|护盾猛击|先锋追击|狂野绽放|生命绽放)")
+_SCRIPTED_EXCLUDE_RE = re.compile(r"(锁定追击|点名|分摊|机制|读条|致死|秒杀)")
 
 
 def _load_json(path: str) -> Any:
@@ -120,6 +133,51 @@ def skill_fallback_names() -> dict[int, str]:
 
 
 @lru_cache(maxsize=1)
+def aoyi_skill_names() -> dict[int, str]:
+    return _plain_names(_load_json(os.path.join(_RESONANCE_CONFIG, "skill_aoyi_icons.json")), fields=("NameDesign", "Name", "name", "text"))
+
+
+@lru_cache(maxsize=1)
+def damage_attr_names() -> dict[int, str]:
+    return _plain_names(_load_json(os.path.join(_RESONANCE_CONFIG, "DamageAttrIdName.json")), fields=("NameDesign", "Name", "name", "text"))
+
+
+@lru_cache(maxsize=1)
+def profession_skill_ids() -> set[int]:
+    ids: set[int] = set()
+    try:
+        skills = importlib.import_module("packet_parser.skills")
+    except Exception:
+        return ids
+    for attr in ("PROFESSION_NORMAL_ATTACK", "PROFESSION_SKILL", "PROFESSION_ULTIMATE"):
+        mapping = getattr(skills, attr, {}) or {}
+        if isinstance(mapping, Mapping):
+            ids.update(_safe_int(value) for value in mapping.values())
+    variants = getattr(skills, "PROFESSION_SKILL_VARIANTS", {}) or {}
+    if isinstance(variants, Mapping):
+        for values in variants.values():
+            if isinstance(values, (list, tuple, set)):
+                ids.update(_safe_int(value) for value in values)
+    sub_names = getattr(skills, "SUB_PROFESSION_NAMES", {}) or {}
+    if isinstance(sub_names, Mapping):
+        ids.update(_safe_int(key) for key in sub_names)
+    return {sid for sid in ids if sid > 0}
+
+
+@lru_cache(maxsize=1)
+def ultimate_skill_ids() -> set[int]:
+    ids = set(aoyi_skill_names())
+    try:
+        skills = importlib.import_module("packet_parser.skills")
+    except Exception:
+        skills = None
+    mapping = getattr(skills, "PROFESSION_ULTIMATE", {}) if skills is not None else {}
+    if isinstance(mapping, Mapping):
+        ids.update(_safe_int(value) for value in mapping.values())
+    return {sid for sid in ids if sid > 0}
+
+
+@lru_cache(maxsize=1)
 def buff_fallback_names() -> dict[int, str]:
     return _plain_names(_load_json(os.path.join(_RESONANCE_CONFIG, "BuffName.json")), fields=("NameDesign", "Name", "name", "text"))
 
@@ -167,16 +225,50 @@ def boss_skill_ids() -> set[int]:
     return ids
 
 
+def _slot_positions(row: Mapping[str, Any]) -> set[int]:
+    raw = row.get("SlotPositionId") or []
+    if isinstance(raw, (int, str)):
+        raw = [raw]
+    return {_safe_int(value, -1) for value in raw if _safe_int(value, -1) >= 0}
+
+
+def _skill_name_text(skill_id: int, row: Mapping[str, Any] | None = None) -> str:
+    row = row or skill_table().get(skill_id) or {}
+    pieces = [
+        _entry_name(row),
+        _clean_text(row.get("NameDesign") if isinstance(row, Mapping) else ""),
+        skill_fallback_names().get(skill_id, ""),
+        aoyi_skill_names().get(skill_id, ""),
+        damage_attr_names().get(skill_id, ""),
+    ]
+    return " ".join(text for text in pieces if text)
+
+
 def classify_skill_id(skill_id: Any) -> str:
     sid = _safe_int(skill_id)
     if sid <= 0:
         return ""
     row = skill_table().get(sid) or {}
-    name = _entry_name(row) or skill_fallback_names().get(sid, "")
+    name = _entry_name(row) or skill_fallback_names().get(sid, "") or aoyi_skill_names().get(sid, "") or damage_attr_names().get(sid, "")
+    text = _skill_name_text(sid, row)
     if row and _safe_int(row.get("SkillType"), -1) == 7:
         return FIELD_MARKER_KIND
-    if _FIELD_MARKER_RE.search(name):
+    if _FIELD_MARKER_RE.search(text):
         return FIELD_MARKER_KIND
+    if _VIRTUAL_RE.search(text):
+        return VIRTUAL_SKILL_KIND
+    if _SCRIPTED_RE.search(text):
+        if _BOSS_MECHANIC_SKILL_RE.search(text) and not _SCRIPTED_EXCLUDE_RE.search(text):
+            return BOSS_MECHANIC_SKILL_KIND
+        return SCRIPTED_SKILL_KIND
+    if _ROGUELIKE_RE.search(text):
+        return ROGUELIKE_AFFIX_KIND
+    if sid in ultimate_skill_ids() or _ULTIMATE_RE.search(text):
+        return ULTIMATE_SKILL_KIND
+    if sid in profession_skill_ids() or (row and (_slot_positions(row) & {1, 2, 6, 7, 8})):
+        return PROFESSION_SKILL_KIND
+    if _BOSS_MECHANIC_SKILL_RE.search(text) or bool(row.get("IsDangerSkill")) or bool(row.get("IsFractureSkill")):
+        return BOSS_MECHANIC_SKILL_KIND
     if sid in boss_skill_ids():
         return BOSS_SKILL_KIND
     return SKILL_KIND
@@ -204,10 +296,15 @@ def classify_buff_id(buff_id: Any) -> str:
         return ""
     name = _buff_name(bid)
     row = buff_table().get(bid) or {}
-    if _BOSS_STATUS_RE.search(name):
-        return BOSS_STATUS_KIND
+    text = " ".join(str(part or "") for part in (name, row.get("Note") if isinstance(row, Mapping) else ""))
     if _EVENT_RE.search(name):
         return EVENT_KIND
+    if _SCRIPTED_RE.search(name) or _VIRTUAL_RE.search(name):
+        return EVENT_KIND
+    if _ROGUELIKE_RE.search(name):
+        return FACTOR_BUFF_KIND
+    if _PROFESSION_BUFF_RE.search(text):
+        return PROFESSION_SKILL_BUFF_KIND
     if not row:
         return BUFF_KIND
     visible = _safe_int(row.get("Visible"), 0)
@@ -226,12 +323,23 @@ def classify_buff_id(buff_id: Any) -> str:
 
 def _skill_name(skill_id: int) -> str:
     row = skill_table().get(skill_id) or {}
-    return _entry_name(row) or skill_fallback_names().get(skill_id, "")
+    return _entry_name(row) or skill_fallback_names().get(skill_id, "") or aoyi_skill_names().get(skill_id, "") or damage_attr_names().get(skill_id, "")
 
 
 def _skill_maps() -> dict[str, dict[int, str]]:
-    out = {SKILL_KIND: {}, FIELD_MARKER_KIND: {}, BOSS_SKILL_KIND: {}}
-    ids = set(skill_table()) | set(skill_fallback_names()) | boss_skill_ids()
+    out = {
+        SKILL_KIND: {},
+        FIELD_MARKER_KIND: {},
+        BOSS_SKILL_KIND: {},
+        ULTIMATE_SKILL_KIND: {},
+        ROGUELIKE_AFFIX_KIND: {},
+        PROFESSION_SKILL_KIND: {},
+        SCRIPTED_SKILL_KIND: {},
+        VIRTUAL_SKILL_KIND: {},
+        BOSS_MECHANIC_SKILL_KIND: {},
+    }
+    ids = set(skill_table()) | set(skill_fallback_names()) | set(aoyi_skill_names()) | boss_skill_ids()
+    ids.update(sid for sid, text in damage_attr_names().items() if _ULTIMATE_RE.search(text) or _ROGUELIKE_RE.search(text) or _VIRTUAL_RE.search(text) or _BOSS_MECHANIC_SKILL_RE.search(text))
     for sid in sorted(ids):
         name = _skill_name(sid)
         if not name:
@@ -243,7 +351,7 @@ def _skill_maps() -> dict[str, dict[int, str]]:
 
 
 def _buff_maps() -> dict[str, dict[int, str]]:
-    out = {BUFF_KIND: {}, PLAYER_BUFF_KIND: {}, FACTOR_BUFF_KIND: {}, EVENT_KIND: {}, BOSS_STATUS_KIND: {}}
+    out = {BUFF_KIND: {}, PLAYER_BUFF_KIND: {}, FACTOR_BUFF_KIND: {}, PROFESSION_SKILL_BUFF_KIND: {}, EVENT_KIND: {}}
     ids = set(buff_table())
     ids.update(buff_fallback_names())
     for bid in sorted(ids):
@@ -251,16 +359,18 @@ def _buff_maps() -> dict[str, dict[int, str]]:
         if not name:
             continue
         kind = classify_buff_id(bid)
-        if kind in {EVENT_KIND, BOSS_STATUS_KIND}:
+        if kind == EVENT_KIND:
             out[kind][bid] = name
             continue
-        if kind == PLAYER_BUFF_KIND:
+        if kind == PROFESSION_SKILL_BUFF_KIND:
+            out[PROFESSION_SKILL_BUFF_KIND][bid] = name
+        elif kind == PLAYER_BUFF_KIND:
             out[PLAYER_BUFF_KIND][bid] = name
         elif kind == FACTOR_BUFF_KIND:
             out[FACTOR_BUFF_KIND][bid] = name
         else:
             out[BUFF_KIND][bid] = name
-        if kind in {PLAYER_BUFF_KIND, FACTOR_BUFF_KIND, BUFF_KIND}:
+        if kind in {PLAYER_BUFF_KIND, FACTOR_BUFF_KIND, PROFESSION_SKILL_BUFF_KIND, BUFF_KIND}:
             out[BUFF_KIND][bid] = name
     return out
 
@@ -291,11 +401,17 @@ def load_classified_tables() -> dict[str, dict[str, dict[str, str]]]:
         SKILL_KIND: _to_runtime(skills[SKILL_KIND]),
         FIELD_MARKER_KIND: _to_runtime(skills[FIELD_MARKER_KIND]),
         BOSS_SKILL_KIND: _to_runtime(skills[BOSS_SKILL_KIND]),
+        ULTIMATE_SKILL_KIND: _to_runtime(skills[ULTIMATE_SKILL_KIND]),
+        ROGUELIKE_AFFIX_KIND: _to_runtime(skills[ROGUELIKE_AFFIX_KIND]),
+        PROFESSION_SKILL_KIND: _to_runtime(skills[PROFESSION_SKILL_KIND]),
+        SCRIPTED_SKILL_KIND: _to_runtime(skills[SCRIPTED_SKILL_KIND]),
+        VIRTUAL_SKILL_KIND: _to_runtime(skills[VIRTUAL_SKILL_KIND]),
+        BOSS_MECHANIC_SKILL_KIND: _to_runtime(skills[BOSS_MECHANIC_SKILL_KIND]),
         BUFF_KIND: _to_runtime(buffs[BUFF_KIND]),
         PLAYER_BUFF_KIND: _to_runtime(buffs[PLAYER_BUFF_KIND]),
         FACTOR_BUFF_KIND: _to_runtime(buffs[FACTOR_BUFF_KIND]),
+        PROFESSION_SKILL_BUFF_KIND: _to_runtime(buffs[PROFESSION_SKILL_BUFF_KIND]),
         EVENT_KIND: _to_runtime(buffs[EVENT_KIND]),
-        BOSS_STATUS_KIND: _to_runtime({**mechanics, **buffs[BOSS_STATUS_KIND]}),
         BOSS_MECHANIC_KIND: _to_runtime(mechanics),
         "boss": _to_runtime(_boss_map()),
     }

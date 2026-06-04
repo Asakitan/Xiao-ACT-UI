@@ -146,7 +146,7 @@ def normalize_timeline(raw: Any) -> Dict[str, Any]:
 
 def make_default_phase_trigger() -> Dict[str, Any]:
     return {
-        "type": "manual",   # manual | time | dps_total | hp_pct | breaking | buff_event | shield_broken | overdrive | extinction_pct | breaking_stage | boss_mechanic | boss_mechanic_family
+        "type": "manual",   # manual | time | dps_total | hp_pct | breaking | buff_event | shield_broken | overdrive | extinction_pct | breaking_stage | boss_mechanic | boss_mechanic_family | boss_skill | boss_mechanic_skill | ultimate_skill
         "value": 0,
     }
 
@@ -156,11 +156,12 @@ def normalize_phase_trigger(raw: Any) -> Dict[str, Any]:
     trigger_type = _string(src.get("type")).lower()
     if trigger_type not in ("manual", "time", "dps_total", "hp_pct", "breaking", "buff_event",
                             "shield_broken", "overdrive", "extinction_pct", "breaking_stage",
-                            "boss_mechanic", "boss_mechanic_family"):
+                            "boss_mechanic", "boss_mechanic_family", "boss_skill",
+                            "boss_mechanic_skill", "ultimate_skill"):
         trigger_type = "manual"
     return {
         "type": trigger_type,
-        "value": _string(src.get("value")) if trigger_type in ("boss_mechanic", "boss_mechanic_family") else _coerce_float(src.get("value"), 0.0, 0.0),
+        "value": _string(src.get("value")) if trigger_type in ("boss_mechanic", "boss_mechanic_family", "boss_skill", "boss_mechanic_skill", "ultimate_skill") else _coerce_float(src.get("value"), 0.0, 0.0),
     }
 
 
@@ -916,6 +917,9 @@ class BossRaidEngine:
             boss_mechanic_key = _string(event.get("boss_mechanic_key") or fact.get("boss_mechanic_key"))
             boss_mechanic_label = _string(event.get("boss_mechanic_label") or fact.get("boss_mechanic_label"))
             trigger_family = _string(event.get("trigger_family") or fact.get("trigger_family"))
+            skill_id = _coerce_int(event.get("skill_id") or fact.get("skill_id"), 0)
+            skill_name = _string(event.get("skill_name") or fact.get("skill_name"))
+            skill_category = _string(event.get("skill_category") or event.get("skill_kind") or fact.get("skill_category") or fact.get("skill_kind"))
             self._last_boss_event = dict(event or {})
             self._last_boss_event.setdefault("combat_fact", fact)
             self._last_boss_mechanic_key = boss_mechanic_key
@@ -949,6 +953,15 @@ class BossRaidEngine:
                 elif trigger_type == "boss_mechanic_family":
                     trigger_text = _string(trigger.get("value"))
                     if trigger_text and trigger_text == trigger_family:
+                        self._advance_phase()
+                elif trigger_type in ("boss_skill", "boss_mechanic_skill", "ultimate_skill"):
+                    trigger_text = _string(trigger.get("value"))
+                    expected_category = {
+                        "boss_skill": "boss_skill",
+                        "boss_mechanic_skill": "boss_mechanic_skill",
+                        "ultimate_skill": "ultimate_skill",
+                    }.get(trigger_type, trigger_type)
+                    if skill_category == expected_category and (not trigger_text or trigger_text in (str(skill_id), skill_name, skill_category)):
                         self._advance_phase()
             self._push_game_state_locked(time.time())
 

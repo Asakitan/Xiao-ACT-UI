@@ -260,11 +260,17 @@ def build_act_render_spec(live: Optional[Dict[str, Any]] = None,
             "dungeon_difficulty": _safe_int(
                 context.get("dungeon_difficulty") or encounter.get("dungeon_difficulty"), 0),
             "dungeon_name": dungeon_name,
-            "last_skill_kind": str(last_skill.get("kind") or ""),
+            "last_skill_event_kind": str(last_skill.get("kind") or ""),
             "last_skill_id": _safe_int(last_skill.get("skill_id") or last_skill_fact.get("skill_id"), 0),
             "last_skill_name": str(last_skill.get("skill_name") or last_skill_fact.get("skill_name") or ""),
             "last_skill_role": str(last_skill.get("skill_role") or last_skill_fact.get("skill_role") or ""),
+            "last_skill_category": str(last_skill.get("skill_category") or last_skill_fact.get("skill_category") or ""),
+            "last_skill_kind": str(last_skill.get("skill_kind") or last_skill_fact.get("skill_kind") or last_skill.get("skill_category") or last_skill_fact.get("skill_category") or ""),
+            "last_skill_is_ultimate": bool(last_skill.get("is_ultimate") or last_skill_fact.get("is_ultimate")),
+            "last_skill_is_boss_skill": bool(last_skill.get("is_boss_skill") or last_skill_fact.get("is_boss_skill")),
+            "last_skill_is_boss_mechanic": bool(last_skill.get("is_boss_mechanic_skill") or last_skill_fact.get("is_boss_mechanic_skill")),
             "last_boss_event_type": _safe_int(last_boss_event.get("event_type"), 0),
+            "last_buff_category": str(last_boss_event.get("buff_category") or last_boss_fact.get("buff_category") or ""),
             "last_boss_mechanic_key": str(
                 last_boss_event.get("boss_mechanic_key") or last_boss_fact.get("boss_mechanic_key") or ""),
             "last_boss_mechanic_label": str(

@@ -840,7 +840,7 @@ class PacketBridge:
         if buff_id > 0 and buff_name:
             buff_kind = str(fact.get('buff_category') or 'buff')
             self._cache_name(buff_kind, buff_id, buff_name, source='tcp_boss_event', confidence='medium', context=context)
-            if buff_kind in {'player_buff', 'factor_buff'}:
+            if buff_kind in {'player_buff', 'factor_buff', 'profession_skill_buff'}:
                 self._cache_name('buff', buff_id, buff_name, source='tcp_boss_event', confidence='medium', context=context)
 
     def _is_mem_trigger_event(self, trigger: str, context: Any) -> bool:
@@ -988,6 +988,13 @@ class PacketBridge:
                     event['skill_name'] = fact.get('skill_name')
                 event.setdefault('skill_role', fact.get('skill_role'))
                 event.setdefault('skill_category', fact.get('skill_category'))
+                event.setdefault('skill_kind', fact.get('skill_kind'))
+                event.setdefault('is_ultimate', fact.get('is_ultimate'))
+                event.setdefault('is_boss_skill', fact.get('is_boss_skill'))
+                event.setdefault('is_boss_mechanic_skill', fact.get('is_boss_mechanic_skill'))
+                event.setdefault('is_scripted_skill', fact.get('is_scripted_skill'))
+                event.setdefault('is_virtual_skill', fact.get('is_virtual_skill'))
+                event.setdefault('is_roguelike_affix', fact.get('is_roguelike_affix'))
                 event.setdefault('sub_profession', fact.get('sub_profession'))
         except Exception:
             pass

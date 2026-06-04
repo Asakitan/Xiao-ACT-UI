@@ -84,6 +84,56 @@ def _append_decimal(prefix: int, suffix: int, min_width: int) -> int:
     return int(prefix or 0) * (10 ** width) + suffix
 
 
+def _skill_semantic_fact(skill_id: int) -> Dict[str, Any]:
+    sid = _safe_int(skill_id, 0)
+    if sid <= 0:
+        return {}
+    try:
+        from tools.tablekit.combat_preparse import skill_role
+        from tools.tablekit.name_table_classifier import classify_skill_id
+        category = str(classify_skill_id(sid) or 'skill')
+        role = str(skill_role(sid) or '')
+    except Exception:
+        category = 'skill'
+        role = 'skill'
+    if category in {
+        'field_marker', 'boss_skill', 'ultimate_skill', 'roguelike_affix',
+        'scripted_skill', 'virtual_skill', 'boss_mechanic_skill',
+    }:
+        role = category
+    return {
+        'skill_category': category,
+        'skill_kind': category,
+        'skill_role': role,
+        'is_ultimate': category == 'ultimate_skill' or role == 'ultimate',
+        'is_boss_skill': category == 'boss_skill',
+        'is_boss_mechanic_skill': category == 'boss_mechanic_skill',
+        'is_scripted_skill': category == 'scripted_skill',
+        'is_virtual_skill': category == 'virtual_skill',
+        'is_roguelike_affix': category == 'roguelike_affix',
+    }
+
+
+def _annotate_skill_rows(rows: Any) -> None:
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sid = _safe_int(row.get('skill_id'), 0)
+        if sid <= 0:
+            continue
+        row.update(_skill_semantic_fact(sid))
+
+
+def _annotate_entity_skill_rows(entities: Any) -> None:
+    if not isinstance(entities, list):
+        return
+    for entity in entities:
+        if isinstance(entity, dict):
+            _annotate_skill_rows(entity.get('skills'))
+
+
 # ═══════════════════════════════════════════════
 #  Per-Skill / Per-Entity Stats
 # ═══════════════════════════════════════════════
@@ -518,6 +568,8 @@ class DpsTracker:
             self._player_cache,
             int(self._total_damage),
         )
+        if include_skills:
+            _annotate_entity_skill_rows(entities)
 
         display_damage = self._total_damage_boss if (
             self._boss_uuid and self._total_damage_boss > 0
@@ -633,6 +685,7 @@ class DpsTracker:
             if not entity:
                 return None
             d = entity.to_dict(include_skills=True)
+            _annotate_skill_rows(d.get('skills'))
             d['damage_pct'] = round(
                 entity.damage_total / max(self._total_damage, 1), 3
             )
@@ -726,6 +779,7 @@ class DpsTracker:
                 entity = self._entities.get(detail_uid)
                 if entity:
                     d = entity.to_dict(include_skills=True)
+                    _annotate_skill_rows(d.get('skills'))
                     d['damage_pct'] = round(
                         entity.damage_total / max(self._total_damage, 1), 3)
                     result['detail'] = d

@@ -168,7 +168,11 @@ def enrich_skill_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
     name = _clean_text(src.get("skill_name") or src.get("name")) or _resolver_name(skill_category, skill_id) or _resolver_name("skill", skill_id)
     sub_profession = _clean_text(src.get("sub_profession")) or _clean_text(SUB_PROFESSION_NAMES.get(skill_id, ""))
     role = skill_role(skill_id, profession_id=profession_id)
-    if skill_category in {"field_marker", "boss_skill"}:
+    category_roles = {
+        "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
+        "scripted_skill", "virtual_skill", "boss_mechanic_skill",
+    }
+    if skill_category in category_roles:
         role = skill_category
     fact = {
         "kind": _clean_text(src.get("kind")),
@@ -178,6 +182,13 @@ def enrich_skill_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
         "display_name": name or (f"技能#{skill_id}" if skill_id > 0 else ""),
         "skill_role": role,
         "skill_category": skill_category,
+        "skill_kind": skill_category,
+        "is_ultimate": skill_category == "ultimate_skill" or role == "ultimate",
+        "is_boss_skill": skill_category == "boss_skill",
+        "is_boss_mechanic_skill": skill_category == "boss_mechanic_skill",
+        "is_scripted_skill": skill_category == "scripted_skill",
+        "is_virtual_skill": skill_category == "virtual_skill",
+        "is_roguelike_affix": skill_category == "roguelike_affix",
         "profession_id": profession_id,
         "sub_profession": sub_profession,
         "target_uuid": _safe_int(src.get("target_uuid"), 0),
@@ -227,7 +238,6 @@ def enrich_boss_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
         "event_type": event_type,
         "boss_mechanic_key": _clean_text(meta.get("key")) or f"buff_event_{event_type}",
         "boss_mechanic_label": label,
-        "boss_status_name": _resolver_name("boss_status", event_type) or label,
         "trigger_family": _clean_text(meta.get("trigger_family")) or "buff_event",
         "severity": _clean_text(meta.get("severity")) or "medium",
         "host_uuid": _safe_int(src.get("host_uuid"), 0),

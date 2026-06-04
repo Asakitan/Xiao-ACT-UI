@@ -48,7 +48,11 @@ class TcpNameCacheTests(unittest.TestCase):
     def test_fallback_labels_are_not_recorded_as_names(self) -> None:
         cache = TcpNameCache(self.path, autosave_interval_s=0)
         cache.observe_name("monster", 11008, "怪物#11008", source="tcp", confidence="high")
+        cache.observe_name("ultimate_skill", 1713, "幻想技能#1713", source="tcp", confidence="high")
+        cache.observe_name("profession_skill_buff", 55302, "职业技能Buff#55302", source="tcp", confidence="high")
         self.assertNotIn("monster", cache.snapshot()["names"]["by_kind"])
+        self.assertNotIn("ultimate_skill", cache.snapshot()["names"]["by_kind"])
+        self.assertNotIn("profession_skill_buff", cache.snapshot()["names"]["by_kind"])
 
     def test_build_index_from_live_rows_filters_confidence_and_id_space(self) -> None:
         index = build_index_from_live_rows({
@@ -77,7 +81,7 @@ class TcpNameCacheTests(unittest.TestCase):
             ]
         })
         by_kind = index["names"]["by_kind"]
-        entry = by_kind["skill"]["2414"]
+        entry = by_kind["skill"].get("2414") or by_kind["profession_skill"]["2414"]
         self.assertEqual(entry["text"], "神圣壁垒")
         dumped = json.dumps(entry, ensure_ascii=False)
         self.assertNotIn("string_obj", dumped)
@@ -176,6 +180,20 @@ class TcpNameCacheTests(unittest.TestCase):
         self.assertEqual(boss["1301"], "测试Boss")
         self.assertEqual(mechanic["47"], "护盾破裂")
         self.assertNotIn("9999", skill)
+
+    def test_hybrid_name_tables_materializes_refined_semantic_tables(self) -> None:
+        from tools.tablekit.hybrid_name_tables import update_runtime_tables
+
+        out_dir = os.path.join(self.tmp, "refined_tables")
+        result = update_runtime_tables(self.path, output_dir=out_dir)
+
+        for kind in ("ultimate_skill", "roguelike_affix", "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill", "profession_skill_buff"):
+            with self.subTest(kind=kind):
+                self.assertIn(kind, result["kinds"])
+                with open(os.path.join(out_dir, f"{kind}.json"), "r", encoding="utf-8") as f:
+                    table = json.load(f)
+                self.assertIsInstance(table, dict)
+        self.assertFalse(os.path.exists(os.path.join(out_dir, "boss_status.json")))
 
     def test_hybrid_name_tables_materializes_static_skill_and_buff_sources(self) -> None:
         from tools.tablekit import hybrid_name_tables

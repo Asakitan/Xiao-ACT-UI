@@ -23,8 +23,9 @@ except Exception:  # pragma: no cover - import fallback for standalone tools
 _SCHEMA_VERSION = 1
 _VALID_CONFIDENCE = {"high", "medium", "low", "mem", "tcp", "static"}
 _GENERIC_KINDS = {
-    "skill", "field_marker", "boss_skill",
-    "monster", "boss", "buff", "player_buff", "factor_buff", "event", "boss_status",
+    "skill", "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
+    "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill",
+    "monster", "boss", "buff", "player_buff", "factor_buff", "profession_skill_buff", "event",
     "dungeon", "scene", "boss_mechanic", "npc", "item", "sub_profession",
 }
 _PLAYER_KIND = "player"
@@ -45,6 +46,11 @@ _LIVE_ID_SPACE_KIND = {
     "boss_event_type": "boss_mechanic",
     "npc_id": "npc",
     "item_id": "item",
+}
+_FALLBACK_LABEL_PREFIXES = {
+    "技能", "场地标记", "Boss技能", "幻想技能", "肉鸽词条", "职业技能",
+    "剧情表演", "虚拟体技能", "Boss机制技能", "怪物", "Boss", "地牢",
+    "Buff", "玩家Buff", "因子Buff", "职业技能Buff", "事件", "机制", "NPC", "道具",
 }
 
 
@@ -100,7 +106,7 @@ def _clean_text(text: Any) -> str:
     value = str(text or "").strip()
     if not value:
         return ""
-    if "#" in value and value.split("#", 1)[0] in {"技能", "怪物", "Boss", "地牢", "Buff", "机制", "NPC", "道具"}:
+    if "#" in value and value.split("#", 1)[0] in _FALLBACK_LABEL_PREFIXES:
         return ""
     return value
 
