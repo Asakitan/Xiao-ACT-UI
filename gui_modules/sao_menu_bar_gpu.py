@@ -24,9 +24,8 @@ This module replaces that visual layer with:
   thread. Click/Enter/Leave bindings still fire because the widget
   area exists.
 
-Toggle via env ``SAO_GPU_MENU_BAR``. Defaults to whatever
-``SAO_GPU_OVERLAY`` says (so users only need one switch for "all
-GPU overlays on/off").
+Toggle via env ``SAO_GPU_MENU_BAR``. Defaults to enabled whenever the
+shared GLFW/ModernGL overlay backend is available.
 """
 from __future__ import annotations
 
@@ -50,9 +49,7 @@ except Exception:  # pragma: no cover - optional dep
 
 
 def gpu_menu_bar_enabled() -> bool:
-    """Honour ``SAO_GPU_MENU_BAR`` if set, otherwise mirror the master
-    ``SAO_GPU_OVERLAY`` switch (so flipping one env turns on the whole
-    GPU overlay family)."""
+    """Honour ``SAO_GPU_MENU_BAR`` if set; otherwise use the GPU backend."""
     env = os.environ.get('SAO_GPU_MENU_BAR')
     if env is not None:
         return env != '0'

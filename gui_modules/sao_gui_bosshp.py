@@ -52,8 +52,8 @@ from render.overlay_render_worker import (
 )
 from render.overlay_subpixel import subpixel_bar_width
 
-# v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_BOSSHP
-# (defaults to SAO_GPU_OVERLAY). Falls back to ULW if GLFW is unavailable.
+# v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_BOSSHP only.
+# Falls back to ULW if GLFW is unavailable.
 # BossHP is intentionally fixed-position and click-through.
 try:
     from render import gpu_overlay_window as _gow

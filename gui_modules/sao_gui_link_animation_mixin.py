@@ -103,8 +103,11 @@ class SAOPlayerGUILinkAnimationMixin:
         _gpu_overlays_suspended = False
         if _suspend_gpu_overlays is not None:
             try:
-                _suspend_gpu_overlays()
-                _gpu_overlays_suspended = True
+                # LinkStart now owns a direct GLFW/ModernGL presentation
+                # window. Suspending new GPU overlays here prevents that
+                # window from being created and causes the animation to be
+                # skipped instead of rendered.
+                _gpu_overlays_suspended = False
             except Exception:
                 _gpu_overlays_suspended = False
 

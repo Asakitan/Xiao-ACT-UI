@@ -266,6 +266,32 @@ function hexToRgb(hex) {
 function lerp(a,b,t){ return a+(b-a)*t; }
 function clamp(x,lo,hi){ return Math.max(lo, Math.min(hi, x)); }
 function easeOut(t){ return 1-Math.pow(1-t,3); }
+function smoothstep01(t){ const x=clamp(t,0,1); return x*x*(3-2*x); }
+
+function p3p4FxState(sceneT, p3Fade=1.0) {
+  const p3d = P3_END - P3_START;
+  const p3t = sceneT - P3_START;
+  const exitElapsed = Math.max(0, sceneT - P3_END);
+  const phase = clamp(p3t / Math.max(0.01, p3d), 0, 1);
+  const exitTail = clamp(exitElapsed / 0.55, 0, 1);
+  const smoothTail = smoothstep01(exitTail);
+  const exitKeep = 1.0 - smoothTail;
+  const inFlash = Math.max(0, 1.0 - p3t / 0.70) * 0.18;
+  const exitFlash = Math.min(0.24, exitElapsed * 0.52) * exitKeep;
+  const baseEnergy = 0.20 + 0.80 * phase;
+  const runEnergy = p3Fade * baseEnergy * (sceneT >= P3_END ? exitKeep : 1.0);
+  const exitEnergy = p3Fade * Math.min(0.38, exitElapsed * 0.70) * exitKeep;
+  const p4Floor = sceneT >= P3_END ? 0.12 * smoothTail : 0.0;
+  const energy = sceneT >= P3_END ? Math.max(0.12, runEnergy + exitEnergy + p4Floor) : runEnergy;
+  return {
+    energy,
+    flash: inFlash + exitFlash,
+    startburst: 0.0,
+    startwave: 1.0,
+    tint: [0.45,0.80,1.00],
+    motionMix: exitElapsed > 0 ? 0.60 + 0.32 * exitTail : 0.60,
+  };
+}
 
 // _calc_bg — sao_theme.py:4641-4662
 function calcBg(t) {
@@ -910,23 +936,15 @@ function frame(now) {
     const exitElapsed = Math.max(0, sceneT-P3_END);
     const p3t = sceneT-P3_START, p3d = P3_END-P3_START;
     const cz = camZWithExit(p3t, p3d, p3d, 0.55);
-    const fx = {
-      energy: p3f*(0.20+0.80*Math.min(1.0,p3t/p3d)+exitElapsed*0.70),
-      flash: Math.max(0,1.0-p3t/0.70)*0.18 + Math.min(0.24, exitElapsed*0.52),
-      startburst: 0.0, startwave: 1.0, tint: [0.45,0.80,1.00],
-      motionMix: exitElapsed > 0 ? 0.86 : 0.60,
-    };
+    const fx = p3p4FxState(sceneT, p3f);
     renderTunnel(coolParticles, cz, p3f, sceneT, bg, fx);
   } else {
     // gap between phases / P4 base — keep postprocess alive so old blue trails are flushed.
-    renderTunnel([], 0, 0, sceneT, bg, {
-      energy: 0.12,
-      flash: 0.0,
-      startburst: 0.0,
-      startwave: 1.0,
-      tint: sceneT >= P3_END ? [0.45,0.80,1.00] : [0.96,0.78,0.24],
-      motionMix: sceneT >= P3_END ? 0.92 : 0.60,
-    });
+    renderTunnel([], 0, 0, sceneT, bg,
+      sceneT >= P3_START
+        ? p3p4FxState(sceneT, 0.0)
+        : { energy:0.12, flash:0.0, startburst:0.0, startwave:1.0, tint:[0.96,0.78,0.24], motionMix:0.60 }
+    );
   }
 
   updateText(sceneT);

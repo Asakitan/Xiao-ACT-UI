@@ -20,7 +20,7 @@ Constraints:
     on the same thread. We pin everything to the Tk main thread by
     driving ``glfw.poll_events`` from a ``root.after`` pump and demanding
     callers schedule render from the same thread.
-- Master-gated via ``config.USE_GPU_OVERLAY`` / ``SAO_GPU_OVERLAY``.
+- Master-gated via ``config.USE_GPU_OVERLAY`` only.
     Callers may temporarily suspend *window creation* during startup
     animations (for example LinkStart) via
     ``suspend_gpu_overlay_creation()`` / ``resume_gpu_overlay_creation()``.
@@ -191,21 +191,16 @@ def _try_imports() -> bool:
 def glfw_supported() -> bool:
     """True if GPU overlay path is available AND opted in.
 
-    Default-ON in v2.3.0 (2026-04 fix). Set ``SAO_GPU_OVERLAY=0`` to
-    force the legacy Tk Canvas / ULW path (e.g. drivers that reject
-    GLFW transparent click-through windows).
+    Default-ON in v2.3.0 (2026-04 fix). Environment variables do not
+    disable the GPU overlay path; startup animations rely on this window
+    being created whenever GLFW/ModernGL are available.
     """
-    env = os.environ.get('SAO_GPU_OVERLAY')
-    if env is not None:
-        if env == '0':
+    try:
+        from config import USE_GPU_OVERLAY  # type: ignore
+        if not USE_GPU_OVERLAY:
             return False
-    else:
-        try:
-            from config import USE_GPU_OVERLAY  # type: ignore
-            if not USE_GPU_OVERLAY:
-                return False
-        except Exception:
-            pass
+    except Exception:
+        pass
     if sys.platform != 'win32':
         return False
     return _try_imports()
@@ -409,7 +404,22 @@ class GlfwPump:
                 f'glfw/moderngl unavailable: {_import_error}')
         if not _glfw.init():  # type: ignore[union-attr]
             raise RuntimeError('glfw.init() failed')
+        self._refresh_tick_hz_from_monitor()
         self._inited = True
+
+    def _refresh_tick_hz_from_monitor(self) -> None:
+        """Use the primary monitor refresh rate for animated GPU windows."""
+        hz = 60
+        try:
+            monitor = _glfw.get_primary_monitor()  # type: ignore[union-attr]
+            mode = _glfw.get_video_mode(monitor) if monitor else None  # type: ignore[union-attr]
+            raw_hz = int(getattr(mode, 'refresh_rate', 0) or 0) if mode else 0
+            if 30 <= raw_hz <= 360:
+                hz = raw_hz
+        except Exception:
+            hz = 60
+        self._tick_hz = hz
+        self._tick_ms = max(1, int(round(1000.0 / float(hz))))
 
     # ── Command marshaling (Tk → pump) ─────────────────────────────
     def exec_on_pump(self, fn: Callable[[], Any], timeout: float = 5.0) -> Any:
@@ -560,12 +570,15 @@ class GlfwPump:
                 wins = list(self._windows)
             any_visible = False
             any_dirty = False
+            any_vsync_dirty = False
             for w in wins:
                 if not w._visible:
                     continue
                 any_visible = True
                 if w._dirty:
                     any_dirty = True
+                    if getattr(w, '_vsync', False):
+                        any_vsync_dirty = True
                 if armed:
                     _phase_trace(
                         'gow.pump.render.begin',
@@ -596,6 +609,11 @@ class GlfwPump:
             # Wait for next tick (or wake) — animating panels run at
             # tick_hz, idle pumps at ~16 Hz.
             target_ms = self._tick_ms if any_dirty else self._idle_ms
+            if any_vsync_dirty:
+                # swap_buffers(vsync=1) already waits for the monitor.
+                # Do not sleep another software frame or a fullscreen
+                # animation falls to half refresh rate.
+                target_ms = 1
             if not any_visible:
                 # Nobody to draw — long idle until a register/wake.
                 target_ms = 250
@@ -711,7 +729,8 @@ class GpuOverlayWindow:
                  x: int = 100, y: int = 100,
                  render_fn: Optional[Callable[[Any, float], None]] = None,
                  click_through: bool = True,
-                 title: str = 'sao_overlay'):
+                 title: str = 'sao_overlay',
+                 vsync: bool = False):
         self._pump = pump
         self._w = max(1, int(w))
         self._h = max(1, int(h))
@@ -720,11 +739,14 @@ class GpuOverlayWindow:
         self._render_fn = render_fn
         self._click_through = bool(click_through)
         self._title = title
+        self._vsync = bool(vsync)
         self._win = None  # GLFW window handle
         self._ctx: Any = None  # moderngl.Context
         self._hwnd = 0
         self._visible = False
         self._dirty = True
+        self._rendering = False
+        self._redraw_requested_during_render = False
         self._created = False
         self._create_pending = False
         self._shown = False
@@ -866,15 +888,11 @@ class GpuOverlayWindow:
             raise RuntimeError('glfw.create_window failed for GpuOverlayWindow')
         glfw.set_window_pos(win, self._x, self._y)  # type: ignore[union-attr]
         glfw.make_context_current(win)  # type: ignore[union-attr]
-        # swap_interval(0): do NOT wait for vsync inside swap_buffers.
-        # The GlfwPump already paces at monitor-refresh via root.after(),
-        # so vsync inside swap_buffers is redundant.  More importantly,
-        # pyglfw's ctypes.CDLL binding RELEASES the Python GIL for the
-        # entire foreign-function call.  With swap_interval(1) that means
-        # the GIL is released for ~16 ms per swap_buffers per window —
-        # the same GIL-release window that lets the WGC pyo3 callback
-        # thread fire and corrupt ``_PyThreadState_Current``.
-        glfw.swap_interval(0)  # type: ignore[union-attr]
+        # Default overlays keep swap_interval(0) to avoid blocking the
+        # pump on every panel. Full-screen LinkStart can opt into vsync
+        # so DWM/display refresh paces the animation instead of a fixed
+        # software 60Hz cap.
+        glfw.swap_interval(1 if self._vsync else 0)  # type: ignore[union-attr]
 
         if sys.platform == 'win32':
             try:
@@ -1022,6 +1040,8 @@ class GpuOverlayWindow:
     def request_redraw(self) -> None:
         """Thread-safe: mark dirty so next pump tick draws even if the
         scheduler has been throttling idle frames."""
+        if getattr(self, '_rendering', False):
+            self._redraw_requested_during_render = True
         self._dirty = True
         try:
             self._pump.kick_redraw()
@@ -1129,6 +1149,8 @@ class GpuOverlayWindow:
             return
         ctx = self._ctx
         try:
+            self._rendering = True
+            self._redraw_requested_during_render = False
             if armed:
                 _phase_trace('gow.render.use', f'hwnd={self._hwnd}')
             ctx.screen.use()
@@ -1146,6 +1168,8 @@ class GpuOverlayWindow:
             rendered = True
         except Exception:
             rendered = False
+        finally:
+            self._rendering = False
         try:
             if armed:
                 _phase_trace('gow.render.swap', f'hwnd={self._hwnd}')
@@ -1162,7 +1186,8 @@ class GpuOverlayWindow:
                 self._show_pending = False
             except Exception:
                 pass
-        self._dirty = False
+        self._dirty = bool(getattr(self, '_redraw_requested_during_render', False))
+        self._redraw_requested_during_render = False
 
 
 # ── BgraPresenter ───────────────────────────────────────────────────────────

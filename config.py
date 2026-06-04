@@ -1130,15 +1130,10 @@ APP_VERSION_LABEL = f"v{APP_VERSION}"
 USE_GPU_MENU_HUD = True
 # v2.3.0 (2026-04 fix): The whole GLFW-backed GPU overlay family
 # (menu bar fisheye painter, left info painter, menu HUD GPU window,
-# child bar painter, skillfx GPU pump) used to be opt-in via
-# `SAO_GPU_OVERLAY=1`. With that gate off, every GPU-window code path
-# silently fell back to the Tk Canvas main-thread paint loop — which
-# is exactly what the v2.2.16 → v2.3.0 "compose on the worker, present
-# on GPU" rewrite was trying to fix. Default-ON so the per-tick
-# fisheye / left info paint cost lands on the worker thread instead
-# of the main loop. Set `SAO_GPU_OVERLAY=0` to force the legacy
-# Tk-Canvas / ULW path (e.g. for diagnostics on machines whose driver
-# refuses GLFW transparent windows).
+# child bar painter, skillfx GPU pump) defaults to GPU when the shared
+# GLFW/ModernGL backend is available. Do not gate this with environment
+# variables; startup animations such as LinkStart rely on the GPU window
+# being created by default.
 USE_GPU_OVERLAY = True
 # v3.0.3
 #   Fix DPS overlay click-through after the second fade cycle. The

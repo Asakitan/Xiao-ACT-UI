@@ -42,8 +42,8 @@ from render.overlay_render_worker import (
 from render.render_capture_sync import wait_until_capture_idle
 from config import FONTS_DIR
 
-# v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_DPS
-# (defaults to SAO_GPU_OVERLAY). NOTE: GLFW path is click_through, so
+# v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_DPS only.
+# NOTE: GLFW path is click_through, so
 # drag-to-move and tab clicks on this overlay are disabled in GPU
 # mode — use SAO_GPU_DPS=0 for the legacy interactive ULW path.
 try:

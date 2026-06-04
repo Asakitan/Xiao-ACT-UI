@@ -56,17 +56,14 @@ from gui_modules.sao_menu_hud import _PIL_DRAW_LOCK
 # ═══════════════════════════════════════════════
 
 def gpu_child_bar_enabled() -> bool:
-    """Mirror SAO_GPU_OVERLAY when SAO_GPU_CHILD_BAR is unset."""
+    """Honour SAO_GPU_CHILD_BAR when set; otherwise default to GPU."""
     if _gow is None:
         return False
     if not _gow.glfw_supported():
         return False
     raw = os.environ.get('SAO_GPU_CHILD_BAR')
     if raw is None:
-        master = os.environ.get('SAO_GPU_OVERLAY')
-        if master is None:
-            return True
-        return master.strip() in ('1', 'true', 'True', 'yes', 'on')
+        return True
     return raw.strip() in ('1', 'true', 'True', 'yes', 'on')
 
 

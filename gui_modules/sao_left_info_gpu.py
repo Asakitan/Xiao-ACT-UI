@@ -680,16 +680,12 @@ class SessionPlayersGpuPainter:
 # ══════════════════════════════════════════════════════════════════════
 
 def gpu_player_panel_enabled() -> bool:
-    """``SAO_GPU_PLAYER_PANEL`` overrides; otherwise inherit
-    ``SAO_GPU_OVERLAY``; otherwise enabled when GLFW is available."""
+    """``SAO_GPU_PLAYER_PANEL`` overrides; otherwise enabled when GLFW is available."""
     env = _env_flag('SAO_GPU_PLAYER_PANEL')
     if env is not None:
         return env
     if _gow is None:
         return False
-    env2 = _env_flag('SAO_GPU_OVERLAY')
-    if env2 is not None:
-        return env2
     try:
         return bool(_gow.glfw_supported())
     except Exception:
@@ -727,7 +723,7 @@ class PlayerPanelGpuPainter:
     full SAOPlayerPanel (user / level / EXP / HP / STA / shift_mode).
     Top + bottom plates compose into one sprite each tick on the worker.
 
-    Env gate: ``SAO_GPU_PLAYER_PANEL`` (or ``SAO_GPU_OVERLAY``).
+    Env gate: ``SAO_GPU_PLAYER_PANEL`` only.
     """
 
     def __init__(self, root: tk.Tk):

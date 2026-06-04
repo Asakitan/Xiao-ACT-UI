@@ -19,6 +19,12 @@ try:
     _HAS_MODERNGL = True
 except ImportError:
     _HAS_MODERNGL = False
+try:
+    from _sao_cy_uihelpers import ease_out_cubic as _cy_ease_out_cubic
+    from _sao_cy_uihelpers import lerp_clamped as _cy_lerp_clamped
+except Exception:
+    _cy_ease_out_cubic = None
+    _cy_lerp_clamped = None
 from sao_theme.utils import ease_out, ease_in, ease_in_out, lerp, lerp_color, hex_to_rgb, rgb_to_hex
 
 # ──────────────────── LINK START 动画 ────────────────────
@@ -212,6 +218,7 @@ uniform sampler2D u_cur;   // 当前帧场景
 uniform sampler2D u_prv;   // 历史模糊帧
 uniform sampler2D u_ui;    // OpenGL 合成的透明 UI 层
 uniform sampler2D u_boot_text; // 启动框小文字 atlas
+uniform sampler2D u_connected_text; // P4 静态文字 atlas
 uniform float     u_ca;    // 色差偏移 (单位: UV坐标)
 uniform float     u_fx_energy;
 uniform float     u_fx_flash;
@@ -224,6 +231,11 @@ uniform vec4      u_boot_rect;
 uniform float     u_boot_opacity;
 uniform float     u_boot_progress;
 uniform float     u_boot_scan;
+uniform vec4      u_boot_text_rect;
+uniform vec2      u_p2_center;
+uniform float     u_p2_opacity;
+uniform float     u_p2_scale;
+uniform float     u_connected_opacity;
 out vec4 fragColor;
 
 float hash21(vec2 p) {
@@ -272,9 +284,20 @@ void main() {
     result += fx;
     result = mix(result, result + u_fx_tint * 0.12, flash * centerGlow);
     result *= mix(0.92, 1.04, vignette);
-    vec4 ui = texture(u_ui, vec2(uv.x, 1.0 - uv.y));
-    float uiAlpha = clamp(ui.a * u_ui_alpha, 0.0, 1.0);
-    result = mix(result, ui.rgb, uiAlpha);
+    float p2Opacity = clamp(u_p2_opacity * u_ui_alpha, 0.0, 1.0);
+    if (p2Opacity > 0.001) {
+        vec2 px = uv * u_resolution;
+        vec2 basePx = (px - u_p2_center) / max(0.001, u_p2_scale) + u_p2_center;
+        vec2 p2Uv = vec2(basePx.x / u_resolution.x, 1.0 - basePx.y / u_resolution.y);
+        vec4 ui = texture(u_ui, clamp(p2Uv, 0.0, 1.0));
+        result = mix(result, ui.rgb, clamp(ui.a * p2Opacity, 0.0, 1.0));
+    }
+
+    float connectedOpacity = clamp(u_connected_opacity * u_ui_alpha, 0.0, 1.0);
+    if (connectedOpacity > 0.001) {
+        vec4 connected = texture(u_connected_text, vec2(uv.x, 1.0 - uv.y));
+        result = mix(result, connected.rgb, clamp(connected.a * connectedOpacity, 0.0, 1.0));
+    }
 
     float bootOpacity = clamp(u_boot_opacity, 0.0, 1.0);
     if (bootOpacity > 0.001) {
@@ -337,7 +360,8 @@ void main() {
         result += (lineCol + vec3(0.45, 0.90, 1.0) * min(corner, 1.0)) * bootOpacity * 0.22;
         result += scatter;
 
-        vec4 text = texture(u_boot_text, vec2(uv.x, 1.0 - uv.y));
+        vec2 textPx = u_boot_text_rect.xy + clamp(local, 0.0, 1.0) * max(vec2(1.0), u_boot_text_rect.zw - u_boot_text_rect.xy);
+        vec4 text = texture(u_boot_text, vec2(textPx.x / u_resolution.x, 1.0 - textPx.y / u_resolution.y));
         result = mix(result, text.rgb, text.a * bootOpacity);
     }
 
@@ -350,6 +374,7 @@ void main() {
         self.root = root
         self.on_done = on_done
         self._overlay = None
+        self._canvas = None
         self._sound_player = None
         self._ls_font_cache = {}
         self._ls_sprite_cache = {}
@@ -361,6 +386,10 @@ void main() {
         self._gpu_present_enabled = False
         self._gpu_present_frame_requested = False
         self._gpu_present_ready = False
+        self._gpu_present_done = False
+        self._gpu_present_finish_posted = False
+        self._finished = False
+        self._target_refresh_hz = 60.0
         self._gl_ctx = None
         self._gl_photo = None
         self._gl_photo_size = None
@@ -373,6 +402,9 @@ void main() {
         self._gl_boot_text_tex = None
         self._gl_boot_text_img = None
         self._gl_boot_sig = None
+        self._gl_connected_text_tex = None
+        self._gl_static_text_sig = None
+        self._gl_boot_text_rect = (0.0, 0.0, 0.0, 0.0)
 
     # ════════════════════════════════════════════════════════
     #  Link Start 音效播放 (3阶段)
@@ -411,6 +443,22 @@ void main() {
         # Phase 3 (t=5.2s): ALO 欢迎音 — 蓝色隧道
         threading.Timer(5.2, lambda: _do_play('alo_welcome')).start()
 
+    def _detect_refresh_hz(self) -> float:
+        """Detect display refresh rate for non-vsync fallback scheduling."""
+        try:
+            from render import gpu_overlay_window as _gow
+            pump = _gow.get_glfw_pump(self.root)
+            try:
+                pump.exec_on_pump(lambda: None, timeout=3.0)
+            except Exception:
+                pass
+            hz = float(getattr(pump, '_tick_hz', 0) or 0)
+            if 30.0 <= hz <= 360.0:
+                return hz
+        except Exception:
+            pass
+        return 60.0
+
     # ════════════════════════════════════════════════════════
     #  启动
     # ════════════════════════════════════════════════════════
@@ -422,6 +470,13 @@ void main() {
         self._diag = math.hypot(sw, sh)
         self._ls_p2_prewarmed = False
         self._next_frame_deadline = 0.0
+        self._target_refresh_hz = self._detect_refresh_hz()
+        self._gpu_present_enabled = False
+        self._gpu_present_frame_requested = False
+        self._gpu_present_ready = False
+        self._finished = False
+        self._gpu_present_done = False
+        self._gpu_present_finish_posted = False
         if _WinTimerResolution is not None and self._timer_resolution is None:
             try:
                 self._timer_resolution = _WinTimerResolution()
@@ -431,23 +486,6 @@ void main() {
 
         # ── 播放 Link Start 音效 ──
         self._play_sound()
-
-        self._gpu_present_enabled = self._try_start_gpu_present_window(sw, sh)
-        if self._gpu_present_enabled:
-            self._overlay = None
-            self._canvas = None
-        else:
-            # ── 创建全屏顶层窗口 ──
-            self._overlay = tk.Toplevel(self.root)
-            self._overlay.overrideredirect(True)
-            self._overlay.attributes('-topmost', True)
-            self._overlay.geometry(f'{sw}x{sh}+0+0')
-            self._overlay.configure(bg='black')
-            self._overlay.attributes('-alpha', 0.92)
-
-            self._canvas = tk.Canvas(self._overlay, width=sw, height=sh,
-                                     bg='black', highlightthickness=0)
-            self._canvas.pack(fill=tk.BOTH, expand=True)
 
         # ── 预生成静态隧道粒子 (SAO-UI 模型) ──
         # GPU模式用300粒子, Canvas回退用150以保证帧率
@@ -472,18 +510,41 @@ void main() {
         self._gl_boot_text_tex = None
         self._gl_boot_text_img = None
         self._gl_boot_sig = None
-        if _HAS_MODERNGL and not self._gpu_present_enabled:
+
+        self._start_time = time.time()
+        self._next_frame_deadline = time.perf_counter()
+
+        self._gpu_present_enabled = self._try_start_gpu_present_window_strict(sw, sh)
+        if self._gpu_present_enabled:
+            self._overlay = None
+            self._canvas = None
+            return
+
+        if _HAS_MODERNGL:
+            print('[LinkStart] GPU present unavailable after retry; skip Tk/Canvas fallback to avoid CPU startup path')
+            self._finish()
+            return
+
+        # ── 仅在没有 ModernGL 的旧环境才预热 Canvas sprite；正常启动动画不走 Tk/Canvas。 ──
+        self._prewarm_linkstart_p2_sprites()
+
+        # ── 创建全屏顶层窗口 ──
+        self._overlay = tk.Toplevel(self.root)
+        self._overlay.overrideredirect(True)
+        self._overlay.attributes('-topmost', True)
+        self._overlay.geometry(f'{sw}x{sh}+0+0')
+        self._overlay.configure(bg='black')
+        self._overlay.attributes('-alpha', 0.92)
+
+        self._canvas = tk.Canvas(self._overlay, width=sw, height=sh,
+                                 bg='black', highlightthickness=0)
+        self._canvas.pack(fill=tk.BOTH, expand=True)
+        if _HAS_MODERNGL:
             try:
                 self._init_gl()
             except Exception as e:
                 print(f'[LinkStart] OpenGL init failed: {e}, fallback to Canvas')
                 self._gl_ctx = None
-
-        # ── 预热 P2 文字 sprite，避免进入 P2 时首次 PIL 光栅化掉帧 ──
-        self._prewarm_linkstart_p2_sprites()
-
-        self._start_time = time.time()
-        self._next_frame_deadline = time.perf_counter()
         self._animate()
 
     # ════════════════════════════════════════════════════════
@@ -520,13 +581,19 @@ void main() {
     def _try_start_gpu_present_window(self, sw: int, sh: int) -> bool:
         """优先使用 GLFW/ModernGL 直出窗口，避免每帧 FBO.read → Tk 贴图。"""
         if not _HAS_MODERNGL:
+            print('[LinkStart] GPU present unavailable: moderngl import failed')
             return False
         try:
             from render import gpu_overlay_window as _gow
-        except Exception:
+        except Exception as e:
+            print(f'[LinkStart] GPU present unavailable: import gpu_overlay_window failed: {e}')
             return False
         try:
             if not _gow.glfw_supported():
+                print('[LinkStart] GPU present unavailable: glfw_supported() returned False')
+                return False
+            if not _gow.gpu_overlay_creation_allowed():
+                print('[LinkStart] GPU present unavailable: overlay creation is suspended')
                 return False
             pump = _gow.get_glfw_pump(self.root)
             win = _gow.GpuOverlayWindow(
@@ -538,10 +605,14 @@ void main() {
                 render_fn=self._render_gpu_present_frame,
                 click_through=True,
                 title='sao_linkstart_gpu',
+                vsync=True,
             )
             win.show()
             self._gpu_present_window = win
             self._gpu_present_ready = False
+            self._gpu_present_done = False
+            self._gpu_present_frame_requested = True
+            win.request_redraw()
             return True
         except Exception as e:
             print(f'[LinkStart] GPU present window unavailable: {e}')
@@ -549,27 +620,70 @@ void main() {
             self._gpu_present_ready = False
             return False
 
+    def _try_start_gpu_present_window_strict(self, sw: int, sh: int) -> bool:
+        """Start direct GPU presentation; recover once if old startup code suspended creation."""
+        if self._try_start_gpu_present_window(sw, sh):
+            return True
+        try:
+            from render import gpu_overlay_window as _gow
+            if not _gow.gpu_overlay_creation_allowed():
+                print('[LinkStart] GPU present retry: resuming suspended overlay creation')
+                _gow.resume_gpu_overlay_creation()
+                if self._try_start_gpu_present_window(sw, sh):
+                    return True
+        except Exception as e:
+            print(f'[LinkStart] GPU present retry failed: {e}')
+        return False
+
     def _render_gpu_present_frame(self, ctx, _pump_t: float) -> None:
         """GpuOverlayWindow 回调：在 pump 拥有的 GL context 中直接渲染到屏幕。"""
+        if getattr(self, '_gpu_present_done', False):
+            return
         if not getattr(self, '_gpu_present_frame_requested', False):
             return
-        self._gpu_present_frame_requested = False
         try:
             if self._gl_ctx is not ctx:
                 self._init_gl(ctx=ctx)
                 self._gpu_present_ready = True
             elapsed = max(0.0, time.time() - self._start_time)
+            scene_t = elapsed - self._STARTUP_PRELUDE
+            if scene_t > self._DURATION:
+                self._gpu_present_done = True
+                self._gpu_present_frame_requested = False
+                self._post_gpu_present_finish()
+                return
             self._render_linkstart_gl_frame(elapsed, target_fbo=ctx.screen, readback_canvas=None)
             alpha = 1.0
-            scene_t = elapsed - self._STARTUP_PRELUDE
             if scene_t >= self._P4_START and scene_t >= self._DURATION - 1.5:
                 ft = min(1.0, (scene_t - (self._DURATION - 1.5)) / 1.5)
                 alpha = max(0.0, 0.92 * (1.0 - ease_in_out(ft)))
             self._copy_present_tex_to_screen(alpha=alpha)
+            self._gpu_present_frame_requested = True
+            if self._gpu_present_window is not None:
+                self._gpu_present_window.request_redraw()
         except Exception as e:
             print(f'[LinkStart] GPU present render error: {e}')
             self._gl_ctx = None
             self._gpu_present_ready = False
+            self._gpu_present_done = True
+            self._post_gpu_present_finish()
+
+    def _post_gpu_present_finish(self) -> None:
+        """GPU 直出结束后只投递一次 Tk 收尾；不使用 Tk 帧循环驱动动画。"""
+        if getattr(self, '_gpu_present_finish_posted', False):
+            return
+        self._gpu_present_finish_posted = True
+        try:
+            pump = getattr(self._gpu_present_window, '_pump', None)
+            if pump is not None:
+                pump.post_to_tk(self._finish)
+                return
+        except Exception:
+            pass
+        try:
+            self.root.after(0, self._finish)
+        except Exception:
+            self._finish()
 
     def _copy_present_tex_to_screen(self, alpha: float = 1.0) -> None:
         """把后处理 ping-pong 输出纹理直接 blit 到 GLFW framebuffer。"""
@@ -664,6 +778,8 @@ layout(location=7) in float i_fog;      // 雾因子
 
 uniform mat4  u_vp;       // view * projection
 uniform float u_rot;      // 隧道旋转 (弧度)
+uniform float u_alpha_mul;
+uniform float u_radius_mul;
 
 out vec3  v_world;
 out vec3  v_normal;
@@ -674,7 +790,7 @@ out float v_fog;
 void main() {
     // 缩放单位圆柱到实际管子
     vec3 pos = in_pos;
-    pos.xy *= i_radius;
+    pos.xy *= i_radius * u_radius_mul;
     pos.z   = pos.z * i_len + i_center.z;
     pos.xy += i_center.xy;
 
@@ -690,7 +806,7 @@ void main() {
     v_world  = pos;
     v_normal = normalize(n);
     v_color  = i_color;
-    v_alpha  = i_alpha;
+    v_alpha  = i_alpha * u_alpha_mul;
     v_fog    = i_fog;
 
     gl_Position = u_vp * vec4(pos, 1.0);
@@ -738,8 +854,8 @@ void main() {
     vec3 lit = ambient + diffuse + specular + emissive + rim_c;
     lit = clamp(lit, 0.0, 1.0);
 
-    // 综合淡入/淡出 + 雾
-    float total_fade = v_alpha * (1.0 - v_fog);
+    // 综合淡入/淡出 + 雾；ghost-pass 会降低 v_alpha，保持拖影柔和而不是实心重影。
+    float total_fade = clamp(v_alpha * (1.0 - v_fog), 0.0, 1.0);
     vec3 final_c = mix(u_bg_color, lit, total_fade);
 
     fragColor = vec4(final_c, 1.0);
@@ -820,14 +936,18 @@ void main() {
         self._gl_pfbo_b = ctx.framebuffer(color_attachments=[self._gl_ptex_b])
         self._gl_ui_tex = ctx.texture((sw, sh), 4)
         self._gl_ui_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
-        self._gl_ui_img = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
-        self._gl_ui_draw = ImageDraw.Draw(self._gl_ui_img)
-        self._gl_ui_dirty = True
         self._gl_ui_sig = None
         self._gl_boot_text_tex = ctx.texture((sw, sh), 4)
         self._gl_boot_text_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
-        self._gl_boot_text_img = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+        self._gl_connected_text_tex = ctx.texture((sw, sh), 4)
+        self._gl_connected_text_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        self._gl_ui_img = None
+        self._gl_ui_draw = None
+        self._gl_ui_dirty = False
+        self._gl_boot_text_img = None
         self._gl_boot_sig = None
+        self._gl_static_text_sig = None
+        self._gl_boot_text_rect = (0.0, 0.0, 0.0, 0.0)
         self._gl_pframe  = 0   # 帧计数 (偏奇偶决定 ping-pong 方向)
         # Fullscreen triangle VAO (无顶点数据, 纯靠 gl_VertexID)
         self._gl_postvao = ctx.vertex_array(self._gl_postprog, [])
@@ -849,7 +969,13 @@ void main() {
         self._gl_postprog['u_boot_opacity'].value = 0.0
         self._gl_postprog['u_boot_progress'].value = 0.0
         self._gl_postprog['u_boot_scan'].value = 0.0
+        self._gl_postprog['u_boot_text_rect'].value = (0.0, 0.0, 0.0, 0.0)
+        self._gl_postprog['u_p2_center'].value = (float(self._cx), float(self._cy))
+        self._gl_postprog['u_p2_opacity'].value = 0.0
+        self._gl_postprog['u_p2_scale'].value = 1.0
+        self._gl_postprog['u_connected_opacity'].value = 0.0
         self._gl_copyprog['u_alpha'].value = 1.0
+        self._ensure_gl_static_text_textures()
 
     def _destroy_gl(self):
         """释放 OpenGL 资源."""
@@ -937,14 +1063,18 @@ void main() {
     # ════════════════════════════════════════════════════════
     def _draw_tunnel(self, cv: tk.Canvas, particles: list,
                      cam_z: float, bg: str, fade: float = 1.0,
-                     t: float = 0.0):
+                     t: float = 0.0,
+                     motion_blur: float = 0.0,
+                     cam_velocity: float = 0.0):
         """
         3D 隧道渲染. 如果 OpenGL 可用, 使用真 3D 圆柱体 + Blinn-Phong;
         否则回退到 Canvas 2D.
         """
         if self._gl_ctx:
             try:
-                self._draw_tunnel_gl(cv, particles, cam_z, bg, fade, t)
+                self._draw_tunnel_gl(cv, particles, cam_z, bg, fade, t,
+                                     motion_blur=motion_blur,
+                                     cam_velocity=cam_velocity)
                 return
             except Exception as e:
                 print(f'[LinkStart] GL render error: {e}')
@@ -1098,45 +1228,87 @@ void main() {
         }
 
     def _ensure_gl_boot_text_texture(self, state):
-        """生成/上传启动框文字 atlas；框体本身由 shader 画。"""
-        if not self._gl_ctx or self._gl_boot_text_tex is None or not state:
+        """Boot text is pre-baked once; shader maps it into animated panel rect."""
+        return
+
+    def _ensure_gl_static_text_textures(self):
+        """Pre-bake all GL text atlases once; animation frames only update uniforms."""
+        if not self._gl_ctx or self._gl_ui_tex is None or self._gl_boot_text_tex is None:
             return
-        scale = state['scale']
-        x0, y0, x1, y1 = state['x0'], state['y0'], state['x1'], state['y1']
-        cx = self._cx
-        sig = (self._sw, self._sh, x0, y0, x1, y1, round(scale, 3))
-        if sig == self._gl_boot_sig:
+        sig = (self._sw, self._sh)
+        if sig == self._gl_static_text_sig:
             return
-        self._gl_boot_sig = sig
-        img = Image.new('RGBA', (self._sw, self._sh), (0, 0, 0, 0))
-        row_size = max(8, int(11 * scale))
-        title_size = max(30, min(48, int(self._sw * 0.035)))
-        title_size = max(24, int(title_size * scale))
-        sub_size = max(9, int(12 * scale))
-        row_y = y0 + int(17 * scale)
-        self._paste_gl_ui(img, self._make_gl_tracking_text(
+        sw, sh = self._sw, self._sh
+        cx, cy = self._cx, self._cy
+
+        p2_img = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+        text1 = self._make_gl_tracking_text(
+            [('WELCOME TO', 'sao')], 42,
+            (245, 248, 255, 255), (30, 44, 72, 150),
+            (110, 232, 255, 155), 0, 4.0, 10)
+        text2 = self._make_gl_tracking_text(
+            [('咲 ', 'cjk'), ('ACT UI', 'sao')], 64,
+            (255, 248, 236, 255), (30, 44, 72, 150),
+            (255, 214, 120, 130), 0, 4.0, 4)
+        gap = 8
+        top = cy - (text1.height + gap + text2.height) // 2
+        self._paste_gl_ui(p2_img, text1, cx, top, anchor='n')
+        self._paste_gl_ui(p2_img, text2, cx, top + text1.height + gap, anchor='n')
+        self._gl_ui_tex.write(p2_img.tobytes())
+        self._gl_ui_img = None
+        self._gl_ui_dirty = False
+
+        if self._gl_connected_text_tex is not None:
+            connected_img = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+            main = self._make_gl_tracking_text(
+                [('SYSTEM >> CONNECTED', 'sao')], 38,
+                (234, 246, 255, 255), (30, 44, 72, 150),
+                (170, 238, 255, 180), 0, 4.0, 8)
+            sub = self._make_gl_tracking_text(
+                [('FULL DIVE INITIALIZED', 'sao')], 15,
+                (159, 216, 255, 220), (22, 34, 48, 120),
+                (170, 238, 255, 120), 0, 3.0, 5)
+            connected_top = cy - (main.height + 14 + sub.height) // 2
+            self._paste_gl_ui(connected_img, main, cx, connected_top, anchor='n')
+            self._paste_gl_ui(connected_img, sub, cx, connected_top + main.height + 14, anchor='n')
+            self._gl_connected_text_tex.write(connected_img.tobytes())
+
+        boot_w = max(360, min(560, int(sw * 0.34)))
+        boot_h = 122
+        boot_img = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
+        bx0 = cx - boot_w // 2
+        by0 = cy - boot_h // 2
+        bx1 = bx0 + boot_w
+        by1 = by0 + boot_h
+        row_size = 11
+        title_size = max(30, min(48, int(sw * 0.035)))
+        sub_size = 12
+        self._paste_gl_ui(boot_img, self._make_gl_tracking_text(
             [('SYSTEM', 'sao')], row_size,
             (170, 238, 255, 210), (10, 24, 40, 150),
-            (110, 232, 255, 120), 1, 2.0 * scale, int(3 * scale)),
-            x0 + int(20 * scale), row_y, anchor='nw')
-        self._paste_gl_ui(img, self._make_gl_tracking_text(
+            (110, 232, 255, 120), 1, 2.0, 3),
+            bx0 + 20, by0 + 17, anchor='nw')
+        self._paste_gl_ui(boot_img, self._make_gl_tracking_text(
             [('[ LINK STANDBY ]', 'sao')], row_size,
             (255, 218, 116, 224), (34, 28, 14, 150),
-            (255, 196, 82, 120), 1, 2.0 * scale, int(3 * scale)),
-            x1 - int(20 * scale), row_y, anchor='ne')
-        self._paste_gl_ui(img, self._make_gl_tracking_text(
+            (255, 196, 82, 120), 1, 2.0, 3),
+            bx1 - 20, by0 + 17, anchor='ne')
+        self._paste_gl_ui(boot_img, self._make_gl_tracking_text(
             [('NErVGEAR', 'sao')], title_size,
             (242, 251, 255, 255), (10, 26, 42, 232),
-            (110, 232, 255, 210), 2, 6.0 * scale,
-            int(max(7, min(14, self._sw * 0.0092)) * scale)),
-            cx, y0 + int(61 * scale), anchor='center')
-        self._paste_gl_ui(img, self._make_gl_tracking_text(
+            (110, 232, 255, 210), 2, 6.0,
+            int(max(7, min(14, sw * 0.0092)))),
+            cx, by0 + 61, anchor='center')
+        self._paste_gl_ui(boot_img, self._make_gl_tracking_text(
             [('FULLDIVE AUTHENTICATION', 'sao')], sub_size,
             (255, 218, 132, 224), (34, 28, 14, 150),
-            (255, 196, 82, 120), 1, 2.2 * scale, int(4 * scale)),
-            cx, y1 - int(17 * scale), anchor='s')
-        self._gl_boot_text_img = img
-        self._gl_boot_text_tex.write(img.tobytes())
+            (255, 196, 82, 120), 1, 2.2, 4),
+            cx, by1 - 17, anchor='s')
+        self._gl_boot_text_tex.write(boot_img.tobytes())
+        self._gl_boot_text_img = None
+        self._gl_boot_sig = sig
+        self._gl_boot_text_rect = (float(bx0), float(by0), float(bx1), float(by1))
+        self._gl_static_text_sig = sig
 
     def _draw_gl_boot_panel_ui(self, img: Image.Image, t: float):
         """启动框 GL 模式由 shader 绘制；这里保留空实现供旧调用兼容。"""
@@ -1208,34 +1380,76 @@ void main() {
         self._paste_gl_ui(img, main, cx, top, anchor='n')
         self._paste_gl_ui(img, sub, cx, top + main.height + 14, anchor='n')
 
+    def _calc_gl_p2_text_state(self, scene_t: float):
+        """P2 text state for shader-only animation; no PIL/Tk work per frame."""
+        op = 0.0
+        scale = 1.0
+        if self._P2_START - 0.2 <= scene_t < self._P2_END + 0.3:
+            if scene_t < 4.2:
+                f = max(0.0, min(1.0, (scene_t - 3.5) / 0.7))
+                op = f
+                scale = lerp(0.2, 1.0, ease_out(f))
+            elif scene_t < 4.7:
+                op = 1.0
+                scale = 1.0
+            elif scene_t < 5.25:
+                f = max(0.0, min(1.0, (scene_t - 4.7) / 0.55))
+                op = 1.0 - f * 0.16
+                scale = lerp(1.0, 3.8, ease_in(f))
+            else:
+                f = max(0.0, min(1.0, (scene_t - 5.25) / 0.25))
+                op = (1.0 - f) * 0.84
+                scale = lerp(3.8, 8.0, ease_in(f))
+        return max(0.0, min(1.0, op)), max(0.001, float(scale))
+
+    def _calc_gl_connected_opacity(self, scene_t: float) -> float:
+        """P4 connected text opacity for shader-only animation."""
+        if scene_t < self._P4_START:
+            return 0.0
+        if scene_t < 7.7:
+            return max(0.0, min(1.0, (scene_t - 7.3) / 0.4))
+        if scene_t < self._P4_HOLD_END:
+            return 1.0
+        return max(0.0, 1.0 - (scene_t - self._P4_HOLD_END) / max(0.01, self._P4_FADE_END - self._P4_HOLD_END))
+
+    def _calc_p3_p4_fx_state(self, scene_t: float, p3_fade: float = 1.0):
+        """Continuous cool-blue background FX through the P3→P4 handoff."""
+        p3_dur = self._P3_END - self._P3_START
+        p3_t = scene_t - self._P3_START
+        exit_elapsed = max(0.0, scene_t - self._P3_END)
+        phase = max(0.0, min(1.0, p3_t / max(0.01, p3_dur)))
+        exit_tail = max(0.0, min(1.0, exit_elapsed / 0.55))
+        smooth_tail = exit_tail * exit_tail * (3.0 - 2.0 * exit_tail)
+        exit_keep = 1.0 - smooth_tail
+        in_flash = max(0.0, 1.0 - p3_t / 0.70) * 0.18
+        exit_flash = min(0.24, exit_elapsed * 0.52) * exit_keep
+        base_energy = 0.20 + 0.80 * phase
+        run_energy = p3_fade * base_energy * (exit_keep if scene_t >= self._P3_END else 1.0)
+        exit_energy = p3_fade * min(0.38, exit_elapsed * 0.70) * exit_keep
+        p4_floor = 0.12 * smooth_tail if scene_t >= self._P3_END else 0.0
+        if scene_t >= self._P3_END:
+            energy = max(0.12, run_energy + exit_energy + p4_floor)
+        else:
+            energy = run_energy
+        motion_mix = 0.60 + 0.32 * exit_tail if exit_elapsed > 0.0 else 0.60
+        return energy, in_flash + exit_flash, (0.45, 0.80, 1.00), motion_mix
+
     def _render_gl_ui_layer(self, elapsed: float, scene_t: float):
-        """生成整帧 GL UI 纹理，避免用 Tk Canvas 绘制启动面板/P2/P4。"""
+        """Ensure static GL text atlases exist; per-frame text animation is shader-only."""
         if not self._gl_ctx or self._gl_ui_tex is None:
             return
-        # 开头 boot 面板已经由 shader 程序化绘制；这里不再每帧
-        # 创建/上传整屏 PIL RGBA，避免 LinkStart 一开始严重卡顿。
-        ui_tick = int(scene_t * 60.0) if scene_t >= self._P2_START - 0.2 else -1
-        sig = (ui_tick, self._sw, self._sh)
-        if sig == self._gl_ui_sig:
-            return
-        self._gl_ui_sig = sig
-        img = Image.new('RGBA', (self._sw, self._sh), (0, 0, 0, 0))
-        self._draw_gl_text_layer_ui(img, scene_t)
-        self._draw_gl_connected_layer_ui(img, scene_t)
-        self._gl_ui_img = img
-        self._gl_ui_dirty = True
+        self._ensure_gl_static_text_textures()
 
     def _postprocess_gl_scene(self, elapsed: float = 0.0):
         """把 scene FBO + history + UI texture 做最终后处理，结果留在 ping-pong 纹理。"""
         ctx = self._gl_ctx
         sw, sh = self._sw, self._sh
-        if self._gl_ui_tex is not None and self._gl_ui_img is not None and self._gl_ui_dirty:
-            self._gl_ui_tex.write(self._gl_ui_img.tobytes())
-            self._gl_ui_dirty = False
+        scene_t = elapsed - self._STARTUP_PRELUDE
+        self._ensure_gl_static_text_textures()
 
         boot_state = self._calc_boot_panel_state(max(0.0, elapsed))
-        if boot_state and self._gl_boot_text_tex is not None:
-            self._ensure_gl_boot_text_texture(boot_state)
+        p2_opacity, p2_scale = self._calc_gl_p2_text_state(scene_t)
+        connected_opacity = self._calc_gl_connected_opacity(scene_t)
 
         pf = self._gl_pframe
         write_fbo = self._gl_pfbo_a if (pf & 1) == 0 else self._gl_pfbo_b
@@ -1249,10 +1463,13 @@ void main() {
             self._gl_ui_tex.use(location=2)
         if self._gl_boot_text_tex is not None:
             self._gl_boot_text_tex.use(location=3)
+        if self._gl_connected_text_tex is not None:
+            self._gl_connected_text_tex.use(location=4)
         self._gl_postprog['u_cur'].value = 0
         self._gl_postprog['u_prv'].value = 1
         self._gl_postprog['u_ui'].value = 2
         self._gl_postprog['u_boot_text'].value = 3
+        self._gl_postprog['u_connected_text'].value = 4
         self._gl_postprog['u_ca'].value = self._gl_ca_uv
         self._gl_postprog['u_fx_energy'].value = float(getattr(self, '_gl_fx_energy', 0.0))
         self._gl_postprog['u_fx_flash'].value = float(getattr(self, '_gl_fx_flash', 0.0))
@@ -1265,11 +1482,17 @@ void main() {
             self._gl_postprog['u_boot_opacity'].value = float(boot_state['opacity'])
             self._gl_postprog['u_boot_progress'].value = float(boot_state['progress'])
             self._gl_postprog['u_boot_scan'].value = float(boot_state['scan'])
+            self._gl_postprog['u_boot_text_rect'].value = self._gl_boot_text_rect
         else:
             self._gl_postprog['u_boot_rect'].value = (0.0, 0.0, 0.0, 0.0)
             self._gl_postprog['u_boot_opacity'].value = 0.0
             self._gl_postprog['u_boot_progress'].value = 0.0
             self._gl_postprog['u_boot_scan'].value = 0.0
+            self._gl_postprog['u_boot_text_rect'].value = (0.0, 0.0, 0.0, 0.0)
+        self._gl_postprog['u_p2_center'].value = (float(self._cx), float(self._cy))
+        self._gl_postprog['u_p2_opacity'].value = float(p2_opacity)
+        self._gl_postprog['u_p2_scale'].value = float(p2_scale)
+        self._gl_postprog['u_connected_opacity'].value = float(connected_opacity)
         self._gl_postvao.render(moderngl.TRIANGLES, vertices=3)
         ctx.enable(moderngl.DEPTH_TEST)
         self._gl_pframe = pf + 1
@@ -1327,7 +1550,9 @@ void main() {
 
     def _draw_tunnel_gl(self, cv: tk.Canvas, particles: list,
                         cam_z: float, bg: str, fade: float = 1.0,
-                        t: float = 0.0):
+                        t: float = 0.0,
+                        motion_blur: float = 0.0,
+                        cam_velocity: float = 0.0):
         """
         使用 ModernGL 渲染真 3D 圆柱体隧道.
 
@@ -1423,8 +1648,32 @@ void main() {
             self._gl_prog['u_rot'].value = rot
             self._gl_prog['u_cam_pos'].value = (0.0, 0.0, cam_z)
             self._gl_prog['u_bg_color'].value = bg_norm
+            self._gl_prog['u_alpha_mul'].value = 1.0
+            self._gl_prog['u_radius_mul'].value = 1.0
 
-            ctx.enable(moderngl.DEPTH_TEST)
+            blur_strength = max(0.0, min(1.0, float(motion_blur)))
+            blur_speed = float(cam_velocity)
+            if blur_strength > 0.01 and abs(blur_speed) > 1.0:
+                # 额外 ghost-pass：不跳帧、不降 FPS，只在同一帧内画两层较旧相机位置，
+                # 模拟 Web/GPU 风格的柱体速度拖影。
+                ctx.disable(moderngl.DEPTH_TEST)
+                for steps, alpha_mul, scale_mul in ((0.55, 0.30, 1.055), (1.05, 0.16, 1.095)):
+                    ghost_cam_z = cam_z - blur_speed * (steps / 60.0)
+                    ghost_vp = self._build_vp_matrix(ghost_cam_z)
+                    self._gl_prog['u_vp'].write(ghost_vp.tobytes())
+                    self._gl_prog['u_cam_pos'].value = (0.0, 0.0, ghost_cam_z)
+                    self._gl_prog['u_alpha_mul'].value = alpha_mul * blur_strength
+                    self._gl_prog['u_radius_mul'].value = scale_mul
+                    self._gl_vao.render(moderngl.TRIANGLES,
+                                        vertices=self._gl_num_verts,
+                                        instances=count)
+                self._gl_prog['u_vp'].write(vp.tobytes())
+                self._gl_prog['u_cam_pos'].value = (0.0, 0.0, cam_z)
+                self._gl_prog['u_alpha_mul'].value = 1.0
+                self._gl_prog['u_radius_mul'].value = 1.0
+                ctx.enable(moderngl.DEPTH_TEST)
+            else:
+                ctx.enable(moderngl.DEPTH_TEST)
             self._gl_vao.render(moderngl.TRIANGLES,
                                 vertices=self._gl_num_verts,
                                 instances=count)
@@ -1463,6 +1712,7 @@ void main() {
                 particle_fade = lerp(0.62, 1.0, ease_out((scene_t - 0.28) / 0.72))
             exit_elapsed = max(0.0, scene_t - self._P1_END)
             cam_z = self._cam_z_with_exit(scene_t, self._CAM_DURATION, self._P1_END, 0.5)
+            cam_velocity = self._cam_z_end_velocity(self._CAM_DURATION)
             startup_bridge_t = min(self._STARTUP_PRELUDE + 0.64, elapsed)
             startup_burst = max(0.0, 1.0 - startup_bridge_t / 1.06)
             startup_wave = min(1.0, startup_bridge_t / (self._STARTUP_PRELUDE + 0.64))
@@ -1472,10 +1722,14 @@ void main() {
             self._gl_fx_flash = max(0.0, 1.0 - startup_bridge_t / 1.08) * 0.30 + startup_burst * 0.28 + min(0.22, exit_elapsed * 0.38)
             self._gl_fx_tint = (0.96, 0.78, 0.24)
             if readback_canvas is not None:
-                self._draw_tunnel_gl(readback_canvas, self._color_particles, cam_z, bg, particle_fade, t=scene_t)
+                self._draw_tunnel_gl(readback_canvas, self._color_particles, cam_z, bg,
+                                     particle_fade, t=scene_t,
+                                     motion_blur=0.70, cam_velocity=cam_velocity)
             else:
                 self._gl_elapsed = elapsed
-                self._draw_tunnel_gl(None, self._color_particles, cam_z, bg, particle_fade, t=scene_t)
+                self._draw_tunnel_gl(None, self._color_particles, cam_z, bg,
+                                     particle_fade, t=scene_t,
+                                     motion_blur=0.70, cam_velocity=cam_velocity)
             rendered = True
 
         if self._P3_START <= scene_t < self._P3_END + 0.55:
@@ -1486,26 +1740,31 @@ void main() {
             p3_t = scene_t - self._P3_START
             p3_dur = self._P3_END - self._P3_START
             cam_z = self._cam_z_with_exit(p3_t, p3_dur, p3_dur, 0.55)
+            cam_velocity = self._cam_z_end_velocity(p3_dur)
             self._gl_start_burst = 0.0
             self._gl_start_wave = 1.0
-            self._gl_fx_energy = p3_fade * (0.20 + 0.80 * min(1.0, p3_t / max(0.01, p3_dur)) + exit_elapsed * 0.70)
-            self._gl_fx_flash = max(0.0, 1.0 - p3_t / 0.70) * 0.18 + min(0.24, exit_elapsed * 0.52)
-            self._gl_fx_tint = (0.45, 0.80, 1.00)
-            self._gl_motion_mix = 0.86 if exit_elapsed > 0.0 else 0.60
+            self._gl_fx_energy, self._gl_fx_flash, self._gl_fx_tint, self._gl_motion_mix = self._calc_p3_p4_fx_state(scene_t, p3_fade)
             if readback_canvas is not None:
-                self._draw_tunnel_gl(readback_canvas, self._blue_particles, cam_z, bg, p3_fade, t=scene_t)
+                self._draw_tunnel_gl(readback_canvas, self._blue_particles, cam_z, bg,
+                                     p3_fade, t=scene_t,
+                                     motion_blur=0.78, cam_velocity=cam_velocity)
             else:
                 self._gl_elapsed = elapsed
-                self._draw_tunnel_gl(None, self._blue_particles, cam_z, bg, p3_fade, t=scene_t)
+                self._draw_tunnel_gl(None, self._blue_particles, cam_z, bg,
+                                     p3_fade, t=scene_t,
+                                     motion_blur=0.78, cam_velocity=cam_velocity)
             rendered = True
 
         if not rendered:
             self._gl_start_burst = 0.0
             self._gl_start_wave = 1.0
-            self._gl_fx_energy = 0.12
-            self._gl_fx_flash = 0.0
-            self._gl_fx_tint = (0.45, 0.80, 1.00) if scene_t >= self._P3_START else (0.96, 0.78, 0.24)
-            self._gl_motion_mix = 0.92 if scene_t >= self._P3_END else 0.60
+            if scene_t >= self._P3_START:
+                self._gl_fx_energy, self._gl_fx_flash, self._gl_fx_tint, self._gl_motion_mix = self._calc_p3_p4_fx_state(scene_t, 0.0)
+            else:
+                self._gl_fx_energy = 0.12
+                self._gl_fx_flash = 0.0
+                self._gl_fx_tint = (0.96, 0.78, 0.24)
+                self._gl_motion_mix = 0.60
             self._draw_startup_gl(readback_canvas, bg, t=elapsed)
             rendered = True
 
@@ -1624,6 +1883,9 @@ void main() {
             if not self._gpu_present_window:
                 self._finish()
                 return
+            if getattr(self, '_gpu_present_done', False):
+                self._finish()
+                return
         elif not self._overlay or not self._overlay.winfo_exists():
             return
 
@@ -1635,15 +1897,19 @@ void main() {
             return
         if getattr(self, '_gpu_present_enabled', False):
             try:
-                self._gpu_present_frame_requested = True
-                self._gpu_present_window.request_redraw()
+                if not self._gpu_present_frame_requested:
+                    self._gpu_present_frame_requested = True
+                    self._gpu_present_window.request_redraw()
             except Exception as e:
                 print(f'[LinkStart] GPU present request failed: {e}')
                 self._finish()
                 return
-            self._schedule_next_frame()
             return
 
+        self._animate_canvas_frame(elapsed, scene_t)
+
+    def _animate_canvas_frame(self, elapsed: float, scene_t: float):
+        """Tk/Canvas 或非直出 GL 的单帧渲染；直出 GPU 不走这里。"""
         cv = self._canvas
         sw, sh = self._sw, self._sh
         use_gl = self._gl_ctx is not None
@@ -1695,6 +1961,7 @@ void main() {
             # 使用原始 _CAM_DURATION (3.5s) 保持与 P3 相同的飞行速度.
             # z_near < 1.0 的近裁剪guard已处理摄像机追上粒子的情况 → 直接跳过不渲染.
             cam_z = self._cam_z_with_exit(scene_t, self._CAM_DURATION, self._P1_END, 0.5)
+            cam_velocity = self._cam_z_end_velocity(self._CAM_DURATION)
 
             # 粒子隧道
             startup_bridge_t = min(self._STARTUP_PRELUDE + 0.64, elapsed)
@@ -1709,7 +1976,9 @@ void main() {
                 self._draw_focus_flow_cv(cv, scene_t, self._CAM_DURATION,
                                          particle_fade, bg, warm=True)
             self._draw_tunnel(cv, self._color_particles, cam_z, bg,
-                              particle_fade, t=scene_t)
+                              particle_fade, t=scene_t,
+                              motion_blur=0.70,
+                              cam_velocity=cam_velocity)
             if self._gl_ctx:
                 rendered_gl_scene = True
 
@@ -1738,17 +2007,17 @@ void main() {
             p3_t = scene_t - self._P3_START
             p3_dur = self._P3_END - self._P3_START  # = 2.3s, 确保摄像机在相结束前走完全程
             cam_z = self._cam_z_with_exit(p3_t, p3_dur, p3_dur, 0.55)
+            cam_velocity = self._cam_z_end_velocity(p3_dur)
             self._gl_start_burst = 0.0
             self._gl_start_wave = 1.0
-            self._gl_fx_energy = p3_fade * (0.20 + 0.80 * min(1.0, p3_t / max(0.01, p3_dur)) + exit_elapsed * 0.70)
-            self._gl_fx_flash = max(0.0, 1.0 - p3_t / 0.70) * 0.18 + min(0.24, exit_elapsed * 0.52)
-            self._gl_fx_tint = (0.45, 0.80, 1.00)
-            self._gl_motion_mix = 0.86 if exit_elapsed > 0.0 else 0.60
+            self._gl_fx_energy, self._gl_fx_flash, self._gl_fx_tint, self._gl_motion_mix = self._calc_p3_p4_fx_state(scene_t, p3_fade)
             if not self._gl_ctx:
                 self._draw_focus_flow_cv(cv, p3_t, p3_dur,
                                          p3_fade, bg, warm=False)
             self._draw_tunnel(cv, self._blue_particles, cam_z, bg,
-                              p3_fade, t=scene_t)
+                              p3_fade, t=scene_t,
+                              motion_blur=0.78,
+                              cam_velocity=cam_velocity)
             if self._gl_ctx:
                 rendered_gl_scene = True
 
@@ -1757,7 +2026,10 @@ void main() {
                 self._draw_tunnel_hud_overlay(cv, scene_t, p3_fade, warm=False)
 
         if self._gl_ctx and not rendered_gl_scene:
-            self._gl_motion_mix = 0.92 if scene_t >= self._P3_END else 0.60
+            if scene_t >= self._P3_START:
+                self._gl_fx_energy, self._gl_fx_flash, self._gl_fx_tint, self._gl_motion_mix = self._calc_p3_p4_fx_state(scene_t, 0.0)
+            else:
+                self._gl_motion_mix = 0.60
             self._draw_startup_gl(cv, bg, t=elapsed)
             rendered_gl_scene = True
 
@@ -1787,7 +2059,7 @@ void main() {
                 return
         elif not self._overlay or not self._overlay.winfo_exists():
             return
-        frame_sec = 1.0 / 60.0
+        frame_sec = 1.0 / max(1.0, float(getattr(self, '_target_refresh_hz', 60.0)))
         now = time.perf_counter()
         deadline = getattr(self, '_next_frame_deadline', 0.0)
         if deadline <= 0.0 or deadline < now - frame_sec:
@@ -3070,6 +3342,10 @@ void main() {
     #  结束
     # ════════════════════════════════════════════════════════
     def _finish(self):
+        if getattr(self, '_finished', False):
+            return
+        self._finished = True
+        self._gpu_present_done = True
         if self._timer_resolution is not None:
             try:
                 self._timer_resolution.release()
@@ -3086,6 +3362,7 @@ void main() {
         self._gpu_present_enabled = False
         self._gpu_present_frame_requested = False
         self._gpu_present_ready = False
+        self._gpu_present_finish_posted = False
         if self._overlay and self._overlay.winfo_exists():
             self._overlay.destroy()
         self._overlay = None

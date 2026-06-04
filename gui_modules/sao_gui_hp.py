@@ -51,10 +51,9 @@ from render.overlay_render_worker import (
 from render.overlay_subpixel import subpixel_bar_width
 
 # v2.3.x: optional GPU presenter (mirrors SkillFX/MenuHud pattern).
-# Env-gated via SAO_GPU_HP (defaults to SAO_GPU_OVERLAY). Falls back to
-# the original ULW path if GLFW is unavailable. GPU mode now owns input
-# callbacks, preserving drag/tap/context menu while keeping presentation
-# off the ULW path.
+# Env-gated via SAO_GPU_HP only. Falls back to the original ULW path if
+# GLFW is unavailable. GPU mode now owns input callbacks, preserving
+# drag/tap/context menu while keeping presentation off the ULW path.
 try:
     from render import gpu_overlay_window as _gow
 except Exception:

@@ -256,9 +256,9 @@ class BurstReadyOverlay:
         # zero compose work on the in-between ticks.
         self._last_submit_phase_q: float = -1.0
         self._warm_sig: tuple = ()
-        # v2.3.0 Phase 2c: optional GPU overlay presentation. When
-        # SAO_GPU_OVERLAY=1 we replace the tk.Toplevel + ULW commit
-        # path with a GpuOverlayWindow + BgraPresenter; the worker
+        # v2.3.0 Phase 2c: optional GPU overlay presentation. The
+        # tk.Toplevel + ULW commit path is replaced with a
+        # GpuOverlayWindow + BgraPresenter; the worker
         # still composes PIL→BGRA exactly as before, only the present
         # step changes (~1–2 ms ULW commit → 0.01 ms texture upload).
         self._gpu_window: Optional[Any] = None

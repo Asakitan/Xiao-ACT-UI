@@ -119,9 +119,9 @@ class MenuHudOverlay:
         # First-tick anchor so phase math is stable across calls.
         self._phase_t0: float = 0.0
         self._destroyed = False
-        # v2.3.0 Phase 3: optional GPU overlay presentation. When
-        # SAO_GPU_OVERLAY=1 the per-frame ULW commit (~1-2 ms GDI
-        # bitmap copy) is replaced with a moderngl texture upload +
+        # v2.3.0 Phase 3: optional GPU overlay presentation. The
+        # per-frame ULW commit (~1-2 ms GDI bitmap copy) is replaced
+        # with a moderngl texture upload +
         # quad draw (~0.01 ms). Worker still composes PIL→BGRA the
         # same way; only the present transport changes.
         self._gpu_window: Optional[Any] = None
