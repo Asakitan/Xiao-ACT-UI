@@ -28,6 +28,8 @@ except Exception:
 PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+TH32CS_SNAPPROCESS = 0x00000002
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 MEM_COMMIT = 0x1000
 MEM_PRIVATE = 0x20000
@@ -66,6 +68,73 @@ class _MEMORY_BASIC_INFORMATION64(ctypes.Structure):
         ("Type", wintypes.DWORD),
         ("__alignment2", wintypes.DWORD),
     ]
+
+
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", wintypes.WCHAR * wintypes.MAX_PATH),
+    ]
+
+
+def _iter_process_entries_wide() -> Iterator[tuple[str, int]]:
+    """Enumerate process names via the Unicode Toolhelp API.
+
+    ``pymem.process.process_from_name`` decodes ``PROCESSENTRY32.szExeFile``
+    with ``locale.getpreferredencoding()``.  On Windows machines configured for
+    UTF-8, unrelated processes with ANSI bytes in their executable name can make
+    that helper raise ``UnicodeDecodeError`` before it ever reaches Star.exe.
+    The W-suffixed Toolhelp APIs return UTF-16 strings directly, avoiding that
+    locale-sensitive decode path.
+    """
+    kernel32 = ctypes.windll.kernel32
+    CreateToolhelp32Snapshot = kernel32.CreateToolhelp32Snapshot
+    Process32FirstW = kernel32.Process32FirstW
+    Process32NextW = kernel32.Process32NextW
+    CloseHandle = kernel32.CloseHandle
+
+    CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+    Process32FirstW.restype = wintypes.BOOL
+    Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESSENTRY32W)]
+    Process32NextW.restype = wintypes.BOOL
+    CloseHandle.argtypes = [wintypes.HANDLE]
+    CloseHandle.restype = wintypes.BOOL
+
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if int(snap) == int(INVALID_HANDLE_VALUE):
+        return
+    try:
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+        ok = Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            yield str(entry.szExeFile), int(entry.th32ProcessID)
+            ok = Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        CloseHandle(snap)
+
+
+def _find_pid_by_name_wide(process_name: str) -> Optional[int]:
+    target = os.path.basename(str(process_name or "")).casefold()
+    if not target:
+        return None
+    try:
+        for exe_name, pid in _iter_process_entries_wide():
+            if os.path.basename(str(exe_name or "")).casefold() == target:
+                return int(pid)
+    except Exception:
+        return None
+    return None
 
 
 # ───────────────────────── 数据类 ─────────────────────────
@@ -113,7 +182,7 @@ class StarProcess:
 
         import pymem.process
         from pymem import Pymem
-        from pymem.exception import ProcessNotFound, CouldNotOpenProcess
+        from pymem.exception import CouldNotOpenProcess
 
         candidates = [process_name] if process_name else list(GAME_PROCESS_NAMES)
         last_err: Optional[Exception] = None
@@ -123,8 +192,10 @@ class StarProcess:
             if not name:
                 continue
             try:
-                proc = pymem.process.process_from_name(name)
-                pid = int(proc.th32ProcessID)
+                pid = find_pid_by_name(name)
+                if pid is None:
+                    last_err = StarProcessError(f"process not found: {name}")
+                    continue
                 handle = pymem.process.open(
                     pid,
                     debug=False,
@@ -141,9 +212,6 @@ class StarProcess:
                 self._pm.process_handle = handle
                 attached_name = name
                 break
-            except ProcessNotFound as e:
-                last_err = e
-                continue
             except CouldNotOpenProcess as e:
                 # 找到了但打不开 — 通常是反作弊或权限不足, 直接抛, 不再尝试其它候选
                 raise StarProcessError(
@@ -350,12 +418,12 @@ def is_admin() -> bool:
 
 
 def find_pid_by_name(process_name: str) -> Optional[int]:
-    """轻量探测: 不开进程, 仅枚举 PID; 用于 attach 前预检."""
-    try:
-        import pymem.process
-        return pymem.process.process_from_name(process_name).th32ProcessID  # type: ignore[attr-defined]
-    except Exception:
-        return None
+    """轻量探测: 不开进程, 仅枚举 PID; 用于 attach 前预检.
+
+    Uses the Unicode Win32 process enumeration path so a non-UTF-8 executable
+    name from any unrelated process cannot abort Star.exe discovery.
+    """
+    return _find_pid_by_name_wide(process_name)
 
 
 if __name__ == "__main__":  # 简易自测

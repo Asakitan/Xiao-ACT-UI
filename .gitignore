@@ -17,13 +17,6 @@ packet_debug.jsonl
 *.jsonl
 exports/
 
-# ── Test files ────────────────────────────────────
-# Scoped to repo root so C#/tests/ stays tracked.
-test_*.py
-*_test.py
-/tests/
-/test_*
-
 # ── Build / dist ──────────────────────────────────
 dist/
 build/
@@ -63,7 +56,6 @@ update_host/releases/
 
 # ── mem_probe production: keep code, exclude per-user anchor data ───
 mem_probe/anchors.json
-!mem_probe/test_cy_memscan.py
 
 # ── Misc ───────────────────────────────────────────
 .github/
