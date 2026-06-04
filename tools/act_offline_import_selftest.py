@@ -9,6 +9,11 @@ import tempfile
 import unittest
 import gzip
 import zipfile
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from act_platform import runtime
 from act_platform.plugins import PluginManager

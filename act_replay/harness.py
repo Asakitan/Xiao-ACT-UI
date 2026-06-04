@@ -180,9 +180,12 @@ class ActReplayHarness:
         return event
 
     def emit_monster_update(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        from act_platform.runtime import enrich_action_log_event
+
         event = dict(event or {})
         event.setdefault("timestamp", time.time())
         event.setdefault("source", "replay")
+        event = enrich_action_log_event(event, owner=self, topic="monster")
         updates = boss_state_from_monster_update(event)
         if updates:
             self.state_mgr.update(**updates)
@@ -191,8 +194,11 @@ class ActReplayHarness:
         return event
 
     def emit_damage_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        from act_platform.runtime import enrich_action_log_event
+
         event = dict(event or {})
         event.setdefault("timestamp", time.time())
+        event = enrich_action_log_event(event, owner=self, topic="heal" if event.get("is_heal") else "damage")
         if event.get("attacker_is_self") and event.get("target_uuid"):
             try:
                 self.dps_tracker.set_boss_uuid(_safe_int(event.get("target_uuid")))

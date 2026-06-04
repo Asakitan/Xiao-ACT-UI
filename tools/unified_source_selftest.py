@@ -3,9 +3,15 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import types
 import unittest
 from unittest import mock
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from mem_probe import unified_source
 from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider

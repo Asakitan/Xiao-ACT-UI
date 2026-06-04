@@ -52,6 +52,7 @@ class ActionLogPanel:
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
         self._last_rows_sig = ""
+        self._expanded_groups: set[str] = set()
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -318,6 +319,7 @@ class ActionLogPanel:
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         rows = list(status.get('rows') or [])
+        groups = list(status.get('grouped_rows') or [])
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         cursor = status.get('cursor') if isinstance(status.get('cursor'), Mapping) else {}
         source = str(status.get('source') or filters.get('source') or 'live')
@@ -336,7 +338,7 @@ class ActionLogPanel:
         )
         if self._rows is None:
             return
-        sig = self._rows_signature(rows)
+        sig = self._rows_signature(rows) + repr([(g.get('key'), g.get('count'), g.get('total_value')) for g in groups[:80]]) + repr(sorted(self._expanded_groups))
         if sig == self._last_rows_sig:
             return
         self._last_rows_sig = sig
@@ -345,9 +347,87 @@ class ActionLogPanel:
         if not rows:
             self._render_empty()
             return
+        if groups:
+            for group in groups[:80]:
+                if isinstance(group, Mapping):
+                    self._render_group(group)
+            return
         self._render_header()
         for row in rows[:80]:
             self._render_row(row)
+
+    def _toggle_group(self, key: str) -> None:
+        key = str(key or '')
+        if not key:
+            return
+        if key in self._expanded_groups:
+            self._expanded_groups.remove(key)
+        else:
+            self._expanded_groups.add(key)
+        self._last_rows_sig = ""
+        self._render_status(self._last_status)
+
+    def _render_group(self, group: Mapping[str, Any]) -> None:
+        if self._rows is None:
+            return
+        key = str(group.get('key') or '')
+        open_group = key in self._expanded_groups
+        card = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+        card.pack(fill='x', pady=4, padx=4)
+        top = tk.Frame(card, bg=_SAO_PANEL_HEADER_BG)
+        top.pack(fill='x')
+        toggle = '▾' if open_group else '▸'
+        title = f"{toggle} {group.get('name') or '-'}"
+        meta = (
+            f"{str(group.get('kind') or 'event').upper()} · {int(group.get('count') or 0)} rows · "
+            f"UID {int(group.get('uid_count') or 0)} · {int(group.get('first_time_ms') or 0)}-{int(group.get('last_time_ms') or 0)}ms"
+        )
+        tk.Button(
+            top,
+            text=title,
+            command=lambda k=key: self._toggle_group(k),
+            anchor='w',
+            bg=_SAO_PANEL_HEADER_BG,
+            fg=_SAO_PANEL_VALUE_FG,
+            activebackground=_SAO_PANEL_ACCENT,
+            activeforeground='white',
+            relief='flat',
+            bd=0,
+            font=('Segoe UI', 9, 'bold'),
+        ).pack(side='left', fill='x', expand=True, padx=(8, 4), pady=6)
+        tk.Label(
+            top,
+            text=str(group.get('total_value') or 0),
+            bg=_SAO_PANEL_HEADER_BG,
+            fg=_SAO_PANEL_GOLD,
+            font=('Segoe UI', 9, 'bold'),
+        ).pack(side='right', padx=8)
+        tk.Label(card, text=meta, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', font=('Segoe UI', 8)).pack(fill='x', padx=8, pady=(4, 6))
+        if not open_group:
+            return
+        for row in list(group.get('rows') or [])[:80]:
+            if isinstance(row, Mapping):
+                self._render_group_detail(card, row)
+        if group.get('has_more_rows'):
+            tk.Label(card, text='还有更多明细，请缩小筛选或翻页查看。', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', font=('Segoe UI', 8)).pack(fill='x', padx=14, pady=(0, 8))
+
+    def _render_group_detail(self, parent: tk.Misc, row: Mapping[str, Any]) -> None:
+        payload = row.get('payload') if isinstance(row.get('payload'), Mapping) else {}
+        uid = row.get('target_uid') or payload.get('target_uuid') or payload.get('target_uid') or row.get('actor_uid') or payload.get('actor_uid') or '-'
+        dungeon = row.get('dungeon') or payload.get('dungeon_name') or payload.get('dungeon_id') or '-'
+        box = tk.Frame(parent, bg='#081521', highlightthickness=1, highlightbackground='#254a63')
+        box.pack(fill='x', pady=3, padx=12)
+        top = tk.Frame(box, bg='#081521')
+        top.pack(fill='x', padx=8, pady=(5, 2))
+        for text, width, fg in (
+            (f"{int(row.get('time_ms') or 0)}ms", 10, _SAO_PANEL_LABEL_FG),
+            (str(row.get('topic') or '-'), 10, _SAO_PANEL_GOLD),
+            (str(row.get('label') or '-'), 30, _SAO_PANEL_VALUE_FG),
+            (str(row.get('value') or ''), 12, _SAO_PANEL_VALUE_FG),
+        ):
+            tk.Label(top, text=text, width=width, anchor='w', bg='#081521', fg=fg, font=('Segoe UI', 8)).pack(side='left', padx=2)
+        meta = f"actor={row.get('actor') or '-'} · target={row.get('target') or '-'} · uid={uid} · dungeon={dungeon} · source={row.get('source') or '-'}"
+        tk.Label(box, text=meta, bg='#081521', fg=_SAO_PANEL_LABEL_FG, anchor='w', font=('Segoe UI', 8)).pack(fill='x', padx=8, pady=(0, 5))
 
     def _render_header(self) -> None:
         if self._rows is None:

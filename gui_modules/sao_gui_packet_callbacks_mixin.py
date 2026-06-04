@@ -56,7 +56,7 @@ from typing import Any, Optional
 
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
-from act_platform.runtime import publish_owner_event, should_record_owner_combat_event
+from act_platform.runtime import enrich_action_log_event, publish_owner_event, should_record_owner_combat_event
 from engines.combat_analytics import boss_state_from_monster_update
 
 
@@ -76,7 +76,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
     def _on_skill_event(self, event):
         """Normalized TCP skill lifecycle event → shared ACT context."""
         try:
-            self._last_skill_event = dict(event or {})
+            self._last_skill_event = enrich_action_log_event(dict(event or {}), owner=self, topic='skill')
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(last_skill_event=self._last_skill_event)
             mgr = getattr(self, '_encounter_mgr', None)
@@ -119,6 +119,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
                 if 'dungeon_name' not in event_for_mgr and updates.get('dungeon_name'):
                     event_for_mgr['dungeon_name'] = updates.get('dungeon_name')
                 mgr.on_dungeon_event(event_for_mgr)
+            event = enrich_action_log_event(event, owner=self, topic='dungeon')
             publish_owner_event(self, 'dungeon', event, source_name='entity', source_kind='tcp')
             if scene_id > 0:
                 publish_owner_event(self, 'scene', event, source_name='entity', source_kind='tcp')
@@ -158,6 +159,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
         """Damage event callback from packet_parser → boss raid engine + DPS tracker."""
         event = self._normalize_damage_event_for_self(event)
         event = self._normalize_damage_event_target_for_entity(event)
+        event = enrich_action_log_event(event, owner=self, topic='damage')
         publish_owner_event(self, 'damage', event, source_name='entity', source_kind='tcp')
         selective_decision = should_record_owner_combat_event(self, event)
         # Track self -> non-player combat target damage for boss bar target.

@@ -31,15 +31,31 @@ _REPO = os.path.dirname(_SAO)
 _ASSETS = os.path.join(_SAO, "assets")
 _EXTRACTED = os.path.join(_ASSETS, "name_tables")          # 解码器输出
 _DATATOOLS_CN = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Data", "CN")
+_SRD_WPF_MONSTER = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAnalysis.WPF", "Data", "Monster")
+_SRD_WINFORM_TABLE = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAnalysis.WinForm", "Core", "TabelJson")
+_DATATOOLS_OLD_MONSTER = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Old", "Data", "monster")
+_RESONANCE_LOGS_CONFIG = os.path.join(_REPO, "resonance-logs-cn", "src", "lib", "config")
+_RESONANCE_LOGS_METER_DATA = os.path.join(_REPO, "resonance-logs-cn", "src-tauri", "meter-data")
 _SKILL_NAMES = os.path.join(_ASSETS, "skill_names.json")
 _LIVE_ACT_MATCHES = os.path.join(_EXTRACTED, "live_probe_act_matched_rows.json")
 
 # 每个 kind 的数据源 (高优先级在前)
 _SOURCES = {
     "skill":   [(_EXTRACTED, "skill.json"),   (_DATATOOLS_CN, "SkillTable.json"),  (_ASSETS, "skill_names.json")],
-    "monster": [(_EXTRACTED, "monster.json"), (_DATATOOLS_CN, "MonsterTable.json")],
+    "monster": [
+        (_EXTRACTED, "monster.json"),
+        (_DATATOOLS_CN, "MonsterTable.json"),
+        (_SRD_WPF_MONSTER, "monster.zh-CN.json"),
+        (_SRD_WINFORM_TABLE, "monster_names.json"),
+        (_DATATOOLS_OLD_MONSTER, "monster_name_mapping.json"),
+    ],
     "buff":    [(_EXTRACTED, "buff.json"),    (_DATATOOLS_CN, "BuffTable.json"),   (_ASSETS, "skill_names.json")],
-    "dungeon": [(_EXTRACTED, "dungeon.json"), (_DATATOOLS_CN, "DungeonTable.json")],
+    "dungeon": [
+        (_EXTRACTED, "dungeon.json"),
+        (_DATATOOLS_CN, "DungeonTable.json"),
+        (_RESONANCE_LOGS_METER_DATA, "SceneName.json"),
+        (_RESONANCE_LOGS_CONFIG, "SceneName.json"),
+    ],
     "item":    [(_EXTRACTED, "item.json"),    (_DATATOOLS_CN, "ItemTable.json")],
     "npc":     [(_EXTRACTED, "npc.json"),     (_DATATOOLS_CN, "NpcTable.json")],
 }

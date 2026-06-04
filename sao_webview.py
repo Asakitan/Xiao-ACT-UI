@@ -124,6 +124,7 @@ from act_platform.runtime import (
     ensure_act_plugin_manager,
     publish_owner_event,
     should_record_owner_combat_event,
+    enrich_action_log_event,
 )
 from config import (
     DEFAULT_HOTKEYS,
@@ -3050,6 +3051,7 @@ class SAOWebViewGUI:
         """
         event = self._normalize_damage_event_for_self(event)
         event = self._normalize_damage_event_target_for_webview(event)
+        event = enrich_action_log_event(event, owner=self, topic='damage')
         publish_owner_event(self, 'damage', event, source_name='webview', source_kind='tcp')
         selective_decision = should_record_owner_combat_event(self, event)
         # Track last self -> non-player combat target damage for boss bar target.
@@ -3222,7 +3224,7 @@ class SAOWebViewGUI:
     def _on_skill_event(self, event):
         """Skill lifecycle event callback from packet_parser for ACT/triggers."""
         try:
-            self._last_skill_event = dict(event or {})
+            self._last_skill_event = enrich_action_log_event(dict(event or {}), owner=self, topic='skill')
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(last_skill_event=self._last_skill_event)
             mgr = getattr(self, '_encounter_mgr', None)
@@ -3262,6 +3264,7 @@ class SAOWebViewGUI:
                 if 'dungeon_name' not in ev_for_mgr and updates.get('dungeon_name'):
                     ev_for_mgr['dungeon_name'] = updates.get('dungeon_name')
                 mgr.on_dungeon_event(ev_for_mgr)
+            ev = enrich_action_log_event(ev, owner=self, topic='dungeon')
             publish_owner_event(self, 'dungeon', ev, source_name='webview', source_kind='tcp')
             if scene_id > 0:
                 publish_owner_event(self, 'scene', ev, source_name='webview', source_kind='tcp')

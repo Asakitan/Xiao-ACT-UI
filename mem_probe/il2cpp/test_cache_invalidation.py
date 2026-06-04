@@ -15,6 +15,7 @@ from mem_probe.il2cpp.static_dps_source import StaticDpsSource
 from mem_probe.il2cpp.instance_cache import (
     _DEFAULT_CACHE, _key, _load, _save, validate_cache_entry,
 )
+from mem_probe.process import StarProcessError
 
 CLS = "Zproto.CharSerialize"
 SENT_FIELD = "Attr"
@@ -43,9 +44,20 @@ def test_with_cache_mod(name: str, mutator) -> bool:
 
 def main():
     print("[#0] ensure baseline cache exists")
-    src = StaticDpsSource()
     try:
-        if not validate_cache_entry(src.sr, CLS, SENT_FIELD, SENT_CLS):
+        src = StaticDpsSource()
+    except StarProcessError as e:
+        print(f"  [SKIP] live Star.exe memory attach unavailable: {e}")
+        print("  This cache-invalidation smoke needs PROCESS_QUERY|VM_READ access; deterministic mem tests should still run without it.")
+        return 0
+    try:
+        try:
+            resolver = src.sr
+        except StarProcessError as e:
+            print(f"  [SKIP] live Star.exe memory attach unavailable: {e}")
+            print("  This cache-invalidation smoke needs PROCESS_QUERY|VM_READ access; deterministic mem tests should still run without it.")
+            return 0
+        if not validate_cache_entry(resolver, CLS, SENT_FIELD, SENT_CLS):
             print("  baseline cache invalid, doing full scan...")
             s = src.get_self_snapshot()
             assert s is not None, "scan failed"

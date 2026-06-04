@@ -1348,12 +1348,10 @@ def _compact_timeline_event(event: Mapping[str, Any], index: int = 0) -> dict[st
     source = event.get("source") if isinstance(event.get("source"), Mapping) else {}
     topic = str(event.get("topic") or "")
     observed_at = _safe_float(event.get("observed_at") or (payload or {}).get("timestamp") or 0.0)
+    display = _action_log_display_fields(payload, topic=topic)
     label = str(
-        (payload or {}).get("message")
-        or (payload or {}).get("skill")
-        or (payload or {}).get("skill_name")
-        or (payload or {}).get("attacker")
-        or (payload or {}).get("name")
+        display.get("label")
+        or (payload or {}).get("message")
         or topic
     )
     value = (
@@ -1564,15 +1562,16 @@ def _normalize_action_log_source(source: Any) -> str:
 def _action_log_row(event: Mapping[str, Any], index: int = 0) -> dict[str, Any]:
     compact = _compact_timeline_event(event, index)
     payload = compact.get("payload") if isinstance(compact.get("payload"), Mapping) else {}
-    actor = str(payload.get("attacker") or payload.get("actor") or payload.get("source") or payload.get("name") or "")
-    target = str(payload.get("target") or payload.get("victim") or payload.get("boss") or "")
+    display = _action_log_display_fields(payload, topic=str(compact.get("topic") or ""))
+    actor = str(display.get("actor") or "")
+    target = str(display.get("target") or "")
     row_id = compact.get("id") or f"{compact.get('topic')}:{compact.get('time_ms')}:{index}"
-    return {
+    row = {
         "index": int(index),
         "id": str(row_id),
         "time_ms": int(compact.get("time_ms") or 0),
         "topic": str(compact.get("topic") or ""),
-        "label": str(compact.get("label") or ""),
+        "label": str(display.get("label") or compact.get("label") or ""),
         "value": compact.get("value") or "",
         "source": str(compact.get("source") or ""),
         "actor": actor,
@@ -1581,6 +1580,8 @@ def _action_log_row(event: Mapping[str, Any], index: int = 0) -> dict[str, Any]:
         "source_mode": "live",
         "is_cursor": False,
     }
+    row.update(_action_log_group_metadata(row, payload, display))
+    return row
 
 
 def _action_log_history_row(action: Mapping[str, Any], index: int = 0) -> dict[str, Any]:
@@ -1599,21 +1600,34 @@ def _action_log_history_row(action: Mapping[str, Any], index: int = 0) -> dict[s
     encounter_id = str(action.get("encounter_id") or "")
     seq = int(action.get("seq") or index)
     time_ms = int(action.get("time_ms") or 0)
-    return {
+    merged_payload = dict(payload)
+    for key in ("actor_uid", "target_uid", "skill_id", "dungeon_id", "encounter_id", "topic"):
+        if action.get(key) is not None and merged_payload.get(key) is None:
+            merged_payload[key] = action.get(key)
+    if actor and not merged_payload.get("actor"):
+        merged_payload["actor"] = actor
+    if target and not merged_payload.get("target"):
+        merged_payload["target"] = target
+    if label and not merged_payload.get("skill_name"):
+        merged_payload["skill_name"] = label
+    display = _action_log_display_fields(merged_payload, topic=str(action.get("topic") or payload.get("topic") or ""))
+    row = {
         "index": int(index),
         "id": f"history:{encounter_id}:{seq}:{time_ms}",
         "encounter_id": encounter_id,
         "time_ms": time_ms,
         "topic": str(action.get("topic") or payload.get("topic") or ""),
-        "label": label,
+        "label": str(display.get("label") or label),
         "value": action.get("value") if action.get("value") is not None else "",
         "source": source,
-        "actor": actor,
-        "target": target,
-        "payload": _json_safe(payload),
+        "actor": str(display.get("actor") or actor),
+        "target": str(display.get("target") or target),
+        "payload": _json_safe(merged_payload),
         "source_mode": "history",
         "is_cursor": False,
     }
+    row.update(_action_log_group_metadata(row, merged_payload, display))
+    return row
 
 
 def _filter_action_log_rows(rows: list[dict[str, Any]], *, query: str = "", topic: str = "") -> list[dict[str, Any]]:
@@ -1638,6 +1652,315 @@ def _action_log_numeric_value(row: Mapping[str, Any]) -> float:
         return float(text)
     except Exception:
         return 0.0
+
+
+def _truthy_text(value: Any) -> str:
+    text = str(value or "").strip()
+    return text if text and text not in {"-", "0", "None", "none", "null"} else ""
+
+
+def _payload_first_text(payload: Mapping[str, Any], keys: Iterable[str]) -> str:
+    for key in keys:
+        text = _truthy_text(payload.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _payload_first_int(payload: Mapping[str, Any], keys: Iterable[str]) -> int:
+    for key in keys:
+        value = payload.get(key)
+        try:
+            if value is not None and str(value or "").strip():
+                ivalue = int(value)
+                if ivalue:
+                    return ivalue
+        except Exception:
+            continue
+    return 0
+
+
+def _is_generated_entity_label(text: Any) -> bool:
+    value = _truthy_text(text)
+    return bool(value and (value.startswith("怪物#") or value.startswith("目标#") or value.startswith("技能#") or value.startswith("地牢#")))
+
+
+def _is_unresolved_entity_label(text: Any) -> bool:
+    value = _truthy_text(text)
+    if not value:
+        return True
+    if _is_generated_entity_label(value):
+        return True
+    return value.lstrip("+-").isdigit()
+
+
+def _payload_first_name_text(payload: Mapping[str, Any], keys: Iterable[str]) -> str:
+    for key in keys:
+        text = _truthy_text(payload.get(key))
+        if text and not _is_unresolved_entity_label(text):
+            return text
+    return ""
+
+
+def _resolve_name(kind: str, value: Any) -> str:
+    if value is None or not str(value or "").strip():
+        return ""
+    try:
+        from tools.tablekit.name_tables import names
+        return _truthy_text(names.resolve(kind, value, default=""))
+    except Exception:
+        return ""
+
+
+def _owner_packet_bridge(owner: Any) -> Any:
+    return getattr(owner, "_packet_engine", None) or getattr(owner, "packet_bridge", None) or getattr(owner, "_bridge", None)
+
+
+def _monster_snapshot_from_owner(owner: Any, uid: int) -> Mapping[str, Any]:
+    if owner is None or not uid:
+        return {}
+    bridge = _owner_packet_bridge(owner)
+    getter = getattr(bridge, "get_monster", None)
+    if not callable(getter):
+        return {}
+    try:
+        monster = getter(int(uid))
+    except Exception:
+        monster = None
+    if monster is None:
+        return {}
+    to_dict = getattr(monster, "to_dict", None)
+    if callable(to_dict):
+        try:
+            snap = to_dict()
+            return snap if isinstance(snap, Mapping) else {}
+        except Exception:
+            return {}
+    out: dict[str, Any] = {}
+    for attr in ("uuid", "uid", "name", "template_id", "hp", "max_hp"):
+        try:
+            value = getattr(monster, attr)
+        except Exception:
+            continue
+        if value is not None:
+            out[attr] = value
+    return out
+
+
+def _owner_monster_identity_cache(owner: Any) -> dict[str, dict[str, Any]]:
+    if owner is None:
+        return {"by_uuid": {}, "by_template": {}}
+    cache = getattr(owner, "_act_monster_identity_cache", None)
+    if not isinstance(cache, dict):
+        cache = {"by_uuid": {}, "by_template": {}}
+        try:
+            setattr(owner, "_act_monster_identity_cache", cache)
+        except Exception:
+            return {"by_uuid": {}, "by_template": {}}
+    by_uuid = cache.get("by_uuid")
+    if not isinstance(by_uuid, dict):
+        by_uuid = {}
+        cache["by_uuid"] = by_uuid
+    by_template = cache.get("by_template")
+    if not isinstance(by_template, dict):
+        by_template = {}
+        cache["by_template"] = by_template
+    return cache
+
+
+def _remember_monster_identity(owner: Any, payload: Mapping[str, Any]) -> None:
+    if owner is None or not isinstance(payload, Mapping):
+        return
+    name = _payload_first_name_text(payload, ("monster_name", "target_name", "boss_name", "name"))
+    if not name:
+        return
+    uuid = _payload_first_int(payload, ("target_uuid", "target_uid", "uuid", "boss_uuid", "boss_uid", "combatant_id"))
+    template_id = _payload_first_int(payload, ("monster_id", "template_id", "target_template_id", "boss_id", "config_id"))
+    cache = _owner_monster_identity_cache(owner)
+    item = {"name": name, "monster_id": template_id, "uuid": uuid}
+    if uuid:
+        cache["by_uuid"][str(uuid)] = item
+    if template_id:
+        cache["by_template"][str(template_id)] = item
+
+
+def _lookup_monster_identity(owner: Any, *, uuid: int = 0, template_id: int = 0) -> Mapping[str, Any]:
+    if owner is None:
+        return {}
+    cache = _owner_monster_identity_cache(owner)
+    if uuid:
+        item = cache.get("by_uuid", {}).get(str(uuid))
+        if isinstance(item, Mapping) and _truthy_text(item.get("name")):
+            return item
+    if template_id:
+        item = cache.get("by_template", {}).get(str(template_id))
+        if isinstance(item, Mapping) and _truthy_text(item.get("name")):
+            return item
+    return {}
+
+
+def enrich_action_log_event(event: Mapping[str, Any] | None, *, owner: Any = None,
+                            topic: str = "") -> dict[str, Any]:
+    """Add best-effort display names/ids for ACT action-log consumers.
+
+    The helper is intentionally additive: existing parser payload fields are
+    preserved, and UI/runtime code can still fall back to raw IDs when a name
+    is not available yet.
+    """
+    payload = dict(event or {})
+    topic_text = str(topic or payload.get("topic") or "").strip().lower()
+    if topic_text in {"monster", "boss", "boss_state"}:
+        if _payload_first_int(payload, ("uuid",)) and not _payload_first_int(payload, ("target_uuid", "target_uid")):
+            payload["target_uuid"] = payload.get("uuid")
+        if _payload_first_int(payload, ("template_id",)) and not _payload_first_int(payload, ("monster_id", "target_template_id")):
+            payload["monster_id"] = payload.get("template_id")
+        name = _payload_first_name_text(payload, ("monster_name", "target_name", "boss_name", "name"))
+        if name:
+            payload.setdefault("monster_name", name)
+            payload.setdefault("target_name", name)
+    _remember_monster_identity(owner, payload)
+    target_uid = _payload_first_int(payload, ("target_uuid", "target_uid", "uuid", "boss_uuid", "boss_uid", "combatant_id"))
+    monster = _monster_snapshot_from_owner(owner, target_uid)
+    if monster:
+        name = _truthy_text(monster.get("name"))
+        template_id = _payload_first_int(monster, ("template_id", "monster_id"))
+        if name and not _is_unresolved_entity_label(name) and not _payload_first_name_text(payload, ("target_name", "monster_name", "target_display")):
+            payload["target_name"] = name
+            payload["monster_name"] = name
+        if template_id and not _payload_first_int(payload, ("monster_id", "template_id", "target_template_id")):
+            payload["monster_id"] = template_id
+            payload["target_template_id"] = template_id
+    cached = _lookup_monster_identity(
+        owner,
+        uuid=target_uid,
+        template_id=_payload_first_int(payload, ("monster_id", "template_id", "target_template_id")),
+    )
+    if cached:
+        cached_name = _truthy_text(cached.get("name"))
+        cached_monster_id = _payload_first_int(cached, ("monster_id", "template_id"))
+        if cached_name and not _is_unresolved_entity_label(cached_name) and not _payload_first_name_text(payload, ("target_name", "monster_name", "target_display")):
+            payload["target_name"] = cached_name
+            payload["monster_name"] = cached_name
+        if cached_monster_id and not _payload_first_int(payload, ("monster_id", "template_id", "target_template_id")):
+            payload["monster_id"] = cached_monster_id
+            payload["target_template_id"] = cached_monster_id
+    display = _action_log_display_fields(payload, topic=topic_text)
+    if display.get("skill_name") and not payload.get("skill_name"):
+        payload["skill_name"] = display.get("skill_name")
+    if display.get("monster_name") and not payload.get("monster_name"):
+        payload["monster_name"] = display.get("monster_name")
+    if display.get("dungeon_name") and not payload.get("dungeon_name"):
+        payload["dungeon_name"] = display.get("dungeon_name")
+    if display.get("label"):
+        payload.setdefault("display_label", display.get("label"))
+    if display.get("actor"):
+        payload.setdefault("actor_display", display.get("actor"))
+    if display.get("target"):
+        payload.setdefault("target_display", display.get("target"))
+    payload.setdefault("display_kind", display.get("group_kind") or topic_text or "event")
+    evidence: list[dict[str, Any]] = []
+    for kind, id_key, name_key in (
+        ("skill", "skill_id", "skill_name"),
+        ("monster", "monster_id", "monster_name"),
+        ("dungeon", "dungeon_id", "dungeon_name"),
+    ):
+        iid = _payload_first_int(payload, (id_key,))
+        text = _truthy_text(payload.get(name_key))
+        if iid and text and not _is_unresolved_entity_label(text):
+            evidence.append({"kind": kind, "id": iid, "name": text, "source": "act_name_resolver"})
+    if monster:
+        monster_text = _truthy_text(monster.get("name"))
+        if monster_text and not _is_unresolved_entity_label(monster_text):
+            evidence.append({"kind": "monster", "id": target_uid, "name": monster_text, "source": "packet_bridge_monster_cache"})
+    if evidence:
+        payload["name_resolution"] = evidence
+    return payload
+
+
+def _action_log_display_fields(payload: Mapping[str, Any], *, topic: str = "") -> dict[str, Any]:
+    payload = payload if isinstance(payload, Mapping) else {}
+    topic_text = str(topic or payload.get("topic") or "").strip().lower()
+    skill_id = _payload_first_int(payload, ("skill_id", "skill_key", "skill", "skill_level_id", "skillLevelId"))
+    monster_id = _payload_first_int(payload, ("monster_id", "template_id", "target_template_id", "boss_id", "config_id"))
+    dungeon_id = _payload_first_int(payload, ("dungeon_id", "dungeon", "cur_map_id", "map_id"))
+    actor_uid = _payload_first_int(payload, ("actor_uid", "attacker_uid", "source_uid", "caster_uid", "player_uid"))
+    target_uid = _payload_first_int(payload, ("target_uid", "target_uuid", "uuid", "victim_uid", "boss_uid", "boss_uuid", "combatant_id"))
+    skill_name = (
+        _payload_first_text(payload, ("skill_display", "skill_name", "skillName", "action_name"))
+        or _resolve_name("skill", skill_id)
+        or _payload_first_text(payload, ("skill",))
+    )
+    monster_name = _payload_first_name_text(payload, ("monster_name", "target_name", "boss_name", "target", "victim", "boss")) or _resolve_name("monster", monster_id)
+    if _is_unresolved_entity_label(monster_name):
+        monster_name = ""
+    dungeon_name = (
+        _payload_first_text(payload, ("dungeon_display", "dungeon_name", "scene_name", "map_name"))
+        or _resolve_name("dungeon", dungeon_id)
+    )
+    actor_name = _payload_first_text(payload, ("actor_display", "actor_name", "attacker_name", "attacker", "actor", "source_name", "source", "caster_name", "player_name", "name"))
+    target_name = _payload_first_name_text(payload, ("target_name", "victim_name", "target", "victim", "boss_name", "boss")) or monster_name
+    if _is_unresolved_entity_label(target_name):
+        target_name = ""
+    if topic_text in {"skill"}:
+        label = skill_name or _payload_first_text(payload, ("message", "event_type", "name")) or topic_text
+        group_kind = "actor_skill" if actor_name and skill_name else "skill"
+        group_name = f"{actor_name} · {skill_name}" if actor_name and skill_name else (skill_name or label)
+    elif topic_text in {"dungeon", "scene"}:
+        label = dungeon_name or _payload_first_text(payload, ("message", "event_type", "name")) or topic_text
+        group_kind = "dungeon"
+        group_name = dungeon_name or label
+    elif topic_text in {"monster", "boss", "boss_state"}:
+        fallback = f"怪物#{target_uid}" if target_uid else (f"怪物#{monster_id}" if monster_id else topic_text)
+        label = monster_name or target_name or _payload_first_text(payload, ("message", "event_type", "name")) or fallback
+        group_kind = "monster"
+        group_name = monster_name or target_name or label
+    elif topic_text in {"damage", "heal"}:
+        label = skill_name or _payload_first_text(payload, ("message", "action_type", "event_type")) or topic_text
+        target_is_player = bool(payload.get("target_is_player"))
+        target_is_monster = bool(payload.get("target_is_monster")) or bool(monster_name or monster_id)
+        group_kind = "monster" if target_is_monster and not target_is_player else "target"
+        fallback = f"怪物#{target_uid}" if group_kind == "monster" and target_uid else (f"目标#{target_uid}" if target_uid else label)
+        group_name = target_name or monster_name or fallback
+    else:
+        label = _payload_first_text(payload, ("display_label", "message", "action_name", "skill_name", "name")) or topic_text
+        group_kind = topic_text or "event"
+        group_name = label
+    return {
+        "label": label,
+        "actor": actor_name or (str(actor_uid) if actor_uid else ""),
+        "target": target_name or (("怪物#" if group_kind == "monster" else "目标#") + str(target_uid) if target_uid else ""),
+        "skill_name": skill_name,
+        "monster_name": monster_name,
+        "dungeon_name": dungeon_name,
+        "skill_id": skill_id,
+        "monster_id": monster_id,
+        "dungeon_id": dungeon_id,
+        "actor_uid": actor_uid,
+        "target_uid": target_uid,
+        "group_kind": group_kind,
+        "group_name": group_name,
+    }
+
+
+def _action_log_group_metadata(row: Mapping[str, Any], payload: Mapping[str, Any], display: Mapping[str, Any]) -> dict[str, Any]:
+    topic = str(row.get("topic") or "")
+    group_kind = _truthy_text(display.get("group_kind")) or topic or "event"
+    group_name = _truthy_text(display.get("group_name")) or _truthy_text(row.get("label")) or "-"
+    safe_name = group_name.lower()
+    group_key = f"{group_kind}:{safe_name}"
+    return {
+        "group_key": group_key,
+        "group_kind": group_kind,
+        "group_name": group_name,
+        "actor_uid": _payload_first_int(payload, ("actor_uid", "attacker_uid", "source_uid", "caster_uid", "player_uid")) or int(display.get("actor_uid") or 0),
+        "target_uid": _payload_first_int(payload, ("target_uid", "target_uuid", "uuid", "victim_uid", "boss_uid", "boss_uuid", "combatant_id")) or int(display.get("target_uid") or 0),
+        "skill_id": _payload_first_int(payload, ("skill_id", "skill_key", "skill", "skill_level_id", "skillLevelId")) or int(display.get("skill_id") or 0),
+        "monster_id": _payload_first_int(payload, ("monster_id", "template_id", "target_template_id", "boss_id", "config_id")) or int(display.get("monster_id") or 0),
+        "dungeon_id": _payload_first_int(payload, ("dungeon_id", "dungeon", "cur_map_id", "map_id")) or int(display.get("dungeon_id") or 0),
+        "dungeon": _truthy_text(display.get("dungeon_name")) or _payload_first_text(payload, ("dungeon_name", "scene_name", "map_name")),
+        "skill": _truthy_text(display.get("skill_name")) or _payload_first_text(payload, ("skill_name", "skill_display")),
+        "monster": _truthy_text(display.get("monster_name")) or _payload_first_text(payload, ("monster_name", "target_name", "boss_name")),
+    }
 
 
 def _action_log_group_summary(rows: list[dict[str, Any]], key: str, *, limit: int = 6) -> list[dict[str, Any]]:
@@ -1668,6 +1991,79 @@ def _action_log_group_summary(rows: list[dict[str, Any]], key: str, *, limit: in
         copied["total_value"] = round(float(copied.get("total_value") or 0.0), 3)
         out.append(copied)
     return out
+
+
+def _append_unique(values: list[Any], value: Any, *, cap: int = 24) -> None:
+    if value is None:
+        return
+    text = str(value or "").strip()
+    if not text or text == "0" or text in {str(item) for item in values}:
+        return
+    if len(values) < cap:
+        values.append(value)
+
+
+def _action_log_detailed_groups(rows: list[dict[str, Any]], *, limit: int = 80,
+                                details_per_group: int = 80) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for row in rows:
+        key = _truthy_text(row.get("group_key")) or f"{row.get('topic') or 'event'}:{row.get('label') or '-'}".lower()
+        if key not in groups:
+            groups[key] = {
+                "key": key,
+                "kind": _truthy_text(row.get("group_kind")) or _truthy_text(row.get("topic")) or "event",
+                "name": _truthy_text(row.get("group_name")) or _truthy_text(row.get("label")) or "-",
+                "count": 0,
+                "total_value": 0.0,
+                "first_time_ms": 0,
+                "last_time_ms": 0,
+                "uids": [],
+                "uid_count": 0,
+                "actor_uids": [],
+                "target_uids": [],
+                "skill_ids": [],
+                "monster_ids": [],
+                "dungeon_ids": [],
+                "dungeons": [],
+                "sources": [],
+                "topics": [],
+                "row_ids": [],
+                "rows": [],
+            }
+            order.append(key)
+        item = groups[key]
+        time_ms = int(row.get("time_ms") or 0)
+        item["count"] = int(item.get("count") or 0) + 1
+        item["total_value"] = float(item.get("total_value") or 0.0) + _action_log_numeric_value(row)
+        if time_ms:
+            first = int(item.get("first_time_ms") or 0)
+            item["first_time_ms"] = time_ms if not first else min(first, time_ms)
+            item["last_time_ms"] = max(int(item.get("last_time_ms") or 0), time_ms)
+        for field, out_key in (("actor_uid", "actor_uids"), ("target_uid", "target_uids"), ("skill_id", "skill_ids"), ("monster_id", "monster_ids"), ("dungeon_id", "dungeon_ids")):
+            _append_unique(item[out_key], row.get(field))
+        for uid_field in ("actor_uid", "target_uid"):
+            _append_unique(item["uids"], row.get(uid_field))
+        _append_unique(item["dungeons"], row.get("dungeon"))
+        _append_unique(item["sources"], row.get("source"))
+        _append_unique(item["topics"], row.get("topic"))
+        _append_unique(item["row_ids"], row.get("id"), cap=details_per_group)
+        if len(item["rows"]) < max(1, int(details_per_group or 80)):
+            item["rows"].append(row)
+    detailed = [groups[key] for key in order]
+    for item in detailed:
+        item["total_value"] = round(float(item.get("total_value") or 0.0), 3)
+        if str(item.get("kind") or "") in {"monster", "target"}:
+            item["uid_count"] = len(item.get("target_uids") or [])
+        elif str(item.get("kind") or "") in {"actor", "actor_skill"}:
+            item["uid_count"] = len(item.get("actor_uids") or [])
+        else:
+            item["uid_count"] = len(item.get("uids") or [])
+        item["has_more_rows"] = int(item.get("count") or 0) > len(item.get("rows") or [])
+    detailed.sort(
+        key=lambda item: (-float(item.get("total_value") or 0.0), -int(item.get("count") or 0), str(item.get("name") or "")),
+    )
+    return detailed[:max(1, int(limit or 80))]
 
 
 def _action_log_analytics(all_rows: list[dict[str, Any]], page_rows: list[dict[str, Any]],
@@ -1702,6 +2098,7 @@ def _action_log_analytics(all_rows: list[dict[str, Any]], page_rows: list[dict[s
             "actors": _action_log_group_summary(all_rows, "actor"),
             "targets": _action_log_group_summary(all_rows, "target"),
             "actions": _action_log_group_summary(all_rows, "label"),
+            "detailed": _action_log_detailed_groups(all_rows),
         },
     }
 
@@ -1804,6 +2201,7 @@ def act_action_log_status(owner: Any, *, limit: int = 80, query: str | None = No
         "filters": filters,
         "cursor": cursor,
         "analytics": analytics,
+        "grouped_rows": _action_log_detailed_groups(rows, details_per_group=row_limit),
         "storage_status": storage_status,
         "errors": errors,
     }
@@ -1869,6 +2267,7 @@ def act_action_log_copy(owner: Any, *, limit: int = 80, query: str = "",
         "filters": status.get("filters") or {},
         "cursor": status.get("cursor") or {},
         "analytics": status.get("analytics") or {},
+        "grouped_rows": status.get("grouped_rows") or [],
         "storage_status": status.get("storage_status") or {},
     }
     try:
@@ -1886,6 +2285,7 @@ def act_action_log_copy(owner: Any, *, limit: int = 80, query: str = "",
         "filters": payload["filters"],
         "cursor": payload["cursor"],
         "analytics": payload["analytics"],
+        "grouped_rows": payload["grouped_rows"],
         "storage_status": payload["storage_status"],
         "errors": list(status.get("errors") or []),
     }
