@@ -48,13 +48,12 @@ from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from render.overlay_scheduler import get_scheduler as _get_scheduler
 from render.overlay_render_worker import (
     AsyncFrameWorker, clip_alpha_image, multiply_alpha_image,
-    submit_ulw_commit,
 )
 from render.overlay_subpixel import subpixel_bar_width
+from gui_modules.entity_gpu_policy import require_entity_gpu
 
-# v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_BOSSHP only.
-# Falls back to ULW if GLFW is unavailable.
-# BossHP is intentionally fixed-position and click-through.
+# BossHP presentation is GPU-required. BossHP is intentionally
+# fixed-position and click-through; do not fall back to ULW/Tk.
 try:
     from render import gpu_overlay_window as _gow
 except Exception:
@@ -62,16 +61,7 @@ except Exception:
 
 
 def _gpu_bosshp_enabled() -> bool:
-    if _gow is None or not _gow.glfw_supported():
-        return False
-    try:
-        import os as _os
-        flag = _os.environ.get('SAO_GPU_BOSSHP')
-        if flag is None:
-            return True
-        return str(flag).strip() not in ('', '0', 'false', 'False')
-    except Exception:
-        return False
+    return require_entity_gpu('BossHpOverlay', _gow)
 
 from utils.perf_probe import gauge as _perf_gauge, probe as _probe
 
@@ -680,100 +670,41 @@ class BossHpOverlay:
         if self._win is not None:
             return
         self._restore_fixed_position()
-        # v2.3.x: GPU presenter path (env-gated).
-        if _gpu_bosshp_enabled():
-            try:
-                pump = _gow.get_glfw_pump(self.root)
-                presenter = _gow.BgraPresenter()
-                gpu_win = _gow.GpuOverlayWindow(
-                    pump,
-                    w=int(self.WIDTH), h=int(self.HEIGHT),
-                    x=int(self._x), y=int(self._y),
-                    render_fn=presenter.render,
-                    click_through=True,
-                    title='sao_bosshp_gpu',
-                )
-                gpu_win.show()
-                self._gpu_window = gpu_win
-                self._gpu_presenter = presenter
-                self._gpu_managed = True
-                self._win = self  # type: ignore[assignment]  # sentinel
-                self._hwnd = 0
-                self._visible = True
-                self._destroying = False
-                self._fade_from = 0.0
-                self._fade_alpha = 0.0
-                self._fade_target = 1.0
-                self._fade_start = time.time()
-                self._fade_duration = self.FADE_IN
-                self._enter_translate = 10.0
-                self._exiting = False
-                self._hide_after_exit = False
-                self._schedule_tick(immediate=True)
-                return
-            except Exception:
-                self._gpu_window = None
-                self._gpu_presenter = None
-                self._gpu_managed = False
-        self._win = tk.Toplevel(self.root)
-        # Black bg + 1x1 initial geometry prevents any default-bg white flash
-        # before the first UpdateLayeredWindow call commits real pixels.
+        require_entity_gpu('BossHpOverlay', _gow)
         try:
-            self._win.configure(bg='black')
+            pump = _gow.get_glfw_pump(self.root)
+            presenter = _gow.BgraPresenter()
+            gpu_win = _gow.GpuOverlayWindow(
+                pump,
+                w=int(self.WIDTH), h=int(self.HEIGHT),
+                x=int(self._x), y=int(self._y),
+                render_fn=presenter.render,
+                click_through=True,
+                title='sao_bosshp_gpu',
+            )
+            gpu_win.show()
+            self._gpu_window = gpu_win
+            self._gpu_presenter = presenter
+            self._gpu_managed = True
+            self._win = self  # type: ignore[assignment]  # sentinel
+            self._hwnd = 0
+            self._visible = True
+            self._destroying = False
+            self._fade_from = 0.0
+            self._fade_alpha = 0.0
+            self._fade_target = 1.0
+            self._fade_start = time.time()
+            self._fade_duration = self.FADE_IN
+            self._enter_translate = 10.0
+            self._exiting = False
+            self._hide_after_exit = False
+            self._schedule_tick(immediate=True)
+            return
         except Exception:
-            pass
-        self._win.overrideredirect(True)
-        self._win.attributes('-topmost', True)
-        self._win.geometry(f'1x1+{self._x}+{self._y}')
-        self._win.update_idletasks()
-
-        try:
-            self._hwnd = _user32.GetParent(self._win.winfo_id()) or \
-                self._win.winfo_id()
-        except Exception:
-            self._hwnd = self._win.winfo_id()
-
-        ex = _user32.GetWindowLongW(ctypes.c_void_p(self._hwnd), GWL_EXSTYLE)
-        _user32.SetWindowLongW(
-            ctypes.c_void_p(self._hwnd), GWL_EXSTYLE,
-            ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
-            | WS_EX_TRANSPARENT,
-        )
-        # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
-        try:
-            _GCL_STYLE, _CS_DS = -26, 0x00020000
-            _cls = ctypes.windll.user32.GetClassLongW(self._hwnd, _GCL_STYLE)
-            if _cls & _CS_DS:
-                ctypes.windll.user32.SetClassLongW(
-                    self._hwnd, _GCL_STYLE, _cls & ~_CS_DS)
-        except Exception:
-            pass
-        try:
-            _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
-        except Exception:
-            pass
-        # Disable DWM non-client rendering (incl. system drop shadow) so the
-        # shadow does not linger while the ULW bitmap fades to transparent.
-        try:
-            _ncr_disabled = ctypes.c_int(1)   # DWMNCRP_DISABLED
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                ctypes.c_void_p(self._hwnd), 2,
-                ctypes.byref(_ncr_disabled), ctypes.sizeof(_ncr_disabled))
-        except Exception:
-            pass
-
-        self._visible = True
-        self._destroying = False
-        # Entry animation
-        self._fade_from = 0.0
-        self._fade_alpha = 0.0
-        self._fade_target = 1.0
-        self._fade_start = time.time()
-        self._fade_duration = self.FADE_IN
-        self._enter_translate = 10.0
-        self._exiting = False
-        self._hide_after_exit = False
-        self._schedule_tick(immediate=True)
+            self._gpu_window = None
+            self._gpu_presenter = None
+            self._gpu_managed = False
+            raise
 
     def hide(self) -> None:
         # Play the exit animation then destroy on completion.
@@ -1355,12 +1286,11 @@ class BossHpOverlay:
         self._advance(now, dt)
 
         # ── Async render pipeline ──
-        if self._hwnd or self._gpu_managed:
+        if self._gpu_managed:
             # v2.2.23: don't let vision capture starve our commits.
             fb = self._render_worker.take_result(allow_during_capture=True)
             if fb is not None:
-                if self._gpu_managed and self._gpu_presenter is not None \
-                        and self._gpu_window is not None:
+                if self._gpu_presenter is not None and self._gpu_window is not None:
                     try:
                         if (fb.x, fb.y) != (self._x, self._y):
                             self._gpu_window.set_geometry(
@@ -1372,12 +1302,6 @@ class BossHpOverlay:
                         _perf_gauge('ui.bosshp.presented', 1)
                     except Exception as e:
                         print(f'[BOSSHP-OV] gpu present error: {e}')
-                elif self._hwnd:
-                    try:
-                        submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
-                        _perf_gauge('ui.bosshp.presented', 1)
-                    except Exception as e:
-                        print(f'[BOSSHP-OV] ulw error: {e}')
             else:
                 _perf_gauge('ui.bosshp.presented', 0)
 
@@ -1484,13 +1408,8 @@ class BossHpOverlay:
 
     @_probe.decorate('ui.bosshp.render')
     def _render(self, now: float) -> None:
-        if not self._hwnd:
-            return
-        img = self.compose_frame(now)
-        try:
-            _ulw_update(self._hwnd, img, self._x, self._y)
-        except Exception as e:
-            print(f'[BOSSHP-OV] ulw error: {e}')
+        require_entity_gpu('BossHpOverlay', _gow)
+        raise RuntimeError('BossHpOverlay legacy ULW render path is disabled; GPU presentation is required')
 
     @_probe.decorate('ui.bosshp.compose')
     def compose_frame(self, now: Optional[float] = None) -> Image.Image:

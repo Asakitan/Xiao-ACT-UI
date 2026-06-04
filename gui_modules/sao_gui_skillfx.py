@@ -44,13 +44,12 @@ from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from render.gpu_renderer import _render_lock as _gpu_render_lock
 from render.gpu_renderer import _get_wgl_serialize_lock as _gpu_wgl_lock
 from render.overlay_scheduler import get_scheduler as _get_scheduler
-from render.overlay_render_worker import AsyncFrameWorker, FrameBuffer, run_cpu_tasks, submit_ulw_commit
+from render.overlay_render_worker import AsyncFrameWorker, FrameBuffer, run_cpu_tasks
 try:
     from render import gpu_overlay_window as _gow
 except Exception:
     _gow = None  # type: ignore[assignment]
 from render.overlay_subpixel import subpixel_alpha_composite
-from render.render_capture_sync import wait_until_capture_idle
 from render.skillfx_jit import fast_beam_rgba as _jit_fast_beam_rgba
 from render.skillfx_jit import fast_ring_layer_rgba as _jit_fast_ring_rgba
 from render.skillfx_jit import fast_ring_sweep_rgba as _jit_fast_sweep_rgba
@@ -65,6 +64,7 @@ except Exception:
     pass
 
 from utils.perf_probe import probe as _probe
+from gui_modules.entity_gpu_policy import require_entity_gpu
 
 from gui_modules.sao_gui_dps import (
     _ulw_update, _user32, _load_font, _pick_font, _text_width,
@@ -124,16 +124,14 @@ MOTION_SAMPLES_STEADY = ((0.0, 1.0),)
 
 
 def _skillfx_gpu_enabled() -> bool:
-    """Honour ``SAO_SKILLFX_GPU`` env override; otherwise consult
-    ``config.USE_GPU_SKILLFX`` (default True in v2.3.0)."""
-    env = os.environ.get('SAO_SKILLFX_GPU')
-    if env is not None:
-        return env != '0'
+    """SkillFX requires the shader/GPU compose path."""
     try:
         from config import USE_GPU_SKILLFX  # type: ignore
-        return bool(USE_GPU_SKILLFX)
     except Exception:
-        return True
+        USE_GPU_SKILLFX = True
+    if not USE_GPU_SKILLFX:
+        raise RuntimeError('SkillFX requires USE_GPU_SKILLFX=True; no CPU/PIL fallback is available')
+    return require_entity_gpu('SkillFX', _gow)
 
 
 def _lerp_color(ca, cb, t):
@@ -315,69 +313,29 @@ class BurstReadyOverlay:
     def _ensure_window(self) -> None:
         if self._win is not None:
             return
-        # v2.3.0 Phase 2c: GPU overlay presentation path (env-gated).
-        # Builds a borderless transparent click-through GLFW window
-        # instead of a tk.Toplevel + ULW. The Toplevel is skipped
-        # entirely; we use the BurstReadyOverlay instance itself as
-        # the `_win` truthy sentinel so existing `if self._win is not
-        # None` guards keep working.
-        if _gow is not None and _gow.glfw_supported():
-            try:
-                pump = _gow.get_glfw_pump(self.root)
-                presenter = _gow.BgraPresenter()
-                gpu_win = _gow.GpuOverlayWindow(
-                    pump,
-                    w=int(self._win_w), h=int(self._win_h),
-                    x=int(self._win_x), y=int(self._win_y),
-                    render_fn=presenter.render,
-                    click_through=True,
-                    title='sao_skillfx_gpu',
-                )
-                gpu_win.show()
-                self._gpu_window = gpu_win
-                self._gpu_presenter = presenter
-                self._win = self  # type: ignore[assignment]  # sentinel
-                self._hwnd = 0   # ULW path stays disabled in GPU mode
-                self._visible = True
-                return
-            except Exception:
-                # Fall through to ULW path on any GLFW failure.
-                self._gpu_window = None
-                self._gpu_presenter = None
-        self._win = tk.Toplevel(self.root)
-        self._win.overrideredirect(True)
-        self._win.attributes('-topmost', True)
-        self._win.geometry(
-            f'{int(self._win_w)}x{int(self._win_h)}+'
-            f'{int(self._win_x)}+{int(self._win_y)}')
-        self._win.update_idletasks()
+        require_entity_gpu('SkillFX', _gow)
         try:
-            self._hwnd = _user32.GetParent(self._win.winfo_id()) or \
-                self._win.winfo_id()
+            pump = _gow.get_glfw_pump(self.root)
+            presenter = _gow.BgraPresenter()
+            gpu_win = _gow.GpuOverlayWindow(
+                pump,
+                w=int(self._win_w), h=int(self._win_h),
+                x=int(self._win_x), y=int(self._win_y),
+                render_fn=presenter.render,
+                click_through=True,
+                title='sao_skillfx_gpu',
+            )
+            gpu_win.show()
+            self._gpu_window = gpu_win
+            self._gpu_presenter = presenter
+            self._win = self  # type: ignore[assignment]  # sentinel
+            self._hwnd = 0
+            self._visible = True
+            return
         except Exception:
-            self._hwnd = self._win.winfo_id()
-        ex = _user32.GetWindowLongW(
-            ctypes.c_void_p(self._hwnd), GWL_EXSTYLE)
-        # fully click-through — never interacts with the player
-        _user32.SetWindowLongW(
-            ctypes.c_void_p(self._hwnd), GWL_EXSTYLE,
-            ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW
-            | WS_EX_TOPMOST | WS_EX_TRANSPARENT,
-        )
-        # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
-        try:
-            _GCL_STYLE, _CS_DS = -26, 0x00020000
-            _cls = ctypes.windll.user32.GetClassLongW(self._hwnd, _GCL_STYLE)
-            if _cls & _CS_DS:
-                ctypes.windll.user32.SetClassLongW(
-                    self._hwnd, _GCL_STYLE, _cls & ~_CS_DS)
-        except Exception:
-            pass
-        try:
-            _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
-        except Exception:
-            pass
-        self._visible = True
+            self._gpu_window = None
+            self._gpu_presenter = None
+            raise
 
     def destroy(self) -> None:
         self._cancel_tick()
@@ -800,7 +758,7 @@ void main() {
         self._schedule_tick(immediate=True)
 
     def _try_clear_window(self) -> bool:
-        # v2.3.0 Phase 2c: GPU path — just stage an empty frame.
+        # GPU path — just stage an empty frame.
         if self._gpu_presenter is not None and self._gpu_window is not None:
             try:
                 self._render_worker.reset()
@@ -813,26 +771,12 @@ void main() {
                 return True
             except Exception:
                 return False
-        if not self._hwnd:
-            return False
-        if not wait_until_capture_idle(0.0):
-            return False
-        try:
-            self._render_worker.reset()
-        except Exception:
-            pass
-        self._pending_fb = None
-        try:
-            empty = Image.new('RGBA', (self._win_w, self._win_h), (0, 0, 0, 0))
-            _ulw_update(self._hwnd, empty, self._win_x, self._win_y)
-            return True
-        except Exception:
-            return False
+        return False
 
     def _try_present_frame(self, fb: Optional[FrameBuffer]) -> bool:
         if fb is None:
             return False
-        # v2.3.0 Phase 2c: GPU path — upload BGRA to texture + redraw.
+        # GPU path — upload BGRA to texture + redraw.
         if self._gpu_presenter is not None and self._gpu_window is not None:
             try:
                 self._gpu_presenter.set_frame(
@@ -841,16 +785,7 @@ void main() {
                 return True
             except Exception:
                 return False
-        if not self._hwnd:
-            return False
-        try:
-            return bool(submit_ulw_commit(
-                self._hwnd,
-                fb,
-                allow_during_capture=True,
-            ))
-        except Exception:
-            return False
+        return False
 
     # ──────────────────────────────────────────
     #  Tick
@@ -1185,38 +1120,17 @@ void main() {
 
     @_probe.decorate('ui.skillfx.compose')
     def compose_frame(self, now: float) -> Image.Image:
-        # v2.3.0 Phase 1: GPU SDF compose path. Defaults ON via
-        # config.USE_GPU_SKILLFX (set SAO_SKILLFX_GPU=0 to force CPU).
-        # Falls back to PIL on any pipeline failure.
-        # v2.3.6: log the path actually taken on first compose so the user
-        # can grep stdout to verify GPU is live (instead of silently CPU).
-        if not getattr(self, '_skillfx_gpu_disabled', False) \
-                and _skillfx_gpu_enabled():
+        _skillfx_gpu_enabled()
+        gpu_img = self._compose_frame_gpu(now)
+        if gpu_img is None:
+            raise RuntimeError('SkillFX GPU compose returned no frame; CPU/PIL fallback is disabled')
+        if not getattr(self, '_skillfx_gpu_path_logged', False):
+            self._skillfx_gpu_path_logged = True
             try:
-                gpu_img = self._compose_frame_gpu(now)
-            except Exception as exc:
-                try:
-                    print(f'[skillfx] GPU compose failed, disabling: {exc}')
-                except Exception:
-                    pass
-                self._skillfx_gpu_disabled = True
-                gpu_img = None
-            if gpu_img is not None:
-                if not getattr(self, '_skillfx_gpu_path_logged', False):
-                    self._skillfx_gpu_path_logged = True
-                    try:
-                        print('[skillfx] compose path: GPU (SDF shader pipeline)', flush=True)
-                    except Exception:
-                        pass
-                return gpu_img
-        if not getattr(self, '_skillfx_cpu_path_logged', False):
-            self._skillfx_cpu_path_logged = True
-            try:
-                _reason = 'disabled' if getattr(self, '_skillfx_gpu_disabled', False) else (
-                    'env/config' if not _skillfx_gpu_enabled() else 'gpu_returned_none')
-                print(f'[skillfx] compose path: CPU/PIL fallback (reason={_reason})', flush=True)
+                print('[skillfx] compose path: GPU (SDF shader pipeline)', flush=True)
             except Exception:
                 pass
+        return gpu_img
 
         W, H = int(self._win_w), int(self._win_h)
         img = self._get_layer_buf('main', W, H)

@@ -48,6 +48,7 @@ except Exception:
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from render.overlay_render_worker import AsyncFrameWorker
 from utils.perf_probe import probe as _probe
+from gui_modules.entity_gpu_policy import require_entity_gpu
 from gui_modules.sao_menu_hud import _PIL_DRAW_LOCK
 
 
@@ -56,15 +57,8 @@ from gui_modules.sao_menu_hud import _PIL_DRAW_LOCK
 # ═══════════════════════════════════════════════
 
 def gpu_child_bar_enabled() -> bool:
-    """Honour SAO_GPU_CHILD_BAR when set; otherwise default to GPU."""
-    if _gow is None:
-        return False
-    if not _gow.glfw_supported():
-        return False
-    raw = os.environ.get('SAO_GPU_CHILD_BAR')
-    if raw is None:
-        return True
-    return raw.strip() in ('1', 'true', 'True', 'yes', 'on')
+    """Child bar requires the shared Entity GPU backend."""
+    return require_entity_gpu('ChildBarGpuPainter', _gow)
 
 
 # ═══════════════════════════════════════════════
@@ -431,8 +425,7 @@ class ChildBarGpuPainter:
     def _ensure_window(self, w: int, h: int, x: int, y: int) -> bool:
         if self._gpu_window is not None:
             return True
-        if _gow is None or not _gow.glfw_supported():
-            return False
+        require_entity_gpu('ChildBarGpuPainter', _gow)
         try:
             pump = _gow.get_glfw_pump(self._root)
             self._presenter = _gow.BgraPresenter()
@@ -446,10 +439,10 @@ class ChildBarGpuPainter:
             )
             self._gpu_window.show()
             return True
-        except Exception:
+        except Exception as exc:
             self._presenter = None
             self._gpu_window = None
-            return False
+            raise RuntimeError('ChildBarGpuPainter requires GPU window support') from exc
 
     def destroy(self) -> None:
         if self._destroyed:

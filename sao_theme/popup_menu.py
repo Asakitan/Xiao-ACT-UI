@@ -9,13 +9,13 @@ from render.overlay_scheduler import get_scheduler as _get_scheduler
 from utils.perf_probe import phase as _phase_trace, probe as _probe
 from gui_modules.sao_menu_hud import MenuHudSpriteRenderer
 try:
-    # v2.2.12: per-pixel-alpha layered window for the HUD layer.
-    # Optional: falls back to canvas-native chroma-key path if unavailable.
+    # GPU-required HUD layer. Canvas-native HUD fallback is disabled.
     from gui_modules.sao_gui_menu_hud import MenuHudOverlay, gpu_menu_hud_enabled
-except Exception:
+except Exception as _gpu_hud_import_error:
+    _GPU_HUD_IMPORT_ERROR = _gpu_hud_import_error
     MenuHudOverlay = None  # type: ignore[assignment]
     def gpu_menu_hud_enabled() -> bool:  # type: ignore[no-redef]
-        return False
+        raise RuntimeError('MenuHudOverlay GPU module is required') from _GPU_HUD_IMPORT_ERROR
 from sao_theme.animator import Animator
 from sao_theme.utils import ease_out
 from sao_theme.menu_bar import SAOMenuBar
@@ -80,11 +80,10 @@ class SAOPopUpMenu:
         self._menu_hud_renderer = MenuHudSpriteRenderer()
         self._menu_hud_backdrop = None
         self._menu_hud_backdrop_key = None
-        # v2.2.12: optional per-pixel-alpha layered HUD overlay. When
-        # active, the canvas-native HUD items (`_menu_hud_items`) are
-        # left empty and the HUD is composed off-thread on the heavy
-        # render lane and committed via `submit_ulw_commit`.
-        self._gpu_hud_enabled = bool(MenuHudOverlay) and gpu_menu_hud_enabled()
+        # GPU-required HUD overlay. Canvas-native HUD fallback is disabled.
+        if MenuHudOverlay is None:
+            raise RuntimeError('MenuHudOverlay GPU module is required')
+        self._gpu_hud_enabled = bool(gpu_menu_hud_enabled())
         self._hud_overlay: Optional[object] = None
         self._content_place_sig = None
         self._overlay_size_part = ''

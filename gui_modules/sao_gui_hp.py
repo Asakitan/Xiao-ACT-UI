@@ -46,14 +46,12 @@ from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur, render_shell_rg
 from render.overlay_scheduler import get_scheduler as _get_scheduler
 from render.overlay_render_worker import (
     AsyncFrameWorker, clip_alpha_image, multiply_alpha_image,
-    submit_ulw_commit,
 )
 from render.overlay_subpixel import subpixel_bar_width
+from gui_modules.entity_gpu_policy import require_entity_gpu
 
-# v2.3.x: optional GPU presenter (mirrors SkillFX/MenuHud pattern).
-# Env-gated via SAO_GPU_HP only. Falls back to the original ULW path if
-# GLFW is unavailable. GPU mode now owns input callbacks, preserving
-# drag/tap/context menu while keeping presentation off the ULW path.
+# Entity HP presentation is GPU-required. GPU mode owns input callbacks,
+# preserving drag/tap/context menu while keeping presentation off ULW/Tk.
 try:
     from render import gpu_overlay_window as _gow
 except Exception:
@@ -61,16 +59,7 @@ except Exception:
 
 
 def _gpu_hp_enabled() -> bool:
-    if _gow is None or not _gow.glfw_supported():
-        return False
-    try:
-        import os as _os
-        flag = _os.environ.get('SAO_GPU_HP')
-        if flag is None:
-            return True
-        return str(flag).strip() not in ('', '0', 'false', 'False')
-    except Exception:
-        return False
+    return require_entity_gpu('HpOverlay', _gow)
 
 from utils.perf_probe import gauge as _perf_gauge, phase as _phase_trace, probe as _probe
 
@@ -834,126 +823,49 @@ class HpOverlay:
         self._sync_layout()
         if self._win is not None:
             return
-        # v2.3.x: try GPU presenter path first when env-enabled.
-        if _gpu_hp_enabled():
-            try:
-                pump = _gow.get_glfw_pump(self.root)
-                presenter = _gow.BgraPresenter()
-                gpu_win = _gow.GpuOverlayWindow(
-                    pump,
-                    w=int(self.WIDTH), h=int(self.HEIGHT),
-                    x=int(self._x), y=int(self._y),
-                    render_fn=presenter.render,
-                    click_through=False,
-                    title='sao_hp_gpu',
-                )
-                gpu_win.set_input_callbacks(
-                    cursor_pos_fn=self._on_gpu_cursor_pos,
-                    cursor_leave_fn=self._on_gpu_cursor_leave,
-                    mouse_button_fn=self._on_gpu_mouse_button,
-                )
-                gpu_win.show()
-                self._gpu_window = gpu_win
-                self._gpu_presenter = presenter
-                self._gpu_managed = True
-                self._win = self  # type: ignore[assignment]  # sentinel
-                self._hwnd = 0
-                self._visible = True
-                self._spawn_time = time.time()
-                self._fade_from = 0.0
-                self._fade_alpha = 0.0
-                self._fade_target = 1.0
-                self._fade_start = time.time()
-                self._fade_duration = self.FADE_IN
-                self._enter_scale_t = 0.0
-                self._exiting = False
-                self._hide_after_exit = False
-                self._last_compose_sig = None
-                self._start_input_passthrough_poller()
-                _phase_trace('hp.overlay.show.gpu', f'xy={self._x},{self._y}')
-                self._schedule_tick(immediate=True)
-                return
-            except Exception:
-                self._gpu_window = None
-                self._gpu_presenter = None
-                self._gpu_managed = False
-        self._win = tk.Toplevel(self.root)
-        self._win.overrideredirect(True)
-        self._win.attributes('-topmost', True)
-        # v2.3.0: keep the Toplevel hidden until the layered ex-style is
-        # applied. Without withdraw(), tk creates a default-bg (white)
-        # opaque window for a few ms before WS_EX_LAYERED is set, which
-        # the user perceives as a white flash next to the ID plate.
-        self._win.withdraw()
-        self._win.geometry(
-            f'{self.WIDTH}x{self.HEIGHT}+{self._x}+{self._y}')
-        self._win.update_idletasks()
+        require_entity_gpu('HpOverlay', _gow)
         try:
-            self._hwnd = _user32.GetParent(self._win.winfo_id()) or \
-                self._win.winfo_id()
+            pump = _gow.get_glfw_pump(self.root)
+            presenter = _gow.BgraPresenter()
+            gpu_win = _gow.GpuOverlayWindow(
+                pump,
+                w=int(self.WIDTH), h=int(self.HEIGHT),
+                x=int(self._x), y=int(self._y),
+                render_fn=presenter.render,
+                click_through=False,
+                title='sao_hp_gpu',
+            )
+            gpu_win.set_input_callbacks(
+                cursor_pos_fn=self._on_gpu_cursor_pos,
+                cursor_leave_fn=self._on_gpu_cursor_leave,
+                mouse_button_fn=self._on_gpu_mouse_button,
+            )
+            gpu_win.show()
+            self._gpu_window = gpu_win
+            self._gpu_presenter = presenter
+            self._gpu_managed = True
+            self._win = self  # type: ignore[assignment]  # sentinel
+            self._hwnd = 0
+            self._visible = True
+            self._spawn_time = time.time()
+            self._fade_from = 0.0
+            self._fade_alpha = 0.0
+            self._fade_target = 1.0
+            self._fade_start = time.time()
+            self._fade_duration = self.FADE_IN
+            self._enter_scale_t = 0.0
+            self._exiting = False
+            self._hide_after_exit = False
+            self._last_compose_sig = None
+            self._start_input_passthrough_poller()
+            _phase_trace('hp.overlay.show.gpu', f'xy={self._x},{self._y}')
+            self._schedule_tick(immediate=True)
+            return
         except Exception:
-            self._hwnd = self._win.winfo_id()
-
-        ex = _user32.GetWindowLongW(
-            ctypes.c_void_p(self._hwnd), GWL_EXSTYLE)
-        _user32.SetWindowLongW(
-            ctypes.c_void_p(self._hwnd), GWL_EXSTYLE,
-            ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-        )
-        # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
-        try:
-            _GCL_STYLE, _CS_DS = -26, 0x00020000
-            _cls = ctypes.windll.user32.GetClassLongW(self._hwnd, _GCL_STYLE)
-            if _cls & _CS_DS:
-                ctypes.windll.user32.SetClassLongW(
-                    self._hwnd, _GCL_STYLE, _cls & ~_CS_DS)
-        except Exception:
-            pass
-        # v2.3.0: now that WS_EX_LAYERED is in effect (the very next
-        # ULW commit drives the per-pixel alpha), it's safe to show.
-        try:
-            self._win.deiconify()
-        except Exception:
-            pass
-        # Exclude from screen capture so vision engine never sees this overlay
-        try:
-            _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
-        except Exception:
-            pass
-        # Disable DWM non-client rendering (incl. system drop shadow).
-        # _apply_panel_style() in sao_gui.py sets CS_DROPSHADOW on the Tk
-        # window CLASS which affects every Toplevel in the process.  Without
-        # this call the window's system shadow would linger after the ULW
-        # bitmap fades to transparent (until destroy() is called).
-        try:
-            _ncr_disabled = ctypes.c_int(1)   # DWMNCRP_DISABLED
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                ctypes.c_void_p(self._hwnd), 2,
-                ctypes.byref(_ncr_disabled), ctypes.sizeof(_ncr_disabled))
-        except Exception:
-            pass
-
-        self._win.bind('<Button-1>', self._on_drag_start)
-        self._win.bind('<B1-Motion>', self._on_drag_move)
-        self._win.bind('<ButtonRelease-1>', self._on_drag_end)
-        self._win.bind('<Button-3>', self._on_context_menu)
-        self._win.bind('<Motion>', self._on_pointer_move)
-        self._win.bind('<Leave>', self._on_pointer_leave)
-
-        self._visible = True
-        self._spawn_time = time.time()
-        self._fade_from = 0.0
-        self._fade_alpha = 0.0
-        self._fade_target = 1.0
-        self._fade_start = time.time()
-        self._fade_duration = self.FADE_IN
-        self._enter_scale_t = 0.0
-        self._exiting = False
-        self._hide_after_exit = False
-        self._last_compose_sig = None
-        self._start_input_passthrough_poller()
-        _phase_trace('hp.overlay.show.ulw', f'hwnd={self._hwnd} xy={self._x},{self._y}')
-        self._schedule_tick(immediate=True)
+            self._gpu_window = None
+            self._gpu_presenter = None
+            self._gpu_managed = False
+            raise
 
     def hide(self) -> None:
         if self._win is None:
@@ -1219,15 +1131,12 @@ class HpOverlay:
 
         # ── Async render pipeline ──
         # 1. Commit the most recent off-thread frame (if ready).
-        if self._hwnd or self._gpu_managed:
+        if self._gpu_managed:
             # v2.2.23: allow_during_capture=True so vision PrintWindow
-            # ticks (10 Hz × 30-60 ms each) don't drop our commits — the
-            # async ulw queue is per-HWND and can't conflict with the
-            # game-window capture.
+            # ticks (10 Hz × 30-60 ms each) don't drop our GPU presents.
             fb = self._render_worker.take_result(allow_during_capture=True)
             if fb is not None:
-                if self._gpu_managed and self._gpu_presenter is not None \
-                        and self._gpu_window is not None:
+                if self._gpu_presenter is not None and self._gpu_window is not None:
                     try:
                         # Track moves the user made via set_position too.
                         if (fb.x, fb.y) != (self._x, self._y):
@@ -1240,28 +1149,8 @@ class HpOverlay:
                         _perf_gauge('ui.hp.presented', 1)
                     except Exception as e:
                         print(f'[HP-OV] gpu present error: {e}')
-                elif self._hwnd:
-                    try:
-                        submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
-                        _perf_gauge('ui.hp.presented', 1)
-                    except Exception as e:
-                        print(f'[HP-OV] ulw error: {e}')
             else:
                 _perf_gauge('ui.hp.presented', 0)
-
-            # Periodic topmost enforcement (HWND only — GLFW window is
-            # already TOPMOST via WS_EX_TOPMOST in gpu_overlay_window).
-            if self._hwnd and now - self._last_topmost_t > _TOPMOST_INTERVAL:
-                self._last_topmost_t = now
-                try:
-                    _user32.SetWindowPos(
-                        ctypes.c_void_p(self._hwnd),
-                        ctypes.c_void_p(HWND_TOPMOST),
-                        0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                    )
-                except Exception:
-                    pass
 
             # 2. Submit next frame for off-thread composition.
             #    v2.2.16: idle rate cap — when nothing is animating, the
@@ -1395,33 +1284,12 @@ class HpOverlay:
     # ──────────────────────────────────────────
 
     def _render(self, now: float) -> None:
-        if not self._hwnd:
-            return
-        # Periodic topmost enforcement — keeps panel above taskbar
-        if now - self._last_topmost_t > _TOPMOST_INTERVAL:
-            self._last_topmost_t = now
-            try:
-                _user32.SetWindowPos(
-                    ctypes.c_void_p(self._hwnd),
-                    ctypes.c_void_p(HWND_TOPMOST),
-                    0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                )
-            except Exception:
-                pass
-        img = self.compose_frame(now)
-        try:
-            _ulw_update(self._hwnd, img, self._x, self._y)
-        except Exception as e:
-            print(f'[HP-OV] ulw error: {e}')
+        require_entity_gpu('HpOverlay', _gow)
+        raise RuntimeError('HpOverlay legacy ULW render path is disabled; GPU presentation is required')
 
     @_probe.decorate('ui.hp.compose')
     def compose_frame(self, now: Optional[float] = None) -> Image.Image:
-        """Render one HP frame to an RGBA PIL image without touching Win32.
-
-        Used by both the live ULW path (``_render``) and the off-screen
-        test harness in ``temp/_hp_render_compare.py``.
-        """
+        """Render one HP frame to an RGBA PIL image without touching Win32."""
         if now is None:
             now = time.time()
         w, h = self.WIDTH, self.HEIGHT
@@ -1431,12 +1299,9 @@ class HpOverlay:
         y_off = int(round(8 * (1.0 - self._enter_scale_t)))
         sig = (y_off,)
 
-        # ── v2.3.0 Phase 1: full-frame cache ──────────────────────────
-        # Build a quantized signature of EVERYTHING that affects the
-        # output pixels. If it matches the previous compose, we can skip
-        # the entire 30 ms PIL/numpy pipeline and reuse the prior image.
-        # Quantization buckets are sized below the perceptual threshold
-        # so visual quality is unaffected (\u201c\u4e0d\u80fd\u7ed9\u7279\u6548\u505a\u51cf\u6cd5\u201d).
+        # Build a quantized signature of everything that affects output pixels.
+        # Quantization buckets are below the perceptual threshold, preserving
+        # visual quality (\u201c\u4e0d\u80fd\u7ed9\u7279\u6548\u505a\u51cf\u6cd5\u201d).
         frame_sig = self._compute_frame_sig(now, y_off)
         if frame_sig is not None and self._frame_cache is not None \
                 and self._frame_sig == frame_sig:

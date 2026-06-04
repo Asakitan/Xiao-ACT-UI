@@ -26,6 +26,7 @@ from gui_modules.sao_gui_dps import (
     GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT,
 )
+from gui_modules.entity_gpu_policy import require_entity_gpu
 
 try:
     from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
@@ -46,19 +47,16 @@ except Exception:  # pragma: no cover
 
 
 def _gpu_buffmon_enabled() -> bool:
-    """True 当 config.USE_GPU_BUFFMON 开启且 GLFW 可用。"""
+    """BuffMon requires the shared Entity GPU backend."""
     try:
         from config import USE_GPU_BUFFMON as _flag
     except Exception:
         _flag = True
     if not _flag:
-        return False
+        raise RuntimeError('BuffMon requires USE_GPU_BUFFMON=True; no ULW fallback is available')
     if _gow is None or AsyncFrameWorker is None:
-        return False
-    try:
-        return bool(_gow.glfw_supported())
-    except Exception:
-        return False
+        raise RuntimeError('BuffMon requires GPU overlay and AsyncFrameWorker; no ULW fallback is available')
+    return require_entity_gpu('BuffMon', _gow)
 
 
 # ─────────────────────────────────────────
@@ -201,65 +199,31 @@ class _BuffPanelBase:
         self._gpu_last_geom: Optional[Tuple[int, int, int, int]] = None
         self._gpu_last_compose_sig: Tuple = ()
 
-        # ── ULW 兼容路径 (回退) ──
+        # ── Legacy ULW fields (inactive; kept only until dead-code removal) ──
         self._win: Optional[tk.Toplevel] = None
         self._hwnd: int = 0
         self._ulw_created = False
         self._visible_hwnd = False
 
-        if self._gpu_enabled:
-            try:
-                self._gpu_worker = AsyncFrameWorker(prefer_isolation=False)
-                _dbg(f'[{self._name}] GPU worker created')
-            except Exception as e:
-                _dbg(f'[{self._name}] GPU worker init failed: {e}; falling back to ULW')
-                self._gpu_enabled = False
-                self._gpu_worker = None
-
-        if not self._gpu_enabled:
-            self._init_ulw_window()
+        try:
+            self._gpu_worker = AsyncFrameWorker(prefer_isolation=False)
+            _dbg(f'[{self._name}] GPU worker created')
+        except Exception as e:
+            self._gpu_enabled = False
+            self._gpu_worker = None
+            raise RuntimeError(
+                f'BuffMon {self._name} requires GPU worker support; no ULW fallback is available'
+            ) from e
 
         self._schedule_tick()
 
     # ─────────────────────────────────────
-    #  Window — ULW (回退路径)
+    #  Window — legacy ULW (inactive; scheduled for removal)
     # ─────────────────────────────────────
     def _init_ulw_window(self):
-        if self._ulw_created:
-            return
-        try:
-            win = tk.Toplevel(self.root)
-            win.overrideredirect(True)
-            win.attributes('-topmost', True)
-            win.geometry('1x1+0+0')
-            win.update_idletasks()
-
-            try:
-                hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
-            except Exception:
-                hwnd = win.winfo_id()
-
-            ex = _user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
-            _user32.SetWindowLongW(
-                ctypes.c_void_p(hwnd), GWL_EXSTYLE,
-                ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_TRANSPARENT,
-            )
-            try:
-                _user32.SetWindowDisplayAffinity(ctypes.c_void_p(hwnd), 0x00000011)
-            except Exception:
-                pass
-            try:
-                _user32.ShowWindow(ctypes.c_void_p(hwnd), 0)
-            except Exception:
-                pass
-
-            self._win = win
-            self._hwnd = int(hwnd)
-            self._ulw_created = True
-        except Exception as e:
-            print(f'[BuffMon:{self._name}] init ULW window failed: {e}')
-            self._win = None
-            self._hwnd = 0
+        raise RuntimeError(
+            f'BuffMon {self._name} legacy ULW window path is disabled; GPU presentation is required'
+        )
 
     # ─────────────────────────────────────
     #  Window — GPU (优先路径)
@@ -268,8 +232,7 @@ class _BuffPanelBase:
         """惰性创建 GpuOverlayWindow + BgraPresenter。"""
         if self._gpu_window is not None:
             return True
-        if _gow is None:
-            return False
+        require_entity_gpu(f'BuffMon {self._name}', _gow)
         try:
             pump = _gow.get_glfw_pump(self.root)
             self._gpu_presenter = _gow.BgraPresenter()
@@ -286,13 +249,12 @@ class _BuffPanelBase:
             _dbg(f'[{self._name}] GPU window created at xy=({x},{y}) wh=({w},{h})')
             return True
         except Exception as e:
-            _dbg(f'[{self._name}] GPU window create failed: {e}; switching to ULW')
             self._gpu_presenter = None
             self._gpu_window = None
-            # 切到 ULW fallback
             self._gpu_enabled = False
-            self._init_ulw_window()
-            return False
+            raise RuntimeError(
+                f'BuffMon {self._name} requires GPU window support; no ULW fallback is available'
+            ) from e
 
     # ─────────────────────────────────────
     #  Public API
@@ -743,10 +705,7 @@ class _BuffPanelBase:
         if not self._enabled or self._destroyed:
             self._hide_window()
             return
-        # GPU 模式不需要 _hwnd; ULW 模式需要
-        if not self._gpu_enabled and self._hwnd == 0:
-            self._hide_window()
-            return
+        require_entity_gpu(f'BuffMon {self._name}', _gow)
 
         rows = self.get_rows() if not self._destroyed else []
         has_rows = bool(rows)
@@ -794,7 +753,7 @@ class _BuffPanelBase:
         if not getattr(self, '_dbg_first_anchor', False):
             self._dbg_first_anchor = True
             _dbg(f'[{self._name}] FIRST anchor resolved: xy={anchor} total_h={total_h} '
-                 f'mode={"GPU" if self._gpu_enabled else "ULW"}')
+                 f'mode=GPU')
 
         ax, ay = anchor
 
@@ -803,11 +762,7 @@ class _BuffPanelBase:
         y = int(ay)
         alpha = int(max(0, min(255, self._vis_value * 255)))
 
-        # 分发: GPU vs ULW
-        if self._gpu_enabled:
-            self._present_gpu(base_img, x, y, alpha)
-        else:
-            self._present_ulw(base_img, x, y, alpha)
+        self._present_gpu(base_img, x, y, alpha)
 
     def _present_ulw(self, base_img: Image.Image, x: int, y: int, alpha: int):
         if not self._visible_hwnd:
@@ -885,21 +840,12 @@ class _BuffPanelBase:
             _dbg(f'[{self._name}] GPU submit error: {e}')
 
     def _hide_window(self):
-        if self._gpu_enabled:
-            if self._gpu_visible and self._gpu_window is not None:
-                try:
-                    self._gpu_window.hide()
-                except Exception:
-                    pass
-                self._gpu_visible = False
-        else:
-            if not self._visible_hwnd:
-                return
+        if self._gpu_visible and self._gpu_window is not None:
             try:
-                _user32.ShowWindow(ctypes.c_void_p(self._hwnd), 0)
+                self._gpu_window.hide()
             except Exception:
                 pass
-            self._visible_hwnd = False
+            self._gpu_visible = False
 
 
 # ─────────────────────────────────────────

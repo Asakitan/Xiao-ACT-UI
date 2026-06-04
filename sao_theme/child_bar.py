@@ -16,13 +16,14 @@ try:
         BarColors as _ChildBarColors,
         gpu_child_bar_enabled,
     )
-except Exception:
+except Exception as _child_gpu_import_error:
+    _CHILD_GPU_IMPORT_ERROR = _child_gpu_import_error
     ChildBarGpuPainter = None  # type: ignore[assignment]
     _ChildBarSnapshot = None  # type: ignore[assignment]
     _ChildRowSnapshot = None  # type: ignore[assignment]
     _ChildBarColors = None  # type: ignore[assignment]
     def gpu_child_bar_enabled() -> bool:  # type: ignore[no-redef]
-        return False
+        raise RuntimeError('ChildBarGpuPainter GPU module is required') from _CHILD_GPU_IMPORT_ERROR
 from sao_theme.colors import SAOColors
 from sao_theme.animator import Animator
 from sao_theme.utils import ease_in_out, lerp, lerp_color
@@ -688,8 +689,9 @@ class SAOChildBar(tk.Frame):
 
     # ── v2.3.0 Phase 3+++: GPU painter wiring ─────────────────────
     def _setup_gpu_painter(self):
-        if ChildBarGpuPainter is None or not gpu_child_bar_enabled():
-            return
+        if ChildBarGpuPainter is None:
+            raise RuntimeError('ChildBarGpuPainter GPU module is required')
+        gpu_child_bar_enabled()
         try:
             top = self.winfo_toplevel()
             self._gpu_painter = ChildBarGpuPainter(top)
@@ -705,6 +707,7 @@ class SAOChildBar(tk.Frame):
         except Exception:
             self._gpu_painter = None
             self._gpu_managed = False
+            raise
 
     def _on_destroy(self):
         self._cancel_layout_commit()

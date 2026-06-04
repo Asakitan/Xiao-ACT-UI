@@ -17,12 +17,13 @@ try:
         _ButtonSnapshot,
         gpu_menu_bar_enabled,
     )
-except Exception:
+except Exception as _menu_gpu_import_error:
+    _MENU_GPU_IMPORT_ERROR = _menu_gpu_import_error
     MenuBarGpuPainter = None  # type: ignore[assignment]
     BarColorFns = None  # type: ignore[assignment]
     _ButtonSnapshot = None  # type: ignore[assignment]
     def gpu_menu_bar_enabled() -> bool:  # type: ignore[no-redef]
-        return False
+        raise RuntimeError('MenuBarGpuPainter GPU module is required') from _MENU_GPU_IMPORT_ERROR
 from sao_theme.colors import SAOColors
 from sao_theme.animator import Animator
 from sao_theme.utils import lerp_color
@@ -57,9 +58,9 @@ class SAOMenuBar(tk.Frame):
         self._enter_duration_s = 0.28
         self._float_phases: List[float] = []
         self._anim = Animator(self)
-        # v2.3.0 Phase 3+: optional GPU painter for the fisheye strip.
-        # Built lazily in _build() once the slot/button geometry is
-        # known; torn down in _stop_float on widget destroy.
+        # GPU-required painter for the fisheye strip. Built lazily in
+        # _build() once the slot/button geometry is known; torn down in
+        # _stop_float on widget destroy.
         self._gpu_painter: Optional[Any] = None
         self._gpu_color_fns: Optional[Any] = None
         # v2.3.0 Phase A3: cache screen origin so _dispatch_gpu_paint
@@ -117,8 +118,9 @@ class SAOMenuBar(tk.Frame):
             except Exception:
                 pass
             self._gpu_painter = None
-        if MenuBarGpuPainter is None or not gpu_menu_bar_enabled():
-            return
+        if MenuBarGpuPainter is None:
+            raise RuntimeError('MenuBarGpuPainter GPU module is required')
+        gpu_menu_bar_enabled()
         if not self._buttons:
             return
         try:
@@ -159,7 +161,7 @@ class SAOMenuBar(tk.Frame):
             self._gpu_color_fns = None
             for btn in self._buttons:
                 btn._gpu_managed = False
-            return
+            raise
         # Force Tk to lay out the menu bar before the first dispatch
         # fires from `_tick_float`. Without this the painter's first
         # tick can race the popup mapping and read rootx/rooty == 0,

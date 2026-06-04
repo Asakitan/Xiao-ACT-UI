@@ -24,12 +24,10 @@ This module replaces that visual layer with:
   thread. Click/Enter/Leave bindings still fire because the widget
   area exists.
 
-Toggle via env ``SAO_GPU_MENU_BAR``. Defaults to enabled whenever the
-shared GLFW/ModernGL overlay backend is available.
+Entity menu bar rendering is GPU-required; do not fall back to Tk/ULW.
 """
 from __future__ import annotations
 
-import os
 import threading
 import time
 import tkinter as tk
@@ -39,6 +37,7 @@ from PIL import Image
 
 from render.overlay_render_worker import AsyncFrameWorker, FrameBuffer
 from utils.perf_probe import phase as _phase_trace, probe as _probe
+from gui_modules.entity_gpu_policy import require_entity_gpu
 from gui_modules.sao_menu_hud import MenuCircleButtonRenderer
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
@@ -49,16 +48,8 @@ except Exception:  # pragma: no cover - optional dep
 
 
 def gpu_menu_bar_enabled() -> bool:
-    """Honour ``SAO_GPU_MENU_BAR`` if set; otherwise use the GPU backend."""
-    env = os.environ.get('SAO_GPU_MENU_BAR')
-    if env is not None:
-        return env != '0'
-    if _gow is None:
-        return False
-    try:
-        return bool(_gow.glfw_supported())
-    except Exception:
-        return False
+    """Menu bar requires the shared Entity GPU backend."""
+    return require_entity_gpu('MenuBarGpuPainter', _gow)
 
 
 class _ButtonSnapshot:
@@ -134,8 +125,7 @@ class MenuBarGpuPainter:
     def _ensure_window(self, w: int, h: int, x: int, y: int) -> bool:
         if self._gpu_window is not None:
             return True
-        if _gow is None or not _gow.glfw_supported():
-            return False
+        require_entity_gpu('MenuBarGpuPainter', _gow)
         try:
             pump = _gow.get_glfw_pump(self._root)
             self._presenter = _gow.BgraPresenter()
@@ -161,10 +151,10 @@ class MenuBarGpuPainter:
                 )
             self._gpu_window.show()
             return True
-        except Exception:
+        except Exception as exc:
             self._presenter = None
             self._gpu_window = None
-            return False
+            raise RuntimeError('MenuBarGpuPainter requires GPU window support') from exc
 
     def _slot_index(self, x: float, y: float) -> Optional[int]:
         return _CY_UI.menu_bar_slot_index(

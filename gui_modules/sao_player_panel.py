@@ -45,14 +45,17 @@ class SAOPlayerPanel(tk.Frame):
                 _PlayerPanelSnapshot as _PPSnap,
                 gpu_player_panel_enabled as _gppen,
             )
-        except Exception:
+        except Exception as _player_gpu_import_error:
+            _PLAYER_GPU_IMPORT_ERROR = _player_gpu_import_error
             _PPGP = None
             _PPSnap = None
             def _gppen():  # type: ignore[no-redef]
-                return False
+                raise RuntimeError('PlayerPanelGpuPainter GPU module is required') from _PLAYER_GPU_IMPORT_ERROR
         self._PPGP_cls = _PPGP
         self._PPSnap_cls = _PPSnap
         self._gpu_required = bool(self.ENTITY_GPU_ONLY)
+        if self._gpu_required and _PPGP is None:
+            _gppen()
         self._gpu_managed = bool(_PPGP is not None and _gppen())
         self._gpu_chroma = '#010101'
         self._gpu_painter = None
@@ -410,17 +413,17 @@ class SAOPlayerPanel(tk.Frame):
             self._bottom.create_text(w - 8, h - 10, text='SAO://SYSTEM',
                                      anchor='e', font=get_sao_font(5), fill='#c8c8c8')
 
-    # ── GPU painter wiring (active when SAO_GPU_PLAYER_PANEL on) ─
+    # ── GPU painter wiring (GPU-required Entity path) ─
 
     def _setup_gpu_painter(self) -> None:
         if self._PPGP_cls is None:
-            return
+            raise RuntimeError('PlayerPanelGpuPainter GPU module is required')
         try:
             self._gpu_painter = self._PPGP_cls(self.winfo_toplevel())
         except Exception:
             self._gpu_painter = None
             self._gpu_managed = False
-            return
+            raise
         # winfo_rootx/y is expensive; cache and invalidate on
         # <Configure> (matches Phase A pattern).
         self.bind('<Configure>',

@@ -67,14 +67,17 @@ class SAOSessionPlayersPanel(tk.Frame):
                 _SessionPlayersSnapshot as _SPSnap,
                 gpu_session_players_enabled as _spgen,
             )
-        except Exception:
+        except Exception as _session_gpu_import_error:
+            _SESSION_GPU_IMPORT_ERROR = _session_gpu_import_error
             _SPGP = None
             _SPSnap = None
             def _spgen():  # type: ignore[no-redef]
-                return False
+                raise RuntimeError('SessionPlayersGpuPainter GPU module is required') from _SESSION_GPU_IMPORT_ERROR
         self._SPGP_cls = _SPGP
         self._SPSnap_cls = _SPSnap
         self._gpu_required = bool(self.ENTITY_GPU_ONLY)
+        if self._gpu_required and _SPGP is None:
+            _spgen()
         self._gpu_managed = bool(
             _SPGP is not None
             and _spgen()
@@ -121,15 +124,7 @@ class SAOSessionPlayersPanel(tk.Frame):
                 pass
             self._hit = None
         if self._gpu_required:
-            self._gpu_managed = False
-            self.configure(width=self.PANEL_W, height=self.PANEL_H)
-            self.pack_propagate(False)
-            self._bind_wheel(self)
-            try:
-                print('[SAO Entity] Session Players GPU unavailable; Tk fallback suppressed', flush=True)
-            except Exception:
-                pass
-            return
+            raise RuntimeError('SessionPlayersPanel requires GPU painter support')
 
         self.configure(width=self.PANEL_W, height=self.PANEL_H)
         self.pack_propagate(False)
@@ -179,13 +174,13 @@ class SAOSessionPlayersPanel(tk.Frame):
     def _setup_gpu_painter(self):
         if self._SPGP_cls is None:
             self._gpu_managed = False
-            return
+            raise RuntimeError('SessionPlayersGpuPainter GPU module is required')
         try:
             self._gpu_painter = self._SPGP_cls(self.winfo_toplevel())
         except Exception:
             self._gpu_painter = None
             self._gpu_managed = False
-            return
+            raise
         self.bind('<Configure>',
                   lambda e: setattr(self, '_cached_screen_xy', None),
                   add='+')
@@ -517,7 +512,7 @@ class SAOSessionPlayersPanel(tk.Frame):
             self._cached_screen_xy = None
             return
         if getattr(self, '_gpu_required', False):
-            return
+            raise RuntimeError('SessionPlayersPanel requires GPU painter support')
         try:
             if self._open_anim_after_id:
                 self.after_cancel(self._open_anim_after_id)
@@ -562,7 +557,7 @@ class SAOSessionPlayersPanel(tk.Frame):
             _step()
             return
         if getattr(self, '_gpu_required', False):
-            return
+            raise RuntimeError('SessionPlayersPanel requires GPU painter support')
         try:
             if self._open_anim_after_id:
                 self.after_cancel(self._open_anim_after_id)
@@ -621,7 +616,7 @@ class SAOSessionPlayersPanel(tk.Frame):
             self._queue_gpu_drain(retries=30, delay_ms=33)
             return
         if getattr(self, '_gpu_required', False) and not hasattr(self, '_rows_host'):
-            return
+            raise RuntimeError('SessionPlayersPanel requires GPU rows host')
         self._destroy_rows()
         try:
             self._canvas.yview_moveto(0.0)

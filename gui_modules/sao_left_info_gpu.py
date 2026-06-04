@@ -5,11 +5,11 @@ Mirrors :mod:`sao_menu_bar_gpu`. The popup's left info panel is two
 stacked Canvases (top + bottom) that paint cached PIL plates with an
 optional sweep highlight on open / close / sync_pulse.
 
-When ``SAO_GPU_LEFT_INFO`` is enabled, the Tk Canvases are kept at
-chroma-key bg with no ``create_image`` so they stay invisible, and
-the two plates are composed into one BGRA frame on the heavy
-``AsyncFrameWorker`` lane. Presentation goes through a single
-``GpuOverlayWindow`` sized to the panel's combined bounding box.
+Entity left-info/player/session visuals are GPU-required. The Tk
+Canvases are kept at chroma-key bg with no ``create_image`` so they
+stay invisible, and panel plates are composed into BGRA frames on the
+heavy ``AsyncFrameWorker`` lane. Presentation goes through
+``GpuOverlayWindow``; no Tk visual fallback is selected.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from render.overlay_render_worker import AsyncFrameWorker
 from utils.perf_probe import probe as _probe
+from gui_modules.entity_gpu_policy import require_entity_gpu
 from gui_modules.sao_menu_hud import MenuLeftInfoRenderer, PlayerPanelRenderer
 
 try:
@@ -40,13 +41,6 @@ _FONT_SAO = os.path.join(_FONTS_DIR, 'SAOUI.ttf')
 _FONT_CJK = os.path.join(_FONTS_DIR, 'ZhuZiAYuanJWD.ttf')
 
 
-def _env_flag(name: str) -> Optional[bool]:
-    raw = os.environ.get(name)
-    if raw is None:
-        return None
-    return str(raw).strip().lower() not in ('', '0', 'false', 'no', 'off')
-
-
 def _pil_font(path: str, size: int):
     try:
         return ImageFont.truetype(path, max(6, int(size)))
@@ -58,15 +52,7 @@ def _pil_font(path: str, size: int):
 
 
 def gpu_left_info_enabled() -> bool:
-    env = _env_flag('SAO_GPU_LEFT_INFO')
-    if env is not None:
-        return env
-    if _gow is None:
-        return False
-    try:
-        return bool(_gow.glfw_supported())
-    except Exception:
-        return False
+    return require_entity_gpu('LeftInfoGpuPainter', _gow)
 
 
 class _LeftInfoSnapshot:
@@ -112,8 +98,7 @@ class LeftInfoGpuPainter:
     def _ensure_window(self, w: int, h: int, x: int, y: int) -> bool:
         if self._gpu_window is not None:
             return True
-        if _gow is None or not _gow.glfw_supported():
-            return False
+        require_entity_gpu('LeftInfoGpuPainter', _gow)
         try:
             pump = _gow.get_glfw_pump(self._root)
             self._presenter = _gow.BgraPresenter()
@@ -127,10 +112,10 @@ class LeftInfoGpuPainter:
             )
             self._gpu_window.show()
             return True
-        except Exception:
+        except Exception as exc:
             self._presenter = None
             self._gpu_window = None
-            return False
+            raise RuntimeError('LeftInfoGpuPainter requires GPU window support') from exc
 
     def destroy(self) -> None:
         if self._destroyed:
@@ -231,18 +216,7 @@ class LeftInfoGpuPainter:
 # ══════════════════════════════════════════════════════════════════════
 
 def gpu_session_players_enabled() -> bool:
-    env = _env_flag('SAO_GPU_SESSION_PLAYERS')
-    if env is not None:
-        return env
-    env2 = _env_flag('SAO_GPU_LEFT_INFO')
-    if env2 is not None:
-        return env2
-    if _gow is None:
-        return False
-    try:
-        return bool(_gow.glfw_supported())
-    except Exception:
-        return False
+    return require_entity_gpu('SessionPlayersGpuPainter', _gow)
 
 
 class _SessionPlayersSnapshot:
@@ -558,8 +532,7 @@ class SessionPlayersGpuPainter:
                        allow_async: bool = False) -> bool:
         if self._gpu_window is not None:
             return True
-        if _gow is None or not _gow.glfw_supported():
-            return False
+        require_entity_gpu('SessionPlayersGpuPainter', _gow)
         if not self._create_lock.acquire(blocking=False):
             return False
         self._creating = True
@@ -576,10 +549,10 @@ class SessionPlayersGpuPainter:
             )
             self._gpu_window.show(async_create=allow_async)
             return True
-        except Exception:
+        except Exception as exc:
             self._presenter = None
             self._gpu_window = None
-            return False
+            raise RuntimeError('SessionPlayersGpuPainter requires GPU window support') from exc
         finally:
             self._creating = False
             try:
@@ -680,16 +653,8 @@ class SessionPlayersGpuPainter:
 # ══════════════════════════════════════════════════════════════════════
 
 def gpu_player_panel_enabled() -> bool:
-    """``SAO_GPU_PLAYER_PANEL`` overrides; otherwise enabled when GLFW is available."""
-    env = _env_flag('SAO_GPU_PLAYER_PANEL')
-    if env is not None:
-        return env
-    if _gow is None:
-        return False
-    try:
-        return bool(_gow.glfw_supported())
-    except Exception:
-        return False
+    """Player panel requires the shared Entity GPU backend."""
+    return require_entity_gpu('PlayerPanelGpuPainter', _gow)
 
 
 class _PlayerPanelSnapshot:
@@ -723,7 +688,7 @@ class PlayerPanelGpuPainter:
     full SAOPlayerPanel (user / level / EXP / HP / STA / shift_mode).
     Top + bottom plates compose into one sprite each tick on the worker.
 
-    Env gate: ``SAO_GPU_PLAYER_PANEL`` only.
+    GPU-required painter for ``SAOPlayerPanel``.
     """
 
     def __init__(self, root: tk.Tk):
@@ -752,8 +717,7 @@ class PlayerPanelGpuPainter:
                        allow_async: bool = False) -> bool:
         if self._gpu_window is not None:
             return True
-        if _gow is None or not _gow.glfw_supported():
-            return False
+        require_entity_gpu('PlayerPanelGpuPainter', _gow)
         if not self._create_lock.acquire(blocking=False):
             return False
         self._creating = True
@@ -770,10 +734,10 @@ class PlayerPanelGpuPainter:
             )
             self._gpu_window.show(async_create=allow_async)
             return True
-        except Exception:
+        except Exception as exc:
             self._presenter = None
             self._gpu_window = None
-            return False
+            raise RuntimeError('PlayerPanelGpuPainter requires GPU window support') from exc
         finally:
             self._creating = False
             try:

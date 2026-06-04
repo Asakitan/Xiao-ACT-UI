@@ -15,11 +15,12 @@ try:
         _LeftInfoSnapshot,
         gpu_left_info_enabled,
     )
-except Exception:
+except Exception as _left_gpu_import_error:
+    _LEFT_GPU_IMPORT_ERROR = _left_gpu_import_error
     LeftInfoGpuPainter = None  # type: ignore[assignment]
     _LeftInfoSnapshot = None  # type: ignore[assignment]
     def gpu_left_info_enabled() -> bool:  # type: ignore[no-redef]
-        return False
+        raise RuntimeError('LeftInfoGpuPainter GPU module is required') from _LEFT_GPU_IMPORT_ERROR
 from sao_theme.animator import Animator
 from sao_theme.utils import ease_in_out
 
@@ -53,11 +54,10 @@ class SAOLeftInfo(tk.Frame):
         self._bottom_photo = None
         self._sweep_phase = 0.0
         self._sweep_strength = 0.0
-        # v2.3.0 Phase 3+: optional GPU painter for the left info panel.
-        # When attached, _redraw_top/_redraw_bottom skip the Tk
-        # PhotoImage upload and dispatch a snapshot to the painter
-        # instead. Tk Canvases stay in place at chroma-key bg so the
-        # GPU layer underneath shows through.
+        # GPU-required painter for the left info panel. _redraw_top/
+        # _redraw_bottom skip Tk PhotoImage uploads and dispatch a
+        # snapshot to the painter instead. Tk Canvases stay in place at
+        # chroma-key bg so the GPU layer underneath shows through.
         # GPU painter: when attached we set Tk canvases to FINAL size
         # once (so the parent layout settles correctly) and never
         # configure them again per animation frame. The painter
@@ -76,14 +76,16 @@ class SAOLeftInfo(tk.Frame):
         self._setup_gpu_painter()
 
     def _setup_gpu_painter(self) -> None:
-        if LeftInfoGpuPainter is None or not gpu_left_info_enabled():
-            return
+        if LeftInfoGpuPainter is None:
+            raise RuntimeError('LeftInfoGpuPainter GPU module is required')
+        gpu_left_info_enabled()
         try:
             self._gpu_painter = LeftInfoGpuPainter(self.winfo_toplevel())
             self._gpu_managed = True
         except Exception:
             self._gpu_painter = None
             self._gpu_managed = False
+            raise
 
     def _on_destroy(self) -> None:
         if self._gpu_painter is not None:

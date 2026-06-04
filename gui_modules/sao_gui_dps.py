@@ -37,15 +37,14 @@ import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
 from render.overlay_scheduler import get_scheduler as _get_scheduler
 from render.overlay_render_worker import (
-    AsyncFrameWorker, multiply_alpha_image, submit_ulw_commit,
+    AsyncFrameWorker, multiply_alpha_image,
 )
 from render.render_capture_sync import wait_until_capture_idle
 from config import FONTS_DIR
+from gui_modules.entity_gpu_policy import require_entity_gpu
 
-# v2.3.x: optional GPU presenter. Env-gated via SAO_GPU_DPS only.
-# NOTE: GLFW path is click_through, so
-# drag-to-move and tab clicks on this overlay are disabled in GPU
-# mode — use SAO_GPU_DPS=0 for the legacy interactive ULW path.
+# DPS presentation is GPU-required. GPU mode owns drag/tab/scroll input
+# callbacks; do not fall back to the legacy interactive ULW path.
 try:
     from render import gpu_overlay_window as _gow
 except Exception:
@@ -53,16 +52,7 @@ except Exception:
 
 
 def _gpu_dps_enabled() -> bool:
-    if _gow is None or not _gow.glfw_supported():
-        return False
-    try:
-        import os as _os
-        flag = _os.environ.get('SAO_GPU_DPS')
-        if flag is None:
-            return True
-        return str(flag).strip() not in ('', '0', 'false', 'False')
-    except Exception:
-        return False
+    return require_entity_gpu('DpsOverlay', _gow)
 
 import _sao_cy_pixels as _CY_PIXELS  # type: ignore[import-not-found]
 
@@ -704,105 +694,47 @@ class DpsOverlay:
     def show(self) -> None:
         if self._win is not None:
             return
-        # v2.3.x: GPU presenter path (env-gated).
-        if _gpu_dps_enabled():
-            try:
-                pump = _gow.get_glfw_pump(self.root)
-                presenter = _gow.BgraPresenter()
-                # Initial 1×1 placeholder; tick will resize to compose dims.
-                gpu_win = _gow.GpuOverlayWindow(
-                    pump,
-                    w=1, h=1,
-                    x=int(self._x), y=int(self._y),
-                    render_fn=presenter.render,
-                    click_through=False,
-                    title='sao_dps_gpu',
-                )
-                gpu_win.set_input_callbacks(
-                    cursor_pos_fn=self._on_gpu_cursor_pos,
-                    mouse_button_fn=self._on_gpu_mouse_button,
-                    scroll_fn=self._on_gpu_scroll,
-                )
-                gpu_win.show()
-                self._gpu_window = gpu_win
-                self._gpu_presenter = presenter
-                self._gpu_managed = True
-                self._win = self  # type: ignore[assignment]  # sentinel
-                self._hwnd = 0
-                self._visible = True
-                self._faded_out = False
-                self._hide_after_fade = False
-                self._idle_passthrough_pending = False
-                self._is_passthrough = False
-                self._fade_from = 0.0
-                self._fade_alpha = 0.0
-                self._fade_target = 1.0
-                self._fade_start = time.time()
-                self._fade_duration = self.FADE_IN
-                self._schedule_tick(immediate=True)
-                return
-            except Exception:
-                self._gpu_window = None
-                self._gpu_presenter = None
-                self._gpu_managed = False
-        self._win = tk.Toplevel(self.root)
-        self._win.overrideredirect(True)
-        self._win.attributes('-topmost', True)
-        self._win.geometry(f'1x1+{self._x}+{self._y}')
-        self._win.update_idletasks()
-
+        require_entity_gpu('DpsOverlay', _gow)
         try:
-            self._hwnd = _user32.GetParent(self._win.winfo_id()) or \
-                self._win.winfo_id()
+            pump = _gow.get_glfw_pump(self.root)
+            presenter = _gow.BgraPresenter()
+            # Initial 1×1 placeholder; tick will resize to compose dims.
+            gpu_win = _gow.GpuOverlayWindow(
+                pump,
+                w=1, h=1,
+                x=int(self._x), y=int(self._y),
+                render_fn=presenter.render,
+                click_through=False,
+                title='sao_dps_gpu',
+            )
+            gpu_win.set_input_callbacks(
+                cursor_pos_fn=self._on_gpu_cursor_pos,
+                mouse_button_fn=self._on_gpu_mouse_button,
+                scroll_fn=self._on_gpu_scroll,
+            )
+            gpu_win.show()
+            self._gpu_window = gpu_win
+            self._gpu_presenter = presenter
+            self._gpu_managed = True
+            self._win = self  # type: ignore[assignment]  # sentinel
+            self._hwnd = 0
+            self._visible = True
+            self._faded_out = False
+            self._hide_after_fade = False
+            self._idle_passthrough_pending = False
+            self._is_passthrough = False
+            self._fade_from = 0.0
+            self._fade_alpha = 0.0
+            self._fade_target = 1.0
+            self._fade_start = time.time()
+            self._fade_duration = self.FADE_IN
+            self._schedule_tick(immediate=True)
+            return
         except Exception:
-            self._hwnd = self._win.winfo_id()
-
-        ex = _user32.GetWindowLongW(ctypes.c_void_p(self._hwnd), GWL_EXSTYLE)
-        _user32.SetWindowLongW(
-            ctypes.c_void_p(self._hwnd),
-            GWL_EXSTYLE,
-            ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-        )
-        # 防御性清理：移除可能被 _apply_panel_style() 设置的 CS_DROPSHADOW
-        try:
-            _GCL_STYLE, _CS_DS = -26, 0x00020000
-            _cls = ctypes.windll.user32.GetClassLongW(self._hwnd, _GCL_STYLE)
-            if _cls & _CS_DS:
-                ctypes.windll.user32.SetClassLongW(
-                    self._hwnd, _GCL_STYLE, _cls & ~_CS_DS)
-        except Exception:
-            pass
-        try:
-            _user32.SetWindowDisplayAffinity(ctypes.c_void_p(self._hwnd), 0x00000011)
-        except Exception:
-            pass
-        # Disable DWM non-client rendering (incl. system drop shadow) so the
-        # shadow does not linger while the ULW bitmap fades to transparent.
-        try:
-            _ncr_disabled = ctypes.c_int(1)   # DWMNCRP_DISABLED
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                ctypes.c_void_p(self._hwnd), 2,
-                ctypes.byref(_ncr_disabled), ctypes.sizeof(_ncr_disabled))
-        except Exception:
-            pass
-
-        # Dragging
-        self._win.bind('<Button-1>', self._on_drag_start)
-        self._win.bind('<B1-Motion>', self._on_drag_move)
-        self._win.bind('<ButtonRelease-1>', self._on_drag_end)
-        self._win.bind('<MouseWheel>', self._on_mouse_wheel)
-
-        self._visible = True
-        self._faded_out = False
-        self._hide_after_fade = False
-        self._idle_passthrough_pending = False
-        self._is_passthrough = False
-        self._fade_from = 0.0
-        self._fade_alpha = 0.0
-        self._fade_target = 1.0
-        self._fade_start = time.time()
-        self._fade_duration = self.FADE_IN
-        self._schedule_tick(immediate=True)
+            self._gpu_window = None
+            self._gpu_presenter = None
+            self._gpu_managed = False
+            raise
 
     def hide(self) -> None:
         self._hide_after_fade = False
@@ -1302,13 +1234,12 @@ class DpsOverlay:
         self._advance_animations(now)
 
         # ── Async render pipeline ──
-        if self._hwnd or self._gpu_managed:
+        if self._gpu_managed:
             # v2.2.23: don't let vision capture starve our commits.
             fb = self._render_worker.take_result(allow_during_capture=True)
             if fb is not None:
                 sz = (fb.width, fb.height)
-                if self._gpu_managed and self._gpu_presenter is not None \
-                        and self._gpu_window is not None:
+                if self._gpu_presenter is not None and self._gpu_window is not None:
                     try:
                         if sz != self._last_rendered_size \
                                 or (fb.x, fb.y) != (self._x, self._y):
@@ -1321,21 +1252,6 @@ class DpsOverlay:
                         _perf_gauge('ui.dps.presented', 1)
                     except Exception as e:
                         print(f'[DPS-OV] gpu present error: {e}')
-                elif self._hwnd:
-                    # Resize Tk window if panel dimensions changed.
-                    if self._win is not None and self._win is not self \
-                            and sz != self._last_rendered_size:
-                        try:
-                            self._win.geometry(
-                                f'{fb.width}x{fb.height}+{self._x}+{self._y}')
-                        except Exception:
-                            pass
-                        self._last_rendered_size = sz
-                    try:
-                        submit_ulw_commit(self._hwnd, fb, allow_during_capture=True)
-                        _perf_gauge('ui.dps.presented', 1)
-                    except Exception as e:
-                        print(f'[DPS-OV] ulw error: {e}')
             else:
                 _perf_gauge('ui.dps.presented', 0)
 
@@ -1590,22 +1506,8 @@ class DpsOverlay:
 
     @_probe.decorate('ui.dps.render')
     def _render(self, now: float) -> None:
-        if not self._hwnd:
-            return
-        img = self.compose_frame(now)
-        w, h = img.size
-
-        if self._win is not None and (w, h) != self._last_rendered_size:
-            try:
-                self._win.geometry(f'{w}x{h}+{self._x}+{self._y}')
-            except Exception:
-                pass
-            self._last_rendered_size = (w, h)
-
-        try:
-            _ulw_update(self._hwnd, img, self._x, self._y)
-        except Exception as e:
-            print(f'[DPS-OV] ulw error: {e}')
+        require_entity_gpu('DpsOverlay', _gow)
+        raise RuntimeError('DpsOverlay legacy ULW render path is disabled; GPU presentation is required')
 
     def _build_shell_layer(self, w: int, h: int) -> Image.Image:
         """Compose the static shell (shadow + body + corners) once per size.
