@@ -20,6 +20,10 @@ _REPO = os.path.dirname(_SAO)
 _ASSETS = os.path.join(_SAO, "assets")
 _NAME_TABLES = os.path.join(_SAO, "assets", "name_tables")
 _DEFAULT_CACHE = os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.json")
+_LOCAL_CACHE = os.environ.get(
+    "SAO_TCP_PREPARSE_NAME_CACHE_LOCAL",
+    os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.local.json"),
+)
 _DATATOOLS_CN = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Data", "CN")
 _RESONANCE_METER = os.path.join(_REPO, "resonance-logs-cn", "src-tauri", "meter-data")
 _RESONANCE_CONFIG = os.path.join(_REPO, "resonance-logs-cn", "src", "lib", "config")
@@ -317,8 +321,26 @@ def merge_entries(existing: Mapping[str, Mapping[str, str]], incoming: Mapping[s
     return merged, changed
 
 
-def update_runtime_tables(cache_path: str = _DEFAULT_CACHE, *, output_dir: str = _NAME_TABLES, write: bool = True, fill_missing_only: bool = True) -> dict[str, Any]:
+def _merge_cache_payloads(primary: Any, secondary: Any) -> dict[str, Any]:
+    merged = {"schema_version": 1, "names": {"by_kind": {}}}
+    for cache in (primary, secondary):
+        if not isinstance(cache, Mapping):
+            continue
+        by_kind = (((cache.get("names") or {}).get("by_kind") or {}))
+        if not isinstance(by_kind, Mapping):
+            continue
+        for kind, bucket in by_kind.items():
+            if str(kind) == "player" or not isinstance(bucket, Mapping):
+                continue
+            target = merged["names"]["by_kind"].setdefault(str(kind), {})
+            target.update(bucket)
+    return merged
+
+
+def update_runtime_tables(cache_path: str = _DEFAULT_CACHE, *, output_dir: str = _NAME_TABLES, write: bool = True, fill_missing_only: bool = True, include_local_cache: bool = False) -> dict[str, Any]:
     cache = _load_json(cache_path)
+    if include_local_cache and os.path.abspath(cache_path) == os.path.abspath(_DEFAULT_CACHE):
+        cache = _merge_cache_payloads(cache, _load_json(_LOCAL_CACHE))
     summary: dict[str, Any] = {"cache": os.path.normpath(cache_path), "updated_at": _iso(), "kinds": {}}
     for kind in _RUNTIME_KINDS:
         path = os.path.join(output_dir, f"{kind}.json")
@@ -350,12 +372,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", default=_NAME_TABLES)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-overwrite", action="store_true", help="Allow higher-confidence incoming names to replace existing names")
+    parser.add_argument("--include-local-cache", action="store_true", help="Also merge ignored local runtime cache into generated local outputs")
     args = parser.parse_args(argv)
     result = update_runtime_tables(
         args.cache,
         output_dir=args.output_dir,
         write=not args.dry_run,
         fill_missing_only=not args.allow_overwrite,
+        include_local_cache=args.include_local_cache,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

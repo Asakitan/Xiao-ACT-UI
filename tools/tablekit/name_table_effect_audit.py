@@ -35,6 +35,14 @@ _VOLATILE_KEYS = {
     "allLocalizationString_element_base",
 }
 _FALLBACK_RE = re.compile(r"^(技能|玩家技能|怪物技能|环境技能|场地标记|Boss技能|幻想技能|肉鸽词条|职业技能|剧情表演|虚拟体技能|Boss机制技能|怪物|Boss|地牢|Buff|玩家Buff|因子Buff|职业技能Buff|事件|机制|NPC|道具)#\d+$")
+_CACHE_FORBIDDEN_KEYS = {
+    "endpoints", "player", "sources", "context", "updated_at",
+    "first_seen", "last_seen", "seen_count", "player_uid", "player_uuid",
+    "scene_guid", "connect_guid", "last_context", "ip", "port",
+}
+_CACHE_FORBIDDEN_VALUE_RE = re.compile(
+    r"(?:\b\d{1,3}(?:\.\d{1,3}){3}\b|[0-9a-fA-F]{8}:\d+|StarResonanceDps/|resonance-logs-cn/)"
+)
 
 
 def _load_json(path: str) -> Any:
@@ -115,6 +123,27 @@ def _fallback_labels_in_cache(cache: Any) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _cache_privacy_violations(cache: Any) -> dict[str, Any]:
+    key_counts: Counter[str] = Counter()
+    value_hits: list[str] = []
+    if not isinstance(cache, Mapping):
+        return {"ok": True, "forbidden_key_counts": {}, "forbidden_value_samples": []}
+    for row in _iter_dicts(cache):
+        for key, value in row.items():
+            key_text = str(key)
+            if key_text in _CACHE_FORBIDDEN_KEYS:
+                key_counts[key_text] += 1
+            if isinstance(value, str) and _CACHE_FORBIDDEN_VALUE_RE.search(value):
+                if len(value_hits) < 16:
+                    value_hits.append(value)
+    ok = not key_counts and not value_hits
+    return {
+        "ok": ok,
+        "forbidden_key_counts": dict(sorted(key_counts.items())),
+        "forbidden_value_samples": value_hits,
+    }
+
+
 def _matched_counts(matched: Any) -> dict[str, Any]:
     rows = matched.get("rows") if isinstance(matched, Mapping) else []
     by_kind: Counter[str] = Counter()
@@ -178,6 +207,7 @@ def audit(full_input: str = _DEFAULT_FULL,
             "kind_counts": cache_kind_counts,
             "fallback_label_counts": _fallback_labels_in_cache(cache),
             "endpoint_count": len((cache.get("endpoints") or {}) if isinstance(cache, Mapping) else {}),
+            "privacy": _cache_privacy_violations(cache),
         },
         "runtime_tables": {
             "kind_counts": _runtime_table_counts(),
@@ -199,8 +229,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache-input", default=_DEFAULT_CACHE)
     parser.add_argument("--correspondence-input", default=_DEFAULT_CORRESPONDENCE)
     args = parser.parse_args(argv)
-    print(json.dumps(audit(args.full_input, args.matched_input, args.cache_input, args.correspondence_input), ensure_ascii=False, indent=2))
-    return 0
+    result = audit(args.full_input, args.matched_input, args.cache_input, args.correspondence_input)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    privacy = ((result.get("tcp_preparse_cache") or {}).get("privacy") or {})
+    return 0 if privacy.get("ok", True) else 1
 
 
 if __name__ == "__main__":

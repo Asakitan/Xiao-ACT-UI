@@ -50,6 +50,25 @@ def cpu_features() -> dict:
     return {"avx2": False, "sse42": False, "fallback": "python"}
 
 
+def backend_info() -> dict:
+    """Return JSON-safe diagnostics for the active memscan backend."""
+    features = dict(cpu_features() or {})
+    fallback = str(features.get("fallback") or "")
+    if _fast is None:
+        backend = "python"
+    elif fallback.startswith("cython"):
+        backend = fallback
+    else:
+        backend = "cython"
+    return {
+        "extension_loaded": _fast is not None,
+        "backend": backend,
+        "features": features,
+        "readonly_buffers_supported": False,
+        "bytes_copy_required": _fast is not None,
+    }
+
+
 def force_disable_avx2() -> None:
     if _fast is not None and hasattr(_fast, "force_disable_avx2"):
         _fast.force_disable_avx2()

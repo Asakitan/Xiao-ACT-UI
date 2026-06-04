@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from net.tcp_name_cache import build_index_from_live_rows, default_cache_path
+from net.tcp_name_cache import build_index_from_live_rows, sanitize_shared_cache, shared_cache_path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--output",
-        default=default_cache_path(),
+        default=shared_cache_path(),
         help="Path to write compact tcp_preparse_name_cache.json",
     )
     args = parser.parse_args(argv)
@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     with open(args.input, "r", encoding="utf-8") as f:
         rows_obj = json.load(f)
-    index = build_index_from_live_rows(rows_obj)
+    index = sanitize_shared_cache(build_index_from_live_rows(rows_obj))
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False, indent=2, sort_keys=True)

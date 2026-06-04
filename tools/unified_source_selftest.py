@@ -15,7 +15,7 @@ if ROOT not in sys.path:
 
 from mem_probe import unified_source
 from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider
-from mem_probe.il2cpp.mem_state_anchor import AnchorMemoryReader
+from mem_probe.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
 from mem_probe.process import MemoryRegion
 
 
@@ -203,6 +203,62 @@ class UnifiedSourceContractTests(unittest.TestCase):
         provider = MemSelfStateProvider(allow_static_fallback=False)
         provider._src = ExplodingSource()
         self.assertIsNone(provider._get_snapshot_nowait())
+
+    def test_provider_skips_weak_anchor_without_scanning(self) -> None:
+        class ExplodingReader:
+            def find_self(self, anchor):
+                raise AssertionError("weak anchor should not scan")
+
+        class ExplodingSource:
+            scan_in_progress = False
+
+            def get_self_snapshot_nowait(self):
+                raise AssertionError("static fallback should not be called")
+
+        provider = MemSelfStateProvider(
+            allow_static_fallback=False,
+            anchor_source=lambda: AnchorPack(uid=36668136),
+        )
+        provider._src = ExplodingSource()
+        provider._anchor_reader = ExplodingReader()
+
+        self.assertIsNone(provider._get_snapshot_nowait())
+        policy = provider.policy_status()
+        self.assertEqual(policy["provider_anchor_strength"], "weak")
+        self.assertEqual(policy["provider_anchor_skip_reason"], "weak_anchor_no_scan")
+        self.assertFalse(policy["provider_scan_in_progress"])
+
+    def test_auto_hybrid_policy_defaults_are_scan_safe(self) -> None:
+        with mock.patch.object(unified_source, "MemStateBridge", FakeMemStateBridge):
+            source = unified_source.UnifiedDataSource(
+                state_mgr=object(),
+                mode="hybrid",
+                settings={},
+            )
+        health = source.health()
+        self.assertFalse(health["policy"]["allow_static_fallback"])
+        self.assertEqual(health["policy"]["max_scan_regions_mb"], 1024)
+        self.assertFalse(health["policy"]["start_on_scene"])
+        self.assertTrue(health["policy"]["start_on_full_sync"])
+        self.assertFalse(health["policy"]["allow_full_heap_scan"])
+        self.assertIn("cy_memscan", health["policy"])
+
+    def test_auto_hybrid_zero_scan_cap_is_clamped_unless_explicitly_allowed(self) -> None:
+        with mock.patch.object(unified_source, "MemStateBridge", FakeMemStateBridge):
+            safe = unified_source.UnifiedDataSource(
+                state_mgr=object(),
+                mode="hybrid",
+                settings={"mem_max_scan_regions_mb": 0},
+            )
+            unsafe = unified_source.UnifiedDataSource(
+                state_mgr=object(),
+                mode="hybrid",
+                settings={"mem_max_scan_regions_mb": 0, "mem_allow_full_heap_scan": True},
+            )
+        self.assertEqual(safe.health()["policy"]["max_scan_regions_mb"], 1024)
+        self.assertFalse(safe.health()["policy"]["allow_full_heap_scan"])
+        self.assertEqual(unsafe.health()["policy"]["max_scan_regions_mb"], 0)
+        self.assertTrue(unsafe.health()["policy"]["allow_full_heap_scan"])
 
 
 if __name__ == "__main__":

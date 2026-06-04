@@ -42,7 +42,7 @@ from packet_parser import (PlayerData, MonsterData,
                            _SKILL_TO_PROFESSION,
                            _PROFESSION_PREFIX, _ALL_PROFESSION_PREFIXES)
 from net.packet_capture import PacketCapture, list_devices, auto_select_device
-from net.tcp_name_cache import TcpNameCache
+from net.tcp_name_cache import TcpNameCache, runtime_cache_path, shared_cache_path
 from tools.tablekit.name_tables import names as _NAME_RESOLVER
 from tools.tablekit.combat_preparse import (
     enrich_boss_event,
@@ -392,7 +392,7 @@ class PacketBridge:
         self._mem_source = None                  # UnifiedDataSource 实例 (lazy)
         self._last_name_resolver_reload_ts: float = 0.0
         try:
-            self._tcp_name_cache = TcpNameCache(on_save=self._on_tcp_name_cache_saved)
+            self._tcp_name_cache = TcpNameCache(path=runtime_cache_path(), on_save=self._on_tcp_name_cache_saved)
         except Exception as exc:
             logger.warning(f'[Bridge] tcp name cache unavailable: {exc}')
             self._tcp_name_cache = None
@@ -414,6 +414,9 @@ class PacketBridge:
         self._parser = None
         self._thread = None
         self._last_update_t: float = 0
+        self._last_packet_frame_t: float = 0.0
+        self._last_parser_progress_t: float = 0.0
+        self._last_parser_progress_sig: tuple = ()
         self._last_publish_t: float = 0      # 上次非 tick 推送时间
         self._last_save_t: float = 0          # 上次 settings 写盘时间
         self._lock = threading.Lock()
@@ -426,6 +429,8 @@ class PacketBridge:
         self._last_capture_restart_ts: float = 0.0
         self._last_capture_raw_seen: int = 0
         self._last_capture_raw_seen_ts: float = 0.0
+        self._last_capture_game_seen: int = 0
+        self._last_capture_game_seen_ts: float = 0.0
         self._identity_warn_logged: bool = False  # log once about missing name/level
         state = self._state_mgr.state
         self._identity_cache_available: bool = bool(
@@ -446,7 +451,8 @@ class PacketBridge:
             return
         self._last_name_resolver_reload_ts = now
         try:
-            update_runtime_tables(path)
+            if os.path.abspath(path) == os.path.abspath(shared_cache_path()):
+                update_runtime_tables(path)
             _NAME_RESOLVER.reload()
             logger.debug(f'[Bridge] refreshed runtime name tables after tcp name cache save: {path}')
         except Exception as exc:
@@ -588,6 +594,29 @@ class PacketBridge:
                 out["parser_adapter"] = self._parser_adapter.health()
             except Exception:
                 out["parser_adapter"] = {"alive": False}
+        cap = getattr(self, '_capture', None)
+        if cap is not None:
+            try:
+                cap_stats = cap.stats or {}
+            except Exception:
+                cap_stats = {}
+            try:
+                thread_alive = bool(cap._thread and cap._thread.is_alive())
+            except Exception:
+                thread_alive = False
+            out["capture"] = {
+                "server_identified": bool(getattr(cap, 'server_identified', False)),
+                "thread_alive": thread_alive,
+                "stats": dict(cap_stats),
+                "last_packet_frame_age_s": round(max(0.0, time.time() - self._last_packet_frame_t), 3) if self._last_packet_frame_t else -1,
+                "last_parser_progress_age_s": round(max(0.0, time.time() - self._last_parser_progress_t), 3) if self._last_parser_progress_t else -1,
+                "last_player_update_age_s": round(max(0.0, time.time() - self._last_update_t), 3) if self._last_update_t else -1,
+            }
+        if self._parser is not None:
+            try:
+                out["parser_stats"] = dict(getattr(self._parser, 'stats', {}) or {})
+            except Exception:
+                out["parser_stats"] = {}
         out["parser_adapter_selection"] = dict(self._parser_adapter_selection)
         return out
 
@@ -802,9 +831,13 @@ class PacketBridge:
                 self._cache_name('buff', buff_id, buff_name, source='tcp_boss_event', confidence='medium', context=context)
 
     def _is_mem_trigger_event(self, trigger: str, context: Any) -> bool:
-        if trigger in {'self_update_full_sync', 'dungeon_event'}:
-            return True
+        if trigger == 'self_update_full_sync':
+            return self._bool_setting('mem_start_on_full_sync', True)
+        if trigger == 'dungeon_event':
+            return self._bool_setting('mem_start_on_scene', False)
         if trigger != 'scene_change':
+            return False
+        if not self._bool_setting('mem_start_on_scene', False):
             return False
         if not isinstance(context, Mapping):
             return True
@@ -1117,6 +1150,7 @@ class PacketBridge:
             )
 
     def _process_live_packet_frame(self, frame: bytes, metadata: Mapping | None = None):
+        self._last_packet_frame_t = time.time()
         if metadata:
             self._last_packet_metadata = dict(metadata)
             self._observe_tcp_endpoint(metadata)
@@ -1129,9 +1163,33 @@ class PacketBridge:
         if not callable(process):
             return None
         result = process(frame)
+        self._mark_parser_progress()
         if not isinstance(adapter, StarResonanceParserAdapter):
             self._publish_plugin_parser_events(result)
         return result
+
+    def _mark_parser_progress(self) -> None:
+        parser = self._parser
+        if parser is None:
+            self._last_parser_progress_t = time.time()
+            return
+        try:
+            stats = getattr(parser, 'stats', {}) or {}
+            sig = (
+                int(stats.get('raw_frames') or 0),
+                int(stats.get('game_frames') or 0),
+                int(stats.get('damage_events') or 0),
+                int(stats.get('combat_damage_events') or 0),
+                int(stats.get('self_damage_events') or 0),
+                int(stats.get('unknown_message_types') or 0),
+                int(stats.get('zstd_failures') or 0),
+            )
+        except Exception:
+            sig = ()
+        if sig and sig == self._last_parser_progress_sig:
+            return
+        self._last_parser_progress_sig = sig
+        self._last_parser_progress_t = time.time()
 
     def _run_inner(self):
         """主运行流程 (实际逻辑)"""
@@ -1297,12 +1355,22 @@ class PacketBridge:
             raw = int(stats.get('raw_frames') or 0)
         except Exception:
             raw = 0
+        try:
+            game = int(stats.get('complete_game_frames') or 0)
+        except Exception:
+            game = 0
         last_raw = int(getattr(self, '_last_capture_raw_seen', 0) or 0)
         last_raw_ts = float(getattr(self, '_last_capture_raw_seen_ts', 0.0) or 0.0)
         if raw != last_raw:
             self._last_capture_raw_seen = raw
             self._last_capture_raw_seen_ts = now
             last_raw_ts = now
+        last_game = int(getattr(self, '_last_capture_game_seen', 0) or 0)
+        last_game_ts = float(getattr(self, '_last_capture_game_seen_ts', 0.0) or 0.0)
+        if game != last_game:
+            self._last_capture_game_seen = game
+            self._last_capture_game_seen_ts = now
+            last_game_ts = now
         thread_alive = False
         try:
             thread_alive = bool(cap._thread and cap._thread.is_alive())
@@ -1318,9 +1386,18 @@ class PacketBridge:
                 logger.warning(f'[Bridge] capture thread restart failed: {e}')
             return
         no_raw_for = now - last_raw_ts if last_raw_ts > 0 else idle
-        if idle >= 12.0:
+        no_game_for = now - last_game_ts if last_game_ts > 0 else idle
+        packet_frame_age = now - self._last_packet_frame_t if self._last_packet_frame_t else idle
+        if no_raw_for < 30.0 and no_game_for < 30.0 and packet_frame_age < 30.0:
+            logger.debug(
+                '[Bridge] player update idle %.1fs but packet path is active '
+                '(no_raw=%.1fs no_game=%.1fs frame_age=%.1fs); skip reconnect',
+                idle, no_raw_for, no_game_for, packet_frame_age,
+            )
+            return
+        if no_game_for >= 30.0 and raw > 0:
             try:
-                if cap.force_reconnect(f'bridge_idle_{idle:.0f}s'):
+                if cap.force_reconnect(f'no_game_frames_{no_game_for:.0f}s_player_idle_{idle:.0f}s'):
                     self._server_found_printed = False
             except Exception as e:
                 logger.warning(f'[Bridge] capture force_reconnect failed: {e}')

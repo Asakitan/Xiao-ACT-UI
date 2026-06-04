@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """Runtime TCP name correspondence cache.
 
-The cache records already decoded TCP/MEM facts (Chinese names, IDs and
-server endpoints) for pre-parse lookup and later diagnostics. It deliberately
-stores no raw packet payloads.
+The local runtime cache records already decoded TCP/MEM facts (Chinese names,
+IDs and server endpoints) for pre-parse lookup and later diagnostics. It
+deliberately stores no raw packet payloads.
+
+The checked-in shared cache is a different contract: it is a generalized
+ID-to-name bucket only, with local endpoints/player/session/source provenance
+removed before it is committed.
 """
 from __future__ import annotations
 
@@ -35,7 +39,13 @@ _PLAYER_KIND = "player"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SAO = os.path.dirname(_HERE)
-_DEFAULT_CACHE_PATH = os.path.join(_SAO, "assets", "name_tables", "tcp_preparse_name_cache.json")
+_NAME_TABLES = os.path.join(_SAO, "assets", "name_tables")
+_SHARED_CACHE_PATH = os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.json")
+_RUNTIME_CACHE_PATH = os.environ.get(
+    "SAO_TCP_PREPARSE_NAME_CACHE_LOCAL",
+    os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.local.json"),
+)
+_DEFAULT_CACHE_PATH = _RUNTIME_CACHE_PATH
 
 _LIVE_ID_SPACE_KIND = {
     "skill_id": "skill",
@@ -57,6 +67,7 @@ _FALLBACK_LABEL_PREFIXES = {
     "客户端表现技能", "交互玩法技能", "伙伴技能", "投射物技能", "被动/修饰技能", "测试技能", "系统技能",
     "Buff", "玩家Buff", "因子Buff", "职业技能Buff", "事件", "机制", "NPC", "道具",
 }
+_SHARED_TEXT_DENYLIST = {"login", "logout", "unknown", "none", "null"}
 
 
 def _semantic_cache_kind(kind: str, id_: Any) -> str:
@@ -92,6 +103,16 @@ def default_cache_path() -> str:
     return _DEFAULT_CACHE_PATH
 
 
+def shared_cache_path() -> str:
+    """Return the checked-in generalized cache path."""
+    return _SHARED_CACHE_PATH
+
+
+def runtime_cache_path() -> str:
+    """Return the ignored local runtime cache path."""
+    return _RUNTIME_CACHE_PATH
+
+
 def now_ts() -> float:
     return time.time()
 
@@ -120,6 +141,8 @@ def _port_from_endpoint(endpoint: str) -> int:
 def _clean_text(text: Any) -> str:
     value = str(text or "").strip()
     if not value:
+        return ""
+    if value.lower() in _SHARED_TEXT_DENYLIST:
         return ""
     if "#" in value and value.split("#", 1)[0] in _FALLBACK_LABEL_PREFIXES:
         return ""
@@ -176,10 +199,64 @@ def empty_snapshot() -> dict[str, Any]:
     }
 
 
+def empty_shared_snapshot() -> dict[str, Any]:
+    return {
+        "schema_version": _SCHEMA_VERSION,
+        "names": {"by_kind": {}},
+    }
+
+
+def sanitize_shared_cache(data: Any) -> dict[str, Any]:
+    """Strip local/session provenance from a cache before committing it.
+
+    Shared assets must be reusable across users.  Keep only semantic kind/id,
+    text, and optional confidence; discard endpoints, players, contexts,
+    timestamps, source paths, and every other local diagnostic field.
+    """
+    out = empty_shared_snapshot()
+    if isinstance(data, Mapping):
+        try:
+            out["schema_version"] = int(data.get("schema_version") or _SCHEMA_VERSION)
+        except Exception:
+            out["schema_version"] = _SCHEMA_VERSION
+        by_kind = ((data.get("names") or {}).get("by_kind") or {})
+    else:
+        by_kind = {}
+    if not isinstance(by_kind, Mapping):
+        return out
+    out_by_kind = out["names"]["by_kind"]
+    for kind, bucket in by_kind.items():
+        source_kind = str(kind or "").strip()
+        if source_kind == _PLAYER_KIND or not isinstance(bucket, Mapping):
+            continue
+        for key, entry in bucket.items():
+            iid = _coerce_int(key)
+            if iid <= 0:
+                continue
+            target_kind = _semantic_cache_kind(source_kind, iid)
+            if target_kind not in _GENERIC_KINDS:
+                continue
+            text = ""
+            confidence = ""
+            if isinstance(entry, str):
+                text = entry
+            elif isinstance(entry, Mapping):
+                text = str(entry.get("text") or entry.get("name") or entry.get("Name") or "")
+                confidence = str(entry.get("confidence") or "").strip().lower()
+            text = _clean_text(text)
+            if not text:
+                continue
+            clean_entry: dict[str, str] = {"text": text}
+            if confidence in _VALID_CONFIDENCE or confidence in {"static", "curated"}:
+                clean_entry["confidence"] = confidence
+            out_by_kind.setdefault(target_kind, {})[str(iid)] = clean_entry
+    return out
+
+
 def build_index_from_live_rows(rows_obj: Any, *, confidence: set[str] | None = None) -> dict[str, Any]:
     """Build a compact by-kind index from live_probe_act_matched_rows data."""
     accepted = confidence or {"high", "medium"}
-    out = empty_snapshot()
+    out = empty_shared_snapshot()
     rows = rows_obj.get("rows") if isinstance(rows_obj, Mapping) else rows_obj
     for row in rows or []:
         if not isinstance(row, Mapping):
@@ -201,12 +278,7 @@ def build_index_from_live_rows(rows_obj: Any, *, confidence: set[str] | None = N
         bucket[str(iid)] = {
             "text": text,
             "confidence": row_conf,
-            "sources": [str(match.get("source") or match.get("source_kind") or "live_probe")],
-            "endpoints": [],
-            "updated_at": _iso(),
-            "context": _stable_context_from_live_row(row, match, id_space),
         }
-    out["updated_at"] = _iso()
     return out
 
 
@@ -436,4 +508,8 @@ __all__ = [
     "build_index_from_live_rows",
     "default_cache_path",
     "empty_snapshot",
+    "empty_shared_snapshot",
+    "runtime_cache_path",
+    "sanitize_shared_cache",
+    "shared_cache_path",
 ]

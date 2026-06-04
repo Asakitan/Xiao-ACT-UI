@@ -24,6 +24,7 @@ LOCAL_HIDDENIMPORTS = [
     # Cython 加速器（裸名 import；.pyd 在根，由 CYTHON_ACCEL_BINARIES glob 收集 binaries）
     '_sao_cy_pixels',
     '_sao_cy_combat',
+    '_sao_cy_memscan',
     '_sao_cy_packet',
     '_sao_cy_skillfx',
     '_sao_cy_uihelpers',

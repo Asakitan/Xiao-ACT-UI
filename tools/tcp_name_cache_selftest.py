@@ -14,7 +14,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from net.tcp_name_cache import TcpNameCache, build_index_from_live_rows
+from net.tcp_name_cache import (
+    TcpNameCache,
+    build_index_from_live_rows,
+    runtime_cache_path,
+    sanitize_shared_cache,
+    shared_cache_path,
+)
 
 
 class TcpNameCacheTests(unittest.TestCase):
@@ -93,10 +99,49 @@ class TcpNameCacheTests(unittest.TestCase):
         dumped = json.dumps(entry, ensure_ascii=False)
         self.assertNotIn("string_obj", dumped)
         self.assertNotIn("table_element_base", dumped)
-        self.assertEqual(entry["context"]["allLocalizationString_index"], 123)
-        self.assertEqual(entry["context"]["anchor_status"], "text_aligned_pointer_table_fallback")
+        self.assertNotIn("context", entry)
+        self.assertNotIn("sources", entry)
+        self.assertNotIn("updated_at", entry)
         self.assertNotIn("skill", by_kind)
         self.assertNotIn("unknown", by_kind)
+
+    def test_default_runtime_cache_is_separate_from_shared_asset(self) -> None:
+        self.assertNotEqual(os.path.abspath(runtime_cache_path()), os.path.abspath(shared_cache_path()))
+        self.assertTrue(os.path.basename(runtime_cache_path()).endswith(".local.json"))
+
+    def test_sanitize_shared_cache_strips_local_and_provenance_fields(self) -> None:
+        dirty = {
+            "schema_version": 1,
+            "updated_at": "2026-06-04T21:23:23Z",
+            "endpoints": {"d239471c:2131": {"ip": "210.57.71.28", "seen_count": 3}},
+            "names": {
+                "by_kind": {
+                    "skill": {
+                        "2414": {
+                            "text": "神圣壁垒",
+                            "confidence": "high",
+                            "sources": ["StarResonanceDps/DataTools/Data/CN/BuffTable.json"],
+                            "endpoints": ["d239471c:2131"],
+                            "updated_at": "2026-06-04T21:23:23Z",
+                            "context": {"player_uid": 36668136, "player_uuid": 2403082961536},
+                        },
+                        "1": {"text": "login", "confidence": "medium"},
+                    },
+                    "player": {"36668136": {"text": "咲"}},
+                }
+            },
+        }
+        clean = sanitize_shared_cache(dirty)
+        dumped = json.dumps(clean, ensure_ascii=False)
+        retained_texts = []
+        for bucket in clean["names"]["by_kind"].values():
+            retained_texts.extend(str(entry.get("text") or "") for entry in bucket.values())
+        self.assertIn("神圣壁垒", retained_texts)
+        for forbidden in (
+            "endpoints", "player", "sources", "context", "updated_at", "seen_count",
+            "player_uid", "player_uuid", "210.57.71.28", "d239471c:2131", "StarResonanceDps/", "login",
+        ):
+            self.assertNotIn(forbidden, dumped)
 
     def test_mem_snapshot_updates_player_cache(self) -> None:
         cache = TcpNameCache(self.path, autosave_interval_s=0)
@@ -150,10 +195,30 @@ class TcpNameCacheTests(unittest.TestCase):
                 }, f, ensure_ascii=False)
             from tools.tablekit import name_tables
             with mock.patch.object(name_tables, "_SOURCES", {"skill": []}), \
-                 mock.patch.object(name_tables, "_TCP_PREPARSE_CACHE", path):
+                 mock.patch.object(name_tables, "_TCP_PREPARSE_CACHE", path), \
+                 mock.patch.object(name_tables, "_TCP_PREPARSE_LOCAL_CACHE", os.path.join(td, "missing.local.json")):
                 resolver = name_tables.NameResolver()
                 self.assertEqual(resolver.skill(2414), "神圣壁垒")
                 self.assertEqual(resolver.resolve("player", 36668136, default=""), "")
+
+    def test_name_resolver_merges_ignored_local_cache_text_only(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            shared = os.path.join(td, "shared.json")
+            local = os.path.join(td, "local.json")
+            with open(shared, "w", encoding="utf-8") as f:
+                json.dump({"names": {"by_kind": {"skill": {"2414": {"text": "神圣壁垒"}}}}}, f, ensure_ascii=False)
+            with open(local, "w", encoding="utf-8") as f:
+                json.dump({
+                    "endpoints": {"01020304:1234": {"ip": "1.2.3.4"}},
+                    "names": {"by_kind": {"skill": {"9999": {"text": "本地技能", "context": {"endpoint": "01020304:1234"}}}}},
+                }, f, ensure_ascii=False)
+            from tools.tablekit import name_tables
+            with mock.patch.object(name_tables, "_SOURCES", {"skill": []}), \
+                 mock.patch.object(name_tables, "_TCP_PREPARSE_CACHE", shared), \
+                 mock.patch.object(name_tables, "_TCP_PREPARSE_LOCAL_CACHE", local):
+                resolver = name_tables.NameResolver()
+                self.assertEqual(resolver.skill(2414), "神圣壁垒")
+                self.assertEqual(resolver.skill(9999), "本地技能")
 
     def test_runtime_name_table_assets_are_consumed_by_name_resolver(self) -> None:
         from tools.tablekit import name_tables

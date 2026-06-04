@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional
 
 from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
 from mem_probe.il2cpp.mem_self_state_provider import MemSelfStateProvider
+from mem_probe import cy_memscan as _cy_memscan
 
 StatusCallback = Callable[[str, str], None]
 SelfCallback = Callable[[dict], None]
@@ -286,7 +287,7 @@ class UnifiedDataSource:
                 context={
                     "source": "UnifiedDataSource",
                     "trigger": self._last_trigger,
-                    "deferred_start": bool(self._trigger_count),
+                    "deferred_start": bool(self._last_trigger and self._last_trigger != "start"),
                 },
             )
         except Exception:
@@ -303,13 +304,18 @@ class UnifiedDataSource:
         require_admin = self._bool_setting("mem_require_admin", False)
         admin_ok = (not require_admin) or self._is_windows_admin()
         auto_scan_enabled = self._bool_setting("mem_auto_scan_enabled", True)
-        max_scan_regions_mb = self._int_setting("mem_max_scan_regions_mb", 0)
+        scan_safe_mode = self.mode in ("auto", "hybrid")
+        allow_full_heap_scan = self._bool_setting("mem_allow_full_heap_scan", self.mode == "memory")
+        default_scan_cap_mb = 1024 if scan_safe_mode else 0
+        max_scan_regions_mb = self._int_setting("mem_max_scan_regions_mb", default_scan_cap_mb)
         if max_scan_regions_mb < 0:
             max_scan_regions_mb = 0
-        allow_static_fallback = self._bool_setting("mem_allow_static_fallback", True)
+        if scan_safe_mode and not allow_full_heap_scan and max_scan_regions_mb <= 0:
+            max_scan_regions_mb = default_scan_cap_mb
+        allow_static_fallback = self._bool_setting("mem_allow_static_fallback", self.mode == "memory")
         show_risk_warning = self._bool_setting("mem_show_risk_warning", True)
         defer_until_tcp_scene = self._bool_setting("mem_defer_until_tcp_scene", self.mode in ("auto", "hybrid"))
-        start_on_scene = self._bool_setting("mem_start_on_scene", True)
+        start_on_scene = self._bool_setting("mem_start_on_scene", False)
         start_on_full_sync = self._bool_setting("mem_start_on_full_sync", True)
         fallback_reason = ""
         if not auto_scan_enabled:
@@ -322,7 +328,9 @@ class UnifiedDataSource:
             "require_admin": bool(require_admin),
             "admin_ok": bool(admin_ok),
             "max_scan_regions_mb": int(max_scan_regions_mb),
+            "allow_full_heap_scan": bool(allow_full_heap_scan),
             "allow_static_fallback": bool(allow_static_fallback),
+            "cy_memscan": _cy_memscan.backend_info(),
             "show_risk_warning": bool(show_risk_warning),
             "defer_until_tcp_scene": bool(defer_until_tcp_scene),
             "start_on_scene": bool(start_on_scene),

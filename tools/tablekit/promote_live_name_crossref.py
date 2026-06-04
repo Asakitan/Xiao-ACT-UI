@@ -10,12 +10,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import tempfile
-import time
 from typing import Any, Mapping
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SAO = os.path.dirname(os.path.dirname(_HERE))
+if _SAO not in sys.path:
+    sys.path.insert(0, _SAO)
 _NAME_TABLES = os.path.join(_SAO, "assets", "name_tables")
 _DEFAULT_INPUT = os.path.join(_NAME_TABLES, "live_probe_id_candidates.json")
 _DEFAULT_CACHE = os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.json")
@@ -31,7 +33,6 @@ _ID_SPACE_KIND = {
     "scene_id": "dungeon",
     "boss_event_type": "boss_mechanic",
 }
-_ALLOWED_CONTEXT_KEYS = ("source", "source_kind", "field", "match", "id_space", "tcp_status", "alias_of", "alias_reason")
 _CONFIDENCE_RANK = {"static": 50, "curated": 45, "mem": 40, "tcp": 35, "high": 30, "medium": 20, "low": 10}
 _FALLBACK_PREFIXES = (
     "技能#", "玩家技能#", "怪物技能#", "环境技能#",
@@ -50,10 +51,6 @@ def _semantic_kind(id_space: str, id_: Any) -> str:
         return classify_id(id_space, id_) or fallback
     except Exception:
         return fallback
-
-
-def _iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def _load_json(path: str) -> Any:
@@ -93,7 +90,7 @@ def _rank(confidence: str) -> int:
 
 
 def _empty_cache() -> dict[str, Any]:
-    return {"schema_version": 1, "updated_at": "", "endpoints": {}, "names": {"by_kind": {}}}
+    return {"schema_version": 1, "names": {"by_kind": {}}}
 
 
 def _candidate_rows(obj: Any):
@@ -140,12 +137,13 @@ def promote_crossref(input_path: str = _DEFAULT_INPUT, cache_path: str = _DEFAUL
                      confidence: set[str] | None = None, exact_only: bool = True,
                      fill_missing_only: bool = True) -> dict[str, Any]:
     accepted = confidence or {"high"}
+    from net.tcp_name_cache import sanitize_shared_cache
+
     crossref = _load_json(input_path)
-    cache = _load_json(cache_path)
+    cache = sanitize_shared_cache(_load_json(cache_path))
     if not isinstance(cache, dict):
         cache = _empty_cache()
     cache.setdefault("schema_version", 1)
-    cache.setdefault("endpoints", {})
     by_kind = cache.setdefault("names", {}).setdefault("by_kind", {})
     stats: dict[str, Any] = {
         "input": os.path.normpath(input_path),
@@ -183,13 +181,9 @@ def promote_crossref(input_path: str = _DEFAULT_INPUT, cache_path: str = _DEFAUL
             bucket[iid] = {
                 "text": text,
                 "confidence": str(match.get("confidence") or "high"),
-                "sources": [str(match.get("source") or match.get("source_kind") or "live_crossref")],
-                "endpoints": [],
-                "updated_at": _iso(),
-                "context": {key: match.get(key) for key in _ALLOWED_CONTEXT_KEYS if match.get(key) is not None},
             }
             stats["promoted"][kind] = stats["promoted"].get(kind, 0) + 1
-    cache["updated_at"] = _iso()
+    cache = sanitize_shared_cache(cache)
     if write:
         _write_json_atomic(cache_path, cache)
     return stats

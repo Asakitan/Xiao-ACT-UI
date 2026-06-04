@@ -36,6 +36,7 @@ if _ROOT not in sys.path:
 
 from mem_probe.il2cpp.static_dps_source import StaticDpsSource, SelfSnapshot
 from mem_probe.il2cpp.mem_state_anchor import AnchorMemoryReader, AnchorPack
+from mem_probe import cy_memscan as _cy_memscan
 
 
 class MemSelfStateProvider:
@@ -103,6 +104,8 @@ class MemSelfStateProvider:
         self._last_identity: tuple = (0, 0, 0, 0)  # (level, season_exp, season_medal, fight_point)
         self._last_stamina: tuple = (-1, -1)         # (energy_current, energy_total)
         self._tick_no: int = 0
+        self._last_anchor_strength: str = "none"
+        self._last_anchor_skip_reason: str = ""
 
     # ───────── public ─────────
 
@@ -216,36 +219,42 @@ class MemSelfStateProvider:
             try:
                 anchor = self.anchor_source() or AnchorPack()
                 if int(getattr(anchor, 'uid', 0) or 0) > 0:
-                    resolved = self._anchor_reader.find_self(anchor)
-                    if resolved:
-                        data = self._anchor_reader.read_self_snapshot(resolved)
-                        uid = int(data.get('uid') or 0)
-                        cur = int(data.get('cur_hp') or 0)
-                        mx = int(data.get('max_hp') or 0)
-                        if uid > 0 and mx > 0:
-                            snap = SelfSnapshot(
-                                uid=uid,
-                                cur_hp=cur,
-                                max_hp=mx,
-                                char_serialize_obj=resolved.char_serialize_obj,
-                                user_fight_attr_obj=resolved.user_fight_attr_obj,
-                                fetched_at=time.time(),
-                            )
-                            snap.is_dead = int(data.get('is_dead') or 0)
-                            snap.origin_energy = float(data.get('origin_energy') or 0.0)
-                            snap.profession_id = int(data.get('profession_id') or data.get('init_profession_id') or 0)
-                            snap.char_name = str(data.get('name') or '')
-                            snap.level_base = int(data.get('level_base') or 0)
-                            snap.season_exp = int(data.get('season_exp') or 0)
-                            snap.fight_point = int(data.get('fight_point') or 0)
-                            snap.energy_limit = int(data.get('energy_limit') or 0)
-                            snap.extra_energy_limit = int(data.get('extra_energy_limit') or 0)
-                            try:
-                                self._src.fill_extended(snap)
-                            except Exception:
-                                traceback.print_exc()
-                            self._src._last_snapshot = snap
-                            return snap
+                    if not anchor.is_strong():
+                        self._last_anchor_strength = "weak"
+                        self._last_anchor_skip_reason = "weak_anchor_no_scan"
+                    else:
+                        self._last_anchor_strength = "strong"
+                        self._last_anchor_skip_reason = ""
+                        resolved = self._anchor_reader.find_self(anchor)
+                        if resolved:
+                            data = self._anchor_reader.read_self_snapshot(resolved)
+                            uid = int(data.get('uid') or 0)
+                            cur = int(data.get('cur_hp') or 0)
+                            mx = int(data.get('max_hp') or 0)
+                            if uid > 0 and mx > 0:
+                                snap = SelfSnapshot(
+                                    uid=uid,
+                                    cur_hp=cur,
+                                    max_hp=mx,
+                                    char_serialize_obj=resolved.char_serialize_obj,
+                                    user_fight_attr_obj=resolved.user_fight_attr_obj,
+                                    fetched_at=time.time(),
+                                )
+                                snap.is_dead = int(data.get('is_dead') or 0)
+                                snap.origin_energy = float(data.get('origin_energy') or 0.0)
+                                snap.profession_id = int(data.get('profession_id') or data.get('init_profession_id') or 0)
+                                snap.char_name = str(data.get('name') or '')
+                                snap.level_base = int(data.get('level_base') or 0)
+                                snap.season_exp = int(data.get('season_exp') or 0)
+                                snap.fight_point = int(data.get('fight_point') or 0)
+                                snap.energy_limit = int(data.get('energy_limit') or 0)
+                                snap.extra_energy_limit = int(data.get('extra_energy_limit') or 0)
+                                try:
+                                    self._src.fill_extended(snap)
+                                except Exception:
+                                    traceback.print_exc()
+                                self._src._last_snapshot = snap
+                                return snap
             except Exception:
                 traceback.print_exc()
         if not self.allow_static_fallback:
@@ -341,11 +350,22 @@ class MemSelfStateProvider:
                 limited = bool(getattr(reader, "last_region_scan_limited", False))
             except Exception:
                 pass
+        scan_in_progress = False
+        if self._src is not None:
+            try:
+                scan_in_progress = bool(getattr(self._src, "scan_in_progress", False))
+            except Exception:
+                scan_in_progress = False
         return {
             "provider_auto_scan_enabled": bool(self.auto_scan_enabled),
             "provider_poll_interval_s": round(float(self.poll_interval), 3),
             "provider_allow_static_fallback": bool(self.allow_static_fallback),
             "provider_max_scan_regions_mb": int(self.max_scan_regions_mb),
+            "provider_full_heap_scan": int(self.max_scan_regions_mb) <= 0,
+            "provider_cy_memscan": _cy_memscan.backend_info(),
+            "provider_anchor_strength": self._last_anchor_strength,
+            "provider_anchor_skip_reason": self._last_anchor_skip_reason,
+            "provider_scan_in_progress": scan_in_progress,
             "provider_region_scan_mb": region_mb,
             "provider_region_scan_limited": limited,
         }
