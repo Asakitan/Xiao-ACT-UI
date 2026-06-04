@@ -129,10 +129,12 @@ def _anchored_runtime(row_runtime: Dict[str, Any], row_index: int,
     if not isinstance(global_start, int):
         row_runtime["anchor_status"] = "runtime_heap_pointer_table_only"
         return row_runtime
-    all_loc = (((anchor.get("anchor") or {}).get("allLocalizationString_") or {}))
+    anchor_info = anchor.get("anchor") or {}
+    anchor_status = str(anchor_info.get("status") or "resolved_static_singleton_string_pool")
+    all_loc = ((anchor_info.get("allLocalizationString_") or {}))
     row_runtime.update({
-        "anchor_status": "resolved_static_singleton_string_pool",
-        "static_anchor_chain": ((anchor.get("anchor") or {}).get("chain")),
+        "anchor_status": anchor_status,
+        "static_anchor_chain": anchor_info.get("chain"),
         "allLocalizationString_array_obj": all_loc.get("array_obj"),
         "allLocalizationString_element_base": all_loc.get("element_base"),
         "allLocalizationString_index": global_start + row_index,
@@ -174,7 +176,7 @@ def export_act_rows(pointer_tables_input: str, output: str, *, anchor_input: Opt
                 "string_klass": string_info.get("klass"),
                 "string_klass_name": "System.String",
             }, int(row.get("index") or 0), projection, anchor)
-            if runtime.get("anchor_status") == "resolved_static_singleton_string_pool":
+            if runtime.get("anchor_status") not in {"runtime_heap_pointer_table_only", "unresolved"}:
                 anchored_row_count += 1
             rows.append({
                 "text": text,
@@ -213,7 +215,7 @@ def export_act_rows(pointer_tables_input: str, output: str, *, anchor_input: Opt
             "primary_id_space_counts": dict(sorted(by_id_space.items())),
             "anchored_row_count": anchored_row_count,
             "persistent_anchor_status": (
-                "resolved_static_singleton_string_pool"
+                str(((anchor or {}).get("anchor") or {}).get("status") or "resolved_static_singleton_string_pool")
                 if anchored_row_count else "unresolved"
             ),
         },

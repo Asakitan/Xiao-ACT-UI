@@ -2,24 +2,23 @@
   "source": "live_name_owner_refs",
   "input": "assets/name_tables/live_probe_id_candidates.json",
   "process": "star.exe",
-  "pid": 33148,
+  "pid": 20500,
   "note": "Read-only pointer reference scan for live Il2CppString objects. Pointer locations are runtime-only evidence; owner class names require a current script.json/bundle for this game build.",
   "summary": {
-    "target_count": 4,
-    "total_ptr_locations": 5,
+    "target_count": 3,
+    "total_ptr_locations": 4,
     "ptr_locations_by_text": {
       "圣环守护": 1,
       "光盾回复流": 2,
-      "神圣壁垒": 1,
-      "防护回复流": 1
+      "神圣壁垒": 1
     }
   },
   "targets": [
     {
       "text": "圣环守护",
       "runtime": {
-        "obj": "0x4466CC510",
-        "chars": "0x4466CC524",
+        "obj": "0x447847810",
+        "chars": "0x447847824",
         "klass": "0x30252490",
         "klass_name": "System.String",
         "anchor_status": "runtime_heap_address_only"
@@ -69,252 +68,253 @@
       ],
       "reference_scan": {
         "ptr_location_count": 1,
-        "scanned_bytes": 13114970112,
-        "seconds": 17.433,
+        "scanned_bytes": 7598493696,
+        "seconds": 7.871,
         "ptr_locations": [
           {
-            "addr": "0x4468361A0",
+            "addr": "0x4479DF1A0",
             "where": "heap"
           }
         ],
         "ptr_contexts": [
           {
-            "ptr_location": "0x4468361A0",
+            "ptr_location": "0x4479DF1A0",
             "qwords": [
               {
-                "slot_addr": "0x446836140",
+                "slot_addr": "0x4479DF140",
                 "slot_delta": -96,
-                "value": "0x4466CC750",
+                "value": "0x447847A50",
                 "as_string": "极意神圣之击"
               },
               {
-                "slot_addr": "0x446836148",
+                "slot_addr": "0x4479DF148",
                 "slot_delta": -88,
-                "value": "0x4466CC720",
+                "value": "0x447847A20",
                 "as_string": "魔法守卫"
               },
               {
-                "slot_addr": "0x446836150",
+                "slot_addr": "0x4479DF150",
                 "slot_delta": -80,
-                "value": "0x4466CC6F0",
+                "value": "0x4478479F0",
                 "as_string": "极意征伐"
               },
               {
-                "slot_addr": "0x446836158",
+                "slot_addr": "0x4479DF158",
                 "slot_delta": -72,
-                "value": "0x4466CC6C0",
+                "value": "0x4478479C0",
                 "as_string": "光之暴击"
               },
               {
-                "slot_addr": "0x446836160",
+                "slot_addr": "0x4479DF160",
                 "slot_delta": -64,
-                "value": "0x4466CC690",
+                "value": "0x447847990",
                 "as_string": "逆境强化"
               },
               {
-                "slot_addr": "0x446836168",
+                "slot_addr": "0x4479DF168",
                 "slot_delta": -56,
-                "value": "0x4466CC660",
+                "value": "0x447847960",
                 "as_string": "广域征伐"
               },
               {
-                "slot_addr": "0x446836170",
+                "slot_addr": "0x4479DF170",
                 "slot_delta": -48,
-                "value": "0x4466CC630",
+                "value": "0x447847930",
                 "as_string": "悍勇无畏"
               },
               {
-                "slot_addr": "0x446836178",
+                "slot_addr": "0x4479DF178",
                 "slot_delta": -40,
-                "value": "0x4466CC600",
+                "value": "0x447847900",
                 "as_string": "光芒核心"
               },
               {
-                "slot_addr": "0x446836180",
+                "slot_addr": "0x4479DF180",
                 "slot_delta": -32,
-                "value": "0x4466CC5D0",
+                "value": "0x4478478D0",
                 "as_string": "征伐追击"
               },
               {
-                "slot_addr": "0x446836188",
+                "slot_addr": "0x4479DF188",
                 "slot_delta": -24,
-                "value": "0x4466CC5A0",
+                "value": "0x4478478A0",
                 "as_string": "决断之刃"
               },
               {
-                "slot_addr": "0x446836190",
+                "slot_addr": "0x4479DF190",
                 "slot_delta": -16,
-                "value": "0x4466CC570",
+                "value": "0x447847870",
                 "as_string": "冷酷加速"
               },
               {
-                "slot_addr": "0x446836198",
+                "slot_addr": "0x4479DF198",
                 "slot_delta": -8,
-                "value": "0x4466CC540",
+                "value": "0x447847840",
                 "as_string": "圣印强化"
               },
               {
-                "slot_addr": "0x4468361A0",
+                "slot_addr": "0x4479DF1A0",
                 "slot_delta": 0,
-                "value": "0x4466CC510",
+                "value": "0x447847810",
                 "as_string": "圣环守护"
               },
               {
-                "slot_addr": "0x4468361A8",
+                "slot_addr": "0x4479DF1A8",
                 "slot_delta": 8,
-                "value": "0x4466CC4E0",
+                "value": "0x4478477E0",
                 "as_string": "裁决精进"
               },
               {
-                "slot_addr": "0x4468361B0",
+                "slot_addr": "0x4479DF1B0",
                 "slot_delta": 16,
-                "value": "0x4466CC4B0",
+                "value": "0x4478477B0",
                 "as_string": "圣印追击"
               },
               {
-                "slot_addr": "0x4468361B8",
+                "slot_addr": "0x4479DF1B8",
                 "slot_delta": 24,
-                "value": "0x4466CC480",
+                "value": "0x447847780",
                 "as_string": "溢愈光壁"
               },
               {
-                "slot_addr": "0x4468361C0",
+                "slot_addr": "0x4479DF1C0",
                 "slot_delta": 32,
-                "value": "0x7FCBD820",
+                "value": "0x7FC238C0",
                 "as_string": "光愈"
               },
               {
-                "slot_addr": "0x4468361C8",
+                "slot_addr": "0x4479DF1C8",
                 "slot_delta": 40,
-                "value": "0x4466CC450",
+                "value": "0x447847750",
                 "as_string": "决心速回"
               },
               {
-                "slot_addr": "0x4468361D0",
+                "slot_addr": "0x4479DF1D0",
                 "slot_delta": 48,
-                "value": "0x7FCBD800",
+                "value": "0x7FC238A0",
                 "as_string": "光晕"
               },
               {
-                "slot_addr": "0x4468361D8",
+                "slot_addr": "0x4479DF1D8",
                 "slot_delta": 56,
-                "value": "0x4466CC420",
+                "value": "0x447847720",
                 "as_string": "弦域扩张"
               },
               {
-                "slot_addr": "0x4468361E0",
+                "slot_addr": "0x4479DF1E0",
                 "slot_delta": 64,
-                "value": "0x4466CC3F0",
+                "value": "0x4478476F0",
                 "as_string": "炽热迸发"
               },
               {
-                "slot_addr": "0x4468361E8",
+                "slot_addr": "0x4479DF1E8",
                 "slot_delta": 72,
-                "value": "0x4466CC3C0",
+                "value": "0x4478476C0",
                 "as_string": "智力转换"
               },
               {
-                "slot_addr": "0x4468361F0",
+                "slot_addr": "0x4479DF1F0",
                 "slot_delta": 80,
-                "value": "0x4466CC390",
+                "value": "0x447847690",
                 "as_string": "魔力升华"
               },
               {
-                "slot_addr": "0x4468361F8",
+                "slot_addr": "0x4479DF1F8",
                 "slot_delta": 88,
-                "value": "0x4466CC360",
+                "value": "0x447847660",
                 "as_string": "鸣奏·热力核心"
               },
               {
-                "slot_addr": "0x446836200",
+                "slot_addr": "0x4479DF200",
                 "slot_delta": 96,
-                "value": "0x4466CC330",
+                "value": "0x447847630",
                 "as_string": "炎爆追击"
               },
               {
-                "slot_addr": "0x446836208",
+                "slot_addr": "0x4479DF208",
                 "slot_delta": 104,
-                "value": "0x4466CC300",
+                "value": "0x447847600",
                 "as_string": "炎爆追击二式"
               },
               {
-                "slot_addr": "0x446836210",
+                "slot_addr": "0x4479DF210",
                 "slot_delta": 112,
-                "value": "0x4466CC2D0",
+                "value": "0x4478475D0",
                 "as_string": "狂音流"
               },
               {
-                "slot_addr": "0x446836218",
+                "slot_addr": "0x4479DF218",
                 "slot_delta": 120,
-                "value": "0x4466CC2A0",
+                "value": "0x4478475A0",
                 "as_string": "幸运音浪"
               },
               {
-                "slot_addr": "0x446836220",
+                "slot_addr": "0x4479DF220",
                 "slot_delta": 128,
-                "value": "0x4466CC270",
+                "value": "0x447847570",
                 "as_string": "三重狂想"
               },
               {
-                "slot_addr": "0x446836228",
+                "slot_addr": "0x4479DF228",
                 "slot_delta": 136,
-                "value": "0x7FCBD7E0",
+                "value": "0x7FC23880",
                 "as_string": "断章"
               },
               {
-                "slot_addr": "0x446836230",
+                "slot_addr": "0x4479DF230",
                 "slot_delta": 144,
-                "value": "0x4466CC240",
+                "value": "0x447847540",
                 "as_string": "音浪烈火"
               },
               {
-                "slot_addr": "0x446836238",
+                "slot_addr": "0x4479DF238",
                 "slot_delta": 152,
-                "value": "0x4466CC210",
+                "value": "0x447847510",
                 "as_string": "愈疗音符"
               },
               {
-                "slot_addr": "0x446836240",
+                "slot_addr": "0x4479DF240",
                 "slot_delta": 160,
-                "value": "0x4466CC1E0",
+                "value": "0x4478474E0",
                 "as_string": "炽焰治愈"
               },
               {
-                "slot_addr": "0x446836248",
+                "slot_addr": "0x4479DF248",
                 "slot_delta": 168,
-                "value": "0x7FCBD7C0",
+                "value": "0x7FC23860",
                 "as_string": "协奏"
               },
               {
-                "slot_addr": "0x446836250",
+                "slot_addr": "0x4479DF250",
                 "slot_delta": 176,
-                "value": "0x7FCBD7A0",
+                "value": "0x7FC23840",
                 "as_string": "重启"
               },
               {
-                "slot_addr": "0x446836258",
+                "slot_addr": "0x4479DF258",
                 "slot_delta": 184,
-                "value": "0x4466CC1B0",
+                "value": "0x4478474B0",
                 "as_string": "协奏流"
               },
               {
-                "slot_addr": "0x446836260",
+                "slot_addr": "0x4479DF260",
                 "slot_delta": 192,
-                "value": "0x4466CC180",
+                "value": "0x447847480",
                 "as_string": "华彩章节充能"
               }
             ],
             "array_guesses": []
           }
         ],
-        "owner_status": "ptr_locations_only_no_current_script_json"
+        "owner_status": "ptr_locations_only_no_current_script_json",
+        "scan_scope": "private_readable"
       }
     },
     {
       "text": "光盾回复流",
       "runtime": {
-        "obj": "0x4466CCC30",
-        "chars": "0x4466CCC44",
+        "obj": "0x447847F30",
+        "chars": "0x447847F44",
         "klass": "0x30252490",
         "klass_name": "System.String",
         "anchor_status": "runtime_heap_address_only"
@@ -356,466 +356,467 @@
       ],
       "reference_scan": {
         "ptr_location_count": 2,
-        "scanned_bytes": 12988256256,
-        "seconds": 15.941,
+        "scanned_bytes": 7598518272,
+        "seconds": 7.458,
         "ptr_locations": [
           {
-            "addr": "0x446836058",
+            "addr": "0x4479DF058",
             "where": "heap"
           },
           {
-            "addr": "0x141BAB7368",
+            "addr": "0x147E36BF28",
             "where": "heap"
           }
         ],
         "ptr_contexts": [
           {
-            "ptr_location": "0x446836058",
+            "ptr_location": "0x4479DF058",
             "qwords": [
               {
-                "slot_addr": "0x446835FF8",
+                "slot_addr": "0x4479DEFF8",
                 "slot_delta": -96,
-                "value": "0x4466CCE10",
+                "value": "0x7FB7B120",
                 "as_string": "力量转换"
               },
               {
-                "slot_addr": "0x446836000",
+                "slot_addr": "0x4479DF000",
                 "slot_delta": -88,
-                "value": "0x4466CCDE0",
+                "value": "0x7FB7B0F0",
                 "as_string": "断罪之光"
               },
               {
-                "slot_addr": "0x446836008",
+                "slot_addr": "0x4479DF008",
                 "slot_delta": -80,
-                "value": "0x4466CCDB0",
+                "value": "0x7FB7B0C0",
                 "as_string": "防护回复流"
               },
               {
-                "slot_addr": "0x446836010",
+                "slot_addr": "0x4479DF010",
                 "slot_delta": -72,
-                "value": "0x7FCBD8C0",
+                "value": "0x7FC23960",
                 "as_string": "神谕"
               },
               {
-                "slot_addr": "0x446836018",
+                "slot_addr": "0x4479DF018",
                 "slot_delta": -64,
-                "value": "0x4466CCD80",
+                "value": "0x7FB7B090",
                 "as_string": "裁决启示"
               },
               {
-                "slot_addr": "0x446836020",
+                "slot_addr": "0x4479DF020",
                 "slot_delta": -56,
-                "value": "0x4466CCD50",
+                "value": "0x7FB7B060",
                 "as_string": "圣环护卫"
               },
               {
-                "slot_addr": "0x446836028",
+                "slot_addr": "0x4479DF028",
                 "slot_delta": -48,
-                "value": "0x7FCBD8A0",
+                "value": "0x7FC23940",
                 "as_string": "光护"
               },
               {
-                "slot_addr": "0x446836030",
+                "slot_addr": "0x4479DF030",
                 "slot_delta": -40,
-                "value": "0x4466CCD20",
+                "value": "0x7FB7B030",
                 "as_string": "圣光守卫赞歌"
               },
               {
-                "slot_addr": "0x446836038",
+                "slot_addr": "0x4479DF038",
                 "slot_delta": -32,
-                "value": "0x4466CCCF0",
+                "value": "0x7FB7B000",
                 "as_string": "无畏之盾"
               },
               {
-                "slot_addr": "0x446836040",
+                "slot_addr": "0x4479DF040",
                 "slot_delta": -24,
-                "value": "0x4466CCCC0",
+                "value": "0x447847FC0",
                 "as_string": "圣光守卫惩戒"
               },
               {
-                "slot_addr": "0x446836048",
+                "slot_addr": "0x4479DF048",
                 "slot_delta": -16,
-                "value": "0x4466CCC90",
+                "value": "0x447847F90",
                 "as_string": "光明圣剑"
               },
               {
-                "slot_addr": "0x446836050",
+                "slot_addr": "0x4479DF050",
                 "slot_delta": -8,
-                "value": "0x4466CCC60",
+                "value": "0x447847F60",
                 "as_string": "神圣壁垒"
               },
               {
-                "slot_addr": "0x446836058",
+                "slot_addr": "0x4479DF058",
                 "slot_delta": 0,
-                "value": "0x4466CCC30",
+                "value": "0x447847F30",
                 "as_string": "光盾回复流"
               },
               {
-                "slot_addr": "0x446836060",
+                "slot_addr": "0x4479DF060",
                 "slot_delta": 8,
-                "value": "0x7FCBD880",
+                "value": "0x7FC23920",
                 "as_string": "光障"
               },
               {
-                "slot_addr": "0x446836068",
+                "slot_addr": "0x4479DF068",
                 "slot_delta": 16,
-                "value": "0x4466CCC00",
+                "value": "0x447847F00",
                 "as_string": "光铸屏障的升华"
               },
               {
-                "slot_addr": "0x446836070",
+                "slot_addr": "0x4479DF070",
                 "slot_delta": 24,
-                "value": "0x4466CCBD0",
+                "value": "0x447847ED0",
                 "as_string": "圣环咏叹"
               },
               {
-                "slot_addr": "0x446836078",
+                "slot_addr": "0x4479DF078",
                 "slot_delta": 32,
-                "value": "0x7FCBD860",
+                "value": "0x7FC23900",
                 "as_string": "圣击"
               },
               {
-                "slot_addr": "0x446836080",
+                "slot_addr": "0x4479DF080",
                 "slot_delta": 40,
-                "value": "0x4466CCBA0",
+                "value": "0x447847EA0",
                 "as_string": "神圣光辉"
               },
               {
-                "slot_addr": "0x446836088",
+                "slot_addr": "0x4479DF088",
                 "slot_delta": 48,
-                "value": "0x4466CCB70",
+                "value": "0x447847E70",
                 "as_string": "决心斩击"
               },
               {
-                "slot_addr": "0x446836090",
+                "slot_addr": "0x4479DF090",
                 "slot_delta": 56,
-                "value": "0x4466CCB40",
+                "value": "0x447847E40",
                 "as_string": "光铸驱动"
               },
               {
-                "slot_addr": "0x446836098",
+                "slot_addr": "0x4479DF098",
                 "slot_delta": 64,
-                "value": "0x4466CCB10",
+                "value": "0x447847E10",
                 "as_string": "冷酷回溯"
               },
               {
-                "slot_addr": "0x4468360A0",
+                "slot_addr": "0x4479DF0A0",
                 "slot_delta": 72,
-                "value": "0x4466CCAE0",
+                "value": "0x447847DE0",
                 "as_string": "圣环激荡"
               },
               {
-                "slot_addr": "0x4468360A8",
+                "slot_addr": "0x4479DF0A8",
                 "slot_delta": 80,
-                "value": "0x4466CCAB0",
+                "value": "0x447847DB0",
                 "as_string": "裁决追击"
               },
               {
-                "slot_addr": "0x4468360B0",
+                "slot_addr": "0x4479DF0B0",
                 "slot_delta": 88,
-                "value": "0x4466CCA80",
+                "value": "0x447847D80",
                 "as_string": "圣环祝福"
               },
               {
-                "slot_addr": "0x4468360B8",
+                "slot_addr": "0x4479DF0B8",
                 "slot_delta": 96,
-                "value": "0x4466CCA50",
+                "value": "0x447847D50",
                 "as_string": "光铸平衡"
               },
               {
-                "slot_addr": "0x4468360C0",
+                "slot_addr": "0x4479DF0C0",
                 "slot_delta": 104,
-                "value": "0x4466CCA20",
+                "value": "0x447847D20",
                 "as_string": "光铸刚毅"
               },
               {
-                "slot_addr": "0x4468360C8",
+                "slot_addr": "0x4479DF0C8",
                 "slot_delta": 112,
-                "value": "0x4466CC9F0",
+                "value": "0x447847CF0",
                 "as_string": "光能援护"
               },
               {
-                "slot_addr": "0x4468360D0",
+                "slot_addr": "0x4479DF0D0",
                 "slot_delta": 120,
-                "value": "0x4466CC9C0",
+                "value": "0x447847CC0",
                 "as_string": "生命强化"
               },
               {
-                "slot_addr": "0x4468360D8",
+                "slot_addr": "0x4479DF0D8",
                 "slot_delta": 128,
-                "value": "0x4466CC990",
+                "value": "0x447847C90",
                 "as_string": "断罪时效"
               },
               {
-                "slot_addr": "0x4468360E0",
+                "slot_addr": "0x4479DF0E0",
                 "slot_delta": 136,
-                "value": "0x7FCBD840",
+                "value": "0x7FC238E0",
                 "as_string": "剑舞"
               },
               {
-                "slot_addr": "0x4468360E8",
+                "slot_addr": "0x4479DF0E8",
                 "slot_delta": 144,
-                "value": "0x4466CC960",
+                "value": "0x447847C60",
                 "as_string": "持盾冲击"
               },
               {
-                "slot_addr": "0x4468360F0",
+                "slot_addr": "0x4479DF0F0",
                 "slot_delta": 152,
-                "value": "0x4466CC930",
+                "value": "0x447847C30",
                 "as_string": "清算炎盾"
               },
               {
-                "slot_addr": "0x4468360F8",
+                "slot_addr": "0x4479DF0F8",
                 "slot_delta": 160,
-                "value": "0x4466CC900",
+                "value": "0x447847C00",
                 "as_string": "圣光时效"
               },
               {
-                "slot_addr": "0x446836100",
+                "slot_addr": "0x4479DF100",
                 "slot_delta": 168,
-                "value": "0x4466CC8D0",
+                "value": "0x447847BD0",
                 "as_string": "圣光召唤"
               },
               {
-                "slot_addr": "0x446836108",
+                "slot_addr": "0x4479DF108",
                 "slot_delta": 176,
-                "value": "0x4466CC8A0",
+                "value": "0x447847BA0",
                 "as_string": "光击连锁"
               },
               {
-                "slot_addr": "0x446836110",
+                "slot_addr": "0x4479DF110",
                 "slot_delta": 184,
-                "value": "0x4466CC870",
+                "value": "0x447847B70",
                 "as_string": "清算爆炎"
               },
               {
-                "slot_addr": "0x446836118",
+                "slot_addr": "0x4479DF118",
                 "slot_delta": 192,
-                "value": "0x4466CC840",
+                "value": "0x447847B40",
                 "as_string": "圣体治愈"
               }
             ],
             "array_guesses": []
           },
           {
-            "ptr_location": "0x141BAB7368",
+            "ptr_location": "0x147E36BF28",
             "qwords": [
               {
-                "slot_addr": "0x141BAB7308",
+                "slot_addr": "0x147E36BEC8",
                 "slot_delta": -96,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7310",
+                "slot_addr": "0x147E36BED0",
                 "slot_delta": -88,
-                "value": "0x7FF98A176370"
+                "value": "0x7FF902996370"
               },
               {
-                "slot_addr": "0x141BAB7318",
+                "slot_addr": "0x147E36BED8",
                 "slot_delta": -80,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7320",
+                "slot_addr": "0x147E36BEE0",
                 "slot_delta": -72,
-                "value": "0x30"
+                "value": "0x40"
               },
               {
-                "slot_addr": "0x141BAB7328",
+                "slot_addr": "0x147E36BEE8",
                 "slot_delta": -64,
-                "value": "0x7FF989714720"
+                "value": "0x7FF901F34720"
               },
               {
-                "slot_addr": "0x141BAB7330",
+                "slot_addr": "0x147E36BEF0",
                 "slot_delta": -56,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7338",
+                "slot_addr": "0x147E36BEF8",
                 "slot_delta": -48,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7340",
+                "slot_addr": "0x147E36BF00",
                 "slot_delta": -40,
                 "value": "0x31863648"
               },
               {
-                "slot_addr": "0x141BAB7348",
+                "slot_addr": "0x147E36BF08",
                 "slot_delta": -32,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7350",
+                "slot_addr": "0x147E36BF10",
                 "slot_delta": -24,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7358",
+                "slot_addr": "0x147E36BF18",
                 "slot_delta": -16,
                 "value": "0x2"
               },
               {
-                "slot_addr": "0x141BAB7360",
+                "slot_addr": "0x147E36BF20",
                 "slot_delta": -8,
-                "value": "0x44C7E4BD0",
+                "value": "0x448E12C00",
                 "as_string": "职业二阶"
               },
               {
-                "slot_addr": "0x141BAB7368",
+                "slot_addr": "0x147E36BF28",
                 "slot_delta": 0,
-                "value": "0x4466CCC30",
+                "value": "0x447847F30",
                 "as_string": "光盾回复流"
               },
               {
-                "slot_addr": "0x141BAB7370",
+                "slot_addr": "0x147E36BF30",
                 "slot_delta": 8,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7378",
+                "slot_addr": "0x147E36BF38",
                 "slot_delta": 16,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7380",
+                "slot_addr": "0x147E36BF40",
                 "slot_delta": 24,
-                "value": "0x14FA160630"
+                "value": "0xFFFFFFEB3AA81F9F"
               },
               {
-                "slot_addr": "0x141BAB7388",
+                "slot_addr": "0x147E36BF48",
                 "slot_delta": 32,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7390",
+                "slot_addr": "0x147E36BF50",
                 "slot_delta": 40,
-                "value": "0x7FF98A176370"
+                "value": "0x7FF902996370"
               },
               {
-                "slot_addr": "0x141BAB7398",
+                "slot_addr": "0x147E36BF58",
                 "slot_delta": 48,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB73A0",
+                "slot_addr": "0x147E36BF60",
                 "slot_delta": 56,
-                "value": "0x30"
+                "value": "0x60"
               },
               {
-                "slot_addr": "0x141BAB73A8",
+                "slot_addr": "0x147E36BF68",
                 "slot_delta": 64,
-                "value": "0x7FF989714720"
+                "value": "0x7FF901F34720"
               },
               {
-                "slot_addr": "0x141BAB73B0",
+                "slot_addr": "0x147E36BF70",
                 "slot_delta": 72,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB73B8",
+                "slot_addr": "0x147E36BF78",
                 "slot_delta": 80,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB73C0",
+                "slot_addr": "0x147E36BF80",
                 "slot_delta": 88,
-                "value": "0x14FA160690"
+                "value": "0xFFFFFFEB3AA81F3F"
               },
               {
-                "slot_addr": "0x141BAB73C8",
+                "slot_addr": "0x147E36BF88",
                 "slot_delta": 96,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB73D0",
+                "slot_addr": "0x147E36BF90",
                 "slot_delta": 104,
-                "value": "0x7FF98A176370"
+                "value": "0x7FF902996370"
               },
               {
-                "slot_addr": "0x141BAB73D8",
+                "slot_addr": "0x147E36BF98",
                 "slot_delta": 112,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB73E0",
+                "slot_addr": "0x147E36BFA0",
                 "slot_delta": 120,
-                "value": "0x30"
+                "value": "0x60"
               },
               {
-                "slot_addr": "0x141BAB73E8",
+                "slot_addr": "0x147E36BFA8",
                 "slot_delta": 128,
-                "value": "0x7FF989714720"
+                "value": "0x7FF901F34720"
               },
               {
-                "slot_addr": "0x141BAB73F0",
+                "slot_addr": "0x147E36BFB0",
                 "slot_delta": 136,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB73F8",
+                "slot_addr": "0x147E36BFB8",
                 "slot_delta": 144,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7400",
+                "slot_addr": "0x147E36BFC0",
                 "slot_delta": 152,
-                "value": "0x14FA1606F0"
+                "value": "0xFFFFFFEB3AA81EDF"
               },
               {
-                "slot_addr": "0x141BAB7408",
+                "slot_addr": "0x147E36BFC8",
                 "slot_delta": 160,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7410",
+                "slot_addr": "0x147E36BFD0",
                 "slot_delta": 168,
-                "value": "0x7FF98A176370"
+                "value": "0x7FF902996370"
               },
               {
-                "slot_addr": "0x141BAB7418",
+                "slot_addr": "0x147E36BFD8",
                 "slot_delta": 176,
                 "value": "0x0"
               },
               {
-                "slot_addr": "0x141BAB7420",
+                "slot_addr": "0x147E36BFE0",
                 "slot_delta": 184,
-                "value": "0x30"
+                "value": "0x60"
               },
               {
-                "slot_addr": "0x141BAB7428",
+                "slot_addr": "0x147E36BFE8",
                 "slot_delta": 192,
-                "value": "0x7FF989714720"
+                "value": "0x7FF901F34720"
               }
             ],
             "array_guesses": [
               {
-                "array_obj": "0x141BAB7340",
+                "array_obj": "0x147E36BF00",
                 "array_klass": "0x31863648",
                 "array_klass_name": "System.String[]",
                 "length": 2,
-                "element_base": "0x141BAB7360",
+                "element_base": "0x147E36BF20",
                 "element_index_at_ptr_location": 1
               },
               {
-                "array_obj": "0x141BAB7308",
+                "array_obj": "0x147E36BEC8",
                 "array_klass": null,
                 "array_klass_name": null,
-                "length": 48,
-                "element_base": "0x141BAB7328",
+                "length": 64,
+                "element_base": "0x147E36BEE8",
                 "element_index_at_ptr_location": 8
               }
             ]
           }
         ],
-        "owner_status": "ptr_locations_only_no_current_script_json"
+        "owner_status": "ptr_locations_only_no_current_script_json",
+        "scan_scope": "private_readable"
       }
     },
     {
       "text": "神圣壁垒",
       "runtime": {
-        "obj": "0x4466CCC60",
-        "chars": "0x4466CCC74",
+        "obj": "0x447847F60",
+        "chars": "0x447847F74",
         "klass": "0x30252490",
         "klass_name": "System.String",
         "anchor_status": "runtime_heap_address_only"
@@ -889,548 +890,246 @@
       ],
       "reference_scan": {
         "ptr_location_count": 1,
-        "scanned_bytes": 13073154048,
-        "seconds": 16.224,
+        "scanned_bytes": 7598493696,
+        "seconds": 7.42,
         "ptr_locations": [
           {
-            "addr": "0x446836050",
+            "addr": "0x4479DF050",
             "where": "heap"
           }
         ],
         "ptr_contexts": [
           {
-            "ptr_location": "0x446836050",
+            "ptr_location": "0x4479DF050",
             "qwords": [
               {
-                "slot_addr": "0x446835FF0",
+                "slot_addr": "0x4479DEFF0",
                 "slot_delta": -96,
-                "value": "0x4466CCE40",
+                "value": "0x7FB7B150",
                 "as_string": "急速圣令"
               },
               {
-                "slot_addr": "0x446835FF8",
+                "slot_addr": "0x4479DEFF8",
                 "slot_delta": -88,
-                "value": "0x4466CCE10",
+                "value": "0x7FB7B120",
                 "as_string": "力量转换"
               },
               {
-                "slot_addr": "0x446836000",
+                "slot_addr": "0x4479DF000",
                 "slot_delta": -80,
-                "value": "0x4466CCDE0",
+                "value": "0x7FB7B0F0",
                 "as_string": "断罪之光"
               },
               {
-                "slot_addr": "0x446836008",
+                "slot_addr": "0x4479DF008",
                 "slot_delta": -72,
-                "value": "0x4466CCDB0",
+                "value": "0x7FB7B0C0",
                 "as_string": "防护回复流"
               },
               {
-                "slot_addr": "0x446836010",
+                "slot_addr": "0x4479DF010",
                 "slot_delta": -64,
-                "value": "0x7FCBD8C0",
+                "value": "0x7FC23960",
                 "as_string": "神谕"
               },
               {
-                "slot_addr": "0x446836018",
+                "slot_addr": "0x4479DF018",
                 "slot_delta": -56,
-                "value": "0x4466CCD80",
+                "value": "0x7FB7B090",
                 "as_string": "裁决启示"
               },
               {
-                "slot_addr": "0x446836020",
+                "slot_addr": "0x4479DF020",
                 "slot_delta": -48,
-                "value": "0x4466CCD50",
+                "value": "0x7FB7B060",
                 "as_string": "圣环护卫"
               },
               {
-                "slot_addr": "0x446836028",
+                "slot_addr": "0x4479DF028",
                 "slot_delta": -40,
-                "value": "0x7FCBD8A0",
+                "value": "0x7FC23940",
                 "as_string": "光护"
               },
               {
-                "slot_addr": "0x446836030",
+                "slot_addr": "0x4479DF030",
                 "slot_delta": -32,
-                "value": "0x4466CCD20",
+                "value": "0x7FB7B030",
                 "as_string": "圣光守卫赞歌"
               },
               {
-                "slot_addr": "0x446836038",
+                "slot_addr": "0x4479DF038",
                 "slot_delta": -24,
-                "value": "0x4466CCCF0",
+                "value": "0x7FB7B000",
                 "as_string": "无畏之盾"
               },
               {
-                "slot_addr": "0x446836040",
+                "slot_addr": "0x4479DF040",
                 "slot_delta": -16,
-                "value": "0x4466CCCC0",
+                "value": "0x447847FC0",
                 "as_string": "圣光守卫惩戒"
               },
               {
-                "slot_addr": "0x446836048",
+                "slot_addr": "0x4479DF048",
                 "slot_delta": -8,
-                "value": "0x4466CCC90",
+                "value": "0x447847F90",
                 "as_string": "光明圣剑"
               },
               {
-                "slot_addr": "0x446836050",
+                "slot_addr": "0x4479DF050",
                 "slot_delta": 0,
-                "value": "0x4466CCC60",
+                "value": "0x447847F60",
                 "as_string": "神圣壁垒"
               },
               {
-                "slot_addr": "0x446836058",
+                "slot_addr": "0x4479DF058",
                 "slot_delta": 8,
-                "value": "0x4466CCC30",
+                "value": "0x447847F30",
                 "as_string": "光盾回复流"
               },
               {
-                "slot_addr": "0x446836060",
+                "slot_addr": "0x4479DF060",
                 "slot_delta": 16,
-                "value": "0x7FCBD880",
+                "value": "0x7FC23920",
                 "as_string": "光障"
               },
               {
-                "slot_addr": "0x446836068",
+                "slot_addr": "0x4479DF068",
                 "slot_delta": 24,
-                "value": "0x4466CCC00",
+                "value": "0x447847F00",
                 "as_string": "光铸屏障的升华"
               },
               {
-                "slot_addr": "0x446836070",
+                "slot_addr": "0x4479DF070",
                 "slot_delta": 32,
-                "value": "0x4466CCBD0",
+                "value": "0x447847ED0",
                 "as_string": "圣环咏叹"
               },
               {
-                "slot_addr": "0x446836078",
+                "slot_addr": "0x4479DF078",
                 "slot_delta": 40,
-                "value": "0x7FCBD860",
+                "value": "0x7FC23900",
                 "as_string": "圣击"
               },
               {
-                "slot_addr": "0x446836080",
+                "slot_addr": "0x4479DF080",
                 "slot_delta": 48,
-                "value": "0x4466CCBA0",
+                "value": "0x447847EA0",
                 "as_string": "神圣光辉"
               },
               {
-                "slot_addr": "0x446836088",
+                "slot_addr": "0x4479DF088",
                 "slot_delta": 56,
-                "value": "0x4466CCB70",
+                "value": "0x447847E70",
                 "as_string": "决心斩击"
               },
               {
-                "slot_addr": "0x446836090",
+                "slot_addr": "0x4479DF090",
                 "slot_delta": 64,
-                "value": "0x4466CCB40",
+                "value": "0x447847E40",
                 "as_string": "光铸驱动"
               },
               {
-                "slot_addr": "0x446836098",
+                "slot_addr": "0x4479DF098",
                 "slot_delta": 72,
-                "value": "0x4466CCB10",
+                "value": "0x447847E10",
                 "as_string": "冷酷回溯"
               },
               {
-                "slot_addr": "0x4468360A0",
+                "slot_addr": "0x4479DF0A0",
                 "slot_delta": 80,
-                "value": "0x4466CCAE0",
+                "value": "0x447847DE0",
                 "as_string": "圣环激荡"
               },
               {
-                "slot_addr": "0x4468360A8",
+                "slot_addr": "0x4479DF0A8",
                 "slot_delta": 88,
-                "value": "0x4466CCAB0",
+                "value": "0x447847DB0",
                 "as_string": "裁决追击"
               },
               {
-                "slot_addr": "0x4468360B0",
+                "slot_addr": "0x4479DF0B0",
                 "slot_delta": 96,
-                "value": "0x4466CCA80",
+                "value": "0x447847D80",
                 "as_string": "圣环祝福"
               },
               {
-                "slot_addr": "0x4468360B8",
+                "slot_addr": "0x4479DF0B8",
                 "slot_delta": 104,
-                "value": "0x4466CCA50",
+                "value": "0x447847D50",
                 "as_string": "光铸平衡"
               },
               {
-                "slot_addr": "0x4468360C0",
+                "slot_addr": "0x4479DF0C0",
                 "slot_delta": 112,
-                "value": "0x4466CCA20",
+                "value": "0x447847D20",
                 "as_string": "光铸刚毅"
               },
               {
-                "slot_addr": "0x4468360C8",
+                "slot_addr": "0x4479DF0C8",
                 "slot_delta": 120,
-                "value": "0x4466CC9F0",
+                "value": "0x447847CF0",
                 "as_string": "光能援护"
               },
               {
-                "slot_addr": "0x4468360D0",
+                "slot_addr": "0x4479DF0D0",
                 "slot_delta": 128,
-                "value": "0x4466CC9C0",
+                "value": "0x447847CC0",
                 "as_string": "生命强化"
               },
               {
-                "slot_addr": "0x4468360D8",
+                "slot_addr": "0x4479DF0D8",
                 "slot_delta": 136,
-                "value": "0x4466CC990",
+                "value": "0x447847C90",
                 "as_string": "断罪时效"
               },
               {
-                "slot_addr": "0x4468360E0",
+                "slot_addr": "0x4479DF0E0",
                 "slot_delta": 144,
-                "value": "0x7FCBD840",
+                "value": "0x7FC238E0",
                 "as_string": "剑舞"
               },
               {
-                "slot_addr": "0x4468360E8",
+                "slot_addr": "0x4479DF0E8",
                 "slot_delta": 152,
-                "value": "0x4466CC960",
+                "value": "0x447847C60",
                 "as_string": "持盾冲击"
               },
               {
-                "slot_addr": "0x4468360F0",
+                "slot_addr": "0x4479DF0F0",
                 "slot_delta": 160,
-                "value": "0x4466CC930",
+                "value": "0x447847C30",
                 "as_string": "清算炎盾"
               },
               {
-                "slot_addr": "0x4468360F8",
+                "slot_addr": "0x4479DF0F8",
                 "slot_delta": 168,
-                "value": "0x4466CC900",
+                "value": "0x447847C00",
                 "as_string": "圣光时效"
               },
               {
-                "slot_addr": "0x446836100",
+                "slot_addr": "0x4479DF100",
                 "slot_delta": 176,
-                "value": "0x4466CC8D0",
+                "value": "0x447847BD0",
                 "as_string": "圣光召唤"
               },
               {
-                "slot_addr": "0x446836108",
+                "slot_addr": "0x4479DF108",
                 "slot_delta": 184,
-                "value": "0x4466CC8A0",
+                "value": "0x447847BA0",
                 "as_string": "光击连锁"
               },
               {
-                "slot_addr": "0x446836110",
+                "slot_addr": "0x4479DF110",
                 "slot_delta": 192,
-                "value": "0x4466CC870",
+                "value": "0x447847B70",
                 "as_string": "清算爆炎"
               }
             ],
             "array_guesses": []
           }
         ],
-        "owner_status": "ptr_locations_only_no_current_script_json"
-      }
-    },
-    {
-      "text": "防护回复流",
-      "runtime": {
-        "obj": "0x4466CCDB0",
-        "chars": "0x4466CCDC4",
-        "klass": "0x30252490",
-        "klass_name": "System.String",
-        "anchor_status": "runtime_heap_address_only"
-      },
-      "classification": "tcp_alias",
-      "match_ids": [
-        {
-          "id_space": "buff_id",
-          "id": 2206090,
-          "source_kind": "resonance-logs-cn.BuffName",
-          "confidence": "medium",
-          "match": "alias_from_compound_name",
-          "alias_of": "盾击流-防护回复流"
-        },
-        {
-          "id_space": "buff_id",
-          "id": 2206091,
-          "source_kind": "resonance-logs-cn.BuffName",
-          "confidence": "medium",
-          "match": "alias_from_compound_name",
-          "alias_of": "5秒内-防护回复流"
-        },
-        {
-          "id_space": "buff_id",
-          "id": 2206092,
-          "source_kind": "resonance-logs-cn.BuffName",
-          "confidence": "medium",
-          "match": "alias_from_compound_name",
-          "alias_of": "嘲讽-防护回复流"
-        },
-        {
-          "id_space": "sub_profession_skill_id",
-          "id": 2405,
-          "source_kind": "tcp_flow_alias",
-          "confidence": "medium",
-          "match": "alias",
-          "alias_of": null
-        },
-        {
-          "id_space": "temp_attr_id",
-          "id": 92037,
-          "source_kind": "resonance-logs-cn.TempAttrTable",
-          "confidence": "low",
-          "match": "alias_from_compound_name",
-          "alias_of": "防护回复流词条刷新概率提高"
-        },
-        {
-          "id_space": "temp_attr_id",
-          "id": 92037,
-          "source_kind": "resonance-logs-cn.TempAttrTable",
-          "confidence": "low",
-          "match": "alias_from_compound_name",
-          "alias_of": "防护回复流词条刷新概率提高"
-        }
-      ],
-      "reference_scan": {
-        "ptr_location_count": 1,
-        "scanned_bytes": 13210615808,
-        "seconds": 16.787,
-        "ptr_locations": [
-          {
-            "addr": "0x446836008",
-            "where": "heap"
-          }
-        ],
-        "ptr_contexts": [
-          {
-            "ptr_location": "0x446836008",
-            "qwords": [
-              {
-                "slot_addr": "0x446835FA8",
-                "slot_delta": -96,
-                "value": "0x4466CCFC0",
-                "as_string": "聚能之力"
-              },
-              {
-                "slot_addr": "0x446835FB0",
-                "slot_delta": -88,
-                "value": "0x4466CCF90",
-                "as_string": "钢喙之击"
-              },
-              {
-                "slot_addr": "0x446835FB8",
-                "slot_delta": -80,
-                "value": "0x4466CCF60",
-                "as_string": "钢制喙聚集"
-              },
-              {
-                "slot_addr": "0x446835FC0",
-                "slot_delta": -72,
-                "value": "0x4466CCF30",
-                "as_string": "连环爆炸"
-              },
-              {
-                "slot_addr": "0x446835FC8",
-                "slot_delta": -64,
-                "value": "0x4466CCF00",
-                "as_string": "光铸身躯"
-              },
-              {
-                "slot_addr": "0x446835FD0",
-                "slot_delta": -56,
-                "value": "0x7FCBD8E0",
-                "as_string": "断罪"
-              },
-              {
-                "slot_addr": "0x446835FD8",
-                "slot_delta": -48,
-                "value": "0x4466CCED0",
-                "as_string": "圣令的恩惠"
-              },
-              {
-                "slot_addr": "0x446835FE0",
-                "slot_delta": -40,
-                "value": "0x4466CCEA0",
-                "as_string": "裁决之环"
-              },
-              {
-                "slot_addr": "0x446835FE8",
-                "slot_delta": -32,
-                "value": "0x4466CCE70",
-                "as_string": "光铸延续"
-              },
-              {
-                "slot_addr": "0x446835FF0",
-                "slot_delta": -24,
-                "value": "0x4466CCE40",
-                "as_string": "急速圣令"
-              },
-              {
-                "slot_addr": "0x446835FF8",
-                "slot_delta": -16,
-                "value": "0x4466CCE10",
-                "as_string": "力量转换"
-              },
-              {
-                "slot_addr": "0x446836000",
-                "slot_delta": -8,
-                "value": "0x4466CCDE0",
-                "as_string": "断罪之光"
-              },
-              {
-                "slot_addr": "0x446836008",
-                "slot_delta": 0,
-                "value": "0x4466CCDB0",
-                "as_string": "防护回复流"
-              },
-              {
-                "slot_addr": "0x446836010",
-                "slot_delta": 8,
-                "value": "0x7FCBD8C0",
-                "as_string": "神谕"
-              },
-              {
-                "slot_addr": "0x446836018",
-                "slot_delta": 16,
-                "value": "0x4466CCD80",
-                "as_string": "裁决启示"
-              },
-              {
-                "slot_addr": "0x446836020",
-                "slot_delta": 24,
-                "value": "0x4466CCD50",
-                "as_string": "圣环护卫"
-              },
-              {
-                "slot_addr": "0x446836028",
-                "slot_delta": 32,
-                "value": "0x7FCBD8A0",
-                "as_string": "光护"
-              },
-              {
-                "slot_addr": "0x446836030",
-                "slot_delta": 40,
-                "value": "0x4466CCD20",
-                "as_string": "圣光守卫赞歌"
-              },
-              {
-                "slot_addr": "0x446836038",
-                "slot_delta": 48,
-                "value": "0x4466CCCF0",
-                "as_string": "无畏之盾"
-              },
-              {
-                "slot_addr": "0x446836040",
-                "slot_delta": 56,
-                "value": "0x4466CCCC0",
-                "as_string": "圣光守卫惩戒"
-              },
-              {
-                "slot_addr": "0x446836048",
-                "slot_delta": 64,
-                "value": "0x4466CCC90",
-                "as_string": "光明圣剑"
-              },
-              {
-                "slot_addr": "0x446836050",
-                "slot_delta": 72,
-                "value": "0x4466CCC60",
-                "as_string": "神圣壁垒"
-              },
-              {
-                "slot_addr": "0x446836058",
-                "slot_delta": 80,
-                "value": "0x4466CCC30",
-                "as_string": "光盾回复流"
-              },
-              {
-                "slot_addr": "0x446836060",
-                "slot_delta": 88,
-                "value": "0x7FCBD880",
-                "as_string": "光障"
-              },
-              {
-                "slot_addr": "0x446836068",
-                "slot_delta": 96,
-                "value": "0x4466CCC00",
-                "as_string": "光铸屏障的升华"
-              },
-              {
-                "slot_addr": "0x446836070",
-                "slot_delta": 104,
-                "value": "0x4466CCBD0",
-                "as_string": "圣环咏叹"
-              },
-              {
-                "slot_addr": "0x446836078",
-                "slot_delta": 112,
-                "value": "0x7FCBD860",
-                "as_string": "圣击"
-              },
-              {
-                "slot_addr": "0x446836080",
-                "slot_delta": 120,
-                "value": "0x4466CCBA0",
-                "as_string": "神圣光辉"
-              },
-              {
-                "slot_addr": "0x446836088",
-                "slot_delta": 128,
-                "value": "0x4466CCB70",
-                "as_string": "决心斩击"
-              },
-              {
-                "slot_addr": "0x446836090",
-                "slot_delta": 136,
-                "value": "0x4466CCB40",
-                "as_string": "光铸驱动"
-              },
-              {
-                "slot_addr": "0x446836098",
-                "slot_delta": 144,
-                "value": "0x4466CCB10",
-                "as_string": "冷酷回溯"
-              },
-              {
-                "slot_addr": "0x4468360A0",
-                "slot_delta": 152,
-                "value": "0x4466CCAE0",
-                "as_string": "圣环激荡"
-              },
-              {
-                "slot_addr": "0x4468360A8",
-                "slot_delta": 160,
-                "value": "0x4466CCAB0",
-                "as_string": "裁决追击"
-              },
-              {
-                "slot_addr": "0x4468360B0",
-                "slot_delta": 168,
-                "value": "0x4466CCA80",
-                "as_string": "圣环祝福"
-              },
-              {
-                "slot_addr": "0x4468360B8",
-                "slot_delta": 176,
-                "value": "0x4466CCA50",
-                "as_string": "光铸平衡"
-              },
-              {
-                "slot_addr": "0x4468360C0",
-                "slot_delta": 184,
-                "value": "0x4466CCA20",
-                "as_string": "光铸刚毅"
-              },
-              {
-                "slot_addr": "0x4468360C8",
-                "slot_delta": 192,
-                "value": "0x4466CC9F0",
-                "as_string": "光能援护"
-              }
-            ],
-            "array_guesses": []
-          }
-        ],
-        "owner_status": "ptr_locations_only_no_current_script_json"
+        "owner_status": "ptr_locations_only_no_current_script_json",
+        "scan_scope": "private_readable"
       }
     }
   ]
