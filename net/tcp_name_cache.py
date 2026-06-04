@@ -26,6 +26,8 @@ _GENERIC_KINDS = {
     "skill", "player_skill", "monster_skill", "environment_skill",
     "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
     "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill",
+    "client_effect_skill", "interaction_skill", "companion_skill", "projectile_skill",
+    "passive_skill", "test_skill", "system_skill",
     "monster", "boss", "buff", "player_buff", "factor_buff", "profession_skill_buff", "event",
     "dungeon", "scene", "boss_mechanic", "npc", "item", "sub_profession",
 }
@@ -52,8 +54,19 @@ _FALLBACK_LABEL_PREFIXES = {
     "技能", "玩家技能", "怪物技能", "环境技能",
     "场地标记", "Boss技能", "幻想技能", "肉鸽词条", "职业技能",
     "剧情表演", "虚拟体技能", "Boss机制技能", "怪物", "Boss", "地牢",
+    "客户端表现技能", "交互玩法技能", "伙伴技能", "投射物技能", "被动/修饰技能", "测试技能", "系统技能",
     "Buff", "玩家Buff", "因子Buff", "职业技能Buff", "事件", "机制", "NPC", "道具",
 }
+
+
+def _semantic_cache_kind(kind: str, id_: Any) -> str:
+    if kind in {"skill", "buff"}:
+        try:
+            from tools.tablekit.name_table_classifier import classify_id
+            return classify_id(kind, id_) or kind
+        except Exception:
+            return kind
+    return kind
 
 
 def _semantic_live_kind(id_space: str, id_: Any) -> str:
@@ -297,10 +310,11 @@ class TcpNameCache:
                      confidence: str = "medium", endpoint: str = "",
                      context: Mapping[str, Any] | None = None) -> None:
         kind = str(kind or "").strip()
-        if kind not in _GENERIC_KINDS:
-            return
         iid = _coerce_int(id_)
         if iid <= 0:
+            return
+        kind = _semantic_cache_kind(kind, iid)
+        if kind not in _GENERIC_KINDS:
             return
         text_value = _clean_text(text)
         if not text_value:

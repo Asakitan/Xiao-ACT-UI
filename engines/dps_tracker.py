@@ -103,6 +103,8 @@ def _skill_semantic_fact_cached(skill_id: int) -> Tuple[Tuple[str, Any], ...]:
         'player_skill', 'monster_skill', 'environment_skill',
         'field_marker', 'boss_skill', 'ultimate_skill', 'roguelike_affix',
         'scripted_skill', 'virtual_skill', 'boss_mechanic_skill',
+        'client_effect_skill', 'interaction_skill', 'companion_skill', 'projectile_skill',
+        'passive_skill', 'test_skill', 'system_skill',
     }:
         role = category
     fact = {
@@ -119,6 +121,13 @@ def _skill_semantic_fact_cached(skill_id: int) -> Tuple[Tuple[str, Any], ...]:
         'is_scripted_skill': category == 'scripted_skill',
         'is_virtual_skill': category == 'virtual_skill',
         'is_roguelike_affix': category == 'roguelike_affix',
+        'is_client_effect_skill': category == 'client_effect_skill',
+        'is_interaction_skill': category == 'interaction_skill',
+        'is_companion_skill': category == 'companion_skill',
+        'is_projectile_skill': category == 'projectile_skill',
+        'is_passive_skill': category == 'passive_skill',
+        'is_test_skill': category == 'test_skill',
+        'is_system_skill': category == 'system_skill',
     }
     return tuple(fact.items())
 
@@ -133,12 +142,13 @@ def _semantic_base_skill_id(skill_id: int) -> int:
     if sid <= 0:
         return 0
     try:
-        from tools.tablekit.name_table_classifier import classify_skill_id, skill_fallback_names, skill_table
-        if classify_skill_id(sid) != 'skill' or sid in skill_table() or sid in skill_fallback_names():
+        from tools.tablekit.name_table_classifier import aoyi_skill_names, damage_attr_names, skill_fallback_names, skill_table
+        known_skill_ids = set(skill_table()) | set(skill_fallback_names()) | set(aoyi_skill_names()) | set(damage_attr_names())
+        if sid in known_skill_ids:
             return sid
         digits = str(sid)
         candidates = []
-        for base_id in set(skill_table()) | set(skill_fallback_names()):
+        for base_id in known_skill_ids:
             if base_id <= 0:
                 continue
             base_text = str(base_id)

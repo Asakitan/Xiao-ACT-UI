@@ -36,6 +36,13 @@ PROFESSION_SKILL_KIND = "profession_skill"
 SCRIPTED_SKILL_KIND = "scripted_skill"
 VIRTUAL_SKILL_KIND = "virtual_skill"
 BOSS_MECHANIC_SKILL_KIND = "boss_mechanic_skill"
+CLIENT_EFFECT_SKILL_KIND = "client_effect_skill"
+INTERACTION_SKILL_KIND = "interaction_skill"
+COMPANION_SKILL_KIND = "companion_skill"
+PROJECTILE_SKILL_KIND = "projectile_skill"
+PASSIVE_SKILL_KIND = "passive_skill"
+TEST_SKILL_KIND = "test_skill"
+SYSTEM_SKILL_KIND = "system_skill"
 BUFF_KIND = "buff"
 PLAYER_BUFF_KIND = "player_buff"
 FACTOR_BUFF_KIND = "factor_buff"
@@ -49,16 +56,23 @@ _SCRIPTED_RE = re.compile(r"(剧情|表演|演出|锁定追击|空降|过场|脚
 _VIRTUAL_RE = re.compile(r"(虚拟体|虚拟|dummy|Dummy|DUMMY|VFX|vfx|假子弹|假体)")
 _ULTIMATE_RE = re.compile(r"(奥义|幻想|终极|绝技|大招|ULT|ult)")
 _ROGUELIKE_RE = re.compile(r"(肉鸽词条|大秘境词条|词条|赛季词缀|赛季词条)")
-_BOSS_MECHANIC_SKILL_RE = re.compile(r"(读条|点名|分摊|致死|转阶段|阶段转换|机制杀|机制|踩塔|连线|全场|秒杀|破盾|破防|锁血|斩杀|狂暴)")
+_BOSS_MECHANIC_SKILL_RE = re.compile(r"(读条|点名|分摊|致死|转阶段|阶段转换|机制杀|机制|踩塔|连线|全场|秒杀|破盾|破防|锁血|斩杀|狂暴|死亡计时|密码破译|角斗准备)")
 _ENVIRONMENT_SKILL_RE = re.compile(r"(吸引怪物|拉怪|黯影堡垒专用|场景专用|地图专用|关卡专用|机关|陷阱|装置|传送|清怪辅助|交互|环境|地板|毒池|领域|子弹雨|弹雨|地刺|喷泉|光浪|风场|炮台|载具|矿车|电梯)")
 _MONSTER_SKILL_RE = re.compile(r"(小怪|精英怪|魔物|哥布林|史莱姆|肉山|野猪|枪兵|盾兵|蜥蜴人|剧毒蜂巢|触手|爪击|撕咬|啃咬|扫尾|平A|挥击|下砸|砸地|践踏|撼地|冲拳|锤击|钳击|旋风斩|咆哮|三连砸|冲锋|撞击|跳劈|劈砍|前砍|吐息|飞扑|召唤伙伴|召唤导弹|子弹三连|灼烧弹)")
 _LEGACY_MONSTER_CONTEXT_RE = re.compile(r"(英雄本|大师本|噩梦|多人|肉鸽大秘境|黯影堡垒|安德拉|黑石|鱼人|石头人|卷心菜|小猪|圣域飞鱼|虚蚀龙|野猪|蜥蜴人|蟹蛛|岩蛇|娜宝|多戈尔曼|蒂娜BOSS|BOSS|boss|Boss|首领|眼球王|军团盾|枪兵|盾兵|骑士|法师|弓手|小斧哥|双子机像|机器人|傀儡|召唤兽|野兽)")
-_LEGACY_MONSTER_ACTION_RE = re.compile(r"(重击|飞刃|虚蚀弹|剑气|烈火|龙卷风|炸弹|巡逻子弹|组合技|沉默水池|天空水池|狙击|凝滞场|三连突刺|蓄力|连斩|破甲|重砍|突进|缠绕射击|压团血|死刑|顺劈|碎地|重拳|地震波|裂石风暴|疯狂锤地|撞墙|落石|内爆|冲撞)")
+_LEGACY_MONSTER_ACTION_RE = re.compile(r"(重击|飞刃|虚蚀弹|剑气|烈火|龙卷风|炸弹|巡逻子弹|组合技|沉默水池|天空水池|狙击|凝滞场|三连突刺|蓄力|连斩|破甲|重砍|突进|缠绕射击|压团血|死刑|顺劈|碎地|重拳|地震波|裂石风暴|疯狂锤地|撞墙|落石|内爆|冲撞|石怒|寒冰荆棘|流火之沼|影之瞬杀|虚蚀弹三连|单发|陀螺|吹风|光棱|魔法箭矢|光能箭矢|冰暗巨口|岩火巨口|森风巨口)")
 _LEGACY_ENVIRONMENT_CONTEXT_RE = re.compile(r"(升降门|空气墙|场景|专用|调查团|药水|低重力|观光|资源AI|显影|变色|崩塌|落雷场景|可被吸引|内场资源|巨塔)")
-_PLAYER_SKILL_RE = re.compile(r"(红光反制|飞鸟投|普通攻击|普攻|特殊攻击|专精技能|共鸣技能|领地共鸣|共鸣|职业技能|武器技能)")
+_LEGACY_BOSS_CONTEXT_RE = re.compile(r"(P[123456]|首领|BOSS|boss|Boss|绯红剑影|炎光|幻华|殷红断狱|断狱|终焉|共罪|蚀心|神罚|陨星|大炎戒|狱炎轮回|灭世|角斗|誓死守护|领地驱逐|趴着演绎)")
+_PLAYER_SKILL_RE = re.compile(r"(红光反制|飞鸟投|刹那|滋养|护盾猛击|幸运一击|止战之锋|普通攻击|普攻|特殊攻击|专精技能|共鸣技能|领地共鸣|共鸣|职业技能|武器技能)")
 _LEGACY_BUFF_RE = re.compile(r"(BUFF|Buff|buff|子BUFF|子buff|计时BUFF|叠层buff|增伤BUFF|易伤|减益)")
 _PROFESSION_BUFF_RE = re.compile(r"(职业|专精|天赋|流派|普攻|特攻|特殊攻击|大招|奥义|终技|技能强化|替换技能|派生|分支|圣令|气刃|寒冰能量|光铸|种子|协奏|狂音|雷之印|恩格|护盾猛击|先锋追击|狂野绽放|生命绽放)")
 _SCRIPTED_EXCLUDE_RE = re.compile(r"(锁定追击|点名|分摊|机制|读条|致死|秒杀)")
+_CLIENT_EFFECT_RE = re.compile(r"(特效|表现|屏幕|镜头|光效|音效|动画|波纹|水花|高亮|隐藏表现|前端|纯客户端|模型|消散|出生技|反馈)")
+_INTERACTION_SKILL_RE = re.compile(r"(采集|钓鱼|挖矿|浇水|清扫|种花|家园|抚摸|吓猫|狗狗举手|射击狗狗|拔娜宝|坐下|演奏|游轮|弹簧|摩天轮|旋转木马|浮标|得分圈|滑翔|跑酷|传送门|可收集|阅读物|协会|狩猎|资源点)")
+_COMPANION_SKILL_RE = re.compile(r"(宠物|伙伴|召唤兽|猎鹰|雄鹰|野兽伙伴|协同子弹)")
+_PROJECTILE_SKILL_RE = re.compile(r"(子弹|箭矢|飞弹|导弹|火球|炸弹|陨石|水球|弹幕|飞刃|飞石|光棱|箭雨|爆炸箭)")
+_PASSIVE_SKILL_RE = re.compile(r"(被动|Passive|passive|天赋|层数|计数|增伤|减伤|加速|减CD|刷新|冷却|能量|资源恢复|护盾|恢复|治疗|属性|标记|印记|状态|转为|类型|光环|强化|替换技能)")
+_TEST_SKILL_RE = re.compile(r"(测试|test|Test|TEST|占位|废弃|作废|dummy_test|Debug|debug)")
 
 
 def _load_json(path: str) -> Any:
@@ -299,10 +313,13 @@ def classify_skill_id(skill_id: Any) -> str:
     row = skill_table().get(sid) or {}
     name = _entry_name(row) or skill_fallback_names().get(sid, "") or aoyi_skill_names().get(sid, "") or damage_attr_names().get(sid, "")
     text = _skill_name_text(sid, row)
+    slot_positions = _slot_positions(row) if row else set()
     if row and _safe_int(row.get("SkillType"), -1) == 7:
         return FIELD_MARKER_KIND
     if _FIELD_MARKER_RE.search(text):
         return FIELD_MARKER_KIND
+    if _TEST_SKILL_RE.search(text):
+        return TEST_SKILL_KIND
     if _VIRTUAL_RE.search(text):
         return VIRTUAL_SKILL_KIND
     if _SCRIPTED_RE.search(text):
@@ -319,7 +336,7 @@ def classify_skill_id(skill_id: Any) -> str:
         return FACTOR_BUFF_KIND
     if sid in ultimate_skill_ids() or _ULTIMATE_RE.search(text):
         return ULTIMATE_SKILL_KIND
-    if sid in profession_skill_ids() or (row and (_slot_positions(row) & {1, 2, 6, 7, 8})):
+    if sid in profession_skill_ids() or (row and (slot_positions & {1, 2, 6, 7, 8})):
         return PROFESSION_SKILL_KIND
     if _BOSS_MECHANIC_SKILL_RE.search(text) or bool(row.get("IsDangerSkill")) or bool(row.get("IsFractureSkill")):
         return BOSS_MECHANIC_SKILL_KIND
@@ -327,13 +344,29 @@ def classify_skill_id(skill_id: Any) -> str:
         return ENVIRONMENT_SKILL_KIND
     if sid in boss_skill_ids():
         return BOSS_SKILL_KIND
+    if _LEGACY_BOSS_CONTEXT_RE.search(text):
+        return BOSS_SKILL_KIND
     if sid in monster_skill_ids():
         return MONSTER_SKILL_KIND
     if sid in player_skill_ids() or _PLAYER_SKILL_RE.search(text):
         return PLAYER_SKILL_KIND
-    if _MONSTER_SKILL_RE.search(text) or _LEGACY_MONSTER_CONTEXT_RE.search(text):
+    if _COMPANION_SKILL_RE.search(text):
+        return COMPANION_SKILL_KIND
+    if _MONSTER_SKILL_RE.search(text) or _LEGACY_MONSTER_CONTEXT_RE.search(text) or _LEGACY_MONSTER_ACTION_RE.search(text):
         return MONSTER_SKILL_KIND
-    return SKILL_KIND
+    if _INTERACTION_SKILL_RE.search(text):
+        return INTERACTION_SKILL_KIND
+    if _CLIENT_EFFECT_RE.search(text):
+        return CLIENT_EFFECT_SKILL_KIND
+    if _PROJECTILE_SKILL_RE.search(text):
+        return PROJECTILE_SKILL_KIND
+    if _PASSIVE_SKILL_RE.search(text):
+        return PASSIVE_SKILL_KIND
+    if row and slot_positions:
+        if slot_positions & {3, 4, 5, 9}:
+            return PLAYER_SKILL_KIND
+        return SYSTEM_SKILL_KIND
+    return SYSTEM_SKILL_KIND
 
 
 def _buff_name(buff_id: int) -> str:
@@ -390,7 +423,6 @@ def _skill_name(skill_id: int) -> str:
 
 def _skill_maps() -> dict[str, dict[int, str]]:
     out = {
-        SKILL_KIND: {},
         PLAYER_SKILL_KIND: {},
         MONSTER_SKILL_KIND: {},
         ENVIRONMENT_SKILL_KIND: {},
@@ -402,6 +434,13 @@ def _skill_maps() -> dict[str, dict[int, str]]:
         SCRIPTED_SKILL_KIND: {},
         VIRTUAL_SKILL_KIND: {},
         BOSS_MECHANIC_SKILL_KIND: {},
+        CLIENT_EFFECT_SKILL_KIND: {},
+        INTERACTION_SKILL_KIND: {},
+        COMPANION_SKILL_KIND: {},
+        PROJECTILE_SKILL_KIND: {},
+        PASSIVE_SKILL_KIND: {},
+        TEST_SKILL_KIND: {},
+        SYSTEM_SKILL_KIND: {},
         BUFF_KIND: {},
         FACTOR_BUFF_KIND: {},
         PLAYER_BUFF_KIND: {},
@@ -473,7 +512,6 @@ def load_classified_tables() -> dict[str, dict[str, dict[str, str]]]:
                 buffs[BUFF_KIND].setdefault(iid, text)
     mechanics = _boss_mechanic_map()
     result: dict[str, dict[str, dict[str, str]]] = {
-        SKILL_KIND: _to_runtime(skills[SKILL_KIND]),
         PLAYER_SKILL_KIND: _to_runtime(skills[PLAYER_SKILL_KIND]),
         MONSTER_SKILL_KIND: _to_runtime(skills[MONSTER_SKILL_KIND]),
         ENVIRONMENT_SKILL_KIND: _to_runtime(skills[ENVIRONMENT_SKILL_KIND]),
@@ -485,6 +523,13 @@ def load_classified_tables() -> dict[str, dict[str, dict[str, str]]]:
         SCRIPTED_SKILL_KIND: _to_runtime(skills[SCRIPTED_SKILL_KIND]),
         VIRTUAL_SKILL_KIND: _to_runtime(skills[VIRTUAL_SKILL_KIND]),
         BOSS_MECHANIC_SKILL_KIND: _to_runtime(skills[BOSS_MECHANIC_SKILL_KIND]),
+        CLIENT_EFFECT_SKILL_KIND: _to_runtime(skills[CLIENT_EFFECT_SKILL_KIND]),
+        INTERACTION_SKILL_KIND: _to_runtime(skills[INTERACTION_SKILL_KIND]),
+        COMPANION_SKILL_KIND: _to_runtime(skills[COMPANION_SKILL_KIND]),
+        PROJECTILE_SKILL_KIND: _to_runtime(skills[PROJECTILE_SKILL_KIND]),
+        PASSIVE_SKILL_KIND: _to_runtime(skills[PASSIVE_SKILL_KIND]),
+        TEST_SKILL_KIND: _to_runtime(skills[TEST_SKILL_KIND]),
+        SYSTEM_SKILL_KIND: _to_runtime(skills[SYSTEM_SKILL_KIND]),
         BUFF_KIND: _to_runtime(buffs[BUFF_KIND]),
         PLAYER_BUFF_KIND: _to_runtime(buffs[PLAYER_BUFF_KIND]),
         FACTOR_BUFF_KIND: _to_runtime(buffs[FACTOR_BUFF_KIND]),

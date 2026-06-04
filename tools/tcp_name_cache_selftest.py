@@ -38,7 +38,8 @@ class TcpNameCacheTests(unittest.TestCase):
         endpoint = data["endpoints"]["01020304:1234"]
         self.assertEqual(endpoint["ip"], "1.2.3.4")
         self.assertEqual(endpoint["port"], 1234)
-        self.assertEqual(data["names"]["by_kind"]["skill"]["1522"]["text"], "滋养")
+        self.assertEqual(data["names"]["by_kind"]["player_skill"]["1522"]["text"], "滋养")
+        self.assertNotIn("skill", data["names"]["by_kind"])
         self.assertEqual(data["names"]["by_kind"]["boss_mechanic"]["47"]["text"], "护盾破裂")
         self.assertEqual(data["names"]["by_kind"]["boss"]["1301"]["text"], "测试Boss")
         dumped = json.dumps(data, ensure_ascii=False)
@@ -64,9 +65,9 @@ class TcpNameCacheTests(unittest.TestCase):
         index = build_index_from_live_rows({
             "rows": [
                 {
-                    "text": "神圣壁垒",
+                    "text": "滋养",
                     "confidence": "high",
-                    "primary_match": {"id_space": "skill_id", "id": 2414, "source": "tcp_alias"},
+                    "primary_match": {"id_space": "skill_id", "id": 1522, "source": "tcp_alias"},
                     "runtime": {
                         "string_obj": "0x111",
                         "table_element_base": "0x222",
@@ -87,14 +88,14 @@ class TcpNameCacheTests(unittest.TestCase):
             ]
         })
         by_kind = index["names"]["by_kind"]
-        entry = by_kind["skill"].get("2414") or by_kind["profession_skill"]["2414"]
-        self.assertEqual(entry["text"], "神圣壁垒")
+        entry = by_kind["player_skill"]["1522"]
+        self.assertEqual(entry["text"], "滋养")
         dumped = json.dumps(entry, ensure_ascii=False)
         self.assertNotIn("string_obj", dumped)
         self.assertNotIn("table_element_base", dumped)
         self.assertEqual(entry["context"]["allLocalizationString_index"], 123)
         self.assertEqual(entry["context"]["anchor_status"], "text_aligned_pointer_table_fallback")
-        self.assertNotIn("9999", by_kind["skill"])
+        self.assertNotIn("skill", by_kind)
         self.assertNotIn("unknown", by_kind)
 
     def test_mem_snapshot_updates_player_cache(self) -> None:
@@ -200,8 +201,6 @@ class TcpNameCacheTests(unittest.TestCase):
             boss = json.load(f)
         with open(os.path.join(out_dir, "boss_mechanic.json"), "r", encoding="utf-8") as f:
             mechanic = json.load(f)
-        with open(os.path.join(out_dir, "skill.json"), "r", encoding="utf-8") as f:
-            skill = json.load(f)
         with open(os.path.join(out_dir, "monster_skill.json"), "r", encoding="utf-8") as f:
             monster_skill = json.load(f)
         with open(os.path.join(out_dir, "environment_skill.json"), "r", encoding="utf-8") as f:
@@ -214,7 +213,7 @@ class TcpNameCacheTests(unittest.TestCase):
         self.assertEqual(player_skill["9998"], "测试玩家技能")
         self.assertEqual(boss["1301"], "测试Boss")
         self.assertEqual(mechanic["47"], "护盾破裂")
-        self.assertNotIn("9999", skill)
+        self.assertFalse(os.path.exists(os.path.join(out_dir, "skill.json")))
 
     def test_hybrid_name_tables_materializes_refined_semantic_tables(self) -> None:
         from tools.tablekit.hybrid_name_tables import update_runtime_tables
@@ -222,7 +221,7 @@ class TcpNameCacheTests(unittest.TestCase):
         out_dir = os.path.join(self.tmp, "refined_tables")
         result = update_runtime_tables(self.path, output_dir=out_dir)
 
-        for kind in ("player_skill", "monster_skill", "environment_skill", "ultimate_skill", "roguelike_affix", "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill", "profession_skill_buff"):
+        for kind in ("player_skill", "monster_skill", "environment_skill", "ultimate_skill", "roguelike_affix", "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill", "client_effect_skill", "interaction_skill", "companion_skill", "projectile_skill", "passive_skill", "test_skill", "system_skill", "profession_skill_buff"):
             with self.subTest(kind=kind):
                 self.assertIn(kind, result["kinds"])
                 with open(os.path.join(out_dir, f"{kind}.json"), "r", encoding="utf-8") as f:
@@ -234,6 +233,7 @@ class TcpNameCacheTests(unittest.TestCase):
             environment_skill = json.load(f)
         self.assertIn("1004820", monster_skill)
         self.assertIn("1006507", environment_skill)
+        self.assertFalse(os.path.exists(os.path.join(out_dir, "skill.json")))
         self.assertFalse(os.path.exists(os.path.join(out_dir, "boss_status.json")))
 
     def test_hybrid_name_tables_materializes_static_skill_and_buff_sources(self) -> None:
@@ -260,17 +260,14 @@ class TcpNameCacheTests(unittest.TestCase):
              mock.patch.object(hybrid_name_tables, "_ASSETS", assets):
             result = hybrid_name_tables.update_runtime_tables(self.path, output_dir=out_dir)
 
-        self.assertEqual(result["kinds"]["skill"]["written"], 2)
+        self.assertNotIn("skill", result["kinds"])
         self.assertGreaterEqual(result["kinds"]["buff"]["written"], 2)
-        with open(os.path.join(out_dir, "skill.json"), "r", encoding="utf-8") as f:
-            skill = json.load(f)
         with open(os.path.join(out_dir, "buff.json"), "r", encoding="utf-8") as f:
             buff = json.load(f)
-        self.assertEqual(skill["1001"], "静态技能")
-        self.assertEqual(skill["1002"], "旧技能表")
         self.assertEqual(buff["2001"], "静态Buff设计")
         self.assertEqual(buff["2002"], "列表Buff")
         self.assertNotIn("1002", buff)
+        self.assertFalse(os.path.exists(os.path.join(out_dir, "skill.json")))
 
 
 if __name__ == "__main__":

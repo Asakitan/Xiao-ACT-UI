@@ -13,12 +13,17 @@ if ROOT not in sys.path:
 from tools.tablekit import name_table_classifier as classifier  # noqa: E402
 
 
+def _assert_not_generic_skill(testcase: unittest.TestCase, tables: dict, skill_id: str) -> None:
+    testcase.assertNotIn("skill", tables)
+    testcase.assertFalse(tables.get("skill", {}).get(skill_id))
+
+
 class NameTableClassifierTests(unittest.TestCase):
     def test_field_marker_skill_type_and_name_are_split_from_skill(self) -> None:
         self.assertEqual(classifier.classify_skill_id(1101), "field_marker")
         tables = classifier.load_classified_tables()
         self.assertIn("1101", tables["field_marker"])
-        self.assertNotIn("1101", tables["skill"])
+        _assert_not_generic_skill(self, tables, "1101")
 
     def test_placeholder_description_does_not_create_field_markers(self) -> None:
         self.assertEqual(classifier.classify_skill_id(1005201), "monster_skill")
@@ -26,14 +31,14 @@ class NameTableClassifierTests(unittest.TestCase):
         tables = classifier.load_classified_tables()
         self.assertIn("1005201", tables["monster_skill"])
         self.assertIn("1006401", tables["monster_skill"])
-        self.assertNotIn("1005201", tables["skill"])
+        _assert_not_generic_skill(self, tables, "1005201")
         self.assertNotIn("1005201", tables["field_marker"])
 
     def test_profession_skill_is_split_from_generic_skill(self) -> None:
         self.assertEqual(classifier.classify_skill_id(1201), "profession_skill")
         tables = classifier.load_classified_tables()
         self.assertIn("1201", tables["profession_skill"])
-        self.assertNotIn("1201", tables["skill"])
+        _assert_not_generic_skill(self, tables, "1201")
 
     def test_player_monster_and_environment_skills_are_split_from_generic_skill(self) -> None:
         self.assertEqual(classifier.classify_skill_id(1004820), "monster_skill")
@@ -41,8 +46,8 @@ class NameTableClassifierTests(unittest.TestCase):
         tables = classifier.load_classified_tables()
         self.assertIn("1004820", tables["monster_skill"])
         self.assertIn("1006507", tables["environment_skill"])
-        self.assertNotIn("1004820", tables["skill"])
-        self.assertNotIn("1006507", tables["skill"])
+        _assert_not_generic_skill(self, tables, "1004820")
+        _assert_not_generic_skill(self, tables, "1006507")
 
     def test_obvious_legacy_fallback_names_leave_generic_skill(self) -> None:
         self.assertEqual(classifier.classify_skill_id(1), "player_skill")
@@ -69,7 +74,25 @@ class NameTableClassifierTests(unittest.TestCase):
         self.assertIn("7020340", tables["environment_skill"])
         self.assertIn("1001", tables["factor_buff"])
         for legacy_id in ("1", "10", "100", "100431", "1006512", "1010403", "10290117", "1005303", "1006410", "7020340", "1001"):
-            self.assertNotIn(legacy_id, tables["skill"])
+            _assert_not_generic_skill(self, tables, legacy_id)
+
+    def test_remaining_legacy_fallback_names_are_split_into_explicit_semantic_tables(self) -> None:
+        samples = {
+            12001: "client_effect_skill",
+            7920051: "interaction_skill",
+            101112: "companion_skill",
+            106: "projectile_skill",
+            2200302: "passive_skill",
+            2010010: "test_skill",
+            100433: "monster_skill",
+            10300112: "boss_skill",
+        }
+        tables = classifier.load_classified_tables()
+        self.assertNotIn("skill", tables)
+        for sid, expected_kind in samples.items():
+            with self.subTest(skill_id=sid, expected_kind=expected_kind):
+                self.assertEqual(classifier.classify_skill_id(sid), expected_kind)
+                self.assertIn(str(sid), tables[expected_kind])
 
     def test_refined_boss_skill_excludes_scripted_and_virtual_samples(self) -> None:
         tables = classifier.load_classified_tables()
@@ -90,15 +113,15 @@ class NameTableClassifierTests(unittest.TestCase):
         self.assertIn("1713", tables["ultimate_skill"])
         self.assertIn("998141", tables["roguelike_affix"])
         self.assertIn("3004020", tables["roguelike_affix"])
-        self.assertNotIn("1713", tables["skill"])
-        self.assertNotIn("998141", tables["skill"])
+        _assert_not_generic_skill(self, tables, "1713")
+        _assert_not_generic_skill(self, tables, "998141")
 
     def test_scripted_skill_examples_are_split_from_skill(self) -> None:
         for sid in (100324, 100325, 100591, 1006508):
             with self.subTest(skill_id=sid):
                 self.assertEqual(classifier.classify_skill_id(sid), "scripted_skill")
                 self.assertIn(str(sid), classifier.load_classified_tables()["scripted_skill"])
-                self.assertNotIn(str(sid), classifier.load_classified_tables()["skill"])
+                _assert_not_generic_skill(self, classifier.load_classified_tables(), str(sid))
 
     def test_visible_buff_is_player_buff_and_legacy_buff_aggregate(self) -> None:
         self.assertEqual(classifier.classify_buff_id(3701), "player_buff")

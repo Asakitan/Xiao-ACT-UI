@@ -956,6 +956,13 @@ class PacketBridge:
                 event.setdefault('is_scripted_skill', fact.get('is_scripted_skill'))
                 event.setdefault('is_virtual_skill', fact.get('is_virtual_skill'))
                 event.setdefault('is_roguelike_affix', fact.get('is_roguelike_affix'))
+                event.setdefault('is_client_effect_skill', fact.get('is_client_effect_skill'))
+                event.setdefault('is_interaction_skill', fact.get('is_interaction_skill'))
+                event.setdefault('is_companion_skill', fact.get('is_companion_skill'))
+                event.setdefault('is_projectile_skill', fact.get('is_projectile_skill'))
+                event.setdefault('is_passive_skill', fact.get('is_passive_skill'))
+                event.setdefault('is_test_skill', fact.get('is_test_skill'))
+                event.setdefault('is_system_skill', fact.get('is_system_skill'))
                 event.setdefault('sub_profession', fact.get('sub_profession'))
         except Exception:
             pass

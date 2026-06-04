@@ -22,7 +22,6 @@ assets/name_tables/live_*.json
 assets/name_tables/live_name_table_scan_report_*.md
 assets/name_tables/_backup_live_scan_*/
 !assets/name_tables/tcp_preparse_name_cache.json
-!assets/name_tables/skill.json
 !assets/name_tables/dungeon.json
 !assets/name_tables/monster.json
 !assets/name_tables/boss.json

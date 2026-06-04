@@ -28,24 +28,29 @@ _SR_WPF_MONSTER = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAnaly
 _SR_OLD_MONSTER = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Old", "Data", "monster")
 
 _RUNTIME_KINDS = (
-    "skill", "player_skill", "monster_skill", "environment_skill",
+    "player_skill", "monster_skill", "environment_skill",
     "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
     "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill",
+    "client_effect_skill", "interaction_skill", "companion_skill", "projectile_skill",
+    "passive_skill", "test_skill", "system_skill",
     "dungeon", "monster", "boss",
     "boss_mechanic",
     "buff", "player_buff", "factor_buff", "profession_skill_buff", "event",
 )
 _KIND_FILENAMES = {kind: os.path.join(_NAME_TABLES, f"{kind}.json") for kind in _RUNTIME_KINDS}
 _CLASSIFIED_KINDS = {
-    "skill", "player_skill", "monster_skill", "environment_skill",
+    "player_skill", "monster_skill", "environment_skill",
     "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
     "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill",
+    "client_effect_skill", "interaction_skill", "companion_skill", "projectile_skill",
+    "passive_skill", "test_skill", "system_skill",
     "boss", "boss_mechanic", "buff", "player_buff", "factor_buff", "profession_skill_buff", "event",
 }
 _FALLBACK_PREFIXES = (
     "技能#", "玩家技能#", "怪物技能#", "环境技能#",
     "场地标记#", "Boss技能#", "幻想技能#", "肉鸽词条#", "职业技能#",
     "剧情表演#", "虚拟体技能#", "Boss机制技能#", "怪物#", "Boss#", "地牢#",
+    "客户端表现技能#", "交互玩法技能#", "伙伴技能#", "投射物技能#", "被动/修饰技能#", "测试技能#", "系统技能#",
     "Buff#", "玩家Buff#", "因子Buff#", "职业技能Buff#", "事件#", "机制#", "NPC#", "道具#",
 )
 _CONFIDENCE_RANK = {

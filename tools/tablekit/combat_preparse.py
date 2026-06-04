@@ -172,6 +172,8 @@ def enrich_skill_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
         "player_skill", "monster_skill", "environment_skill",
         "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
         "scripted_skill", "virtual_skill", "boss_mechanic_skill",
+        "client_effect_skill", "interaction_skill", "companion_skill", "projectile_skill",
+        "passive_skill", "test_skill", "system_skill",
     }
     if skill_category in category_roles:
         role = skill_category
@@ -193,6 +195,13 @@ def enrich_skill_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
         "is_scripted_skill": skill_category == "scripted_skill",
         "is_virtual_skill": skill_category == "virtual_skill",
         "is_roguelike_affix": skill_category == "roguelike_affix",
+        "is_client_effect_skill": skill_category == "client_effect_skill",
+        "is_interaction_skill": skill_category == "interaction_skill",
+        "is_companion_skill": skill_category == "companion_skill",
+        "is_projectile_skill": skill_category == "projectile_skill",
+        "is_passive_skill": skill_category == "passive_skill",
+        "is_test_skill": skill_category == "test_skill",
+        "is_system_skill": skill_category == "system_skill",
         "profession_id": profession_id,
         "sub_profession": sub_profession,
         "target_uuid": _safe_int(src.get("target_uuid"), 0),

@@ -8,6 +8,9 @@
     3. StarResonanceDps/resonance-logs-cn 社区表(可能不全), {id: {Name:..}}
     4. 生成器/审计工具可继续读取 assets/skill_names.json, 运行时显示层走本 resolver。
 
+注意: ``skill`` 是兼容入口, 只做语义分流和兜底标签, 不再对应 runtime
+``skill.json`` 资产。所有技能 ID 必须进入更明确的 *_skill 分类。
+
 kind: skill / monster / boss / buff / dungeon / boss_mechanic / npc / item ...
 
 用法:
@@ -41,7 +44,6 @@ _TCP_PREPARSE_CACHE = os.path.join(_EXTRACTED, "tcp_preparse_name_cache.json")
 
 # 每个 kind 的数据源 (高优先级在前)
 _SOURCES = {
-    "skill":   [(_EXTRACTED, "skill.json")],
     "player_skill": [(_EXTRACTED, "player_skill.json")],
     "monster_skill": [(_EXTRACTED, "monster_skill.json")],
     "environment_skill": [(_EXTRACTED, "environment_skill.json")],
@@ -53,6 +55,13 @@ _SOURCES = {
     "scripted_skill": [(_EXTRACTED, "scripted_skill.json")],
     "virtual_skill": [(_EXTRACTED, "virtual_skill.json")],
     "boss_mechanic_skill": [(_EXTRACTED, "boss_mechanic_skill.json")],
+    "client_effect_skill": [(_EXTRACTED, "client_effect_skill.json")],
+    "interaction_skill": [(_EXTRACTED, "interaction_skill.json")],
+    "companion_skill": [(_EXTRACTED, "companion_skill.json")],
+    "projectile_skill": [(_EXTRACTED, "projectile_skill.json")],
+    "passive_skill": [(_EXTRACTED, "passive_skill.json")],
+    "test_skill": [(_EXTRACTED, "test_skill.json")],
+    "system_skill": [(_EXTRACTED, "system_skill.json")],
     "monster": [
         (_EXTRACTED, "monster.json"),
         (_DATATOOLS_CN, "MonsterTable.json"),
@@ -83,6 +92,8 @@ _FALLBACK_PREFIX = {
     "environment_skill": "环境技能", "field_marker": "场地标记", "boss_skill": "Boss技能",
     "ultimate_skill": "幻想技能", "roguelike_affix": "肉鸽词条", "profession_skill": "职业技能",
     "scripted_skill": "剧情表演", "virtual_skill": "虚拟体技能", "boss_mechanic_skill": "Boss机制技能",
+    "client_effect_skill": "客户端表现技能", "interaction_skill": "交互玩法技能", "companion_skill": "伙伴技能",
+    "projectile_skill": "投射物技能", "passive_skill": "被动/修饰技能", "test_skill": "测试技能", "system_skill": "系统技能",
     "monster": "怪物", "boss": "Boss", "buff": "Buff", "player_buff": "玩家Buff",
     "factor_buff": "因子Buff", "profession_skill_buff": "职业技能Buff", "event": "事件",
     "dungeon": "地牢", "boss_mechanic": "机制", "item": "道具", "npc": "NPC",
@@ -93,6 +104,8 @@ _COMPAT_KIND_FALLBACKS = {
         "ultimate_skill", "profession_skill", "player_skill", "environment_skill",
         "boss_mechanic_skill", "boss_skill", "monster_skill",
         "scripted_skill", "virtual_skill", "field_marker", "roguelike_affix",
+        "companion_skill", "projectile_skill", "interaction_skill", "client_effect_skill",
+        "passive_skill", "system_skill", "test_skill",
     ),
     "buff": ("profession_skill_buff", "player_buff", "factor_buff"),
 }
@@ -146,7 +159,7 @@ def _coerce_table(obj) -> Dict[int, str]:
 
 def _load_tcp_preparse_cache(kind: str) -> Dict[int, str]:
     out: Dict[int, str] = {}
-    if kind not in _SOURCES:
+    if kind not in _SOURCES and kind != "skill":
         return out
     if not os.path.isfile(_TCP_PREPARSE_CACHE):
         return out
@@ -211,11 +224,16 @@ class NameResolver:
             name = self._load_kind(semantic_kind).get(iid)
             if name:
                 return name
-        name = self._load_kind(kind).get(iid)
-        if name:
-            return name
+        if kind in _SOURCES:
+            name = self._load_kind(kind).get(iid)
+            if name:
+                return name
         for compat_kind in _COMPAT_KIND_FALLBACKS.get(kind, ()):
             name = self._load_kind(compat_kind).get(iid)
+            if name:
+                return name
+        if kind == "skill":
+            name = _load_tcp_preparse_cache(kind).get(iid)
             if name:
                 return name
         if default is not None:

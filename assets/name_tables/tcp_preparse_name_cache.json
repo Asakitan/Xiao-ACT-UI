@@ -1,8 +1,503 @@
 {
-  "endpoints": {},
+  "endpoints": {
+    "d239471c:2131": {
+      "first_seen": "2026-06-04T21:18:18Z",
+      "ip": "210.57.71.28",
+      "last_context": {
+        "same_server_reconnect": true
+      },
+      "last_seen": "2026-06-04T21:26:38Z",
+      "port": 2131,
+      "seen_count": 294,
+      "source": "tcp"
+    }
+  },
   "names": {
     "by_kind": {
-      "buff": {
+      "dungeon": {
+        "1": {
+          "confidence": "medium",
+          "context": {
+            "combat_fact": {
+              "display_name": "login",
+              "dungeon_difficulty": 0,
+              "dungeon_id": 1,
+              "dungeon_name": "login",
+              "flow_state": 0,
+              "kind": "sync_dungeon_data",
+              "scene_id": 0,
+              "scene_uuid": 1,
+              "source": "tcp",
+              "target_count": 0
+            },
+            "dungeon_difficulty": 0,
+            "dungeon_id": 1,
+            "dungeon_name": "login",
+            "kind": "sync_dungeon_data",
+            "scene_uuid": 1,
+            "source": "tcp",
+            "targets": [],
+            "timestamp": 1780608203.347304
+          },
+          "endpoints": [
+            "d239471c:2131"
+          ],
+          "sources": [
+            "tcp_dungeon_event"
+          ],
+          "text": "login",
+          "updated_at": "2026-06-04T21:23:23Z"
+        },
+        "9": {
+          "confidence": "medium",
+          "context": {
+            "combat_fact": {
+              "display_name": "巴哈马尔高原",
+              "dungeon_difficulty": 0,
+              "dungeon_id": 0,
+              "dungeon_name": "巴哈马尔高原",
+              "flow_state": 0,
+              "kind": "enter_scene",
+              "scene_id": 9,
+              "scene_uuid": 0,
+              "source": "tcp",
+              "target_count": 0
+            },
+            "connect_guid": "",
+            "dungeon_name": "巴哈马尔高原",
+            "kind": "enter_scene",
+            "player_uid": 36668136,
+            "player_uuid": 2403082961536,
+            "scene_guid": "",
+            "scene_id": 9,
+            "source": "tcp",
+            "timestamp": 1780608183.4783692
+          },
+          "endpoints": [
+            "d239471c:2131"
+          ],
+          "sources": [
+            "tcp_dungeon_event"
+          ],
+          "text": "巴哈马尔高原",
+          "updated_at": "2026-06-04T21:23:03Z"
+        }
+      },
+      "factor_buff": {
+        "2206331": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光能援护",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206381": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "清算炎盾",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206451": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "守护极意",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206481": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "极意神圣之击",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206542": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "悍勇无畏",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206571": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "决断之刃",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207151": {
+          "confidence": "high",
+          "context": {
+            "field": "NameDesign",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "炽焰治愈",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207651": {
+          "confidence": "high",
+          "context": {
+            "allLocalizationString_index": 13429,
+            "anchor_status": "text_aligned_pointer_table_fallback",
+            "id_space": "buff_id",
+            "runtime_evidence": {
+              "allLocalizationString_index": 13429,
+              "anchor_status": "text_aligned_pointer_table_fallback",
+              "row_index": 966,
+              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
+              "string_klass_name": "System.String",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "属性共鸣超载",
+          "updated_at": "2026-06-04T16:28:38Z"
+        }
+      },
+      "field_marker": {
+        "230105": {
+          "confidence": "high",
+          "context": {
+            "allLocalizationString_index": 13407,
+            "anchor_status": "text_aligned_pointer_table_fallback",
+            "id_space": "skill_id",
+            "runtime_evidence": {
+              "allLocalizationString_index": 13407,
+              "anchor_status": "text_aligned_pointer_table_fallback",
+              "row_index": 944,
+              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
+              "string_klass_name": "System.String",
+              "table_index": 0
+            },
+            "tcp_field": "skill_id/skill_level_id"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
+          ],
+          "text": "炎律狂踏",
+          "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "230106": {
+          "confidence": "high",
+          "context": {
+            "allLocalizationString_index": 13408,
+            "anchor_status": "text_aligned_pointer_table_fallback",
+            "id_space": "skill_id",
+            "runtime_evidence": {
+              "allLocalizationString_index": 13408,
+              "anchor_status": "text_aligned_pointer_table_fallback",
+              "row_index": 945,
+              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
+              "string_klass_name": "System.String",
+              "table_index": 0
+            },
+            "tcp_field": "skill_id/skill_level_id"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
+          ],
+          "text": "烈焰音符",
+          "updated_at": "2026-06-04T16:28:38Z"
+        }
+      },
+      "monster_skill": {
+        "2207220": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "烈火节拍",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207380": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "挥击回涌",
+          "updated_at": "2026-06-04T17:27:19Z"
+        }
+      },
+      "passive_skill": {
+        "2206250": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "决心斩击",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206340": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "生命强化",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206520": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "逆境强化",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206580": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "冷酷加速",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206590": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣印强化",
+          "updated_at": "2026-06-04T17:27:19Z"
+        }
+      },
+      "player": {
+        "36668136": {
+          "context": {
+            "hp_from_full_sync": true,
+            "level_extra_source": "season_attr",
+            "self_uid_confirmed": true
+          },
+          "endpoints": [
+            "d239471c:2131"
+          ],
+          "fight_point": 62145,
+          "hp": 1102517,
+          "level": 60,
+          "max_hp": 503930,
+          "name": "咲",
+          "profession_id": 12,
+          "profession_name": "神盾骑士",
+          "skills": [
+            {
+              "name": "",
+              "skill_id": 242506,
+              "skill_level_id": 242506
+            },
+            {
+              "name": "",
+              "skill_id": 153101,
+              "skill_level_id": 153101
+            },
+            {
+              "name": "",
+              "skill_id": 396801,
+              "skill_level_id": 396801
+            },
+            {
+              "name": "",
+              "skill_id": 394601,
+              "skill_level_id": 394601
+            },
+            {
+              "name": "",
+              "skill_id": 222001,
+              "skill_level_id": 222001
+            },
+            {
+              "name": "",
+              "skill_id": 223501,
+              "skill_level_id": 223501
+            },
+            {
+              "name": "",
+              "skill_id": 392301,
+              "skill_level_id": 392301
+            },
+            {
+              "name": "",
+              "skill_id": 395001,
+              "skill_level_id": 395001
+            },
+            {
+              "name": "",
+              "skill_id": 222026,
+              "skill_level_id": 222026
+            },
+            {
+              "name": "",
+              "skill_id": 242030,
+              "skill_level_id": 242030
+            },
+            {
+              "name": "",
+              "skill_id": 154101,
+              "skill_level_id": 154101
+            },
+            {
+              "name": "",
+              "skill_id": 223301,
+              "skill_level_id": 223301
+            },
+            {
+              "name": "",
+              "skill_id": 394801,
+              "skill_level_id": 394801
+            },
+            {
+              "name": "",
+              "skill_id": 170501,
+              "skill_level_id": 170501
+            },
+            {
+              "name": "",
+              "skill_id": 122201,
+              "skill_level_id": 122201
+            }
+          ],
+          "source": "tcp_player_update",
+          "text": "咲",
+          "updated_at": "2026-06-04T21:25:40Z"
+        }
+      },
+      "player_buff": {
         "2206160": {
           "confidence": "high",
           "context": {
@@ -83,29 +578,6 @@
           "text": "神圣壁垒",
           "updated_at": "2026-06-04T17:27:19Z"
         },
-        "2206210": {
-          "confidence": "high",
-          "context": {
-            "allLocalizationString_index": 13321,
-            "anchor_status": "text_aligned_pointer_table_fallback",
-            "id_space": "buff_id",
-            "runtime_evidence": {
-              "allLocalizationString_index": 13321,
-              "anchor_status": "text_aligned_pointer_table_fallback",
-              "row_index": 858,
-              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
-              "string_klass_name": "System.String",
-              "table_index": 0
-            },
-            "tcp_field": "buff_id/BaseId"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "光铸屏障的升华",
-          "updated_at": "2026-06-04T16:28:38Z"
-        },
         "2206220": {
           "confidence": "high",
           "context": {
@@ -173,29 +645,6 @@
             "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
           ],
           "text": "决心斩击",
-          "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "2206260": {
-          "confidence": "high",
-          "context": {
-            "allLocalizationString_index": 13326,
-            "anchor_status": "text_aligned_pointer_table_fallback",
-            "id_space": "buff_id",
-            "runtime_evidence": {
-              "allLocalizationString_index": 13326,
-              "anchor_status": "text_aligned_pointer_table_fallback",
-              "row_index": 863,
-              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
-              "string_klass_name": "System.String",
-              "table_index": 0
-            },
-            "tcp_field": "buff_id/BaseId"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "光铸驱动",
           "updated_at": "2026-06-04T16:28:38Z"
         },
         "2206270": {
@@ -290,52 +739,6 @@
           "text": "圣环祝福",
           "updated_at": "2026-06-04T16:28:38Z"
         },
-        "2206310": {
-          "confidence": "high",
-          "context": {
-            "allLocalizationString_index": 13331,
-            "anchor_status": "text_aligned_pointer_table_fallback",
-            "id_space": "buff_id",
-            "runtime_evidence": {
-              "allLocalizationString_index": 13331,
-              "anchor_status": "text_aligned_pointer_table_fallback",
-              "row_index": 868,
-              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
-              "string_klass_name": "System.String",
-              "table_index": 0
-            },
-            "tcp_field": "buff_id/BaseId"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "光铸平衡",
-          "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "2206320": {
-          "confidence": "high",
-          "context": {
-            "allLocalizationString_index": 13332,
-            "anchor_status": "text_aligned_pointer_table_fallback",
-            "id_space": "buff_id",
-            "runtime_evidence": {
-              "allLocalizationString_index": 13332,
-              "anchor_status": "text_aligned_pointer_table_fallback",
-              "row_index": 869,
-              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
-              "string_klass_name": "System.String",
-              "table_index": 0
-            },
-            "tcp_field": "buff_id/BaseId"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "光铸刚毅",
-          "updated_at": "2026-06-04T16:28:38Z"
-        },
         "2206330": {
           "confidence": "high",
           "context": {
@@ -358,23 +761,6 @@
           ],
           "text": "光能援护",
           "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "2206331": {
-          "confidence": "high",
-          "context": {
-            "field": "Name",
-            "id_space": "buff_id",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
-            "source_kind": "StarResonanceDps.BuffTable",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "光能援护",
-          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206340": {
           "confidence": "high",
@@ -467,23 +853,6 @@
           ],
           "text": "清算炎盾",
           "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "2206381": {
-          "confidence": "high",
-          "context": {
-            "field": "Name",
-            "id_space": "buff_id",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
-            "source_kind": "StarResonanceDps.BuffTable",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "清算炎盾",
-          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206390": {
           "confidence": "high",
@@ -646,23 +1015,6 @@
           "text": "守护极意",
           "updated_at": "2026-06-04T16:28:38Z"
         },
-        "2206451": {
-          "confidence": "high",
-          "context": {
-            "field": "Name",
-            "id_space": "buff_id",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
-            "source_kind": "StarResonanceDps.BuffTable",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "守护极意",
-          "updated_at": "2026-06-04T17:27:19Z"
-        },
         "2206460": {
           "confidence": "high",
           "context": {
@@ -731,23 +1083,6 @@
           ],
           "text": "极意神圣之击",
           "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "2206481": {
-          "confidence": "high",
-          "context": {
-            "field": "Name",
-            "id_space": "buff_id",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
-            "source_kind": "StarResonanceDps.BuffTable",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "极意神圣之击",
-          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206490": {
           "confidence": "medium",
@@ -864,23 +1199,6 @@
           "text": "悍勇无畏",
           "updated_at": "2026-06-04T16:28:38Z"
         },
-        "2206542": {
-          "confidence": "high",
-          "context": {
-            "field": "Name",
-            "id_space": "buff_id",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
-            "source_kind": "StarResonanceDps.BuffTable",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "悍勇无畏",
-          "updated_at": "2026-06-04T17:27:19Z"
-        },
         "2206550": {
           "confidence": "high",
           "context": {
@@ -966,23 +1284,6 @@
           ],
           "text": "决断之刃",
           "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "2206571": {
-          "confidence": "high",
-          "context": {
-            "field": "Name",
-            "id_space": "buff_id",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
-            "source_kind": "StarResonanceDps.BuffTable",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "决断之刃",
-          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206580": {
           "confidence": "high",
@@ -1254,29 +1555,6 @@
           "text": "鸣奏·热力核心",
           "updated_at": "2026-06-04T16:28:38Z"
         },
-        "2207070": {
-          "confidence": "medium",
-          "context": {
-            "allLocalizationString_index": 13372,
-            "anchor_status": "text_aligned_pointer_table_fallback",
-            "id_space": "buff_id",
-            "runtime_evidence": {
-              "allLocalizationString_index": 13372,
-              "anchor_status": "text_aligned_pointer_table_fallback",
-              "row_index": 909,
-              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
-              "string_klass_name": "System.String",
-              "table_index": 0
-            },
-            "tcp_field": "buff_id/BaseId"
-          },
-          "endpoints": [],
-          "sources": [
-            "resonance-logs-cn/src/lib/config/BuffName.json"
-          ],
-          "text": "炎爆追击",
-          "updated_at": "2026-06-04T16:28:38Z"
-        },
         "2207080": {
           "confidence": "medium",
           "context": {
@@ -1321,29 +1599,6 @@
             "resonance-logs-cn/src/lib/config/BuffName.json"
           ],
           "text": "狂音流",
-          "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "2207100": {
-          "confidence": "medium",
-          "context": {
-            "allLocalizationString_index": 13375,
-            "anchor_status": "text_aligned_pointer_table_fallback",
-            "id_space": "buff_id",
-            "runtime_evidence": {
-              "allLocalizationString_index": 13375,
-              "anchor_status": "text_aligned_pointer_table_fallback",
-              "row_index": 912,
-              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
-              "string_klass_name": "System.String",
-              "table_index": 0
-            },
-            "tcp_field": "buff_id/BaseId"
-          },
-          "endpoints": [],
-          "sources": [
-            "resonance-logs-cn/src/lib/config/BuffName.json"
-          ],
-          "text": "幸运音浪",
           "updated_at": "2026-06-04T16:28:38Z"
         },
         "2207110": {
@@ -1437,23 +1692,6 @@
           ],
           "text": "炽焰治愈",
           "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "2207151": {
-          "confidence": "high",
-          "context": {
-            "field": "NameDesign",
-            "id_space": "buff_id",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
-            "source_kind": "StarResonanceDps.BuffTable",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "炽焰治愈",
-          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2207180": {
           "confidence": "medium",
@@ -2236,29 +2474,6 @@
           "text": "音塔共鸣",
           "updated_at": "2026-06-04T16:28:38Z"
         },
-        "2207651": {
-          "confidence": "high",
-          "context": {
-            "allLocalizationString_index": 13429,
-            "anchor_status": "text_aligned_pointer_table_fallback",
-            "id_space": "buff_id",
-            "runtime_evidence": {
-              "allLocalizationString_index": 13429,
-              "anchor_status": "text_aligned_pointer_table_fallback",
-              "row_index": 966,
-              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
-              "string_klass_name": "System.String",
-              "table_index": 0
-            },
-            "tcp_field": "buff_id/BaseId"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
-          ],
-          "text": "属性共鸣超载",
-          "updated_at": "2026-06-04T16:28:38Z"
-        },
         "2207660": {
           "confidence": "medium",
           "context": {
@@ -2306,7 +2521,188 @@
           "updated_at": "2026-06-04T16:28:38Z"
         }
       },
-      "skill": {
+      "player_skill": {
+        "2207651": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "属性共鸣超载",
+          "updated_at": "2026-06-04T17:27:19Z"
+        }
+      },
+      "profession_skill": {
+        "2406": {
+          "confidence": "medium",
+          "context": {
+            "anchor_status": "runtime_heap_pointer_table_only",
+            "id_space": "sub_profession_skill_id",
+            "runtime_evidence": {
+              "anchor_status": "runtime_heap_pointer_table_only",
+              "row_index": 1,
+              "string_klass_name": "System.String",
+              "table_index": 1
+            },
+            "tcp_field": "skill_id/sub_profession"
+          },
+          "endpoints": [],
+          "sources": [
+            "manual:packet_parser_skills_flow_aliases"
+          ],
+          "text": "光盾回复流",
+          "updated_at": "2026-06-04T16:28:38Z"
+        }
+      },
+      "profession_skill_buff": {
+        "2206210": {
+          "confidence": "high",
+          "context": {
+            "allLocalizationString_index": 13321,
+            "anchor_status": "text_aligned_pointer_table_fallback",
+            "id_space": "buff_id",
+            "runtime_evidence": {
+              "allLocalizationString_index": 13321,
+              "anchor_status": "text_aligned_pointer_table_fallback",
+              "row_index": 858,
+              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
+              "string_klass_name": "System.String",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光铸屏障的升华",
+          "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2206260": {
+          "confidence": "high",
+          "context": {
+            "allLocalizationString_index": 13326,
+            "anchor_status": "text_aligned_pointer_table_fallback",
+            "id_space": "buff_id",
+            "runtime_evidence": {
+              "allLocalizationString_index": 13326,
+              "anchor_status": "text_aligned_pointer_table_fallback",
+              "row_index": 863,
+              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
+              "string_klass_name": "System.String",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光铸驱动",
+          "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2206310": {
+          "confidence": "high",
+          "context": {
+            "allLocalizationString_index": 13331,
+            "anchor_status": "text_aligned_pointer_table_fallback",
+            "id_space": "buff_id",
+            "runtime_evidence": {
+              "allLocalizationString_index": 13331,
+              "anchor_status": "text_aligned_pointer_table_fallback",
+              "row_index": 868,
+              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
+              "string_klass_name": "System.String",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光铸平衡",
+          "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2206320": {
+          "confidence": "high",
+          "context": {
+            "allLocalizationString_index": 13332,
+            "anchor_status": "text_aligned_pointer_table_fallback",
+            "id_space": "buff_id",
+            "runtime_evidence": {
+              "allLocalizationString_index": 13332,
+              "anchor_status": "text_aligned_pointer_table_fallback",
+              "row_index": 869,
+              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
+              "string_klass_name": "System.String",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光铸刚毅",
+          "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2207070": {
+          "confidence": "medium",
+          "context": {
+            "allLocalizationString_index": 13372,
+            "anchor_status": "text_aligned_pointer_table_fallback",
+            "id_space": "buff_id",
+            "runtime_evidence": {
+              "allLocalizationString_index": 13372,
+              "anchor_status": "text_aligned_pointer_table_fallback",
+              "row_index": 909,
+              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
+              "string_klass_name": "System.String",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "炎爆追击",
+          "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2207100": {
+          "confidence": "medium",
+          "context": {
+            "allLocalizationString_index": 13375,
+            "anchor_status": "text_aligned_pointer_table_fallback",
+            "id_space": "buff_id",
+            "runtime_evidence": {
+              "allLocalizationString_index": 13375,
+              "anchor_status": "text_aligned_pointer_table_fallback",
+              "row_index": 912,
+              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
+              "string_klass_name": "System.String",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "幸运音浪",
+          "updated_at": "2026-06-04T16:28:38Z"
+        }
+      },
+      "system_skill": {
         "160": {
           "confidence": "high",
           "context": {
@@ -2568,23 +2964,6 @@
           "text": "神圣光辉",
           "updated_at": "2026-06-04T17:27:19Z"
         },
-        "2206250": {
-          "confidence": "high",
-          "context": {
-            "field": "value",
-            "id_space": "skill_id_or_legacy_skill_name_index",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
-            "source_kind": "skill_name_map",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
-          ],
-          "text": "决心斩击",
-          "updated_at": "2026-06-04T17:27:19Z"
-        },
         "2206260": {
           "confidence": "high",
           "context": {
@@ -2719,23 +3098,6 @@
             "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
           ],
           "text": "光能援护",
-          "updated_at": "2026-06-04T17:27:19Z"
-        },
-        "2206340": {
-          "confidence": "high",
-          "context": {
-            "field": "value",
-            "id_space": "skill_id_or_legacy_skill_name_index",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
-            "source_kind": "skill_name_map",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
-          ],
-          "text": "生命强化",
           "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206350": {
@@ -3044,23 +3406,6 @@
           "text": "极意征伐",
           "updated_at": "2026-06-04T17:27:19Z"
         },
-        "2206520": {
-          "confidence": "high",
-          "context": {
-            "field": "value",
-            "id_space": "skill_id_or_legacy_skill_name_index",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
-            "source_kind": "skill_name_map",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
-          ],
-          "text": "逆境强化",
-          "updated_at": "2026-06-04T17:27:19Z"
-        },
         "2206530": {
           "confidence": "high",
           "context": {
@@ -3195,40 +3540,6 @@
             "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
           ],
           "text": "决断之刃",
-          "updated_at": "2026-06-04T17:27:19Z"
-        },
-        "2206580": {
-          "confidence": "high",
-          "context": {
-            "field": "value",
-            "id_space": "skill_id_or_legacy_skill_name_index",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
-            "source_kind": "skill_name_map",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
-          ],
-          "text": "冷酷加速",
-          "updated_at": "2026-06-04T17:27:19Z"
-        },
-        "2206590": {
-          "confidence": "high",
-          "context": {
-            "field": "value",
-            "id_space": "skill_id_or_legacy_skill_name_index",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
-            "source_kind": "skill_name_map",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
-          ],
-          "text": "圣印强化",
           "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206600": {
@@ -3418,23 +3729,6 @@
           "text": "华彩章节充能",
           "updated_at": "2026-06-04T17:27:19Z"
         },
-        "2207220": {
-          "confidence": "high",
-          "context": {
-            "field": "value",
-            "id_space": "skill_id_or_legacy_skill_name_index",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
-            "source_kind": "skill_name_map",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
-          ],
-          "text": "烈火节拍",
-          "updated_at": "2026-06-04T17:27:19Z"
-        },
         "2207280": {
           "confidence": "high",
           "context": {
@@ -3552,23 +3846,6 @@
             "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
           ],
           "text": "不屈谐音",
-          "updated_at": "2026-06-04T17:27:19Z"
-        },
-        "2207380": {
-          "confidence": "high",
-          "context": {
-            "field": "value",
-            "id_space": "skill_id_or_legacy_skill_name_index",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
-            "source_kind": "skill_name_map",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
-          ],
-          "text": "挥击回涌",
           "updated_at": "2026-06-04T17:27:19Z"
         },
         "2207390": {
@@ -3741,23 +4018,6 @@
           "text": "鸣奏交响式",
           "updated_at": "2026-06-04T17:27:19Z"
         },
-        "2207651": {
-          "confidence": "high",
-          "context": {
-            "field": "value",
-            "id_space": "skill_id_or_legacy_skill_name_index",
-            "match": "exact",
-            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
-            "source_kind": "skill_name_map",
-            "tcp_status": "known_id_space"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
-          ],
-          "text": "属性共鸣超载",
-          "updated_at": "2026-06-04T17:27:19Z"
-        },
         "2207680": {
           "confidence": "high",
           "context": {
@@ -3775,16 +4035,16 @@
           "text": "螺旋炎奏",
           "updated_at": "2026-06-04T17:27:19Z"
         },
-        "230105": {
+        "2414": {
           "confidence": "high",
           "context": {
-            "allLocalizationString_index": 13407,
+            "allLocalizationString_index": 13318,
             "anchor_status": "text_aligned_pointer_table_fallback",
             "id_space": "skill_id",
             "runtime_evidence": {
-              "allLocalizationString_index": 13407,
+              "allLocalizationString_index": 13318,
               "anchor_status": "text_aligned_pointer_table_fallback",
-              "row_index": 944,
+              "row_index": 855,
               "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
               "string_klass_name": "System.String",
               "table_index": 0
@@ -3795,32 +4055,11 @@
           "sources": [
             "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
           ],
-          "text": "炎律狂踏",
+          "text": "神圣壁垒",
           "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "230106": {
-          "confidence": "high",
-          "context": {
-            "allLocalizationString_index": 13408,
-            "anchor_status": "text_aligned_pointer_table_fallback",
-            "id_space": "skill_id",
-            "runtime_evidence": {
-              "allLocalizationString_index": 13408,
-              "anchor_status": "text_aligned_pointer_table_fallback",
-              "row_index": 945,
-              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
-              "string_klass_name": "System.String",
-              "table_index": 0
-            },
-            "tcp_field": "skill_id/skill_level_id"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
-          ],
-          "text": "烈焰音符",
-          "updated_at": "2026-06-04T16:28:38Z"
-        },
+        }
+      },
+      "ultimate_skill": {
         "2335": {
           "confidence": "high",
           "context": {
@@ -3866,53 +4105,10 @@
           ],
           "text": "升格·巡演曲",
           "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "2406": {
-          "confidence": "medium",
-          "context": {
-            "anchor_status": "runtime_heap_pointer_table_only",
-            "id_space": "sub_profession_skill_id",
-            "runtime_evidence": {
-              "anchor_status": "runtime_heap_pointer_table_only",
-              "row_index": 1,
-              "string_klass_name": "System.String",
-              "table_index": 1
-            },
-            "tcp_field": "skill_id/sub_profession"
-          },
-          "endpoints": [],
-          "sources": [
-            "manual:packet_parser_skills_flow_aliases"
-          ],
-          "text": "光盾回复流",
-          "updated_at": "2026-06-04T16:28:38Z"
-        },
-        "2414": {
-          "confidence": "high",
-          "context": {
-            "allLocalizationString_index": 13318,
-            "anchor_status": "text_aligned_pointer_table_fallback",
-            "id_space": "skill_id",
-            "runtime_evidence": {
-              "allLocalizationString_index": 13318,
-              "anchor_status": "text_aligned_pointer_table_fallback",
-              "row_index": 855,
-              "static_anchor_chain": "pointer_table_text_alignment -> inferred allLocalizationString_ array",
-              "string_klass_name": "System.String",
-              "table_index": 0
-            },
-            "tcp_field": "skill_id/skill_level_id"
-          },
-          "endpoints": [],
-          "sources": [
-            "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
-          ],
-          "text": "神圣壁垒",
-          "updated_at": "2026-06-04T16:28:38Z"
         }
       }
     }
   },
   "schema_version": 1,
-  "updated_at": "2026-06-04T17:27:19Z"
+  "updated_at": "2026-06-04T21:26:38Z"
 }
