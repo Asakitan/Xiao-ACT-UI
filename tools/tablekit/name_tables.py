@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from typing import Dict, Optional
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -163,26 +164,28 @@ def _load_tcp_preparse_cache(kind: str) -> Dict[int, str]:
 class NameResolver:
     def __init__(self):
         self._tables: Dict[str, Dict[int, str]] = {}
+        self._lock = threading.RLock()
 
     def _load_kind(self, kind: str) -> Dict[int, str]:
-        if kind in self._tables:
-            return self._tables[kind]
-        merged: Dict[int, str] = {}
-        # 低优先级先填, 高优先级后覆盖
-        for folder, fname in reversed(_SOURCES.get(kind, [])):
-            path = os.path.join(folder, fname)
-            if not os.path.isfile(path):
-                continue
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                merged.update(_coerce_table(data))
-            except Exception:
-                pass
-        merged.update(_load_live_act_matches(kind))
-        merged.update(_load_tcp_preparse_cache(kind))
-        self._tables[kind] = merged
-        return merged
+        with self._lock:
+            if kind in self._tables:
+                return self._tables[kind]
+            merged: Dict[int, str] = {}
+            # 低优先级先填, 高优先级后覆盖
+            for folder, fname in reversed(_SOURCES.get(kind, [])):
+                path = os.path.join(folder, fname)
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    merged.update(_coerce_table(data))
+                except Exception:
+                    pass
+            merged.update(_load_live_act_matches(kind))
+            merged.update(_load_tcp_preparse_cache(kind))
+            self._tables[kind] = merged
+            return merged
 
     def resolve(self, kind: str, id_: object, default: Optional[str] = None) -> str:
         try:
@@ -218,7 +221,8 @@ class NameResolver:
         return {k: len(self._load_kind(k)) for k in _SOURCES}
 
     def reload(self):
-        self._tables.clear()
+        with self._lock:
+            self._tables.clear()
 
 
 # 模块级单例

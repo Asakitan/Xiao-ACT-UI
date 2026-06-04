@@ -364,6 +364,13 @@ def _runtime_key(row: Dict[str, Any]) -> Tuple[str, str, str]:
     )
 
 
+def _runtime_klass_status(row: Dict[str, Any]) -> str:
+    klass = str(row.get("klass") or "").strip()
+    if klass:
+        return "observed_volatile_runtime_klass"
+    return "unverified_runtime_klass"
+
+
 def crossref(candidate_input: str, output: str) -> Dict[str, Any]:
     candidates = _load_json(candidate_input)
     index = _build_index()
@@ -379,15 +386,15 @@ def crossref(candidate_input: str, output: str) -> Dict[str, Any]:
             matches = _dedupe_matches(index.get(text, []))
             if matches:
                 matched += 1
+            runtime = {
+                "obj": row.get("obj"),
+                "chars": row.get("chars"),
+                "anchor_status": "runtime_heap_address_only",
+                "klass_status": _runtime_klass_status(row),
+            }
             item = {
                 "text": text,
-                "runtime": {
-                    "obj": row.get("obj"),
-                    "chars": row.get("chars"),
-                    "klass": row.get("klass") or "0x30252490",
-                    "klass_name": "System.String",
-                    "anchor_status": "runtime_heap_address_only",
-                },
+                "runtime": runtime,
                 "classification": _classify(matches),
                 "matches": matches,
             }
@@ -409,12 +416,7 @@ def crossref(candidate_input: str, output: str) -> Dict[str, Any]:
             "ID mappings are only as authoritative as their listed source. "
             "Persistent table/container anchors are not decoded yet."
         ),
-        "known_runtime_klass": {
-            "System.String": {
-                "runtime_klass": "0x30252490",
-                "anchor_status": "runtime_pointer_confirmed_name_System.String_not_persistent_rva",
-            }
-        },
+        "known_runtime_klass": candidates.get("known_runtime_klass") or {},
         "summary": {
             "total_runtime_candidates": total,
             "matched_candidates": matched,

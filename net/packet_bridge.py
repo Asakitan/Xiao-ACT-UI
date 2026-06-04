@@ -44,6 +44,7 @@ from packet_parser import (PlayerData, MonsterData,
                            _PROFESSION_PREFIX, _ALL_PROFESSION_PREFIXES)
 from net.packet_capture import PacketCapture, list_devices, auto_select_device
 from net.tcp_name_cache import TcpNameCache
+from tools.tablekit.name_tables import names as _NAME_RESOLVER
 from tools.tablekit.combat_preparse import (
     enrich_boss_event,
     enrich_dungeon_event,
@@ -86,11 +87,25 @@ def _load_skill_names() -> dict:
 
 def _get_skill_name(skill_id: int) -> str:
     """Resolve a numeric skill_id to its display name."""
-    if not _SKILL_NAMES:
-        _load_skill_names()
     skill_id = int(skill_id or 0)
     if skill_id <= 0:
         return ''
+    try:
+        name = _NAME_RESOLVER.skill(skill_id, default='')
+        if name:
+            return name
+    except Exception:
+        pass
+    if skill_id >= 100:
+        try:
+            base_id = skill_id // 100
+            name = _NAME_RESOLVER.skill(base_id, default='')
+            if name:
+                return name
+        except Exception:
+            pass
+    if not _SKILL_NAMES:
+        _load_skill_names()
     # Try exact match first
     name = _SKILL_NAMES.get(skill_id)
     if name:
@@ -416,8 +431,9 @@ class PacketBridge:
         self._plugin_manager = plugin_manager
         self._event_bus = event_bus if isinstance(event_bus, EventBus) else None
         self._mem_source = None                  # UnifiedDataSource 实例 (lazy)
+        self._last_name_resolver_reload_ts: float = 0.0
         try:
-            self._tcp_name_cache = TcpNameCache()
+            self._tcp_name_cache = TcpNameCache(on_save=self._on_tcp_name_cache_saved)
         except Exception as exc:
             logger.warning(f'[Bridge] tcp name cache unavailable: {exc}')
             self._tcp_name_cache = None
@@ -463,6 +479,18 @@ class PacketBridge:
         # 检查 Npcap 可用性
         self._npcap_ok = False
         self._error_msg = ''
+
+    def _on_tcp_name_cache_saved(self, path: str) -> None:
+        """Reload the shared NameResolver after compact TCP names are saved."""
+        now = time.time()
+        if now - self._last_name_resolver_reload_ts < 1.0:
+            return
+        self._last_name_resolver_reload_ts = now
+        try:
+            _NAME_RESOLVER.reload()
+            logger.debug(f'[Bridge] reloaded NameResolver after tcp name cache save: {path}')
+        except Exception as exc:
+            logger.debug(f'[Bridge] name resolver reload failed after tcp name cache save: {exc}')
 
     def _get_watched_slots(self):
         """Return set of watched skill slot indices from settings."""

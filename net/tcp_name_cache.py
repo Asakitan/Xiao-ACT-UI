@@ -13,7 +13,7 @@ import os
 import tempfile
 import threading
 import time
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 try:
     from packet_parser.skills import PROFESSION_NAMES  # type: ignore
@@ -39,6 +39,13 @@ _LIVE_ID_SPACE_KIND = {
     "scene_id": "dungeon",
     "npc_id": "npc",
     "item_id": "item",
+}
+
+_VOLATILE_RUNTIME_KEYS = {
+    "obj", "chars", "klass", "runtime_klass", "string_klass", "string_obj",
+    "string_chars", "slot_addr", "array_obj", "element_base",
+    "table_element_base", "allLocalizationString_array_obj",
+    "allLocalizationString_element_base",
 }
 
 
@@ -101,6 +108,26 @@ def _merge_unique_list(old: Any, items: list[Any], *, limit: int = 16) -> list[A
     return out
 
 
+def _stable_context_from_live_row(row: Mapping[str, Any], match: Mapping[str, Any], id_space: str) -> dict[str, Any]:
+    """Return stable preparse context without session-specific heap pointers."""
+    runtime = row.get("runtime") if isinstance(row.get("runtime"), Mapping) else {}
+    stable_runtime = {
+        key: value
+        for key, value in runtime.items()
+        if key not in _VOLATILE_RUNTIME_KEYS
+    }
+    context = {
+        "id_space": id_space,
+        "tcp_field": match.get("tcp_field") or match.get("field") or "",
+        "anchor_status": runtime.get("anchor_status") or row.get("anchor_status") or "",
+    }
+    if runtime.get("allLocalizationString_index") is not None:
+        context["allLocalizationString_index"] = runtime.get("allLocalizationString_index")
+    if stable_runtime:
+        context["runtime_evidence"] = stable_runtime
+    return context
+
+
 def empty_snapshot() -> dict[str, Any]:
     return {
         "schema_version": _SCHEMA_VERSION,
@@ -138,11 +165,7 @@ def build_index_from_live_rows(rows_obj: Any, *, confidence: set[str] | None = N
             "sources": [str(match.get("source") or match.get("source_kind") or "live_probe")],
             "endpoints": [],
             "updated_at": _iso(),
-            "context": {
-                "id_space": id_space,
-                "tcp_field": match.get("tcp_field") or match.get("field") or "",
-                "runtime": row.get("runtime") if isinstance(row.get("runtime"), Mapping) else {},
-            },
+            "context": _stable_context_from_live_row(row, match, id_space),
         }
     out["updated_at"] = _iso()
     return out
@@ -151,10 +174,13 @@ def build_index_from_live_rows(rows_obj: Any, *, confidence: set[str] | None = N
 class TcpNameCache:
     """Small JSON-backed correspondence cache for TCP/MEM decoded names."""
 
-    def __init__(self, path: str | None = None, *, autosave_interval_s: float = 5.0, max_entries_per_kind: int = 4096) -> None:
+    def __init__(self, path: str | None = None, *, autosave_interval_s: float = 5.0,
+                 max_entries_per_kind: int = 4096,
+                 on_save: Callable[[str], None] | None = None) -> None:
         self.path = path or _DEFAULT_CACHE_PATH
         self.autosave_interval_s = max(0.0, float(autosave_interval_s or 0.0))
         self.max_entries_per_kind = max(64, int(max_entries_per_kind or 4096))
+        self.on_save = on_save
         self._lock = threading.RLock()
         self._data: dict[str, Any] = empty_snapshot()
         self._dirty = False
@@ -207,7 +233,12 @@ class TcpNameCache:
             self._data = data
             self._dirty = False
             self._last_save_ts = now
-            return True
+        if self.on_save:
+            try:
+                self.on_save(self.path)
+            except Exception:
+                pass
+        return True
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:

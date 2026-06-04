@@ -53,6 +53,12 @@ class TcpNameCacheTests(unittest.TestCase):
                     "text": "神圣壁垒",
                     "confidence": "high",
                     "primary_match": {"id_space": "skill_id", "id": 2414, "source": "tcp_alias"},
+                    "runtime": {
+                        "string_obj": "0x111",
+                        "table_element_base": "0x222",
+                        "allLocalizationString_index": 123,
+                        "anchor_status": "text_aligned_pointer_table_fallback",
+                    },
                 },
                 {
                     "text": "低可信技能",
@@ -67,7 +73,13 @@ class TcpNameCacheTests(unittest.TestCase):
             ]
         })
         by_kind = index["names"]["by_kind"]
-        self.assertEqual(by_kind["skill"]["2414"]["text"], "神圣壁垒")
+        entry = by_kind["skill"]["2414"]
+        self.assertEqual(entry["text"], "神圣壁垒")
+        dumped = json.dumps(entry, ensure_ascii=False)
+        self.assertNotIn("string_obj", dumped)
+        self.assertNotIn("table_element_base", dumped)
+        self.assertEqual(entry["context"]["allLocalizationString_index"], 123)
+        self.assertEqual(entry["context"]["anchor_status"], "text_aligned_pointer_table_fallback")
         self.assertNotIn("9999", by_kind["skill"])
         self.assertNotIn("unknown", by_kind)
 
@@ -128,6 +140,13 @@ class TcpNameCacheTests(unittest.TestCase):
                 resolver = name_tables.NameResolver()
                 self.assertEqual(resolver.skill(2414), "神圣壁垒")
                 self.assertEqual(resolver.resolve("player", 36668136, default=""), "")
+
+    def test_save_callback_can_reload_name_resolver(self) -> None:
+        seen = []
+        cache = TcpNameCache(self.path, autosave_interval_s=0, on_save=lambda path: seen.append(path))
+        cache.observe_name("skill", 2414, "神圣壁垒", source="tcp", confidence="high")
+
+        self.assertEqual(seen, [self.path])
 
 
 if __name__ == "__main__":

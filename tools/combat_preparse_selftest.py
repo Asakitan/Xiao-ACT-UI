@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import os
 import sys
+import json
+import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -27,6 +30,7 @@ from engines.boss_raid_engine import BossRaidEngine, normalize_phase_trigger  # 
 from engines.combat_analytics import build_act_render_spec  # noqa: E402
 from engines.game_state import GameStateManager  # noqa: E402
 from net.packet_bridge import PacketBridge  # noqa: E402
+from net import packet_bridge as packet_bridge_module  # noqa: E402
 
 
 class CombatPreparseTests(unittest.TestCase):
@@ -42,6 +46,11 @@ class CombatPreparseTests(unittest.TestCase):
         self.assertEqual(fact["profession_id"], 12)
         self.assertEqual(fact["sub_profession"], "光盾")
         self.assertTrue(fact["display_name"])
+
+    def test_packet_bridge_skill_name_prefers_name_resolver(self) -> None:
+        with mock.patch.object(packet_bridge_module._NAME_RESOLVER, "skill", side_effect=lambda skill_id, default="": "统一技能名" if int(skill_id) == 2414 else default):
+            packet_bridge_module._SKILL_NAMES = {2414: "本地旧技能名"}
+            self.assertEqual(packet_bridge_module._get_skill_name(2414), "统一技能名")
 
     def test_dungeon_event_resolves_name_and_target_summary(self) -> None:
         fact = enrich_dungeon_event({
@@ -172,6 +181,31 @@ class CombatPreparseTests(unittest.TestCase):
         self.assertEqual(ctx["last_skill_role"], "sub_profession_skill")
         self.assertEqual(ctx["last_boss_mechanic_key"], "shield_broken")
         self.assertEqual(ctx["last_boss_trigger_family"], "shield")
+
+    def test_name_table_effect_audit_reports_mapping_health(self) -> None:
+        from tools.tablekit.name_table_effect_audit import audit
+
+        with tempfile.TemporaryDirectory() as td:
+            full = os.path.join(td, "full.json")
+            matched = os.path.join(td, "matched.json")
+            cache = os.path.join(td, "cache.json")
+            correspondence = os.path.join(td, "corr.json")
+            with open(full, "w", encoding="utf-8") as f:
+                json.dump({"anchor": {"status": "text_aligned_pointer_table_fallback"}, "rows": [{"index": 0, "text": "神圣壁垒", "string_obj": "0x1"}]}, f, ensure_ascii=False)
+            with open(matched, "w", encoding="utf-8") as f:
+                json.dump({"rows": [{"text": "神圣壁垒", "confidence": "high", "primary_match": {"id_space": "skill_id", "id": 2414}, "runtime": {"anchor_status": "text_aligned_pointer_table_fallback", "string_obj": "0x1"}}]}, f, ensure_ascii=False)
+            with open(cache, "w", encoding="utf-8") as f:
+                json.dump({"endpoints": {}, "names": {"by_kind": {"skill": {"2414": {"text": "神圣壁垒", "context": {"allLocalizationString_index": 0}}}}}}, f, ensure_ascii=False)
+            with open(correspondence, "w", encoding="utf-8") as f:
+                json.dump({"summary": {"tcp_matched_entry_count": 1}}, f, ensure_ascii=False)
+
+            result = audit(full, matched, cache, correspondence)
+
+        self.assertEqual(result["full_string_pool"]["nonempty_text_count"], 1)
+        self.assertEqual(result["matched_rows"]["by_id_space"]["skill_id"], 1)
+        self.assertEqual(result["tcp_preparse_cache"]["kind_counts"]["skill"], 1)
+        self.assertEqual(result["volatile_address_keys"]["cache"], {})
+        self.assertEqual(result["volatile_address_keys"]["matched"]["string_obj"], 1)
 
 
 if __name__ == "__main__":
