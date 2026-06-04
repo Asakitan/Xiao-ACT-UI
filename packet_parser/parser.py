@@ -2723,7 +2723,7 @@ class PacketParser:
                               for c in sync_skill_cds[:5]]
                 if any(v5 > 0 for _, v5, _ in sample_vcd):
                     logger.info(f'[Parser] VCD field5 captured: {sample_vcd}')
-                if _PACKET_DEBUG_ENABLED:
+                if _helpers._PACKET_DEBUG_ENABLED:
                     _append_packet_debug('sync_skill_cd', {
                         'uid': player.uid, 'skill_cds': sync_skill_cds,
                     })
@@ -2744,7 +2744,7 @@ class PacketParser:
                         'valid_cd_time': decoded_fight_cd['valid_cd_time'],
                         'observed_at_ms': int(time.time() * 1000),
                     }
-            if fight_res_cds and _PACKET_DEBUG_ENABLED:
+            if fight_res_cds and _helpers._PACKET_DEBUG_ENABLED:
                 _append_packet_debug('fight_res_cd', {
                     'uid': player.uid, 'fight_res_cds': fight_res_cds,
                 })
@@ -3239,7 +3239,7 @@ class PacketParser:
             monster.last_update = time.time()
             self._notify_monster(monster)
             # Log break-related attrs to packet_debug for diagnosis
-            if _PACKET_DEBUG_ENABLED and (monster.max_extinction > 0 or monster.max_stunned > 0
+            if _helpers._PACKET_DEBUG_ENABLED and (monster.max_extinction > 0 or monster.max_stunned > 0
                     or monster.extinction > 0 or monster.stunned > 0
                     or monster.breaking_stage >= 0 or monster.shield_active):
                 _append_packet_debug('monster_break', {
@@ -3682,7 +3682,7 @@ class PacketParser:
                 continue
             int_value = _decode_int32_from_raw(raw_data)
 
-            if _PACKET_DEBUG_ENABLED and self._is_confirmed_self_uid(uid):
+            if _helpers._PACKET_DEBUG_ENABLED and self._is_confirmed_self_uid(uid):
                 _append_packet_debug(
                     'attr_collection',
                     {
