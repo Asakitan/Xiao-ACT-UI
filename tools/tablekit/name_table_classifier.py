@@ -25,6 +25,9 @@ _SR_WPF_MONSTER = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAnaly
 _SR_OLD_MONSTER = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Old", "Data", "monster")
 
 SKILL_KIND = "skill"
+PLAYER_SKILL_KIND = "player_skill"
+MONSTER_SKILL_KIND = "monster_skill"
+ENVIRONMENT_SKILL_KIND = "environment_skill"
 FIELD_MARKER_KIND = "field_marker"
 BOSS_SKILL_KIND = "boss_skill"
 ULTIMATE_SKILL_KIND = "ultimate_skill"
@@ -47,6 +50,9 @@ _VIRTUAL_RE = re.compile(r"(虚拟体|虚拟|dummy|Dummy|DUMMY|VFX|vfx|假子弹
 _ULTIMATE_RE = re.compile(r"(奥义|幻想|终极|绝技|大招|ULT|ult)")
 _ROGUELIKE_RE = re.compile(r"(肉鸽词条|大秘境词条|词条|赛季词缀|赛季词条)")
 _BOSS_MECHANIC_SKILL_RE = re.compile(r"(读条|点名|分摊|致死|转阶段|阶段转换|机制杀|机制|踩塔|连线|全场|秒杀|破盾|破防|锁血|斩杀|狂暴)")
+_ENVIRONMENT_SKILL_RE = re.compile(r"(吸引怪物|拉怪|黯影堡垒专用|场景专用|地图专用|关卡专用|机关|陷阱|装置|传送|清怪辅助|交互|环境|炮台|载具|矿车|电梯)")
+_MONSTER_SKILL_RE = re.compile(r"(小怪|精英怪|魔物|哥布林|史莱姆|肉山|触手|爪击|撕咬|啃咬|扫尾|平A)")
+_PLAYER_SKILL_RE = re.compile(r"(普通攻击|普攻|特殊攻击|专精技能|共鸣技能|职业技能|武器技能)")
 _PROFESSION_BUFF_RE = re.compile(r"(职业|专精|天赋|流派|普攻|特攻|特殊攻击|大招|奥义|终技|技能强化|替换技能|派生|分支|圣令|气刃|寒冰能量|光铸|种子|协奏|狂音|雷之印|恩格|护盾猛击|先锋追击|狂野绽放|生命绽放)")
 _SCRIPTED_EXCLUDE_RE = re.compile(r"(锁定追击|点名|分摊|机制|读条|致死|秒杀)")
 
@@ -225,6 +231,44 @@ def boss_skill_ids() -> set[int]:
     return ids
 
 
+@lru_cache(maxsize=1)
+def monster_skill_ids() -> set[int]:
+    ids: set[int] = set()
+    bosses = boss_monster_ids()
+    for monster_id, row in monster_table().items():
+        if monster_id in bosses or _safe_int(row.get("MonsterType"), -1) == 2:
+            continue
+        for raw in row.get("SkillIds") or []:
+            sid = _safe_int(raw)
+            if sid > 0:
+                ids.add(sid)
+    return ids
+
+
+@lru_cache(maxsize=1)
+def environment_skill_ids() -> set[int]:
+    ids: set[int] = set()
+    for sid in set(skill_table()) | set(skill_fallback_names()):
+        text = _skill_name_text(sid)
+        row = skill_table().get(sid) or {}
+        if _ENVIRONMENT_SKILL_RE.search(text):
+            ids.add(sid)
+            continue
+        if row and _safe_int(row.get("VehicleSkillType"), 0) > 0:
+            ids.add(sid)
+    return {sid for sid in ids if sid > 0}
+
+
+@lru_cache(maxsize=1)
+def player_skill_ids() -> set[int]:
+    ids = set(profession_skill_ids()) | set(ultimate_skill_ids())
+    for sid, row in skill_table().items():
+        text = _skill_name_text(sid, row)
+        if _PLAYER_SKILL_RE.search(text) and sid not in boss_skill_ids() and sid not in monster_skill_ids():
+            ids.add(sid)
+    return {sid for sid in ids if sid > 0}
+
+
 def _slot_positions(row: Mapping[str, Any]) -> set[int]:
     raw = row.get("SlotPositionId") or []
     if isinstance(raw, (int, str)):
@@ -269,8 +313,14 @@ def classify_skill_id(skill_id: Any) -> str:
         return PROFESSION_SKILL_KIND
     if _BOSS_MECHANIC_SKILL_RE.search(text) or bool(row.get("IsDangerSkill")) or bool(row.get("IsFractureSkill")):
         return BOSS_MECHANIC_SKILL_KIND
+    if sid in environment_skill_ids() or _ENVIRONMENT_SKILL_RE.search(text):
+        return ENVIRONMENT_SKILL_KIND
     if sid in boss_skill_ids():
         return BOSS_SKILL_KIND
+    if sid in monster_skill_ids() or _MONSTER_SKILL_RE.search(text):
+        return MONSTER_SKILL_KIND
+    if sid in player_skill_ids() or _PLAYER_SKILL_RE.search(text):
+        return PLAYER_SKILL_KIND
     return SKILL_KIND
 
 
@@ -329,6 +379,9 @@ def _skill_name(skill_id: int) -> str:
 def _skill_maps() -> dict[str, dict[int, str]]:
     out = {
         SKILL_KIND: {},
+        PLAYER_SKILL_KIND: {},
+        MONSTER_SKILL_KIND: {},
+        ENVIRONMENT_SKILL_KIND: {},
         FIELD_MARKER_KIND: {},
         BOSS_SKILL_KIND: {},
         ULTIMATE_SKILL_KIND: {},
@@ -338,7 +391,7 @@ def _skill_maps() -> dict[str, dict[int, str]]:
         VIRTUAL_SKILL_KIND: {},
         BOSS_MECHANIC_SKILL_KIND: {},
     }
-    ids = set(skill_table()) | set(skill_fallback_names()) | set(aoyi_skill_names()) | boss_skill_ids()
+    ids = set(skill_table()) | set(skill_fallback_names()) | set(aoyi_skill_names()) | boss_skill_ids() | monster_skill_ids() | environment_skill_ids() | player_skill_ids()
     ids.update(sid for sid, text in damage_attr_names().items() if _ULTIMATE_RE.search(text) or _ROGUELIKE_RE.search(text) or _VIRTUAL_RE.search(text) or _BOSS_MECHANIC_SKILL_RE.search(text))
     for sid in sorted(ids):
         name = _skill_name(sid)
@@ -399,6 +452,9 @@ def load_classified_tables() -> dict[str, dict[str, dict[str, str]]]:
     mechanics = _boss_mechanic_map()
     result: dict[str, dict[str, dict[str, str]]] = {
         SKILL_KIND: _to_runtime(skills[SKILL_KIND]),
+        PLAYER_SKILL_KIND: _to_runtime(skills[PLAYER_SKILL_KIND]),
+        MONSTER_SKILL_KIND: _to_runtime(skills[MONSTER_SKILL_KIND]),
+        ENVIRONMENT_SKILL_KIND: _to_runtime(skills[ENVIRONMENT_SKILL_KIND]),
         FIELD_MARKER_KIND: _to_runtime(skills[FIELD_MARKER_KIND]),
         BOSS_SKILL_KIND: _to_runtime(skills[BOSS_SKILL_KIND]),
         ULTIMATE_SKILL_KIND: _to_runtime(skills[ULTIMATE_SKILL_KIND]),

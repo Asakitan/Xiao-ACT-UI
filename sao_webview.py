@@ -3886,20 +3886,6 @@ class SAOWebViewGUI:
             self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
             ensure_act_event_bus(self)
             ensure_act_plugin_manager(self, load=True)
-            # Load skill name mapping
-            _skill_json = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                       'assets', 'skill_names.json')
-            if os.path.isfile(_skill_json):
-                try:
-                    with open(_skill_json, 'r', encoding='utf-8') as _sf:
-                        _raw = json.load(_sf)
-                    if isinstance(_raw, dict):
-                        self._dps_tracker.set_skill_names(
-                            {int(k): v for k, v in _raw.items() if str(k).isdigit()}
-                        )
-                        print(f'[SAO] Loaded {len(_raw)} skill names')
-                except Exception as _se:
-                    print(f'[SAO] Failed to load skill_names.json: {_se}')
             print('[SAO] DPS tracker initialized')
         except Exception as e:
             print(f'[SAO] DPS tracker init failed: {e}')

@@ -169,6 +169,7 @@ def enrich_skill_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
     sub_profession = _clean_text(src.get("sub_profession")) or _clean_text(SUB_PROFESSION_NAMES.get(skill_id, ""))
     role = skill_role(skill_id, profession_id=profession_id)
     category_roles = {
+        "player_skill", "monster_skill", "environment_skill",
         "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
         "scripted_skill", "virtual_skill", "boss_mechanic_skill",
     }
@@ -184,6 +185,9 @@ def enrich_skill_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
         "skill_category": skill_category,
         "skill_kind": skill_category,
         "is_ultimate": skill_category == "ultimate_skill" or role == "ultimate",
+        "is_player_skill": skill_category in {"player_skill", "profession_skill", "ultimate_skill"},
+        "is_monster_skill": skill_category == "monster_skill",
+        "is_environment_skill": skill_category == "environment_skill",
         "is_boss_skill": skill_category == "boss_skill",
         "is_boss_mechanic_skill": skill_category == "boss_mechanic_skill",
         "is_scripted_skill": skill_category == "scripted_skill",

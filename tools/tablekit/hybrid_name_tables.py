@@ -28,7 +28,8 @@ _SR_WPF_MONSTER = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAnaly
 _SR_OLD_MONSTER = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Old", "Data", "monster")
 
 _RUNTIME_KINDS = (
-    "skill", "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
+    "skill", "player_skill", "monster_skill", "environment_skill",
+    "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
     "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill",
     "dungeon", "monster", "boss",
     "boss_mechanic",
@@ -36,12 +37,14 @@ _RUNTIME_KINDS = (
 )
 _KIND_FILENAMES = {kind: os.path.join(_NAME_TABLES, f"{kind}.json") for kind in _RUNTIME_KINDS}
 _CLASSIFIED_KINDS = {
-    "skill", "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
+    "skill", "player_skill", "monster_skill", "environment_skill",
+    "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
     "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill",
     "boss", "boss_mechanic", "buff", "player_buff", "factor_buff", "profession_skill_buff", "event",
 }
 _FALLBACK_PREFIXES = (
-    "技能#", "场地标记#", "Boss技能#", "幻想技能#", "肉鸽词条#", "职业技能#",
+    "技能#", "玩家技能#", "怪物技能#", "环境技能#",
+    "场地标记#", "Boss技能#", "幻想技能#", "肉鸽词条#", "职业技能#",
     "剧情表演#", "虚拟体技能#", "Boss机制技能#", "怪物#", "Boss#", "地牢#",
     "Buff#", "玩家Buff#", "因子Buff#", "职业技能Buff#", "事件#", "机制#", "NPC#", "道具#",
 )
@@ -182,6 +185,7 @@ def _classified_entries(kind: str) -> dict[str, dict[str, str]]:
         for name in (
             "skill_table", "buff_table", "monster_table", "skill_fallback_names",
             "buff_fallback_names", "monster_names", "boss_monster_ids", "boss_skill_ids",
+            "monster_skill_ids", "environment_skill_ids", "player_skill_ids",
             "aoyi_skill_names", "damage_attr_names", "profession_skill_ids", "ultimate_skill_ids",
             "load_classified_tables",
         ):

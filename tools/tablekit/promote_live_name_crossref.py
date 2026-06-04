@@ -34,7 +34,8 @@ _ID_SPACE_KIND = {
 _ALLOWED_CONTEXT_KEYS = ("source", "source_kind", "field", "match", "id_space", "tcp_status", "alias_of", "alias_reason")
 _CONFIDENCE_RANK = {"static": 50, "curated": 45, "mem": 40, "tcp": 35, "high": 30, "medium": 20, "low": 10}
 _FALLBACK_PREFIXES = (
-    "技能#", "场地标记#", "Boss技能#", "幻想技能#", "肉鸽词条#", "职业技能#",
+    "技能#", "玩家技能#", "怪物技能#", "环境技能#",
+    "场地标记#", "Boss技能#", "幻想技能#", "肉鸽词条#", "职业技能#",
     "剧情表演#", "虚拟体技能#", "Boss机制技能#", "怪物#", "Boss#", "地牢#",
     "Buff#", "玩家Buff#", "因子Buff#", "职业技能Buff#", "事件#", "机制#", "NPC#", "道具#",
 )

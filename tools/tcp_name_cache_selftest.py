@@ -48,9 +48,15 @@ class TcpNameCacheTests(unittest.TestCase):
     def test_fallback_labels_are_not_recorded_as_names(self) -> None:
         cache = TcpNameCache(self.path, autosave_interval_s=0)
         cache.observe_name("monster", 11008, "怪物#11008", source="tcp", confidence="high")
+        cache.observe_name("monster_skill", 1004820, "怪物技能#1004820", source="tcp", confidence="high")
+        cache.observe_name("environment_skill", 1006507, "环境技能#1006507", source="tcp", confidence="high")
+        cache.observe_name("player_skill", 1201, "玩家技能#1201", source="tcp", confidence="high")
         cache.observe_name("ultimate_skill", 1713, "幻想技能#1713", source="tcp", confidence="high")
         cache.observe_name("profession_skill_buff", 55302, "职业技能Buff#55302", source="tcp", confidence="high")
         self.assertNotIn("monster", cache.snapshot()["names"]["by_kind"])
+        self.assertNotIn("monster_skill", cache.snapshot()["names"]["by_kind"])
+        self.assertNotIn("environment_skill", cache.snapshot()["names"]["by_kind"])
+        self.assertNotIn("player_skill", cache.snapshot()["names"]["by_kind"])
         self.assertNotIn("ultimate_skill", cache.snapshot()["names"]["by_kind"])
         self.assertNotIn("profession_skill_buff", cache.snapshot()["names"]["by_kind"])
 
@@ -158,6 +164,9 @@ class TcpNameCacheTests(unittest.TestCase):
     def test_hybrid_name_tables_build_runtime_outputs(self) -> None:
         cache = TcpNameCache(self.path, autosave_interval_s=0)
         cache.observe_name("monster", 999001, "测试怪物", source="tcp", confidence="high")
+        cache.observe_name("monster_skill", 1004820, "肉鸽大秘境肉山平A", source="tcp", confidence="high")
+        cache.observe_name("environment_skill", 1006507, "吸引怪物-黯影堡垒专用", source="tcp", confidence="high")
+        cache.observe_name("player_skill", 9998, "测试玩家技能", source="tcp", confidence="high")
         cache.observe_name("boss", 1301, "测试Boss", source="tcp", confidence="high")
         cache.observe_name("boss_mechanic", 47, "护盾破裂", source="tcp", confidence="high")
         cache.observe_name("dungeon", 42001, "测试副本", source="tcp", confidence="high")
@@ -176,7 +185,16 @@ class TcpNameCacheTests(unittest.TestCase):
             mechanic = json.load(f)
         with open(os.path.join(out_dir, "skill.json"), "r", encoding="utf-8") as f:
             skill = json.load(f)
+        with open(os.path.join(out_dir, "monster_skill.json"), "r", encoding="utf-8") as f:
+            monster_skill = json.load(f)
+        with open(os.path.join(out_dir, "environment_skill.json"), "r", encoding="utf-8") as f:
+            environment_skill = json.load(f)
+        with open(os.path.join(out_dir, "player_skill.json"), "r", encoding="utf-8") as f:
+            player_skill = json.load(f)
         self.assertEqual(monster["999001"], "测试怪物")
+        self.assertEqual(monster_skill["1004820"], "肉鸽大秘境肉山平A")
+        self.assertEqual(environment_skill["1006507"], "吸引怪物-黯影堡垒专用")
+        self.assertEqual(player_skill["9998"], "测试玩家技能")
         self.assertEqual(boss["1301"], "测试Boss")
         self.assertEqual(mechanic["47"], "护盾破裂")
         self.assertNotIn("9999", skill)
@@ -187,12 +205,18 @@ class TcpNameCacheTests(unittest.TestCase):
         out_dir = os.path.join(self.tmp, "refined_tables")
         result = update_runtime_tables(self.path, output_dir=out_dir)
 
-        for kind in ("ultimate_skill", "roguelike_affix", "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill", "profession_skill_buff"):
+        for kind in ("player_skill", "monster_skill", "environment_skill", "ultimate_skill", "roguelike_affix", "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill", "profession_skill_buff"):
             with self.subTest(kind=kind):
                 self.assertIn(kind, result["kinds"])
                 with open(os.path.join(out_dir, f"{kind}.json"), "r", encoding="utf-8") as f:
                     table = json.load(f)
                 self.assertIsInstance(table, dict)
+        with open(os.path.join(out_dir, "monster_skill.json"), "r", encoding="utf-8") as f:
+            monster_skill = json.load(f)
+        with open(os.path.join(out_dir, "environment_skill.json"), "r", encoding="utf-8") as f:
+            environment_skill = json.load(f)
+        self.assertIn("1004820", monster_skill)
+        self.assertIn("1006507", environment_skill)
         self.assertFalse(os.path.exists(os.path.join(out_dir, "boss_status.json")))
 
     def test_hybrid_name_tables_materializes_static_skill_and_buff_sources(self) -> None:

@@ -19,7 +19,6 @@ import threading
 import time
 import logging
 import math
-import json
 import os
 import sys
 from collections.abc import Mapping
@@ -57,37 +56,8 @@ from utils.perf_probe import probe as _probe
 
 logger = logging.getLogger('sao_auto.bridge')
 
-# ── Skill name table (from SRDC skill_names_new.json) ──
-_SKILL_NAMES: dict = {}
-
-
-def _load_skill_names() -> dict:
-    """Load skill name mapping {int_id: str_name} from assets/skill_names.json."""
-    global _SKILL_NAMES
-    if _SKILL_NAMES:
-        return _SKILL_NAMES
-    try:
-        if getattr(sys, 'frozen', False):
-            base = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable)
-        else:
-            # reorg 2026-06-02: 本模块下沉到 net/, __file__ 深一层, 取上一级 (sao_auto/) 作根
-            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        path = os.path.join(base, 'assets', 'skill_names.json')
-        if not os.path.exists(path):
-            logger.warning(f'[Bridge] skill_names.json not found at {path}')
-            return {}
-        with open(path, 'r', encoding='utf-8') as f:
-            raw = json.load(f)
-        _SKILL_NAMES = {int(k): str(v) for k, v in raw.items() if str(k).isdigit()}
-        logger.info(f'[Bridge] loaded {len(_SKILL_NAMES)} skill names')
-        return _SKILL_NAMES
-    except Exception as e:
-        logger.warning(f'[Bridge] failed to load skill names: {e}')
-        return {}
-
-
 def _get_skill_name(skill_id: int) -> str:
-    """Resolve a numeric skill_id to its display name."""
+    """Resolve a numeric skill_id through the runtime NameResolver."""
     skill_id = int(skill_id or 0)
     if skill_id <= 0:
         return ''
@@ -105,18 +75,6 @@ def _get_skill_name(skill_id: int) -> str:
                 return name
         except Exception:
             pass
-    if not _SKILL_NAMES:
-        _load_skill_names()
-    # Try exact match first
-    name = _SKILL_NAMES.get(skill_id)
-    if name:
-        return name
-    # Try base skill id (strip level suffix — skill_level_id = skill_id * 100 + level)
-    if skill_id >= 100:
-        base_id = skill_id // 100
-        name = _SKILL_NAMES.get(base_id)
-        if name:
-            return name
     return ''
 _energy_samples = []          # 最近 N 个 energy 值
 _energy_domain = 'unknown'    # 'pct' | 'absolute' | 'unknown'
@@ -990,6 +948,9 @@ class PacketBridge:
                 event.setdefault('skill_category', fact.get('skill_category'))
                 event.setdefault('skill_kind', fact.get('skill_kind'))
                 event.setdefault('is_ultimate', fact.get('is_ultimate'))
+                event.setdefault('is_player_skill', fact.get('is_player_skill'))
+                event.setdefault('is_monster_skill', fact.get('is_monster_skill'))
+                event.setdefault('is_environment_skill', fact.get('is_environment_skill'))
                 event.setdefault('is_boss_skill', fact.get('is_boss_skill'))
                 event.setdefault('is_boss_mechanic_skill', fact.get('is_boss_mechanic_skill'))
                 event.setdefault('is_scripted_skill', fact.get('is_scripted_skill'))

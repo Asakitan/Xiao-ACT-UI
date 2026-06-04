@@ -21,7 +21,8 @@ _DEFAULT_MATCHED = os.path.join(_NAME_TABLES, "live_probe_act_matched_rows.json"
 _DEFAULT_CACHE = os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.json")
 _DEFAULT_CORRESPONDENCE = os.path.join(_NAME_TABLES, "live_name_tcp_correspondence.json")
 _RUNTIME_TABLE_KINDS = (
-    "skill", "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
+    "skill", "player_skill", "monster_skill", "environment_skill",
+    "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
     "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill",
     "dungeon", "monster", "boss", "boss_mechanic",
     "buff", "player_buff", "factor_buff", "profession_skill_buff", "event",
@@ -33,7 +34,7 @@ _VOLATILE_KEYS = {
     "table_element_base", "allLocalizationString_array_obj",
     "allLocalizationString_element_base",
 }
-_FALLBACK_RE = re.compile(r"^(技能|场地标记|Boss技能|幻想技能|肉鸽词条|职业技能|剧情表演|虚拟体技能|Boss机制技能|怪物|Boss|地牢|Buff|玩家Buff|因子Buff|职业技能Buff|事件|机制|NPC|道具)#\d+$")
+_FALLBACK_RE = re.compile(r"^(技能|玩家技能|怪物技能|环境技能|场地标记|Boss技能|幻想技能|肉鸽词条|职业技能|剧情表演|虚拟体技能|Boss机制技能|怪物|Boss|地牢|Buff|玩家Buff|因子Buff|职业技能Buff|事件|机制|NPC|道具)#\d+$")
 
 
 def _load_json(path: str) -> Any:

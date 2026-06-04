@@ -23,7 +23,8 @@ except Exception:  # pragma: no cover - import fallback for standalone tools
 _SCHEMA_VERSION = 1
 _VALID_CONFIDENCE = {"high", "medium", "low", "mem", "tcp", "static"}
 _GENERIC_KINDS = {
-    "skill", "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
+    "skill", "player_skill", "monster_skill", "environment_skill",
+    "field_marker", "boss_skill", "ultimate_skill", "roguelike_affix",
     "profession_skill", "scripted_skill", "virtual_skill", "boss_mechanic_skill",
     "monster", "boss", "buff", "player_buff", "factor_buff", "profession_skill_buff", "event",
     "dungeon", "scene", "boss_mechanic", "npc", "item", "sub_profession",
@@ -48,7 +49,8 @@ _LIVE_ID_SPACE_KIND = {
     "item_id": "item",
 }
 _FALLBACK_LABEL_PREFIXES = {
-    "技能", "场地标记", "Boss技能", "幻想技能", "肉鸽词条", "职业技能",
+    "技能", "玩家技能", "怪物技能", "环境技能",
+    "场地标记", "Boss技能", "幻想技能", "肉鸽词条", "职业技能",
     "剧情表演", "虚拟体技能", "Boss机制技能", "怪物", "Boss", "地牢",
     "Buff", "玩家Buff", "因子Buff", "职业技能Buff", "事件", "机制", "NPC", "道具",
 }

@@ -21,10 +21,12 @@ class NameTableClassifierTests(unittest.TestCase):
         self.assertNotIn("1101", tables["skill"])
 
     def test_placeholder_description_does_not_create_field_markers(self) -> None:
-        self.assertEqual(classifier.classify_skill_id(1005201), "skill")
-        self.assertEqual(classifier.classify_skill_id(1006401), "skill")
+        self.assertEqual(classifier.classify_skill_id(1005201), "monster_skill")
+        self.assertEqual(classifier.classify_skill_id(1006401), "monster_skill")
         tables = classifier.load_classified_tables()
-        self.assertIn("1005201", tables["skill"])
+        self.assertIn("1005201", tables["monster_skill"])
+        self.assertIn("1006401", tables["monster_skill"])
+        self.assertNotIn("1005201", tables["skill"])
         self.assertNotIn("1005201", tables["field_marker"])
 
     def test_profession_skill_is_split_from_generic_skill(self) -> None:
@@ -32,6 +34,15 @@ class NameTableClassifierTests(unittest.TestCase):
         tables = classifier.load_classified_tables()
         self.assertIn("1201", tables["profession_skill"])
         self.assertNotIn("1201", tables["skill"])
+
+    def test_player_monster_and_environment_skills_are_split_from_generic_skill(self) -> None:
+        self.assertEqual(classifier.classify_skill_id(1004820), "monster_skill")
+        self.assertEqual(classifier.classify_skill_id(1006507), "environment_skill")
+        tables = classifier.load_classified_tables()
+        self.assertIn("1004820", tables["monster_skill"])
+        self.assertIn("1006507", tables["environment_skill"])
+        self.assertNotIn("1004820", tables["skill"])
+        self.assertNotIn("1006507", tables["skill"])
 
     def test_refined_boss_skill_excludes_scripted_and_virtual_samples(self) -> None:
         tables = classifier.load_classified_tables()

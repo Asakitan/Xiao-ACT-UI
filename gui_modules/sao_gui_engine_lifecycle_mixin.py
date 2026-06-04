@@ -14,7 +14,7 @@ Methods:
   * _reconfigure_data_engines (80 lines) — restarts the
     packet+vision engines for the current data source. Reads
     `mem_data_source` setting to pick TCP/memory/hybrid/auto path.
-    Loads skill_names.json into the DPS tracker.
+    Resolves DPS skill names through the shared runtime NameResolver.
   * _start_recognition (204 lines — the biggest method here) —
     full bring-up sequence:
       1. instantiate GameStateManager + CfgSettings + subscribe
@@ -29,12 +29,9 @@ Methods:
     player_name / profession / level / season_exp / player_id /
     fight_point into the cfg_settings game_cache dict.
 
-Round 53 fix: the inline `os.path.dirname(os.path.abspath(__file__))`
-in _reconfigure_data_engines (used to find the skill_names.json
-bundle) is replaced with `resource_path('assets', 'skill_names.json')`
-because __file__ now resolves to gui_modules/ instead of the
-sao_auto/ root. resource_path() consults the same BASE_DIR /
-BUNDLE_DIR fallback the rest of the app already uses.
+Round 53+ follow-up: DPS skill-name lookup now goes through the shared
+NameResolver/TCP name_tables path instead of reading a standalone
+skill_names.json bundle during engine startup.
 
 Required SAOPlayerGUI attrs:
   * self.root, self.settings, self._cfg_settings_ref, self._state_mgr
@@ -69,14 +66,12 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, Optional
 
 from engines.auto_key_engine import AutoKeyEngine
 from engines.boss_autokey_linkage import BossAutoKeyLinkage
 from engines.boss_raid_engine import BossRaidEngine
-from config import resource_path
 from engines.act_trigger_engine import ActTriggerEngine
 from engines.dps_history import DpsHistoryStore
 from engines.dps_tracker import DpsTracker
@@ -188,20 +183,6 @@ class SAOPlayerGUIEngineLifecycleMixin:
             self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
             ensure_act_event_bus(self)
             ensure_act_plugin_manager(self, load=True)
-            # Load skill name mapping (same as webview path)
-            _skill_json = resource_path('assets', 'skill_names.json')
-            if os.path.isfile(_skill_json):
-                try:
-                    with open(_skill_json, 'r', encoding='utf-8') as _sf:
-                        _raw = json.load(_sf)
-                    if isinstance(_raw, dict):
-                        self._dps_tracker.set_skill_names(
-                            {int(k): v for k, v in _raw.items()
-                             if str(k).isdigit()}
-                        )
-                        print(f'[SAO Entity] Loaded {len(_raw)} skill names')
-                except Exception as e:
-                    print(f'[SAO Entity] skill_names.json load error: {e}')
             print('[SAO Entity] DPS tracker initialized')
         except Exception as e:
             print(f'[SAO Entity] DPS tracker init failed: {e}')

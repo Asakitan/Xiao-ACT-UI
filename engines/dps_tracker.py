@@ -8,6 +8,7 @@ import copy
 import threading
 import time
 from collections import defaultdict
+from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from utils.perf_probe import probe as _probe
@@ -84,10 +85,12 @@ def _append_decimal(prefix: int, suffix: int, min_width: int) -> int:
     return int(prefix or 0) * (10 ** width) + suffix
 
 
-def _skill_semantic_fact(skill_id: int) -> Dict[str, Any]:
-    sid = _safe_int(skill_id, 0)
+@lru_cache(maxsize=4096)
+def _skill_semantic_fact_cached(skill_id: int) -> Tuple[Tuple[str, Any], ...]:
+    raw_sid = _safe_int(skill_id, 0)
+    sid = _semantic_base_skill_id(raw_sid)
     if sid <= 0:
-        return {}
+        return ()
     try:
         from tools.tablekit.combat_preparse import skill_role
         from tools.tablekit.name_table_classifier import classify_skill_id
@@ -97,21 +100,55 @@ def _skill_semantic_fact(skill_id: int) -> Dict[str, Any]:
         category = 'skill'
         role = 'skill'
     if category in {
+        'player_skill', 'monster_skill', 'environment_skill',
         'field_marker', 'boss_skill', 'ultimate_skill', 'roguelike_affix',
         'scripted_skill', 'virtual_skill', 'boss_mechanic_skill',
     }:
         role = category
-    return {
+    fact = {
+        'semantic_skill_id': sid,
         'skill_category': category,
         'skill_kind': category,
         'skill_role': role,
         'is_ultimate': category == 'ultimate_skill' or role == 'ultimate',
+        'is_player_skill': category in {'player_skill', 'profession_skill', 'ultimate_skill'},
+        'is_monster_skill': category == 'monster_skill',
+        'is_environment_skill': category == 'environment_skill',
         'is_boss_skill': category == 'boss_skill',
         'is_boss_mechanic_skill': category == 'boss_mechanic_skill',
         'is_scripted_skill': category == 'scripted_skill',
         'is_virtual_skill': category == 'virtual_skill',
         'is_roguelike_affix': category == 'roguelike_affix',
     }
+    return tuple(fact.items())
+
+
+def _skill_semantic_fact(skill_id: int) -> Dict[str, Any]:
+    return dict(_skill_semantic_fact_cached(_safe_int(skill_id, 0)))
+
+
+@lru_cache(maxsize=4096)
+def _semantic_base_skill_id(skill_id: int) -> int:
+    sid = _safe_int(skill_id, 0)
+    if sid <= 0:
+        return 0
+    try:
+        from tools.tablekit.name_table_classifier import classify_skill_id, skill_fallback_names, skill_table
+        if classify_skill_id(sid) != 'skill' or sid in skill_table() or sid in skill_fallback_names():
+            return sid
+        digits = str(sid)
+        candidates = []
+        for base_id in set(skill_table()) | set(skill_fallback_names()):
+            if base_id <= 0:
+                continue
+            base_text = str(base_id)
+            if len(base_text) >= 4 and base_text in digits:
+                candidates.append(base_id)
+        if candidates:
+            return max(candidates, key=lambda value: len(str(value)))
+    except Exception:
+        pass
+    return sid
 
 
 def _annotate_skill_rows(rows: Any) -> None:
@@ -177,6 +214,7 @@ class DpsTracker:
         self._boss_uuid: int = 0
         self._total_damage_boss: int = 0
         self._skill_names: Dict[int, str] = dict(skill_names or {})
+        self._name_resolver = None
         self._on_update = on_update
         self._dirty = False
         self._last_report: Optional[Dict[str, Any]] = None
@@ -288,6 +326,34 @@ class DpsTracker:
         with self._lock:
             self._skill_names.update(names)
 
+    def set_name_resolver(self, resolver: Any) -> None:
+        with self._lock:
+            self._name_resolver = resolver
+
+    def _resolve_skill_name_locked(self, skill_key: int, skill_id: int) -> str:
+        semantic_id = _semantic_base_skill_id(skill_key)
+        for sid in (skill_id, skill_key, semantic_id):
+            sid = _safe_int(sid, 0)
+            if sid <= 0:
+                continue
+            resolver = self._name_resolver
+            if resolver is None:
+                try:
+                    from tools.tablekit.name_tables import names as resolver
+                except Exception:
+                    resolver = None
+            if resolver is not None:
+                try:
+                    name = resolver.skill(sid, default='')
+                    if name:
+                        return str(name)
+                except Exception:
+                    pass
+            name = self._skill_names.get(sid)
+            if name:
+                return str(name)
+        return str(skill_id or skill_key)
+
     def register_finalized_hook(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Register a callback for finalized encounter reports.
 
@@ -362,11 +428,7 @@ class DpsTracker:
         if is_immune or is_absorbed or damage <= 0:
             return
 
-        skill_name = (
-            self._skill_names.get(skill_key)
-            or self._skill_names.get(skill_id)
-            or str(skill_id or skill_key)
-        )
+        skill_name = self._resolve_skill_name_locked(skill_key, skill_id)
         tracked = False
 
         if is_heal:

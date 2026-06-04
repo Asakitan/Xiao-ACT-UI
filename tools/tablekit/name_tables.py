@@ -6,7 +6,7 @@
     1. assets/name_tables/<kind>.json   ← 轻量稳定 TCP/MEM/解析名字表, {id: name}
     2. assets/name_tables/tcp_preparse_name_cache.json ← 运行时 compact TCP/MEM cache
     3. StarResonanceDps/resonance-logs-cn 社区表(可能不全), {id: {Name:..}}
-    4. assets/skill_names.json          ← 现有部分技能名 fallback, {id: name}
+    4. 生成器/审计工具可继续读取 assets/skill_names.json, 运行时显示层走本 resolver。
 
 kind: skill / monster / boss / buff / dungeon / boss_mechanic / npc / item ...
 
@@ -37,12 +37,14 @@ _SRD_WINFORM_TABLE = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAn
 _DATATOOLS_OLD_MONSTER = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Old", "Data", "monster")
 _RESONANCE_LOGS_CONFIG = os.path.join(_REPO, "resonance-logs-cn", "src", "lib", "config")
 _RESONANCE_LOGS_METER_DATA = os.path.join(_REPO, "resonance-logs-cn", "src-tauri", "meter-data")
-_SKILL_NAMES = os.path.join(_ASSETS, "skill_names.json")
 _TCP_PREPARSE_CACHE = os.path.join(_EXTRACTED, "tcp_preparse_name_cache.json")
 
 # 每个 kind 的数据源 (高优先级在前)
 _SOURCES = {
     "skill":   [(_EXTRACTED, "skill.json")],
+    "player_skill": [(_EXTRACTED, "player_skill.json")],
+    "monster_skill": [(_EXTRACTED, "monster_skill.json")],
+    "environment_skill": [(_EXTRACTED, "environment_skill.json")],
     "field_marker": [(_EXTRACTED, "field_marker.json")],
     "boss_skill": [(_EXTRACTED, "boss_skill.json")],
     "ultimate_skill": [(_EXTRACTED, "ultimate_skill.json")],
@@ -77,7 +79,8 @@ _SOURCES = {
 
 # 兜底前缀 (找不到名字时显示 "<前缀>#<id>")
 _FALLBACK_PREFIX = {
-    "skill": "技能", "field_marker": "场地标记", "boss_skill": "Boss技能",
+    "skill": "技能", "player_skill": "玩家技能", "monster_skill": "怪物技能",
+    "environment_skill": "环境技能", "field_marker": "场地标记", "boss_skill": "Boss技能",
     "ultimate_skill": "幻想技能", "roguelike_affix": "肉鸽词条", "profession_skill": "职业技能",
     "scripted_skill": "剧情表演", "virtual_skill": "虚拟体技能", "boss_mechanic_skill": "Boss机制技能",
     "monster": "怪物", "boss": "Boss", "buff": "Buff", "player_buff": "玩家Buff",
@@ -87,7 +90,8 @@ _FALLBACK_PREFIX = {
 
 _COMPAT_KIND_FALLBACKS = {
     "skill": (
-        "ultimate_skill", "profession_skill", "boss_mechanic_skill", "boss_skill",
+        "ultimate_skill", "profession_skill", "player_skill", "environment_skill",
+        "boss_mechanic_skill", "boss_skill", "monster_skill",
         "scripted_skill", "virtual_skill", "field_marker", "roguelike_affix",
     ),
     "buff": ("profession_skill_buff", "player_buff", "factor_buff"),
@@ -221,6 +225,15 @@ class NameResolver:
     def skill(self, id_: object, default: Optional[str] = None) -> str:
         return self.resolve("skill", id_, default)
 
+    def player_skill(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("player_skill", id_, default)
+
+    def monster_skill(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("monster_skill", id_, default)
+
+    def environment_skill(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("environment_skill", id_, default)
+
     def field_marker(self, id_: object, default: Optional[str] = None) -> str:
         return self.resolve("field_marker", id_, default)
 
@@ -283,6 +296,12 @@ class NameResolver:
 
     def coverage(self) -> Dict[str, int]:
         return {k: len(self._load_kind(k)) for k in _SOURCES}
+
+    def kind_map(self, kind: str) -> Dict[int, str]:
+        return dict(self._load_kind(kind))
+
+    def export_kind_map(self, kind: str) -> Dict[int, str]:
+        return self.kind_map(kind)
 
     def reload(self):
         with self._lock:
