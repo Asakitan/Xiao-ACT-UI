@@ -323,6 +323,10 @@ class AutoKeyDetailPanel(_DetailEditorBase):
         'sta_pct_gte',
         'profession_is',
         'player_name_is',
+        'dungeon_is',
+        'last_skill_is',
+        'boss_mechanic_is',
+        'boss_mechanic_family_is',
     )
     SLOT_STATES = ('ready', 'active', 'cooldown', 'insufficient_energy')
 
@@ -614,7 +618,8 @@ class AutoKeyDetailPanel(_DetailEditorBase):
                 elif ctype == 'slot_state_is':
                     cond['slot_index'] = _as_int(cv['slot_index'].get(), 0, 0, 9)
                     cond['state'] = str(cv['state'].get() or 'ready')
-                elif ctype in ('profession_is', 'player_name_is'):
+                elif ctype in ('profession_is', 'player_name_is', 'dungeon_is',
+                               'last_skill_is', 'boss_mechanic_is', 'boss_mechanic_family_is'):
                     cond['value'] = str(cv['value'].get() or '').strip()
                 if ctype:
                     conditions.append(cond)
@@ -802,6 +807,8 @@ class BossRaidDetailPanel(_DetailEditorBase):
         'overdrive',
         'extinction_pct',
         'breaking_stage',
+        'boss_mechanic',
+        'boss_mechanic_family',
     )
     ALERT_TYPES = ('both', 'visual', 'sound')
     CONDITION_TYPES = ('always', 'hp_pct', 'shield_active', 'breaking')
@@ -1076,7 +1083,7 @@ class BossRaidDetailPanel(_DetailEditorBase):
                 'name': pv['name'].get().strip(),
                 'trigger': {
                     'type': pv['trigger_type'].get().strip() or 'manual',
-                    'value': _as_float(pv['trigger_value'].get(), 0.0, 0.0),
+                    'value': pv['trigger_value'].get().strip() if pv['trigger_type'].get().strip() in ('boss_mechanic', 'boss_mechanic_family') else _as_float(pv['trigger_value'].get(), 0.0, 0.0),
                 },
                 'timelines': timelines,
             })

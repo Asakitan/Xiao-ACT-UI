@@ -79,6 +79,10 @@ def _trigger_text(trigger: Optional[Dict[str, Any]]) -> str:
         return f'Break bar ≥ {int(float(value or 0))}%'
     if trigger_type == 'breaking_stage':
         return f'Break stage ≥ {int(float(value or 0))}'
+    if trigger_type == 'boss_mechanic':
+        return f'Mechanic: {value}'
+    if trigger_type == 'boss_mechanic_family':
+        return f'Mechanic family: {value}'
     return f'{trigger_type}: {value}'
 
 

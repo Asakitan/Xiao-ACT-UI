@@ -241,6 +241,12 @@ def build_act_render_spec(live: Optional[Dict[str, Any]] = None,
     dungeon_name = str(context.get("dungeon_name") or encounter.get("dungeon_name") or "")
     last_skill = context.get("last_skill_event") or encounter.get("last_skill_event") or {}
     last_boss_event = context.get("last_boss_event") or encounter.get("last_boss_event") or {}
+    last_skill_fact = last_skill.get("combat_fact") if isinstance(last_skill, dict) else {}
+    if not isinstance(last_skill_fact, dict):
+        last_skill_fact = {}
+    last_boss_fact = last_boss_event.get("combat_fact") if isinstance(last_boss_event, dict) else {}
+    if not isinstance(last_boss_fact, dict):
+        last_boss_fact = {}
     boss = _boss_context(context, encounter, live)
     return {
         "version": 1,
@@ -255,7 +261,16 @@ def build_act_render_spec(live: Optional[Dict[str, Any]] = None,
                 context.get("dungeon_difficulty") or encounter.get("dungeon_difficulty"), 0),
             "dungeon_name": dungeon_name,
             "last_skill_kind": str(last_skill.get("kind") or ""),
+            "last_skill_id": _safe_int(last_skill.get("skill_id") or last_skill_fact.get("skill_id"), 0),
+            "last_skill_name": str(last_skill.get("skill_name") or last_skill_fact.get("skill_name") or ""),
+            "last_skill_role": str(last_skill.get("skill_role") or last_skill_fact.get("skill_role") or ""),
             "last_boss_event_type": _safe_int(last_boss_event.get("event_type"), 0),
+            "last_boss_mechanic_key": str(
+                last_boss_event.get("boss_mechanic_key") or last_boss_fact.get("boss_mechanic_key") or ""),
+            "last_boss_mechanic_label": str(
+                last_boss_event.get("boss_mechanic_label") or last_boss_fact.get("boss_mechanic_label") or ""),
+            "last_boss_trigger_family": str(
+                last_boss_event.get("trigger_family") or last_boss_fact.get("trigger_family") or ""),
             "last_boss_host_uuid": _safe_int(last_boss_event.get("host_uuid"), 0),
         },
         "name_resolution": {

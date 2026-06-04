@@ -261,7 +261,10 @@ def normalize_condition(raw: Any) -> Optional[Dict[str, Any]]:
     elif condition_type == "slot_state_is":
         normalized["slot_index"] = _coerce_int(raw.get("slot_index"), 0, 0, 9)
         normalized["state"] = _string(raw.get("state")).lower() or "ready"
-    elif condition_type in ("profession_is", "player_name_is"):
+    elif condition_type in (
+        "profession_is", "player_name_is", "dungeon_is",
+        "last_skill_is", "boss_mechanic_is", "boss_mechanic_family_is",
+    ):
         normalized["value"] = _string(raw.get("value"))
     elif condition_type == "in_combat_is":
         normalized["value"] = _coerce_bool(raw.get("value"), True)
@@ -864,6 +867,48 @@ class AutoKeyEngine:
                     return False
             elif cond_type == "player_name_is":
                 if _string(getattr(gs, "player_name", "")) != _string(condition.get("value")):
+                    return False
+            elif cond_type == "dungeon_is":
+                value = _string(condition.get("value"))
+                if not value:
+                    return False
+                dungeon_id = _coerce_int(getattr(gs, "dungeon_id", 0), 0)
+                dungeon_name = _string(getattr(gs, "dungeon_name", ""))
+                if value != str(dungeon_id) and value != dungeon_name:
+                    return False
+            elif cond_type == "last_skill_is":
+                value = _string(condition.get("value"))
+                if not value:
+                    return False
+                ev = getattr(gs, "last_skill_event", {}) or {}
+                fact = ev.get("combat_fact") if isinstance(ev, dict) else {}
+                fact = fact if isinstance(fact, dict) else {}
+                skill_id = _coerce_int(ev.get("skill_id") or fact.get("skill_id"), 0) if isinstance(ev, dict) else 0
+                skill_name = _string((ev.get("skill_name") or fact.get("skill_name") or ev.get("name")) if isinstance(ev, dict) else "")
+                skill_role = _string((ev.get("skill_role") or fact.get("skill_role")) if isinstance(ev, dict) else "")
+                if value not in (str(skill_id), skill_name, skill_role):
+                    return False
+            elif cond_type == "boss_mechanic_is":
+                value = _string(condition.get("value"))
+                if not value:
+                    return False
+                ev = getattr(gs, "last_boss_event", {}) or {}
+                fact = ev.get("combat_fact") if isinstance(ev, dict) else {}
+                fact = fact if isinstance(fact, dict) else {}
+                event_type = _coerce_int(ev.get("event_type") or fact.get("event_type"), 0) if isinstance(ev, dict) else 0
+                key = _string((ev.get("boss_mechanic_key") or fact.get("boss_mechanic_key")) if isinstance(ev, dict) else "")
+                label = _string((ev.get("boss_mechanic_label") or fact.get("boss_mechanic_label")) if isinstance(ev, dict) else "")
+                if value not in (str(event_type), key, label):
+                    return False
+            elif cond_type == "boss_mechanic_family_is":
+                value = _string(condition.get("value"))
+                if not value:
+                    return False
+                ev = getattr(gs, "last_boss_event", {}) or {}
+                fact = ev.get("combat_fact") if isinstance(ev, dict) else {}
+                fact = fact if isinstance(fact, dict) else {}
+                family = _string((ev.get("trigger_family") or fact.get("trigger_family")) if isinstance(ev, dict) else "")
+                if value != family:
                     return False
             elif cond_type == "in_combat_is":
                 if bool(getattr(gs, "in_combat", False)) != _coerce_bool(condition.get("value"), True):

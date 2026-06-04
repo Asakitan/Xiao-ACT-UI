@@ -109,6 +109,10 @@ def on_unload():
 
 Callbacks receive one argument: a canonical ACT event envelope.
 
+Live Star Resonance packet events for `skill`, `dungeon`, `monster`, and `boss` include a stable combat semantic payload at `event["payload"]["combat_fact"]` when the built-in parser can derive it. Useful keys include `skill_id`, `skill_name`, `skill_role`, `dungeon_id`, `dungeon_name`, `monster_id`, `mechanics`, `boss_mechanic_key`, `boss_mechanic_label`, and `trigger_family`. ACT snapshots also expose shortcuts at `render_spec.context.last_skill_id`, `last_skill_name`, `last_skill_role`, `last_boss_mechanic_key`, `last_boss_mechanic_label`, and `last_boss_trigger_family`.
+
+AutoKey profile conditions can use the same semantic facts through condition types `dungeon_is`, `last_skill_is`, `boss_mechanic_is`, and `boss_mechanic_family_is`. Values may match ids, names, or keys depending on the condition; for example `boss_mechanic_is=shield_broken` or `boss_mechanic_family_is=shield`.
+
 Decorator style keeps external plugins compact:
 
 ```python

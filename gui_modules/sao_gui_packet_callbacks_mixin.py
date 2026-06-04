@@ -58,6 +58,7 @@ import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 from act_platform.runtime import enrich_action_log_event, publish_owner_event, should_record_owner_combat_event
 from engines.combat_analytics import boss_state_from_monster_update
+from tools.tablekit.combat_preparse import enrich_boss_event, enrich_dungeon_event, enrich_monster_event, enrich_skill_event
 
 
 class SAOPlayerGUIPacketCallbacksMixin:
@@ -76,7 +77,16 @@ class SAOPlayerGUIPacketCallbacksMixin:
     def _on_skill_event(self, event):
         """Normalized TCP skill lifecycle event → shared ACT context."""
         try:
-            self._last_skill_event = enrich_action_log_event(dict(event or {}), owner=self, topic='skill')
+            event = dict(event or {})
+            fact = enrich_skill_event(event)
+            event.setdefault('combat_fact', fact)
+            if fact.get('skill_id') and not event.get('skill_id'):
+                event['skill_id'] = fact.get('skill_id')
+            if fact.get('skill_name') and not event.get('skill_name'):
+                event['skill_name'] = fact.get('skill_name')
+            event.setdefault('skill_role', fact.get('skill_role'))
+            event.setdefault('sub_profession', fact.get('sub_profession'))
+            self._last_skill_event = enrich_action_log_event(event, owner=self, topic='skill')
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(last_skill_event=self._last_skill_event)
             mgr = getattr(self, '_encounter_mgr', None)
@@ -90,6 +100,12 @@ class SAOPlayerGUIPacketCallbacksMixin:
         """Normalized TCP dungeon/scene event → shared ACT context."""
         try:
             event = dict(event or {})
+            fact = enrich_dungeon_event(event)
+            event.setdefault('combat_fact', fact)
+            if fact.get('dungeon_name') and not event.get('dungeon_name'):
+                event['dungeon_name'] = fact.get('dungeon_name')
+            if fact.get('dungeon_id') and not event.get('dungeon_id'):
+                event['dungeon_id'] = fact.get('dungeon_id')
             self._last_dungeon_event = event
             updates = {'last_dungeon_event': event}
             dungeon_id = int(event.get('dungeon_id') or 0)
@@ -102,7 +118,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
                 updates['dungeon_id'] = dungeon_id
                 try:
                     from tools.tablekit.name_tables import names
-                    resolved = names.dungeon(dungeon_id, default='')
+                    resolved = event.get('dungeon_name') or names.dungeon(dungeon_id, default='')
                     if resolved:
                         updates['dungeon_name'] = resolved
                 except Exception:
@@ -313,6 +329,15 @@ class SAOPlayerGUIPacketCallbacksMixin:
 
     def _on_monster_update(self, monster_data):
         """Monster update from packet_parser → boss raid engine + BossHP pretrack."""
+        try:
+            if isinstance(monster_data, dict):
+                fact = enrich_monster_event(monster_data)
+                monster_data.setdefault('combat_fact', fact)
+                monster_data.setdefault('mechanics', fact.get('mechanics') or [])
+                if fact.get('monster_name') and not monster_data.get('monster_name'):
+                    monster_data['monster_name'] = fact.get('monster_name')
+        except Exception:
+            pass
         publish_owner_event(self, 'monster', monster_data, source_name='entity', source_kind='tcp')
         if self._boss_raid_engine:
             try: self._boss_raid_engine.on_monster_update(monster_data)
@@ -382,7 +407,13 @@ class SAOPlayerGUIPacketCallbacksMixin:
     def _on_boss_event(self, event):
         """Boss buff/event callback from packet_parser → boss raid engine."""
         try:
-            self._last_boss_event = dict(event or {})
+            event = dict(event or {})
+            fact = enrich_boss_event(event)
+            event.setdefault('combat_fact', fact)
+            event.setdefault('boss_mechanic_key', fact.get('boss_mechanic_key'))
+            event.setdefault('boss_mechanic_label', fact.get('boss_mechanic_label'))
+            event.setdefault('trigger_family', fact.get('trigger_family'))
+            self._last_boss_event = event
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(last_boss_event=self._last_boss_event)
             self._push_dps_act_snapshot()

@@ -44,6 +44,12 @@ from packet_parser import (PlayerData, MonsterData,
                            _PROFESSION_PREFIX, _ALL_PROFESSION_PREFIXES)
 from net.packet_capture import PacketCapture, list_devices, auto_select_device
 from net.tcp_name_cache import TcpNameCache
+from tools.tablekit.combat_preparse import (
+    enrich_boss_event,
+    enrich_dungeon_event,
+    enrich_monster_event,
+    enrich_skill_event,
+)
 
 from utils.perf_probe import probe as _probe
 
@@ -730,38 +736,41 @@ class PacketBridge:
     def _cache_skill_event(self, event: Mapping | None) -> None:
         if not isinstance(event, Mapping):
             return
-        skill_level_id = int(event.get('skill_level_id') or 0)
-        skill_id = int(event.get('skill_id') or 0)
-        if skill_id <= 0 and skill_level_id > 0:
-            skill_id = skill_level_id // 100 if skill_level_id >= 100 else skill_level_id
+        fact = enrich_skill_event(event)
+        skill_level_id = int(fact.get('skill_level_id') or event.get('skill_level_id') or 0)
+        skill_id = int(fact.get('skill_id') or event.get('skill_id') or 0)
         if skill_id <= 0:
             return
-        name = str(event.get('skill_name') or event.get('name') or _get_skill_name(skill_id) or '')
-        self._cache_name('skill', skill_id, name, source='tcp_skill_event', confidence='medium', context=dict(event))
+        name = str(fact.get('skill_name') or event.get('skill_name') or event.get('name') or _get_skill_name(skill_id) or '')
+        context = dict(event)
+        context['combat_fact'] = fact
+        context['skill_level_id'] = skill_level_id
+        self._cache_name('skill', skill_id, name, source='tcp_skill_event', confidence='medium', context=context)
 
     def _cache_dungeon_event(self, event: Mapping | None) -> None:
         if not isinstance(event, Mapping):
             return
-        dungeon_id = int(event.get('dungeon_id') or event.get('scene_id') or event.get('scene_uuid') or 0)
+        fact = enrich_dungeon_event(event)
+        dungeon_id = int(fact.get('dungeon_id') or fact.get('scene_id') or event.get('dungeon_id') or event.get('scene_id') or event.get('scene_uuid') or 0)
         if dungeon_id <= 0:
             return
-        try:
-            from tools.tablekit.name_tables import names as _names
-            name = _names.dungeon(dungeon_id, default='')
-        except Exception:
-            name = ''
-        self._cache_name('dungeon', dungeon_id, name, source='tcp_dungeon_event', confidence='medium', context=dict(event))
+        name = str(fact.get('dungeon_name') or '')
+        context = dict(event)
+        context['combat_fact'] = fact
+        self._cache_name('dungeon', dungeon_id, name, source='tcp_dungeon_event', confidence='medium', context=context)
 
     def _cache_monster_event(self, monster: Mapping | None) -> None:
         if not isinstance(monster, Mapping):
             return
-        template_id = int(monster.get('template_id') or monster.get('monster_id') or 0)
+        fact = enrich_monster_event(monster)
+        template_id = int(fact.get('monster_id') or monster.get('template_id') or monster.get('monster_id') or 0)
         if template_id <= 0:
             return
-        name = str(monster.get('name') or monster.get('monster_name') or '')
+        name = str(fact.get('monster_name') or monster.get('name') or monster.get('monster_name') or '')
         self._cache_name('monster', template_id, name, source='tcp_monster_update', confidence='medium', context={
             'uuid': monster.get('uuid'),
             'uid': monster.get('uid'),
+            'combat_fact': fact,
         })
 
     def _is_mem_trigger_event(self, trigger: str, context: Any) -> bool:
@@ -829,7 +838,7 @@ class PacketBridge:
             preferred_uid=preferred_uid,
             on_damage=self._on_damage,
             on_monster_update=self._on_parser_monster_update,
-            on_boss_event=self._on_boss_event,
+            on_boss_event=self._on_parser_boss_event,
             on_skill_event=self._on_parser_skill_event,
             on_dungeon_event=self._on_parser_dungeon_event,
             on_scene_change=self._on_parser_scene_change,
@@ -862,6 +871,15 @@ class PacketBridge:
 
     def _on_parser_monster_update(self, monster: dict):
         self._cache_monster_event(monster)
+        try:
+            if isinstance(monster, Mapping):
+                fact = enrich_monster_event(monster)
+                monster.setdefault('combat_fact', fact)
+                monster.setdefault('mechanics', fact.get('mechanics') or [])
+                if fact.get('monster_name') and not monster.get('monster_name'):
+                    monster['monster_name'] = fact.get('monster_name')
+        except Exception:
+            pass
         cb = self._on_monster_update
         if callable(cb):
             try:
@@ -869,7 +887,38 @@ class PacketBridge:
             except Exception:
                 logger.debug('[Bridge] on_monster_update callback error', exc_info=True)
 
+    def _on_parser_boss_event(self, event: dict):
+        try:
+            if isinstance(event, Mapping):
+                fact = enrich_boss_event(event)
+                event.setdefault('combat_fact', fact)
+                event.setdefault('boss_mechanic_key', fact.get('boss_mechanic_key'))
+                event.setdefault('boss_mechanic_label', fact.get('boss_mechanic_label'))
+                event.setdefault('trigger_family', fact.get('trigger_family'))
+                if getattr(self, '_state_mgr', None):
+                    self._state_mgr.update(last_boss_event=dict(event))
+        except Exception:
+            pass
+        cb = self._on_boss_event
+        if callable(cb):
+            try:
+                cb(event)
+            except Exception:
+                logger.debug('[Bridge] on_boss_event callback error', exc_info=True)
+
     def _on_parser_skill_event(self, event: dict):
+        try:
+            if isinstance(event, Mapping):
+                fact = enrich_skill_event(event)
+                event.setdefault('combat_fact', fact)
+                if fact.get('skill_id') and not event.get('skill_id'):
+                    event['skill_id'] = fact.get('skill_id')
+                if fact.get('skill_name') and not event.get('skill_name'):
+                    event['skill_name'] = fact.get('skill_name')
+                event.setdefault('skill_role', fact.get('skill_role'))
+                event.setdefault('sub_profession', fact.get('sub_profession'))
+        except Exception:
+            pass
         self._cache_skill_event(event)
         cb = self._on_skill_event
         if callable(cb):
@@ -879,6 +928,16 @@ class PacketBridge:
                 logger.debug('[Bridge] on_skill_event callback error', exc_info=True)
 
     def _on_parser_dungeon_event(self, event: dict):
+        try:
+            if isinstance(event, Mapping):
+                fact = enrich_dungeon_event(event)
+                event.setdefault('combat_fact', fact)
+                if fact.get('dungeon_name') and not event.get('dungeon_name'):
+                    event['dungeon_name'] = fact.get('dungeon_name')
+                if fact.get('dungeon_id') and not event.get('dungeon_id'):
+                    event['dungeon_id'] = fact.get('dungeon_id')
+        except Exception:
+            pass
         self._cache_dungeon_event(event)
         kind = str((event or {}).get('kind') or '') if isinstance(event, Mapping) else ''
         if kind in {'enter_scene', 'sync_dungeon_data', 'start_playing_dungeon'}:

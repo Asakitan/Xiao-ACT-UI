@@ -80,6 +80,19 @@ Important fields:
 
 Use `make_event(...)` from `act_platform.events` when adding new producers.
 
+### Combat Semantic Facts
+
+Live TCP skill, dungeon, monster, and boss-mechanic events are enriched by `tools.tablekit.combat_preparse` before they enter shared ACT consumers. The original parser fields remain intact, and the derived fields are attached under `payload.combat_fact` plus common top-level shortcuts where useful.
+
+Current fact families:
+
+- `skill`: `skill_id`, `skill_level_id`, `skill_name`, `skill_role`, `profession_id`, `sub_profession`, caster/target ids.
+- `dungeon`: `dungeon_id`, `scene_id`, `scene_uuid`, `dungeon_difficulty`, `dungeon_name`, `flow_state`, target count.
+- `monster`: `monster_id`, `monster_name`, HP/shield/break/overdrive fields, `mechanics` list, buff count.
+- `boss`: `event_type`, `boss_mechanic_key`, `boss_mechanic_label`, `trigger_family`, host/buff ids.
+
+`combat_analytics.build_act_render_spec(...)` exposes commonly-used shortcuts under `render_spec.context`: `last_skill_id`, `last_skill_name`, `last_skill_role`, `last_boss_mechanic_key`, `last_boss_mechanic_label`, and `last_boss_trigger_family`. These are intended for ACT triggers, plugins, AutoKey gates, BossRaid profiles, and WebView/Entity UI parity.
+
 ## Parser Adapters
 
 The parser adapter contract lives in `act_platform.adapters`.

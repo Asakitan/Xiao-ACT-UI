@@ -13,6 +13,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import BASE_DIR
+from tools.tablekit.combat_preparse import enrich_boss_event
 
 from utils.perf_probe import probe as _probe
 import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
@@ -145,7 +146,7 @@ def normalize_timeline(raw: Any) -> Dict[str, Any]:
 
 def make_default_phase_trigger() -> Dict[str, Any]:
     return {
-        "type": "manual",   # manual | time | dps_total | hp_pct | breaking | buff_event | shield_broken | overdrive | extinction_pct | breaking_stage
+        "type": "manual",   # manual | time | dps_total | hp_pct | breaking | buff_event | shield_broken | overdrive | extinction_pct | breaking_stage | boss_mechanic | boss_mechanic_family
         "value": 0,
     }
 
@@ -154,11 +155,12 @@ def normalize_phase_trigger(raw: Any) -> Dict[str, Any]:
     src = raw if isinstance(raw, dict) else {}
     trigger_type = _string(src.get("type")).lower()
     if trigger_type not in ("manual", "time", "dps_total", "hp_pct", "breaking", "buff_event",
-                            "shield_broken", "overdrive", "extinction_pct", "breaking_stage"):
+                            "shield_broken", "overdrive", "extinction_pct", "breaking_stage",
+                            "boss_mechanic", "boss_mechanic_family"):
         trigger_type = "manual"
     return {
         "type": trigger_type,
-        "value": _coerce_float(src.get("value"), 0.0, 0.0),
+        "value": _string(src.get("value")) if trigger_type in ("boss_mechanic", "boss_mechanic_family") else _coerce_float(src.get("value"), 0.0, 0.0),
     }
 
 
@@ -555,6 +557,10 @@ class BossRaidEngine:
         self._boss_extinction_pct: float = 0.0  # Breaking bar %
         self._boss_in_overdrive: bool = False
         self._boss_invincible: bool = False
+        self._last_boss_event: Dict[str, Any] = {}
+        self._last_boss_mechanic_key: str = ""
+        self._last_boss_mechanic_label: str = ""
+        self._last_boss_trigger_family: str = ""
         self._immune_streak: int = 0          # Consecutive immune hits for invincibility detection
         self._immune_window_start: float = 0.0
         self._last_monster_data: Optional[Dict[str, Any]] = None
@@ -587,7 +593,7 @@ class BossRaidEngine:
         """Start (or restart) a boss raid with the given profile."""
         with self._lock:
             if profile:
-                self._profile = copy.deepcopy(profile)
+                self._profile = normalize_profile(copy.deepcopy(profile))
             if not self._profile:
                 return
             self._state = self.STATE_RUNNING
@@ -609,6 +615,7 @@ class BossRaidEngine:
             self._boss_in_overdrive = False
             self._boss_invincible = False
             self._immune_streak = 0
+            self._clear_last_boss_mechanic_locked()
             self._last_monster_data = None
             # Reset multi-entity tracking
             self._entities.clear()
@@ -639,6 +646,7 @@ class BossRaidEngine:
             self._boss_max_hp = 0
             self._boss_invincible = False
             self._immune_streak = 0
+            self._clear_last_boss_mechanic_locked()
             self._entities.clear()
             self._entity_order.clear()
             self._boss_manually_set = False
@@ -668,6 +676,7 @@ class BossRaidEngine:
             self._boss_in_overdrive = False
             self._boss_invincible = False
             self._immune_streak = 0
+            self._clear_last_boss_mechanic_locked()
             self._last_monster_data = None
             self._entities.clear()
             self._entity_order.clear()
@@ -675,6 +684,12 @@ class BossRaidEngine:
         self._push_game_state_clear()
 
     # ── Entity role management (for visual editor) ──
+
+    def _clear_last_boss_mechanic_locked(self):
+        self._last_boss_event = {}
+        self._last_boss_mechanic_key = ""
+        self._last_boss_mechanic_label = ""
+        self._last_boss_trigger_family = ""
 
     def set_entity_role(self, uuid: int, role: str):
         """Set entity role: 'boss' or 'enemy'. Called from visual editor overlay.
@@ -897,6 +912,15 @@ class BossRaidEngine:
             if self._state != self.STATE_RUNNING:
                 return
             event_type = event.get("event_type", 0)
+            fact = event.get("combat_fact") if isinstance(event.get("combat_fact"), dict) else enrich_boss_event(event)
+            boss_mechanic_key = _string(event.get("boss_mechanic_key") or fact.get("boss_mechanic_key"))
+            boss_mechanic_label = _string(event.get("boss_mechanic_label") or fact.get("boss_mechanic_label"))
+            trigger_family = _string(event.get("trigger_family") or fact.get("trigger_family"))
+            self._last_boss_event = dict(event or {})
+            self._last_boss_event.setdefault("combat_fact", fact)
+            self._last_boss_mechanic_key = boss_mechanic_key
+            self._last_boss_mechanic_label = boss_mechanic_label
+            self._last_boss_trigger_family = trigger_family
 
             # Check for breaking/buff_event/shield_broken phase triggers
             profile = self._profile or {}
@@ -918,6 +942,15 @@ class BossRaidEngine:
                     # Overdrive is also signalled via entering breaking or special events
                     if self._boss_in_overdrive:
                         self._advance_phase()
+                elif trigger_type == "boss_mechanic":
+                    trigger_text = _string(trigger.get("value"))
+                    if trigger_text and trigger_text in (str(event_type), boss_mechanic_key, boss_mechanic_label):
+                        self._advance_phase()
+                elif trigger_type == "boss_mechanic_family":
+                    trigger_text = _string(trigger.get("value"))
+                    if trigger_text and trigger_text == trigger_family:
+                        self._advance_phase()
+            self._push_game_state_locked(time.time())
 
     def get_status(self) -> Dict[str, Any]:
         """Return current engine status dict."""
@@ -977,6 +1010,10 @@ class BossRaidEngine:
             "boss_extinction_pct": round(self._boss_extinction_pct, 4),
             "boss_in_overdrive": self._boss_in_overdrive,
             "boss_invincible": self._boss_invincible,
+            "last_boss_event": dict(self._last_boss_event or {}),
+            "last_boss_mechanic_key": self._last_boss_mechanic_key,
+            "last_boss_mechanic_label": self._last_boss_mechanic_label,
+            "last_boss_trigger_family": self._last_boss_trigger_family,
             "entities": self._get_entities_locked(),
         }
 
@@ -1186,6 +1223,7 @@ class BossRaidEngine:
             boss_extinction_pct=status["boss_extinction_pct"],
             boss_in_overdrive=status["boss_in_overdrive"],
             boss_invincible=status["boss_invincible"],
+            last_boss_event=status.get("last_boss_event") or {},
         )
 
     def _push_game_state_clear(self):
@@ -1208,6 +1246,7 @@ class BossRaidEngine:
             boss_extinction_pct=0.0,
             boss_in_overdrive=False,
             boss_invincible=False,
+            last_boss_event={},
         )
 
     def _fire_alert(self, title: str, message: str):
