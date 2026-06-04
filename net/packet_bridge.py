@@ -51,6 +51,7 @@ from tools.tablekit.combat_preparse import (
     enrich_monster_event,
     enrich_skill_event,
 )
+from tools.tablekit.hybrid_name_tables import update_runtime_tables
 
 from utils.perf_probe import probe as _probe
 
@@ -481,16 +482,17 @@ class PacketBridge:
         self._error_msg = ''
 
     def _on_tcp_name_cache_saved(self, path: str) -> None:
-        """Reload the shared NameResolver after compact TCP names are saved."""
+        """Refresh lightweight name tables and resolver after compact TCP names are saved."""
         now = time.time()
         if now - self._last_name_resolver_reload_ts < 1.0:
             return
         self._last_name_resolver_reload_ts = now
         try:
+            update_runtime_tables(path)
             _NAME_RESOLVER.reload()
-            logger.debug(f'[Bridge] reloaded NameResolver after tcp name cache save: {path}')
+            logger.debug(f'[Bridge] refreshed runtime name tables after tcp name cache save: {path}')
         except Exception as exc:
-            logger.debug(f'[Bridge] name resolver reload failed after tcp name cache save: {exc}')
+            logger.debug(f'[Bridge] runtime name table refresh failed after tcp name cache save: {exc}')
 
     def _get_watched_slots(self):
         """Return set of watched skill slot indices from settings."""
@@ -779,13 +781,22 @@ class PacketBridge:
         if not isinstance(event, Mapping):
             return
         fact = enrich_dungeon_event(event)
-        dungeon_id = int(fact.get('dungeon_id') or fact.get('scene_id') or event.get('dungeon_id') or event.get('scene_id') or event.get('scene_uuid') or 0)
-        if dungeon_id <= 0:
-            return
         name = str(fact.get('dungeon_name') or '')
         context = dict(event)
         context['combat_fact'] = fact
-        self._cache_name('dungeon', dungeon_id, name, source='tcp_dungeon_event', confidence='medium', context=context)
+        ids = []
+        for value in (
+            fact.get('dungeon_id'), fact.get('scene_id'), fact.get('scene_uuid'),
+            event.get('dungeon_id'), event.get('scene_id'), event.get('scene_uuid'), event.get('cur_map_id'),
+        ):
+            try:
+                iid = int(value or 0)
+            except Exception:
+                iid = 0
+            if iid > 0 and iid not in ids:
+                ids.append(iid)
+        for iid in ids:
+            self._cache_name('dungeon', iid, name, source='tcp_dungeon_event', confidence='medium', context=context)
 
     def _cache_monster_event(self, monster: Mapping | None) -> None:
         if not isinstance(monster, Mapping):
@@ -800,6 +811,33 @@ class PacketBridge:
             'uid': monster.get('uid'),
             'combat_fact': fact,
         })
+        if bool(monster.get('is_boss') or monster.get('boss') or monster.get('boss_raid_active')):
+            self._cache_name('boss', template_id, name, source='tcp_monster_update', confidence='medium', context={
+                'uuid': monster.get('uuid'),
+                'uid': monster.get('uid'),
+                'combat_fact': fact,
+            })
+
+    def _cache_boss_event(self, event: Mapping | None) -> None:
+        if not isinstance(event, Mapping):
+            return
+        fact = enrich_boss_event(event)
+        event_type = int(fact.get('event_type') or event.get('event_type') or 0)
+        context = dict(event)
+        context['combat_fact'] = fact
+        if event_type > 0:
+            self._cache_name(
+                'boss_mechanic',
+                event_type,
+                fact.get('boss_mechanic_label') or event.get('boss_mechanic_label') or '',
+                source='tcp_boss_event',
+                confidence='high',
+                context=context,
+            )
+        buff_id = int(fact.get('buff_id') or event.get('buff_id') or event.get('base_id') or 0)
+        buff_name = str(fact.get('buff_name') or event.get('buff_name') or '')
+        if buff_id > 0 and buff_name:
+            self._cache_name('buff', buff_id, buff_name, source='tcp_boss_event', confidence='medium', context=context)
 
     def _is_mem_trigger_event(self, trigger: str, context: Any) -> bool:
         if trigger in {'self_update_full_sync', 'dungeon_event'}:
@@ -927,6 +965,7 @@ class PacketBridge:
                     self._state_mgr.update(last_boss_event=dict(event))
         except Exception:
             pass
+        self._cache_boss_event(event)
         cb = self._on_boss_event
         if callable(cb):
             try:

@@ -29,6 +29,8 @@ class TcpNameCacheTests(unittest.TestCase):
         cache = TcpNameCache(self.path, autosave_interval_s=0)
         cache.observe_endpoint("01020304:1234", source="tcp")
         cache.observe_name("skill", 1522, "滋养", source="tcp", confidence="high", endpoint="01020304:1234")
+        cache.observe_name("boss_mechanic", 47, "护盾破裂", source="tcp", confidence="high", endpoint="01020304:1234")
+        cache.observe_name("boss", 1301, "测试Boss", source="tcp", confidence="high", endpoint="01020304:1234")
         cache.save(force=True)
 
         with open(self.path, "r", encoding="utf-8") as f:
@@ -37,6 +39,8 @@ class TcpNameCacheTests(unittest.TestCase):
         self.assertEqual(endpoint["ip"], "1.2.3.4")
         self.assertEqual(endpoint["port"], 1234)
         self.assertEqual(data["names"]["by_kind"]["skill"]["1522"]["text"], "滋养")
+        self.assertEqual(data["names"]["by_kind"]["boss_mechanic"]["47"]["text"], "护盾破裂")
+        self.assertEqual(data["names"]["by_kind"]["boss"]["1301"]["text"], "测试Boss")
         dumped = json.dumps(data, ensure_ascii=False)
         self.assertNotIn("raw_payload", dumped)
         self.assertNotIn("packet_bytes", dumped)
@@ -135,7 +139,6 @@ class TcpNameCacheTests(unittest.TestCase):
                 }, f, ensure_ascii=False)
             from tools.tablekit import name_tables
             with mock.patch.object(name_tables, "_SOURCES", {"skill": []}), \
-                 mock.patch.object(name_tables, "_LIVE_ACT_MATCHES", os.path.join(td, "missing.json")), \
                  mock.patch.object(name_tables, "_TCP_PREPARSE_CACHE", path):
                 resolver = name_tables.NameResolver()
                 self.assertEqual(resolver.skill(2414), "神圣壁垒")
@@ -147,6 +150,32 @@ class TcpNameCacheTests(unittest.TestCase):
         cache.observe_name("skill", 2414, "神圣壁垒", source="tcp", confidence="high")
 
         self.assertEqual(seen, [self.path])
+
+    def test_hybrid_name_tables_build_runtime_outputs(self) -> None:
+        cache = TcpNameCache(self.path, autosave_interval_s=0)
+        cache.observe_name("monster", 999001, "测试怪物", source="tcp", confidence="high")
+        cache.observe_name("boss", 1301, "测试Boss", source="tcp", confidence="high")
+        cache.observe_name("boss_mechanic", 47, "护盾破裂", source="tcp", confidence="high")
+        cache.observe_name("dungeon", 42001, "测试副本", source="tcp", confidence="high")
+        cache.observe_name("skill", 9999, "技能#9999", source="tcp", confidence="high")
+
+        from tools.tablekit.hybrid_name_tables import update_runtime_tables
+        out_dir = os.path.join(self.tmp, "tables")
+        result = update_runtime_tables(self.path, output_dir=out_dir)
+
+        self.assertGreaterEqual(result["kinds"]["boss_mechanic"]["written"], 1)
+        with open(os.path.join(out_dir, "monster.json"), "r", encoding="utf-8") as f:
+            monster = json.load(f)
+        with open(os.path.join(out_dir, "boss.json"), "r", encoding="utf-8") as f:
+            boss = json.load(f)
+        with open(os.path.join(out_dir, "boss_mechanic.json"), "r", encoding="utf-8") as f:
+            mechanic = json.load(f)
+        with open(os.path.join(out_dir, "skill.json"), "r", encoding="utf-8") as f:
+            skill = json.load(f)
+        self.assertEqual(monster["999001"], "测试怪物")
+        self.assertEqual(boss["1301"], "测试Boss")
+        self.assertEqual(mechanic["47"], "护盾破裂")
+        self.assertNotIn("9999", skill)
 
 
 if __name__ == "__main__":

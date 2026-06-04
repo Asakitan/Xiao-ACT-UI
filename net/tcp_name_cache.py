@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover - import fallback for standalone tools
 
 _SCHEMA_VERSION = 1
 _VALID_CONFIDENCE = {"high", "medium", "low", "mem", "tcp", "static"}
-_GENERIC_KINDS = {"skill", "monster", "buff", "dungeon", "scene", "npc", "item", "sub_profession"}
+_GENERIC_KINDS = {"skill", "monster", "boss", "buff", "dungeon", "scene", "boss_mechanic", "npc", "item", "sub_profession"}
 _PLAYER_KIND = "player"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,8 +35,10 @@ _LIVE_ID_SPACE_KIND = {
     "sub_profession_skill_id": "skill",
     "buff_id": "buff",
     "monster_id": "monster",
+    "boss_id": "boss",
     "dungeon_id": "dungeon",
     "scene_id": "dungeon",
+    "boss_event_type": "boss_mechanic",
     "npc_id": "npc",
     "item_id": "item",
 }
@@ -82,7 +84,7 @@ def _clean_text(text: Any) -> str:
     value = str(text or "").strip()
     if not value:
         return ""
-    if "#" in value and value.split("#", 1)[0] in {"技能", "怪物", "地牢", "Buff", "NPC", "道具"}:
+    if "#" in value and value.split("#", 1)[0] in {"技能", "怪物", "Boss", "地牢", "Buff", "机制", "NPC", "道具"}:
         return ""
     return value
 

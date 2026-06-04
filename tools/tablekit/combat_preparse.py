@@ -108,7 +108,10 @@ def _resolver_name(kind: str, id_: int) -> str:
         return ""
     try:
         from tools.tablekit.name_tables import names
-        return _clean_text(getattr(names, kind)(id_, default=""))
+        resolver = getattr(names, kind, None)
+        if callable(resolver):
+            return _clean_text(resolver(id_, default=""))
+        return _clean_text(names.resolve(kind, id_, default=""))
     except Exception:
         return ""
 
@@ -204,10 +207,11 @@ def enrich_boss_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
     src = dict(event or {})
     event_type = _safe_int(src.get("event_type"), 0)
     meta = BOSS_MECHANIC_EVENTS.get(event_type, {})
+    label = _resolver_name("boss_mechanic", event_type) or _clean_text(meta.get("label")) or f"机制事件#{event_type}"
     fact = {
         "event_type": event_type,
         "boss_mechanic_key": _clean_text(meta.get("key")) or f"buff_event_{event_type}",
-        "boss_mechanic_label": _clean_text(meta.get("label")) or f"机制事件#{event_type}",
+        "boss_mechanic_label": label,
         "trigger_family": _clean_text(meta.get("trigger_family")) or "buff_event",
         "severity": _clean_text(meta.get("severity")) or "medium",
         "host_uuid": _safe_int(src.get("host_uuid"), 0),
@@ -224,7 +228,7 @@ def enrich_boss_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
 def enrich_monster_event(monster: Mapping[str, Any] | None) -> dict[str, Any]:
     src = dict(monster or {})
     template_id = _safe_int(src.get("template_id") or src.get("monster_id"), 0)
-    name = _clean_text(src.get("name") or src.get("monster_name")) or _resolver_name("monster", template_id)
+    name = _clean_text(src.get("name") or src.get("monster_name") or src.get("boss_name")) or _resolver_name("boss", template_id) or _resolver_name("monster", template_id)
     hp = max(0, _safe_int(src.get("hp"), 0))
     max_hp = max(0, _safe_int(src.get("max_hp"), 0))
     mechanics: list[str] = []
@@ -243,6 +247,7 @@ def enrich_monster_event(monster: Mapping[str, Any] | None) -> dict[str, Any]:
         "uid": _safe_int(src.get("uid"), 0),
         "monster_id": template_id,
         "monster_name": name,
+        "boss_name": name if bool(src.get("is_boss") or src.get("boss") or src.get("boss_raid_active")) else "",
         "display_name": name or (f"怪物#{template_id}" if template_id > 0 else ""),
         "hp": hp,
         "max_hp": max_hp,

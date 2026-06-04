@@ -73,6 +73,14 @@ class CombatPreparseTests(unittest.TestCase):
         self.assertEqual(fact["trigger_family"], "shield")
         self.assertEqual(fact["host_uuid"], 123)
 
+    def test_boss_event_label_prefers_name_resolver(self) -> None:
+        from tools.tablekit import name_tables
+
+        with mock.patch.object(name_tables.names, "boss_mechanic", side_effect=lambda event_type, default="": "统一机制名" if int(event_type) == 47 else default):
+            fact = enrich_boss_event({"event_type": 47, "host_uuid": 123})
+
+        self.assertEqual(fact["boss_mechanic_label"], "统一机制名")
+
     def test_bossraid_semantic_trigger_advances_phase(self) -> None:
         state = GameStateManager()
         engine = BossRaidEngine(state, settings={})
@@ -206,6 +214,19 @@ class CombatPreparseTests(unittest.TestCase):
         self.assertEqual(result["tcp_preparse_cache"]["kind_counts"]["skill"], 1)
         self.assertEqual(result["volatile_address_keys"]["cache"], {})
         self.assertEqual(result["volatile_address_keys"]["matched"]["string_obj"], 1)
+
+    def test_name_table_effect_audit_works_without_large_correspondence(self) -> None:
+        from tools.tablekit.name_table_effect_audit import audit
+
+        with tempfile.TemporaryDirectory() as td:
+            cache = os.path.join(td, "cache.json")
+            with open(cache, "w", encoding="utf-8") as f:
+                json.dump({"endpoints": {}, "names": {"by_kind": {"boss_mechanic": {"47": {"text": "护盾破裂"}}}}}, f, ensure_ascii=False)
+
+            result = audit(os.path.join(td, "missing_full.json"), os.path.join(td, "missing_matched.json"), cache, os.path.join(td, "missing_corr.json"))
+
+        self.assertEqual(result["tcp_preparse_cache"]["kind_counts"]["boss_mechanic"], 1)
+        self.assertEqual(result["correspondence"]["status"], "not_generated_runtime_optional")
 
 
 if __name__ == "__main__":

@@ -3,12 +3,12 @@
 所有显示层(TCP 解析 / 面板)都经此把数字 ID 变中文名, 杜绝裸数字。
 
 数据源(按优先级 高->低, 高覆盖低):
-  1. assets/name_tables/<kind>.json   ← Bokura 解码器抽出的权威表(最准最全), {id: name}
-    2. assets/name_tables/live_probe_act_matched_rows.json ← 已锚定 live StringPool/TCP 匹配子集
-    3. StarResonanceDps/DataTools/Data/CN/<Kind>Table.json  ← 社区表(可能不全), {id: {Name:..}}
-    4. assets/skill_names.json          ← 现有部分技能名, {id: name}
+    1. assets/name_tables/<kind>.json   ← 轻量稳定 TCP/MEM/解析名字表, {id: name}
+    2. assets/name_tables/tcp_preparse_name_cache.json ← 运行时 compact TCP/MEM cache
+    3. StarResonanceDps/resonance-logs-cn 社区表(可能不全), {id: {Name:..}}
+    4. assets/skill_names.json          ← 现有部分技能名 fallback, {id: name}
 
-kind: skill / monster / buff / dungeon / npc / item ...
+kind: skill / monster / boss / buff / dungeon / boss_mechanic / npc / item ...
 
 用法:
     from tools.tablekit.name_tables import names
@@ -38,7 +38,6 @@ _DATATOOLS_OLD_MONSTER = os.path.join(_REPO, "StarResonanceDps", "DataTools", "O
 _RESONANCE_LOGS_CONFIG = os.path.join(_REPO, "resonance-logs-cn", "src", "lib", "config")
 _RESONANCE_LOGS_METER_DATA = os.path.join(_REPO, "resonance-logs-cn", "src-tauri", "meter-data")
 _SKILL_NAMES = os.path.join(_ASSETS, "skill_names.json")
-_LIVE_ACT_MATCHES = os.path.join(_EXTRACTED, "live_probe_act_matched_rows.json")
 _TCP_PREPARSE_CACHE = os.path.join(_EXTRACTED, "tcp_preparse_name_cache.json")
 
 # 每个 kind 的数据源 (高优先级在前)
@@ -51,6 +50,7 @@ _SOURCES = {
         (_SRD_WINFORM_TABLE, "monster_names.json"),
         (_DATATOOLS_OLD_MONSTER, "monster_name_mapping.json"),
     ],
+    "boss": [(_EXTRACTED, "boss.json")],
     "buff":    [(_EXTRACTED, "buff.json"),    (_DATATOOLS_CN, "BuffTable.json"),   (_ASSETS, "skill_names.json")],
     "dungeon": [
         (_EXTRACTED, "dungeon.json"),
@@ -58,14 +58,15 @@ _SOURCES = {
         (_RESONANCE_LOGS_METER_DATA, "SceneName.json"),
         (_RESONANCE_LOGS_CONFIG, "SceneName.json"),
     ],
+    "boss_mechanic": [(_EXTRACTED, "boss_mechanic.json")],
     "item":    [(_EXTRACTED, "item.json"),    (_DATATOOLS_CN, "ItemTable.json")],
     "npc":     [(_EXTRACTED, "npc.json"),     (_DATATOOLS_CN, "NpcTable.json")],
 }
 
 # 兜底前缀 (找不到名字时显示 "<前缀>#<id>")
 _FALLBACK_PREFIX = {
-    "skill": "技能", "monster": "怪物", "buff": "Buff",
-    "dungeon": "地牢", "item": "道具", "npc": "NPC",
+    "skill": "技能", "monster": "怪物", "boss": "Boss", "buff": "Buff",
+    "dungeon": "地牢", "boss_mechanic": "机制", "item": "道具", "npc": "NPC",
 }
 
 _LIVE_ID_SPACE_KIND = {
@@ -74,7 +75,10 @@ _LIVE_ID_SPACE_KIND = {
     "sub_profession_skill_id": "skill",
     "buff_id": "buff",
     "monster_id": "monster",
+    "boss_id": "boss",
     "dungeon_id": "dungeon",
+    "scene_id": "dungeon",
+    "boss_event_type": "boss_mechanic",
     "npc_id": "npc",
     "item_id": "item",
 }
@@ -100,32 +104,6 @@ def _coerce_table(obj) -> Dict[int, str]:
             name = str(name).strip()
             if name:
                 out[kid] = name
-    return out
-
-
-def _load_live_act_matches(kind: str) -> Dict[int, str]:
-    out: Dict[int, str] = {}
-    if not os.path.isfile(_LIVE_ACT_MATCHES):
-        return out
-    try:
-        with open(_LIVE_ACT_MATCHES, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return out
-    for row in (data.get("rows") if isinstance(data, dict) else []) or []:
-        if str(row.get("confidence") or "") not in {"high", "medium"}:
-            continue
-        match = row.get("primary_match") or {}
-        id_space = str(match.get("id_space") or "")
-        if _LIVE_ID_SPACE_KIND.get(id_space) != kind:
-            continue
-        try:
-            iid = int(match.get("id"))
-        except (TypeError, ValueError):
-            continue
-        text = str(row.get("text") or "").strip()
-        if text:
-            out.setdefault(iid, text)
     return out
 
 
@@ -182,7 +160,6 @@ class NameResolver:
                     merged.update(_coerce_table(data))
                 except Exception:
                     pass
-            merged.update(_load_live_act_matches(kind))
             merged.update(_load_tcp_preparse_cache(kind))
             self._tables[kind] = merged
             return merged
@@ -205,11 +182,17 @@ class NameResolver:
     def monster(self, id_: object, default: Optional[str] = None) -> str:
         return self.resolve("monster", id_, default)
 
+    def boss(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("boss", id_, default)
+
     def buff(self, id_: object, default: Optional[str] = None) -> str:
         return self.resolve("buff", id_, default)
 
     def dungeon(self, id_: object, default: Optional[str] = None) -> str:
         return self.resolve("dungeon", id_, default)
+
+    def boss_mechanic(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("boss_mechanic", id_, default)
 
     def has(self, kind: str, id_: object) -> bool:
         try:

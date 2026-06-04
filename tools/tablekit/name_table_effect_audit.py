@@ -20,6 +20,7 @@ _DEFAULT_FULL = os.path.join(_NAME_TABLES, "live_string_pool_all_localization.js
 _DEFAULT_MATCHED = os.path.join(_NAME_TABLES, "live_probe_act_matched_rows.json")
 _DEFAULT_CACHE = os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.json")
 _DEFAULT_CORRESPONDENCE = os.path.join(_NAME_TABLES, "live_name_tcp_correspondence.json")
+_RUNTIME_TABLE_KINDS = ("skill", "dungeon", "monster", "boss", "boss_mechanic", "buff")
 
 _VOLATILE_KEYS = {
     "obj", "chars", "klass", "runtime_klass", "string_klass", "string_obj",
@@ -79,6 +80,15 @@ def _cache_kind_counts(cache: Any) -> dict[str, int]:
     return {str(kind): len(bucket or {}) for kind, bucket in sorted(by_kind.items()) if isinstance(bucket, Mapping)}
 
 
+def _runtime_table_counts() -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for kind in _RUNTIME_TABLE_KINDS:
+        path = os.path.join(_NAME_TABLES, f"{kind}.json")
+        data = _load_json(path)
+        counts[kind] = len(data) if isinstance(data, Mapping) else 0
+    return counts
+
+
 def _fallback_labels_in_cache(cache: Any) -> dict[str, int]:
     counts: Counter[str] = Counter()
     if not isinstance(cache, Mapping):
@@ -134,6 +144,14 @@ def audit(full_input: str = _DEFAULT_FULL,
     nonempty = sum(1 for row in full_rows if str(row.get("text") or "").strip())
     anchor = (full.get("anchor") if isinstance(full, Mapping) else {}) or {}
     corr_summary = correspondence.get("summary") if isinstance(correspondence, Mapping) else {}
+    cache_kind_counts = _cache_kind_counts(cache)
+    if not corr_summary and (full_rows or cache_kind_counts):
+        corr_summary = {
+            "status": "not_generated_runtime_optional",
+            "total_entries": len(full_rows),
+            "nonempty_text_count": nonempty,
+            "cache_kind_counts": cache_kind_counts,
+        }
     return {
         "inputs": {
             "full": _rel(full_input),
@@ -151,9 +169,12 @@ def audit(full_input: str = _DEFAULT_FULL,
         },
         "matched_rows": _matched_counts(matched if isinstance(matched, Mapping) else {}),
         "tcp_preparse_cache": {
-            "kind_counts": _cache_kind_counts(cache),
+            "kind_counts": cache_kind_counts,
             "fallback_label_counts": _fallback_labels_in_cache(cache),
             "endpoint_count": len((cache.get("endpoints") or {}) if isinstance(cache, Mapping) else {}),
+        },
+        "runtime_tables": {
+            "kind_counts": _runtime_table_counts(),
         },
         "correspondence": corr_summary or {},
         "volatile_address_keys": {
