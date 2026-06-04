@@ -13,7 +13,7 @@ import ctypes
 import ctypes.wintypes
 import logging
 import os
-from typing import Optional, Callable, List, Dict, Tuple
+from typing import Optional, Callable, List, Dict, Tuple, Any
 
 logger = logging.getLogger('sao_auto.capture')
 
@@ -201,6 +201,15 @@ def _parse_eth_ip_tcp(raw: bytes) -> Optional[Tuple[bytes, bytes, int, int, int,
     return _CY_PACKET.parse_eth_ip_tcp(raw)
 
 
+def _fmt_ip_bytes(ip: bytes) -> str:
+    try:
+        if len(ip) != 4:
+            return ''
+        return '.'.join(str(int(b)) for b in ip)
+    except Exception:
+        return ''
+
+
 # ═══════════════════════════════════════════════
 #  TCP 流重组器
 # ═══════════════════════════════════════════════
@@ -221,6 +230,7 @@ class TcpReassembler:
         self._on_pkt = on_game_packet  # 回调: 一个完整游戏帧
         self._on_server_change = on_server_change  # 回调: 场景服务器切换
         self._server_addr: Optional[str] = None
+        self._server_meta: Dict[str, Any] = {}
         self._lock = threading.Lock()
 
         # TCP seq 重组
@@ -270,6 +280,7 @@ class TcpReassembler:
     def reset(self):
         with self._lock:
             self._server_addr = None
+            self._server_meta = {}
             self._next_seq = -1
             self._cache.clear()
             self._buf = b''
@@ -286,6 +297,7 @@ class TcpReassembler:
         with self._lock:
             old_addr = self._server_addr
             self._server_addr = None
+            self._server_meta = {}
             self._next_seq = -1
             self._cache.clear()
             self._buf = b''
@@ -326,6 +338,13 @@ class TcpReassembler:
             return
 
         addr = f'{src_ip.hex()}:{sport}'
+        meta = {
+            'endpoint_hex': addr,
+            'endpoint_ip': _fmt_ip_bytes(src_ip),
+            'endpoint_port': int(sport),
+            'dst_ip': _fmt_ip_bytes(dst_ip),
+            'dst_port': int(dport),
+        }
 
         # v2.1.18: 缓存最近的入站包, 供 server-change / 同服重连后回放.
         # 必须在所有早返回路径之前记录, 这样未被消费的包才能在重连后被找回.
@@ -338,6 +357,7 @@ class TcpReassembler:
             # 初次识别允许松散 c3SB (无锚点, 必须接受首个候选).
             if self._try_identify(payload, addr):
                 self._server_addr = addr
+                self._server_meta = dict(meta)
                 logger.info(f'[Capture] 识别到游戏服务器: {_fmt_ip(src_ip)}:{sport}')
                 # v2.1.18: 回放在识别成功之前缓存的同 addr 包,
                 # 拿回首个 SyncContainerData / EnterGame 等关键登录帧.
@@ -373,6 +393,8 @@ class TcpReassembler:
                     return
                 old_addr = self._server_addr
                 self._server_addr = addr
+                self._server_meta = dict(meta)
+                self._server_meta['server_change_from'] = old_addr
                 # 重置 TCP 重组状态
                 with self._lock:
                     self._next_seq = -1
@@ -465,6 +487,8 @@ class TcpReassembler:
                     flush=True,
                 )
                 self._next_seq = -1
+                self._server_meta = dict(meta)
+                self._server_meta['same_server_reconnect'] = True
                 self._cache.clear()
                 self._buf = b''
                 self._gap_since = 0.0
@@ -713,7 +737,9 @@ class TcpReassembler:
         """
         while True:
             frames: list = []
+            metadata: Dict[str, Any] = {}
             with self._lock:
+                metadata = dict(self._server_meta or {})
                 buf = self._buf
                 buf_len = len(buf)
                 offset = 0
@@ -754,7 +780,10 @@ class TcpReassembler:
             # 回调在锁外执行
             for frame in frames:
                 try:
-                    self._on_pkt(frame)
+                    try:
+                        self._on_pkt(frame, dict(metadata))
+                    except TypeError:
+                        self._on_pkt(frame)
                     self.stats['complete_game_frames'] += 1
                 except Exception as e:
                     import traceback

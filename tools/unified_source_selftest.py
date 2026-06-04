@@ -83,6 +83,7 @@ class UnifiedSourceContractTests(unittest.TestCase):
                     "mem_auto_scan_interval_s": 1.25,
                     "mem_allow_static_fallback": False,
                     "mem_max_scan_regions_mb": 64,
+                    "mem_defer_until_tcp_scene": False,
                 },
                 packet_bridge=packet_bridge,
                 on_status_change=lambda status, error="": statuses.append((status, error)),
@@ -112,6 +113,32 @@ class UnifiedSourceContractTests(unittest.TestCase):
         self.assertEqual(health["policy"]["max_scan_regions_mb"], 64)
         self.assertEqual(health["self"]["uid"], 36668136)
         self.assertTrue(health["snapshot_available"])
+
+    def test_start_can_defer_until_tcp_trigger(self) -> None:
+        statuses = []
+        with mock.patch.object(unified_source, "MemStateBridge", FakeMemStateBridge):
+            source = unified_source.UnifiedDataSource(
+                state_mgr=object(),
+                mode="hybrid",
+                settings={"mem_defer_until_tcp_scene": True},
+                on_status_change=lambda status, error="": statuses.append((status, error)),
+            )
+            self.assertTrue(source.start())
+            self.assertEqual(source._bridge.start_count, 0)
+            health = source.health()
+            self.assertTrue(health["deferred"])
+            self.assertEqual(health["status"], "deferred")
+            self.assertFalse(health["running"])
+            self.assertTrue(source.start_bridge(trigger="scene_change", context={"kind": "hard"}))
+            self.assertTrue(source.start_bridge(trigger="scene_change", context={"kind": "hard"}))
+            health = source.health()
+
+        self.assertIn(("deferred", ""), statuses)
+        self.assertEqual(source._bridge.start_count, 1)
+        self.assertFalse(health["deferred"])
+        self.assertTrue(health["running"])
+        self.assertEqual(health["last_trigger"], "scene_change")
+        self.assertEqual(health["trigger_count"], 1)
 
     def test_failed_start_reports_error_without_throwing(self) -> None:
         class FailingBridge(FakeMemStateBridge):
@@ -143,6 +170,7 @@ class UnifiedSourceContractTests(unittest.TestCase):
                 on_status_change=lambda status, error="": statuses.append((status, error)),
             )
             self.assertFalse(source.start())
+            self.assertFalse(source.start_bridge(trigger="scene_change", context={}))
             health = source.health()
 
         self.assertEqual(source._bridge.start_count, 0)

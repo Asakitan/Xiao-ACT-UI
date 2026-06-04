@@ -38,6 +38,7 @@ _RESONANCE_LOGS_CONFIG = os.path.join(_REPO, "resonance-logs-cn", "src", "lib", 
 _RESONANCE_LOGS_METER_DATA = os.path.join(_REPO, "resonance-logs-cn", "src-tauri", "meter-data")
 _SKILL_NAMES = os.path.join(_ASSETS, "skill_names.json")
 _LIVE_ACT_MATCHES = os.path.join(_EXTRACTED, "live_probe_act_matched_rows.json")
+_TCP_PREPARSE_CACHE = os.path.join(_EXTRACTED, "tcp_preparse_name_cache.json")
 
 # 每个 kind 的数据源 (高优先级在前)
 _SOURCES = {
@@ -127,6 +128,38 @@ def _load_live_act_matches(kind: str) -> Dict[int, str]:
     return out
 
 
+def _load_tcp_preparse_cache(kind: str) -> Dict[int, str]:
+    out: Dict[int, str] = {}
+    if kind not in _SOURCES:
+        return out
+    if not os.path.isfile(_TCP_PREPARSE_CACHE):
+        return out
+    try:
+        with open(_TCP_PREPARSE_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return out
+    names = data.get("names") if isinstance(data, dict) else {}
+    by_kind = names.get("by_kind") if isinstance(names, dict) else {}
+    bucket = by_kind.get(kind) if isinstance(by_kind, dict) else {}
+    if not isinstance(bucket, dict):
+        return out
+    for key, entry in bucket.items():
+        try:
+            iid = int(key)
+        except (TypeError, ValueError):
+            continue
+        text = ""
+        if isinstance(entry, str):
+            text = entry
+        elif isinstance(entry, dict):
+            text = str(entry.get("text") or entry.get("name") or "")
+        text = text.strip()
+        if text:
+            out.setdefault(iid, text)
+    return out
+
+
 class NameResolver:
     def __init__(self):
         self._tables: Dict[str, Dict[int, str]] = {}
@@ -147,6 +180,7 @@ class NameResolver:
             except Exception:
                 pass
         merged.update(_load_live_act_matches(kind))
+        merged.update(_load_tcp_preparse_cache(kind))
         self._tables[kind] = merged
         return merged
 

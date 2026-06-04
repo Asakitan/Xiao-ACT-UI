@@ -18,6 +18,7 @@ recurse.
 from __future__ import annotations
 
 import time
+import threading
 from typing import Any, Callable, Optional
 
 from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
@@ -70,6 +71,12 @@ class UnifiedDataSource:
         self._last_error = ""
         self._last_status = "init"
         self._last_snapshot_sig = None
+        self._deferred = False
+        self._defer_reason = ""
+        self._trigger_count = 0
+        self._last_trigger = ""
+        self._last_trigger_context: dict[str, Any] = {}
+        self._start_lock = threading.RLock()
         self._policy = self._build_policy()
 
         self._bridge = MemStateBridge(
@@ -90,31 +97,54 @@ class UnifiedDataSource:
 
     # ───────── public API expected by PacketBridge ─────────
 
-    def start(self) -> bool:
-        """Start the underlying read-only memory self-state bridge."""
+    def start(self, *, defer: Optional[bool] = None) -> bool:
+        """Start or arm the underlying read-only memory self-state bridge."""
         if self._started:
             return True
         if not self._policy["start_allowed"]:
             self._last_error = str(self._policy["fallback_reason"] or "memory policy denied startup")
             self._notify_status("error", self._last_error)
             return False
-        self._notify_status("starting", "")
-        try:
-            ok = bool(self._bridge.start())
-        except Exception as exc:
-            self._last_error = str(exc)
-            self._notify_status("error", self._last_error)
-            return False
-        if not ok:
-            self._last_error = getattr(self._bridge, "last_error", "") or "MemStateBridge failed to start"
-            self._notify_status("error", self._last_error)
-            return False
-        self._started = True
-        self._started_at = time.time()
-        self._last_error = ""
-        self._notify_status("running", "")
-        self._emit_self_update_if_changed()
-        return True
+        defer_start = bool(self._policy.get("defer_until_tcp_scene", False) if defer is None else defer)
+        if defer_start and self.mode != "memory":
+            self._deferred = True
+            self._defer_reason = "waiting_for_tcp_scene_or_full_sync"
+            self._last_error = ""
+            self._notify_status("deferred", "")
+            return True
+        return self.start_bridge(trigger="start", context={})
+
+    def start_bridge(self, *, trigger: str = "", context: Optional[dict] = None) -> bool:
+        """Idempotently start the heavy MemStateBridge after a TCP trigger."""
+        with self._start_lock:
+            if self._started:
+                return True
+            if not self._policy["start_allowed"]:
+                self._last_error = str(self._policy["fallback_reason"] or "memory policy denied startup")
+                self._notify_status("error", self._last_error)
+                return False
+            self._trigger_count += 1
+            self._last_trigger = str(trigger or "manual")
+            self._last_trigger_context = dict(context or {})
+            self._deferred = False
+            self._defer_reason = ""
+            self._notify_status("starting", "")
+            try:
+                ok = bool(self._bridge.start())
+            except Exception as exc:
+                self._last_error = str(exc)
+                self._notify_status("error", self._last_error)
+                return False
+            if not ok:
+                self._last_error = getattr(self._bridge, "last_error", "") or "MemStateBridge failed to start"
+                self._notify_status("error", self._last_error)
+                return False
+            self._started = True
+            self._started_at = time.time()
+            self._last_error = ""
+            self._notify_status("running", "")
+            self._emit_self_update_if_changed()
+            return True
 
     def stop(self) -> None:
         """Stop the underlying bridge. Never raises."""
@@ -123,6 +153,7 @@ class UnifiedDataSource:
         except Exception as exc:
             self._last_error = str(exc)
         self._started = False
+        self._deferred = False
         self._notify_status("stopped", self._last_error)
 
     def health(self) -> dict:
@@ -137,6 +168,11 @@ class UnifiedDataSource:
             "mode": mode,
             "running": bool(self._started),
             "started": bool(self._started),
+            "deferred": bool(self._deferred),
+            "defer_reason": self._defer_reason,
+            "trigger_count": int(self._trigger_count),
+            "last_trigger": self._last_trigger,
+            "last_trigger_context": dict(self._last_trigger_context),
             "alive": alive,
             "is_memory_active": bool(getattr(self._bridge, "is_memory_active", False)),
             "status": self._last_status,
@@ -210,9 +246,6 @@ class UnifiedDataSource:
         return data
 
     def _emit_self_update_if_changed(self) -> None:
-        cb = self.on_self_update
-        if not callable(cb):
-            return
         payload = self._safe_snapshot_dict()
         if not payload:
             payload = {
@@ -226,8 +259,36 @@ class UnifiedDataSource:
         if sig == self._last_snapshot_sig:
             return
         self._last_snapshot_sig = sig
+        self._update_tcp_name_cache(payload)
+        cb = self.on_self_update
+        if callable(cb):
+            try:
+                cb(payload)
+            except Exception:
+                pass
+
+    def _update_tcp_name_cache(self, payload: dict) -> None:
+        bridge = self.packet_bridge
+        cache = getattr(bridge, "tcp_name_cache", None) if bridge is not None else None
+        if cache is None:
+            return
+        endpoint = ""
         try:
-            cb(payload)
+            endpoint_fn = getattr(bridge, "_tcp_endpoint", None)
+            if callable(endpoint_fn):
+                endpoint = str(endpoint_fn() or "")
+        except Exception:
+            endpoint = ""
+        try:
+            cache.apply_mem_self_snapshot(
+                payload,
+                endpoint=endpoint,
+                context={
+                    "source": "UnifiedDataSource",
+                    "trigger": self._last_trigger,
+                    "deferred_start": bool(self._trigger_count),
+                },
+            )
         except Exception:
             pass
 
@@ -247,6 +308,9 @@ class UnifiedDataSource:
             max_scan_regions_mb = 0
         allow_static_fallback = self._bool_setting("mem_allow_static_fallback", True)
         show_risk_warning = self._bool_setting("mem_show_risk_warning", True)
+        defer_until_tcp_scene = self._bool_setting("mem_defer_until_tcp_scene", self.mode in ("auto", "hybrid"))
+        start_on_scene = self._bool_setting("mem_start_on_scene", True)
+        start_on_full_sync = self._bool_setting("mem_start_on_full_sync", True)
         fallback_reason = ""
         if not auto_scan_enabled:
             fallback_reason = "memory auto scan disabled by mem_auto_scan_enabled"
@@ -260,6 +324,9 @@ class UnifiedDataSource:
             "max_scan_regions_mb": int(max_scan_regions_mb),
             "allow_static_fallback": bool(allow_static_fallback),
             "show_risk_warning": bool(show_risk_warning),
+            "defer_until_tcp_scene": bool(defer_until_tcp_scene),
+            "start_on_scene": bool(start_on_scene),
+            "start_on_full_sync": bool(start_on_full_sync),
             "start_allowed": not bool(fallback_reason),
             "fallback_reason": fallback_reason,
         }

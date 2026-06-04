@@ -429,21 +429,25 @@ class SAOPlayerGUIEngineLifecycleMixin:
             # skill CDs into GameState. TCP path remains authoritative; this
             # is a fast-path that covers the "started after login" gap.
             try:
-                from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
-                self._mem_bridge = MemStateBridge(
-                    state_mgr=self._state_mgr,
-                    dps_tracker=getattr(self, '_dps_tracker', None),
-                    dps_overlay=getattr(self, '_dps_overlay', None),
-                    hp_overlay=getattr(self, '_hp_overlay', None),
-                    auto_key_engine=getattr(self, '_auto_key_engine', None),
-                    boss_raid_engine=getattr(self, '_boss_raid_engine', None),
-                    packet_bridge=getattr(self, '_packet_engine', None),
-                    dump_id='fdc7111b',
-                    enable_extended=True,
-                    on_log=lambda m: print(f'[MemBridge] {m}'),
-                )
-                if not self._mem_bridge.start():
+                if getattr(self, '_packet_engine', None) is not None:
                     self._mem_bridge = None
+                    print('[MemBridge] deferred to PacketBridge TCP scene/full-sync trigger')
+                else:
+                    from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
+                    self._mem_bridge = MemStateBridge(
+                        state_mgr=self._state_mgr,
+                        dps_tracker=getattr(self, '_dps_tracker', None),
+                        dps_overlay=getattr(self, '_dps_overlay', None),
+                        hp_overlay=getattr(self, '_hp_overlay', None),
+                        auto_key_engine=getattr(self, '_auto_key_engine', None),
+                        boss_raid_engine=getattr(self, '_boss_raid_engine', None),
+                        packet_bridge=getattr(self, '_packet_engine', None),
+                        dump_id='fdc7111b',
+                        enable_extended=True,
+                        on_log=lambda m: print(f'[MemBridge] {m}'),
+                    )
+                    if not self._mem_bridge.start():
+                        self._mem_bridge = None
             except Exception as _mb_exc:
                 import traceback
                 print(f'[MemBridge] init failed: {_mb_exc}')

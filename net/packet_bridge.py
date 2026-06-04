@@ -43,6 +43,7 @@ from packet_parser import (PlayerData, MonsterData,
                            _SKILL_TO_PROFESSION,
                            _PROFESSION_PREFIX, _ALL_PROFESSION_PREFIXES)
 from net.packet_capture import PacketCapture, list_devices, auto_select_device
+from net.tcp_name_cache import TcpNameCache
 
 from utils.perf_probe import probe as _probe
 
@@ -409,6 +410,15 @@ class PacketBridge:
         self._plugin_manager = plugin_manager
         self._event_bus = event_bus if isinstance(event_bus, EventBus) else None
         self._mem_source = None                  # UnifiedDataSource 实例 (lazy)
+        try:
+            self._tcp_name_cache = TcpNameCache()
+        except Exception as exc:
+            logger.warning(f'[Bridge] tcp name cache unavailable: {exc}')
+            self._tcp_name_cache = None
+        self.tcp_name_cache = self._tcp_name_cache
+        self._last_packet_metadata: dict[str, Any] = {}
+        self._mem_trigger_lock = threading.Lock()
+        self._last_mem_trigger_ts: float = 0.0
         self._running = False
 
         # 抓包层
@@ -482,8 +492,8 @@ class PacketBridge:
         mode = self._data_source_mode
         if mode in ('memory', 'hybrid', 'auto'):
             mem_ok = self._start_memory_source()
-            if mem_ok and mode != 'hybrid':
-                # memory/auto 启动成功时沿用 memory-first 语义; hybrid 继续启 TCP 兜底
+            if mem_ok and mode != 'hybrid' and not self._mem_source_is_deferred():
+                # memory/auto 启动成功且未延迟时沿用 memory-first 语义; hybrid 继续启 TCP 兜底
                 return
             elif not mem_ok and mode == 'memory':
                 # 严格 memory 模式失败, 报错不降级
@@ -524,7 +534,8 @@ class PacketBridge:
                 packet_bridge=self,
                 settings=self._settings,
             )
-            return self._mem_source.start()
+            defer_default = self._data_source_mode in ('auto', 'hybrid')
+            return self._mem_source.start(defer=self._bool_setting('mem_defer_until_tcp_scene', defer_default))
         except Exception as e:
             self._error_msg = f"UnifiedDataSource start failed: {e}"
             return False
@@ -638,6 +649,170 @@ class PacketBridge:
             return settings.get(key, default)
         return default
 
+    def _bool_setting(self, key: str, default: bool) -> bool:
+        value = self._setting_value(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in ('1', 'true', 'yes', 'on', 'enabled'):
+            return True
+        if text in ('0', 'false', 'no', 'off', 'disabled'):
+            return False
+        return bool(default)
+
+    def _tcp_endpoint(self) -> str:
+        meta = self._last_packet_metadata or {}
+        return str(meta.get('endpoint_hex') or '')
+
+    def _observe_tcp_endpoint(self, metadata: Mapping | None, *, source: str = 'tcp') -> None:
+        if not metadata or self._tcp_name_cache is None:
+            return
+        try:
+            endpoint = str(metadata.get('endpoint_hex') or '')
+            if not endpoint:
+                return
+            self._tcp_name_cache.observe_endpoint(
+                endpoint,
+                endpoint_ip=str(metadata.get('endpoint_ip') or ''),
+                endpoint_port=int(metadata.get('endpoint_port') or 0),
+                source=source,
+                context={k: v for k, v in dict(metadata).items()
+                         if k in {'server_change_from', 'same_server_reconnect'}},
+            )
+        except Exception as exc:
+            logger.debug(f'[Bridge] tcp name cache endpoint observe failed: {exc}')
+
+    def _cache_name(self, kind: str, id_: object, text: object, *,
+                    source: str = 'tcp', confidence: str = 'medium',
+                    context: Mapping | None = None) -> None:
+        if self._tcp_name_cache is None:
+            return
+        try:
+            self._tcp_name_cache.observe_name(
+                kind,
+                id_,
+                text,
+                source=source,
+                confidence=confidence,
+                endpoint=self._tcp_endpoint(),
+                context=context,
+            )
+        except Exception as exc:
+            logger.debug(f'[Bridge] tcp name cache observe_name failed: {exc}')
+
+    def _cache_player(self, player: PlayerData, *, source: str = 'tcp') -> None:
+        if self._tcp_name_cache is None or player is None:
+            return
+        try:
+            self._tcp_name_cache.observe_player(
+                getattr(player, 'uid', 0),
+                name=getattr(player, 'name', '') or '',
+                level=getattr(player, 'level', 0) or 0,
+                hp=getattr(player, 'hp', 0) or 0,
+                max_hp=getattr(player, 'max_hp', 0) or 0,
+                profession_id=getattr(player, 'profession_id', 0) or 0,
+                profession_name=getattr(player, 'profession', '') or '',
+                fight_point=getattr(player, 'fight_point', 0) or 0,
+                skills=getattr(player, 'skill_cd_map', {}) or getattr(player, 'skill_seen_ids', []) or [],
+                source=source,
+                endpoint=self._tcp_endpoint(),
+                context={
+                    'self_uid_confirmed': bool(getattr(player, 'self_uid_confirmed', False)),
+                    'hp_from_full_sync': bool(getattr(player, 'hp_from_full_sync', False)),
+                    'level_extra_source': str(getattr(player, 'level_extra_source', '') or ''),
+                },
+            )
+        except Exception as exc:
+            logger.debug(f'[Bridge] tcp name cache observe_player failed: {exc}')
+
+    def _cache_skill_event(self, event: Mapping | None) -> None:
+        if not isinstance(event, Mapping):
+            return
+        skill_level_id = int(event.get('skill_level_id') or 0)
+        skill_id = int(event.get('skill_id') or 0)
+        if skill_id <= 0 and skill_level_id > 0:
+            skill_id = skill_level_id // 100 if skill_level_id >= 100 else skill_level_id
+        if skill_id <= 0:
+            return
+        name = str(event.get('skill_name') or event.get('name') or _get_skill_name(skill_id) or '')
+        self._cache_name('skill', skill_id, name, source='tcp_skill_event', confidence='medium', context=dict(event))
+
+    def _cache_dungeon_event(self, event: Mapping | None) -> None:
+        if not isinstance(event, Mapping):
+            return
+        dungeon_id = int(event.get('dungeon_id') or event.get('scene_id') or event.get('scene_uuid') or 0)
+        if dungeon_id <= 0:
+            return
+        try:
+            from tools.tablekit.name_tables import names as _names
+            name = _names.dungeon(dungeon_id, default='')
+        except Exception:
+            name = ''
+        self._cache_name('dungeon', dungeon_id, name, source='tcp_dungeon_event', confidence='medium', context=dict(event))
+
+    def _cache_monster_event(self, monster: Mapping | None) -> None:
+        if not isinstance(monster, Mapping):
+            return
+        template_id = int(monster.get('template_id') or monster.get('monster_id') or 0)
+        if template_id <= 0:
+            return
+        name = str(monster.get('name') or monster.get('monster_name') or '')
+        self._cache_name('monster', template_id, name, source='tcp_monster_update', confidence='medium', context={
+            'uuid': monster.get('uuid'),
+            'uid': monster.get('uid'),
+        })
+
+    def _is_mem_trigger_event(self, trigger: str, context: Any) -> bool:
+        if trigger in {'self_update_full_sync', 'dungeon_event'}:
+            return True
+        if trigger != 'scene_change':
+            return False
+        if not isinstance(context, Mapping):
+            return True
+        kind = str(context.get('kind') or '').lower()
+        reason = str(context.get('reason') or '').lower()
+        if kind in {'hard', 'transition', 'restart'}:
+            return True
+        if any(key in context for key in ('scene_id', 'dungeon_id', 'scene_guid', 'connect_guid', 'new_scene_key')):
+            return True
+        return any(token in reason for token in ('reset', 'scene', 'dungeon', 'server', 'enter'))
+
+    def _mem_source_is_deferred(self) -> bool:
+        source = self._mem_source
+        if source is None:
+            return False
+        try:
+            health = source.health()
+            return bool(health.get('deferred'))
+        except Exception:
+            return False
+
+    def _maybe_start_mem_source_for_tcp_event(self, trigger: str, context: Any = None) -> bool:
+        if not self._is_mem_trigger_event(trigger, context):
+            return False
+        if not self._bool_setting('mem_bridge_enabled', True):
+            return False
+        with self._mem_trigger_lock:
+            now = time.time()
+            if now - self._last_mem_trigger_ts < 0.5:
+                return False
+            self._last_mem_trigger_ts = now
+            if self._mem_source is None:
+                if not self._start_memory_source():
+                    return False
+            source = self._mem_source
+            start_bridge = getattr(source, 'start_bridge', None)
+            if callable(start_bridge):
+                try:
+                    return bool(start_bridge(trigger=trigger, context=context if isinstance(context, Mapping) else {}))
+                except Exception as exc:
+                    self._error_msg = f'UnifiedDataSource trigger start failed: {exc}'
+                    logger.warning(f'[Bridge] memory trigger start failed: {exc}')
+                    return False
+            return False
+
     def _requested_live_parser_adapter_id(self) -> str:
         for key in ('act_live_parser_adapter_id', 'live_parser_adapter_id', 'parser_adapter_id'):
             value = str(self._setting_value(key, '') or '').strip()
@@ -650,14 +825,14 @@ class PacketBridge:
                                      fallback_reason: str = ''):
         adapter = StarResonanceParserAdapter()
         self._parser = adapter.create_parser(
-            on_self_update=self._on_player_update,
+            on_self_update=self._on_parser_player_update,
             preferred_uid=preferred_uid,
             on_damage=self._on_damage,
-            on_monster_update=self._on_monster_update,
+            on_monster_update=self._on_parser_monster_update,
             on_boss_event=self._on_boss_event,
-            on_skill_event=self._on_skill_event,
-            on_dungeon_event=self._on_dungeon_event,
-            on_scene_change=self._on_scene_change,
+            on_skill_event=self._on_parser_skill_event,
+            on_dungeon_event=self._on_parser_dungeon_event,
+            on_scene_change=self._on_parser_scene_change,
         )
         self._parser_adapter_selection = {
             "requested_id": str(requested_id or 'star_resonance_tcp'),
@@ -667,6 +842,64 @@ class PacketBridge:
         }
         self._parser_adapter = adapter
         return adapter
+
+    def _on_parser_player_update(self, player: PlayerData):
+        self._cache_player(player, source='tcp_player_update')
+        full_sync_like = bool(getattr(player, 'hp_from_full_sync', False)) or bool(
+            getattr(player, 'name', '') and getattr(player, 'level', 0) and getattr(player, 'max_hp', 0)
+        )
+        if full_sync_like:
+            self._maybe_start_mem_source_for_tcp_event('self_update_full_sync', {
+                'uid': getattr(player, 'uid', 0),
+                'name': getattr(player, 'name', ''),
+                'level': getattr(player, 'level', 0),
+                'hp': getattr(player, 'hp', 0),
+                'max_hp': getattr(player, 'max_hp', 0),
+                'profession_id': getattr(player, 'profession_id', 0),
+                'fight_point': getattr(player, 'fight_point', 0),
+            })
+        self._on_player_update(player)
+
+    def _on_parser_monster_update(self, monster: dict):
+        self._cache_monster_event(monster)
+        cb = self._on_monster_update
+        if callable(cb):
+            try:
+                cb(monster)
+            except Exception:
+                logger.debug('[Bridge] on_monster_update callback error', exc_info=True)
+
+    def _on_parser_skill_event(self, event: dict):
+        self._cache_skill_event(event)
+        cb = self._on_skill_event
+        if callable(cb):
+            try:
+                cb(event)
+            except Exception:
+                logger.debug('[Bridge] on_skill_event callback error', exc_info=True)
+
+    def _on_parser_dungeon_event(self, event: dict):
+        self._cache_dungeon_event(event)
+        kind = str((event or {}).get('kind') or '') if isinstance(event, Mapping) else ''
+        if kind in {'enter_scene', 'sync_dungeon_data', 'start_playing_dungeon'}:
+            self._maybe_start_mem_source_for_tcp_event('dungeon_event', event)
+        cb = self._on_dungeon_event
+        if callable(cb):
+            try:
+                cb(event)
+            except Exception:
+                logger.debug('[Bridge] on_dungeon_event callback error', exc_info=True)
+
+    def _on_parser_scene_change(self, scene_event=None):
+        self._maybe_start_mem_source_for_tcp_event('scene_change', scene_event)
+        cb = self._on_scene_change
+        if callable(cb):
+            try:
+                cb(scene_event)
+            except TypeError:
+                cb()
+            except Exception:
+                logger.debug('[Bridge] on_scene_change callback error', exc_info=True)
 
     def _create_live_parser_adapter(self, *, preferred_uid: int = 0):
         """Create the live TCP parser adapter with plugin opt-in + safe fallback.
@@ -777,7 +1010,10 @@ class PacketBridge:
                 parser_id=getattr(adapter, 'adapter_id', ''),
             )
 
-    def _process_live_packet_frame(self, frame: bytes):
+    def _process_live_packet_frame(self, frame: bytes, metadata: Mapping | None = None):
+        if metadata:
+            self._last_packet_metadata = dict(metadata)
+            self._observe_tcp_endpoint(metadata)
         adapter = self._parser_adapter
         if adapter is None:
             return None

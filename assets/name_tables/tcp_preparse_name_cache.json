@@ -1,0 +1,3145 @@
+{
+  "endpoints": {},
+  "names": {
+    "by_kind": {
+      "buff": {
+        "2203640": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13297,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 834,
+              "slot_addr": "0x446835FA8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCFD4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCFC0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "聚能之力",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2203650": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13298,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 835,
+              "slot_addr": "0x446835FB0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCFA4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCF90",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "钢喙之击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2203660": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13299,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 836,
+              "slot_addr": "0x446835FB8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCF74",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCF60",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "钢制喙聚集",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206010": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13301,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 838,
+              "slot_addr": "0x446835FC8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCF14",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCF00",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光铸身躯",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206030": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13303,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 840,
+              "slot_addr": "0x446835FD8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCEE4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCED0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣令的恩惠",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206040": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13304,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 841,
+              "slot_addr": "0x446835FE0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCEB4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCEA0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "裁决之环",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206050": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13305,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 842,
+              "slot_addr": "0x446835FE8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCE84",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCE70",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光铸延续",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206060": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13306,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 843,
+              "slot_addr": "0x446835FF0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCE54",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCE40",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "急速圣令",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206070": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13307,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 844,
+              "slot_addr": "0x446835FF8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCE24",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCE10",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "力量转换",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206080": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13308,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 845,
+              "slot_addr": "0x446836000",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCDF4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCDE0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "断罪之光",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206110": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13311,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 848,
+              "slot_addr": "0x446836018",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCD94",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCD80",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "裁决启示",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206120": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13312,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 849,
+              "slot_addr": "0x446836020",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCD64",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCD50",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣环护卫",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206140": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13314,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 851,
+              "slot_addr": "0x446836030",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCD34",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCD20",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣光守卫赞歌",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206150": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13315,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 852,
+              "slot_addr": "0x446836038",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCD04",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCCF0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "无畏之盾",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206160": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13316,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 853,
+              "slot_addr": "0x446836040",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCCD4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCCC0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣光守卫惩戒",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206170": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13317,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 854,
+              "slot_addr": "0x446836048",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCCA4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCC90",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光明圣剑",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206210": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13321,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 858,
+              "slot_addr": "0x446836068",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCC14",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCC00",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光铸屏障的升华",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206220": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13322,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 859,
+              "slot_addr": "0x446836070",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCBE4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCBD0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣环咏叹",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206240": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13324,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 861,
+              "slot_addr": "0x446836080",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCBB4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCBA0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "神圣光辉",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206250": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13325,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 862,
+              "slot_addr": "0x446836088",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCB84",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCB70",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "决心斩击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206260": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13326,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 863,
+              "slot_addr": "0x446836090",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCB54",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCB40",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光铸驱动",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206270": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13327,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 864,
+              "slot_addr": "0x446836098",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCB24",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCB10",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "冷酷回溯",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206280": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13328,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 865,
+              "slot_addr": "0x4468360A0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCAF4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCAE0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣环激荡",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206290": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13329,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 866,
+              "slot_addr": "0x4468360A8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCAC4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCAB0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "裁决追击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206300": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13330,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 867,
+              "slot_addr": "0x4468360B0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCA94",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCA80",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣环祝福",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206310": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13331,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 868,
+              "slot_addr": "0x4468360B8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCA64",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCA50",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光铸平衡",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206320": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13332,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 869,
+              "slot_addr": "0x4468360C0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCA34",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCA20",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光铸刚毅",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206330": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13333,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 870,
+              "slot_addr": "0x4468360C8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCA04",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC9F0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光能援护",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206340": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13334,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 871,
+              "slot_addr": "0x4468360D0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC9D4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC9C0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "生命强化",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206350": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13335,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 872,
+              "slot_addr": "0x4468360D8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC9A4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC990",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "断罪时效",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206370": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13337,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 874,
+              "slot_addr": "0x4468360E8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC974",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC960",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "持盾冲击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206380": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13338,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 875,
+              "slot_addr": "0x4468360F0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC944",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC930",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "清算炎盾",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206390": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13339,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 876,
+              "slot_addr": "0x4468360F8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC914",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC900",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣光时效",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206400": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13340,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 877,
+              "slot_addr": "0x446836100",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC8E4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC8D0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣光召唤",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206410": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13341,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 878,
+              "slot_addr": "0x446836108",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC8B4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC8A0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光击连锁",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206420": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13342,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 879,
+              "slot_addr": "0x446836110",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC884",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC870",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "清算爆炎",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206430": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13343,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 880,
+              "slot_addr": "0x446836118",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC854",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC840",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣体治愈",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206440": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13344,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 881,
+              "slot_addr": "0x446836120",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC824",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC810",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光元素加护",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206450": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13345,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 882,
+              "slot_addr": "0x446836128",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC7F4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC7E0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "守护极意",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206460": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13346,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 883,
+              "slot_addr": "0x446836130",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC7C4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC7B0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "盾击守护",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206470": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13347,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 884,
+              "slot_addr": "0x446836138",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC794",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC780",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光愈裁断",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206480": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13348,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 885,
+              "slot_addr": "0x446836140",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC764",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC750",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "极意神圣之击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206490": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13349,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 886,
+              "slot_addr": "0x446836148",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC734",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC720",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "魔法守卫",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206500": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13350,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 887,
+              "slot_addr": "0x446836150",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC704",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC6F0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "极意征伐",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206520": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13352,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 889,
+              "slot_addr": "0x446836160",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC6A4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC690",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "逆境强化",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206530": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13353,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 890,
+              "slot_addr": "0x446836168",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC674",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC660",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "广域征伐",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206540": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13354,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 891,
+              "slot_addr": "0x446836170",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC644",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC630",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "悍勇无畏",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206550": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13355,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 892,
+              "slot_addr": "0x446836178",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC614",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC600",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光芒核心",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206560": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13356,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 893,
+              "slot_addr": "0x446836180",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC5E4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC5D0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "征伐追击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206570": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13357,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 894,
+              "slot_addr": "0x446836188",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC5B4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC5A0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "决断之刃",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206580": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13358,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 895,
+              "slot_addr": "0x446836190",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC584",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC570",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "冷酷加速",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206590": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13359,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 896,
+              "slot_addr": "0x446836198",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC554",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC540",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣印强化",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206600": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13360,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 897,
+              "slot_addr": "0x4468361A0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC524",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC510",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣环守护",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206610": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13361,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 898,
+              "slot_addr": "0x4468361A8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC4F4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC4E0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "裁决精进",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206620": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13362,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 899,
+              "slot_addr": "0x4468361B0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC4C4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC4B0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "圣印追击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206630": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13363,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 900,
+              "slot_addr": "0x4468361B8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC494",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC480",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "溢愈光壁",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2206660": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13365,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 902,
+              "slot_addr": "0x4468361C8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC464",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC450",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "决心速回",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207020": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13367,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 904,
+              "slot_addr": "0x4468361D8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC434",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC420",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "弦域扩张",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207030": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13368,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 905,
+              "slot_addr": "0x4468361E0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC404",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC3F0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "炽热迸发",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207050": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13370,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 907,
+              "slot_addr": "0x4468361F0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC3A4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC390",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "魔力升华",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207060": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13371,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 908,
+              "slot_addr": "0x4468361F8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC374",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC360",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "鸣奏·热力核心",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207070": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13372,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 909,
+              "slot_addr": "0x446836200",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC344",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC330",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "炎爆追击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207080": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13373,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 910,
+              "slot_addr": "0x446836208",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC314",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC300",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "炎爆追击二式",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207090": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13374,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 911,
+              "slot_addr": "0x446836210",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC2E4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC2D0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "狂音流",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207100": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13375,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 912,
+              "slot_addr": "0x446836218",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC2B4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC2A0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "幸运音浪",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207110": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13376,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 913,
+              "slot_addr": "0x446836220",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC284",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC270",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "三重狂想",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207130": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13378,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 915,
+              "slot_addr": "0x446836230",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC254",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC240",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "音浪烈火",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207140": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13379,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 916,
+              "slot_addr": "0x446836238",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC224",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC210",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "愈疗音符",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207150": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13380,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 917,
+              "slot_addr": "0x446836240",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC1F4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC1E0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "炽焰治愈",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207180": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13383,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 920,
+              "slot_addr": "0x446836258",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC1C4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC1B0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "协奏流",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207190": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13384,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 921,
+              "slot_addr": "0x446836260",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC194",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC180",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "华彩章节充能",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207200": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13385,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 922,
+              "slot_addr": "0x446836268",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC164",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC150",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "双生治愈音符",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207220": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13386,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 923,
+              "slot_addr": "0x446836270",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC134",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC120",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "烈火节拍",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207240": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13388,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 925,
+              "slot_addr": "0x446836280",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC0D4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC0C0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "热情挥洒·激昂",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207250": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13389,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 926,
+              "slot_addr": "0x446836288",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC0A4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC090",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "属性共鸣",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207260": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13390,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 927,
+              "slot_addr": "0x446836290",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC074",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC060",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "属性共鸣暴击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207280": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13392,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 929,
+              "slot_addr": "0x4468362A0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC044",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC030",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "临界喝彩",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207290": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13393,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 930,
+              "slot_addr": "0x4468362A8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CC014",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CC000",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "节奏灵韵",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207330": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13397,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 934,
+              "slot_addr": "0x4468362C8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDF44",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDF30",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "热力加倍",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207350": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13399,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 936,
+              "slot_addr": "0x4468362D8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDF14",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDF00",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "鸣奏和弦",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207370": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13401,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 938,
+              "slot_addr": "0x4468362E8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDEE4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDED0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "不屈谐音",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207380": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13402,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 939,
+              "slot_addr": "0x4468362F0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDEB4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDEA0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "挥击回涌",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207390": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13403,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 940,
+              "slot_addr": "0x4468362F8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDE84",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDE70",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "幸运倍乘",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207400": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13404,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 941,
+              "slot_addr": "0x446836300",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDE54",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDE40",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "回响赋格",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207410": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13405,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 942,
+              "slot_addr": "0x446836308",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDE24",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDE10",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "音爆愈疗",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207450": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13409,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 946,
+              "slot_addr": "0x446836328",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDD94",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDD80",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "终幕指令",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207490": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13413,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 950,
+              "slot_addr": "0x446836348",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDCD4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDCC0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "绝顶万众瞩目",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207500": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13414,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 951,
+              "slot_addr": "0x446836350",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDCA4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDC90",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "极意万众瞩目·狂音",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207510": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13415,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 952,
+              "slot_addr": "0x446836358",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDC74",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDC60",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "音塔多重波动",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207520": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13416,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 953,
+              "slot_addr": "0x446836360",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDC44",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDC30",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "音浪超频领域",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207530": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13417,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 954,
+              "slot_addr": "0x446836368",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDC14",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDC00",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "会心充能律",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207540": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13418,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 955,
+              "slot_addr": "0x446836370",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDBE4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDBD0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "音塔爆炎冲击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207550": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13419,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 956,
+              "slot_addr": "0x446836378",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDBB4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDBA0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "多目标热力增幅",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207560": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13420,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 957,
+              "slot_addr": "0x446836380",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDB84",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDB70",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "热烈音塔爆炎冲击",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207570": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13421,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 958,
+              "slot_addr": "0x446836388",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDB54",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDB40",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "音波裁决",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207580": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13422,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 959,
+              "slot_addr": "0x446836390",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDB24",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDB10",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "谐波增幅器",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207590": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13423,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 960,
+              "slot_addr": "0x446836398",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDAF4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDAE0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "渐强治愈和弦",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207600": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13424,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 961,
+              "slot_addr": "0x4468363A0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDAC4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDAB0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "暴击天秤",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207610": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13425,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 962,
+              "slot_addr": "0x4468363A8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDA94",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDA80",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "鸣奏交响式",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207640": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13428,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 965,
+              "slot_addr": "0x4468363C0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDA04",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CD9F0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "音塔共鸣",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207651": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13429,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 966,
+              "slot_addr": "0x4468363C8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CD9D4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CD9C0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "属性共鸣超载",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207660": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13430,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 967,
+              "slot_addr": "0x4468363D0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CD9A4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CD990",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "resonance-logs-cn/src/lib/config/BuffName.json"
+          ],
+          "text": "极意万众瞩目·协奏",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2207680": {
+          "confidence": "high",
+          "context": {
+            "id_space": "buff_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13431,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 968,
+              "slot_addr": "0x4468363D8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CD974",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CD960",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "buff_id/BaseId"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "螺旋炎奏",
+          "updated_at": "2026-06-04T14:54:29Z"
+        }
+      },
+      "skill": {
+        "1007704": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "skill_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13300,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 837,
+              "slot_addr": "0x446835FC0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCF44",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCF30",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "skill_id/skill_level_id"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
+          ],
+          "text": "连环爆炸",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "214": {
+          "confidence": "high",
+          "context": {
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13426,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 963,
+              "slot_addr": "0x4468363B0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDA64",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDA50",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "skill_id"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "活力解放",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "230105": {
+          "confidence": "high",
+          "context": {
+            "id_space": "skill_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13407,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 944,
+              "slot_addr": "0x446836318",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDDF4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDDE0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "skill_id/skill_level_id"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
+          ],
+          "text": "炎律狂踏",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "230106": {
+          "confidence": "high",
+          "context": {
+            "id_space": "skill_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13408,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 945,
+              "slot_addr": "0x446836320",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDDC4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDDB0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "skill_id/skill_level_id"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
+          ],
+          "text": "烈焰音符",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2335": {
+          "confidence": "high",
+          "context": {
+            "id_space": "skill_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13394,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 931,
+              "slot_addr": "0x4468362B0",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDFD4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDFC0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "skill_id/skill_level_id"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
+          ],
+          "text": "升格·无限狂想",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2336": {
+          "confidence": "high",
+          "context": {
+            "id_space": "skill_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13395,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 932,
+              "slot_addr": "0x4468362B8",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CDFA4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CDF90",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "skill_id/skill_level_id"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
+          ],
+          "text": "升格·巡演曲",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2405": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "sub_profession_skill_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13309,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 846,
+              "slot_addr": "0x446836008",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCDC4",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCDB0",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "skill_id/sub_profession"
+          },
+          "endpoints": [],
+          "sources": [
+            "manual:packet_parser_skills_flow_aliases"
+          ],
+          "text": "防护回复流",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2406": {
+          "confidence": "medium",
+          "context": {
+            "id_space": "sub_profession_skill_id",
+            "runtime": {
+              "anchor_status": "runtime_heap_pointer_table_only",
+              "row_index": 1,
+              "slot_addr": "0x141BAB7368",
+              "string_chars": "0x4466CCC44",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCC30",
+              "table_element_base": "0x141BAB7360",
+              "table_index": 1
+            },
+            "tcp_field": "skill_id/sub_profession"
+          },
+          "endpoints": [],
+          "sources": [
+            "manual:packet_parser_skills_flow_aliases"
+          ],
+          "text": "光盾回复流",
+          "updated_at": "2026-06-04T14:54:29Z"
+        },
+        "2414": {
+          "confidence": "high",
+          "context": {
+            "id_space": "skill_id",
+            "runtime": {
+              "allLocalizationString_array_obj": "0x44681C000",
+              "allLocalizationString_element_base": "0x44681C020",
+              "allLocalizationString_index": 13318,
+              "anchor_status": "resolved_static_singleton_string_pool",
+              "row_index": 855,
+              "slot_addr": "0x446836050",
+              "static_anchor_chain": "ZUtil.ZSingleton<StringPoolManager>.static_fields.instance_ -> StringPoolManager.impl_ -> StringPoolRuntimeImpl.allLocalizationString_",
+              "string_chars": "0x4466CCC74",
+              "string_klass": "0x30252490",
+              "string_klass_name": "System.String",
+              "string_obj": "0x4466CCC60",
+              "table_element_base": "0x446834598",
+              "table_index": 0
+            },
+            "tcp_field": "skill_id/skill_level_id"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/SkillTable.json"
+          ],
+          "text": "神圣壁垒",
+          "updated_at": "2026-06-04T14:54:29Z"
+        }
+      }
+    }
+  },
+  "schema_version": 1,
+  "updated_at": "2026-06-04T14:54:29Z"
+}
