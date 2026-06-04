@@ -71,6 +71,7 @@ from gui_modules.sao_gui_report_export import ReportExportPanel
 from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
 from gui_modules.sao_gui_timeline_vcr import TimelineVcrPanel
 from gui_modules.sao_gui_trigger_timer_manager import TriggerTimerManagerPanel
+from gui_modules.sao_panel_ui import _set_sao_panel_theme
 
 
 class SAOPlayerGUIPanelsMixin:
@@ -93,10 +94,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_plugin_manager_panel:
             self._act_plugin_manager_panel = PluginManagerPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_plugin_manager_panel.is_visible():
             self._act_plugin_manager_panel.hide()
         else:
             self._act_plugin_manager_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_plugin_manager_panel))
 
     def _toggle_act_trigger_timer_panel(self):
@@ -104,10 +107,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_trigger_timer_panel:
             self._act_trigger_timer_panel = TriggerTimerManagerPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_trigger_timer_panel.is_visible():
             self._act_trigger_timer_panel.hide()
         else:
             self._act_trigger_timer_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_trigger_timer_panel))
 
     def _toggle_act_data_source_health_panel(self):
@@ -115,10 +120,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_data_source_health_panel:
             self._act_data_source_health_panel = DataSourceHealthPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_data_source_health_panel.is_visible():
             self._act_data_source_health_panel.hide()
         else:
             self._act_data_source_health_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_data_source_health_panel))
 
     def _toggle_act_report_export_panel(self):
@@ -126,10 +133,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_report_export_panel:
             self._act_report_export_panel = ReportExportPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_report_export_panel.is_visible():
             self._act_report_export_panel.hide()
         else:
             self._act_report_export_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_report_export_panel))
 
     def _toggle_act_offline_import_panel(self):
@@ -137,10 +146,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_offline_import_panel:
             self._act_offline_import_panel = OfflineImportPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_offline_import_panel.is_visible():
             self._act_offline_import_panel.hide()
         else:
             self._act_offline_import_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_offline_import_panel))
 
     def _toggle_act_timeline_vcr_panel(self):
@@ -148,10 +159,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_timeline_vcr_panel:
             self._act_timeline_vcr_panel = TimelineVcrPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_timeline_vcr_panel.is_visible():
             self._act_timeline_vcr_panel.hide()
         else:
             self._act_timeline_vcr_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_timeline_vcr_panel))
 
     def _toggle_act_action_log_panel(self):
@@ -159,10 +172,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_action_log_panel:
             self._act_action_log_panel = ActionLogPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_action_log_panel.is_visible():
             self._act_action_log_panel.hide()
         else:
             self._act_action_log_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_action_log_panel))
 
     def _toggle_act_death_recap_panel(self):
@@ -170,10 +185,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_death_recap_panel:
             self._act_death_recap_panel = DeathRecapPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_death_recap_panel.is_visible():
             self._act_death_recap_panel.hide()
         else:
             self._act_death_recap_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_death_recap_panel))
 
     def _toggle_act_graph_timeseries_panel(self):
@@ -181,10 +198,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_graph_timeseries_panel:
             self._act_graph_timeseries_panel = GraphTimeseriesPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_graph_timeseries_panel.is_visible():
             self._act_graph_timeseries_panel.hide()
         else:
             self._act_graph_timeseries_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_graph_timeseries_panel))
 
     def _toggle_act_combatant_drilldown_panel(self):
@@ -192,10 +211,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_combatant_drilldown_panel:
             self._act_combatant_drilldown_panel = CombatantDrilldownPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_combatant_drilldown_panel.is_visible():
             self._act_combatant_drilldown_panel.hide()
         else:
             self._act_combatant_drilldown_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_combatant_drilldown_panel))
 
     def _toggle_act_skill_drilldown_panel(self):
@@ -203,10 +224,12 @@ class SAOPlayerGUIPanelsMixin:
         self._dismiss_sao_menu_for_panel()
         if not self._act_skill_drilldown_panel:
             self._act_skill_drilldown_panel = SkillDrilldownPanel(self.root, self)
+            self._apply_act_panel_theme()
         if self._act_skill_drilldown_panel.is_visible():
             self._act_skill_drilldown_panel.hide()
         else:
             self._act_skill_drilldown_panel.show()
+            self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_skill_drilldown_panel))
 
     @_probe.decorate('ui.commander_push')
@@ -317,7 +340,46 @@ class SAOPlayerGUIPanelsMixin:
         'bosshp':  '_boss_hp_overlay',
         'skillfx': '_skillfx_overlay',
         'alert':   '_alert_overlay',
+        'act':     '',
     }
+
+    _ACT_PANEL_ATTRS = (
+        '_act_plugin_manager_panel',
+        '_act_trigger_timer_panel',
+        '_act_data_source_health_panel',
+        '_act_report_export_panel',
+        '_act_offline_import_panel',
+        '_act_timeline_vcr_panel',
+        '_act_action_log_panel',
+        '_act_death_recap_panel',
+        '_act_graph_timeseries_panel',
+        '_act_combatant_drilldown_panel',
+        '_act_skill_drilldown_panel',
+    )
+
+    def _act_panel_theme(self) -> str:
+        try:
+            cfg = self._cfg_settings_ref or self.settings
+            themes = dict(cfg.get('panel_themes', {}) or {})
+            return 'light' if themes.get('act') == 'light' else 'dark'
+        except Exception:
+            return 'dark'
+
+    def _apply_act_panel_theme(self, theme: Optional[str] = None) -> None:
+        """Apply the grouped ACT panel theme to all registered Tk ACT panels."""
+        theme = 'light' if str(theme or self._act_panel_theme()).lower() == 'light' else 'dark'
+        try:
+            _set_sao_panel_theme(theme)
+        except Exception:
+            pass
+        for attr in self._ACT_PANEL_ATTRS:
+            panel = getattr(self, attr, None)
+            win = getattr(panel, '_win', None)
+            try:
+                if win and win.winfo_exists():
+                    _set_sao_panel_theme(theme, win)
+            except Exception:
+                pass
 
     def _toggle_recognition_menu(self):
         """切换识别开关 — SAO Entity UI."""

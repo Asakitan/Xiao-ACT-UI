@@ -148,7 +148,7 @@ class TimelineVcrPanel:
         win.minsize(680, 420)
         win.configure(bg=_SAO_PANEL_BG)
         try:
-            win.overrideredirect(False)
+            win.overrideredirect(True)
             win.attributes('-alpha', 0.97)
         except Exception:
             pass

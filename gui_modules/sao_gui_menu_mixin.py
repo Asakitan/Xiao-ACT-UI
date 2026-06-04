@@ -469,6 +469,7 @@ class SAOPlayerGUIMenuMixin:
             'bosshp': ('⚔', 'BossHP'),
             'skillfx': ('✦', 'SkillFX'),
             'alert': ('!', 'Alert'),
+            'act': ('▣', 'ACT'),
         }
         skin_items = []
         skin_items.append({'icon': '🎨', 'label': '全部 Light', 'command': lambda: self._set_all_themes('light')})
@@ -500,6 +501,9 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '◇', 'label': f'Boss血条: {boss_bar_disp}', 'command': self._cycle_boss_bar_mode},
             {'icon': '✦', 'label': f'Buff监视器: {"ON" if buffmon_on else "OFF"}', 'command': self._toggle_buffmon_enabled},
             {'icon': '◆', 'label': f'Hybrid数据源: {mem_mode_disp}', 'command': self._cycle_mem_data_source},
+        ])
+
+        act_items = [
             {'icon': '☌', 'label': f'ACT插件: {plugin_active}/{plugin_total}', 'command': self._show_act_plugin_status_menu},
             {'icon': '☌', 'label': 'ACT插件管理面板', 'command': self._toggle_act_plugin_manager_panel},
             {'icon': '⏱', 'label': f'ACT触发/计时: {trigger_total}/{trigger_timers}', 'command': self._toggle_act_trigger_timer_panel},
@@ -514,7 +518,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '✦', 'label': f'ACT技能钻取: {skill_state}/{skill_id}/{skill_ref_count}', 'command': self._toggle_act_skill_drilldown_panel},
             {'icon': '↻', 'label': '重载ACT插件', 'command': self._reload_act_plugins_menu},
             {'icon': '◆', 'label': '切换首个ACT插件', 'command': self._toggle_first_act_plugin_menu},
-        ])
+        ]
 
         return {
             '控制': [
@@ -526,6 +530,7 @@ class SAOPlayerGUIMenuMixin:
             'Boss': boss_items,
             'Burst': burst_items,
             '面板': panel_items,
+            'ACT': act_items,
             '皮肤': skin_items,
             '关于': [
                 {'icon': '◇', 'label': '关于本程序', 'command': self._show_about},
@@ -662,6 +667,7 @@ class SAOPlayerGUIMenuMixin:
             {'name': 'Boss', 'icon': '⚔', 'can_active': True},
             {'name': 'Burst', 'icon': 'B', 'can_active': True},
             {'name': '面板', 'icon': '◆', 'can_active': True},
+            {'name': 'ACT', 'icon': 'A', 'can_active': True},
             {'name': '皮肤', 'icon': 'P', 'can_active': True},
             {'name': '关于', 'icon': 'ℹ', 'can_active': True},
         ]

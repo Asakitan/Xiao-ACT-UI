@@ -233,7 +233,7 @@ class ActionLogPanel:
         win.minsize(720, 430)
         win.configure(bg=_SAO_PANEL_BG)
         try:
-            win.overrideredirect(False)
+            win.overrideredirect(True)
             win.attributes('-alpha', 0.97)
         except Exception:
             pass

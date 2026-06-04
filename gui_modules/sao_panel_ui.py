@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 import tkinter as tk
 from typing import Any, Dict, Tuple
 
@@ -143,16 +144,241 @@ def _apply_panel_style(panel):
 
 
 # ── SAO HUD 面板样式常量 ──
-_SAO_PANEL_BG = '#fafafa'          # 面板主背景
-_SAO_PANEL_HEADER_BG = '#1a2030'   # 深色标题栏
-_SAO_PANEL_HEADER_FG = '#e8f4f8'   # 标题文字
-_SAO_PANEL_BORDER = '#d1d1d6'      # 外边框
-_SAO_PANEL_ACCENT = '#86dfff'      # 青色强调
-_SAO_PANEL_GOLD = '#f3af12'        # 金色强调
-_SAO_PANEL_SEP = '#e0e0e0'         # 分隔线
-_SAO_PANEL_BODY_BG = '#ffffff'     # 内容区背景
-_SAO_PANEL_LABEL_FG = '#999999'    # 标签文字
-_SAO_PANEL_VALUE_FG = '#333333'    # 数值文字
+# Keep this palette aligned with ``sao_web_panel_common.py`` and the WebView
+# editor panels: light translucent shell, muted graphite text, cyan/gold
+# accents.  ACT floating panels use these helpers as their shared chrome.
+_SAO_PANEL_BG = '#e8ebee'          # 面板外壳/透明边缘
+_SAO_PANEL_HEADER_BG = '#fcfcfc'   # 浅色标题栏
+_SAO_PANEL_HEADER_FG = '#646364'   # 标题文字
+_SAO_PANEL_BORDER = '#babec4'      # 卡片/壳边线
+_SAO_PANEL_ACCENT = '#68e4ff'      # 青色强调
+_SAO_PANEL_GOLD = '#dea620'        # 金色强调
+_SAO_PANEL_SEP = '#d8dde2'         # 分隔线
+_SAO_PANEL_BODY_BG = '#f6f7f7'     # 内容区背景
+_SAO_PANEL_LABEL_FG = '#8c878a'    # 标签文字
+_SAO_PANEL_VALUE_FG = '#646364'    # 数值文字
+
+_SAO_PANEL_THEME = 'light'
+_SAO_PANEL_ROOTS = []
+_SAO_PANEL_PALETTES = {
+    'light': {
+        'bg': '#e8ebee',
+        'header_bg': '#fcfcfc',
+        'header_fg': '#646364',
+        'border': '#babec4',
+        'accent': '#68e4ff',
+        'gold': '#dea620',
+        'sep': '#d8dde2',
+        'body_bg': '#f6f7f7',
+        'label_fg': '#8c878a',
+        'value_fg': '#646364',
+        'control_bg': '#fafbfb',
+        'danger': '#ef684e',
+        'danger_soft': '#fff0f2',
+        'ok': '#5cc46a',
+        'warn_soft': '#fff8e5',
+        'active_fg': '#ffffff',
+    },
+    'dark': {
+        'bg': '#101823',
+        'header_bg': '#182334',
+        'header_fg': '#e6f4ff',
+        'border': '#36566a',
+        'accent': '#68e4ff',
+        'gold': '#f0c456',
+        'sep': '#274255',
+        'body_bg': '#111b28',
+        'label_fg': '#9fb4c4',
+        'value_fg': '#e6f4ff',
+        'control_bg': '#172436',
+        'danger': '#ff707a',
+        'danger_soft': '#301c22',
+        'ok': '#7df2bf',
+        'warn_soft': '#2c2617',
+        'active_fg': '#101823',
+    },
+}
+
+
+def _normalize_sao_panel_theme(theme: str) -> str:
+    return 'light' if str(theme or '').lower() == 'light' else 'dark'
+
+
+def _sync_imported_sao_panel_constants() -> None:
+    values = {
+        '_SAO_PANEL_BG': _SAO_PANEL_BG,
+        '_SAO_PANEL_HEADER_BG': _SAO_PANEL_HEADER_BG,
+        '_SAO_PANEL_HEADER_FG': _SAO_PANEL_HEADER_FG,
+        '_SAO_PANEL_BORDER': _SAO_PANEL_BORDER,
+        '_SAO_PANEL_ACCENT': _SAO_PANEL_ACCENT,
+        '_SAO_PANEL_GOLD': _SAO_PANEL_GOLD,
+        '_SAO_PANEL_SEP': _SAO_PANEL_SEP,
+        '_SAO_PANEL_BODY_BG': _SAO_PANEL_BODY_BG,
+        '_SAO_PANEL_LABEL_FG': _SAO_PANEL_LABEL_FG,
+        '_SAO_PANEL_VALUE_FG': _SAO_PANEL_VALUE_FG,
+    }
+    for name, module in list(sys.modules.items()):
+        if not name.startswith('gui_modules.sao_gui_'):
+            continue
+        for attr, value in values.items():
+            if hasattr(module, attr):
+                try:
+                    setattr(module, attr, value)
+                except Exception:
+                    pass
+
+
+def _apply_sao_panel_palette(theme: str) -> None:
+    global _SAO_PANEL_THEME
+    global _SAO_PANEL_BG, _SAO_PANEL_HEADER_BG, _SAO_PANEL_HEADER_FG
+    global _SAO_PANEL_BORDER, _SAO_PANEL_ACCENT, _SAO_PANEL_GOLD
+    global _SAO_PANEL_SEP, _SAO_PANEL_BODY_BG, _SAO_PANEL_LABEL_FG
+    global _SAO_PANEL_VALUE_FG
+
+    _SAO_PANEL_THEME = _normalize_sao_panel_theme(theme)
+    p = _SAO_PANEL_PALETTES[_SAO_PANEL_THEME]
+    _SAO_PANEL_BG = p['bg']
+    _SAO_PANEL_HEADER_BG = p['header_bg']
+    _SAO_PANEL_HEADER_FG = p['header_fg']
+    _SAO_PANEL_BORDER = p['border']
+    _SAO_PANEL_ACCENT = p['accent']
+    _SAO_PANEL_GOLD = p['gold']
+    _SAO_PANEL_SEP = p['sep']
+    _SAO_PANEL_BODY_BG = p['body_bg']
+    _SAO_PANEL_LABEL_FG = p['label_fg']
+    _SAO_PANEL_VALUE_FG = p['value_fg']
+    _sync_imported_sao_panel_constants()
+
+
+_apply_sao_panel_palette(_SAO_PANEL_THEME)
+
+
+def _normalise_hex_color(value: Any) -> str:
+    try:
+        return str(value or '').strip().lower()
+    except Exception:
+        return ''
+
+
+def _semantic_color_key(value: Any) -> str:
+    color = _normalise_hex_color(value)
+    if not color:
+        return ''
+    for palette in _SAO_PANEL_PALETTES.values():
+        for key, candidate in palette.items():
+            if _normalise_hex_color(candidate) == color:
+                return key
+    return ''
+
+
+def _theme_color(key: str, fallback: str = '') -> str:
+    return _SAO_PANEL_PALETTES[_SAO_PANEL_THEME].get(key, fallback)
+
+
+def _remember_sao_panel_root(root) -> None:
+    try:
+        if root is None:
+            return
+        for existing in list(_SAO_PANEL_ROOTS):
+            try:
+                if existing is root:
+                    return
+                if not existing.winfo_exists():
+                    _SAO_PANEL_ROOTS.remove(existing)
+            except Exception:
+                try:
+                    _SAO_PANEL_ROOTS.remove(existing)
+                except Exception:
+                    pass
+        _SAO_PANEL_ROOTS.append(root)
+    except Exception:
+        pass
+
+
+def _apply_sao_theme_to_widget(widget) -> None:
+    cls = widget.winfo_class()
+    try:
+        bg_key = _semantic_color_key(widget.cget('bg'))
+    except Exception:
+        bg_key = ''
+    try:
+        fg_key = _semantic_color_key(widget.cget('fg'))
+    except Exception:
+        fg_key = ''
+    try:
+        if cls in {'Toplevel'}:
+            widget.configure(bg=_SAO_PANEL_BG)
+        elif cls in {'Frame', 'Labelframe'}:
+            if bg_key:
+                widget.configure(bg=_theme_color(bg_key))
+            try:
+                hb_key = _semantic_color_key(widget.cget('highlightbackground'))
+                if hb_key:
+                    widget.configure(highlightbackground=_theme_color(hb_key))
+                hc_key = _semantic_color_key(widget.cget('highlightcolor'))
+                if hc_key:
+                    widget.configure(highlightcolor=_theme_color(hc_key))
+            except Exception:
+                pass
+        elif cls == 'Label':
+            updates = {}
+            if bg_key:
+                updates['bg'] = _theme_color(bg_key)
+            if fg_key:
+                updates['fg'] = _theme_color(fg_key)
+            if updates:
+                widget.configure(**updates)
+            try:
+                hb_key = _semantic_color_key(widget.cget('highlightbackground'))
+                if hb_key:
+                    widget.configure(highlightbackground=_theme_color(hb_key))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _style_sao_panel_tree(root) -> None:
+    try:
+        _remember_sao_panel_root(root)
+        root.configure(bg=_SAO_PANEL_BG)
+    except Exception:
+        pass
+    try:
+        _apply_sao_theme_to_widget(root)
+    except Exception:
+        pass
+    try:
+        _style_panel_descendants(root)
+    except Exception:
+        pass
+
+
+def _set_sao_panel_theme(theme: str, root=None, repaint_registered: bool = False) -> str:
+    """Set ACT/Tk SAO panel theme and repaint registered panel roots."""
+    _apply_sao_panel_palette(theme)
+    targets = [root] if root is not None else (list(_SAO_PANEL_ROOTS) if repaint_registered else [])
+    for target in targets:
+        try:
+            if target is None or not target.winfo_exists():
+                continue
+            _style_sao_panel_tree(target)
+        except Exception:
+            pass
+    return _SAO_PANEL_THEME
+
+
+def _enable_frameless_panel(win):
+    """Best-effort custom SAO chrome for Toplevel panels."""
+    try:
+        if isinstance(win, tk.Toplevel):
+            _remember_sao_panel_root(win)
+            win.overrideredirect(True)
+            win.configure(bg=_SAO_PANEL_BG)
+            _disable_native_window_shadow(win)
+            _apply_panel_style(win)
+    except Exception:
+        pass
 
 
 def _hex_rgba(hex_color: str, alpha: int = 255):
@@ -216,20 +442,25 @@ def _sao_panel_header(parent, title_icon, title_text=None, close_cmd=None, on_cl
         title_text = str(title_icon or '')
         title_icon = '◉'
     close_cb = on_close or close_cmd or (lambda: None)
-    hdr = tk.Frame(parent, bg=_SAO_PANEL_HEADER_BG, height=28)
+    try:
+        _enable_frameless_panel(parent.winfo_toplevel())
+    except Exception:
+        pass
+    hdr = tk.Frame(parent, bg=_SAO_PANEL_HEADER_BG, height=34, bd=0, highlightthickness=0)
     hdr.pack(fill=tk.X)
     hdr.pack_propagate(False)
     # 左侧角标 + 标题
-    accent = tk.Frame(hdr, bg=_SAO_PANEL_ACCENT, width=3, height=16)
-    accent.pack(side=tk.LEFT, padx=(6, 0), pady=6)
+    accent = tk.Frame(hdr, bg=_SAO_PANEL_ACCENT, width=3, height=18)
+    accent.pack(side=tk.LEFT, padx=(8, 0), pady=8)
     tk.Label(hdr, text=f'{title_icon} {title_text}',
              bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG,
-             font=get_sao_font(8, True)).pack(side=tk.LEFT, padx=6)
+             font=get_sao_font(9, True)).pack(side=tk.LEFT, padx=(7, 4))
+    tk.Frame(hdr, bg=_SAO_PANEL_GOLD, width=24, height=2).pack(side=tk.LEFT, padx=(3, 0), pady=(18, 0))
     # 右侧系统标记
-    tk.Label(hdr, text='◇', bg=_SAO_PANEL_HEADER_BG, fg='#4a5a6a',
+    tk.Label(hdr, text='◇', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_SEP,
              font=get_sao_font(7)).pack(side=tk.RIGHT, padx=(0, 2))
     close_lbl = _make_panel_close_button(hdr, close_cb, bg=_SAO_PANEL_HEADER_BG)
-    close_lbl.pack(side=tk.RIGHT, padx=6)
+    close_lbl.pack(side=tk.RIGHT, padx=(6, 8))
     class _HeaderProxy:
         def __init__(self, frame, close_button):
             self.frame = frame
@@ -287,11 +518,97 @@ def _bind_panel_drag(hdr, close_lbl=None, start_fn=None, move_fn=None):
 
 def _sao_panel_body(parent):
     """创建 SAO 风格面板内容区 (带角标装饰)"""
-    # 分隔线
-    tk.Frame(parent, bg=_SAO_PANEL_ACCENT, height=1).pack(fill=tk.X)
-    body = tk.Frame(parent, bg=_SAO_PANEL_BODY_BG)
+    tk.Frame(parent, bg=_SAO_PANEL_SEP, height=1).pack(fill=tk.X)
+    tk.Frame(parent, bg=_SAO_PANEL_ACCENT, height=2).pack(fill=tk.X)
+    body = tk.Frame(
+        parent,
+        bg=_SAO_PANEL_BODY_BG,
+        highlightthickness=1,
+        highlightbackground=_SAO_PANEL_BORDER,
+        highlightcolor=_SAO_PANEL_ACCENT,
+    )
     body.pack(fill=tk.BOTH, expand=True, padx=1, pady=(0, 1))
+    try:
+        tk.Frame(body, bg=_SAO_PANEL_ACCENT, width=34, height=2).place(x=0, y=0)
+        tk.Frame(body, bg=_SAO_PANEL_GOLD, width=34, height=2).place(relx=1.0, rely=1.0, anchor='se')
+    except Exception:
+        pass
+    for delay in (0, 80, 240):
+        try:
+            body.after(delay, lambda root=body: _style_panel_descendants(root))
+        except Exception:
+            pass
     return body
+
+
+def _style_panel_descendants(root):
+    """Apply one-shot SAO styling to simple Tk controls created in a panel."""
+    for child in list(root.winfo_children()):
+        cls = child.winfo_class()
+        _apply_sao_theme_to_widget(child)
+        try:
+            if cls == 'Button':
+                child.configure(
+                    bg=_SAO_PANEL_HEADER_BG,
+                    fg=_SAO_PANEL_HEADER_FG,
+                    activebackground=_SAO_PANEL_ACCENT,
+                    activeforeground=_theme_color('active_fg', '#ffffff'),
+                    relief=tk.FLAT,
+                    bd=0,
+                    padx=max(int(str(child.cget('padx') or 0)), 8),
+                    pady=max(int(str(child.cget('pady') or 0)), 3),
+                    highlightthickness=1,
+                    highlightbackground=_SAO_PANEL_BORDER,
+                    highlightcolor=_SAO_PANEL_ACCENT,
+                )
+            elif cls == 'Entry':
+                child.configure(
+                    bg=_theme_color('control_bg', '#fafbfb'),
+                    fg=_SAO_PANEL_VALUE_FG,
+                    insertbackground=_SAO_PANEL_GOLD,
+                    relief=tk.FLAT,
+                    bd=0,
+                    highlightthickness=1,
+                    highlightbackground=_SAO_PANEL_BORDER,
+                    highlightcolor=_SAO_PANEL_ACCENT,
+                )
+            elif cls == 'Menubutton':
+                child.configure(
+                    bg=_theme_color('control_bg', '#fafbfb'),
+                    fg=_SAO_PANEL_VALUE_FG,
+                    activebackground=_SAO_PANEL_ACCENT,
+                    activeforeground=_theme_color('active_fg', '#ffffff'),
+                    relief=tk.FLAT,
+                    bd=0,
+                    highlightthickness=1,
+                    highlightbackground=_SAO_PANEL_BORDER,
+                    highlightcolor=_SAO_PANEL_ACCENT,
+                )
+                menu = child.cget('menu')
+                if menu:
+                    menu_obj = child.nametowidget(menu)
+                    menu_obj.configure(
+                        bg=_theme_color('control_bg', '#fafbfb'),
+                        fg=_SAO_PANEL_VALUE_FG,
+                        activebackground=_SAO_PANEL_ACCENT,
+                        activeforeground=_theme_color('active_fg', '#ffffff'),
+                        relief=tk.FLAT,
+                        bd=0,
+                    )
+            elif cls == 'Scrollbar':
+                child.configure(
+                    troughcolor=_SAO_PANEL_BODY_BG,
+                    bg=_SAO_PANEL_BORDER,
+                    activebackground=_SAO_PANEL_ACCENT,
+                    relief=tk.FLAT,
+                    bd=0,
+                    highlightthickness=0,
+                )
+            elif cls == 'Canvas':
+                child.configure(bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        except Exception:
+            pass
+        _style_panel_descendants(child)
 
 
 def _sao_panel_hud_canvas(parent):
@@ -316,12 +633,42 @@ def _sao_row(parent, label_text, value_text='', value_fg=None, value_font=None):
     return val_lbl
 
 
-def _sao_pill(parent, text, active, command):
-    """创建 SAO 风格切换按钮"""
-    bg = _SAO_PANEL_GOLD if active else '#1a2030'
-    fg = '#ffffff' if active else '#8a9aaa'
+def _sao_pill(parent, text, active=None, command=None):
+    """创建 SAO 风格切换按钮/徽章。
+
+    Older callers used this as a clickable toggle and passed ``active`` plus
+    ``command``.  ACT panels also use it as a static badge, so both arguments
+    are optional and the visual state is inferred from common status labels.
+    """
+    token = str(text or '').upper()
+    if active is None:
+        active = token in {'ACTIVE', 'ENABLED', 'READY', 'RUNNING', 'OK'} or 'SDK' in token
+    bad = token in {'ERROR', 'DISABLED', 'FAILED', 'BAD'}
+    warn = token in {'WARN', 'WARNING', 'TIMER', 'PAUSED'}
+    if bad:
+        bg = _theme_color('danger_soft', '#fff0f2')
+        fg = _theme_color('danger', '#ef684e')
+        border = _theme_color('danger', '#ef684e')
+    elif warn:
+        bg = _theme_color('warn_soft', '#fff8e5')
+        fg = _SAO_PANEL_GOLD
+        border = _SAO_PANEL_GOLD
+    elif active:
+        bg = _SAO_PANEL_GOLD
+        fg = _theme_color('active_fg', '#ffffff')
+        border = _SAO_PANEL_GOLD
+    else:
+        bg = _theme_color('control_bg', '#fafbfb')
+        fg = _SAO_PANEL_VALUE_FG
+        border = _SAO_PANEL_ACCENT
     lbl = tk.Label(parent, text=text, bg=bg, fg=fg,
                    font=get_cjk_font(8, True),
-                   padx=8, pady=2, cursor='hand2', relief=tk.FLAT)
-    lbl.bind('<Button-1>', lambda e: command())
+                   padx=9, pady=3,
+                   cursor='hand2' if callable(command) else '',
+                   relief=tk.FLAT,
+                   highlightthickness=1,
+                   highlightbackground=border,
+                   highlightcolor=border)
+    if callable(command):
+        lbl.bind('<Button-1>', lambda e: command())
     return lbl

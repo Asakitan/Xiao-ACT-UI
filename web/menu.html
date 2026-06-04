@@ -378,7 +378,7 @@ html, body {
 .item_box {
     list-style: none;
     position: absolute;
-    height: 490px;
+    height: 560px;
     overflow: hidden;
 }
 
@@ -409,6 +409,7 @@ html, body {
 .item:nth-child(5) { animation-delay: 0.10s; }
 .item:nth-child(6) { animation-delay: 0.05s; }
 .item:nth-child(7) { animation-delay: 0.00s; }
+.item:nth-child(8) { animation-delay: 0.00s; }
 
 @keyframes itemDown {
     from { transform: translateY(-80px); opacity: 0; filter: blur(14px); }
@@ -676,6 +677,30 @@ html, body {
     transform: translateX(-50%);
     border-radius: 2px;
     background: currentColor;
+}
+
+.sao-icon-act::before {
+    left: 4px;
+    top: 4px;
+    width: 16px;
+    height: 16px;
+    border: 2px solid currentColor;
+    transform: rotate(45deg);
+    border-radius: 2px;
+}
+.sao-icon-act::after {
+    left: 50%;
+    top: 50%;
+    width: 4px;
+    height: 4px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow:
+        0 -8px 0 -1px currentColor,
+        8px 0 0 -1px currentColor,
+        0 8px 0 -1px currentColor,
+        -8px 0 0 -1px currentColor;
 }
 
 /* ═══ Custom sub-menu widgets ═══ */
@@ -3167,19 +3192,22 @@ html, body {
 }
 /* ─── Motion blur fix + dropdown stacking: skip blur/transform on large panels ─── */
 .child-menu.boss-raid-menu,
-.child-menu.auto-key-menu {
+.child-menu.auto-key-menu,
+.child-menu#sub-act {
     filter: none;
     transform: none;
     transition: opacity 0.22s ease;
 }
 .child-menu.boss-raid-menu.show,
-.child-menu.auto-key-menu.show {
+.child-menu.auto-key-menu.show,
+.child-menu#sub-act.show {
     filter: none;
     transform: none;
 }
 
-/* Panels sub-menu (系统设置) — enable scrolling like the other two complex menus */
-.child-menu#sub-panels {
+/* Panels / ACT sub-menus — enable scrolling like the other complex menus */
+.child-menu#sub-panels,
+.child-menu#sub-act {
     width: min(76vw, 1180px);
     min-width: min(76vw, 1180px);
     max-width: calc(100vw - 220px);
@@ -3193,10 +3221,12 @@ html, body {
     scroll-padding-bottom: 150px;
     z-index: 100;
 }
-.child-menu#sub-panels li {
+.child-menu#sub-panels li,
+.child-menu#sub-act li {
     width: 100%;
 }
-.child-menu#sub-panels .widget-row {
+.child-menu#sub-panels .widget-row,
+.child-menu#sub-act .widget-row {
     width: 100%;
 }
 /* ─── Text clarity: disable blur / motion-heavy transitions on the menu shell ─── */
@@ -3263,35 +3293,44 @@ html, body {
 .child-menu li:hover {
     transform: none;
 }
-/* ─── Panels sub-menu: SAO light widget rows ─── */
-#sub-panels li.widget-row {
+/* ─── Panels / ACT sub-menus: SAO light widget rows ─── */
+#sub-panels li.widget-row,
+#sub-act li.widget-row {
     background: rgba(255,255,255,0.75);
     border: 1px solid rgba(201,198,198,0.40);
 }
-#sub-panels li.widget-row:hover {
+#sub-panels li.widget-row:hover,
+#sub-act li.widget-row:hover {
     background: rgba(255,255,255,0.85);
 }
-#sub-panels .widget-label {
+#sub-panels .widget-label,
+#sub-act .widget-label {
     color: rgb(80,78,80);
 }
-#sub-panels .widget-note {
+#sub-panels .widget-note,
+#sub-act .widget-note {
     color: rgb(160,158,160);
 }
-#sub-panels .sao-toggle {
+#sub-panels .sao-toggle,
+#sub-act .sao-toggle {
     color: rgb(100,99,100);
 }
-#sub-panels .sao-toggle .toggle-track {
+#sub-panels .sao-toggle .toggle-track,
+#sub-act .sao-toggle .toggle-track {
     background: rgba(201,198,198,0.30);
     border-color: rgba(201,198,198,0.50);
 }
-#sub-panels .sao-toggle input:checked + .toggle-track {
+#sub-panels .sao-toggle input:checked + .toggle-track,
+#sub-act .sao-toggle input:checked + .toggle-track {
     background: rgba(243,175,18,0.35);
     border-color: rgba(222,166,32,0.60);
 }
-#sub-panels .sao-slider {
+#sub-panels .sao-slider,
+#sub-act .sao-slider {
     background: rgba(201,198,198,0.30);
 }
-#sub-panels .source-summary {
+#sub-panels .source-summary,
+#sub-act .source-summary {
     color: rgb(160,158,160);
 }
 
@@ -3300,6 +3339,7 @@ html, body {
    ═══════════════════════════════════════ */
 .child-menu::-webkit-scrollbar,
 #sub-panels::-webkit-scrollbar,
+#sub-act::-webkit-scrollbar,
 .auto-key-list::-webkit-scrollbar,
 .boss-raid-editor-layout::-webkit-scrollbar,
 #br-phases-container::-webkit-scrollbar,
@@ -3389,10 +3429,13 @@ html, body {
             <li class="item" data-name="panels" data-idx="4">
                 <div class="in-circle"><span class="sao-icon sao-icon-settings"></span></div>
             </li>
-            <li class="item" data-name="theme" data-idx="5">
+            <li class="item" data-name="act" data-idx="5">
+                <div class="in-circle"><span class="sao-icon sao-icon-act"></span></div>
+            </li>
+            <li class="item" data-name="theme" data-idx="6">
                 <div class="in-circle"><span class="sao-icon sao-icon-theme"></span></div>
             </li>
-            <li class="item" data-name="about" data-idx="6">
+            <li class="item" data-name="about" data-idx="7">
                 <div class="in-circle"><span class="sao-icon sao-icon-about"></span></div>
             </li>
         </ul>
@@ -3773,17 +3816,6 @@ html, body {
                 <li data-action="toggle_recognition"><i class="menu-glyph mi-play"></i><span>识别 开/关</span><small class="shortcut">F5</small></li>
                 <li data-action="toggle_hide_seek"><i class="menu-glyph mi-play"></i><span>自动躲猫猫 Hide & Seek</span><small class="shortcut">F11</small></li>
                 <li data-action="toggle_commander"><i class="menu-glyph mi-play"></i><span>团本指挥 Commander</span></li>
-                <li data-action="toggle_plugin_manager"><i class="menu-glyph mi-mid"></i><span>ACT 插件管理 Plugin Manager</span></li>
-                <li data-action="toggle_trigger_timer_manager"><i class="menu-glyph mi-mid"></i><span>ACT 触发/计时 Trigger Timer</span></li>
-                <li data-action="toggle_data_source_health"><i class="menu-glyph mi-mid"></i><span>ACT 数据源健康 Data Source Health</span></li>
-                <li data-action="toggle_report_export"><i class="menu-glyph mi-mid"></i><span>ACT 报告/导出 Report Export</span></li>
-                <li data-action="toggle_offline_import"><i class="menu-glyph mi-mid"></i><span>ACT 离线导入 Offline Import</span></li>
-                <li data-action="toggle_timeline_vcr"><i class="menu-glyph mi-mid"></i><span>ACT 时间线/VCR Timeline</span></li>
-                <li data-action="toggle_action_log"><i class="menu-glyph mi-mid"></i><span>ACT 行为日志 Action Log</span></li>
-                <li data-action="toggle_death_recap"><i class="menu-glyph mi-mid"></i><span>ACT 死亡回放 Death Recap</span></li>
-                <li data-action="toggle_graph_timeseries"><i class="menu-glyph mi-mid"></i><span>ACT 图表/曲线 Graph</span></li>
-                <li data-action="toggle_combatant_drilldown"><i class="menu-glyph mi-mid"></i><span>ACT 战斗成员 Drilldown</span></li>
-                <li data-action="toggle_skill_drilldown"><i class="menu-glyph mi-mid"></i><span>ACT 技能 Drilldown</span></li>
                 <li data-action="toggle_session_players"><i class="menu-glyph mi-mid"></i><span>本次登录玩家 Session Players</span></li>
                 <li class="sep"></li>
                 <li class="widget-row">
@@ -3851,6 +3883,21 @@ html, body {
                     </div>
                 </li>
             </ul>
+
+            <!-- ACT sub-menu -->
+            <ul class="child-menu" id="sub-act" data-group="act">
+                <li data-action="toggle_plugin_manager"><i class="menu-glyph mi-mid"></i><span>ACT 插件管理 Plugin Manager</span></li>
+                <li data-action="toggle_trigger_timer_manager"><i class="menu-glyph mi-mid"></i><span>ACT 触发/计时 Trigger Timer</span></li>
+                <li data-action="toggle_data_source_health"><i class="menu-glyph mi-mid"></i><span>ACT 数据源健康 Data Source Health</span></li>
+                <li data-action="toggle_report_export"><i class="menu-glyph mi-mid"></i><span>ACT 报告/导出 Report Export</span></li>
+                <li data-action="toggle_offline_import"><i class="menu-glyph mi-mid"></i><span>ACT 离线导入 Offline Import</span></li>
+                <li data-action="toggle_timeline_vcr"><i class="menu-glyph mi-mid"></i><span>ACT 时间线/VCR Timeline</span></li>
+                <li data-action="toggle_action_log"><i class="menu-glyph mi-mid"></i><span>ACT 行为日志 Action Log</span></li>
+                <li data-action="toggle_death_recap"><i class="menu-glyph mi-mid"></i><span>ACT 死亡回放 Death Recap</span></li>
+                <li data-action="toggle_graph_timeseries"><i class="menu-glyph mi-mid"></i><span>ACT 图表/曲线 Graph</span></li>
+                <li data-action="toggle_combatant_drilldown"><i class="menu-glyph mi-mid"></i><span>ACT 战斗成员 Drilldown</span></li>
+                <li data-action="toggle_skill_drilldown"><i class="menu-glyph mi-mid"></i><span>ACT 技能 Drilldown</span></li>
+            </ul>
             <!-- About / System sub-menu -->
             <ul class="child-menu" id="sub-about" data-group="about">
                 <li data-action="switch_to_entity"><i class="menu-glyph mi-ent"></i><span>切换到 Entity UI</span></li>
@@ -3872,6 +3919,7 @@ html, body {
                         <div class="mode-btn" id="theme-bosshp" onclick="_toggleTheme('bosshp')" style="cursor:pointer;text-align:center;padding:3px 6px;">BossHP: Dark</div>
                         <div class="mode-btn" id="theme-skillfx" onclick="_toggleTheme('skillfx')" style="cursor:pointer;text-align:center;padding:3px 6px;">SkillFX: Dark</div>
                         <div class="mode-btn" id="theme-alert" onclick="_toggleTheme('alert')" style="cursor:pointer;text-align:center;padding:3px 6px;">Alert: Dark</div>
+                        <div class="mode-btn" id="theme-act" onclick="_toggleTheme('act')" style="cursor:pointer;text-align:center;padding:3px 6px;">ACT: Dark</div>
                     </div>
                 </li>
             </ul>
@@ -5743,12 +5791,12 @@ document.getElementById('ak-engine-pause-on-death').addEventListener('change', f
 
 /* ═══ Panel Theme toggles ═══ */
 var _panelThemes = {};
-var _themeDefaultDark = { dps: true, hp: true, bosshp: true, skillfx: true, alert: true };
+var _themePanels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act'];
+var _themeDefaultDark = { dps: true, hp: true, bosshp: true, skillfx: true, alert: true, act: true };
 
 function _refreshThemeButtons() {
-    var panels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert'];
     var allLight = true, allDark = true;
-    panels.forEach(function(p) {
+    _themePanels.forEach(function(p) {
         var el = document.getElementById('theme-' + p);
         if (!el) return;
         var t = _panelThemes[p] || (_themeDefaultDark[p] ? 'dark' : 'light');
@@ -5764,10 +5812,9 @@ function _refreshThemeButtons() {
 }
 
 function _menuThemeFromPanels() {
-    var panels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert'];
     var lightCount = 0;
     var darkCount = 0;
-    panels.forEach(function(p) {
+    _themePanels.forEach(function(p) {
         var t = _panelThemes[p] || (_themeDefaultDark[p] ? 'dark' : 'light');
         if (t === 'light') lightCount += 1;
         if (t === 'dark') darkCount += 1;
@@ -5782,7 +5829,7 @@ function _applyMenuTheme(theme) {
 function _syncPanelThemes(themes) {
     if (themes && typeof themes === 'object') {
         var next = {};
-        ['dps', 'hp', 'bosshp', 'skillfx', 'alert'].forEach(function(p) {
+        _themePanels.forEach(function(p) {
             var t = String(themes[p] || '').toLowerCase();
             next[p] = (t === 'light' || t === 'dark') ? t : (_themeDefaultDark[p] ? 'dark' : 'light');
         });
@@ -5803,8 +5850,7 @@ function _toggleTheme(panel) {
 }
 
 function _setAllThemes(theme) {
-    var panels = ['dps', 'hp', 'bosshp', 'skillfx', 'alert'];
-    panels.forEach(function(p) {
+    _themePanels.forEach(function(p) {
         _panelThemes[p] = theme;
         if (window.pywebview && window.pywebview.api && window.pywebview.api.set_panel_theme) {
             window.pywebview.api.set_panel_theme(p, theme);

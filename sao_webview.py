@@ -868,16 +868,23 @@ class SAOWebAPI:
                 'bosshp': 'dark',
                 'skillfx': 'dark',
                 'alert': 'dark',
+                'act': 'dark',
             }
             themes = dict(cfg.get('panel_themes', {}) or {})
             defaults.update({k: v for k, v in themes.items() if v in ('light', 'dark')})
             return defaults
         except Exception:
-            return {'dps': 'dark', 'hp': 'dark', 'bosshp': 'dark', 'skillfx': 'dark', 'alert': 'dark'}
+            return {'dps': 'dark', 'hp': 'dark', 'bosshp': 'dark', 'skillfx': 'dark', 'alert': 'dark', 'act': 'dark'}
 
     def set_panel_theme(self, panel: str, theme: str):
         """从 JS 端设置面板主题并保存."""
         try:
+            panel = str(panel or '').lower()
+            theme = str(theme or '').lower()
+            if panel not in {'dps', 'hp', 'bosshp', 'skillfx', 'alert', 'act'}:
+                return False
+            if theme not in {'light', 'dark'}:
+                theme = 'dark'
             cfg = getattr(self._g, '_cfg_settings_ref', None) or self._g.settings
             themes = dict(cfg.get('panel_themes', {}))
             themes[panel] = theme
@@ -891,12 +898,26 @@ class SAOWebAPI:
                 'skillfx': getattr(self._g, 'skillfx_win', None),
                 'alert': getattr(self._g, 'alert_win', None),
             }
-            w = _win_map.get(panel)
-            if w:
-                try:
-                    w.evaluate_js(f'window._applyPanelTheme&&window._applyPanelTheme("{theme}")')
-                except Exception:
-                    pass
+            _act_wins = (
+                getattr(self._g, 'plugin_manager_win', None),
+                getattr(self._g, 'trigger_timer_win', None),
+                getattr(self._g, 'data_source_health_win', None),
+                getattr(self._g, 'report_export_win', None),
+                getattr(self._g, 'offline_import_win', None),
+                getattr(self._g, 'timeline_vcr_win', None),
+                getattr(self._g, 'action_log_win', None),
+                getattr(self._g, 'death_recap_win', None),
+                getattr(self._g, 'graph_timeseries_win', None),
+                getattr(self._g, 'combatant_drilldown_win', None),
+                getattr(self._g, 'skill_drilldown_win', None),
+            )
+            targets = _act_wins if panel == 'act' else (_win_map.get(panel),)
+            for w in targets:
+                if w:
+                    try:
+                        w.evaluate_js(f'window._applyPanelTheme&&window._applyPanelTheme("{theme}")')
+                    except Exception:
+                        pass
             return True
         except Exception:
             return False
@@ -8607,6 +8628,7 @@ class SAOWebViewGUI:
                     'bosshp': 'dark',
                     'skillfx': 'dark',
                     'alert': 'dark',
+                    'act': 'dark',
                 }
             cfg['auto_key'] = self._get_auto_key_menu_state()
             cfg['boss_bar_mode'] = self._get_setting('boss_bar_mode', 'boss_raid') or 'boss_raid'

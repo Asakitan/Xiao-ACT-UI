@@ -32,13 +32,13 @@ from sao_theme.circle_button import SAOCircleButton
 class SAOMenuBar(tk.Frame):
     """
     SAO 风格垂直菜单栏
-    - 最多显示 7 个圆形按钮
+    - 最多显示 8 个圆形按钮
     - 下落动画 (from top:-500 to top:0)
     - 滚轮滚动
     - 点击激活 → 触发 LeftInfo + ChildBar
     """
 
-    _MAX_VISIBLE = 7
+    _MAX_VISIBLE = 8
 
     def __init__(self, parent, icon_arr: List[Dict], on_activate=None, **kw):
         super().__init__(parent, bg='', highlightthickness=0, **kw)

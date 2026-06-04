@@ -142,7 +142,7 @@ class SkillDrilldownPanel:
         win.minsize(660, 400)
         win.configure(bg=_SAO_PANEL_BG)
         try:
-            win.overrideredirect(False)
+            win.overrideredirect(True)
             win.attributes('-alpha', 0.97)
         except Exception:
             pass

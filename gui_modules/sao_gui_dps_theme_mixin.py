@@ -86,6 +86,12 @@ class SAOPlayerGUIDpsThemeMixin:
 
     def _apply_theme_to_overlay(self, key: str, theme: str) -> None:
         """将主题应用到 overlay 实例（如果已创建）。"""
+        if key == 'act':
+            try:
+                self._apply_act_panel_theme(theme)
+            except Exception as e:
+                print(f'[THEME] apply_to_act_panels FAILED: err={e}')
+            return
         attr = self._THEME_OVERLAY_MAP.get(key, '')
         ov = getattr(self, attr, None)
         if ov is not None and hasattr(ov, '_apply_theme'):

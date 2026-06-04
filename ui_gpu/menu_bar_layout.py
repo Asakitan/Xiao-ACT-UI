@@ -17,7 +17,7 @@ import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 SIZE = 54
 MAX_SIZE = 70
 SLOT = 70                       # vertical slot per button (= MAX_SIZE)
-MAX_VISIBLE = 7
+MAX_VISIBLE = 8
 WIDTH = MAX_SIZE                # column width
 
 # Animation tuning

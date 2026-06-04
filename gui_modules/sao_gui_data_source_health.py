@@ -130,7 +130,7 @@ class DataSourceHealthPanel:
         win.minsize(660, 420)
         win.configure(bg=_SAO_PANEL_BG)
         try:
-            win.overrideredirect(False)
+            win.overrideredirect(True)
             win.attributes('-alpha', 0.97)
         except Exception:
             pass
