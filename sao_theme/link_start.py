@@ -613,14 +613,25 @@ void main() {
         eased = self._cubic_bezier_y(t, 0.8, 0.1, 0.9, 0.8)
         return self._CAM_Z_START + (self._CAM_Z_END - self._CAM_Z_START) * eased
 
+    def _cam_z_end_velocity(self, duration: float) -> float:
+        """_cam_z 在结束点的速度，用于飞出段无停顿续接。"""
+        # cubic-bezier(0.8, 0.1, 0.9, 0.8) 在终点的 dy/dx。
+        end_slope = (1.0 - 0.8) / max(1.0e-6, 1.0 - 0.9)
+        return (self._CAM_Z_END - self._CAM_Z_START) * end_slope / max(0.01, duration)
+
     def _cam_z_with_exit(self, phase_elapsed: float, duration: float,
                          exit_start: float, exit_duration: float) -> float:
         """相机结束段继续 overshoot，确保圆柱体尾巴整体飞出屏幕。"""
         cam_z = self._cam_z(phase_elapsed, duration)
         if phase_elapsed <= exit_start or exit_duration <= 0.0:
             return cam_z
+        base_z = self._cam_z(exit_start, duration)
         exit_t = max(0.0, min(1.0, (phase_elapsed - exit_start) / exit_duration))
-        return cam_z + self._CAM_EXIT_EXTRA * ease_in(exit_t)
+        exit_dt = min(max(0.0, phase_elapsed - exit_start), exit_duration)
+        exit_speed = self._cam_z_end_velocity(duration)
+        linear_extra = exit_speed * exit_dt
+        topup_extra = max(0.0, self._CAM_EXIT_EXTRA - exit_speed * exit_duration)
+        return base_z + linear_extra + topup_extra * ease_in(exit_t)
 
     # ════════════════════════════════════════════════════════
     #  OpenGL 3D 隧道初始化

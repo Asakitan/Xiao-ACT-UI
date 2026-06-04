@@ -297,11 +297,21 @@ function camZ(phaseElapsed, duration) {
   const t = clamp(phaseElapsed/duration, 0.0, 1.0);
   return CAM_Z_START + (CAM_Z_END - CAM_Z_START) * cubicBezierY(t, 0.8,0.1,0.9,0.8);
 }
+function camZEndVelocity(duration) {
+  // cubic-bezier(0.8,0.1,0.9,0.8) endpoint dy/dx; keeps exit speed continuous.
+  const endSlope = (1.0 - 0.8) / Math.max(1.0e-6, 1.0 - 0.9);
+  return (CAM_Z_END - CAM_Z_START) * endSlope / Math.max(0.01, duration);
+}
 function camZWithExit(phaseElapsed, duration, exitStart, exitDuration) {
-  let z = camZ(phaseElapsed, duration);
+  const z = camZ(phaseElapsed, duration);
   if (phaseElapsed <= exitStart || exitDuration <= 0.0) return z;
+  const baseZ = camZ(exitStart, duration);
   const exitT = clamp((phaseElapsed - exitStart) / exitDuration, 0.0, 1.0);
-  return z + CAM_EXIT_EXTRA * (exitT * exitT * exitT);
+  const exitDt = Math.min(Math.max(0.0, phaseElapsed - exitStart), exitDuration);
+  const exitSpeed = camZEndVelocity(duration);
+  const linearExtra = exitSpeed * exitDt;
+  const topupExtra = Math.max(0.0, CAM_EXIT_EXTRA - exitSpeed * exitDuration);
+  return baseZ + linearExtra + topupExtra * (exitT * exitT * exitT);
 }
 
 // _gen_tunnel — sao_theme.py:3889-3915
