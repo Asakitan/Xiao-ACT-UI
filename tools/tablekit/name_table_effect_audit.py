@@ -20,7 +20,11 @@ _DEFAULT_FULL = os.path.join(_NAME_TABLES, "live_string_pool_all_localization.js
 _DEFAULT_MATCHED = os.path.join(_NAME_TABLES, "live_probe_act_matched_rows.json")
 _DEFAULT_CACHE = os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.json")
 _DEFAULT_CORRESPONDENCE = os.path.join(_NAME_TABLES, "live_name_tcp_correspondence.json")
-_RUNTIME_TABLE_KINDS = ("skill", "dungeon", "monster", "boss", "boss_mechanic", "buff")
+_RUNTIME_TABLE_KINDS = (
+    "skill", "field_marker", "boss_skill",
+    "dungeon", "monster", "boss", "boss_mechanic", "boss_status",
+    "buff", "player_buff", "factor_buff", "event",
+)
 
 _VOLATILE_KEYS = {
     "obj", "chars", "klass", "runtime_klass", "string_klass", "string_obj",

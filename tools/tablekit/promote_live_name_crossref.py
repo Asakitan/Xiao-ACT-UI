@@ -33,7 +33,18 @@ _ID_SPACE_KIND = {
 }
 _ALLOWED_CONTEXT_KEYS = ("source", "source_kind", "field", "match", "id_space", "tcp_status", "alias_of", "alias_reason")
 _CONFIDENCE_RANK = {"static": 50, "curated": 45, "mem": 40, "tcp": 35, "high": 30, "medium": 20, "low": 10}
-_FALLBACK_PREFIXES = ("技能#", "怪物#", "Boss#", "地牢#", "Buff#", "机制#", "NPC#", "道具#")
+_FALLBACK_PREFIXES = ("技能#", "怪物#", "Boss#", "地牢#", "Buff#", "机制#", "状态#", "事件#", "场地标记#", "NPC#", "道具#")
+
+
+def _semantic_kind(id_space: str, id_: Any) -> str:
+    fallback = _ID_SPACE_KIND.get(id_space, "")
+    if not fallback:
+        return ""
+    try:
+        from tools.tablekit.name_table_classifier import classify_id
+        return classify_id(id_space, id_) or fallback
+    except Exception:
+        return fallback
 
 
 def _iso() -> str:
@@ -107,11 +118,12 @@ def _best_matches(row: Mapping[str, Any], *, confidence: set[str], exact_only: b
             continue
         if exact_only and match.get("match") != "exact":
             continue
-        kind = _ID_SPACE_KIND.get(str(match.get("id_space") or ""), "")
+        id_space = str(match.get("id_space") or "")
         try:
             iid = int(match.get("id") or 0)
         except Exception:
             iid = 0
+        kind = _semantic_kind(id_space, iid)
         if not kind or iid <= 0:
             continue
         out.append(dict(match))
@@ -153,7 +165,7 @@ def promote_crossref(input_path: str = _DEFAULT_INPUT, cache_path: str = _DEFAUL
             continue
         for match in matches:
             id_space = str(match.get("id_space") or "")
-            kind = _ID_SPACE_KIND[id_space]
+            kind = _semantic_kind(id_space, match.get("id") or 0)
             iid = str(int(match.get("id") or 0))
             bucket = by_kind.setdefault(kind, {})
             old = bucket.get(iid)

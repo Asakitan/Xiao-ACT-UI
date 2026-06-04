@@ -775,7 +775,8 @@ class PacketBridge:
         context = dict(event)
         context['combat_fact'] = fact
         context['skill_level_id'] = skill_level_id
-        self._cache_name('skill', skill_id, name, source='tcp_skill_event', confidence='medium', context=context)
+        skill_kind = str(fact.get('skill_category') or 'skill')
+        self._cache_name(skill_kind, skill_id, name, source='tcp_skill_event', confidence='medium', context=context)
 
     def _cache_dungeon_event(self, event: Mapping | None) -> None:
         if not isinstance(event, Mapping):
@@ -837,7 +838,10 @@ class PacketBridge:
         buff_id = int(fact.get('buff_id') or event.get('buff_id') or event.get('base_id') or 0)
         buff_name = str(fact.get('buff_name') or event.get('buff_name') or '')
         if buff_id > 0 and buff_name:
-            self._cache_name('buff', buff_id, buff_name, source='tcp_boss_event', confidence='medium', context=context)
+            buff_kind = str(fact.get('buff_category') or 'buff')
+            self._cache_name(buff_kind, buff_id, buff_name, source='tcp_boss_event', confidence='medium', context=context)
+            if buff_kind in {'player_buff', 'factor_buff'}:
+                self._cache_name('buff', buff_id, buff_name, source='tcp_boss_event', confidence='medium', context=context)
 
     def _is_mem_trigger_event(self, trigger: str, context: Any) -> bool:
         if trigger in {'self_update_full_sync', 'dungeon_event'}:
@@ -983,6 +987,7 @@ class PacketBridge:
                 if fact.get('skill_name') and not event.get('skill_name'):
                     event['skill_name'] = fact.get('skill_name')
                 event.setdefault('skill_role', fact.get('skill_role'))
+                event.setdefault('skill_category', fact.get('skill_category'))
                 event.setdefault('sub_profession', fact.get('sub_profession'))
         except Exception:
             pass

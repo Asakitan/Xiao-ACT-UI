@@ -27,9 +27,18 @@ _SR_WINFORM_TABLE = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAna
 _SR_WPF_MONSTER = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAnalysis.WPF", "Data", "Monster")
 _SR_OLD_MONSTER = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Old", "Data", "monster")
 
-_RUNTIME_KINDS = ("skill", "dungeon", "monster", "boss", "boss_mechanic", "buff")
+_RUNTIME_KINDS = (
+    "skill", "field_marker", "boss_skill",
+    "dungeon", "monster", "boss",
+    "boss_mechanic", "boss_status",
+    "buff", "player_buff", "factor_buff", "event",
+)
 _KIND_FILENAMES = {kind: os.path.join(_NAME_TABLES, f"{kind}.json") for kind in _RUNTIME_KINDS}
-_FALLBACK_PREFIXES = ("技能#", "怪物#", "Boss#", "地牢#", "Buff#", "机制#", "NPC#", "道具#")
+_CLASSIFIED_KINDS = {
+    "skill", "field_marker", "boss_skill", "boss", "boss_mechanic", "boss_status",
+    "buff", "player_buff", "factor_buff", "event",
+}
+_FALLBACK_PREFIXES = ("技能#", "怪物#", "Boss#", "地牢#", "Buff#", "机制#", "状态#", "事件#", "场地标记#", "NPC#", "道具#")
 _CONFIDENCE_RANK = {
     "static": 50,
     "curated": 45,
@@ -151,7 +160,38 @@ def _seed_named_json(path: str, *, confidence: str = "static", fields: tuple[str
     return {key: {"text": value.get("text") or "", "confidence": confidence} for key, value in _coerce_name_map(_load_json(path), fields=fields).items()}
 
 
+def _classified_entries(kind: str) -> dict[str, dict[str, str]]:
+    try:
+        from tools.tablekit import name_table_classifier as classifier
+    except Exception:
+        return {}
+    try:
+        classifier._ASSETS = _ASSETS
+        classifier._DATATOOLS_CN = _DATATOOLS_CN
+        classifier._RESONANCE_METER = _RESONANCE_METER
+        classifier._RESONANCE_CONFIG = _RESONANCE_CONFIG
+        classifier._SR_WINFORM_TABLE = _SR_WINFORM_TABLE
+        classifier._SR_WPF_MONSTER = _SR_WPF_MONSTER
+        classifier._SR_OLD_MONSTER = _SR_OLD_MONSTER
+        for name in (
+            "skill_table", "buff_table", "monster_table", "skill_fallback_names",
+            "buff_fallback_names", "monster_names", "boss_monster_ids", "boss_skill_ids", "load_classified_tables",
+        ):
+            fn = getattr(classifier, name, None)
+            clear = getattr(fn, "cache_clear", None)
+            if callable(clear):
+                clear()
+        table = classifier.load_classified_tables().get(kind, {})
+        return {str(k): {"text": str(v.get("text") or ""), "confidence": str(v.get("confidence") or "static")} for k, v in table.items() if isinstance(v, Mapping) and v.get("text")}
+    except Exception:
+        return {}
+
+
 def _community_entries(kind: str) -> dict[str, dict[str, str]]:
+    if kind in _CLASSIFIED_KINDS:
+        classified = _classified_entries(kind)
+        if classified:
+            return classified
     if kind == "skill":
         merged: dict[str, dict[str, str]] = {}
         for path in (
@@ -219,6 +259,29 @@ def _cache_entries(cache: Any, kind: str) -> dict[str, dict[str, str]]:
     return _coerce_name_map(bucket)
 
 
+def _classify_cache_kind(generic_kind: str, key: str) -> str:
+    try:
+        from tools.tablekit.name_table_classifier import classify_id
+        return classify_id(generic_kind, int(key)) or generic_kind
+    except Exception:
+        return generic_kind
+
+
+def _semantic_cache_entries(cache: Any, kind: str) -> dict[str, dict[str, str]]:
+    if not isinstance(cache, Mapping):
+        return {}
+    by_kind = (((cache.get("names") or {}).get("by_kind") or {}))
+    if not isinstance(by_kind, Mapping):
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for source_kind in ("skill", "buff"):
+        for key, value in _coerce_name_map(by_kind.get(source_kind) or {}).items():
+            classified = _classify_cache_kind(source_kind, key)
+            if classified == kind or (kind == "buff" and classified in {"buff", "player_buff", "factor_buff"}):
+                out[key] = value
+    return out
+
+
 def merge_entries(existing: Mapping[str, Mapping[str, str]], incoming: Mapping[str, Mapping[str, str]], *, fill_missing_only: bool = True) -> tuple[dict[str, dict[str, str]], int]:
     merged = {str(k): {"text": str(v.get("text") or ""), "confidence": str(v.get("confidence") or "static")} for k, v in existing.items() if v.get("text")}
     changed = 0
@@ -243,8 +306,15 @@ def update_runtime_tables(cache_path: str = _DEFAULT_CACHE, *, output_dir: str =
     for kind in _RUNTIME_KINDS:
         path = os.path.join(output_dir, f"{kind}.json")
         existing = _coerce_name_map(_load_json(path))
-        incoming, _ = merge_entries(_community_entries(kind), _cache_entries(cache, kind), fill_missing_only=False)
-        merged, changed = merge_entries(existing, incoming, fill_missing_only=fill_missing_only)
+        cache_incoming = _cache_entries(cache, kind)
+        if kind in _CLASSIFIED_KINDS:
+            cache_incoming, _ = merge_entries(cache_incoming, _semantic_cache_entries(cache, kind), fill_missing_only=False)
+        incoming, _ = merge_entries(_community_entries(kind), cache_incoming, fill_missing_only=False)
+        if kind in _CLASSIFIED_KINDS:
+            merged = dict(incoming)
+            changed = 1 if _plain_table(existing) != _plain_table(merged) else 0
+        else:
+            merged, changed = merge_entries(existing, incoming, fill_missing_only=fill_missing_only)
         if write and (changed or not os.path.isfile(path)):
             _atomic_write_json(path, _plain_table(merged))
         summary["kinds"][kind] = {

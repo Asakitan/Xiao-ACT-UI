@@ -42,7 +42,9 @@ _TCP_PREPARSE_CACHE = os.path.join(_EXTRACTED, "tcp_preparse_name_cache.json")
 
 # 每个 kind 的数据源 (高优先级在前)
 _SOURCES = {
-    "skill":   [(_EXTRACTED, "skill.json"),   (_DATATOOLS_CN, "SkillTable.json"),  (_ASSETS, "skill_names.json")],
+    "skill":   [(_EXTRACTED, "skill.json")],
+    "field_marker": [(_EXTRACTED, "field_marker.json")],
+    "boss_skill": [(_EXTRACTED, "boss_skill.json")],
     "monster": [
         (_EXTRACTED, "monster.json"),
         (_DATATOOLS_CN, "MonsterTable.json"),
@@ -51,7 +53,11 @@ _SOURCES = {
         (_DATATOOLS_OLD_MONSTER, "monster_name_mapping.json"),
     ],
     "boss": [(_EXTRACTED, "boss.json")],
-    "buff":    [(_EXTRACTED, "buff.json"),    (_DATATOOLS_CN, "BuffTable.json"),   (_ASSETS, "skill_names.json")],
+    "buff":    [(_EXTRACTED, "buff.json")],
+    "player_buff": [(_EXTRACTED, "player_buff.json")],
+    "factor_buff": [(_EXTRACTED, "factor_buff.json")],
+    "event": [(_EXTRACTED, "event.json")],
+    "boss_status": [(_EXTRACTED, "boss_status.json")],
     "dungeon": [
         (_EXTRACTED, "dungeon.json"),
         (_DATATOOLS_CN, "DungeonTable.json"),
@@ -65,8 +71,15 @@ _SOURCES = {
 
 # 兜底前缀 (找不到名字时显示 "<前缀>#<id>")
 _FALLBACK_PREFIX = {
-    "skill": "技能", "monster": "怪物", "boss": "Boss", "buff": "Buff",
+    "skill": "技能", "field_marker": "场地标记", "boss_skill": "Boss技能",
+    "monster": "怪物", "boss": "Boss", "buff": "Buff", "player_buff": "玩家Buff",
+    "factor_buff": "因子Buff", "event": "事件", "boss_status": "Boss状态",
     "dungeon": "地牢", "boss_mechanic": "机制", "item": "道具", "npc": "NPC",
+}
+
+_COMPAT_KIND_FALLBACKS = {
+    "skill": ("boss_skill", "field_marker"),
+    "buff": ("player_buff", "factor_buff", "boss_status", "event"),
 }
 
 _LIVE_ID_SPACE_KIND = {
@@ -82,6 +95,15 @@ _LIVE_ID_SPACE_KIND = {
     "npc_id": "npc",
     "item_id": "item",
 }
+
+
+def _semantic_kind(kind: str, id_: object) -> str:
+    try:
+        from tools.tablekit.name_table_classifier import classify_id
+        classified = classify_id(kind, id_)
+        return classified or kind
+    except Exception:
+        return kind
 
 
 def _coerce_table(obj) -> Dict[int, str]:
@@ -169,15 +191,30 @@ class NameResolver:
             iid = int(id_)
         except (TypeError, ValueError):
             return default if default is not None else str(id_)
+        semantic_kind = _semantic_kind(kind, iid)
+        if semantic_kind != kind and semantic_kind in _SOURCES:
+            name = self._load_kind(semantic_kind).get(iid)
+            if name:
+                return name
         name = self._load_kind(kind).get(iid)
         if name:
             return name
+        for compat_kind in _COMPAT_KIND_FALLBACKS.get(kind, ()):
+            name = self._load_kind(compat_kind).get(iid)
+            if name:
+                return name
         if default is not None:
             return default
         return "%s#%d" % (_FALLBACK_PREFIX.get(kind, kind), iid)
 
     def skill(self, id_: object, default: Optional[str] = None) -> str:
         return self.resolve("skill", id_, default)
+
+    def field_marker(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("field_marker", id_, default)
+
+    def boss_skill(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("boss_skill", id_, default)
 
     def monster(self, id_: object, default: Optional[str] = None) -> str:
         return self.resolve("monster", id_, default)
@@ -187,6 +224,18 @@ class NameResolver:
 
     def buff(self, id_: object, default: Optional[str] = None) -> str:
         return self.resolve("buff", id_, default)
+
+    def player_buff(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("player_buff", id_, default)
+
+    def factor_buff(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("factor_buff", id_, default)
+
+    def event(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("event", id_, default)
+
+    def boss_status(self, id_: object, default: Optional[str] = None) -> str:
+        return self.resolve("boss_status", id_, default)
 
     def dungeon(self, id_: object, default: Optional[str] = None) -> str:
         return self.resolve("dungeon", id_, default)

@@ -116,6 +116,16 @@ def _resolver_name(kind: str, id_: int) -> str:
         return ""
 
 
+def _classified_kind(kind: str, id_: int) -> str:
+    if id_ <= 0:
+        return kind
+    try:
+        from tools.tablekit.name_table_classifier import classify_id
+        return _clean_text(classify_id(kind, id_)) or kind
+    except Exception:
+        return kind
+
+
 def _skill_base_id(event: Mapping[str, Any]) -> int:
     skill_id = _safe_int(event.get("skill_id"), 0)
     skill_level_id = _safe_int(event.get("skill_level_id"), 0)
@@ -154,15 +164,20 @@ def enrich_skill_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
     profession_id = _safe_int(src.get("profession_id") or src.get("caster_profession_id"), 0)
     if profession_id <= 0 and skill_id > 0:
         profession_id = _safe_int(_SKILL_TO_PROFESSION.get(skill_id), 0)
-    name = _clean_text(src.get("skill_name") or src.get("name")) or _resolver_name("skill", skill_id)
+    skill_category = _classified_kind("skill", skill_id)
+    name = _clean_text(src.get("skill_name") or src.get("name")) or _resolver_name(skill_category, skill_id) or _resolver_name("skill", skill_id)
     sub_profession = _clean_text(src.get("sub_profession")) or _clean_text(SUB_PROFESSION_NAMES.get(skill_id, ""))
+    role = skill_role(skill_id, profession_id=profession_id)
+    if skill_category in {"field_marker", "boss_skill"}:
+        role = skill_category
     fact = {
         "kind": _clean_text(src.get("kind")),
         "skill_id": skill_id,
         "skill_level_id": skill_level_id,
         "skill_name": name,
         "display_name": name or (f"技能#{skill_id}" if skill_id > 0 else ""),
-        "skill_role": skill_role(skill_id, profession_id=profession_id),
+        "skill_role": role,
+        "skill_category": skill_category,
         "profession_id": profession_id,
         "sub_profession": sub_profession,
         "target_uuid": _safe_int(src.get("target_uuid"), 0),
@@ -212,6 +227,7 @@ def enrich_boss_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
         "event_type": event_type,
         "boss_mechanic_key": _clean_text(meta.get("key")) or f"buff_event_{event_type}",
         "boss_mechanic_label": label,
+        "boss_status_name": _resolver_name("boss_status", event_type) or label,
         "trigger_family": _clean_text(meta.get("trigger_family")) or "buff_event",
         "severity": _clean_text(meta.get("severity")) or "medium",
         "host_uuid": _safe_int(src.get("host_uuid"), 0),
@@ -219,7 +235,12 @@ def enrich_boss_event(event: Mapping[str, Any] | None) -> dict[str, Any]:
         "buff_id": _safe_int(src.get("buff_id") or src.get("base_id"), 0),
         "source": _clean_text(src.get("source")) or "tcp",
     }
-    buff_name = _clean_text(src.get("buff_name")) or _resolver_name("buff", fact["buff_id"])
+    buff_category = _classified_kind("buff", fact["buff_id"])
+    if fact["buff_id"] > 0:
+        fact["buff_category"] = buff_category
+    buff_name = _clean_text(src.get("buff_name")) or _resolver_name(buff_category, fact["buff_id"]) or _resolver_name("buff", fact["buff_id"])
+    if not buff_name:
+        buff_name = _resolver_name(buff_category, fact["buff_id"])
     if buff_name:
         fact["buff_name"] = buff_name
     return fact

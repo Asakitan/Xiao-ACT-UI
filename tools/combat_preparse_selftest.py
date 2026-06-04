@@ -43,6 +43,7 @@ class CombatPreparseTests(unittest.TestCase):
 
         self.assertEqual(fact["skill_id"], 2406)
         self.assertEqual(fact["skill_role"], "sub_profession_skill")
+        self.assertEqual(fact["skill_category"], "skill")
         self.assertEqual(fact["profession_id"], 12)
         self.assertEqual(fact["sub_profession"], "光盾")
         self.assertTrue(fact["display_name"])
@@ -70,6 +71,7 @@ class CombatPreparseTests(unittest.TestCase):
 
         self.assertEqual(fact["boss_mechanic_key"], "shield_broken")
         self.assertEqual(fact["boss_mechanic_label"], "护盾破裂")
+        self.assertEqual(fact["boss_status_name"], "护盾破裂")
         self.assertEqual(fact["trigger_family"], "shield")
         self.assertEqual(fact["host_uuid"], 123)
 
@@ -168,6 +170,7 @@ class CombatPreparseTests(unittest.TestCase):
 
         self.assertEqual(seen["skill"]["skill_id"], 2406)
         self.assertEqual(seen["skill"]["skill_role"], "sub_profession_skill")
+        self.assertEqual(seen["skill"]["skill_category"], "skill")
         self.assertIn("combat_fact", seen["dungeon"])
         self.assertIn("shield", seen["monster"].get("mechanics") or [])
         self.assertEqual(seen["boss"]["boss_mechanic_key"], "shield_broken")

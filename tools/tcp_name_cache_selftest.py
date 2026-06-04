@@ -202,7 +202,7 @@ class TcpNameCacheTests(unittest.TestCase):
             result = hybrid_name_tables.update_runtime_tables(self.path, output_dir=out_dir)
 
         self.assertEqual(result["kinds"]["skill"]["written"], 2)
-        self.assertGreaterEqual(result["kinds"]["buff"]["written"], 3)
+        self.assertGreaterEqual(result["kinds"]["buff"]["written"], 2)
         with open(os.path.join(out_dir, "skill.json"), "r", encoding="utf-8") as f:
             skill = json.load(f)
         with open(os.path.join(out_dir, "buff.json"), "r", encoding="utf-8") as f:
@@ -211,7 +211,7 @@ class TcpNameCacheTests(unittest.TestCase):
         self.assertEqual(skill["1002"], "旧技能表")
         self.assertEqual(buff["2001"], "静态Buff设计")
         self.assertEqual(buff["2002"], "列表Buff")
-        self.assertEqual(buff["1002"], "旧技能表")
+        self.assertNotIn("1002", buff)
 
 
 if __name__ == "__main__":

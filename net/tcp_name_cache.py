@@ -22,7 +22,11 @@ except Exception:  # pragma: no cover - import fallback for standalone tools
 
 _SCHEMA_VERSION = 1
 _VALID_CONFIDENCE = {"high", "medium", "low", "mem", "tcp", "static"}
-_GENERIC_KINDS = {"skill", "monster", "boss", "buff", "dungeon", "scene", "boss_mechanic", "npc", "item", "sub_profession"}
+_GENERIC_KINDS = {
+    "skill", "field_marker", "boss_skill",
+    "monster", "boss", "buff", "player_buff", "factor_buff", "event", "boss_status",
+    "dungeon", "scene", "boss_mechanic", "npc", "item", "sub_profession",
+}
 _PLAYER_KIND = "player"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -42,6 +46,18 @@ _LIVE_ID_SPACE_KIND = {
     "npc_id": "npc",
     "item_id": "item",
 }
+
+
+def _semantic_live_kind(id_space: str, id_: Any) -> str:
+    fallback = _LIVE_ID_SPACE_KIND.get(id_space, "")
+    if not fallback:
+        return ""
+    try:
+        from tools.tablekit.name_table_classifier import classify_id
+        classified = classify_id(id_space, id_)
+        return classified or fallback
+    except Exception:
+        return fallback
 
 _VOLATILE_RUNTIME_KEYS = {
     "obj", "chars", "klass", "runtime_klass", "string_klass", "string_obj",
@@ -155,8 +171,8 @@ def build_index_from_live_rows(rows_obj: Any, *, confidence: set[str] | None = N
             continue
         match = row.get("primary_match") if isinstance(row.get("primary_match"), Mapping) else {}
         id_space = str(match.get("id_space") or "")
-        kind = _LIVE_ID_SPACE_KIND.get(id_space, "")
         iid = _coerce_int(match.get("id"))
+        kind = _semantic_live_kind(id_space, iid)
         if not kind or iid <= 0:
             continue
         by_kind = out.setdefault("names", {}).setdefault("by_kind", {})
