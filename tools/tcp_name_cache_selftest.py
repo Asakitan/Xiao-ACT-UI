@@ -154,6 +154,23 @@ class TcpNameCacheTests(unittest.TestCase):
                 self.assertEqual(resolver.skill(2414), "神圣壁垒")
                 self.assertEqual(resolver.resolve("player", 36668136, default=""), "")
 
+    def test_runtime_name_table_assets_are_consumed_by_name_resolver(self) -> None:
+        from tools.tablekit import name_tables
+
+        runtime_assets = {
+            name for name in os.listdir(name_tables._EXTRACTED)
+            if name.endswith(".json") and not name.startswith("live_")
+        }
+        resolver_assets = {
+            fname
+            for sources in name_tables._SOURCES.values()
+            for folder, fname in sources
+            if os.path.abspath(folder) == os.path.abspath(name_tables._EXTRACTED)
+        }
+        resolver_assets.add(os.path.basename(name_tables._TCP_PREPARSE_CACHE))
+
+        self.assertFalse(sorted(runtime_assets - resolver_assets))
+
     def test_save_callback_can_reload_name_resolver(self) -> None:
         seen = []
         cache = TcpNameCache(self.path, autosave_interval_s=0, on_save=lambda path: seen.append(path))

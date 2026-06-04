@@ -50,9 +50,13 @@ _VIRTUAL_RE = re.compile(r"(虚拟体|虚拟|dummy|Dummy|DUMMY|VFX|vfx|假子弹
 _ULTIMATE_RE = re.compile(r"(奥义|幻想|终极|绝技|大招|ULT|ult)")
 _ROGUELIKE_RE = re.compile(r"(肉鸽词条|大秘境词条|词条|赛季词缀|赛季词条)")
 _BOSS_MECHANIC_SKILL_RE = re.compile(r"(读条|点名|分摊|致死|转阶段|阶段转换|机制杀|机制|踩塔|连线|全场|秒杀|破盾|破防|锁血|斩杀|狂暴)")
-_ENVIRONMENT_SKILL_RE = re.compile(r"(吸引怪物|拉怪|黯影堡垒专用|场景专用|地图专用|关卡专用|机关|陷阱|装置|传送|清怪辅助|交互|环境|炮台|载具|矿车|电梯)")
-_MONSTER_SKILL_RE = re.compile(r"(小怪|精英怪|魔物|哥布林|史莱姆|肉山|触手|爪击|撕咬|啃咬|扫尾|平A)")
-_PLAYER_SKILL_RE = re.compile(r"(普通攻击|普攻|特殊攻击|专精技能|共鸣技能|职业技能|武器技能)")
+_ENVIRONMENT_SKILL_RE = re.compile(r"(吸引怪物|拉怪|黯影堡垒专用|场景专用|地图专用|关卡专用|机关|陷阱|装置|传送|清怪辅助|交互|环境|地板|毒池|领域|子弹雨|弹雨|地刺|喷泉|光浪|风场|炮台|载具|矿车|电梯)")
+_MONSTER_SKILL_RE = re.compile(r"(小怪|精英怪|魔物|哥布林|史莱姆|肉山|野猪|枪兵|盾兵|蜥蜴人|剧毒蜂巢|触手|爪击|撕咬|啃咬|扫尾|平A|挥击|下砸|砸地|践踏|撼地|冲拳|锤击|钳击|旋风斩|咆哮|三连砸|冲锋|撞击|跳劈|劈砍|前砍|吐息|飞扑|召唤伙伴|召唤导弹|子弹三连|灼烧弹)")
+_LEGACY_MONSTER_CONTEXT_RE = re.compile(r"(英雄本|大师本|噩梦|多人|肉鸽大秘境|黯影堡垒|安德拉|黑石|鱼人|石头人|卷心菜|小猪|圣域飞鱼|虚蚀龙|野猪|蜥蜴人|蟹蛛|岩蛇|娜宝|多戈尔曼|蒂娜BOSS|BOSS|boss|Boss|首领|眼球王|军团盾|枪兵|盾兵|骑士|法师|弓手|小斧哥|双子机像|机器人|傀儡|召唤兽|野兽)")
+_LEGACY_MONSTER_ACTION_RE = re.compile(r"(重击|飞刃|虚蚀弹|剑气|烈火|龙卷风|炸弹|巡逻子弹|组合技|沉默水池|天空水池|狙击|凝滞场|三连突刺|蓄力|连斩|破甲|重砍|突进|缠绕射击|压团血|死刑|顺劈|碎地|重拳|地震波|裂石风暴|疯狂锤地|撞墙|落石|内爆|冲撞)")
+_LEGACY_ENVIRONMENT_CONTEXT_RE = re.compile(r"(升降门|空气墙|场景|专用|调查团|药水|低重力|观光|资源AI|显影|变色|崩塌|落雷场景|可被吸引|内场资源|巨塔)")
+_PLAYER_SKILL_RE = re.compile(r"(红光反制|飞鸟投|普通攻击|普攻|特殊攻击|专精技能|共鸣技能|领地共鸣|共鸣|职业技能|武器技能)")
+_LEGACY_BUFF_RE = re.compile(r"(BUFF|Buff|buff|子BUFF|子buff|计时BUFF|叠层buff|增伤BUFF|易伤|减益)")
 _PROFESSION_BUFF_RE = re.compile(r"(职业|专精|天赋|流派|普攻|特攻|特殊攻击|大招|奥义|终技|技能强化|替换技能|派生|分支|圣令|气刃|寒冰能量|光铸|种子|协奏|狂音|雷之印|恩格|护盾猛击|先锋追击|狂野绽放|生命绽放)")
 _SCRIPTED_EXCLUDE_RE = re.compile(r"(锁定追击|点名|分摊|机制|读条|致死|秒杀)")
 
@@ -307,20 +311,28 @@ def classify_skill_id(skill_id: Any) -> str:
         return SCRIPTED_SKILL_KIND
     if _ROGUELIKE_RE.search(text):
         return ROGUELIKE_AFFIX_KIND
+    if not row and _EVENT_RE.search(text):
+        return EVENT_KIND
+    if not row and _LEGACY_BUFF_RE.search(text):
+        if _PROFESSION_BUFF_RE.search(text):
+            return PROFESSION_SKILL_BUFF_KIND
+        return FACTOR_BUFF_KIND
     if sid in ultimate_skill_ids() or _ULTIMATE_RE.search(text):
         return ULTIMATE_SKILL_KIND
     if sid in profession_skill_ids() or (row and (_slot_positions(row) & {1, 2, 6, 7, 8})):
         return PROFESSION_SKILL_KIND
     if _BOSS_MECHANIC_SKILL_RE.search(text) or bool(row.get("IsDangerSkill")) or bool(row.get("IsFractureSkill")):
         return BOSS_MECHANIC_SKILL_KIND
-    if sid in environment_skill_ids() or _ENVIRONMENT_SKILL_RE.search(text):
+    if sid in environment_skill_ids() or _ENVIRONMENT_SKILL_RE.search(text) or _LEGACY_ENVIRONMENT_CONTEXT_RE.search(text):
         return ENVIRONMENT_SKILL_KIND
     if sid in boss_skill_ids():
         return BOSS_SKILL_KIND
-    if sid in monster_skill_ids() or _MONSTER_SKILL_RE.search(text):
+    if sid in monster_skill_ids():
         return MONSTER_SKILL_KIND
     if sid in player_skill_ids() or _PLAYER_SKILL_RE.search(text):
         return PLAYER_SKILL_KIND
+    if _MONSTER_SKILL_RE.search(text) or _LEGACY_MONSTER_CONTEXT_RE.search(text):
+        return MONSTER_SKILL_KIND
     return SKILL_KIND
 
 
@@ -390,6 +402,11 @@ def _skill_maps() -> dict[str, dict[int, str]]:
         SCRIPTED_SKILL_KIND: {},
         VIRTUAL_SKILL_KIND: {},
         BOSS_MECHANIC_SKILL_KIND: {},
+        BUFF_KIND: {},
+        FACTOR_BUFF_KIND: {},
+        PLAYER_BUFF_KIND: {},
+        PROFESSION_SKILL_BUFF_KIND: {},
+        EVENT_KIND: {},
     }
     ids = set(skill_table()) | set(skill_fallback_names()) | set(aoyi_skill_names()) | boss_skill_ids() | monster_skill_ids() | environment_skill_ids() | player_skill_ids()
     ids.update(sid for sid, text in damage_attr_names().items() if _ULTIMATE_RE.search(text) or _ROGUELIKE_RE.search(text) or _VIRTUAL_RE.search(text) or _BOSS_MECHANIC_SKILL_RE.search(text))
@@ -449,6 +466,11 @@ def _to_runtime(entries: Mapping[int, str]) -> dict[str, dict[str, str]]:
 def load_classified_tables() -> dict[str, dict[str, dict[str, str]]]:
     skills = _skill_maps()
     buffs = _buff_maps()
+    for kind in (BUFF_KIND, PLAYER_BUFF_KIND, FACTOR_BUFF_KIND, PROFESSION_SKILL_BUFF_KIND, EVENT_KIND):
+        for iid, text in skills.get(kind, {}).items():
+            buffs[kind].setdefault(iid, text)
+            if kind in {BUFF_KIND, PLAYER_BUFF_KIND, FACTOR_BUFF_KIND, PROFESSION_SKILL_BUFF_KIND}:
+                buffs[BUFF_KIND].setdefault(iid, text)
     mechanics = _boss_mechanic_map()
     result: dict[str, dict[str, dict[str, str]]] = {
         SKILL_KIND: _to_runtime(skills[SKILL_KIND]),

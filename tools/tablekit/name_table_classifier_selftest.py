@@ -44,6 +44,33 @@ class NameTableClassifierTests(unittest.TestCase):
         self.assertNotIn("1004820", tables["skill"])
         self.assertNotIn("1006507", tables["skill"])
 
+    def test_obvious_legacy_fallback_names_leave_generic_skill(self) -> None:
+        self.assertEqual(classifier.classify_skill_id(1), "player_skill")
+        self.assertEqual(classifier.classify_skill_id(10), "player_skill")
+        self.assertEqual(classifier.classify_skill_id(100), "monster_skill")
+        self.assertEqual(classifier.classify_skill_id(100431), "monster_skill")
+        self.assertEqual(classifier.classify_skill_id(1006512), "monster_skill")
+        self.assertEqual(classifier.classify_skill_id(1010403), "monster_skill")
+        self.assertEqual(classifier.classify_skill_id(10290117), "monster_skill")
+        self.assertEqual(classifier.classify_skill_id(1005303), "monster_skill")
+        self.assertEqual(classifier.classify_skill_id(1006410), "environment_skill")
+        self.assertEqual(classifier.classify_skill_id(7020340), "environment_skill")
+        self.assertEqual(classifier.classify_skill_id(1001), "factor_buff")
+        tables = classifier.load_classified_tables()
+        self.assertIn("1", tables["player_skill"])
+        self.assertIn("10", tables["player_skill"])
+        self.assertIn("100", tables["monster_skill"])
+        self.assertIn("100431", tables["monster_skill"])
+        self.assertIn("1006512", tables["monster_skill"])
+        self.assertIn("1010403", tables["monster_skill"])
+        self.assertIn("10290117", tables["monster_skill"])
+        self.assertIn("1005303", tables["monster_skill"])
+        self.assertIn("1006410", tables["environment_skill"])
+        self.assertIn("7020340", tables["environment_skill"])
+        self.assertIn("1001", tables["factor_buff"])
+        for legacy_id in ("1", "10", "100", "100431", "1006512", "1010403", "10290117", "1005303", "1006410", "7020340", "1001"):
+            self.assertNotIn(legacy_id, tables["skill"])
+
     def test_refined_boss_skill_excludes_scripted_and_virtual_samples(self) -> None:
         tables = classifier.load_classified_tables()
         self.assertTrue(tables["boss_skill"])
