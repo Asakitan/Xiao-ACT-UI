@@ -95,6 +95,14 @@ ENERGY_ITEM = {
 PROFESSION_LIST = {
     'CurProfessionId': (0x10, 'i32'),
 }
+
+# Conservative self-player plausibility guardrails used when TCP only gives a
+# uid.  These are deliberately broad enough for future gear/level growth but
+# narrow enough to reject arbitrary u64 hits that happen to equal the uid.
+MAX_SELF_HP = 100_000_000
+MAX_SELF_LEVEL = 200
+MAX_SELF_PROFESSION_ID = 64
+MAX_SELF_NAME_LEN = 64
 SKILL_CD_INFO = {
     'SkillLevelId': (0x10, 'i32'),
     'SkillBeginTime': (0x18, 'i64'),
@@ -132,6 +140,10 @@ class AnchorPack:
         """A weak anchor pack can't pin down the live player; refuse to scan."""
         return self.uid > 0 and (self.level > 0 or self.profession_id > 0
                                  or len(self.skill_level_ids) >= 3)
+
+    def has_semantic_detail(self) -> bool:
+        """Return True when TCP has more than just the uid."""
+        return self.level > 0 or self.profession_id > 0 or bool(self.skill_level_ids)
 
 
 @dataclass
@@ -234,6 +246,42 @@ class AnchorMemoryReader:
     @staticmethod
     def _plausible_ptr(ptr: Optional[int]) -> bool:
         return bool(ptr and 0x10000 <= ptr <= 0x7FFFFFFFFFFF)
+
+    @staticmethod
+    def _plausible_hp(cur: Optional[int], mx: Optional[int]) -> bool:
+        if cur is None or mx is None:
+            return False
+        try:
+            cur_i = int(cur)
+            mx_i = int(mx)
+        except Exception:
+            return False
+        return 0 <= cur_i <= mx_i <= MAX_SELF_HP and mx_i > 0
+
+    @staticmethod
+    def _plausible_level(level: Optional[int]) -> bool:
+        try:
+            lv = int(level or 0)
+        except Exception:
+            return False
+        return 1 <= lv <= MAX_SELF_LEVEL
+
+    @staticmethod
+    def _plausible_profession_id(profession_id: Optional[int]) -> bool:
+        try:
+            pid = int(profession_id or 0)
+        except Exception:
+            return False
+        return 1 <= pid <= MAX_SELF_PROFESSION_ID
+
+    @staticmethod
+    def _plausible_char_name(name: Optional[str]) -> bool:
+        if not isinstance(name, str):
+            return False
+        text = name.strip()
+        if not text or len(text) > MAX_SELF_NAME_LEN:
+            return False
+        return all(ch.isprintable() for ch in text)
 
     # ---------- anchor pack construction ----------
 
@@ -439,10 +487,11 @@ class AnchorMemoryReader:
         ``CdInfo`` is a pointer to a RepeatedField object, not an inline
         struct next to ``UserFightAttr``.
         """
-        if not anchor.is_strong():
+        if anchor.uid <= 0:
             return None
         t0 = time.time()
         anchor_skills = set(anchor.skill_level_ids)
+        strong_anchor = anchor.is_strong()
         cached = self._resolved_cache
         if cached is not None and self._resolved_cache_uid == int(anchor.uid or 0):
             ok, info = self._validate_self(cached.char_serialize_obj, anchor)
@@ -472,7 +521,12 @@ class AnchorMemoryReader:
         min_skill_matches = 0
         if anchor_skills:
             min_skill_matches = min(8, max(2, len(anchor_skills) // 32))
-        for cs_base in candidates[:512]:
+        best: Optional[ResolvedSelf] = None
+        # Strong anchors have exact TCP level/profession/skill evidence, so the
+        # first validated hit is enough.  Uid-only anchors need to scan wider
+        # and choose the most plausible full snapshot to avoid false positives.
+        candidate_limit = 512 if strong_anchor else 2048
+        for cs_base in candidates[:candidate_limit]:
             ok, info = self._validate_self(cs_base, anchor)
             if not ok:
                 continue
@@ -496,10 +550,20 @@ class AnchorMemoryReader:
                 confidence=info['confidence'],
                 used_anchors=info['used'],
             )
-            self._resolved_cache = resolved
+            if strong_anchor:
+                self._resolved_cache = resolved
+                self._resolved_cache_uid = int(anchor.uid or 0)
+                self._resolved_cache_ts = time.time()
+                return resolved
+            if best is None or resolved.confidence > best.confidence:
+                best = resolved
+                if resolved.confidence >= 0.95:
+                    break
+        if best is not None:
+            self._resolved_cache = best
             self._resolved_cache_uid = int(anchor.uid or 0)
             self._resolved_cache_ts = time.time()
-            return resolved
+            return best
         return None
 
     def _validate_self(self, cs_base: int, anchor: AnchorPack) -> Tuple[bool, dict]:
@@ -507,6 +571,8 @@ class AnchorMemoryReader:
         info = {'ufa': 0, 'cb': 0, 'ei': 0, 'rl': 0, 'pl': 0, 'used': '', 'confidence': 0.0}
         checks = 0
         passed = 0
+        plausibility_score = 0
+        plausibility_used: List[str] = []
         # CharId
         if anchor.uid > 0:
             checks += 1
@@ -520,26 +586,59 @@ class AnchorMemoryReader:
         if not attr or attr < 0x1000:
             return False, info
         info['ufa'] = attr
-        # UserFightAttr.MaxHp must be > 0
+        # UserFightAttr HP must be internally sane.  MaxHp alone is not enough:
+        # uid-only scans can find arbitrary integers with an adjacent positive
+        # qword that looks like MaxHp.
+        cur = self._read_i64(attr + 0x10)
         mx = self._read_i64(attr + 0x18)
-        if not mx or mx <= 0 or mx > 0x7FFFFFFF:
+        if not self._plausible_hp(cur, mx):
             return False, info
+        checks += 1
+        passed += 1
+        plausibility_score += 2
+        plausibility_used.append('hp')
+        dead = self._read_i32(attr + 0x38)
+        if dead is not None:
+            if int(dead) not in (0, 1):
+                return False, info
+            plausibility_score += 1
+            plausibility_used.append('dead')
         # CharBase pointer
         cb = self._read_u64(cs_base + 0x18)
-        if cb and cb > 0x1000:
+        if self._plausible_ptr(cb):
             info['cb'] = cb
+            cb_uid = self._read_i64(cb + 0x10)
+            if anchor.uid > 0 and cb_uid == anchor.uid:
+                plausibility_score += 2
+                plausibility_used.append('char_base.uid')
+            name = self._read_il2cpp_string(cb + 0x30)
+            if self._plausible_char_name(name):
+                plausibility_score += 2
+                plausibility_used.append('name')
+            init_pid = self._read_i32(cb + 0xc8)
+            if self._plausible_profession_id(init_pid):
+                plausibility_score += 1
+                plausibility_used.append('char_base.prof')
         # EnergyItem pointer
         ei = self._read_u64(cs_base + 0x70)
-        if ei and ei > 0x1000:
+        if self._plausible_ptr(ei):
             info['ei'] = ei
         # RoleLevel
         rl = self._read_u64(cs_base + 0xb8)
-        if rl and rl > 0x1000:
+        if self._plausible_ptr(rl):
             info['rl'] = rl
+            lv_probe = self._read_i32(rl + 0x10)
+            if self._plausible_level(lv_probe):
+                plausibility_score += 1
+                plausibility_used.append('level')
         # ProfessionList
         pl = self._read_u64(cs_base + 0x1f8)
-        if pl and pl > 0x1000:
+        if self._plausible_ptr(pl):
             info['pl'] = pl
+            cur_pid = self._read_i32(pl + 0x10)
+            if self._plausible_profession_id(cur_pid):
+                plausibility_score += 1
+                plausibility_used.append('profession')
         if anchor.level > 0 and info['rl']:
             checks += 1
             lv = self._read_i32(info['rl'] + 0x10)
@@ -554,8 +653,20 @@ class AnchorMemoryReader:
                 passed += 1
             else:
                 return False, info
-        info['used'] = f'uid={anchor.uid}, level={anchor.level}, prof={anchor.profession_id}, skills={len(anchor.skill_level_ids)}'
-        info['confidence'] = (passed / checks) if checks else 0.0
+        if not anchor.has_semantic_detail():
+            # Uid-only mode is allowed only when the object graph itself looks
+            # like a real self player: HP is sane and enough identity fields are
+            # readable.  This rejected live false positives with garbage HP,
+            # empty names, huge levels, and bogus profession ids.
+            if plausibility_score < 7:
+                return False, info
+        info['used'] = (
+            f'uid={anchor.uid}, level={anchor.level}, prof={anchor.profession_id}, '
+            f'skills={len(anchor.skill_level_ids)}, plausible={"|".join(plausibility_used)}'
+        )
+        anchor_conf = (passed / checks) if checks else 0.0
+        plausibility_conf = min(1.0, plausibility_score / 10.0)
+        info['confidence'] = max(anchor_conf, plausibility_conf)
         return True, info
 
     # ---------- field readers (assume ResolvedSelf is valid) ----------

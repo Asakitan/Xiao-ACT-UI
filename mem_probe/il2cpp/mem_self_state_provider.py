@@ -215,7 +215,7 @@ class MemSelfStateProvider:
         if self.anchor_source and self._anchor_reader and self._src:
             try:
                 anchor = self.anchor_source() or AnchorPack()
-                if anchor.is_strong():
+                if int(getattr(anchor, 'uid', 0) or 0) > 0:
                     resolved = self._anchor_reader.find_self(anchor)
                     if resolved:
                         data = self._anchor_reader.read_self_snapshot(resolved)
