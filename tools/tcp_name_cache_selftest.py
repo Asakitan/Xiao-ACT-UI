@@ -177,6 +177,42 @@ class TcpNameCacheTests(unittest.TestCase):
         self.assertEqual(mechanic["47"], "护盾破裂")
         self.assertNotIn("9999", skill)
 
+    def test_hybrid_name_tables_materializes_static_skill_and_buff_sources(self) -> None:
+        from tools.tablekit import hybrid_name_tables
+
+        out_dir = os.path.join(self.tmp, "tables")
+        datatools = os.path.join(self.tmp, "DataTools", "CN")
+        resonance = os.path.join(self.tmp, "resonance")
+        assets = os.path.join(self.tmp, "assets")
+        os.makedirs(datatools, exist_ok=True)
+        os.makedirs(resonance, exist_ok=True)
+        os.makedirs(assets, exist_ok=True)
+        with open(os.path.join(datatools, "SkillTable.json"), "w", encoding="utf-8") as f:
+            json.dump({"1001": {"Id": 1001, "Name": "静态技能"}}, f, ensure_ascii=False)
+        with open(os.path.join(datatools, "BuffTable.json"), "w", encoding="utf-8") as f:
+            json.dump({"2001": {"Id": 2001, "Name": "静态Buff", "NameDesign": "静态Buff设计"}}, f, ensure_ascii=False)
+        with open(os.path.join(resonance, "BuffName.json"), "w", encoding="utf-8") as f:
+            json.dump([{"Id": 2002, "NameDesign": "列表Buff"}], f, ensure_ascii=False)
+        with open(os.path.join(assets, "skill_names.json"), "w", encoding="utf-8") as f:
+            json.dump({"1002": "旧技能表"}, f, ensure_ascii=False)
+
+        with mock.patch.object(hybrid_name_tables, "_DATATOOLS_CN", datatools), \
+             mock.patch.object(hybrid_name_tables, "_RESONANCE_CONFIG", resonance), \
+             mock.patch.object(hybrid_name_tables, "_ASSETS", assets):
+            result = hybrid_name_tables.update_runtime_tables(self.path, output_dir=out_dir)
+
+        self.assertEqual(result["kinds"]["skill"]["written"], 2)
+        self.assertGreaterEqual(result["kinds"]["buff"]["written"], 3)
+        with open(os.path.join(out_dir, "skill.json"), "r", encoding="utf-8") as f:
+            skill = json.load(f)
+        with open(os.path.join(out_dir, "buff.json"), "r", encoding="utf-8") as f:
+            buff = json.load(f)
+        self.assertEqual(skill["1001"], "静态技能")
+        self.assertEqual(skill["1002"], "旧技能表")
+        self.assertEqual(buff["2001"], "静态Buff设计")
+        self.assertEqual(buff["2002"], "列表Buff")
+        self.assertEqual(buff["1002"], "旧技能表")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

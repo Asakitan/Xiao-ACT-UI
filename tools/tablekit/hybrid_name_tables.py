@@ -17,12 +17,15 @@ from typing import Any, Mapping
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SAO = os.path.dirname(os.path.dirname(_HERE))
 _REPO = os.path.dirname(_SAO)
+_ASSETS = os.path.join(_SAO, "assets")
 _NAME_TABLES = os.path.join(_SAO, "assets", "name_tables")
 _DEFAULT_CACHE = os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.json")
+_DATATOOLS_CN = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Data", "CN")
 _RESONANCE_METER = os.path.join(_REPO, "resonance-logs-cn", "src-tauri", "meter-data")
 _RESONANCE_CONFIG = os.path.join(_REPO, "resonance-logs-cn", "src", "lib", "config")
 _SR_WINFORM_TABLE = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAnalysis.WinForm", "Core", "TabelJson")
 _SR_WPF_MONSTER = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAnalysis.WPF", "Data", "Monster")
+_SR_OLD_MONSTER = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Old", "Data", "monster")
 
 _RUNTIME_KINDS = ("skill", "dungeon", "monster", "boss", "boss_mechanic", "buff")
 _KIND_FILENAMES = {kind: os.path.join(_NAME_TABLES, f"{kind}.json") for kind in _RUNTIME_KINDS}
@@ -77,11 +80,14 @@ def _clean_text(value: Any) -> str:
     return text
 
 
-def _entry_text(value: Any) -> str:
+def _entry_text(value: Any, *, fields: tuple[str, ...] = ("text", "name", "Name", "NameDesign")) -> str:
     if isinstance(value, str):
         return _clean_text(value)
     if isinstance(value, Mapping):
-        return _clean_text(value.get("text") or value.get("name") or value.get("Name") or value.get("NameDesign"))
+        for field in fields:
+            text = _clean_text(value.get(field))
+            if text:
+                return text
     return ""
 
 
@@ -95,18 +101,25 @@ def _rank(confidence: str) -> int:
     return _CONFIDENCE_RANK.get(str(confidence or "").strip().lower(), 0)
 
 
-def _coerce_name_map(obj: Any) -> dict[str, dict[str, str]]:
+def _iter_source_entries(obj: Any):
+    if isinstance(obj, Mapping):
+        yield from obj.items()
+    elif isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, Mapping):
+                yield item.get("Id") or item.get("id") or item.get("ID"), item
+
+
+def _coerce_name_map(obj: Any, *, fields: tuple[str, ...] = ("text", "name", "Name", "NameDesign")) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
-    if not isinstance(obj, Mapping):
-        return out
-    for key, value in obj.items():
+    for key, value in _iter_source_entries(obj):
         try:
             iid = int(key)
         except (TypeError, ValueError):
             continue
         if iid <= 0:
             continue
-        text = _entry_text(value)
+        text = _entry_text(value, fields=fields)
         if not text:
             continue
         out[str(iid)] = {"text": text, "confidence": _entry_confidence(value)}
@@ -134,14 +147,23 @@ def _seed_boss_mechanics() -> dict[str, dict[str, str]]:
     return out
 
 
-def _seed_named_json(path: str, *, confidence: str = "static") -> dict[str, dict[str, str]]:
-    return {key: {"text": value.get("text") or "", "confidence": confidence} for key, value in _coerce_name_map(_load_json(path)).items()}
+def _seed_named_json(path: str, *, confidence: str = "static", fields: tuple[str, ...] = ("text", "name", "Name", "NameDesign")) -> dict[str, dict[str, str]]:
+    return {key: {"text": value.get("text") or "", "confidence": confidence} for key, value in _coerce_name_map(_load_json(path), fields=fields).items()}
 
 
 def _community_entries(kind: str) -> dict[str, dict[str, str]]:
+    if kind == "skill":
+        merged: dict[str, dict[str, str]] = {}
+        for path in (
+            os.path.join(_DATATOOLS_CN, "SkillTable.json"),
+            os.path.join(_ASSETS, "skill_names.json"),
+        ):
+            merged, _ = merge_entries(merged, _seed_named_json(path, fields=("Name", "NameDesign", "name", "text")), fill_missing_only=True)
+        return merged
     if kind == "dungeon":
         merged: dict[str, dict[str, str]] = {}
         for path in (
+            os.path.join(_DATATOOLS_CN, "DungeonTable.json"),
             os.path.join(_RESONANCE_METER, "SceneName.json"),
             os.path.join(_RESONANCE_CONFIG, "SceneName.json"),
         ):
@@ -150,10 +172,21 @@ def _community_entries(kind: str) -> dict[str, dict[str, str]]:
     if kind == "monster":
         merged: dict[str, dict[str, str]] = {}
         for path in (
+            os.path.join(_DATATOOLS_CN, "MonsterTable.json"),
             os.path.join(_SR_WINFORM_TABLE, "monster_names.json"),
             os.path.join(_SR_WPF_MONSTER, "monster.zh-CN.json"),
+            os.path.join(_SR_OLD_MONSTER, "monster_name_mapping.json"),
         ):
-            merged, _ = merge_entries(merged, _seed_named_json(path), fill_missing_only=True)
+            merged, _ = merge_entries(merged, _seed_named_json(path, fields=("Name", "NameDesign", "name", "text")), fill_missing_only=True)
+        return merged
+    if kind == "buff":
+        merged: dict[str, dict[str, str]] = {}
+        for path in (
+            os.path.join(_RESONANCE_CONFIG, "BuffName.json"),
+            os.path.join(_DATATOOLS_CN, "BuffTable.json"),
+            os.path.join(_ASSETS, "skill_names.json"),
+        ):
+            merged, _ = merge_entries(merged, _seed_named_json(path, fields=("NameDesign", "Name", "name", "text")), fill_missing_only=True)
         return merged
     if kind == "boss":
         names = _community_entries("monster")

@@ -49,6 +49,40 @@
           "text": "光明圣剑",
           "updated_at": "2026-06-04T16:28:38Z"
         },
+        "2206171": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光明圣剑",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206180": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "神圣壁垒",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
         "2206210": {
           "confidence": "high",
           "context": {
@@ -325,6 +359,23 @@
           "text": "光能援护",
           "updated_at": "2026-06-04T16:28:38Z"
         },
+        "2206331": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光能援护",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
         "2206340": {
           "confidence": "high",
           "context": {
@@ -416,6 +467,23 @@
           ],
           "text": "清算炎盾",
           "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2206381": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "清算炎盾",
+          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206390": {
           "confidence": "high",
@@ -578,6 +646,23 @@
           "text": "守护极意",
           "updated_at": "2026-06-04T16:28:38Z"
         },
+        "2206451": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "守护极意",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
         "2206460": {
           "confidence": "high",
           "context": {
@@ -646,6 +731,23 @@
           ],
           "text": "极意神圣之击",
           "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2206481": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "极意神圣之击",
+          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206490": {
           "confidence": "medium",
@@ -762,6 +864,23 @@
           "text": "悍勇无畏",
           "updated_at": "2026-06-04T16:28:38Z"
         },
+        "2206542": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "悍勇无畏",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
         "2206550": {
           "confidence": "high",
           "context": {
@@ -784,6 +903,23 @@
           ],
           "text": "光芒核心",
           "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2206551": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光芒核心",
+          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206560": {
           "confidence": "high",
@@ -830,6 +966,23 @@
           ],
           "text": "决断之刃",
           "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2206571": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "决断之刃",
+          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206580": {
           "confidence": "high",
@@ -968,6 +1121,23 @@
           ],
           "text": "溢愈光壁",
           "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2206650": {
+          "confidence": "high",
+          "context": {
+            "field": "Name",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "光元素加护",
+          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2206660": {
           "confidence": "medium",
@@ -1268,6 +1438,23 @@
           "text": "炽焰治愈",
           "updated_at": "2026-06-04T16:28:38Z"
         },
+        "2207151": {
+          "confidence": "high",
+          "context": {
+            "field": "NameDesign",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "炽焰治愈",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
         "2207180": {
           "confidence": "medium",
           "context": {
@@ -1475,6 +1662,40 @@
           "text": "节奏灵韵",
           "updated_at": "2026-06-04T16:28:38Z"
         },
+        "2207300": {
+          "confidence": "high",
+          "context": {
+            "field": "NameDesign",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "升格·无限狂想",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207310": {
+          "confidence": "high",
+          "context": {
+            "field": "NameDesign",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "升格·巡演曲",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
         "2207330": {
           "confidence": "high",
           "context": {
@@ -1635,6 +1856,40 @@
           ],
           "text": "音爆愈疗",
           "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "2207430": {
+          "confidence": "high",
+          "context": {
+            "field": "NameDesign",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "炎律狂踏",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207440": {
+          "confidence": "high",
+          "context": {
+            "field": "NameDesign",
+            "id_space": "buff_id",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Data/CN/BuffTable.json",
+            "source_kind": "StarResonanceDps.BuffTable",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Data/CN/BuffTable.json"
+          ],
+          "text": "烈焰音符",
+          "updated_at": "2026-06-04T17:27:19Z"
         },
         "2207450": {
           "confidence": "medium",
@@ -2052,6 +2307,108 @@
         }
       },
       "skill": {
+        "160": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "盾击守护",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "161": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光芒核心",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "163": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "神圣光辉",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "200": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "升格·巡演曲",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "203": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "炎律狂踏",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "204": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "烈焰音符",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
         "214": {
           "confidence": "high",
           "context": {
@@ -2074,6 +2431,1349 @@
           ],
           "text": "活力解放",
           "updated_at": "2026-06-04T16:28:38Z"
+        },
+        "215": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "炽焰治愈",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206160": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣光守卫惩戒",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206170": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光明圣剑",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206171": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光明圣剑",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206180": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "神圣壁垒",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206210": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光铸屏障的升华",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206220": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣环咏叹",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206240": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "神圣光辉",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206250": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "决心斩击",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206260": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光铸驱动",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206270": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "冷酷回溯",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206280": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣环激荡",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206300": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣环祝福",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206310": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光铸平衡",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206320": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光铸刚毅",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206330": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光能援护",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206331": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光能援护",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206340": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "生命强化",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206350": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "断罪时效",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206370": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "持盾冲击",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206380": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "清算炎盾",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206381": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "清算炎盾",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206390": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣光时效",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206400": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣光召唤",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206410": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光击连锁",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206420": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "清算爆炎",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206430": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣体治愈",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206440": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光元素加护",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206450": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "守护极意",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206451": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "守护极意",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206460": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "盾击守护",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206461": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "盾击守护",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206470": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光愈裁断",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206480": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "极意神圣之击",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206481": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "极意神圣之击",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206500": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "极意征伐",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206520": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "逆境强化",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206530": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "广域征伐",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206540": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "悍勇无畏",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206542": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "悍勇无畏",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206550": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光芒核心",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206551": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光芒核心",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206560": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "征伐追击",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206570": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "决断之刃",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206571": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "决断之刃",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206580": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "冷酷加速",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206590": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣印强化",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206600": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣环守护",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206610": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "裁决精进",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206620": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "圣印追击",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206630": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "溢愈光壁",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2206650": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "光元素加护",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207020": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "弦域扩张",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207050": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "魔力升华",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207060": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "鸣奏·热力核心",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207150": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "炽焰治愈",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207151": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "炽焰治愈",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207190": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "华彩章节充能",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207220": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "烈火节拍",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207280": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "临界喝彩",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207290": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "节奏灵韵",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207300": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "升格·无限狂想",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207310": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "升格·巡演曲",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207330": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "热力加倍",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207350": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "鸣奏和弦",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207370": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "不屈谐音",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207380": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "挥击回涌",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207390": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "幸运倍乘",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207430": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "炎律狂踏",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207440": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "烈焰音符",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207530": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "会心充能律",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207540": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "音塔爆炎冲击",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207550": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "多目标热力增幅",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207560": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "热烈音塔爆炎冲击",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207590": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "渐强治愈和弦",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207600": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "暴击天秤",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207610": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "鸣奏交响式",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207651": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "属性共鸣超载",
+          "updated_at": "2026-06-04T17:27:19Z"
+        },
+        "2207680": {
+          "confidence": "high",
+          "context": {
+            "field": "value",
+            "id_space": "skill_id_or_legacy_skill_name_index",
+            "match": "exact",
+            "source": "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json",
+            "source_kind": "skill_name_map",
+            "tcp_status": "known_id_space"
+          },
+          "endpoints": [],
+          "sources": [
+            "StarResonanceDps/DataTools/Old/Data/skill/skill_name_mapping.json"
+          ],
+          "text": "螺旋炎奏",
+          "updated_at": "2026-06-04T17:27:19Z"
         },
         "230105": {
           "confidence": "high",
@@ -2214,5 +3914,5 @@
     }
   },
   "schema_version": 1,
-  "updated_at": "2026-06-04T16:28:38Z"
+  "updated_at": "2026-06-04T17:27:19Z"
 }
