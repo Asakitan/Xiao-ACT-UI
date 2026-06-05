@@ -39,7 +39,10 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
 .side-title { color: var(--gold); font-size: 12px; letter-spacing: .16em; }
 .row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(117, 205, 255, .16); padding-bottom: 5px; font-size: 12px; color: var(--muted); }
 .row strong { color: var(--text); text-align: right; }
-.event { margin-bottom: 8px; border: 1px solid rgba(117, 205, 255, .28); border-left: 3px solid rgba(117, 205, 255, .75); border-radius: 10px; background: linear-gradient(180deg, rgba(27, 46, 68, .82), rgba(9, 16, 26, .78)); padding: 10px 12px; user-select: text; }
+.event { margin-bottom: 8px; border: 1px solid rgba(117, 205, 255, .28); border-left: 3px solid rgba(117, 205, 255, .75); border-radius: 10px; background: linear-gradient(180deg, rgba(27, 46, 68, .82), rgba(9, 16, 26, .78)); padding: 10px 12px; user-select: text; cursor: pointer; }
+.event:hover { border-color: rgba(117, 205, 255, .5); }
+.evt-caret { color: var(--gold); margin-right: 4px; }
+.evt-payload { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow: auto; user-select: text; }
 .event.damage { border-left-color: #ff8a74; }
 .event.heal { border-left-color: #7df2bf; }
 .event.skill { border-left-color: var(--gold); }
@@ -124,13 +127,13 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         document.getElementById('status-pill').textContent = data.ok === false ? 'ERROR' : (data.playing ? 'PLAYING' : 'READY');
         document.getElementById('status-pill').style.color = data.ok === false ? 'var(--bad)' : (data.playing ? 'var(--ok)' : 'var(--muted)');
         document.getElementById('sum-events').textContent = String(events.length || 0);
-        document.getElementById('sum-cursor').textContent = String(data.cursor_ms || 0) + 'ms';
+        document.getElementById('sum-cursor').textContent = ActTime.fmtDur(data.cursor_ms);
         document.getElementById('sum-speed').textContent = String(data.speed || 1) + 'x';
         document.getElementById('sum-playing').textContent = data.playing ? 'YES' : 'NO';
         document.getElementById('sum-errors').textContent = String((data.errors || []).length);
         if (!events.length) { list.innerHTML = '<div class="empty">暂无 ACT 时间线事件。<br/>开始识别或 replay 后会出现事件。</div>'; return; }
         list.innerHTML = events.map(function (ev) {
-            return '<article class="event ' + esc(ev.topic || '') + '"><div class="event-top"><div class="event-title">' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ev.topic || '-') + '</div></div><div class="event-meta">t=' + esc(ev.time_ms || 0) + 'ms · source=' + esc(ev.source || '-') + ' · value=' + esc(ev.value || '') + '</div></article>';
+            return '<article class="event ' + esc(ev.topic || '') + '" onclick="TimelineVcr.toggleEvent(this)"><div class="event-top"><div class="event-title"><span class="evt-caret">▸</span>' + esc(ev.label || ev.topic || 'event') + '</div><div class="event-topic">' + esc(ev.topic || '-') + '</div></div><div class="event-meta">' + esc(ActTime.fmtClock(ev.time_ms)) + ' · source=' + esc(ev.source || '-') + ' · value=' + esc(ev.value || '') + '</div><pre class="evt-payload" style="display:none;">' + esc(JSON.stringify(ev.payload || {})) + '</pre></article>';
         }).join('');
     }
     window.TimelineVcr = {
@@ -140,6 +143,13 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         step: function (delta) { return apiCall('step_timeline', [delta || 1000]).then(function (data) { render(data); return data; }); },
         seek: function (cursorMs) { return apiCall('seek_timeline', [cursorMs || 0]).then(function (data) { render(data); return data; }); },
         close: function () { apiCall('toggle_timeline_vcr'); },
+        toggleEvent: function (el) {
+            var pre = el.querySelector('.evt-payload'); var caret = el.querySelector('.evt-caret');
+            if (!pre) return;
+            var open = pre.style.display !== 'none';
+            pre.style.display = open ? 'none' : '';
+            if (caret) caret.textContent = open ? '▸' : '▾';
+        },
         fadeIn: function () { shell.classList.add('visible'); },
         fadeOut: function () { shell.classList.remove('visible'); }
     };

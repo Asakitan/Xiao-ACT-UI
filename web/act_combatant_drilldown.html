@@ -93,6 +93,12 @@
       async focus() { const status = await callApi('focus_combatant_target', 'act.combatant.focus_target', this._id(), document.getElementById('focusTarget').value); this.render(status); },
       async back() { const status = await callApi('back_combatant_drilldown', 'act.combatant.back'); document.getElementById('combatantId').value = ''; this.render(status); },
       async close() { this.fadeOut(); await callApi('toggle_combatant_drilldown', 'ui.menu_action', 'toggle_combatant_drilldown'); },
+      async openSkill(skillId) {
+        const cid = this._id() || (this.last && this.last.combatant_id) || '';
+        if (!cid || !skillId) { document.getElementById('status').textContent = 'Need combatant UID + skill id'; return; }
+        await callApi('open_skill_drilldown', 'ui.menu_action', String(cid), String(skillId));
+        document.getElementById('status').textContent = 'Opened skill ' + skillId;
+      },
       render(status) {
         status = status || {}; this.last = status;
         const s = status.summary || {}; const skills = status.skills || []; const incoming = status.incoming || []; const outgoing = status.outgoing || [];
@@ -104,7 +110,9 @@
         const max = Math.max(1, ...skills.map(x => Number(x.amount || 0)));
         document.getElementById('skills').innerHTML = skills.length ? skills.map(sk => {
           const w = Math.round(Number(sk.amount || 0) / max * 100);
-          return '<div class="skill-row '+(sk.kind === 'heal' ? 'heal' : '')+'"><div class="bar" style="width:'+w+'%"></div><div class="skill-main"><div><div class="skill-name">'+esc(sk.name)+'</div><div class="skill-extra">'+esc(sk.kind)+' · hits '+esc(sk.hits)+' · crit '+pct(sk.crit_rate)+'</div></div><div class="skill-amount">'+fmt(sk.amount)+'</div></div></div>';
+          const sid = sk.skill_id || sk.source_skill_id || sk.base_skill_id || '';
+          const click = sid ? ' onclick="CombatantDrilldown.openSkill(\''+esc(String(sid))+'\')" style="cursor:pointer;" title="打开技能钻取 / open skill drilldown"' : '';
+          return '<div class="skill-row '+(sk.kind === 'heal' ? 'heal' : '')+'"'+click+'><div class="bar" style="width:'+w+'%"></div><div class="skill-main"><div><div class="skill-name">'+esc(sk.name)+'</div><div class="skill-extra">'+esc(sk.kind)+' · hits '+esc(sk.hits)+' · crit '+pct(sk.crit_rate)+'</div></div><div class="skill-amount">'+fmt(sk.amount)+'</div></div></div>';
         }).join('') : '<div class="empty">No skill rows</div>';
         const sideRows = [];
         if ((status.filters || {}).focus_target) sideRows.push({ kind: 'focus', name: status.filters.focus_target, amount: '' });

@@ -18,7 +18,15 @@ from act_platform.runtime import (
     act_timeline_status,
     act_timeline_step,
 )
-from gui_modules.sao_panel_components import action_button, aggregate_row, empty_state, metric_tile, section_card
+from gui_modules.sao_panel_components import (
+    action_button,
+    aggregate_row,
+    empty_state,
+    fmt_clock,
+    fmt_dur,
+    metric_tile,
+    section_card,
+)
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -224,7 +232,7 @@ class TimelineVcrPanel:
     def _render_status(self, status: Mapping[str, Any]) -> None:
         events = list(status.get('events') or [])
         self._summary_var.set(
-            f"{len(events)} EVENTS · {int(status.get('cursor_ms') or 0)}ms · {float(status.get('speed') or 1.0):g}x"
+            f"{len(events)} EVENTS · cursor {fmt_dur(status.get('cursor_ms'))} · {float(status.get('speed') or 1.0):g}x"
         )
         errors = list(status.get('errors') or [])
         self._status_var.set(
@@ -260,7 +268,7 @@ class TimelineVcrPanel:
         grid.pack(fill='x', padx=4, pady=(0, 8))
         items = (
             ('Events', len(events), f"topics {len(topics)}", 'cyan'),
-            ('Cursor', f"{cursor_ms}ms", 'VCR position', 'gold'),
+            ('Cursor', fmt_dur(cursor_ms), 'VCR position', 'gold'),
             ('Speed', f"{speed:g}x", 'playing' if status.get('playing') else 'paused', 'cyan'),
             ('Errors', len(status.get('errors') or []), status.get('encounter_id') or 'live', 'danger' if status.get('errors') else 'gold'),
         )
@@ -320,12 +328,13 @@ class TimelineVcrPanel:
         accent = 'danger' if topic in {'damage', 'death'} else ('heal' if topic == 'heal' else 'gold')
         aggregate_row(
             parent,
-            title=('▼ ' if open_event else '▶ ') + str(event.get('label') or topic),
-            meta=f"{topic.upper()} · t={int(event.get('time_ms') or 0)}ms · source={event.get('source') or '-'}",
+            title=str(event.get('label') or topic),
+            meta=f"{topic.upper()} · {fmt_clock(event.get('time_ms'))} · source={event.get('source') or '-'}",
             value=self._fmt(event.get('value')) if event.get('value') not in (None, '') else '',
             ratio=1.0 if event.get('value') else 0.12,
             accent=accent,
             command=lambda key=event_id: self._toggle_event(key),
+            expanded=open_event,
         ).pack(fill='x', pady=2)
         if open_event:
             payload = json.dumps(event.get('payload') or {}, ensure_ascii=False, default=str)

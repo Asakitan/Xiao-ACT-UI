@@ -714,6 +714,31 @@ class SAOWebAPI:
     def back_skill_drilldown(self):
         return json.dumps(act_skill_drilldown_back(self._g), ensure_ascii=False)
 
+    def open_skill_drilldown(self, combatant_id=None, skill_id=None):
+        """Open the Skill Drilldown window focused on (combatant_id, skill_id).
+
+        Webview parity for the entity combatant `_open_skill` -> SkillDrilldown
+        select path: clicking a combatant skill row must actually OPEN the skill
+        window and show that skill (the user's '点开进不去')."""
+        cid = str(combatant_id or '')
+        sid = str(skill_id or '')
+        try:
+            if not getattr(self._g, '_skill_drilldown_visible', False):
+                self._g._show_skill_drilldown()
+        except Exception:
+            pass
+        status = act_skill_drilldown_status(self._g, combatant_id=cid or None, skill_id=sid or None, query=None, limit=80)
+        try:
+            js = (
+                "(function(){var c=document.getElementById('combatantId'),s=document.getElementById('skillId');"
+                "if(c)c.value=" + json.dumps(cid) + ";if(s)s.value=" + json.dumps(sid) + ";"
+                "if(window.SkillDrilldown&&SkillDrilldown.refresh)SkillDrilldown.refresh();})()"
+            )
+            self._g._eval_skill_drilldown(js)
+        except Exception:
+            pass
+        return json.dumps(status, ensure_ascii=False)
+
     def list_plugins(self):
         return json.dumps(act_plugin_list(self._g), ensure_ascii=False)
 

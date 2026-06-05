@@ -14,6 +14,7 @@ from act_platform.runtime import (
     act_skill_drilldown_filter,
     act_skill_drilldown_status,
 )
+from gui_modules.sao_panel_components import fmt_clock
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -271,7 +272,7 @@ class SkillDrilldownPanel:
             row.pack(fill='x', pady=2, padx=4)
             row.configure(cursor='hand2')
             values = (
-                (f"{int(ref.get('time_ms') or 0)}ms", 12, _SAO_PANEL_GOLD),
+                (fmt_clock(ref.get('time_ms')), 12, _SAO_PANEL_GOLD),
                 (str(ref.get('topic') or '-'), 12, _SAO_PANEL_LABEL_FG),
                 (str(ref.get('label') or '-'), 34, _SAO_PANEL_VALUE_FG),
                 (self._fmt(ref.get('value')), 14, _SAO_PANEL_VALUE_FG),

@@ -18,6 +18,8 @@ from gui_modules.sao_panel_components import (
     aggregate_row,
     detail_row,
     empty_state,
+    fmt_clock,
+    fmt_dur,
     metric_tile,
     section_card,
     source_badges,
@@ -290,7 +292,7 @@ class ActAggregatePanel:
         if not rows:
             return
         for ridx, row in enumerate(rows):
-            text = f"{int(row.get('time_ms') or 0)}ms · {row.get('topic') or '-'} · {row.get('actor') or '-'} → {row.get('target') or '-'} · {row.get('label') or '-'} · {self._fmt(row.get('value'))}"
+            text = f"{fmt_clock(row.get('time_ms'))} · {row.get('topic') or '-'} · {row.get('actor') or '-'} → {row.get('target') or '-'} · {row.get('label') or '-'} · {self._fmt(row.get('value'))}"
             detail_row(detail, text, accent=accent, zebra=bool(ridx % 2)).pack(fill='x', pady=1)
 
     def _render_graph_preview(self, graph: Mapping[str, Any]) -> None:
@@ -313,7 +315,7 @@ class ActAggregatePanel:
 
     def _group_meta(self, group: Mapping[str, Any]) -> str:
         span = int(group.get('duration_ms') or max(0, int(group.get('last_time_ms') or 0) - int(group.get('first_time_ms') or 0)))
-        bits = [f"active {span}ms"]
+        bits = [f"active {fmt_dur(span)}"]
         for key, label in (('actors', 'actors'), ('targets', 'targets'), ('skills', 'skills'), ('monsters', 'monsters'), ('dungeons', 'dungeons'), ('sources', 'src')):
             values = list(group.get(key) or [])
             if values:

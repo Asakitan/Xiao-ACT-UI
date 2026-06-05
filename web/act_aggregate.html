@@ -187,7 +187,7 @@ input#query { width: 170px; }
 
     function groupMeta(g) {
         var span = parseInt(g.duration_ms || (Math.max(0, (g.last_time_ms || 0) - (g.first_time_ms || 0))), 10) || 0;
-        var bits = ['active ' + span + 'ms'];
+        var bits = ['active ' + ActTime.fmtDur(span)];
         [['actors', 'actors'], ['targets', 'targets'], ['skills', 'skills'], ['monsters', 'monsters'], ['dungeons', 'dungeons'], ['sources', 'src']].forEach(function (p) {
             var vals = g[p[0]] || [];
             if (vals && vals.length) bits.push(p[1] + ' ' + vals.length);
@@ -203,7 +203,7 @@ input#query { width: 170px; }
         });
         html += '</div>';
         (g.rows || []).slice(0, 6).forEach(function (r) {
-            html += '<div class="aca-line">' + esc((r.time_ms || 0) + 'ms · ' + (r.topic || '-') + ' · ' + (r.actor || '-') + ' → ' + (r.target || '-') + ' · ' + (r.label || '-') + ' · ' + fmt(r.value)) + '</div>';
+            html += '<div class="aca-line">' + esc(ActTime.fmtClock(r.time_ms) + ' · ' + (r.topic || '-') + ' · ' + (r.actor || '-') + ' → ' + (r.target || '-') + ' · ' + (r.label || '-') + ' · ' + fmt(r.value)) + '</div>';
         });
         return html + '</div>';
     }
