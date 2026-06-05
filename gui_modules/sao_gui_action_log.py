@@ -16,8 +16,11 @@ from act_platform.runtime import (
     act_action_log_status,
 )
 from gui_modules.sao_panel_components import (
+    SP_XS,
+    SP_LG,
     action_button,
     aggregate_row,
+    detail_row,
     empty_state,
     fmt_clock,
     fmt_dur,
@@ -344,8 +347,9 @@ class ActionLogPanel:
             f"{len(rows)}/{total_rows} ROWS · {source.upper()} · PAGE {page_index}/{page_count} · {filters.get('topic') or 'ALL'}"
         )
         errors = list(status.get('errors') or [])
+        cursor_ms = int(cursor.get('time_ms') or 0)
         self._status_var.set(
-            f"encounter={status.get('encounter_id') or filters.get('encounter_id') or source} · cursor={int(cursor.get('time_ms') or 0)}ms · query={filters.get('query') or '-'} · errors={len(errors)}"
+            f"encounter={status.get('encounter_id') or filters.get('encounter_id') or source} · cursor={fmt_clock(cursor_ms) if cursor_ms else '--'} · query={filters.get('query') or '-'} · errors={len(errors)}"
         )
         if self._rows is None:
             return
@@ -410,24 +414,42 @@ class ActionLogPanel:
             key = str(group.get('key') or idx)
             open_group = key in self._expanded_groups
             value = float(group.get('total_value') or 0.0)
+            first_ms = int(group.get('first_time_ms') or 0)
+            last_ms = int(group.get('last_time_ms') or 0)
             meta = (
                 f"{str(group.get('kind') or 'event').upper()} · {int(group.get('count') or 0)} rows · "
-                f"UID {int(group.get('uid_count') or 0)} · {int(group.get('first_time_ms') or 0)}-{int(group.get('last_time_ms') or 0)}ms"
+                f"UID {int(group.get('uid_count') or 0)} · {fmt_clock(first_ms)} · {fmt_dur(last_ms - first_ms)}"
             )
             if group.get('dungeons'):
                 meta += f" · {'/'.join(str(x) for x in list(group.get('dungeons') or [])[:3])}"
             aggregate_row(
                 body,
-                title=('▼ ' if open_group else '▶ ') + str(group.get('name') or '-'),
+                title=str(group.get('name') or '-'),
                 meta=meta,
                 value=f"{self._fmt(value)} · {int(group.get('count') or 0)}x",
                 ratio=value / max_value if max_value else 0.0,
                 accent='danger' if str(group.get('kind') or '') in {'damage', 'monster', 'target'} else 'gold',
                 zebra=bool(idx % 2),
                 command=lambda k=key: self._toggle_group(k),
+                expanded=open_group,
             ).pack(fill='x', pady=2)
             if open_group:
                 self._render_group_details(body, group)
+
+    def _render_group_details(self, parent: tk.Misc, group: Mapping[str, Any]) -> None:
+        """Representative rows under an expanded group (was a missing method that
+        crashed every group expand — the user's '点开进不去')."""
+        accent = 'danger' if str(group.get('kind') or '') in {'damage', 'monster', 'target'} else 'gold'
+        rows = [row for row in list(group.get('rows') or []) if isinstance(row, Mapping)][:8]
+        for ridx, row in enumerate(rows):
+            text = (
+                f"{fmt_clock(row.get('time_ms'))} · {row.get('topic') or '-'} · "
+                f"{row.get('actor') or '-'} → {row.get('target') or '-'} · "
+                f"{row.get('label') or '-'} · {self._fmt(row.get('value'))}"
+            )
+            detail_row(parent, text, accent=accent, zebra=bool(ridx % 2)).pack(fill='x', padx=(SP_LG, SP_XS), pady=1)
+        if group.get('has_more_rows'):
+            detail_row(parent, '还有更多明细，请缩小筛选或翻页查看。', accent=accent).pack(fill='x', padx=(SP_LG, SP_XS), pady=1)
 
     def _render_raw_section(self, rows: list[Any]) -> None:
         if self._rows is None:
@@ -547,7 +569,7 @@ class ActionLogPanel:
         top = tk.Frame(card, bg=bg)
         top.pack(fill='x', padx=8, pady=(6, 2))
         values = (
-            (f"{int(row.get('time_ms') or 0)}ms", 10, _SAO_PANEL_LABEL_FG),
+            (fmt_clock(row.get('time_ms')), 10, _SAO_PANEL_LABEL_FG),
             (str(row.get('topic') or '-'), 12, _SAO_PANEL_GOLD),
             (str(row.get('label') or '-'), 34, _SAO_PANEL_VALUE_FG),
             (str(row.get('value') or ''), 14, _SAO_PANEL_VALUE_FG),
