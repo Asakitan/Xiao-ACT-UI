@@ -267,7 +267,7 @@ C3SB_SHORT = b'\x63\x33\x53\x42'
 # (服务器没被识别 → 没包到 parser → 连 tcp_dump 都没有)。每行字段:
 #   src/dst(ip:port) seq n(len) srv(是否当前已识别服务器) strict/loose(识别命中) head(前32B hex)
 # 抓完一段后把 _RAW_CAP_DUMP_ENABLED 改回 False。
-_RAW_CAP_DUMP_ENABLED = True
+_RAW_CAP_DUMP_ENABLED = False  # 诊断开关: 排查抓不到服务器时临时改 True (写 raw_cap_dump.jsonl)
 _RAW_CAP_MAX_BYTES = 80_000_000
 _RAW_CAP_PER_ADDR = 60
 _raw_cap_bytes = 0

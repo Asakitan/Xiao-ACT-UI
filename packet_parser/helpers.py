@@ -168,7 +168,7 @@ _DIRTY_CHARBASE_FIELDS: Dict[int, tuple] = {
 # 把每个解压后的游戏 notify (method_id + 原始 hex) 以及未识别的顶层帧写到
 # sao_auto/tcp_dump.jsonl, 供离线解码分析 (找伤害/场景包到底走了哪个 method)。
 # 抓完一段后请把 _TCP_DUMP_ENABLED 改回 False (避免持续写盘 / 体积膨胀)。
-_TCP_DUMP_ENABLED = True
+_TCP_DUMP_ENABLED = False  # 诊断开关: 抓包分析时临时改 True (写 tcp_dump.jsonl)
 _TCP_DUMP_MAX_BYTES = 150_000_000  # ~150MB 上限, 防跑飞
 _tcp_dump_bytes = 0
 _tcp_dump_printed = False
