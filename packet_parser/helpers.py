@@ -164,6 +164,44 @@ _DIRTY_CHARBASE_FIELDS: Dict[int, tuple] = {
 }
 
 
+# ── 全量 TCP notify dump (诊断/回归分析用) ──────────────────────────────
+# 把每个解压后的游戏 notify (method_id + 原始 hex) 以及未识别的顶层帧写到
+# sao_auto/tcp_dump.jsonl, 供离线解码分析 (找伤害/场景包到底走了哪个 method)。
+# 抓完一段后请把 _TCP_DUMP_ENABLED 改回 False (避免持续写盘 / 体积膨胀)。
+_TCP_DUMP_ENABLED = True
+_TCP_DUMP_MAX_BYTES = 150_000_000  # ~150MB 上限, 防跑飞
+_tcp_dump_bytes = 0
+_tcp_dump_printed = False
+
+
+def _dump_tcp(kind: str, **fields):
+    """Append one raw TCP frame record to sao_auto/tcp_dump.jsonl (offline analysis).
+
+    kind='notify'        — 解压后的游戏 notify: mid(method_id)/name/zstd/n(len)/hex
+    kind='unknown_msgtype' — 顶层消息类型既非 NOTIFY 也非 FRAME_DOWN 的原始帧
+    """
+    global _tcp_dump_bytes, _tcp_dump_printed
+    if not _TCP_DUMP_ENABLED:
+        return
+    try:
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'tcp_dump.jsonl')
+        if not _tcp_dump_printed:
+            _tcp_dump_printed = True
+            print(f'[TCP-DUMP] 已开启 → {path} '
+                  f'(抓完把 helpers._TCP_DUMP_ENABLED 改回 False)', flush=True)
+        if _tcp_dump_bytes > _TCP_DUMP_MAX_BYTES:
+            return
+        row = {'ts': round(time.time(), 3), 'kind': kind, **fields}
+        line = json.dumps(row, ensure_ascii=False) + '\n'
+        _tcp_dump_bytes += len(line)
+        with open(path, 'a', encoding='utf-8') as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
 def _append_packet_debug(tag: str, payload: Dict[str, Any]):
     """Append a small packet debug snapshot for later field confirmation."""
     if not _PACKET_DEBUG_ENABLED:

@@ -888,6 +888,12 @@ class PacketParser:
                     self._on_frame_down(payload, is_zstd)
                 else:
                     self.stats['unknown_message_types'] += 1
+                    # 全量 TCP dump: 顶层既非 NOTIFY 也非 FRAME_DOWN 的帧 (unknown_msg)
+                    if _helpers._TCP_DUMP_ENABLED:
+                        _helpers._dump_tcp(
+                            'unknown_msgtype', mt=int(msg_type),
+                            zstd=bool(is_zstd), n=len(payload or b''),
+                            hex=(payload or b'').hex())
 
             except Exception as e:
                 import traceback
@@ -931,6 +937,15 @@ class PacketParser:
             msg_payload = self._decompress(msg_payload)
             if msg_payload is None:
                 return
+
+        # 全量 TCP dump (诊断): 解压后每个 notify 的 method_id + 原始 hex,
+        # 便于离线确认伤害/场景包用的是哪个 method (回归分析)。
+        if _helpers._TCP_DUMP_ENABLED:
+            _helpers._dump_tcp(
+                'notify', mid=int(method_id),
+                name=_NOTIFY_METHOD_NAMES.get(method_id, ''),
+                zstd=bool(is_zstd), n=len(msg_payload or b''),
+                hex=(msg_payload or b'').hex())
 
         if method_id == NotifyMethod.ENTER_SCENE:
             self._on_enter_scene(msg_payload)
