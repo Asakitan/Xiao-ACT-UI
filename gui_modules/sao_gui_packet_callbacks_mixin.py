@@ -51,6 +51,7 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any, Optional
 
@@ -127,6 +128,19 @@ class SAOPlayerGUIPacketCallbacksMixin:
                 updates['dungeon_scene_id'] = scene_id
             if difficulty > 0:
                 updates['dungeon_difficulty'] = difficulty
+            # 切换地图中央横幅: 解析地图名后, 延迟 3s 在屏幕中央淡入显示。
+            # 覆盖所有场景切换 (副本 dungeon_id + 开放世界 scene_id), 取不到名则不弹。
+            banner_name = (updates.get('dungeon_name') or event.get('dungeon_name') or '').strip()
+            if not banner_name:
+                _lookup = dungeon_id or scene_id
+                if _lookup > 0:
+                    try:
+                        from tools.tablekit.name_tables import names
+                        banner_name = (names.dungeon(_lookup, default='') or '').strip()
+                    except Exception:
+                        banner_name = ''
+            if banner_name:
+                self._schedule_map_banner(banner_name)
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(**updates)
             mgr = getattr(self, '_encounter_mgr', None)
@@ -141,6 +155,49 @@ class SAOPlayerGUIPacketCallbacksMixin:
                 publish_owner_event(self, 'scene', event, source_name='entity', source_kind='tcp')
         except Exception:
             pass
+
+    def _schedule_map_banner(self, name: str):
+        """检测到切换地图 → 延迟 3 秒后在屏幕中央淡入地图名 (Entity ULW)。
+
+        去重: 与当前已显示 / 已排队的地图名相同则跳过, 防止抓包对同一场景
+        重复推送导致横幅狂闪; 3s 窗口内快速连切时只保留最新的一张图。
+        本方法可能在抓包线程被调用, 因此用 threading.Timer 计时, 真正的
+        渲染由 MapBannerOverlay.show_banner 内部 root.after(0) 调度回主线程。
+        """
+        name = (name or '').strip()
+        if not name:
+            return
+        overlay = getattr(self, '_map_banner_overlay', None)
+        if overlay is None:
+            return
+        if name == getattr(self, '_map_banner_last_name', '') \
+                or name == getattr(self, '_map_banner_pending_name', ''):
+            return
+        self._map_banner_pending_name = name
+        prev = getattr(self, '_map_banner_timer', None)
+        if prev is not None:
+            try:
+                prev.cancel()
+            except Exception:
+                pass
+
+        def _fire(n=name):
+            # 期间又切到别的图则放弃这次 (pending 已被覆盖)
+            if n != getattr(self, '_map_banner_pending_name', ''):
+                return
+            self._map_banner_pending_name = ''
+            self._map_banner_last_name = n
+            ov = getattr(self, '_map_banner_overlay', None)
+            if ov is not None:
+                try:
+                    ov.show_banner(n)
+                except Exception:
+                    pass
+
+        t = threading.Timer(3.0, _fire)
+        t.daemon = True
+        self._map_banner_timer = t
+        t.start()
 
     def _send_linked_key(self, key: str, press_mode: str = "tap",
                          hold_ms: int = 80, press_count: int = 1):

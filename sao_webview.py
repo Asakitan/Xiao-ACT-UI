@@ -2169,6 +2169,13 @@ class SAOWebViewGUI:
         self.menu_win = None
         self.skillfx_win = None
         self.alert_win = None
+        # 切换地图中央横幅 (延迟 3s 后淡入地图名)
+        self.mapbanner_win = None
+        self._mapbanner_hwnd = 0
+        self._mapbanner_nonce = 0
+        self._mapbanner_last_name = ''
+        self._mapbanner_pending_name = ''
+        self._mapbanner_timer = None
         self.boss_hp_win = None
         self._boss_hp_hwnd = 0
         self._boss_hp_visible = False
@@ -3294,6 +3301,19 @@ class SAOWebViewGUI:
                 updates['dungeon_scene_id'] = scene_id
             if difficulty > 0:
                 updates['dungeon_difficulty'] = difficulty
+            # 切换地图中央横幅: 解析地图名后延迟 3s 在屏幕中央淡入。覆盖所有
+            # 场景切换 (副本 dungeon_id + 开放世界 scene_id), 取不到名则不弹。
+            banner_name = (updates.get('dungeon_name') or ev.get('dungeon_name') or '').strip()
+            if not banner_name:
+                _lookup = dungeon_id or scene_id
+                if _lookup > 0:
+                    try:
+                        from tools.tablekit.name_tables import names
+                        banner_name = (names.dungeon(_lookup, default='') or '').strip()
+                    except Exception:
+                        banner_name = ''
+            if banner_name:
+                self._schedule_map_banner(banner_name)
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(**updates)
             mgr = getattr(self, '_encounter_mgr', None)
@@ -3964,6 +3984,7 @@ class SAOWebViewGUI:
         menu_url = _web_file_uri('menu.html')
         skillfx_url = _web_file_uri('skillfx.html')
         alert_url = _web_file_uri('alert.html')
+        mapbanner_url = _web_file_uri('mapbanner.html')
 
         # HP 固定位置: 跟随游戏窗口所在显示器, 避免 webview 在高 DPI /
         # 多显示器环境下按系统 DPI 定位而产生几何漂移。
@@ -4038,6 +4059,23 @@ class SAOWebViewGUI:
             width=alert_w, height=alert_h,
             x=max(0, int((_sw - alert_w) / 2)),
             y=max(32, int(_sh * 0.16)),
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
+        # Map-name banner — 居中大字横幅 (切换地图时淡入), 纯覆盖层鼠标穿透
+        mapbanner_w = max(640, int(_sw * 0.6))
+        mapbanner_h = 280
+        self.mapbanner_win = webview.create_window(
+            'SAO MapBanner', mapbanner_url,
+            width=self._to_webview_px(mapbanner_w),
+            height=self._to_webview_px(mapbanner_h),
+            x=self._to_webview_px(monitor_left + max(0, int((_sw - mapbanner_w) / 2))),
+            y=self._to_webview_px(monitor_top + max(0, int((_sh - mapbanner_h) / 2))),
             frameless=True,
             easy_drag=False,
             transparent=True,
@@ -4614,6 +4652,7 @@ class SAOWebViewGUI:
         _apply_for('SAO-HP', self.hp_win)
         _apply_for('SAO SkillFX', self.skillfx_win)
         _apply_for('SAO Alert', self.alert_win)
+        _apply_for('SAO MapBanner', self.mapbanner_win)
         _apply_for('SAO-BossHP', self.boss_hp_win)
         # DPS 窗口只做 Win32 色键, 不设 .NET TransparencyKey
         # (TransparencyKey 会令 HTML 透明区域变成鼠标穿透, 导致按钮/行无法点击)
@@ -4726,6 +4765,10 @@ class SAOWebViewGUI:
                         pass
                     try:
                         self._setup_boss_hp_click_through(_wait_retries=0)
+                    except Exception:
+                        pass
+                    try:
+                        self._setup_mapbanner_click_through(_wait_retries=0)
                     except Exception:
                         pass
                     try:
@@ -6006,6 +6049,13 @@ class SAOWebViewGUI:
         try:
             if self.alert_win:
                 self.alert_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _eval_mapbanner(self, js):
+        try:
+            if self.mapbanner_win:
+                self.mapbanner_win.evaluate_js(js)
         except Exception:
             pass
 
@@ -7482,6 +7532,122 @@ class SAOWebViewGUI:
 
         threading.Timer(0.52, _finish_hide).start()
 
+    # ── Map-name banner (切换地图中央横幅) ──
+
+    def _position_mapbanner_window(self):
+        """把横幅窗口居中到游戏所在显示器的正中央。"""
+        if not self.mapbanner_win:
+            return
+        try:
+            rect = getattr(self, '_hud_monitor_rect', None)
+            if rect:
+                left, top, right, bottom = rect
+            else:
+                left, top = 0, 0
+                right = ctypes.windll.user32.GetSystemMetrics(0)
+                bottom = ctypes.windll.user32.GetSystemMetrics(1)
+            sw = max(1, right - left)
+            sh = max(1, bottom - top)
+            width = max(640, int(sw * 0.6))
+            height = 280
+            x = left + max(0, int((sw - width) / 2))
+            y = top + max(0, int((sh - height) / 2))
+            try:
+                self.mapbanner_win.resize(self._to_webview_px(width), self._to_webview_px(height))
+            except Exception:
+                pass
+            try:
+                self.mapbanner_win.move(self._to_webview_px(x), self._to_webview_px(y))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _schedule_map_banner(self, name: str):
+        """检测到切换地图 → 延迟 3 秒后在屏幕中央淡入地图名 (WebView)。
+
+        去重: 与当前已显示 / 已排队的地图名相同则跳过, 防止抓包对同一场景
+        重复推送导致横幅狂闪; 3s 窗口内快速连切时只保留最新的一张图。
+        """
+        name = (name or '').strip()
+        if not name or not getattr(self, 'mapbanner_win', None):
+            return
+        if (name == getattr(self, '_mapbanner_last_name', '')
+                or name == getattr(self, '_mapbanner_pending_name', '')):
+            return
+        self._mapbanner_pending_name = name
+        prev = getattr(self, '_mapbanner_timer', None)
+        if prev is not None:
+            try:
+                prev.cancel()
+            except Exception:
+                pass
+        t = threading.Timer(3.0, lambda n=name: self._show_map_banner_window(n))
+        t.daemon = True
+        self._mapbanner_timer = t
+        t.start()
+
+    def _show_map_banner_window(self, name: str):
+        name = (name or '').strip()
+        if not name or not getattr(self, 'mapbanner_win', None):
+            return
+        # 触发时若已被更新的待显示覆盖, 放弃这次 (快速连切只显示最新)
+        if (getattr(self, '_mapbanner_pending_name', '')
+                and name != self._mapbanner_pending_name):
+            return
+        self._mapbanner_pending_name = ''
+        self._mapbanner_last_name = name
+        self._mapbanner_nonce = int(getattr(self, '_mapbanner_nonce', 0) or 0) + 1
+        nonce = self._mapbanner_nonce
+
+        self._position_mapbanner_window()
+        try:
+            self.mapbanner_win.show()
+        except Exception:
+            pass
+        try:
+            self._apply_webview2_transparency()
+        except Exception:
+            pass
+        self._set_window_alpha('SAO MapBanner', 1.0)
+        # 纯覆盖层: 立即设鼠标穿透, 避免拦截游戏点击
+        self._setup_mapbanner_click_through()
+        threading.Timer(0.5, lambda: self._setup_mapbanner_click_through(_wait_retries=0)).start()
+
+        safe_name = self._safe_js(name)
+
+        def _push():
+            if nonce != int(getattr(self, '_mapbanner_nonce', 0) or 0):
+                return
+            self._eval_mapbanner(
+                f'if (window.MapBanner && MapBanner.showBanner) '
+                f'MapBanner.showBanner("{safe_name}")'
+            )
+            self._ensure_mapbanner_on_top()
+
+        _push()
+        threading.Timer(0.35, _push).start()
+        # 显示约 2.6s 后淡出 (与 mapbanner.html 动画时长配合)
+        threading.Timer(3.0, lambda: self._hide_map_banner_window(expected_nonce=nonce)).start()
+
+    def _hide_map_banner_window(self, expected_nonce: int = None):
+        if not getattr(self, 'mapbanner_win', None):
+            return
+        if expected_nonce is not None and expected_nonce != int(getattr(self, '_mapbanner_nonce', 0) or 0):
+            return
+        self._eval_mapbanner('if (window.MapBanner && MapBanner.beginClose) MapBanner.beginClose()')
+        closing_nonce = int(getattr(self, '_mapbanner_nonce', 0) or 0)
+
+        def _finish_hide():
+            if closing_nonce != int(getattr(self, '_mapbanner_nonce', 0) or 0):
+                return
+            try:
+                self.mapbanner_win.hide()
+            except Exception:
+                pass
+
+        threading.Timer(0.6, _finish_hide).start()
+
     def _setup_alert_click_through(self):
         """Make alert window fully click-through (WS_EX_TRANSPARENT).
 
@@ -7525,6 +7691,40 @@ class SAOWebViewGUI:
             ex |= (_WS_EX_TRANSPARENT | _WS_EX_LAYERED)
             user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex)
             self._ensure_skillfx_on_top()
+        except Exception:
+            pass
+
+    def _setup_mapbanner_click_through(self, _wait_retries: int = 20):
+        """Make Map-name banner overlay fully click-through (纯覆盖层, 永不挡点击)."""
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, 'SAO MapBanner')
+            if not hwnd and _wait_retries > 0:
+                threading.Timer(0.1, lambda: self._setup_mapbanner_click_through(_wait_retries - 1)).start()
+                return
+            if not hwnd:
+                return
+            self._mapbanner_hwnd = hwnd
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            ex |= (_WS_EX_TRANSPARENT | _WS_EX_LAYERED)
+            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex)
+            self._ensure_mapbanner_on_top()
+        except Exception:
+            pass
+
+    def _ensure_mapbanner_on_top(self):
+        try:
+            if not self._mapbanner_hwnd:
+                self._mapbanner_hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO MapBanner')
+            if not self._mapbanner_hwnd:
+                return
+            HWND_TOPMOST = ctypes.c_void_p(-1)
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            ctypes.windll.user32.SetWindowPos(
+                self._mapbanner_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
         except Exception:
             pass
 

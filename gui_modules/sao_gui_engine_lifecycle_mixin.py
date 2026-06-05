@@ -80,6 +80,7 @@ from act_platform.runtime import ensure_act_event_bus, ensure_act_plugin_manager
 from utils.sao_sound import play_sound
 
 from gui_modules.sao_gui_alert import AlertOverlay
+from gui_modules.sao_gui_map_banner import MapBannerOverlay
 from gui_modules.sao_gui_bosshp import BossHpOverlay
 from gui_modules.sao_gui_buffmon import SelfBuffOverlay, BossBuffOverlay
 from gui_modules.sao_gui_dps import DpsOverlay
@@ -367,6 +368,13 @@ class SAOPlayerGUIEngineLifecycleMixin:
             except Exception as e:
                 print(f'[SAO Entity] Alert overlay init failed: {e}')
                 self._alert_overlay = None
+
+            try:
+                self._map_banner_overlay = MapBannerOverlay(self.root, self._cfg_settings_ref)
+                print('[SAO Entity] Map banner overlay initialized')
+            except Exception as e:
+                print(f'[SAO Entity] Map banner overlay init failed: {e}')
+                self._map_banner_overlay = None
 
             try:
                 self._skillfx_overlay = BurstReadyOverlay(self.root, self._cfg_settings_ref)
