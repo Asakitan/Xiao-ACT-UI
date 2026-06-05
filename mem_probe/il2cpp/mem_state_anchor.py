@@ -42,7 +42,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -337,17 +337,18 @@ class AnchorMemoryReader:
 
     # ---------- skill-cd driven self discovery ----------
 
-    def _scan_for_uid_candidates(self, anchor: AnchorPack, max_hits: int = 4096) -> List[int]:
-        """Find candidate CharSerialize bases by TCP-confirmed uid.
+    def _iter_uid_candidates(self, anchor: AnchorPack, max_hits: int = 4096) -> Iterator[int]:
+        """Yield candidate ``CharSerialize`` bases by TCP-confirmed uid, lazily.
 
         ``CharSerialize.CharId`` is at ``+0x10``.  We scan readable private
         regions with the Cython u64 scanner, then subtract that field offset.
-        This keeps the expensive cross-process work to a small number of
-        candidate validations instead of pointer-walking every SkillCD array.
+        Yielding region-by-region lets a strong-anchor caller validate-and-stop
+        the moment self is found, instead of always sweeping the whole heap to
+        collect every uid collision first.
         """
         if anchor.uid <= 0:
-            return []
-        out: List[int] = []
+            return
+        emitted = 0
         needle = int(anchor.uid) & 0xFFFFFFFFFFFFFFFF
         for region in self._regions():
             base = region.base
@@ -361,17 +362,21 @@ class AnchorMemoryReader:
                 if blob is None:
                     off += n
                     continue
-                remaining = max_hits - len(out)
+                remaining = max_hits - emitted
                 if remaining <= 0:
-                    return out
+                    return
                 for hit_off in _cy.find_aligned_u64(blob, needle, remaining):
                     cs_base = base + off + int(hit_off) - CHAR_SERIALIZE['CharId'][0]
                     if cs_base >= base:
-                        out.append(cs_base)
-                        if len(out) >= max_hits:
-                            return out
+                        yield cs_base
+                        emitted += 1
+                        if emitted >= max_hits:
+                            return
                 off += n
-        return out
+
+    def _scan_for_uid_candidates(self, anchor: AnchorPack, max_hits: int = 4096) -> List[int]:
+        """Eagerly collect all uid candidates (used by the weak-anchor path)."""
+        return list(self._iter_uid_candidates(anchor, max_hits))
 
     def _read_skill_matches_from_attr(self, attr: int, anchor_skills: Set[int],
                                       max_items: int = 512) -> Set[int]:
@@ -515,46 +520,61 @@ class AnchorMemoryReader:
                     return fresh
             self._resolved_cache = None
             self._resolved_cache_uid = 0
-        candidates = self._scan_for_uid_candidates(anchor)
-        if not candidates:
-            return None
         min_skill_matches = 0
         if anchor_skills:
             min_skill_matches = min(8, max(2, len(anchor_skills) // 32))
-        best: Optional[ResolvedSelf] = None
-        # Strong anchors have exact TCP level/profession/skill evidence, so the
-        # first validated hit is enough.  Uid-only anchors need to scan wider
-        # and choose the most plausible full snapshot to avoid false positives.
-        candidate_limit = 512 if strong_anchor else 2048
-        for cs_base in candidates[:candidate_limit]:
-            ok, info = self._validate_self(cs_base, anchor)
-            if not ok:
-                continue
-            ufa = info['ufa']
-            all_matched = self._read_skill_matches_from_attr(ufa, anchor_skills)
-            if len(all_matched) < min_skill_matches:
-                continue
-            scan_time = time.time() - t0
+
+        def _build(cs_base: int, info: dict, all_matched: Set[int]) -> ResolvedSelf:
+            conf = info['confidence']
             if anchor_skills:
                 skill_conf = min(1.0, len(all_matched) / max(1, min(32, len(anchor_skills))))
-                info['confidence'] = min(1.0, (info['confidence'] * 0.65) + (skill_conf * 0.35))
-            resolved = ResolvedSelf(
+                conf = min(1.0, (conf * 0.65) + (skill_conf * 0.35))
+            return ResolvedSelf(
                 char_serialize_obj=cs_base,
-                user_fight_attr_obj=ufa,
+                user_fight_attr_obj=info['ufa'],
                 char_base_obj=info['cb'],
                 energy_item_obj=info['ei'],
                 role_level_obj=info['rl'],
                 profession_list_obj=info['pl'],
                 matched_skill_ids=all_matched,
-                scan_time_s=scan_time,
-                confidence=info['confidence'],
+                scan_time_s=time.time() - t0,
+                confidence=conf,
                 used_anchors=info['used'],
             )
-            if strong_anchor:
-                self._resolved_cache = resolved
-                self._resolved_cache_uid = int(anchor.uid or 0)
-                self._resolved_cache_ts = time.time()
-                return resolved
+
+        def _validate(cs_base: int) -> Optional[ResolvedSelf]:
+            ok, info = self._validate_self(cs_base, anchor)
+            if not ok:
+                return None
+            all_matched = self._read_skill_matches_from_attr(info['ufa'], anchor_skills)
+            if len(all_matched) < min_skill_matches:
+                return None
+            return _build(cs_base, info, all_matched)
+
+        if strong_anchor:
+            # The uid is a plain i64, so in a multi-GB heap thousands of unrelated
+            # qwords collide with it (observed 1655 hits, the real CharSerialize at
+            # index #1108).  But a strong anchor adds a hard uid+hp+level+profession
+            # gate that only the live self can clear, so we scan lazily and return
+            # on the FIRST validated hit — stopping the heap sweep the moment self
+            # is found instead of always collecting every collision first.
+            for cs_base in self._iter_uid_candidates(anchor):
+                resolved = _validate(cs_base)
+                if resolved is not None:
+                    self._resolved_cache = resolved
+                    self._resolved_cache_uid = int(anchor.uid or 0)
+                    self._resolved_cache_ts = time.time()
+                    return resolved
+            return None
+
+        # Weak (uid-only) anchor: there is no hard level/profession gate, so a
+        # random uid-collision could pass the looser plausibility check.  Collect
+        # every candidate and keep the most plausible full snapshot.
+        best: Optional[ResolvedSelf] = None
+        for cs_base in self._iter_uid_candidates(anchor):
+            resolved = _validate(cs_base)
+            if resolved is None:
+                continue
             if best is None or resolved.confidence > best.confidence:
                 best = resolved
                 if resolved.confidence >= 0.95:
