@@ -50,6 +50,27 @@ PROFESSION_SKILL_BUFF_KIND = "profession_skill_buff"
 EVENT_KIND = "event"
 BOSS_MECHANIC_KIND = "boss_mechanic"
 
+# --- self-contained data sources (this project only, never a neighbour repo) ---
+_NAME_TABLES = os.path.join(_ASSETS, "name_tables")
+_SHARED_CACHE = os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.json")
+_LOCAL_CACHE = os.environ.get(
+    "SAO_TCP_PREPARSE_NAME_CACHE_LOCAL",
+    os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.local.json"),
+)
+# Specific kinds per id domain, in disambiguation priority (first listed wins for
+# the rare id present in more than one table). The skill domain has 0 intra-domain
+# ambiguity; the buff domain resolves its overlaps by this order.
+_SKILL_DOMAIN_KINDS = (
+    FIELD_MARKER_KIND, ULTIMATE_SKILL_KIND, ROGUELIKE_AFFIX_KIND, PROFESSION_SKILL_KIND,
+    SCRIPTED_SKILL_KIND, VIRTUAL_SKILL_KIND, BOSS_MECHANIC_SKILL_KIND, BOSS_SKILL_KIND,
+    MONSTER_SKILL_KIND, ENVIRONMENT_SKILL_KIND, COMPANION_SKILL_KIND, PROJECTILE_SKILL_KIND,
+    INTERACTION_SKILL_KIND, CLIENT_EFFECT_SKILL_KIND, PLAYER_SKILL_KIND, PASSIVE_SKILL_KIND,
+    TEST_SKILL_KIND, SYSTEM_SKILL_KIND,
+)
+_BUFF_DOMAIN_KINDS = (EVENT_KIND, PROFESSION_SKILL_BUFF_KIND, PLAYER_BUFF_KIND, FACTOR_BUFF_KIND)
+# Kinds materialised by load_classified_tables: specific + aggregate buff + boss.
+_AGGREGATE_AND_BOSS_KINDS = (BUFF_KIND, "boss")
+
 _FIELD_MARKER_RE = re.compile(r"(场地标记|场地|地面|范围标记)")
 _EVENT_RE = re.compile(r"(事件|Event|event|触发事件|玩法事件|任务事件)")
 _SCRIPTED_RE = re.compile(r"(剧情|表演|演出|锁定追击|空降|过场|脚本|idle|Idle|IDLE)")
@@ -306,6 +327,62 @@ def _skill_name_text(skill_id: int, row: Mapping[str, Any] | None = None) -> str
     return " ".join(text for text in pieces if text)
 
 
+@lru_cache(maxsize=1)
+def _cache_by_kind() -> dict[str, dict[int, str]]:
+    """id->name per kind from our own MEM/TCP parse cache (shared + local)."""
+    out: dict[str, dict[int, str]] = {}
+    for path in (_SHARED_CACHE, _LOCAL_CACHE):
+        data = _load_json(path)
+        by_kind = (((data.get("names") or {}).get("by_kind")) or {}) if isinstance(data, Mapping) else {}
+        if not isinstance(by_kind, Mapping):
+            continue
+        for kind, bucket in by_kind.items():
+            if str(kind) == "player" or not isinstance(bucket, Mapping):
+                continue
+            for sid, entry in bucket.items():
+                iid = _safe_int(sid)
+                if iid <= 0:
+                    continue
+                text = entry if isinstance(entry, str) else _entry_name(entry, fields=("text", "name", "Name"))
+                text = _clean_text(text)
+                if text:
+                    out.setdefault(str(kind), {})[iid] = text
+    return out
+
+
+@lru_cache(maxsize=1)
+def _our_index() -> tuple[dict[int, str], dict[int, str], dict[int, str]]:
+    """Build (skill_id->kind, buff_id->kind, id->name) from OUR project data only:
+    committed per-kind tables + the MEM/TCP parse cache. No neighbour repo."""
+    skill_idx: dict[int, str] = {}
+    buff_idx: dict[int, str] = {}
+    names: dict[int, str] = {}
+    for kind in _SKILL_DOMAIN_KINDS:
+        for sid, nm in _load_json(os.path.join(_NAME_TABLES, f"{kind}.json")).items():
+            iid = _safe_int(sid)
+            if iid > 0:
+                skill_idx.setdefault(iid, kind)
+                if nm:
+                    names.setdefault(iid, str(nm))
+    for kind in _BUFF_DOMAIN_KINDS:
+        for sid, nm in _load_json(os.path.join(_NAME_TABLES, f"{kind}.json")).items():
+            iid = _safe_int(sid)
+            if iid > 0:
+                buff_idx.setdefault(iid, kind)
+                if nm:
+                    names.setdefault(iid, str(nm))
+    # Our parse cache is authoritative: it refines kind and supplies in-memory names.
+    for kind, bucket in _cache_by_kind().items():
+        for iid, text in bucket.items():
+            if kind in _SKILL_DOMAIN_KINDS:
+                skill_idx[iid] = kind
+            elif kind in _BUFF_DOMAIN_KINDS:
+                buff_idx[iid] = kind
+            if text:
+                names[iid] = text
+    return skill_idx, buff_idx, names
+
+
 def classify_skill_id(skill_id: Any) -> str:
     sid = _safe_int(skill_id)
     if sid <= 0:
@@ -316,14 +393,14 @@ def classify_skill_id(skill_id: Any) -> str:
 @lru_cache(maxsize=16384)
 def _classify_skill_id_cached(sid: int) -> str:
     # Hot path: called per damage event via name_tables.resolve()->_semantic_kind().
-    # Result depends only on the immutable lru_cache(1) static tables, so caching
-    # per unique skill id is safe and collapses the ~20-regex chain to O(1) on repeat.
-    row = skill_table().get(sid) or {}
-    name = _entry_name(row) or skill_fallback_names().get(sid, "") or aoyi_skill_names().get(sid, "") or damage_attr_names().get(sid, "")
-    text = _skill_name_text(sid, row)
-    slot_positions = _slot_positions(row) if row else set()
-    if row and _safe_int(row.get("SkillType"), -1) == 7:
-        return FIELD_MARKER_KIND
+    # 1) trust our own classification (committed tables + MEM/TCP parse cache);
+    # 2) for a brand-new id fall back to name-text regex + our packet_parser id
+    # sets. No neighbour metadata (SlotPosition/SkillType/IsDangerSkill/...).
+    skill_idx, _, names = _our_index()
+    known = skill_idx.get(sid)
+    if known:
+        return known
+    text = names.get(sid, "")
     if _FIELD_MARKER_RE.search(text):
         return FIELD_MARKER_KIND
     if _TEST_SKILL_RE.search(text):
@@ -336,27 +413,23 @@ def _classify_skill_id_cached(sid: int) -> str:
         return SCRIPTED_SKILL_KIND
     if _ROGUELIKE_RE.search(text):
         return ROGUELIKE_AFFIX_KIND
-    if not row and _EVENT_RE.search(text):
+    if _EVENT_RE.search(text):
         return EVENT_KIND
-    if not row and _LEGACY_BUFF_RE.search(text):
+    if _LEGACY_BUFF_RE.search(text):
         if _PROFESSION_BUFF_RE.search(text):
             return PROFESSION_SKILL_BUFF_KIND
         return FACTOR_BUFF_KIND
     if sid in ultimate_skill_ids() or _ULTIMATE_RE.search(text):
         return ULTIMATE_SKILL_KIND
-    if sid in profession_skill_ids() or (row and (slot_positions & {1, 2, 6, 7, 8})):
+    if sid in profession_skill_ids():
         return PROFESSION_SKILL_KIND
-    if _BOSS_MECHANIC_SKILL_RE.search(text) or bool(row.get("IsDangerSkill")) or bool(row.get("IsFractureSkill")):
+    if _BOSS_MECHANIC_SKILL_RE.search(text):
         return BOSS_MECHANIC_SKILL_KIND
-    if sid in environment_skill_ids() or _ENVIRONMENT_SKILL_RE.search(text) or _LEGACY_ENVIRONMENT_CONTEXT_RE.search(text):
+    if _ENVIRONMENT_SKILL_RE.search(text) or _LEGACY_ENVIRONMENT_CONTEXT_RE.search(text):
         return ENVIRONMENT_SKILL_KIND
-    if sid in boss_skill_ids():
-        return BOSS_SKILL_KIND
     if _LEGACY_BOSS_CONTEXT_RE.search(text):
         return BOSS_SKILL_KIND
-    if sid in monster_skill_ids():
-        return MONSTER_SKILL_KIND
-    if sid in player_skill_ids() or _PLAYER_SKILL_RE.search(text):
+    if _PLAYER_SKILL_RE.search(text):
         return PLAYER_SKILL_KIND
     if _COMPANION_SKILL_RE.search(text):
         return COMPANION_SKILL_KIND
@@ -370,10 +443,6 @@ def _classify_skill_id_cached(sid: int) -> str:
         return PROJECTILE_SKILL_KIND
     if _PASSIVE_SKILL_RE.search(text):
         return PASSIVE_SKILL_KIND
-    if row and slot_positions:
-        if slot_positions & {3, 4, 5, 9}:
-            return PLAYER_SKILL_KIND
-        return SYSTEM_SKILL_KIND
     return SYSTEM_SKILL_KIND
 
 
@@ -402,30 +471,21 @@ def classify_buff_id(buff_id: Any) -> str:
 
 @lru_cache(maxsize=16384)
 def _classify_buff_id_cached(bid: int) -> str:
-    name = _buff_name(bid)
-    row = buff_table().get(bid) or {}
-    text = " ".join(str(part or "") for part in (name, row.get("Note") if isinstance(row, Mapping) else ""))
-    if _EVENT_RE.search(name):
+    # 1) trust our own classification; 2) name-text regex for brand-new ids.
+    # No neighbour BuffTable metadata (Visible/IsClientBuff/Tags/...).
+    _, buff_idx, names = _our_index()
+    known = buff_idx.get(bid)
+    if known:
+        return known
+    text = names.get(bid, "")
+    if _EVENT_RE.search(text):
         return EVENT_KIND
-    if _SCRIPTED_RE.search(name) or _VIRTUAL_RE.search(name):
+    if _SCRIPTED_RE.search(text) or _VIRTUAL_RE.search(text):
         return EVENT_KIND
-    if _ROGUELIKE_RE.search(name):
+    if _ROGUELIKE_RE.search(text):
         return FACTOR_BUFF_KIND
     if _PROFESSION_BUFF_RE.search(text):
         return PROFESSION_SKILL_BUFF_KIND
-    if not row:
-        return BUFF_KIND
-    visible = _safe_int(row.get("Visible"), 0)
-    is_client = bool(row.get("IsClientBuff"))
-    show_hud = _truthy(row.get("ShowHUDIcon")) or _truthy(row.get("TipsDescription"))
-    buff_ability_type = _safe_int(row.get("BuffAbilityType"), 0)
-    buff_ability_subtype = _safe_int(row.get("BuffAbilitySubType"), 0)
-    tags = row.get("Tags") or []
-    special_attr = row.get("SpecialAttr") or []
-    if visible != 0 or show_hud:
-        return PLAYER_BUFF_KIND
-    if is_client or visible == 0 or buff_ability_type or buff_ability_subtype or tags or special_attr:
-        return FACTOR_BUFF_KIND
     return BUFF_KIND
 
 
@@ -516,41 +576,40 @@ def _to_runtime(entries: Mapping[int, str]) -> dict[str, dict[str, str]]:
 
 @lru_cache(maxsize=1)
 def load_classified_tables() -> dict[str, dict[str, dict[str, str]]]:
-    skills = _skill_maps()
-    buffs = _buff_maps()
-    for kind in (BUFF_KIND, PLAYER_BUFF_KIND, FACTOR_BUFF_KIND, PROFESSION_SKILL_BUFF_KIND, EVENT_KIND):
-        for iid, text in skills.get(kind, {}).items():
-            buffs[kind].setdefault(iid, text)
-            if kind in {BUFF_KIND, PLAYER_BUFF_KIND, FACTOR_BUFF_KIND, PROFESSION_SKILL_BUFF_KIND}:
-                buffs[BUFF_KIND].setdefault(iid, text)
+    """Materialise each kind table from OUR data only: committed ``<kind>.json``
+    overlaid with the MEM/TCP parse cache, plus combat_preparse boss mechanics.
+    No neighbour repo, so a missing StarResonanceDps never empties a table."""
+    result: dict[str, dict[str, dict[str, str]]] = {}
+    cache = _cache_by_kind()
+    for kind in _SKILL_DOMAIN_KINDS + _BUFF_DOMAIN_KINDS + _AGGREGATE_AND_BOSS_KINDS:
+        table: dict[str, dict[str, str]] = {}
+        for sid, nm in _load_json(os.path.join(_NAME_TABLES, f"{kind}.json")).items():
+            iid = _safe_int(sid)
+            text = _clean_text(nm)
+            if iid > 0 and text:
+                table[str(iid)] = {"text": text, "confidence": "static"}
+        for iid, text in cache.get(kind, {}).items():
+            if text:
+                table[str(iid)] = {"text": text, "confidence": "tcp"}
+        result[kind] = table
+    # buff aggregate carries every buff sub-kind id (event stays out of the
+    # aggregate, matching the legacy split).
+    aggregate = result.setdefault(BUFF_KIND, {})
+    for kind in (PROFESSION_SKILL_BUFF_KIND, PLAYER_BUFF_KIND, FACTOR_BUFF_KIND):
+        for sid, entry in result.get(kind, {}).items():
+            aggregate.setdefault(sid, entry)
+    # boss mechanics from our combat_preparse table (fall back to committed json).
     mechanics = _boss_mechanic_map()
-    result: dict[str, dict[str, dict[str, str]]] = {
-        PLAYER_SKILL_KIND: _to_runtime(skills[PLAYER_SKILL_KIND]),
-        MONSTER_SKILL_KIND: _to_runtime(skills[MONSTER_SKILL_KIND]),
-        ENVIRONMENT_SKILL_KIND: _to_runtime(skills[ENVIRONMENT_SKILL_KIND]),
-        FIELD_MARKER_KIND: _to_runtime(skills[FIELD_MARKER_KIND]),
-        BOSS_SKILL_KIND: _to_runtime(skills[BOSS_SKILL_KIND]),
-        ULTIMATE_SKILL_KIND: _to_runtime(skills[ULTIMATE_SKILL_KIND]),
-        ROGUELIKE_AFFIX_KIND: _to_runtime(skills[ROGUELIKE_AFFIX_KIND]),
-        PROFESSION_SKILL_KIND: _to_runtime(skills[PROFESSION_SKILL_KIND]),
-        SCRIPTED_SKILL_KIND: _to_runtime(skills[SCRIPTED_SKILL_KIND]),
-        VIRTUAL_SKILL_KIND: _to_runtime(skills[VIRTUAL_SKILL_KIND]),
-        BOSS_MECHANIC_SKILL_KIND: _to_runtime(skills[BOSS_MECHANIC_SKILL_KIND]),
-        CLIENT_EFFECT_SKILL_KIND: _to_runtime(skills[CLIENT_EFFECT_SKILL_KIND]),
-        INTERACTION_SKILL_KIND: _to_runtime(skills[INTERACTION_SKILL_KIND]),
-        COMPANION_SKILL_KIND: _to_runtime(skills[COMPANION_SKILL_KIND]),
-        PROJECTILE_SKILL_KIND: _to_runtime(skills[PROJECTILE_SKILL_KIND]),
-        PASSIVE_SKILL_KIND: _to_runtime(skills[PASSIVE_SKILL_KIND]),
-        TEST_SKILL_KIND: _to_runtime(skills[TEST_SKILL_KIND]),
-        SYSTEM_SKILL_KIND: _to_runtime(skills[SYSTEM_SKILL_KIND]),
-        BUFF_KIND: _to_runtime(buffs[BUFF_KIND]),
-        PLAYER_BUFF_KIND: _to_runtime(buffs[PLAYER_BUFF_KIND]),
-        FACTOR_BUFF_KIND: _to_runtime(buffs[FACTOR_BUFF_KIND]),
-        PROFESSION_SKILL_BUFF_KIND: _to_runtime(buffs[PROFESSION_SKILL_BUFF_KIND]),
-        EVENT_KIND: _to_runtime(buffs[EVENT_KIND]),
-        BOSS_MECHANIC_KIND: _to_runtime(mechanics),
-        "boss": _to_runtime(_boss_map()),
-    }
+    if mechanics:
+        result[BOSS_MECHANIC_KIND] = _to_runtime(mechanics)
+    else:
+        boss_mech: dict[str, dict[str, str]] = {}
+        for sid, nm in _load_json(os.path.join(_NAME_TABLES, "boss_mechanic.json")).items():
+            iid = _safe_int(sid)
+            text = _clean_text(nm)
+            if iid > 0 and text:
+                boss_mech[str(iid)] = {"text": text, "confidence": "static"}
+        result[BOSS_MECHANIC_KIND] = boss_mech
     return result
 
 

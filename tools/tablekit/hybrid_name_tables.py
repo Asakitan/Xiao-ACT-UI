@@ -203,20 +203,10 @@ def _classified_entries(kind: str) -> dict[str, dict[str, str]]:
     except Exception:
         return {}
     try:
-        classifier._ASSETS = _ASSETS
-        classifier._DATATOOLS_CN = _DATATOOLS_CN
-        classifier._RESONANCE_METER = _RESONANCE_METER
-        classifier._RESONANCE_CONFIG = _RESONANCE_CONFIG
-        classifier._SR_WINFORM_TABLE = _SR_WINFORM_TABLE
-        classifier._SR_WPF_MONSTER = _SR_WPF_MONSTER
-        classifier._SR_OLD_MONSTER = _SR_OLD_MONSTER
-        for name in (
-            "skill_table", "buff_table", "monster_table", "skill_fallback_names",
-            "buff_fallback_names", "monster_names", "boss_monster_ids", "boss_skill_ids",
-            "monster_skill_ids", "environment_skill_ids", "player_skill_ids",
-            "aoyi_skill_names", "damage_attr_names", "profession_skill_ids", "ultimate_skill_ids",
-            "load_classified_tables",
-        ):
+        # Invalidate the classifier's self-contained caches so a freshly written
+        # table is reflected on the next kind in this run.
+        for name in ("_our_index", "_cache_by_kind", "profession_skill_ids",
+                     "ultimate_skill_ids", "load_classified_tables"):
             fn = getattr(classifier, name, None)
             clear = getattr(fn, "cache_clear", None)
             if callable(clear):
@@ -228,67 +218,22 @@ def _classified_entries(kind: str) -> dict[str, dict[str, str]]:
 
 
 def _community_entries(kind: str) -> dict[str, dict[str, str]]:
+    """Per-kind base names from OUR project only (no neighbour repo).
+
+    Classified kinds come from the self-contained classifier; boss mechanics from
+    combat_preparse; every other kind falls back to our own committed
+    ``<kind>.json`` so a missing StarResonanceDps/resonance checkout never empties
+    a table.
+    """
     if kind in _CLASSIFIED_KINDS:
         classified = _classified_entries(kind)
         if classified:
             return classified
-    if kind == "skill":
-        merged: dict[str, dict[str, str]] = {}
-        for path in (
-            os.path.join(_DATATOOLS_CN, "SkillTable.json"),
-            os.path.join(_ASSETS, "skill_names.json"),
-        ):
-            merged, _ = merge_entries(merged, _seed_named_json(path, fields=("Name", "NameDesign", "name", "text")), fill_missing_only=True)
-        return merged
-    if kind == "dungeon":
-        merged: dict[str, dict[str, str]] = {}
-        for path in (
-            os.path.join(_DATATOOLS_CN, "DungeonTable.json"),
-            os.path.join(_RESONANCE_METER, "SceneName.json"),
-            os.path.join(_RESONANCE_CONFIG, "SceneName.json"),
-        ):
-            merged, _ = merge_entries(merged, _seed_named_json(path), fill_missing_only=True)
-        return merged
-    if kind == "monster":
-        merged: dict[str, dict[str, str]] = {}
-        for path in (
-            os.path.join(_DATATOOLS_CN, "MonsterTable.json"),
-            os.path.join(_SR_WINFORM_TABLE, "monster_names.json"),
-            os.path.join(_SR_WPF_MONSTER, "monster.zh-CN.json"),
-            os.path.join(_SR_OLD_MONSTER, "monster_name_mapping.json"),
-        ):
-            merged, _ = merge_entries(merged, _seed_named_json(path, fields=("Name", "NameDesign", "name", "text")), fill_missing_only=True)
-        return merged
-    if kind == "buff":
-        merged: dict[str, dict[str, str]] = {}
-        for path in (
-            os.path.join(_RESONANCE_CONFIG, "BuffName.json"),
-            os.path.join(_DATATOOLS_CN, "BuffTable.json"),
-            os.path.join(_ASSETS, "skill_names.json"),
-        ):
-            merged, _ = merge_entries(merged, _seed_named_json(path, fields=("NameDesign", "Name", "name", "text")), fill_missing_only=True)
-        return merged
-    if kind == "boss":
-        names = _community_entries("monster")
-        types = _load_json(os.path.join(_RESONANCE_METER, "MonsterIdNameType.json"))
-        if not isinstance(types, Mapping):
-            types = _load_json(os.path.join(_RESONANCE_CONFIG, "MonsterIdNameType.json"))
-        if not isinstance(types, Mapping):
-            return {}
-        out: dict[str, dict[str, str]] = {}
-        for key, type_value in types.items():
-            try:
-                if int(type_value) != 2:
-                    continue
-            except Exception:
-                continue
-            entry = names.get(str(key))
-            if entry and _clean_text(entry.get("text")):
-                out[str(key)] = {"text": _clean_text(entry.get("text")), "confidence": "static"}
-        return out
     if kind == "boss_mechanic":
-        return _seed_boss_mechanics()
-    return {}
+        seeded = _seed_boss_mechanics()
+        if seeded:
+            return seeded
+    return _seed_named_json(os.path.join(_NAME_TABLES, f"{kind}.json"))
 
 
 def _cache_entries(cache: Any, kind: str) -> dict[str, dict[str, str]]:

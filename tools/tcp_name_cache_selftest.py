@@ -309,37 +309,30 @@ class TcpNameCacheTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(out_dir, "skill.json")))
         self.assertFalse(os.path.exists(os.path.join(out_dir, "boss_status.json")))
 
-    def test_hybrid_name_tables_materializes_static_skill_and_buff_sources(self) -> None:
+    def test_full_rebuild_is_self_contained_without_neighbour_repo(self) -> None:
+        """A full rebuild must rely ONLY on our project (committed tables + parse
+        cache): with the neighbour StarResonanceDps/resonance dirs pointed at an
+        empty path, it must not empty our tables (no classifier degradation)."""
         from tools.tablekit import hybrid_name_tables
+        import shutil
 
-        out_dir = os.path.join(self.tmp, "tables")
-        datatools = os.path.join(self.tmp, "DataTools", "CN")
-        resonance = os.path.join(self.tmp, "resonance")
-        assets = os.path.join(self.tmp, "assets")
-        os.makedirs(datatools, exist_ok=True)
-        os.makedirs(resonance, exist_ok=True)
-        os.makedirs(assets, exist_ok=True)
-        with open(os.path.join(datatools, "SkillTable.json"), "w", encoding="utf-8") as f:
-            json.dump({"1001": {"Id": 1001, "Name": "静态技能"}}, f, ensure_ascii=False)
-        with open(os.path.join(datatools, "BuffTable.json"), "w", encoding="utf-8") as f:
-            json.dump({"2001": {"Id": 2001, "Name": "静态Buff", "NameDesign": "静态Buff设计"}}, f, ensure_ascii=False)
-        with open(os.path.join(resonance, "BuffName.json"), "w", encoding="utf-8") as f:
-            json.dump([{"Id": 2002, "NameDesign": "列表Buff"}], f, ensure_ascii=False)
-        with open(os.path.join(assets, "skill_names.json"), "w", encoding="utf-8") as f:
-            json.dump({"1002": "旧技能表"}, f, ensure_ascii=False)
-
-        with mock.patch.object(hybrid_name_tables, "_DATATOOLS_CN", datatools), \
-             mock.patch.object(hybrid_name_tables, "_RESONANCE_CONFIG", resonance), \
-             mock.patch.object(hybrid_name_tables, "_ASSETS", assets):
-            result = hybrid_name_tables.update_runtime_tables(self.path, output_dir=out_dir)
+        out_dir = os.path.join(self.tmp, "self_contained")
+        os.makedirs(out_dir, exist_ok=True)
+        for fn in os.listdir(hybrid_name_tables._NAME_TABLES):
+            if fn.endswith(".json"):
+                shutil.copy2(os.path.join(hybrid_name_tables._NAME_TABLES, fn), os.path.join(out_dir, fn))
+        empty = os.path.join(self.tmp, "no_neighbour")
+        os.makedirs(empty, exist_ok=True)
+        with mock.patch.object(hybrid_name_tables, "_DATATOOLS_CN", empty), \
+             mock.patch.object(hybrid_name_tables, "_RESONANCE_CONFIG", empty), \
+             mock.patch.object(hybrid_name_tables, "_RESONANCE_METER", empty):
+            result = hybrid_name_tables.update_runtime_tables(output_dir=out_dir)
 
         self.assertNotIn("skill", result["kinds"])
-        self.assertGreaterEqual(result["kinds"]["buff"]["written"], 2)
-        with open(os.path.join(out_dir, "buff.json"), "r", encoding="utf-8") as f:
-            buff = json.load(f)
-        self.assertEqual(buff["2001"], "静态Buff设计")
-        self.assertEqual(buff["2002"], "列表Buff")
-        self.assertNotIn("1002", buff)
+        # Missing neighbour must not collapse our classified tables.
+        self.assertGreaterEqual(result["kinds"]["player_buff"]["written"], 1000)
+        self.assertGreaterEqual(result["kinds"]["buff"]["written"], 1000)
+        self.assertGreaterEqual(result["kinds"]["system_skill"]["written"], 1000)
         self.assertFalse(os.path.exists(os.path.join(out_dir, "skill.json")))
 
 
