@@ -82,17 +82,45 @@ def _default_filter_mode() -> str:
 # ─────────────────────────────────────────
 #  奥义 / 幻想 buff 过滤器
 # ─────────────────────────────────────────
-# 凭借 buff 名 keyword 区分: 11 个职业的大招主名 + 通用 "奥义" / "幻想"
+# 「幻想技能」(绝技/奥义/职业大招) buff 判定关键词。完整集 = 分类器
+# _ULTIMATE_RE 的通用词 (奥义/幻想/终极/绝技/大招/ULT) ∪ 11 职业大招主名。
 ULTIMATE_KEYWORDS: Tuple[str, ...] = (
-    '奥义', '幻想',
+    '奥义', '幻想', '终极', '绝技', '大招', 'ULT', 'ult',
     # 11 个职业的大招主名 (PROFESSION_ULTIMATE 派生)
     '极诣', '极寒', '炎魔', '风神', '繁盛', '雷爆溟灭',
     '岩御', '神灵凭依', '锐眼·光能', '凛威', '升格',
 )
 
+_ULT_ID_SET = None
 
-def is_ultimate_buff(name: str) -> bool:
-    """True 当 buff 名匹配奥义/幻想/职业大招关键词。"""
+
+def _ultimate_skill_id_set():
+    """游戏真实「幻想技能」大招技能ID集 (ACT 分类器单一源头, 懒加载缓存)。
+
+    = name_table_classifier.ultimate_skill_ids() (aoyi_skill_names +
+    PROFESSION_ULTIMATE)，让面板按游戏真实分类而非纯关键词猜测。
+    """
+    global _ULT_ID_SET
+    if _ULT_ID_SET is None:
+        try:
+            from tools.tablekit.name_table_classifier import ultimate_skill_ids
+            _ULT_ID_SET = frozenset(ultimate_skill_ids())
+        except Exception:
+            _ULT_ID_SET = frozenset()
+    return _ULT_ID_SET
+
+
+def is_ultimate_buff(name: str, buff_id: int = 0) -> bool:
+    """True 当 buff 属于「幻想技能」(绝技/奥义/职业大招)。
+
+    判定优先级: ① buff_id 命中游戏真实大招技能ID集 (权威, 名字缺失也能识别)
+    → ② buff 名命中完整关键词集。
+    """
+    try:
+        if buff_id and int(buff_id) in _ultimate_skill_id_set():
+            return True
+    except (TypeError, ValueError):
+        pass
     if not name:
         return False
     for kw in ULTIMATE_KEYWORDS:
@@ -941,8 +969,8 @@ class SelfBuffOverlay(_BuffPanelBase):
                 rem_s = rem_ms / 1000.0
             else:
                 rem_s = -1.0
-            # 过滤
-            if mode != 'all' and not is_ultimate_buff(name):
+            # 过滤: 「幻想技能」分类 = 名字关键词 ∪ 游戏真实大招技能ID集
+            if mode != 'all' and not is_ultimate_buff(name, bid):
                 if len(rejected_examples) < 3:
                     rejected_examples.append(name or f"#{bid}")
                 continue
