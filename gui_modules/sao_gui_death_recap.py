@@ -9,6 +9,7 @@ import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
 from act_platform.runtime import act_death_recap_copy, act_death_recap_status
+from gui_modules.sao_panel_components import action_button, aggregate_row, empty_state, metric_tile, section_card, status_badge
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -42,6 +43,7 @@ class DeathRecapPanel:
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
         self._last_rows_sig = ""
+        self._expanded_rows: set[str] = set()
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -152,7 +154,7 @@ class DeathRecapPanel:
         _sao_pill(toolbar, 'DEATH').pack(side='left')
         tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 10, 'bold')).pack(side='left', padx=(12, 0))
         for label, cmd in (('Refresh', self.refresh), ('Copy', self.copy_json), ('Close', self.hide)):
-            tk.Button(toolbar, text=label, command=cmd, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, activebackground=_SAO_PANEL_ACCENT, activeforeground='white', relief='flat', bd=0, padx=10, pady=4).pack(side='right', padx=(6, 0))
+            action_button(toolbar, label, cmd, kind='cyan' if label == 'Copy' else 'gold').pack(side='right', padx=(6, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
@@ -188,25 +190,81 @@ class DeathRecapPanel:
         )
         if self._rows is None:
             return
-        sig = repr([(row.get('id'), row.get('relative_ms'), row.get('kind'), row.get('amount')) for row in rows])
+        sig = repr([(row.get('id'), row.get('relative_ms'), row.get('kind'), row.get('amount')) for row in rows]) + repr(sorted(self._expanded_rows))
         if sig == self._last_rows_sig:
             return
         self._last_rows_sig = sig
         for child in list(self._rows.winfo_children()):
             child.destroy()
+        self._render_metrics(status, rows, summary, death)
         if not rows:
-            tk.Label(self._rows, text='No death recap rows', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 10), pady=30).pack(fill='x')
+            empty_state(self._rows, '暂无死亡回放', '等待 death/is_dead/hp=0 事件。').pack(fill='x', pady=8, padx=4)
             return
+        box = section_card(self._rows, '死亡前后事件摘要', subtitle='默认显示 compact rows；点击单行展开 payload/raw detail。', badge=str(len(rows)))
+        box.pack(fill='x', padx=4, pady=(0, 8))
+        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        body.pack(fill='x', padx=8, pady=8)
         for row in rows[:120]:
-            self._render_row(row)
+            self._render_row(row, parent=body)
 
-    def _render_row(self, row: Mapping[str, Any]) -> None:
+    def _render_metrics(self, status: Mapping[str, Any], rows: list[Any], summary: Mapping[str, Any], death: Mapping[str, Any]) -> None:
         if self._rows is None:
             return
-        frame = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightbackground=_SAO_PANEL_BORDER, highlightthickness=1)
-        frame.pack(fill='x', pady=(0, 4))
+        window = status.get('window') if isinstance(status.get('window'), Mapping) else {}
+        grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
+        grid.pack(fill='x', padx=4, pady=(0, 8))
+        items = (
+            ('Incoming', self._fmt(summary.get('incoming_damage')), f"{int(summary.get('death_events') or 0)} death", 'danger'),
+            ('Healing', self._fmt(summary.get('healing')), f"shield {self._fmt(summary.get('shield'))}", 'heal'),
+            ('Rows', len(rows), f"window {int(window.get('before_ms') or 0)}ms", 'cyan'),
+            ('Death', death.get('name') or death.get('entity_id') or '-', f"t={int(death.get('time_ms') or 0)}ms", 'gold'),
+        )
+        for label, value, sub, accent in items:
+            metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
+        badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
+        badges.pack(fill='x', padx=4, pady=(0, 8))
+        status_badge(badges, f"ENCOUNTER {status.get('encounter_id') or 'live'}", kind='cyan').pack(side='left', padx=(0, 6))
+        status_badge(badges, f"ERRORS {len(status.get('errors') or [])}", kind='danger' if status.get('errors') else 'cyan').pack(side='left', padx=(0, 6))
+
+    def _render_row(self, row: Mapping[str, Any], parent: Optional[tk.Misc] = None) -> None:
+        parent = parent or self._rows
+        if parent is None:
+            return
+        row_id = str(row.get('id') or f"{row.get('kind')}:{row.get('time_ms')}:{row.get('index')}")
+        open_row = row_id in self._expanded_rows
         rel = int(row.get('relative_ms') or 0)
-        title = f"{rel:+}ms · {row.get('kind') or row.get('topic')} · {row.get('amount') or ''}"
-        tk.Label(frame, text=title, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD if row.get('is_death') else _SAO_PANEL_VALUE_FG, anchor='w', font=('Segoe UI', 9, 'bold')).pack(fill='x', padx=8, pady=(5, 1))
         detail = f"{row.get('actor') or '-'} -> {row.get('target') or '-'} · {row.get('label') or ''}"
-        tk.Label(frame, text=detail, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', font=('Segoe UI', 8)).pack(fill='x', padx=8, pady=(0, 5))
+        kind = str(row.get('kind') or row.get('topic') or 'event')
+        accent = 'danger' if row.get('is_death') or kind == 'incoming_damage' else ('heal' if kind == 'healing' else 'gold')
+        aggregate_row(
+            parent,
+            title=('▼ ' if open_row else '▶ ') + f"{rel:+}ms · {kind}",
+            meta=detail,
+            value=self._fmt(row.get('amount')),
+            ratio=1.0 if row.get('is_death') else 0.35,
+            accent=accent,
+            command=lambda key=row_id: self._toggle_row(key),
+        ).pack(fill='x', pady=2)
+        if open_row:
+            payload = json.dumps(row.get('payload') or {}, ensure_ascii=False, default=str)
+            tk.Label(parent, text=payload, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', justify='left', wraplength=740, font=('Segoe UI', 8)).pack(fill='x', padx=22, pady=(0, 6))
+
+    def _toggle_row(self, row_id: str) -> None:
+        if row_id in self._expanded_rows:
+            self._expanded_rows.remove(row_id)
+        else:
+            self._expanded_rows.add(row_id)
+        self._last_rows_sig = ""
+        self._render_status(self._last_status)
+
+    @staticmethod
+    def _fmt(value: Any) -> str:
+        try:
+            number = float(value or 0.0)
+        except Exception:
+            return str(value or '')
+        if abs(number) >= 1_000_000:
+            return f"{number / 1_000_000:.2f}m"
+        if abs(number) >= 1_000:
+            return f"{number / 1_000:.1f}k"
+        return str(int(number)) if number == int(number) else f"{number:.2f}"

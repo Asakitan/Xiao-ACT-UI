@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import json
 import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
 from act_platform.runtime import (
+    act_aggregate_status,
     act_timeline_filter,
     act_timeline_pause,
     act_timeline_play,
@@ -16,6 +18,7 @@ from act_platform.runtime import (
     act_timeline_status,
     act_timeline_step,
 )
+from gui_modules.sao_panel_components import action_button, aggregate_row, empty_state, metric_tile, section_card
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -49,6 +52,7 @@ class TimelineVcrPanel:
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
         self._last_events_sig = ""
+        self._expanded_events: set[str] = set()
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -179,19 +183,7 @@ class TimelineVcrPanel:
             ('暂停 Pause', self.pause),
             ('关闭 Close', self.hide),
         ):
-            tk.Button(
-                toolbar,
-                text=label,
-                command=cmd,
-                bg=_SAO_PANEL_HEADER_BG,
-                fg=_SAO_PANEL_HEADER_FG,
-                activebackground=_SAO_PANEL_ACCENT,
-                activeforeground='white',
-                relief='flat',
-                bd=0,
-                padx=10,
-                pady=4,
-            ).pack(side='right', padx=(6, 0))
+            action_button(toolbar, label, cmd, kind='cyan' if '播放' in label else 'gold').pack(side='right', padx=(6, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
@@ -240,17 +232,68 @@ class TimelineVcrPanel:
         )
         if self._events is None:
             return
-        sig = self._events_signature(events)
+        sig = self._events_signature(events) + repr(sorted(self._expanded_events))
         if sig == self._last_events_sig:
             return
         self._last_events_sig = sig
         for child in list(self._events.winfo_children()):
             child.destroy()
+        self._render_metrics(status, events)
         if not events:
-            self._render_empty()
+            empty_state(self._events, '暂无 ACT 时间线事件', '开始识别或 replay 后会出现事件。').pack(fill='x', pady=8, padx=4)
             return
+        self._render_timeline_clusters()
+        box = section_card(self._events, '事件流摘要', subtitle='默认只显示时间、主题、标签和值；点击行展开 payload。', badge=str(len(events)))
+        box.pack(fill='x', pady=(0, 8), padx=4)
+        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        body.pack(fill='x', padx=8, pady=8)
         for event in events[:80]:
-            self._render_event(event)
+            self._render_event(event, parent=body)
+
+    def _render_metrics(self, status: Mapping[str, Any], events: list[Any]) -> None:
+        if self._events is None:
+            return
+        cursor_ms = int(status.get('cursor_ms') or 0)
+        speed = float(status.get('speed') or 1.0)
+        topics = sorted({str(event.get('topic') or '-') for event in events if isinstance(event, Mapping)})
+        grid = tk.Frame(self._events, bg=_SAO_PANEL_BODY_BG)
+        grid.pack(fill='x', padx=4, pady=(0, 8))
+        items = (
+            ('Events', len(events), f"topics {len(topics)}", 'cyan'),
+            ('Cursor', f"{cursor_ms}ms", 'VCR position', 'gold'),
+            ('Speed', f"{speed:g}x", 'playing' if status.get('playing') else 'paused', 'cyan'),
+            ('Errors', len(status.get('errors') or []), status.get('encounter_id') or 'live', 'danger' if status.get('errors') else 'gold'),
+        )
+        for label, value, sub, accent in items:
+            metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
+
+    def _render_timeline_clusters(self) -> None:
+        if self._events is None:
+            return
+        try:
+            aggregate = act_aggregate_status(self.owner, limit=500, query=self._query_var.get(), source='live', window_ms=1000, top_n=8)
+        except Exception:
+            aggregate = {}
+        clusters = [item for item in list(aggregate.get('timeline_clusters') or []) if isinstance(item, Mapping)]
+        if not clusters:
+            return
+        box = section_card(self._events, '时间桶聚合', subtitle='按 1s 语义时间桶汇总，避免逐条时间线刷屏。', badge=str(len(clusters)))
+        box.pack(fill='x', pady=(0, 8), padx=4)
+        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        body.pack(fill='x', padx=8, pady=8)
+        max_value = max(1.0, *[float(item.get('damage') or item.get('total_value') or 0.0) for item in clusters])
+        for idx, group in enumerate(clusters[:8]):
+            topics = ', '.join(str(item.get('key') or '-') for item in list(group.get('topics_top') or [])[:3] if isinstance(item, Mapping))
+            value = float(group.get('damage') or group.get('total_value') or 0.0)
+            aggregate_row(
+                body,
+                title=str(group.get('name') or group.get('key') or '-'),
+                meta=f"{int(group.get('count') or 0)} events · {topics or 'mixed'}",
+                value=self._fmt(value),
+                ratio=value / max_value if max_value else 0.0,
+                accent='cyan',
+                zebra=bool(idx % 2),
+            ).pack(fill='x', pady=2)
 
     def _render_empty(self) -> None:
         if self._events is None:
@@ -267,18 +310,34 @@ class TimelineVcrPanel:
             pady=28,
         ).pack(fill='x')
 
-    def _render_event(self, event: Mapping[str, Any]) -> None:
-        if self._events is None:
+    def _render_event(self, event: Mapping[str, Any], parent: Optional[tk.Misc] = None) -> None:
+        parent = parent or self._events
+        if parent is None:
             return
         topic = str(event.get('topic') or '-')
-        card = tk.Frame(self._events, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        card.pack(fill='x', pady=5, padx=4)
-        top = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
-        top.pack(fill='x', padx=10, pady=(8, 2))
-        tk.Label(top, text=str(event.get('label') or topic), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, anchor='w', font=('Segoe UI', 10, 'bold')).pack(side='left', fill='x', expand=True)
-        _sao_pill(top, topic.upper()).pack(side='right')
-        meta = f"t={int(event.get('time_ms') or 0)}ms · source={event.get('source') or '-'} · value={event.get('value') or ''}"
-        tk.Label(card, text=meta, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', justify='left', font=('Segoe UI', 9)).pack(fill='x', padx=10, pady=(0, 8))
+        event_id = str(event.get('id') or f"{topic}:{event.get('time_ms')}")
+        open_event = event_id in self._expanded_events
+        accent = 'danger' if topic in {'damage', 'death'} else ('heal' if topic == 'heal' else 'gold')
+        aggregate_row(
+            parent,
+            title=('▼ ' if open_event else '▶ ') + str(event.get('label') or topic),
+            meta=f"{topic.upper()} · t={int(event.get('time_ms') or 0)}ms · source={event.get('source') or '-'}",
+            value=self._fmt(event.get('value')) if event.get('value') not in (None, '') else '',
+            ratio=1.0 if event.get('value') else 0.12,
+            accent=accent,
+            command=lambda key=event_id: self._toggle_event(key),
+        ).pack(fill='x', pady=2)
+        if open_event:
+            payload = json.dumps(event.get('payload') or {}, ensure_ascii=False, default=str)
+            tk.Label(parent, text=payload, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', justify='left', wraplength=760, font=('Segoe UI', 8)).pack(fill='x', padx=22, pady=(0, 6))
+
+    def _toggle_event(self, event_id: str) -> None:
+        if event_id in self._expanded_events:
+            self._expanded_events.remove(event_id)
+        else:
+            self._expanded_events.add(event_id)
+        self._last_events_sig = ""
+        self._render_status(self._last_status)
 
     @staticmethod
     def _events_signature(events: list[Any]) -> str:
@@ -288,3 +347,15 @@ class TimelineVcrPanel:
                 continue
             parts.append((event.get('id'), event.get('topic'), event.get('time_ms'), event.get('label'), event.get('value')))
         return repr(parts)
+
+    @staticmethod
+    def _fmt(value: Any) -> str:
+        try:
+            number = float(value or 0.0)
+        except Exception:
+            return str(value or '')
+        if abs(number) >= 1_000_000:
+            return f"{number / 1_000_000:.2f}m"
+        if abs(number) >= 1_000:
+            return f"{number / 1_000:.1f}k"
+        return str(int(number)) if number == int(number) else f"{number:.2f}"

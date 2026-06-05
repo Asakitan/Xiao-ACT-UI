@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO ACT Aggregate Cockpit</title>
+<style>
+:root {
+    --bg: rgba(8, 13, 22, .76);
+    --panel: rgba(18, 33, 52, .90);
+    --panel2: rgba(6, 11, 18, .72);
+    --line: rgba(117, 205, 255, .48);
+    --gold: rgba(255, 214, 117, .86);
+    --text: rgba(232, 246, 255, .96);
+    --muted: rgba(176, 204, 226, .76);
+    --ok: #7df2bf;
+    --bad: #ff6b82;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; background: transparent; color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; user-select: none; }
+body { padding: 14px; }
+.shell { position: relative; width: 100%; height: calc(100vh - 28px); min-height: 520px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: radial-gradient(circle at 80% 14%, rgba(255, 214, 117, .15), transparent 24%), linear-gradient(135deg, rgba(100, 202, 255, .15), transparent 24%, transparent 70%, rgba(255, 215, 125, .12)), linear-gradient(180deg, rgba(16, 28, 45, .96), rgba(7, 12, 20, .90)); box-shadow: 0 0 34px rgba(88, 199, 255, .22), inset 0 0 28px rgba(109, 216, 255, .10); opacity: 0; transform: translateY(10px) scale(.985); transition: opacity .22s ease, transform .22s ease; }
+.shell.visible { opacity: 1; transform: translateY(0) scale(1); }
+.shell::before { content: ""; pointer-events: none; position: absolute; inset: 0; background: repeating-linear-gradient(180deg, rgba(255,255,255,.035) 0, rgba(255,255,255,.035) 1px, transparent 1px, transparent 7px); mix-blend-mode: screen; }
+.header { height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 8px 18px; border-bottom: 1px solid rgba(117, 205, 255, .35); background: linear-gradient(90deg, rgba(18, 59, 94, .76), rgba(11, 22, 35, .58)); }
+.kicker { letter-spacing: .18em; font-size: 10px; color: var(--gold); text-shadow: 0 0 10px rgba(255, 214, 117, .52); }
+.title { margin-top: 2px; font-size: 20px; font-weight: 700; letter-spacing: .08em; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
+.pill { min-width: 94px; text-align: center; padding: 5px 9px; border: 1px solid rgba(117, 205, 255, .42); border-radius: 999px; color: var(--muted); background: rgba(8, 14, 22, .62); font-size: 12px; }
+button, input, select { border: 1px solid rgba(117, 205, 255, .48); background: linear-gradient(180deg, rgba(61, 143, 201, .42), rgba(19, 48, 74, .58)); color: var(--text); border-radius: 8px; padding: 7px 11px; font-size: 12px; font-weight: 600; }
+input { width: 190px; background: rgba(4, 8, 14, .58); font-weight: 400; }
+button { cursor: pointer; }
+button:hover { box-shadow: 0 0 16px rgba(107, 214, 255, .25); transform: translateY(-1px); }
+button.primary { border-color: rgba(255, 214, 117, .74); color: #fff8da; }
+button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 16px; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; height: calc(100% - 58px); padding: 12px; }
+.main { min-height: 0; overflow: auto; padding-right: 4px; }
+.side { min-height: 0; border: 1px solid rgba(117, 205, 255, .30); border-radius: 10px; background: rgba(8, 14, 22, .52); padding: 12px; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+.side-title { color: var(--gold); font-size: 12px; letter-spacing: .16em; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.kpi { border: 1px solid rgba(117, 205, 255, .32); border-radius: 10px; background: linear-gradient(180deg, rgba(27, 46, 68, .82), rgba(9, 16, 26, .78)); padding: 12px; text-align: center; }
+.kpi-label { font-size: 11px; color: var(--muted); letter-spacing: .12em; margin-bottom: 6px; }
+.kpi-value { font-size: 22px; font-weight: 700; color: var(--gold); text-shadow: 0 0 12px rgba(255, 214, 117, .42); }
+.kpi-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.section { margin-bottom: 14px; border: 1px solid rgba(117, 205, 255, .28); border-radius: 10px; background: rgba(8, 14, 22, .52); overflow: hidden; }
+.section-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: linear-gradient(90deg, rgba(18, 59, 94, .76), rgba(11, 22, 35, .58)); border-bottom: 1px solid rgba(117, 205, 255, .28); cursor: pointer; user-select: none; }
+.section-header:hover { background: linear-gradient(90deg, rgba(24, 68, 108, .82), rgba(14, 28, 44, .64)); }
+.section-title { font-size: 14px; font-weight: 700; color: var(--text); letter-spacing: .08em; }
+.section-badge { min-width: 32px; text-align: center; padding: 3px 8px; border: 1px solid rgba(117, 205, 255, .42); border-radius: 999px; color: var(--muted); background: rgba(8, 14, 22, .62); font-size: 11px; }
+.section-body { padding: 10px 14px; }
+.section-body.collapsed { display: none; }
+.row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(117, 205, 255, .16); padding: 8px 0; font-size: 12px; }
+.row:last-child { border-bottom: none; }
+.row-title { color: var(--text); font-weight: 600; flex: 1; }
+.row-meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.row-value { color: var(--gold); font-weight: 700; text-align: right; min-width: 80px; }
+.row-bar { height: 4px; background: rgba(117, 205, 255, .18); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+.row-bar-fill { height: 100%; background: linear-gradient(90deg, rgba(117, 205, 255, .72), rgba(255, 214, 117, .72)); border-radius: 2px; transition: width .22s ease; }
+.empty { display: grid; place-items: center; height: 100%; min-height: 260px; color: var(--muted); border: 1px dashed rgba(117, 205, 255, .28); border-radius: 10px; text-align: center; line-height: 1.6; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
+.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(0,0,0,.18); }
+::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
+</style>
+<link rel="stylesheet" href="act_panel_theme.css" />
+<script src="act_panel_theme.js"></script>
+</head>
+<body>
+<div class="shell" id="shell">
+    <div class="header">
+        <div><div class="kicker">ACT SEMANTIC COCKPIT</div><div class="title">AGGREGATE 聚合驾驶舱</div></div>
+        <div class="header-actions">
+            <div class="pill" id="status-pill">READY</div>
+            <input id="query" type="text" placeholder="搜索聚合 / Search" />
+            <select id="source"><option value="live" selected>Live</option><option value="history">History</option></select>
+            <button class="primary" type="button" onclick="ActAggregate.refresh()">刷新</button>
+            <button class="close" type="button" onclick="ActAggregate.close()">×</button>
+        </div>
+    </div>
+    <div class="body">
+        <main class="main" id="content"><div class="empty">正在读取 ACT 聚合数据...<br/>LOADING AGGREGATE</div></main>
+        <aside class="side">
+            <div class="side-title">OVERVIEW</div>
+            <div id="overview-side"></div>
+            <div class="side-title" style="margin-top:10px;">SOURCE MIX</div>
+            <div id="source-mix"></div>
+        </aside>
+    </div>
+    <div class="toast" id="toast"></div>
+</div>
+<script src="pywebview-shim.js"></script>
+<script>
+(function () {
+    "use strict";
+    var shell = document.getElementById('shell');
+    var content = document.getElementById('content');
+    var overviewSide = document.getElementById('overview-side');
+    var sourceMix = document.getElementById('source-mix');
+    var statusPill = document.getElementById('status-pill');
+    var queryInput = document.getElementById('query');
+    var sourceSelect = document.getElementById('source');
+    var toast = document.getElementById('toast');
+
+    function fmt(value) {
+        var n = parseFloat(value) || 0;
+        if (Math.abs(n) >= 1000000) return (n / 1000000).toFixed(2) + 'm';
+        if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1) + 'k';
+        return n === Math.floor(n) ? String(n) : n.toFixed(2);
+    }
+
+    function showToast(msg) {
+        toast.textContent = msg;
+        toast.classList.add('visible');
+        setTimeout(function () { toast.classList.remove('visible'); }, 1800);
+    }
+
+    function renderKPI(label, value, sub) {
+        return '<div class="kpi"><div class="kpi-label">' + label + '</div><div class="kpi-value">' + fmt(value) + '</div><div class="kpi-sub">' + (sub || '') + '</div></div>';
+    }
+
+    function renderSection(title, badge, items, maxVal) {
+        if (!items || !items.length) return '';
+        var html = '<div class="section"><div class="section-header" onclick="this.nextElementSibling.classList.toggle(\'collapsed\')"><div class="section-title">' + title + '</div><div class="section-badge">' + badge + '</div></div><div class="section-body">';
+        items.forEach(function (item) {
+            var val = parseFloat(item.total_value || item.damage || item.count || 0);
+            var ratio = maxVal > 0 ? (val / maxVal) : 0;
+            html += '<div class="row"><div style="flex:1;"><div class="row-title">' + (item.name || item.key || '-') + '</div><div class="row-meta">' + (item.kind || 'event').toUpperCase() + ' · ' + (item.count || 0) + ' rows</div><div class="row-bar"><div class="row-bar-fill" style="width:' + (ratio * 100).toFixed(1) + '%;"></div></div></div><div class="row-value">' + fmt(val) + '</div></div>';
+        });
+        html += '</div></div>';
+        return html;
+    }
+
+    function render(data) {
+        if (!data || !data.ok) {
+            content.innerHTML = '<div class="empty">暂无 ACT 聚合数据<br/>NO AGGREGATE DATA</div>';
+            overviewSide.innerHTML = '';
+            sourceMix.innerHTML = '';
+            return;
+        }
+        var overview = data.overview || {};
+        var timeline = data.timeline_clusters || [];
+        var skills = data.skill_damage || [];
+        var monsters = data.monster_damage || [];
+        var dungeons = data.dungeon_damage || [];
+        var logs = data.log_groups || [];
+        var sources = data.source_mix || {};
+
+        var html = '<div class="kpi-grid">';
+        html += renderKPI('EVENTS', overview.event_count || 0, 'total rows');
+        html += renderKPI('DAMAGE', overview.total_damage || 0, 'all sources');
+        html += renderKPI('HEAL', overview.total_heal || 0, 'all sources');
+        html += renderKPI('SKILLS', overview.skill_count || 0, 'unique skills');
+        html += '</div>';
+
+        if (timeline.length) html += renderSection('TIMELINE CLUSTERS 时间桶', timeline.length, timeline.slice(0, 12), Math.max.apply(null, timeline.map(function (t) { return t.damage || t.total_value || 0; })));
+        if (skills.length) html += renderSection('SKILL DAMAGE 技能伤害', skills.length, skills.slice(0, 16), Math.max.apply(null, skills.map(function (s) { return s.total_value || s.damage || 0; })));
+        if (monsters.length) html += renderSection('MONSTER DAMAGE 怪物伤害', monsters.length, monsters.slice(0, 12), Math.max.apply(null, monsters.map(function (m) { return m.total_value || m.damage || 0; })));
+        if (dungeons.length) html += renderSection('DUNGEON DAMAGE 地牢伤害', dungeons.length, dungeons.slice(0, 8), Math.max.apply(null, dungeons.map(function (d) { return d.total_value || d.damage || 0; })));
+        if (logs.length) html += renderSection('LOG GROUPS 日志分组', logs.length, logs.slice(0, 20), Math.max.apply(null, logs.map(function (l) { return l.total_value || l.count || 0; })));
+
+        content.innerHTML = html || '<div class="empty">暂无聚合分组<br/>NO AGGREGATE GROUPS</div>';
+
+        var sideHtml = '';
+        sideHtml += '<div class="row"><span>Encounter</span><strong>' + (data.encounter_id || 'live') + '</strong></div>';
+        sideHtml += '<div class="row"><span>Source</span><strong>' + (data.source || 'live').toUpperCase() + '</strong></div>';
+        sideHtml += '<div class="row"><span>Window</span><strong>' + (data.window_ms || 1000) + 'ms</strong></div>';
+        sideHtml += '<div class="row"><span>Top N</span><strong>' + (data.top_n || 20) + '</strong></div>';
+        sideHtml += '<div class="row"><span>Errors</span><strong>' + (data.errors || []).length + '</strong></div>';
+        overviewSide.innerHTML = sideHtml;
+
+        var mixHtml = '';
+        Object.keys(sources).forEach(function (key) {
+            mixHtml += '<div class="row"><span>' + key.toUpperCase() + '</span><strong>' + (sources[key] || 0) + '</strong></div>';
+        });
+        sourceMix.innerHTML = mixHtml || '<div class="row"><span>No sources</span><strong>-</strong></div>';
+    }
+
+    function refresh() {
+        statusPill.textContent = 'LOADING';
+        var query = queryInput.value || '';
+        var source = sourceSelect.value || 'live';
+        var api = window.pywebview && window.pywebview.api;
+        if (api && api.get_aggregate_status) {
+            api.get_aggregate_status(1000, query, source, 1000, 20, '').then(function (json) {
+                try {
+                    var data = JSON.parse(json);
+                    render(data);
+                    statusPill.textContent = data.ok ? 'OK' : 'ERROR';
+                } catch (e) {
+                    render(null);
+                    statusPill.textContent = 'PARSE ERROR';
+                }
+            }).catch(function () {
+                render(null);
+                statusPill.textContent = 'API ERROR';
+            });
+        } else {
+            render(null);
+            statusPill.textContent = 'NO API';
+        }
+    }
+
+    function close() {
+        var api = window.pywebview && window.pywebview.api;
+        if (api && api.toggle_act_aggregate) api.toggle_act_aggregate();
+    }
+
+    window.ActAggregate = {
+        refresh: refresh,
+        close: close,
+        fadeIn: function () { shell.classList.add('visible'); },
+        fadeOut: function () { shell.classList.remove('visible'); }
+    };
+
+    queryInput.addEventListener('input', function () { setTimeout(refresh, 300); });
+    sourceSelect.addEventListener('change', refresh);
+
+    setTimeout(function () {
+        shell.classList.add('visible');
+        refresh();
+    }, 80);
+})();
+</script>
+</body>
+</html>

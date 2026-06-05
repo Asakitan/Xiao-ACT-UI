@@ -15,6 +15,14 @@ from act_platform.runtime import (
     act_action_log_search,
     act_action_log_status,
 )
+from gui_modules.sao_panel_components import (
+    action_button,
+    aggregate_row,
+    empty_state,
+    metric_tile,
+    section_card,
+    status_badge,
+)
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -53,6 +61,7 @@ class ActionLogPanel:
         self._last_refresh_at = 0.0
         self._last_rows_sig = ""
         self._expanded_groups: set[str] = set()
+        self._show_raw_rows = tk.BooleanVar(value=False)
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -265,19 +274,7 @@ class ActionLogPanel:
             ('复制 Copy', self.copy_json),
             ('关闭 Close', self.hide),
         ):
-            tk.Button(
-                toolbar,
-                text=label,
-                command=cmd,
-                bg=_SAO_PANEL_HEADER_BG,
-                fg=_SAO_PANEL_HEADER_FG,
-                activebackground=_SAO_PANEL_ACCENT,
-                activeforeground='white',
-                relief='flat',
-                bd=0,
-                padx=10,
-                pady=4,
-            ).pack(side='right', padx=(6, 0))
+            action_button(toolbar, label, cmd, kind='cyan' if '复制' in label else 'gold').pack(side='right', padx=(6, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
@@ -295,6 +292,18 @@ class ActionLogPanel:
         tk.Button(control, text='过滤 Filter', command=self.filter_topic).pack(side='left', padx=(0, 8))
         tk.Button(control, text='上一页 Prev', command=self.previous_page).pack(side='left', padx=(0, 6))
         tk.Button(control, text='下一页 Next', command=self.next_page).pack(side='left')
+        tk.Checkbutton(
+            control,
+            text='RAW rows',
+            variable=self._show_raw_rows,
+            command=self._toggle_raw_rows,
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_LABEL_FG,
+            selectcolor=_SAO_PANEL_HEADER_BG,
+            activebackground=_SAO_PANEL_BODY_BG,
+            activeforeground=_SAO_PANEL_GOLD,
+            font=('Segoe UI', 9),
+        ).pack(side='left', padx=(10, 0))
 
         tk.Label(
             body,
@@ -338,23 +347,96 @@ class ActionLogPanel:
         )
         if self._rows is None:
             return
-        sig = self._rows_signature(rows) + repr([(g.get('key'), g.get('count'), g.get('total_value')) for g in groups[:80]]) + repr(sorted(self._expanded_groups))
+        sig = self._rows_signature(rows) + repr([(g.get('key'), g.get('count'), g.get('total_value')) for g in groups[:80]]) + repr(sorted(self._expanded_groups)) + repr(bool(self._show_raw_rows.get()))
         if sig == self._last_rows_sig:
             return
         self._last_rows_sig = sig
         for child in list(self._rows.winfo_children()):
             child.destroy()
+        self._render_metrics(status, rows, groups, analytics, cursor, source)
         if not rows:
-            self._render_empty()
+            empty_state(self._rows, '暂无 ACT 行为日志', 'live 模式等待事件；history 模式需要 SQLite actions。').pack(fill='x', pady=8, padx=4)
+            return
+        if groups and not self._show_raw_rows.get():
+            self._render_group_section(groups)
             return
         if groups:
-            for group in groups[:80]:
-                if isinstance(group, Mapping):
-                    self._render_group(group)
+            self._render_group_section(groups, title='行为聚合摘要', subtitle='RAW 模式已开启，下方同时显示原始行。')
+        self._render_raw_section(rows)
+
+    def _toggle_raw_rows(self) -> None:
+        self._last_rows_sig = ""
+        self._render_status(self._last_status)
+
+    def _render_metrics(self, status: Mapping[str, Any], rows: list[Any], groups: list[Any], analytics: Mapping[str, Any], cursor: Mapping[str, Any], source: str) -> None:
+        if self._rows is None:
             return
-        self._render_header()
+        totals = analytics.get('totals') if isinstance(analytics.get('totals'), Mapping) else {}
+        page = analytics.get('page') if isinstance(analytics.get('page'), Mapping) else {}
+        group_info = analytics.get('groups') if isinstance(analytics.get('groups'), Mapping) else {}
+        topic_groups = list(group_info.get('topics') or []) if isinstance(group_info.get('topics'), list) else []
+        top_topic = topic_groups[0].get('key') if topic_groups and isinstance(topic_groups[0], Mapping) else '-'
+        grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
+        grid.pack(fill='x', padx=4, pady=(0, 8))
+        items = (
+            ('Rows', f"{len(rows)}/{int(analytics.get('total_rows') or cursor.get('total_row_count') or len(rows))}", source.upper(), 'cyan'),
+            ('Value', self._fmt(totals.get('value')), 'all filtered rows', 'gold'),
+            ('Groups', len(groups), f"top {top_topic}", 'gold'),
+            ('Page', f"{int(page.get('page_index') or cursor.get('page_index') or 0)}/{int(page.get('page_count') or cursor.get('page_count') or 0)}", f"offset {int(page.get('offset') or cursor.get('offset') or 0)}", 'cyan'),
+        )
+        for label, value, sub, accent in items:
+            metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
+        badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
+        badges.pack(fill='x', padx=4, pady=(0, 8))
+        status_badge(badges, f"MODE {source.upper()}", kind='cyan').pack(side='left', padx=(0, 6))
+        status_badge(badges, f"RAW {'ON' if self._show_raw_rows.get() else 'OFF'}", kind='gold').pack(side='left', padx=(0, 6))
+        status_badge(badges, f"ERRORS {len(status.get('errors') or [])}", kind='danger' if status.get('errors') else 'cyan').pack(side='left', padx=(0, 6))
+
+    def _render_group_section(self, groups: list[Any], *, title: str = '行为日志聚合', subtitle: str = '默认按动作/技能/怪物/地牢语义分组；展开后才看 raw samples。') -> None:
+        if self._rows is None:
+            return
+        box = section_card(self._rows, title, subtitle=subtitle, badge=str(len(groups)))
+        box.pack(fill='x', padx=4, pady=(4, 9))
+        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        body.pack(fill='x', padx=8, pady=8)
+        valid = [group for group in groups if isinstance(group, Mapping)]
+        if not valid:
+            empty_state(body, '暂无聚合分组', '当前筛选条件没有可折叠的语义分组。').pack(fill='x')
+            return
+        max_value = max(1.0, *[float(group.get('total_value') or 0.0) for group in valid])
+        for idx, group in enumerate(valid[:80]):
+            key = str(group.get('key') or idx)
+            open_group = key in self._expanded_groups
+            value = float(group.get('total_value') or 0.0)
+            meta = (
+                f"{str(group.get('kind') or 'event').upper()} · {int(group.get('count') or 0)} rows · "
+                f"UID {int(group.get('uid_count') or 0)} · {int(group.get('first_time_ms') or 0)}-{int(group.get('last_time_ms') or 0)}ms"
+            )
+            if group.get('dungeons'):
+                meta += f" · {'/'.join(str(x) for x in list(group.get('dungeons') or [])[:3])}"
+            aggregate_row(
+                body,
+                title=('▼ ' if open_group else '▶ ') + str(group.get('name') or '-'),
+                meta=meta,
+                value=f"{self._fmt(value)} · {int(group.get('count') or 0)}x",
+                ratio=value / max_value if max_value else 0.0,
+                accent='danger' if str(group.get('kind') or '') in {'damage', 'monster', 'target'} else 'gold',
+                zebra=bool(idx % 2),
+                command=lambda k=key: self._toggle_group(k),
+            ).pack(fill='x', pady=2)
+            if open_group:
+                self._render_group_details(body, group)
+
+    def _render_raw_section(self, rows: list[Any]) -> None:
+        if self._rows is None:
+            return
+        box = section_card(self._rows, 'RAW 行明细', subtitle='仅用于排查和复制；默认不作为主要阅读视图。', badge=str(len(rows)))
+        box.pack(fill='x', padx=4, pady=(4, 9))
+        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        body.pack(fill='x', padx=8, pady=8)
+        self._render_header(body)
         for row in rows[:80]:
-            self._render_row(row)
+            self._render_row(row, parent=body)
 
     def _toggle_group(self, key: str) -> None:
         key = str(key or '')
@@ -429,10 +511,11 @@ class ActionLogPanel:
         meta = f"actor={row.get('actor') or '-'} · target={row.get('target') or '-'} · uid={uid} · dungeon={dungeon} · source={row.get('source') or '-'}"
         tk.Label(box, text=meta, bg='#081521', fg=_SAO_PANEL_LABEL_FG, anchor='w', font=('Segoe UI', 8)).pack(fill='x', padx=8, pady=(0, 5))
 
-    def _render_header(self) -> None:
-        if self._rows is None:
+    def _render_header(self, parent: Optional[tk.Misc] = None) -> None:
+        parent = parent or self._rows
+        if parent is None:
             return
-        header = tk.Frame(self._rows, bg=_SAO_PANEL_HEADER_BG)
+        header = tk.Frame(parent, bg=_SAO_PANEL_HEADER_BG)
         header.pack(fill='x', pady=(0, 2))
         for text, width in (('Time', 10), ('Topic', 12), ('Action', 34), ('Value', 14), ('Source', 16)):
             tk.Label(header, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold')).pack(side='left', padx=3, pady=5)
@@ -452,11 +535,12 @@ class ActionLogPanel:
             pady=28,
         ).pack(fill='x')
 
-    def _render_row(self, row: Mapping[str, Any]) -> None:
-        if self._rows is None:
+    def _render_row(self, row: Mapping[str, Any], parent: Optional[tk.Misc] = None) -> None:
+        parent = parent or self._rows
+        if parent is None:
             return
         bg = '#2b2a1a' if row.get('is_cursor') else _SAO_PANEL_BODY_BG
-        card = tk.Frame(self._rows, bg=bg, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+        card = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
         card.pack(fill='x', pady=3, padx=4)
         top = tk.Frame(card, bg=bg)
         top.pack(fill='x', padx=8, pady=(6, 2))
@@ -480,3 +564,15 @@ class ActionLogPanel:
                 continue
             parts.append((row.get('id'), row.get('time_ms'), row.get('topic'), row.get('label'), row.get('value'), bool(row.get('is_cursor'))))
         return repr(parts)
+
+    @staticmethod
+    def _fmt(value: Any) -> str:
+        try:
+            number = float(value or 0.0)
+        except Exception:
+            return str(value or '0')
+        if abs(number) >= 1_000_000:
+            return f"{number / 1_000_000:.2f}m"
+        if abs(number) >= 1_000:
+            return f"{number / 1_000:.1f}k"
+        return str(int(number)) if number == int(number) else f"{number:.2f}"

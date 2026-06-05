@@ -32,6 +32,7 @@ public sealed class ActBridge : IDisposable
         BridgeCommands.ActTimelineSeek,
         BridgeCommands.ActTimelineSpeed,
         BridgeCommands.ActTimelineFilter,
+        BridgeCommands.ActAggregateStatus,
         BridgeCommands.ActActionLogStatus,
         BridgeCommands.ActActionLogSearch,
         BridgeCommands.ActActionLogFilter,

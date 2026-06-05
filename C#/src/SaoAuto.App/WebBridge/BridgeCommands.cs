@@ -105,6 +105,8 @@ public static class BridgeCommands
     public const string ActTimelineSpeed = "act.timeline.speed";
     public const string ActTimelineFilter = "act.timeline.filter";
 
+    public const string ActAggregateStatus = "act.aggregate.status";
+
     public const string ActActionLogStatus = "act.action_log.status";
     public const string ActActionLogSearch = "act.action_log.search";
     public const string ActActionLogFilter = "act.action_log.filter";

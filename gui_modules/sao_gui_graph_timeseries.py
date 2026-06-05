@@ -15,6 +15,7 @@ from act_platform.runtime import (
     act_graph_timeseries_status,
     act_graph_timeseries_zoom,
 )
+from gui_modules.sao_panel_components import action_button, aggregate_row, empty_state, metric_tile, section_card, status_badge
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -58,6 +59,7 @@ class GraphTimeseriesPanel:
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
         self._last_series_sig = ""
+        self._show_raw_points = tk.BooleanVar(value=False)
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -204,19 +206,7 @@ class GraphTimeseriesPanel:
             ('导出 Export', self.export_json),
             ('关闭 Close', self.hide),
         ):
-            tk.Button(
-                toolbar,
-                text=label,
-                command=cmd,
-                bg=_SAO_PANEL_HEADER_BG,
-                fg=_SAO_PANEL_HEADER_FG,
-                activebackground=_SAO_PANEL_ACCENT,
-                activeforeground='white',
-                relief='flat',
-                bd=0,
-                padx=10,
-                pady=4,
-            ).pack(side='right', padx=(6, 0))
+            action_button(toolbar, label, cmd, kind='cyan' if '导出' in label else 'gold').pack(side='right', padx=(6, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=12, pady=(0, 8))
@@ -229,6 +219,18 @@ class GraphTimeseriesPanel:
         tk.Button(control, text='过滤 Filter', command=self.filter).pack(side='left', padx=(0, 8))
         tk.Label(control, text='Range ms', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
         tk.OptionMenu(control, self._zoom_var, '0', '5000', '15000', '30000', '60000', command=lambda _v: self.zoom()).pack(side='left', padx=(6, 0))
+        tk.Checkbutton(
+            control,
+            text='RAW points',
+            variable=self._show_raw_points,
+            command=self._toggle_raw_points,
+            bg=_SAO_PANEL_BODY_BG,
+            fg=_SAO_PANEL_LABEL_FG,
+            selectcolor=_SAO_PANEL_HEADER_BG,
+            activebackground=_SAO_PANEL_BODY_BG,
+            activeforeground=_SAO_PANEL_GOLD,
+            font=('Segoe UI', 9),
+        ).pack(side='left', padx=(10, 0))
 
         tk.Label(
             body,
@@ -261,17 +263,43 @@ class GraphTimeseriesPanel:
         )
         if self._rows is None:
             return
-        sig = self._series_signature(metric, points, status)
+        sig = self._series_signature(metric, points, status) + repr(bool(self._show_raw_points.get()))
         if sig == self._last_series_sig:
             return
         self._last_series_sig = sig
         for child in list(self._rows.winfo_children()):
             child.destroy()
+        self._render_metrics(status, metric, points, latest)
         if not points:
-            self._render_empty()
+            empty_state(self._rows, '暂无 ACT 图表数据', '开始识别或 replay 后会出现曲线点。').pack(fill='both', expand=True, pady=8, padx=4)
             return
         self._render_chart(metric, points)
         self._render_points(metric, points)
+
+    def _toggle_raw_points(self) -> None:
+        self._last_series_sig = ""
+        self._render_status(self._last_status)
+
+    def _render_metrics(self, status: Mapping[str, Any], metric: str, points: list[Mapping[str, Any]], latest: Any) -> None:
+        if self._rows is None:
+            return
+        filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
+        grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
+        grid.pack(fill='x', padx=4, pady=(0, 8))
+        first_ms = int(points[0].get('time_ms') or 0) if points else 0
+        last_ms = int(points[-1].get('time_ms') or 0) if points else 0
+        items = (
+            ('Metric', metric.upper(), f"topic {filters.get('topic') or 'ALL'}", 'gold'),
+            ('Latest', self._fmt(latest), f"{len(points)} points", 'cyan'),
+            ('Range', f"{int(status.get('time_range_ms') or 0)}ms", f"{first_ms}-{last_ms}ms", 'cyan'),
+            ('Rows', int(status.get('row_count') or len(points)), f"raw {'ON' if self._show_raw_points.get() else 'OFF'}", 'gold'),
+        )
+        for label, value, sub, accent in items:
+            metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
+        badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
+        badges.pack(fill='x', padx=4, pady=(0, 8))
+        status_badge(badges, f"QUERY {filters.get('query') or '-'}", kind='cyan').pack(side='left', padx=(0, 6))
+        status_badge(badges, f"ERRORS {len(status.get('errors') or [])}", kind='danger' if status.get('errors') else 'cyan').pack(side='left', padx=(0, 6))
 
     def _render_empty(self) -> None:
         if self._rows is None:
@@ -291,12 +319,14 @@ class GraphTimeseriesPanel:
     def _render_chart(self, metric: str, points: list[Mapping[str, Any]]) -> None:
         if self._rows is None:
             return
-        chart = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
+        chart = section_card(self._rows, '趋势图表', subtitle='保留图形主视图；下方点位列表默认只显示 compact rows。', badge=metric.upper())
         chart.pack(fill='x', pady=(0, 8), padx=4)
+        chart_body = tk.Frame(chart, bg=_SAO_PANEL_BODY_BG)
+        chart_body.pack(fill='x', padx=8, pady=8)
         max_value = max(1.0, *[float(point.get('value') or 0.0) for point in points])
         color = _BAR_COLORS.get(metric, _SAO_PANEL_ACCENT)
         for point in points[-24:]:
-            row = tk.Frame(chart, bg=_SAO_PANEL_BODY_BG)
+            row = tk.Frame(chart_body, bg=_SAO_PANEL_BODY_BG)
             row.pack(fill='x', padx=8, pady=3)
             time_label = f"{int(point.get('time_ms') or 0)}ms"
             value = float(point.get('value') or 0.0)
@@ -310,21 +340,25 @@ class GraphTimeseriesPanel:
     def _render_points(self, metric: str, points: list[Mapping[str, Any]]) -> None:
         if self._rows is None:
             return
-        header = tk.Frame(self._rows, bg=_SAO_PANEL_HEADER_BG)
-        header.pack(fill='x', pady=(0, 2), padx=4)
-        for text, width in (('Time', 12), ('Topic', 14), (metric, 18), ('Row', 34)):
-            tk.Label(header, text=text, width=width, anchor='w', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold')).pack(side='left', padx=3, pady=5)
-        for point in reversed(points[-12:]):
-            row = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-            row.pack(fill='x', pady=2, padx=4)
-            values = (
-                (f"{int(point.get('time_ms') or 0)}ms", 12, _SAO_PANEL_LABEL_FG),
-                (str(point.get('topic') or '-'), 14, _SAO_PANEL_GOLD),
-                (self._fmt(point.get('value')), 18, _SAO_PANEL_VALUE_FG),
-                (str(point.get('row_id') or '-'), 34, _SAO_PANEL_LABEL_FG),
-            )
-            for text, width, fg in values:
-                tk.Label(row, text=text, width=width, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=fg, font=('Segoe UI', 9)).pack(side='left', padx=3, pady=5)
+        box = section_card(self._rows, '点位摘要', subtitle='按时间倒序显示关键点；raw row id 只在 RAW 模式显示。', badge=str(len(points)))
+        box.pack(fill='x', pady=(0, 2), padx=4)
+        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        body.pack(fill='x', padx=8, pady=8)
+        max_value = max(1.0, *[float(point.get('value') or 0.0) for point in points])
+        for idx, point in enumerate(reversed(points[-16:])):
+            row_id = str(point.get('row_id') or '-')
+            meta = f"{str(point.get('topic') or '-').upper()} · t={int(point.get('time_ms') or 0)}ms"
+            if self._show_raw_points.get():
+                meta += f" · row={row_id}"
+            aggregate_row(
+                body,
+                title=f"{metric.upper()} {self._fmt(point.get('value'))}",
+                meta=meta,
+                value=row_id if self._show_raw_points.get() else self._fmt(point.get('value')),
+                ratio=float(point.get('value') or 0.0) / max_value if max_value else 0.0,
+                accent='gold' if metric == 'damage' else 'cyan',
+                zebra=bool(idx % 2),
+            ).pack(fill='x', pady=2)
 
     @staticmethod
     def _fmt(value: Any) -> str:

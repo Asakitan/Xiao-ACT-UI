@@ -72,6 +72,7 @@ from act_platform.runtime import (
     act_action_log_jump_to_time,
     act_action_log_search,
     act_action_log_status,
+    act_aggregate_status,
     act_combatant_drilldown_back,
     act_combatant_drilldown_filter,
     act_combatant_drilldown_focus_target,
@@ -534,6 +535,20 @@ class SAOWebAPI:
     def get_timeline_status(self, limit=80, query=''):
         return json.dumps(act_timeline_status(self._g, limit=int(limit or 80), query=str(query or '')), ensure_ascii=False)
 
+    def get_aggregate_status(self, limit=1000, query='', source='live', window_ms=1000, top_n=20, encounter_id=''):
+        return json.dumps(
+            act_aggregate_status(
+                self._g,
+                limit=int(limit or 1000),
+                query=str(query or ''),
+                source=str(source or 'live'),
+                window_ms=int(window_ms or 1000),
+                top_n=int(top_n or 20),
+                encounter_id=str(encounter_id or ''),
+            ),
+            ensure_ascii=False,
+        )
+
     def play_timeline(self, speed=1.0):
         return json.dumps(act_timeline_play(self._g, speed=float(speed or 1.0)), ensure_ascii=False)
 
@@ -761,6 +776,15 @@ class SAOWebAPI:
                 self._g._show_timeline_vcr()
         threading.Thread(target=_do, daemon=True).start()
 
+    def toggle_act_aggregate(self):
+        """Show/hide the ACT semantic aggregate cockpit overlay."""
+        def _do():
+            if self._g._act_aggregate_visible:
+                self._g._hide_act_aggregate()
+            else:
+                self._g._show_act_aggregate()
+        threading.Thread(target=_do, daemon=True).start()
+
     def toggle_action_log(self):
         """Show/hide the ACT action-log overlay."""
         def _do():
@@ -906,6 +930,7 @@ class SAOWebAPI:
                 getattr(self._g, 'report_export_win', None),
                 getattr(self._g, 'offline_import_win', None),
                 getattr(self._g, 'timeline_vcr_win', None),
+                getattr(self._g, 'act_aggregate_win', None),
                 getattr(self._g, 'action_log_win', None),
                 getattr(self._g, 'death_recap_win', None),
                 getattr(self._g, 'graph_timeseries_win', None),
@@ -2214,6 +2239,10 @@ class SAOWebViewGUI:
         # ACT Timeline/VCR panel
         self.timeline_vcr_win = None
         self._timeline_vcr_visible = False
+
+        # ACT Semantic Aggregate cockpit panel
+        self.act_aggregate_win = None
+        self._act_aggregate_visible = False
 
         # ACT Action Log panel
         self.action_log_win = None
@@ -4221,6 +4250,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # ACT Semantic Aggregate — cockpit parity with Entity/Tk aggregate panel
+        act_aggregate_url = _web_file_uri('act_aggregate.html')
+        _ag_w = max(820, int(min(_sw, 1920) * 0.54))
+        _ag_h = max(620, int(min(_sh, 1080) * 0.62))
+        _ag_x = max(16, int(monitor_left + (_sw - _ag_w) * 0.25))
+        _ag_y = max(22, int(monitor_top + (_sh - _ag_h) * 0.14))
+        self.act_aggregate_win = webview.create_window(
+            'SAO-ActAggregate', act_aggregate_url,
+            width=_ag_w, height=_ag_h,
+            x=_ag_x, y=_ag_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         # ACT Action Log — searchable EventBus table for WebView parity
         action_log_url = _web_file_uri('act_action_log.html')
         _al_w = max(760, int(min(_sw, 1920) * 0.48))
@@ -5619,6 +5666,14 @@ class SAOWebViewGUI:
             except Exception:
                 pass
             try:
+                self._act_aggregate_visible = False
+                if self.act_aggregate_win:
+                    self._set_window_alpha('SAO-ActAggregate', 0.0)
+                    self.act_aggregate_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
                 self._action_log_visible = False
                 if self.action_log_win:
                     self._set_window_alpha('SAO-ActionLog', 0.0)
@@ -6753,6 +6808,63 @@ class SAOWebViewGUI:
         except Exception:
             pass
         self._timeline_vcr_visible = False
+
+    # ── ACT Semantic Aggregate panel ──
+
+    def _eval_act_aggregate(self, js):
+        try:
+            if self.act_aggregate_win:
+                self.act_aggregate_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_act_aggregate_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the aggregate cockpit receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-ActAggregate')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_act_aggregate(self):
+        try:
+            if self.act_aggregate_win and not self._act_aggregate_visible:
+                self._set_window_alpha('SAO-ActAggregate', 0.0)
+                self.act_aggregate_win.show()
+                self._eval_act_aggregate('if(window.ActAggregate&&ActAggregate.fadeIn)ActAggregate.fadeIn()')
+                self._eval_act_aggregate('if(window.ActAggregate&&ActAggregate.refresh)ActAggregate.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-ActAggregate', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._act_aggregate_visible = True
+                self._ensure_act_aggregate_clickable()
+                threading.Timer(0.5, self._ensure_act_aggregate_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_act_aggregate(self):
+        try:
+            if self.act_aggregate_win and self._act_aggregate_visible:
+                self._eval_act_aggregate('if(window.ActAggregate&&ActAggregate.fadeOut)ActAggregate.fadeOut()')
+                def _finish():
+                    try:
+                        if self.act_aggregate_win:
+                            self.act_aggregate_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._act_aggregate_visible = False
 
     # ── ACT Action Log panel ──
 
@@ -7978,6 +8090,11 @@ class SAOWebViewGUI:
         except Exception:
             pass
         try:
+            if self.act_aggregate_win:
+                self.act_aggregate_win.destroy()
+        except Exception:
+            pass
+        try:
             if self.action_log_win:
                 self.action_log_win.destroy()
         except Exception:
@@ -8669,6 +8786,7 @@ class SAOWebViewGUI:
             'toggle_report_export': lambda: (self._show_report_export() if not self._report_export_visible else self._hide_report_export()),
             'toggle_offline_import': lambda: (self._show_offline_import() if not self._offline_import_visible else self._hide_offline_import()),
             'toggle_timeline_vcr': lambda: (self._show_timeline_vcr() if not self._timeline_vcr_visible else self._hide_timeline_vcr()),
+            'toggle_act_aggregate': lambda: (self._show_act_aggregate() if not self._act_aggregate_visible else self._hide_act_aggregate()),
             'toggle_action_log': lambda: (self._show_action_log() if not self._action_log_visible else self._hide_action_log()),
             'toggle_death_recap': lambda: (self._show_death_recap() if not self._death_recap_visible else self._hide_death_recap()),
             'toggle_graph_timeseries': lambda: (self._show_graph_timeseries() if not self._graph_timeseries_visible else self._hide_graph_timeseries()),

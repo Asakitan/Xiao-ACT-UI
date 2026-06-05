@@ -80,6 +80,7 @@ public class Session194ActBridgeTests
         lifecycle.AttachAct();
 
         Assert.Contains(BridgeCommands.ActSourcesHealth, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.ActAggregateStatus, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ActSkillStatus, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ActTriggersStatus, lifecycle.Router.RegisteredCommands);
 

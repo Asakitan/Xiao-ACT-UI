@@ -71,6 +71,9 @@
         toggle_timeline_vcr: function () {
             return call('ui.menu_action', { action: 'toggle_timeline_vcr' });
         },
+        toggle_act_aggregate: function () {
+            return call('ui.menu_action', { action: 'toggle_act_aggregate' });
+        },
         toggle_action_log: function () {
             return call('ui.menu_action', { action: 'toggle_action_log' });
         },
@@ -142,6 +145,9 @@
         },
         get_timeline_status: function (limit, query) {
             return call('act.timeline.status', { limit: limit || 80, query: String(query || '') });
+        },
+        get_aggregate_status: function (limit, query, source, windowMs, topN, encounterId) {
+            return call('act.aggregate.status', { limit: limit || 1000, query: String(query || ''), source: String(source || 'live'), window_ms: windowMs || 1000, top_n: topN || 20, encounter_id: String(encounterId || '') });
         },
         play_timeline: function (speed) {
             return call('act.timeline.play', { speed: speed || 1 });
