@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Entity-mode ACT aggregate cockpit panel."""
+"""Entity-mode ACT semantic aggregate cockpit panel."""
 
 from __future__ import annotations
 
@@ -8,15 +8,20 @@ import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
-from act_platform.runtime import (
-    act_action_log_status,
-    act_graph_timeseries_status,
+from act_platform.runtime import act_aggregate_status, act_graph_timeseries_status
+from gui_modules.sao_panel_components import (
+    action_button,
+    aggregate_row,
+    empty_state,
+    metric_tile,
+    section_card,
+    source_badges,
+    status_badge,
 )
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
     _SAO_PANEL_BODY_BG,
-    _SAO_PANEL_BORDER,
     _SAO_PANEL_GOLD,
     _SAO_PANEL_HEADER_BG,
     _SAO_PANEL_HEADER_FG,
@@ -31,16 +36,17 @@ from gui_modules.sao_panel_ui import (
 
 
 class ActAggregatePanel:
-    """Single ACT overview for summary, groups, and graph preview."""
+    """Semantic ACT cockpit: grouped timeline, skills, monsters, dungeons and logs."""
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
         self.owner = owner
         self._win: Optional[tk.Toplevel] = None
         self._rows: Optional[tk.Frame] = None
-        self._summary_var = tk.StringVar(value="ACT AGGREGATE: --")
+        self._summary_var = tk.StringVar(value="ACT COCKPIT: --")
         self._status_var = tk.StringVar(value="Ready")
         self._query_var = tk.StringVar(value="")
+        self._source_var = tk.StringVar(value="live")
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
         self._last_sig = ""
@@ -85,24 +91,18 @@ class ActAggregatePanel:
         if self._last_status and now - self._last_refresh_at < 0.35:
             self._render_status(self._last_status)
             return self._last_status
-        snapshot = self._snapshot()
         query = self._query_var.get()
+        source = self._source_var.get()
         try:
-            action_log = act_action_log_status(self.owner, limit=80, query=query)
+            status = act_aggregate_status(self.owner, limit=1000, query=query, source=source, window_ms=1000, top_n=20)
         except Exception as exc:
-            action_log = {"ok": False, "message": str(exc), "rows": [], "grouped_rows": [], "analytics": {}, "errors": [str(exc)]}
+            status = {"ok": False, "message": str(exc), "overview": {}, "timeline_clusters": [], "skill_damage": [], "monster_damage": [], "dungeon_damage": [], "log_groups": [], "source_mix": [], "raw_counts": {}, "filters": {"query": query, "source": source}, "errors": [str(exc)]}
         try:
-            graph = act_graph_timeseries_status(self.owner, limit=120, query=query)
+            status = dict(status or {})
+            status["graph"] = act_graph_timeseries_status(self.owner, limit=120, query=query)
         except Exception as exc:
-            graph = {"ok": False, "message": str(exc), "series": {}, "row_count": 0, "errors": [str(exc)]}
-        status = {
-            "ok": bool(action_log.get("ok", True)) and bool(graph.get("ok", True)),
-            "snapshot": snapshot,
-            "action_log": action_log,
-            "graph": graph,
-            "query": query,
-            "errors": list(action_log.get("errors") or []) + list(graph.get("errors") or []),
-        }
+            status.setdefault("errors", []).append(str(exc))
+            status["graph"] = {"ok": False, "series": {}, "row_count": 0, "errors": [str(exc)]}
         self._last_status = status
         self._last_refresh_at = now
         self._render_status(status)
@@ -118,28 +118,11 @@ class ActAggregatePanel:
         try:
             self.root.clipboard_clear()
             self.root.clipboard_append(text)
-            self._status_var.set('Aggregate JSON copied to clipboard')
+            self._status_var.set('Aggregate cockpit JSON copied')
             return {"ok": True, "text": text}
         except Exception as exc:
             self._status_var.set(str(exc))
             return {"ok": False, "message": str(exc), "text": text}
-
-    def _snapshot(self) -> Dict[str, Any]:
-        for name in ("_get_dps_act_snapshot", "_build_dps_act_snapshot"):
-            fn = getattr(self.owner, name, None)
-            if callable(fn):
-                try:
-                    snap = fn(history_limit=20)
-                except TypeError:
-                    try:
-                        snap = fn()
-                    except Exception:
-                        snap = {}
-                except Exception:
-                    snap = {}
-                if isinstance(snap, Mapping):
-                    return dict(snap)
-        return {}
 
     def _exists(self) -> bool:
         try:
@@ -150,9 +133,9 @@ class ActAggregatePanel:
     def _build(self) -> None:
         win = tk.Toplevel(self.root)
         self._win = win
-        win.title('SAO ACT Aggregate')
-        win.geometry('960x620+210+130')
-        win.minsize(760, 460)
+        win.title('SAO ACT Cockpit')
+        win.geometry('1040x720+180+95')
+        win.minsize(820, 520)
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
@@ -163,7 +146,7 @@ class ActAggregatePanel:
             _apply_window_icon(win)
         except Exception:
             pass
-        header = _sao_panel_header(win, 'ACT AGGREGATE COCKPIT', on_close=self.hide)
+        header = _sao_panel_header(win, 'ACT SEMANTIC COCKPIT', on_close=self.hide)
         header.pack(fill='x')
         _bind_panel_drag(win, header)
 
@@ -171,21 +154,23 @@ class ActAggregatePanel:
         body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        toolbar.pack(fill='x', padx=12, pady=(10, 8))
-        _sao_pill(toolbar, 'AGGREGATE').pack(side='left')
+        toolbar.pack(fill='x', padx=14, pady=(12, 8))
+        _sao_pill(toolbar, 'COCKPIT').pack(side='left')
         tk.Label(toolbar, textvariable=self._summary_var, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 10, 'bold')).pack(side='left', padx=(12, 0))
-        for label, cmd in (('刷新 Refresh', self.refresh), ('复制 Copy', self.copy_json), ('关闭 Close', self.hide)):
-            tk.Button(toolbar, text=label, command=cmd, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, activebackground=_SAO_PANEL_ACCENT, activeforeground='white', relief='flat', bd=0, padx=10, pady=4).pack(side='right', padx=(6, 0))
+        action_button(toolbar, '关闭 Close', self.hide).pack(side='right', padx=(6, 0))
+        action_button(toolbar, '复制 Copy', self.copy_json, kind='cyan').pack(side='right', padx=(6, 0))
+        action_button(toolbar, '刷新 Refresh', self.refresh, kind='gold').pack(side='right', padx=(6, 0))
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        control.pack(fill='x', padx=12, pady=(0, 8))
-        tk.Label(control, text='Search', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._query_var, width=28).pack(side='left', padx=(6, 8))
-        tk.Button(control, text='过滤 Filter', command=self.filter).pack(side='left')
-        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(fill='x', padx=12, pady=(0, 6))
+        control.pack(fill='x', padx=14, pady=(0, 8))
+        tk.Label(control, text='Search aggregate groups', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
+        tk.Entry(control, textvariable=self._query_var, width=30).pack(side='left', padx=(8, 8))
+        tk.OptionMenu(control, self._source_var, 'live', 'history', command=lambda _v: self.filter()).pack(side='left', padx=(0, 8))
+        action_button(control, '过滤 Filter', self.filter, kind='cyan').pack(side='left')
+        tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(fill='x', padx=14, pady=(0, 6))
 
         outer = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
-        outer.pack(fill='both', expand=True, padx=12, pady=(0, 12))
+        outer.pack(fill='both', expand=True, padx=14, pady=(0, 14))
         canvas = tk.Canvas(outer, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
         scroll = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
@@ -197,15 +182,17 @@ class ActAggregatePanel:
         win.protocol('WM_DELETE_WINDOW', self.hide)
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
-        snap = status.get('snapshot') if isinstance(status.get('snapshot'), Mapping) else {}
-        spec = snap.get('render_spec') if isinstance(snap.get('render_spec'), Mapping) else {}
-        totals = spec.get('totals') if isinstance(spec.get('totals'), Mapping) else {}
-        rows = list(spec.get('rows') or []) if isinstance(spec.get('rows'), list) else []
-        action_log = status.get('action_log') if isinstance(status.get('action_log'), Mapping) else {}
-        graph = status.get('graph') if isinstance(status.get('graph'), Mapping) else {}
-        grouped = list(action_log.get('grouped_rows') or [])
-        self._summary_var.set(f"DMG {self._fmt(totals.get('damage'))} · HEAL {self._fmt(totals.get('heal'))} · MEMBERS {len(rows)} · GROUPS {len(grouped)}")
-        self._status_var.set(f"encounter={snap.get('encounter_id') or action_log.get('encounter_id') or 'live'} · query={status.get('query') or '-'} · graphRows={graph.get('row_count') or 0} · errors={len(status.get('errors') or [])}")
+        overview = status.get('overview') if isinstance(status.get('overview'), Mapping) else {}
+        counts = status.get('raw_counts') if isinstance(status.get('raw_counts'), Mapping) else {}
+        errors = list(status.get('errors') or [])
+        self._summary_var.set(
+            f"DMG {self._fmt(overview.get('damage'))} · DPS {self._fmt(overview.get('dps'))} · "
+            f"EVENTS {int(counts.get('rows') or 0)} · GROUPS {int(counts.get('skills') or 0)}/{int(counts.get('monsters') or 0)}/{int(counts.get('dungeons') or 0)}"
+        )
+        self._status_var.set(
+            f"{overview.get('dungeon_name') or overview.get('mode') or 'live'} · source={status.get('source') or 'live'} · "
+            f"query={self._query_var.get() or '-'} · errors={len(errors)}"
+        )
         if self._rows is None:
             return
         sig = self._signature(status)
@@ -214,87 +201,113 @@ class ActAggregatePanel:
         self._last_sig = sig
         for child in list(self._rows.winfo_children()):
             child.destroy()
-        self._render_cards(totals, rows)
-        self._render_member_rows(rows)
-        self._render_groups(grouped)
-        self._render_graph_preview(graph)
+        self._render_header_summary(status)
+        if int(counts.get('rows') or 0) <= 0:
+            empty_state(self._rows, '等待 ACT 事件 / 战斗数据', '聚合驾驶舱会在收到伤害、技能、怪物、地牢或日志事件后自动显示语义分组。').pack(fill='x', padx=4, pady=10)
+            return
+        self._render_group_section('时间线聚合', '按时间桶汇总，不再一条时间一行', 'timeline', status.get('timeline_clusters') or [], value_key='damage', accent='cyan')
+        self._render_group_section('伤害解析 / 技能聚合', '按技能汇总伤害/治疗、命中次数、目标和来源', 'skill', status.get('skill_damage') or [], value_key='damage', accent='gold')
+        self._render_group_section('怪物伤害', '按怪物/目标汇总承伤、技能、参与者和来源', 'monster', status.get('monster_damage') or [], value_key='damage', accent='danger')
+        self._render_group_section('地牢伤害', '按地牢/encounter 汇总总量、怪物、技能和事件跨度', 'dungeon', status.get('dungeon_damage') or [], value_key='damage', accent='cyan')
+        self._render_group_section('日志聚合', '按动作/主题汇总日志，展开后才查看代表 raw rows', 'log', status.get('log_groups') or [], value_key='total_value', accent='gold')
+        self._render_graph_preview(status.get('graph') if isinstance(status.get('graph'), Mapping) else {})
 
-    def _render_cards(self, totals: Mapping[str, Any], rows: list[Any]) -> None:
+    def _render_header_summary(self, status: Mapping[str, Any]) -> None:
         if self._rows is None:
             return
+        overview = status.get('overview') if isinstance(status.get('overview'), Mapping) else {}
+        counts = status.get('raw_counts') if isinstance(status.get('raw_counts'), Mapping) else {}
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
-        grid.pack(fill='x', padx=4, pady=(0, 8))
+        grid.pack(fill='x', padx=4, pady=(0, 10))
         items = (
-            ('Damage', self._fmt(totals.get('damage'))),
-            ('DPS', self._fmt(totals.get('dps'))),
-            ('Heal', self._fmt(totals.get('heal'))),
-            ('HPS', self._fmt(totals.get('hps'))),
-            ('Elapsed', f"{int(float(totals.get('elapsed_s') or 0))}s"),
-            ('Members', str(len(rows))),
+            ('Damage', self._fmt(overview.get('damage')), f"{int(counts.get('rows') or 0)} events", 'gold'),
+            ('DPS', self._fmt(overview.get('dps')), f"{self._fmt(overview.get('elapsed_s'))}s", 'cyan'),
+            ('Heal/HPS', f"{self._fmt(overview.get('heal'))} / {self._fmt(overview.get('hps'))}", 'support', 'heal'),
+            ('Skills', int(counts.get('skills') or 0), 'aggregated', 'gold'),
+            ('Monsters', int(counts.get('monsters') or 0), 'targets', 'danger'),
+            ('Dungeons', int(counts.get('dungeons') or 0), overview.get('dungeon_name') or 'live', 'cyan'),
         )
-        for label, value in items:
-            card = tk.Frame(grid, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-            card.pack(side='left', fill='x', expand=True, padx=2)
-            tk.Label(card, text=label, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8)).pack(anchor='w', padx=6, pady=(5, 0))
-            tk.Label(card, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=('Segoe UI', 10, 'bold')).pack(anchor='w', padx=6, pady=(1, 5))
+        for label, value, sub, accent in items:
+            metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
+        badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
+        badges.pack(fill='x', padx=4, pady=(0, 8))
+        status_badge(badges, f"MODE {overview.get('mode') or 'live'}", kind='cyan').pack(side='left', padx=(0, 6))
+        status_badge(badges, f"SPAN {int(overview.get('span_ms') or 0)}ms", kind='gold').pack(side='left', padx=(0, 6))
+        source_badges(badges, status.get('source_mix') or []).pack(side='left')
 
-    def _render_member_rows(self, rows: list[Any]) -> None:
+    def _render_group_section(self, title: str, subtitle: str, prefix: str, groups: list[Any], *, value_key: str, accent: str) -> None:
         if self._rows is None:
             return
-        box = self._section('TOP COMBATANTS / AGGREGATED DAMAGE')
+        box = section_card(self._rows, title, subtitle=subtitle, badge=str(len(groups)))
+        box.pack(fill='x', padx=4, pady=(9, 0))
+        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        body.pack(fill='x', padx=8, pady=8)
+        valid = [item for item in groups if isinstance(item, Mapping)]
+        if not valid:
+            empty_state(body, '暂无聚合数据', '当前筛选条件下没有可展示的语义分组。').pack(fill='x')
+            return
+        max_value = max(1.0, *[float(item.get(value_key) or item.get('damage') or item.get('total_value') or 0.0) for item in valid])
+        for idx, group in enumerate(valid[:20]):
+            key = f"{prefix}:{group.get('key') or idx}"
+            value = float(group.get(value_key) or group.get('damage') or group.get('total_value') or 0.0)
+            meta = self._group_meta(group)
+            row = aggregate_row(
+                body,
+                title=('▼ ' if key in self._expanded_groups else '▶ ') + str(group.get('name') or group.get('key') or '-'),
+                meta=meta,
+                value=f"{self._fmt(value)} · {int(group.get('count') or 0)}x",
+                ratio=value / max_value if max_value else 0.0,
+                accent=accent,
+                zebra=bool(idx % 2),
+                command=lambda k=key: self._toggle_group(k),
+            )
+            row.pack(fill='x', pady=2)
+            if key in self._expanded_groups:
+                self._render_group_details(body, group)
+
+    def _render_group_details(self, parent: tk.Misc, group: Mapping[str, Any]) -> None:
+        detail = tk.Frame(parent, bg=_SAO_PANEL_BODY_BG)
+        detail.pack(fill='x', padx=18, pady=(0, 6))
+        chips = tk.Frame(detail, bg=_SAO_PANEL_BODY_BG)
+        chips.pack(fill='x', pady=(2, 4))
+        for label, values, kind in (
+            ('actors', group.get('actors') or group.get('actor_uids') or [], 'cyan'),
+            ('targets', group.get('targets') or group.get('target_uids') or [], 'gold'),
+            ('skills', group.get('skills') or group.get('skill_ids') or [], 'gold'),
+            ('sources', group.get('sources') or [], 'cyan'),
+        ):
+            values = list(values or [])[:4]
+            if values:
+                status_badge(chips, f"{label}: {', '.join(str(v) for v in values)}", kind=kind).pack(side='left', padx=(0, 6), pady=2)
+        rows = [row for row in list(group.get('rows') or []) if isinstance(row, Mapping)][:6]
         if not rows:
-            tk.Label(box, text='No combatant rows yet', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, pady=12).pack(fill='x')
             return
-        max_amount = max(1.0, *[float((row or {}).get('damage') or 0) for row in rows if isinstance(row, Mapping)])
-        for row in [item for item in rows if isinstance(item, Mapping)][:12]:
-            line = tk.Frame(box, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-            line.pack(fill='x', padx=8, pady=2)
-            amount = float(row.get('damage') or 0)
-            width = max(4, min(260, int(260 * amount / max_amount)))
-            tk.Frame(line, bg=_SAO_PANEL_GOLD, width=width, height=3).pack(fill='x', anchor='w')
-            tk.Label(line, text=str(row.get('name') or row.get('uid') or 'Unknown'), width=28, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=('Segoe UI', 9)).pack(side='left', padx=6, pady=4)
-            tk.Label(line, text=f"DMG {self._fmt(row.get('damage'))}", width=16, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold')).pack(side='left', padx=6, pady=4)
-            tk.Label(line, text=f"DPS {self._fmt(row.get('dps'))}", width=16, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left', padx=6, pady=4)
-
-    def _render_groups(self, groups: list[Any]) -> None:
-        if self._rows is None:
-            return
-        box = self._section('ACTION / SKILL STRUCTURE GROUPS')
-        if not groups:
-            tk.Label(box, text='No grouped ACT rows yet', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, pady=12).pack(fill='x')
-            return
-        for idx, group in enumerate([item for item in groups if isinstance(item, Mapping)][:16]):
-            gid = str(group.get('id') or group.get('key') or idx)
-            header = tk.Frame(box, bg=_SAO_PANEL_HEADER_BG, cursor='hand2')
-            header.pack(fill='x', padx=8, pady=(4, 0))
-            title = f"{group.get('label') or group.get('key') or 'GROUP'} · {int(group.get('count') or 0)} · {self._fmt(group.get('total_value'))}"
-            label = tk.Label(header, text=('▼ ' if gid in self._expanded_groups else '▶ ') + title, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, anchor='w', font=('Segoe UI', 9, 'bold'), cursor='hand2')
-            label.pack(fill='x', padx=6, pady=4)
-            header.bind('<Button-1>', lambda _e, key=gid: self._toggle_group(key))
-            label.bind('<Button-1>', lambda _e, key=gid: self._toggle_group(key))
-            if gid in self._expanded_groups:
-                for row in list(group.get('rows') or [])[:8]:
-                    if not isinstance(row, Mapping):
-                        continue
-                    tk.Label(box, text=f"  {int(row.get('time_ms') or 0)}ms  {row.get('topic') or '-'}  {row.get('label') or '-'}  {row.get('value') or ''}", bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', font=('Segoe UI', 9)).pack(fill='x', padx=18, pady=1)
+        for row in rows:
+            text = f"{int(row.get('time_ms') or 0)}ms · {row.get('topic') or '-'} · {row.get('actor') or '-'} → {row.get('target') or '-'} · {row.get('label') or '-'} · {self._fmt(row.get('value'))}"
+            tk.Label(detail, text=text, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', font=('Segoe UI', 9)).pack(fill='x', padx=6, pady=1)
 
     def _render_graph_preview(self, graph: Mapping[str, Any]) -> None:
         if self._rows is None:
             return
-        box = self._section('GRAPH / TIMESERIES PREVIEW')
+        box = section_card(self._rows, '图表预览', subtitle='来自现有 ACT graph/timeseries，作为聚合驾驶舱的趋势摘要', badge=str(graph.get('row_count') or 0))
+        box.pack(fill='x', padx=4, pady=(9, 0))
+        body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        body.pack(fill='x', padx=8, pady=8)
         series = graph.get('series') if isinstance(graph.get('series'), Mapping) else {}
-        for metric in ('damage', 'heal', 'event_count'):
+        for metric, accent in (('damage', 'gold'), ('heal', 'heal'), ('event_count', 'cyan')):
             item = series.get(metric) if isinstance(series.get(metric), Mapping) else {}
             points = list(item.get('points') or [])
             latest = points[-1].get('value') if points else 0
-            tk.Label(box, text=f"{metric.upper()}: {len(points)} pts · latest {self._fmt(latest)}", bg=_SAO_PANEL_BODY_BG, fg=(_SAO_PANEL_GOLD if metric == 'damage' else _SAO_PANEL_LABEL_FG), anchor='w', font=('Segoe UI', 9)).pack(fill='x', padx=8, pady=2)
+            aggregate_row(body, title=metric.upper(), meta=f"{len(points)} points", value=self._fmt(latest), ratio=1.0 if points else 0.0, accent=accent).pack(fill='x', pady=2)
 
-    def _section(self, title: str) -> tk.Frame:
-        assert self._rows is not None
-        box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
-        box.pack(fill='x', padx=4, pady=(8, 0))
-        tk.Label(box, text=title, bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold'), anchor='w').pack(fill='x')
-        return box
+    def _group_meta(self, group: Mapping[str, Any]) -> str:
+        span = int(group.get('duration_ms') or max(0, int(group.get('last_time_ms') or 0) - int(group.get('first_time_ms') or 0)))
+        bits = [f"span {span}ms"]
+        for key, label in (('actors', 'actors'), ('targets', 'targets'), ('skills', 'skills'), ('monsters', 'monsters'), ('dungeons', 'dungeons'), ('sources', 'src')):
+            values = list(group.get(key) or [])
+            if values:
+                bits.append(f"{label} {len(values)}")
+        return ' · '.join(bits)
 
     def _toggle_group(self, group_id: str) -> None:
         if group_id in self._expanded_groups:
@@ -317,15 +330,15 @@ class ActAggregatePanel:
         return str(int(number)) if number == int(number) else f"{number:.2f}"
 
     def _signature(self, status: Mapping[str, Any]) -> str:
-        snap = status.get('snapshot') if isinstance(status.get('snapshot'), Mapping) else {}
-        spec = snap.get('render_spec') if isinstance(snap.get('render_spec'), Mapping) else {}
-        action_log = status.get('action_log') if isinstance(status.get('action_log'), Mapping) else {}
-        graph = status.get('graph') if isinstance(status.get('graph'), Mapping) else {}
+        counts = status.get('raw_counts') if isinstance(status.get('raw_counts'), Mapping) else {}
+        overview = status.get('overview') if isinstance(status.get('overview'), Mapping) else {}
         return repr((
-            spec.get('totals'),
-            [(row.get('uid'), row.get('damage'), row.get('heal')) for row in list(spec.get('rows') or [])[:16] if isinstance(row, Mapping)],
-            [(group.get('id'), group.get('key'), group.get('count'), group.get('total_value')) for group in list(action_log.get('grouped_rows') or [])[:16] if isinstance(group, Mapping)],
-            graph.get('row_count'),
+            tuple(sorted((counts or {}).items())),
+            overview.get('damage'), overview.get('heal'), overview.get('elapsed_s'),
+            [(item.get('key'), item.get('damage'), item.get('count')) for item in list(status.get('skill_damage') or [])[:12] if isinstance(item, Mapping)],
+            [(item.get('key'), item.get('damage'), item.get('count')) for item in list(status.get('monster_damage') or [])[:12] if isinstance(item, Mapping)],
+            [(item.get('key'), item.get('damage'), item.get('count')) for item in list(status.get('dungeon_damage') or [])[:12] if isinstance(item, Mapping)],
+            [(item.get('key'), item.get('total_value'), item.get('count')) for item in list(status.get('log_groups') or [])[:12] if isinstance(item, Mapping)],
             tuple(sorted(self._expanded_groups)),
-            status.get('query'),
+            self._query_var.get(), self._source_var.get(),
         ))

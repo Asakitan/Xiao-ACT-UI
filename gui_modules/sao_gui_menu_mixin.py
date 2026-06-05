@@ -41,6 +41,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from act_platform.runtime import (
+    act_aggregate_status,
     act_action_log_status,
     act_combatant_drilldown_status,
     act_data_source_health,
@@ -218,6 +219,21 @@ class SAOPlayerGUIMenuMixin:
         except Exception:
             action_log_sig = (False, 0, 0, 0, '')
         try:
+            aggregate_status = self._get_act_aggregate_menu_status()
+            aggregate_counts = aggregate_status.get('raw_counts') or {}
+            aggregate_overview = aggregate_status.get('overview') or {}
+            aggregate_sig = (
+                bool(aggregate_status.get('ok')),
+                int(aggregate_counts.get('rows') or 0),
+                int(aggregate_counts.get('timeline_clusters') or 0),
+                int(aggregate_counts.get('skills') or 0),
+                int(aggregate_counts.get('monsters') or 0),
+                int(aggregate_counts.get('dungeons') or 0),
+                int(aggregate_overview.get('damage') or 0),
+            )
+        except Exception:
+            aggregate_sig = (False, 0, 0, 0, 0, 0, 0)
+        try:
             death_status = self._get_act_death_recap_menu_status()
             death_summary = death_status.get('summary') or {}
             death = death_status.get('death') or {}
@@ -292,6 +308,7 @@ class SAOPlayerGUIMenuMixin:
             report_sig,
             timeline_sig,
             action_log_sig,
+            aggregate_sig,
             death_sig,
             graph_sig,
             combatant_sig,
@@ -401,6 +418,10 @@ class SAOPlayerGUIMenuMixin:
         action_log_count = len(action_log_status.get('rows') or [])
         action_group_count = len(action_log_status.get('grouped_rows') or [])
         action_log_state = 'READY' if action_log_status.get('ok') else 'EMPTY'
+        aggregate_status = self._get_act_aggregate_menu_status()
+        aggregate_counts = aggregate_status.get('raw_counts') or {}
+        aggregate_state = 'READY' if aggregate_status.get('ok') and int(aggregate_counts.get('rows') or 0) else 'EMPTY'
+        aggregate_label = f"{int(aggregate_counts.get('rows') or 0)}/{int(aggregate_counts.get('skills') or 0)}/{int(aggregate_counts.get('monsters') or 0)}"
         death_status = self._get_act_death_recap_menu_status()
         death_summary = death_status.get('summary') or {}
         death_damage = int(death_summary.get('incoming_damage') or 0)
@@ -513,7 +534,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '⬇', 'label': f'ACT报告/导出: {report_state}/{report_total_damage}', 'command': self._toggle_act_report_export_panel},
             {'icon': '⬇', 'label': 'ACT离线导入向导', 'command': self._toggle_act_offline_import_panel},
             {'icon': '▶', 'label': f'ACT时间线/VCR: {timeline_state}/{timeline_count}', 'command': self._toggle_act_timeline_vcr_panel},
-            {'icon': '▣', 'label': f'ACT聚合总览: {action_log_state}/{action_group_count}', 'command': self._toggle_act_aggregate_panel},
+            {'icon': '▣', 'label': f'ACT聚合驾驶舱: {aggregate_state}/{aggregate_label}', 'command': self._toggle_act_aggregate_panel},
             {'icon': '▤', 'label': f'ACT行为日志: {action_log_state}/{action_log_count}', 'command': self._toggle_act_action_log_panel},
             {'icon': '✚', 'label': f'ACT死亡回放: {death_state}/{death_damage}', 'command': self._toggle_act_death_recap_panel},
             {'icon': '⌁', 'label': f'ACT图表/曲线: {graph_state}/{graph_metric}/{graph_count}', 'command': self._toggle_act_graph_timeseries_panel},
@@ -580,6 +601,12 @@ class SAOPlayerGUIMenuMixin:
             return act_action_log_status(self, limit=24)
         except Exception as exc:
             return {'ok': False, 'message': str(exc), 'rows': [], 'columns': [], 'filters': {'query': '', 'topic': ''}, 'cursor': {'time_ms': 0, 'row_count': 0}, 'errors': [str(exc)]}
+
+    def _get_act_aggregate_menu_status(self):
+        try:
+            return act_aggregate_status(self, limit=240, top_n=12)
+        except Exception as exc:
+            return {'ok': False, 'message': str(exc), 'overview': {}, 'raw_counts': {'rows': 0, 'skills': 0, 'monsters': 0, 'dungeons': 0}, 'errors': [str(exc)]}
 
     def _get_act_death_recap_menu_status(self):
         try:

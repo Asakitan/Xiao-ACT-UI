@@ -8,6 +8,8 @@ import json
 import time
 from typing import Any, Callable, Iterable, Mapping, Optional
 
+from engines.act_aggregate import build_act_aggregate_summary
+
 from .event_bus import EventBus
 from .plugins import PluginManager
 from .selective_parsing import normalize_policy, should_record_event
@@ -2203,6 +2205,100 @@ def act_action_log_status(owner: Any, *, limit: int = 80, query: str | None = No
         "analytics": analytics,
         "grouped_rows": _action_log_detailed_groups(rows, details_per_group=row_limit),
         "storage_status": storage_status,
+        "errors": errors,
+    }
+
+
+def _act_aggregate_snapshot(owner: Any) -> dict[str, Any]:
+    for name in ("_get_dps_act_snapshot", "_build_dps_act_snapshot"):
+        fn = getattr(owner, name, None)
+        if callable(fn):
+            try:
+                snap = fn(history_limit=20)
+            except TypeError:
+                try:
+                    snap = fn()
+                except Exception:
+                    snap = {}
+            except Exception:
+                snap = {}
+            if isinstance(snap, Mapping):
+                return dict(_json_safe(snap))
+    return {}
+
+
+def act_aggregate_status(owner: Any, *, limit: int = 1000, query: str | None = "",
+                         source: str | None = "live", window_ms: int = 1000,
+                         top_n: int = 20, encounter_id: str | None = None) -> dict[str, Any]:
+    """Return semantic ACT aggregate groups for the primary cockpit panel."""
+    errors: list[str] = []
+    row_limit = max(1, min(int(limit or 1000), 5000))
+    source_mode = _normalize_action_log_source(source)
+    selected_encounter = str(encounter_id or "")
+    rows: list[dict[str, Any]] = []
+    storage_status: dict[str, Any] = {}
+    if source_mode == "history":
+        store, store_errors = _owner_history_store(owner)
+        errors.extend(store_errors)
+        raw_actions: list[Any] = []
+        if store is not None:
+            storage_status = _history_storage_status(store)
+            list_actions = getattr(store, "list_sqlite_actions", None)
+            if callable(list_actions):
+                try:
+                    raw_actions = list(_json_safe(list_actions(
+                        limit=row_limit,
+                        encounter_id=selected_encounter,
+                    ) or []))
+                except Exception as exc:
+                    errors.append(str(exc))
+            else:
+                errors.append("SQLite action history query API is unavailable")
+        rows = [_action_log_history_row(action, idx) for idx, action in enumerate(raw_actions) if isinstance(action, Mapping)]
+    else:
+        try:
+            raw_events = ensure_act_event_bus(owner).recent_events(row_limit)
+        except Exception as exc:
+            raw_events = []
+            errors.append(str(exc))
+        rows = [_action_log_row(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
+    rows = _filter_action_log_rows(rows, query=str(query or ""), topic="")
+    snapshot = _act_aggregate_snapshot(owner)
+    render_spec = snapshot.get("render_spec") if isinstance(snapshot.get("render_spec"), Mapping) else {}
+    try:
+        summary = build_act_aggregate_summary(
+            rows,
+            render_spec=render_spec,
+            window_ms=max(100, int(window_ms or 1000)),
+            top_n=max(1, min(int(top_n or 20), 80)),
+        )
+    except Exception as exc:
+        errors.append(str(exc))
+        summary = build_act_aggregate_summary([], render_spec=render_spec)
+    raw_counts = dict(summary.get("raw_counts") or {})
+    raw_counts.update({"action_rows": len(rows), "limit": row_limit})
+    return {
+        "ok": not errors,
+        "message": "OK" if not errors else "; ".join(errors),
+        "source": source_mode,
+        "encounter_id": selected_encounter or str(snapshot.get("encounter_id") or (render_spec.get("encounter") or {}).get("id") or ""),
+        "overview": summary.get("overview") or {},
+        "timeline_clusters": summary.get("timeline_clusters") or [],
+        "skill_damage": summary.get("skill_damage") or [],
+        "monster_damage": summary.get("monster_damage") or [],
+        "dungeon_damage": summary.get("dungeon_damage") or [],
+        "log_groups": summary.get("log_groups") or [],
+        "source_mix": summary.get("source_mix") or [],
+        "raw_counts": raw_counts,
+        "filters": {
+            "query": str(query or ""),
+            "source": source_mode,
+            "window_ms": max(100, int(window_ms or 1000)),
+            "top_n": max(1, min(int(top_n or 20), 80)),
+            "encounter_id": selected_encounter,
+        },
+        "storage_status": storage_status,
+        "snapshot": snapshot,
         "errors": errors,
     }
 
