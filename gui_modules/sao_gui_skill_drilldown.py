@@ -306,19 +306,32 @@ class SkillDrilldownPanel:
     def _render_payload(self, status: Mapping[str, Any]) -> None:
         if self._rows is None:
             return
+        summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
         box = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
         box.pack(fill='x', padx=4, pady=(8, 0))
-        tk.Label(box, text='COPY PAYLOAD PREVIEW', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold'), anchor='w').pack(fill='x')
-        preview = {
-            'encounter_id': status.get('encounter_id'),
-            'combatant_id': status.get('combatant_id'),
-            'skill_id': status.get('skill_id'),
-            'casts': status.get('casts'),
-            'hits': status.get('hits'),
-            'crit_rate': status.get('crit_rate'),
-            'timeline_refs': len(status.get('timeline_refs') or []),
-        }
-        tk.Label(box, text=json.dumps(preview, ensure_ascii=False), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Consolas', 9), anchor='w', justify='left', wraplength=760).pack(fill='x', padx=8, pady=6)
+        tk.Label(box, text='技能事实 / SKILL FACTS', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_GOLD, font=('Segoe UI', 9, 'bold'), anchor='w').pack(fill='x')
+        # Clean labeled key/value grid instead of a raw JSON blob (the previous
+        # "COPY PAYLOAD PREVIEW" dump was the unreadable part). The Copy button
+        # still copies the full payload.
+        facts = (
+            ('Combatant', status.get('combatant_id') or '-'),
+            ('Skill ID', status.get('skill_id') or '-'),
+            ('Damage', self._fmt(summary.get('damage'))),
+            ('Heal', self._fmt(summary.get('heal'))),
+            ('Casts', int(status.get('casts') or 0)),
+            ('Hits', int(status.get('hits') or 0)),
+            ('Crit', self._pct(status.get('crit_rate'))),
+            ('Refs', len(status.get('timeline_refs') or [])),
+        )
+        grid = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
+        grid.pack(fill='x', padx=8, pady=6)
+        for idx in range(4):
+            grid.grid_columnconfigure(idx, weight=1, uniform='facts')
+        for i, (key, value) in enumerate(facts):
+            cell = tk.Frame(grid, bg=_SAO_PANEL_BODY_BG)
+            cell.grid(row=i // 4, column=i % 4, sticky='ew', padx=(0, 14), pady=3)
+            tk.Label(cell, text=key.upper(), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8), anchor='w').pack(fill='x')
+            tk.Label(cell, text=str(value), bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, font=('Segoe UI', 11, 'bold'), anchor='w').pack(fill='x')
 
     @staticmethod
     def _fmt(value: Any) -> str:
