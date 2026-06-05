@@ -122,7 +122,8 @@
       font-size: 11px;
       color: rgba(223,250,255,0.72);
     }
-    .row { display: grid; grid-template-columns: 72px 1fr 82px; gap: 8px; border-top: 1px solid rgba(72,239,255,0.12); padding-top: 4px; }
+    .row { display: grid; grid-template-columns: 78px 1fr 82px; gap: 8px; border-top: 1px solid rgba(72,239,255,0.12); padding-top: 4px; cursor: pointer; }
+    .row:hover { background: rgba(72,239,255,0.10); }
     .status { margin-top: 10px; color: rgba(223,250,255,0.52); font-size: 11px; }
     .close { width: 34px; height: 34px; padding: 0; border-radius: 50%; font-size: 16px; }
     @media (max-width: 820px) {
@@ -133,6 +134,7 @@
   </style>
   <link rel="stylesheet" href="act_panel_theme.css" />
   <script src="act_panel_theme.js"></script>
+  <script src="act_panel_util.js"></script>
 </head>
 <body>
   <section class="panel">
@@ -299,6 +301,10 @@
         this.fadeOut();
         await callApi('toggle_graph_timeseries', 'ui.menu_action', 'toggle_graph_timeseries');
       },
+      async openLog(ms, topic) {
+        await callApi('show_action_log_at', 'act.action_log.jump_to_time', Number(ms) || 0, 'live', '');
+        document.getElementById('status').textContent = 'Action Log @ ' + ActTime.fmtClock(ms);
+      },
       render(status) {
         status = status || {};
         this.last = status;
@@ -312,10 +318,14 @@
         document.getElementById('metricName').textContent = metric;
         document.getElementById('latestValue').textContent = fmt(latest);
         document.getElementById('pointCount').textContent = String(points.length || 0);
-        document.getElementById('rangeValue').textContent = String(status.time_range_ms || 0) + 'ms';
+        document.getElementById('rangeValue').textContent = ActTime.fmtDur(status.time_range_ms);
         document.getElementById('status').textContent = status.message || 'OK';
         document.getElementById('legend').innerHTML = (status.metrics || []).map(m => '<div class="legend-row"><span class="swatch" style="background:' + (colors[m.id] || '#48efff') + '"></span><span>' + (m.label || m.id) + '</span></div>').join('');
-        document.getElementById('points').innerHTML = points.slice(-6).reverse().map(p => '<div class="row"><span>' + (p.time_ms || 0) + 'ms</span><span>' + (p.topic || '') + '</span><span>' + fmt(p.value) + '</span></div>').join('');
+        const t0 = points.length ? Math.min.apply(null, points.map(p => Number(p.time_ms || 0))) : 0;
+        document.getElementById('points').innerHTML = points.slice(-6).reverse().map(p => {
+          const ms = Number(p.time_ms || 0);
+          return '<div class="row" title="' + ActTime.fmtRel(ms, t0) + '" onclick="GraphTimeseries.openLog(' + ms + ",'" + (p.topic || '') + "')\"><span>" + ActTime.fmtClock(ms) + '</span><span>' + (p.topic || '') + '</span><span>' + fmt(p.value) + '</span></div>';
+        }).join('');
         drawChart(status);
       }
     };

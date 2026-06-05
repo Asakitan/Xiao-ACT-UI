@@ -34,6 +34,9 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
 .table th, .table td { padding: 8px 9px; border-bottom: 1px solid rgba(117, 205, 255, .14); text-align: left; vertical-align: top; }
 .table th { position: sticky; top: 0; z-index: 1; background: rgba(31, 22, 35, .96); color: var(--gold); font-size: 11px; letter-spacing: .08em; }
 .death td { background: rgba(255, 107, 130, .12); box-shadow: inset 3px 0 0 var(--bad); }
+.table tbody tr.evt { cursor: pointer; }
+.table tbody tr.evt:hover { background: rgba(117, 205, 255, .08); }
+.table tr.detail td { background: rgba(8, 14, 22, .58); }
 .kind { color: var(--gold); font-size: 11px; letter-spacing: .08em; }
 .payload { color: var(--muted); font-size: 11px; line-height: 1.45; user-select: text; }
 .side { min-height: 0; border: 1px solid rgba(117, 205, 255, .30); border-radius: 10px; background: rgba(8, 14, 22, .52); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
@@ -46,6 +49,7 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
 <script src="act_panel_theme.js"></script>
+<script src="act_panel_util.js"></script>
 </head>
 <body>
 <div class="shell" id="shell">
@@ -107,17 +111,20 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         document.getElementById('sum-heal').textContent = String(summary.healing || 0);
         document.getElementById('sum-shield').textContent = String(summary.shield || 0);
         document.getElementById('sum-rows').textContent = String(rows.length || 0);
-        document.getElementById('sum-window').textContent = String(win.before_ms || 0) + 'ms';
+        document.getElementById('sum-window').textContent = ActTime.fmtDur(win.before_ms);
         document.getElementById('sum-errors').textContent = String((data.errors || []).length);
         if (!rows.length) { rowsEl.innerHTML = '<div class="empty">暂无死亡回放。<br/>等待 death/is_dead/hp=0 事件。</div>'; return; }
-        rowsEl.innerHTML = '<table class="table"><thead><tr><th>Delta</th><th>Kind</th><th>Actor</th><th>Target</th><th>Amount</th><th>Detail</th></tr></thead><tbody>' + rows.map(function (row) {
-            return '<tr class="' + (row.is_death ? 'death' : '') + '"><td>' + esc((row.relative_ms || 0) + 'ms') + '</td><td><span class="kind">' + esc(row.kind || row.topic || '-') + '</span></td><td>' + esc(row.actor || '-') + '</td><td>' + esc(row.target || '-') + '</td><td>' + esc(row.amount || '') + '</td><td><div class="payload">' + esc(row.label || '') + '</div></td></tr>';
+        rowsEl.innerHTML = '<table class="table"><thead><tr><th>Delta</th><th>Time</th><th>Kind</th><th>Actor</th><th>Target</th><th>Amount</th><th>Detail</th></tr></thead><tbody>' + rows.map(function (row) {
+            var main = '<tr class="evt ' + (row.is_death ? 'death' : '') + '" onclick="DeathRecap.toggleRow(this)"><td>' + esc(ActTime.fmtSigned(row.relative_ms)) + '</td><td>' + esc(ActTime.fmtClock(row.time_ms)) + '</td><td><span class="kind">' + esc(row.kind || row.topic || '-') + '</span></td><td>' + esc(row.actor || '-') + '</td><td>' + esc(row.target || '-') + '</td><td>' + esc(row.amount || '') + '</td><td><div class="payload">' + esc(row.label || '') + '</div></td></tr>';
+            var detail = '<tr class="detail" style="display:none;"><td colspan="7"><div class="payload">' + esc(JSON.stringify(row.payload || {})) + '</div></td></tr>';
+            return main + detail;
         }).join('') + '</tbody></table>';
     }
     window.DeathRecap = {
         refresh: function () { return apiCall('get_death_recap_status', [80, Number(windowInput.value || 8), entity.value || null]).then(function (data) { render(data); if (data.ok === false) showToast(data.message || 'Death recap failed'); return data; }); },
         copy: function () { return apiCall('copy_death_recap', [80, Number(windowInput.value || 8), entity.value || null]).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data); showToast('Death recap copied'); return data; }); },
         close: function () { apiCall('toggle_death_recap'); },
+        toggleRow: function (tr) { var d = tr.nextElementSibling; if (d && d.classList.contains('detail')) d.style.display = (d.style.display === 'none' ? '' : 'none'); },
         fadeIn: function () { shell.classList.add('visible'); },
         fadeOut: function () { shell.classList.remove('visible'); }
     };

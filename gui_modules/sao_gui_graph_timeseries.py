@@ -15,7 +15,17 @@ from act_platform.runtime import (
     act_graph_timeseries_status,
     act_graph_timeseries_zoom,
 )
-from gui_modules.sao_panel_components import action_button, aggregate_row, empty_state, metric_tile, section_card, status_badge
+from gui_modules.sao_panel_components import (
+    action_button,
+    aggregate_row,
+    empty_state,
+    fmt_clock,
+    fmt_dur,
+    fmt_rel,
+    metric_tile,
+    section_card,
+    status_badge,
+)
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -255,7 +265,7 @@ class GraphTimeseriesPanel:
         latest = points[-1].get('value') if points else 0
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
         self._summary_var.set(
-            f"{metric.upper()} · {len(points)} PTS · {self._fmt(latest)} · {int(status.get('time_range_ms') or 0)}ms"
+            f"{metric.upper()} · {len(points)} PTS · {self._fmt(latest)} · {fmt_dur(status.get('time_range_ms'))}"
         )
         errors = list(status.get('errors') or [])
         self._status_var.set(
@@ -288,10 +298,11 @@ class GraphTimeseriesPanel:
         grid.pack(fill='x', padx=4, pady=(0, 8))
         first_ms = int(points[0].get('time_ms') or 0) if points else 0
         last_ms = int(points[-1].get('time_ms') or 0) if points else 0
+        span_sub = f"{fmt_clock(first_ms)} · {fmt_dur(last_ms - first_ms)}" if first_ms else '--'
         items = (
             ('Metric', metric.upper(), f"topic {filters.get('topic') or 'ALL'}", 'gold'),
             ('Latest', self._fmt(latest), f"{len(points)} points", 'cyan'),
-            ('Range', f"{int(status.get('time_range_ms') or 0)}ms", f"{first_ms}-{last_ms}ms", 'cyan'),
+            ('Range', fmt_dur(status.get('time_range_ms')), span_sub, 'cyan'),
             ('Rows', int(status.get('row_count') or len(points)), f"raw {'ON' if self._show_raw_points.get() else 'OFF'}", 'gold'),
         )
         for label, value, sub, accent in items:
@@ -325,10 +336,11 @@ class GraphTimeseriesPanel:
         chart_body.pack(fill='x', padx=8, pady=8)
         max_value = max(1.0, *[float(point.get('value') or 0.0) for point in points])
         color = _BAR_COLORS.get(metric, _SAO_PANEL_ACCENT)
+        first_ms = int(points[0].get('time_ms') or 0) if points else 0
         for point in points[-24:]:
             row = tk.Frame(chart_body, bg=_SAO_PANEL_BODY_BG)
             row.pack(fill='x', padx=8, pady=3)
-            time_label = f"{int(point.get('time_ms') or 0)}ms"
+            time_label = fmt_rel(point.get('time_ms'), first_ms)
             value = float(point.get('value') or 0.0)
             tk.Label(row, text=time_label, width=10, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8)).pack(side='left')
             bar_wrap = tk.Frame(row, bg='#eeeeee', height=8)
@@ -345,9 +357,12 @@ class GraphTimeseriesPanel:
         body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
         body.pack(fill='x', padx=8, pady=8)
         max_value = max(1.0, *[float(point.get('value') or 0.0) for point in points])
+        first_ms = int(points[0].get('time_ms') or 0) if points else 0
         for idx, point in enumerate(reversed(points[-16:])):
             row_id = str(point.get('row_id') or '-')
-            meta = f"{str(point.get('topic') or '-').upper()} · t={int(point.get('time_ms') or 0)}ms"
+            time_ms = int(point.get('time_ms') or 0)
+            topic = str(point.get('topic') or '-').upper()
+            meta = f"{topic} · {fmt_clock(time_ms)} ({fmt_rel(time_ms, first_ms)})"
             if self._show_raw_points.get():
                 meta += f" · row={row_id}"
             aggregate_row(
@@ -358,7 +373,38 @@ class GraphTimeseriesPanel:
                 ratio=float(point.get('value') or 0.0) / max_value if max_value else 0.0,
                 accent='gold' if metric == 'damage' else 'cyan',
                 zebra=bool(idx % 2),
+                command=lambda t=time_ms, tp=str(point.get('topic') or ''): self._open_action_log_at(t, tp),
             ).pack(fill='x', pady=2)
+
+    def _open_action_log_at(self, time_ms: int, topic: str) -> None:
+        """Drill a graph point into the Action Log focused at that point's time."""
+        owner = self.owner
+        try:
+            panel = getattr(owner, '_act_action_log_panel', None)
+            visible = bool(panel and getattr(panel, 'is_visible', lambda: False)())
+            if not visible:
+                toggle = getattr(owner, '_toggle_act_action_log_panel', None)
+                if callable(toggle):
+                    toggle()
+                panel = getattr(owner, '_act_action_log_panel', None)
+            if panel is None:
+                self._status_var.set('Action Log panel unavailable')
+                return
+            try:
+                panel._cursor_var.set(str(int(time_ms or 0)))
+                if topic:
+                    panel._topic_var.set(str(topic))
+                jump = getattr(panel, 'jump_to_time', None) or getattr(panel, 'refresh', None)
+                if callable(jump):
+                    jump()
+            except Exception:
+                pass
+            self._status_var.set(f'Action Log @ {fmt_clock(time_ms)}')
+        except Exception as exc:
+            try:
+                self._status_var.set(str(exc))
+            except Exception:
+                pass
 
     @staticmethod
     def _fmt(value: Any) -> str:

@@ -19,6 +19,8 @@ from gui_modules.sao_panel_components import (
     action_button,
     aggregate_row,
     empty_state,
+    fmt_clock,
+    fmt_dur,
     metric_tile,
     section_card,
     status_badge,

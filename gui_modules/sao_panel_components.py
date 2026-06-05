@@ -9,6 +9,7 @@ swap repaints every panel consistently — never hardcode hex here.
 
 from __future__ import annotations
 
+import time as _time
 import tkinter as tk
 from typing import Any, Callable, Iterable, Mapping, Optional
 
@@ -37,6 +38,63 @@ def _pc(key: str, fallback: str = '') -> str:
         return ui._theme_color(key, fallback) or fallback
     except Exception:
         return fallback
+
+
+# ── 可读时间格式化（所有 ACT 面板共用，禁止再拿 epoch-ms 直接 print）──
+# 三类时间分开处理：绝对 epoch 毫秒→墙钟 HH:MM:SS；带符号偏移→+2.6s；纯时长→2.6s/M:SS。
+# JS 侧的等价实现见 web/act_panel_util.js（window.ActTime），两边输出必须逐字一致。
+def fmt_clock(time_ms: Any, *, with_seconds: bool = True) -> str:
+    """ABSOLUTE epoch-ms → local wall clock 'HH:MM:SS'. '--' when <=0/None."""
+    try:
+        ms = int(time_ms or 0)
+    except Exception:
+        ms = 0
+    if ms <= 0:
+        return '--'
+    return _time.strftime('%H:%M:%S' if with_seconds else '%H:%M', _time.localtime(ms / 1000.0))
+
+
+def fmt_dur(ms: Any) -> str:
+    """Non-negative DURATION → '2.6s' (<60s) / 'M:SS' (<1h) / 'H:MM:SS'."""
+    try:
+        total = max(0.0, float(ms or 0)) / 1000.0
+    except Exception:
+        total = 0.0
+    if total < 60:
+        return f'{total:.1f}s'
+    if total < 3600:
+        return f'{int(total // 60)}:{int(total % 60):02d}'
+    return f'{int(total // 3600)}:{int((total % 3600) // 60):02d}:{int(total % 60):02d}'
+
+
+def fmt_rel(time_ms: Any, base_ms: Any) -> str:
+    """SIGNED offset of absolute time_ms from base_ms → '+2.6s' / '-1:23'.
+
+    Falls back to fmt_clock when base is missing (so a lone absolute time still
+    reads as a clock, never as raw ms).
+    """
+    try:
+        base = int(base_ms or 0)
+    except Exception:
+        base = 0
+    if not base:
+        return fmt_clock(time_ms)
+    try:
+        delta = int(time_ms or 0) - base
+    except Exception:
+        delta = 0
+    return f"{'+' if delta >= 0 else '-'}{fmt_dur(abs(delta))}"
+
+
+def fmt_signed(delta_ms: Any) -> str:
+    """Already-computed delta (relative_ms / cursor) → 'T0' at zero, else '+2.6s'/'-1:23'."""
+    try:
+        d = int(delta_ms or 0)
+    except Exception:
+        d = 0
+    if d == 0:
+        return 'T0'
+    return f"{'+' if d > 0 else '-'}{fmt_dur(abs(d))}"
 
 
 def _accent(kind: str = "gold") -> str:
@@ -214,9 +272,12 @@ def aggregate_row(parent: tk.Misc, *, title: str, meta: str = "", value: str = "
     if value:
         tk.Label(body, text=str(value), bg=base_bg, fg=color, font=FONT_VALUE_SM, anchor='e').pack(side='right', padx=(SP_SM, 0))
 
+    # Only advertise interactivity (hand cursor + hover-lighten) when the row
+    # actually has a handler — a hovering-but-dead row reads as "click me" and
+    # then does nothing (the user's "点开进不去" complaint).
     if callable(command):
         _bind_click(row, command)
-    _bind_hover(row, base_bg, hover_bg)
+        _bind_hover(row, base_bg, hover_bg)
     return row
 
 

@@ -9,7 +9,17 @@ import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
 from act_platform.runtime import act_death_recap_copy, act_death_recap_status
-from gui_modules.sao_panel_components import action_button, aggregate_row, empty_state, metric_tile, section_card, status_badge
+from gui_modules.sao_panel_components import (
+    action_button,
+    aggregate_row,
+    empty_state,
+    fmt_clock,
+    fmt_dur,
+    fmt_signed,
+    metric_tile,
+    section_card,
+    status_badge,
+)
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -216,8 +226,8 @@ class DeathRecapPanel:
         items = (
             ('Incoming', self._fmt(summary.get('incoming_damage')), f"{int(summary.get('death_events') or 0)} death", 'danger'),
             ('Healing', self._fmt(summary.get('healing')), f"shield {self._fmt(summary.get('shield'))}", 'heal'),
-            ('Rows', len(rows), f"window {int(window.get('before_ms') or 0)}ms", 'cyan'),
-            ('Death', death.get('name') or death.get('entity_id') or '-', f"t={int(death.get('time_ms') or 0)}ms", 'gold'),
+            ('Rows', len(rows), f"window {fmt_dur(window.get('before_ms'))}", 'cyan'),
+            ('Death', death.get('name') or death.get('entity_id') or '-', f"@ {fmt_clock(death.get('time_ms'))}", 'gold'),
         )
         for label, value, sub, accent in items:
             metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
@@ -238,12 +248,13 @@ class DeathRecapPanel:
         accent = 'danger' if row.get('is_death') or kind == 'incoming_damage' else ('heal' if kind == 'healing' else 'gold')
         aggregate_row(
             parent,
-            title=('▼ ' if open_row else '▶ ') + f"{rel:+}ms · {kind}",
+            title=f"{fmt_signed(rel)} · {kind}",
             meta=detail,
             value=self._fmt(row.get('amount')),
             ratio=1.0 if row.get('is_death') else 0.35,
             accent=accent,
             command=lambda key=row_id: self._toggle_row(key),
+            expanded=open_row,
         ).pack(fill='x', pady=2)
         if open_row:
             payload = json.dumps(row.get('payload') or {}, ensure_ascii=False, default=str)
