@@ -4132,6 +4132,24 @@ class SAOWebViewGUI:
             js_api=self._dps_api,
         )
 
+        # Buff coverage overlay — 幻想技能 buff uptime, below the DPS meter
+        buff_cov_url = _web_file_uri('buff_coverage.html')
+        _bc_w = int(getattr(self, '_dps_base_w', 0)) or max(300, int(min(_sw, 1920) * 0.18))
+        _bc_h = max(220, int(min(_sh, 1080) * 0.24))
+        _bc_x = _dps_x
+        _bc_y = min(_dps_y + _dps_h + 12, max(0, _sh - _bc_h - 24))
+        self.buff_coverage_win = webview.create_window(
+            'SAO-BuffCoverage', buff_cov_url,
+            width=_bc_w, height=_bc_h,
+            x=_bc_x, y=_bc_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         # Raid Editor overlay — left side, same height as DPS
         raid_editor_url = _web_file_uri('raid_editor.html')
         _re_w = max(360, int(min(_sw, 1920) * 0.22))
@@ -5586,6 +5604,12 @@ class SAOWebViewGUI:
                     if self.dps_win:
                         self._wait_and_apply_click_through('SAO-DPS', timeout=0.5)
                         self._make_dps_unclickable()
+                    _bcw = getattr(self, 'buff_coverage_win', None)
+                    if _bcw and not getattr(self, '_buff_cov_visible', False):
+                        self._wait_and_apply_click_through('SAO-BuffCoverage', timeout=0.5)
+                        self._set_window_alpha('SAO-BuffCoverage', 1.0)
+                        _bcw.show()
+                        self._buff_cov_visible = True
                 except Exception:
                     pass
             threading.Timer(4.0, _late_panel_recovery).start()
@@ -5598,6 +5622,7 @@ class SAOWebViewGUI:
             self._set_window_icon('SAO Alert')
             self._set_window_icon('SAO-BossHP')
             self._set_window_icon('SAO-DPS')
+            self._set_window_icon('SAO-BuffCoverage')
             self._set_window_icon('SAO-RaidEditor')
             self._set_window_icon('SAO-AutoKeyEditor')
             self._set_window_icon('SAO-Commander')
@@ -6063,6 +6088,67 @@ class SAOWebViewGUI:
         try:
             if self.boss_hp_win:
                 self.boss_hp_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _eval_buff_coverage(self, js):
+        try:
+            win = getattr(self, 'buff_coverage_win', None)
+            if win:
+                win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _push_buff_coverage(self, gs, buf_list):
+        """Build + push the 幻想技能 buff-coverage payload to the webview panel.
+
+        Merges the dps tracker's encounter uptime (uptime%, trigger count,
+        layers) with the remaining-time of the current self_buffs snapshot,
+        filtered to ultimate (幻想技能) buffs. Deduped + skipped when buffmon
+        is disabled. Runs only on actual buff change (caller dedups by ref).
+        """
+        try:
+            tr = getattr(self, '_dps_tracker', None)
+            if tr is None:
+                return
+            if not self._get_setting('buffmon_enabled', True):
+                if getattr(self, '_last_buff_cov_sig', None) != 'off':
+                    self._last_buff_cov_sig = 'off'
+                    self._eval_buff_coverage('updateBuffCoverage({"buffs":[]})')
+                return
+            from gui_modules.sao_gui_buffmon import is_ultimate_buff
+            upt = tr.get_buff_uptime()
+            soff = float(getattr(gs, 'server_time_offset_ms', 0.0) or 0.0)
+            now_ms = time.time() * 1000.0 + soff
+            rem_by_id = {}
+            for b in (buf_list or []):
+                if not isinstance(b, dict):
+                    continue
+                bid = int(b.get('id', 0) or b.get('buff_id', 0) or 0)
+                begin = int(b.get('begin_ms', 0) or b.get('begin_time', 0) or 0)
+                dur = int(b.get('duration_ms', 0) or b.get('duration', 0) or 0)
+                if bid and dur > 0 and begin > 0:
+                    rem_by_id[bid] = round(max(0.0, (begin + dur - now_ms) / 1000.0), 1)
+            rows = []
+            for u in upt.get('buffs', []):
+                bid = int(u.get('buff_id', 0) or 0)
+                nm = u.get('name', '')
+                if not is_ultimate_buff(nm, bid):
+                    continue
+                rows.append({
+                    'id': bid, 'name': nm,
+                    'uptime_pct': u.get('uptime_pct', 0.0),
+                    'apply_count': u.get('apply_count', 0),
+                    'layer': u.get('layer', 0),
+                    'max_layer': u.get('max_layer', 0),
+                    'active': bool(u.get('active', False)),
+                    'rem_s': rem_by_id.get(bid, -1.0),
+                })
+            payload = {'elapsed_ms': upt.get('elapsed_ms', 0), 'buffs': rows}
+            js_payload = json.dumps(payload, ensure_ascii=False)
+            if js_payload != getattr(self, '_last_buff_cov_sig', None):
+                self._last_buff_cov_sig = js_payload
+                self._eval_buff_coverage('updateBuffCoverage(%s)' % js_payload)
         except Exception:
             pass
 
@@ -9281,7 +9367,9 @@ class SAOWebViewGUI:
                             _rb = getattr(gs, 'self_buffs', None)
                             if _rb is not getattr(self, '_last_self_buffs_ref', None):
                                 self._last_self_buffs_ref = _rb
-                                self._dps_tracker.update_self_buffs(list(_rb or []))
+                                _bl = list(_rb or [])
+                                self._dps_tracker.update_self_buffs(_bl)
+                                self._push_buff_coverage(gs, _bl)
                             if gs.player_id:
                                 _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
                                 if _p_uid:
