@@ -1904,20 +1904,52 @@ class BossHpOverlay:
         draw.line(outline + [outline[0]], fill=self.LINE, width=1)
         draw.line((ox, oy, ox, oy + 25), fill=self.LINE, width=1)
 
+    def _fit_name_lines(self, draw, name: str, max_w: int, base_size: int):
+        """智能分行 + 自适应字号: 单行放得下就缩字号保持单行, 否则均分 2 行
+        并缩到两行都能放下。返回 (lines, font, size)。"""
+        name = (name or '').strip()
+        if not name:
+            return [''], _pick_font('', base_size), base_size
+        # 单行: 原字号 → 略缩
+        for size in (base_size, base_size - 2):
+            font = _pick_font(name, size)
+            if _text_width(draw, name, font) <= max_w:
+                return [name], font, size
+        # 两行: 从中间均分, 逐步缩字号直到两行都放得下
+        mid = (len(name) + 1) // 2
+        l1, l2 = name[:mid], name[mid:]
+        for size in (base_size - 2, base_size - 3, base_size - 4):
+            font = _pick_font(name, size)
+            if (_text_width(draw, l1, font) <= max_w
+                    and _text_width(draw, l2, font) <= max_w):
+                return [l1, l2], font, size
+        # 兜底: 最小字号 + 两行各自截断
+        size = base_size - 4
+        font = _pick_font(name, size)
+        return ([_truncate(draw, l1, font, max_w),
+                 _truncate(draw, l2, font, max_w)], font, size)
+
     def _draw_name_plate_text(self, img: Image.Image, y_off: int) -> None:
         draw = ImageDraw.Draw(img, 'RGBA')
-        name = self._boss_name
-        font = _pick_font(name, 15)
-        ty = self.BOX_Y + 4 + y_off
         color = self.TEXT_MAIN
         max_w = 85
-        name = _truncate(draw, name, font, max_w)
-        tx = self.BOX_X + 29 + 10 + max(0, (85 - _text_width(draw, name, font)) // 2)
-        _draw_text_shadow(
-            img, (tx + 1, ty + 1), name, font,
-            shadow_color=(28, 34, 42, 56), blur=2,
-        )
-        draw.text((tx, ty), name, fill=color, font=font)
+        base_x = self.BOX_X + 29 + 10
+        lines, font, size = self._fit_name_lines(draw, self._boss_name, max_w, 15)
+        line_h = size + 1
+        # 1 行: 原基线; 2 行: 整体上移半行, 围绕原基线垂直居中 (智能适应位置)
+        base_ty = self.BOX_Y + 4 + y_off
+        top = base_ty if len(lines) <= 1 else base_ty - (line_h // 2)
+        for i, ln in enumerate(lines):
+            if not ln:
+                continue
+            lw = _text_width(draw, ln, font)
+            tx = base_x + max(0, (max_w - lw) // 2)
+            ty = top + i * line_h
+            _draw_text_shadow(
+                img, (tx + 1, ty + 1), ln, font,
+                shadow_color=(28, 34, 42, 56), blur=2,
+            )
+            draw.text((tx, ty), ln, fill=color, font=font)
 
     # ── HP bar ──────────────────────────────────────────────────────
 

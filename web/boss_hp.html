@@ -200,11 +200,15 @@ html,body{
 .xt_right>span{
     min-width:80px;
     max-width:85px;
-    padding-left:10px;
+    padding-left:8px;
     text-align:center;
-    white-space:nowrap;
+    line-height:1.05;
+    white-space:normal;      /* 智能分行: 长名换行而非截断 */
+    word-break:break-word;
     overflow:hidden;
-    text-overflow:ellipsis;
+    display:-webkit-box;
+    -webkit-box-orient:vertical;
+    -webkit-line-clamp:2;    /* 最多 2 行, 超出省略号 */
 }
 .number_xt{
     position:absolute;
@@ -1513,9 +1517,14 @@ function updateBossBar(data) {
         _showBossBar();
     }
 
-    // Update boss name
+    // Update boss name — 智能分行 + 按长度自适应字号 (智能适应位置)
     var bossNameEl = document.getElementById('boss-name');
-    if (bossNameEl && data.boss_name) bossNameEl.textContent = data.boss_name;
+    if (bossNameEl && data.boss_name) {
+        bossNameEl.textContent = data.boss_name;
+        var _nl = data.boss_name.length;
+        var _fs = _nl <= 4 ? 14 : (_nl <= 6 ? 12.5 : (_nl <= 9 ? 11.5 : 10.5));
+        bossNameEl.style.fontSize = _fs + 'px';
+    }
 
     var pct = Math.max(0, Math.min(1, Number(data.hp_pct || 0)));
     var hpFill = document.getElementById('hp-fill');
