@@ -630,11 +630,14 @@ class _BuffPanelBase:
             fill=(255, 255, 255, 90), width=1,
         )
 
-        # 名字 (左)
+        # 名字 (左) — ×层数 · 触发次数
+        applies = int(row.get('apply_count', 0) or 0)
         if layer > 1:
             name = f'{name} ×{layer}'
         elif count > 1:
             name = f'{name} ×{count}'
+        if applies > 1:
+            name = f'{name}·{applies}'
 
         font_name = _pick_font(name, 12)
         # 给秒数 60 px
@@ -664,6 +667,20 @@ class _BuffPanelBase:
             # 重新计算: secs 文字右对齐到 rx1-8, 单位放在 secs 之后会越界, 改为 secs 内部
             # 干脆把 's' 包含进 secs 文字
             pass
+
+        # ACT 本场 uptime 覆盖率: 行底边细条 (self buff 才有; -1 = 无数据)
+        up = row.get('uptime_pct', -1.0)
+        if up >= 0.0:
+            pct = max(0.0, min(1.0, up))
+            bar_y = ry1 - 1
+            bar_x0 = rx0 + 8
+            bar_x1 = rx1 - 8
+            full_w = max(1, bar_x1 - bar_x0)
+            draw.line((bar_x0, bar_y, bar_x1, bar_y), fill=(255, 255, 255, 34), width=2)
+            fill_w = int(full_w * pct)
+            if fill_w > 0:
+                draw.line((bar_x0, bar_y, bar_x0 + fill_w, bar_y),
+                          fill=self.GOLD if pct >= 0.85 else self.CYAN_DEEP, width=2)
 
     def _lerp_color(self, ca, cb, t):
         t = max(0.0, min(1.0, t))
@@ -905,11 +922,15 @@ class SelfBuffOverlay(_BuffPanelBase):
         self._hp_overlay = hp_overlay
         self.set_anchor(hp_overlay)
 
-    def update_buffs(self, raw_buffs: list, server_offset_ms: float = 0.0):
+    def update_buffs(self, raw_buffs: list, server_offset_ms: float = 0.0,
+                     uptime=None):
         """Upsert 进 _buff_cache; 旧的 buff 由 duration 自然过期, 不被新推送清空。
 
         这样即使服务器偶发只发部分 buff (例如 AoiSyncDelta 只带 1 个 '箭雨'),
         奥义 buff 也不会被误清, 不再闪烁。
+
+        ``uptime`` = dps_tracker.get_buff_uptime() 快照 (ACT 本场覆盖率),
+        合并进行渲染: 每个 buff 的 uptime%/触发次数。
         """
         if not isinstance(raw_buffs, list):
             raw_buffs = []
@@ -917,6 +938,16 @@ class SelfBuffOverlay(_BuffPanelBase):
             self._server_offset_ms = float(server_offset_ms or 0.0)
         except Exception:
             self._server_offset_ms = 0.0
+
+        # ACT 本场 buff 覆盖率 map: {buff_id: {uptime_pct, apply_count, max_layer}}
+        if uptime is not None:
+            try:
+                self._uptime_map = {
+                    int(u.get('buff_id', 0) or 0): u
+                    for u in (uptime.get('buffs') or [])
+                }
+            except Exception:
+                self._uptime_map = {}
 
         if raw_buffs and not getattr(self, '_dbg_first_data', False):
             self._dbg_first_data = True
@@ -974,6 +1005,8 @@ class SelfBuffOverlay(_BuffPanelBase):
                 if len(rejected_examples) < 3:
                     rejected_examples.append(name or f"#{bid}")
                 continue
+            _up = getattr(self, '_uptime_map', None)
+            _ur = _up.get(bid) if _up else None
             rows.append({
                 'id': bid,
                 'uuid': uuid,
@@ -981,6 +1014,8 @@ class SelfBuffOverlay(_BuffPanelBase):
                 'rem_s': rem_s,
                 'layer': int(b.get('layer', 0) or 0),
                 'count': int(b.get('count', 0) or 0),
+                'uptime_pct': float(_ur.get('uptime_pct', -1.0)) if _ur else -1.0,
+                'apply_count': int(_ur.get('apply_count', 0)) if _ur else 0,
                 'sort_key': rem_s if rem_s >= 0 else 1e9,
             })
         # 过期清理

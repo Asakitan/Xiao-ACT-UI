@@ -112,18 +112,25 @@ class SAOPlayerGUIStateMixin:
             if _raw_buffs is not _prev_buffs_ref:
                 self._last_self_buffs_ref = _raw_buffs
                 _buf_list = list(_raw_buffs or [])
+                # ACT buff/debuff coverage: feed the tracker FIRST (the
+                # snapshot-diff accumulator credits the interval since the
+                # previous change to the still-active buffs), then read the
+                # uptime back so the overlay can show coverage%.
+                _uptime = None
+                tr = getattr(self, '_dps_tracker', None)
+                if tr is not None:
+                    tr.update_self_buffs(_buf_list)
+                    try:
+                        _uptime = tr.get_buff_uptime()
+                    except Exception:
+                        _uptime = None
                 ov = getattr(self, '_self_buff_overlay', None)
                 if ov is not None:
                     ov.update_buffs(
                         _buf_list,
                         float(getattr(gs, 'server_time_offset_ms', 0.0) or 0.0),
+                        _uptime,
                     )
-                # ACT buff/debuff coverage: feed the tracker on actual buff
-                # changes (the snapshot-diff accumulator credits the interval
-                # since the previous change to the still-active buffs).
-                tr = getattr(self, '_dps_tracker', None)
-                if tr is not None:
-                    tr.update_self_buffs(_buf_list)
         except Exception:
             pass
 
