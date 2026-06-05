@@ -10,8 +10,13 @@ from typing import Any, Dict, Mapping, Optional
 
 from act_platform.runtime import act_aggregate_status, act_graph_timeseries_status
 from gui_modules.sao_panel_components import (
+    SP_XS,
+    SP_SM,
+    SP_MD,
+    SP_LG,
     action_button,
     aggregate_row,
+    detail_row,
     empty_state,
     metric_tile,
     section_card,
@@ -231,17 +236,18 @@ class ActAggregatePanel:
             metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
         badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         badges.pack(fill='x', padx=4, pady=(0, 8))
-        status_badge(badges, f"MODE {overview.get('mode') or 'live'}", kind='cyan').pack(side='left', padx=(0, 6))
-        status_badge(badges, f"SPAN {int(overview.get('span_ms') or 0)}ms", kind='gold').pack(side='left', padx=(0, 6))
+        status_badge(badges, f"MODE {overview.get('mode') or 'live'}", kind='cyan').pack(side='left', padx=(0, SP_SM))
+        span_s = round(float(overview.get('span_ms') or 0) / 1000.0, 1)
+        status_badge(badges, f"SPAN {self._fmt(span_s)}s", kind='gold').pack(side='left', padx=(0, SP_SM))
         source_badges(badges, status.get('source_mix') or []).pack(side='left')
 
     def _render_group_section(self, title: str, subtitle: str, prefix: str, groups: list[Any], *, value_key: str, accent: str) -> None:
         if self._rows is None:
             return
-        box = section_card(self._rows, title, subtitle=subtitle, badge=str(len(groups)))
-        box.pack(fill='x', padx=4, pady=(9, 0))
+        box = section_card(self._rows, title, subtitle=subtitle, badge=str(len(groups)), accent=accent)
+        box.pack(fill='x', padx=4, pady=(SP_MD, 0))
         body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
-        body.pack(fill='x', padx=8, pady=8)
+        body.pack(fill='x', padx=SP_SM, pady=SP_SM)
         valid = [item for item in groups if isinstance(item, Mapping)]
         if not valid:
             empty_state(body, '暂无聚合数据', '当前筛选条件下没有可展示的语义分组。').pack(fill='x')
@@ -253,23 +259,24 @@ class ActAggregatePanel:
             meta = self._group_meta(group)
             row = aggregate_row(
                 body,
-                title=('▼ ' if key in self._expanded_groups else '▶ ') + str(group.get('name') or group.get('key') or '-'),
+                title=str(group.get('name') or group.get('key') or '-'),
                 meta=meta,
                 value=f"{self._fmt(value)} · {int(group.get('count') or 0)}x",
                 ratio=value / max_value if max_value else 0.0,
                 accent=accent,
                 zebra=bool(idx % 2),
                 command=lambda k=key: self._toggle_group(k),
+                expanded=key in self._expanded_groups,
             )
             row.pack(fill='x', pady=2)
             if key in self._expanded_groups:
-                self._render_group_details(body, group)
+                self._render_group_details(body, group, accent=accent)
 
-    def _render_group_details(self, parent: tk.Misc, group: Mapping[str, Any]) -> None:
+    def _render_group_details(self, parent: tk.Misc, group: Mapping[str, Any], *, accent: str = 'cyan') -> None:
         detail = tk.Frame(parent, bg=_SAO_PANEL_BODY_BG)
-        detail.pack(fill='x', padx=18, pady=(0, 6))
+        detail.pack(fill='x', padx=(SP_LG, SP_XS), pady=(0, SP_SM))
         chips = tk.Frame(detail, bg=_SAO_PANEL_BODY_BG)
-        chips.pack(fill='x', pady=(2, 4))
+        chips.pack(fill='x', pady=(2, SP_XS))
         for label, values, kind in (
             ('actors', group.get('actors') or group.get('actor_uids') or [], 'cyan'),
             ('targets', group.get('targets') or group.get('target_uids') or [], 'gold'),
@@ -278,13 +285,13 @@ class ActAggregatePanel:
         ):
             values = list(values or [])[:4]
             if values:
-                status_badge(chips, f"{label}: {', '.join(str(v) for v in values)}", kind=kind).pack(side='left', padx=(0, 6), pady=2)
+                status_badge(chips, f"{label}: {', '.join(str(v) for v in values)}", kind=kind).pack(side='left', padx=(0, SP_SM), pady=2)
         rows = [row for row in list(group.get('rows') or []) if isinstance(row, Mapping)][:6]
         if not rows:
             return
-        for row in rows:
+        for ridx, row in enumerate(rows):
             text = f"{int(row.get('time_ms') or 0)}ms · {row.get('topic') or '-'} · {row.get('actor') or '-'} → {row.get('target') or '-'} · {row.get('label') or '-'} · {self._fmt(row.get('value'))}"
-            tk.Label(detail, text=text, bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, anchor='w', font=('Segoe UI', 9)).pack(fill='x', padx=6, pady=1)
+            detail_row(detail, text, accent=accent, zebra=bool(ridx % 2)).pack(fill='x', pady=1)
 
     def _render_graph_preview(self, graph: Mapping[str, Any]) -> None:
         if self._rows is None:
@@ -297,12 +304,16 @@ class ActAggregatePanel:
         for metric, accent in (('damage', 'gold'), ('heal', 'heal'), ('event_count', 'cyan')):
             item = series.get(metric) if isinstance(series.get(metric), Mapping) else {}
             points = list(item.get('points') or [])
-            latest = points[-1].get('value') if points else 0
-            aggregate_row(body, title=metric.upper(), meta=f"{len(points)} points", value=self._fmt(latest), ratio=1.0 if points else 0.0, accent=accent).pack(fill='x', pady=2)
+            values = [float(p.get('value') or 0.0) for p in points if isinstance(p, Mapping)]
+            latest = values[-1] if values else 0.0
+            peak = max(values) if values else 0.0
+            ratio = (latest / peak) if peak > 0 else 0.0
+            aggregate_row(body, title=metric.upper(), meta=f"{len(points)} points · peak {self._fmt(peak)}",
+                          value=self._fmt(latest), ratio=ratio, accent=accent).pack(fill='x', pady=2)
 
     def _group_meta(self, group: Mapping[str, Any]) -> str:
         span = int(group.get('duration_ms') or max(0, int(group.get('last_time_ms') or 0) - int(group.get('first_time_ms') or 0)))
-        bits = [f"span {span}ms"]
+        bits = [f"active {span}ms"]
         for key, label in (('actors', 'actors'), ('targets', 'targets'), ('skills', 'skills'), ('monsters', 'monsters'), ('dungeons', 'dungeons'), ('sources', 'src')):
             values = list(group.get(key) or [])
             if values:

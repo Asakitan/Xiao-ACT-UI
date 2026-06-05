@@ -167,35 +167,49 @@ _SAO_PANEL_PALETTES = {
         'header_fg': '#646364',
         'border': '#babec4',
         'accent': '#68e4ff',
+        'accent_strong': '#16a9d6',   # 青色描边/文字（强对比，浅底可读）
         'gold': '#dea620',
         'sep': '#d8dde2',
-        'body_bg': '#f6f7f7',
+        'body_bg': '#eef1f4',         # 内容区背景（略深，衬托卡片）
+        'card_bg': '#ffffff',         # 卡片背景（抬升）
+        'card_bg_alt': '#f4f6f8',     # 斑马行/嵌套
         'label_fg': '#8c878a',
-        'value_fg': '#646364',
+        'value_fg': '#3b3a3c',        # 数值文字（加深，更醒目）
         'control_bg': '#fafbfb',
+        'track_bg': '#e2e6ea',        # 进度条底槽
+        'accent_soft': '#e2f6fd',     # 青色淡底（徽章/标签）
+        'gold_soft': '#fbf2d8',
         'danger': '#ef684e',
-        'danger_soft': '#fff0f2',
-        'ok': '#5cc46a',
+        'danger_soft': '#fdeae6',
+        'ok': '#3fae5a',
+        'ok_soft': '#e6f6ea',
         'warn_soft': '#fff8e5',
         'active_fg': '#ffffff',
     },
     'dark': {
-        'bg': '#101823',
-        'header_bg': '#182334',
+        'bg': '#0c141f',
+        'header_bg': '#16243a',
         'header_fg': '#e6f4ff',
-        'border': '#36566a',
+        'border': '#2c4861',
         'accent': '#68e4ff',
+        'accent_strong': '#7fe9ff',
         'gold': '#f0c456',
-        'sep': '#274255',
-        'body_bg': '#111b28',
+        'sep': '#22384c',
+        'body_bg': '#0e1825',         # 内容区背景
+        'card_bg': '#172739',         # 卡片背景（抬升）
+        'card_bg_alt': '#1d3147',     # 斑马行/嵌套
         'label_fg': '#9fb4c4',
-        'value_fg': '#e6f4ff',
-        'control_bg': '#172436',
+        'value_fg': '#eaf6ff',
+        'control_bg': '#16263a',
+        'track_bg': '#1b2c3e',        # 进度条底槽
+        'accent_soft': '#15303f',     # 青色淡底（徽章/标签）
+        'gold_soft': '#2f2916',
         'danger': '#ff707a',
-        'danger_soft': '#301c22',
+        'danger_soft': '#311c22',
         'ok': '#7df2bf',
+        'ok_soft': '#16322a',
         'warn_soft': '#2c2617',
-        'active_fg': '#101823',
+        'active_fg': '#0c141f',
     },
 }
 

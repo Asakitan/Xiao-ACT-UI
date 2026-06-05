@@ -5,63 +5,93 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SAO ACT Aggregate Cockpit</title>
 <style>
+/* ───────────────────────────────────────────────────────────────────────────
+   Panel-scoped tokens: LAYOUT/SIZING only. All COLORS come from the shared
+   act_panel_theme.css var(--act-*) tokens so light/dark follow the host theme
+   and stay 1:1 with the Tk Entity cockpit. Custom content uses `aca-*` class
+   names the shared theme does not target, so there is no !important collision.
+   ─────────────────────────────────────────────────────────────────────────── */
 :root {
-    --bg: rgba(8, 13, 22, .76);
-    --panel: rgba(18, 33, 52, .90);
-    --panel2: rgba(6, 11, 18, .72);
-    --line: rgba(117, 205, 255, .48);
-    --gold: rgba(255, 214, 117, .86);
-    --text: rgba(232, 246, 255, .96);
-    --muted: rgba(176, 204, 226, .76);
-    --ok: #7df2bf;
-    --bad: #ff6b82;
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+    --r-sm: 4px; --r-md: 6px;
+    --fs-kicker: 10px; --fs-meta: 11px; --fs-body: 12px; --fs-title: 14px; --fs-metric: 22px;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; background: transparent; color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; user-select: none; }
-body { padding: 14px; }
-.shell { position: relative; width: 100%; height: calc(100vh - 28px); min-height: 520px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: radial-gradient(circle at 80% 14%, rgba(255, 214, 117, .15), transparent 24%), linear-gradient(135deg, rgba(100, 202, 255, .15), transparent 24%, transparent 70%, rgba(255, 215, 125, .12)), linear-gradient(180deg, rgba(16, 28, 45, .96), rgba(7, 12, 20, .90)); box-shadow: 0 0 34px rgba(88, 199, 255, .22), inset 0 0 28px rgba(109, 216, 255, .10); opacity: 0; transform: translateY(10px) scale(.985); transition: opacity .22s ease, transform .22s ease; }
+html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; user-select: none; }
+body { padding: 12px; }
+
+.shell {
+    opacity: 0; transform: translateY(8px) scale(.99);
+    transition: opacity .22s ease, transform .22s ease;
+}
 .shell.visible { opacity: 1; transform: translateY(0) scale(1); }
-.shell::before { content: ""; pointer-events: none; position: absolute; inset: 0; background: repeating-linear-gradient(180deg, rgba(255,255,255,.035) 0, rgba(255,255,255,.035) 1px, transparent 1px, transparent 7px); mix-blend-mode: screen; }
-.header { height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 8px 18px; border-bottom: 1px solid rgba(117, 205, 255, .35); background: linear-gradient(90deg, rgba(18, 59, 94, .76), rgba(11, 22, 35, .58)); }
-.kicker { letter-spacing: .18em; font-size: 10px; color: var(--gold); text-shadow: 0 0 10px rgba(255, 214, 117, .52); }
-.title { margin-top: 2px; font-size: 20px; font-weight: 700; letter-spacing: .08em; }
-.header-actions { display: flex; gap: 8px; align-items: center; }
-.pill { min-width: 94px; text-align: center; padding: 5px 9px; border: 1px solid rgba(117, 205, 255, .42); border-radius: 999px; color: var(--muted); background: rgba(8, 14, 22, .62); font-size: 12px; }
-button, input, select { border: 1px solid rgba(117, 205, 255, .48); background: linear-gradient(180deg, rgba(61, 143, 201, .42), rgba(19, 48, 74, .58)); color: var(--text); border-radius: 8px; padding: 7px 11px; font-size: 12px; font-weight: 600; }
-input { width: 190px; background: rgba(4, 8, 14, .58); font-weight: 400; }
-button { cursor: pointer; }
-button:hover { box-shadow: 0 0 16px rgba(107, 214, 255, .25); transform: translateY(-1px); }
-button.primary { border-color: rgba(255, 214, 117, .74); color: #fff8da; }
-button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 16px; }
-.body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; height: calc(100% - 58px); padding: 12px; }
-.main { min-height: 0; overflow: auto; padding-right: 4px; }
-.side { min-height: 0; border: 1px solid rgba(117, 205, 255, .30); border-radius: 10px; background: rgba(8, 14, 22, .52); padding: 12px; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
-.side-title { color: var(--gold); font-size: 12px; letter-spacing: .16em; }
-.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
-.kpi { border: 1px solid rgba(117, 205, 255, .32); border-radius: 10px; background: linear-gradient(180deg, rgba(27, 46, 68, .82), rgba(9, 16, 26, .78)); padding: 12px; text-align: center; }
-.kpi-label { font-size: 11px; color: var(--muted); letter-spacing: .12em; margin-bottom: 6px; }
-.kpi-value { font-size: 22px; font-weight: 700; color: var(--gold); text-shadow: 0 0 12px rgba(255, 214, 117, .42); }
-.kpi-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
-.section { margin-bottom: 14px; border: 1px solid rgba(117, 205, 255, .28); border-radius: 10px; background: rgba(8, 14, 22, .52); overflow: hidden; }
-.section-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: linear-gradient(90deg, rgba(18, 59, 94, .76), rgba(11, 22, 35, .58)); border-bottom: 1px solid rgba(117, 205, 255, .28); cursor: pointer; user-select: none; }
-.section-header:hover { background: linear-gradient(90deg, rgba(24, 68, 108, .82), rgba(14, 28, 44, .64)); }
-.section-title { font-size: 14px; font-weight: 700; color: var(--text); letter-spacing: .08em; }
-.section-badge { min-width: 32px; text-align: center; padding: 3px 8px; border: 1px solid rgba(117, 205, 255, .42); border-radius: 999px; color: var(--muted); background: rgba(8, 14, 22, .62); font-size: 11px; }
-.section-body { padding: 10px 14px; }
-.section-body.collapsed { display: none; }
-.row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(117, 205, 255, .16); padding: 8px 0; font-size: 12px; }
-.row:last-child { border-bottom: none; }
-.row-title { color: var(--text); font-weight: 600; flex: 1; }
-.row-meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
-.row-value { color: var(--gold); font-weight: 700; text-align: right; min-width: 80px; }
-.row-bar { height: 4px; background: rgba(117, 205, 255, .18); border-radius: 2px; margin-top: 4px; overflow: hidden; }
-.row-bar-fill { height: 100%; background: linear-gradient(90deg, rgba(117, 205, 255, .72), rgba(255, 214, 117, .72)); border-radius: 2px; transition: width .22s ease; }
-.empty { display: grid; place-items: center; height: 100%; min-height: 260px; color: var(--muted); border: 1px dashed rgba(117, 205, 255, .28); border-radius: 10px; text-align: center; line-height: 1.6; }
-.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
-.toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: rgba(0,0,0,.18); }
-::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
+
+.header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.kicker { letter-spacing: .18em; font-size: var(--fs-kicker); color: var(--act-gold); text-transform: uppercase; }
+.title { margin-top: 2px; font-size: 19px; font-weight: 700; letter-spacing: .06em; color: var(--act-text); }
+.header-actions { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.header-actions label { font-size: var(--fs-meta); color: var(--act-muted); }
+input#query { width: 170px; }
+
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--sp-3); }
+.main { min-height: 0; overflow: auto; padding-right: var(--sp-1); }
+.side { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-3); }
+.side-title { color: var(--act-gold); font-size: var(--fs-meta); letter-spacing: .16em; text-transform: uppercase; }
+
+/* ── KPI metric tiles (6, mirror Tk metric_tile) ── */
+.aca-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.aca-tile { position: relative; border: 1px solid var(--act-edge-soft); border-radius: var(--r-md); background: var(--act-card-bg); padding: var(--sp-3); overflow: hidden; }
+.aca-tile::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: var(--acc, var(--act-cyan)); }
+.aca-tile-label { font-size: var(--fs-meta); letter-spacing: .12em; color: var(--act-muted); text-transform: uppercase; }
+.aca-tile-value { font-size: var(--fs-metric); font-weight: 700; color: var(--act-text); margin-top: 6px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.aca-tile-value .unit { color: var(--act-muted); font-size: .62em; font-weight: 600; margin-left: 1px; }
+.aca-tile-sub { font-size: var(--fs-meta); color: var(--acc, var(--act-cyan)); margin-top: 5px; }
+
+/* ── badge row (mirror Tk status badges) ── */
+.aca-badges { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-4); }
+.aca-badge { font-size: var(--fs-meta); padding: 3px 10px; border-radius: 999px; border: 1px solid var(--acc, var(--act-cyan)); color: var(--acc, var(--act-cyan)); background: color-mix(in srgb, var(--acc, var(--act-cyan)) 14%, transparent); }
+
+/* ── sections (mirror Tk section_card) ── */
+.aca-section { margin-bottom: var(--sp-3); border: 1px solid var(--act-edge-soft); border-radius: var(--r-md); background: var(--act-card-bg); overflow: hidden; }
+.aca-sec-head { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); background: var(--act-card-bg-2); border-bottom: 1px solid var(--act-edge-soft); cursor: pointer; user-select: none; }
+.aca-sec-head:hover { background: color-mix(in srgb, var(--acc, var(--act-cyan)) 10%, var(--act-card-bg-2)); }
+.aca-sec-rail { width: 4px; align-self: stretch; min-height: 26px; background: var(--acc, var(--act-cyan)); border-radius: 2px; }
+.aca-sec-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.aca-sec-title { font-size: var(--fs-title); font-weight: 700; color: var(--act-gold); letter-spacing: .05em; }
+.aca-sec-sub { font-size: var(--fs-meta); color: var(--act-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aca-sec-badge { margin-left: auto; font-size: var(--fs-meta); padding: 2px 9px; border-radius: 999px; border: 1px solid var(--acc, var(--act-cyan)); color: var(--acc, var(--act-cyan)); background: color-mix(in srgb, var(--acc, var(--act-cyan)) 14%, transparent); }
+.aca-sec-body { padding: var(--sp-2) var(--sp-3) var(--sp-3); }
+.aca-sec-body.collapsed { display: none; }
+.aca-empty-mini { font-size: var(--fs-meta); color: var(--act-muted); padding: var(--sp-2) 0; }
+
+/* ── aggregate rows (mirror Tk aggregate_row: caret + title/meta + value + full-width track) ── */
+.aca-row { position: relative; border-radius: var(--r-sm); padding: var(--sp-2) var(--sp-2) 7px; cursor: pointer; transition: background .12s ease; }
+.aca-row + .aca-row { margin-top: 3px; }
+.aca-row.zebra { background: color-mix(in srgb, var(--act-card-bg-2) 55%, transparent); }
+.aca-row:hover { background: color-mix(in srgb, var(--acc, var(--act-cyan)) 12%, var(--act-card-bg-2)); }
+.aca-row-top { display: flex; align-items: baseline; gap: var(--sp-2); }
+.aca-caret { color: var(--acc, var(--act-cyan)); font-size: var(--fs-meta); width: 10px; flex-shrink: 0; }
+.aca-row-title { font-weight: 600; color: var(--act-text); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-body); }
+.aca-row-value { font-weight: 700; color: var(--acc, var(--act-cyan)); font-size: var(--fs-body); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.aca-row-meta { font-size: var(--fs-meta); color: var(--act-muted); margin-top: 2px; padding-left: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aca-bar { height: 6px; border-radius: 3px; background: var(--act-edge-soft); margin-top: 6px; margin-left: 18px; overflow: hidden; }
+.aca-fill { height: 100%; border-radius: 3px; background: var(--acc, var(--act-cyan)); box-shadow: 0 0 6px color-mix(in srgb, var(--acc, var(--act-cyan)) 55%, transparent); transition: width .22s ease; }
+
+/* ── expand drawer (mirror Tk _render_group_details) ── */
+.aca-drawer { margin: var(--sp-2) 0 var(--sp-1) 18px; padding-left: var(--sp-3); border-left: 2px solid var(--acc, var(--act-cyan)); }
+.aca-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-bottom: var(--sp-1); }
+.aca-chip { font-size: 10px; padding: 2px 7px; border-radius: var(--r-sm); border: 1px solid var(--act-edge-soft); color: var(--act-muted); }
+.aca-line { font-size: var(--fs-meta); color: var(--act-muted); padding: 2px 0; font-variant-numeric: tabular-nums; }
+
+/* ── side context card ── */
+.aca-ctx { display: flex; justify-content: space-between; align-items: center; font-size: var(--fs-meta); padding: 5px 0; border-bottom: 1px solid var(--act-edge-soft); }
+.aca-ctx:last-child { border-bottom: none; }
+.aca-ctx span { color: var(--act-muted); }
+.aca-ctx strong { color: var(--act-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--act-edge); border-radius: 999px; }
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
 <script src="act_panel_theme.js"></script>
@@ -74,6 +104,13 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
             <div class="pill" id="status-pill">READY</div>
             <input id="query" type="text" placeholder="搜索聚合 / Search" />
             <select id="source"><option value="live" selected>Live</option><option value="history">History</option></select>
+            <label for="window">窗口</label>
+            <select id="window">
+                <option value="500">0.5s</option>
+                <option value="1000" selected>1s</option>
+                <option value="2000">2s</option>
+                <option value="5000">5s</option>
+            </select>
             <button class="primary" type="button" onclick="ActAggregate.refresh()">刷新</button>
             <button class="close" type="button" onclick="ActAggregate.close()">×</button>
         </div>
@@ -81,9 +118,9 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
     <div class="body">
         <main class="main" id="content"><div class="empty">正在读取 ACT 聚合数据...<br/>LOADING AGGREGATE</div></main>
         <aside class="side">
-            <div class="side-title">OVERVIEW</div>
+            <div class="side-title">OVERVIEW 概览</div>
             <div id="overview-side"></div>
-            <div class="side-title" style="margin-top:10px;">SOURCE MIX</div>
+            <div class="side-title" style="margin-top:6px;">SOURCE MIX 来源</div>
             <div id="source-mix"></div>
         </aside>
     </div>
@@ -100,13 +137,34 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
     var statusPill = document.getElementById('status-pill');
     var queryInput = document.getElementById('query');
     var sourceSelect = document.getElementById('source');
+    var windowSelect = document.getElementById('window');
     var toast = document.getElementById('toast');
 
+    var expanded = {};      // group key -> true (mirrors Tk _expanded_groups)
+    var lastData = null;    // last aggregate payload, for re-render on expand
+    var lastGraph = null;   // last graph payload
+
+    var ACCENTS = { cyan: 'var(--act-cyan)', gold: 'var(--act-gold)', danger: 'var(--act-danger)', ok: 'var(--act-ok)' };
+    function acc(kind) { return ACCENTS[kind] || ACCENTS.cyan; }
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function num(v) { var n = parseFloat(v); return isFinite(n) ? n : 0; }
+
+    // _fmt parity with Tk: >=1e6 -> m, >=1e3 -> k, integer -> int, else 2dp
     function fmt(value) {
-        var n = parseFloat(value) || 0;
+        var n = num(value);
         if (Math.abs(n) >= 1000000) return (n / 1000000).toFixed(2) + 'm';
         if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1) + 'k';
         return n === Math.floor(n) ? String(n) : n.toFixed(2);
+    }
+    // split trailing k/m so the suffix can be dimmed (resonance-logs trick)
+    function fmtHtml(value) {
+        var s = fmt(value), m = /^(-?[\d.]+)([km])$/.exec(s);
+        return m ? esc(m[1]) + '<span class="unit">' + m[2] + '</span>' : esc(s);
     }
 
     function showToast(msg) {
@@ -115,90 +173,184 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         setTimeout(function () { toast.classList.remove('visible'); }, 1800);
     }
 
-    function renderKPI(label, value, sub) {
-        return '<div class="kpi"><div class="kpi-label">' + label + '</div><div class="kpi-value">' + fmt(value) + '</div><div class="kpi-sub">' + (sub || '') + '</div></div>';
+    function tile(label, valueHtml, sub, kind) {
+        return '<div class="aca-tile" style="--acc:' + acc(kind) + ';">'
+            + '<div class="aca-tile-label">' + esc(label) + '</div>'
+            + '<div class="aca-tile-value">' + valueHtml + '</div>'
+            + '<div class="aca-tile-sub">' + esc(sub || '') + '</div></div>';
     }
 
-    function renderSection(title, badge, items, maxVal) {
-        if (!items || !items.length) return '';
-        var html = '<div class="section"><div class="section-header" onclick="this.nextElementSibling.classList.toggle(\'collapsed\')"><div class="section-title">' + title + '</div><div class="section-badge">' + badge + '</div></div><div class="section-body">';
-        items.forEach(function (item) {
-            var val = parseFloat(item.total_value || item.damage || item.count || 0);
-            var ratio = maxVal > 0 ? (val / maxVal) : 0;
-            html += '<div class="row"><div style="flex:1;"><div class="row-title">' + (item.name || item.key || '-') + '</div><div class="row-meta">' + (item.kind || 'event').toUpperCase() + ' · ' + (item.count || 0) + ' rows</div><div class="row-bar"><div class="row-bar-fill" style="width:' + (ratio * 100).toFixed(1) + '%;"></div></div></div><div class="row-value">' + fmt(val) + '</div></div>';
+    function badge(text, kind) {
+        return '<div class="aca-badge" style="--acc:' + acc(kind) + ';">' + esc(text) + '</div>';
+    }
+
+    function groupMeta(g) {
+        var span = parseInt(g.duration_ms || (Math.max(0, (g.last_time_ms || 0) - (g.first_time_ms || 0))), 10) || 0;
+        var bits = ['active ' + span + 'ms'];
+        [['actors', 'actors'], ['targets', 'targets'], ['skills', 'skills'], ['monsters', 'monsters'], ['dungeons', 'dungeons'], ['sources', 'src']].forEach(function (p) {
+            var vals = g[p[0]] || [];
+            if (vals && vals.length) bits.push(p[1] + ' ' + vals.length);
         });
-        html += '</div></div>';
-        return html;
+        return bits.join(' · ');
     }
 
-    function render(data) {
+    function drawer(g, kind) {
+        var html = '<div class="aca-drawer" style="--acc:' + acc(kind) + ';"><div class="aca-chips">';
+        [['actors', g.actors || g.actor_uids], ['targets', g.targets || g.target_uids], ['skills', g.skills || g.skill_ids], ['sources', g.sources]].forEach(function (p) {
+            var vals = (p[1] || []).slice(0, 4);
+            if (vals.length) html += '<div class="aca-chip">' + esc(p[0]) + ': ' + esc(vals.join(', ')) + '</div>';
+        });
+        html += '</div>';
+        (g.rows || []).slice(0, 6).forEach(function (r) {
+            html += '<div class="aca-line">' + esc((r.time_ms || 0) + 'ms · ' + (r.topic || '-') + ' · ' + (r.actor || '-') + ' → ' + (r.target || '-') + ' · ' + (r.label || '-') + ' · ' + fmt(r.value)) + '</div>';
+        });
+        return html + '</div>';
+    }
+
+    function section(prefix, title, sub, kind, items, valueKey) {
+        items = (items || []).filter(function (it) { return it && typeof it === 'object'; });
+        var maxVal = 1;
+        items.forEach(function (it) { maxVal = Math.max(maxVal, num(it[valueKey] != null ? it[valueKey] : (it.damage != null ? it.damage : it.total_value))); });
+        var rows = '';
+        if (!items.length) {
+            rows = '<div class="aca-empty-mini">暂无聚合数据 / no groups</div>';
+        } else {
+            items.slice(0, 20).forEach(function (g, idx) {
+                var key = prefix + ':' + (g.key || idx);
+                var val = num(g[valueKey] != null ? g[valueKey] : (g.damage != null ? g.damage : g.total_value));
+                var ratio = maxVal > 0 ? (val / maxVal) : 0;
+                var isOpen = !!expanded[key];
+                rows += '<div class="aca-row' + (idx % 2 ? ' zebra' : '') + '" data-key="' + esc(key) + '" style="--acc:' + acc(kind) + ';">'
+                    + '<div class="aca-row-top">'
+                    + '<span class="aca-caret">' + (isOpen ? '▾' : '▸') + '</span>'
+                    + '<span class="aca-row-title">' + esc(g.name || g.key || '-') + '</span>'
+                    + '<span class="aca-row-value">' + fmtHtml(val) + ' · ' + (g.count || 0) + 'x</span>'
+                    + '</div>'
+                    + '<div class="aca-row-meta">' + esc(groupMeta(g)) + '</div>'
+                    + '<div class="aca-bar"><div class="aca-fill" style="width:' + (ratio * 100).toFixed(1) + '%;"></div></div>'
+                    + (isOpen ? drawer(g, kind) : '')
+                    + '</div>';
+            });
+        }
+        return '<div class="aca-section" style="--acc:' + acc(kind) + ';">'
+            + '<div class="aca-sec-head" data-toggle="1"><div class="aca-sec-rail"></div>'
+            + '<div class="aca-sec-titles"><div class="aca-sec-title">' + esc(title) + '</div><div class="aca-sec-sub">' + esc(sub) + '</div></div>'
+            + '<div class="aca-sec-badge">' + items.length + '</div></div>'
+            + '<div class="aca-sec-body">' + rows + '</div></div>';
+    }
+
+    function graphSection(graph) {
+        var series = (graph && graph.series) || {};
+        var defs = [['damage', 'DAMAGE', 'gold'], ['heal', 'HEAL', 'ok'], ['event_count', 'EVENT_COUNT', 'cyan']];
+        var rows = '';
+        defs.forEach(function (d) {
+            var item = series[d[0]] || {};
+            var pts = (item.points || []).map(function (p) { return num(p && p.value); });
+            var latest = pts.length ? pts[pts.length - 1] : 0;
+            var peak = pts.length ? Math.max.apply(null, pts) : 0;
+            var ratio = peak > 0 ? latest / peak : 0;
+            rows += '<div class="aca-row" style="--acc:' + acc(d[2]) + ';">'
+                + '<div class="aca-row-top"><span class="aca-caret"></span>'
+                + '<span class="aca-row-title">' + d[1] + '</span>'
+                + '<span class="aca-row-value">' + fmtHtml(latest) + '</span></div>'
+                + '<div class="aca-row-meta">' + pts.length + ' points · peak ' + fmt(peak) + '</div>'
+                + '<div class="aca-bar"><div class="aca-fill" style="width:' + (ratio * 100).toFixed(1) + '%;"></div></div></div>';
+        });
+        return '<div class="aca-section" style="--acc:' + acc('cyan') + ';">'
+            + '<div class="aca-sec-head" data-toggle="1"><div class="aca-sec-rail"></div>'
+            + '<div class="aca-sec-titles"><div class="aca-sec-title">图表预览 / GRAPH PREVIEW</div>'
+            + '<div class="aca-sec-sub">来自 ACT graph/timeseries 的趋势摘要</div></div>'
+            + '<div class="aca-sec-badge">' + (graph && graph.row_count || 0) + '</div></div>'
+            + '<div class="aca-sec-body">' + rows + '</div></div>';
+    }
+
+    function render(data, graph) {
         if (!data || !data.ok) {
             content.innerHTML = '<div class="empty">暂无 ACT 聚合数据<br/>NO AGGREGATE DATA</div>';
             overviewSide.innerHTML = '';
             sourceMix.innerHTML = '';
             return;
         }
-        var overview = data.overview || {};
-        var timeline = data.timeline_clusters || [];
-        var skills = data.skill_damage || [];
-        var monsters = data.monster_damage || [];
-        var dungeons = data.dungeon_damage || [];
-        var logs = data.log_groups || [];
-        var sources = data.source_mix || {};
+        var ov = data.overview || {};
+        var counts = data.raw_counts || {};
+        var sources = Array.isArray(data.source_mix) ? data.source_mix : [];
 
-        var html = '<div class="kpi-grid">';
-        html += renderKPI('EVENTS', overview.event_count || 0, 'total rows');
-        html += renderKPI('DAMAGE', overview.total_damage || 0, 'all sources');
-        html += renderKPI('HEAL', overview.total_heal || 0, 'all sources');
-        html += renderKPI('SKILLS', overview.skill_count || 0, 'unique skills');
+        // 6 KPI tiles (1:1 with Tk header summary)
+        var html = '<div class="aca-kpis">';
+        html += tile('Damage', fmtHtml(ov.damage), (counts.rows || 0) + ' events', 'gold');
+        html += tile('DPS', fmtHtml(ov.dps), fmt(ov.elapsed_s) + 's', 'cyan');
+        html += tile('Heal/HPS', fmtHtml(ov.heal) + ' / ' + fmtHtml(ov.hps), 'support', 'ok');
+        html += tile('Skills', String(counts.skills || 0), 'aggregated', 'gold');
+        html += tile('Monsters', String(counts.monsters || 0), 'targets', 'danger');
+        html += tile('Dungeons', String(counts.dungeons || 0), ov.dungeon_name || 'live', 'cyan');
         html += '</div>';
 
-        if (timeline.length) html += renderSection('TIMELINE CLUSTERS 时间桶', timeline.length, timeline.slice(0, 12), Math.max.apply(null, timeline.map(function (t) { return t.damage || t.total_value || 0; })));
-        if (skills.length) html += renderSection('SKILL DAMAGE 技能伤害', skills.length, skills.slice(0, 16), Math.max.apply(null, skills.map(function (s) { return s.total_value || s.damage || 0; })));
-        if (monsters.length) html += renderSection('MONSTER DAMAGE 怪物伤害', monsters.length, monsters.slice(0, 12), Math.max.apply(null, monsters.map(function (m) { return m.total_value || m.damage || 0; })));
-        if (dungeons.length) html += renderSection('DUNGEON DAMAGE 地牢伤害', dungeons.length, dungeons.slice(0, 8), Math.max.apply(null, dungeons.map(function (d) { return d.total_value || d.damage || 0; })));
-        if (logs.length) html += renderSection('LOG GROUPS 日志分组', logs.length, logs.slice(0, 20), Math.max.apply(null, logs.map(function (l) { return l.total_value || l.count || 0; })));
+        // badges row: MODE / SPAN / source chips
+        html += '<div class="aca-badges">';
+        html += badge('MODE ' + (ov.mode || 'live'), 'cyan');
+        html += badge('SPAN ' + fmt((ov.span_ms || 0) / 1000) + 's', 'gold');
+        sources.forEach(function (s) { html += badge((s.source || '-') + ' · ' + (s.count || 0), 'cyan'); });
+        html += '</div>';
 
-        content.innerHTML = html || '<div class="empty">暂无聚合分组<br/>NO AGGREGATE GROUPS</div>';
+        // 5 group sections in Tk order with matching accents + bilingual subtitles
+        html += section('timeline', '时间线聚合 / TIMELINE CLUSTERS', '按时间桶汇总，不再一条时间一行', 'cyan', data.timeline_clusters, 'damage');
+        html += section('skill', '伤害解析 · 技能聚合 / SKILL DAMAGE', '按技能汇总伤害/治疗、命中次数、目标和来源', 'gold', data.skill_damage, 'damage');
+        html += section('monster', '怪物伤害 / MONSTER DAMAGE', '按怪物/目标汇总承伤、技能、参与者和来源', 'danger', data.monster_damage, 'damage');
+        html += section('dungeon', '地牢伤害 / DUNGEON DAMAGE', '按地牢/encounter 汇总总量、怪物、技能和事件跨度', 'cyan', data.dungeon_damage, 'damage');
+        html += section('log', '日志聚合 / LOG GROUPS', '按动作/主题汇总日志，展开后才查看代表 raw rows', 'gold', data.log_groups, 'total_value');
+        html += graphSection(graph);
 
-        var sideHtml = '';
-        sideHtml += '<div class="row"><span>Encounter</span><strong>' + (data.encounter_id || 'live') + '</strong></div>';
-        sideHtml += '<div class="row"><span>Source</span><strong>' + (data.source || 'live').toUpperCase() + '</strong></div>';
-        sideHtml += '<div class="row"><span>Window</span><strong>' + (data.window_ms || 1000) + 'ms</strong></div>';
-        sideHtml += '<div class="row"><span>Top N</span><strong>' + (data.top_n || 20) + '</strong></div>';
-        sideHtml += '<div class="row"><span>Errors</span><strong>' + (data.errors || []).length + '</strong></div>';
-        overviewSide.innerHTML = sideHtml;
+        content.innerHTML = html;
 
-        var mixHtml = '';
-        Object.keys(sources).forEach(function (key) {
-            mixHtml += '<div class="row"><span>' + key.toUpperCase() + '</span><strong>' + (sources[key] || 0) + '</strong></div>';
-        });
-        sourceMix.innerHTML = mixHtml || '<div class="row"><span>No sources</span><strong>-</strong></div>';
+        // side: overview context card
+        var s = '';
+        s += '<div class="aca-ctx"><span>Encounter</span><strong>' + esc(data.encounter_id || 'live') + '</strong></div>';
+        s += '<div class="aca-ctx"><span>Source</span><strong>' + esc(String(data.source || 'live').toUpperCase()) + '</strong></div>';
+        s += '<div class="aca-ctx"><span>Span</span><strong>' + fmt((ov.span_ms || 0) / 1000) + 's</strong></div>';
+        s += '<div class="aca-ctx"><span>Elapsed</span><strong>' + fmt(ov.elapsed_s) + 's</strong></div>';
+        s += '<div class="aca-ctx"><span>Events</span><strong>' + (counts.rows || 0) + '</strong></div>';
+        s += '<div class="aca-ctx"><span>Window</span><strong>' + ((data.filters && data.filters.window_ms) || 1000) + 'ms</strong></div>';
+        s += '<div class="aca-ctx"><span>Errors</span><strong>' + ((data.errors || []).length) + '</strong></div>';
+        overviewSide.innerHTML = s;
+
+        // side: source mix (LIST of {source,count} — was wrongly read as object before)
+        var mix = '';
+        sources.forEach(function (it) { mix += '<div class="aca-ctx"><span>' + esc(String(it.source || '-').toUpperCase()) + '</span><strong>' + (it.count || 0) + '</strong></div>'; });
+        sourceMix.innerHTML = mix || '<div class="aca-ctx"><span>No sources</span><strong>-</strong></div>';
     }
+
+    function rerender() { render(lastData, lastGraph); }
+
+    // event delegation: section collapse + row expand
+    content.addEventListener('click', function (e) {
+        var head = e.target.closest && e.target.closest('.aca-sec-head');
+        if (head) { var body = head.nextElementSibling; if (body) body.classList.toggle('collapsed'); return; }
+        var row = e.target.closest && e.target.closest('.aca-row');
+        if (row && row.dataset.key) {
+            var k = row.dataset.key;
+            if (expanded[k]) { delete expanded[k]; } else { expanded[k] = true; }
+            rerender();
+        }
+    });
 
     function refresh() {
         statusPill.textContent = 'LOADING';
         var query = queryInput.value || '';
         var source = sourceSelect.value || 'live';
+        var win = parseInt(windowSelect.value, 10) || 1000;
         var api = window.pywebview && window.pywebview.api;
-        if (api && api.get_aggregate_status) {
-            api.get_aggregate_status(1000, query, source, 1000, 20, '').then(function (json) {
-                try {
-                    var data = JSON.parse(json);
-                    render(data);
-                    statusPill.textContent = data.ok ? 'OK' : 'ERROR';
-                } catch (e) {
-                    render(null);
-                    statusPill.textContent = 'PARSE ERROR';
-                }
-            }).catch(function () {
-                render(null);
-                statusPill.textContent = 'API ERROR';
-            });
-        } else {
-            render(null);
-            statusPill.textContent = 'NO API';
-        }
+        if (!api || !api.get_aggregate_status) { render(null); statusPill.textContent = 'NO API'; return; }
+        var graphP = (api.get_graph_timeseries_status)
+            ? Promise.resolve(api.get_graph_timeseries_status(null, 120, query, null, null)).then(function (j) { try { return JSON.parse(j); } catch (e) { return null; } }).catch(function () { return null; })
+            : Promise.resolve(null);
+        var aggP = Promise.resolve(api.get_aggregate_status(1000, query, source, win, 20, '')).then(function (j) { return JSON.parse(j); });
+        Promise.all([aggP, graphP]).then(function (res) {
+            lastData = res[0]; lastGraph = res[1];
+            render(lastData, lastGraph);
+            statusPill.textContent = lastData && lastData.ok ? 'OK' : 'ERROR';
+        }).catch(function () {
+            render(null); statusPill.textContent = 'API ERROR';
+        });
     }
 
     function close() {
@@ -213,13 +365,12 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         fadeOut: function () { shell.classList.remove('visible'); }
     };
 
-    queryInput.addEventListener('input', function () { setTimeout(refresh, 300); });
+    var qTimer = null;
+    queryInput.addEventListener('input', function () { clearTimeout(qTimer); qTimer = setTimeout(refresh, 300); });
     sourceSelect.addEventListener('change', refresh);
+    windowSelect.addEventListener('change', refresh);
 
-    setTimeout(function () {
-        shell.classList.add('visible');
-        refresh();
-    }, 80);
+    setTimeout(function () { shell.classList.add('visible'); refresh(); }, 80);
 })();
 </script>
 </body>

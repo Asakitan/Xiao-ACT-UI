@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Reusable SAO-style Tk components for Entity panels."""
+"""Reusable SAO-style Tk components for Entity panels.
+
+Centralized so every ACT floating panel (aggregate cockpit, action log, death
+recap, timeline VCR, graph timeseries) shares one visual language. All colors
+come from the live ``sao_panel_ui`` palette (light/dark) via ``_pc`` so a theme
+swap repaints every panel consistently — never hardcode hex here.
+"""
 
 from __future__ import annotations
 
@@ -9,36 +15,127 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 from gui_modules import sao_panel_ui as ui
 
 
-PAD_X = 12
-PAD_Y = 8
+# ── 统一间距刻度（替代散落的 2/3/5/7/9 魔法值）──
+SP_XS, SP_SM, SP_MD, SP_LG, SP_XL = 4, 8, 12, 16, 24
+
+PAD_X = SP_MD
+PAD_Y = SP_SM
+
 FONT_SMALL = ('Segoe UI', 8)
+FONT_META = ('Segoe UI', 8)
 FONT_BODY = ('Segoe UI', 9)
 FONT_BODY_BOLD = ('Segoe UI', 9, 'bold')
-FONT_VALUE = ('Segoe UI', 13, 'bold')
+FONT_VALUE = ('Segoe UI', 18, 'bold')       # 指标卡数值（醒目，原 13 太弱）
+FONT_VALUE_SM = ('Segoe UI', 11, 'bold')    # 行内数值
 FONT_TITLE = ('Segoe UI', 10, 'bold')
+FONT_CARET = ('Segoe UI', 9)
+
+
+def _pc(key: str, fallback: str = '') -> str:
+    """Read a token from the active SAO palette with a safe fallback."""
+    try:
+        return ui._theme_color(key, fallback) or fallback
+    except Exception:
+        return fallback
 
 
 def _accent(kind: str = "gold") -> str:
     kind = str(kind or "gold").lower()
     if kind in {"cyan", "accent", "info"}:
-        return ui._SAO_PANEL_ACCENT
+        return _pc('accent', ui._SAO_PANEL_ACCENT)
     if kind in {"ok", "good", "heal"}:
-        return ui._SAO_PANEL_PALETTES[ui._SAO_PANEL_THEME].get('ok', '#7df2bf')
+        return _pc('ok', '#5cc46a')
     if kind in {"danger", "bad", "error"}:
-        return ui._SAO_PANEL_PALETTES[ui._SAO_PANEL_THEME].get('danger', '#ff707a')
-    return ui._SAO_PANEL_GOLD
+        return _pc('danger', '#ef684e')
+    return _pc('gold', ui._SAO_PANEL_GOLD)
+
+
+def _accent_text(kind: str = "gold") -> str:
+    """Accent color tuned for legible TEXT (cyan needs a darker shade on tints)."""
+    kind = str(kind or "gold").lower()
+    if kind in {"cyan", "accent", "info"}:
+        return _pc('accent_strong', _accent('cyan'))
+    return _accent(kind)
+
+
+def _accent_soft(kind: str = "gold") -> str:
+    kind = str(kind or "gold").lower()
+    if kind in {"cyan", "accent", "info"}:
+        return _pc('accent_soft', _pc('header_bg', ui._SAO_PANEL_HEADER_BG))
+    if kind in {"ok", "good", "heal"}:
+        return _pc('ok_soft', _pc('header_bg', ui._SAO_PANEL_HEADER_BG))
+    if kind in {"danger", "bad", "error"}:
+        return _pc('danger_soft', _pc('header_bg', ui._SAO_PANEL_HEADER_BG))
+    return _pc('gold_soft', _pc('header_bg', ui._SAO_PANEL_HEADER_BG))
+
+
+def _bind_click(widget: tk.Misc, command: Callable[[], Any]) -> None:
+    def walk(w: tk.Misc) -> None:
+        try:
+            w.bind('<Button-1>', lambda _e: command(), add='+')
+            w.configure(cursor='hand2')
+        except Exception:
+            pass
+        try:
+            children = w.winfo_children()
+        except Exception:
+            children = []
+        for child in children:
+            walk(child)
+    walk(widget)
+
+
+def _bind_hover(row: tk.Misc, base_bg: str, hover_bg: str) -> None:
+    """Lighten the row (and same-bg children) on mouse-over for live feedback."""
+    if not hover_bg or hover_bg == base_bg:
+        return
+    targets: list[tk.Misc] = []
+
+    def collect(w: tk.Misc) -> None:
+        try:
+            if str(w.cget('bg')) == base_bg:
+                targets.append(w)
+        except Exception:
+            pass
+        try:
+            children = w.winfo_children()
+        except Exception:
+            children = []
+        for child in children:
+            collect(child)
+
+    collect(row)
+
+    def _enter(_e: Any) -> None:
+        for w in targets:
+            try:
+                w.configure(bg=hover_bg)
+            except Exception:
+                pass
+
+    def _leave(_e: Any) -> None:
+        for w in targets:
+            try:
+                w.configure(bg=base_bg)
+            except Exception:
+                pass
+
+    row.bind('<Enter>', _enter, add='+')
+    row.bind('<Leave>', _leave, add='+')
 
 
 def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold") -> tk.Label:
-    fg = _accent(kind)
-    bg = ui._SAO_PANEL_HEADER_BG if kind not in {"danger", "error"} else ui._SAO_PANEL_PALETTES[ui._SAO_PANEL_THEME].get('danger_soft', ui._SAO_PANEL_HEADER_BG)
-    label = tk.Label(parent, text=str(text or "-"), bg=bg, fg=fg, font=FONT_SMALL, padx=8, pady=2, highlightthickness=1, highlightbackground=fg)
-    return label
+    fg = _accent_text(kind)
+    bg = _accent_soft(kind)
+    return tk.Label(
+        parent, text=str(text or "-"), bg=bg, fg=fg, font=FONT_SMALL,
+        padx=SP_SM, pady=2, highlightthickness=1, highlightbackground=_accent(kind),
+    )
 
 
 def action_button(parent: tk.Misc, text: str, command: Optional[Callable[[], Any]] = None, *, kind: str = "normal") -> tk.Button:
-    bg = ui._SAO_PANEL_HEADER_BG
-    fg = ui._SAO_PANEL_HEADER_FG
+    bg = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
+    fg = _pc('header_fg', ui._SAO_PANEL_HEADER_FG)
     active = _accent(kind)
     return tk.Button(
         parent,
@@ -47,11 +144,11 @@ def action_button(parent: tk.Misc, text: str, command: Optional[Callable[[], Any
         bg=bg,
         fg=fg,
         activebackground=active,
-        activeforeground=ui._SAO_PANEL_PALETTES[ui._SAO_PANEL_THEME].get('active_fg', 'white'),
+        activeforeground=_pc('active_fg', 'white'),
         relief='flat',
         bd=0,
-        padx=10,
-        pady=5,
+        padx=SP_MD,
+        pady=SP_XS + 1,
         font=FONT_BODY_BOLD,
         cursor='hand2' if callable(command) else '',
     )
@@ -59,81 +156,95 @@ def action_button(parent: tk.Misc, text: str, command: Optional[Callable[[], Any
 
 def metric_tile(parent: tk.Misc, label: str, value: Any, *, sub: str = "", accent: str = "gold") -> tk.Frame:
     color = _accent(accent)
-    card = tk.Frame(parent, bg=ui._SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=ui._SAO_PANEL_BORDER)
-    tk.Frame(card, bg=color, height=3).pack(fill='x')
-    tk.Label(card, text=str(label or "-"), bg=ui._SAO_PANEL_BODY_BG, fg=ui._SAO_PANEL_LABEL_FG, font=FONT_SMALL).pack(anchor='w', padx=10, pady=(7, 0))
-    tk.Label(card, text=str(value or "0"), bg=ui._SAO_PANEL_BODY_BG, fg=ui._SAO_PANEL_VALUE_FG, font=FONT_VALUE).pack(anchor='w', padx=10, pady=(1, 0))
+    card_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
+    border = _pc('border', ui._SAO_PANEL_BORDER)
+    card = tk.Frame(parent, bg=card_bg, highlightthickness=1, highlightbackground=border)
+    tk.Frame(card, bg=color, height=4).pack(fill='x')           # 4px 顶部强调条（原 3px 像渲染瑕疵）
+    inner = tk.Frame(card, bg=card_bg)
+    inner.pack(fill='both', expand=True, padx=SP_MD, pady=(SP_SM, SP_SM))
+    tk.Label(inner, text=str(label or "-").upper(), bg=card_bg, fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG), font=FONT_SMALL).pack(anchor='w')
+    tk.Label(inner, text=str(value if value not in (None, '') else "0"), bg=card_bg, fg=_pc('value_fg', ui._SAO_PANEL_VALUE_FG), font=FONT_VALUE).pack(anchor='w', pady=(2, 0))
     if sub:
-        tk.Label(card, text=str(sub), bg=ui._SAO_PANEL_BODY_BG, fg=color, font=FONT_SMALL).pack(anchor='w', padx=10, pady=(0, 7))
-    else:
-        tk.Frame(card, bg=ui._SAO_PANEL_BODY_BG, height=7).pack(fill='x')
+        tk.Label(inner, text=str(sub), bg=card_bg, fg=color, font=FONT_SMALL).pack(anchor='w', pady=(1, 0))
     return card
 
 
-def section_card(parent: tk.Misc, title: str, *, subtitle: str = "", badge: str = "") -> tk.Frame:
-    box = tk.Frame(parent, bg=ui._SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=ui._SAO_PANEL_BORDER)
-    head = tk.Frame(box, bg=ui._SAO_PANEL_HEADER_BG)
+def section_card(parent: tk.Misc, title: str, *, subtitle: str = "", badge: str = "", accent: str = "cyan") -> tk.Frame:
+    body_bg = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    header_bg = _pc('header_bg', ui._SAO_PANEL_HEADER_BG)
+    box = tk.Frame(parent, bg=body_bg, highlightthickness=1, highlightbackground=_pc('border', ui._SAO_PANEL_BORDER))
+    head = tk.Frame(box, bg=header_bg)
     head.pack(fill='x')
-    tk.Frame(head, bg=ui._SAO_PANEL_ACCENT, width=4).pack(side='left', fill='y')
-    text_box = tk.Frame(head, bg=ui._SAO_PANEL_HEADER_BG)
-    text_box.pack(side='left', fill='x', expand=True, padx=(8, 4), pady=6)
-    tk.Label(text_box, text=str(title or "SECTION"), bg=ui._SAO_PANEL_HEADER_BG, fg=ui._SAO_PANEL_GOLD, font=FONT_TITLE, anchor='w').pack(fill='x')
+    tk.Frame(head, bg=_accent(accent), width=4).pack(side='left', fill='y')   # 左侧强调轨（按 section 配色）
+    text_box = tk.Frame(head, bg=header_bg)
+    text_box.pack(side='left', fill='x', expand=True, padx=(SP_SM, SP_XS), pady=SP_SM)
+    tk.Label(text_box, text=str(title or "SECTION"), bg=header_bg, fg=_pc('gold', ui._SAO_PANEL_GOLD), font=FONT_TITLE, anchor='w').pack(fill='x')
     if subtitle:
-        tk.Label(text_box, text=str(subtitle), bg=ui._SAO_PANEL_HEADER_BG, fg=ui._SAO_PANEL_LABEL_FG, font=FONT_SMALL, anchor='w').pack(fill='x')
+        tk.Label(text_box, text=str(subtitle), bg=header_bg, fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG), font=FONT_SMALL, anchor='w').pack(fill='x')
     if badge:
-        status_badge(head, badge, kind='cyan').pack(side='right', padx=8, pady=6)
+        status_badge(head, badge, kind=accent).pack(side='right', padx=SP_SM, pady=SP_SM)
     return box
 
 
 def aggregate_row(parent: tk.Misc, *, title: str, meta: str = "", value: str = "", ratio: float = 0.0,
-                  accent: str = "gold", zebra: bool = False, command: Optional[Callable[[], Any]] = None) -> tk.Frame:
+                  accent: str = "gold", zebra: bool = False, command: Optional[Callable[[], Any]] = None,
+                  expanded: Optional[bool] = None) -> tk.Frame:
     color = _accent(accent)
-    bg = ui._SAO_PANEL_HEADER_BG if zebra else ui._SAO_PANEL_BODY_BG
-    row = tk.Frame(parent, bg=bg, highlightthickness=1, highlightbackground=ui._SAO_PANEL_SEP, cursor='hand2' if callable(command) else '')
-    bar_bg = tk.Frame(row, bg=bg)
-    bar_bg.pack(fill='x')
-    bar_width = max(3, min(280, int(280 * max(0.0, min(1.0, float(ratio or 0.0))))))
-    tk.Frame(bar_bg, bg=color, width=bar_width, height=3).pack(anchor='w')
-    body = tk.Frame(row, bg=bg)
-    body.pack(fill='x', padx=8, pady=5)
-    left = tk.Frame(body, bg=bg)
-    left.pack(side='left', fill='x', expand=True)
-    tk.Label(left, text=str(title or '-'), bg=bg, fg=ui._SAO_PANEL_VALUE_FG, font=FONT_BODY_BOLD, anchor='w').pack(fill='x')
-    if meta:
-        tk.Label(left, text=str(meta), bg=bg, fg=ui._SAO_PANEL_LABEL_FG, font=FONT_SMALL, anchor='w').pack(fill='x')
-    if value:
-        tk.Label(body, text=str(value), bg=bg, fg=color, font=FONT_BODY_BOLD, anchor='e').pack(side='right', padx=(8, 0))
-    if callable(command):
-        def _bind_recursive(widget: tk.Misc) -> None:
-            try:
-                widget.bind('<Button-1>', lambda _e: command())
-                widget.configure(cursor='hand2')
-            except Exception:
-                pass
-            try:
-                children = widget.winfo_children()
-            except Exception:
-                children = []
-            for child in children:
-                _bind_recursive(child)
+    base_bg = _pc('card_bg_alt', ui._SAO_PANEL_HEADER_BG) if zebra else _pc('card_bg', ui._SAO_PANEL_BODY_BG)
+    hover_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG) if zebra else _pc('card_bg_alt', ui._SAO_PANEL_HEADER_BG)
+    row = tk.Frame(parent, bg=base_bg, highlightthickness=1, highlightbackground=_pc('sep', ui._SAO_PANEL_SEP),
+                   cursor='hand2' if callable(command) else '')
 
-        _bind_recursive(row)
+    # 全宽进度槽 + 比例填充（替代原本最多 280px 的像素条，随窗口缩放）
+    track = tk.Frame(row, bg=_pc('track_bg', base_bg), height=5)
+    track.pack(fill='x', side='top')
+    track.pack_propagate(False)
+    fill = tk.Frame(track, bg=color)
+    fill.place(x=0, y=0, relheight=1.0, relwidth=max(0.0, min(1.0, float(ratio or 0.0))))
+
+    body = tk.Frame(row, bg=base_bg)
+    body.pack(fill='x', padx=SP_SM, pady=SP_XS + 1)
+    if expanded is not None:
+        tk.Label(body, text=('▾' if expanded else '▸'), bg=base_bg, fg=color, font=FONT_CARET).pack(side='left', padx=(0, SP_XS))
+    left = tk.Frame(body, bg=base_bg)
+    left.pack(side='left', fill='x', expand=True)
+    tk.Label(left, text=str(title or '-'), bg=base_bg, fg=_pc('value_fg', ui._SAO_PANEL_VALUE_FG), font=FONT_BODY_BOLD, anchor='w').pack(fill='x')
+    if meta:
+        tk.Label(left, text=str(meta), bg=base_bg, fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG), font=FONT_META, anchor='w').pack(fill='x')
+    if value:
+        tk.Label(body, text=str(value), bg=base_bg, fg=color, font=FONT_VALUE_SM, anchor='e').pack(side='right', padx=(SP_SM, 0))
+
+    if callable(command):
+        _bind_click(row, command)
+    _bind_hover(row, base_bg, hover_bg)
+    return row
+
+
+def detail_row(parent: tk.Misc, text: str, *, accent: str = "cyan", zebra: bool = False, strong: bool = False) -> tk.Frame:
+    """One drilldown line: thin accent rule + monospace-ish aligned text, zebra striped."""
+    base_bg = _pc('card_bg_alt', ui._SAO_PANEL_HEADER_BG) if zebra else _pc('card_bg', ui._SAO_PANEL_BODY_BG)
+    fg = _pc('value_fg', ui._SAO_PANEL_VALUE_FG) if strong else _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
+    row = tk.Frame(parent, bg=base_bg)
+    tk.Frame(row, bg=_accent(accent), width=2).pack(side='left', fill='y')
+    tk.Label(row, text=str(text), bg=base_bg, fg=fg, font=FONT_META, anchor='w', justify='left').pack(
+        side='left', fill='x', expand=True, padx=(SP_SM, SP_SM), pady=1)
     return row
 
 
 def empty_state(parent: tk.Misc, title: str, detail: str = "") -> tk.Frame:
-    box = tk.Frame(parent, bg=ui._SAO_PANEL_BODY_BG)
-    tk.Label(box, text=str(title or "No data"), bg=ui._SAO_PANEL_BODY_BG, fg=ui._SAO_PANEL_GOLD, font=FONT_TITLE, pady=12).pack(fill='x')
+    body_bg = _pc('body_bg', ui._SAO_PANEL_BODY_BG)
+    box = tk.Frame(parent, bg=body_bg, highlightthickness=1, highlightbackground=_pc('sep', ui._SAO_PANEL_SEP))
+    tk.Label(box, text=str(title or "No data"), bg=body_bg, fg=_pc('gold', ui._SAO_PANEL_GOLD), font=FONT_TITLE, pady=SP_MD).pack(fill='x')
     if detail:
-        tk.Label(box, text=str(detail), bg=ui._SAO_PANEL_BODY_BG, fg=ui._SAO_PANEL_LABEL_FG, font=FONT_BODY, wraplength=720, justify='center').pack(fill='x', padx=12, pady=(0, 12))
+        tk.Label(box, text=str(detail), bg=body_bg, fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG), font=FONT_BODY, wraplength=720, justify='center').pack(fill='x', padx=SP_MD, pady=(0, SP_MD))
     return box
 
 
 def source_badges(parent: tk.Misc, sources: Iterable[Mapping[str, Any]]) -> tk.Frame:
-    frame = tk.Frame(parent, bg=ui._SAO_PANEL_BODY_BG)
+    frame = tk.Frame(parent, bg=_pc('body_bg', ui._SAO_PANEL_BODY_BG))
     for item in sources or []:
         if not isinstance(item, Mapping):
             continue
         text = f"{item.get('source') or '-'} · {int(item.get('count') or 0)}"
-        status_badge(frame, text, kind='cyan').pack(side='left', padx=(0, 6), pady=2)
+        status_badge(frame, text, kind='cyan').pack(side='left', padx=(0, SP_SM), pady=2)
     return frame

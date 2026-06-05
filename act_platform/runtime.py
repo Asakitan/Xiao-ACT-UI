@@ -30,7 +30,17 @@ def ensure_act_event_bus(owner: Any) -> EventBus:
     bus = getattr(owner, "_act_event_bus", None)
     if isinstance(bus, EventBus):
         return bus
-    bus = EventBus()
+    # Retain a full encounter worth of live events, not just the EventBus
+    # default of 200. During a busy boss fight all topics (damage/heal/skill/
+    # monster/boss/dungeon) share this one bus, so 200 events roll over in a
+    # fraction of a second and every span/elapsed/DPS number derived from the
+    # retained slice collapses to "几百毫秒". 4000 covers a typical fight while
+    # recent_events() still only clones the last `limit` rows per read.
+    try:
+        max_recent = int(_settings_get(owner, "act_event_bus_max_recent", 4000) or 4000)
+    except Exception:
+        max_recent = 4000
+    bus = EventBus(max_recent=max(200, max_recent))
     try:
         setattr(owner, "_act_event_bus", bus)
     except Exception:
@@ -1714,6 +1724,30 @@ def _resolve_name(kind: str, value: Any) -> str:
         return ""
 
 
+def _resolve_skill_name_from_detail(skill: Mapping[str, Any]) -> str:
+    """Best-effort skill name for a DPS-tracker skill detail row.
+
+    Tries every id form the tracker carries (base/semantic/level/raw) through
+    the shared name resolver, retrying with //100 so composite/level ids resolve
+    against the base-keyed tables. Returns "" when nothing resolves so callers
+    keep their existing bare-id fallback.
+    """
+    name = _truthy_text(skill.get("skill_name")) or _truthy_text(skill.get("name"))
+    if name:
+        return name
+    seen: set[int] = set()
+    for key in ("base_skill_id", "semantic_skill_id", "semantic_base_skill_id",
+                "skill_id", "skill_level_id", "source_skill_id"):
+        sid = _coerce_int(skill.get(key), 0)
+        if sid <= 0 or sid in seen:
+            continue
+        seen.add(sid)
+        resolved = _resolve_name("skill", sid) or (_resolve_name("skill", sid // 100) if sid >= 100 else "")
+        if resolved:
+            return resolved
+    return ""
+
+
 def _owner_packet_bridge(owner: Any) -> Any:
     return getattr(owner, "_packet_engine", None) or getattr(owner, "packet_bridge", None) or getattr(owner, "_bridge", None)
 
@@ -1890,6 +1924,11 @@ def _action_log_display_fields(payload: Mapping[str, Any], *, topic: str = "") -
     skill_name = (
         _payload_first_text(payload, ("skill_display", "skill_name", "skillName", "action_name"))
         or _resolve_name("skill", skill_id)
+        # Direct-hit damage carries a composite/level id (e.g. 120101) while the
+        # name tables are keyed by the base skill id (1201). Retry with //100
+        # like packet_bridge._get_skill_name does, so most skills resolve a name
+        # instead of only the DoT/debuff ticks whose id is a verbatim buff key.
+        or (_resolve_name("skill", skill_id // 100) if skill_id >= 100 else "")
         or _payload_first_text(payload, ("skill",))
     )
     monster_name = _payload_first_name_text(payload, ("monster_name", "target_name", "boss_name", "target", "victim", "boss")) or _resolve_name("monster", monster_id)
@@ -2858,7 +2897,7 @@ def _combatant_skill_rows(detail: Mapping[str, Any], *, query: str = "") -> list
             "semantic_skill_id": str(skill.get("semantic_skill_id") or skill.get("base_skill_id") or skill.get("semantic_base_skill_id") or ""),
             "skill_level_id": str(skill.get("skill_level_id") or ""),
             "skill_uuid": str(skill.get("skill_uuid") or ""),
-            "name": str(skill.get("skill_name") or skill.get("name") or skill.get("skill_id") or "Unknown Skill"),
+            "name": _resolve_skill_name_from_detail(skill) or str(skill.get("skill_name") or skill.get("name") or skill.get("skill_id") or "Unknown Skill"),
             "kind": "heal" if is_heal else "damage",
             "amount": int(amount),
             "damage": damage,
@@ -3044,7 +3083,7 @@ def _skill_summary(skill: Mapping[str, Any]) -> dict[str, Any]:
         "skill_level_id": _normalize_skill_id(skill.get("skill_level_id")),
         "skill_uuid": _normalize_skill_id(skill.get("skill_uuid")),
         "candidate_skill_ids": sorted(_skill_id_candidates(skill)),
-        "name": str(skill.get("skill_name") or skill.get("name") or skill.get("skill_id") or "Unknown Skill"),
+        "name": _resolve_skill_name_from_detail(skill) or str(skill.get("skill_name") or skill.get("name") or skill.get("skill_id") or "Unknown Skill"),
         "kind": "heal" if is_heal else "damage",
         "amount": int(amount),
         "damage": damage,

@@ -380,9 +380,16 @@ def _overview(rows: list[dict[str, Any]], render_spec: Mapping[str, Any] | None 
     heal = sum(float(row.get("heal") or 0.0) for row in rows)
     render_damage = _safe_float(totals.get("damage"), 0.0)
     render_heal = _safe_float(totals.get("heal"), 0.0)
+    # `slice_span_ms` is the width of the *retained event slice*; it is only the
+    # true fight duration when retention covers the whole encounter. Prefer the
+    # encounter timing (render_spec totals.elapsed_s / encounter.duration_s) for
+    # the headline elapsed/DPS/span so a truncated slice can no longer make the
+    # numbers spike into the "几百毫秒" range.
+    slice_span_ms = max(0, last - first)
     elapsed_s = _safe_float(totals.get("elapsed_s") or encounter.get("duration_s"), 0.0)
     if not elapsed_s and first and last:
-        elapsed_s = max(0.0, (last - first) / 1000.0)
+        elapsed_s = max(0.0, slice_span_ms / 1000.0)
+    span_ms = int(round(elapsed_s * 1000)) if elapsed_s > 0 else slice_span_ms
     final_damage = render_damage or damage
     final_heal = render_heal or heal
     return {
@@ -394,7 +401,8 @@ def _overview(rows: list[dict[str, Any]], render_spec: Mapping[str, Any] | None 
         "elapsed_s": round(elapsed_s, 3),
         "first_time_ms": first,
         "last_time_ms": last,
-        "span_ms": max(0, last - first),
+        "span_ms": span_ms,
+        "slice_span_ms": slice_span_ms,
         "skill_count": len({row.get("skill_id") or row.get("skill_name") for row in rows if row.get("skill_id") or row.get("skill_name")}),
         "monster_count": len({row.get("monster_id") or row.get("monster_name") or row.get("target_uid") for row in rows if row.get("monster_id") or row.get("monster_name") or row.get("target_uid")}),
         "dungeon_count": len({row.get("dungeon_id") or row.get("dungeon_name") for row in rows if row.get("dungeon_id") or row.get("dungeon_name")}),
