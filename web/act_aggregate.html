@@ -235,7 +235,7 @@ input#query { width: 170px; }
         }
         return '<div class="aca-section" style="--acc:' + acc(kind) + ';">'
             + '<div class="aca-sec-head" data-toggle="1"><div class="aca-sec-rail"></div>'
-            + '<div class="aca-sec-titles"><div class="aca-sec-title">' + esc(title) + '</div><div class="aca-sec-sub">' + esc(sub) + '</div></div>'
+            + '<div class="aca-sec-titles"><div class="aca-sec-title">' + esc(title) + '</div>' + (sub ? '<div class="aca-sec-sub">' + esc(sub) + '</div>' : '') + '</div>'
             + '<div class="aca-sec-badge">' + items.length + '</div></div>'
             + '<div class="aca-sec-body">' + rows + '</div></div>';
     }
@@ -294,11 +294,11 @@ input#query { width: 170px; }
         html += '</div>';
 
         // 5 group sections in Tk order with matching accents + bilingual subtitles
-        html += section('timeline', '时间线聚合 / TIMELINE CLUSTERS', '按时间桶汇总，不再一条时间一行', 'cyan', data.timeline_clusters, 'damage');
-        html += section('skill', '伤害解析 · 技能聚合 / SKILL DAMAGE', '按技能汇总伤害/治疗、命中次数、目标和来源', 'gold', data.skill_damage, 'damage');
-        html += section('monster', '怪物伤害 / MONSTER DAMAGE', '按怪物/目标汇总承伤、技能、参与者和来源', 'danger', data.monster_damage, 'damage');
-        html += section('dungeon', '地牢伤害 / DUNGEON DAMAGE', '按地牢/encounter 汇总总量、怪物、技能和事件跨度', 'cyan', data.dungeon_damage, 'damage');
-        html += section('log', '日志聚合 / LOG GROUPS', '按动作/主题汇总日志，展开后才查看代表 raw rows', 'gold', data.log_groups, 'total_value');
+        // 时间线聚合(0.x 秒一桶)对阅读无意义，已移除；副标题注释也去掉，只留语义分组。
+        html += section('skill', '技能聚合 / SKILL DAMAGE', '', 'gold', data.skill_damage, 'damage');
+        html += section('monster', '怪物伤害 / MONSTER DAMAGE', '', 'danger', data.monster_damage, 'damage');
+        html += section('dungeon', '地牢 / 场景 DUNGEON·SCENE', '', 'cyan', data.dungeon_damage, 'damage');
+        html += section('log', '日志聚合 / LOG GROUPS', '', 'gold', data.log_groups, 'total_value');
         html += graphSection(graph);
 
         content.innerHTML = html;

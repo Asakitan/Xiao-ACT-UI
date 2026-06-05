@@ -182,7 +182,10 @@ class ActAggregatePanel:
         scroll = tk.Scrollbar(outer, orient='vertical', command=canvas.yview)
         self._rows = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._rows.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.create_window((0, 0), window=self._rows, anchor='nw')
+        _win_id = canvas.create_window((0, 0), window=self._rows, anchor='nw')
+        # Stretch the scrolled frame to the canvas width so content fills the
+        # whole panel instead of hugging the left edge.
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure(_win_id, width=e.width))
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
@@ -212,11 +215,11 @@ class ActAggregatePanel:
         if int(counts.get('rows') or 0) <= 0:
             empty_state(self._rows, '等待 ACT 事件 / 战斗数据', '聚合驾驶舱会在收到伤害、技能、怪物、地牢或日志事件后自动显示语义分组。').pack(fill='x', padx=4, pady=10)
             return
-        self._render_group_section('时间线聚合', '按时间桶汇总，不再一条时间一行', 'timeline', status.get('timeline_clusters') or [], value_key='damage', accent='cyan')
-        self._render_group_section('伤害解析 / 技能聚合', '按技能汇总伤害/治疗、命中次数、目标和来源', 'skill', status.get('skill_damage') or [], value_key='damage', accent='gold')
-        self._render_group_section('怪物伤害', '按怪物/目标汇总承伤、技能、参与者和来源', 'monster', status.get('monster_damage') or [], value_key='damage', accent='danger')
-        self._render_group_section('地牢伤害', '按地牢/encounter 汇总总量、怪物、技能和事件跨度', 'dungeon', status.get('dungeon_damage') or [], value_key='damage', accent='cyan')
-        self._render_group_section('日志聚合', '按动作/主题汇总日志，展开后才查看代表 raw rows', 'log', status.get('log_groups') or [], value_key='total_value', accent='gold')
+        # 时间线聚合(0.x 秒一桶)对阅读无意义，已移除；只保留技能/怪物/地牢/日志语义分组。
+        self._render_group_section('技能聚合', '', 'skill', status.get('skill_damage') or [], value_key='damage', accent='gold')
+        self._render_group_section('怪物伤害', '', 'monster', status.get('monster_damage') or [], value_key='damage', accent='danger')
+        self._render_group_section('地牢 / 场景', '', 'dungeon', status.get('dungeon_damage') or [], value_key='damage', accent='cyan')
+        self._render_group_section('日志聚合', '', 'log', status.get('log_groups') or [], value_key='total_value', accent='gold')
         self._render_graph_preview(status.get('graph') if isinstance(status.get('graph'), Mapping) else {})
 
     def _render_header_summary(self, status: Mapping[str, Any]) -> None:
