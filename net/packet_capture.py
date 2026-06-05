@@ -226,8 +226,8 @@ C3SB_SHORT = b'\x63\x33\x53\x42'
 #   src/dst(ip:port) seq n(len) srv(是否当前已识别服务器) strict/loose(识别命中) head(前32B hex)
 # 抓完一段后把 _RAW_CAP_DUMP_ENABLED 改回 False。
 _RAW_CAP_DUMP_ENABLED = True
-_RAW_CAP_MAX_BYTES = 60_000_000
-_RAW_CAP_PER_ADDR = 12
+_RAW_CAP_MAX_BYTES = 80_000_000
+_RAW_CAP_PER_ADDR = 60
 _raw_cap_bytes = 0
 _raw_cap_addr_seen: Dict[str, int] = {}
 _raw_cap_printed = False
@@ -252,7 +252,7 @@ def _dump_raw_cap(meta, seq, payload, is_server, strict, loose):
             'dst': '%s:%d' % (meta.get('dst_ip', ''), meta.get('dst_port', 0)),
             'seq': int(seq), 'n': len(payload),
             'srv': bool(is_server), 'strict': bool(strict), 'loose': bool(loose),
-            'head': payload[:32].hex(),
+            'head': payload[:512].hex(),
         }
         line = json.dumps(row, ensure_ascii=False) + '\n'
         _raw_cap_bytes += len(line)
@@ -403,8 +403,11 @@ class TcpReassembler:
             try:
                 _loose = C3SB_SHORT in payload
                 _strict = self._identify_strict(payload)
+                # 排除 TLS/DNS 噪声 (CDN/网页/解析), 聚焦游戏候选流量
+                _noise = (meta.get('dst_port') in (443, 53)
+                          or meta.get('endpoint_port') in (443, 53))
                 _seen = _raw_cap_addr_seen.get(addr, 0)
-                if _loose or _strict or _seen < _RAW_CAP_PER_ADDR:
+                if _loose or ((not _noise) and (_strict or _seen < _RAW_CAP_PER_ADDR)):
                     _raw_cap_addr_seen[addr] = _seen + 1
                     _dump_raw_cap(meta, seq, payload,
                                   is_server=(addr == self._server_addr),
