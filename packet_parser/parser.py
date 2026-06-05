@@ -2015,6 +2015,10 @@ class PacketParser:
                 'scene_layer': sd.SceneLayer,
             }
             if new_scene_id > 0:
+                # 主城/开放大地图(阿斯特里斯=8 / 巴哈马尔高原=9 等)的 scene_id 走
+                # 这条 SceneData.MapId, 而非 EnterScene 的 SCENE_BASIC_ID(0x155)。
+                # 记录是否真的换了 MapId, 用于补发场景事件(供中央地图名横幅 / ACT)。
+                map_id_changed = (int(new_scene_id) != int(self._last_scene_id or 0))
                 player.scene_id = new_scene_id
                 changed = True
                 if (self._last_scene_key is not None
@@ -2038,6 +2042,20 @@ class PacketParser:
                     )
                 self._last_scene_id = new_scene_id
                 self._last_scene_key = scene_key
+                # 补发场景事件: 开放地图/主城不发 SyncDungeonData、EnterScene 的
+                # SCENE_BASIC_ID 又常为空 → 横幅/ACT 一直拿不到地图名。这里在 MapId
+                # 变化时发 dungeon 事件(scene_id=MapId), 让 _on_dungeon_event 用
+                # names.dungeon(scene_id) 解析出地图名 → 中央横幅可弹。仅在真正换图
+                # 时触发, 同图重复 full-sync 不会重发, 配合 UI 5s 去重不会刷屏。
+                if map_id_changed:
+                    self._emit_dungeon_event(
+                        'container_scene',
+                        scene_id=int(new_scene_id),
+                        cur_map_id=int(new_scene_id),
+                        channel_id=int(sd.ChannelId or 0),
+                        plane_id=int(sd.PlaneId or 0),
+                        scene_layer=int(sd.SceneLayer or 0),
+                    )
             player.extended_data['SCENE_DATA'] = scene
             logger.info(f'[Parser] CharSerialize SceneData(pb2): {scene} uid={uid}')
 
