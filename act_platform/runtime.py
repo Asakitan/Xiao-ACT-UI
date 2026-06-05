@@ -2757,6 +2757,11 @@ def _combatant_skill_rows(detail: Mapping[str, Any], *, query: str = "") -> list
         row = {
             "rank": index,
             "skill_id": str(skill.get("skill_id") or skill.get("id") or ""),
+            "source_skill_id": str(skill.get("source_skill_id") or skill.get("raw_skill_key") or skill.get("skill_key") or skill.get("stats_key") or skill.get("id") or ""),
+            "base_skill_id": str(skill.get("base_skill_id") or skill.get("semantic_base_skill_id") or skill.get("semantic_skill_id") or ""),
+            "semantic_skill_id": str(skill.get("semantic_skill_id") or skill.get("base_skill_id") or skill.get("semantic_base_skill_id") or ""),
+            "skill_level_id": str(skill.get("skill_level_id") or ""),
+            "skill_uuid": str(skill.get("skill_uuid") or ""),
             "name": str(skill.get("skill_name") or skill.get("name") or skill.get("skill_id") or "Unknown Skill"),
             "kind": "heal" if is_heal else "damage",
             "amount": int(amount),
@@ -2866,13 +2871,63 @@ def _normalize_skill_id(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _skill_id_candidates(*values: Any) -> set[str]:
+    candidates: set[str] = set()
+    for value in values:
+        if isinstance(value, Mapping):
+            for key in (
+                "skill_id", "id", "source_skill_id", "raw_skill_key", "skill_key",
+                "stats_key", "base_skill_id", "semantic_base_skill_id", "semantic_skill_id",
+                "skill_level_id", "skill_uuid",
+            ):
+                candidates.update(_skill_id_candidates(value.get(key)))
+            fact = value.get("combat_fact")
+            if isinstance(fact, Mapping):
+                candidates.update(_skill_id_candidates(fact))
+            continue
+        text = _normalize_skill_id(value)
+        if not text:
+            continue
+        candidates.add(text)
+        try:
+            num = int(text, 0)
+        except Exception:
+            num = None
+        if num is None or num <= 0:
+            continue
+        dec = str(num)
+        candidates.add(dec)
+        if len(dec) > 8:
+            # DPS/Cython can expose a composite damage key such as
+            # 110048200100. Keep the raw key, but also match embedded
+            # base ids like 1004820 and common leveled/effect suffix forms.
+            for start in range(0, max(0, len(dec) - 5)):
+                for width in (8, 7, 6):
+                    if start + width <= len(dec):
+                        part = dec[start:start + width]
+                        if part and not part.startswith("0"):
+                            candidates.add(str(int(part)))
+            for trim in (2, 3, 4):
+                if len(dec) > trim:
+                    base = dec[:-trim]
+                    if base and not base.startswith("0"):
+                        candidates.add(str(int(base)))
+        elif len(dec) > 4:
+            for trim in (1, 2, 3):
+                if len(dec) > trim + 3:
+                    base = dec[:-trim]
+                    if base and not base.startswith("0"):
+                        candidates.add(str(int(base)))
+    return {item for item in candidates if item}
+
+
 def _find_skill_detail(detail: Mapping[str, Any], skill_id: str) -> dict[str, Any] | None:
-    target = _normalize_skill_id(skill_id)
+    target_ids = _skill_id_candidates(skill_id)
     for skill in list(detail.get("skills") or []):
         if not isinstance(skill, Mapping):
             continue
-        current = _normalize_skill_id(skill.get("skill_id") or skill.get("id"))
-        if current and current == target:
+        current_ids = _skill_id_candidates(skill)
+        if target_ids and current_ids and target_ids.intersection(current_ids):
             return dict(_json_safe(skill))
     return None
 
@@ -2882,8 +2937,17 @@ def _skill_summary(skill: Mapping[str, Any]) -> dict[str, Any]:
     heal = int(skill.get("heal_total") or skill.get("heal") or 0)
     is_heal = heal > damage
     amount = heal if is_heal else damage
+    sid = _normalize_skill_id(skill.get("skill_id") or skill.get("id"))
+    source_sid = _normalize_skill_id(skill.get("source_skill_id") or skill.get("raw_skill_key") or skill.get("skill_key") or skill.get("stats_key"))
+    base_sid = _normalize_skill_id(skill.get("base_skill_id") or skill.get("semantic_base_skill_id") or skill.get("semantic_skill_id"))
     return {
-        "skill_id": _normalize_skill_id(skill.get("skill_id") or skill.get("id")),
+        "skill_id": sid,
+        "source_skill_id": source_sid,
+        "base_skill_id": base_sid,
+        "semantic_skill_id": _normalize_skill_id(skill.get("semantic_skill_id") or base_sid),
+        "skill_level_id": _normalize_skill_id(skill.get("skill_level_id")),
+        "skill_uuid": _normalize_skill_id(skill.get("skill_uuid")),
+        "candidate_skill_ids": sorted(_skill_id_candidates(skill)),
         "name": str(skill.get("skill_name") or skill.get("name") or skill.get("skill_id") or "Unknown Skill"),
         "kind": "heal" if is_heal else "damage",
         "amount": int(amount),
@@ -2894,7 +2958,7 @@ def _skill_summary(skill: Mapping[str, Any]) -> dict[str, Any]:
 
 def _skill_timeline_refs(owner: Any, *, skill_id: str, query: str = "", limit: int = 80) -> list[dict[str, Any]]:
     text = str(query or "").strip().lower()
-    target = _normalize_skill_id(skill_id)
+    target_ids = _skill_id_candidates(skill_id)
     try:
         raw_events = ensure_act_event_bus(owner).recent_events(limit)
     except Exception:
@@ -2905,8 +2969,9 @@ def _skill_timeline_refs(owner: Any, *, skill_id: str, query: str = "", limit: i
             continue
         row = _action_log_row(event, idx)
         payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
-        current = _normalize_skill_id(payload.get("skill_id") or payload.get("id"))
-        if current != target:
+        current_ids = _skill_id_candidates(payload)
+        matched_ids = target_ids.intersection(current_ids)
+        if not target_ids or not current_ids or not matched_ids:
             continue
         ref = {
             "id": str(row.get("id") or ""),
@@ -2914,6 +2979,7 @@ def _skill_timeline_refs(owner: Any, *, skill_id: str, query: str = "", limit: i
             "topic": str(row.get("topic") or ""),
             "label": str(row.get("label") or ""),
             "value": row.get("value") or "",
+            "matched_skill_ids": sorted(matched_ids),
             "payload": _json_safe(payload),
         }
         if text and text not in json.dumps(ref, ensure_ascii=False, default=str).lower():

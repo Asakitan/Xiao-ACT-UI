@@ -60,6 +60,7 @@ from typing import Any, Optional
 
 from utils.perf_probe import probe as _probe
 from gui_modules.sao_gui_action_log import ActionLogPanel
+from gui_modules.sao_gui_act_aggregate import ActAggregatePanel
 from gui_modules.sao_gui_commander import CommanderPanel
 from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel
 from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
@@ -180,6 +181,19 @@ class SAOPlayerGUIPanelsMixin:
             self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_action_log_panel))
 
+    def _toggle_act_aggregate_panel(self):
+        """打开/关闭 ACT 聚合总览面板 (tkinter)."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._act_aggregate_panel:
+            self._act_aggregate_panel = ActAggregatePanel(self.root, self)
+            self._apply_act_panel_theme()
+        if self._act_aggregate_panel.is_visible():
+            self._act_aggregate_panel.hide()
+        else:
+            self._act_aggregate_panel.show()
+            self._apply_act_panel_theme()
+            self.root.after(120, lambda: self._raise_panel_window(self._act_aggregate_panel))
+
     def _toggle_act_death_recap_panel(self):
         """打开/关闭 ACT 死亡回放面板 (tkinter)."""
         self._dismiss_sao_menu_for_panel()
@@ -296,6 +310,7 @@ class SAOPlayerGUIPanelsMixin:
             ('act_report_export', getattr(self._act_report_export_panel, '_win', None)),
             ('act_offline_import', getattr(self._act_offline_import_panel, '_win', None)),
             ('act_timeline_vcr', getattr(self._act_timeline_vcr_panel, '_win', None)),
+            ('act_aggregate', getattr(self._act_aggregate_panel, '_win', None)),
             ('act_action_log', getattr(self._act_action_log_panel, '_win', None)),
             ('act_death_recap', getattr(self._act_death_recap_panel, '_win', None)),
             ('act_graph_timeseries', getattr(self._act_graph_timeseries_panel, '_win', None)),
@@ -350,6 +365,7 @@ class SAOPlayerGUIPanelsMixin:
         '_act_report_export_panel',
         '_act_offline_import_panel',
         '_act_timeline_vcr_panel',
+        '_act_aggregate_panel',
         '_act_action_log_panel',
         '_act_death_recap_panel',
         '_act_graph_timeseries_panel',

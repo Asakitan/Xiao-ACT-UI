@@ -48,6 +48,16 @@ class CombatantDrilldownPanel:
         self._last_refresh_at = 0.0
         self._last_sig = ""
 
+    def select(self, combatant_id: Any = "", *, query: str = "") -> Dict[str, Any]:
+        if combatant_id is not None:
+            self._combatant_var.set(str(combatant_id or ""))
+        if query:
+            self._query_var.set(str(query or ""))
+        self._last_refresh_at = 0.0
+        self._last_sig = ""
+        self.show()
+        return self.refresh()
+
     def show(self) -> None:
         if self._win is None or not self._exists():
             self._build()
@@ -239,6 +249,7 @@ class CombatantDrilldownPanel:
         for skill in skills[:40]:
             row = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             row.pack(fill='x', pady=2, padx=4)
+            row.configure(cursor='hand2')
             color = '#e8fff4' if skill.get('kind') == 'heal' else _SAO_PANEL_BODY_BG
             bar_width = max(4, min(160, int(160 * int(skill.get('amount') or 0) / max_amount)))
             tk.Frame(row, bg=('#2ebf86' if skill.get('kind') == 'heal' else _SAO_PANEL_GOLD), width=bar_width, height=3).pack(fill='x', anchor='w')
@@ -252,7 +263,35 @@ class CombatantDrilldownPanel:
             line = tk.Frame(row, bg=color)
             line.pack(fill='x')
             for text, width, fg in values:
-                tk.Label(line, text=text, width=width, anchor='w', bg=color, fg=fg, font=('Segoe UI', 9)).pack(side='left', padx=3, pady=5)
+                label = tk.Label(line, text=text, width=width, anchor='w', bg=color, fg=fg, font=('Segoe UI', 9), cursor='hand2')
+                label.pack(side='left', padx=3, pady=5)
+                label.bind('<Button-1>', lambda _e, sk=skill: self._open_skill(sk))
+            row.bind('<Button-1>', lambda _e, sk=skill: self._open_skill(sk))
+
+    def _open_skill(self, skill: Mapping[str, Any]) -> None:
+        sid = str(skill.get('skill_id') or skill.get('base_skill_id') or skill.get('source_skill_id') or '')
+        cid = str(self._combatant_var.get() or self._last_status.get('combatant_id') or '')
+        if not sid or not cid:
+            self._status_var.set('SKILL DRILLDOWN NEEDS UID + SKILL ID')
+            return
+        panel = getattr(self.owner, '_act_skill_drilldown_panel', None)
+        if panel is None:
+            try:
+                from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
+                panel = SkillDrilldownPanel(self.root, self.owner)
+                setattr(self.owner, '_act_skill_drilldown_panel', panel)
+            except Exception as exc:
+                self._status_var.set(f'SKILL PANEL ERROR: {exc}')
+                return
+        select = getattr(panel, 'select', None)
+        if callable(select):
+            select(cid, sid)
+        else:
+            try:
+                panel.show()
+            except Exception:
+                pass
+        self._status_var.set(f'OPEN SKILL {sid}')
 
     def _render_side(self, status: Mapping[str, Any]) -> None:
         if self._rows is None:

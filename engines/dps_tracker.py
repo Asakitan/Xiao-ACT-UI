@@ -167,10 +167,24 @@ def _annotate_skill_rows(rows: Any) -> None:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        sid = _safe_int(row.get('skill_id'), 0)
+        raw_sid = _safe_int(
+            row.get('source_skill_id') or row.get('raw_skill_key')
+            or row.get('skill_key') or row.get('stats_key')
+            or row.get('skill_id') or row.get('id'),
+            0,
+        )
+        sid = _safe_int(row.get('skill_id') or raw_sid, 0)
         if sid <= 0:
             continue
-        row.update(_skill_semantic_fact(sid))
+        semantic = _semantic_base_skill_id(raw_sid or sid)
+        if raw_sid > 0:
+            row.setdefault('source_skill_id', raw_sid)
+            row.setdefault('raw_skill_key', raw_sid)
+        row.setdefault('base_skill_id', semantic)
+        row.setdefault('semantic_base_skill_id', semantic)
+        if sid != semantic:
+            row.setdefault('skill_level_id', sid)
+        row.update(_skill_semantic_fact(raw_sid or sid))
 
 
 def _annotate_entity_skill_rows(entities: Any) -> None:

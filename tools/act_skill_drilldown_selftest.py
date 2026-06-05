@@ -18,6 +18,9 @@ class FakeTracker:
             "skills": [
                 {
                     "skill_id": 11,
+                    "source_skill_id": 110048200100,
+                    "base_skill_id": 1004820,
+                    "skill_level_id": 11,
                     "skill_name": "Slash",
                     "total": 1800,
                     "hits": 3,
@@ -50,6 +53,7 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
         bus = ensure_act_event_bus(owner)
         bus.publish("skill", {"timestamp": 101.0, "attacker": "Kirito", "skill_id": 11, "skill_name": "Slash", "damage": 900}, source_name="tcp", source_kind="packet")
         bus.publish("damage", {"timestamp": 102.0, "attacker": "Kirito", "skill_id": 11, "skill_name": "Slash", "damage": 900}, source_name="tcp", source_kind="packet")
+        bus.publish("damage", {"timestamp": 102.5, "attacker": "Kirito", "skill_id": 110048200100, "base_skill_id": 1004820, "skill_name": "Slash", "damage": 1}, source_name="tcp", source_kind="packet")
         bus.publish("heal", {"timestamp": 103.0, "attacker": "Kirito", "skill_id": 12, "skill_name": "Potion", "heal": 120}, source_name="tcp", source_kind="packet")
         return owner
 
@@ -60,6 +64,8 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
         self.assertEqual(status["combatant_id"], "1001")
         self.assertEqual(status["skill_id"], "11")
         self.assertEqual(status["summary"]["name"], "Slash")
+        self.assertEqual(status["summary"]["base_skill_id"], "1004820")
+        self.assertIn("110048200100", status["summary"]["candidate_skill_ids"])
         self.assertEqual(status["casts"], 2)
         self.assertEqual(status["hits"], 3)
         self.assertAlmostEqual(status["crit_rate"], 0.333)
@@ -80,6 +86,19 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
         self.assertTrue(copied["ok"])
         self.assertEqual(data["skill_id"], "11")
         self.assertIn("timeline_refs", data)
+
+    def test_skill_status_matches_composite_source_key(self) -> None:
+        status = runtime.act_skill_drilldown_status(self._owner_with_events(), combatant_id=1001, skill_id=110048200100)
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["summary"]["name"], "Slash")
+        self.assertGreaterEqual(len(status["timeline_refs"]), 1)
+
+    def test_skill_status_matches_semantic_base_id(self) -> None:
+        status = runtime.act_skill_drilldown_status(self._owner_with_events(), combatant_id=1001, skill_id=1004820)
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["summary"]["name"], "Slash")
 
     def test_skill_back_clears_selection(self) -> None:
         owner = self._owner_with_events()

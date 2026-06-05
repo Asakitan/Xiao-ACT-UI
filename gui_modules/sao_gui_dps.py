@@ -412,7 +412,7 @@ class DpsOverlay:
     """
 
     # Outer panel (ULW window) size
-    WIDTH = 340
+    WIDTH = 380
     DEFAULT_HEIGHT = 420
     MAX_HEIGHT = 700
     DETAIL_DEFAULT_W = 760
@@ -434,8 +434,8 @@ class DpsOverlay:
     EYEBROW_H = 13
     TITLE_H = 26
     SUMMARY_H = 14
-    BTN_H = 26
-    BTN_GAP = 6
+    BTN_H = 30
+    BTN_GAP = 8
     TAB_H = 26
     TAB_PAD_TOP = 10
     TAB_PAD_BOT = 8
@@ -572,6 +572,9 @@ class DpsOverlay:
         self._view_mode = 'live'
         self._current_tab = 'damage'
         self._report_available = False
+        self._minimized = False
+        self._panel_notice: str = ''
+        self._panel_notice_until: float = 0.0
         # Detail view state (parity with web/dps.html _openDetail/_closeDetail)
         self._detail_visible = False
         self._detail_uid = 0
@@ -610,6 +613,7 @@ class DpsOverlay:
                 self._y = int(settings.get('dps_ov_y', self._y))
                 self._detail_w = int(settings.get('dps_detail_w', self._detail_w))
                 self._detail_h = int(settings.get('dps_detail_h', self._detail_h))
+                self._minimized = bool(settings.get('dps_minimized', False))
                 self._detail_w = max(self.DETAIL_MIN_W, min(self.DETAIL_MAX_W, self._detail_w))
                 self._detail_h = max(self.DETAIL_MIN_H, min(self.DETAIL_MAX_H, self._detail_h))
             except Exception:
@@ -1060,10 +1064,11 @@ class DpsOverlay:
         self._encounter_active = bool(snapshot.get('encounter_active'))
 
         seen_uids: List[int] = []
-        # Apply scroll offset to the entity list
-        scroll = max(0, min(self._scroll_offset, max(0, len(entities) - self.MAX_ROWS)))
-        self._scroll_offset = scroll
-        for idx, ent in enumerate(entities[scroll: scroll + self.MAX_ROWS]):
+        # Keep row state for the full ranked entity list. Rendering applies
+        # the scroll window later; dropping offscreen rows here made the wheel
+        # unable to ever reach rank 7+ because the model only retained 6 rows.
+        self._scroll_offset = max(0, min(self._scroll_offset, max(0, len(entities) - self.MAX_ROWS)))
+        for idx, ent in enumerate(entities):
             try:
                 uid = int(ent.get('uid') or 0)
             except Exception:
@@ -1215,6 +1220,8 @@ class DpsOverlay:
                 bool(self._detail_visible),
                 bool(self._detail_mode),
                 int(self._detail_uid),
+                bool(self._minimized),
+                self._panel_notice_text(),
                 int(self._detail_w),
                 int(self._detail_h),
                 self._act_badge_text(),
@@ -1339,21 +1346,29 @@ class DpsOverlay:
         """Total .dps-header height = pad-top + eyebrow + 4 + title + 6 +
         summary + pad-bot + button row (below title cluster, wrapped)."""
         # Top cluster (eyebrow/title/summary) + button row + gap between
+        button_rows = self._button_row_count()
         return (self.HEADER_PAD_TOP
                 + self.EYEBROW_H + 4
                 + self.TITLE_H + 6
                 + self.SUMMARY_H
                 + 8
-                + self.BTN_H
+            + button_rows * self.BTN_H
+            + max(0, button_rows - 1) * 5
                 + self.HEADER_PAD_BOT)
 
     def _tabs_height(self) -> int:
         return self.TAB_PAD_TOP + self.TAB_H + self.TAB_PAD_BOT
 
-    def _current_row_count(self) -> int:
+    def _view_row_total(self) -> int:
         if self._view_mode == 'report':
-            return min(len(self._report_entities()), self.MAX_ROWS)
-        return min(len(self._rows), self.MAX_ROWS)
+            return len(self._report_entities())
+        act_rows = self._act_render_rows()
+        if act_rows:
+            return len(act_rows)
+        return len(self._rows)
+
+    def _current_row_count(self) -> int:
+        return min(self._view_row_total(), self.MAX_ROWS)
 
     def _clamped_scroll(self) -> int:
         """Return the scroll offset clamped to current data bounds."""
@@ -1462,12 +1477,14 @@ class DpsOverlay:
             live_rows.sort(key=lambda row: (row.disp_heal, row.uid), reverse=True)
         else:
             live_rows.sort(key=lambda row: (row.disp_y, row.uid))
+        scroll = max(0, min(self._scroll_offset, max(0, len(live_rows) - self.MAX_ROWS)))
+        self._scroll_offset = scroll
         total = self._disp_total_heal if is_heal else self._disp_total_damage
         max_amount = max(
             [row.disp_heal if is_heal else row.disp_damage for row in live_rows],
             default=0.0,
         )
-        for row in live_rows[: self.MAX_ROWS]:
+        for row in live_rows[scroll: scroll + self.MAX_ROWS]:
             amount = row.disp_heal if is_heal else row.disp_damage
             rows.append({
                 'uid': row.uid,
@@ -1492,6 +1509,11 @@ class DpsOverlay:
             h = max(self.DETAIL_MIN_H, min(self.DETAIL_MAX_H, int(self._detail_h)))
             self._detail_w, self._detail_h = w, h
             return (w, h)
+        if self._minimized:
+            total = (self.BODY_PAD * 2
+                     + self._header_height()
+                     + self.FOOTER_H)
+            return (self.WIDTH, min(self.MAX_HEIGHT, max(150, total)))
         rows = self._current_row_count()
         rows = max(rows, 3)      # reserve a minimum list area for empty state
         list_h = rows * self.ROW_H + self.ROW_MARGIN
@@ -1593,7 +1615,9 @@ class DpsOverlay:
         self._detail_back_rect = None
         self._resize_rect = None
         self._list_rect = None
-        if self._detail_visible:
+        if self._minimized and not self._detail_mode:
+            footer_y = sy + sh - self.FOOTER_H
+        elif self._detail_visible:
             content_y = sy + hh
             footer_y = sy + sh - self.FOOTER_H
             list_x = sx + self.CONTENT_PAD_X
@@ -1868,20 +1892,41 @@ class DpsOverlay:
                            summary, font_sum, self.TEXT_MUTED, 0.85)
         y += self.SUMMARY_H + 8
 
-        # Button row: LIVE | DETAIL | REPORT | HISTORY | EXPORT | RESET (right-aligned)
+        # Button rows: wrap instead of shrinking into unreadable controls.
         buttons = self._button_specs()
         btn_font = _load_font('sao', 10)
-        # Measure and lay out right-aligned
-        sizes, gap = self._button_layout_sizes(
-            draw, btn_font, max(1, x_right - x_left))
-        total_w = sum(sizes) + gap * (len(sizes) - 1)
-        start_x = x_right - total_w
-        bx = start_x
+        sizes, gap = self._button_layout_sizes(draw, btn_font, max(1, x_right - x_left))
+        rows: List[List[Tuple[Tuple[str, str, bool, str, bool], int]]] = []
+        cur: List[Tuple[Tuple[str, str, bool, str, bool], int]] = []
+        cur_w = 0
+        for spec, bw2 in zip(buttons, sizes):
+            add = bw2 if not cur else bw2 + gap
+            if cur and cur_w + add > max(1, x_right - x_left):
+                rows.append(cur)
+                cur = [(spec, bw2)]
+                cur_w = bw2
+            else:
+                cur.append((spec, bw2))
+                cur_w += add
+        if cur:
+            rows.append(cur)
         by = y
-        for (_name, text, active, kind, enabled), bw2 in zip(buttons, sizes):
-            self._draw_button(draw, bx, by, bw2, self.BTN_H,
-                              text, active, kind, btn_font, enabled)
-            bx += bw2 + gap
+        for row in rows:
+            row_w = sum(size for _spec, size in row) + gap * (len(row) - 1)
+            bx = x_right - row_w
+            for (_name, text, active, kind, enabled), bw2 in row:
+                self._draw_button(draw, bx, by, bw2, self.BTN_H,
+                                  text, active, kind, btn_font, enabled)
+                bx += bw2 + gap
+            by += self.BTN_H + 5
+
+        notice = self._panel_notice_text()
+        if notice:
+            nf = _load_font('sao', 9)
+            notice_y = max(sy + hh - 18, y + self.BTN_H + 3)
+            self._draw_tracked(draw, (x_left, notice_y),
+                               self._truncate(notice.upper(), nf, max(40, x_right - x_left), draw),
+                               nf, self.GOLD, 0.75)
 
         # Bottom border of header
         draw.line((sx, sy + hh, sx + sw - 1, sy + hh),
@@ -1891,7 +1936,9 @@ class DpsOverlay:
         report_ok = self._report_available or self._has_report_data()
         history_ok = report_ok or callable(self._list_history_cb)
         detail_label = 'NORMAL' if self._detail_mode else 'DETAIL'
+        minimize_label = 'RESTORE' if self._minimized else 'MIN'
         return [
+            ('minimize', minimize_label, bool(self._minimized), 'normal', True),
             ('live', 'LIVE', self._view_mode == 'live' and not self._detail_mode,
              'live', True),
             ('detail', detail_label, bool(self._detail_mode), 'normal', True),
@@ -1904,30 +1951,27 @@ class DpsOverlay:
 
     def _button_layout_sizes(self, draw: ImageDraw.ImageDraw, font,
                              available_w: int) -> Tuple[List[int], int]:
-        sizes = [max(52, _text_width(draw, label, font) + 14)
+        sizes = [max(58, _text_width(draw, label, font) + 18)
                  for _name, label, _active, _kind, _enabled in self._button_specs()]
         gap = self.BTN_GAP
-        total_w = sum(sizes) + gap * (len(sizes) - 1)
-        if total_w <= available_w:
-            return sizes, gap
+        return sizes, gap
 
-        gap = 4
-        sizes = [max(44, _text_width(draw, label, font) + 10)
-                 for _name, label, _active, _kind, _enabled in self._button_specs()]
-        total_w = sum(sizes) + gap * (len(sizes) - 1)
-        if total_w <= available_w:
-            return sizes, gap
-
-        overflow = total_w - available_w
-        reducible = sum(max(0, size - 34) for size in sizes) or 1
-        compact = []
+    def _button_row_count(self) -> int:
+        dummy = ImageDraw.Draw(Image.new('RGBA', (1, 1), (0, 0, 0, 0)))
+        font = _load_font('sao', 10)
+        sizes, gap = self._button_layout_sizes(
+            dummy, font, max(1, self.WIDTH - 2 * self.BODY_PAD - 2 * self.HEADER_PAD_X))
+        available_w = max(1, self.WIDTH - 2 * self.BODY_PAD - 2 * self.HEADER_PAD_X)
+        rows = 1
+        used = 0
         for size in sizes:
-            cut = int(round(overflow * max(0, size - 34) / reducible))
-            compact.append(max(34, size - cut))
-        while sum(compact) + gap * (len(compact) - 1) > available_w and compact:
-            idx = max(range(len(compact)), key=lambda i: compact[i])
-            compact[idx] = max(34, compact[idx] - 1)
-        return compact, gap
+            add = size if used <= 0 else size + gap
+            if used > 0 and used + add > available_w:
+                rows += 1
+                used = size
+            else:
+                used += add
+        return max(1, rows)
 
     def _draw_button(self, draw: ImageDraw.ImageDraw, bx: int, by: int,
                      bw: int, bh: int, text: str, active: bool,
@@ -2011,7 +2055,10 @@ class DpsOverlay:
                                         lx + lw // 2, ly + lh // 2 - 6, 2)
             return
 
+        self._draw_scroll_affordance(draw, lx, ly, lw, lh)
+
         margin = self.ROW_MARGIN
+        rank_base = self._current_scroll_offset()
         for rank_idx, row_data in enumerate(view_rows):
             ry = ly + margin + rank_idx * self.ROW_H
             rx = lx + margin
@@ -2019,7 +2066,7 @@ class DpsOverlay:
             rh = self.ROW_H - margin
             if ry + rh > ly + lh - 2:
                 continue
-            self._draw_row(draw, img, row_data, rx, ry, rw, rh, rank_idx)
+            self._draw_row(draw, img, row_data, rx, ry, rw, rh, rank_base + rank_idx)
             uid = int(row_data.get('uid') or 0)
             if uid > 0:
                 self._row_click_regions.append(
@@ -2122,10 +2169,9 @@ class DpsOverlay:
                 )
 
         # Rank number (web: plain digit coloured by rank, no #)
-        rank = max(0, min(rank_idx, self.MAX_ROWS - 1))
-        rank_color = self.RANK_COLORS.get(rank, self.TEXT_MUTED[:3])
+        rank_color = self.RANK_COLORS.get(rank_idx, self.TEXT_MUTED[:3])
         rf = _load_font('sao', 11)
-        rank_txt = str(rank + 1)
+        rank_txt = str(rank_idx + 1)
         rw = _text_width(draw, rank_txt, rf)
         draw.text((x + 10 + (20 - rw) // 2, y + 12), rank_txt,
                   fill=rank_color + (255,), font=rf)
@@ -2186,6 +2232,31 @@ class DpsOverlay:
         sw_ = self._tracked_text_width(draw, val_sub, font_sub, 0.75)
         self._draw_tracked(draw, (x + w - 10 - sw_, y + 22), val_sub,
                            font_sub, self.TEXT_MUTED, 0.75)
+
+    def _draw_scroll_affordance(self, draw: ImageDraw.ImageDraw, lx: int, ly: int, lw: int, lh: int) -> None:
+        max_off = self._max_scroll_offset()
+        if max_off <= 0:
+            return
+        offset = self._current_scroll_offset()
+        track_x = lx + lw - 8
+        track_y = ly + 8
+        track_h = max(24, lh - 16)
+        draw.rounded_rectangle(
+            (track_x, track_y, track_x + 3, track_y + track_h),
+            radius=2, fill=(104, 228, 255, 70),
+        )
+        thumb_h = max(16, int(track_h * self.MAX_ROWS / max(self.MAX_ROWS + max_off, 1)))
+        thumb_y = track_y + int((track_h - thumb_h) * offset / max(max_off, 1))
+        draw.rounded_rectangle(
+            (track_x - 1, thumb_y, track_x + 4, thumb_y + thumb_h),
+            radius=2, fill=self.CORNER_GOLD,
+        )
+        visible = len(self._build_view_rows())
+        total = max(self.MAX_ROWS, max_off + self.MAX_ROWS)
+        hint = f'{offset + 1}-{offset + visible}/{total}'
+        hint_font = _load_font('sao', 8)
+        self._draw_tracked(draw, (lx + lw - 72, ly + lh - 15), hint,
+                           hint_font, self.TEXT_MUTED, 0.6)
 
     # --------  Footer  --------
 
@@ -2743,16 +2814,33 @@ class DpsOverlay:
         buttons = self._button_specs()
         sizes, gap = self._button_layout_sizes(
             dummy, btn_font, max(1, sw - 2 * self.HEADER_PAD_X))
-        total_w = sum(sizes) + gap * (len(sizes) - 1)
-        start_x = sx + sw - self.HEADER_PAD_X - total_w
         start_y = (sy + self.HEADER_PAD_TOP + self.EYEBROW_H + 4
                    + self.TITLE_H + 6 + self.SUMMARY_H + 8)
 
         button_regions = {}
-        cur_x = start_x
-        for (name, _label, _active, _kind, _enabled), bw in zip(buttons, sizes):
-            button_regions[name] = (cur_x, start_y, cur_x + bw, start_y + self.BTN_H)
-            cur_x += bw + gap
+        available_w = max(1, sw - 2 * self.HEADER_PAD_X)
+        row_specs: List[List[Tuple[Tuple[str, str, bool, str, bool], int]]] = []
+        cur: List[Tuple[Tuple[str, str, bool, str, bool], int]] = []
+        cur_w = 0
+        for spec, bw in zip(buttons, sizes):
+            add = bw if not cur else bw + gap
+            if cur and cur_w + add > available_w:
+                row_specs.append(cur)
+                cur = [(spec, bw)]
+                cur_w = bw
+            else:
+                cur.append((spec, bw))
+                cur_w += add
+        if cur:
+            row_specs.append(cur)
+        cur_y = start_y
+        for row in row_specs:
+            row_w = sum(size for _spec, size in row) + gap * (len(row) - 1)
+            cur_x = sx + sw - self.HEADER_PAD_X - row_w
+            for (name, _label, _active, _kind, _enabled), bw in row:
+                button_regions[name] = (cur_x, cur_y, cur_x + bw, cur_y + self.BTN_H)
+                cur_x += bw + gap
+            cur_y += self.BTN_H + 5
 
         tabs_y = sy + hh + self.TAB_PAD_TOP
         x0 = sx + self.HEADER_PAD_X
@@ -2772,6 +2860,7 @@ class DpsOverlay:
         return x0 <= x <= x1 and y0 <= y <= y1
 
     def _notify_no_report(self) -> None:
+        self._set_panel_notice('暂无上一场战斗报告 / No last combat report yet.', seconds=4.0)
         if not callable(self._alert_cb):
             return
         try:
@@ -2793,6 +2882,7 @@ class DpsOverlay:
             pass
 
     def _notify_export_result(self, ok: bool, message: str) -> None:
+        self._set_panel_notice(message, seconds=6.0)
         if not callable(self._alert_cb):
             return
         title = 'DPS EXPORT' if ok else 'DPS METER'
@@ -2830,16 +2920,23 @@ class DpsOverlay:
 
     def _activate_history(self) -> None:
         report = None
+        count = 0
         if callable(self._list_history_cb):
             try:
                 items = self._list_history_cb(20)
                 if items:
+                    count = len(items)
                     report = items[0]
             except Exception:
                 report = None
         if report is None:
             report = self._last_report
-        if not self.show_last_report(report):
+        if self.show_last_report(report):
+            if count > 1:
+                self._set_panel_notice(f'Loaded latest history report · {count} reports found', seconds=5.0)
+            else:
+                self._set_panel_notice('Loaded last combat report', seconds=4.0)
+        else:
             self._notify_no_report()
 
     def _activate_export(self) -> None:
@@ -2869,6 +2966,38 @@ class DpsOverlay:
                 snapshot = None
         self.show_live(snapshot or _empty_snapshot())
 
+    def _activate_minimize(self) -> None:
+        self._minimized = not self._minimized
+        if self._minimized:
+            self._detail_visible = False
+            self._detail_mode = False
+            self._resize_active = False
+            self._set_panel_notice('DPS minimized · click RESTORE to expand', seconds=4.0)
+        else:
+            self._set_panel_notice('DPS restored', seconds=3.0)
+        if self.settings is not None:
+            try:
+                self.settings.set('dps_minimized', bool(self._minimized))
+                save = getattr(self.settings, 'save', None)
+                if callable(save):
+                    save()
+            except Exception:
+                pass
+        self._shell_cache = None
+        self._last_compose_sig = None
+        self._schedule_tick(immediate=True)
+
+    def _set_panel_notice(self, message: str, *, seconds: float = 4.0) -> None:
+        self._panel_notice = str(message or '')
+        self._panel_notice_until = time.time() + max(0.5, float(seconds or 4.0))
+        self._last_compose_sig = None
+        self._schedule_tick(immediate=True)
+
+    def _panel_notice_text(self) -> str:
+        if self._panel_notice and time.time() <= float(self._panel_notice_until or 0.0):
+            return self._panel_notice
+        return ''
+
     def _handle_click(self, x: int, y: int) -> None:
         # Detail-view back button has highest priority
         if (self._detail_visible and self._detail_back_rect
@@ -2878,7 +3007,9 @@ class DpsOverlay:
         regions = self._control_regions()
         for name, rect in regions['buttons'].items():
             if self._point_in_rect(x, y, rect):
-                if name == 'live':
+                if name == 'minimize':
+                    self._activate_minimize()
+                elif name == 'live':
                     self._activate_live()
                 elif name == 'detail':
                     if self._detail_mode:
@@ -2897,6 +3028,8 @@ class DpsOverlay:
                 elif name == 'reset':
                     self._activate_reset()
                 return
+        if self._minimized and not self._detail_mode:
+            return
         if self._detail_visible:
             return
         for name, rect in regions['tabs'].items():
@@ -2943,6 +3076,7 @@ class DpsOverlay:
     def _on_gpu_scroll(self, _xoff: float, yoff: float) -> None:
         if abs(yoff) <= 1e-6:
             return
+        self._set_passthrough(False)
         self._on_mouse_wheel(
             self._gpu_event(0, 0, delta=120 if yoff > 0 else -120)
         )
@@ -2958,6 +3092,12 @@ class DpsOverlay:
                 self._resize_start_root = (int(ev.x_root), int(ev.y_root))
                 self._resize_start_size = (int(self._detail_w), int(self._detail_h))
                 self._drag_start_root = self._resize_start_root
+                self._drag_moved = False
+                return
+            if self._minimized and not self._detail_mode:
+                self._drag_ox = ev.x_root - self._x
+                self._drag_oy = ev.y_root - self._y
+                self._drag_start_root = (int(ev.x_root), int(ev.y_root))
                 self._drag_moved = False
                 return
             # 落点在 entity 列表区域 → 拖动滚动列表 (上下), 不移动窗口
@@ -3121,10 +3261,7 @@ class DpsOverlay:
         return '_scroll_offset_report' if self._view_mode == 'report' else '_scroll_offset'
 
     def _max_scroll_offset(self) -> int:
-        if self._view_mode == 'report':
-            total = len(self._report_entities())
-        else:
-            total = len(self._rows)
+        total = self._view_row_total()
         return max(0, total - self.MAX_ROWS)
 
     def _current_scroll_offset(self) -> int:

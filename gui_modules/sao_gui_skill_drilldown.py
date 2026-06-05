@@ -48,6 +48,20 @@ class SkillDrilldownPanel:
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
         self._last_sig = ""
+        self._expanded_refs: set[str] = set()
+
+    def select(self, combatant_id: Any = "", skill_id: Any = "", *, query: str = "") -> Dict[str, Any]:
+        if combatant_id is not None:
+            self._combatant_var.set(str(combatant_id or ""))
+        if skill_id is not None:
+            self._skill_var.set(str(skill_id or ""))
+        if query:
+            self._query_var.set(str(query or ""))
+        self._last_refresh_at = 0.0
+        self._last_sig = ""
+        self._expanded_refs.clear()
+        self.show()
+        return self.refresh()
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -119,6 +133,7 @@ class SkillDrilldownPanel:
     def back(self) -> Dict[str, Any]:
         self._combatant_var.set('')
         self._skill_var.set('')
+        self._expanded_refs.clear()
         return self._apply_result(act_skill_drilldown_back(self.owner), 'BACK')
 
     def _apply_result(self, result: Mapping[str, Any], message: str) -> Dict[str, Any]:
@@ -250,9 +265,11 @@ class SkillDrilldownPanel:
         if not refs:
             tk.Label(self._rows, text='No timeline refs', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 10), pady=20).pack(fill='x')
             return
-        for ref in refs[:80]:
+        for idx, ref in enumerate(refs[:80]):
+            ref_id = str(ref.get('id') or f"ref:{idx}:{ref.get('time_ms')}")
             row = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG, highlightthickness=1, highlightbackground=_SAO_PANEL_BORDER)
             row.pack(fill='x', pady=2, padx=4)
+            row.configure(cursor='hand2')
             values = (
                 (f"{int(ref.get('time_ms') or 0)}ms", 12, _SAO_PANEL_GOLD),
                 (str(ref.get('topic') or '-'), 12, _SAO_PANEL_LABEL_FG),
@@ -260,7 +277,29 @@ class SkillDrilldownPanel:
                 (self._fmt(ref.get('value')), 14, _SAO_PANEL_VALUE_FG),
             )
             for text, width, fg in values:
-                tk.Label(row, text=text, width=width, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=fg, font=('Segoe UI', 9)).pack(side='left', padx=3, pady=5)
+                label = tk.Label(row, text=text, width=width, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=fg, font=('Segoe UI', 9), cursor='hand2')
+                label.pack(side='left', padx=3, pady=5)
+                label.bind('<Button-1>', lambda _e, rid=ref_id: self._toggle_ref(rid))
+            row.bind('<Button-1>', lambda _e, rid=ref_id: self._toggle_ref(rid))
+            if ref_id in self._expanded_refs:
+                self._render_ref_payload(ref)
+
+    def _toggle_ref(self, ref_id: str) -> None:
+        if ref_id in self._expanded_refs:
+            self._expanded_refs.remove(ref_id)
+        else:
+            self._expanded_refs.add(ref_id)
+        self._last_sig = ""
+        self._render_status(self._last_status)
+
+    def _render_ref_payload(self, ref: Mapping[str, Any]) -> None:
+        if self._rows is None:
+            return
+        payload = ref.get('payload') if isinstance(ref.get('payload'), Mapping) else ref
+        box = tk.Frame(self._rows, bg='#0f1720', highlightthickness=1, highlightbackground=_SAO_PANEL_GOLD)
+        box.pack(fill='x', padx=12, pady=(0, 4))
+        text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+        tk.Label(box, text=text, bg='#0f1720', fg='#d7f7ff', font=('Consolas', 9), anchor='w', justify='left', wraplength=760).pack(fill='x', padx=8, pady=6)
 
     def _render_payload(self, status: Mapping[str, Any]) -> None:
         if self._rows is None:
@@ -298,12 +337,11 @@ class SkillDrilldownPanel:
         except Exception:
             return '0.0%'
 
-    @staticmethod
-    def _signature(status: Mapping[str, Any]) -> str:
+    def _signature(self, status: Mapping[str, Any]) -> str:
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
         refs = []
         for ref in list(status.get('timeline_refs') or [])[:80]:
             if isinstance(ref, Mapping):
-                refs.append((ref.get('id'), ref.get('time_ms'), ref.get('topic'), ref.get('label'), ref.get('value')))
+                refs.append((ref.get('id'), ref.get('time_ms'), ref.get('topic'), ref.get('label'), ref.get('value'), ref.get('payload') if str(ref.get('id')) in self._expanded_refs else None))
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
-        return repr((status.get('combatant_id'), status.get('skill_id'), summary.get('amount'), status.get('casts'), status.get('hits'), status.get('crit_rate'), filters.get('query'), refs))
+        return repr((status.get('combatant_id'), status.get('skill_id'), summary.get('amount'), status.get('casts'), status.get('hits'), status.get('crit_rate'), filters.get('query'), tuple(sorted(self._expanded_refs)), refs))

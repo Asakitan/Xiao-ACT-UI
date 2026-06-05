@@ -250,6 +250,7 @@ class SAOPlayerGUILifecycleMixin:
             self._act_report_export_panel,
             self._act_offline_import_panel,
             self._act_timeline_vcr_panel,
+            self._act_aggregate_panel,
             self._act_action_log_panel,
             self._act_death_recap_panel,
             self._act_graph_timeseries_panel,
@@ -279,6 +280,7 @@ class SAOPlayerGUILifecycleMixin:
         self._act_report_export_panel = None
         self._act_offline_import_panel = None
         self._act_timeline_vcr_panel = None
+        self._act_aggregate_panel = None
         self._act_action_log_panel = None
         self._act_death_recap_panel = None
         self._act_graph_timeseries_panel = None

@@ -211,11 +211,12 @@ class SAOPlayerGUIMenuMixin:
             action_log_sig = (
                 bool(action_log_status.get('ok')),
                 int(len(action_log_status.get('rows') or [])),
+                int(len(action_log_status.get('grouped_rows') or [])),
                 int((action_log_status.get('cursor') or {}).get('time_ms') or 0),
                 str((action_log_status.get('filters') or {}).get('topic') or ''),
             )
         except Exception:
-            action_log_sig = (False, 0, 0, '')
+            action_log_sig = (False, 0, 0, 0, '')
         try:
             death_status = self._get_act_death_recap_menu_status()
             death_summary = death_status.get('summary') or {}
@@ -398,6 +399,7 @@ class SAOPlayerGUIMenuMixin:
         timeline_state = 'PLAY' if timeline_status.get('playing') else 'READY'
         action_log_status = self._get_act_action_log_menu_status()
         action_log_count = len(action_log_status.get('rows') or [])
+        action_group_count = len(action_log_status.get('grouped_rows') or [])
         action_log_state = 'READY' if action_log_status.get('ok') else 'EMPTY'
         death_status = self._get_act_death_recap_menu_status()
         death_summary = death_status.get('summary') or {}
@@ -511,6 +513,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '⬇', 'label': f'ACT报告/导出: {report_state}/{report_total_damage}', 'command': self._toggle_act_report_export_panel},
             {'icon': '⬇', 'label': 'ACT离线导入向导', 'command': self._toggle_act_offline_import_panel},
             {'icon': '▶', 'label': f'ACT时间线/VCR: {timeline_state}/{timeline_count}', 'command': self._toggle_act_timeline_vcr_panel},
+            {'icon': '▣', 'label': f'ACT聚合总览: {action_log_state}/{action_group_count}', 'command': self._toggle_act_aggregate_panel},
             {'icon': '▤', 'label': f'ACT行为日志: {action_log_state}/{action_log_count}', 'command': self._toggle_act_action_log_panel},
             {'icon': '✚', 'label': f'ACT死亡回放: {death_state}/{death_damage}', 'command': self._toggle_act_death_recap_panel},
             {'icon': '⌁', 'label': f'ACT图表/曲线: {graph_state}/{graph_metric}/{graph_count}', 'command': self._toggle_act_graph_timeseries_panel},
