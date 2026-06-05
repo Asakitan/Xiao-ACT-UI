@@ -41,7 +41,7 @@ from packet_parser import (PlayerData, MonsterData,
                            PROFESSION_SKILL_VARIANTS, SUB_PROFESSION_NAMES,
                            _SKILL_TO_PROFESSION,
                            _PROFESSION_PREFIX, _ALL_PROFESSION_PREFIXES)
-from net.packet_capture import PacketCapture, list_devices, auto_select_device
+from net.packet_capture import PacketCapture, list_devices, auto_select_device, select_capture_devices
 from net.tcp_name_cache import TcpNameCache, runtime_cache_path, shared_cache_path
 from tools.tablekit.name_tables import names as _NAME_RESOLVER
 from tools.tablekit.combat_preparse import (
@@ -1212,7 +1212,7 @@ class PacketBridge:
         try:
             forced_dev = (self._settings or {}).get('capture_device')
             if forced_dev:
-                # 从设备列表里按名称或描述子串匹配
+                # 用户强制指定单网卡: 按名称或描述子串匹配
                 devs = list_devices()
                 dev = next(
                     (d for d in devs
@@ -1222,12 +1222,15 @@ class PacketBridge:
                 if not dev:
                     logger.warning(f'[Bridge] 未找到 capture_device={forced_dev!r}，回退到自动选择')
                     dev = auto_select_device()
+                cap_devices = [dev] if dev else []
             else:
-                dev = auto_select_device()
-            if not dev:
+                # 默认: 同时抓物理网卡 + 加速器虚拟网卡 (开放世界经加速器虚拟网卡明文进出)
+                cap_devices = select_capture_devices()
+            if not cap_devices:
                 self._error('未找到网络设备，请安装 Npcap')
                 return
-            logger.info(f'[Bridge] 选择网络设备: {dev["description"]}')
+            logger.info('[Bridge] 选择网络设备: '
+                        + ', '.join(d['description'] for d in cap_devices))
         except RuntimeError as e:
             self._error(str(e))
             return
@@ -1259,7 +1262,7 @@ class PacketBridge:
         # 创建抓包器
         self._capture = PacketCapture(
             on_game_packet=self._process_live_packet_frame,
-            device=dev,
+            devices=cap_devices,
             on_server_change=self._on_server_change,
         )
 

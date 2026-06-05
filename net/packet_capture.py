@@ -146,6 +146,47 @@ def auto_select_device() -> Optional[Dict[str, str]]:
     return chosen
 
 
+def select_capture_devices() -> List[Dict[str, str]]:
+    """选择要同时抓的网卡: 物理 NIC + 加速器/VPN 虚拟网卡 (TAP/TUN/WireGuard 等)。
+
+    背景: 网游加速器会把开放世界(主城/高原等)流量经其虚拟网卡明文进出, 再在物理
+    网卡上加密成隧道。只抓物理网卡时, 开放世界看到的全是加密外壳(无 c3SB)→ 识别不
+    到服务器 → 没数据; 副本(直连物理网卡, 有 c3SB)才正常。故必须把加速器虚拟网卡
+    也一起抓 —— 那块网卡上游戏帧是明文。返回去重后的设备列表。
+    """
+    devs = list_devices()
+    if not devs:
+        return []
+    # 仅排除"确定不会有游戏流量"的死适配器; 关键: 不再排除 tap/tun/wireguard/vpn
+    # (那些正是加速器的虚拟网卡)。
+    dead_kw = [
+        'loopback', 'npcap loopback', 'bluetooth', 'wan miniport',
+        'microsoft kernel debug', 'network monitor',
+        'vmware', 'virtualbox', 'hyper-v', 'vethernet', 'docker', 'wsl',
+        'teredo', 'isatap', '6to4', 'pseudo', 'wi-fi direct',
+    ]
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for d in devs:
+        desc_low = d['description'].lower()
+        if any(kw in desc_low for kw in dead_kw):
+            continue
+        if d['name'] in seen:
+            continue
+        seen.add(d['name'])
+        out.append(d)
+    if not out:
+        # 全被排除时退回单网卡自动选择, 保证不至于完全抓不到
+        one = auto_select_device()
+        return [one] if one else devs[:1]
+    # 安全上限, 避免极端环境开太多 pcap handle
+    if len(out) > 6:
+        out = out[:6]
+    print(f'[Capture] 多网卡抓包: 选中 {len(out)} 块 ('
+          + ', '.join(d['description'] for d in out) + ')', flush=True)
+    return out
+
+
 # ═══════════════════════════════════════════════
 #  IP 分片重组
 # ═══════════════════════════════════════════════
@@ -879,28 +920,58 @@ class PacketCapture:
 
     def __init__(self, on_game_packet: Callable[[bytes], None],
                  device: Optional[Dict[str, str]] = None,
-                 on_server_change: Optional[Callable[[], None]] = None):
+                 on_server_change: Optional[Callable[[], None]] = None,
+                 devices: Optional[List[Dict[str, str]]] = None):
         self._on_pkt = on_game_packet
-        self._device = device
+        # 设备列表: 显式 devices > 单 device > 自动多网卡选择
+        if devices:
+            self._devices = list(devices)
+        elif device:
+            self._devices = [device]
+        else:
+            self._devices = select_capture_devices() or [None]
+        self._device = self._devices[0] if self._devices else None
         self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._reassembler = TcpReassembler(on_game_packet,
-                                            on_server_change=on_server_change)
+        self._threads: List[threading.Thread] = []
+        self._thread: Optional[threading.Thread] = None  # 兼容旧引用
         self._restart_requested = threading.Event()
         self._last_packet_ts: float = 0.0
+        # 多网卡并发喂入同一 parser: 用锁串行化回调, 避免解析器状态竞争
+        self._cb_lock = threading.Lock()
+
+        def _safe_pkt(frame):
+            with self._cb_lock:
+                on_game_packet(frame)
+
+        def _safe_change():
+            with self._cb_lock:
+                on_server_change()
+
+        _chg = _safe_change if on_server_change else None
+        # 每块网卡一个独立 reassembler (各自识别本网卡上的游戏服务器)
+        self._reassemblers = [
+            TcpReassembler(_safe_pkt, on_server_change=_chg)
+            for _ in self._devices
+        ]
+        self._reassembler = self._reassemblers[0]  # 兼容旧引用
 
     @property
     def server_identified(self) -> bool:
-        return self._reassembler.server_identified
+        return any(r.server_identified for r in self._reassemblers)
 
     @property
     def stats(self) -> Dict[str, int]:
-        data = dict(getattr(self._reassembler, 'stats', {}) or {})
-        data['last_packet_age_s'] = int(max(0.0, time.time() - self._last_packet_ts)) if self._last_packet_ts else -1
-        return data
+        merged: Dict[str, int] = {}
+        for r in self._reassemblers:
+            for k, v in (getattr(r, 'stats', {}) or {}).items():
+                if isinstance(v, (int, float)):
+                    merged[k] = merged.get(k, 0) + v
+        merged['last_packet_age_s'] = int(max(0.0, time.time() - self._last_packet_ts)) if self._last_packet_ts else -1
+        merged['capture_devices'] = len(self._devices)
+        return merged
 
     def force_reconnect(self, reason: str = 'watchdog') -> bool:
-        return bool(self._reassembler.force_reconnect(reason))
+        return any(bool(r.force_reconnect(reason)) for r in self._reassemblers)
 
     def request_restart(self, reason: str = 'watchdog') -> bool:
         if not self._running:
@@ -914,25 +985,33 @@ class PacketCapture:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True,
-                                        name='sao_capture')
-        self._thread.start()
+        self._threads = []
+        for idx, (dev, rea) in enumerate(zip(self._devices, self._reassemblers)):
+            t = threading.Thread(target=self._loop, args=(dev, rea), daemon=True,
+                                 name=f'sao_capture_{idx}')
+            t.start()
+            self._threads.append(t)
+        self._thread = self._threads[0] if self._threads else None
 
     def stop(self):
         self._running = False
-        if self._thread:
-            self._thread.join(timeout=3)
-            self._thread = None
+        for t in self._threads:
+            try:
+                t.join(timeout=3)
+            except Exception:
+                pass
+        self._threads = []
+        self._thread = None
 
-    def _loop(self):
+    def _loop(self, dev, rea):
         while self._running:
-            should_retry = self._loop_once()
+            should_retry = self._loop_once(dev, rea)
             if self._running and should_retry:
                 time.sleep(0.25)
                 continue
             break
 
-    def _loop_once(self) -> bool:
+    def _loop_once(self, dev, rea) -> bool:
         print(f'[Capture] _loop 线程已启动', flush=True)
         try:
             dll = _load_wpcap()
@@ -941,8 +1020,9 @@ class PacketCapture:
             logger.error(str(e))
             return False
 
-        # 设备选择
-        dev = self._device or auto_select_device()
+        # 设备 (多网卡: 每线程一块)
+        if not dev:
+            dev = auto_select_device()
         if not dev:
             print('[Capture] 没有可用网络设备!', flush=True)
             logger.error('[Capture] 没有可用网络设备')
@@ -991,20 +1071,20 @@ class PacketCapture:
                     self._last_packet_ts = time.time()
                     caplen = hdr_ptr.contents.caplen
                     raw = ctypes.string_at(data_ptr, caplen)
-                    self._reassembler.feed_raw_frame(raw)
+                    rea.feed_raw_frame(raw)
                     pkt_count += 1
                     if pkt_count == 1:
-                        print(f'[Capture] 首个网络包! caplen={caplen}', flush=True)
+                        print(f'[Capture] 首个网络包! ({dev["description"]}) caplen={caplen}', flush=True)
                         logger.info('[Capture] 收到首个网络包')
                     if pkt_count <= 3 or pkt_count % 5000 == 0:
-                        print(f'[Capture] pkt#{pkt_count} caplen={caplen} reassembler_raw={self._reassembler.stats["raw_frames"]}', flush=True)
+                        print(f'[Capture] pkt#{pkt_count} caplen={caplen} reassembler_raw={rea.stats["raw_frames"]}', flush=True)
                 elif res == 0:
-                    self._reassembler.stats['pcap_timeouts'] += 1
+                    rea.stats['pcap_timeouts'] += 1
                     continue  # 超时
                 elif res == -1:
                     print('[Capture] pcap_next_ex 返回 -1 (错误)', flush=True)
                     logger.error('[Capture] pcap_next_ex 错误')
-                    self._reassembler.stats['pcap_errors'] += 1
+                    rea.stats['pcap_errors'] += 1
                     break
         except Exception as exc:
             import traceback
