@@ -2,11 +2,15 @@
 
 所有显示层(TCP 解析 / 面板)都经此把数字 ID 变中文名, 杜绝裸数字。
 
-数据源(按优先级 高->低, 高覆盖低):
-    1. assets/name_tables/<kind>.json   ← 轻量稳定 TCP/MEM/解析名字表, {id: name}
-    2. assets/name_tables/tcp_preparse_name_cache.json ← 运行时 compact TCP/MEM cache
-    3. StarResonanceDps/resonance-logs-cn 社区表(可能不全), {id: {Name:..}}
-    4. 生成器/审计工具可继续读取 assets/skill_names.json, 运行时显示层走本 resolver。
+数据源(运行时合并, 优先级 高->低, 高覆盖低):
+    1. assets/name_tables/tcp_preparse_name_cache(.local).json
+       ← 我们从游戏内存/TCP 实测解析出的名字(权威): text=内存真名, id=指针表/锚定匹配。
+         运行时最后合并, 故覆盖 <kind>.json。
+    2. assets/name_tables/<kind>.json, {id: name}
+       ← 已固化的稳定名字表。由 tools.tablekit.hybrid_name_tables 生成: 以上面的解析
+         结果(cache)为权威, 隔壁 StarResonanceDps/resonance-logs-cn 静态表仅兜底缺失 id。
+         注意: hybrid --overlay-only 把 cache 安全叠加到本表(不触发分类器重建)。
+    3. 生成期参考: StarResonanceDps/resonance-logs-cn 静态表(隔壁工程, 可能过时/不全)。
 
 注意: ``skill`` 是兼容入口, 只做语义分流和兜底标签, 不再对应 runtime
 ``skill.json`` 资产。所有技能 ID 必须进入更明确的 *_skill 分类。

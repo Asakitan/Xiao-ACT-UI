@@ -98,9 +98,28 @@ def _atomic_write_json(path: str, payload: Any) -> None:
             pass
 
 
+# Reference data from neighbouring projects (StarResonanceDps DataTools /
+# resonance-logs-cn) sometimes carries scene/login placeholders that are not real
+# display names. Our own TCP/MEM parse is authoritative, so these tokens must
+# never be materialised into the runtime tables.
+_TEXT_DENYLIST = {"login", "logout", "unknown", "none", "null"}
+
+# Buff sub-kinds aggregate into the generic buff.json so that resolve("buff", id)
+# (the fallback path when the classifier cannot refine the kind) also serves our
+# in-memory names. There is no aggregate skill.json (deliberately removed), so
+# skill sub-kinds need no parent here.
+_AGGREGATE_PARENT_KIND = {
+    "player_buff": "buff",
+    "factor_buff": "buff",
+    "profession_skill_buff": "buff",
+}
+
+
 def _clean_text(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
+        return ""
+    if text.lower() in _TEXT_DENYLIST:
         return ""
     if any(text.startswith(prefix) for prefix in _FALLBACK_PREFIXES):
         return ""
@@ -321,6 +340,27 @@ def merge_entries(existing: Mapping[str, Mapping[str, str]], incoming: Mapping[s
     return merged, changed
 
 
+def _overlay_entries(base: Mapping[str, Mapping[str, str]], overlay: Mapping[str, Mapping[str, str]]) -> dict[str, dict[str, str]]:
+    """Force ``overlay`` on top of ``base``: overlay wins every id collision.
+
+    ``base`` is the neighbouring reference data (StarResonanceDps DataTools /
+    resonance-logs-cn static tables) used only to fill ids we have not parsed.
+    ``overlay`` is our own live MEM/TCP parse (the runtime name cache, whose text
+    is the in-memory display name and whose id is pointer-table/anchor matched),
+    which is authoritative and therefore overrides the reference name on conflict.
+    """
+    out = {
+        str(k): {"text": str(v.get("text") or ""), "confidence": str(v.get("confidence") or "static")}
+        for k, v in base.items() if v.get("text")
+    }
+    for key, value in overlay.items():
+        text = _clean_text(value.get("text"))
+        if not text:
+            continue
+        out[str(key)] = {"text": text, "confidence": str(value.get("confidence") or "medium").strip().lower()}
+    return out
+
+
 def _merge_cache_payloads(primary: Any, secondary: Any) -> dict[str, Any]:
     merged = {"schema_version": 1, "names": {"by_kind": {}}}
     for cache in (primary, secondary):
@@ -348,12 +388,20 @@ def update_runtime_tables(cache_path: str = _DEFAULT_CACHE, *, output_dir: str =
         cache_incoming = _cache_entries(cache, kind)
         if kind in _CLASSIFIED_KINDS:
             cache_incoming, _ = merge_entries(cache_incoming, _semantic_cache_entries(cache, kind), fill_missing_only=False)
-        incoming, _ = merge_entries(_community_entries(kind), cache_incoming, fill_missing_only=False)
+        # Our live MEM/TCP parse (cache_incoming) is authoritative: its text is the
+        # in-memory display name and its id is pointer-table/anchor matched. The
+        # neighbouring reference tables (_community_entries) only fill ids we have
+        # not parsed ourselves, and never override a name we read from memory.
+        incoming = _overlay_entries(_community_entries(kind), cache_incoming)
         if kind in _CLASSIFIED_KINDS:
             merged = dict(incoming)
             changed = 1 if _plain_table(existing) != _plain_table(merged) else 0
         else:
             merged, changed = merge_entries(existing, incoming, fill_missing_only=fill_missing_only)
+            overlaid = _overlay_entries(merged, cache_incoming)
+            if _plain_table(overlaid) != _plain_table(merged):
+                changed = 1
+            merged = overlaid
         if write and (changed or not os.path.isfile(path)):
             _atomic_write_json(path, _plain_table(merged))
         summary["kinds"][kind] = {
@@ -366,6 +414,64 @@ def update_runtime_tables(cache_path: str = _DEFAULT_CACHE, *, output_dir: str =
     return summary
 
 
+def overlay_cache_into_existing_tables(cache_path: str = _DEFAULT_CACHE, *, output_dir: str = _NAME_TABLES,
+                                       write: bool = True, include_local_cache: bool = False) -> dict[str, Any]:
+    """Fold our live MEM/TCP parse (the name cache) onto the existing on-disk tables.
+
+    Unlike :func:`update_runtime_tables`, this does NOT re-run the semantic
+    classifier and does NOT pull neighbouring reference tables.  It only writes
+    the names we parsed from memory (cache ``text``) over the ids they belong to,
+    leaving every other on-disk entry untouched.  Use this to align the runtime
+    tables with the authoritative cache without risking classifier drift.
+    """
+    cache = _load_json(cache_path)
+    if include_local_cache and os.path.abspath(cache_path) == os.path.abspath(_DEFAULT_CACHE):
+        cache = _merge_cache_payloads(cache, _load_json(_LOCAL_CACHE))
+    by_kind = (((cache.get("names") or {}).get("by_kind") or {})) if isinstance(cache, Mapping) else {}
+    # Each cache bucket overrides its own <kind>.json, and buff sub-kinds also
+    # override the aggregate buff.json so the generic ``resolve("buff", id)`` path
+    # (used when the classifier can't refine, e.g. neighbouring BuffTable missing)
+    # still returns our in-memory name instead of a stale aggregate entry.
+    targets: dict[str, dict[str, str]] = {}
+    for kind, bucket in by_kind.items():
+        if str(kind) == "player" or not isinstance(bucket, Mapping):
+            continue
+        for key, entry in bucket.items():
+            try:
+                iid = int(key)
+            except (TypeError, ValueError):
+                continue
+            if iid <= 0:
+                continue
+            text = _entry_text(entry)
+            if not text:
+                continue
+            targets.setdefault(str(kind), {})[str(iid)] = text
+            parent = _AGGREGATE_PARENT_KIND.get(str(kind))
+            if parent:
+                targets.setdefault(parent, {})[str(iid)] = text
+    summary: dict[str, Any] = {"cache": os.path.normpath(cache_path), "updated_at": _iso(), "kinds": {}}
+    for kind, overlay in targets.items():
+        path = os.path.join(output_dir, f"{kind}.json")
+        existing = _load_json(path)
+        if not isinstance(existing, dict):
+            existing = {}
+        existing = {str(k): str(v) for k, v in existing.items() if isinstance(v, str)}
+        changes: dict[str, dict[str, str]] = {}
+        for sid, text in overlay.items():
+            if existing.get(sid) != text:
+                changes[sid] = {"old": existing.get(sid) or "", "new": text}
+                existing[sid] = text
+        if changes and write:
+            _atomic_write_json(path, existing)
+        summary["kinds"][kind] = {
+            "path": os.path.normpath(path),
+            "changed": len(changes),
+            "detail": changes,
+        }
+    return summary
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build/update lightweight runtime name tables from compact TCP/MEM cache")
     parser.add_argument("--cache", default=_DEFAULT_CACHE)
@@ -373,14 +479,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-overwrite", action="store_true", help="Allow higher-confidence incoming names to replace existing names")
     parser.add_argument("--include-local-cache", action="store_true", help="Also merge ignored local runtime cache into generated local outputs")
+    parser.add_argument("--overlay-only", action="store_true",
+                        help="Safe mode: only overlay our parsed cache names onto existing tables; "
+                             "skip the semantic classifier and neighbouring reference rebuild")
     args = parser.parse_args(argv)
-    result = update_runtime_tables(
-        args.cache,
-        output_dir=args.output_dir,
-        write=not args.dry_run,
-        fill_missing_only=not args.allow_overwrite,
-        include_local_cache=args.include_local_cache,
-    )
+    if args.overlay_only:
+        result = overlay_cache_into_existing_tables(
+            args.cache,
+            output_dir=args.output_dir,
+            write=not args.dry_run,
+            include_local_cache=args.include_local_cache,
+        )
+    else:
+        result = update_runtime_tables(
+            args.cache,
+            output_dir=args.output_dir,
+            write=not args.dry_run,
+            fill_missing_only=not args.allow_overwrite,
+            include_local_cache=args.include_local_cache,
+        )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

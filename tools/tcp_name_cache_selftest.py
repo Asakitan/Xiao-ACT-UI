@@ -223,9 +223,17 @@ class TcpNameCacheTests(unittest.TestCase):
     def test_runtime_name_table_assets_are_consumed_by_name_resolver(self) -> None:
         from tools.tablekit import name_tables
 
+        # Runtime resolver assets are the per-kind id->name tables plus the shared
+        # preparse cache. Exclude ignored local runtime caches (*.local.json) and
+        # hand-curated meta tables consumed by dedicated loaders rather than the
+        # NameResolver (element.json -> tools.tablekit.element_meta).
+        non_resolver_assets = {"element.json"}
         runtime_assets = {
             name for name in os.listdir(name_tables._EXTRACTED)
-            if name.endswith(".json") and not name.startswith("live_")
+            if name.endswith(".json")
+            and not name.startswith("live_")
+            and not name.endswith(".local.json")
+            and name not in non_resolver_assets
         }
         resolver_assets = {
             fname
@@ -333,6 +341,35 @@ class TcpNameCacheTests(unittest.TestCase):
         self.assertEqual(buff["2002"], "列表Buff")
         self.assertNotIn("1002", buff)
         self.assertFalse(os.path.exists(os.path.join(out_dir, "skill.json")))
+
+
+    def test_overlay_cache_overrides_existing_names_only(self) -> None:
+        from tools.tablekit import hybrid_name_tables as H
+
+        out_dir = os.path.join(self.tmp, "overlay_tables")
+        os.makedirs(out_dir, exist_ok=True)
+        # Existing on-disk table carries a stale neighbouring name plus an entry we
+        # never parsed from memory.
+        with open(os.path.join(out_dir, "player_buff.json"), "w", encoding="utf-8") as f:
+            json.dump({"2207130": "音浪烈焰", "999": "无关条目"}, f, ensure_ascii=False)
+        cache = TcpNameCache(self.path, autosave_interval_s=0)
+        cache.observe_name("player_buff", 2207130, "音浪烈火", source="mem", confidence="high")
+        cache.save(force=True)
+
+        result = H.overlay_cache_into_existing_tables(self.path, output_dir=out_dir)
+        with open(os.path.join(out_dir, "player_buff.json"), "r", encoding="utf-8") as f:
+            table = json.load(f)
+        # Our memory-parsed name wins the conflict; unrelated ids stay untouched.
+        self.assertEqual(table["2207130"], "音浪烈火")
+        self.assertEqual(table["999"], "无关条目")
+        self.assertEqual(result["kinds"]["player_buff"]["changed"], 1)
+
+    def test_hybrid_clean_text_drops_denylisted_tokens(self) -> None:
+        from tools.tablekit import hybrid_name_tables as H
+
+        for token in ("login", "LOGIN", "logout", "unknown", "none", "null"):
+            self.assertEqual(H._clean_text(token), "", token)
+        self.assertEqual(H._clean_text("巴哈马尔高原"), "巴哈马尔高原")
 
 
 if __name__ == "__main__":
