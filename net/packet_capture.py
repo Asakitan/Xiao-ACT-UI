@@ -158,9 +158,10 @@ def select_capture_devices() -> List[Dict[str, str]]:
     if not devs:
         return []
     # 仅排除"确定不会有游戏流量"的死适配器; 关键: 不再排除 tap/tun/wireguard/vpn
-    # (那些正是加速器的虚拟网卡)。
+    # (那些正是加速器的虚拟网卡), 也不再排除 loopback (加速器本地代理的明文常走
+    # 127.0.0.1 回环)。
     dead_kw = [
-        'loopback', 'npcap loopback', 'bluetooth', 'wan miniport',
+        'bluetooth', 'wan miniport',
         'microsoft kernel debug', 'network monitor',
         'vmware', 'virtualbox', 'hyper-v', 'vethernet', 'docker', 'wsl',
         'teredo', 'isatap', '6to4', 'pseudo', 'wi-fi direct',
@@ -276,7 +277,40 @@ _RAW_CAP_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'raw_cap_dump.jsonl')
 
 
-def _dump_raw_cap(meta, seq, payload, is_server, strict, loose):
+# ── 链路层归一化: 加速器虚拟网卡/回环常用 raw-IP 或 BSD-loopback 链路层,
+#    而 _parse_eth_ip_tcp 默认按以太网(14B 头)剥。这里按 pcap DLT 把各种链路层
+#    统一补成"以太网帧"再交给解析器, 否则 raw-IP 帧会被剥坏 → 抓不到明文。
+_ETH_V4_HDR = b'\x00' * 12 + b'\x08\x00'   # dst+src MAC 占位 + IPv4 ethertype
+_ETH_V6_HDR = b'\x00' * 12 + b'\x86\xdd'    # IPv6 ethertype
+# 常见 DLT: 1=EN10MB(以太网) 0=NULL(BSD loopback,4B头) 12=RAW 14=RAW(BSD)
+# 101=RAW(Linux别名) 113=LINUX_SLL(16B头) 8=SLIP 9=PPP
+
+
+def _ip_to_eth(ip_pkt: bytes) -> bytes:
+    """给裸 IP 包补一个以太网头 (按 IP 版本选 ethertype)。"""
+    if not ip_pkt:
+        return ip_pkt
+    ver = ip_pkt[0] >> 4
+    return (_ETH_V6_HDR if ver == 6 else _ETH_V4_HDR) + ip_pkt
+
+
+def _normalize_link_frame(raw: bytes, dlt: int) -> bytes:
+    """把非以太网链路层的抓包帧统一成以太网帧 (供 _parse_eth_ip_tcp)。"""
+    if dlt == 1:                      # EN10MB: 已是以太网
+        return raw
+    if dlt in (12, 14, 101):         # RAW: 帧本身就是 IP 包
+        return _ip_to_eth(raw)
+    if dlt == 0:                     # NULL: 4 字节 BSD/loopback 链路头
+        return _ip_to_eth(raw[4:]) if len(raw) >= 4 else raw
+    if dlt == 113:                   # LINUX_SLL: 16 字节头
+        return _ip_to_eth(raw[16:]) if len(raw) >= 16 else raw
+    # 未知 DLT: 若首字节像 IP 版本(4/6)则当裸 IP 处理
+    if raw and (raw[0] >> 4) in (4, 6):
+        return _ip_to_eth(raw)
+    return raw
+
+
+def _dump_raw_cap(meta, seq, payload, is_server, strict, loose, dev='', dlt=1):
     global _raw_cap_bytes, _raw_cap_printed
     if not _RAW_CAP_DUMP_ENABLED:
         return
@@ -289,6 +323,7 @@ def _dump_raw_cap(meta, seq, payload, is_server, strict, loose):
             return
         row = {
             'ts': round(time.time(), 3),
+            'dev': dev, 'dlt': int(dlt),
             'src': '%s:%d' % (meta.get('endpoint_ip', ''), meta.get('endpoint_port', 0)),
             'dst': '%s:%d' % (meta.get('dst_ip', ''), meta.get('dst_port', 0)),
             'seq': int(seq), 'n': len(payload),
@@ -314,6 +349,8 @@ class TcpReassembler:
                  on_server_change: Optional[Callable[[], None]] = None):
         self._on_pkt = on_game_packet  # 回调: 一个完整游戏帧
         self._on_server_change = on_server_change  # 回调: 场景服务器切换
+        self._cap_label = ''   # 诊断: 本 reassembler 绑定的网卡描述 (由 _loop_once 设置)
+        self._cap_dlt = 1      # 诊断: 本网卡链路层类型 (DLT)
         self._server_addr: Optional[str] = None
         self._server_meta: Dict[str, Any] = {}
         self._lock = threading.Lock()
@@ -452,7 +489,8 @@ class TcpReassembler:
                     _raw_cap_addr_seen[addr] = _seen + 1
                     _dump_raw_cap(meta, seq, payload,
                                   is_server=(addr == self._server_addr),
-                                  strict=_strict, loose=_loose)
+                                  strict=_strict, loose=_loose,
+                                  dev=self._cap_label, dlt=self._cap_dlt)
             except Exception:
                 pass
 
@@ -1058,6 +1096,22 @@ class PacketCapture:
 
         print('[Capture] pcap_open_live 成功, 抓包已启动', flush=True)
         logger.info('[Capture] 抓包已启动')
+        # 链路层类型 DLT: 物理网卡通常 1(以太网); 加速器虚拟网卡/回环可能是
+        # 12/14(raw-IP) 或 0(BSD-loopback), 需归一化成以太网帧再解析。
+        try:
+            pcap_datalink = dll.pcap_datalink
+            pcap_datalink.argtypes = [ctypes.c_void_p]
+            pcap_datalink.restype = ctypes.c_int
+            dlt = int(pcap_datalink(handle))
+        except Exception:
+            dlt = 1
+        try:
+            rea._cap_label = dev.get('description', '')
+            rea._cap_dlt = dlt
+        except Exception:
+            pass
+        print(f'[Capture] 链路层 DLT={dlt} ({dev["description"]})'
+              + ('  [非以太网, 已启用归一化]' if dlt != 1 else ''), flush=True)
         pkt_count = 0
         try:
             while self._running:
@@ -1071,6 +1125,8 @@ class PacketCapture:
                     self._last_packet_ts = time.time()
                     caplen = hdr_ptr.contents.caplen
                     raw = ctypes.string_at(data_ptr, caplen)
+                    if dlt != 1:
+                        raw = _normalize_link_frame(raw, dlt)
                     rea.feed_raw_frame(raw)
                     pkt_count += 1
                     if pkt_count == 1:
