@@ -198,11 +198,12 @@ html,body{
     clip-path:polygon(85px 22%,100% 22%,100% 0%,0% 0%,0 100%,228px 100%,234px 77%,100% 77%,100% 60%,233px 60%,228px 77%,85px 77%);
 }
 .xt_right>span{
-    min-width:80px;
-    max-width:85px;
-    padding-left:8px;
+    flex:0 0 72px;           /* 锁定宽度, 名字区结束在 ~101px, 血条起点 108px 之前留间隙 */
+    box-sizing:border-box;
+    width:72px;
+    padding-left:6px;
     text-align:center;
-    line-height:1.05;
+    line-height:1.04;
     white-space:normal;      /* 智能分行: 长名换行而非截断 */
     word-break:break-word;
     overflow:hidden;
@@ -1521,8 +1522,9 @@ function updateBossBar(data) {
     var bossNameEl = document.getElementById('boss-name');
     if (bossNameEl && data.boss_name) {
         bossNameEl.textContent = data.boss_name;
+        // 优先在 72px 窄框里换 2 行 (保持可读字号), 仅超长才缩字号
         var _nl = data.boss_name.length;
-        var _fs = _nl <= 4 ? 14 : (_nl <= 6 ? 12.5 : (_nl <= 9 ? 11.5 : 10.5));
+        var _fs = _nl <= 9 ? 13.5 : (_nl <= 13 ? 11.5 : 10);
         bossNameEl.style.fontSize = _fs + 'px';
     }
 

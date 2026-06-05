@@ -1915,10 +1915,10 @@ class BossHpOverlay:
             font = _pick_font(name, size)
             if _text_width(draw, name, font) <= max_w:
                 return [name], font, size
-        # 两行: 从中间均分, 逐步缩字号直到两行都放得下
+        # 两行: 从中间均分, 从大到小试字号直到两行都放得下 (优先保持大字号)
         mid = (len(name) + 1) // 2
         l1, l2 = name[:mid], name[mid:]
-        for size in (base_size - 2, base_size - 3, base_size - 4):
+        for size in (base_size, base_size - 1, base_size - 2, base_size - 3, base_size - 4):
             font = _pick_font(name, size)
             if (_text_width(draw, l1, font) <= max_w
                     and _text_width(draw, l2, font) <= max_w):
@@ -1932,7 +1932,8 @@ class BossHpOverlay:
     def _draw_name_plate_text(self, img: Image.Image, y_off: int) -> None:
         draw = ImageDraw.Draw(img, 'RGBA')
         color = self.TEXT_MAIN
-        max_w = 85
+        # 名字区起点 = BOX_X+39, 血条起点 BAR_X(=BOX_X+108); 收到 66px 留间隙不压血条
+        max_w = 66
         base_x = self.BOX_X + 29 + 10
         lines, font, size = self._fit_name_lines(draw, self._boss_name, max_w, 15)
         line_h = size + 1
