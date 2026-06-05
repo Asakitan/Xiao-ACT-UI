@@ -4643,57 +4643,108 @@ class SAOWebViewGUI:
         try:
             import tkinter as tk
             from sao_theme import SAOLinkStart
+        except Exception as e:
+            print(f"[SAO] LinkStart skipped (import): {e}")
+            return
 
+        ls_root = None
+        try:
             ls_root = tk.Tk()
             ls_root.withdraw()
 
-            done = threading.Event()
-
+            # Cover the GAME window's monitor. play() otherwise reads
+            # winfo_screenwidth/height off this withdrawn throwaway root,
+            # which under PerMonitorV2 reports the PRIMARY monitor — so on a
+            # multi-monitor / high-DPI rig the borderless GLFW present window
+            # landed off the game screen and looked like "the window won't
+            # render". Passing the real monitor rect is the entity-parity fix.
+            monitor_rect = None
             try:
-                from render.gpu_overlay_window import (
-                    suspend_gpu_overlay_creation as _suspend_gpu_overlays,
-                    resume_gpu_overlay_creation as _resume_gpu_overlays,
-                )
-            except Exception:
-                _suspend_gpu_overlays = None  # type: ignore[assignment]
-                _resume_gpu_overlays = None  # type: ignore[assignment]
-            _gpu_overlays_suspended = False
-            if _suspend_gpu_overlays is not None:
-                try:
-                    # LinkStart now owns a direct GLFW/ModernGL presentation
-                    # window when available; suspending new GPU overlays here
-                    # would force it back to the old FBO.read -> Tk path.
-                    _gpu_overlays_suspended = False
-                except Exception:
-                    _gpu_overlays_suspended = False
+                game_hwnd, game_rect = self._get_game_window_context()
+                monitor_rect = self._get_monitor_rect_for_target(
+                    hwnd=game_hwnd, rect=game_rect)
+            except Exception as e:
+                print(f"[SAO] LinkStart monitor-rect probe failed: {e}")
 
-            def _resume_overlay_creation():
-                nonlocal _gpu_overlays_suspended
-                if not _gpu_overlays_suspended or _resume_gpu_overlays is None:
-                    return
-                _gpu_overlays_suspended = False
-                try:
-                    _resume_gpu_overlays()
-                except Exception:
-                    pass
+            done = threading.Event()
 
             def on_done():
                 done.set()
-                _resume_overlay_creation()
                 try:
                     ls_root.after(50, ls_root.destroy)
                 except Exception:
                     pass
 
+            ls = SAOLinkStart(ls_root, on_done=on_done,
+                              monitor_rect=monitor_rect)
+
+            # Watchdog: a wedged finish-marshal (post_to_tk never drained) or
+            # a GLFW window that never paints must never hang this blocking
+            # startup mainloop. Force-finish a little past the intro's natural
+            # length; SAOLinkStart._finish() is idempotent (guarded by
+            # _finished) and fires on_done -> destroy.
             try:
-                ls = SAOLinkStart(ls_root, on_done=on_done)
+                watchdog_ms = int((SAOLinkStart._DURATION
+                                   + SAOLinkStart._STARTUP_PRELUDE + 3.0) * 1000)
+            except Exception:
+                watchdog_ms = 15000
+
+            def _watchdog():
+                if done.is_set():
+                    return
+                done.set()
+                print("[SAO] LinkStart watchdog fired — forcing finish so "
+                      "the HUD can start")
+                # In the wedged-GPU-pump failure case, ls._finish() ->
+                # GpuOverlayWindow.destroy() blocks up to ~5s waiting on the
+                # dead pump. Don't freeze the Tk main thread / startup: null
+                # on_done (so _finish can't re-enter Tk from a worker thread)
+                # and run the teardown off-thread when GPU present is active.
+                ls.on_done = None
+
+                def _bg_finish():
+                    try:
+                        ls._finish()
+                    except Exception:
+                        pass
+
+                if getattr(ls, '_gpu_present_enabled', False):
+                    threading.Thread(target=_bg_finish, daemon=True).start()
+                else:
+                    _bg_finish()
+                # Break the blocking mainloop now; the finally block destroys
+                # ls_root (Tk-only, fast).
+                try:
+                    ls_root.quit()
+                except Exception:
+                    pass
+
+            try:
+                ls_root.after(watchdog_ms, _watchdog)
+            except Exception:
+                pass
+
+            try:
                 ls.play()
             except Exception:
-                _resume_overlay_creation()
-                raise
+                import traceback
+                traceback.print_exc()
+                try:
+                    ls._finish()
+                except Exception:
+                    pass
+
             ls_root.mainloop()
         except Exception as e:
             print(f"[SAO] LinkStart skipped: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            try:
+                if ls_root is not None and ls_root.winfo_exists():
+                    ls_root.destroy()
+            except Exception:
+                pass
 
     # ─── 透明设置 ───
     def _apply_webview2_transparency(self):

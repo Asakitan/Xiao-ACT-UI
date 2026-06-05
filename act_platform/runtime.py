@@ -1642,10 +1642,18 @@ def _action_log_history_row(action: Mapping[str, Any], index: int = 0) -> dict[s
     return row
 
 
+# UI-internal book-keeping topics that carry no user-facing combat content
+# (act_snapshot is the DPS render-spec push emitted on every damage/state tick).
+# They are kept on the event bus for plugins/triggers/overlay but hidden from
+# the Action Log and Aggregate views so they don't show up as empty "0 · 38x"
+# groups.
+_HIDDEN_ACTION_TOPICS = {"act_snapshot"}
+
+
 def _filter_action_log_rows(rows: list[dict[str, Any]], *, query: str = "", topic: str = "") -> list[dict[str, Any]]:
     text = str(query or "").strip().lower()
     topic_text = str(topic or "").strip().lower()
-    out = rows
+    out = [row for row in rows if str(row.get("topic") or "").lower() not in _HIDDEN_ACTION_TOPICS]
     if topic_text:
         out = [row for row in out if str(row.get("topic") or "").lower() == topic_text]
     if text:

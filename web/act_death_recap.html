@@ -5,47 +5,49 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SAO ACT Death Recap</title>
 <style>
+/* ───────────────────────────────────────────────────────────────────────────
+   Panel-scoped tokens: LAYOUT/SIZING only. All COLORS come from the shared
+   act_panel_theme.css var(--act-*) tokens so light/dark follow the host theme
+   and stay 1:1 with the flat Tk Entity reference. Shell chrome (flat border,
+   corner brackets, header, table, side, toast) is owned by the shared theme
+   via !important; here we only style layout + custom kind/payload/death markup.
+   ─────────────────────────────────────────────────────────────────────────── */
 :root {
-    --bg: rgba(8, 13, 22, .78);
-    --line: rgba(117, 205, 255, .48);
-    --gold: rgba(255, 214, 117, .88);
-    --text: rgba(232, 246, 255, .96);
-    --muted: rgba(176, 204, 226, .76);
-    --bad: #ff6b82;
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+    --r-sm: 4px; --r-md: 6px;
+    --fs-kicker: 10px; --fs-meta: 11px; --fs-body: 12px;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; background: transparent; color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; user-select: none; }
-body { padding: 14px; }
-.shell { width: 100%; height: calc(100vh - 28px); min-height: 450px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: linear-gradient(180deg, rgba(17, 31, 48, .96), rgba(7, 12, 20, .92)); box-shadow: 0 0 34px rgba(88, 199, 255, .22), inset 0 0 28px rgba(109, 216, 255, .10); opacity: 0; transform: translateY(10px) scale(.985); transition: opacity .22s ease, transform .22s ease; }
+html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; user-select: none; }
+.shell { opacity: 0; transform: translateY(10px) scale(.985); transition: opacity .22s ease, transform .22s ease; }
 .shell.visible { opacity: 1; transform: translateY(0) scale(1); }
-.header { height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 8px 18px; border-bottom: 1px solid rgba(117, 205, 255, .35); background: linear-gradient(90deg, rgba(46, 24, 38, .78), rgba(11, 22, 35, .58)); }
-.kicker { letter-spacing: .18em; font-size: 10px; color: var(--gold); }
-.title { margin-top: 2px; font-size: 20px; font-weight: 700; letter-spacing: .08em; }
-.actions { display: flex; gap: 8px; align-items: center; }
-button, input { border: 1px solid rgba(117, 205, 255, .48); background: linear-gradient(180deg, rgba(61, 143, 201, .38), rgba(19, 48, 74, .58)); color: var(--text); border-radius: 8px; padding: 7px 11px; font-size: 12px; font-weight: 600; }
-input { width: 116px; background: rgba(4, 8, 14, .58); font-weight: 400; }
-button { cursor: pointer; }
-button:hover { box-shadow: 0 0 16px rgba(107, 214, 255, .25); transform: translateY(-1px); }
-button.primary { border-color: rgba(255, 214, 117, .74); color: #fff8da; }
-button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 16px; }
-.body { display: grid; grid-template-columns: minmax(0, 1fr) 292px; gap: 12px; height: calc(100% - 62px); padding: 12px; }
-.main { min-height: 0; overflow: auto; border: 1px solid rgba(117, 205, 255, .24); border-radius: 10px; background: rgba(8, 14, 22, .42); }
-.table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.table th, .table td { padding: 8px 9px; border-bottom: 1px solid rgba(117, 205, 255, .14); text-align: left; vertical-align: top; }
-.table th { position: sticky; top: 0; z-index: 1; background: rgba(31, 22, 35, .96); color: var(--gold); font-size: 11px; letter-spacing: .08em; }
-.death td { background: rgba(255, 107, 130, .12); box-shadow: inset 3px 0 0 var(--bad); }
+.header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.kicker { letter-spacing: .18em; font-size: var(--fs-kicker); color: var(--act-gold); }
+.title { margin-top: 2px; font-size: 20px; font-weight: 700; letter-spacing: .08em; color: var(--act-text); }
+.actions { display: flex; gap: var(--sp-2); align-items: center; }
+input#entity { width: 116px; }
+input#window { width: 116px; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 292px; gap: var(--sp-3); }
+.main { min-height: 0; overflow: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+.table th, .table td { padding: 8px 9px; text-align: left; vertical-align: top; }
+.table th { position: sticky; top: 0; z-index: 1; font-size: var(--fs-meta); letter-spacing: .08em; }
+.death td { background: color-mix(in srgb, var(--act-danger) 14%, transparent); box-shadow: inset 3px 0 0 var(--act-danger); }
 .table tbody tr.evt { cursor: pointer; }
-.table tbody tr.evt:hover { background: rgba(117, 205, 255, .08); }
-.table tr.detail td { background: rgba(8, 14, 22, .58); }
-.kind { color: var(--gold); font-size: 11px; letter-spacing: .08em; }
-.payload { color: var(--muted); font-size: 11px; line-height: 1.45; user-select: text; }
-.side { min-height: 0; border: 1px solid rgba(117, 205, 255, .30); border-radius: 10px; background: rgba(8, 14, 22, .52); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-.side-title { color: var(--gold); font-size: 12px; letter-spacing: .16em; }
-.row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px solid rgba(117, 205, 255, .16); padding-bottom: 5px; font-size: 12px; color: var(--muted); }
-.row strong { color: var(--text); text-align: right; }
-.empty { display: grid; place-items: center; height: 100%; min-height: 260px; color: var(--muted); text-align: center; line-height: 1.6; }
-.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid rgba(255, 214, 117, .58); background: rgba(8, 14, 22, .88); color: #fff7d2; border-radius: 999px; padding: 8px 14px; font-size: 12px; transition: opacity .16s ease, transform .16s ease; }
+.table tbody tr.evt:hover { background: color-mix(in srgb, var(--act-cyan) 10%, transparent); }
+.table tr.detail td { background: var(--act-card-bg-2); }
+.kind { color: var(--act-gold); font-size: var(--fs-meta); letter-spacing: .08em; }
+.payload { color: var(--act-muted); font-size: var(--fs-meta); line-height: 1.45; user-select: text; }
+.side { min-height: 0; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); }
+.side-title { color: var(--act-gold); font-size: var(--fs-body); letter-spacing: .16em; }
+.row { display: flex; justify-content: space-between; gap: 10px; padding-bottom: 5px; font-size: var(--fs-body); }
+.row strong { text-align: right; }
+.empty { display: grid; place-items: center; height: 100%; min-height: 260px; text-align: center; line-height: 1.6; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border-radius: 999px; padding: 8px 14px; font-size: var(--fs-body); transition: opacity .16s ease, transform .16s ease; }
 .toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--act-edge); border-radius: 999px; }
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
 <script src="act_panel_theme.js"></script>

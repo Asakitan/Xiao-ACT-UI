@@ -370,9 +370,19 @@ void main() {
 }
 '''
 
-    def __init__(self, root: tk.Tk, on_done: Optional[Callable] = None):
+    def __init__(self, root: tk.Tk, on_done: Optional[Callable] = None,
+                 monitor_rect: Optional[tuple] = None):
         self.root = root
         self.on_done = on_done
+        # Optional (left, top, right, bottom) of the monitor the intro should
+        # cover. Entity mode leaves this None and the animation fills the
+        # primary monitor as before; WebView mode passes the game window's
+        # monitor so the borderless GLFW present window does not land off the
+        # game screen on a multi-monitor / high-DPI rig (the most likely
+        # cause of "window won't render").
+        self._monitor_rect = monitor_rect
+        self._origin_x = 0
+        self._origin_y = 0
         self._overlay = None
         self._canvas = None
         self._sound_player = None
@@ -463,8 +473,20 @@ void main() {
     #  启动
     # ════════════════════════════════════════════════════════
     def play(self):
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
+        # Prefer the explicitly supplied monitor rect (WebView passes the game
+        # window's monitor). Fall back to the root's primary-monitor metrics
+        # for Entity mode — byte-for-byte unchanged when no rect is given.
+        mr = self._monitor_rect
+        if mr and len(mr) == 4:
+            left, top, right, bottom = (int(mr[0]), int(mr[1]),
+                                        int(mr[2]), int(mr[3]))
+            sw = max(1, right - left)
+            sh = max(1, bottom - top)
+            self._origin_x, self._origin_y = left, top
+        else:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            self._origin_x, self._origin_y = 0, 0
         self._cx, self._cy = sw // 2, sh // 2
         self._sw, self._sh = sw, sh
         self._diag = math.hypot(sw, sh)
@@ -532,7 +554,9 @@ void main() {
         self._overlay = tk.Toplevel(self.root)
         self._overlay.overrideredirect(True)
         self._overlay.attributes('-topmost', True)
-        self._overlay.geometry(f'{sw}x{sh}+0+0')
+        self._overlay.geometry(
+            f'{sw}x{sh}+{int(getattr(self, "_origin_x", 0))}'
+            f'+{int(getattr(self, "_origin_y", 0))}')
         self._overlay.configure(bg='black')
         self._overlay.attributes('-alpha', 0.92)
 
@@ -600,8 +624,8 @@ void main() {
                 pump,
                 w=sw,
                 h=sh,
-                x=0,
-                y=0,
+                x=int(getattr(self, '_origin_x', 0)),
+                y=int(getattr(self, '_origin_y', 0)),
                 render_fn=self._render_gpu_present_frame,
                 click_through=True,
                 title='sao_linkstart_gpu',
@@ -662,7 +686,13 @@ void main() {
             if self._gpu_present_window is not None:
                 self._gpu_present_window.request_redraw()
         except Exception as e:
+            # Surface the real cause: a driver-specific GLSL compile/link
+            # failure here used to vanish silently and look like "the intro
+            # never rendered". The traceback disambiguates it from a
+            # geometry/occlusion problem.
             print(f'[LinkStart] GPU present render error: {e}')
+            import traceback
+            traceback.print_exc()
             self._gl_ctx = None
             self._gpu_present_ready = False
             self._gpu_present_done = True

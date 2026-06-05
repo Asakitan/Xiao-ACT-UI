@@ -72,6 +72,14 @@ WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_TOPMOST = 0x00000008
 ULW_ALPHA = 2
 
+# SetWindowPos flags — used to flush an ex-style change so the new
+# WS_EX_TRANSPARENT hit-test behaviour takes effect for the Tk/ULW path.
+HWND_TOPMOST = -1
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+SWP_NOACTIVATE = 0x0010
+SWP_FRAMECHANGED = 0x0020
+
 
 class _POINT(ctypes.Structure):
     _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
@@ -792,12 +800,23 @@ class DpsOverlay:
         """
         passthrough = bool(passthrough)
         if self._gpu_managed and self._gpu_window is not None:
-            try:
-                self._gpu_window.set_click_through(passthrough)
-                self._is_passthrough = passthrough
-                return
-            except Exception:
-                pass
+            # v3.0.4: set_click_through used to live on the wrong class
+            # (BgraPresenter) so this call raised AttributeError, which we
+            # silently swallowed — leaving the faded-out panel grabbing
+            # clicks forever. Guard explicitly and only treat the toggle as
+            # applied when it actually ran, so a regression surfaces in the
+            # log instead of hiding as a dead click-zone.
+            fn = getattr(self._gpu_window, 'set_click_through', None)
+            if callable(fn):
+                try:
+                    fn(passthrough)
+                    self._is_passthrough = passthrough
+                    return
+                except Exception as exc:
+                    print(f'[DPS-OV] gpu set_click_through failed: {exc}')
+            else:
+                print('[DPS-OV] gpu window has no set_click_through; '
+                      'falling back to hwnd ex-style')
         if not self._hwnd:
             return
         try:
@@ -810,6 +829,17 @@ class DpsOverlay:
             if new_ex != ex:
                 _user32.SetWindowLongW(
                     ctypes.c_void_p(self._hwnd), GWL_EXSTYLE, new_ex)
+                # Flush: WS_EX_TRANSPARENT hit-testing can stay cached on
+                # the layered window until a frame-change pulse. Without
+                # this, the Tk/ULW DPS panel had the same dead-zone bug.
+                try:
+                    _user32.SetWindowPos(
+                        ctypes.c_void_p(self._hwnd),
+                        ctypes.c_void_p(HWND_TOPMOST), 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                        | SWP_FRAMECHANGED)
+                except Exception:
+                    pass
             self._is_passthrough = passthrough
         except Exception:
             pass

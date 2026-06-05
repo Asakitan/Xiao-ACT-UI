@@ -5,127 +5,60 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SAO ACT Graph Timeseries</title>
   <style>
-    :root { color-scheme: dark; }
+    /* ─────────────────────────────────────────────────────────────────────────
+       Panel-scoped tokens: LAYOUT/SIZING only. ALL colors come from the shared
+       act_panel_theme.css var(--act-*) tokens (the shared .panel/.header/.summary/
+       .chart-wrap/.row/.close rules drive chrome, edges, text, accents) so
+       light/dark follow the host theme and stay 1:1 with the flat Tk reference.
+       Canvas strokes read the same tokens at draw time via getComputedStyle.
+       ───────────────────────────────────────────────────────────────────────── */
+    :root {
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+      --r-sm: 4px; --r-md: 6px;
+      --fs-meta: 11px; --fs-body: 12px; --fs-title: 18px;
+    }
     * { box-sizing: border-box; }
-    html, body {
-      margin: 0;
-      width: 100%;
-      min-height: 100%;
-      background: transparent;
-      color: #dffaff;
-      font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
-      overflow: hidden;
-      user-select: none;
-    }
-    body { padding: 18px; opacity: 0; transition: opacity 180ms ease; }
+    html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; user-select: none; }
+    body { opacity: 0; transition: opacity 180ms ease; }
     body.visible { opacity: 1; }
-    .panel {
-      width: min(100%, 980px);
-      min-height: 520px;
-      border: 1px solid rgba(52, 232, 255, 0.58);
-      clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 30px, 100% 100%, 30px 100%, 0 calc(100% - 30px));
-      background:
-        linear-gradient(135deg, rgba(4, 17, 30, 0.92), rgba(7, 42, 60, 0.80)),
-        repeating-linear-gradient(180deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 4px);
-      box-shadow: 0 0 28px rgba(0, 210, 255, 0.38), inset 0 0 28px rgba(0, 210, 255, 0.12);
-      padding: 18px;
-      position: relative;
-    }
-    .panel::before, .panel::after {
-      content: "";
-      position: absolute;
-      height: 2px;
-      left: 22px;
-      right: 22px;
-      background: linear-gradient(90deg, transparent, #48efff, #f9b44a, transparent);
-      opacity: 0.8;
-    }
-    .panel::before { top: 8px; }
-    .panel::after { bottom: 8px; }
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 14px;
-    }
-    h1 {
-      margin: 0;
-      font-size: 18px;
-      letter-spacing: 0.12em;
-      text-shadow: 0 0 10px rgba(72, 239, 255, 0.88);
-    }
-    .sub { color: rgba(223,250,255,0.66); font-size: 12px; margin-top: 4px; }
+    /* .panel: shared theme paints flat chrome (border, corner brackets, bg). Layout only here. */
+    .panel { display: flex; flex-direction: column; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); }
+    h1 { margin: 0; font-size: var(--fs-title); letter-spacing: 0.12em; color: var(--act-text); }
+    .sub { color: var(--act-muted); font-size: var(--fs-body); margin-top: var(--sp-1); }
     .controls {
       display: grid;
       grid-template-columns: 132px 132px 1fr 104px 86px 86px;
-      gap: 8px;
+      gap: var(--sp-2);
       align-items: center;
-      margin-bottom: 12px;
+      margin-bottom: var(--sp-3);
     }
-    select, input, button {
-      border: 1px solid rgba(72, 239, 255, 0.45);
-      background: rgba(2, 18, 32, 0.74);
-      color: #e8fdff;
-      border-radius: 4px;
-      padding: 8px 10px;
-      outline: none;
-      font-size: 12px;
-    }
-    input::placeholder { color: rgba(223,250,255,0.42); }
-    button {
-      cursor: pointer;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      transition: all 120ms ease;
-    }
-    button:hover { border-color: #f9b44a; box-shadow: 0 0 14px rgba(249,180,74,0.28); }
-    .layout {
-      display: grid;
-      grid-template-columns: 1fr 210px;
-      gap: 14px;
-    }
-    .chart-wrap {
-      border: 1px solid rgba(72, 239, 255, 0.25);
-      background: rgba(0, 7, 16, 0.48);
-      min-height: 342px;
-      position: relative;
-      overflow: hidden;
-    }
+    select, input, button { padding: 8px 10px; outline: none; font-size: var(--fs-body); }
+    button { cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; }
+    .layout { display: grid; grid-template-columns: 1fr 210px; gap: var(--sp-4); }
+    /* .chart-wrap / .summary: shared theme paints border + bg. Sizing only here. */
+    .chart-wrap { position: relative; min-height: 342px; overflow: hidden; padding: var(--sp-1); }
     canvas { width: 100%; height: 342px; display: block; }
-    .chart-title {
-      position: absolute;
-      top: 10px;
-      left: 14px;
-      color: rgba(223,250,255,0.82);
-      font-size: 12px;
-      pointer-events: none;
-    }
-    .summary {
-      border: 1px solid rgba(72, 239, 255, 0.22);
-      background: rgba(0, 11, 20, 0.45);
-      padding: 12px;
-      min-height: 342px;
-    }
-    .stat { margin-bottom: 12px; }
-    .stat .label { color: rgba(223,250,255,0.56); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
-    .stat .value { font-size: 18px; color: #fff7d6; text-shadow: 0 0 8px rgba(249,180,74,0.35); margin-top: 2px; word-break: break-word; }
-    .legend { display: grid; gap: 8px; margin-top: 12px; }
-    .legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: rgba(223,250,255,0.74); }
+    .chart-title { position: absolute; top: 10px; left: 14px; color: var(--act-muted); font-size: var(--fs-body); pointer-events: none; }
+    .summary { padding: var(--sp-3); min-height: 342px; }
+    .stat { margin-bottom: var(--sp-3); }
+    .stat .label { color: var(--act-muted); font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: 0.08em; }
+    .stat .value { font-size: var(--fs-title); color: var(--act-gold); margin-top: 2px; word-break: break-word; }
+    .legend { display: grid; gap: var(--sp-2); margin-top: var(--sp-3); }
+    .legend-row { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-body); color: var(--act-muted); }
     .swatch { width: 18px; height: 3px; border-radius: 8px; }
     .table {
-      margin-top: 12px;
+      margin-top: var(--sp-3);
       max-height: 110px;
       overflow: hidden;
       display: grid;
-      gap: 4px;
-      font-size: 11px;
-      color: rgba(223,250,255,0.72);
+      gap: var(--sp-1);
+      font-size: var(--fs-meta);
+      color: var(--act-muted);
     }
-    .row { display: grid; grid-template-columns: 78px 1fr 82px; gap: 8px; border-top: 1px solid rgba(72,239,255,0.12); padding-top: 4px; cursor: pointer; }
-    .row:hover { background: rgba(72,239,255,0.10); }
-    .status { margin-top: 10px; color: rgba(223,250,255,0.52); font-size: 11px; }
-    .close { width: 34px; height: 34px; padding: 0; border-radius: 50%; font-size: 16px; }
+    .row { display: grid; grid-template-columns: 78px 1fr 82px; gap: var(--sp-2); border-top: 1px solid var(--act-edge-soft); padding-top: var(--sp-1); cursor: pointer; }
+    .row:hover { background: color-mix(in srgb, var(--act-cyan) 10%, transparent); }
+    .status { margin-top: 10px; color: var(--act-muted); font-size: var(--fs-meta); }
     @media (max-width: 820px) {
       .controls { grid-template-columns: 1fr 1fr; }
       .layout { grid-template-columns: 1fr; }
@@ -189,7 +122,18 @@
 
   <script src="pywebview-shim.js"></script>
   <script>
-    const colors = { damage: '#f9b44a', heal: '#67ffc2', event_count: '#48efff', boss_hp_pct: '#ff5f8f' };
+    // Metric -> shared theme token. Resolved to a concrete color at draw time via
+    // getComputedStyle so canvas strokes follow the host light/dark theme (the
+    // shared --act-* tokens flip on theme change). gold=damage, ok=heal,
+    // cyan=event_count, danger=boss_hp_pct — 1:1 with the Tk accent mapping.
+    const metricVars = { damage: '--act-gold', heal: '--act-ok', event_count: '--act-cyan', boss_hp_pct: '--act-danger' };
+    function cssVar(name, fallback) {
+      try {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        return v || fallback;
+      } catch (_) { return fallback; }
+    }
+    function metricColor(metric) { return cssVar(metricVars[metric] || '--act-cyan', '#48efff'); }
     function parseMaybeJson(value) {
       if (typeof value === 'string') {
         try { return JSON.parse(value); } catch (_) { return {}; }
@@ -221,19 +165,22 @@
       canvas.height = Math.max(1, Math.floor(rect.height * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       const w = rect.width, h = rect.height;
+      // Resolve shared theme tokens once per draw (cheap; flips with host theme).
+      const edgeSoft = cssVar('--act-edge-soft', 'rgba(72,239,255,0.10)');
+      const muted = cssVar('--act-muted', 'rgba(223,250,255,0.55)');
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = 'rgba(0, 10, 20, 0.35)';
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeStyle = 'rgba(72,239,255,0.10)';
+      // No opaque chart fill: let the shared flat .chart-wrap background show through.
+      ctx.strokeStyle = edgeSoft;
       ctx.lineWidth = 1;
       for (let i = 0; i <= 6; i++) {
         const y = 34 + (h - 58) * i / 6;
         ctx.beginPath(); ctx.moveTo(42, y); ctx.lineTo(w - 18, y); ctx.stroke();
       }
       const metric = status.selected_metric || 'damage';
+      const stroke = metricColor(metric);
       const points = (((status.series || {})[metric] || {}).points || []);
       if (!points.length) {
-        ctx.fillStyle = 'rgba(223,250,255,0.55)';
+        ctx.fillStyle = muted;
         ctx.font = '14px Microsoft YaHei, sans-serif';
         ctx.fillText('No timeseries data', 48, h / 2);
         return;
@@ -245,17 +192,15 @@
       const plot = { l: 42, t: 28, r: w - 18, b: h - 30 };
       const xOf = p => plot.l + ((Number(p.time_ms || 0) - minT) / Math.max(1, maxT - minT)) * (plot.r - plot.l);
       const yOf = p => plot.b - ((Number(p.value || 0) - minV) / Math.max(1, maxV - minV)) * (plot.b - plot.t);
-      ctx.strokeStyle = colors[metric] || '#48efff';
+      // Flat line, no neon shadow glow (matches the flat Tk reference).
+      ctx.strokeStyle = stroke;
       ctx.lineWidth = 2;
-      ctx.shadowColor = colors[metric] || '#48efff';
-      ctx.shadowBlur = 10;
       ctx.beginPath();
       points.forEach((p, idx) => { const x = xOf(p), y = yOf(p); idx ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
       ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = colors[metric] || '#48efff';
+      ctx.fillStyle = stroke;
       points.slice(-18).forEach(p => { ctx.beginPath(); ctx.arc(xOf(p), yOf(p), 2.4, 0, Math.PI * 2); ctx.fill(); });
-      ctx.fillStyle = 'rgba(223,250,255,0.55)';
+      ctx.fillStyle = muted;
       ctx.font = '11px Microsoft YaHei, sans-serif';
       ctx.fillText(fmt(maxV), 8, plot.t + 5);
       ctx.fillText(fmt(minV), 8, plot.b);
@@ -320,7 +265,7 @@
         document.getElementById('pointCount').textContent = String(points.length || 0);
         document.getElementById('rangeValue').textContent = ActTime.fmtDur(status.time_range_ms);
         document.getElementById('status').textContent = status.message || 'OK';
-        document.getElementById('legend').innerHTML = (status.metrics || []).map(m => '<div class="legend-row"><span class="swatch" style="background:' + (colors[m.id] || '#48efff') + '"></span><span>' + (m.label || m.id) + '</span></div>').join('');
+        document.getElementById('legend').innerHTML = (status.metrics || []).map(m => '<div class="legend-row"><span class="swatch" style="background:var(' + (metricVars[m.id] || '--act-cyan') + ')"></span><span>' + (m.label || m.id) + '</span></div>').join('');
         const t0 = points.length ? Math.min.apply(null, points.map(p => Number(p.time_ms || 0))) : 0;
         document.getElementById('points').innerHTML = points.slice(-6).reverse().map(p => {
           const ms = Number(p.time_ms || 0);
@@ -330,6 +275,13 @@
       }
     };
     window.addEventListener('resize', () => GraphTimeseries.last && drawChart(GraphTimeseries.last));
+    // Redraw canvas when the host pushes a theme change: act_panel_theme.js flips
+    // data-act-theme / theme-* classes on <html>, which re-resolves the --act-*
+    // tokens our strokes read. Observe that attribute and re-stroke the chart.
+    try {
+      new MutationObserver(() => { if (GraphTimeseries.last) drawChart(GraphTimeseries.last); })
+        .observe(document.documentElement, { attributes: true, attributeFilter: ['data-act-theme', 'class', 'style'] });
+    } catch (_) {}
     window.addEventListener('load', () => { GraphTimeseries.fadeIn(); GraphTimeseries.refresh(); });
   </script>
 </body>

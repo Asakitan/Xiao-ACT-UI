@@ -59,6 +59,30 @@
     --menu-hover-warm: rgba(248, 242, 231, 0.98);
     --menu-hover-warm-2: rgba(239, 227, 202, 0.92);
     --menu-hover-border: rgba(243, 175, 18, 0.42);
+
+    /* ── Authoritative SAO accent tokens (mirror sao_theme/colors.py · SAOColors) ── */
+    --sao-cyan: #5eb8ca;          /* MenuHudSpriteRenderer._CYAN (94,184,202) */
+    --sao-cyan-bright: #68e4ff;   /* SAOColors.CORNER_CYAN (104,228,255) — corner-tick glow only */
+    --sao-gold: #f3af12;          /* SAOColors.ACTIVE_BORDER / _GOLD (243,175,18) */
+    --circle-border: #bcc4ca;     /* SAOColors.CIRCLE_BORDER */
+    --circle-bg: #f7f8f8;         /* SAOColors.CIRCLE_BG */
+    --circle-icon: #959aa0;       /* SAOColors.CIRCLE_ICON */
+    --circle-hover-bg: #edf7fa;   /* SAOColors.HOVER_BG */
+    --circle-hover-icon: #718995; /* SAOColors.HOVER_ICON */
+    --circle-active-border: #f3af12; /* SAOColors.ACTIVE_BORDER */
+    --circle-active-bg: #f4ebd7;  /* SAOColors.ACTIVE_BG */
+    --circle-active-icon: #6d5d40;/* SAOColors.ACTIVE_ICON */
+    --child-bg: #f8f8f8;          /* SAOColors.CHILD_BG */
+    --child-hover: #f4eee1;       /* SAOColors.CHILD_HOVER */
+    --child-hover-fg: #625846;    /* SAOColors.CHILD_HOVER_FG */
+    --child-text: #646364;        /* SAOColors.CHILD_TEXT */
+    --child-line: #bcc4ca;        /* SAOColors.CHILD_LINE */
+    --child-icon: #8f959b;        /* SAOColors.CHILD_ICON */
+    --info-top: #fbfbfb;          /* SAOColors.INFO_BG */
+    --info-bottom: #ecebea;       /* SAOColors.INFO_BOTTOM */
+    /* Aliases for previously-undeclared vars referenced by scrollbar thumbs */
+    --cyan: var(--sao-cyan);
+    --cyan-strong: #16a9d6;
 }
 .theme-dark {
     --menu-surface: rgba(20, 26, 36, 0.92);
@@ -123,7 +147,7 @@ html, body {
     width: 100vw;
     height: 100vh;
     overflow: hidden;
-    background: rgba(0, 0, 0, 0.30);
+    background: transparent;
     backdrop-filter: blur(0px);
     perspective: 600px;
     opacity: 0;
@@ -159,60 +183,76 @@ html, body {
     pointer-events: none;
     z-index: 0;
 }
-.menu-hud-lane {
+/* ─── Entity-style anchored HUD frame (mirrors MenuHudSpriteRenderer) ───
+   Replaces the four free-floating ambient lanes with a content-anchored
+   frame around the menu circle-button column: corner brackets
+   (cyan TL/BL, gold TR/BR), vertical rails offset a few px, a scan line
+   with trails, and corner dots. Anchored to .position, subtle/transparent
+   (no dark plate). _BRACKET_LEN=16, _RAIL_OFFSET=4, _HUD_MARGIN=6. */
+.menu-frame {
     position: absolute;
-    width: 172px;
-    height: 30px;
-    border: 1px solid rgba(104, 228, 255, 0.40);
-    clip-path: polygon(0 16%, 88% 16%, 100% 0, 100% 100%, 10% 100%, 0 76%);
-    box-shadow: inset 0 0 18px rgba(104, 228, 255, 0.12), 0 0 18px rgba(104, 228, 255, 0.05);
+    /* Wrap the circle-button column (.item_box: 54px × 560px at origin),
+       offset outward by HUD_MARGIN(6px) so brackets sit just outside content,
+       matching the Entity net bracket margin (PLATE_PAD 16 − HUD_MARGIN 6 → 6px). */
+    left: -6px;
+    top: -6px;
+    width: 66px;
+    height: 572px;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.9;
 }
-.menu-hud-lane.gold {
-    border-color: rgba(243, 175, 18, 0.38);
-    box-shadow: inset 0 0 18px rgba(243, 175, 18, 0.12), 0 0 18px rgba(243, 175, 18, 0.05);
-}
-.menu-hud-lane::before {
-    content: '';
+/* Corner brackets — 16px L-arms. Cyan on the left corners, gold on the
+   right corners (matching MenuHudSpriteRenderer._draw_brackets). */
+.menu-frame .frame-corner {
     position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(90deg, rgba(255,255,255,0) 0 12px, rgba(255,255,255,.08) 12px 13px, rgba(255,255,255,0) 13px 22px);
-    opacity: .26;
+    width: 16px;
+    height: 16px;
 }
-.menu-hud-label {
+.menu-frame .frame-corner.tl { left: 0; top: 0; border-left: 1px solid var(--sao-cyan); border-top: 1px solid var(--sao-cyan); }
+.menu-frame .frame-corner.bl { left: 0; bottom: 0; border-left: 1px solid var(--sao-cyan); border-bottom: 1px solid var(--sao-cyan); }
+.menu-frame .frame-corner.tr { right: 0; top: 0; border-right: 1px solid var(--sao-gold); border-top: 1px solid var(--sao-gold); }
+.menu-frame .frame-corner.br { right: 0; bottom: 0; border-right: 1px solid var(--sao-gold); border-bottom: 1px solid var(--sao-gold); }
+/* Corner-tick glow — reserve the brighter #68e4ff only here. */
+.menu-frame .frame-corner.tl,
+.menu-frame .frame-corner.bl { box-shadow: -1px 0 4px rgba(104, 228, 255, 0.22); }
+/* Vertical rails offset RAIL_OFFSET(4px) outside the brackets; span the
+   inner column between the 16px bracket arms. Left cyan, right gold. */
+.menu-frame .frame-rail {
     position: absolute;
-    top: 50%;
-    left: 12px;
-    transform: translateY(-50%);
-    font-family: var(--font-ui);
-    font-size: 12px;
-    letter-spacing: 1.1px;
-    color: rgba(104, 228, 255, 0.92);
+    top: 16px;
+    bottom: 16px;
+    width: 1px;
 }
-.menu-hud-lane.gold .menu-hud-label { color: rgba(243, 175, 18, 0.90); }
-@keyframes menu-hud-left-far {
-    0% { transform: translate3d(-20px, 0, 0); opacity: .30; }
-    50% { transform: translate3d(20px, 8px, 0); opacity: .66; }
-    100% { transform: translate3d(-20px, 0, 0); opacity: .30; }
+.menu-frame .frame-rail.l { left: -4px; background: var(--sao-cyan); }
+.menu-frame .frame-rail.r { right: -4px; background: var(--sao-gold); }
+/* Corner dots on the rails (cyan left, gold right). */
+.menu-frame .frame-dot {
+    position: absolute;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
 }
-@keyframes menu-hud-left-near {
-    0% { transform: translate3d(-34px, 0, 0); opacity: .28; }
-    50% { transform: translate3d(28px, -10px, 0); opacity: .84; }
-    100% { transform: translate3d(-34px, 0, 0); opacity: .28; }
+.menu-frame .frame-dot.l { left: -5px; top: 20px; background: var(--sao-cyan); box-shadow: 0 0 5px rgba(94, 184, 202, 0.6); }
+.menu-frame .frame-dot.r { right: -5px; bottom: 20px; background: var(--sao-gold); box-shadow: 0 0 5px rgba(243, 175, 18, 0.5); }
+/* Scan line + trails sweeping vertically through the frame (cyan + dim
+   trails, matching _draw_dynamic). Kept subtle. */
+.menu-frame .frame-scan {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--sao-cyan);
+    box-shadow: 0 -3px 0 rgba(58, 106, 120, 0.7), 0 -6px 0 rgba(42, 80, 96, 0.6);
+    opacity: 0.7;
+    animation: menu-frame-scan 6.5s linear infinite;
 }
-@keyframes menu-hud-right-far {
-    0% { transform: translate3d(20px, 0, 0); opacity: .30; }
-    50% { transform: translate3d(-20px, 8px, 0); opacity: .66; }
-    100% { transform: translate3d(20px, 0, 0); opacity: .30; }
+@keyframes menu-frame-scan {
+    0%   { top: 18px; opacity: 0; }
+    8%   { opacity: 0.7; }
+    92%  { opacity: 0.7; }
+    100% { top: 560px; opacity: 0; }
 }
-@keyframes menu-hud-right-near {
-    0% { transform: translate3d(34px, 0, 0); opacity: .28; }
-    50% { transform: translate3d(-28px, -10px, 0); opacity: .84; }
-    100% { transform: translate3d(34px, 0, 0); opacity: .28; }
-}
-.menu-hud-left-far { left: 7vw; top: 16vh; animation: menu-hud-left-far 8.4s ease-in-out infinite; }
-.menu-hud-left-near { left: 9vw; bottom: 16vh; animation: menu-hud-left-near 5.9s ease-in-out infinite; }
-.menu-hud-right-far { right: 8vw; top: 19vh; animation: menu-hud-right-far 8.0s ease-in-out infinite; }
-.menu-hud-right-near { right: 9vw; bottom: 18vh; animation: menu-hud-right-near 5.6s ease-in-out infinite; }
 
 /* ═══ Breathing animation for position ═══ */
 .position {
@@ -388,7 +428,7 @@ html, body {
     width: 54px;
     height: 54px;
     border-radius: 50%;
-    border: 2px solid rgba(201, 198, 198, .6);
+    border: 2px solid var(--circle-border);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -399,8 +439,7 @@ html, body {
     opacity: 0;
     filter: blur(10px);
     transform: translateY(-80px);
-    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 10px 24px var(--menu-shadow);
-    backdrop-filter: blur(10px);
+    box-shadow: none;
 }
 .item:nth-child(1) { animation-delay: 0.30s; }
 .item:nth-child(2) { animation-delay: 0.25s; }
@@ -428,13 +467,12 @@ html, body {
     width: calc(var(--radius) - 8px);
     height: calc(var(--radius) - 8px);
     border-radius: 50%;
-    background:
-        radial-gradient(circle at 32% 28%, rgba(255,255,255,0.98), rgba(248,248,248,0.92) 56%, rgba(232,234,236,0.92) 100%);
+    background: var(--circle-bg);
     display: flex;
     align-items: center;
     justify-content: center;
     transition: background 0.22s ease, box-shadow 0.22s ease, transform 0.22s ease;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.62), inset 0 -10px 18px rgba(80,86,94,0.06), 0 6px 16px rgba(31,34,40,0.08);
+    box-shadow: none;
     position: relative;
     overflow: hidden;
 }
@@ -444,14 +482,14 @@ html, body {
     position: absolute;
     inset: 7px;
     border-radius: 50%;
-    border: 1px solid rgba(104, 228, 255, 0.10);
+    border: 1px solid rgba(94, 184, 202, 0.10);
     opacity: 0.9;
     pointer-events: none;
 }
 
 .item .in-circle i,
 .item .in-circle .sao-icon {
-    color: var(--menu-icon);
+    color: var(--circle-icon);
     transition: color 0.2s ease;
     display: block;
 }
@@ -1482,29 +1520,29 @@ html, body {
 
 /* Active circle */
 .item.active {
-    border: 2px solid rgba(243, 175, 18, 0.52) !important;
-    box-shadow: 0 0 0 1px rgba(243,175,18,0.14), 0 10px 28px rgba(243, 175, 18, 0.12);
+    border: 2px solid var(--circle-active-border) !important;
+    box-shadow: none;
 }
 .item.active .in-circle {
-    background: radial-gradient(circle at 32% 28%, rgba(255,250,239,0.98), rgba(245,236,213,0.96) 58%, rgba(231,220,192,0.92) 100%) !important;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.44), 0 0 16px rgba(243,175,18,0.10);
+    background: var(--circle-active-bg) !important;
+    box-shadow: none;
 }
 .item.active .in-circle i,
 .item.active .in-circle .sao-icon {
-    color: rgba(109, 93, 64, 0.96) !important;
+    color: var(--circle-active-icon) !important;
 }
 
 /* Hover */
 .item:hover .in-circle {
-    background: radial-gradient(circle at 32% 28%, var(--menu-hover-cyan), var(--menu-hover-cyan-2) 58%, rgba(212,233,239,0.92) 100%);
+    background: var(--circle-hover-bg);
     transform: scale(1.02);
 }
 .item:hover .in-circle i,
 .item:hover .in-circle .sao-icon {
-    color: rgba(103, 137, 148, 0.96);
+    color: var(--circle-hover-icon);
 }
 .item:hover {
-    border: 2px solid rgba(104, 228, 255, 0.40);
+    border: 2px solid var(--sao-cyan);
     transform: translateX(-2px);
 }
 
@@ -1529,7 +1567,7 @@ html, body {
 }
 
 .leftInfoBox .top {
-    background: var(--menu-surface);
+    background: var(--info-top);
     width: 240px;
     height: 252px;
     overflow: hidden;
@@ -1554,7 +1592,7 @@ html, body {
     top: 200px;
     left: 100%;
     clip-path: polygon(100% 50%, 0 100%, 0 0);
-    background: var(--menu-surface);
+    background: var(--info-top);
 }
 
 .bottom-triangle {
@@ -1564,11 +1602,11 @@ html, body {
     top: 0;
     left: 30px;
     clip-path: polygon(50% 100%, 100% 0, 0 0);
-    background: rgba(247, 247, 246, 0.78);
+    background: var(--info-bottom);
 }
 
 .leftInfoBox .bottom {
-    background: var(--menu-surface-2);
+    background: var(--info-bottom);
     width: 240px;
     height: 54px;
     position: relative;
@@ -1851,9 +1889,9 @@ html, body {
     top: 50%;
     left: -12px;
     transform: translateY(-50%);
-    background: linear-gradient(transparent, rgba(104,228,255,0.92) 14%, rgba(243,175,18,0.96) 48%, rgba(104,228,255,0.92) 84%, transparent);
+    background: linear-gradient(transparent, rgba(94,184,202,0.92) 14%, rgba(243,175,18,0.96) 48%, rgba(94,184,202,0.92) 84%, transparent);
     transition: opacity 0.2s ease, height 0.3s ease;
-    box-shadow: 0 0 10px rgba(104,228,255,0.24);
+    box-shadow: 0 0 10px rgba(94,184,202,0.24);
 }
 .cb_position .line.show { opacity: 1; }
 
@@ -1902,22 +1940,22 @@ html, body {
 }
 
 .child-menu li {
-    height: 40px;
-    margin-bottom: 8px;
+    height: 44px;
+    margin-bottom: 3px;
     width: 238px;
-    background: linear-gradient(180deg, var(--menu-surface-card), var(--menu-surface-card-2));
+    background: var(--child-bg);
+    color: var(--child-text);
     display: flex;
     align-items: center;
-    font-size: 15px;
+    font-size: 13px;
     text-align: left;
     cursor: pointer;
     padding-left: 12px;
     padding-right: 10px;
-    transition: background 0.15s ease, color 0.15s ease, transform 0.18s ease, box-shadow 0.18s ease;
-    border: 1px solid var(--menu-border);
-    border-radius: 10px;
-    box-shadow: 0 10px 24px var(--menu-shadow), inset 0 0 0 1px rgba(104,228,255,0.05);
-    backdrop-filter: blur(12px);
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.18s ease;
+    border: 1px solid var(--child-line);
+    border-radius: 0;
+    box-shadow: none;
 }
 .child-menu li:last-child { margin-bottom: 0; }
 .child-menu li.sep {
@@ -1929,11 +1967,11 @@ html, body {
 }
 
 .child-menu li:hover {
-    background: linear-gradient(180deg, var(--menu-hover-warm), var(--menu-hover-warm-2));
-    color: var(--menu-text);
-    transform: translateX(3px);
-    border-color: var(--menu-hover-border);
-    box-shadow: 0 14px 30px rgba(243,175,18,0.10);
+    background: var(--child-hover);
+    color: var(--child-hover-fg);
+    border-color: var(--child-line);
+    /* 2px left gold indicator strip — mirrors sao_child_bar_gpu ROW_X_INDICATOR */
+    box-shadow: inset 2px 0 0 var(--sao-gold);
 }
 
 .child-menu li span {
@@ -1956,13 +1994,12 @@ html, body {
     width: 24px;
     min-width: 24px;
     height: 18px;
-    color: #8adfff;
+    color: var(--child-icon);
     opacity: 0.96;
-    filter: drop-shadow(0 0 4px rgba(104, 228, 255, 0.18));
+    filter: none;
     background:
         linear-gradient(90deg, currentColor, currentColor) left top 3px / 7px 1px no-repeat,
-        linear-gradient(90deg, currentColor, currentColor) right bottom 3px / 7px 1px no-repeat,
-        linear-gradient(180deg, rgba(104, 228, 255, 0.18), rgba(104, 228, 255, 0)) center / 100% 100% no-repeat;
+        linear-gradient(90deg, currentColor, currentColor) right bottom 3px / 7px 1px no-repeat;
 }
 .menu-glyph::before,
 .menu-glyph::after,
@@ -1974,8 +2011,8 @@ html, body {
     border-color: currentColor;
 }
 .child-menu li:hover .menu-glyph {
-    color: rgba(109, 93, 64, 0.92);
-    filter: drop-shadow(0 0 8px rgba(243, 175, 18, 0.14));
+    color: var(--child-hover-fg);
+    filter: none;
 }
 
 .mi-play::before { left: 7px; top: 2px; width: 0; height: 0; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 8px solid currentColor; }
@@ -2030,7 +2067,7 @@ html, body {
     letter-spacing: 0;
 }
 .child-menu li:hover .shortcut {
-    color: rgba(255, 255, 255, 0.6);
+    color: rgba(98, 88, 70, 0.7);
 }
 
 /* ═══ Status indicator in child items ═══ */
@@ -3360,14 +3397,23 @@ html, body {
 
     <div class="menu-bg-layer" id="menu-bg-layer" aria-hidden="true"></div>
 
-    <div class="menu-hud" aria-hidden="true">
-        <div class="menu-hud-lane menu-hud-left-far"><span class="menu-hud-label">SYS CORE</span></div>
-        <div class="menu-hud-lane gold menu-hud-left-near"><span class="menu-hud-label">GAIN ROUTE</span></div>
-        <div class="menu-hud-lane menu-hud-right-far"><span class="menu-hud-label">NERVE GEAR</span></div>
-        <div class="menu-hud-lane gold menu-hud-right-near"><span class="menu-hud-label">LINK RATE</span></div>
-    </div>
+    <div class="menu-hud" aria-hidden="true"></div>
 
     <div class="position" id="menu-position">
+
+        <!-- Entity-style anchored HUD frame (corner brackets + rails + scan + dots) -->
+        <div class="menu-frame" aria-hidden="true">
+            <span class="frame-corner tl"></span>
+            <span class="frame-corner tr"></span>
+            <span class="frame-corner bl"></span>
+            <span class="frame-corner br"></span>
+            <span class="frame-rail l"></span>
+            <span class="frame-rail r"></span>
+            <span class="frame-dot l"></span>
+            <span class="frame-dot r"></span>
+            <span class="frame-scan"></span>
+        </div>
+
 
         <!-- LeftInfo Panel -->
         <div class="leftInfo" id="left-info">

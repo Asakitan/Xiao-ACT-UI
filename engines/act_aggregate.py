@@ -207,11 +207,21 @@ def normalize_act_event_row(event_or_row: Mapping[str, Any], *, index: int = 0) 
         "group_name": _text(item.get("group_name")) or label,
         "payload": dict(payload),
         "combat_fact": dict(combat_fact),
+        "_normalized": True,
     }
 
 
 def normalize_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    normalized = [normalize_act_event_row(row, index=idx) for idx, row in enumerate(rows or []) if isinstance(row, Mapping)]
+    # Idempotent: rows already produced by normalize_act_event_row carry
+    # "_normalized" and are passed through (only re-sorted). This kills the
+    # redundant re-normalization when build_act_aggregate_summary feeds the same
+    # normalized list into every aggregator (was ~11x rebuild of every row dict,
+    # the bulk of the menu-reopen lag).
+    normalized = [
+        row if row.get("_normalized") else normalize_act_event_row(row, index=idx)
+        for idx, row in enumerate(rows or [])
+        if isinstance(row, Mapping)
+    ]
     normalized.sort(key=lambda row: (int(row.get("time_ms") or 0), int(row.get("index") or 0), str(row.get("id") or "")))
     return normalized
 
@@ -415,21 +425,28 @@ def _overview(rows: list[dict[str, Any]], render_spec: Mapping[str, Any] | None 
 def build_act_aggregate_summary(rows: Iterable[Mapping[str, Any]], *, render_spec: Mapping[str, Any] | None = None,
                                 window_ms: int = 1000, top_n: int = 20) -> dict[str, Any]:
     normalized = normalize_rows(rows)
+    # Aggregate each dimension ONCE (full set), then slice for display and reuse
+    # len() for raw_counts — instead of re-running every aggregator twice.
+    timeline = build_timeline_clusters(normalized, window_ms=window_ms, top_n=max(top_n, 24))
+    skills = aggregate_damage_by_skill(normalized, top_n=10_000)
+    monsters = aggregate_damage_by_monster(normalized, top_n=10_000)
+    dungeons = aggregate_damage_by_dungeon(normalized, top_n=10_000)
+    logs = aggregate_action_log(normalized, top_n=10_000)
     return {
         "overview": _overview(normalized, render_spec),
-        "timeline_clusters": build_timeline_clusters(normalized, window_ms=window_ms, top_n=max(top_n, 24)),
-        "skill_damage": aggregate_damage_by_skill(normalized, top_n=top_n),
-        "monster_damage": aggregate_damage_by_monster(normalized, top_n=top_n),
-        "dungeon_damage": aggregate_damage_by_dungeon(normalized, top_n=min(top_n, 12)),
-        "log_groups": aggregate_action_log(normalized, top_n=top_n),
+        "timeline_clusters": timeline,
+        "skill_damage": skills[:max(1, int(top_n or 20))],
+        "monster_damage": monsters[:max(1, int(top_n or 20))],
+        "dungeon_damage": dungeons[:max(1, min(int(top_n or 20), 12))],
+        "log_groups": logs[:max(1, int(top_n or 20))],
         "source_mix": _source_mix(normalized),
         "raw_counts": {
             "rows": len(normalized),
-            "timeline_clusters": len(build_timeline_clusters(normalized, window_ms=window_ms, top_n=max(top_n, 24))),
-            "skills": len(aggregate_damage_by_skill(normalized, top_n=10_000)),
-            "monsters": len(aggregate_damage_by_monster(normalized, top_n=10_000)),
-            "dungeons": len(aggregate_damage_by_dungeon(normalized, top_n=10_000)),
-            "logs": len(aggregate_action_log(normalized, top_n=10_000)),
+            "timeline_clusters": len(timeline),
+            "skills": len(skills),
+            "monsters": len(monsters),
+            "dungeons": len(dungeons),
+            "logs": len(logs),
         },
     }
 
