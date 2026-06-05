@@ -193,7 +193,7 @@ html,body{
 .xt_right{
     flex:1;
     display:flex;
-    align-items:center;
+    align-items:flex-start;  /* 名字顶端对齐 (与 HP 条顶 top:9px 对齐), 双排不上浮 */
     background:linear-gradient(to right,var(--bgColor) 50%,rgba(248,249,250,0));
     clip-path:polygon(85px 22%,100% 22%,100% 0%,0% 0%,0 100%,228px 100%,234px 77%,100% 77%,100% 60%,233px 60%,228px 77%,85px 77%);
 }
@@ -201,6 +201,7 @@ html,body{
     flex:0 0 72px;           /* 锁定宽度, 名字区结束在 ~101px, 血条起点 108px 之前留间隙 */
     box-sizing:border-box;
     width:72px;
+    margin-top:9px;          /* 名字最上端下移与 HP 条顶端对齐 */
     padding-left:6px;
     text-align:center;
     line-height:1.04;

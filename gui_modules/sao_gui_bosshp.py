@@ -1937,9 +1937,10 @@ class BossHpOverlay:
         base_x = self.BOX_X + 29 + 10
         lines, font, size = self._fit_name_lines(draw, self._boss_name, max_w, 15)
         line_h = size + 1
-        # 1 行: 原基线; 2 行: 整体上移半行, 围绕原基线垂直居中 (智能适应位置)
-        base_ty = self.BOX_Y + 4 + y_off
-        top = base_ty if len(lines) <= 1 else base_ty - (line_h // 2)
+        # 名字最上端与 HP 血条顶端 (BAR_Y) 对齐; 1 行/2 行都从顶端向下排,
+        # 不再上移居中, 这样双排不会比血条靠上。
+        base_ty = self.BAR_Y + y_off
+        top = base_ty
         for i, ln in enumerate(lines):
             if not ln:
                 continue
