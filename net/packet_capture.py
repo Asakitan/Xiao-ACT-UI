@@ -13,6 +13,7 @@ import ctypes
 import ctypes.wintypes
 import logging
 import os
+import json
 from typing import Optional, Callable, List, Dict, Tuple, Any
 
 logger = logging.getLogger('sao_auto.capture')
@@ -218,6 +219,49 @@ C3SB_SIGNATURE = b'\x00\x63\x33\x53\x42\x00'
 C3SB_SHORT = b'\x63\x33\x53\x42'
 
 
+# ── 原始包诊断 dump (定位"开放世界服务器没被识别") ──────────────────────
+# 在服务器识别之前记录入站 TCP 包: 凡是含 c3SB 的游戏候选, 以及每个新 addr 的
+# 前若干包, 都写到 sao_auto/raw_cap_dump.jsonl。用于排查 高原/主城 抓不到服务器
+# (服务器没被识别 → 没包到 parser → 连 tcp_dump 都没有)。每行字段:
+#   src/dst(ip:port) seq n(len) srv(是否当前已识别服务器) strict/loose(识别命中) head(前32B hex)
+# 抓完一段后把 _RAW_CAP_DUMP_ENABLED 改回 False。
+_RAW_CAP_DUMP_ENABLED = True
+_RAW_CAP_MAX_BYTES = 60_000_000
+_RAW_CAP_PER_ADDR = 12
+_raw_cap_bytes = 0
+_raw_cap_addr_seen: Dict[str, int] = {}
+_raw_cap_printed = False
+_RAW_CAP_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'raw_cap_dump.jsonl')
+
+
+def _dump_raw_cap(meta, seq, payload, is_server, strict, loose):
+    global _raw_cap_bytes, _raw_cap_printed
+    if not _RAW_CAP_DUMP_ENABLED:
+        return
+    try:
+        if not _raw_cap_printed:
+            _raw_cap_printed = True
+            print(f'[RAW-CAP] 已开启 → {_RAW_CAP_PATH} '
+                  f'(抓完把 net.packet_capture._RAW_CAP_DUMP_ENABLED 改回 False)', flush=True)
+        if _raw_cap_bytes > _RAW_CAP_MAX_BYTES:
+            return
+        row = {
+            'ts': round(time.time(), 3),
+            'src': '%s:%d' % (meta.get('endpoint_ip', ''), meta.get('endpoint_port', 0)),
+            'dst': '%s:%d' % (meta.get('dst_ip', ''), meta.get('dst_port', 0)),
+            'seq': int(seq), 'n': len(payload),
+            'srv': bool(is_server), 'strict': bool(strict), 'loose': bool(loose),
+            'head': payload[:32].hex(),
+        }
+        line = json.dumps(row, ensure_ascii=False) + '\n'
+        _raw_cap_bytes += len(line)
+        with open(_RAW_CAP_PATH, 'a', encoding='utf-8') as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
 class TcpReassembler:
     """
     单向 TCP 流重组 + 游戏帧提取。
@@ -352,6 +396,22 @@ class TcpReassembler:
         if len(self._recent_pkts) > self._RECENT_PKT_LIMIT:
             self._recent_pkts.pop(0)
 
+        # 原始包诊断 (识别之前): 抓游戏候选流量(含 c3SB) + 每个新 addr 的前 N 包,
+        # 用于定位"开放世界服务器没被识别"。开放世界/主城进场时, 在此能看到那个
+        # 没被切换识别的新服务器 addr 及其首包格式 (strict/loose 命中情况)。
+        if _RAW_CAP_DUMP_ENABLED:
+            try:
+                _loose = C3SB_SHORT in payload
+                _strict = self._identify_strict(payload)
+                _seen = _raw_cap_addr_seen.get(addr, 0)
+                if _loose or _strict or _seen < _RAW_CAP_PER_ADDR:
+                    _raw_cap_addr_seen[addr] = _seen + 1
+                    _dump_raw_cap(meta, seq, payload,
+                                  is_server=(addr == self._server_addr),
+                                  strict=_strict, loose=_loose)
+            except Exception:
+                pass
+
         # ─── 服务器识别 ───
         if self._server_addr is None:
             # 初次识别允许松散 c3SB (无锚点, 必须接受首个候选).
@@ -390,7 +450,17 @@ class TcpReassembler:
                 _old_still_alive = (_now - self._last_t) < 3.0
                 if _old_still_alive:
                     # 旧流仍在活跃, 不切换 — 直接丢弃新 addr 的包
+                    if _RAW_CAP_DUMP_ENABLED:
+                        print(f'[Capture][DIAG] 新服务器 {_fmt_ip(src_ip)}:{sport} '
+                              f'严格识别命中, 但旧服务器 {self._server_addr} 在 '
+                              f'{_now - self._last_t:.2f}s 内仍活跃 → 拒绝切换(丢弃)', flush=True)
                     return
+            elif _RAW_CAP_DUMP_ENABLED and (C3SB_SHORT in payload):
+                # 新 addr 带 c3SB 但未通过严格识别 → 开放世界服务器首包格式可能
+                # 不是 FrameDown 嵌套 c3SB / LoginReturn (诊断: 一次性 per addr)。
+                if _raw_cap_addr_seen.get(addr, 0) <= _RAW_CAP_PER_ADDR:
+                    print(f'[Capture][DIAG] 新服务器 {_fmt_ip(src_ip)}:{sport} 带 c3SB '
+                          f'但严格识别未命中 → 不切换。head={payload[:16].hex()}', flush=True)
                 old_addr = self._server_addr
                 self._server_addr = addr
                 self._server_meta = dict(meta)
