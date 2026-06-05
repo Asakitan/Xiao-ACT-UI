@@ -9276,6 +9276,12 @@ class SAOWebViewGUI:
                     # ── DPS Meter push (packet-driven, always runs) ──
                     if self._dps_tracker:
                         try:
+                            # ACT buff/debuff coverage: feed self_buffs (deduped
+                            # by list identity, same trick as the entity mode).
+                            _rb = getattr(gs, 'self_buffs', None)
+                            if _rb is not getattr(self, '_last_self_buffs_ref', None):
+                                self._last_self_buffs_ref = _rb
+                                self._dps_tracker.update_self_buffs(list(_rb or []))
                             if gs.player_id:
                                 _p_uid = int(gs.player_id) if str(gs.player_id).isdigit() else 0
                                 if _p_uid:
