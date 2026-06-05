@@ -2174,7 +2174,7 @@ class SAOWebViewGUI:
         self._mapbanner_hwnd = 0
         self._mapbanner_nonce = 0
         self._mapbanner_last_name = ''
-        self._mapbanner_pending_name = ''
+        self._mapbanner_last_ts = 0.0
         self._mapbanner_timer = None
         self.boss_hp_win = None
         self._boss_hp_hwnd = 0
@@ -3314,6 +3314,10 @@ class SAOWebViewGUI:
                         banner_name = ''
             if banner_name:
                 self._schedule_map_banner(banner_name)
+            elif dungeon_id or scene_id:
+                # 诊断: 有 id 但查不到名 (帮助定位大地图等场景)
+                print(f'[MapBanner][webview] no-name event kind={ev.get("kind")!r} '
+                      f'dungeon_id={dungeon_id} scene_id={scene_id}', flush=True)
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(**updates)
             mgr = getattr(self, '_encounter_mgr', None)
@@ -7652,16 +7656,21 @@ class SAOWebViewGUI:
     def _schedule_map_banner(self, name: str):
         """检测到切换地图 → 延迟 3 秒后在屏幕中央淡入地图名 (WebView)。
 
-        去重: 与当前已显示 / 已排队的地图名相同则跳过, 防止抓包对同一场景
-        重复推送导致横幅狂闪; 3s 窗口内快速连切时只保留最新的一张图。
+        去重改为时间窗 (5s): 同名且距上次调度 < 5s 视为同一次进图的重复抓包,
+        吞掉防止狂闪; 超过 5s 再次进入同一场景会重新弹 (满足"第二次切入同场景
+        也要刷出名字")。快速连切到别的图时取消上一个未触发的延迟, 只显示最新。
         """
         name = (name or '').strip()
         if not name or not getattr(self, 'mapbanner_win', None):
             return
-        if (name == getattr(self, '_mapbanner_last_name', '')
-                or name == getattr(self, '_mapbanner_pending_name', '')):
+        now = time.time()
+        last = getattr(self, '_mapbanner_last_name', '')
+        last_ts = float(getattr(self, '_mapbanner_last_ts', 0.0) or 0.0)
+        if name == last and (now - last_ts) < 5.0:
             return
-        self._mapbanner_pending_name = name
+        self._mapbanner_last_name = name
+        self._mapbanner_last_ts = now
+        print(f'[MapBanner][webview] schedule name={name!r} (+3s)', flush=True)
         prev = getattr(self, '_mapbanner_timer', None)
         if prev is not None:
             try:
@@ -7677,12 +7686,6 @@ class SAOWebViewGUI:
         name = (name or '').strip()
         if not name or not getattr(self, 'mapbanner_win', None):
             return
-        # 触发时若已被更新的待显示覆盖, 放弃这次 (快速连切只显示最新)
-        if (getattr(self, '_mapbanner_pending_name', '')
-                and name != self._mapbanner_pending_name):
-            return
-        self._mapbanner_pending_name = ''
-        self._mapbanner_last_name = name
         self._mapbanner_nonce = int(getattr(self, '_mapbanner_nonce', 0) or 0) + 1
         nonce = self._mapbanner_nonce
 

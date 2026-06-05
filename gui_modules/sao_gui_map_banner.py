@@ -2,19 +2,20 @@
 """
 sao_gui_map_banner.py — ULW Map-Name Banner Overlay for SAO Entity UI
 
-切换地图时在屏幕正中央淡入大字地图名 (SAO 风格), 停留约 2.6s 后淡出。
+切换地图时在屏幕正中央淡入大字地图名 (SAO 风格), 停留约 2.4s 后淡出。
 对应 webview 端 web/mapbanner.html, 两端外观保持一致:
 纯大字 + 青色辉光 + 青→金→青 装饰下划线, 无面板底框, 全程鼠标穿透。
 
-显示由调用方 (packet callbacks mixin) 在检测到切换地图 3 秒后触发,
-本模块只负责"把一个地图名渲染成居中淡入淡出动画"。
+性能 (v2): 整张横幅图 **只渲染一次** 并裁剪到内容 bbox 缓存; 动画每帧
+**不再做 LANCZOS 缩放 / numpy 逐像素 alpha**, 只用 UpdateLayeredWindow 的
+整窗 SourceConstantAlpha (硬件合成) 做淡入淡出 + 改 y 做上浮位移。
+60fps 下几乎零 CPU 像素开销, 不卡。
 """
 
 import ctypes
 import time
 import threading
 
-import numpy as np
 from PIL import Image, ImageDraw
 
 from render.gpu_renderer import gaussian_blur_rgba as _gpu_blur
@@ -25,7 +26,7 @@ from gui_modules.sao_gui_alert import (
     _draw_tracked,
     _tracked_text_width,
 )
-# 复用 DPS overlay 的 UpdateLayeredWindow 提交函数
+# 复用 DPS overlay 的 UpdateLayeredWindow 提交函数 (支持整窗 constant alpha)
 from gui_modules.sao_gui_dps import _ulw_update
 
 import tkinter as tk
@@ -47,14 +48,15 @@ def _smoothstep(t: float) -> float:
 class MapBannerOverlay:
     """ULW-based centered map-name banner matching web/mapbanner.html."""
 
-    WIDTH = 1000          # 画布宽 (含辉光余量), 居中于屏幕
-    HEIGHT = 260          # 画布高
+    CANVAS_W = 1280       # 渲染画布 (含辉光余量), 渲染后裁剪到内容 bbox
+    CANVAS_H = 320
     FONT_SIZE = 52        # 大字号 (过宽时自动缩小)
     LETTER_SPACING = 6.0
-    DISPLAY_TIME = 2.6    # 停留秒数
-    ANIM_OPEN = 0.58
-    ANIM_CLOSE = 0.46
+    DISPLAY_TIME = 2.4    # 停留秒数
+    ANIM_OPEN = 0.52
+    ANIM_CLOSE = 0.42
     FPS = 60
+    RISE_PX = 18.0        # 淡入时上浮像素
 
     # 固定 SAO 配色 (带辉光 + 深阴影, 亮/暗场景下都清晰可读)
     TEXT_COLOR = (244, 248, 255, 255)
@@ -70,10 +72,8 @@ class MapBannerOverlay:
         self._lock = threading.Lock()
         self._anim_id = None
 
-        sw = _user32.GetSystemMetrics(0)
-        sh = _user32.GetSystemMetrics(1)
-        self._center_x = (sw - self.WIDTH) // 2
-        self._center_y = (sh - self.HEIGHT) // 2
+        self._sw = _user32.GetSystemMetrics(0)
+        self._sh = _user32.GetSystemMetrics(1)
 
     # ── public API ──
 
@@ -107,12 +107,16 @@ class MapBannerOverlay:
             pass
         self._anim_id = None
 
+        # 渲染一次 + 裁剪到内容 bbox (缓存); 之后动画零重渲染
         base_img = self._render_frame(name)
+        bw, bh = base_img.size
+        cx = max(0, (self._sw - bw) // 2)
+        cy = max(0, (self._sh - bh) // 2)
 
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.attributes('-topmost', True)
-        win.geometry(f'1x1+{self._center_x}+{self._center_y}')
+        win.geometry(f'1x1+{cx}+{cy}')
         win.update_idletasks()
 
         try:
@@ -140,6 +144,7 @@ class MapBannerOverlay:
 
         entry = {
             'win': win, 'hwnd': hwnd, 'base_img': base_img,
+            'cx': cx, 'cy': cy,
             'created_at': time.time(), 'phase': 'open',
             'display_time': max(0.5, float(display_time if display_time is not None else self.DISPLAY_TIME)),
         }
@@ -150,7 +155,7 @@ class MapBannerOverlay:
         self._animate_open(entry)
 
     def _render_frame(self, name: str) -> Image.Image:
-        W, H = self.WIDTH, self.HEIGHT
+        W, H = self.CANVAS_W, self.CANVAS_H
         img = Image.new('RGBA', (W, H), (0, 0, 0, 0))
 
         # 字号自适应: 文字过宽时逐级缩小
@@ -158,7 +163,7 @@ class MapBannerOverlay:
         spacing = self.LETTER_SPACING
         font = _load_font('cjk', size)
         tw = _tracked_text_width(name, font, spacing)
-        while tw > (W - 120) and size > 26:
+        while tw > (W - 160) and size > 26:
             size -= 4
             font = _load_font('cjk', size)
             tw = _tracked_text_width(name, font, spacing)
@@ -186,7 +191,7 @@ class MapBannerOverlay:
 
         # 4) 青→金→青 装饰下划线 (跟随文字宽度)
         uy = int(ty + size + 22)
-        half = int(min(W - 60, tw + 96) / 2)
+        half = int(min(W - 80, tw + 96) / 2)
         cxc = W // 2
         line_left = cxc - half
         line_w = half * 2
@@ -206,25 +211,25 @@ class MapBannerOverlay:
                     continue
                 draw.line([(line_left + i, uy), (line_left + i, uy + 1)], fill=(r, g, b, a))
 
+        # 裁剪到内容 bbox (+小边距), 大幅缩小每帧 ULW 提交的位图体积
+        bbox = img.getbbox()
+        if bbox:
+            pad = 6
+            x0 = max(0, bbox[0] - pad)
+            y0 = max(0, bbox[1] - pad)
+            x1 = min(W, bbox[2] + pad)
+            y1 = min(H, bbox[3] + pad)
+            img = img.crop((x0, y0, x1, y1))
         return img
 
-    def _scale_frame(self, entry, scale, opacity, dy=0.0):
+    def _present(self, entry, opacity, dy=0.0):
+        """提交一帧: 同一张缓存底图, 只改整窗 alpha + y 偏移 (零重渲染)。"""
         base = entry['base_img']
-        bw, bh = base.size
-        nw = max(1, int(bw * scale))
-        nh = max(1, int(bh * scale))
-        scaled = base.resize((nw, nh), Image.LANCZOS)
-
-        if opacity < 1.0:
-            arr = np.array(scaled)
-            arr[:, :, 3] = (arr[:, :, 3] * max(0.0, min(1.0, opacity))).astype(np.uint8)
-            scaled = Image.fromarray(arr)
-
-        cx = self._center_x + (bw - nw) // 2
-        cy = self._center_y + (bh - nh) // 2 + int(dy)
-
+        x = entry['cx']
+        y = entry['cy'] + int(dy)
+        a = int(max(0, min(255, round(opacity * 255))))
         try:
-            _ulw_update(entry['hwnd'], scaled, cx, cy)
+            _ulw_update(entry['hwnd'], base, x, y, alpha=a)
         except Exception:
             pass
 
@@ -237,18 +242,9 @@ class MapBannerOverlay:
                 return
             t = min((time.time() - t0) / dur, 1.0)
             e = _smoothstep(t)
-            # scale 0.86→1.0 (轻微回弹), opacity 0→1, dy 16→0
-            if t < 0.6:
-                u = t / 0.6
-                scale = 0.86 + (1.03 - 0.86) * _smoothstep(u)
-                opacity = u
-            else:
-                u = (t - 0.6) / 0.4
-                scale = 1.03 + (1.0 - 1.03) * _smoothstep(u)
-                opacity = 1.0
-            dy = 16.0 * (1.0 - e)
-
-            self._scale_frame(entry, scale, opacity, dy)
+            opacity = e
+            dy = self.RISE_PX * (1.0 - e)
+            self._present(entry, opacity, dy)
 
             if t < 1.0:
                 self._anim_id = self.root.after(1000 // self.FPS, step)
@@ -270,11 +266,10 @@ class MapBannerOverlay:
             if entry.get('destroyed'):
                 return
             t = min((time.time() - t0) / dur, 1.0)
-            scale = 1.0 + (1.04 - 1.0) * t
-            opacity = 1.0 - t
-            dy = -14.0 * t
-
-            self._scale_frame(entry, scale, opacity, dy)
+            e = _smoothstep(t)
+            opacity = 1.0 - e
+            dy = -12.0 * e
+            self._present(entry, opacity, dy)
 
             if t < 1.0:
                 self._anim_id = self.root.after(1000 // self.FPS, step)

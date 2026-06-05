@@ -314,6 +314,7 @@ class PacketParser:
         # 导致自己的伤害无法识别 → DPS=0 / boss 血条不出.
         old_uuid = self._current_uuid
         self._current_uuid = 0
+        self._dbg_openscene_dmg_logged = False  # 诊断标志: 新场景重新采样首发伤害归因
         self.stats['scene_changes'] += 1
         logger.info(
             f'[Parser] 场景重置: 清除 {old_count} 个怪物, '
@@ -1216,6 +1217,25 @@ class PacketParser:
                     player_uuid=int(player_uuid or 0),
                     player_uid=int(self._current_uid or 0),
                 )
+            else:
+                # 诊断: 开放大地图等场景常提取不到 SCENE_BASIC_ID(0x155) → 不发
+                # enter_scene 事件 → 中央地图名横幅不弹。打印实际带的属性 id /
+                # 是否含 PlayerEnt, 以便定位大地图把 scene_id 放在了哪个字段。
+                # 仅在提取失败时触发, 不影响正常副本/活动中心路径。
+                try:
+                    def _attr_ids(coll):
+                        return [int(getattr(a, 'Id', 0) or 0)
+                                for a in (getattr(coll, 'Attrs', None) or [])][:24]
+                    print(
+                        f'[Parser][MapBanner] EnterScene 无 scene_id: '
+                        f'scene_attr_ids={_attr_ids(info.SceneAttrs)} '
+                        f'sub_attr_ids={_attr_ids(info.SubsceneAttrs)} '
+                        f'scene_guid={str(info.SceneGuid or "")!r} '
+                        f'has_player_ent={info.HasField("PlayerEnt")}',
+                        flush=True,
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             logger.debug(f'[Parser] EnterScene decode error: {e}')
 
@@ -2929,6 +2949,30 @@ class PacketParser:
         if (not attacker_is_self) and attacker_uid and self._current_uid:
             if int(attacker_uid) == int(self._current_uid):
                 attacker_is_self = True
+
+        # v3.x: 退出副本进入开放大地图后 reset_scene 会把 _current_uuid 清零,
+        # 而该场景的 SyncToMeDeltaInfo 常常迟迟不来 → 自身伤害只能靠上面的 uid
+        # 兜底命中 (attacker_is_self=True) 却拿不回 entity uuid → 之后基于 uuid 的
+        # 归因 / 技能 caster 追踪失效, 大地图 DPS/ACT 长时间为 0。这里用首个已
+        # 确认的自身伤害提前恢复 _current_uuid。仅在 _current_uuid==0 且 attacker
+        # 是真实玩家 uuid 时触发, 副本 (uuid 已知) 路径完全不受影响。
+        if (attacker_is_self and not self._current_uuid
+                and attacker_uuid and _is_player(attacker_uuid)):
+            self._confirm_self_uid(
+                _uuid_to_uid(attacker_uuid), 'self_damage_recover', int(attacker_uuid))
+
+        # 诊断(一次性/scene): _current_uuid 未恢复时, 首个"玩家攻击者"伤害的归因
+        # 情况。大地图 DPS=0 时据此判断是 uid 兜底没命中 (is_self=False / uid 不符)
+        # 还是别的原因。打印后置标志, 由 reset_scene 复位以便切图后再次采样。
+        if (not self._current_uuid and attacker_uuid and _is_player(attacker_uuid)
+                and not getattr(self, '_dbg_openscene_dmg_logged', False)):
+            self._dbg_openscene_dmg_logged = True
+            print(
+                f'[Parser][MapBanner] open-scene first dmg: attacker_uuid={attacker_uuid} '
+                f'attacker_uid={attacker_uid} current_uid={self._current_uid} '
+                f'is_self={attacker_is_self}',
+                flush=True,
+            )
 
         entity_target_fallback = ''
         if attacker_is_self and target_uuid and target_is_player:

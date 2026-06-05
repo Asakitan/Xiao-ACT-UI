@@ -141,6 +141,10 @@ class SAOPlayerGUIPacketCallbacksMixin:
                         banner_name = ''
             if banner_name:
                 self._schedule_map_banner(banner_name)
+            elif dungeon_id or scene_id:
+                # 诊断: 有 id 但查不到名 (帮助定位大地图等场景)
+                print(f'[MapBanner][entity] no-name event kind={event.get("kind")!r} '
+                      f'dungeon_id={dungeon_id} scene_id={scene_id}', flush=True)
             if getattr(self, '_state_mgr', None):
                 self._state_mgr.update(**updates)
             mgr = getattr(self, '_encounter_mgr', None)
@@ -159,10 +163,11 @@ class SAOPlayerGUIPacketCallbacksMixin:
     def _schedule_map_banner(self, name: str):
         """检测到切换地图 → 延迟 3 秒后在屏幕中央淡入地图名 (Entity ULW)。
 
-        去重: 与当前已显示 / 已排队的地图名相同则跳过, 防止抓包对同一场景
-        重复推送导致横幅狂闪; 3s 窗口内快速连切时只保留最新的一张图。
-        本方法可能在抓包线程被调用, 因此用 threading.Timer 计时, 真正的
-        渲染由 MapBannerOverlay.show_banner 内部 root.after(0) 调度回主线程。
+        去重改为时间窗 (5s): 同名且距上次调度 < 5s 视为同一次进图的重复抓包,
+        吞掉防止狂闪; 超过 5s 再次进入同一场景会重新弹 (满足"第二次切入同场景
+        也要刷出名字")。快速连切到别的图时取消上一个未触发的延迟, 只显示最新。
+        本方法可能在抓包线程被调用, 故用 threading.Timer 计时, 真正渲染由
+        MapBannerOverlay.show_banner 内部 root.after(0) 调度回主线程。
         """
         name = (name or '').strip()
         if not name:
@@ -170,10 +175,14 @@ class SAOPlayerGUIPacketCallbacksMixin:
         overlay = getattr(self, '_map_banner_overlay', None)
         if overlay is None:
             return
-        if name == getattr(self, '_map_banner_last_name', '') \
-                or name == getattr(self, '_map_banner_pending_name', ''):
+        now = time.time()
+        last = getattr(self, '_map_banner_last_name', '')
+        last_ts = float(getattr(self, '_map_banner_last_ts', 0.0) or 0.0)
+        if name == last and (now - last_ts) < 5.0:
             return
-        self._map_banner_pending_name = name
+        self._map_banner_last_name = name
+        self._map_banner_last_ts = now
+        print(f'[MapBanner][entity] schedule name={name!r} (+3s)', flush=True)
         prev = getattr(self, '_map_banner_timer', None)
         if prev is not None:
             try:
@@ -182,11 +191,6 @@ class SAOPlayerGUIPacketCallbacksMixin:
                 pass
 
         def _fire(n=name):
-            # 期间又切到别的图则放弃这次 (pending 已被覆盖)
-            if n != getattr(self, '_map_banner_pending_name', ''):
-                return
-            self._map_banner_pending_name = ''
-            self._map_banner_last_name = n
             ov = getattr(self, '_map_banner_overlay', None)
             if ov is not None:
                 try:

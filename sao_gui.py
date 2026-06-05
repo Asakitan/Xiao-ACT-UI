@@ -436,7 +436,7 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         # 切换地图中央横幅 (延迟 3s 后淡入地图名); 去重状态见 _schedule_map_banner
         self._map_banner_overlay = None
         self._map_banner_last_name = ''
-        self._map_banner_pending_name = ''
+        self._map_banner_last_ts = 0.0
         self._map_banner_timer = None
         # v3.2.x: MemStateBridge (read-only Star.exe → GameState push).
         # Initialized in _start_recognition_engines once the data stack is
