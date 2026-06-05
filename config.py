@@ -343,8 +343,32 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "3.2.22"
+APP_VERSION = "4.0.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v4.0.0: ACT platform + self-contained name-table pipeline (major release).
+#   Aggregates 3 days / 109 commits (6f837b4..) since v3.2.22 into a major
+#   version. The release turns the 3.x ACT work into a first-class platform
+#   and cuts the name-table pipeline loose from the external neighbour repo.
+#   1) ACT platform: new act_platform/ package (EventBus, parser adapters,
+#      process-isolated parser worker, mini-parse, selective parsing, trusted
+#      plugin engine + sample plugins). ACT XML report import/export + a
+#      compressed roundtrip, SQLite + JSONL history archive, local report API,
+#      action-log paging analytics, an offline import wizard, death recap
+#      (entity + WebView), live parser-adapter selection + health, and a 1:1
+#      dual-UI aggregate cockpit redesign.
+#   2) ACT coverage: 幻想技能 (ultimate) buff coverage% + trigger count in the
+#      buff overlay, self buff/debuff uptime tracking, per-target/element/
+#      min-max breakdown with CN names, encounter-driven aggregation window,
+#      and hybrid-memory policy gates.
+#   3) Name tables: self-contained classifier + full rebuild (no neighbour
+#      repo), 20+ semantic assets/name_tables/*.json, smart resolution,
+#      taxonomy/kind split, fallback routing, tcp name cache + deferred mem
+#      startup, and runtime tables aligned to our in-memory parse over stale
+#      neighbour data.
+#   4) GPU/UI: LinkStart GPU startup-animation polish with continuous phase +
+#      camera transitions, GPU-required entity panels, a centered map-name
+#      banner on scene change, an editor-window-as-game guard, and packet mem
+#      startup hardening.
 # v3.2.22: ACT replay, memory-probe, and live name-table tooling refresh.
 #   Add the read-only mem_probe/IL2CPP runtime inspection pipeline, Cython
 #   memscan accelerator, live localization/name-table extraction diagnostics,

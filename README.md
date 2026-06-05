@@ -4,8 +4,17 @@
 
 - 当前工作分支：`3.0.0`
 - 运行版本来源：`config.py` 中的 `APP_VERSION` / `APP_VERSION_LABEL`
-- 当前源码版本：`3.2.22`
+- 当前源码版本：`4.0.0`
 - 默认运行平台：Windows 10 / 11
+
+## v4.0.0 大版本重点
+
+`4.0.0` 把 3.x 阶段的 ACT 工作整理为一条独立的「ACT 平台」能力线，并让名称表流水线彻底脱离外部邻居仓库、完全自包含。相对 `3.2.22` 的主要变化：
+
+- **ACT 平台**：新增 `act_platform/` 包（EventBus、解析适配器、进程隔离 parser worker、mini-parse、选择性解析、可信插件引擎与示例插件）。新增 ACT XML 报告导入 / 导出与压缩 roundtrip、SQLite + JSONL 历史归档、本地 report API、行为日志分页分析、离线导入向导、死亡回放（entity + WebView）、live parser 适配器选择与健康面板，以及 1:1 双 UI 聚合 cockpit 重设计。
+- **ACT 覆盖率**：幻想技能（ultimate）buff 覆盖率 % + 触发次数、self buff/debuff 持续时间追踪、按目标 / 元素 / min-max 拆分并附中文名、encounter 驱动的聚合窗口与 hybrid memory 策略闸门。
+- **名称表自包含**：classifier 与全量重建不再依赖邻居仓库；新增 20+ 个语义 `assets/name_tables/*.json`、smart 解析、taxonomy/kind 拆分、fallback 路由、tcp name cache + 延迟 mem 启动，运行期表以本机内存解析为权威、覆盖陈旧邻居数据。
+- **GPU / UI**：LinkStart GPU 开场动画打磨与连续相位 / 相机过渡、entity 面板强制 GPU、场景切换地图名横幅居中、避免把编辑器窗口误判为游戏、packet mem 启动稳定化。
 
 ## 当前 3.x 重构线重点
 
@@ -117,6 +126,7 @@ sao_auto/
 ├─ settings.json                   # 本地运行配置与 UI 状态缓存
 ├─ sao_gui.py                      # Entity/Tk HUD 聚合入口，核心实现已拆到 gui_modules/
 ├─ sao_webview.py                  # WebView HUD 主入口
+├─ act_platform/                   # ACT 事件总线 / 解析适配器 / 插件引擎 / 选择性解析
 ├─ act_replay/                     # 离线 ACT/TCP replay 合同自检
 ├─ engines/                        # GameState、DPS、Boss Raid、AutoKey、ACT、Hide & Seek
 ├─ gui_modules/                    # Entity HUD 拆分模块、面板、mixin、热键、弹窗
@@ -294,13 +304,13 @@ pyinstaller --clean --noconfirm update_host/UpdateHost.spec
 构建 `runtime-delta`：
 
 ```powershell
-python build_delta.py --version 3.2.22 --files runtime/sao_gui.py web/menu.html assets/sounds/click.wav
+python build_delta.py --version 4.0.0 --files runtime/sao_gui.py web/menu.html assets/sounds/click.wav
 ```
 
 构建 `full-package`：
 
 ```powershell
-python build_full_package.py --version 3.2.22
+python build_full_package.py --version 4.0.0
 ```
 
 开发发布助手会默认读取 `config.APP_VERSION`，需要发布到更新服务端时再显式使用上传参数：
