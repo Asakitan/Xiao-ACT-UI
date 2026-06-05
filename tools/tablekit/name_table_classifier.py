@@ -310,6 +310,14 @@ def classify_skill_id(skill_id: Any) -> str:
     sid = _safe_int(skill_id)
     if sid <= 0:
         return ""
+    return _classify_skill_id_cached(sid)
+
+
+@lru_cache(maxsize=16384)
+def _classify_skill_id_cached(sid: int) -> str:
+    # Hot path: called per damage event via name_tables.resolve()->_semantic_kind().
+    # Result depends only on the immutable lru_cache(1) static tables, so caching
+    # per unique skill id is safe and collapses the ~20-regex chain to O(1) on repeat.
     row = skill_table().get(sid) or {}
     name = _entry_name(row) or skill_fallback_names().get(sid, "") or aoyi_skill_names().get(sid, "") or damage_attr_names().get(sid, "")
     text = _skill_name_text(sid, row)
@@ -389,6 +397,11 @@ def classify_buff_id(buff_id: Any) -> str:
     bid = _safe_int(buff_id)
     if bid <= 0:
         return ""
+    return _classify_buff_id_cached(bid)
+
+
+@lru_cache(maxsize=16384)
+def _classify_buff_id_cached(bid: int) -> str:
     name = _buff_name(bid)
     row = buff_table().get(bid) or {}
     text = " ".join(str(part or "") for part in (name, row.get("Note") if isinstance(row, Mapping) else ""))

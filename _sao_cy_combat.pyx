@@ -294,6 +294,7 @@ cdef class CySkillStats:
     cdef public long long hits
     cdef public long long crit_hits
     cdef public long long max_hit
+    cdef public long long min_hit
     cdef public long long heal_total
     cdef public long long heal_hits
 
@@ -308,6 +309,7 @@ cdef class CySkillStats:
         self.hits = 0
         self.crit_hits = 0
         self.max_hit = 0
+        self.min_hit = -1   # sentinel: no hits yet
         self.heal_total = 0
         self.heal_hits = 0
 
@@ -319,6 +321,8 @@ cdef class CySkillStats:
             self.crit_hits += 1
         if v > self.max_hit:
             self.max_hit = v
+        if self.min_hit < 0 or v < self.min_hit:
+            self.min_hit = v
 
     cpdef void add_heal(self, object value):
         self.heal_total += _safe_i64(value)
@@ -338,8 +342,72 @@ cdef class CySkillStats:
             'crit_hits': self.crit_hits,
             'crit_rate': round(crit_rate, 3),
             'max_hit': self.max_hit,
+            'min_hit': self.min_hit if self.min_hit >= 0 else 0,
+            'avg_hit': (self.total // self.hits) if self.hits > 0 else 0,
             'heal_total': self.heal_total,
             'heal_hits': self.heal_hits,
+        }
+
+
+cdef class CyTargetStats:
+    """Per-target damage cross-tab (ACT "damage dealt to each target")."""
+    cdef public unsigned long long target_uuid
+    cdef public str target_name
+    cdef public long long total
+    cdef public long long hits
+    cdef public long long crit_hits
+    cdef public long long max_hit
+    cdef public double first_t
+    cdef public double last_t
+
+    def __init__(self, object target_uuid, str target_name=''):
+        cdef unsigned long long u
+        if _to_u64(target_uuid, &u):
+            self.target_uuid = u
+        else:
+            self.target_uuid = 0
+        self.target_name = target_name or ''
+        self.total = 0
+        self.hits = 0
+        self.crit_hits = 0
+        self.max_hit = 0
+        self.first_t = 0.0
+        self.last_t = 0.0
+
+    cdef inline void add(self, long long v, bint is_crit, double ts):
+        self.total += v
+        self.hits += 1
+        if is_crit:
+            self.crit_hits += 1
+        if v > self.max_hit:
+            self.max_hit = v
+        if self.first_t == 0.0:
+            self.first_t = ts
+        self.last_t = ts
+
+    cpdef long long get_dps(self):
+        cdef double span
+        if self.first_t > 0.0 and self.last_t > 0.0:
+            span = self.last_t - self.first_t
+            if span < 0.001:
+                span = 0.001
+            return <long long>(<double>self.total / span)
+        return 0
+
+    cpdef dict to_dict(self):
+        cdef double crit_rate
+        if self.hits > 0:
+            crit_rate = <double>self.crit_hits / <double>self.hits
+        else:
+            crit_rate = 0.0
+        return {
+            'target_uuid': self.target_uuid,
+            'target_name': self.target_name,
+            'total': self.total,
+            'hits': self.hits,
+            'crit_rate': round(crit_rate, 3),
+            'max_hit': self.max_hit,
+            'dps': self.get_dps(),
         }
 
 
@@ -360,6 +428,9 @@ cdef class CyEntityStats:
     cdef public double last_damage_time
     cdef public dict skills
     cdef public long long max_hit
+    cdef public long long min_hit
+    cdef public dict targets
+    cdef public dict elements
     cdef public double created_at
 
     def __init__(self, object uid, str name='', str profession='',
@@ -387,6 +458,9 @@ cdef class CyEntityStats:
         self.last_damage_time = 0.0
         self.skills = {}
         self.max_hit = 0
+        self.min_hit = -1
+        self.targets = {}
+        self.elements = {}
         self.created_at = _time.time()
 
     cdef inline CySkillStats _get_or_create_skill(self, long long skill_id,
@@ -401,9 +475,15 @@ cdef class CyEntityStats:
 
     cpdef void add_damage(self, object skill_id, object value,
                           bint is_crit=False, str skill_name='',
-                          object timestamp=None):
+                          object timestamp=None, object target_uuid=0,
+                          str target_name='', object element=0):
         cdef long long v = _safe_i64(value)
         cdef long long sid = _safe_i64(skill_id)
+        cdef long long elem
+        cdef unsigned long long tuid
+        cdef object el
+        cdef object tgt
+        cdef CySkillStats sk
         cdef double ts
         if timestamp is None:
             ts = _time.time()
@@ -417,11 +497,29 @@ cdef class CyEntityStats:
             self.damage_crit_hits += 1
         if v > self.max_hit:
             self.max_hit = v
+        if self.min_hit < 0 or v < self.min_hit:
+            self.min_hit = v
         if self.first_damage_time == 0.0:
             self.first_damage_time = ts
         self.last_damage_time = ts
-        cdef CySkillStats sk = self._get_or_create_skill(sid, skill_name)
+        sk = self._get_or_create_skill(sid, skill_name)
         sk.add_damage(v, is_crit)
+        # element / damage-type bucket (this data was previously discarded)
+        elem = _safe_i64(element)
+        if elem != 0:
+            el = self.elements.get(elem)
+            if el is None:
+                self.elements[elem] = [v, 1]
+            else:
+                el[0] += v
+                el[1] += 1
+        # per-target cross-tab (DPS dealt to each individual target)
+        if _to_u64(target_uuid, &tuid) and tuid > 0:
+            tgt = self.targets.get(tuid)
+            if tgt is None:
+                tgt = CyTargetStats(tuid, target_name)
+                self.targets[tuid] = tgt
+            (<CyTargetStats>tgt).add(v, is_crit, ts)
 
     cpdef void add_heal(self, object skill_id, object value,
                         str skill_name='', object timestamp=None):
@@ -465,11 +563,17 @@ cdef class CyEntityStats:
             return 0
         return <long long>(<double>self.heal_total / self.get_elapsed_s())
 
-    cpdef dict to_dict(self, bint include_skills=False):
+    cpdef dict to_dict(self, bint include_skills=False,
+                       bint include_targets=False,
+                       bint include_elements=False):
         cdef double crit_rate
         cdef double elapsed = self.get_elapsed_s()
         cdef CySkillStats sk
         cdef list skill_list
+        cdef list target_list
+        cdef list elem_list
+        cdef object tgt
+        cdef object ev
         if self.damage_hits > 0:
             crit_rate = <double>self.damage_crit_hits / <double>self.damage_hits
         else:
@@ -491,6 +595,8 @@ cdef class CyEntityStats:
             'dps': self.get_dps(),
             'hps': self.get_hps(),
             'max_hit': self.max_hit,
+            'min_hit': self.min_hit if self.min_hit >= 0 else 0,
+            'avg_hit': (self.damage_total // self.damage_hits) if self.damage_hits > 0 else 0,
             'elapsed_s': round(elapsed, 1),
         }
         if include_skills:
@@ -499,11 +605,27 @@ cdef class CyEntityStats:
                 skill_list.append(sk.to_dict())
             skill_list.sort(key=_skill_sort_key, reverse=True)
             d['skills'] = skill_list
+        if include_targets:
+            target_list = []
+            for tgt in self.targets.values():
+                target_list.append((<CyTargetStats>tgt).to_dict())
+            target_list.sort(key=_skill_sort_key, reverse=True)
+            d['targets'] = target_list
+        if include_elements:
+            elem_list = []
+            for ekey, ev in self.elements.items():
+                elem_list.append({'element': ekey, 'damage': ev[0], 'hits': ev[1]})
+            elem_list.sort(key=_element_sort_key, reverse=True)
+            d['elements'] = elem_list
         return d
 
 
 cdef inline object _skill_sort_key(dict s):
     return s['total']
+
+
+cdef inline object _element_sort_key(dict e):
+    return e['damage']
 
 
 cdef inline object _entity_sort_key(dict e):

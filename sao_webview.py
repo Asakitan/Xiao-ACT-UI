@@ -3167,6 +3167,15 @@ class SAOWebViewGUI:
         pre-set the target UUID so the boss bar can immediately display HP
         when the player starts attacking. Also handles break bar pre-tracking.
         """
+        # ACT per-target cross-tab: feed resolved CN monster name to the tracker.
+        try:
+            if getattr(self, '_dps_tracker', None) is not None:
+                _mu = int(monster_data.get('uuid', 0) or 0)
+                _mn = str(monster_data.get('monster_name') or monster_data.get('name') or '')
+                if _mu and _mn:
+                    self._dps_tracker.update_monster_info(_mu, _mn)
+        except Exception:
+            pass
         publish_owner_event(self, 'monster', monster_data, source_name='webview', source_kind='tcp')
         if self._boss_raid_engine:
             try:
@@ -9040,6 +9049,7 @@ class SAOWebViewGUI:
                     )
                     if _bb_sig != getattr(self, '_last_boss_bar_sig', None):
                         self._last_boss_bar_sig = _bb_sig
+                        from gui_modules.sao_gui_state_mixin import _bb_resolve_unit_name as _bb_name
                         _bb_data = {
                             'active': _bb_show,
                             'hp_pct': _bb_sig[1],
@@ -9056,7 +9066,10 @@ class SAOWebViewGUI:
                             'stop_breaking_ticking': _bb_sig[12],
                             'in_overdrive': _bb_sig[13],
                             'invincible': _bb_sig[14],
-                            'boss_name': (_bb_direct_data or {}).get('name', '') or '',
+                            'boss_name': _bb_name(
+                                _bb_direct_data,
+                                (_bb_direct_data or {}).get('uuid', 0),
+                                getattr(self, '_dps_tracker', None)) or '',
                             'additional': _bb_additional,
                         }
                         self._eval_boss_hp(f'updateBossBar({json.dumps(_bb_data)})')

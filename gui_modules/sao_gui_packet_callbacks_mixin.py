@@ -338,6 +338,15 @@ class SAOPlayerGUIPacketCallbacksMixin:
                     monster_data['monster_name'] = fact.get('monster_name')
         except Exception:
             pass
+        # ACT per-target cross-tab: feed resolved CN monster name to the tracker.
+        try:
+            if getattr(self, '_dps_tracker', None) is not None:
+                _mu = int(monster_data.get('uuid', 0) or 0)
+                _mn = str(monster_data.get('monster_name') or monster_data.get('name') or '')
+                if _mu and _mn:
+                    self._dps_tracker.update_monster_info(_mu, _mn)
+        except Exception:
+            pass
         publish_owner_event(self, 'monster', monster_data, source_name='entity', source_kind='tcp')
         if self._boss_raid_engine:
             try: self._boss_raid_engine.on_monster_update(monster_data)

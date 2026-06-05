@@ -237,6 +237,8 @@ class DpsTracker:
         self._total_heal: int = 0
         self._boss_uuid: int = 0
         self._total_damage_boss: int = 0
+        # ACT per-target cross-tab: target uuid -> resolved CN name (monsters).
+        self._target_names: Dict[int, str] = {}
         self._skill_names: Dict[int, str] = dict(skill_names or {})
         self._name_resolver = None
         self._on_update = on_update
@@ -262,6 +264,29 @@ class DpsTracker:
         """Set the current boss monster UUID for boss-only damage filtering."""
         with self._lock:
             self._boss_uuid = int(uuid or 0)
+
+    def update_monster_info(self, uuid: int, name: str = '') -> None:
+        """Register a target uuid -> CN name for the ACT per-target cross-tab.
+
+        Fed from the monster-update path of both UI front-ends (mirrors how
+        update_player_info is called). Stored in a small side map so the
+        per-target drill-down can show real monster names without polluting
+        the DPS entity list. Bounded to avoid unbounded growth.
+        """
+        u = int(uuid or 0)
+        nm = str(name or '').strip()
+        if u <= 0 or not nm:
+            return
+        with self._lock:
+            if self._target_names.get(u) == nm:
+                return
+            if len(self._target_names) > 4096:
+                self._target_names.clear()
+            self._target_names[u] = nm
+
+    def get_target_name(self, uuid: int) -> str:
+        """Return the registered CN name for a target uuid (or '')."""
+        return self._target_names.get(int(uuid or 0), '')
 
     # ── Player info cache (persistence) ──
 
@@ -447,6 +472,8 @@ class DpsTracker:
         skill_key = int(skill_key) or int(skill_id)
         target_is_player = bool(event.get('target_is_player', False))
         target_is_monster = event.get('target_is_monster', False)
+        # ACT: element/damage-type was previously decoded then discarded here.
+        element = int(event.get('element') or 0)
 
         # Skip immune/absorbed for DPS tracking
         if is_immune or is_absorbed or damage <= 0:
@@ -470,7 +497,8 @@ class DpsTracker:
                 if not self._encounter_start:
                     self._encounter_start = now
                 entity = self._get_or_create(attacker_uid, attacker_is_self)
-                entity.add_damage(skill_key, damage, is_crit, skill_name, now)
+                entity.add_damage(skill_key, damage, is_crit, skill_name, now,
+                                  target_uuid, '', element)
                 self._track_big_hit_fx_locked(entity, damage, now)
                 self._total_damage += damage
                 if self._boss_uuid and target_uuid == self._boss_uuid:
@@ -770,8 +798,36 @@ class DpsTracker:
             entity = self._entities.get(uid)
             if not entity:
                 return None
-            d = entity.to_dict(include_skills=True)
+            d = entity.to_dict(include_skills=True, include_targets=True,
+                               include_elements=True)
             _annotate_skill_rows(d.get('skills'))
+            # ACT per-target cross-tab: resolve target names — monsters from the
+            # uuid->name side map (fed by update_monster_info), players from the
+            # tracked entity list.
+            for trow in (d.get('targets') or []):
+                if trow.get('target_name'):
+                    continue
+                tuuid = int(trow.get('target_uuid') or 0)
+                if not tuuid:
+                    continue
+                nm = self._target_names.get(tuuid)
+                if nm:
+                    trow['target_name'] = nm
+                elif (tuuid & 0xFFFF) == 640:
+                    tent = self._entities.get(tuuid >> 16)
+                    if tent is not None and tent.name:
+                        trow['target_name'] = tent.name
+            # ACT element breakdown: annotate each row with CN name + color + icon.
+            erows = d.get('elements')
+            if erows:
+                from tools.tablekit.element_meta import element_meta as _emeta
+                _etotal = max(int(d.get('damage_total', 0) or 0), 1)
+                for er in erows:
+                    meta = _emeta(er.get('element', 0))
+                    er['element_name'] = meta['name']
+                    er['color'] = meta['color']
+                    er['icon'] = meta['icon']
+                    er['pct'] = round(int(er.get('damage', 0) or 0) / _etotal, 3)
             d['damage_pct'] = round(
                 entity.damage_total / max(self._total_damage, 1), 3
             )

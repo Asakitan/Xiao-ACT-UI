@@ -39,6 +39,48 @@ def _boss_bar_main_key(_m, _recent_targets):
     _last_ts = float(_recent_targets.get(getattr(_m, 'uuid', 0), 0) or 0.0)
     return (-_max_hp, -_hp_pct, -_last_ts)
 
+
+_BB_BAD_NAMES = frozenset({'', 'unit', 'target'})
+
+
+def _bb_resolve_unit_name(direct_data, target_uuid, tracker):
+    """Best-effort CN name for the boss-bar enemy slot.
+
+    Order: explicit name on the monster object -> MonsterTable/BossTable lookup
+    by template_id -> tracker uuid->name side map (fed by update_monster_info).
+    Only READS the name tables, so it never conflicts with the cross-repo
+    name-table regeneration flow.
+    """
+    if direct_data:
+        nm = str(direct_data.get('name') or direct_data.get('monster_name')
+                 or direct_data.get('display_name') or '').strip()
+        if nm and nm.lower() not in _BB_BAD_NAMES:
+            return nm[:20]
+        try:
+            tid = int(direct_data.get('template_id') or 0)
+        except (TypeError, ValueError):
+            tid = 0
+        if tid > 0:
+            try:
+                from tools.tablekit.name_tables import names as _names
+                rn = _names.boss(tid, default='') or _names.monster(tid, default='')
+                if rn:
+                    return str(rn)[:20]
+            except Exception:
+                pass
+    try:
+        u = int(target_uuid or 0)
+    except (TypeError, ValueError):
+        u = 0
+    if u and tracker is not None:
+        try:
+            rn = tracker.get_target_name(u)
+            if rn:
+                return str(rn)[:20]
+        except Exception:
+            pass
+    return ''
+
 import _sao_cy_packet as _CY_PACKET  # type: ignore[import-not-found]
 import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 from utils.perf_probe import probe as _probe
@@ -505,7 +547,9 @@ class SAOPlayerGUIStateMixin:
                     'stop_breaking_ticking': bool(_bb_direct_data.get('stop_breaking_ticking')),
                     'in_overdrive': bool(_bb_direct_data.get('in_overdrive')),
                     'invincible': False,
-                    'boss_name': str(_bb_direct_data.get('name', ''))[:20] or '',
+                    'boss_name': _bb_resolve_unit_name(
+                        _bb_direct_data, self._bb_last_target_uuid,
+                        getattr(self, '_dps_tracker', None)) or '',
                 }
             elif _bb_show and not _bb_raid_active:
                 _bb_target_uuid = int(self._bb_last_target_uuid or 0)
@@ -533,7 +577,9 @@ class SAOPlayerGUIStateMixin:
                     'stop_breaking_ticking': False,
                     'in_overdrive': False,
                     'invincible': False,
-                    'boss_name': f'Target {_bb_target_label}' if _bb_target_label else 'Target',
+                    'boss_name': _bb_resolve_unit_name(
+                        None, _bb_target_uuid, getattr(self, '_dps_tracker', None))
+                    or (f'Target {_bb_target_label}' if _bb_target_label else 'Target'),
                 }
             else:
                 _bb_breaking_stage_gs = getattr(gs, 'boss_breaking_stage', -1)
@@ -553,7 +599,9 @@ class SAOPlayerGUIStateMixin:
                     'stop_breaking_ticking': False,
                     'in_overdrive': getattr(gs, 'boss_in_overdrive', False),
                     'invincible': getattr(gs, 'boss_invincible', False),
-                    'boss_name': '',
+                    'boss_name': _bb_resolve_unit_name(
+                        None, getattr(self, '_bb_last_target_uuid', 0),
+                        getattr(self, '_dps_tracker', None)),
                 }
             if _bb_show and not _bb_raid_active:
                 _bb_hp_motion_sig = (
