@@ -15,6 +15,8 @@ from utils.perf_probe import probe as _probe
 
 import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
 
+from engines.buff_uptime import BuffUptimeTracker
+
 
 # ═══════════════════════════════════════════════
 #  Player cache path
@@ -239,6 +241,8 @@ class DpsTracker:
         self._total_damage_boss: int = 0
         # ACT per-target cross-tab: target uuid -> resolved CN name (monsters).
         self._target_names: Dict[int, str] = {}
+        # ACT buff/debuff uptime (self), fed by self_buffs snapshots.
+        self._buff_uptime = BuffUptimeTracker()
         self._skill_names: Dict[int, str] = dict(skill_names or {})
         self._name_resolver = None
         self._on_update = on_update
@@ -287,6 +291,19 @@ class DpsTracker:
     def get_target_name(self, uuid: int) -> str:
         """Return the registered CN name for a target uuid (or '')."""
         return self._target_names.get(int(uuid or 0), '')
+
+    def update_self_buffs(self, buffs: Optional[List[Dict[str, Any]]],
+                          now_ms: Optional[float] = None) -> None:
+        """Feed a self_buffs snapshot into the buff-uptime accumulator.
+
+        Lock-free w.r.t. the tracker lock (BuffUptimeTracker has its own lock);
+        called from the same place that pushes self_buffs to the buff overlay.
+        """
+        self._buff_uptime.update(buffs, now_ms)
+
+    def get_buff_uptime(self) -> Dict[str, Any]:
+        """Return the self buff/debuff uptime snapshot for the ACT panel."""
+        return self._buff_uptime.snapshot()
 
     # ── Player info cache (persistence) ──
 
@@ -663,6 +680,7 @@ class DpsTracker:
         self._boss_uuid = 0
         self._total_damage_boss = 0
         self._last_hit_fx = None
+        self._buff_uptime.reset()
         self._dirty = True
 
     def _has_meaningful_data_locked(self) -> bool:
@@ -831,6 +849,9 @@ class DpsTracker:
             d['damage_pct'] = round(
                 entity.damage_total / max(self._total_damage, 1), 3
             )
+            # ACT buff/debuff coverage (self-only — self_buffs is self-scoped).
+            if entity.is_self:
+                d['buff_uptime'] = self._buff_uptime.snapshot()
             return d
 
     def get_last_report(self) -> Optional[Dict[str, Any]]:

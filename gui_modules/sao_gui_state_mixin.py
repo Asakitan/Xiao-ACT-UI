@@ -107,16 +107,23 @@ class SAOPlayerGUIStateMixin:
         # entirely on the ~30-60 Hz of state updates that touch only HP/STA
         # /skills (saves ~10-20 us each call, ~300-1000 us/sec total).
         try:
-            ov = getattr(self, '_self_buff_overlay', None)
-            if ov is not None:
-                _raw_buffs = getattr(gs, 'self_buffs', None)
-                _prev_buffs_ref = getattr(self, '_last_self_buffs_ref', None)
-                if _raw_buffs is not _prev_buffs_ref:
-                    self._last_self_buffs_ref = _raw_buffs
+            _raw_buffs = getattr(gs, 'self_buffs', None)
+            _prev_buffs_ref = getattr(self, '_last_self_buffs_ref', None)
+            if _raw_buffs is not _prev_buffs_ref:
+                self._last_self_buffs_ref = _raw_buffs
+                _buf_list = list(_raw_buffs or [])
+                ov = getattr(self, '_self_buff_overlay', None)
+                if ov is not None:
                     ov.update_buffs(
-                        list(_raw_buffs or []),
+                        _buf_list,
                         float(getattr(gs, 'server_time_offset_ms', 0.0) or 0.0),
                     )
+                # ACT buff/debuff coverage: feed the tracker on actual buff
+                # changes (the snapshot-diff accumulator credits the interval
+                # since the previous change to the still-active buffs).
+                tr = getattr(self, '_dps_tracker', None)
+                if tr is not None:
+                    tr.update_self_buffs(_buf_list)
         except Exception:
             pass
 
