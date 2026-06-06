@@ -96,10 +96,12 @@ from act_platform.runtime import (
     act_offline_import_status,
     act_plugin_disable,
     act_plugin_enable,
+    act_plugin_hotkeys,
     act_plugin_list,
     act_plugin_menu,
     act_plugin_pin,
     act_plugin_reload,
+    act_plugin_set_hotkey,
     act_plugin_status,
     act_plugin_ui_action,
     act_plugin_ui_panels,
@@ -766,6 +768,12 @@ class SAOWebAPI:
 
     def pin_plugin(self, plugin_id, pinned=True):
         return json.dumps(act_plugin_pin(self._g, str(plugin_id or ''), bool(pinned)), ensure_ascii=False)
+
+    def get_plugin_hotkeys(self):
+        return json.dumps(act_plugin_hotkeys(self._g), ensure_ascii=False)
+
+    def set_plugin_hotkey(self, action, key=''):
+        return json.dumps(act_plugin_set_hotkey(self._g, str(action or ''), str(key or '')), ensure_ascii=False)
 
     # ── plugin UI panels + render hooks/overlays (shared with plugin_layer.js) ──
     def get_plugin_ui_panels(self):

@@ -573,6 +573,16 @@ def act_plugin_hotkey_dispatch(owner: Any, action: str) -> dict[str, Any]:
         return {"ok": False, "message": str(exc)}
 
 
+def act_plugin_set_hotkey(owner: Any, action: str, key: str = "") -> dict[str, Any]:
+    """Rebind a plugin hotkey (shared settings['hotkeys']; '' clears to default)."""
+    try:
+        manager = ensure_act_plugin_manager(owner)
+        ok = manager.set_hotkey(str(action or ""), str(key or ""))
+        return {"ok": bool(ok), "hotkeys": manager.list_hotkeys()}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "hotkeys": []}
+
+
 # ── Plugin UI panels (redrawable declarative panels) ──────────────────────────
 
 def _coerce_payload(payload: Any) -> dict[str, Any]:
@@ -4009,6 +4019,7 @@ __all__ = [
     "act_plugin_pin",
     "act_plugin_hotkeys",
     "act_plugin_hotkey_dispatch",
+    "act_plugin_set_hotkey",
     "act_plugin_ui_panels",
     "act_plugin_ui_render",
     "act_plugin_ui_action",

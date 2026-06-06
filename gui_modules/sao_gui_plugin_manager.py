@@ -14,11 +14,16 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 from act_platform.runtime import (
     act_plugin_disable,
     act_plugin_enable,
+    act_plugin_hotkeys,
     act_plugin_pin,
     act_plugin_reload,
+    act_plugin_set_hotkey,
     act_plugin_status,
+    act_plugin_ui_action,
+    act_plugin_ui_panels,
+    act_plugin_ui_render,
 )
-from gui_modules.sao_plugin_ui_render import PluginPanelList
+from gui_modules.sao_plugin_ui_render import PluginPanelList, render_spec_into
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -422,4 +427,247 @@ class PluginManagerPanel:
                 pass
 
 
-__all__ = ["PluginManagerPanel"]
+_FKEYS = [f'F{i}' for i in range(1, 13)]
+_HK_DEFAULT = '默认 Default'
+
+
+class PluginDetachedPanel:
+    """A detached, per-plugin SAO panel window.
+
+    Renders one plugin's declarative ``ui_panel`` spec(s) — the plugin's own GUI
+    (the default GUI is whatever the plugin's render handler returns) — plus a
+    hotkey-config section that rebinds the plugin's hotkeys through the shared
+    ``settings['hotkeys']`` namespace. Auto-refreshes on ``plugin_ui_invalidate``.
+    """
+
+    def __init__(self, root: tk.Misc, owner: Any, plugin_id: str):
+        self.root = root
+        self.owner = owner
+        self.plugin_id = str(plugin_id or '')
+        self._win: Optional[tk.Toplevel] = None
+        self._panel_host: Optional[tk.Frame] = None
+        self._hotkey_host: Optional[tk.Frame] = None
+        self._after_id: Optional[str] = None
+        self._sub_token = ''
+        self._dirty = True
+        self._title = self.plugin_id
+
+    def show(self) -> None:
+        if self._win is None or not self._exists():
+            self._build()
+        if self._win is None:
+            return
+        try:
+            self._win.deiconify()
+            self._win.lift()
+            self._win.attributes('-topmost', True)
+            self._win.after(220, lambda: self._win and self._win.attributes('-topmost', False))
+        except Exception:
+            pass
+        self._dirty = True
+        self._start()
+
+    def hide(self) -> None:
+        self._stop()
+        if self._win is not None:
+            try:
+                self._win.withdraw()
+            except Exception:
+                pass
+
+    def destroy(self) -> None:
+        self._stop()
+        if self._win is not None:
+            try:
+                self._win.destroy()
+            except Exception:
+                pass
+        self._win = None
+
+    def is_visible(self) -> bool:
+        try:
+            return bool(self._win and self._win.winfo_exists() and self._win.state() != 'withdrawn')
+        except Exception:
+            return False
+
+    def _exists(self) -> bool:
+        try:
+            return bool(self._win and self._win.winfo_exists())
+        except Exception:
+            return False
+
+    def _plugin_name(self) -> str:
+        try:
+            for plug in (act_plugin_status(self.owner).get('plugins') or []):
+                if str(plug.get('id')) == self.plugin_id:
+                    return str(plug.get('name') or self.plugin_id)
+        except Exception:
+            pass
+        return self.plugin_id
+
+    def _build(self) -> None:
+        self._title = self._plugin_name()
+        win = tk.Toplevel(self.root)
+        self._win = win
+        win.title(f'SAO Plugin · {self._title}')
+        win.geometry('430x540+230+140')
+        win.minsize(320, 320)
+        win.configure(bg=_SAO_PANEL_BG)
+        try:
+            win.overrideredirect(True)
+            win.attributes('-alpha', 0.97)
+        except Exception:
+            pass
+        try:
+            _apply_window_icon(win)
+        except Exception:
+            pass
+        header = _sao_panel_header(win, str(self._title).upper(), on_close=self.hide)
+        header.pack(fill='x')
+        _bind_panel_drag(win, header)
+
+        body = _sao_panel_body(win)
+        body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
+        canvas = tk.Canvas(body, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        scroll = tk.Scrollbar(body, orient='vertical', command=canvas.yview)
+        inner = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
+        inner.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
+        _wid = canvas.create_window((0, 0), window=inner, anchor='nw')
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure(_wid, width=e.width))
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side='left', fill='both', expand=True, padx=(10, 0), pady=10)
+        scroll.pack(side='right', fill='y', padx=(0, 10), pady=10)
+
+        self._panel_host = tk.Frame(inner, bg=_SAO_PANEL_BODY_BG)
+        self._panel_host.pack(fill='x')
+        self._hotkey_host = tk.Frame(inner, bg=_SAO_PANEL_BODY_BG)
+        self._hotkey_host.pack(fill='x', pady=(10, 0))
+        win.protocol('WM_DELETE_WINDOW', self.hide)
+        self._build_hotkeys()
+        self._subscribe()
+
+    def _make_action(self, panel_id: str):
+        def _handler(action: str, payload: dict) -> None:
+            try:
+                act_plugin_ui_action(self.owner, panel_id, action, payload)
+            except Exception:
+                pass
+            self._dirty = True
+        return _handler
+
+    def _refresh(self) -> None:
+        host = self._panel_host
+        if host is None:
+            return
+        for child in list(host.winfo_children()):
+            child.destroy()
+        try:
+            panels = [p for p in (act_plugin_ui_panels(self.owner).get('panels') or [])
+                      if str(p.get('plugin_id')) == self.plugin_id and p.get('available')]
+        except Exception:
+            panels = []
+        if not panels:
+            tk.Label(host, text='插件未提供面板或未激活\n(enable it in the manager)',
+                     bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, justify='center',
+                     font=('Segoe UI', 10), pady=20).pack(fill='x')
+            return
+        for panel in panels:
+            pid = str(panel.get('id') or '')
+            card = tk.Frame(host, bg=_SAO_PANEL_BODY_BG, highlightthickness=1,
+                            highlightbackground=_SAO_PANEL_BORDER)
+            card.pack(fill='x', pady=6, padx=2)
+            inner = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
+            inner.pack(fill='x', padx=10, pady=8)
+            try:
+                spec = (act_plugin_ui_render(self.owner, pid) or {}).get('spec') or {}
+            except Exception:
+                spec = {'version': 1, 'title': pid, 'nodes': []}
+            render_spec_into(inner, spec, on_action=self._make_action(pid))
+
+    def _build_hotkeys(self) -> None:
+        host = self._hotkey_host
+        if host is None:
+            return
+        for child in list(host.winfo_children()):
+            child.destroy()
+        try:
+            hotkeys = [h for h in (act_plugin_hotkeys(self.owner).get('hotkeys') or [])
+                       if str(h.get('plugin_id')) == self.plugin_id]
+        except Exception:
+            hotkeys = []
+        if not hotkeys:
+            return
+        tk.Frame(host, bg=_SAO_PANEL_SEP, height=1).pack(fill='x', pady=(2, 6))
+        tk.Label(host, text='快捷键 Hotkeys', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_GOLD,
+                 anchor='w', font=('Segoe UI', 10, 'bold')).pack(fill='x', pady=(0, 4))
+        for hk in hotkeys:
+            action = str(hk.get('action') or '')
+            cur = str(hk.get('current_key') or '').upper()
+            row = tk.Frame(host, bg=_SAO_PANEL_BODY_BG)
+            row.pack(fill='x', pady=2)
+            tk.Label(row, text=str(hk.get('label') or hk.get('hotkey_id') or action),
+                     bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, anchor='w',
+                     font=('Segoe UI', 9)).pack(side='left', fill='x', expand=True)
+            var = tk.StringVar(value=(cur if cur in _FKEYS else _HK_DEFAULT))
+            opt = tk.OptionMenu(row, var, _HK_DEFAULT, *_FKEYS,
+                                command=lambda v, a=action: self._set_hotkey(a, v))
+            opt.configure(bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, relief='flat',
+                          bd=0, highlightthickness=0, font=('Segoe UI', 9), padx=8)
+            opt.pack(side='right')
+
+    def _set_hotkey(self, action: str, value: str) -> None:
+        key = '' if value == _HK_DEFAULT else value
+        try:
+            act_plugin_set_hotkey(self.owner, action, key)
+        except Exception:
+            pass
+        self._build_hotkeys()
+
+    def _subscribe(self) -> None:
+        try:
+            from act_platform.runtime import ensure_act_event_bus
+            self._sub_token = ensure_act_event_bus(self.owner).subscribe(
+                'plugin_ui_invalidate', lambda _e: setattr(self, '_dirty', True),
+                owner_id=f'detached_{self.plugin_id}')
+        except Exception:
+            self._sub_token = ''
+
+    def _start(self) -> None:
+        if not self._sub_token:
+            self._subscribe()
+        self._tick()
+
+    def _stop(self) -> None:
+        if self._after_id is not None:
+            try:
+                self.root.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+        if self._sub_token:
+            try:
+                from act_platform.runtime import ensure_act_event_bus
+                ensure_act_event_bus(self.owner).unsubscribe(self._sub_token)
+                self._sub_token = ''
+            except Exception:
+                pass
+
+    def _tick(self) -> None:
+        # _dirty is set True from the event-bus thread (plugin_ui_invalidate) and
+        # read/cleared here on the Tk thread. Bool read/write is atomic under the
+        # GIL, and we clear it BEFORE rendering, so an invalidate that arrives
+        # during _refresh() is caught on the next tick — never lost (worst case a
+        # ≤700ms delay, the poll cadence). No lock needed.
+        if self._dirty:
+            self._dirty = False
+            try:
+                self._refresh()
+            except Exception:
+                pass
+        try:
+            self._after_id = self.root.after(700, self._tick)
+        except Exception:
+            self._after_id = None
+
+
+__all__ = ["PluginManagerPanel", "PluginDetachedPanel"]

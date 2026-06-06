@@ -7459,11 +7459,35 @@ setTimeout(function() {
 .ppm-btn:hover { box-shadow:0 0 10px rgba(107,214,255,.3); }
 .ppm-empty { color:#9fc0d8; text-align:center; padding:20px 0; }
 .ppm-sep { height:1px; background:rgba(117,205,255,.2); margin:6px 2px; }
+.ppm-arrow { color:#73d7ff; }
+.ppm-open:hover { background:rgba(117,205,255,.10); border-radius:8px; }
+/* Detached per-plugin panel */
+#plugin-detached-overlay { display:none; position:fixed; inset:0; z-index:100000;
+    background:rgba(4,8,14,.6); align-items:center; justify-content:center;
+    font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
+#pd-card { width:380px; max-height:80vh; overflow:auto;
+    border:1px solid rgba(117,205,255,.5); border-radius:12px;
+    background:linear-gradient(180deg,rgba(18,31,47,.98),rgba(9,14,22,.98));
+    box-shadow:0 0 34px rgba(88,199,255,.28); color:#e8f6ff; }
+#pd-body, #pd-hotkeys { padding:10px 12px; }
+#pd-hotkeys { border-top:1px solid rgba(117,205,255,.2); }
+.pd-hk-row { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:5px 2px; font-size:12px; }
+.pd-hk-row select { background:rgba(19,48,74,.6); color:#e8f6ff;
+    border:1px solid rgba(117,205,255,.5); border-radius:6px; padding:2px 6px; font-size:12px; }
+.pd-hk-title { color:#ffd46f; font-weight:700; font-size:12px; letter-spacing:.06em; margin-bottom:4px; }
 </style>
 <div id="plugin-popup-overlay">
     <div id="plugin-popup-card">
         <div class="ppm-head"><span>🧩 插件菜单 Plugins</span><span id="ppm-close">×</span></div>
         <div id="ppm-list"><div class="ppm-empty">加载中…</div></div>
+    </div>
+</div>
+<div id="plugin-detached-overlay">
+    <div id="pd-card">
+        <div class="ppm-head"><span id="pd-title">Plugin</span><span id="pd-close">×</span></div>
+        <div id="pd-body"><div class="ppm-empty">加载中…</div></div>
+        <div id="pd-hotkeys"></div>
     </div>
 </div>
 <script>
@@ -7482,6 +7506,100 @@ setTimeout(function() {
         var ov = document.getElementById('plugin-popup-overlay');
         if (ov) ov.style.display = 'none';
     };
+
+    // ── Detached per-plugin panel (the plugin's own GUI + hotkey config) ──
+    var _pdPlugin = '';
+    var _pdTimer = null;
+    window.showPluginDetached = function (pluginId) {
+        _pdPlugin = String(pluginId || '');
+        var ov = document.getElementById('plugin-detached-overlay');
+        if (ov) ov.style.display = 'flex';
+        renderPluginDetachedPanels();
+        buildPluginDetachedHotkeys();  // built once so the dropdown isn't reset on refresh
+        if (_pdTimer) clearInterval(_pdTimer);
+        _pdTimer = setInterval(function () {
+            var o = document.getElementById('plugin-detached-overlay');
+            if (o && o.style.display !== 'none') renderPluginDetachedPanels();
+            else { clearInterval(_pdTimer); _pdTimer = null; }
+        }, 800);
+    };
+    window.hidePluginDetached = function () {
+        var ov = document.getElementById('plugin-detached-overlay');
+        if (ov) ov.style.display = 'none';
+        if (_pdTimer) { clearInterval(_pdTimer); _pdTimer = null; }
+    };
+    function pdAction(panelId) {
+        return function (action, payload) {
+            var a = api();
+            if (a && a.invoke_ui_action) {
+                Promise.resolve(a.invoke_ui_action(panelId, action, JSON.stringify(payload || {})))
+                    .then(renderPluginDetachedPanels);
+            }
+        };
+    }
+    var _pdSeq = 0;
+    function renderPluginDetachedPanels() {
+        var a = api();
+        var body = document.getElementById('pd-body');
+        var title = document.getElementById('pd-title');
+        var renderSpec = window.PluginHooks && window.PluginHooks.renderSpec;
+        if (!a || !body || !a.get_plugin_ui_panels) return;
+        // Request id: async render_ui_panel results from a superseded refresh
+        // (the 800ms timer can fire while the previous fetch is still pending)
+        // are discarded so they don't paint into orphaned/cleared cards.
+        var mySeq = ++_pdSeq;
+        Promise.resolve(a.get_plugin_ui_panels()).then(parse).then(function (data) {
+            if (mySeq !== _pdSeq) return;
+            var panels = ((data && data.panels) || []).filter(function (p) {
+                return p.plugin_id === _pdPlugin && p.available;
+            });
+            if (title) title.textContent = (panels[0] && panels[0].title) || _pdPlugin;
+            if (!panels.length) { body.innerHTML = '<div class="ppm-empty">插件未提供面板或未激活</div>'; return; }
+            body.innerHTML = '';
+            panels.forEach(function (p) {
+                var card = document.createElement('div');
+                card.style.marginBottom = '8px';
+                body.appendChild(card);
+                Promise.resolve(a.render_ui_panel(p.id, '')).then(parse).then(function (r) {
+                    if (mySeq !== _pdSeq || !card.isConnected) return;
+                    var spec = (r && r.spec) || { nodes: [] };
+                    if (renderSpec) renderSpec(spec, card, pdAction(p.id));
+                    else card.textContent = JSON.stringify(spec);
+                });
+            });
+        });
+    }
+    function buildPluginDetachedHotkeys() {
+        var a = api();
+        var hkBox = document.getElementById('pd-hotkeys');
+        if (!a || !hkBox || !a.get_plugin_hotkeys) { if (hkBox) hkBox.innerHTML = ''; return; }
+        Promise.resolve(a.get_plugin_hotkeys()).then(parse).then(function (data) {
+            var hks = ((data && data.hotkeys) || []).filter(function (h) { return h.plugin_id === _pdPlugin; });
+            if (!hks.length) { hkBox.innerHTML = ''; return; }
+            var html = '<div class="pd-hk-title">快捷键 HOTKEYS</div>';
+            hks.forEach(function (h) {
+                var cur = String(h.current_key || '').toUpperCase();
+                var opts = '<option value="">默认 Default</option>';
+                for (var i = 1; i <= 12; i++) {
+                    var k = 'F' + i;
+                    opts += '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' + k + '</option>';
+                }
+                html += '<div class="pd-hk-row"><span>' + esc(h.label || h.hotkey_id) + '</span>'
+                    + '<select data-action="' + esc(h.action) + '">' + opts + '</select></div>';
+            });
+            hkBox.innerHTML = html;
+        });
+    }
+    document.addEventListener('change', function (e) {
+        var sel = e.target;
+        if (!sel || sel.tagName !== 'SELECT' || !sel.getAttribute('data-action')) return;
+        if (!sel.closest || !sel.closest('#pd-hotkeys')) return;
+        var a = api();
+        if (a && a.set_plugin_hotkey) a.set_plugin_hotkey(sel.getAttribute('data-action'), sel.value);
+    });
+    document.addEventListener('click', function (e) {
+        if (e.target.id === 'plugin-detached-overlay' || e.target.id === 'pd-close') window.hidePluginDetached();
+    });
     // Shared plugin row builder (pinned-first list with toggle + pin buttons).
     function buildPluginRows(plugins) {
         var html = '';
@@ -7516,13 +7634,27 @@ setTimeout(function() {
         });
     };
     // Inline plugin category (the dedicated 「插件」 tab board panel).
+    // The 「插件」 category tab is a panel LAUNCHER: only enabled + panel-declaring
+    // plugins are listed; a row click opens that plugin's detached panel.
     window.renderPluginsCategory = function () {
         var list = document.getElementById('plugins-cat-list');
         if (!list) return;
         fetchPluginMenu().then(function (data) {
-            var plugins = (data && data.plugins) || [];
-            list.innerHTML = plugins.length ? buildPluginRows(plugins)
-                : '<div class="ppm-empty">未发现插件 (plugins/&lt;id&gt;/)</div>';
+            var plugins = ((data && data.plugins) || []).filter(function (p) {
+                return p.active && p.declares_panel;  // active = loaded + running
+            });
+            if (!plugins.length) {
+                list.innerHTML = '<div class="ppm-empty">无已启用面板插件<br/>去 Manage 启用</div>';
+                return;
+            }
+            var html = '';
+            plugins.forEach(function (it) {
+                var hk = (it.hotkey_count || 0) ? ' ⌨' + it.hotkey_count : '';
+                html += '<div class="ppm-row ppm-open" data-open="' + esc(it.id) + '" style="cursor:pointer;">'
+                    + '<span class="ppm-name">' + (it.pinned ? '★ ' : '') + esc(it.label) + hk + '</span>'
+                    + '<span class="ppm-arrow" style="opacity:.6;">▸</span></div>';
+            });
+            list.innerHTML = html;
         });
     };
     // Delegated clicks for the inline category list. MUST bind on the list
@@ -7531,19 +7663,9 @@ setTimeout(function() {
     // the container is a descendant of that li, so it fires first while bubbling.
     var _catList = document.getElementById('plugins-cat-list');
     if (_catList) _catList.addEventListener('click', function (e) {
-        var t = e.target;
-        if (!t.classList || !t.classList.contains('ppm-btn')) return;
-        var a = api();
-        if (!a) return;
-        if (t.getAttribute('data-pin')) {
-            var pid = t.getAttribute('data-pin');
-            var pinned = t.getAttribute('data-pinned') === '1';
-            if (a.pin_plugin) Promise.resolve(a.pin_plugin(pid, !pinned)).then(window.renderPluginsCategory);
-        } else if (t.getAttribute('data-id')) {
-            var id = t.getAttribute('data-id');
-            var en = t.getAttribute('data-en') === '1';
-            Promise.resolve(en ? a.disable_plugin(id) : a.enable_plugin(id)).then(window.renderPluginsCategory);
-        }
+        var row = e.target.closest && e.target.closest('.ppm-open');
+        if (!row || !row.getAttribute('data-open')) return;
+        window.showPluginDetached(row.getAttribute('data-open'));
     });
     document.addEventListener('click', function (e) {
         var ov = document.getElementById('plugin-popup-overlay');

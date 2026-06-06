@@ -67,7 +67,7 @@ from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
 from gui_modules.sao_gui_death_recap import DeathRecapPanel
 from gui_modules.sao_gui_graph_timeseries import GraphTimeseriesPanel
 from gui_modules.sao_gui_offline_import import OfflineImportPanel
-from gui_modules.sao_gui_plugin_manager import PluginManagerPanel
+from gui_modules.sao_gui_plugin_manager import PluginDetachedPanel, PluginManagerPanel
 from gui_modules.sao_gui_report_export import ReportExportPanel
 from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
 from gui_modules.sao_gui_timeline_vcr import TimelineVcrPanel
@@ -117,6 +117,23 @@ class SAOPlayerGUIPanelsMixin:
         panel.show()
         self._apply_act_panel_theme()
         self.root.after(120, lambda: self._raise_panel_window(panel))
+
+    def _open_plugin_detached_panel(self, plugin_id):
+        """打开某插件的独立分离面板 (渲染插件自己的 GUI + 热键配置)."""
+        self._dismiss_sao_menu_for_panel()
+        panels = getattr(self, '_plugin_detached_panels', None)
+        if panels is None:
+            panels = {}
+            self._plugin_detached_panels = panels
+        panel = panels.get(plugin_id)
+        if panel is None or not panel._exists():
+            panel = PluginDetachedPanel(self.root, self, plugin_id)
+            panels[plugin_id] = panel
+        panel.show()
+        try:
+            self.root.after(120, lambda: self._raise_panel_window(panel))
+        except Exception:
+            pass
 
     def _toggle_plugin_enabled(self, plugin_id, enabled):
         """启用/禁用某个插件 (供 popup 菜单调用)."""
@@ -168,10 +185,11 @@ class SAOPlayerGUIPanelsMixin:
                             command=lambda p=pid, en=enabled: self._toggle_plugin_enabled(p, en))
             sub.add_command(label=('取消置顶 Unpin' if pinned else '置顶 Pin'),
                             command=lambda p=pid, pn=pinned: self._pin_plugin_from_menu(p, not pn))
-            # Only plugins that DECLARE a panel get the open-panel entry.
+            # Only plugins that DECLARE a panel get the open-panel entry —
+            # opens that plugin's own detached panel (not the manager).
             if it.get('declares_panel'):
                 sub.add_command(label='打开面板 Open panel',
-                                command=lambda: self._open_act_plugin_manager('panels'))
+                                command=lambda p=pid: self._open_plugin_detached_panel(p))
             prefix = ('★ ' if pinned else '') + ('● ' if it.get('active') else ('◐ ' if enabled else '○ '))
             menu.add_cascade(label=prefix + name, menu=sub)
         try:

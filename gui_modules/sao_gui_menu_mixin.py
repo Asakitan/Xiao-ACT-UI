@@ -503,10 +503,10 @@ class SAOPlayerGUIMenuMixin:
             })
 
         buffmon_on = bool(self._get_setting('buffmon_enabled', True))
+        # 「面板」分类只保留真·面板入口 + DPS 报告系列。
+        # 音效/音量/Boss血条/Buff监视器/数据源 等纯设置开关已迁往「控制」分类
+        # (v4.x: 面板分类回归"开/关面板"职责, 全局开关归到设置)。
         panel_items.extend([
-            {'icon': '♪', 'label': f'音效: {"ON" if snd_on else "OFF"}', 'command': self._toggle_sound_enabled},
-            {'icon': '♪', 'label': '音量+', 'command': lambda: self._adj_sound_volume(10)},
-            {'icon': '♪', 'label': '音量-', 'command': lambda: self._adj_sound_volume(-10)},
             {'icon': '◆', 'label': f'DPS面板: {"ON" if dps_on else "OFF"}', 'command': self._toggle_dps_enabled},
             {'icon': '◆' if dps_report_available else '◇',
              'label': '查看上次战斗DPS' + (' ✓' if dps_report_available else ' (暂无)'),
@@ -517,10 +517,17 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '⬇' if dps_report_available else '◇',
              'label': '导出DPS报告' + (' ✓' if dps_report_available else ' (暂无)'),
              'command': self._export_last_dps_report_menu},
+        ])
+
+        # 「控制」(设置) 分类: 从「面板」迁移过来的全局开关性设置。
+        control_setting_items = [
+            {'icon': '♪', 'label': f'音效: {"ON" if snd_on else "OFF"}', 'command': self._toggle_sound_enabled},
+            {'icon': '♪', 'label': '音量+', 'command': lambda: self._adj_sound_volume(10)},
+            {'icon': '♪', 'label': '音量-', 'command': lambda: self._adj_sound_volume(-10)},
             {'icon': '◇', 'label': f'Boss血条: {boss_bar_disp}', 'command': self._cycle_boss_bar_mode},
             {'icon': '✦', 'label': f'Buff监视器: {"ON" if buffmon_on else "OFF"}', 'command': self._toggle_buffmon_enabled},
             {'icon': '◆', 'label': f'Hybrid数据源: {mem_mode_disp}', 'command': self._cycle_mem_data_source},
-        ])
+        ]
 
         act_items = [
             {'icon': '⏱', 'label': f'ACT触发/计时: {trigger_total}/{trigger_timers}', 'command': self._toggle_act_trigger_timer_panel},
@@ -542,6 +549,9 @@ class SAOPlayerGUIMenuMixin:
             '控制': [
                 {'icon': '⚙', 'label': recog_label + _k('toggle_recognition'), 'command': self._toggle_recognition_menu},
                 {'icon': '⬆', 'label': topmost_label + _k('toggle_topmost'), 'command': self._toggle_topmost},
+                {'icon': '─', 'label': '──────────'},
+                *control_setting_items,
+                {'icon': '─', 'label': '──────────'},
                 {'icon': '✓', 'label': '保存设置', 'command': lambda: self.settings.save()},
             ],
             '自动': auto_items,
@@ -581,29 +591,29 @@ class SAOPlayerGUIMenuMixin:
             data = {'plugins': []}
         items = [
             {'icon': '⚙', 'label': '插件管理面板 Manage', 'command': lambda: self._open_act_plugin_manager('manage')},
-            {'icon': '⬢', 'label': '插件面板 Panels', 'command': lambda: self._open_act_plugin_manager('panels')},
             {'icon': '↻', 'label': '重载全部插件 Reload', 'command': self._reload_act_plugins_menu},
         ]
-        plugins = data.get('plugins') or []
+        # This tab is a panel LAUNCHER: only show plugins that are ACTIVE
+        # (successfully loaded) AND declare a panel (manifest ui_panels).
+        # Disabled / panel-less / load-failed plugins are managed from the
+        # 「插件管理面板」, not cluttered here. A row click opens that plugin's
+        # detached panel window (not a toggle).
+        plugins = [p for p in (data.get('plugins') or [])
+                   if p.get('active') and p.get('declares_panel')]
         if not plugins:
-            items.append({'icon': '·', 'label': '未发现插件 (plugins/<id>/)', 'command': lambda: None})
+            items.append({'icon': '·', 'label': '无已启用面板插件 (去 Manage 启用)',
+                          'command': lambda: self._open_act_plugin_manager('manage')})
             return items
         for p in plugins:
             pid = str(p.get('id') or '')
             name = str(p.get('label') or pid)
-            on = bool(p.get('enabled'))
             pinned = bool(p.get('pinned'))
-            icon = '★' if pinned else ('●' if p.get('active') else '○')
-            flags = ''
-            if p.get('declares_panel'):
-                flags += ' ▣'
+            icon = '★' if pinned else ('●' if p.get('active') else '◈')
             hk = int(p.get('hotkey_count') or 0)
-            if hk:
-                flags += f' ⌨{hk}'
-            label = f'{name}  [{"ON" if on else "OFF"}]{flags}'
+            label = f'{name}' + (f'  ⌨{hk}' if hk else '')
             items.append({
                 'icon': icon, 'label': label,
-                'command': lambda pid=pid, on=on: self._toggle_plugin_enabled(pid, on),
+                'command': lambda pid=pid: self._open_plugin_detached_panel(pid),
             })
         return items
 

@@ -1314,6 +1314,39 @@ class PluginManager:
             for action in stale:
                 self._hotkeys.pop(action, None)
 
+    def set_hotkey(self, action: str, key: str) -> bool:
+        """Rebind a plugin hotkey through the shared ``settings['hotkeys']``.
+
+        Only registered plugin hotkeys may be rebound (so a plugin panel cannot
+        clobber a built-in binding). An empty / 'default' key clears the override
+        so the plugin's declared default applies again. The key is stored as a
+        plain ``"F8"`` string, which ``SAOHotkeyManager`` resolves to a VK — the
+        same mechanism the built-in hotkeys use, avoiding a separate conflict set.
+        """
+        # Hotkey actions are stored lowercase (_safe_id); normalize callers'
+        # input so a mixed-case action id still matches.
+        action = str(action or "").lower()
+        with self._hotkeys_lock:
+            if action not in self._hotkeys:
+                return False
+        if self.settings is None or not (hasattr(self.settings, "get") and hasattr(self.settings, "set")):
+            return False
+        raw = self.settings.get("hotkeys", {}) or {}
+        raw = dict(raw) if isinstance(raw, dict) else {}
+        key_norm = str(key or "").strip().upper()
+        if not key_norm or key_norm in ("DEFAULT", "(DEFAULT)", "默认", "NONE", "无"):
+            raw.pop(action, None)
+        else:
+            raw[action] = key_norm
+        self.settings.set("hotkeys", raw)
+        save = getattr(self.settings, "save", None)
+        if callable(save):
+            try:
+                save()
+            except Exception:
+                pass
+        return True
+
     # ── pinned plugins (promoted to the top of the plugin menu) ────────────
     def pinned_plugins(self) -> list[str]:
         if self.settings is not None and hasattr(self.settings, "get"):

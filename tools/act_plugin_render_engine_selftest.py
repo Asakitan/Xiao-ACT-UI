@@ -395,6 +395,46 @@ class PinHotkeyDeclareTests(unittest.TestCase):
             self.assertEqual(m.list_hotkeys(), [])
             self.assertFalse(m.dispatch_hotkey("plugin.ph.go"))
 
+    def test_set_hotkey_rebind_clear_and_builtin_protection(self) -> None:
+        class Settings:
+            def __init__(self):
+                self.d = {}
+
+            def get(self, k, default=None):
+                return self.d.get(k, default)
+
+            def set(self, k, v):
+                self.d[k] = v
+
+            def save(self):
+                pass
+
+        with tempfile.TemporaryDirectory(prefix="act_sethk_") as root:
+            s = Settings()
+            m = self._mgr_with_settings(root, s)
+            action = "plugin.ph.go"
+            self.assertEqual(m.list_hotkeys()[0]["current_key"], "F7")  # default
+            self.assertTrue(m.set_hotkey(action, "F8"))
+            self.assertEqual(s.d["hotkeys"][action], "F8")
+            self.assertEqual(m.list_hotkeys()[0]["current_key"], "F8")
+            # clear -> back to declared default
+            m.set_hotkey(action, "default")
+            self.assertNotIn(action, s.d.get("hotkeys", {}))
+            self.assertEqual(m.list_hotkeys()[0]["current_key"], "F7")
+            # cannot rebind a non-plugin (built-in) action
+            self.assertFalse(m.set_hotkey("toggle_recognition", "F8"))
+
+    def _mgr_with_settings(self, root, settings):
+        _write_plugin(
+            os.path.join(root, "ph"),
+            {"id": "ph", "name": "PH", "version": "1.0.0", "entry": "plugin.py",
+             "enabled": True, "capabilities": [{"id": "ui_panels"}]},
+            PIN_HOTKEY_PLUGIN)
+        m = PluginManager(plugin_dirs=[root], settings=settings)
+        m.discover()
+        self.assertTrue(m.load_plugin("ph"))
+        return m
+
     def test_pin_promotes_in_menu(self) -> None:
         with tempfile.TemporaryDirectory(prefix="act_pin_") as root:
             # two plugins; pin the second -> it sorts first
