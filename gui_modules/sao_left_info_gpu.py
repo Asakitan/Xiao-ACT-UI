@@ -125,18 +125,20 @@ class LeftInfoGpuPainter:
             self._render_worker.stop()
         except Exception:
             pass
-        if self._presenter is not None:
-            try:
-                self._presenter.release()
-            except Exception:
-                pass
-            self._presenter = None
+        presenter = self._presenter
         if self._gpu_window is not None:
             try:
                 self._gpu_window.destroy()
             except Exception:
                 pass
             self._gpu_window = None
+            presenter = None
+        if presenter is not None:
+            try:
+                presenter.release()
+            except Exception:
+                pass
+        self._presenter = None
 
     @_probe.decorate('ui.menu.left_info_gpu_tick')
     def tick(self, screen_x: int, screen_y: int,
@@ -568,18 +570,20 @@ class SessionPlayersGpuPainter:
             self._render_worker.stop()
         except Exception:
             pass
-        if self._presenter is not None:
-            try:
-                self._presenter.release()
-            except Exception:
-                pass
-            self._presenter = None
+        presenter = self._presenter
         if self._gpu_window is not None:
             try:
                 self._gpu_window.destroy()
             except Exception:
                 pass
             self._gpu_window = None
+            presenter = None
+        if presenter is not None:
+            try:
+                presenter.release()
+            except Exception:
+                pass
+        self._presenter = None
 
     def hide(self) -> None:
         self._last_sig = None
@@ -753,18 +757,20 @@ class PlayerPanelGpuPainter:
             self._render_worker.stop()
         except Exception:
             pass
-        if self._presenter is not None:
-            try:
-                self._presenter.release()
-            except Exception:
-                pass
-            self._presenter = None
+        presenter = self._presenter
         if self._gpu_window is not None:
             try:
                 self._gpu_window.destroy()
             except Exception:
                 pass
             self._gpu_window = None
+            presenter = None
+        if presenter is not None:
+            try:
+                presenter.release()
+            except Exception:
+                pass
+        self._presenter = None
 
     def hide(self) -> None:
         if self._gpu_window is not None:

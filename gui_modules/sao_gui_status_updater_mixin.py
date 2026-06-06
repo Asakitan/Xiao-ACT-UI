@@ -724,35 +724,94 @@ class SAOPlayerGUIStatusUpdaterMixin:
         self._set_update_button(self._update_primary_btn, view['primary_text'], view['primary_action'], side=tk.LEFT)
         self._set_update_button(self._update_secondary_btn, view['secondary_text'], view['secondary_action'], side=tk.RIGHT)
 
+    def _is_update_dialog_safe(self) -> bool:
+        """True when menu/fisheye close animations are no longer tearing down."""
+        if getattr(self, '_destroyed', False):
+            return False
+        if getattr(self, '_sao_menu_close_pending', False):
+            return False
+        try:
+            blur_count = int(getattr(self, '_motion_blur_active_count', 0) or 0)
+        except Exception:
+            blur_count = 0
+        try:
+            blur_until = float(getattr(self, '_motion_blur_active_until', 0.0) or 0.0)
+        except Exception:
+            blur_until = 0.0
+        if blur_count > 0 or time.time() < blur_until:
+            return False
+        menu = getattr(self, '_sao_menu', None)
+        try:
+            if menu is not None and getattr(menu, 'visible', False):
+                return False
+        except Exception:
+            return False
+        overlay = getattr(menu, '_overlay', None) if menu is not None else None
+        if overlay is not None:
+            try:
+                if overlay.winfo_exists():
+                    return False
+            except Exception:
+                return False
+        if menu is not None and getattr(menu, '_hud_overlay', None) is not None:
+            return False
+        ov = getattr(self, '_fisheye_ov', None)
+        if ov is not None:
+            panel_open = False
+            any_panel_open = getattr(self, '_any_panel_open', None)
+            if callable(any_panel_open):
+                try:
+                    panel_open = bool(any_panel_open())
+                except Exception:
+                    panel_open = False
+            if not panel_open:
+                return False
+        return True
+
+    def _run_update_dialog_when_safe(
+            self, callback: Callable[[], None], remaining: int = 24) -> None:
+        if getattr(self, '_destroyed', False):
+            return
+        if self._is_update_dialog_safe() or remaining <= 0:
+            callback()
+            return
+        try:
+            self.root.after(
+                80,
+                lambda: self._run_update_dialog_when_safe(
+                    callback, remaining - 1))
+        except Exception:
+            callback()
+
     def _defer_update_check_until_menu_closed(self, callback: Callable[[], None]) -> bool:
         """Delay manual update UI until the GPU popup has finished closing."""
         if getattr(self, '_destroyed', False):
             return True
+        if self._is_update_dialog_safe():
+            return False
+        if getattr(self, '_update_check_deferred_from_menu', False):
+            return True
+        self._update_check_deferred_from_menu = True
         menu = getattr(self, '_sao_menu', None)
         try:
             menu_visible = bool(menu is not None and getattr(menu, 'visible', False))
         except Exception:
             menu_visible = False
-        if not menu_visible:
-            return False
-        if getattr(self, '_update_check_deferred_from_menu', False):
-            return True
-        self._update_check_deferred_from_menu = True
-        try:
-            if not bool(getattr(menu, '_closing', False)):
-                menu.close()
-        except Exception:
-            pass
+        if menu_visible:
+            try:
+                close_menu = getattr(self, '_close_sao_menu_from_background', None)
+                if callable(close_menu):
+                    close_menu()
+                elif not bool(getattr(menu, '_closing', False)):
+                    menu.close()
+            except Exception:
+                pass
 
-        def _resume(remaining: int = 8):
+        def _resume(remaining: int = 24):
             if getattr(self, '_destroyed', False):
                 self._update_check_deferred_from_menu = False
                 return
-            try:
-                still_visible = bool(menu is not None and getattr(menu, 'visible', False))
-            except Exception:
-                still_visible = False
-            if still_visible and remaining > 0:
+            if not self._is_update_dialog_safe() and remaining > 0:
                 try:
                     self.root.after(80, lambda: _resume(remaining - 1))
                     return
@@ -841,21 +900,28 @@ class SAOPlayerGUIStatusUpdaterMixin:
             return
 
     def _show_manual_update_result(self, snapshot):
-        self._manual_update_check_inflight = False
-        try:
-            from updater.sao_updater import STATE_AVAILABLE, STATE_UP_TO_DATE, STATE_ERROR
-        except Exception:
-            STATE_AVAILABLE, STATE_UP_TO_DATE, STATE_ERROR = 'available', 'up_to_date', 'error'
-        if snapshot.state == STATE_AVAILABLE:
-            self._prompt_update_available(snapshot)
-        elif snapshot.state == STATE_UP_TO_DATE:
-            SAODialog.showinfo(
-                self._float, '更新',
-                f'已是最新版本 ({APP_VERSION_LABEL})')
-        elif snapshot.state == STATE_ERROR:
-            SAODialog.showinfo(
-                self._float, '更新',
-                f'检查失败: {snapshot.error}')
+        if getattr(self, '_destroyed', False):
+            self._manual_update_check_inflight = False
+            return
+
+        def _show():
+            self._manual_update_check_inflight = False
+            try:
+                from updater.sao_updater import STATE_AVAILABLE, STATE_UP_TO_DATE, STATE_ERROR
+            except Exception:
+                STATE_AVAILABLE, STATE_UP_TO_DATE, STATE_ERROR = 'available', 'up_to_date', 'error'
+            if snapshot.state == STATE_AVAILABLE:
+                self._prompt_update_available(snapshot)
+            elif snapshot.state == STATE_UP_TO_DATE:
+                SAODialog.showinfo(
+                    self._float, '更新',
+                    f'已是最新版本 ({APP_VERSION_LABEL})')
+            elif snapshot.state == STATE_ERROR:
+                SAODialog.showinfo(
+                    self._float, '更新',
+                    f'检查失败: {snapshot.error}')
+
+        self._run_update_dialog_when_safe(_show)
 
     def _prompt_update_available(self, snapshot):
         from updater.sao_updater import get_manager, STATE_READY, STATE_ERROR

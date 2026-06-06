@@ -910,19 +910,23 @@ class HpOverlay:
                 self._render_worker.stop()
             except Exception:
                 pass
-        # GPU presenter teardown first (mirrors SkillFX pattern).
-        if self._gpu_presenter is not None:
-            try:
-                self._gpu_presenter.release()
-            except Exception:
-                pass
-            self._gpu_presenter = None
+        # The GPU window owns the GL context used by BgraPresenter.
+        # Destroy the window first so its pump cannot render with a
+        # half-released presenter and leave a black DWM frame behind.
+        presenter = self._gpu_presenter
         if self._gpu_window is not None:
             try:
                 self._gpu_window.destroy()
             except Exception:
                 pass
             self._gpu_window = None
+            presenter = None
+        if presenter is not None:
+            try:
+                presenter.release()
+            except Exception:
+                pass
+        self._gpu_presenter = None
         if self._win is not None and self._win is not self:
             try:
                 self._win.destroy()

@@ -937,6 +937,8 @@ class SAOPlayerGUIFisheyeMixin:
         ov._running_ref = _running
 
         def _request_fadeout(force=False):
+            if self._fisheye_ov is not ov:
+                return
             _stop_requested[0] = True
             _force_fadeout[0] = bool(force)
             try:
@@ -947,19 +949,23 @@ class SAOPlayerGUIFisheyeMixin:
         ov._request_fadeout = _request_fadeout
 
         def _on_fadeout_done():
+            def _stop_if_current(_expected=ov):
+                if self._fisheye_ov is _expected:
+                    self._stop_fisheye_overlay(wait=True, expected=_expected)
+
             try:
                 pump = getattr(gpu_win, '_pump', None)
                 post_to_tk = getattr(pump, 'post_to_tk', None)
                 if callable(post_to_tk):
-                    post_to_tk(lambda: self._stop_fisheye_overlay(wait=True))
+                    post_to_tk(_stop_if_current)
                 else:
-                    self._stop_fisheye_overlay(wait=True)
+                    _stop_if_current()
             except Exception:
                 pass
 
         def _tick():
             _tick_t0 = time.perf_counter()
-            if self._fisheye_ov is None:
+            if self._fisheye_ov is not ov:
                 return
             s = _state[0]
 
@@ -1002,7 +1008,7 @@ class SAOPlayerGUIFisheyeMixin:
                         pass
                     _state[0] = 'fadein'
                 elif not _fisheye_should_run and _stop_requested[0]:
-                    self._stop_fisheye_overlay()
+                    self._stop_fisheye_overlay(expected=ov)
                     return
             elif s == 'fadein':
                 if not _fisheye_should_run:
@@ -1469,7 +1475,7 @@ class SAOPlayerGUIFisheyeMixin:
         _worker_thread.start()
 
     @_probe.decorate('ui.fisheye.stop')
-    def _stop_fisheye_overlay(self, wait: bool = False):
+    def _stop_fisheye_overlay(self, wait: bool = False, expected=None):
         """销毁持久鱼眼叠加层.
 
         v3.1.8 round 19: previously this method called ``worker_thread.join(2.0)``
@@ -1483,6 +1489,8 @@ class SAOPlayerGUIFisheyeMixin:
         GLFW pump/GPU resources are torn down before root.quit().
         """
         ov = self._fisheye_ov
+        if expected is not None and ov is not expected:
+            return
         if ov is None:
             return
         gpu_win = getattr(ov, 'gpu_win', None)
@@ -1492,7 +1500,8 @@ class SAOPlayerGUIFisheyeMixin:
             post_to_tk = getattr(pump, 'post_to_tk', None)
             if callable(post_to_tk):
                 try:
-                    post_to_tk(lambda: self._stop_fisheye_overlay(wait=wait))
+                    post_to_tk(lambda: self._stop_fisheye_overlay(
+                        wait=wait, expected=expected))
                     return
                 except Exception:
                     pass
@@ -1528,12 +1537,20 @@ class SAOPlayerGUIFisheyeMixin:
                     gw.destroy()
                 except Exception:
                     pass
+                try:
+                    _ov.gpu_win = None
+                except Exception:
+                    pass
                 presenter = None
             if presenter is not None:
                 # Only fall back to direct release when there is no GPU
                 # window/context left to marshal through.
                 try:
                     presenter.release()
+                except Exception:
+                    pass
+                try:
+                    _ov.presenter = None
                 except Exception:
                     pass
             destroy_cb = getattr(_ov, 'destroy', None)

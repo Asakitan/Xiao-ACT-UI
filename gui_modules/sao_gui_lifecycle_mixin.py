@@ -195,9 +195,13 @@ class SAOPlayerGUILifecycleMixin:
             self._update_listener = None
             self._update_listener_installed = False
         self._cleanup_entry_overlay()
-        self._cleanup_exit_overlay()
-        if hasattr(self, '_hotkey_mgr'):
-            self._hotkey_mgr.cleanup()
+        # Keep the exit overlay alive while child GPU windows are torn
+        # down. If it is destroyed first, the HP/ID layered windows can
+        # briefly expose a black compositor frame after the animation.
+        hotkey_mgr = getattr(self, '_hotkey_mgr', None)
+        cleanup_hotkeys = getattr(hotkey_mgr, 'cleanup', None)
+        if callable(cleanup_hotkeys):
+            cleanup_hotkeys()
         try:
             if self._state_mgr:
                 self._state_mgr.unsubscribe(self._on_game_state_update)
@@ -307,6 +311,7 @@ class SAOPlayerGUILifecycleMixin:
                 self._float.destroy()
         except Exception:
             pass
+        self._cleanup_exit_overlay()
         try:
             self.root.quit()  # 退出 mainloop，由 run() 负责 destroy
         except Exception:

@@ -308,6 +308,30 @@ class SAOPlayerGUIFloatHpMixin:
             except Exception:
                 pass
 
+    def _mark_motion_blur_active(self, ttl: float = 0.9) -> None:
+        """Track async motion-blur teardown so dialogs wait for it."""
+        try:
+            count = int(getattr(self, '_motion_blur_active_count', 0) or 0)
+        except Exception:
+            count = 0
+        self._motion_blur_active_count = max(0, count) + 1
+        until = time.time() + max(0.05, float(ttl))
+        try:
+            prev = float(getattr(self, '_motion_blur_active_until', 0.0) or 0.0)
+        except Exception:
+            prev = 0.0
+        self._motion_blur_active_until = max(prev, until)
+
+    def _clear_motion_blur_active(self, settle: float = 0.08) -> None:
+        try:
+            count = int(getattr(self, '_motion_blur_active_count', 0) or 0)
+        except Exception:
+            count = 0
+        count = max(0, count - 1)
+        self._motion_blur_active_count = count
+        if count <= 0:
+            self._motion_blur_active_until = time.time() + max(0.0, float(settle))
+
     def _hp_overlay_on_click(self):
         """Left-click on HP panel: open the SAO radial menu (web parity)."""
         try:
@@ -357,6 +381,15 @@ class SAOPlayerGUIFloatHpMixin:
         except ImportError:
             return
 
+        self._mark_motion_blur_active(ttl=1.2)
+        _blur_cleared = [False]
+
+        def _clear_blur(settle: float = 0.08) -> None:
+            if _blur_cleared[0]:
+                return
+            _blur_cleared[0] = True
+            self._clear_motion_blur_active(settle=settle)
+
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
 
@@ -391,6 +424,10 @@ class SAOPlayerGUIFloatHpMixin:
                     except Exception:
                         continue
             if shot is None:
+                try:
+                    self.root.after(0, _clear_blur)
+                except Exception:
+                    _clear_blur()
                 return
 
             # 半分辨率处理 (1/2 而非 1/3, 提升清晰度)
@@ -427,7 +464,7 @@ class SAOPlayerGUIFloatHpMixin:
             try:
                 self.root.after(0, lambda img=full: _display(img))
             except Exception:
-                pass
+                _clear_blur()
 
         def _display(pil_img):
             """主线程: 显示模糊图 + 350ms ease-out 渐隐."""
@@ -495,6 +532,7 @@ class SAOPlayerGUIFloatHpMixin:
                     except Exception:
                         pass
             except Exception:
+                _clear_blur()
                 return
 
             # 快速渐入 (50ms) → 缓慢渐隐 (350ms), 消除突然出现的闪烁感
@@ -515,11 +553,12 @@ class SAOPlayerGUIFloatHpMixin:
                 else:
                     try: mb_ov.destroy()
                     except Exception: pass
+                    _clear_blur()
                     return
                 try: mb_ov.attributes('-alpha', max(0.0, a))
                 except Exception: pass
                 try: mb_ov.after(16, _mblur_anim)
-                except Exception: pass
+                except Exception: _clear_blur()
 
             mb_ov.after(1, _mblur_anim)
 

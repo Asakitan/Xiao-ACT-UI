@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -71,6 +72,17 @@ class MenuMotionBlurTests(unittest.TestCase):
         owner._raise_fisheye_panels_above_motion_blur()
 
         self.assertEqual(owner.raised, [owner.panels[0]])
+
+    def test_motion_blur_marker_keeps_short_settle_window(self) -> None:
+        owner = _Owner(None)
+
+        owner._mark_motion_blur_active(ttl=0.2)
+        self.assertEqual(owner._motion_blur_active_count, 1)
+        self.assertGreater(owner._motion_blur_active_until, time.time())
+
+        owner._clear_motion_blur_active(settle=0.05)
+        self.assertEqual(owner._motion_blur_active_count, 0)
+        self.assertGreater(owner._motion_blur_active_until, time.time())
 
 
 if __name__ == "__main__":

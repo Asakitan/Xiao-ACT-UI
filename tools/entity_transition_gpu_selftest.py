@@ -162,6 +162,96 @@ class _FadeableOverlay:
         self.hide_count += 1
 
 
+class _DestroyableOverlay:
+    def __init__(self, order, name: str) -> None:
+        self.order = order
+        self.name = name
+
+    def destroy(self) -> None:
+        self.order.append(f"{self.name}.destroy")
+
+
+class _QuitRoot:
+    def __init__(self, order) -> None:
+        self.order = order
+
+    def after_cancel(self, _aid) -> None:
+        self.order.append("root.after_cancel")
+
+    def quit(self) -> None:
+        self.order.append("root.quit")
+
+
+class _StopFlag:
+    def __init__(self, order) -> None:
+        self.order = order
+
+    def set(self) -> None:
+        self.order.append("cache.stop")
+
+
+class _FinalizeOwner(SAOPlayerGUILifecycleMixin):
+    def __init__(self) -> None:
+        self.order = []
+        self.root = _QuitRoot(self.order)
+        self._close_finalized = False
+        self._destroyed = False
+        self._breath_active = True
+        self._lift_loop_active = True
+        self._panel_float_after_id = None
+        self._menu_refresh_after_id = None
+        self._updater_mgr = None
+        self._update_listener = None
+        self._update_listener_installed = False
+        self._hotkey_mgr = None
+        self._state_mgr = None
+        self._cfg_settings_ref = None
+        self._sao_menu = None
+        self._recognition_active = True
+        self._cache_loop_stop = _StopFlag(self.order)
+        self._status_panel = None
+        self._update_panel = None
+        self._dps_overlay = None
+        self._boss_hp_overlay = None
+        self._hp_overlay = _DestroyableOverlay(self.order, "hp")
+        self._alert_overlay = None
+        self._map_banner_overlay = None
+        self._skillfx_overlay = None
+        self._self_buff_overlay = None
+        self._boss_buff_overlay = None
+        for name in (
+            '_autokey_panel', '_bossraid_panel',
+            '_autokey_detail_panel', '_bossraid_detail_panel',
+            '_commander_panel', '_act_plugin_manager_panel',
+            '_act_trigger_timer_panel', '_act_data_source_health_panel',
+            '_act_report_export_panel', '_act_offline_import_panel',
+            '_act_timeline_vcr_panel', '_act_aggregate_panel',
+            '_act_action_log_panel', '_act_death_recap_panel',
+            '_act_graph_timeseries_panel', '_act_combatant_drilldown_panel',
+            '_act_skill_drilldown_panel',
+        ):
+            setattr(self, name, None)
+        self._float = None
+
+    def _cleanup_entry_overlay(self) -> None:
+        self.order.append("entry.cleanup")
+
+    def _cleanup_exit_overlay(self) -> None:
+        self.order.append("exit.cleanup")
+
+    def _stop_fisheye_overlay(self, wait=False) -> None:
+        self.order.append("fisheye.stop")
+
+    def _stop_boss_hp_worker(self) -> None:
+        self.order.append("boss_worker.stop")
+
+    def _stop_recognition_engines(self) -> None:
+        self.order.append("recognition.stop")
+
+    def _destroy_hp_alpha_strip_windows(self) -> None:
+        self.order.append("hp_alpha_strips.destroy")
+
+
 class EntityTransitionGpuDestroyTests(unittest.TestCase):
     def test_shader_points_flip_top_left_screen_y_to_bottom_left_gl_y(self) -> None:
         overlay = EntityTransitionGpuOverlay(
@@ -270,6 +360,20 @@ class EntityTransitionGpuExitLifecycleTests(unittest.TestCase):
 
         self.assertEqual(hp.fade_count, 1)
         self.assertEqual(hp.hide_count, 0)
+
+    def test_finalize_keeps_exit_overlay_until_gpu_children_are_destroyed(self) -> None:
+        owner = _FinalizeOwner()
+
+        owner._finalize_close()
+
+        self.assertLess(
+            owner.order.index("hp.destroy"),
+            owner.order.index("exit.cleanup"),
+        )
+        self.assertLess(
+            owner.order.index("exit.cleanup"),
+            owner.order.index("root.quit"),
+        )
 
 
 if __name__ == "__main__":

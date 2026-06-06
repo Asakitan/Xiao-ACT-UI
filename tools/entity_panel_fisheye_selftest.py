@@ -333,6 +333,25 @@ class EntityPanelFisheyeTests(unittest.TestCase):
 
         self.assertEqual(owner._presenter.release_count, 1)
 
+    def test_stale_fadeout_stop_does_not_destroy_new_fisheye_overlay(self) -> None:
+        owner = _StopOwner()
+        stale = owner._fisheye_ov
+        new_running = [True]
+        new_overlay = SimpleNamespace(
+            gpu_win=None,
+            presenter=_Presenter(),
+            _worker_thread=None,
+            _running_ref=new_running,
+        )
+        owner._fisheye_ov = new_overlay
+
+        owner._stop_fisheye_overlay(wait=True, expected=stale)
+
+        self.assertIs(owner._fisheye_ov, new_overlay)
+        self.assertTrue(new_running[0])
+        self.assertEqual(owner._gpu_win.destroy_count, 0)
+        self.assertEqual(owner._presenter.release_count, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

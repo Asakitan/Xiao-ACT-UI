@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,10 +34,20 @@ class _FakeRoot:
             self.run_next()
 
 
+class _FakeOverlay:
+    def __init__(self, alive: bool = True) -> None:
+        self.alive = alive
+
+    def winfo_exists(self) -> bool:
+        return self.alive
+
+
 class _FakeMenu:
     def __init__(self) -> None:
         self.visible = True
         self._closing = False
+        self._overlay = _FakeOverlay(alive=True)
+        self._hud_overlay = None
         self.close_calls = 0
 
     def close(self) -> None:
@@ -80,12 +91,17 @@ class _ManualOwner(SAOPlayerGUIStatusUpdaterMixin):
         self._destroyed = False
         self.root = _FakeRoot()
         self._float = object()
-        self._sao_menu = SimpleNamespace(visible=False)
+        self._sao_menu = SimpleNamespace(visible=False, _overlay=None, _hud_overlay=None)
+        self._fisheye_ov = None
+        self._sao_menu_close_pending = False
         self._manual_update_check_inflight = False
         self.available_prompts = []
 
     def _prompt_update_available(self, snapshot) -> None:
         self.available_prompts.append(snapshot)
+
+    def _any_panel_open(self) -> bool:
+        return False
 
 
 class _FakeManager:
@@ -170,6 +186,11 @@ def test_manual_check_waits_for_menu_close() -> None:
 
     owner._sao_menu.visible = False
     owner.root.run_next()
+    assert owner.runs == 0
+    assert owner.root.jobs
+
+    owner._sao_menu._overlay.alive = False
+    owner.root.run_next()
     assert owner.runs == 1
 
 
@@ -195,6 +216,70 @@ def test_latest_manual_check_has_no_checking_dialog() -> None:
     finally:
         updater_mixin.SAODialog = original_dialog
         sao_updater.get_manager = original_get_manager
+
+
+def test_latest_manual_result_waits_for_menu_overlay_destroy() -> None:
+    owner = _ManualOwner()
+    owner._manual_update_check_inflight = True
+    owner._sao_menu = SimpleNamespace(
+        visible=False,
+        _overlay=_FakeOverlay(alive=True),
+        _hud_overlay=None,
+    )
+    snapshot = SimpleNamespace(
+        state=sao_updater.STATE_UP_TO_DATE,
+        latest_version="",
+        progress=0.0,
+        error="",
+    )
+    original_dialog = updater_mixin.SAODialog
+    _DialogRecorder.calls = []
+    try:
+        updater_mixin.SAODialog = _DialogRecorder
+        owner._show_manual_update_result(snapshot)
+        assert _DialogRecorder.calls == []
+        assert owner._manual_update_check_inflight is True
+        assert owner.root.jobs
+
+        owner._sao_menu._overlay.alive = False
+        owner.root.run_next()
+        assert _DialogRecorder.calls == [
+            ("showinfo", "更新", f"已是最新版本 ({updater_mixin.APP_VERSION_LABEL})")
+        ]
+        assert owner._manual_update_check_inflight is False
+    finally:
+        updater_mixin.SAODialog = original_dialog
+
+
+def test_latest_manual_result_waits_for_motion_blur_to_settle() -> None:
+    owner = _ManualOwner()
+    owner._manual_update_check_inflight = True
+    owner._motion_blur_active_count = 1
+    owner._motion_blur_active_until = time.time() + 10.0
+    snapshot = SimpleNamespace(
+        state=sao_updater.STATE_UP_TO_DATE,
+        latest_version="",
+        progress=0.0,
+        error="",
+    )
+    original_dialog = updater_mixin.SAODialog
+    _DialogRecorder.calls = []
+    try:
+        updater_mixin.SAODialog = _DialogRecorder
+        owner._show_manual_update_result(snapshot)
+        assert _DialogRecorder.calls == []
+        assert owner._manual_update_check_inflight is True
+        assert owner.root.jobs
+
+        owner._motion_blur_active_count = 0
+        owner._motion_blur_active_until = time.time() - 1.0
+        owner.root.run_next()
+        assert _DialogRecorder.calls == [
+            ("showinfo", "更新", f"已是最新版本 ({updater_mixin.APP_VERSION_LABEL})")
+        ]
+        assert owner._manual_update_check_inflight is False
+    finally:
+        updater_mixin.SAODialog = original_dialog
 
 
 def test_update_check_retries_transient_fetch_once() -> None:
@@ -230,6 +315,8 @@ def main() -> int:
     test_available_popup_still_surfaces()
     test_manual_check_waits_for_menu_close()
     test_latest_manual_check_has_no_checking_dialog()
+    test_latest_manual_result_waits_for_menu_overlay_destroy()
+    test_latest_manual_result_waits_for_motion_blur_to_settle()
     test_update_check_retries_transient_fetch_once()
     print("update_check_flow_selftest: ok")
     return 0

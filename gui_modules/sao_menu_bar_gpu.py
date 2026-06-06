@@ -272,18 +272,20 @@ class MenuBarGpuPainter:
             self._render_worker.stop()
         except Exception:
             pass
-        if self._presenter is not None:
-            try:
-                self._presenter.release()
-            except Exception:
-                pass
-            self._presenter = None
+        presenter = self._presenter
         if self._gpu_window is not None:
             try:
                 self._gpu_window.destroy()
             except Exception:
                 pass
             self._gpu_window = None
+            presenter = None
+        if presenter is not None:
+            try:
+                presenter.release()
+            except Exception:
+                pass
+        self._presenter = None
         self._target_geom = None
 
     # ──────────────────────────────────────────

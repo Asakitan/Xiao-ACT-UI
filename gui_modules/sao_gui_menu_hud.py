@@ -268,19 +268,23 @@ class MenuHudOverlay:
             self._render_worker.stop()
         except Exception:
             pass
-        # v2.3.0 Phase 3: tear down GPU resources first.
-        if self._gpu_presenter is not None:
-            try:
-                self._gpu_presenter.release()
-            except Exception:
-                pass
-            self._gpu_presenter = None
+        # The GPU window owns the GL context used by BgraPresenter.
+        # Close it first so pending redraw callbacks do not see a
+        # released presenter while the menu fade is finishing.
+        presenter = self._gpu_presenter
         if self._gpu_window is not None:
             try:
                 self._gpu_window.destroy()
             except Exception:
                 pass
             self._gpu_window = None
+            presenter = None
+        if presenter is not None:
+            try:
+                presenter.release()
+            except Exception:
+                pass
+        self._gpu_presenter = None
         if self._win is not None and self._win is not self:
             try:
                 self._win.destroy()
