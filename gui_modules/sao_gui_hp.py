@@ -902,6 +902,25 @@ class HpOverlay:
                 pass
         self._schedule_tick(immediate=True)
 
+    def raise_topmost(self) -> None:
+        hwnd = self._input_hwnd()
+        if not hwnd:
+            return
+        try:
+            _user32.SetWindowPos(
+                ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST),
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+            self._last_topmost_t = time.time()
+        except Exception:
+            pass
+        try:
+            if self._gpu_window is not None:
+                self._gpu_window.request_redraw()
+        except Exception:
+            pass
+
     def destroy(self) -> None:
         _phase_trace('hp.overlay.destroy', f'gpu={int(bool(self._gpu_managed))} hwnd={self._hwnd}')
         self._cancel_tick()

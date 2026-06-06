@@ -13,6 +13,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from gui_modules.sao_gui_fisheye_mixin import SAOPlayerGUIFisheyeMixin
+from gui_modules.sao_gui_float_hp_mixin import SAOPlayerGUIFloatHpMixin
 from gui_modules.sao_gui_float_handlers_mixin import SAOPlayerGUIFloatHandlersMixin
 
 
@@ -130,6 +131,29 @@ class _RaiseOwner(SAOPlayerGUIFloatHandlersMixin):
         self.root = _Root()
 
 
+class _HpOverlay:
+    def __init__(self) -> None:
+        self.raise_count = 0
+
+    def raise_topmost(self) -> None:
+        self.raise_count += 1
+
+
+class _MotionBlurOwner(SAOPlayerGUIFloatHpMixin):
+    def __init__(self) -> None:
+        self._hp_overlay = _HpOverlay()
+        self.raised_panels = []
+
+    def _raise_panel_window(self, panel) -> None:
+        self.raised_panels.append(panel)
+
+    def _iter_fisheye_panels(self):
+        return [getattr(self, '_act_aggregate_panel', None)]
+
+    def _is_fisheye_panel_visible(self, panel) -> bool:
+        return panel is not None
+
+
 class EntityPanelFisheyeTests(unittest.TestCase):
     def test_act_panels_keep_fisheye_alive_and_release_backdrop_input(self) -> None:
         owner = _FisheyeOwner()
@@ -187,6 +211,15 @@ class EntityPanelFisheyeTests(unittest.TestCase):
         self.assertEqual(panel._win.topmost_values, [True, True, True])
         self.assertEqual(panel._win.focus_count, 1)
         self.assertEqual([delay for delay, _ in owner.root.after_calls], [260, 520])
+
+    def test_closing_motion_blur_raises_hp_overlay_with_panels(self) -> None:
+        owner = _MotionBlurOwner()
+        owner._act_aggregate_panel = _Panel(True)
+
+        owner._raise_fisheye_panels_above_motion_blur()
+
+        self.assertEqual(owner._hp_overlay.raise_count, 1)
+        self.assertEqual(owner.raised_panels, [owner._act_aggregate_panel])
 
 
 if __name__ == "__main__":
