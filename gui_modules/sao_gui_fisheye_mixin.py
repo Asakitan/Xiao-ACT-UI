@@ -951,9 +951,9 @@ class SAOPlayerGUIFisheyeMixin:
                 pump = getattr(gpu_win, '_pump', None)
                 post_to_tk = getattr(pump, 'post_to_tk', None)
                 if callable(post_to_tk):
-                    post_to_tk(self._stop_fisheye_overlay)
+                    post_to_tk(lambda: self._stop_fisheye_overlay(wait=True))
                 else:
-                    self._stop_fisheye_overlay()
+                    self._stop_fisheye_overlay(wait=True)
             except Exception:
                 pass
 
@@ -1511,23 +1511,6 @@ class SAOPlayerGUIFisheyeMixin:
         # Toplevel destroy must still go via root.after so it lands on main.
         _root = self.root
 
-        def _release_presenter_on_pump(_gw, _presenter):
-            try:
-                from render import gpu_overlay_window as _gow_local
-                glfw_mod = getattr(_gow_local, '_glfw', None)
-                win = getattr(_gw, '_win', None)
-                if glfw_mod is not None and win is not None:
-                    try:
-                        glfw_mod.make_context_current(win)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            try:
-                _presenter.release()
-            except Exception:
-                pass
-
         def _async_fisheye_shutdown(_ov=ov, _root_ref=_root):
             worker_thread = getattr(_ov, '_worker_thread', None)
             if worker_thread is not None and worker_thread.is_alive():
@@ -1540,29 +1523,19 @@ class SAOPlayerGUIFisheyeMixin:
                     pass
             gw = getattr(_ov, 'gpu_win', None)
             presenter = getattr(_ov, 'presenter', None)
-            if gw is not None and presenter is not None:
-                _pump = getattr(gw, '_pump', None)
-                _exec = getattr(_pump, 'exec_on_pump', None)
-                if callable(_exec):
-                    try:
-                        _exec(lambda: _release_presenter_on_pump(gw, presenter),
-                              timeout=1.0)
-                        presenter = None
-                    except Exception:
-                        pass
             if gw is not None:
                 try:
                     gw.destroy()
                 except Exception:
                     pass
+                presenter = None
             if presenter is not None:
                 # Only fall back to direct release when there is no GPU
                 # window/context left to marshal through.
-                if gw is None:
-                    try:
-                        presenter.release()
-                    except Exception:
-                        pass
+                try:
+                    presenter.release()
+                except Exception:
+                    pass
             destroy_cb = getattr(_ov, 'destroy', None)
             if callable(destroy_cb):
                 # Legacy Tk Toplevel — must land on main thread.

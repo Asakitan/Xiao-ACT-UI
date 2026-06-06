@@ -321,9 +321,17 @@ class EntityPanelFisheyeTests(unittest.TestCase):
         self.assertFalse(owner._running_ref[0])
         self.assertEqual(layer.destroy_count, 1)
         self.assertEqual(owner._worker.join_calls, [2.0])
-        self.assertEqual(owner._pump.exec_calls, 1)
-        self.assertEqual(owner._presenter.release_count, 1)
+        self.assertEqual(owner._pump.exec_calls, 0)
+        self.assertEqual(owner._presenter.release_count, 0)
         self.assertEqual(owner._gpu_win.destroy_count, 1)
+
+    def test_stop_fisheye_releases_presenter_without_gpu_window(self) -> None:
+        owner = _StopOwner()
+        owner._fisheye_ov.gpu_win = None
+
+        owner._stop_fisheye_overlay(wait=True)
+
+        self.assertEqual(owner._presenter.release_count, 1)
 
 
 if __name__ == "__main__":
