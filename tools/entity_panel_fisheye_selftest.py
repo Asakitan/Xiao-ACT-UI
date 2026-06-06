@@ -41,9 +41,20 @@ class _Menu:
 class _FisheyeOverlay:
     def __init__(self) -> None:
         self.fade_requests = 0
+        self.fade_forces = []
+        self.gpu_win = _GpuWin()
 
-    def _request_fadeout(self) -> None:
+    def _request_fadeout(self, force=False) -> None:
         self.fade_requests += 1
+        self.fade_forces.append(bool(force))
+
+
+class _GpuWin:
+    def __init__(self) -> None:
+        self.click_through_values = []
+
+    def set_click_through(self, value: bool) -> None:
+        self.click_through_values.append(bool(value))
 
 
 class _FisheyeOwner(SAOPlayerGUIFisheyeMixin):
@@ -62,6 +73,8 @@ class _FisheyeOwner(SAOPlayerGUIFisheyeMixin):
         self.prepared_for_panel = 0
         self.stopped = 0
         self.clickthrough_values = []
+        self.hit_layer_destroyed = 0
+        self.raised_panels = []
 
     def _prepare_fisheye_backdrop_for_panels(self) -> None:
         self.prepared_for_panel += 1
@@ -69,8 +82,14 @@ class _FisheyeOwner(SAOPlayerGUIFisheyeMixin):
     def _stop_fisheye_overlay(self) -> None:
         self.stopped += 1
 
+    def _destroy_fisheye_hit_layer(self) -> None:
+        self.hit_layer_destroyed += 1
+
     def _set_fisheye_hit_layer_clickthrough(self, enabled: bool) -> None:
         self.clickthrough_values.append(bool(enabled))
+
+    def _raise_panel_window(self, panel) -> None:
+        self.raised_panels.append(panel)
 
 
 class _Win:
@@ -138,13 +157,17 @@ class EntityPanelFisheyeTests(unittest.TestCase):
         self.assertEqual(owner.prepared_for_panel, 0)
         self.assertEqual(owner.stopped, 0)
 
-    def test_backdrop_click_request_fades_fisheye_without_stopping_panel(self) -> None:
+    def test_backdrop_click_request_forces_animated_fisheye_exit(self) -> None:
         owner = _FisheyeOwner()
         owner._act_aggregate_panel = _Panel(True)
 
         owner._request_fisheye_backdrop_close()
 
         self.assertEqual(owner._fisheye_ov.fade_requests, 1)
+        self.assertEqual(owner._fisheye_ov.fade_forces, [True])
+        self.assertEqual(owner._fisheye_ov.gpu_win.click_through_values, [True])
+        self.assertEqual(owner.hit_layer_destroyed, 1)
+        self.assertEqual(owner.raised_panels, [owner._act_aggregate_panel])
         self.assertEqual(owner.stopped, 0)
         self.assertTrue(owner._any_panel_open())
 
