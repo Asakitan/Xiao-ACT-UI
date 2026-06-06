@@ -28,6 +28,26 @@ class _Owner(SAOPlayerGUIFloatHpMixin):
         self._sao_menu = menu
 
 
+class _Panel:
+    def __init__(self, visible: bool = True) -> None:
+        self.visible = visible
+
+
+class _PanelOwner(SAOPlayerGUIFloatHpMixin):
+    def __init__(self) -> None:
+        self.panels = [_Panel(True), _Panel(False)]
+        self.raised = []
+
+    def _iter_fisheye_panels(self):
+        return iter(self.panels)
+
+    def _is_fisheye_panel_visible(self, panel) -> bool:
+        return bool(getattr(panel, 'visible', False))
+
+    def _raise_panel_window(self, panel) -> None:
+        self.raised.append(panel)
+
+
 class MenuMotionBlurTests(unittest.TestCase):
     def test_open_blur_reraises_visible_sao_menu(self) -> None:
         menu = _Menu(visible=True)
@@ -44,6 +64,13 @@ class MenuMotionBlurTests(unittest.TestCase):
         _Owner(None)._raise_sao_menu_above_motion_blur()
 
         self.assertEqual(hidden.raise_count, 0)
+
+    def test_closing_blur_reraises_visible_fisheye_panels(self) -> None:
+        owner = _PanelOwner()
+
+        owner._raise_fisheye_panels_above_motion_blur()
+
+        self.assertEqual(owner.raised, [owner.panels[0]])
 
 
 if __name__ == "__main__":

@@ -75,9 +75,13 @@ class _FisheyeOwner(SAOPlayerGUIFisheyeMixin):
         self.clickthrough_values = []
         self.hit_layer_destroyed = 0
         self.raised_panels = []
+        self.close_fx_count = 0
 
     def _prepare_fisheye_backdrop_for_panels(self) -> None:
         self.prepared_for_panel += 1
+
+    def _play_fisheye_backdrop_close_fx(self) -> None:
+        self.close_fx_count += 1
 
     def _stop_fisheye_overlay(self) -> None:
         self.stopped += 1
@@ -167,6 +171,7 @@ class EntityPanelFisheyeTests(unittest.TestCase):
         self.assertEqual(owner._fisheye_ov.fade_forces, [True])
         self.assertEqual(owner._fisheye_ov.gpu_win.click_through_values, [True])
         self.assertEqual(owner.hit_layer_destroyed, 1)
+        self.assertEqual(owner.close_fx_count, 1)
         self.assertEqual(owner.raised_panels, [owner._act_aggregate_panel])
         self.assertEqual(owner.stopped, 0)
         self.assertTrue(owner._any_panel_open())

@@ -248,6 +248,20 @@ class SAOPlayerGUIFisheyeMixin:
         except Exception:
             pass
 
+    def _play_fisheye_backdrop_close_fx(self) -> None:
+        """Play the same close flourish when dismissing panel-only fisheye."""
+        try:
+            from utils.sao_sound import play_sound as _play_sound
+            _play_sound('menu_close')
+        except Exception:
+            pass
+        try:
+            motion_blur = getattr(self, '_play_motion_blur', None)
+            if callable(motion_blur):
+                motion_blur(closing=True)
+        except Exception:
+            pass
+
     def _request_fisheye_backdrop_close(self) -> None:
         self._sao_panel_transition_until = 0.0
         ov = self._fisheye_ov
@@ -255,6 +269,7 @@ class SAOPlayerGUIFisheyeMixin:
         if callable(request_fadeout):
             try:
                 self._destroy_fisheye_hit_layer()
+                self._play_fisheye_backdrop_close_fx()
                 self._restore_fisheye_exit_zorder(ov)
                 try:
                     request_fadeout(force=True)

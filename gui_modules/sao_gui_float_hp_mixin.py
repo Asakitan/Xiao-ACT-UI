@@ -290,6 +290,24 @@ class SAOPlayerGUIFloatHpMixin:
         except Exception:
             pass
 
+    def _raise_fisheye_panels_above_motion_blur(self):
+        """Keep visible Entity panels above the async closing blur overlay."""
+        raise_panel = getattr(self, '_raise_panel_window', None)
+        iter_panels = getattr(self, '_iter_fisheye_panels', None)
+        is_visible = getattr(self, '_is_fisheye_panel_visible', None)
+        if not callable(raise_panel) or not callable(iter_panels) or not callable(is_visible):
+            return
+        try:
+            panels = list(iter_panels())
+        except Exception:
+            return
+        for panel in panels:
+            try:
+                if is_visible(panel):
+                    raise_panel(panel)
+            except Exception:
+                pass
+
     def _hp_overlay_on_click(self):
         """Left-click on HP panel: open the SAO radial menu (web parity)."""
         try:
@@ -430,8 +448,30 @@ class SAOPlayerGUIFloatHpMixin:
                 try:
                     import ctypes as _ct
                     _u32 = _ct.windll.user32
+                    _GWL_EXSTYLE = -20
+                    _WS_EX_LAYERED = 0x00080000
+                    _WS_EX_TRANSPARENT = 0x00000020
+                    _WS_EX_TOOLWINDOW = 0x00000080
+                    _WS_EX_NOACTIVATE = 0x08000000
+                    _HWND_TOPMOST = -1
+                    _SWP_NOMOVE = 0x0002
+                    _SWP_NOSIZE = 0x0001
+                    _SWP_NOACTIVATE = 0x0010
+                    _SWP_NOOWNERZORDER = 0x0200
                     mb_ov.update_idletasks()
                     hwnd = _u32.GetParent(mb_ov.winfo_id()) or mb_ov.winfo_id()
+                    ex = _u32.GetWindowLongPtrW(_ct.c_void_p(hwnd), _GWL_EXSTYLE)
+                    _u32.SetWindowLongPtrW(
+                        _ct.c_void_p(hwnd), _GWL_EXSTYLE,
+                        ex | _WS_EX_LAYERED | _WS_EX_TRANSPARENT
+                        | _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE,
+                    )
+                    _u32.SetWindowPos(
+                        _ct.c_void_p(hwnd), _ct.c_void_p(_HWND_TOPMOST),
+                        0, 0, 0, 0,
+                        _SWP_NOMOVE | _SWP_NOSIZE
+                        | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
+                    )
                     _u32.SetWindowDisplayAffinity(hwnd, 0x00000011)
                 except Exception:
                     pass
@@ -444,6 +484,14 @@ class SAOPlayerGUIFloatHpMixin:
                     try:
                         self.root.after(32, self._raise_sao_menu_above_motion_blur)
                         self.root.after(96, self._raise_sao_menu_above_motion_blur)
+                    except Exception:
+                        pass
+                else:
+                    self._raise_fisheye_panels_above_motion_blur()
+                    try:
+                        self.root.after(32, self._raise_fisheye_panels_above_motion_blur)
+                        self.root.after(96, self._raise_fisheye_panels_above_motion_blur)
+                        self.root.after(180, self._raise_fisheye_panels_above_motion_blur)
                     except Exception:
                         pass
             except Exception:
