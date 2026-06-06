@@ -519,6 +519,22 @@ class DpsOverlay:
     SKILL_BAR_HEAL = (154, 211, 52, 70)
     SKILL_BAR_DAMAGE = (222, 190, 80, 60)
     VAL_HEAL_GREEN = (92, 150, 44, 255)
+    # Skill rank-board cockpit (parity with web/dps.html): gold/silver/bronze
+    # rank badges + a heat-gradient track (cold→gold→hot by relative output).
+    # Theme-independent — kept as class defaults so they survive _apply_theme
+    # (which only setattr's keys present in the theme dict) and stay 1:1 across
+    # light/dark with the webview which hard-codes the same colors.
+    RANK_GOLD = (235, 185, 60, 255)
+    RANK_SILVER = (200, 209, 221, 255)
+    RANK_BRONZE = (209, 144, 80, 255)
+    RANK_GOLD_FG = (42, 29, 5, 255)
+    RANK_SILVER_FG = (28, 32, 38, 255)
+    RANK_BRONZE_FG = (36, 18, 8, 255)
+    SKILL_TRACK_BG = (128, 130, 120, 56)
+    SKILL_RANK_MUTED = (150, 150, 156, 255)
+    HEAT_COLD = (60, 176, 255)
+    HEAT_MID = (255, 200, 72)
+    HEAT_HOT = (255, 96, 78)
     # Shell layer
     SHELL_AMBIENT_SHADOW = (22, 24, 18, 0)
     SHELL_CONTACT_SHADOW = (31, 34, 16, 0)
@@ -676,6 +692,11 @@ class DpsOverlay:
         # Scroll offset for entity list (mouse wheel support)
         self._scroll_offset: int = 0
         self._scroll_offset_report: int = 0
+        # Scroll offset for the detail-view skill list (independent of the
+        # entity list; driven by the wheel while the detail view is open).
+        self._skill_scroll_offset: int = 0
+        self._skill_total: int = 0      # total skills in the open detail
+        self._skill_visible: int = 0    # skills that fit the skill region
 
         # Static shell layer cache (shadow + shell + corners).
         # Only depends on (w, h); reused as long as panel size is stable.
@@ -939,6 +960,7 @@ class DpsOverlay:
             return
         self._detail_uid = uid
         self._detail_visible = True
+        self._skill_scroll_offset = 0
         # In live mode, request a fresh skill breakdown from the controller.
         if self._view_mode == 'live' and callable(self._request_entity_detail_cb):
             try:
@@ -993,6 +1015,7 @@ class DpsOverlay:
         self._detail_mode = True
         self._detail_uid = max(0, int(uid or 0))
         self._detail_visible = True
+        self._skill_scroll_offset = 0
         if self._detail_uid > 0 and self._view_mode == 'live' \
                 and callable(self._request_entity_detail_cb):
             try:
@@ -1009,6 +1032,7 @@ class DpsOverlay:
         self._resize_active = False
         self._detail_visible = False
         self._detail_uid = 0
+        self._skill_scroll_offset = 0
         self._last_compose_sig = None
         self._schedule_tick(immediate=True)
 
@@ -1020,6 +1044,7 @@ class DpsOverlay:
             return
         self._detail_visible = False
         self._detail_uid = 0
+        self._skill_scroll_offset = 0
         self._schedule_tick(immediate=True)
 
     @_probe.decorate('ui.dps.update_detail')
@@ -2482,13 +2507,21 @@ class DpsOverlay:
             self._draw_tracked(draw, (cx + col_w - 6 - vw, val_y),
                                value, val_font, color, 0.7)
 
-        # Skill rows below the stats grid
+        # Skill rows below the stats grid — "rank board · layered card" mirror
+        # of web/dps.html _renderSkillRows: rank badge + name + value/share on
+        # the head line, sub-meta below, an independent heat-gradient track at
+        # the bottom. Wheel-scrollable when the list overflows the region (see
+        # _scroll_skills); rows are sliced + clipped so nothing spills out.
         sk_y = body_y + grid_h + 6
         sk_h = ly + lh - sk_y - 4
-        if sk_h <= 12:
+        if sk_h <= 14:
+            self._skill_total = 0
+            self._skill_visible = 0
             return
         skills = entity.get('skills') or []
         if not skills:
+            self._skill_total = 0
+            self._skill_visible = 0
             font = _load_font('sao', 10)
             msg = ('NO SKILL DATA IN LAST REPORT' if self._view_mode == 'report'
                    else 'WAITING FOR LIVE SKILL DETAIL')
@@ -2503,19 +2536,39 @@ class DpsOverlay:
                               float(s.get('heal_total') or 0)),
             reverse=True,
         )
-        max_val = max(
-            (max(float(s.get('total') or 0), float(s.get('heal_total') or 0))
-             for s in skills_sorted),
-            default=0.0,
-        ) or 1.0
-        sk_row_h = 22
-        max_rows = max(1, sk_h // (sk_row_h + 2))
+        amounts = [max(float(s.get('total') or 0), float(s.get('heal_total') or 0))
+                   for s in skills_sorted]
+        max_val = max(amounts, default=0.0) or 1.0   # bar length basis
+        sum_val = sum(amounts) or 1.0                 # share-of-total basis
+
+        sk_row_h = 44
+        sk_row_gap = 4
+        step = sk_row_h + sk_row_gap
+        visible = max(1, (sk_h + sk_row_gap) // step)
+        total_sk = len(skills_sorted)
+        max_off = max(0, total_sk - visible)
+        off = max(0, min(int(self._skill_scroll_offset or 0), max_off))
+        self._skill_scroll_offset = off
+        self._skill_total = total_sk
+        self._skill_visible = visible
+
+        # Reserve a right gutter for the scrollbar only when the list overflows.
+        gutter = 8 if max_off > 0 else 0
+        row_x0 = lx + 6
+        row_x1 = lx + lw - 7 - gutter
+
         sk_font_extra = _load_font('sao', 8)
-        sk_font_val = _load_font('sao', 11)
-        for i, sk in enumerate(skills_sorted[:max_rows]):
-            ry = sk_y + i * (sk_row_h + 2)
+        sk_font_val = _load_font('sao', 12)
+        sk_font_pct = _load_font('sao', 9)
+        sk_font_rank = _load_font('sao', 9)
+        rank_colors = (self.RANK_GOLD, self.RANK_SILVER, self.RANK_BRONZE)
+        rank_fg_colors = (self.RANK_GOLD_FG, self.RANK_SILVER_FG, self.RANK_BRONZE_FG)
+
+        for vi, sk in enumerate(skills_sorted[off:off + visible]):
+            ry = sk_y + vi * step
             if ry + sk_row_h > ly + lh - 4:
                 break
+            rank = off + vi + 1
             dmg = float(sk.get('total') or 0)
             heal = float(sk.get('heal_total') or 0)
             amount = max(dmg, heal)
@@ -2523,46 +2576,120 @@ class DpsOverlay:
             hits = int(sk.get('heal_hits' if is_heal else 'hits') or 0)
             crit = (float(sk.get('crit_rate') or 0)
                     if not is_heal and int(sk.get('hits') or 0) > 0 else 0)
-            bar_pct = amount / max_val if max_val > 0 else 0
-            # Background bar
+            ratio = amount / max_val if max_val > 0 else 0    # bar length
+            share = amount / sum_val if sum_val > 0 else 0     # share of total
+            heat = self._heat_color(ratio)
+            heat_rgba = (heat[0], heat[1], heat[2], 255)
+
+            # Card background + hairline border
             self._fill_rounded_rect(
-                img, (lx + 6, ry, lx + lw - 7, ry + sk_row_h - 1),
-                radius=2, fill=self.SKILL_ROW_BG,
+                img, (row_x0, ry, row_x1, ry + sk_row_h - 1),
+                radius=5, fill=self.SKILL_ROW_BG,
             )
-            bar_w = int((lw - 14) * bar_pct)
-            if bar_w > 0:
-                bar_color = (self.SKILL_BAR_HEAL if is_heal
-                             else self.SKILL_BAR_DAMAGE)
+            draw.rounded_rectangle(
+                (row_x0, ry, row_x1, ry + sk_row_h - 1),
+                radius=5, outline=self.ROW_BORDER, width=1,
+            )
+
+            # ── Head line: rank badge + name … value + share% ──
+            rank_w = 20
+            rank_h = 16
+            rbx = row_x0 + 7
+            rby = ry + 5
+            if rank <= 3:
                 self._fill_rounded_rect(
-                    img, (lx + 6, ry, lx + 6 + bar_w, ry + sk_row_h - 1),
-                    radius=2, fill=bar_color,
+                    img, (rbx, rby, rbx + rank_w, rby + rank_h),
+                    radius=4, fill=rank_colors[rank - 1],
                 )
-            # Pick font based on the actual skill name text so CJK skill
-            # names (Chinese skill names like 星辉剑制, 岚刃 etc.) use
-            # ZhuZiAYuanJWD instead of SAOUI.ttf which has no CJK glyphs
-            # and renders them as boxes.
-            sk_name_raw = str(sk.get('skill_name') or sk.get('skill_id') or 'Unknown')
-            sk_font_name = _pick_font(sk_name_raw, 10)
-            sk_name = self._truncate(
-                sk_name_raw,
-                sk_font_name, int((lw - 14) * 0.55), draw,
+                rank_fg = rank_fg_colors[rank - 1]
+            else:
+                rank_fg = self.SKILL_RANK_MUTED
+            self._draw_tracked_centered(
+                draw, str(rank), sk_font_rank, rank_fg,
+                rbx + rank_w // 2, rby + 3, 0.5,
             )
-            self._draw_tracked(draw, (lx + 12, ry + 2), sk_name,
-                               sk_font_name, self.TEXT_MAIN, 0.6)
+            name_x = rbx + rank_w + 8
+
+            # Right side: share% on the far right, value to its left
+            pct_text = f'{int(round(share * 100))}%'
+            pw = self._tracked_text_width(draw, pct_text, sk_font_pct, 0.5)
+            self._draw_tracked(draw, (row_x1 - 8 - pw, ry + 7),
+                               pct_text, sk_font_pct, self.TEXT_MUTED, 0.5)
+            val_text = _fmt_num(amount)
+            vw = self._tracked_text_width(draw, val_text, sk_font_val, 0.6)
+            val_color = self.VAL_HEAL_GREEN if is_heal else heat_rgba
+            val_x = row_x1 - 8 - pw - 8 - vw
+            self._draw_tracked(draw, (val_x, ry + 5),
+                               val_text, sk_font_val, val_color, 0.6)
+
+            # Name — CJK-aware font (星辉剑制 / 岚刃 need ZhuZiAYuanJWD, not
+            # SAOUI.ttf which renders CJK as tofu boxes). Truncate to the gap
+            # left of the value so it never overlaps.
+            sk_name_raw = str(sk.get('skill_name') or sk.get('skill_id') or 'Unknown')
+            sk_font_name = _pick_font(sk_name_raw, 11)
+            name_avail = max(20, val_x - 6 - name_x)
+            sk_name = self._truncate(sk_name_raw, sk_font_name, name_avail, draw)
+            self._draw_tracked(draw, (name_x, ry + 6), sk_name,
+                               sk_font_name, self.TEXT_MAIN, 0.5)
+
+            # ── Sub line: DMG/HEAL · ×hits · CRIT n% ──
             extras = [('HEAL' if is_heal else 'DMG'), f'×{hits}']
             if not is_heal and crit > 0:
                 extras.append(f'CRIT {int(round(crit * 100))}%')
             extra_text = ' · '.join(extras)
-            self._draw_tracked(draw, (lx + 12, ry + sk_row_h - 11),
-                               extra_text, sk_font_extra,
-                               self.TEXT_MUTED, 0.6)
-            val_text = _fmt_num(amount)
-            vw = self._tracked_text_width(draw, val_text, sk_font_val, 0.6)
-            val_color = (self.VAL_HEAL_GREEN if is_heal else self.GOLD)
-            self._draw_tracked(draw, (lx + lw - 12 - vw, ry + 4),
-                               val_text, sk_font_val, val_color, 0.6)
+            self._draw_tracked(draw, (name_x, ry + 23),
+                               extra_text, sk_font_extra, self.TEXT_MUTED, 0.5)
+
+            # ── Bottom line: independent thin heat-gradient track ──
+            track_x0 = name_x
+            track_x1 = row_x1 - 8
+            track_y = ry + sk_row_h - 10
+            track_h = 5
+            self._fill_rounded_rect(
+                img, (track_x0, track_y, track_x1, track_y + track_h),
+                radius=2, fill=self.SKILL_TRACK_BG,
+            )
+            fill_w = int((track_x1 - track_x0) * ratio)
+            if fill_w > 1:
+                self._fill_rounded_rect(
+                    img, (track_x0, track_y, track_x0 + fill_w, track_y + track_h),
+                    radius=2, fill=(heat[0], heat[1], heat[2], 235),
+                )
+
+        # Scrollbar affordance for the skill list (only when it overflows)
+        if max_off > 0:
+            sb_x = row_x1 + 3
+            sb_y0 = sk_y
+            sb_y1 = ly + lh - 4
+            sb_h = sb_y1 - sb_y0
+            self._fill_rounded_rect(
+                img, (sb_x, sb_y0, sb_x + 3, sb_y1),
+                radius=2, fill=self.SKILL_TRACK_BG,
+            )
+            thumb_h = max(20, int(sb_h * visible / max(total_sk, 1)))
+            thumb_y = sb_y0 + int((sb_h - thumb_h) * off / max_off)
+            self._fill_rounded_rect(
+                img, (sb_x, thumb_y, sb_x + 3, thumb_y + thumb_h),
+                radius=2, fill=self.GOLD,
+            )
 
     # --------  Helpers  --------
+
+    @staticmethod
+    def _lerp_rgb(a, b, t):
+        return (
+            int(round(a[0] + (b[0] - a[0]) * t)),
+            int(round(a[1] + (b[1] - a[1]) * t)),
+            int(round(a[2] + (b[2] - a[2]) * t)),
+        )
+
+    def _heat_color(self, ratio: float):
+        """Heat gradient by relative output: low → cold blue, mid → gold,
+        high → hot red. Byte-for-byte mirror of web/dps.html _heatColor."""
+        r = max(0.0, min(1.0, float(ratio or 0.0)))
+        if r < 0.5:
+            return self._lerp_rgb(self.HEAT_COLD, self.HEAT_MID, r / 0.5)
+        return self._lerp_rgb(self.HEAT_MID, self.HEAT_HOT, (r - 0.5) / 0.5)
 
     def _draw_clip_rect(self, draw: ImageDraw.ImageDraw,
                         x: int, y: int, w: int, h: int,
@@ -3271,13 +3398,20 @@ class DpsOverlay:
     # ──────────────────────────────────────────
 
     def _on_mouse_wheel(self, ev) -> None:
-        """Handle mouse wheel to scroll the entity list."""
-        # ev.delta is positive = scroll up, negative = scroll down on Windows
+        """Handle mouse wheel.
+
+        In detail view the wheel scrolls the skill list (parity with
+        web/dps.html .skill-frame overflow:auto); otherwise it scrolls the
+        entity list. ev.delta > 0 = scroll up, < 0 = scroll down on Windows.
+        """
         delta = getattr(ev, 'delta', 0)
-        if delta > 0:
-            self._scroll(-1)
-        elif delta < 0:
-            self._scroll(1)
+        if delta == 0:
+            return
+        direction = -1 if delta > 0 else 1
+        if self._detail_visible:
+            self._scroll_skills(direction)
+        else:
+            self._scroll(direction)
 
     def _scroll(self, direction: int) -> None:
         """Scroll the entity list by one row in the given direction (+1 down, -1 up)."""
@@ -3286,6 +3420,21 @@ class DpsOverlay:
         new = max(0, min(max_offset, old + direction))
         if new != old:
             self._set_scroll_offset(new)
+
+    def _scroll_skills(self, direction: int) -> None:
+        """Scroll the detail-view skill list by one row (+1 down, -1 up).
+
+        Bounds come from the last _draw_detail_view pass which records how
+        many skills exist (_skill_total) and how many fit (_skill_visible),
+        so rows stay clipped inside the panel.
+        """
+        max_off = max(0, int(getattr(self, '_skill_total', 0) or 0)
+                      - int(getattr(self, '_skill_visible', 0) or 0))
+        old = int(getattr(self, '_skill_scroll_offset', 0) or 0)
+        new = max(0, min(max_off, old + direction))
+        if new != old:
+            self._skill_scroll_offset = new
+            self._schedule_tick(immediate=True)
 
     def _scroll_offset_attr(self) -> str:
         return '_scroll_offset_report' if self._view_mode == 'report' else '_scroll_offset'

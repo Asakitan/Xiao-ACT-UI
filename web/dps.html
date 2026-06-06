@@ -1191,54 +1191,92 @@ body{padding:10px}
 }
 .stat-value.gold{color:var(--gold)}
 .stat-value.green{color:var(--stat-green)}
+/* Skill detail rows — "rank board · layered card": rank badge + name +
+   value/share on the first line, sub-meta on the second, an independent
+   thin heat-gradient track on the third. Mirrors the Tk Entity cockpit 1:1.
+   The old design (a full-row fill bar with text smeared on top) is gone. */
 .skill-row{
     position:relative;
     margin:6px;
-    padding:8px 10px;
-    overflow:hidden;
-    border:1px solid rgba(160,162,150,0.32);
-    background:rgba(255,255,255,0.46);
-    clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+    padding:7px 10px 9px;
+    border:1px solid rgba(160,162,150,0.28);
+    border-radius:6px;
+    background:rgba(255,255,255,0.40);
+    box-sizing:border-box;
+    transition:background .15s ease;
 }
-.skill-bar{
-    position:absolute;
-    left:0;
-    top:0;
-    bottom:0;
-    width:0;
-    background:linear-gradient(90deg,var(--bar-gold-a),var(--bar-gold-b));
-}
-.skill-row.heal .skill-bar{
-    background:linear-gradient(90deg,var(--bar-heal-a),var(--bar-heal-b));
-}
-.skill-main{
-    position:relative;
-    z-index:1;
+.skill-row:hover{background:rgba(255,255,255,0.60)}
+.skill-head{
     display:flex;
-    align-items:flex-start;
-    justify-content:space-between;
-    gap:10px;
+    align-items:center;
+    gap:8px;
 }
+.skill-rank{
+    flex:0 0 auto;
+    min-width:20px;
+    height:17px;
+    line-height:17px;
+    padding:0 4px;
+    box-sizing:border-box;
+    text-align:center;
+    font-size:10px;
+    font-weight:700;
+    border-radius:4px;
+    color:var(--text-muted);
+    font-variant-numeric:tabular-nums;
+}
+.skill-rank.r1{color:#2a1d05;background:linear-gradient(135deg,#ffd964,#e0a820)}
+.skill-rank.r2{color:#1c2026;background:linear-gradient(135deg,#e7edf5,#aab4c4)}
+.skill-rank.r3{color:#241208;background:linear-gradient(135deg,#e2a868,#bf7438)}
 .skill-name{
-    min-width:0;
     flex:1;
-    font-size:11px;
-    letter-spacing:0.6px;
+    min-width:0;
+    font-size:12px;
+    letter-spacing:0.4px;
+    color:var(--text-main);
     white-space:nowrap;
     overflow:hidden;
     text-overflow:ellipsis;
 }
-.skill-info{
-    text-align:right;
-    white-space:nowrap;
-    font-size:10px;
+.skill-num{
+    flex:0 0 auto;
+    font-size:13px;
+    font-weight:700;
+    color:var(--gold);
+    font-variant-numeric:tabular-nums;
 }
-.skill-extra{
-    margin-top:3px;
-    font-size:8px;
+.skill-pct{
+    flex:0 0 auto;
+    min-width:34px;
+    text-align:right;
+    font-size:10px;
     color:var(--text-muted);
-    letter-spacing:0.7px;
+    font-variant-numeric:tabular-nums;
+}
+.skill-sub{
+    margin-top:3px;
+    padding-left:28px;
+    font-size:9px;
+    letter-spacing:0.5px;
+    color:var(--text-muted);
     text-transform:uppercase;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.skill-track{
+    margin-top:6px;
+    margin-left:28px;
+    height:5px;
+    border-radius:3px;
+    background:rgba(128,130,120,0.22);
+    overflow:hidden;
+}
+.skill-fill{
+    height:100%;
+    border-radius:3px;
+    background:var(--gold);
+    transition:width .2s ease;
 }
 .dps-footer{
     position:relative;
@@ -1818,6 +1856,21 @@ function _renderDetailBase(entity) {
     document.getElementById('detail-grid').innerHTML = html;
 }
 
+// Heat gradient by relative output: low → cold blue, mid → gold, high → hot
+// red. Pure function so the Tk Entity cockpit mirrors it byte-for-byte.
+function _heatColor(ratio) {
+    ratio = Math.max(0, Math.min(1, Number(ratio) || 0));
+    var cold = [60, 176, 255], mid = [255, 200, 72], hot = [255, 96, 78];
+    var a, b, t;
+    if (ratio < 0.5) { a = cold; b = mid; t = ratio / 0.5; }
+    else { a = mid; b = hot; t = (ratio - 0.5) / 0.5; }
+    return [
+        Math.round(a[0] + (b[0] - a[0]) * t),
+        Math.round(a[1] + (b[1] - a[1]) * t),
+        Math.round(a[2] + (b[2] - a[2]) * t)
+    ];
+}
+
 function _renderSkillRows(entity) {
     var skills = (entity && entity.skills) ? entity.skills.slice() : [];
     var frame = document.getElementById('detail-skills');
@@ -1832,10 +1885,11 @@ function _renderSkillRows(entity) {
         return bv - av;
     });
 
-    var maxVal = 0;
+    var maxVal = 0, sumVal = 0;
     for (var i = 0; i < skills.length; i++) {
         var current = Math.max(Number(skills[i].total || 0), Number(skills[i].heal_total || 0));
         if (current > maxVal) maxVal = current;
+        sumVal += current;
     }
 
     var html = '';
@@ -1846,18 +1900,26 @@ function _renderSkillRows(entity) {
         var amount = Math.max(dmg, heal);
         var isHeal = heal > dmg;
         var hits = isHeal ? Number(sk.heal_hits || 0) : Number(sk.hits || 0);
-        var crit = !isHeal && Number(sk.hits || 0) > 0 ? ' · CRIT ' + _pct(sk.crit_rate || 0) : '';
-        var barPct = maxVal > 0 ? Math.round(amount / maxVal * 100) : 0;
+        var crit = !isHeal && Number(sk.hits || 0) > 0 && Number(sk.crit_rate || 0) > 0 ? ' · CRIT ' + _pct(sk.crit_rate || 0) : '';
+        var ratio = maxVal > 0 ? amount / maxVal : 0;       // bar length vs. top skill
+        var share = sumVal > 0 ? amount / sumVal : 0;        // share of total output
+        var rgb = _heatColor(ratio);
+        var fill = 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
+        var glow = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.45)';
+        var numColor = isHeal ? 'var(--stat-green)' : fill;
+        var rank = j + 1;
+        var rankCls = rank <= 3 ? ' r' + rank : '';
+        var sub = (isHeal ? 'HEAL' : 'DMG') + ' · ×' + hits + crit;
         html += ''
-            + '<div class="skill-row ' + (isHeal ? 'heal' : '') + '">'
-            +   '<div class="skill-bar" style="width:' + barPct + '%"></div>'
-            +   '<div class="skill-main">'
-            +     '<div>'
-            +       '<div class="skill-name">' + _escHtml(sk.skill_name || sk.skill_id || 'Unknown Skill') + '</div>'
-            +       '<div class="skill-extra">' + (isHeal ? 'HEAL' : 'DMG') + ' · ×' + hits + crit + '</div>'
-            +     '</div>'
-            +     '<div class="skill-info">' + _fmtNum(amount) + '</div>'
+            + '<div class="skill-row' + (isHeal ? ' heal' : '') + '">'
+            +   '<div class="skill-head">'
+            +     '<span class="skill-rank' + rankCls + '">' + rank + '</span>'
+            +     '<span class="skill-name">' + _escHtml(sk.skill_name || sk.skill_id || 'Unknown Skill') + '</span>'
+            +     '<span class="skill-num" style="color:' + numColor + '">' + _fmtNum(amount) + '</span>'
+            +     '<span class="skill-pct">' + _pct(share) + '</span>'
             +   '</div>'
+            +   '<div class="skill-sub">' + _escHtml(sub) + '</div>'
+            +   '<div class="skill-track"><div class="skill-fill" style="width:' + Math.round(ratio * 100) + '%;background:' + fill + ';box-shadow:0 0 6px ' + glow + '"></div></div>'
             + '</div>';
     }
     frame.innerHTML = html;
