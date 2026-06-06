@@ -278,6 +278,18 @@ class SAOPlayerGUIFloatHpMixin:
                     pass
         tick()
 
+    def _raise_sao_menu_above_motion_blur(self):
+        """Keep the already-open SAO popup above the async blur overlay."""
+        try:
+            menu = getattr(self, '_sao_menu', None)
+            if menu is None or not getattr(menu, 'visible', False):
+                return
+            raise_to_top = getattr(menu, '_raise_to_top', None)
+            if callable(raise_to_top):
+                raise_to_top()
+        except Exception:
+            pass
+
     def _hp_overlay_on_click(self):
         """Left-click on HP panel: open the SAO radial menu (web parity)."""
         try:
@@ -423,6 +435,17 @@ class SAOPlayerGUIFloatHpMixin:
                     _u32.SetWindowDisplayAffinity(hwnd, 0x00000011)
                 except Exception:
                     pass
+                if not closing:
+                    # This full-screen topmost blur appears after
+                    # SAOPopUpMenu.open() because the image is built on a
+                    # worker. Re-raise the popup so it does not flash-hidden
+                    # until the blur fades out.
+                    self._raise_sao_menu_above_motion_blur()
+                    try:
+                        self.root.after(32, self._raise_sao_menu_above_motion_blur)
+                        self.root.after(96, self._raise_sao_menu_above_motion_blur)
+                    except Exception:
+                        pass
             except Exception:
                 return
 
