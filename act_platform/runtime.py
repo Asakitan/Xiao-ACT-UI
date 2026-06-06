@@ -2439,6 +2439,24 @@ def act_aggregate_status(owner: Any, *, limit: int = 1000, query: str | None = "
     row_limit = max(1, min(int(limit or 1000), 5000))
     source_mode = _normalize_action_log_source(source)
     selected_encounter = str(encounter_id or "")
+    # Live-source cache: the aggregate is a pure function of the retained event
+    # slice, so key it on the bus publish counter + params. This collapses the
+    # menu's double call (refresh-signature + children-build) into one fold and
+    # makes re-opening the menu after combat O(1) until new events arrive — the
+    # full O(rows) pure-Python fold (~36ms over 240 events on the Tk thread) was
+    # the cause of the "menu lags after combat / instant on empty cache" report.
+    _cache_key = None
+    if source_mode != "history":
+        try:
+            _bus = ensure_act_event_bus(owner)
+            _cache_key = (_bus.retained, source_mode, str(query or ""),
+                          int(window_ms or 1000), int(top_n or 20), row_limit,
+                          selected_encounter)
+            _cached = getattr(owner, "_act_aggregate_status_cache", None)
+            if _cached is not None and _cached[0] == _cache_key:
+                return _cached[1]
+        except Exception:
+            _cache_key = None
     rows: list[dict[str, Any]] = []
     storage_status: dict[str, Any] = {}
     if source_mode == "history":
@@ -2481,7 +2499,7 @@ def act_aggregate_status(owner: Any, *, limit: int = 1000, query: str | None = "
         summary = build_act_aggregate_summary([], render_spec=render_spec)
     raw_counts = dict(summary.get("raw_counts") or {})
     raw_counts.update({"action_rows": len(rows), "limit": row_limit})
-    return {
+    result = {
         "ok": not errors,
         "message": "OK" if not errors else "; ".join(errors),
         "source": source_mode,
@@ -2505,6 +2523,13 @@ def act_aggregate_status(owner: Any, *, limit: int = 1000, query: str | None = "
         "snapshot": snapshot,
         "errors": errors,
     }
+    # Cache the live result (read-only by all callers) keyed on the bus counter.
+    if _cache_key is not None and not errors:
+        try:
+            setattr(owner, "_act_aggregate_status_cache", (_cache_key, result))
+        except Exception:
+            pass
+    return result
 
 
 def act_action_log_search(owner: Any, *, query: str = "", limit: int = 80,

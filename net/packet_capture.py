@@ -8,6 +8,7 @@ SAO Auto — Npcap 网络抓包 + TCP 流重组
 
 import struct
 import threading
+import queue
 import time
 import ctypes
 import ctypes.wintypes
@@ -974,16 +975,37 @@ class PacketCapture:
         self._thread: Optional[threading.Thread] = None  # 兼容旧引用
         self._restart_requested = threading.Event()
         self._last_packet_ts: float = 0.0
-        # 多网卡并发喂入同一 parser: 用锁串行化回调, 避免解析器状态竞争
-        self._cb_lock = threading.Lock()
+        self._cb_lock = threading.Lock()  # retained for API compat; unused now
+
+        # ── Parse decoupling (combat-lag fix) ─────────────────────────────
+        # Previously every reassembled game frame was parsed INLINE on the pcap
+        # capture thread (under _cb_lock). During heavy combat the protobuf
+        # decode + per-event fan-out per frame exceeded the inter-packet
+        # interval, so the capture thread could not drain the Npcap kernel ring
+        # fast enough → the UI fell progressively behind real time (and kept
+        # draining after combat). Now the capture thread(s) only do the cheap
+        # TCP reassembly and ENQUEUE extracted frames; a single consumer thread
+        # drains the queue and runs on_game_packet (parse + callbacks). Single
+        # consumer == the same serialization the lock used to give, with no
+        # lock contention. Under sustained overload the bounded queue drops the
+        # OLDEST frame (never a server-change sentinel) to keep the meter
+        # current instead of letting an unbounded backlog accrue.
+        self._on_game_packet = on_game_packet
+        self._on_server_change = on_server_change
+        # ~8k frames is a large cushion: normal combat never fills it; it only
+        # sheds load in pathological floods (where falling behind is worse).
+        self._frame_q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=8192)
+        self._frame_drops = 0
+        self._consumer_thread: Optional[threading.Thread] = None
 
         def _safe_pkt(frame):
-            with self._cb_lock:
-                on_game_packet(frame)
+            # Capture thread: enqueue only (no parse here).
+            self._enqueue(('f', frame))
 
         def _safe_change():
-            with self._cb_lock:
-                on_server_change()
+            # Route through the SAME queue so it stays ordered w.r.t. frames and
+            # serialized with the parse (single consumer). Never dropped.
+            self._enqueue(('c', None))
 
         _chg = _safe_change if on_server_change else None
         # 每块网卡一个独立 reassembler (各自识别本网卡上的游戏服务器)
@@ -992,6 +1014,58 @@ class PacketCapture:
             for _ in self._devices
         ]
         self._reassembler = self._reassemblers[0]  # 兼容旧引用
+
+    def _enqueue(self, item: "tuple[str, Any]") -> None:
+        """Put a ('f', frame) or ('c', None) item on the consumer queue.
+
+        On overload, drop the OLDEST frame ('f') to bound latency; server-change
+        sentinels ('c') are never dropped.
+        """
+        q = self._frame_q
+        try:
+            q.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+        rescued = []
+        try:
+            while True:
+                old = q.get_nowait()
+                if old[0] == 'c':
+                    rescued.append(old)  # never drop a server-change
+                    continue
+                self._frame_drops += 1
+                break  # dropped one frame → room made
+        except queue.Empty:
+            pass
+        for r in rescued:
+            try:
+                q.put_nowait(r)
+            except queue.Full:
+                break
+        try:
+            q.put_nowait(item)
+        except queue.Full:
+            if item[0] != 'c':
+                self._frame_drops += 1
+
+    def _consume_loop(self):
+        """Single consumer: drain the frame queue and run parse + callbacks."""
+        q = self._frame_q
+        while self._running or not q.empty():
+            try:
+                kind, payload = q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                if kind == 'c':
+                    if self._on_server_change is not None:
+                        self._on_server_change()
+                else:
+                    self._on_game_packet(payload)
+            except Exception as exc:
+                import traceback
+                logger.error(f'[Capture] consumer error: {exc}\n{traceback.format_exc()}')
 
     @property
     def server_identified(self) -> bool:
@@ -1006,6 +1080,8 @@ class PacketCapture:
                     merged[k] = merged.get(k, 0) + v
         merged['last_packet_age_s'] = int(max(0.0, time.time() - self._last_packet_ts)) if self._last_packet_ts else -1
         merged['capture_devices'] = len(self._devices)
+        merged['parse_queue_depth'] = self._frame_q.qsize()
+        merged['parse_frame_drops'] = self._frame_drops
         return merged
 
     def force_reconnect(self, reason: str = 'watchdog') -> bool:
@@ -1023,6 +1099,10 @@ class PacketCapture:
         if self._running:
             return
         self._running = True
+        # Single parse consumer drains the frame queue off the capture threads.
+        self._consumer_thread = threading.Thread(
+            target=self._consume_loop, daemon=True, name='sao_capture_parse')
+        self._consumer_thread.start()
         self._threads = []
         for idx, (dev, rea) in enumerate(zip(self._devices, self._reassemblers)):
             t = threading.Thread(target=self._loop, args=(dev, rea), daemon=True,
@@ -1040,6 +1120,13 @@ class PacketCapture:
                 pass
         self._threads = []
         self._thread = None
+        ct = self._consumer_thread
+        if ct is not None:
+            try:
+                ct.join(timeout=3)
+            except Exception:
+                pass
+        self._consumer_thread = None
 
     def _loop(self, dev, rea):
         while self._running:

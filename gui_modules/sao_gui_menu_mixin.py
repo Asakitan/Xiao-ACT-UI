@@ -45,6 +45,7 @@ from act_platform.runtime import (
     act_action_log_status,
     act_combatant_drilldown_status,
     act_data_source_health,
+    ensure_act_event_bus,
     act_death_recap_status,
     act_graph_timeseries_status,
     act_plugin_disable,
@@ -218,20 +219,16 @@ class SAOPlayerGUIMenuMixin:
         except Exception:
             action_log_sig = (False, 0, 0, 0, '')
         try:
-            aggregate_status = self._get_act_aggregate_menu_status()
-            aggregate_counts = aggregate_status.get('raw_counts') or {}
-            aggregate_overview = aggregate_status.get('overview') or {}
-            aggregate_sig = (
-                bool(aggregate_status.get('ok')),
-                int(aggregate_counts.get('rows') or 0),
-                int(aggregate_counts.get('timeline_clusters') or 0),
-                int(aggregate_counts.get('skills') or 0),
-                int(aggregate_counts.get('monsters') or 0),
-                int(aggregate_counts.get('dungeons') or 0),
-                int(aggregate_overview.get('damage') or 0),
-            )
+            # CHEAP signature: the aggregate is a pure function of the retained
+            # event slice, so the bus `retained` counter fully captures whether
+            # it changed. Folding the full aggregate here (the old behaviour) ran
+            # a ~36ms O(rows) pass on the Tk thread on EVERY signature check —
+            # the cause of the "menu lags after combat" stall. The actual fold
+            # now happens at most once per data change in _build_menu_children
+            # (and is itself cached in act_aggregate_status).
+            aggregate_sig = (int(ensure_act_event_bus(self).retained),)
         except Exception:
-            aggregate_sig = (False, 0, 0, 0, 0, 0, 0)
+            aggregate_sig = (0,)
         try:
             death_status = self._get_act_death_recap_menu_status()
             death_summary = death_status.get('summary') or {}

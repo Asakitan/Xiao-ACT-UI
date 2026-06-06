@@ -52,6 +52,7 @@ class EventBus:
         # (one extra copy.deepcopy per push + churning the whole ring).
         self._ephemeral_topics: set[str] = set(ephemeral_topics or ())
         self._published = 0
+        self._retained = 0  # increments only for events actually kept in _recent
         self._callback_failures = 0
         self._slow_callbacks = 0
 
@@ -70,6 +71,20 @@ class EventBus:
             self._subscriptions.setdefault(topic, []).append(sub)
             self._by_token[sub.token] = sub
         return sub.token
+
+    @property
+    def published(self) -> int:
+        """Monotonic count of all published events."""
+        return self._published
+
+    @property
+    def retained(self) -> int:
+        """Monotonic count of events actually kept in ``_recent`` (excludes
+        ephemeral topics like act_snapshot). This is the precise freshness token
+        for the aggregate, which folds only the retained slice — so an unchanged
+        value means the aggregate cannot have changed, even if high-rate
+        ephemeral pushes bumped ``published``."""
+        return self._retained
 
     def unsubscribe(self, token: str) -> bool:
         token = str(token or "")
@@ -104,6 +119,7 @@ class EventBus:
         with self._lock:
             self._published += 1
             if topic not in self._ephemeral_topics:
+                self._retained += 1
                 self._recent.append(clone_event(envelope))
                 if len(self._recent) > self._max_recent:
                     self._recent = self._recent[-self._max_recent:]
