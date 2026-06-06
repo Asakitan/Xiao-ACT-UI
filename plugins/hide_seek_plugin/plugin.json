@@ -1,0 +1,15 @@
+{
+  "id": "hide_seek_plugin",
+  "name": "Auto Hide & Seek",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "description": "自动躲猫猫 — 从主程序拆出的自包含示例插件。自带 CV 自动化引擎(hide_seek_engine.py)，通过插件引擎的 load_local(import) / set_interval(计时循环) / notify(告警) / engine 访问(locator) 驱动，1:1 复刻原 F11 开关功能。重度演示插件对引擎的各种调用。",
+  "enabled": true,
+  "subscriptions": [],
+  "capabilities": [
+    "plugin_manager",
+    {"id": "ui_panels", "title": "Hide & Seek control", "actions": ["toggle"]},
+    {"id": "automation", "title": "CV hide-and-seek automation"}
+  ],
+  "permissions": ["engine_access", "input_control"]
+}

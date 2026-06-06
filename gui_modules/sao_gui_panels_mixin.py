@@ -103,6 +103,79 @@ class SAOPlayerGUIPanelsMixin:
             self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_plugin_manager_panel))
 
+    def _open_act_plugin_manager(self, tab='manage'):
+        """打开 ACT 插件管理面板并切到指定页签 (manage / panels)."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._act_plugin_manager_panel:
+            self._act_plugin_manager_panel = PluginManagerPanel(self.root, self)
+            self._apply_act_panel_theme()
+        panel = self._act_plugin_manager_panel
+        try:
+            panel._active_tab = tab if tab in ('manage', 'panels') else 'manage'
+        except Exception:
+            pass
+        panel.show()
+        self._apply_act_panel_theme()
+        self.root.after(120, lambda: self._raise_panel_window(panel))
+
+    def _toggle_plugin_enabled(self, plugin_id, enabled):
+        """启用/禁用某个插件 (供 popup 菜单调用)."""
+        from act_platform.runtime import act_plugin_disable, act_plugin_enable
+        try:
+            if enabled:
+                act_plugin_disable(self, plugin_id)
+            else:
+                act_plugin_enable(self, plugin_id)
+        except Exception:
+            pass
+        panel = getattr(self, '_act_plugin_manager_panel', None)
+        if panel is not None:
+            try:
+                panel.refresh()
+            except Exception:
+                pass
+
+    def _show_plugin_popup_menu(self):
+        """SAO 插件 popup 菜单 — 插件管理 + 各插件(打开面板/启停)."""
+        import tkinter as tk
+
+        from act_platform.runtime import act_plugin_menu
+        self._dismiss_sao_menu_for_panel()
+        try:
+            data = act_plugin_menu(self)
+        except Exception:
+            data = {'ok': False, 'items': []}
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label='⚙ 插件管理面板 Manage',
+                         command=lambda: self._open_act_plugin_manager('manage'))
+        menu.add_command(label='🧩 插件面板 Panels',
+                         command=lambda: self._open_act_plugin_manager('panels'))
+        menu.add_separator()
+        items = [it for it in (data.get('items') or []) if it.get('type') == 'plugin']
+        if not items:
+            menu.add_command(label='(未发现插件 No plugins)', state='disabled')
+        for it in items:
+            pid = str(it.get('id') or '')
+            name = str(it.get('label') or pid)
+            enabled = bool(it.get('enabled'))
+            sub = tk.Menu(menu, tearoff=0)
+            if it.get('panels'):
+                sub.add_command(label='打开面板 Open panel',
+                                command=lambda: self._open_act_plugin_manager('panels'))
+            sub.add_command(label=('禁用 Disable' if enabled else '启用 Enable'),
+                            command=lambda p=pid, en=enabled: self._toggle_plugin_enabled(p, en))
+            prefix = '● ' if it.get('active') else ('◐ ' if enabled else '○ ')
+            menu.add_cascade(label=prefix + name, menu=sub)
+        try:
+            x = self.root.winfo_pointerx()
+            y = self.root.winfo_pointery()
+            menu.tk_popup(x, y)
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+
     def _toggle_act_trigger_timer_panel(self):
         """打开/关闭 ACT 触发/计时管理面板 (tkinter)."""
         self._dismiss_sao_menu_for_panel()

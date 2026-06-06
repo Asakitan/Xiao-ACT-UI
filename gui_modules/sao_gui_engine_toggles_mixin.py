@@ -1,19 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 SAOPlayerGUIEngineTogglesMixin — seventh mixin extracted from
-SAOPlayerGUI (round 44 of the sao_gui split refactor). 11 methods,
-~134 lines.
-
-Two engine-on/off feature clusters that share the toggle + refresh
-pattern:
-
-HideSeek cluster (auto hide-and-seek):
-  * _toggle_hide_seek — top-level on/off
-  * _start_hide_seek — instantiates HideSeekEngine, locator, alert
-  * _stop_hide_seek — engine stop + alert cleanup
-  * _on_hide_seek_status — status callback (debug logs)
-  * _schedule_hide_seek_alert_refresh — 50 s alert refresh tick
-  * _refresh_hide_seek_alert — alert refresh worker
+SAOPlayerGUI (round 44 of the sao_gui split refactor).
 
 Burst cluster (burst-skill trigger):
   * _pick_burst_trigger_slot — cython state-machine delegate
@@ -22,9 +10,10 @@ Burst cluster (burst-skill trigger):
   * _toggle_burst_enabled — toggles `burst_enabled` setting
   * _toggle_burst_slot — adds/removes a slot from `watched_skill_slots`
 
+NOTE: the auto hide-and-seek cluster used to live here; it has been
+extracted into the self-contained ``plugins/hide_seek_plugin`` example.
+
 Required SAOPlayerGUI attrs:
-  * self._hide_seek_engine, self._hide_seek_alert_active,
-    self._hide_seek_alert_after_id
   * self._last_burst_slot, self._last_burst_ready,
     self._last_burst_slot_shown
   * self.root, self._destroyed
@@ -43,7 +32,7 @@ import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 
 
 class SAOPlayerGUIEngineTogglesMixin:
-    """Mixin bundling HideSeek + Burst engine toggles + state."""
+    """Mixin bundling Burst engine toggles + state (hide-and-seek is a plugin)."""
 
     def _pick_burst_trigger_slot(self, gs):
         # v2.4.31: state machine moved to _sao_cy_uihelpers.
@@ -54,90 +43,6 @@ class SAOPlayerGUIEngineTogglesMixin:
         chosen = int(_CY_UI.pick_burst_trigger_slot(slots, watched, prev_slot))
         self._last_burst_slot = chosen
         return chosen
-
-    def _toggle_hide_seek(self):
-        """切换自动躲猫猫引擎开关."""
-        if self._hide_seek_engine and self._hide_seek_engine.running:
-            self._stop_hide_seek()
-        else:
-            self._start_hide_seek()
-
-    def _start_hide_seek(self):
-        """启动自动躲猫猫并用 AlertOverlay 保持状态提示."""
-        if self._hide_seek_engine and self._hide_seek_engine.running:
-            return
-        try:
-            from engines.hide_seek_engine import HideSeekEngine
-            from utils.window_locator import WindowLocator
-
-            locator = getattr(self, '_locator', None)
-            if locator is None:
-                locator = WindowLocator()
-
-            engine = HideSeekEngine(locator=locator, on_status=self._on_hide_seek_status)
-            engine.start()
-            self._hide_seek_engine = engine
-            self._hide_seek_alert_active = True
-            self._show_entity_alert('AUTO HIDE & SEEK', '自动躲猫猫已启动', display_time=60.0)
-            self._schedule_hide_seek_alert_refresh()
-            self._refresh_menu_if_open()
-        except Exception as exc:
-            print(f'[SAO Entity] Hide&Seek start failed: {exc}')
-            import traceback
-            traceback.print_exc()
-            self._hide_seek_engine = None
-            self._hide_seek_alert_active = False
-            self._show_entity_alert('AUTO HIDE & SEEK', '启动失败，请检查游戏窗口与模板资源', display_time=4.0)
-            self._refresh_menu_if_open()
-
-    def _stop_hide_seek(self, show_alert: bool = True):
-        """停止自动躲猫猫并取消持久提示刷新."""
-        self._hide_seek_alert_active = False
-        aid = getattr(self, '_hide_seek_alert_after_id', None)
-        if aid is not None:
-            try:
-                self.root.after_cancel(aid)
-            except Exception:
-                pass
-            self._hide_seek_alert_after_id = None
-        engine = self._hide_seek_engine
-        self._hide_seek_engine = None
-        if engine is not None:
-            try:
-                engine.stop()
-            except Exception:
-                pass
-        if show_alert:
-            self._show_entity_alert('AUTO HIDE & SEEK', '自动躲猫猫已关闭', display_time=3.2)
-        self._refresh_menu_if_open()
-
-    def _on_hide_seek_status(self, message: str, step: int):
-        """Hide & Seek 状态回调 — 当前仅用于调试日志."""
-        if message:
-            print(f'[HideSeek] step={step}: {message}')
-
-    def _schedule_hide_seek_alert_refresh(self):
-        aid = getattr(self, '_hide_seek_alert_after_id', None)
-        if aid is not None:
-            try:
-                self.root.after_cancel(aid)
-            except Exception:
-                pass
-        self._hide_seek_alert_after_id = self.root.after(
-            50000, self._refresh_hide_seek_alert)
-
-    def _refresh_hide_seek_alert(self):
-        self._hide_seek_alert_after_id = None
-        if self._destroyed or not getattr(self, '_hide_seek_alert_active', False):
-            return
-        engine = getattr(self, '_hide_seek_engine', None)
-        if engine is None:
-            self._hide_seek_alert_active = False
-            return
-        if not engine.running:
-            print('[SAO Entity] Hide&Seek engine thread is no longer running')
-        self._show_entity_alert('AUTO HIDE & SEEK', '自动躲猫猫运行中', display_time=60.0)
-        self._schedule_hide_seek_alert_refresh()
 
     # ── AutoKey config helpers ──
     def _normalize_watched_skill_slots(self, slots):

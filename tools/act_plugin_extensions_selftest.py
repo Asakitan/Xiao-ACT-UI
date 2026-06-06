@@ -60,6 +60,10 @@ def on_load(ctx):
         "duration_s": 12,
         "scope": "encounter",
     }))
+    registered.append(ctx.register_ui_panel("demo_panel", {
+        "title": "Demo panel",
+        "route": "plugin://extension_demo/panel",
+    }, render=lambda payload: ctx.ui.panel("Demo", [ctx.ui.text("hi")])))
 '''
 
 
@@ -94,8 +98,9 @@ class ActPluginExtensionTests(unittest.TestCase):
                 "trigger_types": 1,
                 "report_views": 1,
                 "timers": 1,
+                "ui_panels": 1,
             })
-            self.assertEqual(plugin["extension_count"], 6)
+            self.assertEqual(plugin["extension_count"], 7)
             self.assertEqual(plugin["extensions"]["parser_adapters"], ["star_fixture"])
             self.assertEqual(status["extensions"]["parser_adapters"][0]["game_id"], "star_resonance")
             self.assertEqual(status["extensions"]["parser_adapters"][0]["supported_locales"], ["zh-CN"])
@@ -116,6 +121,7 @@ class ActPluginExtensionTests(unittest.TestCase):
             self.assertTrue(manager.unload_plugin("extension_demo"))
             cleared = manager.status()
             self.assertEqual(cleared["extension_counts"]["exporters"], 0)
+            self.assertEqual(cleared["extension_counts"]["ui_panels"], 0)
             self.assertEqual(cleared["extensions"]["parser_adapters"], [])
 
     def test_extension_handler_time_budget_records_failure(self) -> None:

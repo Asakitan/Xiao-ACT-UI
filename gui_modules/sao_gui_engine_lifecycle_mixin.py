@@ -9,8 +9,8 @@ These methods are the heaviest single block remaining in
 SAOPlayerGUI's __init__ flow.
 
 Methods:
-  * _stop_recognition_engines (32 lines) — stops AutoKey, BossRaid,
-    HideSeek, packet/vision engines + clears all references.
+  * _stop_recognition_engines — stops AutoKey, BossRaid, packet/vision
+    engines + clears all references (hide-and-seek now lives in a plugin).
   * _reconfigure_data_engines (80 lines) — restarts the
     packet+vision engines for the current data source. Reads
     `mem_data_source` setting to pick TCP/memory/hybrid/auto path.
@@ -40,8 +40,6 @@ Required SAOPlayerGUI attrs:
     self._season_exp, self._game_state, self._hp_display_name
   * self._auto_key_engine, self._boss_raid_engine,
     self._boss_autokey_linkage
-  * self._hide_seek_engine, self._hide_seek_alert_active,
-    self._hide_seek_alert_after_id
   * self._recognition_engine, self._recognition_engines,
     self._recognition_active, self._packet_engine, self._vision_engine
   * self._dps_tracker, self._dps_overlay, self._dps_enabled,
@@ -106,17 +104,9 @@ class SAOPlayerGUIEngineLifecycleMixin:
             try: self._boss_raid_engine.stop()
             except Exception: pass
             self._boss_raid_engine = None
+        # Plugins (incl. the hide_seek_plugin that now owns the hide-and-seek
+        # engine) are unloaded here; their on_unload stops any owned engines.
         shutdown_act_plugin_manager(self)
-        self._hide_seek_alert_active = False
-        aid = getattr(self, '_hide_seek_alert_after_id', None)
-        if aid is not None:
-            try: self.root.after_cancel(aid)
-            except Exception: pass
-            self._hide_seek_alert_after_id = None
-        if getattr(self, '_hide_seek_engine', None):
-            try: self._hide_seek_engine.stop()
-            except Exception: pass
-            self._hide_seek_engine = None
         engines = list(getattr(self, '_recognition_engines', []) or [])
         if not engines and self._recognition_engine:
             engines = [self._recognition_engine]

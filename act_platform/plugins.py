@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import sys
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -16,6 +17,8 @@ from types import ModuleType
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
 from .event_bus import EventBus
+from .render_hooks import RenderHookRegistry
+from .ui_spec import UI, normalize_ui_spec
 
 
 MANIFEST_FILE = "plugin.json"
@@ -26,7 +29,10 @@ EXTENSION_KINDS = (
     "trigger_types",
     "report_views",
     "timers",
+    "ui_panels",
 )
+# Render hooks are NOT extension-registry entries — they live in
+# ``PluginManager.render_registry`` and surface via ``render_status()``.
 
 
 _ENGINE_HANDLE_ALIASES: dict[str, tuple[str, ...]] = {
@@ -44,6 +50,7 @@ _ENGINE_HANDLE_ALIASES: dict[str, tuple[str, ...]] = {
     "memory_bridge": ("_mem_bridge", "mem_bridge", "memory_bridge"),
     "auto_key_engine": ("_auto_key_engine", "auto_key_engine"),
     "boss_raid_engine": ("_boss_raid_engine", "boss_raid_engine"),
+    "window_locator": ("_locator", "locator", "window_locator"),
 }
 
 
@@ -86,6 +93,12 @@ _RUNTIME_ACTION_ALIASES: dict[str, str] = {
     "skill_drilldown_status": "act_skill_drilldown_status",
     "data_source_health": "act_data_source_health",
     "data_source_diagnose": "act_data_source_diagnose",
+    "ui_panels": "act_plugin_ui_panels",
+    "ui_render": "act_plugin_ui_render",
+    "ui_action": "act_plugin_ui_action",
+    "render_surfaces": "act_render_surfaces",
+    "render_apply_hooks": "act_render_apply_hooks",
+    "render_overlays": "act_render_overlays",
 }
 
 
@@ -250,6 +263,7 @@ class PluginRecord:
     subscriptions: list[str] = field(default_factory=list)
     extensions: dict[str, list[str]] = field(default_factory=dict)
     logs: list[str] = field(default_factory=list)
+    loaded_local_modules: list[str] = field(default_factory=list)
 
     def to_status(self) -> dict[str, Any]:
         return {
@@ -416,6 +430,8 @@ class PluginContext:
         self._manager = manager
         self._record = record
         self.engine = EngineAccess(manager, record)
+        #: Declarative UI builder (see :mod:`act_platform.ui_spec`).
+        self.ui = UI
 
     @property
     def plugin_id(self) -> str:
@@ -589,6 +605,227 @@ class PluginContext:
                        handler: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
         return self._manager._register_extension("timers", self._record.plugin_id, timer_id, metadata, handler)
 
+    # ── UI panels / render hooks / overlays ───────────────────────────────
+    def register_ui_panel(self, panel_id: str,
+                          metadata: Optional[Mapping[str, Any]] = None,
+                          render: Optional[Callable[..., Any]] = None,
+                          on_action: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
+        """Register a redrawable plugin UI panel.
+
+        ``render(payload) -> ui_spec`` is called whenever the host needs the
+        panel's content; ``on_action(action_id, payload) -> result`` handles
+        button presses from the rendered spec.  Call :meth:`request_redraw` to
+        ask the host to re-fetch and repaint.
+        """
+        return self._manager._register_ui_panel(
+            self._record.plugin_id, panel_id, metadata, render, on_action)
+
+    def register_render_hook(self, surface: str, callback: Callable[[str, dict], Any],
+                             priority: float = 0.0) -> str:
+        """Intercept a surface's render payload before the host draws it.
+
+        ``callback(surface, payload) -> payload | None`` may mutate the payload,
+        return a replacement, or take the surface over entirely by setting
+        ``payload[OVERRIDE_KEY] = ctx.ui.panel(...)``.
+        """
+        return self._manager._register_render_hook(
+            self._record.plugin_id, surface, callback, priority)
+
+    def set_overlay(self, surface: str, spec: Any) -> dict[str, Any]:
+        """Draw a declarative spec in ``surface``'s plugin overlay layer."""
+        return self._manager._set_overlay(self._record.plugin_id, surface, spec)
+
+    def clear_overlay(self, surface: Optional[str] = None) -> None:
+        self._manager._clear_overlay(self._record.plugin_id, surface)
+
+    def request_redraw(self, surface: str = "", reason: str = "") -> dict[str, Any]:
+        """Ask all host surfaces (or one) to repaint plugin content."""
+        return self.emit("plugin_ui_invalidate", {
+            "plugin_id": self._record.plugin_id,
+            "surface": str(surface or ""),
+            "reason": str(reason or ""),
+        })
+
+    # ── schedulers / loops (timing primitives for heavy plugins) ──────────
+    def set_interval(self, callback: Callable[[], Any], seconds: float) -> str:
+        """Call ``callback`` every ``seconds`` on a daemon thread until cleared."""
+        return self._manager._add_timer(self._record.plugin_id, callback, seconds, True)
+
+    def set_timeout(self, callback: Callable[[], Any], seconds: float) -> str:
+        """Call ``callback`` once after ``seconds`` on a daemon thread."""
+        return self._manager._add_timer(self._record.plugin_id, callback, seconds, False)
+
+    def clear_timer(self, token: str) -> bool:
+        return self._manager._clear_timer(self._record.plugin_id, str(token or ""))
+
+    def run_on_ui(self, callback: Callable[[], Any]) -> None:
+        """Marshal ``callback`` onto the host UI thread (Tk root.after if present)."""
+        owner = self.owner
+        root = getattr(owner, "root", None)
+        after = getattr(root, "after", None)
+        if callable(after):
+            try:
+                after(0, callback)
+                return
+            except Exception:
+                pass
+        try:
+            callback()
+        except Exception as exc:
+            self._manager._record_failure(self._record.plugin_id, exc)
+
+    # ── owner-agnostic notifications (Entity + WebView alert bridge) ───────
+    def notify(self, title: str, message: str, duration_s: float = 60.0,
+               kind: str = "plugin") -> bool:
+        """Show a persistent SAO alert via whichever alert API the host owns.
+
+        Works on both the Entity (``_show_entity_alert``) and WebView
+        (``_show_identity_alert_window``) owners, marshaled to the UI thread.
+        """
+        owner = self.owner
+        if owner is None:
+            return False
+        entity = getattr(owner, "_show_entity_alert", None)
+        if callable(entity):
+            self.run_on_ui(lambda: entity(str(title), str(message), display_time=float(duration_s)))
+            return True
+        webview = getattr(owner, "_show_identity_alert_window", None)
+        if callable(webview):
+            try:
+                webview(str(title), str(message), duration_ms=int(float(duration_s) * 1000),
+                        alert_kind=str(kind or "plugin"))
+                return True
+            except Exception as exc:
+                self._manager._record_failure(self._record.plugin_id, exc)
+        return False
+
+    def dismiss_notify(self) -> bool:
+        """Dismiss a persistent WebView alert (Entity alerts auto-expire)."""
+        owner = self.owner
+        fn = getattr(owner, "_hide_identity_alert_window", None)
+        if callable(fn):
+            def _do():
+                # Must pass force=True to bypass the persistent-alert guard; a
+                # non-forcing call would leave the alert stuck. If the host's
+                # signature differs, try a positional force before giving up
+                # (never fall back to a non-forcing call, which sticks the alert).
+                try:
+                    fn(force=True)
+                except TypeError:
+                    fn(None, True)
+            try:
+                self.run_on_ui(_do)
+                return True
+            except Exception:
+                return False
+        return False
+
+    def toast(self, message: str) -> bool:
+        """Best-effort transient toast (WebView menu toast, else an entity alert)."""
+        owner = self.owner
+        eval_menu = getattr(owner, "_eval_menu", None)
+        if callable(eval_menu):
+            try:
+                safe = json.dumps(str(message))
+                eval_menu(f'window.SAO&&SAO.showToast&&SAO.showToast({safe})')
+                return True
+            except Exception:
+                pass
+        return self.notify("PLUGIN", str(message), duration_s=3.0)
+
+    def load_local(self, relative_path: str) -> ModuleType:
+        """Load a Python module bundled inside this plugin's own directory.
+
+        Lets a plugin ship its own engine/helper ``.py`` files alongside
+        ``plugin.py`` (sandboxed to the plugin dir, loaded under a unique module
+        name).  The loaded module still imports main-program packages
+        (``cv2``, ``config``, ``utils.*`` …) from the shared process normally.
+        """
+        base = os.path.abspath(self._record.path)
+        target = os.path.abspath(os.path.join(base, str(relative_path or "")))
+        if os.path.commonpath([base, target]) != base:
+            raise ValueError("load_local path must stay inside the plugin directory")
+        if not os.path.isfile(target):
+            raise FileNotFoundError(relative_path)
+        stem = os.path.splitext(os.path.basename(target))[0]
+        mod_name = f"act_plugin_{self._record.plugin_id.replace('-', '_').replace('.', '_')}__{stem}"
+        spec = importlib.util.spec_from_file_location(mod_name, target)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load local module: {relative_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[mod_name] = module
+        # Tracked so unload removes it from sys.modules (no leak across reloads).
+        if mod_name not in self._record.loaded_local_modules:
+            self._record.loaded_local_modules.append(mod_name)
+        spec.loader.exec_module(module)
+        return module
+
+
+class _PluginTimer:
+    """A cancellable one-shot or repeating daemon timer owned by a plugin.
+
+    Callbacks run on a background daemon thread; exceptions are isolated and
+    recorded against the plugin.  All of a plugin's timers are cancelled when it
+    unloads, so a plugin cannot leak a thread after being disabled.
+    """
+
+    __slots__ = ("_manager", "plugin_id", "token", "_fn", "_seconds", "_repeat",
+                 "_cancelled", "_timer")
+
+    def __init__(self, manager: "PluginManager", plugin_id: str, token: str,
+                 fn: Callable[[], Any], seconds: float, repeat: bool) -> None:
+        self._manager = manager
+        self.plugin_id = plugin_id
+        self.token = token
+        self._fn = fn
+        self._seconds = max(0.02, float(seconds or 0.0))
+        self._repeat = bool(repeat)
+        self._cancelled = False
+        self._timer: Optional[threading.Timer] = None
+
+    def start(self) -> "_PluginTimer":
+        # Armed once at creation, before the timer is shared — no lock needed.
+        self._arm()
+        return self
+
+    def _arm(self) -> None:
+        if self._cancelled:
+            return
+        self._timer = threading.Timer(self._seconds, self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _fire(self) -> None:
+        if self._cancelled:
+            return
+        try:
+            self._fn()
+        except Exception as exc:  # noqa: BLE001 - isolation is intentional
+            self._manager._record_failure(self.plugin_id, exc)
+        # Decide rearm under the shared lock so a concurrent cancel() (from
+        # unload) cannot slip between the _cancelled check and re-arming, which
+        # would otherwise orphan a daemon timer that survives unload.
+        forget = False
+        with self._manager._timers_lock:
+            if self._cancelled:
+                pass
+            elif self._repeat:
+                self._arm()
+            else:
+                forget = True
+        if forget:
+            self._manager._forget_timer(self.plugin_id, self.token)
+
+    def cancel(self) -> None:
+        with self._manager._timers_lock:
+            self._cancelled = True
+            timer = self._timer
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+
 
 class PluginManager:
     """Discover and manage in-process Python ACT plugins."""
@@ -609,6 +846,19 @@ class PluginManager:
         self._settings_cache: Dict[str, Dict[str, Any]] = {}
         self._extensions: Dict[str, Dict[str, dict[str, Any]]] = {kind: {} for kind in EXTENSION_KINDS}
         self._extension_handlers: Dict[tuple[str, str], Callable[..., Any]] = {}
+        #: panel_id -> on_action callable (UI panel button dispatch).
+        self._ui_action_handlers: Dict[str, Callable[..., Any]] = {}
+        #: Shared render-hook + overlay registry for every UI surface.
+        self.render_registry = RenderHookRegistry()
+        #: plugin_id -> {token: _PluginTimer} for plugin schedulers/loops.
+        self._timers: Dict[str, Dict[str, "_PluginTimer"]] = {}
+        self._timer_seq = 0
+        #: Guards all _timers mutations + the timer rearm/cancel decision so a
+        #: repeating timer cannot rearm itself past a concurrent unload.
+        self._timers_lock = threading.RLock()
+        #: True once load_all() has run — lets ensure_act_plugin_manager(load=True)
+        #: be idempotent instead of reloading every plugin on every call.
+        self._initial_loaded = False
 
     def discover(self) -> list[PluginRecord]:
         self._extensions = {kind: {} for kind in EXTENSION_KINDS}
@@ -649,6 +899,7 @@ class PluginManager:
             record = self._records[plugin_id]
             if record.enabled:
                 self.load_plugin(plugin_id)
+        self._initial_loaded = True
         return self.status()
 
     def load_plugin(self, plugin_id: str) -> bool:
@@ -805,6 +1056,154 @@ class PluginManager:
             "errors": [],
         }
 
+    # ── UI panels ─────────────────────────────────────────────────────────
+    def _register_ui_panel(self, plugin_id: str, panel_id: str,
+                           metadata: Optional[Mapping[str, Any]] = None,
+                           render: Optional[Callable[..., Any]] = None,
+                           on_action: Optional[Callable[..., Any]] = None) -> dict[str, Any]:
+        normalized = self._register_extension("ui_panels", plugin_id, panel_id, metadata, render)
+        if callable(on_action):
+            self._ui_action_handlers[normalized["id"]] = on_action
+        else:
+            self._ui_action_handlers.pop(normalized["id"], None)
+        return normalized
+
+    def list_ui_panels(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for meta in self.list_extensions("ui_panels"):
+            item = dict(meta)
+            plugin_id = str(item.get("plugin_id") or "")
+            record = self._records.get(plugin_id)
+            item["available"] = bool(record and record.loaded and record.active and record.enabled)
+            item["has_actions"] = item["id"] in self._ui_action_handlers
+            out.append(item)
+        return out
+
+    def render_ui_panel(self, panel_id: str, payload: Optional[Mapping[str, Any]] = None, *,
+                        time_budget_ms: float = 60.0) -> dict[str, Any]:
+        invoked = self.invoke_extension("ui_panels", panel_id, payload, time_budget_ms=time_budget_ms)
+        if not invoked.get("ok"):
+            return {"ok": False, "panel_id": str(panel_id or ""),
+                    "message": invoked.get("message") or "render failed",
+                    "spec": {"version": 1, "title": "", "nodes": []},
+                    "errors": invoked.get("errors") or [invoked.get("message") or "render failed"]}
+        spec = normalize_ui_spec(invoked.get("result"))
+        return {
+            "ok": True,
+            "panel_id": str(panel_id or ""),
+            "plugin_id": invoked.get("plugin_id"),
+            "elapsed_ms": invoked.get("elapsed_ms"),
+            "spec": spec,
+            "errors": [],
+        }
+
+    def invoke_ui_action(self, panel_id: str, action_id: str,
+                         payload: Optional[Mapping[str, Any]] = None, *,
+                         time_budget_ms: float = 800.0) -> dict[str, Any]:
+        panel_id = str(panel_id or "")
+        meta = self._extensions.get("ui_panels", {}).get(panel_id)
+        if not isinstance(meta, Mapping):
+            return {"ok": False, "message": f"ui panel not found: {panel_id}", "errors": ["panel not found"]}
+        plugin_id = str(meta.get("plugin_id") or "")
+        record = self._records.get(plugin_id)
+        if record is None or not record.loaded or not record.active or not record.enabled:
+            return {"ok": False, "plugin_id": plugin_id, "message": "plugin is not active", "errors": ["plugin is not active"]}
+        handler = self._ui_action_handlers.get(panel_id)
+        if not callable(handler):
+            return {"ok": False, "plugin_id": plugin_id, "message": "panel has no action handler", "errors": ["no action handler"]}
+        started = time.perf_counter()
+        try:
+            result = handler(str(action_id or ""), copy.deepcopy(dict(payload or {})))
+        except Exception as exc:
+            self._record_failure(plugin_id, exc)
+            return {"ok": False, "plugin_id": plugin_id, "panel_id": panel_id,
+                    "action_id": str(action_id or ""), "message": str(exc), "errors": [str(exc)]}
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        budget = float(time_budget_ms or 0.0)
+        if budget > 0 and elapsed_ms > budget:
+            exc = TimeoutError(f"ui action exceeded budget: {elapsed_ms:.1f}ms > {budget:.1f}ms")
+            self._record_failure(plugin_id, exc)
+            return {
+                "ok": False,
+                "plugin_id": plugin_id,
+                "panel_id": panel_id,
+                "action_id": str(action_id or ""),
+                "elapsed_ms": elapsed_ms,
+                "time_budget_ms": budget,
+                "timed_out": True,
+                "message": str(exc),
+                "errors": [str(exc)],
+            }
+        out: dict[str, Any] = {
+            "ok": True,
+            "plugin_id": plugin_id,
+            "panel_id": panel_id,
+            "action_id": str(action_id or ""),
+            "elapsed_ms": elapsed_ms,
+            "time_budget_ms": budget,
+            "result": _json_safe(result),
+            "errors": [],
+        }
+        # An action handler may return a fresh spec to repaint immediately.
+        if isinstance(result, Mapping) and ("nodes" in result or "children" in result or result.get("type")):
+            out["spec"] = normalize_ui_spec(result)
+        return out
+
+    # ── render hooks + overlays ────────────────────────────────────────────
+    def _register_render_hook(self, plugin_id: str, surface: str,
+                              callback: Callable[[str, dict], Any], priority: float = 0.0) -> str:
+        return self.render_registry.register_hook(plugin_id, surface, callback, priority)
+
+    def _set_overlay(self, plugin_id: str, surface: str, spec: Any) -> dict[str, Any]:
+        return self.render_registry.set_overlay(plugin_id, surface, spec)
+
+    def _clear_overlay(self, plugin_id: str, surface: Optional[str] = None) -> None:
+        self.render_registry.clear_overlay(plugin_id, surface)
+
+    # ── plugin schedulers / loops ──────────────────────────────────────────
+    def _add_timer(self, plugin_id: str, fn: Callable[[], Any], seconds: float,
+                   repeat: bool) -> str:
+        if not callable(fn):
+            raise TypeError("timer callback must be callable")
+        with self._timers_lock:
+            self._timer_seq += 1
+            token = f"timer_{self._timer_seq}"
+            timer = _PluginTimer(self, plugin_id, token, fn, seconds, repeat)
+            self._timers.setdefault(plugin_id, {})[token] = timer
+        timer.start()  # arm after registration, outside the lock
+        return token
+
+    def _clear_timer(self, plugin_id: str, token: str) -> bool:
+        with self._timers_lock:
+            timer = (self._timers.get(plugin_id) or {}).pop(token, None)
+        if timer is not None:
+            timer.cancel()
+            return True
+        return False
+
+    def _forget_timer(self, plugin_id: str, token: str) -> None:
+        with self._timers_lock:
+            bucket = self._timers.get(plugin_id)
+            if bucket is not None:
+                bucket.pop(token, None)
+
+    def _clear_plugin_timers(self, plugin_id: str) -> None:
+        with self._timers_lock:
+            bucket = self._timers.pop(plugin_id, {}) or {}
+        for timer in list(bucket.values()):
+            timer.cancel()
+
+    def apply_render_hooks(self, surface: str, payload: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+        def _on_error(plugin_id: str, exc: BaseException) -> None:
+            self._record_failure(plugin_id, exc)
+        return self.render_registry.apply(surface, dict(payload or {}), on_error=_on_error)
+
+    def surface_overlays(self, surface: str) -> list[dict[str, Any]]:
+        return self.render_registry.overlays(surface)
+
+    def render_status(self) -> dict[str, Any]:
+        return self.render_registry.status()
+
     def status(self) -> dict[str, Any]:
         capabilities: dict[str, list[str]] = {}
         for record in self._records.values():
@@ -827,6 +1226,8 @@ class PluginManager:
             },
             "engine_access": self.engine_status(),
             "event_bus": self.event_bus.snapshot(),
+            "ui_panels": self.list_ui_panels(),
+            "render": self.render_registry.status(),
         }
 
     def engine_status(self) -> dict[str, Any]:
@@ -892,7 +1293,17 @@ class PluginManager:
             for ext_id in stale:
                 bucket.pop(ext_id, None)
                 self._extension_handlers.pop((kind, ext_id), None)
+                if kind == "ui_panels":
+                    self._ui_action_handlers.pop(ext_id, None)
+        # Drop every render hook + overlay this plugin registered.
+        self.render_registry.unregister_plugin(str(plugin_id or ""))
+        # Cancel any scheduler/loop timers the plugin started.
+        self._clear_plugin_timers(str(plugin_id or ""))
         if record is not None:
+            # Remove modules the plugin loaded via ctx.load_local (no sys.modules leak).
+            for mod_name in list(record.loaded_local_modules):
+                sys.modules.pop(mod_name, None)
+            record.loaded_local_modules.clear()
             record.extensions.clear()
 
     def _read_manifest(self, plug_dir: str, manifest_path: str) -> PluginRecord:

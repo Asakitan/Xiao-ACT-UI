@@ -247,6 +247,29 @@ button.close {
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
 <script src="act_panel_theme.js"></script>
+<script>window.__SAO_SURFACE__ = 'plugin_ui';</script>
+<script src="plugin_layer.js"></script>
+<style>
+.pm-tabs { display: flex; gap: 8px; padding: 8px 12px 0; }
+.pm-tab {
+    border: 1px solid rgba(117,205,255,.42);
+    background: rgba(8,14,22,.5);
+    color: var(--muted);
+    border-radius: 8px 8px 0 0;
+    padding: 7px 16px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.pm-tab.active { color: #fff8da; border-color: rgba(255,214,117,.74); background: rgba(22,35,54,.85); }
+#manage-body { height: calc(100% - 58px - 40px); }
+.panels-body { height: calc(100% - 58px - 40px); overflow: auto; padding: 12px; }
+.panels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.panel-card {
+    border: 1px solid rgba(117,205,255,.34);
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(27,46,68,.86), rgba(9,16,26,.82));
+    padding: 12px;
+}
+.panel-card-head { color: var(--line2); font-size: 11px; letter-spacing: .12em; margin-bottom: 6px; }
+</style>
 </head>
 <body>
 <div class="plugin-shell" id="shell">
@@ -262,7 +285,11 @@ button.close {
             <button class="close" type="button" onclick="PluginManager.close()">×</button>
         </div>
     </div>
-    <div class="plugin-body">
+    <div class="pm-tabs">
+        <div class="pm-tab active" id="tab-manage" onclick="PluginManager.showTab('manage')">管理 Manage</div>
+        <div class="pm-tab" id="tab-panels" onclick="PluginManager.showTab('panels')">面板 Panels</div>
+    </div>
+    <div class="plugin-body" id="manage-body">
         <div class="plugin-list" id="plugin-list">
             <div class="empty">正在读取插件状态...<br/>LOADING PLUGINS</div>
         </div>
@@ -281,6 +308,11 @@ button.close {
                 推荐用 <strong>@ctx.on("damage")</strong>、<strong>ctx.on_snapshot(cb)</strong>、<strong>ctx.subscribe_once(topic, cb)</strong> 监听事件；用 <strong>ctx.set_defaults({...})</strong> 与 <strong>ctx.setting(key)</strong> 管理插件设置。
             </div>
         </aside>
+    </div>
+    <div class="panels-body" id="panels-body" style="display:none;">
+        <div class="panels-grid" id="panels-grid">
+            <div class="empty">无插件 UI 面板<br/>NO PLUGIN PANELS</div>
+        </div>
     </div>
     <div class="toast" id="toast"></div>
 </div>
@@ -429,10 +461,57 @@ button.close {
         },
         updateStatus: function (data) {
             render(parseResult(data));
+        },
+        showTab: function (name) {
+            var manage = name !== 'panels';
+            document.getElementById('manage-body').style.display = manage ? '' : 'none';
+            document.getElementById('panels-body').style.display = manage ? 'none' : '';
+            document.getElementById('tab-manage').classList.toggle('active', manage);
+            document.getElementById('tab-panels').classList.toggle('active', !manage);
+            PluginManager._panelsActive = !manage;
+            if (!manage) PluginManager.renderPanels();
+        },
+        panelAction: function (panelId, action, payload) {
+            return apiCall('invoke_ui_action', [panelId, action, JSON.stringify(payload || {})]).then(function () {
+                return PluginManager.renderPanels();
+            });
+        },
+        renderPanels: function () {
+            var grid = document.getElementById('panels-grid');
+            var renderSpec = window.PluginHooks && window.PluginHooks.renderSpec;
+            return apiCall('get_plugin_ui_panels', []).then(function (data) {
+                var panels = (data && data.panels || []).filter(function (p) { return p.available; });
+                if (!panels.length) {
+                    grid.innerHTML = '<div class="empty">无插件 UI 面板<br/>启用注册了 register_ui_panel 的插件后显示在这里。</div>';
+                    return;
+                }
+                grid.innerHTML = '';
+                panels.forEach(function (p) {
+                    var card = document.createElement('div');
+                    card.className = 'panel-card';
+                    var head = document.createElement('div');
+                    head.className = 'panel-card-head';
+                    head.textContent = (p.title || p.id) + ' · ' + (p.plugin_id || '');
+                    card.appendChild(head);
+                    var body = document.createElement('div');
+                    card.appendChild(body);
+                    grid.appendChild(card);
+                    apiCall('render_ui_panel', [p.id, '']).then(function (r) {
+                        var spec = (r && r.spec) || { nodes: [] };
+                        if (renderSpec) {
+                            renderSpec(spec, body, function (action, payload) { PluginManager.panelAction(p.id, action, payload); });
+                        } else {
+                            body.textContent = JSON.stringify(spec);
+                        }
+                    });
+                });
+            });
         }
     };
 
     window.PluginManager = PluginManager;
+    PluginManager._panelsActive = false;
+    setInterval(function () { if (PluginManager._panelsActive) PluginManager.renderPanels(); }, 1000);
     window.addEventListener('pywebviewready', function () { PluginManager.refresh(); });
     setTimeout(function () {
         PluginManager.fadeIn();

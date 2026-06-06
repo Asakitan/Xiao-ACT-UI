@@ -164,6 +164,10 @@ a = Analysis(
         'PIL.ImageFilter',
         'cv2',
         'numpy',
+        # 插件依赖保险: hide_seek_plugin 自带的 CV 引擎以 DATA(.py) 下发, 其
+        # ``import cv2/numpy/utils.window_locator`` 不在 PyInstaller 静态图内,
+        # 故显式钉住, 保证从主程序获取依赖在冻结包里始终可用。
+        'utils.window_locator',
         # 截图
         'mss',
         'mss.windows',

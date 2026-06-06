@@ -36,7 +36,7 @@ Required SAOPlayerGUI methods (via MRO):
     _toggle_hide_all_panels (Panels mixin)
   * _toggle_auto_script, _toggle_boss_raid,
     _boss_raid_next_phase (Actions mixin)
-  * _toggle_hide_seek (EngineToggles mixin)
+  * _show_plugin_popup_menu (Panels mixin)
 """
 
 from __future__ import annotations
@@ -174,7 +174,7 @@ class SAOPlayerGUIFloatHandlersMixin:
             'toggle_topmost': lambda: self.root.after(0, self._toggle_topmost),
             'toggle_auto_script': lambda: self.root.after(0, self._toggle_auto_script),
             'hide_panels': lambda: self.root.after(0, self._toggle_hide_all_panels),
-            'toggle_hide_seek': lambda: self.root.after(0, self._toggle_hide_seek),
+            'show_plugins': lambda: self.root.after(0, self._show_plugin_popup_menu),
             'boss_raid_start': lambda: self.root.after(0, self._toggle_boss_raid),
             'boss_raid_next_phase': lambda: self.root.after(0, self._boss_raid_next_phase),
         })

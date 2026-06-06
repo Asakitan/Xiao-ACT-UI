@@ -145,7 +145,6 @@ class SAOPlayerGUIMenuMixin:
             except Exception:
                 br_on = False
 
-        hs_on = bool(self._hide_seek_engine and self._hide_seek_engine.running)
         snd_on = bool(self._get_setting('sound_enabled', True))
         dps_on = bool(self._get_setting('dps_enabled', True))
         dps_report_available = bool(self._get_dps_last_report_available())
@@ -290,7 +289,6 @@ class SAOPlayerGUIMenuMixin:
             bool(getattr(self, '_recognition_active', False)),
             topmost,
             ak_on,
-            hs_on,
             br_on,
             snd_on,
             dps_on,
@@ -373,8 +371,6 @@ class SAOPlayerGUIMenuMixin:
         ak_config = self._load_auto_key_config() if self._cfg_settings_ref else {}
         ak_on = bool(ak_config.get('enabled', False))
         ak_label = f'AutoKey: {"ON" if ak_on else "OFF"}' + _k('toggle_auto_script')
-        hs_on = bool(self._hide_seek_engine and self._hide_seek_engine.running)
-        hs_label = f'自动躲猫猫: {"ON" if hs_on else "OFF"}' + _k('toggle_hide_seek')
 
         br_config = self._load_boss_raid_config() if self._cfg_settings_ref else {}
         br_on = bool(br_config.get('enabled', False))
@@ -448,7 +444,7 @@ class SAOPlayerGUIMenuMixin:
         session_count = len(getattr(self, '_session_players', {}) or {})
         auto_items = [
             {'icon': '⚡', 'label': ak_label, 'command': self._toggle_auto_script},
-            {'icon': '◈', 'label': hs_label, 'command': self._toggle_hide_seek},
+            {'icon': '🧩', 'label': '插件菜单 Plugins', 'command': self._show_plugin_popup_menu},
             {'icon': '◆', 'label': 'AutoKey Quick Panel', 'command': self._toggle_autokey_panel},
             {'icon': '◇', 'label': 'AutoKey Detail Editor', 'command': self._toggle_autokey_detail_panel},
         ]

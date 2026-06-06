@@ -1,0 +1,287 @@
+/* SAO plugin render layer — WebView twin of gui_modules/sao_plugin_ui_render.py.
+ *
+ * Loaded into every SAO WebView window (injected centrally by sao_webview.py).
+ * Gives plugins two powers over the page, mirroring the Entity renderer:
+ *
+ *   1. OVERLAYS  — a declarative ui_spec drawn on top of native content.
+ *      Works with ZERO page changes: this script polls the Python bridge for
+ *      overlays on the window's surface and paints them into an injected layer.
+ *
+ *   2. HOOKS / TAKEOVER — a page opts in by routing its render payload through
+ *      window.PluginHooks.tap(surface, payload, applyFn). Plugin render hooks
+ *      (in Python) may mutate the payload (applyFn re-renders) or fully take the
+ *      surface over with an override spec (painted by this layer).
+ *
+ * The same node vocabulary as ui_spec.py: panel/section/card/row/group + text/
+ * kv/bar/badge/divider/spacer/button/table.
+ */
+(function () {
+    "use strict";
+
+    var SURFACE = String(window.__SAO_SURFACE__ || "unknown");
+    var POLL_MS = 800;
+
+    function api() { return window.pywebview && window.pywebview.api; }
+
+    function parse(result) {
+        if (result == null) return null;
+        if (typeof result === "string") {
+            try { return JSON.parse(result); } catch (_) { return null; }
+        }
+        return result;
+    }
+
+    // Call a Python bridge method by name; tolerate both pywebview + bridge.cmd.
+    function call(name, args) {
+        var a = api();
+        if (a && typeof a[name] === "function") {
+            try { return Promise.resolve(a[name].apply(a, args || [])).then(parse).catch(function () { return null; }); }
+            catch (_) { return Promise.resolve(null); }
+        }
+        if (window.bridge && typeof window.bridge.cmd === "function") {
+            return window.bridge.cmd("act." + name, { args: args || [] }).then(parse).catch(function () { return null; });
+        }
+        return Promise.resolve(null);
+    }
+
+    function esc(v) {
+        return String(v == null ? "" : v)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    // ── spec -> DOM ──────────────────────────────────────────────────────────
+    function el(tag, cls, html) {
+        var e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (html != null) e.innerHTML = html;
+        return e;
+    }
+
+    function renderNode(node, onAction) {
+        var t = node && node.type;
+        if (t === "panel" || t === "section" || t === "card" || t === "group" || t === "row") {
+            var box = el("div", "splg-" + t + (node.title ? " splg-titled" : ""));
+            if (node.accent) box.style.setProperty("--splg-acc", barColor(node.accent));
+            if (node.title) {
+                var head = el("div", "splg-head");
+                head.appendChild(el("span", "splg-rail"));
+                head.appendChild(el("span", "splg-title", esc(node.title)));
+                box.appendChild(head);
+            }
+            var inner = el("div", "splg-body splg-" + t + "-body");
+            if (t === "row" && node.align) {
+                inner.style.justifyContent =
+                    { left: "flex-start", center: "center", right: "flex-end" }[node.align] || "flex-start";
+            }
+            (node.children || []).forEach(function (c) {
+                var ce = renderNode(c, onAction);
+                if (ce) inner.appendChild(ce);
+            });
+            box.appendChild(inner);
+            return box;
+        }
+        if (t === "text") return el("div", "splg-text splg-st-" + (node.style || "value") + " splg-al-" + (node.align || "left"), esc(node.text));
+        if (t === "kv") {
+            var kv = el("div", "splg-kv");
+            kv.appendChild(el("span", "splg-k", esc(node.label)));
+            kv.appendChild(el("span", "splg-v splg-st-" + (node.style || "value"), esc(node.value)));
+            return kv;
+        }
+        if (t === "bar") {
+            var wrap = el("div", "splg-barwrap");
+            if (node.label || node.caption) {
+                var top = el("div", "splg-barlabels");
+                top.appendChild(el("span", "splg-k", esc(node.label || "")));
+                top.appendChild(el("span", "splg-v", esc(node.caption || "")));
+                wrap.appendChild(top);
+            }
+            var track = el("div", "splg-bar");
+            var fill = el("div", "splg-fill");
+            fill.style.width = (Math.max(0, Math.min(1, +node.pct || 0)) * 100).toFixed(1) + "%";
+            fill.style.background = barColor(node.color);
+            track.appendChild(fill);
+            wrap.appendChild(track);
+            return wrap;
+        }
+        if (t === "badge") return el("span", "splg-badge splg-bg-" + (node.style || "muted"), esc(node.text));
+        if (t === "divider") return el("div", "splg-divider");
+        if (t === "spacer") { var s = el("div", "splg-spacer"); s.style.height = (+node.size || 8) + "px"; return s; }
+        if (t === "button") {
+            var b = el("button", "splg-btn splg-btn-" + (node.style || "default"), esc(node.label || node.action));
+            if (node.disabled) b.disabled = true;
+            else b.addEventListener("click", function () { if (onAction) onAction(node.action || "", node.payload || {}); });
+            return b;
+        }
+        if (t === "table") return renderTable(node);
+        return null;
+    }
+
+    function renderTable(node) {
+        var cols = node.columns || [];
+        var rows = node.rows || [];
+        if (!cols.length && rows.length) cols = Object.keys(rows[0]).map(function (k) { return { key: k, title: k, align: "left" }; });
+        var html = "";
+        if (node.title) html += '<div class="splg-tabtitle">' + esc(node.title) + "</div>";
+        html += '<table class="splg-table"><thead><tr>';
+        cols.forEach(function (c) { html += '<th class="splg-al-' + (c.align || "left") + '">' + esc(c.title || c.key) + "</th>"; });
+        html += "</tr></thead><tbody>";
+        var hk = node.highlight_key || "";
+        rows.forEach(function (r) {
+            var hi = hk && r[hk] ? " splg-row-hi" : "";
+            html += '<tr class="' + hi + '">';
+            cols.forEach(function (c) {
+                var v = r[c.key];
+                html += '<td class="splg-al-' + (c.align || "left") + '">' + esc(v == null ? "" : v) + "</td>";
+            });
+            html += "</tr>";
+        });
+        html += "</tbody></table>";
+        return el("div", "splg-tablewrap", html);
+    }
+
+    function barColor(c) {
+        return {
+            cyan: "#73d7ff", accent: "#73d7ff", gold: "#ffd46f",
+            ok: "#7df2bf", heal: "#7df2bf", warn: "#ffd46f", bad: "#ff6b82"
+        }[c] || "#73d7ff";
+    }
+
+    function renderSpec(spec, mount, onAction) {
+        mount.innerHTML = "";
+        spec = spec || {};
+        if (spec.title) mount.appendChild(el("div", "splg-text splg-st-title", esc(spec.title)));
+        (spec.nodes || []).forEach(function (n) {
+            try { var e = renderNode(n, onAction); if (e) mount.appendChild(e); }
+            catch (_) { mount.appendChild(el("div", "splg-text splg-st-bad", "[render error]")); }
+        });
+    }
+
+    // ── injected stylesheet (SAO cyan/gold theme, scoped to .splg-*) ─────────
+    function injectStyle() {
+        if (document.getElementById("sao-plugin-layer-style")) return;
+        var css = [
+            "#sao-plugin-layer{position:fixed;left:0;right:0;top:0;z-index:99990;pointer-events:none;padding:6px 8px;}",
+            "#sao-plugin-layer .splg-card,#sao-plugin-layer .splg-section{pointer-events:auto;}",
+            "#sao-plugin-override{position:fixed;inset:0;z-index:99995;overflow:auto;padding:14px;",
+            "  background:linear-gradient(180deg,rgba(10,16,24,.96),rgba(8,12,20,.93));color:#e8f6ff;",
+            "  font-family:'Segoe UI','Microsoft YaHei',sans-serif;}",
+            ".splg-section,.splg-card{border:1px solid rgba(117,205,255,.34);border-left:3px solid var(--splg-acc,#73d7ff);",
+            "  border-radius:9px;background:rgba(18,31,47,.82);box-shadow:inset 0 0 16px rgba(117,205,255,.06);",
+            "  margin:6px 0;padding:8px 10px;color:#e8f6ff;}",
+            ".splg-row-body{display:flex;gap:12px;flex-wrap:wrap;align-items:center;}",
+            ".splg-head{display:flex;align-items:center;gap:6px;margin-bottom:4px;}",
+            ".splg-rail{width:3px;height:14px;background:var(--splg-acc,#73d7ff);border-radius:2px;}",
+            ".splg-title{color:#ffd46f;font-weight:700;font-size:13px;letter-spacing:.03em;}",
+            ".splg-text{font-size:13px;line-height:1.5;margin:2px 0;}",
+            ".splg-st-title{color:#ffd46f;font-weight:700;font-size:15px;}",
+            ".splg-st-subtitle{color:#73d7ff;font-weight:600;}",
+            ".splg-st-value{color:#e8f6ff;}.splg-st-label,.splg-st-muted{color:#9fc0d8;}",
+            ".splg-st-ok{color:#7df2bf;}.splg-st-warn{color:#ffd46f;}.splg-st-bad{color:#ff6b82;}",
+            ".splg-st-gold{color:#ffd46f;}.splg-st-accent{color:#73d7ff;}.splg-st-mono{font-family:Consolas,monospace;}",
+            ".splg-al-left{text-align:left;}.splg-al-center{text-align:center;}.splg-al-right{text-align:right;}",
+            ".splg-kv{display:flex;justify-content:space-between;gap:10px;font-size:12px;margin:2px 0;}",
+            ".splg-k{color:#9fc0d8;}.splg-v{color:#e8f6ff;font-weight:600;}",
+            ".splg-barwrap{margin:4px 0;}.splg-barlabels{display:flex;justify-content:space-between;font-size:11px;color:#9fc0d8;margin-bottom:2px;}",
+            ".splg-bar{height:8px;border-radius:6px;background:rgba(120,150,170,.25);overflow:hidden;}",
+            ".splg-fill{height:100%;border-radius:6px;transition:width .25s ease;}",
+            ".splg-badge{display:inline-block;border:1px solid currentColor;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700;margin:2px 4px 2px 0;}",
+            ".splg-bg-ok{color:#7df2bf;}.splg-bg-warn{color:#ffd46f;}.splg-bg-bad{color:#ff6b82;}.splg-bg-gold{color:#ffd46f;}.splg-bg-accent{color:#73d7ff;}.splg-bg-muted{color:#9fc0d8;}",
+            ".splg-divider{height:1px;background:rgba(117,205,255,.22);margin:6px 0;}",
+            ".splg-btn{pointer-events:auto;border:1px solid rgba(117,205,255,.5);background:linear-gradient(180deg,rgba(61,143,201,.42),rgba(19,48,74,.58));",
+            "  color:#e8f6ff;border-radius:7px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;margin:4px 6px 4px 0;}",
+            ".splg-btn:hover{box-shadow:0 0 12px rgba(107,214,255,.3);}",
+            ".splg-btn-primary{border-color:rgba(255,214,117,.74);color:#fff8da;}.splg-btn-danger{border-color:rgba(255,107,130,.7);}",
+            ".splg-btn:disabled{opacity:.5;cursor:default;}",
+            ".splg-table{width:100%;border-collapse:collapse;font-size:12px;}",
+            ".splg-table th{color:#9fc0d8;font-weight:700;text-align:left;padding:2px 6px;border-bottom:1px solid rgba(117,205,255,.2);}",
+            ".splg-table td{color:#e8f6ff;padding:2px 6px;}.splg-row-hi td{color:#ffd46f;font-weight:700;}",
+            ".splg-tabtitle{color:#9fc0d8;font-weight:700;font-size:12px;margin:4px 0 2px;}"
+        ].join("\n");
+        var st = el("style");
+        st.id = "sao-plugin-layer-style";
+        st.textContent = css;
+        (document.head || document.documentElement).appendChild(st);
+    }
+
+    // ── overlay layer (universal, no page edits required) ────────────────────
+    function overlayMount() {
+        var m = document.getElementById("sao-plugin-layer");
+        if (!m) { m = el("div"); m.id = "sao-plugin-layer"; document.body.appendChild(m); }
+        return m;
+    }
+
+    function overlayAction(panelId) {
+        return function (action, payload) {
+            if (!panelId) return;
+            call("invoke_ui_action", [panelId, action, JSON.stringify(payload || {})]).then(refreshOverlays);
+        };
+    }
+
+    function refreshOverlays() {
+        if (!document.body) return;
+        return call("act_render_overlays", [SURFACE]).then(function (data) {
+            var mount = overlayMount();
+            var overlays = (data && data.overlays) || [];
+            if (!overlays.length) { mount.innerHTML = ""; mount.style.display = "none"; return; }
+            mount.style.display = "block";
+            mount.innerHTML = "";
+            overlays.forEach(function (ov) {
+                var card = el("div", "splg-section");
+                renderSpec(ov.spec || {}, card, overlayAction(ov.panel_id || (ov.spec && ov.spec.panel_id)));
+                mount.appendChild(card);
+            });
+        });
+    }
+
+    // ── override layer (full takeover from a render hook) ────────────────────
+    function showOverride(spec) {
+        var ov = document.getElementById("sao-plugin-override");
+        if (!spec || !(spec.nodes || []).length) {
+            if (ov) ov.remove();
+            return;
+        }
+        if (!ov) { ov = el("div"); ov.id = "sao-plugin-override"; document.body.appendChild(ov); }
+        renderSpec(spec, ov, null);
+    }
+
+    // ── PluginHooks public API ───────────────────────────────────────────────
+    var PluginHooks = {
+        get surface() { return SURFACE; },
+        setSurface: function (id) { SURFACE = String(id || SURFACE); },
+        renderSpec: renderSpec,
+        refresh: function () { refreshOverlays(); },
+
+        // Async: resolve {payload, override} after running Python render hooks.
+        process: function (surface, payload) {
+            return call("act_render_apply_hooks", [surface || SURFACE, JSON.stringify(payload || {})])
+                .then(function (data) {
+                    if (!data || !data.ok) return { payload: payload, override: null };
+                    return { payload: data.payload != null ? data.payload : payload, override: data.override || null };
+                });
+        },
+
+        // Sync-friendly: return payload now; re-apply async if plugins change it.
+        tap: function (surface, payload, applyFn) {
+            PluginHooks.process(surface, payload).then(function (res) {
+                if (res.override) { showOverride(res.override); }
+                else { showOverride(null); }
+                if (res.payload && applyFn && res.payload !== payload) {
+                    try { applyFn(res.payload); } catch (_) {}
+                }
+            });
+            return payload;
+        }
+    };
+    window.PluginHooks = PluginHooks;
+
+    // ── boot ─────────────────────────────────────────────────────────────────
+    function boot() {
+        injectStyle();
+        refreshOverlays();
+        setInterval(refreshOverlays, POLL_MS);
+    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+    else boot();
+    window.addEventListener("pywebviewready", refreshOverlays);
+})();

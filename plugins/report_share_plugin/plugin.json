@@ -1,0 +1,16 @@
+{
+  "id": "report_share_plugin",
+  "name": "Report Share (Exporter + Formatter)",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "description": "Exporter + formatter example: register_exporter('markdown_report') turns an encounter into a Markdown battle report, register_formatter('share_line') builds a compact one-line share string, and a UI panel previews both with a build button.",
+  "enabled": true,
+  "subscriptions": ["encounter_finalized"],
+  "capabilities": [
+    "plugin_manager",
+    {"id": "exporters", "title": "Markdown report", "actions": ["export"]},
+    {"id": "formatters", "title": "Share line"},
+    {"id": "ui_panels", "title": "Report preview", "actions": ["build"]}
+  ],
+  "permissions": []
+}

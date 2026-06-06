@@ -3860,7 +3860,7 @@ html, body {
             <ul class="child-menu" id="sub-panels" data-group="panels">
                 <li data-action="toggle_auto_script"><i class="menu-glyph mi-play"></i><span>自动按键 Auto Key Engine</span><small class="shortcut">F6</small></li>
                 <li data-action="toggle_recognition"><i class="menu-glyph mi-play"></i><span>识别 开/关</span><small class="shortcut">F5</small></li>
-                <li data-action="toggle_hide_seek"><i class="menu-glyph mi-play"></i><span>自动躲猫猫 Hide & Seek</span><small class="shortcut">F11</small></li>
+                <li data-action="show_plugins"><i class="menu-glyph mi-mid"></i><span>🧩 插件菜单 Plugins</span><small class="shortcut">F11</small></li>
                 <li data-action="toggle_commander"><i class="menu-glyph mi-play"></i><span>团本指挥 Commander</span></li>
                 <li data-action="toggle_session_players"><i class="menu-glyph mi-mid"></i><span>本次登录玩家 Session Players</span></li>
                 <li class="sep"></li>
@@ -4866,6 +4866,10 @@ document.querySelectorAll('.child-menu li').forEach(function(li) {
         playSound('snd-click');
         if (action === 'exit') {
             exitApplication();
+            return;
+        }
+        if (action === 'show_plugins') {
+            showPluginPopup();
             return;
         }
         if (action && window.pywebview && window.pywebview.api) {
@@ -7407,6 +7411,101 @@ setTimeout(function() {
     _menuClock();
     setInterval(_menuClock, 1000);
 }, 250);
+</script>
+
+<!-- ═══ Plugin popup menu (插件 popup — manager + plugin list) ═══ -->
+<style>
+#plugin-popup-overlay { display:none; position:fixed; inset:0; z-index:99999;
+    background:rgba(4,8,14,.55); align-items:center; justify-content:center;
+    font-family:"Segoe UI","Microsoft YaHei",sans-serif; }
+#plugin-popup-card { width:340px; max-height:72vh; overflow:auto;
+    border:1px solid rgba(117,205,255,.5); border-radius:12px;
+    background:linear-gradient(180deg,rgba(18,31,47,.97),rgba(9,14,22,.97));
+    box-shadow:0 0 34px rgba(88,199,255,.28); color:#e8f6ff; padding:0; }
+.ppm-head { display:flex; align-items:center; justify-content:space-between;
+    padding:12px 14px; border-bottom:1px solid rgba(117,205,255,.3);
+    font-weight:700; letter-spacing:.04em; color:#ffd46f; }
+#ppm-close { cursor:pointer; font-size:20px; line-height:1; color:#9fc0d8; padding:0 4px; }
+#ppm-list { padding:8px 10px 12px; }
+.ppm-row { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:7px 8px; border-radius:8px; margin:3px 0; font-size:13px; }
+.ppm-row:hover { background:rgba(117,205,255,.08); }
+.ppm-manage { cursor:pointer; color:#73d7ff; font-weight:600; border:1px solid rgba(117,205,255,.3); }
+.ppm-name { cursor:pointer; flex:1; }
+.ppm-name small { color:#9fc0d8; margin-left:4px; }
+.ppm-btn { border:1px solid rgba(117,205,255,.5); background:rgba(19,48,74,.6); color:#e8f6ff;
+    border-radius:6px; padding:3px 9px; font-size:12px; cursor:pointer; }
+.ppm-btn:hover { box-shadow:0 0 10px rgba(107,214,255,.3); }
+.ppm-empty { color:#9fc0d8; text-align:center; padding:20px 0; }
+.ppm-sep { height:1px; background:rgba(117,205,255,.2); margin:6px 2px; }
+</style>
+<div id="plugin-popup-overlay">
+    <div id="plugin-popup-card">
+        <div class="ppm-head"><span>🧩 插件菜单 Plugins</span><span id="ppm-close">×</span></div>
+        <div id="ppm-list"><div class="ppm-empty">加载中…</div></div>
+    </div>
+</div>
+<script>
+(function () {
+    function api() { return window.pywebview && window.pywebview.api; }
+    function parse(r) { try { return typeof r === 'string' ? JSON.parse(r) : r; } catch (e) { return null; } }
+    function esc(v) {
+        return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    window.showPluginPopup = function () {
+        var ov = document.getElementById('plugin-popup-overlay');
+        if (ov) { ov.style.display = 'flex'; window.renderPluginPopup(); }
+    };
+    window.hidePluginPopup = function () {
+        var ov = document.getElementById('plugin-popup-overlay');
+        if (ov) ov.style.display = 'none';
+    };
+    window.renderPluginPopup = function () {
+        var list = document.getElementById('ppm-list');
+        var a = api();
+        if (!list) return;
+        if (!a || !a.get_plugin_menu) { list.innerHTML = '<div class="ppm-empty">插件接口不可用</div>'; return; }
+        Promise.resolve(a.get_plugin_menu()).then(function (r) {
+            var data = parse(r) || { items: [] };
+            var items = data.items || [];
+            var html = '';
+            items.forEach(function (it) {
+                if (it.type === 'manage') {
+                    html += '<div class="ppm-row ppm-manage" data-manage="1">⚙ ' + esc(it.label) + '</div><div class="ppm-sep"></div>';
+                } else {
+                    var st = it.active ? '● 运行' : (it.enabled ? '◐ 已启用' : '○ 已禁用');
+                    html += '<div class="ppm-row"><span class="ppm-name" data-manage="1">' + esc(it.label)
+                        + ' <small>' + st + '</small></span>'
+                        + '<button class="ppm-btn" data-id="' + esc(it.id) + '" data-en="' + (it.enabled ? 1 : 0) + '">'
+                        + (it.enabled ? '禁用' : '启用') + '</button></div>';
+                }
+            });
+            list.innerHTML = html || '<div class="ppm-empty">未发现插件 No plugins</div>';
+        }).catch(function () { list.innerHTML = '<div class="ppm-empty">读取失败</div>'; });
+    };
+    document.addEventListener('click', function (e) {
+        var ov = document.getElementById('plugin-popup-overlay');
+        if (!ov || ov.style.display === 'none') return;
+        var t = e.target;
+        if (t.id === 'plugin-popup-overlay' || t.id === 'ppm-close') { window.hidePluginPopup(); return; }
+        if (t.getAttribute && t.getAttribute('data-manage')) {
+            var a1 = api();
+            if (a1 && a1.menu_action) a1.menu_action('toggle_plugin_manager');
+            window.hidePluginPopup();
+            return;
+        }
+        if (t.classList && t.classList.contains('ppm-btn')) {
+            var a2 = api();
+            var id = t.getAttribute('data-id');
+            var en = t.getAttribute('data-en') === '1';
+            if (a2) {
+                Promise.resolve(en ? a2.disable_plugin(id) : a2.enable_plugin(id))
+                    .then(function () { window.renderPluginPopup(); });
+            }
+        }
+    });
+})();
 </script>
 </body>
 </html>

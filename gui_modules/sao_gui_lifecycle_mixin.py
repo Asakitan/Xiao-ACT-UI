@@ -21,7 +21,7 @@ Methods:
   * _finalize_close (128) — the ordered destroy sequence:
       1. set _destroyed/_close_finalized, stop breath/lift loops
       2. cancel all root.after IDs (panel float, menu refresh,
-         hide-seek alert, shared fx tick on the class)
+         shared fx tick on the class)
       3. remove updater listener
       4. unbind SAOHotkeyManager + GameStateManager
       5. stop fisheye overlay
@@ -153,8 +153,7 @@ class SAOPlayerGUILifecycleMixin:
         self._breath_active = False
         self._lift_loop_active = False
         # ── Cancel all global after() IDs ──
-        for _aid_attr in ('_panel_float_after_id', '_menu_refresh_after_id',
-                          '_hide_seek_alert_after_id'):
+        for _aid_attr in ('_panel_float_after_id', '_menu_refresh_after_id'):
             _aid = getattr(self, _aid_attr, None)
             if _aid is not None:
                 try:

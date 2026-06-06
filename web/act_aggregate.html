@@ -347,6 +347,13 @@ input#query { width: 170px; }
         var aggP = Promise.resolve(api.get_aggregate_status(1000, query, source, win, 20, '')).then(function (j) { return JSON.parse(j); });
         Promise.all([aggP, graphP]).then(function (res) {
             lastData = res[0]; lastGraph = res[1];
+            // Plugin render-hook tap: plugins may transform the aggregate payload
+            // or take the surface over (override painted by plugin_layer.js).
+            if (window.PluginHooks) {
+                lastData = window.PluginHooks.tap('act_aggregate', lastData, function (p) {
+                    lastData = p; render(p, lastGraph);
+                });
+            }
             render(lastData, lastGraph);
             statusPill.textContent = lastData && lastData.ok ? 'OK' : 'ERROR';
         }).catch(function () {

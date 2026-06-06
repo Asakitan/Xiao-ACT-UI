@@ -52,10 +52,18 @@ Required SAOPlayerGUI methods (via MRO):
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Optional
 
 from engines.combat_analytics import build_act_snapshot
-from act_platform.runtime import publish_owner_event
+from act_platform.runtime import act_render_apply_hooks, publish_owner_event
+
+# Minimum interval between *per-combat-event* ACT snapshot pushes (the storm
+# fired from the pcap capture thread on every damage/monster event). Periodic
+# and user-triggered pushes bypass this gate, so the final post-combat value is
+# always delivered by the recognition loop. ~14 Hz collapses a burst of damage
+# ticks into one snapshot build while staying visually real-time.
+_ACT_SNAP_MIN_INTERVAL_S = 0.07
 
 
 class SAOPlayerGUIDpsThemeMixin:
@@ -238,7 +246,11 @@ class SAOPlayerGUIDpsThemeMixin:
         except Exception:
             pass
 
-    def _get_dps_act_snapshot(self, history_limit: int = 20):
+    def _get_dps_act_snapshot(self, history_limit: int = 0):
+        # The DPS overlay / WebView meter / act_snapshot plugins only read
+        # render_spec/sources/triggers, so the push uses the lite (cached,
+        # skill-free, no report/history deepcopy) build. history_limit defaults
+        # to 0 here because this factory only feeds the live act_snapshot push.
         return build_act_snapshot(
             dps_tracker=getattr(self, '_dps_tracker', None),
             history_store=getattr(self, '_dps_history_store', None),
@@ -248,15 +260,32 @@ class SAOPlayerGUIDpsThemeMixin:
             packet_probe=getattr(self, '_packet_engine', None),
             memory_probe=getattr(self, '_mem_bridge', None),
             history_limit=history_limit,
+            lite=True,
         )
 
-    def _push_dps_act_snapshot(self):
+    def _push_dps_act_snapshot(self, throttle: bool = False):
         overlay = getattr(self, '_dps_overlay', None)
         if overlay is None or not hasattr(overlay, 'set_act_snapshot'):
             return
+        # Coalesce the per-damage-event storm fired on the pcap capture thread.
+        # throttle=True is passed only from the high-frequency packet callbacks;
+        # periodic (recognition loop) + user-triggered pushes leave it False so
+        # the trailing / final snapshot is never dropped.
+        now = time.time()
+        if throttle and (now - getattr(self, '_last_act_snap_push_t', 0.0)) < _ACT_SNAP_MIN_INTERVAL_S:
+            return
+        self._last_act_snap_push_t = now
         try:
             snapshot = self._get_dps_act_snapshot()
             publish_owner_event(self, 'act_snapshot', snapshot, source_name='entity', source_kind='ui')
+            # Entity-side plugin render hook (parity with the WebView dps push):
+            # plugins may transform/replace the snapshot before the overlay draws.
+            try:
+                hooked = act_render_apply_hooks(self, 'dps', snapshot)
+                if hooked.get('ok') and hooked.get('payload') is not None:
+                    snapshot = hooked['payload']
+            except Exception:
+                pass
             overlay.set_act_snapshot(snapshot)
         except Exception:
             pass

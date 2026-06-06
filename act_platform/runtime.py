@@ -58,7 +58,10 @@ def ensure_act_event_bus(owner: Any) -> EventBus:
         max_recent = int(_settings_get(owner, "act_event_bus_max_recent", 4000) or 4000)
     except Exception:
         max_recent = 4000
-    bus = EventBus(max_recent=max(200, max_recent))
+    # act_snapshot is a combat-rate live-overlay payload that is always filtered
+    # out of the action-log / aggregate views (_HIDDEN_ACTION_TOPICS), so retain
+    # it for subscribers but keep it out of the deep-cloned _recent ring.
+    bus = EventBus(max_recent=max(200, max_recent), ephemeral_topics={"act_snapshot"})
     try:
         setattr(owner, "_act_event_bus", bus)
     except Exception:
@@ -261,7 +264,10 @@ def ensure_act_plugin_manager(owner: Any, *, load: bool = False,
         if plugin_dirs is not None:
             manager.plugin_dirs = [os.path.abspath(path) for path in plugin_dirs if path]
             manager.discover()
-    if load:
+    # Idempotent: only load on first request. Without this guard every UI poll
+    # (act_plugin_ui_render/menu pass load=True) would unload+reload every
+    # plugin, resetting state and killing engines a stateful plugin owns.
+    if load and not getattr(manager, "_initial_loaded", False):
         manager.load_all()
     return manager
 
@@ -453,6 +459,139 @@ def act_plugin_reload(owner: Any, plugin_id: str = "") -> dict[str, Any]:
         return manager.reload_all()
     except Exception as exc:
         return {"ok": False, "message": str(exc)}
+
+
+def act_plugin_menu(owner: Any) -> dict[str, Any]:
+    """Data for the plugin popup menu (Entity + WebView): manager + plugin list."""
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "items": []}
+    status = manager.status()
+    panels_by_plugin: dict[str, list[str]] = {}
+    for panel in manager.list_ui_panels():
+        panels_by_plugin.setdefault(str(panel.get("plugin_id") or ""), []).append(str(panel.get("id") or ""))
+    items: list[dict[str, Any]] = [
+        {"type": "manage", "id": "__manage__", "label": "插件管理面板 Plugin Manager"},
+    ]
+    for plug in status.get("plugins", []):
+        pid = str(plug.get("id") or "")
+        items.append({
+            "type": "plugin",
+            "id": pid,
+            "label": str(plug.get("name") or pid),
+            "enabled": bool(plug.get("enabled")),
+            "active": bool(plug.get("active")),
+            "panels": panels_by_plugin.get(pid, []),
+        })
+    return {
+        "ok": True,
+        "count": int(status.get("plugin_count", 0) or 0),
+        "active_count": int(status.get("active_count", 0) or 0),
+        "items": items,
+    }
+
+
+# ── Plugin UI panels (redrawable declarative panels) ──────────────────────────
+
+def _coerce_payload(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    if isinstance(payload, str) and payload.strip():
+        try:
+            decoded = json.loads(payload)
+        except Exception:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def act_plugin_ui_panels(owner: Any) -> dict[str, Any]:
+    """List redrawable plugin UI panels registered by active plugins."""
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+        return {"ok": True, "panels": manager.list_ui_panels()}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "panels": []}
+
+
+def act_plugin_ui_render(owner: Any, panel_id: str, payload: Any = None) -> dict[str, Any]:
+    """Render a single plugin UI panel to a normalized spec for the host."""
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+        return manager.render_ui_panel(str(panel_id or ""), _coerce_payload(payload))
+    except Exception as exc:
+        return {"ok": False, "panel_id": str(panel_id or ""), "message": str(exc),
+                "spec": {"version": 1, "title": "", "nodes": []}}
+
+
+def act_plugin_ui_action(owner: Any, panel_id: str, action_id: str, payload: Any = None) -> dict[str, Any]:
+    """Dispatch a button action from a rendered plugin UI panel."""
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+        return manager.invoke_ui_action(str(panel_id or ""), str(action_id or ""), _coerce_payload(payload))
+    except Exception as exc:
+        return {"ok": False, "panel_id": str(panel_id or ""), "message": str(exc)}
+
+
+# ── Render hooks + overlays (intercept any UI surface, both renderers) ─────────
+
+def act_render_surfaces(owner: Any) -> dict[str, Any]:
+    """Report which surfaces have plugin hooks/overlays attached."""
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+        return {"ok": True, **manager.render_status()}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "surfaces": {}}
+
+
+def act_render_apply_hooks(owner: Any, surface: str, payload: Any = None) -> dict[str, Any]:
+    """Run the plugin render-hook chain for ``surface`` over ``payload``.
+
+    Hosts call this just before rendering: the returned ``payload`` may have
+    been mutated or replaced by plugins, and ``override`` carries a full
+    take-over spec when a hook set ``payload[OVERRIDE_KEY]``.
+    """
+    from .render_hooks import OVERRIDE_KEY
+    from .ui_spec import normalize_ui_spec
+    try:
+        manager = ensure_act_plugin_manager(owner)
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "surface": str(surface or ""),
+                "payload": _coerce_payload(payload), "override": None}
+    if not manager.render_registry.has_hooks(surface):
+        return {"ok": True, "surface": str(surface or ""),
+                "payload": _coerce_payload(payload), "override": None, "hooked": False}
+    result = manager.apply_render_hooks(surface, _coerce_payload(payload))
+    override = None
+    if isinstance(result, Mapping) and result.get(OVERRIDE_KEY) is not None:
+        override = normalize_ui_spec(result.get(OVERRIDE_KEY))
+        result = {k: v for k, v in result.items() if k != OVERRIDE_KEY}
+    return {"ok": True, "surface": str(surface or ""), "payload": result,
+            "override": override, "hooked": True}
+
+
+def act_render_overlays(owner: Any, surface: str) -> dict[str, Any]:
+    """Return plugin overlay specs for ``surface`` (drawn over native content)."""
+    try:
+        manager = ensure_act_plugin_manager(owner)
+        return {"ok": True, "surface": str(surface or ""),
+                "overlays": manager.surface_overlays(surface)}
+    except Exception as exc:
+        return {"ok": False, "surface": str(surface or ""), "message": str(exc), "overlays": []}
+
+
+def act_render_surface(owner: Any, surface: str, payload: Any = None) -> dict[str, Any]:
+    """One-shot helper: apply hooks *and* collect overlays for ``surface``."""
+    hooked = act_render_apply_hooks(owner, surface, payload)
+    overlays = act_render_overlays(owner, surface)
+    return {
+        "ok": bool(hooked.get("ok") and overlays.get("ok")),
+        "surface": str(surface or ""),
+        "payload": hooked.get("payload"),
+        "override": hooked.get("override"),
+        "overlays": overlays.get("overlays", []),
+    }
 
 
 def _trigger_status_from_rules(owner: Any, rules: list[dict[str, Any]], *,
@@ -3692,6 +3831,14 @@ __all__ = [
     "act_plugin_list",
     "act_plugin_reload",
     "act_plugin_status",
+    "act_plugin_menu",
+    "act_plugin_ui_panels",
+    "act_plugin_ui_render",
+    "act_plugin_ui_action",
+    "act_render_surfaces",
+    "act_render_apply_hooks",
+    "act_render_overlays",
+    "act_render_surface",
     "act_selective_parsing_clear",
     "act_selective_parsing_status",
     "act_selective_parsing_update",

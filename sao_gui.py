@@ -423,9 +423,6 @@ class SAOPlayerGUI(SAOPlayerGUIMenuMixin, SAOPlayerGUIFisheyeMixin, SAOPlayerGUI
         self._scene_damage_grace_until = time.time() + 20.0
         self._scene_hide_token = 0
         self._damage_self_fallback_log_ts = 0.0
-        self._hide_seek_engine = None
-        self._hide_seek_alert_after_id = None
-        self._hide_seek_alert_active = False
 
         # ── ULW 覆盖层引用 ──
         self._dps_overlay = None

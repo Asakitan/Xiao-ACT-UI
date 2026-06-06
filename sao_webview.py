@@ -97,8 +97,15 @@ from act_platform.runtime import (
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_list,
+    act_plugin_menu,
     act_plugin_reload,
     act_plugin_status,
+    act_plugin_ui_action,
+    act_plugin_ui_panels,
+    act_plugin_ui_render,
+    act_render_apply_hooks,
+    act_render_overlays,
+    act_render_surfaces,
     act_report_copy,
     act_report_export,
     act_report_status,
@@ -753,6 +760,27 @@ class SAOWebAPI:
 
     def reload_plugins(self, plugin_id=''):
         return json.dumps(act_plugin_reload(self._g, str(plugin_id or '')), ensure_ascii=False)
+
+    # ── plugin UI panels + render hooks/overlays (shared with plugin_layer.js) ──
+    def get_plugin_ui_panels(self):
+        return json.dumps(act_plugin_ui_panels(self._g), ensure_ascii=False)
+
+    def render_ui_panel(self, panel_id, payload=''):
+        return json.dumps(act_plugin_ui_render(self._g, str(panel_id or ''), payload), ensure_ascii=False)
+
+    def invoke_ui_action(self, panel_id, action_id, payload=''):
+        return json.dumps(
+            act_plugin_ui_action(self._g, str(panel_id or ''), str(action_id or ''), payload),
+            ensure_ascii=False)
+
+    def act_render_overlays(self, surface):
+        return json.dumps(act_render_overlays(self._g, str(surface or '')), ensure_ascii=False)
+
+    def act_render_apply_hooks(self, surface, payload=''):
+        return json.dumps(act_render_apply_hooks(self._g, str(surface or ''), payload), ensure_ascii=False)
+
+    def act_render_surfaces(self):
+        return json.dumps(act_render_surfaces(self._g), ensure_ascii=False)
 
     def get_trigger_status(self):
         return json.dumps(act_trigger_status(self._g), ensure_ascii=False)
@@ -1783,24 +1811,9 @@ class SAOWebAPI:
         return bool(self._g._autokey_editor_visible)
 
     # ── Hide & Seek toggle ──
-    def toggle_hide_seek(self):
-        """Toggle the Hide & Seek automation on/off.
-
-        v2.1.20: 不再额外 spawn daemon thread. JS 桥本身就在 pywebview 的 worker
-        线程被调用, 再嵌套一层 thread 会让 _show_identity_alert_window 内部的
-        alert_win.show() / pythonnet form.Invoke 与 alert_win 自身的 evaluate_js
-        在两个不同的非主线程上并发, 在某些机器上会触发 WebView2 native crash.
-        engine.start() 自己会创建后台线程, 直接同步调用即可。
-        """
-        try:
-            self._g._toggle_hide_seek()
-        except Exception as e:
-            print(f'[SAO-WV] toggle_hide_seek failed: {e}')
-            import traceback; traceback.print_exc()
-
-    def get_hide_seek_active(self):
-        engine = getattr(self._g, '_hide_seek_engine', None)
-        return bool(engine and engine.running)
+    def get_plugin_menu(self):
+        """Data for the WebView plugin popup menu (manager + plugin list)."""
+        return json.dumps(act_plugin_menu(self._g), ensure_ascii=False)
 
     # ── Data source mode ──
     def set_data_source(self, mode):
@@ -2318,11 +2331,6 @@ class SAOWebViewGUI:
         self.skill_drilldown_win = None
         self._skill_drilldown_visible = False
 
-        # Hide & Seek engine
-        self._hide_seek_engine = None
-        self._hide_seek_alert_timer = None
-        self._hide_seek_alert_active = False
-
         # 热切换目标
         self._pending_switch: Optional[str] = None
         self._update_popup_ready = False
@@ -2802,103 +2810,6 @@ class SAOWebViewGUI:
 
     # ── Hide & Seek ──
 
-    def _toggle_hide_seek(self):
-        """Toggle the Hide & Seek automation engine on/off."""
-        if self._hide_seek_engine and self._hide_seek_engine.running:
-            self._stop_hide_seek()
-        else:
-            self._start_hide_seek()
-
-    def _start_hide_seek(self):
-        """Start the Hide & Seek engine and show persistent alert."""
-        if self._hide_seek_engine and self._hide_seek_engine.running:
-            return
-        try:
-            from engines.hide_seek_engine import HideSeekEngine
-            from utils.window_locator import WindowLocator
-            locator = getattr(self, '_locator', None)
-            if not locator:
-                locator = WindowLocator()
-            self._hide_seek_engine = HideSeekEngine(
-                locator=locator,
-                on_status=self._on_hide_seek_status,
-            )
-            self._hide_seek_engine.start()
-            self._eval_menu('SAO.showToast("HIDE & SEEK: ON")')
-            # Set flag synchronously so _sync_identity_alert
-            # won't dismiss the alert even if engine.running isn't set yet.
-            self._hide_seek_alert_active = True
-            # Show the initial alert with sound — kind='hide_seek' so the
-            # auto-dismiss timer in _hide_identity_alert_window will refuse
-            # to close it as long as the engine is still running.
-            self._show_identity_alert_window(
-                "AUTO HIDE & SEEK", "Auto Hide'seek is on",
-                duration_ms=60000, alert_kind='hide_seek')
-            # Start periodic refresh to keep the alert visible
-            self._schedule_hide_seek_alert_refresh()
-        except Exception as e:
-            print(f'[SAO] Hide&Seek start failed: {e}')
-            import traceback; traceback.print_exc()
-
-    def _stop_hide_seek(self):
-        """Stop the Hide & Seek engine and dismiss persistent alert."""
-        if self._hide_seek_engine:
-            self._hide_seek_engine.stop()
-        self._hide_seek_engine = None
-        self._hide_hide_seek_persistent_alert()
-        self._eval_menu('SAO.showToast("HIDE & SEEK: OFF")')
-
-    def _on_hide_seek_status(self, message: str, step: int):
-        """Callback from engine — could push status to UI if needed."""
-        pass  # status is already printed by the engine
-
-    def _schedule_hide_seek_alert_refresh(self):
-        """Schedule the next alert refresh tick."""
-        self._hide_seek_alert_timer = threading.Timer(
-            50.0, self._refresh_hide_seek_alert)
-        self._hide_seek_alert_timer.daemon = True
-        self._hide_seek_alert_timer.start()
-
-    def _refresh_hide_seek_alert(self):
-        """Re-show the alert (without sound) every ~50s to prevent the 60s auto-hide.
-
-        The hide & seek game mode can last a very long time (up to 8 min per round),
-        so the alert must stay visible for the entire duration of the automation engine.
-
-        IMPORTANT: This timer must NEVER call resume()/restart() or otherwise
-        kill the engine thread.  Each detection phase can take many minutes of
-        idle waiting; interrupting the thread would reset that wait.
-        """
-        engine = self._hide_seek_engine
-        if not engine:
-            self._hide_seek_alert_active = False
-            return
-
-        # If the engine object is gone (user stopped it), stop refreshing.
-        # But do NOT call resume/restart — the engine might just be waiting
-        # a long time for the next UI element to appear.
-        if not engine.running:
-            # Thread truly died (crash) — just log it, keep alert alive so
-            # user knows the mode is still "on" conceptually.  They can
-            # toggle off/on manually if needed.
-            print('[SAO] Hide&Seek engine thread is no longer running')
-
-        # Re-show without sound — this resets the 60s auto-hide timer via nonce
-        self._show_identity_alert_window(
-            "AUTO HIDE & SEEK", "Auto Hide'seek is on",
-            duration_ms=60000, play_sound=False, alert_kind='hide_seek')
-        self._schedule_hide_seek_alert_refresh()
-
-    def _hide_hide_seek_persistent_alert(self):
-        """Cancel the persistent alert refresh timer and hide alert."""
-        self._hide_seek_alert_active = False
-        t = self._hide_seek_alert_timer
-        if t:
-            t.cancel()
-        self._hide_seek_alert_timer = None
-        self._hide_identity_alert_window()
-        self._sync_boss_raid_menu()
-
     def _arm_pending_combat_reset(self, scene_event=None):
         """Defer same-instance encounter reset until the next real damage."""
         reason = 'restart'
@@ -3210,7 +3121,7 @@ class SAOWebViewGUI:
             except Exception:
                 pass
             try:
-                self._push_dps_act_snapshot()
+                self._push_dps_act_snapshot(throttle=True)
             except Exception:
                 pass
 
@@ -3274,7 +3185,7 @@ class SAOWebViewGUI:
                     updates = boss_state_from_monster_update(monster_data)
                     if updates:
                         self._state_mgr.update(**updates)
-                        self._push_dps_act_snapshot()
+                        self._push_dps_act_snapshot(throttle=True)
         except Exception:
             pass
 
@@ -3417,8 +3328,25 @@ class SAOWebViewGUI:
             _preserve_combat = bool(scene_event.get('preserve_combat', False))
             _reset_on_next_damage = bool(scene_event.get('reset_on_next_damage', False))
         if _reset_on_next_damage:
-            self._arm_pending_combat_reset(scene_event)
-            return
+            # Only defer the reset when a fight is genuinely in progress. If
+            # the prior encounter is already idle (no recent self/party
+            # outgoing damage), there is nothing live to protect — fall through
+            # to the immediate hard reset below so stale combat data cannot be
+            # kept alive by the post-scene grace window. Without this, after
+            # repeatedly re-entering a dungeon the DPS panel could stay stuck
+            # visible and never fade. (User-confirmed fix direction A.)
+            _combat_live = False
+            try:
+                if self._dps_tracker is not None:
+                    _combat_live = bool(self._dps_tracker.has_recent_damage(
+                        self._combat_damage_timeout_s()))
+            except Exception:
+                _combat_live = False
+            if _combat_live:
+                self._arm_pending_combat_reset(scene_event)
+                return
+            # Idle prior fight → force the hard-reset path (skip preserve).
+            _preserve_combat = False
         if _preserve_combat:
             # Same-dungeon layer/map transitions can happen mid-fight. Do not
             # wipe the live encounter; just invalidate the next boss-bar push.
@@ -3664,6 +3592,14 @@ class SAOWebViewGUI:
             except Exception:
                 pass
 
+    #: Alert kinds that must not be auto-dismissed/overridden while shown
+    #: (e.g. a plugin's persistent status alert such as hide_seek's).
+    _PERSISTENT_ALERT_KINDS = frozenset({'hide_seek'})
+
+    def _is_persistent_alert_active(self) -> bool:
+        return (bool(getattr(self, '_identity_alert_visible', False))
+                and str(getattr(self, '_identity_alert_kind', '') or '') in self._PERSISTENT_ALERT_KINDS)
+
     def _sync_identity_alert(self, gs):
         if gs is None:
             return
@@ -3681,17 +3617,16 @@ class SAOWebViewGUI:
         # 现在 hide_seek active 时直接吞掉 identity 推送.
         if alert_serial > 0 and alert_serial != getattr(self, '_last_identity_alert_serial', 0):
             self._last_identity_alert_serial = alert_serial
-            if getattr(self, '_hide_seek_alert_active', False):
-                # 仅记账, 不弹窗, 避免覆盖 hide_seek alert
+            if self._is_persistent_alert_active():
+                # 仅记账, 不弹窗, 避免覆盖插件持久 alert (如 hide_seek)
                 pass
             else:
                 self._show_identity_alert_window(alert_title, alert_message, 9000, alert_kind='identity')
             return
 
-        # Don't auto-dismiss when Hide & Seek persistent alert is active —
-        # the H&S engine manages its own alert lifecycle via the 8s timer.
-        # Use the synchronous flag (not engine.running) to avoid race conditions.
-        if getattr(self, '_hide_seek_alert_active', False):
+        # Don't auto-dismiss while a persistent plugin alert is shown — the
+        # owning plugin manages its own alert lifecycle via a refresh loop.
+        if self._is_persistent_alert_active():
             return
 
         has_identity = bool(
@@ -5610,6 +5545,66 @@ class SAOWebViewGUI:
         threading.Thread(target=_slide, daemon=True).start()
 
     # ─── WebView 就绪 ───
+    def _plugin_layer_window_map(self):
+        """Map every SAO WebView window to its plugin render-surface id.
+
+        Injecting ``plugin_layer.js`` into each window gives plugins a universal
+        overlay layer (and, for opt-in pages, render-hook taps) on the main UI
+        and every floating window — not just the ACT panels.
+        """
+        g = self
+        return [
+            (getattr(g, 'hp_win', None), 'hp'),
+            (getattr(g, 'menu_win', None), 'menu'),
+            (getattr(g, 'skillfx_win', None), 'skillfx'),
+            (getattr(g, 'alert_win', None), 'alert'),
+            (getattr(g, 'mapbanner_win', None), 'mapbanner'),
+            (getattr(g, 'boss_hp_win', None), 'boss_hp'),
+            (getattr(g, 'dps_win', None), 'dps'),
+            (getattr(g, 'buff_coverage_win', None), 'buff_coverage'),
+            (getattr(g, 'raid_editor_win', None), 'raid_editor'),
+            (getattr(g, 'autokey_editor_win', None), 'autokey_editor'),
+            (getattr(g, 'commander_win', None), 'commander'),
+            (getattr(g, 'trigger_timer_win', None), 'trigger_timer'),
+            (getattr(g, 'data_source_health_win', None), 'data_source_health'),
+            (getattr(g, 'report_export_win', None), 'report_export'),
+            (getattr(g, 'offline_import_win', None), 'offline_import'),
+            (getattr(g, 'timeline_vcr_win', None), 'timeline_vcr'),
+            (getattr(g, 'act_aggregate_win', None), 'act_aggregate'),
+            (getattr(g, 'action_log_win', None), 'action_log'),
+            (getattr(g, 'death_recap_win', None), 'death_recap'),
+            (getattr(g, 'graph_timeseries_win', None), 'graph_timeseries'),
+            (getattr(g, 'combatant_drilldown_win', None), 'combatant_drilldown'),
+            (getattr(g, 'skill_drilldown_win', None), 'skill_drilldown'),
+        ]
+
+    def _plugin_layer_source(self):
+        src = getattr(self, '_plugin_layer_js_cache', None)
+        if src is None:
+            try:
+                with open(os.path.join(WEB_DIR, 'plugin_layer.js'), 'r', encoding='utf-8') as fp:
+                    src = fp.read()
+            except Exception:
+                src = ''
+            self._plugin_layer_js_cache = src
+        return src
+
+    def _inject_all_plugin_layers(self):
+        """Inject plugin_layer.js into every live WebView window (idempotent)."""
+        src = self._plugin_layer_source()
+        if not src:
+            return
+        for win, surface in self._plugin_layer_window_map():
+            if not win:
+                continue
+            try:
+                win.evaluate_js(
+                    "if(!window.__SAO_PLUGIN_LAYER__){window.__SAO_PLUGIN_LAYER__=1;"
+                    f"window.__SAO_SURFACE__={json.dumps(surface)};\n{src}\n}}"
+                )
+            except Exception:
+                pass
+
     def _on_webview_started(self):
         def _init():
             self._lock_hp_position(2.0)
@@ -5644,6 +5639,13 @@ class SAOWebViewGUI:
             # 初始显示等级 (来自 profile 缓存, 等待抓包数据覆盖)
             self._eval_hp(f'updateHP(0, 1, {self._level})')
             self._sync_menu_info()
+            # 注入插件渲染层 (plugin_layer.js) 到所有 WebView 窗口 —— 给插件
+            # overlay/hook 能力覆盖主UI与全部悬浮窗, 延迟确保页面已加载.
+            try:
+                self._inject_all_plugin_layers()
+                threading.Timer(2.5, self._inject_all_plugin_layers).start()
+            except Exception:
+                pass
             # 设置 click-through (延迟确保窗口已完全创建)
             time.sleep(0.3)
             self._setup_click_through()
@@ -6044,7 +6046,7 @@ class SAOWebViewGUI:
             'hide_panels': lambda: None,
             'boss_raid_start': self._toggle_boss_raid,
             'boss_raid_next_phase': self._boss_raid_next_phase,
-            'toggle_hide_seek': self._toggle_hide_seek,
+            'show_plugins': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
         }
         self._hk_pressed = set()
         self._hk_listener = None
@@ -6316,7 +6318,11 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _build_dps_act_snapshot(self, history_limit: int = 20):
+    def _build_dps_act_snapshot(self, history_limit: int = 0):
+        # WebView DpsMeter.showActSnapshot + act_snapshot plugins only read
+        # render_spec/sources/triggers, so use the lite (cached, skill-free, no
+        # report/history deepcopy) build. history_limit defaults to 0: this
+        # factory only feeds the live act_snapshot push.
         try:
             return build_act_snapshot(
                 dps_tracker=getattr(self, '_dps_tracker', None),
@@ -6327,17 +6333,35 @@ class SAOWebViewGUI:
                 packet_probe=getattr(self, '_packet_engine', None),
                 memory_probe=getattr(self, '_mem_bridge', None),
                 history_limit=history_limit,
+                lite=True,
             )
         except Exception:
             return {}
 
-    def _push_dps_act_snapshot(self):
+    def _push_dps_act_snapshot(self, throttle: bool = False):
         try:
             if not self.dps_win:
                 return
+            # Coalesce the per-damage-event storm fired on the pcap capture
+            # thread. throttle=True comes only from the high-frequency packet
+            # callbacks; the periodic overlay loop + user-triggered pushes leave
+            # it False so the trailing / final snapshot is never dropped
+            # (~14 Hz cap on the storm path).
+            if throttle and (time.time() - getattr(self, '_last_act_snap_push_t', 0.0)) < 0.07:
+                return
+            self._last_act_snap_push_t = time.time()
             snapshot = self._build_dps_act_snapshot()
             if snapshot:
                 publish_owner_event(self, 'act_snapshot', snapshot, source_name='webview', source_kind='ui')
+                # Push-side plugin render hooks: let plugins transform the dps
+                # payload before it reaches the meter (entity/web parity with the
+                # Tk set_act_snapshot hook).
+                try:
+                    hooked = act_render_apply_hooks(self, 'dps', snapshot)
+                    if hooked.get('ok') and hooked.get('payload') is not None:
+                        snapshot = hooked['payload']
+                except Exception:
+                    pass
                 self._eval_dps(
                     f'if(window.DpsMeter&&DpsMeter.showActSnapshot)DpsMeter.showActSnapshot({json.dumps(snapshot, ensure_ascii=False)})'
                 )
@@ -7676,18 +7700,19 @@ class SAOWebViewGUI:
         threading.Timer(0.35, _push).start()
         threading.Timer(stay_ms / 1000.0, lambda: self._hide_identity_alert_window(expected_nonce=nonce)).start()
 
-    def _hide_identity_alert_window(self, expected_nonce: int = None):
+    def _hide_identity_alert_window(self, expected_nonce: int = None, force: bool = False):
         if not self.alert_win:
             return
         current_nonce = int(getattr(self, '_identity_alert_nonce', 0) or 0)
         if expected_nonce is not None and expected_nonce != current_nonce:
             return
 
-        # v2.2.0: Hide & Seek 持续 alert 期间, 任何外部/计时器请求关闭都先放行给
-        # _hide_hide_seek_persistent_alert 走 (它会清掉 _hide_seek_alert_active
-        # 再调本函数). 否则就是误关 — 直接拒绝, 让 50s 刷新器接住.
-        if (getattr(self, '_hide_seek_alert_active', False)
-                and str(getattr(self, '_identity_alert_kind', '') or '') == 'hide_seek'):
+        # While a persistent plugin alert (e.g. hide_seek) is shown, refuse
+        # unforced external dismiss requests so the plugin's refresh loop keeps
+        # it alive. The plugin's own stop passes force=True to close it. (Stale
+        # nonce-bearing auto-hide timers are already rejected above.)
+        if (not force and expected_nonce is None
+                and str(getattr(self, '_identity_alert_kind', '') or '') in self._PERSISTENT_ALERT_KINDS):
             return
 
         was_visible = bool(getattr(self, '_identity_alert_visible', False))
@@ -9148,8 +9173,6 @@ class SAOWebViewGUI:
             cfg['data_source_health_visible'] = bool(self._data_source_health_visible)
             cfg['report_export_visible'] = bool(self._report_export_visible)
             cfg['offline_import_visible'] = bool(self._offline_import_visible)
-            _hs_engine = getattr(self, '_hide_seek_engine', None)
-            cfg['hide_seek_active'] = bool(_hs_engine and _hs_engine.running)
             self._eval_menu(f'SAO.restoreMenuSettings({json.dumps(cfg)})')
         except Exception:
             pass
@@ -9172,7 +9195,7 @@ class SAOWebViewGUI:
         _map = {
             'toggle_recognition': self._toggle_recognition,
             'toggle_auto_script': self._toggle_auto_script,
-            'toggle_hide_seek': self._toggle_hide_seek,
+            'show_plugins': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
             'toggle_raid_editor': lambda: (self._show_raid_editor() if not self._raid_editor_visible else self._hide_raid_editor()),
             'toggle_autokey_editor': lambda: (self._show_autokey_editor() if not self._autokey_editor_visible else self._hide_autokey_editor()),
             'toggle_commander': lambda: (self._show_commander() if not self._commander_visible else self._hide_commander()),

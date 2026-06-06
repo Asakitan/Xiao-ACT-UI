@@ -66,7 +66,7 @@ TOPLEVEL_MODULES = [
     "engines.auto_key_engine", "engines.automation", "engines.boss_autokey_linkage", "engines.boss_raid_engine",
     "engines.character_profile", "config", "engines.dps_tracker", "engines.game_state",
     "render.gpu_capture", "render.gpu_compositor", "render.gpu_overlay_window", "render.gpu_renderer",
-    "engines.hide_seek_engine", "main", "render.overlay_render_worker", "render.overlay_scheduler",
+    "main", "render.overlay_render_worker", "render.overlay_scheduler",
     "render.overlay_subpixel", "net.packet_bridge", "net.packet_capture", "packet_parser",
     "utils.perf_probe", "vision.recognition", "render.render_capture_sync", "sao_gui", "utils.sao_sound",
     "sao_theme", "updater.sao_updater", "sao_web_panel_common", "sao_webview",

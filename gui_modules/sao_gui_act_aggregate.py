@@ -8,7 +8,11 @@ import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
-from act_platform.runtime import act_aggregate_status, act_graph_timeseries_status
+from act_platform.runtime import (
+    act_aggregate_status,
+    act_graph_timeseries_status,
+    act_render_apply_hooks,
+)
 from gui_modules.sao_panel_components import (
     SP_XS,
     SP_SM,
@@ -110,6 +114,14 @@ class ActAggregatePanel:
         except Exception as exc:
             status.setdefault("errors", []).append(str(exc))
             status["graph"] = {"ok": False, "series": {}, "row_count": 0, "errors": [str(exc)]}
+        # Entity-side plugin render hook (parity with web act_aggregate tap):
+        # plugins may transform the cockpit payload before it is rendered.
+        try:
+            hooked = act_render_apply_hooks(self.owner, 'act_aggregate', status)
+            if hooked.get('ok') and isinstance(hooked.get('payload'), dict):
+                status = hooked['payload']
+        except Exception:
+            pass
         self._last_status = status
         self._last_refresh_at = now
         self._render_status(status)

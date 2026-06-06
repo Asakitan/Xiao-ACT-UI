@@ -2138,7 +2138,7 @@ DEFAULT_HOTKEYS = {
     "boss_raid_next_phase": "F8",
     "toggle_topmost": "F9",
     "hide_panels": "F10",
-    "toggle_hide_seek": "F11",
+    "show_plugins": "F11",
 }
 
 

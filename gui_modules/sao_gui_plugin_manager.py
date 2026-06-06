@@ -17,6 +17,7 @@ from act_platform.runtime import (
     act_plugin_reload,
     act_plugin_status,
 )
+from gui_modules.sao_plugin_ui_render import PluginPanelList
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -48,6 +49,11 @@ class PluginManagerPanel:
         self._summary_var = tk.StringVar(value="0 / 0 ACTIVE")
         self._status_var = tk.StringVar(value="Ready")
         self._last_status: Dict[str, Any] = {}
+        self._active_tab = "manage"
+        self._manage_wrap: Optional[tk.Frame] = None
+        self._panels_wrap: Optional[tk.Frame] = None
+        self._panel_list: Optional[PluginPanelList] = None
+        self._tab_buttons: Dict[str, tk.Button] = {}
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -62,8 +68,11 @@ class PluginManagerPanel:
         except Exception:
             pass
         self.refresh()
+        self._show_tab(self._active_tab)
 
     def hide(self) -> None:
+        if self._panel_list is not None:
+            self._panel_list.stop()
         if self._win is None:
             return
         try:
@@ -72,6 +81,12 @@ class PluginManagerPanel:
             pass
 
     def destroy(self) -> None:
+        if self._panel_list is not None:
+            try:
+                self._panel_list.stop()
+            except Exception:
+                pass
+            self._panel_list = None
         if self._win is not None:
             try:
                 self._win.destroy()
@@ -79,6 +94,8 @@ class PluginManagerPanel:
                 pass
         self._win = None
         self._list = None
+        self._manage_wrap = None
+        self._panels_wrap = None
 
     def is_visible(self) -> bool:
         return bool(self._win is not None and self._exists() and self._win.state() != 'withdrawn')
@@ -150,6 +167,18 @@ class PluginManagerPanel:
                 pady=4,
             ).pack(side='right', padx=(6, 0))
 
+        tabs = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
+        tabs.pack(fill='x', padx=12, pady=(0, 4))
+        for key, label in (('manage', '管理 Manage'), ('panels', '面板 Panels')):
+            btn = tk.Button(
+                tabs, text=label, command=lambda k=key: self._show_tab(k),
+                bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG,
+                activebackground=_SAO_PANEL_ACCENT, activeforeground='white',
+                relief='flat', bd=0, padx=14, pady=4, font=('Segoe UI', 9, 'bold'),
+            )
+            btn.pack(side='left', padx=(0, 6))
+            self._tab_buttons[key] = btn
+
         status = tk.Label(
             body,
             textvariable=self._status_var,
@@ -160,8 +189,10 @@ class PluginManagerPanel:
         )
         status.pack(fill='x', padx=12, pady=(0, 6))
 
-        canvas = tk.Canvas(body, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
-        scroll = tk.Scrollbar(body, orient='vertical', command=canvas.yview)
+        # ── Manage tab: scrollable plugin cards (existing surface) ──
+        self._manage_wrap = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
+        canvas = tk.Canvas(self._manage_wrap, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        scroll = tk.Scrollbar(self._manage_wrap, orient='vertical', command=canvas.yview)
         self._list = tk.Frame(canvas, bg=_SAO_PANEL_BODY_BG)
         self._list.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
         _win_id = canvas.create_window((0, 0), window=self._list, anchor='nw')
@@ -169,7 +200,44 @@ class PluginManagerPanel:
         canvas.configure(yscrollcommand=scroll.set)
         canvas.pack(side='left', fill='both', expand=True, padx=(12, 0), pady=(0, 12))
         scroll.pack(side='right', fill='y', padx=(0, 12), pady=(0, 12))
+
+        # ── Panels tab: auto-redrawing plugin UI panels ──
+        self._panels_wrap = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
+        pcanvas = tk.Canvas(self._panels_wrap, bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+        pscroll = tk.Scrollbar(self._panels_wrap, orient='vertical', command=pcanvas.yview)
+        panels_inner = tk.Frame(pcanvas, bg=_SAO_PANEL_BODY_BG)
+        panels_inner.bind('<Configure>', lambda _e: pcanvas.configure(scrollregion=pcanvas.bbox('all')))
+        _pid = pcanvas.create_window((0, 0), window=panels_inner, anchor='nw')
+        pcanvas.bind('<Configure>', lambda e: pcanvas.itemconfigure(_pid, width=e.width))
+        pcanvas.configure(yscrollcommand=pscroll.set)
+        pcanvas.pack(side='left', fill='both', expand=True, padx=(12, 0), pady=(0, 12))
+        pscroll.pack(side='right', fill='y', padx=(0, 12), pady=(0, 12))
+        self._panel_list = PluginPanelList(panels_inner, self.owner)
+
         win.protocol('WM_DELETE_WINDOW', self.hide)
+        self._show_tab(self._active_tab)
+
+    def _show_tab(self, name: str) -> None:
+        self._active_tab = name if name in ('manage', 'panels') else 'manage'
+        for key, btn in self._tab_buttons.items():
+            try:
+                btn.configure(fg=(_SAO_PANEL_GOLD if key == self._active_tab else _SAO_PANEL_HEADER_FG))
+            except Exception:
+                pass
+        if self._manage_wrap is not None:
+            if self._active_tab == 'manage':
+                self._manage_wrap.pack(fill='both', expand=True)
+            else:
+                self._manage_wrap.pack_forget()
+        if self._panels_wrap is not None:
+            if self._active_tab == 'panels':
+                self._panels_wrap.pack(fill='both', expand=True)
+                if self._panel_list is not None:
+                    self._panel_list.start()
+            else:
+                self._panels_wrap.pack_forget()
+                if self._panel_list is not None:
+                    self._panel_list.stop()
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         total = int(status.get('plugin_count', 0) or len(status.get('plugins') or []))
