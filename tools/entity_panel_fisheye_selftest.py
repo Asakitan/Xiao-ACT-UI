@@ -137,6 +137,7 @@ class _HpOverlay:
 
     def raise_topmost(self) -> None:
         self.raise_count += 1
+        raise AssertionError('closing blur must not touch HP GPU window')
 
 
 class _MotionBlurOwner(SAOPlayerGUIFloatHpMixin):
@@ -212,13 +213,13 @@ class EntityPanelFisheyeTests(unittest.TestCase):
         self.assertEqual(panel._win.focus_count, 1)
         self.assertEqual([delay for delay, _ in owner.root.after_calls], [260, 520])
 
-    def test_closing_motion_blur_raises_hp_overlay_with_panels(self) -> None:
+    def test_closing_motion_blur_does_not_touch_hp_gpu_window(self) -> None:
         owner = _MotionBlurOwner()
         owner._act_aggregate_panel = _Panel(True)
 
         owner._raise_fisheye_panels_above_motion_blur()
 
-        self.assertEqual(owner._hp_overlay.raise_count, 1)
+        self.assertEqual(owner._hp_overlay.raise_count, 0)
         self.assertEqual(owner.raised_panels, [owner._act_aggregate_panel])
 
 

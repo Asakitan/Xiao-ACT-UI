@@ -292,14 +292,6 @@ class SAOPlayerGUIFloatHpMixin:
 
     def _raise_fisheye_panels_above_motion_blur(self):
         """Keep visible Entity panels above the async closing blur overlay."""
-        try:
-            hp = getattr(self, '_hp_overlay', None)
-            if hp is not None:
-                raise_topmost = getattr(hp, 'raise_topmost', None)
-                if callable(raise_topmost):
-                    raise_topmost()
-        except Exception:
-            pass
         raise_panel = getattr(self, '_raise_panel_window', None)
         iter_panels = getattr(self, '_iter_fisheye_panels', None)
         is_visible = getattr(self, '_is_fisheye_panel_visible', None)
