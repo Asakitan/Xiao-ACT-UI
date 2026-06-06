@@ -357,28 +357,45 @@ class SAOPlayerGUILifecycleMixin:
 
         wins = self._collect_exit_windows()
         self._create_exit_overlay(mode=mode, target_label=target_label)
-        if not wins:
-            self._draw_exit_overlay(1.0)
+
+        def _exit_overlay_uses_gpu() -> bool:
+            try:
+                ov = getattr(self, '_exit_overlay', None)
+                return bool(ov and ov.get('gpu_transition') is not None)
+            except Exception:
+                return False
+
+        def _complete_close():
             self._finalize_close()
             if after_shutdown:
                 try:
                     after_shutdown()
                 except Exception:
                     pass
+
+        def _finish(final_frame_drawn: bool = False):
+            if _exit_overlay_uses_gpu():
+                try:
+                    if not final_frame_drawn:
+                        self._draw_exit_overlay(1.0)
+                except Exception:
+                    pass
+                try:
+                    self.root.after(260, _complete_close)
+                    return
+                except Exception:
+                    pass
+            _complete_close()
+
+        if not wins:
+            self._draw_exit_overlay(1.0)
+            _finish(final_frame_drawn=True)
             return
 
         t0 = time.time()
         stage1 = 0.34
         stage2 = 0.82
         duration = stage1 + stage2
-
-        def _finish():
-            self._finalize_close()
-            if after_shutdown:
-                try:
-                    after_shutdown()
-                except Exception:
-                    pass
 
         def _step():
             if self._close_finalized:

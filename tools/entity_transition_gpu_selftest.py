@@ -11,6 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+import gui_modules.sao_gui_lifecycle_mixin as lifecycle_mod
 import gui_modules.sao_gui_link_animation_mixin as link_mod
 from gui_modules.sao_gpu_entity_transition import EntityTransitionGpuOverlay
 from gui_modules.sao_gui_lifecycle_mixin import SAOPlayerGUILifecycleMixin
@@ -23,6 +24,15 @@ class _Root:
 
     def winfo_screenheight(self) -> int:
         return 1080
+
+
+class _AfterRoot(_Root):
+    def __init__(self) -> None:
+        self.after_calls = []
+
+    def after(self, delay, callback=None):
+        self.after_calls.append((delay, callback))
+        return f"after-{len(self.after_calls)}"
 
 
 class _Float:
@@ -141,6 +151,18 @@ class _FakeGlObject:
 
 
 class EntityTransitionGpuDestroyTests(unittest.TestCase):
+    def test_shader_points_flip_top_left_screen_y_to_bottom_left_gl_y(self) -> None:
+        overlay = EntityTransitionGpuOverlay(
+            _Root(),
+            kind='entry',
+            center=(692.5, 1044.0),
+            target=(692.5, 1044.0),
+        )
+        overlay._w = 1920
+        overlay._h = 1080
+
+        self.assertEqual(overlay._to_gl_point(overlay.center), (692.5, 36.0))
+
     def test_destroy_leaves_gl_objects_to_gpu_window_context_teardown(self) -> None:
         overlay = EntityTransitionGpuOverlay(
             _Root(),
@@ -161,6 +183,71 @@ class EntityTransitionGpuDestroyTests(unittest.TestCase):
         self.assertEqual(vao.release_count, 0)
         self.assertIsNone(overlay._prog)
         self.assertIsNone(overlay._vao)
+
+
+class _LifecycleOwner(SAOPlayerGUILifecycleMixin):
+    def __init__(self, *, gpu_exit: bool) -> None:
+        self.root = _AfterRoot()
+        self._close_finalized = False
+        self._exit_animating = False
+        self._destroyed = False
+        self._breath_active = True
+        self._lift_loop_active = True
+        self._sao_menu = None
+        self._hp_overlay = None
+        self._boss_hp_overlay = None
+        self._dps_overlay = None
+        self._exit_overlay = None
+        self._gpu_exit = gpu_exit
+        self.draw_progress = []
+        self.finalize_count = 0
+
+    def _play_motion_blur(self, closing=False) -> None:
+        self.motion_blur_closing = closing
+
+    def _collect_exit_windows(self):
+        return []
+
+    def _create_exit_overlay(self, mode='exit', target_label=None):
+        if self._gpu_exit:
+            self._exit_overlay = {'gpu_transition': object()}
+        else:
+            self._exit_overlay = {'win': object()}
+        return self._exit_overlay
+
+    def _draw_exit_overlay(self, progress):
+        self.draw_progress.append(progress)
+
+    def _finalize_close(self):
+        self._close_finalized = True
+        self.finalize_count += 1
+
+
+class EntityTransitionGpuExitLifecycleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._orig_sound = lifecycle_mod.play_sound
+        lifecycle_mod.play_sound = lambda _name: None
+
+    def tearDown(self) -> None:
+        lifecycle_mod.play_sound = self._orig_sound
+
+    def test_gpu_exit_waits_one_present_window_before_finalize(self) -> None:
+        owner = _LifecycleOwner(gpu_exit=True)
+        after_shutdown_calls = []
+
+        owner._run_exit_animation(after_shutdown=lambda: after_shutdown_calls.append(True))
+
+        self.assertEqual(owner.draw_progress, [1.0])
+        self.assertEqual(owner.finalize_count, 0)
+        self.assertEqual(len(owner.root.after_calls), 1)
+        delay, callback = owner.root.after_calls[0]
+        self.assertEqual(delay, 260)
+        self.assertTrue(callable(callback))
+
+        callback()
+
+        self.assertEqual(owner.finalize_count, 1)
+        self.assertEqual(after_shutdown_calls, [True])
 
 
 if __name__ == "__main__":

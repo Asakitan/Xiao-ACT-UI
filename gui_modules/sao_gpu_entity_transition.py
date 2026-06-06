@@ -183,6 +183,10 @@ class EntityTransitionGpuOverlay:
         self._w = 1
         self._h = 1
 
+    def _to_gl_point(self, point: Tuple[float, float]) -> Tuple[float, float]:
+        """Convert top-left screen coordinates to bottom-left GL pixels."""
+        return (float(point[0]), float(self._h) - float(point[1]))
+
     def start(self) -> bool:
         try:
             from render import gpu_overlay_window as _gow
@@ -224,8 +228,8 @@ class EntityTransitionGpuOverlay:
                 self._prog = ctx.program(vertex_shader=_VS, fragment_shader=_FS)
                 self._vao = ctx.vertex_array(self._prog, [])
             self._prog["u_resolution"].value = (float(self._w), float(self._h))
-            self._prog["u_center"].value = self.center
-            self._prog["u_target"].value = self.target
+            self._prog["u_center"].value = self._to_gl_point(self.center)
+            self._prog["u_target"].value = self._to_gl_point(self.target)
             self._prog["u_progress"].value = float(self.progress)
             self._prog["u_time"].value = float(time.perf_counter() - self._started_at)
             self._prog["u_kind"].value = 1 if self.kind == "exit" else 0
