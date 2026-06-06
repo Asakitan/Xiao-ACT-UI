@@ -378,6 +378,53 @@ def aggregate_action_log(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
     return _finalize_groups(groups.values(), top_n=top_n)
 
 
+def aggregate_by_actor(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
+                       _pre_normalized: bool = False) -> list[dict[str, Any]]:
+    """Group events by the acting combatant (参与者) — useful plugin-debug dimension."""
+    groups: dict[str, dict[str, Any]] = {}
+    for row in (rows if _pre_normalized else normalize_rows(rows)):
+        if not (row.get("actor") or row.get("actor_uid")):
+            continue
+        key = _key("actor", row.get("actor_uid"), str(row.get("actor") or ""), str(row.get("id") or "unknown"))
+        name = str(row.get("actor") or row.get("actor_uid") or "Unknown Actor")
+        group = groups.setdefault(key, _new_group(key, "actor", name))
+        _add_common(group, row)
+    return _finalize_groups(groups.values(), top_n=top_n)
+
+
+def aggregate_by_topic(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
+                       _pre_normalized: bool = False) -> list[dict[str, Any]]:
+    """Group events by topic/event-type (事件类型). name kept raw — UI humanizes via topic_cn."""
+    groups: dict[str, dict[str, Any]] = {}
+    for row in (rows if _pre_normalized else normalize_rows(rows)):
+        topic = str(row.get("topic") or "event")
+        key = f"topic:{topic}"
+        group = groups.setdefault(key, _new_group(key, topic, topic))
+        _add_common(group, row)
+    return _finalize_groups(groups.values(), top_n=top_n)
+
+
+def aggregate_by_field(rows: Iterable[Mapping[str, Any]], field: str, *, top_n: int = 20,
+                       _pre_normalized: bool = False) -> list[dict[str, Any]]:
+    """Group events by ANY normalized-row or payload field (the plugin-debug power tool:
+    'group by skill_id / target_uuid / damage_source / …')."""
+    field = str(field or "").strip()
+    if not field:
+        return []
+    groups: dict[str, dict[str, Any]] = {}
+    for row in (rows if _pre_normalized else normalize_rows(rows)):
+        value = row.get(field)
+        if value in (None, "") and isinstance(row.get("payload"), Mapping):
+            value = row["payload"].get(field)
+        text = _text(value)
+        if not text:
+            continue
+        key = f"{field}:{text}"
+        group = groups.setdefault(key, _new_group(key, field, text))
+        _add_common(group, row)
+    return _finalize_groups(groups.values(), top_n=top_n)
+
+
 def _source_mix(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counter: Counter[str] = Counter(str(row.get("source") or "unknown") for row in rows)
     total = max(1, sum(counter.values()))
@@ -467,5 +514,8 @@ __all__ = [
     "aggregate_damage_by_monster",
     "aggregate_damage_by_dungeon",
     "aggregate_action_log",
+    "aggregate_by_actor",
+    "aggregate_by_topic",
+    "aggregate_by_field",
     "build_act_aggregate_summary",
 ]

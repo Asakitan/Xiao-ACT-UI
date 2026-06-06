@@ -346,14 +346,24 @@ def aggregate_row(parent: tk.Misc, *, title: str, meta: str = "", value: str = "
     return row
 
 
-def detail_row(parent: tk.Misc, text: str, *, accent: str = "cyan", zebra: bool = False, strong: bool = False) -> tk.Frame:
-    """One drilldown line: thin accent rule + monospace-ish aligned text, zebra striped."""
+def detail_row(parent: tk.Misc, text: str, *, accent: str = "cyan", zebra: bool = False, strong: bool = False,
+               command: Optional[Callable[[], Any]] = None, expanded: Optional[bool] = None) -> tk.Frame:
+    """One drilldown line: thin accent rule + monospace-ish aligned text, zebra striped.
+
+    When `command` is set the line is clickable (e.g. expand the raw payload), with
+    an optional caret showing expand state.
+    """
     base_bg = _pc('card_bg_alt', ui._SAO_PANEL_HEADER_BG) if zebra else _pc('card_bg', ui._SAO_PANEL_BODY_BG)
     fg = _pc('value_fg', ui._SAO_PANEL_VALUE_FG) if strong else _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
-    row = tk.Frame(parent, bg=base_bg)
+    row = tk.Frame(parent, bg=base_bg, cursor='hand2' if callable(command) else '')
     tk.Frame(row, bg=_accent(accent), width=2).pack(side='left', fill='y')
+    if expanded is not None:
+        tk.Label(row, text=('▾' if expanded else '▸'), bg=base_bg, fg=_accent(accent), font=FONT_META).pack(side='left', padx=(SP_XS, 0))
     tk.Label(row, text=str(text), bg=base_bg, fg=fg, font=FONT_META, anchor='w', justify='left').pack(
         side='left', fill='x', expand=True, padx=(SP_SM, SP_SM), pady=1)
+    if callable(command):
+        _bind_click(row, command)
+        _bind_hover(row, base_bg, _pc('card_bg_alt') if not zebra else _pc('card_bg'))
     return row
 
 

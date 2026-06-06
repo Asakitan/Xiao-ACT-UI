@@ -49,7 +49,14 @@ from gui_modules.sao_panel_ui import (
 
 
 class ActAggregatePanel:
-    """Semantic ACT cockpit: grouped timeline, skills, monsters, dungeons and logs."""
+    """ACT 聚合工作台：插件开发者按维度(技能/怪物/参与者/事件类型/自定义字段)聚合事件，
+    可读为主、点开看原始 payload，是给插件调试/抓数据用的检查器。"""
+
+    # 聚合维度选择器：中文标签 ↔ 后端 group_by id
+    _DIMENSION_LABELS = ("技能", "怪物/目标", "参与者", "事件类型", "自定义字段")
+    _DIMENSION_BY_LABEL = {"技能": "skill", "怪物/目标": "monster", "参与者": "actor",
+                           "事件类型": "topic", "自定义字段": "field"}
+    _LABEL_BY_DIMENSION = {v: k for k, v in _DIMENSION_BY_LABEL.items()}
 
     def __init__(self, root: tk.Misc, owner: Any):
         self.root = root
@@ -60,10 +67,13 @@ class ActAggregatePanel:
         self._status_var = tk.StringVar(value="Ready")
         self._query_var = tk.StringVar(value="")
         self._source_var = tk.StringVar(value="live")
+        self._group_by_var = tk.StringVar(value="技能")        # 聚合维度（中文显示）
+        self._group_field_var = tk.StringVar(value="")        # 自定义字段名
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
         self._last_sig = ""
         self._expanded_groups: set[str] = set()
+        self._expanded_rows: set[str] = set()                 # 展开看原始 payload 的事件行
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -106,10 +116,13 @@ class ActAggregatePanel:
             return self._last_status
         query = self._query_var.get()
         source = self._source_var.get()
+        group_by = self._DIMENSION_BY_LABEL.get(self._group_by_var.get(), "skill")
+        group_field = self._group_field_var.get().strip()
         try:
-            status = act_aggregate_status(self.owner, limit=1000, query=query, source=source, window_ms=1000, top_n=20)
+            status = act_aggregate_status(self.owner, limit=1000, query=query, source=source, window_ms=1000, top_n=20,
+                                          group_by=group_by, group_field=group_field)
         except Exception as exc:
-            status = {"ok": False, "message": str(exc), "overview": {}, "timeline_clusters": [], "skill_damage": [], "monster_damage": [], "dungeon_damage": [], "log_groups": [], "source_mix": [], "raw_counts": {}, "filters": {"query": query, "source": source}, "errors": [str(exc)]}
+            status = {"ok": False, "message": str(exc), "overview": {}, "groups": [], "dimensions": [], "group_by": group_by, "timeline_clusters": [], "skill_damage": [], "monster_damage": [], "dungeon_damage": [], "log_groups": [], "source_mix": [], "raw_counts": {}, "filters": {"query": query, "source": source}, "errors": [str(exc)]}
         try:
             status = dict(status or {})
             status["graph"] = act_graph_timeseries_status(self.owner, limit=120, query=query)
@@ -184,8 +197,11 @@ class ActAggregatePanel:
 
         control = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)
         control.pack(fill='x', padx=14, pady=(0, 8))
-        tk.Label(control, text='Search aggregate groups', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
-        tk.Entry(control, textvariable=self._query_var, width=30).pack(side='left', padx=(8, 8))
+        tk.Label(control, text='聚合维度', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
+        tk.OptionMenu(control, self._group_by_var, *self._DIMENSION_LABELS, command=lambda _v: self.filter()).pack(side='left', padx=(6, 6))
+        tk.Entry(control, textvariable=self._group_field_var, width=14).pack(side='left', padx=(0, 8))
+        tk.Label(control, text='搜索', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(side='left')
+        tk.Entry(control, textvariable=self._query_var, width=18).pack(side='left', padx=(6, 8))
         tk.OptionMenu(control, self._source_var, 'live', 'history', command=lambda _v: self.filter()).pack(side='left', padx=(0, 8))
         action_button(control, '过滤 Filter', self.filter, kind='cyan').pack(side='left')
         tk.Label(body, textvariable=self._status_var, anchor='w', bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 9)).pack(fill='x', padx=14, pady=(0, 6))
@@ -229,11 +245,13 @@ class ActAggregatePanel:
         if int(counts.get('rows') or 0) <= 0:
             empty_state(self._rows, '等待 ACT 事件 / 战斗数据', '聚合驾驶舱会在收到伤害、技能、怪物、地牢或日志事件后自动显示语义分组。').pack(fill='x', padx=4, pady=10)
             return
-        # 时间线聚合(0.x 秒一桶)对阅读无意义，已移除；只保留技能/怪物/地牢/日志语义分组。
-        self._render_group_section('技能聚合', '', 'skill', status.get('skill_damage') or [], value_key='damage', accent='gold')
-        self._render_group_section('怪物伤害', '', 'monster', status.get('monster_damage') or [], value_key='damage', accent='danger')
-        self._render_group_section('地牢 / 场景', '', 'dungeon', status.get('dungeon_damage') or [], value_key='damage', accent='cyan')
-        self._render_group_section('日志聚合', '', 'log', status.get('log_groups') or [], value_key='total_value', accent='gold')
+        # 工作台：只显示当前选中的聚合维度（插件开发者可在工具栏切换"按什么聚合"）。
+        dim_label = self._LABEL_BY_DIMENSION.get(str(status.get('group_by') or 'skill'), '技能')
+        if str(status.get('group_by') or '') == 'field':
+            dim_label = f"字段 {status.get('group_field') or '?'}"
+        groups = status.get('groups') or []
+        accent = {'skill': 'gold', 'monster': 'danger', 'actor': 'cyan', 'topic': 'gold', 'field': 'cyan'}.get(str(status.get('group_by') or 'skill'), 'gold')
+        self._render_group_section(f'按 {dim_label} 聚合', '', 'g', groups, value_key='damage', accent=accent)
         self._render_graph_preview(status.get('graph') if isinstance(status.get('graph'), Mapping) else {})
 
     def _render_header_summary(self, status: Mapping[str, Any]) -> None:
@@ -308,8 +326,36 @@ class ActAggregatePanel:
         rows = [row for row in list(group.get('rows') or []) if isinstance(row, Mapping)][:6]
         if not rows:
             return
+        tk.Label(detail, text='代表事件（点击行展开原始 payload / 含 UID、epoch）', bg=_SAO_PANEL_BODY_BG,
+                 fg=_SAO_PANEL_LABEL_FG, font=('Segoe UI', 8), anchor='w').pack(fill='x', pady=(SP_XS, 1))
         for ridx, row in enumerate(rows):
-            detail_row(detail, self._readable_event_line(row), accent=accent, zebra=bool(ridx % 2)).pack(fill='x', pady=1)
+            row_key = f"{group.get('key')}:{ridx}"
+            open_raw = row_key in self._expanded_rows
+            detail_row(detail, self._readable_event_line(row), accent=accent, zebra=bool(ridx % 2),
+                       command=lambda k=row_key: self._toggle_row(k), expanded=open_raw).pack(fill='x', pady=1)
+            if open_raw:
+                self._render_raw_payload(detail, row)
+
+    def _render_raw_payload(self, parent: tk.Misc, row: Mapping[str, Any]) -> None:
+        """The full event as the plugin sees it — raw payload + raw UIDs + epoch time."""
+        raw = dict(row.get('payload') if isinstance(row.get('payload'), Mapping) else {})
+        for key in ('time_ms', 'topic', 'kind', 'actor', 'actor_uid', 'target', 'target_uid',
+                    'skill_id', 'skill_name', 'monster_id', 'monster_name', 'value', 'damage', 'heal', 'source'):
+            if row.get(key) not in (None, '') and key not in raw:
+                raw[key] = row.get(key)
+        text = json.dumps(raw, ensure_ascii=False, indent=2, default=str)
+        box = tk.Frame(parent, bg='#0f1720', highlightthickness=1, highlightbackground=_SAO_PANEL_GOLD)
+        box.pack(fill='x', padx=(SP_LG, 0), pady=(1, SP_XS))
+        tk.Label(box, text=text, bg='#0f1720', fg='#d7f7ff', font=('Consolas', 8), anchor='w',
+                 justify='left', wraplength=900).pack(fill='x', padx=SP_SM, pady=SP_XS)
+
+    def _toggle_row(self, row_key: str) -> None:
+        if row_key in self._expanded_rows:
+            self._expanded_rows.remove(row_key)
+        else:
+            self._expanded_rows.add(row_key)
+        self._last_sig = ""
+        self._render_status(self._last_status)
 
     def _render_graph_preview(self, graph: Mapping[str, Any]) -> None:
         if self._rows is None:
@@ -393,10 +439,9 @@ class ActAggregatePanel:
         return repr((
             tuple(sorted((counts or {}).items())),
             overview.get('damage'), overview.get('heal'), overview.get('elapsed_s'),
-            [(item.get('key'), item.get('damage'), item.get('count')) for item in list(status.get('skill_damage') or [])[:12] if isinstance(item, Mapping)],
-            [(item.get('key'), item.get('damage'), item.get('count')) for item in list(status.get('monster_damage') or [])[:12] if isinstance(item, Mapping)],
-            [(item.get('key'), item.get('damage'), item.get('count')) for item in list(status.get('dungeon_damage') or [])[:12] if isinstance(item, Mapping)],
-            [(item.get('key'), item.get('total_value'), item.get('count')) for item in list(status.get('log_groups') or [])[:12] if isinstance(item, Mapping)],
+            str(status.get('group_by') or ''), str(status.get('group_field') or ''),
+            [(item.get('key'), item.get('damage'), item.get('total_value'), item.get('count')) for item in list(status.get('groups') or [])[:20] if isinstance(item, Mapping)],
             tuple(sorted(self._expanded_groups)),
+            tuple(sorted(self._expanded_rows)),
             self._query_var.get(), self._source_var.get(),
         ))

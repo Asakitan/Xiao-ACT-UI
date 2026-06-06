@@ -9,7 +9,40 @@ import json
 import time
 from typing import Any, Callable, Iterable, Mapping, Optional
 
-from engines.act_aggregate import build_act_aggregate_summary
+from engines.act_aggregate import (
+    aggregate_by_actor,
+    aggregate_by_field,
+    aggregate_by_topic,
+    aggregate_damage_by_monster,
+    aggregate_damage_by_skill,
+    build_act_aggregate_summary,
+)
+
+
+# 聚合工作台维度：插件开发者可在界面上切换"按什么聚合"（改聚合规则）。
+ACT_AGGREGATE_DIMENSIONS = [
+    {"id": "skill", "label": "技能"},
+    {"id": "monster", "label": "怪物 / 目标"},
+    {"id": "actor", "label": "参与者"},
+    {"id": "topic", "label": "事件类型"},
+    {"id": "field", "label": "自定义字段"},
+]
+
+
+def _aggregate_dimension(summary: Mapping[str, Any], rows: list[dict[str, Any]],
+                         group_by: str, group_field: str, top_n: int) -> list[dict[str, Any]]:
+    """Active workbench dimension. Reuses the summary's already-computed
+    skill/monster folds; computes actor/topic/custom-field fresh."""
+    group_by = str(group_by or "skill").strip().lower()
+    if group_by == "monster":
+        return list(summary.get("monster_damage") or [])
+    if group_by == "actor":
+        return aggregate_by_actor(rows, top_n=top_n)
+    if group_by == "topic":
+        return aggregate_by_topic(rows, top_n=top_n)
+    if group_by == "field":
+        return aggregate_by_field(rows, group_field, top_n=top_n)
+    return list(summary.get("skill_damage") or [])
 
 from .event_bus import EventBus
 from .plugins import PluginManager
@@ -462,34 +495,82 @@ def act_plugin_reload(owner: Any, plugin_id: str = "") -> dict[str, Any]:
 
 
 def act_plugin_menu(owner: Any) -> dict[str, Any]:
-    """Data for the plugin popup menu (Entity + WebView): manager + plugin list."""
+    """Data for the dedicated plugin menu (Entity + WebView).
+
+    Plugins are returned pinned-first; each item carries enable/active state,
+    whether it ``declares_panel`` (manifest), its registered panel ids and its
+    hotkey count so the host can build a rich, toggle-able plugin board.
+    """
     try:
         manager = ensure_act_plugin_manager(owner, load=True)
     except Exception as exc:
-        return {"ok": False, "message": str(exc), "items": []}
+        return {"ok": False, "message": str(exc), "items": [], "plugins": []}
     status = manager.status()
     panels_by_plugin: dict[str, list[str]] = {}
     for panel in manager.list_ui_panels():
         panels_by_plugin.setdefault(str(panel.get("plugin_id") or ""), []).append(str(panel.get("id") or ""))
-    items: list[dict[str, Any]] = [
-        {"type": "manage", "id": "__manage__", "label": "插件管理面板 Plugin Manager"},
-    ]
+
+    plugins: list[dict[str, Any]] = []
     for plug in status.get("plugins", []):
         pid = str(plug.get("id") or "")
-        items.append({
+        plugins.append({
             "type": "plugin",
             "id": pid,
             "label": str(plug.get("name") or pid),
             "enabled": bool(plug.get("enabled")),
             "active": bool(plug.get("active")),
+            "pinned": bool(plug.get("pinned")),
+            "declares_panel": bool(plug.get("declares_panel")),
             "panels": panels_by_plugin.get(pid, []),
+            "hotkey_count": int(plug.get("hotkey_count") or 0),
+            "last_error": str(plug.get("last_error") or ""),
         })
+    # Pinned first (preserving pin order), then the rest alphabetically.
+    pin_order = {pid: i for i, pid in enumerate(status.get("pinned", []) or [])}
+    plugins.sort(key=lambda p: (0, pin_order.get(p["id"], 0), p["label"]) if p["pinned"]
+                 else (1, 0, p["label"]))
+
+    items: list[dict[str, Any]] = [
+        {"type": "manage", "id": "__manage__", "label": "插件管理面板 Manage"},
+        {"type": "panels", "id": "__panels__", "label": "插件面板 Panels"},
+        {"type": "reload", "id": "__reload__", "label": "重载全部插件 Reload"},
+    ] + plugins
     return {
         "ok": True,
         "count": int(status.get("plugin_count", 0) or 0),
         "active_count": int(status.get("active_count", 0) or 0),
+        "pinned": list(status.get("pinned", []) or []),
         "items": items,
+        "plugins": plugins,
+        "hotkeys": status.get("hotkeys", []),
     }
+
+
+def act_plugin_pin(owner: Any, plugin_id: str, pinned: bool = True) -> dict[str, Any]:
+    """Pin/unpin a plugin so it is promoted to the top of the plugin menu."""
+    try:
+        manager = ensure_act_plugin_manager(owner)
+        return {"ok": True, "pinned": manager.set_pinned(str(plugin_id or ""), bool(pinned))}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc)}
+
+
+def act_plugin_hotkeys(owner: Any) -> dict[str, Any]:
+    """List plugin-registered hotkeys (for the keybinding editor + menu)."""
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+        return {"ok": True, "hotkeys": manager.list_hotkeys()}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "hotkeys": []}
+
+
+def act_plugin_hotkey_dispatch(owner: Any, action: str) -> dict[str, Any]:
+    """Fire a plugin hotkey action by id (host hotkey-manager entry point)."""
+    try:
+        manager = ensure_act_plugin_manager(owner)
+        return {"ok": bool(manager.dispatch_hotkey(str(action or "")))}
+    except Exception as exc:
+        return {"ok": False, "message": str(exc)}
 
 
 # ── Plugin UI panels (redrawable declarative panels) ──────────────────────────
@@ -1857,9 +1938,23 @@ def _payload_first_int(payload: Mapping[str, Any], keys: Iterable[str]) -> int:
     return 0
 
 
+def _short_uid(uid: Any) -> str:
+    """Last 6 digits of a UID — distinguishes unnamed entities without dumping a
+    13-digit wall of numbers. The full uid stays in the row payload for plugins."""
+    text = str(uid or "").strip()
+    return text[-6:] if len(text) > 6 else text
+
+
+def _friendly_unknown(kind_label: str, uid: Any) -> str:
+    """Readable fallback for an unresolved entity: '未知怪物·612345' instead of
+    '怪物#2403082961536'. Readable-first; the raw uid remains queryable in payload."""
+    tag = _short_uid(uid)
+    return f"{kind_label}·{tag}" if tag else kind_label
+
+
 def _is_generated_entity_label(text: Any) -> bool:
     value = _truthy_text(text)
-    return bool(value and (value.startswith("怪物#") or value.startswith("目标#") or value.startswith("技能#") or value.startswith("地牢#")))
+    return bool(value and (value.startswith("怪物#") or value.startswith("目标#") or value.startswith("技能#") or value.startswith("地牢#") or value.startswith("未知")))
 
 
 def _is_unresolved_entity_label(text: Any) -> bool:
@@ -2116,7 +2211,7 @@ def _action_log_display_fields(payload: Mapping[str, Any], *, topic: str = "") -
         group_kind = "dungeon"
         group_name = dungeon_name or label
     elif topic_text in {"monster", "boss", "boss_state"}:
-        fallback = f"怪物#{target_uid}" if target_uid else (f"怪物#{monster_id}" if monster_id else topic_text)
+        fallback = _friendly_unknown("未知怪物", target_uid or monster_id) if (target_uid or monster_id) else topic_text
         label = monster_name or target_name or _payload_first_text(payload, ("message", "event_type", "name")) or fallback
         group_kind = "monster"
         group_name = monster_name or target_name or label
@@ -2125,7 +2220,7 @@ def _action_log_display_fields(payload: Mapping[str, Any], *, topic: str = "") -
         target_is_player = bool(payload.get("target_is_player"))
         target_is_monster = bool(payload.get("target_is_monster")) or bool(monster_name or monster_id)
         group_kind = "monster" if target_is_monster and not target_is_player else "target"
-        fallback = f"怪物#{target_uid}" if group_kind == "monster" and target_uid else (f"目标#{target_uid}" if target_uid else label)
+        fallback = _friendly_unknown("未知怪物" if group_kind == "monster" else "未知目标", target_uid) if target_uid else label
         group_name = target_name or monster_name or fallback
     else:
         label = _payload_first_text(payload, ("display_label", "message", "action_name", "skill_name", "name")) or topic_text
@@ -2133,8 +2228,8 @@ def _action_log_display_fields(payload: Mapping[str, Any], *, topic: str = "") -
         group_name = label
     return {
         "label": label,
-        "actor": actor_name or (str(actor_uid) if actor_uid else ""),
-        "target": target_name or (("怪物#" if group_kind == "monster" else "目标#") + str(target_uid) if target_uid else ""),
+        "actor": actor_name or (_friendly_unknown("未知参与者", actor_uid) if actor_uid else ""),
+        "target": target_name or (_friendly_unknown("未知怪物" if group_kind == "monster" else "未知目标", target_uid) if target_uid else ""),
         "skill_name": skill_name,
         "monster_name": monster_name,
         "dungeon_name": dungeon_name,
@@ -2433,12 +2528,20 @@ def _act_aggregate_snapshot(owner: Any) -> dict[str, Any]:
 
 def act_aggregate_status(owner: Any, *, limit: int = 1000, query: str | None = "",
                          source: str | None = "live", window_ms: int = 1000,
-                         top_n: int = 20, encounter_id: str | None = None) -> dict[str, Any]:
-    """Return semantic ACT aggregate groups for the primary cockpit panel."""
+                         top_n: int = 20, encounter_id: str | None = None,
+                         group_by: str | None = "skill", group_field: str | None = "") -> dict[str, Any]:
+    """Return semantic ACT aggregate groups for the primary cockpit panel.
+
+    group_by selects the active workbench dimension (skill/monster/actor/topic/
+    field) so plugin debuggers can re-group the same events without re-querying;
+    group_field is the payload field name when group_by == 'field'.
+    """
     errors: list[str] = []
     row_limit = max(1, min(int(limit or 1000), 5000))
     source_mode = _normalize_action_log_source(source)
     selected_encounter = str(encounter_id or "")
+    group_by = str(group_by or "skill").strip().lower()
+    group_field = str(group_field or "").strip()
     # Live-source cache: the aggregate is a pure function of the retained event
     # slice, so key it on the bus publish counter + params. This collapses the
     # menu's double call (refresh-signature + children-build) into one fold and
@@ -2451,7 +2554,7 @@ def act_aggregate_status(owner: Any, *, limit: int = 1000, query: str | None = "
             _bus = ensure_act_event_bus(owner)
             _cache_key = (_bus.retained, source_mode, str(query or ""),
                           int(window_ms or 1000), int(top_n or 20), row_limit,
-                          selected_encounter)
+                          selected_encounter, group_by, group_field)
             _cached = getattr(owner, "_act_aggregate_status_cache", None)
             if _cached is not None and _cached[0] == _cache_key:
                 return _cached[1]
@@ -2499,12 +2602,23 @@ def act_aggregate_status(owner: Any, *, limit: int = 1000, query: str | None = "
         summary = build_act_aggregate_summary([], render_spec=render_spec)
     raw_counts = dict(summary.get("raw_counts") or {})
     raw_counts.update({"action_rows": len(rows), "limit": row_limit})
+    try:
+        active_groups = _aggregate_dimension(summary, rows, group_by, group_field,
+                                             max(1, min(int(top_n or 20), 80)))
+    except Exception as exc:
+        errors.append(str(exc))
+        active_groups = []
     result = {
         "ok": not errors,
         "message": "OK" if not errors else "; ".join(errors),
         "source": source_mode,
         "encounter_id": selected_encounter or str(snapshot.get("encounter_id") or (render_spec.get("encounter") or {}).get("id") or ""),
         "overview": summary.get("overview") or {},
+        # Workbench dimension: the active group-by view + the selectable dimensions.
+        "group_by": group_by,
+        "group_field": group_field,
+        "dimensions": list(ACT_AGGREGATE_DIMENSIONS),
+        "groups": active_groups,
         "timeline_clusters": summary.get("timeline_clusters") or [],
         "skill_damage": summary.get("skill_damage") or [],
         "monster_damage": summary.get("monster_damage") or [],
@@ -2518,6 +2632,8 @@ def act_aggregate_status(owner: Any, *, limit: int = 1000, query: str | None = "
             "window_ms": max(100, int(window_ms or 1000)),
             "top_n": max(1, min(int(top_n or 20), 80)),
             "encounter_id": selected_encounter,
+            "group_by": group_by,
+            "group_field": group_field,
         },
         "storage_status": storage_status,
         "snapshot": snapshot,
@@ -3857,6 +3973,9 @@ __all__ = [
     "act_plugin_reload",
     "act_plugin_status",
     "act_plugin_menu",
+    "act_plugin_pin",
+    "act_plugin_hotkeys",
+    "act_plugin_hotkey_dispatch",
     "act_plugin_ui_panels",
     "act_plugin_ui_render",
     "act_plugin_ui_action",
