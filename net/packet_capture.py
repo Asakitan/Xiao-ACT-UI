@@ -998,6 +998,25 @@ class PacketCapture:
         self._frame_drops = 0
         self._consumer_thread: Optional[threading.Thread] = None
 
+        # ── Cross-NIC duplicate-frame guard (double-damage fix) ────────────
+        # Each NIC has its OWN independent reassembler, and all of them feed the
+        # SAME parser. With a network accelerator/VPN the plaintext game stream
+        # can be visible on more than one captured adapter at once, so two
+        # reassemblers lock onto the same server and emit byte-identical game
+        # frames → every damage event is counted twice. Since all NICs now funnel
+        # through this single consumer, we dedup here: a game frame whose exact
+        # bytes were just seen (within a short window) is a cross-NIC copy and is
+        # dropped. Only enabled for multi-NIC capture; only small frames are
+        # deduped (damage/skill frames are small and content-unique — large
+        # SyncNearEntities/Container frames are idempotent state syncs, so even a
+        # duplicate is harmless and we skip hashing them).
+        self._dedup_enabled = len(self._devices) > 1
+        self._dedup_recent: "Dict[tuple, float]" = {}
+        self._frame_dupes = 0
+        self._DEDUP_WINDOW_S = 1.0
+        self._DEDUP_MAX_FRAME = 4096
+        self._DEDUP_CAP = 4096
+
         def _safe_pkt(frame):
             # Capture thread: enqueue only (no parse here).
             self._enqueue(('f', frame))
@@ -1049,6 +1068,35 @@ class PacketCapture:
             if item[0] != 'c':
                 self._frame_drops += 1
 
+    def _is_duplicate_frame(self, frame: bytes, now: float) -> bool:
+        """True if this exact game frame was just delivered by another NIC.
+
+        Runs only on the single consumer thread, so no lock is needed. Only
+        small (damage/skill-sized) frames are tracked; large state-sync frames
+        are idempotent and skipped to avoid hashing megabytes per frame.
+        """
+        if not self._dedup_enabled:
+            return False
+        n = len(frame)
+        if n == 0 or n > self._DEDUP_MAX_FRAME:
+            return False
+        sig = (hash(frame), n)  # 64-bit content hash + length: collision-safe
+        recent = self._dedup_recent
+        prev = recent.get(sig)
+        if prev is not None and (now - prev) < self._DEDUP_WINDOW_S:
+            recent[sig] = now
+            self._frame_dupes += 1
+            return True
+        recent[sig] = now
+        # Bound + prune stale entries when the map grows past the cap.
+        if len(recent) > self._DEDUP_CAP:
+            cutoff = now - self._DEDUP_WINDOW_S
+            for k in [k for k, ts in recent.items() if ts < cutoff]:
+                recent.pop(k, None)
+            if len(recent) > self._DEDUP_CAP:  # still too big → hard reset
+                recent.clear()
+        return False
+
     def _consume_loop(self):
         """Single consumer: drain the frame queue and run parse + callbacks."""
         q = self._frame_q
@@ -1062,6 +1110,8 @@ class PacketCapture:
                     if self._on_server_change is not None:
                         self._on_server_change()
                 else:
+                    if self._is_duplicate_frame(payload, time.time()):
+                        continue  # cross-NIC duplicate → already counted
                     self._on_game_packet(payload)
             except Exception as exc:
                 import traceback
@@ -1082,6 +1132,7 @@ class PacketCapture:
         merged['capture_devices'] = len(self._devices)
         merged['parse_queue_depth'] = self._frame_q.qsize()
         merged['parse_frame_drops'] = self._frame_drops
+        merged['parse_frame_dupes'] = self._frame_dupes
         return merged
 
     def force_reconnect(self, reason: str = 'watchdog') -> bool:
