@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.0.12"
+APP_VERSION = "4.0.13"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v4.0.0: ACT platform + self-contained name-table pipeline (major release).
 #   Aggregates 3 days / 109 commits (6f837b4..) since v3.2.22 into a major
