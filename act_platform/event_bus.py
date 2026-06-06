@@ -36,13 +36,21 @@ class Subscription:
 class EventBus:
     """Thread-safe publish/subscribe bus for canonical ACT events."""
 
-    def __init__(self, max_recent: int = 200, slow_callback_ms: float = 25.0) -> None:
+    def __init__(self, max_recent: int = 200, slow_callback_ms: float = 25.0,
+                 ephemeral_topics: Optional[set[str]] = None) -> None:
         self._lock = threading.RLock()
         self._subscriptions: Dict[str, List[Subscription]] = {}
         self._by_token: Dict[str, Subscription] = {}
         self._recent: List[dict[str, Any]] = []
         self._max_recent = max(1, int(max_recent or 200))
         self._slow_callback_ms = max(0.0, float(slow_callback_ms or 0.0))
+        # Ephemeral topics are delivered to subscribers but NOT retained in the
+        # `_recent` ring. ``act_snapshot`` is the canonical case: it is a large
+        # nested payload published at combat rate purely for live overlay/plugin
+        # consumption and is already filtered out of the action-log / aggregate
+        # views, so deep-cloning it into the ring every push was pure waste
+        # (one extra copy.deepcopy per push + churning the whole ring).
+        self._ephemeral_topics: set[str] = set(ephemeral_topics or ())
         self._published = 0
         self._callback_failures = 0
         self._slow_callbacks = 0
@@ -95,9 +103,10 @@ class EventBus:
 
         with self._lock:
             self._published += 1
-            self._recent.append(clone_event(envelope))
-            if len(self._recent) > self._max_recent:
-                self._recent = self._recent[-self._max_recent:]
+            if topic not in self._ephemeral_topics:
+                self._recent.append(clone_event(envelope))
+                if len(self._recent) > self._max_recent:
+                    self._recent = self._recent[-self._max_recent:]
             callbacks = list(self._subscriptions.get(topic, ())) + list(self._subscriptions.get("*", ()))
 
         for sub in callbacks:

@@ -71,7 +71,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             updates = boss_state_from_monster_update(monster_data)
             if updates and getattr(self, '_state_mgr', None):
                 self._state_mgr.update(**updates)
-                self._push_dps_act_snapshot()
+                self._push_dps_act_snapshot(throttle=True)
         except Exception:
             pass
 
@@ -329,7 +329,7 @@ class SAOPlayerGUIPacketCallbacksMixin:
             except Exception:
                 pass
             try:
-                self._push_dps_act_snapshot()
+                self._push_dps_act_snapshot(throttle=True)
             except Exception:
                 pass
 
@@ -506,8 +506,25 @@ class SAOPlayerGUIPacketCallbacksMixin:
             _preserve_combat = bool(scene_event.get('preserve_combat', False))
             _reset_on_next_damage = bool(scene_event.get('reset_on_next_damage', False))
         if _reset_on_next_damage:
-            self._arm_pending_combat_reset(scene_event)
-            return
+            # Only defer the reset when a fight is genuinely in progress. If
+            # the prior encounter is already idle (no recent self/party
+            # outgoing damage), there is nothing live to protect — fall through
+            # to the immediate hard reset below so stale combat data cannot be
+            # kept alive by the post-scene grace window. Without this, after
+            # repeatedly re-entering a dungeon the DPS panel could stay stuck
+            # visible and never fade. (User-confirmed fix direction A.)
+            _combat_live = False
+            try:
+                if self._dps_tracker is not None:
+                    _combat_live = bool(self._dps_tracker.has_recent_damage(
+                        self._combat_damage_timeout_s()))
+            except Exception:
+                _combat_live = False
+            if _combat_live:
+                self._arm_pending_combat_reset(scene_event)
+                return
+            # Idle prior fight → force the hard-reset path (skip preserve).
+            _preserve_combat = False
         if _preserve_combat:
             # Same-dungeon layer/map transitions are common during long fights.
             # Keep the live encounter; only force the next overlay tick to refresh.

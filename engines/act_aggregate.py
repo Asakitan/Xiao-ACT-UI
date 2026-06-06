@@ -291,8 +291,12 @@ def _finalize_groups(groups: Iterable[dict[str, Any]], *, top_n: int = 20) -> li
     return out[:max(1, int(top_n or 20))]
 
 
-def build_timeline_clusters(rows: Iterable[Mapping[str, Any]], *, window_ms: int = 1000, top_n: int = 80) -> list[dict[str, Any]]:
-    normalized = normalize_rows(rows)
+def build_timeline_clusters(rows: Iterable[Mapping[str, Any]], *, window_ms: int = 1000, top_n: int = 80,
+                            _pre_normalized: bool = False) -> list[dict[str, Any]]:
+    # ``_pre_normalized`` lets build_act_aggregate_summary pass the already
+    # normalized+sorted list so we don't re-run normalize_rows (an O(n log n)
+    # sort) a second time. Public/standalone callers leave it False.
+    normalized = list(rows) if _pre_normalized else normalize_rows(rows)
     if not normalized:
         return []
     bucket_ms = max(100, int(window_ms or 1000))
@@ -318,9 +322,10 @@ def build_timeline_clusters(rows: Iterable[Mapping[str, Any]], *, window_ms: int
     return ordered[:max(1, int(top_n or 80))]
 
 
-def aggregate_damage_by_skill(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20) -> list[dict[str, Any]]:
+def aggregate_damage_by_skill(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
+                              _pre_normalized: bool = False) -> list[dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
-    for row in normalize_rows(rows):
+    for row in (rows if _pre_normalized else normalize_rows(rows)):
         if not (float(row.get("damage") or 0.0) or float(row.get("heal") or 0.0) or row.get("skill_id") or row.get("skill_name")):
             continue
         key = _key("skill", row.get("skill_id"), str(row.get("skill_name") or ""), str(row.get("label") or row.get("id") or "unknown"))
@@ -330,9 +335,10 @@ def aggregate_damage_by_skill(rows: Iterable[Mapping[str, Any]], *, top_n: int =
     return _finalize_groups(groups.values(), top_n=top_n)
 
 
-def aggregate_damage_by_monster(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20) -> list[dict[str, Any]]:
+def aggregate_damage_by_monster(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
+                                _pre_normalized: bool = False) -> list[dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
-    for row in normalize_rows(rows):
+    for row in (rows if _pre_normalized else normalize_rows(rows)):
         if not (float(row.get("damage") or 0.0) or row.get("monster_id") or row.get("monster_name") or row.get("target_uid")):
             continue
         key = _key("monster", row.get("monster_id") or row.get("target_uid"), str(row.get("monster_name") or row.get("target") or ""), str(row.get("id") or "unknown"))
@@ -342,9 +348,10 @@ def aggregate_damage_by_monster(rows: Iterable[Mapping[str, Any]], *, top_n: int
     return _finalize_groups(groups.values(), top_n=top_n)
 
 
-def aggregate_damage_by_dungeon(rows: Iterable[Mapping[str, Any]], *, top_n: int = 12) -> list[dict[str, Any]]:
+def aggregate_damage_by_dungeon(rows: Iterable[Mapping[str, Any]], *, top_n: int = 12,
+                                _pre_normalized: bool = False) -> list[dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
-    for row in normalize_rows(rows):
+    for row in (rows if _pre_normalized else normalize_rows(rows)):
         dungeon_id = row.get("dungeon_id")
         dungeon_name = str(row.get("dungeon_name") or "")
         if not (dungeon_id or dungeon_name or float(row.get("damage") or 0.0) or float(row.get("heal") or 0.0)):
@@ -356,9 +363,10 @@ def aggregate_damage_by_dungeon(rows: Iterable[Mapping[str, Any]], *, top_n: int
     return _finalize_groups(groups.values(), top_n=top_n)
 
 
-def aggregate_action_log(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20) -> list[dict[str, Any]]:
+def aggregate_action_log(rows: Iterable[Mapping[str, Any]], *, top_n: int = 20,
+                         _pre_normalized: bool = False) -> list[dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
-    for row in normalize_rows(rows):
+    for row in (rows if _pre_normalized else normalize_rows(rows)):
         key = str(row.get("group_key") or "")
         if not key:
             topic = str(row.get("topic") or "event")
@@ -427,11 +435,11 @@ def build_act_aggregate_summary(rows: Iterable[Mapping[str, Any]], *, render_spe
     normalized = normalize_rows(rows)
     # Aggregate each dimension ONCE (full set), then slice for display and reuse
     # len() for raw_counts — instead of re-running every aggregator twice.
-    timeline = build_timeline_clusters(normalized, window_ms=window_ms, top_n=max(top_n, 24))
-    skills = aggregate_damage_by_skill(normalized, top_n=10_000)
-    monsters = aggregate_damage_by_monster(normalized, top_n=10_000)
-    dungeons = aggregate_damage_by_dungeon(normalized, top_n=10_000)
-    logs = aggregate_action_log(normalized, top_n=10_000)
+    timeline = build_timeline_clusters(normalized, window_ms=window_ms, top_n=max(top_n, 24), _pre_normalized=True)
+    skills = aggregate_damage_by_skill(normalized, top_n=10_000, _pre_normalized=True)
+    monsters = aggregate_damage_by_monster(normalized, top_n=10_000, _pre_normalized=True)
+    dungeons = aggregate_damage_by_dungeon(normalized, top_n=10_000, _pre_normalized=True)
+    logs = aggregate_action_log(normalized, top_n=10_000, _pre_normalized=True)
     return {
         "overview": _overview(normalized, render_spec),
         "timeline_clusters": timeline,

@@ -489,6 +489,12 @@ class PacketBridge:
         if self._running:
             return
         self._running = True
+        # S3 self-heal fix: warm the name-table classifier + resolver tables on a
+        # daemon thread BEFORE the first combat event. Without this, the first
+        # damage event lazily triggers _our_index() (parses ~1.5MB of name JSON)
+        # and NameResolver._load_kind on the synchronous parse/capture thread,
+        # producing the "slow for the first 1-2 minutes, then normal" stall.
+        self._warm_name_tables_async()
         mode = self._data_source_mode
         if mode in ('memory', 'hybrid', 'auto'):
             mem_ok = self._start_memory_source()
@@ -513,6 +519,34 @@ class PacketBridge:
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name='sao_bridge')
         self._thread.start()
+
+    _name_tables_warmed = False
+
+    def _warm_name_tables_async(self) -> None:
+        """Eagerly build the name-table classifier index + resolver kind tables on
+        a background daemon thread so the first combat event does not pay the
+        ~1.5MB JSON parse on the parse/capture thread (S3 self-heal root cause)."""
+        if PacketBridge._name_tables_warmed:
+            return
+        PacketBridge._name_tables_warmed = True
+
+        def _warm():
+            try:
+                from tools.tablekit.name_table_classifier import _our_index
+                _our_index()  # lru_cache(maxsize=1): builds skill/buff/name index once
+            except Exception as exc:
+                logger.debug(f'[Bridge] classifier warmup skipped: {exc}')
+            try:
+                # Force NameResolver to load + merge every kind table now (cached
+                # in self._tables) instead of lazily on the first per-event lookup.
+                _NAME_RESOLVER.coverage()
+            except Exception as exc:
+                logger.debug(f'[Bridge] name table warmup skipped: {exc}')
+
+        try:
+            threading.Thread(target=_warm, daemon=True, name='sao_name_warm').start()
+        except Exception:
+            PacketBridge._name_tables_warmed = False
 
     def _start_memory_source(self) -> bool:
         """Lazy-import + start UnifiedDataSource. Returns True on success."""

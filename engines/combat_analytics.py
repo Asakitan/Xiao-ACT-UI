@@ -317,43 +317,72 @@ def build_act_snapshot(dps_tracker: Any = None,
                        source_probe: Any = None,
                        packet_probe: Any = None,
                        memory_probe: Any = None,
-                       history_limit: int = 20) -> Dict[str, Any]:
+                       history_limit: int = 20,
+                       lite: bool = False,
+                       live_max_age_ms: float = 150.0) -> Dict[str, Any]:
     """Build a single ACT snapshot for UI/API consumers.
 
     This function deliberately delegates locking to the source objects so it can
     be called from pywebview workers without taking unrelated locks together.
+
+    ``lite=True`` is the high-rate live-push path (Entity overlay set_act_snapshot
+    + WebView DpsMeter.showActSnapshot + act_snapshot plugin subscribers). Those
+    consumers only read ``render_spec`` / ``sources`` / ``triggers`` — never the
+    per-entity skill breakdown, the full ``last_report``, or ``history`` — so in
+    lite mode we use the 150ms-cached, skill-free snapshot and skip the per-event
+    deepcopy of the last report + 20-report history while a fight is live. The
+    default ``lite=False`` path is byte-for-byte the original behaviour (used by
+    the offline replay harness and any consumer that wants the full payload).
     """
     live: Optional[Dict[str, Any]] = None
     last_report: Optional[Dict[str, Any]] = None
     history = []
     encounter: Dict[str, Any] = {}
 
+    if encounter_mgr is not None:
+        try:
+            encounter = encounter_mgr.snapshot() or {}
+        except Exception:
+            encounter = {}
+
     if dps_tracker is not None:
         try:
-            live = dps_tracker.get_snapshot(include_skills=True)
+            if lite:
+                getfast = getattr(dps_tracker, 'get_snapshot_fast', None)
+                live = (getfast(live_max_age_ms) if callable(getfast)
+                        else dps_tracker.get_snapshot(include_skills=False))
+            else:
+                live = dps_tracker.get_snapshot(include_skills=True)
         except Exception:
             live = None
+
+    # The render spec is built from `live` during an active encounter; the last
+    # report + history are only needed for the idle "report" view. In lite mode,
+    # skip their deepcopy entirely while a fight is live (that is exactly when
+    # the per-event push fires the most).
+    _is_live = bool(
+        (live or {}).get('encounter_active')
+        or str(encounter.get('status') or '') in ('active', 'pending_reset')
+    )
+    _skip_report = bool(lite and _is_live)
+
+    if dps_tracker is not None and not _skip_report:
         try:
             last_report = dps_tracker.get_last_report()
         except Exception:
             last_report = None
 
     if history_store is not None:
-        if not last_report:
+        if not last_report and not _skip_report:
             try:
                 last_report = history_store.latest_report()
             except Exception:
                 last_report = None
-        try:
-            history = history_store.list_reports(history_limit)
-        except Exception:
-            history = []
-
-    if encounter_mgr is not None:
-        try:
-            encounter = encounter_mgr.snapshot() or {}
-        except Exception:
-            encounter = {}
+        if not lite and history_limit and int(history_limit) > 0:
+            try:
+                history = history_store.list_reports(history_limit)
+            except Exception:
+                history = []
 
     state = _state_to_dict(state_mgr)
     context = {
