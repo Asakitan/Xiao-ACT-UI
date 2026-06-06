@@ -103,6 +103,13 @@ class SAOPlayerGUILifecycleMixin:
         if not ov:
             return
         try:
+            gpu = ov.get('gpu_transition')
+            destroy = getattr(gpu, 'destroy', None)
+            if callable(destroy):
+                destroy()
+        except Exception:
+            pass
+        try:
             gl = ov.get('gl')
             if gl:
                 for key in ('pulse_tex', 'pulse_fbo', 'pulse_prog', 'pulse_vao', 'ctx'):
@@ -126,6 +133,13 @@ class SAOPlayerGUILifecycleMixin:
         ov = getattr(self, '_entry_overlay', None)
         if not ov:
             return
+        try:
+            gpu = ov.get('gpu_transition')
+            destroy = getattr(gpu, 'destroy', None)
+            if callable(destroy):
+                destroy()
+        except Exception:
+            pass
         try:
             gl = ov.get('gl') or {}
             for key in ('boot_fbo', 'boot_tex', 'boot_vao', 'boot_prog', 'ctx'):

@@ -60,6 +60,7 @@ from PIL import Image, ImageTk
 
 from utils.sao_sound import get_sao_font
 from sao_theme import SAOLinkStart, ease_out, ease_in_out, lerp
+from gui_modules.sao_gpu_entity_transition import EntityTransitionGpuOverlay
 from gui_modules.sao_panel_ui import _disable_native_window_shadow
 
 
@@ -273,6 +274,29 @@ void main() {
         self._cleanup_entry_overlay()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
+        start_center = (start_x + self._fw // 2, start_y + self._fh // 2)
+        end_center = (end_x + self._fw // 2, end_y + self._fh // 2)
+        try:
+            gpu = EntityTransitionGpuOverlay(
+                self.root,
+                kind='entry',
+                center=start_center,
+                target=end_center,
+                title='sao_entity_entry_gpu',
+            )
+            if gpu.start():
+                self._entry_overlay = {
+                    'gpu_transition': gpu,
+                    'sw': sw,
+                    'sh': sh,
+                    'start_x': start_center[0],
+                    'start_y': start_center[1],
+                    'end_x': end_center[0],
+                    'end_y': end_center[1],
+                }
+                return self._entry_overlay
+        except Exception:
+            pass
         ov = tk.Toplevel(self.root)
         ov.overrideredirect(True)
         ov.attributes('-topmost', True)
@@ -292,16 +316,23 @@ void main() {
             'sh': sh,
             'gl': self._init_entry_boot_gl(sw, sh),
             'gl_photo': None,
-            'start_x': start_x + self._fw // 2,
-            'start_y': start_y + self._fh // 2,
-            'end_x': end_x + self._fw // 2,
-            'end_y': end_y + self._fh // 2,
+            'start_x': start_center[0],
+            'start_y': start_center[1],
+            'end_x': end_center[0],
+            'end_y': end_center[1],
         }
         return self._entry_overlay
 
     def _draw_entry_overlay(self, progress):
         ov = getattr(self, '_entry_overlay', None)
         if not ov:
+            return
+        gpu = ov.get('gpu_transition')
+        if gpu is not None:
+            try:
+                gpu.set_progress(progress)
+            except Exception:
+                pass
             return
         try:
             win = ov['win']
@@ -635,6 +666,32 @@ void main() {
         except Exception:
             sw, sh = 1920, 1080
         try:
+            fx = self._float.winfo_rootx() + self._fw // 2
+            fy = self._float.winfo_rooty() + self._fh // 2
+        except Exception:
+            fx, fy = sw // 2, sh // 2
+        try:
+            gpu = EntityTransitionGpuOverlay(
+                self.root,
+                kind='exit',
+                center=(fx, fy),
+                target=(fx, fy),
+                title='sao_entity_exit_gpu',
+            )
+            if gpu.start():
+                self._exit_overlay = {
+                    'gpu_transition': gpu,
+                    'sw': sw,
+                    'sh': sh,
+                    'fx': fx,
+                    'fy': fy,
+                    'banner': self._get_exit_banner(mode, target_label),
+                    'mode': mode,
+                }
+                return self._exit_overlay
+        except Exception:
+            pass
+        try:
             ov = tk.Toplevel(self.root)
             ov.overrideredirect(True)
         except Exception:
@@ -650,11 +707,6 @@ void main() {
             pass
         cv = tk.Canvas(ov, width=sw, height=sh, bg='#060a10', highlightthickness=0, bd=0)
         cv.pack(fill=tk.BOTH, expand=True)
-        try:
-            fx = self._float.winfo_rootx() + self._fw // 2
-            fy = self._float.winfo_rooty() + self._fh // 2
-        except Exception:
-            fx, fy = sw // 2, sh // 2
         self._exit_overlay = {
             'win': ov,
             'cv': cv,
@@ -672,6 +724,13 @@ void main() {
     def _draw_exit_overlay(self, progress):
         ov = getattr(self, '_exit_overlay', None)
         if not ov:
+            return
+        gpu = ov.get('gpu_transition')
+        if gpu is not None:
+            try:
+                gpu.set_progress(progress)
+            except Exception:
+                pass
             return
         try:
             win = ov['win']
@@ -919,4 +978,3 @@ void main() {
         _add(getattr(self, '_fisheye_ov', None), 'fisheye')
         # _hp_alpha_windows 已废弃 (ULW 内部渲染)
         return wins
-
