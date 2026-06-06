@@ -881,6 +881,27 @@ class HpOverlay:
         self._hide_after_exit = True
         self._schedule_tick(immediate=True)
 
+    def fade_out(self) -> None:
+        if self._win is None:
+            return
+        if self._exiting and self._fade_target <= 0.0:
+            return
+        _phase_trace('hp.overlay.fade_out.begin', f'alpha={self._fade_alpha:.3f}')
+        self._exiting = True
+        self._fade_from = self._fade_alpha
+        self._fade_target = 0.0
+        self._fade_start = time.time()
+        self._fade_duration = min(self.FADE_OUT, 0.22)
+        self._hide_after_exit = False
+        if self._gpu_managed and self._gpu_presenter is not None \
+                and self._gpu_window is not None:
+            try:
+                self._gpu_presenter.start_fade(0.0, self._fade_duration)
+                self._gpu_window.request_redraw()
+            except Exception:
+                pass
+        self._schedule_tick(immediate=True)
+
     def destroy(self) -> None:
         _phase_trace('hp.overlay.destroy', f'gpu={int(bool(self._gpu_managed))} hwnd={self._hwnd}')
         self._cancel_tick()

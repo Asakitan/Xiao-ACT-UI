@@ -381,7 +381,7 @@ class SAOPlayerGUILifecycleMixin:
                 except Exception:
                     pass
                 try:
-                    self.root.after(260, _complete_close)
+                    self.root.after(80, _complete_close)
                     return
                 except Exception:
                     pass
@@ -446,7 +446,7 @@ class SAOPlayerGUILifecycleMixin:
                 except Exception:
                     _finish()
             else:
-                _finish()
+                _finish(final_frame_drawn=True)
 
         try:
             self.root.after(1, _step)

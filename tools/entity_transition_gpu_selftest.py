@@ -150,6 +150,18 @@ class _FakeGlObject:
         self.release_count += 1
 
 
+class _FadeableOverlay:
+    def __init__(self) -> None:
+        self.fade_count = 0
+        self.hide_count = 0
+
+    def fade_out(self) -> None:
+        self.fade_count += 1
+
+    def hide(self) -> None:
+        self.hide_count += 1
+
+
 class EntityTransitionGpuDestroyTests(unittest.TestCase):
     def test_shader_points_flip_top_left_screen_y_to_bottom_left_gl_y(self) -> None:
         overlay = EntityTransitionGpuOverlay(
@@ -241,13 +253,23 @@ class EntityTransitionGpuExitLifecycleTests(unittest.TestCase):
         self.assertEqual(owner.finalize_count, 0)
         self.assertEqual(len(owner.root.after_calls), 1)
         delay, callback = owner.root.after_calls[0]
-        self.assertEqual(delay, 260)
+        self.assertEqual(delay, 80)
         self.assertTrue(callable(callback))
 
         callback()
 
         self.assertEqual(owner.finalize_count, 1)
         self.assertEqual(after_shutdown_calls, [True])
+
+    def test_exit_prefers_overlay_fade_out_over_hide(self) -> None:
+        owner = _LifecycleOwner(gpu_exit=True)
+        hp = _FadeableOverlay()
+        owner._hp_overlay = hp
+
+        owner._run_exit_animation()
+
+        self.assertEqual(hp.fade_count, 1)
+        self.assertEqual(hp.hide_count, 0)
 
 
 if __name__ == "__main__":

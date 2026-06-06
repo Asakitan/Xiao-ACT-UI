@@ -137,9 +137,10 @@ vec4 exitFx(vec2 uv, vec2 p, vec2 center, float t) {
     color += gold * grid * 0.55;
     color += white * core * (0.50 + 0.50 * lock);
     color += vec3(0.72, 0.95, 1.0) * beam * 0.25;
-    color *= scan * mix(1.0, closeMask, closeV);
+    float tailFade = 1.0 - smoothstep(0.88, 1.0, t);
+    color *= scan * mix(1.0, closeMask, closeV) * tailFade;
     color = clamp(color, 0.0, 1.0);
-    float alpha = clamp((ring * 0.95 + echo * 0.45 + grid * 0.32 + core * 0.80 + beam * 0.16) * mix(1.0, closeMask, closeV), 0.0, 0.98);
+    float alpha = clamp((ring * 0.95 + echo * 0.45 + grid * 0.32 + core * 0.80 + beam * 0.16) * mix(1.0, closeMask, closeV) * tailFade, 0.0, 0.98);
     return vec4(color * alpha, alpha);
 }
 
