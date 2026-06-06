@@ -535,6 +535,10 @@ class DpsOverlay:
     HEAT_COLD = (60, 176, 255)
     HEAT_MID = (255, 200, 72)
     HEAT_HOT = (255, 96, 78)
+    # Detail skill-list smooth scroll: px advanced per wheel notch, and the
+    # per-tick easing factor (disp += (target-disp)*ease at 60 Hz).
+    SKILL_WHEEL_STEP = 96
+    SKILL_SCROLL_EASE = 0.35
     # Shell layer
     SHELL_AMBIENT_SHADOW = (22, 24, 18, 0)
     SHELL_CONTACT_SHADOW = (31, 34, 16, 0)
@@ -692,11 +696,15 @@ class DpsOverlay:
         # Scroll offset for entity list (mouse wheel support)
         self._scroll_offset: int = 0
         self._scroll_offset_report: int = 0
-        # Scroll offset for the detail-view skill list (independent of the
-        # entity list; driven by the wheel while the detail view is open).
-        self._skill_scroll_offset: int = 0
-        self._skill_total: int = 0      # total skills in the open detail
-        self._skill_visible: int = 0    # skills that fit the skill region
+        # Smooth pixel scroll for the detail-view skill list (independent of
+        # the entity list; driven by the wheel while the detail view is open).
+        # _disp eases toward _target every tick so it glides like the webview
+        # .skill-frame instead of snapping one row at a time.
+        self._skill_scroll_disp: float = 0.0     # displayed px offset (eased)
+        self._skill_scroll_target: float = 0.0   # wheel target px offset
+        self._skill_content_h: int = 0           # total skill content height
+        self._skill_view_h: int = 0              # skill viewport height (px)
+        self._skill_max_scroll: float = 0.0      # max(0, content_h - view_h)
 
         # Static shell layer cache (shadow + shell + corners).
         # Only depends on (w, h); reused as long as panel size is stable.
@@ -960,7 +968,8 @@ class DpsOverlay:
             return
         self._detail_uid = uid
         self._detail_visible = True
-        self._skill_scroll_offset = 0
+        self._skill_scroll_disp = 0.0
+        self._skill_scroll_target = 0.0
         # In live mode, request a fresh skill breakdown from the controller.
         if self._view_mode == 'live' and callable(self._request_entity_detail_cb):
             try:
@@ -1015,7 +1024,8 @@ class DpsOverlay:
         self._detail_mode = True
         self._detail_uid = max(0, int(uid or 0))
         self._detail_visible = True
-        self._skill_scroll_offset = 0
+        self._skill_scroll_disp = 0.0
+        self._skill_scroll_target = 0.0
         if self._detail_uid > 0 and self._view_mode == 'live' \
                 and callable(self._request_entity_detail_cb):
             try:
@@ -1032,7 +1042,8 @@ class DpsOverlay:
         self._resize_active = False
         self._detail_visible = False
         self._detail_uid = 0
-        self._skill_scroll_offset = 0
+        self._skill_scroll_disp = 0.0
+        self._skill_scroll_target = 0.0
         self._last_compose_sig = None
         self._schedule_tick(immediate=True)
 
@@ -1044,7 +1055,8 @@ class DpsOverlay:
             return
         self._detail_visible = False
         self._detail_uid = 0
-        self._skill_scroll_offset = 0
+        self._skill_scroll_disp = 0.0
+        self._skill_scroll_target = 0.0
         self._schedule_tick(immediate=True)
 
     @_probe.decorate('ui.dps.update_detail')
@@ -1239,6 +1251,12 @@ class DpsOverlay:
             self._registered = False
 
     def _is_animating(self) -> bool:
+        # Keep ticking at 60 Hz while the detail skill list is gliding so the
+        # eased scroll resubmits every frame (see _compose_signature -> None).
+        if self._detail_visible and abs(
+                float(self._skill_scroll_disp)
+                - float(self._skill_scroll_target)) > 0.75:
+            return True
         return bool(_CY_UI.dps_overlay_animating(
             self._hide_after_fade,
             self._fade_alpha, self._fade_target,
@@ -1363,6 +1381,18 @@ class DpsOverlay:
                 self._panel_fx_tier = ''
             else:
                 animating = True
+
+        # Smooth skill-list scroll: ease the displayed px offset toward the
+        # wheel target so the detail skill list glides like the webview
+        # .skill-frame instead of snapping one row per notch.
+        if self._detail_visible:
+            disp = float(self._skill_scroll_disp)
+            tgt = float(self._skill_scroll_target)
+            if abs(tgt - disp) > 0.75:
+                self._skill_scroll_disp = disp + (tgt - disp) * self.SKILL_SCROLL_EASE
+                animating = True
+            elif disp != tgt:
+                self._skill_scroll_disp = tgt
 
         return animating
 
@@ -2510,18 +2540,22 @@ class DpsOverlay:
         # Skill rows below the stats grid — "rank board · layered card" mirror
         # of web/dps.html _renderSkillRows: rank badge + name + value/share on
         # the head line, sub-meta below, an independent heat-gradient track at
-        # the bottom. Wheel-scrollable when the list overflows the region (see
-        # _scroll_skills); rows are sliced + clipped so nothing spills out.
+        # the bottom. The whole list is rendered into a tall content image and
+        # the visible window is cropped out at a sub-pixel scroll offset, so it
+        # glides smoothly (like the webview .skill-frame) and never spills the
+        # panel — partial rows at the top/bottom are clipped by the crop.
         sk_y = body_y + grid_h + 6
         sk_h = ly + lh - sk_y - 4
         if sk_h <= 14:
-            self._skill_total = 0
-            self._skill_visible = 0
+            self._skill_content_h = 0
+            self._skill_view_h = 0
+            self._skill_max_scroll = 0.0
             return
         skills = entity.get('skills') or []
         if not skills:
-            self._skill_total = 0
-            self._skill_visible = 0
+            self._skill_content_h = 0
+            self._skill_view_h = 0
+            self._skill_max_scroll = 0.0
             font = _load_font('sao', 10)
             msg = ('NO SKILL DATA IN LAST REPORT' if self._view_mode == 'report'
                    else 'WAITING FOR LIVE SKILL DETAIL')
@@ -2544,18 +2578,32 @@ class DpsOverlay:
         sk_row_h = 44
         sk_row_gap = 4
         step = sk_row_h + sk_row_gap
-        visible = max(1, (sk_h + sk_row_gap) // step)
         total_sk = len(skills_sorted)
-        max_off = max(0, total_sk - visible)
-        off = max(0, min(int(self._skill_scroll_offset or 0), max_off))
-        self._skill_scroll_offset = off
-        self._skill_total = total_sk
-        self._skill_visible = visible
+        content_h = total_sk * step - sk_row_gap      # last row has no gap
+        view_h = sk_h
+        max_scroll = float(max(0, content_h - view_h))
+
+        # Publish geometry for the wheel handler + clamp the eased offsets to
+        # the current bounds (the list may have shrunk since the last notch).
+        self._skill_content_h = content_h
+        self._skill_view_h = view_h
+        self._skill_max_scroll = max_scroll
+        self._skill_scroll_target = max(0.0, min(self._skill_scroll_target, max_scroll))
+        self._skill_scroll_disp = max(0.0, min(self._skill_scroll_disp, max_scroll))
+        scroll = self._skill_scroll_disp
 
         # Reserve a right gutter for the scrollbar only when the list overflows.
-        gutter = 8 if max_off > 0 else 0
+        gutter = 8 if max_scroll > 0 else 0
         row_x0 = lx + 6
         row_x1 = lx + lw - 7 - gutter
+        view_w = max(1, row_x1 - row_x0 + 1)
+        cx1 = view_w - 1                               # card right edge (local)
+
+        # Render every row into a transparent content image (local coords, all
+        # >= 0 so _fill_rounded_rect's alpha_composite never sees a negative
+        # dest); the visible slice is cropped + composited after the loop.
+        content_img = Image.new('RGBA', (view_w, max(1, content_h)), (0, 0, 0, 0))
+        cdraw = ImageDraw.Draw(content_img, 'RGBA')
 
         sk_font_extra = _load_font('sao', 8)
         sk_font_val = _load_font('sao', 12)
@@ -2564,11 +2612,9 @@ class DpsOverlay:
         rank_colors = (self.RANK_GOLD, self.RANK_SILVER, self.RANK_BRONZE)
         rank_fg_colors = (self.RANK_GOLD_FG, self.RANK_SILVER_FG, self.RANK_BRONZE_FG)
 
-        for vi, sk in enumerate(skills_sorted[off:off + visible]):
-            ry = sk_y + vi * step
-            if ry + sk_row_h > ly + lh - 4:
-                break
-            rank = off + vi + 1
+        for i, sk in enumerate(skills_sorted):
+            ry = i * step                              # content-local top (>=0)
+            rank = i + 1
             dmg = float(sk.get('total') or 0)
             heal = float(sk.get('heal_total') or 0)
             amount = max(dmg, heal)
@@ -2581,45 +2627,45 @@ class DpsOverlay:
             heat = self._heat_color(ratio)
             heat_rgba = (heat[0], heat[1], heat[2], 255)
 
-            # Card background + hairline border
+            # Card background + hairline border (local coords on content_img)
             self._fill_rounded_rect(
-                img, (row_x0, ry, row_x1, ry + sk_row_h - 1),
+                content_img, (0, ry, cx1, ry + sk_row_h - 1),
                 radius=5, fill=self.SKILL_ROW_BG,
             )
-            draw.rounded_rectangle(
-                (row_x0, ry, row_x1, ry + sk_row_h - 1),
+            cdraw.rounded_rectangle(
+                (0, ry, cx1, ry + sk_row_h - 1),
                 radius=5, outline=self.ROW_BORDER, width=1,
             )
 
             # ── Head line: rank badge + name … value + share% ──
             rank_w = 20
             rank_h = 16
-            rbx = row_x0 + 7
+            rbx = 7
             rby = ry + 5
             if rank <= 3:
                 self._fill_rounded_rect(
-                    img, (rbx, rby, rbx + rank_w, rby + rank_h),
+                    content_img, (rbx, rby, rbx + rank_w, rby + rank_h),
                     radius=4, fill=rank_colors[rank - 1],
                 )
                 rank_fg = rank_fg_colors[rank - 1]
             else:
                 rank_fg = self.SKILL_RANK_MUTED
             self._draw_tracked_centered(
-                draw, str(rank), sk_font_rank, rank_fg,
+                cdraw, str(rank), sk_font_rank, rank_fg,
                 rbx + rank_w // 2, rby + 3, 0.5,
             )
             name_x = rbx + rank_w + 8
 
             # Right side: share% on the far right, value to its left
             pct_text = f'{int(round(share * 100))}%'
-            pw = self._tracked_text_width(draw, pct_text, sk_font_pct, 0.5)
-            self._draw_tracked(draw, (row_x1 - 8 - pw, ry + 7),
+            pw = self._tracked_text_width(cdraw, pct_text, sk_font_pct, 0.5)
+            self._draw_tracked(cdraw, (cx1 - 8 - pw, ry + 7),
                                pct_text, sk_font_pct, self.TEXT_MUTED, 0.5)
             val_text = _fmt_num(amount)
-            vw = self._tracked_text_width(draw, val_text, sk_font_val, 0.6)
+            vw = self._tracked_text_width(cdraw, val_text, sk_font_val, 0.6)
             val_color = self.VAL_HEAL_GREEN if is_heal else heat_rgba
-            val_x = row_x1 - 8 - pw - 8 - vw
-            self._draw_tracked(draw, (val_x, ry + 5),
+            val_x = cx1 - 8 - pw - 8 - vw
+            self._draw_tracked(cdraw, (val_x, ry + 5),
                                val_text, sk_font_val, val_color, 0.6)
 
             # Name — CJK-aware font (星辉剑制 / 岚刃 need ZhuZiAYuanJWD, not
@@ -2628,8 +2674,8 @@ class DpsOverlay:
             sk_name_raw = str(sk.get('skill_name') or sk.get('skill_id') or 'Unknown')
             sk_font_name = _pick_font(sk_name_raw, 11)
             name_avail = max(20, val_x - 6 - name_x)
-            sk_name = self._truncate(sk_name_raw, sk_font_name, name_avail, draw)
-            self._draw_tracked(draw, (name_x, ry + 6), sk_name,
+            sk_name = self._truncate(sk_name_raw, sk_font_name, name_avail, cdraw)
+            self._draw_tracked(cdraw, (name_x, ry + 6), sk_name,
                                sk_font_name, self.TEXT_MAIN, 0.5)
 
             # ── Sub line: DMG/HEAL · ×hits · CRIT n% ──
@@ -2637,37 +2683,46 @@ class DpsOverlay:
             if not is_heal and crit > 0:
                 extras.append(f'CRIT {int(round(crit * 100))}%')
             extra_text = ' · '.join(extras)
-            self._draw_tracked(draw, (name_x, ry + 23),
+            self._draw_tracked(cdraw, (name_x, ry + 23),
                                extra_text, sk_font_extra, self.TEXT_MUTED, 0.5)
 
             # ── Bottom line: independent thin heat-gradient track ──
             track_x0 = name_x
-            track_x1 = row_x1 - 8
+            track_x1 = cx1 - 8
             track_y = ry + sk_row_h - 10
             track_h = 5
             self._fill_rounded_rect(
-                img, (track_x0, track_y, track_x1, track_y + track_h),
+                content_img, (track_x0, track_y, track_x1, track_y + track_h),
                 radius=2, fill=self.SKILL_TRACK_BG,
             )
             fill_w = int((track_x1 - track_x0) * ratio)
             if fill_w > 1:
                 self._fill_rounded_rect(
-                    img, (track_x0, track_y, track_x0 + fill_w, track_y + track_h),
+                    content_img, (track_x0, track_y, track_x0 + fill_w, track_y + track_h),
                     radius=2, fill=(heat[0], heat[1], heat[2], 235),
                 )
 
-        # Scrollbar affordance for the skill list (only when it overflows)
-        if max_off > 0:
+        # Crop the visible window at the eased scroll offset and composite it
+        # into the panel — partial top/bottom rows are clipped here, so the
+        # list never paints outside its region.
+        top = max(0, min(int(round(scroll)), int(max_scroll)))
+        window = content_img.crop((0, top, view_w, top + view_h))
+        img.alpha_composite(window, (row_x0, sk_y))
+
+        # Scrollbar affordance for the skill list (only when it overflows).
+        # Thumb height = viewport/content ratio; position tracks the eased
+        # scroll offset so it glides with the list.
+        if max_scroll > 0:
             sb_x = row_x1 + 3
             sb_y0 = sk_y
-            sb_y1 = ly + lh - 4
-            sb_h = sb_y1 - sb_y0
+            sb_y1 = sk_y + view_h
+            sb_h = view_h
             self._fill_rounded_rect(
                 img, (sb_x, sb_y0, sb_x + 3, sb_y1),
                 radius=2, fill=self.SKILL_TRACK_BG,
             )
-            thumb_h = max(20, int(sb_h * visible / max(total_sk, 1)))
-            thumb_y = sb_y0 + int((sb_h - thumb_h) * off / max_off)
+            thumb_h = max(20, int(sb_h * view_h / max(content_h, 1)))
+            thumb_y = sb_y0 + int((sb_h - thumb_h) * (scroll / max_scroll))
             self._fill_rounded_rect(
                 img, (sb_x, thumb_y, sb_x + 3, thumb_y + thumb_h),
                 radius=2, fill=self.GOLD,
@@ -3422,18 +3477,17 @@ class DpsOverlay:
             self._set_scroll_offset(new)
 
     def _scroll_skills(self, direction: int) -> None:
-        """Scroll the detail-view skill list by one row (+1 down, -1 up).
-
-        Bounds come from the last _draw_detail_view pass which records how
-        many skills exist (_skill_total) and how many fit (_skill_visible),
-        so rows stay clipped inside the panel.
+        """Nudge the detail-view skill-scroll target by one wheel notch
+        (+1 down, -1 up). The displayed offset eases toward this target in
+        _advance_animations, so it glides instead of snapping. Bounds come
+        from the last _draw_detail_view pass (_skill_max_scroll), and the
+        draw pass re-clamps in case the geometry changed since.
         """
-        max_off = max(0, int(getattr(self, '_skill_total', 0) or 0)
-                      - int(getattr(self, '_skill_visible', 0) or 0))
-        old = int(getattr(self, '_skill_scroll_offset', 0) or 0)
-        new = max(0, min(max_off, old + direction))
+        max_scroll = float(getattr(self, '_skill_max_scroll', 0.0) or 0.0)
+        old = float(getattr(self, '_skill_scroll_target', 0.0) or 0.0)
+        new = max(0.0, min(max_scroll, old + direction * self.SKILL_WHEEL_STEP))
         if new != old:
-            self._skill_scroll_offset = new
+            self._skill_scroll_target = new
             self._schedule_tick(immediate=True)
 
     def _scroll_offset_attr(self) -> str:
