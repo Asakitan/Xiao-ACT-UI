@@ -72,7 +72,6 @@ from config import APP_VERSION_LABEL
 from utils.sao_sound import play_sound, get_sao_font, get_cjk_font
 from sao_theme import (
     SAOButton, SAOProgressBar, SAOStatusPill, SAODialog,
-    _close_alert as _sao_close_dialog,
 )
 from gui_modules.sao_panel_ui import (
     _apply_panel_style, _sao_panel_header, _bind_panel_drag,
@@ -805,58 +804,58 @@ class SAOPlayerGUIStatusUpdaterMixin:
             SAODialog.showinfo(self._float, '更新', f'正在下载 ({int(st.progress * 100)}%)...')
             return
 
-        # 否则发起一次检查 — 先显示"正在检查..."对话框, 检查完成后
-        # 自动关闭它, 再弹出结果对话框.
-        _checking_dlg_ref = [None]
-        _checking_dlg_ref[0] = SAODialog.showinfo(self._float, '更新', '正在检查更新...')
-
-        def _close_checking_dlg():
-            dlg = _checking_dlg_ref[0]
-            if dlg is not None:
-                try:
-                    _sao_close_dialog(dlg)
-                except Exception:
-                    try:
-                        dlg.destroy()
-                    except Exception:
-                        pass
-                _checking_dlg_ref[0] = None
+        if getattr(self, '_manual_update_check_inflight', False):
+            return
+        self._manual_update_check_inflight = True
 
         def _on_status(snapshot):
             if snapshot.state == STATE_AVAILABLE:
                 try:
-                    self.root.after(0, lambda: (
-                        _close_checking_dlg(),
-                        self._prompt_update_available(snapshot),
-                    ))
+                    self.root.after(0, lambda snap=snapshot: self._show_manual_update_result(snap))
                 except Exception:
-                    pass
+                    self._manual_update_check_inflight = False
                 mgr.remove_listener(_on_status)
             elif snapshot.state == STATE_UP_TO_DATE:
                 try:
-                    self.root.after(0, lambda: (
-                        _close_checking_dlg(),
-                        SAODialog.showinfo(
-                            self._float, '更新',
-                            f'已是最新版本 ({APP_VERSION_LABEL})'),
-                    ))
+                    self.root.after(0, lambda snap=snapshot: self._show_manual_update_result(snap))
                 except Exception:
-                    pass
+                    self._manual_update_check_inflight = False
                 mgr.remove_listener(_on_status)
             elif snapshot.state == STATE_ERROR:
                 try:
-                    self.root.after(0, lambda: (
-                        _close_checking_dlg(),
-                        SAODialog.showinfo(
-                            self._float, '更新',
-                            f'检查失败: {snapshot.error}'),
-                    ))
+                    self.root.after(0, lambda snap=snapshot: self._show_manual_update_result(snap))
                 except Exception:
-                    pass
+                    self._manual_update_check_inflight = False
                 mgr.remove_listener(_on_status)
 
         mgr.add_listener(_on_status)
-        mgr.check_async()
+        try:
+            mgr.check_async()
+        except Exception as e:
+            self._manual_update_check_inflight = False
+            try:
+                mgr.remove_listener(_on_status)
+            except Exception:
+                pass
+            SAODialog.showinfo(self._float, '更新', f'检查失败: 更新线程启动异常: {e}')
+            return
+
+    def _show_manual_update_result(self, snapshot):
+        self._manual_update_check_inflight = False
+        try:
+            from updater.sao_updater import STATE_AVAILABLE, STATE_UP_TO_DATE, STATE_ERROR
+        except Exception:
+            STATE_AVAILABLE, STATE_UP_TO_DATE, STATE_ERROR = 'available', 'up_to_date', 'error'
+        if snapshot.state == STATE_AVAILABLE:
+            self._prompt_update_available(snapshot)
+        elif snapshot.state == STATE_UP_TO_DATE:
+            SAODialog.showinfo(
+                self._float, '更新',
+                f'已是最新版本 ({APP_VERSION_LABEL})')
+        elif snapshot.state == STATE_ERROR:
+            SAODialog.showinfo(
+                self._float, '更新',
+                f'检查失败: {snapshot.error}')
 
     def _prompt_update_available(self, snapshot):
         from updater.sao_updater import get_manager, STATE_READY, STATE_ERROR

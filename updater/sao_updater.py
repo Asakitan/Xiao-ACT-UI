@@ -68,6 +68,7 @@ except Exception:  # pragma: no cover - 仅在最早 bootstrap 失败时
 
 HTTP_TIMEOUT = 8.0
 DOWNLOAD_TIMEOUT = 60.0
+CHECK_RETRY_DELAY = 0.75
 USER_AGENT = f"SAOAuto-Updater/{APP_VERSION}"
 
 # 状态码
@@ -291,6 +292,17 @@ def _http_get_json(url: str, timeout: float = HTTP_TIMEOUT) -> Tuple[int, Option
         return 0, None, f"更新服务异常: {e}"
 
 
+def _should_retry_check(status_code: int, fetch_error: str) -> bool:
+    if status_code in (500, 502, 503, 504):
+        return True
+    if status_code != 0:
+        return False
+    msg = str(fetch_error or "")
+    if msg.startswith("更新服务响应无效"):
+        return False
+    return bool(msg)
+
+
 def _http_download(
     url: str,
     dst_path: str,
@@ -476,6 +488,12 @@ class UpdateManager:
         self._set_state(state=STATE_CHECKING, error="", progress=0.0)
         url = f"{self.host}/api/update/latest?channel={self.channel}&target={UPDATE_TARGET}&current={APP_VERSION}"
         status_code, data, fetch_error = _http_get_json(url)
+        if not data and _should_retry_check(status_code, fetch_error):
+            try:
+                time.sleep(CHECK_RETRY_DELAY)
+            except Exception:
+                pass
+            status_code, data, fetch_error = _http_get_json(url)
         if status_code in (204, 404):
             with self._lock:
                 self.manifest = None
