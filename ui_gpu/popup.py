@@ -3,7 +3,8 @@
 Lifecycle:
     open()  → creates the chroma-key Tk shell (for left_widget host) +
               the GpuOverlayWindow (menu/child/HUD), starts the tick.
-    close() → fade out, destroy both, unregister scheduler.
+    close() → fade out, destroy the Tk shell, hide/reuse the GPU window,
+              unregister scheduler.
 
 Threading: every tk/glfw call happens on the Tk main thread (driven by
 the existing GLFW pump installed on root via overlay_scheduler).
@@ -331,7 +332,9 @@ class SAOPopUpMenu:
         # moderngl context init). is_open has already been set in open()
         # so a queued alt-key auto-repeat fires close() (which is then
         # honoured normally) instead of re-entering open().
-        self._acquire_click_guard()
+        reuse_gpu_window = self._gpu_win is not None and self._presenter is not None
+        if not reuse_gpu_window:
+            self._acquire_click_guard()
         # Start polled drainer for GLFW click events. Must be started
         # before any GLFW window can receive clicks.
         self._start_click_drainer()
@@ -433,17 +436,34 @@ class SAOPopUpMenu:
         gpu_x = base_x + left_w + gap_left_to_gpu
         gpu_y = base_y + (total_h - win_h) // 2
 
-        # Create GPU window
-        pump = _gow.get_glfw_pump(self.root)
-        self._presenter = _gow.BgraPresenter()
-        self._gpu_win = _gow.GpuOverlayWindow(
-            pump,
-            w=win_w, h=win_h,
-            x=gpu_x, y=gpu_y,
-            render_fn=self._presenter.render,
-            click_through=False,
-            title='sao_popup_gpu',
-        )
+        # Create the GPU window once, then hide/reuse it across normal
+        # menu closes. Recreating GLFW/moderngl while WGC is active can
+        # force a slow capture pause/resume cycle on every later open.
+        if self._presenter is None:
+            self._presenter = _gow.BgraPresenter()
+        if self._gpu_win is None:
+            pump = _gow.get_glfw_pump(self.root)
+            self._gpu_win = _gow.GpuOverlayWindow(
+                pump,
+                w=win_w, h=win_h,
+                x=gpu_x, y=gpu_y,
+                render_fn=self._presenter.render,
+                click_through=False,
+                title='sao_popup_gpu',
+            )
+        else:
+            try:
+                self._gpu_win.set_render_fn(self._presenter.render)
+            except Exception:
+                pass
+            try:
+                self._gpu_win.set_geometry(gpu_x, gpu_y, win_w, win_h)
+            except Exception:
+                pass
+            try:
+                self._gpu_win.set_click_through(False)
+            except Exception:
+                pass
         self._gpu_win.set_input_callbacks(
             cursor_pos_fn=self._on_cursor_pos,
             cursor_leave_fn=self._on_cursor_leave,
@@ -472,7 +492,7 @@ class SAOPopUpMenu:
         # don't keep us beneath them.
         self._raise_to_top()
 
-    def _destroy_window(self) -> None:
+    def _destroy_window(self, keep_gpu: bool = False) -> None:
         # Stop click drainer first so no more queued clicks fire after
         # widgets are gone.
         self._stop_click_drainer()
@@ -490,12 +510,22 @@ class SAOPopUpMenu:
                 pass
             self._focus_poll_job = None
         if self._gpu_win is not None:
-            try:
-                self._gpu_win.destroy()
-            except Exception:
-                pass
-            self._gpu_win = None
-        if self._presenter is not None:
+            if keep_gpu:
+                try:
+                    self._gpu_win.set_input_callbacks()
+                except Exception:
+                    pass
+                try:
+                    self._gpu_win.hide()
+                except Exception:
+                    pass
+            else:
+                try:
+                    self._gpu_win.destroy()
+                except Exception:
+                    pass
+                self._gpu_win = None
+        if self._presenter is not None and not keep_gpu:
             try:
                 self._presenter.release()
             except Exception:
@@ -567,7 +597,7 @@ class SAOPopUpMenu:
                         return
                     # Close finished
                     cb = None if self._skip_close_callback else self.on_close_callback
-                    self._destroy_window()
+                    self._destroy_window(keep_gpu=True)
                     if cb:
                         try:
                             cb()
