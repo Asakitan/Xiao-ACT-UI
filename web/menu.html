@@ -191,13 +191,13 @@ html, body {
    (no dark plate). _BRACKET_LEN=16, _RAIL_OFFSET=4, _HUD_MARGIN=6. */
 .menu-frame {
     position: absolute;
-    /* Wrap the circle-button column (.item_box: 54px × 560px at origin),
+    /* Wrap the circle-button column (.item_box: 54px × 630px at origin),
        offset outward by HUD_MARGIN(6px) so brackets sit just outside content,
        matching the Entity net bracket margin (PLATE_PAD 16 − HUD_MARGIN 6 → 6px). */
     left: -6px;
     top: -6px;
     width: 66px;
-    height: 572px;
+    height: 642px;
     pointer-events: none;
     z-index: 0;
     opacity: 0.9;
@@ -251,7 +251,7 @@ html, body {
     0%   { top: 18px; opacity: 0; }
     8%   { opacity: 0.7; }
     92%  { opacity: 0.7; }
-    100% { top: 560px; opacity: 0; }
+    100% { top: 630px; opacity: 0; }
 }
 
 /* ═══ Breathing animation for position ═══ */
@@ -418,7 +418,7 @@ html, body {
 .item_box {
     list-style: none;
     position: absolute;
-    height: 560px;
+    height: 630px;
     overflow: hidden;
 }
 
@@ -449,6 +449,7 @@ html, body {
 .item:nth-child(6) { animation-delay: 0.05s; }
 .item:nth-child(7) { animation-delay: 0.00s; }
 .item:nth-child(8) { animation-delay: 0.00s; }
+.item:nth-child(9) { animation-delay: 0.00s; }
 
 @keyframes itemDown {
     from { transform: translateY(-80px); opacity: 0; filter: blur(14px); }
@@ -4581,8 +4582,10 @@ function openMenu(x, y) {
     var pos = document.getElementById('menu-position');
     var defaultLeft = Math.round(window.innerWidth * 0.18);
     var defaultTop = Math.round(window.innerHeight * 0.16);
+    var menuFrameHeight = 642;
     var targetLeft = Math.max(240, Math.min(x || defaultLeft, window.innerWidth - 220));
-    var targetTop = Math.max(84, Math.min(y || defaultTop, Math.max(96, window.innerHeight - 420)));
+    var maxTop = Math.max(48, window.innerHeight - menuFrameHeight - 24);
+    var targetTop = Math.max(48, Math.min(y || defaultTop, maxTop));
     pos.style.left = targetLeft + 'px';
     pos.style.top  = targetTop + 'px';
     pos.classList.remove('auto-key-layout');

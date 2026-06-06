@@ -8556,25 +8556,25 @@ class SAOWebViewGUI:
             pass
 
         # 强制退出进程 — webview/.NET 内部线程无法自行终止
-        # 热切换时不强杀: _do_hot_switch 需要在 webview.start() 返回后运行
-        if not self._pending_switch:
-            # Final synchronous settings save before os._exit — ensure
-            # all settings (including those written during panel destroy
-            # callbacks) are persisted before the process dies.
-            try:
-                settings_ref = getattr(self, '_cfg_settings_ref', None)
-                if settings_ref is not None:
-                    settings_ref.save()
-                elif hasattr(self, 'settings') and self.settings is not None:
-                    self.settings.save()
-            except Exception:
-                pass
+        # UI 切换也走新进程: 动画结束后立即拉起 Entity, 不再等待 webview.start() 返回.
+        try:
+            settings_ref = getattr(self, '_cfg_settings_ref', None)
+            if settings_ref is not None:
+                settings_ref.save()
+            elif hasattr(self, 'settings') and self.settings is not None:
+                self.settings.save()
+        except Exception:
+            pass
 
-            def _force_exit():
-                time.sleep(0.5)
-                os._exit(0)
-            t = threading.Thread(target=_force_exit, daemon=True)
-            t.start()
+        if self._pending_switch:
+            self._do_hot_switch(self._pending_switch)
+            return
+
+        def _force_exit():
+            time.sleep(0.5)
+            os._exit(0)
+        t = threading.Thread(target=_force_exit, daemon=True)
+        t.start()
 
     def _exit_with_animation(self):
         self._transition_with_animation()
