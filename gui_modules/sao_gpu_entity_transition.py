@@ -236,16 +236,14 @@ class EntityTransitionGpuOverlay:
     def destroy(self) -> None:
         win = self._win
         self._win = None
+        # GpuOverlayWindow owns the GL context and destroys it on the pump
+        # thread. Do not release VAO/program objects here from Tk after that
+        # context is gone; some drivers terminate the process instead of
+        # raising a Python exception.
+        self._vao = None
+        self._prog = None
         if win is not None:
             try:
                 win.destroy()
             except Exception:
                 pass
-        for name in ("_vao", "_prog"):
-            obj = getattr(self, name, None)
-            if obj is not None:
-                try:
-                    obj.release()
-                except Exception:
-                    pass
-                setattr(self, name, None)

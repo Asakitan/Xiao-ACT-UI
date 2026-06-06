@@ -12,6 +12,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import gui_modules.sao_gui_link_animation_mixin as link_mod
+from gui_modules.sao_gpu_entity_transition import EntityTransitionGpuOverlay
 from gui_modules.sao_gui_lifecycle_mixin import SAOPlayerGUILifecycleMixin
 from gui_modules.sao_gui_link_animation_mixin import SAOPlayerGUILinkAnimationMixin
 
@@ -30,6 +31,13 @@ class _Float:
 
     def winfo_rooty(self) -> int:
         return 840
+
+
+class _HpOverlay:
+    _x = 50
+    _y = 900
+    WIDTH = 500
+    HEIGHT = 120
 
 
 class _FakeGpu:
@@ -61,8 +69,10 @@ class _Owner(SAOPlayerGUILinkAnimationMixin, SAOPlayerGUILifecycleMixin):
         self._fw = 280
         self._fh = 96
         self._float = _Float()
+        self.settings = None
         self._entry_overlay = None
         self._exit_overlay = None
+        self._hp_overlay = None
 
     def _finalize_close(self) -> None:
         raise AssertionError('_finalize_close should not run in GPU route tests')
@@ -88,7 +98,7 @@ class EntityTransitionGpuRouteTests(unittest.TestCase):
         self.assertIs(overlay['gpu_transition'], gpu)
         self.assertEqual(gpu.kind, 'entry')
         self.assertEqual(gpu.center, (240, 248))
-        self.assertEqual(gpu.target, (440, 448))
+        self.assertEqual(gpu.target, (692.5, 1044.0))
         self.assertEqual(gpu.progress_values, [0.42])
         self.assertEqual(gpu.destroy_count, 1)
 
@@ -102,10 +112,55 @@ class EntityTransitionGpuRouteTests(unittest.TestCase):
         gpu = _FakeGpu.instances[0]
         self.assertIs(overlay['gpu_transition'], gpu)
         self.assertEqual(gpu.kind, 'exit')
-        self.assertEqual(gpu.center, (260, 888))
-        self.assertEqual(gpu.target, (260, 888))
+        self.assertEqual(gpu.center, (692.5, 1044.0))
+        self.assertEqual(gpu.target, (692.5, 1044.0))
         self.assertEqual(gpu.progress_values, [0.73])
         self.assertEqual(gpu.destroy_count, 1)
+
+    def test_focus_center_prefers_existing_hp_overlay(self) -> None:
+        owner = _Owner()
+        owner._hp_overlay = _HpOverlay()
+
+        self.assertEqual(owner._entity_transition_focus_center(1, 2), (300.0, 960.0))
+
+
+class _FakeWin:
+    def __init__(self) -> None:
+        self.destroy_count = 0
+
+    def destroy(self) -> None:
+        self.destroy_count += 1
+
+
+class _FakeGlObject:
+    def __init__(self) -> None:
+        self.release_count = 0
+
+    def release(self) -> None:
+        self.release_count += 1
+
+
+class EntityTransitionGpuDestroyTests(unittest.TestCase):
+    def test_destroy_leaves_gl_objects_to_gpu_window_context_teardown(self) -> None:
+        overlay = EntityTransitionGpuOverlay(
+            _Root(),
+            kind='entry',
+            center=(1, 2),
+        )
+        win = _FakeWin()
+        prog = _FakeGlObject()
+        vao = _FakeGlObject()
+        overlay._win = win
+        overlay._prog = prog
+        overlay._vao = vao
+
+        overlay.destroy()
+
+        self.assertEqual(win.destroy_count, 1)
+        self.assertEqual(prog.release_count, 0)
+        self.assertEqual(vao.release_count, 0)
+        self.assertIsNone(overlay._prog)
+        self.assertIsNone(overlay._vao)
 
 
 if __name__ == "__main__":

@@ -67,6 +67,53 @@ from gui_modules.sao_panel_ui import _disable_native_window_shadow
 class SAOPlayerGUILinkAnimationMixin:
     """Mixin bundling SAO link-start / link-end full-screen animations."""
 
+    def _entity_transition_focus_center(self, fallback_x=None, fallback_y=None):
+        """Return the visible HP/Entity panel center, not the transparent anchor."""
+        hp = getattr(self, '_hp_overlay', None)
+        if hp is not None:
+            try:
+                x = float(getattr(hp, '_x'))
+                y = float(getattr(hp, '_y'))
+                w = float(getattr(hp, 'WIDTH'))
+                h = float(getattr(hp, 'HEIGHT'))
+                if w > 0 and h > 0:
+                    return (x + w * 0.5, y + h * 0.5)
+            except Exception:
+                pass
+        try:
+            from gui_modules import sao_gui_hp as _hp
+            sw = int(self.root.winfo_screenwidth())
+            sh = int(self.root.winfo_screenheight())
+            try:
+                _hp._recompute_layout(sw)
+            except Exception:
+                pass
+            x = int(round(sw * _hp.HUD_WINDOW_LEFT_PCT
+                          + sw * _hp.HUD_VW_PCT * _hp.STAGE_LEFT_PCT))
+            y = max(0, sh - int(_hp.PANEL_H))
+            w = int(getattr(_hp, 'PANEL_W', 0) or 0)
+            h = int(getattr(_hp, 'PANEL_H', 0) or 0) + int(getattr(_hp, 'PANEL_SHADOW_BOTTOM', 0) or 0)
+            settings = getattr(self, 'settings', None)
+            if settings is not None:
+                try:
+                    saved_w = int(settings.get('hp_ov_panel_w', 0))
+                    if saved_w == w:
+                        x = int(settings.get('hp_ov_x', x))
+                        y = int(settings.get('hp_ov_y', y))
+                except Exception:
+                    pass
+            if w > 0 and h > 0:
+                return (x + w * 0.5, y + h * 0.5)
+        except Exception:
+            pass
+        if fallback_x is not None and fallback_y is not None:
+            return (float(fallback_x), float(fallback_y))
+        try:
+            return (self.root.winfo_screenwidth() * 0.5,
+                    self.root.winfo_screenheight() * 0.5)
+        except Exception:
+            return (960.0, 540.0)
+
     def _play_link_start(self):
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -275,7 +322,8 @@ void main() {
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         start_center = (start_x + self._fw // 2, start_y + self._fh // 2)
-        end_center = (end_x + self._fw // 2, end_y + self._fh // 2)
+        end_center = self._entity_transition_focus_center(
+            end_x + self._fw // 2, end_y + self._fh // 2)
         try:
             gpu = EntityTransitionGpuOverlay(
                 self.root,
@@ -670,6 +718,7 @@ void main() {
             fy = self._float.winfo_rooty() + self._fh // 2
         except Exception:
             fx, fy = sw // 2, sh // 2
+        fx, fy = self._entity_transition_focus_center(fx, fy)
         try:
             gpu = EntityTransitionGpuOverlay(
                 self.root,
