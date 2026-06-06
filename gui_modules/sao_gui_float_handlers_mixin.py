@@ -159,14 +159,30 @@ class SAOPlayerGUIFloatHandlersMixin:
         win = getattr(panel, '_win', None)
         if win is None:
             return
-        try:
-            if not win.winfo_exists():
-                return
-            win.attributes('-topmost', True)
-            win.lift()
-            win.focus_force()
-        except Exception:
-            pass
+        def _apply(force_focus: bool = False):
+            try:
+                if not win.winfo_exists():
+                    return
+                try:
+                    if str(win.state()) == 'withdrawn':
+                        return
+                except Exception:
+                    pass
+                win.attributes('-topmost', True)
+                win.lift()
+                if force_focus:
+                    win.focus_force()
+            except Exception:
+                pass
+        _apply(force_focus=True)
+        # Many ACT/plugin panels briefly demote themselves at ~220ms after
+        # show(). Re-assert topmost just after that so Entity panels do not
+        # disappear behind the game when the user clicks elsewhere.
+        for delay in (260, 520):
+            try:
+                self.root.after(delay, _apply)
+            except Exception:
+                pass
 
     def _setup_hotkeys(self):
         self._hotkey_mgr = SAOHotkeyManager(self.settings, {

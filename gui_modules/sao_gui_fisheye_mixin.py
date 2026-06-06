@@ -68,6 +68,28 @@ class SAOPlayerGUIFisheyeMixin:
       * self.root (the Tk root)
     """
 
+    _FISHEYE_PANEL_ATTRS = (
+        '_status_panel',
+        '_update_panel',
+        '_autokey_panel',
+        '_bossraid_panel',
+        '_autokey_detail_panel',
+        '_bossraid_detail_panel',
+        '_commander_panel',
+        '_act_plugin_manager_panel',
+        '_act_trigger_timer_panel',
+        '_act_data_source_health_panel',
+        '_act_report_export_panel',
+        '_act_offline_import_panel',
+        '_act_timeline_vcr_panel',
+        '_act_aggregate_panel',
+        '_act_action_log_panel',
+        '_act_death_recap_panel',
+        '_act_graph_timeseries_panel',
+        '_act_combatant_drilldown_panel',
+        '_act_skill_drilldown_panel',
+    )
+
     def _fisheye_close_suppressed(self) -> bool:
         try:
             return time.time() < float(getattr(self, '_fisheye_close_suppress_until', 0.0) or 0.0)
@@ -116,17 +138,83 @@ class SAOPlayerGUIFisheyeMixin:
             except Exception:
                 pass
 
+    def _set_fisheye_hit_layer_clickthrough(self, enabled: bool) -> None:
+        layer = getattr(self, '_fisheye_hit_layer', None)
+        if layer is None:
+            return
+        try:
+            if not layer.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            import ctypes as _cth
+            _u32h = _cth.windll.user32
+            _GWL_EXSTYLE = -20
+            _WS_EX_LAYERED = 0x00080000
+            _WS_EX_TOOLWINDOW = 0x00000080
+            _WS_EX_NOACTIVATE = 0x08000000
+            _WS_EX_TRANSPARENT = 0x00000020
+            _HWND_TOPMOST = -1
+            _SWP_NOMOVE = 0x0002
+            _SWP_NOSIZE = 0x0001
+            _SWP_NOACTIVATE = 0x0010
+            _SWP_NOOWNERZORDER = 0x0200
+            layer.update_idletasks()
+            hwnd = int(_u32h.GetParent(layer.winfo_id()) or layer.winfo_id())
+            if not hwnd:
+                return
+            ex = _u32h.GetWindowLongPtrW(_cth.c_void_p(hwnd), _GWL_EXSTYLE)
+            ex |= _WS_EX_LAYERED | _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE
+            if enabled:
+                ex |= _WS_EX_TRANSPARENT
+            else:
+                ex &= ~_WS_EX_TRANSPARENT
+            _u32h.SetWindowLongPtrW(_cth.c_void_p(hwnd), _GWL_EXSTYLE, ex)
+            _u32h.SetWindowPos(
+                _cth.c_void_p(hwnd), _cth.c_void_p(_HWND_TOPMOST),
+                0, 0, 0, 0,
+                _SWP_NOMOVE | _SWP_NOSIZE
+                | _SWP_NOACTIVATE | _SWP_NOOWNERZORDER,
+            )
+        except Exception:
+            pass
+
+    def _prepare_fisheye_backdrop_for_panels(self) -> None:
+        # Keep the transparent hit layer interactive while panels are open:
+        # clicks on the backdrop should dismiss the fisheye, but panel windows
+        # are raised above it by _raise_panel_window and remain clickable.
+        self._set_fisheye_hit_layer_clickthrough(False)
+        try:
+            self._release_fisheye_input_zorder(getattr(self, '_fisheye_ov', None))
+        except Exception:
+            pass
+
+    def _request_fisheye_backdrop_close(self) -> None:
+        self._sao_panel_transition_until = 0.0
+        ov = self._fisheye_ov
+        request_fadeout = getattr(ov, '_request_fadeout', None)
+        if callable(request_fadeout):
+            try:
+                request_fadeout()
+                return
+            except Exception:
+                pass
+        self._stop_fisheye_overlay()
+
     def _start_fisheye_with_retry(self, retries=5, delay=80):
         """带重试的鱼眼启动 — 首次进入时菜单可能还未完成渲染"""
         if self._destroyed:
             return
         if self._fisheye_close_suppressed():
             return
+        menu_visible = bool(self._sao_menu is not None and self._sao_menu.visible)
         if self._fisheye_ov is not None:
+            self._set_fisheye_hit_layer_clickthrough(False)
             return  # 已在运行
         if retries <= 0:
             return
-        if (self._sao_menu is not None and self._sao_menu.visible) or self._any_panel_open():
+        if menu_visible or self._any_panel_open():
             self._start_fisheye_overlay()
         else:
             try:
@@ -134,36 +222,69 @@ class SAOPlayerGUIFisheyeMixin:
             except Exception:
                 pass
 
+    def _iter_fisheye_panels(self):
+        seen = set()
+        attrs = tuple(getattr(self, '_ACT_PANEL_ATTRS', ()) or ())
+        for attr in self._FISHEYE_PANEL_ATTRS + attrs:
+            if attr in seen:
+                continue
+            seen.add(attr)
+            yield getattr(self, attr, None)
+        panels = getattr(self, '_plugin_detached_panels', None)
+        if isinstance(panels, dict):
+            for panel in list(panels.values()):
+                yield panel
+
+    def _is_fisheye_panel_visible(self, panel) -> bool:
+        if panel is None:
+            return False
+        is_visible = getattr(panel, 'is_visible', None)
+        if callable(is_visible):
+            try:
+                return bool(is_visible())
+            except Exception:
+                pass
+        win = getattr(panel, '_win', panel)
+        if win is None:
+            return False
+        try:
+            if not win.winfo_exists():
+                return False
+        except Exception:
+            return False
+        try:
+            return str(win.state()) != 'withdrawn'
+        except Exception:
+            return True
+
     def _any_panel_open(self):
         """检查是否有任何浮动面板处于打开且可见状态"""
-        if self._panels_hidden:
+        if getattr(self, '_panels_hidden', False):
             return False
-        for p in (self._status_panel, self._update_panel):
-            try:
-                if p and p.winfo_exists():
-                    return True
-            except Exception:
-                pass
-        for panel in (
-            self._autokey_panel,
-            self._bossraid_panel,
-            self._autokey_detail_panel,
-            self._bossraid_detail_panel,
-            self._commander_panel,
-        ):
-            try:
-                if panel and panel.is_visible():
-                    return True
-            except Exception:
-                pass
-        return False
+        return any(self._is_fisheye_panel_visible(panel)
+                   for panel in self._iter_fisheye_panels())
 
     def _maybe_stop_fisheye(self):
         """仅当 SAO 菜单和所有面板都关闭时才销毁鱼眼叠加层"""
-        if (self._sao_menu is not None and self._sao_menu.visible
-                and not self._fisheye_close_suppressed()):
+        menu_visible = bool(
+            self._sao_menu is not None and self._sao_menu.visible
+            and not self._fisheye_close_suppressed())
+        if menu_visible:
+            self._set_fisheye_hit_layer_clickthrough(False)
             return
         if self._any_panel_open():
+            self._prepare_fisheye_backdrop_for_panels()
+            return
+        try:
+            pending_until = float(getattr(self, '_sao_panel_transition_until', 0.0) or 0.0)
+        except Exception:
+            pending_until = 0.0
+        if pending_until and time.time() < pending_until:
+            self._prepare_fisheye_backdrop_for_panels()
+            try:
+                self.root.after(180, self._maybe_stop_fisheye)
+            except Exception:
+                pass
             return
         ov = self._fisheye_ov
         request_fadeout = getattr(ov, '_request_fadeout', None)
@@ -321,7 +442,12 @@ class SAOPlayerGUIFisheyeMixin:
             else:
                 return
             try:
-                self._close_sao_menu_from_background()
+                menu_visible = bool(
+                    self._sao_menu is not None and self._sao_menu.visible)
+                if menu_visible:
+                    self._close_sao_menu_from_background()
+                elif self._any_panel_open():
+                    self._request_fisheye_backdrop_close()
             except Exception:
                 pass
 
@@ -405,6 +531,10 @@ class SAOPlayerGUIFisheyeMixin:
                 layer.bind('<Button-4>', lambda e: (_layer_pos(e), _backdrop_scroll(0.0, 1.0), 'break')[-1])
                 layer.bind('<Button-5>', lambda e: (_layer_pos(e), _backdrop_scroll(0.0, -1.0), 'break')[-1])
                 self._fisheye_hit_layer = layer
+                try:
+                    self._set_fisheye_hit_layer_clickthrough(False)
+                except Exception:
+                    pass
                 try:
                     menu = getattr(self, '_sao_menu', None)
                     raise_to_top = getattr(menu, '_raise_to_top', None)
@@ -1429,4 +1559,3 @@ class SAOPlayerGUIFisheyeMixin:
                 pass
 
         _fade()
-

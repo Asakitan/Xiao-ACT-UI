@@ -737,6 +737,7 @@ class SAOPlayerGUIMenuMixin:
     def _dismiss_sao_menu_for_panel(self):
         """SAO 菜单关掉再弹面板, 避免 topmost overlay 压在面板上看不见."""
         try:
+            self._sao_panel_transition_until = time.time() + 0.9
             menu = getattr(self, '_sao_menu', None)
             if menu is not None and getattr(menu, 'visible', False):
                 menu.close()
