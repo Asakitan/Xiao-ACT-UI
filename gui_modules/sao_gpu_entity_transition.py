@@ -29,7 +29,6 @@ uniform vec2 u_target;
 uniform float u_progress;
 uniform float u_time;
 uniform int u_kind;
-uniform int u_teardown_cover;
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -151,14 +150,6 @@ void main() {
     vec2 c0 = u_center / u_resolution;
     vec2 c1 = u_target / u_resolution;
     float t = clamp(u_progress, 0.0, 1.0);
-    if (u_teardown_cover == 1) {
-        float scan = 0.88 + 0.12 * sin(v_uv.y * u_resolution.y * 2.6 + u_time * 14.0);
-        float rail = band(abs(v_uv.y - 0.5), 0.0, 0.030) * 0.18;
-        vec3 color = vec3(0.006, 0.016, 0.026) * scan
-                   + vec3(0.020, 0.070, 0.095) * rail;
-        fragColor = vec4(color, 1.0);
-        return;
-    }
     if (u_kind == 0) {
         fragColor = entryFx(v_uv, p, c0, c1, t);
     } else {
@@ -192,7 +183,6 @@ class EntityTransitionGpuOverlay:
         self._started_at = time.perf_counter()
         self._w = 1
         self._h = 1
-        self._teardown_cover = False
 
     def _to_gl_point(self, point: Tuple[float, float]) -> Tuple[float, float]:
         """Convert top-left screen coordinates to bottom-left GL pixels."""
@@ -232,14 +222,6 @@ class EntityTransitionGpuOverlay:
         except Exception:
             pass
 
-    def show_teardown_cover(self) -> None:
-        self._teardown_cover = True
-        try:
-            if self._win is not None:
-                self._win.request_redraw()
-        except Exception:
-            pass
-
     def render(self, ctx: Any, _pump_t: float) -> None:
         try:
             from render import gpu_overlay_window as _gow
@@ -252,7 +234,6 @@ class EntityTransitionGpuOverlay:
             self._prog["u_progress"].value = float(self.progress)
             self._prog["u_time"].value = float(time.perf_counter() - self._started_at)
             self._prog["u_kind"].value = 1 if self.kind == "exit" else 0
-            self._prog["u_teardown_cover"].value = 1 if self._teardown_cover else 0
             self._vao.render(mode=_gow._moderngl.TRIANGLES, vertices=3)
         except Exception:
             return

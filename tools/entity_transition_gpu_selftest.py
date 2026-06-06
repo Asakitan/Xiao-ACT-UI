@@ -137,13 +137,9 @@ class EntityTransitionGpuRouteTests(unittest.TestCase):
 class _FakeWin:
     def __init__(self) -> None:
         self.destroy_count = 0
-        self.redraw_count = 0
 
     def destroy(self) -> None:
         self.destroy_count += 1
-
-    def request_redraw(self) -> None:
-        self.redraw_count += 1
 
 
 class _FakeGlObject:
@@ -178,15 +174,9 @@ class _DestroyableOverlay:
 class _QuitRoot:
     def __init__(self, order) -> None:
         self.order = order
-        self.after_calls = []
 
     def after_cancel(self, _aid) -> None:
         self.order.append("root.after_cancel")
-
-    def after(self, delay, callback=None):
-        self.order.append(f"root.after:{delay}")
-        self.after_calls.append((delay, callback))
-        return f"after-{len(self.after_calls)}"
 
     def quit(self) -> None:
         self.order.append("root.quit")
@@ -214,8 +204,6 @@ class _FinalizeOwner(SAOPlayerGUILifecycleMixin):
         self._update_listener = None
         self._update_listener_installed = False
         self._hotkey_mgr = None
-        self._entry_overlay = None
-        self._exit_overlay = None
         self._state_mgr = None
         self._cfg_settings_ref = None
         self._sao_menu = None
@@ -250,10 +238,6 @@ class _FinalizeOwner(SAOPlayerGUILifecycleMixin):
 
     def _cleanup_exit_overlay(self) -> None:
         self.order.append("exit.cleanup")
-
-    def _hold_exit_overlay_for_teardown(self) -> bool:
-        self.order.append("exit.hold")
-        return True
 
     def _stop_fisheye_overlay(self, wait=False) -> None:
         self.order.append("fisheye.stop")
@@ -302,21 +286,6 @@ class EntityTransitionGpuDestroyTests(unittest.TestCase):
         self.assertIsNone(overlay._prog)
         self.assertIsNone(overlay._vao)
 
-    def test_teardown_cover_requests_final_redraw(self) -> None:
-        overlay = EntityTransitionGpuOverlay(
-            _Root(),
-            kind='exit',
-            center=(1, 2),
-        )
-        win = _FakeWin()
-        overlay._win = win
-
-        overlay.show_teardown_cover()
-
-        self.assertTrue(overlay._teardown_cover)
-        self.assertEqual(win.redraw_count, 1)
-
-
 class _LifecycleOwner(SAOPlayerGUILifecycleMixin):
     def __init__(self, *, gpu_exit: bool) -> None:
         self.root = _AfterRoot()
@@ -333,6 +302,7 @@ class _LifecycleOwner(SAOPlayerGUILifecycleMixin):
         self._gpu_exit = gpu_exit
         self.draw_progress = []
         self.finalize_count = 0
+        self.hard_exit_count = 0
 
     def _play_motion_blur(self, closing=False) -> None:
         self.motion_blur_closing = closing
@@ -354,6 +324,9 @@ class _LifecycleOwner(SAOPlayerGUILifecycleMixin):
         self._close_finalized = True
         self.finalize_count += 1
 
+    def _hard_exit_process(self):
+        self.hard_exit_count += 1
+
 
 class EntityTransitionGpuExitLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -363,14 +336,15 @@ class EntityTransitionGpuExitLifecycleTests(unittest.TestCase):
     def tearDown(self) -> None:
         lifecycle_mod.play_sound = self._orig_sound
 
-    def test_gpu_exit_waits_one_present_window_before_finalize(self) -> None:
+    def test_gpu_exit_hard_exits_after_final_present_window(self) -> None:
         owner = _LifecycleOwner(gpu_exit=True)
         after_shutdown_calls = []
 
-        owner._run_exit_animation(after_shutdown=lambda: after_shutdown_calls.append(True))
+        owner._run_exit_animation()
 
         self.assertEqual(owner.draw_progress, [1.0])
         self.assertEqual(owner.finalize_count, 0)
+        self.assertEqual(owner.hard_exit_count, 0)
         self.assertEqual(len(owner.root.after_calls), 1)
         delay, callback = owner.root.after_calls[0]
         self.assertEqual(delay, 80)
@@ -378,8 +352,48 @@ class EntityTransitionGpuExitLifecycleTests(unittest.TestCase):
 
         callback()
 
+        self.assertEqual(owner.finalize_count, 0)
+        self.assertEqual(owner.hard_exit_count, 1)
+        self.assertEqual(after_shutdown_calls, [])
+
+    def test_switch_exit_animation_keeps_ordered_finalize_path(self) -> None:
+        owner = _LifecycleOwner(gpu_exit=True)
+
+        owner._run_exit_animation(mode='switch', target_label='SAO WEBVIEW UI')
+
+        self.assertEqual(owner.draw_progress, [1.0])
+        self.assertEqual(owner.finalize_count, 0)
+        self.assertEqual(owner.hard_exit_count, 0)
+        self.assertEqual(len(owner.root.after_calls), 1)
+
+        _delay, callback = owner.root.after_calls[0]
+        callback()
+
         self.assertEqual(owner.finalize_count, 1)
-        self.assertEqual(after_shutdown_calls, [True])
+        self.assertEqual(owner.hard_exit_count, 0)
+
+    def test_switch_hard_exit_runs_spawn_callback_without_finalize(self) -> None:
+        owner = _LifecycleOwner(gpu_exit=True)
+        spawn_calls = []
+
+        owner._run_exit_animation(
+            after_shutdown=lambda: spawn_calls.append(True),
+            mode='switch',
+            target_label='SAO WEBVIEW UI',
+            hard_exit=True,
+        )
+
+        self.assertEqual(owner.draw_progress, [1.0])
+        self.assertEqual(owner.finalize_count, 0)
+        self.assertEqual(owner.hard_exit_count, 0)
+        self.assertEqual(len(owner.root.after_calls), 1)
+
+        _delay, callback = owner.root.after_calls[0]
+        callback()
+
+        self.assertEqual(spawn_calls, [True])
+        self.assertEqual(owner.finalize_count, 0)
+        self.assertEqual(owner.hard_exit_count, 1)
 
     def test_exit_prefers_overlay_fade_out_over_hide(self) -> None:
         owner = _LifecycleOwner(gpu_exit=True)
@@ -395,26 +409,6 @@ class EntityTransitionGpuExitLifecycleTests(unittest.TestCase):
         owner = _FinalizeOwner()
 
         owner._finalize_close()
-
-        self.assertIn("exit.hold", owner.order)
-        self.assertIn("root.after:64", owner.order)
-        self.assertNotIn("hp.destroy", owner.order)
-        self.assertNotIn("exit.cleanup", owner.order)
-        self.assertNotIn("root.quit", owner.order)
-        self.assertEqual(len(owner.root.after_calls), 1)
-
-        _delay, callback = owner.root.after_calls[0]
-        callback()
-
-        self.assertLess(
-            owner.order.index("exit.hold"),
-            owner.order.index("hp.destroy"),
-        )
-        self.assertIn("root.after:160", owner.order)
-        self.assertEqual(len(owner.root.after_calls), 2)
-
-        _delay, callback = owner.root.after_calls[1]
-        callback()
 
         self.assertLess(
             owner.order.index("hp.destroy"),

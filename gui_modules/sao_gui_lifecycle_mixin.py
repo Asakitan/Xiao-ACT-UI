@@ -30,7 +30,7 @@ Methods:
       8. destroy floating panels, ULW overlays, profile editors
       9. quit root.mainloop()
   * _run_exit_animation (124) — confirm + fade-out + exit overlay
-    + scheduled _finalize_close after the animation.
+    + scheduled hard-exit/finalize after the animation.
   * _on_close (3) — top-level handler: delegate to
     _run_exit_animation.
 
@@ -66,6 +66,7 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Optional
 
@@ -159,55 +160,13 @@ class SAOPlayerGUILifecycleMixin:
             pass
         self._entry_overlay = None
 
-    def _hold_exit_overlay_for_teardown(self) -> bool:
-        """Make the final exit overlay opaque while child GPU HWNDs close."""
-        ov = getattr(self, '_exit_overlay', None)
-        if not ov:
-            return False
-        try:
-            gpu = ov.get('gpu_transition')
-            cover = getattr(gpu, 'show_teardown_cover', None)
-            if callable(cover):
-                cover()
-                return True
-        except Exception:
-            pass
-        try:
-            win = ov.get('win')
-            cv = ov.get('cv')
-            sw = int(ov.get('sw') or self.root.winfo_screenwidth())
-            sh = int(ov.get('sh') or self.root.winfo_screenheight())
-            if win and win.winfo_exists():
-                win.attributes('-topmost', True)
-                win.attributes('-alpha', 0.98)
-            if cv and cv.winfo_exists():
-                cv.delete('all')
-                cv.create_rectangle(0, 0, sw, sh, fill='#020811', outline='')
-                for y in range(0, sh, 28):
-                    cv.create_line(0, y, sw, y, fill='#0b2e3d', width=1)
-                return True
-        except Exception:
-            pass
-        return False
+    def _hard_exit_process(self) -> None:
+        os._exit(0)
 
     def _finalize_close(self):
-        waiting_for_cover = bool(getattr(self, '_exit_teardown_cover_waiting', False))
-        if self._close_finalized and not waiting_for_cover:
+        if self._close_finalized:
             return
-        if waiting_for_cover:
-            self._exit_teardown_cover_waiting = False
-        else:
-            self._close_finalized = True
-            self._destroyed = True
-            self._breath_active = False
-            self._lift_loop_active = False
-            if self._hold_exit_overlay_for_teardown():
-                self._exit_teardown_cover_waiting = True
-                try:
-                    self.root.after(64, self._finalize_close)
-                    return
-                except Exception:
-                    self._exit_teardown_cover_waiting = False
+        self._close_finalized = True
         self._destroyed = True
         self._breath_active = False
         self._lift_loop_active = False
@@ -356,20 +315,15 @@ class SAOPlayerGUILifecycleMixin:
                 self._float.destroy()
         except Exception:
             pass
-
-        def _finish_root_quit():
-            self._cleanup_exit_overlay()
-            try:
-                self.root.quit()  # 退出 mainloop，由 run() 负责 destroy
-            except Exception:
-                pass
-
+        self._cleanup_exit_overlay()
         try:
-            self.root.after(160, _finish_root_quit)
+            self.root.quit()  # 退出 mainloop，由 run() 负责 destroy
         except Exception:
-            _finish_root_quit()
+            pass
 
-    def _run_exit_animation(self, after_shutdown=None, mode='exit', target_label=None):
+    def _run_exit_animation(
+            self, after_shutdown=None, mode='exit', target_label=None,
+            hard_exit: Optional[bool] = None):
         if self._close_finalized or self._exit_animating:
             return
         self._exit_animating = True
@@ -422,7 +376,17 @@ class SAOPlayerGUILifecycleMixin:
             except Exception:
                 return False
 
+        use_hard_exit = (mode == 'exit') if hard_exit is None else bool(hard_exit)
+
         def _complete_close():
+            if use_hard_exit:
+                if after_shutdown:
+                    try:
+                        after_shutdown()
+                    except Exception:
+                        pass
+                self._hard_exit_process()
+                return
             self._finalize_close()
             if after_shutdown:
                 try:

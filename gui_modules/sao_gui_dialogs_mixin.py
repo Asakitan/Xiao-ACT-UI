@@ -23,8 +23,8 @@ Methods:
   * _show_entity_alert(title, message='', display_time=5.0) —
     convenience around self._alert_overlay.show_alert with a
     print() fallback.
-  * _switch_to_webview_ui — confirm dialog + exit-animation + hot
-    restart into sao_webview.SAOWebViewGUI.
+  * _switch_to_webview_ui — confirm dialog + exit-animation + fresh
+    process restart into WebView UI.
   * _show_about — SAO 'about' info dialog with updater state hint.
   * _edit_profile — opens the profile editor (SAODialog-backed
     show_welcome_dialog) with anti-double-open guard +
@@ -39,7 +39,6 @@ Required SAOPlayerGUI attrs:
   * self._alert_overlay, self._hp_overlay, self._recognition_active
   * self._float, self.root, self.settings, self._cfg_settings_ref
   * self._profile_dialog_ref, self._profile_dialog_pending
-  * self._after_shutdown
 
 Required SAOPlayerGUI methods (via MRO):
   * _get_session_player_rows, _refresh_session_players_panel
@@ -55,7 +54,9 @@ Required SAOPlayerGUI methods (via MRO):
 
 from __future__ import annotations
 
-import time
+import os
+import subprocess
+import sys
 import tkinter as tk
 from typing import Any, Optional
 
@@ -171,23 +172,62 @@ class SAOPlayerGUIDialogsMixin:
         else:
             print(f'[SAO Entity] {title}')
 
-    def _switch_to_webview_ui(self):
-        """切换到 WebView UI (sao_webview.py) — 热切换"""
-        def _do_switch():
-            def _launch_next():
-                import gc; gc.collect()
-                time.sleep(0.3)
-                try:
-                    from sao_webview import SAOWebViewGUI
-                    app = SAOWebViewGUI()
-                    app.run()
-                except Exception as e:
-                    print(f"[SAO] Hot switch to WebView failed: {e}")
-                    import traceback; traceback.print_exc()
+    def _spawn_webview_process(self) -> None:
+        """Persist WebView mode, then launch a fresh main.py process."""
+        try:
+            settings_ref = getattr(self, '_cfg_settings_ref', None)
+            if settings_ref is not None:
+                settings_ref.set('ui_mode', 'webview')
+                settings_ref.save()
+                if getattr(self, 'settings', None) is not None and self.settings is not settings_ref:
+                    try:
+                        self.settings.set('ui_mode', 'webview')
+                    except Exception:
+                        pass
+            elif getattr(self, 'settings', None) is not None:
+                self.settings.set('ui_mode', 'webview')
+                self.settings.save()
+        except Exception as e:
+            print(f'[SAO] Save WebView ui_mode failed: {e}')
+        try:
+            persist_identity = getattr(self, '_persist_cached_identity_state', None)
+            if callable(persist_identity):
+                persist_identity(save_now=True)
+        except Exception as e:
+            print(f'[SAO] Persist identity before WebView switch failed: {e}')
+        try:
+            if getattr(sys, 'frozen', False):
+                args = [sys.executable]
+                cwd = os.path.dirname(os.path.abspath(sys.executable))
+            else:
+                app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                args = [sys.executable, os.path.join(app_dir, 'main.py')]
+                cwd = app_dir
+            creationflags = 0
+            if os.name == 'nt':
+                creationflags = getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+            subprocess.Popen(
+                args,
+                cwd=cwd or None,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=creationflags,
+            )
+        except Exception as e:
+            print(f"[SAO] Spawn WebView process failed: {e}")
+            import traceback; traceback.print_exc()
 
-            self._after_shutdown = _launch_next
-            self._run_exit_animation(after_shutdown=None,
-                                     mode='switch', target_label='SAO WEBVIEW UI')
+    def _switch_to_webview_ui(self):
+        """切换到 WebView UI — fresh process restart."""
+        def _do_switch():
+            self._run_exit_animation(
+                after_shutdown=self._spawn_webview_process,
+                mode='switch',
+                target_label='SAO WEBVIEW UI',
+                hard_exit=True,
+            )
 
         SAODialog.ask(self._float, "切换 UI",
                       "将切换到 SAO WebView UI。\n确定继续吗？",
@@ -265,4 +305,3 @@ class SAOPlayerGUIDialogsMixin:
                 self._profile_dialog_pending = False
 
         self.root.after(600, _open_profile_dialog)
-
