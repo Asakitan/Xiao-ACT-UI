@@ -128,6 +128,64 @@ class SAOPlayerGUIFisheyeMixin:
         except Exception:
             pass
 
+    def _restore_fisheye_exit_zorder(self, ov=None):
+        """Make the GPU fisheye visible again for the exit fade.
+
+        Panel mode demotes the GPU window so panel clicks work normally.
+        When the user clicks the backdrop to dismiss the fisheye, briefly
+        restore the render window to topmost but keep it click-through, then
+        re-raise visible panels above it.
+        """
+        if ov is None:
+            ov = getattr(self, '_fisheye_ov', None)
+        gpu_win = getattr(ov, 'gpu_win', None) if ov is not None else None
+        if gpu_win is None:
+            return
+        try:
+            set_click_through = getattr(gpu_win, 'set_click_through', None)
+            if callable(set_click_through):
+                set_click_through(True)
+            else:
+                import ctypes as _ct
+                _u32 = _ct.windll.user32
+                _GWL_EXSTYLE = -20
+                _WS_EX_LAYERED = 0x00080000
+                _WS_EX_TRANSPARENT = 0x00000020
+                _WS_EX_TOOLWINDOW = 0x00000080
+                _WS_EX_NOACTIVATE = 0x08000000
+                _HWND_TOPMOST = -1
+                _SWP_NOMOVE = 0x0002
+                _SWP_NOSIZE = 0x0001
+                _SWP_NOACTIVATE = 0x0010
+                _hwnd = int(getattr(gpu_win, '_hwnd', 0) or 0)
+                if _hwnd:
+                    _ex = _u32.GetWindowLongPtrW(_ct.c_void_p(_hwnd), _GWL_EXSTYLE)
+                    _u32.SetWindowLongPtrW(
+                        _ct.c_void_p(_hwnd), _GWL_EXSTYLE,
+                        _ex | _WS_EX_LAYERED | _WS_EX_TRANSPARENT
+                        | _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE,
+                    )
+                    _u32.SetWindowPos(
+                        _ct.c_void_p(_hwnd), _ct.c_void_p(_HWND_TOPMOST),
+                        0, 0, 0, 0,
+                        _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE,
+                    )
+        except Exception:
+            pass
+        raise_panel = getattr(self, '_raise_panel_window', None)
+        if not callable(raise_panel):
+            return
+        try:
+            panels = list(self._iter_fisheye_panels())
+        except Exception:
+            panels = []
+        for panel in panels:
+            try:
+                if self._is_fisheye_panel_visible(panel):
+                    raise_panel(panel)
+            except Exception:
+                pass
+
     def _destroy_fisheye_hit_layer(self):
         layer = getattr(self, '_fisheye_hit_layer', None)
         self._fisheye_hit_layer = None
@@ -196,7 +254,12 @@ class SAOPlayerGUIFisheyeMixin:
         request_fadeout = getattr(ov, '_request_fadeout', None)
         if callable(request_fadeout):
             try:
-                request_fadeout()
+                self._destroy_fisheye_hit_layer()
+                self._restore_fisheye_exit_zorder(ov)
+                try:
+                    request_fadeout(force=True)
+                except TypeError:
+                    request_fadeout()
                 return
             except Exception:
                 pass
@@ -854,11 +917,13 @@ class SAOPlayerGUIFisheyeMixin:
         _fade_started = [False]
         _fadeout_started = [False]
         _stop_requested = [False]
+        _force_fadeout = [False]
         _frame_seq = [0]
         ov._running_ref = _running
 
-        def _request_fadeout():
+        def _request_fadeout(force=False):
             _stop_requested[0] = True
+            _force_fadeout[0] = bool(force)
             try:
                 gpu_win.request_redraw()
             except Exception:
@@ -902,7 +967,7 @@ class SAOPlayerGUIFisheyeMixin:
                 _actual_should_run = False
             if self._fisheye_close_suppressed():
                 _actual_should_run = False
-            if _actual_should_run:
+            if _actual_should_run and not _force_fadeout[0]:
                 _stop_requested[0] = False
             _fisheye_should_run = bool(_actual_should_run and not _stop_requested[0])
 
