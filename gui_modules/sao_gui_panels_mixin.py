@@ -152,7 +152,7 @@ class SAOPlayerGUIPanelsMixin:
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label='⚙ 插件管理面板 Manage',
                          command=lambda: self._open_act_plugin_manager('manage'))
-        menu.add_command(label='⬢ 插件面板 Panels',
+        menu.add_command(label='◈ 插件面板 Panels',
                          command=lambda: self._open_act_plugin_manager('panels'))
         menu.add_separator()
         items = list(data.get('plugins') or [])

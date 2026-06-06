@@ -1,4 +1,4 @@
-"""Menu bar layout: 8-slot vertical column of fisheye circular buttons.
+"""Menu bar layout: 9-slot vertical column of fisheye circular buttons.
 
 Renders to a single PIL.Image and exposes ``hit_rects`` so the
 ``HitTester`` can map cursor positions back to button indexes.
@@ -17,7 +17,7 @@ import _sao_cy_uihelpers as _CY_UI  # type: ignore[import-not-found]
 SIZE = 54
 MAX_SIZE = 70
 SLOT = 70                       # vertical slot per button (= MAX_SIZE)
-MAX_VISIBLE = 8
+MAX_VISIBLE = 9                  # v3: 8 stock categories + 插件
 WIDTH = MAX_SIZE                # column width
 
 # Animation tuning

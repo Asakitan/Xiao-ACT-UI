@@ -581,7 +581,7 @@ class SAOPlayerGUIMenuMixin:
             data = {'plugins': []}
         items = [
             {'icon': '⚙', 'label': '插件管理面板 Manage', 'command': lambda: self._open_act_plugin_manager('manage')},
-            {'icon': '⬢', 'label': '插件面板 Panels', 'command': lambda: self._open_act_plugin_manager('panels')},
+            {'icon': '◈', 'label': '插件面板 Panels', 'command': lambda: self._open_act_plugin_manager('panels')},
             {'icon': '↻', 'label': '重载全部插件 Reload', 'command': self._reload_act_plugins_menu},
         ]
         plugins = data.get('plugins') or []
@@ -747,7 +747,7 @@ class SAOPlayerGUIMenuMixin:
             {'name': 'Burst', 'icon': 'B', 'can_active': True},
             {'name': '面板', 'icon': '◆', 'can_active': True},
             {'name': 'ACT', 'icon': 'A', 'can_active': True},
-            {'name': '插件', 'icon': '⬢', 'can_active': True},
+            {'name': '插件', 'icon': '◈', 'can_active': True},
             {'name': '皮肤', 'icon': 'P', 'can_active': True},
             {'name': '关于', 'icon': 'ℹ', 'can_active': True},
         ]
