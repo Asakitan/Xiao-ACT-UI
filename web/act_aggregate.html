@@ -79,6 +79,10 @@ input#query { width: 170px; }
 
 /* ── expand drawer (mirror Tk _render_group_details) ── */
 .aca-drawer { margin: var(--sp-2) 0 var(--sp-1) 18px; padding-left: var(--sp-3); border-left: 2px solid var(--acc, var(--act-cyan)); }
+.aca-evt { cursor: pointer; border-radius: var(--r-sm); }
+.aca-evt:hover { background: color-mix(in srgb, var(--acc, var(--act-cyan)) 12%, transparent); }
+.aca-evt-caret { color: var(--acc, var(--act-cyan)); }
+.aca-raw { margin: 4px 0 6px; padding: 8px 10px; background: var(--act-card-bg-2); border: 1px solid var(--act-edge-soft); border-radius: var(--r-sm); color: var(--act-muted); font-family: Consolas, "Courier New", monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto; user-select: text; }
 .aca-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-bottom: var(--sp-1); }
 .aca-chip { font-size: 10px; padding: 2px 7px; border-radius: var(--r-sm); border: 1px solid var(--act-edge-soft); color: var(--act-muted); }
 .aca-line { font-size: var(--fs-meta); color: var(--act-muted); padding: 2px 0; font-variant-numeric: tabular-nums; }
@@ -103,15 +107,17 @@ input#query { width: 170px; }
         <div><div class="kicker">ACT SEMANTIC COCKPIT</div><div class="title">AGGREGATE 聚合驾驶舱</div></div>
         <div class="header-actions">
             <div class="pill" id="status-pill">READY</div>
-            <input id="query" type="text" placeholder="搜索聚合 / Search" />
-            <select id="source"><option value="live" selected>Live</option><option value="history">History</option></select>
-            <label for="window">窗口</label>
-            <select id="window">
-                <option value="500">0.5s</option>
-                <option value="1000" selected>1s</option>
-                <option value="2000">2s</option>
-                <option value="5000">5s</option>
+            <label for="groupBy">聚合维度</label>
+            <select id="groupBy">
+                <option value="skill" selected>技能</option>
+                <option value="monster">怪物 / 目标</option>
+                <option value="actor">参与者</option>
+                <option value="topic">事件类型</option>
+                <option value="field">自定义字段</option>
             </select>
+            <input id="groupField" type="text" placeholder="字段名" style="width:96px;" />
+            <input id="query" type="text" placeholder="搜索 / Search" />
+            <select id="source"><option value="live" selected>Live</option><option value="history">History</option></select>
             <button class="primary" type="button" onclick="ActAggregate.refresh()">刷新</button>
             <button class="close" type="button" onclick="ActAggregate.close()">×</button>
         </div>
@@ -138,7 +144,8 @@ input#query { width: 170px; }
     var statusPill = document.getElementById('status-pill');
     var queryInput = document.getElementById('query');
     var sourceSelect = document.getElementById('source');
-    var windowSelect = document.getElementById('window');
+    var groupBySelect = document.getElementById('groupBy');
+    var groupFieldInput = document.getElementById('groupField');
     var toast = document.getElementById('toast');
 
     var expanded = {};      // group key -> true (mirrors Tk _expanded_groups)
@@ -214,6 +221,17 @@ input#query { width: 170px; }
         return parts.filter(Boolean).join(' · ');
     }
 
+    // 完整原始事件（插件实际收到的）：payload + 原始 UID + epoch time_ms
+    function rawEvent(r) {
+        var out = {};
+        var p = r.payload && typeof r.payload === 'object' ? r.payload : {};
+        Object.keys(p).forEach(function (k) { out[k] = p[k]; });
+        ['time_ms', 'topic', 'kind', 'actor', 'actor_uid', 'target', 'target_uid', 'skill_id', 'skill_name', 'monster_id', 'value', 'damage', 'heal', 'source'].forEach(function (k) {
+            if (r[k] != null && r[k] !== '' && !(k in out)) out[k] = r[k];
+        });
+        return out;
+    }
+
     function drawer(g, kind) {
         var html = '<div class="aca-drawer" style="--acc:' + acc(kind) + ';"><div class="aca-chips">';
         [['参与者', g.actors || g.actor_uids], ['目标', g.targets || g.target_uids], ['技能', g.skills || g.skill_ids], ['来源', (g.sources || []).map(function (s) { return ActText.source(s); })]].forEach(function (p) {
@@ -222,7 +240,7 @@ input#query { width: 170px; }
         });
         html += '</div>';
         (g.rows || []).slice(0, 6).forEach(function (r) {
-            html += '<div class="aca-line">' + esc(readableLine(r)) + '</div>';
+            html += '<div class="aca-line aca-evt" onclick="event.stopPropagation();ActAggregate.toggleRaw(this)"><span class="aca-evt-caret">▸</span> ' + esc(readableLine(r)) + '<pre class="aca-raw" style="display:none;">' + esc(JSON.stringify(rawEvent(r), null, 2)) + '</pre></div>';
         });
         return html + '</div>';
     }
@@ -311,12 +329,12 @@ input#query { width: 170px; }
         sources.forEach(function (s) { html += badge(ActText.source(s.source) + ' · ' + (s.count || 0), 'cyan'); });
         html += '</div>';
 
-        // 5 group sections in Tk order with matching accents + bilingual subtitles
-        // 时间线聚合(0.x 秒一桶)对阅读无意义，已移除；副标题注释也去掉，只留语义分组。
-        html += section('skill', '技能聚合 / SKILL DAMAGE', '', 'gold', data.skill_damage, 'damage');
-        html += section('monster', '怪物伤害 / MONSTER DAMAGE', '', 'danger', data.monster_damage, 'damage');
-        html += section('dungeon', '地牢 / 场景 DUNGEON·SCENE', '', 'cyan', data.dungeon_damage, 'damage');
-        html += section('log', '日志聚合 / LOG GROUPS', '', 'gold', data.log_groups, 'total_value');
+        // 工作台：只显示当前选中的聚合维度（工具栏可切换"按什么聚合"）。场景/日志噪声已移除。
+        var gb = data.group_by || 'skill';
+        var dimLabel = ({ skill: '技能', monster: '怪物 / 目标', actor: '参与者', topic: '事件类型', field: '字段 ' + (data.group_field || '?') })[gb] || '技能';
+        var dimAccent = ({ skill: 'gold', monster: 'danger', actor: 'cyan', topic: 'gold', field: 'cyan' })[gb] || 'gold';
+        var dimValueKey = (gb === 'skill' || gb === 'monster') ? 'damage' : 'total_value';
+        html += section(gb, '按 ' + dimLabel + ' 聚合', '', dimAccent, data.groups || [], dimValueKey);
         html += graphSection(graph);
 
         content.innerHTML = html;
@@ -355,13 +373,14 @@ input#query { width: 170px; }
         statusPill.textContent = 'LOADING';
         var query = queryInput.value || '';
         var source = sourceSelect.value || 'live';
-        var win = parseInt(windowSelect.value, 10) || 1000;
+        var groupBy = groupBySelect.value || 'skill';
+        var groupField = groupFieldInput.value || '';
         var api = window.pywebview && window.pywebview.api;
         if (!api || !api.get_aggregate_status) { render(null); statusPill.textContent = 'NO API'; return; }
         var graphP = (api.get_graph_timeseries_status)
             ? Promise.resolve(api.get_graph_timeseries_status(null, 120, query, null, null)).then(function (j) { try { return JSON.parse(j); } catch (e) { return null; } }).catch(function () { return null; })
             : Promise.resolve(null);
-        var aggP = Promise.resolve(api.get_aggregate_status(1000, query, source, win, 20, '')).then(function (j) { return JSON.parse(j); });
+        var aggP = Promise.resolve(api.get_aggregate_status(1000, query, source, 1000, 20, '', groupBy, groupField)).then(function (j) { return JSON.parse(j); });
         Promise.all([aggP, graphP]).then(function (res) {
             lastData = res[0]; lastGraph = res[1];
             // Plugin render-hook tap: plugins may transform the aggregate payload
@@ -386,6 +405,13 @@ input#query { width: 170px; }
     window.ActAggregate = {
         refresh: refresh,
         close: close,
+        toggleRaw: function (el) {
+            var pre = el.querySelector('.aca-raw'), caret = el.querySelector('.aca-evt-caret');
+            if (!pre) return;
+            var open = pre.style.display !== 'none';
+            pre.style.display = open ? 'none' : 'block';
+            if (caret) caret.textContent = open ? '▸' : '▾';
+        },
         fadeIn: function () { shell.classList.add('visible'); },
         fadeOut: function () { shell.classList.remove('visible'); }
     };
@@ -393,7 +419,8 @@ input#query { width: 170px; }
     var qTimer = null;
     queryInput.addEventListener('input', function () { clearTimeout(qTimer); qTimer = setTimeout(refresh, 300); });
     sourceSelect.addEventListener('change', refresh);
-    windowSelect.addEventListener('change', refresh);
+    groupBySelect.addEventListener('change', refresh);
+    groupFieldInput.addEventListener('change', refresh);
 
     setTimeout(function () { shell.classList.add('visible'); refresh(); }, 80);
 })();

@@ -542,7 +542,7 @@ class SAOWebAPI:
     def get_timeline_status(self, limit=80, query=''):
         return json.dumps(act_timeline_status(self._g, limit=int(limit or 80), query=str(query or '')), ensure_ascii=False)
 
-    def get_aggregate_status(self, limit=1000, query='', source='live', window_ms=1000, top_n=20, encounter_id=''):
+    def get_aggregate_status(self, limit=1000, query='', source='live', window_ms=1000, top_n=20, encounter_id='', group_by='skill', group_field=''):
         return json.dumps(
             act_aggregate_status(
                 self._g,
@@ -552,6 +552,8 @@ class SAOWebAPI:
                 window_ms=int(window_ms or 1000),
                 top_n=int(top_n or 20),
                 encounter_id=str(encounter_id or ''),
+                group_by=str(group_by or 'skill'),
+                group_field=str(group_field or ''),
             ),
             ensure_ascii=False,
         )
