@@ -159,10 +159,55 @@ class SAOPlayerGUILifecycleMixin:
             pass
         self._entry_overlay = None
 
+    def _hold_exit_overlay_for_teardown(self) -> bool:
+        """Make the final exit overlay opaque while child GPU HWNDs close."""
+        ov = getattr(self, '_exit_overlay', None)
+        if not ov:
+            return False
+        try:
+            gpu = ov.get('gpu_transition')
+            cover = getattr(gpu, 'show_teardown_cover', None)
+            if callable(cover):
+                cover()
+                return True
+        except Exception:
+            pass
+        try:
+            win = ov.get('win')
+            cv = ov.get('cv')
+            sw = int(ov.get('sw') or self.root.winfo_screenwidth())
+            sh = int(ov.get('sh') or self.root.winfo_screenheight())
+            if win and win.winfo_exists():
+                win.attributes('-topmost', True)
+                win.attributes('-alpha', 0.98)
+            if cv and cv.winfo_exists():
+                cv.delete('all')
+                cv.create_rectangle(0, 0, sw, sh, fill='#020811', outline='')
+                for y in range(0, sh, 28):
+                    cv.create_line(0, y, sw, y, fill='#0b2e3d', width=1)
+                return True
+        except Exception:
+            pass
+        return False
+
     def _finalize_close(self):
-        if self._close_finalized:
+        waiting_for_cover = bool(getattr(self, '_exit_teardown_cover_waiting', False))
+        if self._close_finalized and not waiting_for_cover:
             return
-        self._close_finalized = True
+        if waiting_for_cover:
+            self._exit_teardown_cover_waiting = False
+        else:
+            self._close_finalized = True
+            self._destroyed = True
+            self._breath_active = False
+            self._lift_loop_active = False
+            if self._hold_exit_overlay_for_teardown():
+                self._exit_teardown_cover_waiting = True
+                try:
+                    self.root.after(64, self._finalize_close)
+                    return
+                except Exception:
+                    self._exit_teardown_cover_waiting = False
         self._destroyed = True
         self._breath_active = False
         self._lift_loop_active = False
@@ -311,11 +356,18 @@ class SAOPlayerGUILifecycleMixin:
                 self._float.destroy()
         except Exception:
             pass
-        self._cleanup_exit_overlay()
+
+        def _finish_root_quit():
+            self._cleanup_exit_overlay()
+            try:
+                self.root.quit()  # 退出 mainloop，由 run() 负责 destroy
+            except Exception:
+                pass
+
         try:
-            self.root.quit()  # 退出 mainloop，由 run() 负责 destroy
+            self.root.after(160, _finish_root_quit)
         except Exception:
-            pass
+            _finish_root_quit()
 
     def _run_exit_animation(self, after_shutdown=None, mode='exit', target_label=None):
         if self._close_finalized or self._exit_animating:

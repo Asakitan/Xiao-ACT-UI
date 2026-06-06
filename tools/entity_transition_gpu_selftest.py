@@ -137,9 +137,13 @@ class EntityTransitionGpuRouteTests(unittest.TestCase):
 class _FakeWin:
     def __init__(self) -> None:
         self.destroy_count = 0
+        self.redraw_count = 0
 
     def destroy(self) -> None:
         self.destroy_count += 1
+
+    def request_redraw(self) -> None:
+        self.redraw_count += 1
 
 
 class _FakeGlObject:
@@ -174,9 +178,15 @@ class _DestroyableOverlay:
 class _QuitRoot:
     def __init__(self, order) -> None:
         self.order = order
+        self.after_calls = []
 
     def after_cancel(self, _aid) -> None:
         self.order.append("root.after_cancel")
+
+    def after(self, delay, callback=None):
+        self.order.append(f"root.after:{delay}")
+        self.after_calls.append((delay, callback))
+        return f"after-{len(self.after_calls)}"
 
     def quit(self) -> None:
         self.order.append("root.quit")
@@ -204,6 +214,8 @@ class _FinalizeOwner(SAOPlayerGUILifecycleMixin):
         self._update_listener = None
         self._update_listener_installed = False
         self._hotkey_mgr = None
+        self._entry_overlay = None
+        self._exit_overlay = None
         self._state_mgr = None
         self._cfg_settings_ref = None
         self._sao_menu = None
@@ -238,6 +250,10 @@ class _FinalizeOwner(SAOPlayerGUILifecycleMixin):
 
     def _cleanup_exit_overlay(self) -> None:
         self.order.append("exit.cleanup")
+
+    def _hold_exit_overlay_for_teardown(self) -> bool:
+        self.order.append("exit.hold")
+        return True
 
     def _stop_fisheye_overlay(self, wait=False) -> None:
         self.order.append("fisheye.stop")
@@ -285,6 +301,20 @@ class EntityTransitionGpuDestroyTests(unittest.TestCase):
         self.assertEqual(vao.release_count, 0)
         self.assertIsNone(overlay._prog)
         self.assertIsNone(overlay._vao)
+
+    def test_teardown_cover_requests_final_redraw(self) -> None:
+        overlay = EntityTransitionGpuOverlay(
+            _Root(),
+            kind='exit',
+            center=(1, 2),
+        )
+        win = _FakeWin()
+        overlay._win = win
+
+        overlay.show_teardown_cover()
+
+        self.assertTrue(overlay._teardown_cover)
+        self.assertEqual(win.redraw_count, 1)
 
 
 class _LifecycleOwner(SAOPlayerGUILifecycleMixin):
@@ -365,6 +395,26 @@ class EntityTransitionGpuExitLifecycleTests(unittest.TestCase):
         owner = _FinalizeOwner()
 
         owner._finalize_close()
+
+        self.assertIn("exit.hold", owner.order)
+        self.assertIn("root.after:64", owner.order)
+        self.assertNotIn("hp.destroy", owner.order)
+        self.assertNotIn("exit.cleanup", owner.order)
+        self.assertNotIn("root.quit", owner.order)
+        self.assertEqual(len(owner.root.after_calls), 1)
+
+        _delay, callback = owner.root.after_calls[0]
+        callback()
+
+        self.assertLess(
+            owner.order.index("exit.hold"),
+            owner.order.index("hp.destroy"),
+        )
+        self.assertIn("root.after:160", owner.order)
+        self.assertEqual(len(owner.root.after_calls), 2)
+
+        _delay, callback = owner.root.after_calls[1]
+        callback()
 
         self.assertLess(
             owner.order.index("hp.destroy"),
