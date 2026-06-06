@@ -431,7 +431,7 @@ class ActionLogPanel:
                 meta=meta,
                 value=f"{self._fmt(value)} · {int(group.get('count') or 0)}x",
                 ratio=value / max_value if max_value else 0.0,
-                accent='danger' if str(group.get('kind') or '') in {'damage', 'monster', 'target'} else 'gold',
+                accent=('cyan' if str(group.get('kind') or '') == 'system' else ('danger' if str(group.get('kind') or '') in {'damage', 'monster', 'target'} else 'gold')),
                 zebra=bool(idx % 2),
                 command=lambda k=key: self._toggle_group(k),
                 expanded=open_group,

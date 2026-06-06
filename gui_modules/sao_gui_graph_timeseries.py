@@ -330,7 +330,7 @@ class GraphTimeseriesPanel:
     def _render_chart(self, metric: str, points: list[Mapping[str, Any]]) -> None:
         if self._rows is None:
             return
-        chart = section_card(self._rows, '趋势图表', subtitle='保留图形主视图；下方点位列表默认只显示 compact rows。', badge=metric.upper())
+        chart = section_card(self._rows, '趋势图表', subtitle='', badge=metric.upper())
         chart.pack(fill='x', pady=(0, 8), padx=4)
         chart_body = tk.Frame(chart, bg=_SAO_PANEL_BODY_BG)
         chart_body.pack(fill='x', padx=8, pady=8)

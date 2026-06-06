@@ -1620,6 +1620,7 @@ def _compact_timeline_event(event: Mapping[str, Any], index: int = 0) -> dict[st
         "label": label,
         "value": value,
         "source": str(source.get("name") or source.get("kind") or ""),
+        "source_kind": str(source.get("kind") or ""),
         "payload": _json_safe(payload),
     }
 
@@ -1824,6 +1825,7 @@ def _action_log_row(event: Mapping[str, Any], index: int = 0) -> dict[str, Any]:
         "label": str(display.get("label") or compact.get("label") or ""),
         "value": compact.get("value") or "",
         "source": str(compact.get("source") or ""),
+        "source_kind": str(compact.get("source_kind") or ""),
         "actor": actor,
         "target": target,
         "payload": _json_safe(payload),
@@ -1886,6 +1888,23 @@ def _action_log_history_row(action: Mapping[str, Any], index: int = 0) -> dict[s
 # the Action Log and Aggregate views so they don't show up as empty "0 · 38x"
 # groups.
 _HIDDEN_ACTION_TOPICS = {"act_snapshot"}
+
+# Plugins (and UI snapshots) publish with these source kinds. Their events are
+# echoes / internal book-keeping (plugin_ui_invalidate from request_redraw, the
+# star_basic_report_plugin re-emitting skills, etc.). They are KEPT in the Action
+# Log but grouped under a separate 系统 category, and EXCLUDED from the combat
+# aggregate + graph so they don't double-count skills or flatten the curve.
+_SYSTEM_SOURCE_KINDS = {"plugin", "ui"}
+
+
+def _is_system_event(row: Mapping[str, Any]) -> bool:
+    return str(row.get("source_kind") or "").strip().lower() in _SYSTEM_SOURCE_KINDS
+
+
+def _combat_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Authoritative combat events only (drops plugin/ui echoes) — for the
+    aggregate workbench and the damage graph."""
+    return [row for row in rows if not _is_system_event(row)]
 
 
 def _filter_action_log_rows(rows: list[dict[str, Any]], *, query: str = "", topic: str = "") -> list[dict[str, Any]]:
@@ -2245,10 +2264,18 @@ def _action_log_display_fields(payload: Mapping[str, Any], *, topic: str = "") -
 
 def _action_log_group_metadata(row: Mapping[str, Any], payload: Mapping[str, Any], display: Mapping[str, Any]) -> dict[str, Any]:
     topic = str(row.get("topic") or "")
-    group_kind = _truthy_text(display.get("group_kind")) or topic or "event"
-    group_name = _truthy_text(display.get("group_name")) or _truthy_text(row.get("label")) or "-"
-    safe_name = group_name.lower()
-    group_key = f"{group_kind}:{safe_name}"
+    if _is_system_event(row):
+        # Internal / plugin events: kept in the Action Log but bucketed under a
+        # separate 系统 kind (one group per internal topic) so they don't mix
+        # with combat actions.
+        group_kind = "system"
+        group_name = topic or "system"
+        group_key = f"system:{(topic or 'event').lower()}"
+    else:
+        group_kind = _truthy_text(display.get("group_kind")) or topic or "event"
+        group_name = _truthy_text(display.get("group_name")) or _truthy_text(row.get("label")) or "-"
+        safe_name = group_name.lower()
+        group_key = f"{group_kind}:{safe_name}"
     return {
         "group_key": group_key,
         "group_kind": group_kind,
@@ -2588,6 +2615,9 @@ def act_aggregate_status(owner: Any, *, limit: int = 1000, query: str | None = "
             errors.append(str(exc))
         rows = [_action_log_row(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
     rows = _filter_action_log_rows(rows, query=str(query or ""), topic="")
+    # The aggregate is the COMBAT workbench — drop plugin/ui echoes so the same
+    # skill isn't counted once under 实体 and again under a plugin source.
+    rows = _combat_rows(rows)
     snapshot = _act_aggregate_snapshot(owner)
     render_spec = snapshot.get("render_spec") if isinstance(snapshot.get("render_spec"), Mapping) else {}
     try:
@@ -2998,6 +3028,9 @@ def _event_boss_hp_pct(payload: Mapping[str, Any]) -> float | None:
 def _graph_rows_from_events(raw_events: list[dict[str, Any]], *, query: str = "", topic: str = "") -> list[dict[str, Any]]:
     rows = [_action_log_row(event, idx) for idx, event in enumerate(raw_events) if isinstance(event, Mapping)]
     rows = _filter_action_log_rows(rows, query=query, topic=topic)
+    # Drop plugin/ui echoes: otherwise the last-120-event window fills up with
+    # plugin_ui_invalidate noise and the cumulative damage curve flatlines.
+    rows = _combat_rows(rows)
     rows.sort(key=lambda row: (int(row.get("time_ms") or 0), int(row.get("index") or 0)))
     return rows
 

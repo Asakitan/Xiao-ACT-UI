@@ -109,6 +109,8 @@ _TOPIC_CN = {
     "log": "日志", "event": "事件", "shield": "护盾", "mitigation": "减伤",
     "incoming_damage": "承受伤害", "healing": "治疗", "ultimate_skill": "终极技",
     "environment_skill": "环境技能", "field_marker": "场地标记",
+    "system": "系统", "plugin_ui_invalidate": "插件重绘", "encounter_finalized": "战斗结束",
+    "encounter_started": "战斗开始", "encounter_reset": "战斗重置",
 }
 _SOURCE_CN = {
     "tcp": "封包", "entity": "实体", "mem": "内存", "memory": "内存", "history": "历史",
