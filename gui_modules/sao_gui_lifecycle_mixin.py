@@ -203,7 +203,7 @@ class SAOPlayerGUILifecycleMixin:
                 self._state_mgr.unsubscribe(self._on_game_state_update)
         except Exception:
             pass
-        self._stop_fisheye_overlay()
+        self._stop_fisheye_overlay(wait=True)
         try:
             if self._sao_menu is not None:
                 self._sao_menu.unbind_events()

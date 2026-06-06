@@ -20,7 +20,7 @@ Methods (in source order):
     whether to keep the fisheye alive
   * _maybe_stop_fisheye — decision point: only stop if menu+panels all closed
   * _start_fisheye_overlay — the 1078-line setup block
-  * _stop_fisheye_overlay — daemon shutdown + GPU window destroy
+  * _stop_fisheye_overlay — ordered worker/GPU shutdown
   * _run_fisheye_entry — entry-animation flow (menu_open + fisheye_in)
 
 All methods are SAOPlayerGUI instance methods today; this mixin holds
@@ -948,7 +948,12 @@ class SAOPlayerGUIFisheyeMixin:
 
         def _on_fadeout_done():
             try:
-                self._stop_fisheye_overlay()
+                pump = getattr(gpu_win, '_pump', None)
+                post_to_tk = getattr(pump, 'post_to_tk', None)
+                if callable(post_to_tk):
+                    post_to_tk(self._stop_fisheye_overlay)
+                else:
+                    self._stop_fisheye_overlay()
             except Exception:
                 pass
 
@@ -1464,8 +1469,8 @@ class SAOPlayerGUIFisheyeMixin:
         _worker_thread.start()
 
     @_probe.decorate('ui.fisheye.stop')
-    def _stop_fisheye_overlay(self):
-        """销毁持久鱼眼叠加层 (GPU 由后台线程自行释放).
+    def _stop_fisheye_overlay(self, wait: bool = False):
+        """销毁持久鱼眼叠加层.
 
         v3.1.8 round 19: previously this method called ``worker_thread.join(2.0)``
         and ``gpu_win.destroy()`` inline on the Tk main thread, which could
@@ -1474,14 +1479,26 @@ class SAOPlayerGUIFisheyeMixin:
         light Tk-bound work (hit-layer destroy, zorder release) and flips
         the ``running[0]`` stop bit synchronously, then dispatches the
         heavy wait + GPU teardown to a daemon thread so the user sees an
-        instant UI response.
+        instant UI response. During final app close, pass wait=True so the
+        GLFW pump/GPU resources are torn down before root.quit().
         """
-        self._destroy_fisheye_hit_layer()
         ov = self._fisheye_ov
-        self._fisheye_ov = None
         if ov is None:
             return
         gpu_win = getattr(ov, 'gpu_win', None)
+        pump = getattr(gpu_win, '_pump', None) if gpu_win is not None else None
+        pump_thread = getattr(pump, '_thread', None)
+        if pump_thread is not None and threading.current_thread() is pump_thread:
+            post_to_tk = getattr(pump, 'post_to_tk', None)
+            if callable(post_to_tk):
+                try:
+                    post_to_tk(lambda: self._stop_fisheye_overlay(wait=wait))
+                    return
+                except Exception:
+                    pass
+
+        self._destroy_fisheye_hit_layer()
+        self._fisheye_ov = None
         if gpu_win is not None:
             # Light Win32 ex-style flip; keep on main for ordering safety.
             self._release_fisheye_input_zorder(ov)
@@ -1494,6 +1511,23 @@ class SAOPlayerGUIFisheyeMixin:
         # Toplevel destroy must still go via root.after so it lands on main.
         _root = self.root
 
+        def _release_presenter_on_pump(_gw, _presenter):
+            try:
+                from render import gpu_overlay_window as _gow_local
+                glfw_mod = getattr(_gow_local, '_glfw', None)
+                win = getattr(_gw, '_win', None)
+                if glfw_mod is not None and win is not None:
+                    try:
+                        glfw_mod.make_context_current(win)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            try:
+                _presenter.release()
+            except Exception:
+                pass
+
         def _async_fisheye_shutdown(_ov=ov, _root_ref=_root):
             worker_thread = getattr(_ov, '_worker_thread', None)
             if worker_thread is not None and worker_thread.is_alive():
@@ -1505,25 +1539,54 @@ class SAOPlayerGUIFisheyeMixin:
                 except Exception:
                     pass
             gw = getattr(_ov, 'gpu_win', None)
+            presenter = getattr(_ov, 'presenter', None)
+            if gw is not None and presenter is not None:
+                _pump = getattr(gw, '_pump', None)
+                _exec = getattr(_pump, 'exec_on_pump', None)
+                if callable(_exec):
+                    try:
+                        _exec(lambda: _release_presenter_on_pump(gw, presenter),
+                              timeout=1.0)
+                        presenter = None
+                    except Exception:
+                        pass
             if gw is not None:
                 try:
                     gw.destroy()
                 except Exception:
                     pass
-            presenter = getattr(_ov, 'presenter', None)
             if presenter is not None:
-                try:
-                    presenter.release()
-                except Exception:
-                    pass
+                # Only fall back to direct release when there is no GPU
+                # window/context left to marshal through.
+                if gw is None:
+                    try:
+                        presenter.release()
+                    except Exception:
+                        pass
             destroy_cb = getattr(_ov, 'destroy', None)
             if callable(destroy_cb):
                 # Legacy Tk Toplevel — must land on main thread.
-                try:
-                    _root_ref.after(0, destroy_cb)
-                except Exception:
-                    pass
+                if wait:
+                    try:
+                        destroy_cb()
+                    except Exception:
+                        pass
+                else:
+                    post_to_tk = getattr(pump, 'post_to_tk', None)
+                    if callable(post_to_tk):
+                        try:
+                            post_to_tk(destroy_cb)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            _root_ref.after(0, destroy_cb)
+                        except Exception:
+                            pass
 
+        if wait:
+            _async_fisheye_shutdown()
+            return
         try:
             threading.Thread(
                 target=_async_fisheye_shutdown,

@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 import unittest
+from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -58,6 +60,63 @@ class _GpuWin:
         self.click_through_values.append(bool(value))
 
 
+class _Layer:
+    def __init__(self) -> None:
+        self.destroy_count = 0
+
+    def winfo_exists(self) -> bool:
+        return True
+
+    def destroy(self) -> None:
+        self.destroy_count += 1
+
+
+class _Pump:
+    def __init__(self) -> None:
+        self._thread = None
+        self.tk_posts = []
+        self.exec_calls = 0
+
+    def post_to_tk(self, fn) -> None:
+        self.tk_posts.append(fn)
+
+    def exec_on_pump(self, fn, timeout=5.0):
+        self.exec_calls += 1
+        return fn()
+
+
+class _StopGpuWin:
+    def __init__(self, pump: _Pump) -> None:
+        self._pump = pump
+        self._win = object()
+        self._hwnd = 0
+        self.destroy_count = 0
+
+    def destroy(self) -> None:
+        self.destroy_count += 1
+
+
+class _Presenter:
+    def __init__(self) -> None:
+        self.release_count = 0
+
+    def release(self) -> None:
+        self.release_count += 1
+
+
+class _Worker:
+    def __init__(self, alive: bool = False) -> None:
+        self._alive = alive
+        self.join_calls = []
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+    def join(self, timeout=None) -> None:
+        self.join_calls.append(timeout)
+        self._alive = False
+
+
 class _FisheyeOwner(SAOPlayerGUIFisheyeMixin):
     def __init__(self) -> None:
         self.root = _Root()
@@ -95,6 +154,25 @@ class _FisheyeOwner(SAOPlayerGUIFisheyeMixin):
 
     def _raise_panel_window(self, panel) -> None:
         self.raised_panels.append(panel)
+
+
+class _StopOwner(SAOPlayerGUIFisheyeMixin):
+    def __init__(self) -> None:
+        self.root = _Root()
+        self._fisheye_hit_layer = _Layer()
+        self._fisheye_close_suppress_until = 0.0
+        self._destroyed = False
+        self._pump = _Pump()
+        self._gpu_win = _StopGpuWin(self._pump)
+        self._presenter = _Presenter()
+        self._worker = _Worker(alive=True)
+        self._running_ref = [True]
+        self._fisheye_ov = SimpleNamespace(
+            gpu_win=self._gpu_win,
+            presenter=self._presenter,
+            _worker_thread=self._worker,
+            _running_ref=self._running_ref,
+        )
 
 
 class _Win:
@@ -221,6 +299,31 @@ class EntityPanelFisheyeTests(unittest.TestCase):
 
         self.assertEqual(owner._hp_overlay.raise_count, 0)
         self.assertEqual(owner.raised_panels, [owner._act_aggregate_panel])
+
+    def test_stop_fisheye_called_from_pump_thread_marshals_to_tk(self) -> None:
+        owner = _StopOwner()
+        owner._pump._thread = threading.current_thread()
+
+        owner._stop_fisheye_overlay()
+
+        self.assertIsNotNone(owner._fisheye_ov)
+        self.assertEqual(owner._fisheye_hit_layer.destroy_count, 0)
+        self.assertEqual(len(owner._pump.tk_posts), 1)
+        self.assertEqual(owner._gpu_win.destroy_count, 0)
+
+    def test_final_close_waits_for_fisheye_gpu_shutdown(self) -> None:
+        owner = _StopOwner()
+        layer = owner._fisheye_hit_layer
+
+        owner._stop_fisheye_overlay(wait=True)
+
+        self.assertIsNone(owner._fisheye_ov)
+        self.assertFalse(owner._running_ref[0])
+        self.assertEqual(layer.destroy_count, 1)
+        self.assertEqual(owner._worker.join_calls, [2.0])
+        self.assertEqual(owner._pump.exec_calls, 1)
+        self.assertEqual(owner._presenter.release_count, 1)
+        self.assertEqual(owner._gpu_win.destroy_count, 1)
 
 
 if __name__ == "__main__":
