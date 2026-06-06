@@ -187,23 +187,42 @@ input#query { width: 170px; }
 
     function groupMeta(g) {
         var span = parseInt(g.duration_ms || (Math.max(0, (g.last_time_ms || 0) - (g.first_time_ms || 0))), 10) || 0;
-        var bits = ['active ' + ActTime.fmtDur(span)];
-        [['actors', 'actors'], ['targets', 'targets'], ['skills', 'skills'], ['monsters', 'monsters'], ['dungeons', 'dungeons'], ['sources', 'src']].forEach(function (p) {
+        var bits = ['持续 ' + ActTime.fmtDur(span)];
+        [['targets', '个目标'], ['monsters', '个怪物'], ['skills', '种技能'], ['actors', '名参与者'], ['dungeons', '个场景']].forEach(function (p) {
             var vals = g[p[0]] || [];
-            if (vals && vals.length) bits.push(p[1] + ' ' + vals.length);
+            if (vals && vals.length) bits.push(vals.length + ' ' + p[1]);
         });
+        var srcs = [];
+        (g.sources || []).forEach(function (s) { var n = ActText.source(s); if (n && srcs.indexOf(n) < 0) srcs.push(n); });
+        if (srcs.length) bits.push('来源 ' + srcs.join('/'));
         return bits.join(' · ');
+    }
+
+    // 一条代表事件 -> 人话行（类型中文、来源→目标、隐藏无意义的 0），与 Tk _readable_event_line 一致
+    function readableLine(r) {
+        var parts = [ActTime.fmtClock(r.time_ms), ActText.topic(r.topic)];
+        var actor = String(r.actor == null ? '' : r.actor).trim();
+        var target = String(r.target == null ? '' : r.target).trim();
+        var label = String(r.label == null ? '' : r.label).trim();
+        var actorDisp = actor ? ActText.source(actor) : '';
+        if (actorDisp && target) parts.push(actorDisp + ' → ' + target);
+        else if (target || actorDisp) parts.push(target || actorDisp);
+        var rawTopic = String(r.topic == null ? '' : r.topic).trim().toLowerCase();
+        if (label && label.toLowerCase() !== rawTopic && label !== target) parts.push(label);
+        var val = fmt(r.value);
+        if (val && val !== '0') parts.push(val);
+        return parts.filter(Boolean).join(' · ');
     }
 
     function drawer(g, kind) {
         var html = '<div class="aca-drawer" style="--acc:' + acc(kind) + ';"><div class="aca-chips">';
-        [['actors', g.actors || g.actor_uids], ['targets', g.targets || g.target_uids], ['skills', g.skills || g.skill_ids], ['sources', g.sources]].forEach(function (p) {
+        [['参与者', g.actors || g.actor_uids], ['目标', g.targets || g.target_uids], ['技能', g.skills || g.skill_ids], ['来源', (g.sources || []).map(function (s) { return ActText.source(s); })]].forEach(function (p) {
             var vals = (p[1] || []).slice(0, 4);
             if (vals.length) html += '<div class="aca-chip">' + esc(p[0]) + ': ' + esc(vals.join(', ')) + '</div>';
         });
         html += '</div>';
         (g.rows || []).slice(0, 6).forEach(function (r) {
-            html += '<div class="aca-line">' + esc(ActTime.fmtClock(r.time_ms) + ' · ' + (r.topic || '-') + ' · ' + (r.actor || '-') + ' → ' + (r.target || '-') + ' · ' + (r.label || '-') + ' · ' + fmt(r.value)) + '</div>';
+            html += '<div class="aca-line">' + esc(readableLine(r)) + '</div>';
         });
         return html + '</div>';
     }
@@ -242,7 +261,7 @@ input#query { width: 170px; }
 
     function graphSection(graph) {
         var series = (graph && graph.series) || {};
-        var defs = [['damage', 'DAMAGE', 'gold'], ['heal', 'HEAL', 'ok'], ['event_count', 'EVENT_COUNT', 'cyan']];
+        var defs = [['damage', '总伤害', 'gold'], ['heal', '治疗', 'ok'], ['event_count', '事件数', 'cyan']];
         var rows = '';
         defs.forEach(function (d) {
             var item = series[d[0]] || {};
@@ -254,13 +273,12 @@ input#query { width: 170px; }
                 + '<div class="aca-row-top"><span class="aca-caret"></span>'
                 + '<span class="aca-row-title">' + d[1] + '</span>'
                 + '<span class="aca-row-value">' + fmtHtml(latest) + '</span></div>'
-                + '<div class="aca-row-meta">' + pts.length + ' points · peak ' + fmt(peak) + '</div>'
+                + '<div class="aca-row-meta">' + pts.length + ' 个采样点 · 峰值 ' + fmt(peak) + '</div>'
                 + '<div class="aca-bar"><div class="aca-fill" style="width:' + (ratio * 100).toFixed(1) + '%;"></div></div></div>';
         });
         return '<div class="aca-section" style="--acc:' + acc('cyan') + ';">'
             + '<div class="aca-sec-head" data-toggle="1"><div class="aca-sec-rail"></div>'
-            + '<div class="aca-sec-titles"><div class="aca-sec-title">图表预览 / GRAPH PREVIEW</div>'
-            + '<div class="aca-sec-sub">来自 ACT graph/timeseries 的趋势摘要</div></div>'
+            + '<div class="aca-sec-titles"><div class="aca-sec-title">趋势预览 / TREND</div></div>'
             + '<div class="aca-sec-badge">' + (graph && graph.row_count || 0) + '</div></div>'
             + '<div class="aca-sec-body">' + rows + '</div></div>';
     }
@@ -278,19 +296,19 @@ input#query { width: 170px; }
 
         // 6 KPI tiles (1:1 with Tk header summary)
         var html = '<div class="aca-kpis">';
-        html += tile('Damage', fmtHtml(ov.damage), (counts.rows || 0) + ' events', 'gold');
-        html += tile('DPS', fmtHtml(ov.dps), fmt(ov.elapsed_s) + 's', 'cyan');
-        html += tile('Heal/HPS', fmtHtml(ov.heal) + ' / ' + fmtHtml(ov.hps), 'support', 'ok');
-        html += tile('Skills', String(counts.skills || 0), 'aggregated', 'gold');
-        html += tile('Monsters', String(counts.monsters || 0), 'targets', 'danger');
-        html += tile('Dungeons', String(counts.dungeons || 0), ov.dungeon_name || 'live', 'cyan');
+        html += tile('总伤害', fmtHtml(ov.damage), (counts.rows || 0) + ' 次事件', 'gold');
+        html += tile('每秒伤害 DPS', fmtHtml(ov.dps), '持续 ' + fmt(ov.elapsed_s) + ' 秒', 'cyan');
+        html += tile('治疗 / 每秒治疗', fmtHtml(ov.heal) + ' / ' + fmtHtml(ov.hps), '辅助治疗', 'ok');
+        html += tile('技能种类', String(counts.skills || 0), '种技能', 'gold');
+        html += tile('怪物数', String(counts.monsters || 0), '个目标', 'danger');
+        html += tile('地牢 / 场景', String(counts.dungeons || 0), ov.dungeon_name || '当前', 'cyan');
         html += '</div>';
 
         // badges row: MODE / SPAN / source chips
         html += '<div class="aca-badges">';
-        html += badge('MODE ' + (ov.mode || 'live'), 'cyan');
-        html += badge('SPAN ' + fmt((ov.span_ms || 0) / 1000) + 's', 'gold');
-        sources.forEach(function (s) { html += badge((s.source || '-') + ' · ' + (s.count || 0), 'cyan'); });
+        html += badge('模式 ' + (ov.mode || 'live'), 'cyan');
+        html += badge('战斗时长 ' + fmt((ov.span_ms || 0) / 1000) + ' 秒', 'gold');
+        sources.forEach(function (s) { html += badge(ActText.source(s.source) + ' · ' + (s.count || 0), 'cyan'); });
         html += '</div>';
 
         // 5 group sections in Tk order with matching accents + bilingual subtitles
@@ -305,18 +323,17 @@ input#query { width: 170px; }
 
         // side: overview context card
         var s = '';
-        s += '<div class="aca-ctx"><span>Encounter</span><strong>' + esc(data.encounter_id || 'live') + '</strong></div>';
-        s += '<div class="aca-ctx"><span>Source</span><strong>' + esc(String(data.source || 'live').toUpperCase()) + '</strong></div>';
-        s += '<div class="aca-ctx"><span>Span</span><strong>' + fmt((ov.span_ms || 0) / 1000) + 's</strong></div>';
-        s += '<div class="aca-ctx"><span>Elapsed</span><strong>' + fmt(ov.elapsed_s) + 's</strong></div>';
-        s += '<div class="aca-ctx"><span>Events</span><strong>' + (counts.rows || 0) + '</strong></div>';
-        s += '<div class="aca-ctx"><span>Window</span><strong>' + ((data.filters && data.filters.window_ms) || 1000) + 'ms</strong></div>';
-        s += '<div class="aca-ctx"><span>Errors</span><strong>' + ((data.errors || []).length) + '</strong></div>';
+        s += '<div class="aca-ctx"><span>当前战斗</span><strong>' + esc(data.encounter_id || 'live') + '</strong></div>';
+        s += '<div class="aca-ctx"><span>数据源</span><strong>' + esc(ActText.source(data.source || 'live')) + '</strong></div>';
+        s += '<div class="aca-ctx"><span>战斗时长</span><strong>' + fmt((ov.span_ms || 0) / 1000) + ' 秒</strong></div>';
+        s += '<div class="aca-ctx"><span>已持续</span><strong>' + fmt(ov.elapsed_s) + ' 秒</strong></div>';
+        s += '<div class="aca-ctx"><span>事件数</span><strong>' + (counts.rows || 0) + '</strong></div>';
+        s += '<div class="aca-ctx"><span>错误</span><strong>' + ((data.errors || []).length) + '</strong></div>';
         overviewSide.innerHTML = s;
 
         // side: source mix (LIST of {source,count} — was wrongly read as object before)
         var mix = '';
-        sources.forEach(function (it) { mix += '<div class="aca-ctx"><span>' + esc(String(it.source || '-').toUpperCase()) + '</span><strong>' + (it.count || 0) + '</strong></div>'; });
+        sources.forEach(function (it) { mix += '<div class="aca-ctx"><span>' + esc(ActText.source(it.source)) + '</span><strong>' + (it.count || 0) + '</strong></div>'; });
         sourceMix.innerHTML = mix || '<div class="aca-ctx"><span>No sources</span><strong>-</strong></div>';
     }
 

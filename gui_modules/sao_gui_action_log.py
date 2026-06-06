@@ -25,8 +25,10 @@ from gui_modules.sao_panel_components import (
     fmt_clock,
     fmt_dur,
     metric_tile,
+    readable_event_line,
     section_card,
     status_badge,
+    topic_cn,
 )
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
@@ -395,7 +397,7 @@ class ActionLogPanel:
             metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
         badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         badges.pack(fill='x', padx=4, pady=(0, 8))
-        status_badge(badges, f"MODE {source.upper()}", kind='cyan').pack(side='left', padx=(0, 6))
+        status_badge(badges, f"模式 {'实时' if source == 'live' else ('历史' if source == 'history' else source)}", kind='cyan').pack(side='left', padx=(0, 6))
         status_badge(badges, f"RAW {'ON' if self._show_raw_rows.get() else 'OFF'}", kind='gold').pack(side='left', padx=(0, 6))
         status_badge(badges, f"ERRORS {len(status.get('errors') or [])}", kind='danger' if status.get('errors') else 'cyan').pack(side='left', padx=(0, 6))
 
@@ -418,8 +420,8 @@ class ActionLogPanel:
             first_ms = int(group.get('first_time_ms') or 0)
             last_ms = int(group.get('last_time_ms') or 0)
             meta = (
-                f"{str(group.get('kind') or 'event').upper()} · {int(group.get('count') or 0)} rows · "
-                f"UID {int(group.get('uid_count') or 0)} · {fmt_clock(first_ms)} · {fmt_dur(last_ms - first_ms)}"
+                f"{topic_cn(group.get('kind'))} · {int(group.get('count') or 0)} 条 · "
+                f"{int(group.get('uid_count') or 0)} 个UID · {fmt_clock(first_ms)} · {fmt_dur(last_ms - first_ms)}"
             )
             if group.get('dungeons'):
                 meta += f" · {'/'.join(str(x) for x in list(group.get('dungeons') or [])[:3])}"
@@ -443,12 +445,7 @@ class ActionLogPanel:
         accent = 'danger' if str(group.get('kind') or '') in {'damage', 'monster', 'target'} else 'gold'
         rows = [row for row in list(group.get('rows') or []) if isinstance(row, Mapping)][:8]
         for ridx, row in enumerate(rows):
-            text = (
-                f"{fmt_clock(row.get('time_ms'))} · {row.get('topic') or '-'} · "
-                f"{row.get('actor') or '-'} → {row.get('target') or '-'} · "
-                f"{row.get('label') or '-'} · {self._fmt(row.get('value'))}"
-            )
-            detail_row(parent, text, accent=accent, zebra=bool(ridx % 2)).pack(fill='x', padx=(SP_LG, SP_XS), pady=1)
+            detail_row(parent, readable_event_line(row, value_fmt=self._fmt), accent=accent, zebra=bool(ridx % 2)).pack(fill='x', padx=(SP_LG, SP_XS), pady=1)
         if group.get('has_more_rows'):
             detail_row(parent, '还有更多明细，请缩小筛选或翻页查看。', accent=accent).pack(fill='x', padx=(SP_LG, SP_XS), pady=1)
 

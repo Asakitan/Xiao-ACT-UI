@@ -97,6 +97,71 @@ def fmt_signed(delta_ms: Any) -> str:
     return f"{'+' if d > 0 else '-'}{fmt_dur(abs(d))}"
 
 
+# ── 技术术语 → 人话（所有 ACT 面板共用，JS 侧见 web/act_panel_util.js window.ActText）──
+# 目的：把 topic/kind/source 这些内部字段名，渲染成用户看得懂的中文，而不是
+# "scene / tcp / actor_skill / src" 这种黑话。两边映射必须一致。
+_TOPIC_CN = {
+    "damage": "伤害", "heal": "治疗", "skill": "技能", "actor_skill": "技能",
+    "monster": "怪物", "monster_skill": "怪物技能", "boss": "Boss", "boss_state": "Boss状态",
+    "boss_mechanic": "Boss机制", "boss_mechanic_skill": "Boss机制", "dungeon": "地牢",
+    "scene": "场景", "death": "死亡", "buff": "增益", "player_buff": "玩家增益",
+    "factor_buff": "因子增益", "trigger": "触发", "timer": "计时", "target": "目标",
+    "log": "日志", "event": "事件", "shield": "护盾", "mitigation": "减伤",
+    "incoming_damage": "承受伤害", "healing": "治疗", "ultimate_skill": "终极技",
+    "environment_skill": "环境技能", "field_marker": "场地标记",
+}
+_SOURCE_CN = {
+    "tcp": "封包", "entity": "实体", "mem": "内存", "memory": "内存", "history": "历史",
+    "replay": "回放", "ui": "界面", "offline_import": "离线导入", "plugin": "插件",
+    "unknown": "未知",
+}
+
+
+def topic_cn(value: Any, *, default: str = "事件") -> str:
+    """topic/kind 字段 → 中文标签。未知值原样返回。"""
+    text = str(value or "").strip()
+    if not text:
+        return default
+    return _TOPIC_CN.get(text.lower(), text)
+
+
+def source_cn(value: Any, *, default: str = "未知") -> str:
+    """数据来源标识 → 中文。tcp→封包 / entity→实体 / mem→内存 …"""
+    text = str(value or "").strip()
+    if not text:
+        return default
+    return _SOURCE_CN.get(text.lower(), text)
+
+
+def readable_event_line(row: Mapping[str, Any], *, value_fmt: Optional[Callable[[Any], Any]] = None) -> str:
+    """一条代表事件 → 人话行：时钟 · 类型 · 来源→目标 · 标签 · 值。
+
+    topic 译成中文；把当 actor 用的来源标识(tcp/entity)译成中文；丢掉无意义的
+    0 值和与类型重复的标签。所有 ACT 面板共用，避免各自拼一套黑话。
+    """
+    if not isinstance(row, Mapping):
+        return ""
+    fmt_value = value_fmt or (lambda v: "" if v in (None, "") else str(v))
+    clock = fmt_clock(row.get("time_ms"))
+    topic = topic_cn(row.get("topic"))
+    actor = str(row.get("actor") or "").strip()
+    target = str(row.get("target") or "").strip()
+    label = str(row.get("label") or "").strip()
+    value = str(fmt_value(row.get("value")) or "")
+    parts = [clock, topic]
+    actor_disp = source_cn(actor) if actor else ""
+    if actor_disp and target:
+        parts.append(f"{actor_disp} → {target}")
+    elif target or actor_disp:
+        parts.append(target or actor_disp)
+    raw_topic = str(row.get("topic") or "").strip().lower()
+    if label and label.lower() != raw_topic and label not in (target, topic):
+        parts.append(label)
+    if value and value not in ("0", "0.00"):
+        parts.append(value)
+    return " · ".join(part for part in parts if part)
+
+
 def _accent(kind: str = "gold") -> str:
     kind = str(kind or "gold").lower()
     if kind in {"cyan", "accent", "info"}:
@@ -306,6 +371,6 @@ def source_badges(parent: tk.Misc, sources: Iterable[Mapping[str, Any]]) -> tk.F
     for item in sources or []:
         if not isinstance(item, Mapping):
             continue
-        text = f"{item.get('source') or '-'} · {int(item.get('count') or 0)}"
+        text = f"{source_cn(item.get('source'), default='-')} · {int(item.get('count') or 0)}"
         status_badge(frame, text, kind='cyan').pack(side='left', padx=(0, SP_SM), pady=2)
     return frame

@@ -26,6 +26,8 @@ from gui_modules.sao_panel_components import (
     fmt_dur,
     metric_tile,
     section_card,
+    source_cn,
+    topic_cn,
 )
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
@@ -330,7 +332,7 @@ class TimelineVcrPanel:
         aggregate_row(
             parent,
             title=str(event.get('label') or topic),
-            meta=f"{topic.upper()} · {fmt_clock(event.get('time_ms'))} · source={event.get('source') or '-'}",
+            meta=f"{topic_cn(topic)} · {fmt_clock(event.get('time_ms'))} · 来源 {source_cn(event.get('source'))}",
             value=self._fmt(event.get('value')) if event.get('value') not in (None, '') else '',
             ratio=1.0 if event.get('value') else 0.12,
             accent=accent,

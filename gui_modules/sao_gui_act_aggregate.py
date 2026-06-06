@@ -27,7 +27,9 @@ from gui_modules.sao_panel_components import (
     metric_tile,
     section_card,
     source_badges,
+    source_cn,
     status_badge,
+    topic_cn,
 )
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
@@ -242,20 +244,20 @@ class ActAggregatePanel:
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 10))
         items = (
-            ('Damage', self._fmt(overview.get('damage')), f"{int(counts.get('rows') or 0)} events", 'gold'),
-            ('DPS', self._fmt(overview.get('dps')), f"{self._fmt(overview.get('elapsed_s'))}s", 'cyan'),
-            ('Heal/HPS', f"{self._fmt(overview.get('heal'))} / {self._fmt(overview.get('hps'))}", 'support', 'heal'),
-            ('Skills', int(counts.get('skills') or 0), 'aggregated', 'gold'),
-            ('Monsters', int(counts.get('monsters') or 0), 'targets', 'danger'),
-            ('Dungeons', int(counts.get('dungeons') or 0), overview.get('dungeon_name') or 'live', 'cyan'),
+            ('总伤害', self._fmt(overview.get('damage')), f"{int(counts.get('rows') or 0)} 次事件", 'gold'),
+            ('每秒伤害 DPS', self._fmt(overview.get('dps')), f"持续 {self._fmt(overview.get('elapsed_s'))} 秒", 'cyan'),
+            ('治疗 / 每秒治疗', f"{self._fmt(overview.get('heal'))} / {self._fmt(overview.get('hps'))}", '辅助治疗', 'heal'),
+            ('技能种类', int(counts.get('skills') or 0), '种技能', 'gold'),
+            ('怪物数', int(counts.get('monsters') or 0), '个目标', 'danger'),
+            ('地牢 / 场景', int(counts.get('dungeons') or 0), overview.get('dungeon_name') or '当前', 'cyan'),
         )
         for label, value, sub, accent in items:
             metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
         badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         badges.pack(fill='x', padx=4, pady=(0, 8))
-        status_badge(badges, f"MODE {overview.get('mode') or 'live'}", kind='cyan').pack(side='left', padx=(0, SP_SM))
+        status_badge(badges, f"模式 {overview.get('mode') or 'live'}", kind='cyan').pack(side='left', padx=(0, SP_SM))
         span_s = round(float(overview.get('span_ms') or 0) / 1000.0, 1)
-        status_badge(badges, f"SPAN {self._fmt(span_s)}s", kind='gold').pack(side='left', padx=(0, SP_SM))
+        status_badge(badges, f"战斗时长 {self._fmt(span_s)} 秒", kind='gold').pack(side='left', padx=(0, SP_SM))
         source_badges(badges, status.get('source_mix') or []).pack(side='left')
 
     def _render_group_section(self, title: str, subtitle: str, prefix: str, groups: list[Any], *, value_key: str, accent: str) -> None:
@@ -295,10 +297,10 @@ class ActAggregatePanel:
         chips = tk.Frame(detail, bg=_SAO_PANEL_BODY_BG)
         chips.pack(fill='x', pady=(2, SP_XS))
         for label, values, kind in (
-            ('actors', group.get('actors') or group.get('actor_uids') or [], 'cyan'),
-            ('targets', group.get('targets') or group.get('target_uids') or [], 'gold'),
-            ('skills', group.get('skills') or group.get('skill_ids') or [], 'gold'),
-            ('sources', group.get('sources') or [], 'cyan'),
+            ('参与者', group.get('actors') or group.get('actor_uids') or [], 'cyan'),
+            ('目标', group.get('targets') or group.get('target_uids') or [], 'gold'),
+            ('技能', group.get('skills') or group.get('skill_ids') or [], 'gold'),
+            ('来源', [source_cn(s) for s in (group.get('sources') or [])], 'cyan'),
         ):
             values = list(values or [])[:4]
             if values:
@@ -307,34 +309,62 @@ class ActAggregatePanel:
         if not rows:
             return
         for ridx, row in enumerate(rows):
-            text = f"{fmt_clock(row.get('time_ms'))} · {row.get('topic') or '-'} · {row.get('actor') or '-'} → {row.get('target') or '-'} · {row.get('label') or '-'} · {self._fmt(row.get('value'))}"
-            detail_row(detail, text, accent=accent, zebra=bool(ridx % 2)).pack(fill='x', pady=1)
+            detail_row(detail, self._readable_event_line(row), accent=accent, zebra=bool(ridx % 2)).pack(fill='x', pady=1)
 
     def _render_graph_preview(self, graph: Mapping[str, Any]) -> None:
         if self._rows is None:
             return
-        box = section_card(self._rows, '图表预览', subtitle='来自现有 ACT graph/timeseries，作为聚合驾驶舱的趋势摘要', badge=str(graph.get('row_count') or 0))
+        box = section_card(self._rows, '趋势预览', subtitle='', badge=str(graph.get('row_count') or 0))
         box.pack(fill='x', padx=4, pady=(9, 0))
         body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
         body.pack(fill='x', padx=8, pady=8)
         series = graph.get('series') if isinstance(graph.get('series'), Mapping) else {}
-        for metric, accent in (('damage', 'gold'), ('heal', 'heal'), ('event_count', 'cyan')):
+        for metric, title, accent in (('damage', '总伤害', 'gold'), ('heal', '治疗', 'heal'), ('event_count', '事件数', 'cyan')):
             item = series.get(metric) if isinstance(series.get(metric), Mapping) else {}
             points = list(item.get('points') or [])
             values = [float(p.get('value') or 0.0) for p in points if isinstance(p, Mapping)]
             latest = values[-1] if values else 0.0
             peak = max(values) if values else 0.0
             ratio = (latest / peak) if peak > 0 else 0.0
-            aggregate_row(body, title=metric.upper(), meta=f"{len(points)} points · peak {self._fmt(peak)}",
+            aggregate_row(body, title=title, meta=f"{len(points)} 个采样点 · 峰值 {self._fmt(peak)}",
                           value=self._fmt(latest), ratio=ratio, accent=accent).pack(fill='x', pady=2)
+
+    def _readable_event_line(self, row: Mapping[str, Any]) -> str:
+        """One representative event as a human line: 时钟 · 类型 · 来源→目标 · 标签 · 值
+        (drops the meaningless 'tcp → x · 0' noise: source-as-actor humanized, 0 value hidden)."""
+        clock = fmt_clock(row.get('time_ms'))
+        topic = topic_cn(row.get('topic'))
+        actor = str(row.get('actor') or '').strip()
+        target = str(row.get('target') or '').strip()
+        label = str(row.get('label') or '').strip()
+        value = self._fmt(row.get('value'))
+        parts = [clock, topic]
+        actor_disp = source_cn(actor) if actor else ''
+        if actor_disp and target:
+            parts.append(f"{actor_disp} → {target}")
+        elif target or actor_disp:
+            parts.append(target or actor_disp)
+        raw_topic = str(row.get('topic') or '').strip().lower()
+        if label and label.lower() != raw_topic and label not in (target, topic):
+            parts.append(label)
+        if value and value not in ('0', '0.00'):
+            parts.append(value)
+        return ' · '.join(part for part in parts if part)
 
     def _group_meta(self, group: Mapping[str, Any]) -> str:
         span = int(group.get('duration_ms') or max(0, int(group.get('last_time_ms') or 0) - int(group.get('first_time_ms') or 0)))
-        bits = [f"active {fmt_dur(span)}"]
-        for key, label in (('actors', 'actors'), ('targets', 'targets'), ('skills', 'skills'), ('monsters', 'monsters'), ('dungeons', 'dungeons'), ('sources', 'src')):
+        bits = [f"持续 {fmt_dur(span)}"]
+        for key, label in (('targets', '个目标'), ('monsters', '个怪物'), ('skills', '种技能'), ('actors', '名参与者'), ('dungeons', '个场景')):
             values = list(group.get(key) or [])
             if values:
-                bits.append(f"{label} {len(values)}")
+                bits.append(f"{len(values)} {label}")
+        srcs: list[str] = []
+        for src in (group.get('sources') or []):
+            name = source_cn(src)
+            if name and name not in srcs:
+                srcs.append(name)
+        if srcs:
+            bits.append('来源 ' + '/'.join(srcs))
         return ' · '.join(bits)
 
     def _toggle_group(self, group_id: str) -> None:

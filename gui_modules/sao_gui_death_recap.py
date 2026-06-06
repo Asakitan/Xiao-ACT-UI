@@ -19,6 +19,7 @@ from gui_modules.sao_panel_components import (
     metric_tile,
     section_card,
     status_badge,
+    topic_cn,
 )
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
@@ -249,7 +250,7 @@ class DeathRecapPanel:
         accent = 'danger' if row.get('is_death') or kind == 'incoming_damage' else ('heal' if kind == 'healing' else 'gold')
         aggregate_row(
             parent,
-            title=f"{fmt_signed(rel)} · {kind}",
+            title=f"{fmt_signed(rel)} · {topic_cn(kind)}",
             meta=detail,
             value=self._fmt(row.get('amount')),
             ratio=1.0 if row.get('is_death') else 0.35,
