@@ -831,6 +831,19 @@ class MenuCircleButtonRenderer:
                           cx + r * 0.45 + dr, cy + r * 0.10 + dr),
                          outline=color, width=max(scale, 1))
             return True
+        # Plugin / module icon: a filled hexagon (nut/module) with a hollow
+        # center, distinct from the ◆ diamond. SAOUI.ttf lacks ⬢ (U+2B22) so it
+        # MUST be drawn here — the circle-button font path has no glyph fallback.
+        if icon_text == '⬢':
+            r = canvas * 0.22
+            pts = []
+            for idx in range(6):
+                ang = math.pi / 6.0 + idx * (math.pi / 3.0)  # flat-top hexagon
+                pts.append((cx + math.cos(ang) * r, cy + math.sin(ang) * r))
+            draw.polygon(pts, fill=color)
+            hr = r * 0.40
+            draw.ellipse((cx - hr, cy - hr, cx + hr, cy + hr), fill=(255, 255, 255, 0))
+            return True
         return False
 
     def _icon_font(self, size: int):
