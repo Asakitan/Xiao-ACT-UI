@@ -435,6 +435,43 @@ class PinHotkeyDeclareTests(unittest.TestCase):
         self.assertTrue(m.load_plugin("ph"))
         return m
 
+    def test_enable_state_persists_across_restart(self) -> None:
+        class Settings:
+            def __init__(self):
+                self.d = {}
+
+            def get(self, k, default=None):
+                return self.d.get(k, default)
+
+            def set(self, k, v):
+                self.d[k] = v
+
+            def save(self):
+                pass
+
+        with tempfile.TemporaryDirectory(prefix="act_persist_") as root:
+            for pid, enabled in (("aaa", True), ("bbb", False)):
+                _write_plugin(
+                    os.path.join(root, pid),
+                    {"id": pid, "name": pid, "version": "1.0.0", "entry": "plugin.py",
+                     "enabled": enabled},
+                    "def on_load(ctx):\n    pass\n")
+            s = Settings()
+            m1 = PluginManager(plugin_dirs=[root], settings=s)
+            m1.discover()
+            m1.load_all()
+            # user flips both
+            m1.disable_plugin("aaa")
+            m1.enable_plugin("bbb")
+            self.assertEqual(s.d["act_plugin_enabled"], {"aaa": False, "bbb": True})
+            # restart: new manager, same settings -> persisted overrides manifest
+            m2 = PluginManager(plugin_dirs=[root], settings=s)
+            m2.discover()
+            m2.load_all()
+            st = {p["id"]: (p["enabled"], p["active"]) for p in m2.status()["plugins"]}
+            self.assertEqual(st["aaa"], (False, False))
+            self.assertEqual(st["bbb"], (True, True))
+
     def test_pin_promotes_in_menu(self) -> None:
         with tempfile.TemporaryDirectory(prefix="act_pin_") as root:
             # two plugins; pin the second -> it sorts first

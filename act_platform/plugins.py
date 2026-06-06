@@ -878,6 +878,8 @@ class PluginManager:
         self._hotkeys_lock = threading.RLock()
         #: pinned plugin ids fallback when no settings object is attached.
         self._pinned_cache: list[str] = []
+        #: {plugin_id: bool} persisted enable/disable choices (settings fallback).
+        self._enabled_cache: dict[str, bool] = {}
         #: True once load_all() has run — lets ensure_act_plugin_manager(load=True)
         #: be idempotent instead of reloading every plugin on every call.
         self._initial_loaded = False
@@ -912,6 +914,14 @@ class PluginManager:
                     )
                 records[record.plugin_id] = record
         self._records = records
+        # Apply the user's persisted enable/disable choices over the manifest
+        # default so a plugin the user turned off (or on) stays that way across
+        # restarts. Only for validly-parsed plugins.
+        persisted = self._persisted_enabled()
+        if persisted:
+            for pid, rec in self._records.items():
+                if pid in persisted and not rec.last_error:
+                    rec.enabled = bool(persisted[pid])
         return list(self._records.values())
 
     def load_all(self) -> dict[str, Any]:
@@ -982,6 +992,7 @@ class PluginManager:
         if record is None:
             return False
         record.enabled = True
+        self._set_persisted_enabled(record.plugin_id, True)
         return self.load_plugin(record.plugin_id)
 
     def disable_plugin(self, plugin_id: str) -> bool:
@@ -989,6 +1000,7 @@ class PluginManager:
         if record is None:
             return False
         record.enabled = False
+        self._set_persisted_enabled(record.plugin_id, False)
         self.unload_plugin(record.plugin_id)
         return True
 
@@ -1373,6 +1385,28 @@ class PluginManager:
         else:
             self._pinned_cache = current
         return current
+
+    # ── persisted enable/disable state (remembered across restarts) ────────
+    def _persisted_enabled(self) -> dict[str, bool]:
+        if self.settings is not None and hasattr(self.settings, "get"):
+            raw = self.settings.get("act_plugin_enabled", {}) or {}
+            if isinstance(raw, Mapping):
+                return {str(k): bool(v) for k, v in raw.items()}
+        return dict(self._enabled_cache)
+
+    def _set_persisted_enabled(self, plugin_id: str, enabled: bool) -> None:
+        current = self._persisted_enabled()
+        current[str(plugin_id or "")] = bool(enabled)
+        if self.settings is not None and hasattr(self.settings, "set"):
+            self.settings.set("act_plugin_enabled", current)
+            save = getattr(self.settings, "save", None)
+            if callable(save):
+                try:
+                    save()
+                except Exception:
+                    pass
+        else:
+            self._enabled_cache = current
 
     def apply_render_hooks(self, surface: str, payload: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
         def _on_error(plugin_id: str, exc: BaseException) -> None:
