@@ -36,7 +36,26 @@ _SAO = os.path.dirname(os.path.dirname(_HERE))
 # 仓库根 (含 StarResonanceDps)
 _REPO = os.path.dirname(_SAO)
 
-_ASSETS = os.path.join(_SAO, "assets")
+
+def _resolve_assets_dir() -> str:
+    """assets/ 根目录解析 (onedir 友好)。
+
+    冻结 onedir 下 assets/ 被 build_release.bat 提升到 BASE_DIR(exe 顶层), 而本模块
+    __file__ 在 runtime/tools/tablekit/ → _SAO/assets=runtime/assets 已被搬空, 所有
+    name_table json 读不到 → names 全部回退 "技能#<id>" 占位。优先 config.resource_path
+    (BASE_DIR 优先, BUNDLE_DIR 回退), 找不到再回退 __file__ 相对(dev 树/未冻结)。
+    """
+    try:
+        from config import resource_path  # BASE_DIR-first, BUNDLE_DIR fallback
+        cand = resource_path("assets")
+        if os.path.isdir(cand):
+            return cand
+    except Exception:
+        pass
+    return os.path.join(_SAO, "assets")
+
+
+_ASSETS = _resolve_assets_dir()
 _EXTRACTED = os.path.join(_ASSETS, "name_tables")          # 解码器输出
 _DATATOOLS_CN = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Data", "CN")
 _SRD_WPF_MONSTER = os.path.join(_REPO, "StarResonanceDps", "StarResonanceDpsAnalysis.WPF", "Data", "Monster")

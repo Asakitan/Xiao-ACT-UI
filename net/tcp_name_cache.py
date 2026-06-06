@@ -39,7 +39,24 @@ _PLAYER_KIND = "player"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SAO = os.path.dirname(_HERE)
-_NAME_TABLES = os.path.join(_SAO, "assets", "name_tables")
+
+
+def _resolve_name_tables_dir() -> str:
+    """assets/name_tables/ 解析 (onedir 友好)。冻结后 assets/ 被 build_release.bat
+    提升到 BASE_DIR(exe 顶层), 而本模块 __file__ 在 runtime/net/ → _SAO/assets=runtime/assets
+    已被搬空, 权威 tcp_preparse_name_cache.json 读不到。优先 config.resource_path
+    (BASE_DIR 优先, BUNDLE_DIR 回退), 回退 __file__ 相对(dev 树/未冻结)。"""
+    try:
+        from config import resource_path  # BASE_DIR-first, BUNDLE_DIR fallback
+        cand = resource_path("assets", "name_tables")
+        if os.path.isdir(cand):
+            return cand
+    except Exception:
+        pass
+    return os.path.join(_SAO, "assets", "name_tables")
+
+
+_NAME_TABLES = _resolve_name_tables_dir()
 _SHARED_CACHE_PATH = os.path.join(_NAME_TABLES, "tcp_preparse_name_cache.json")
 _RUNTIME_CACHE_PATH = os.environ.get(
     "SAO_TCP_PREPARSE_NAME_CACHE_LOCAL",

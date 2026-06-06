@@ -18,8 +18,27 @@ import json
 from functools import lru_cache
 from typing import Dict
 
+def _resolve_element_asset() -> str:
+    """element.json 路径解析 (onedir 友好)。
+
+    冻结 onedir 下 assets/ 被 build_release.bat 提升到 BASE_DIR(exe 顶层),
+    而本模块 __file__ 落在 runtime/tools/tablekit/ → __file__ 相对的 runtime/assets
+    已被搬空, 直接读会 FileNotFoundError 回退内置表。优先用 config.resource_path
+    (BASE_DIR 优先, BUNDLE_DIR 回退), 找不到再回退 __file__ 相对路径(dev 树/未冻结)。
+    """
+    try:
+        from config import resource_path  # BASE_DIR-first, BUNDLE_DIR fallback
+        cand = resource_path('assets', 'name_tables', 'element.json')
+        if os.path.isfile(cand):
+            return cand
+    except Exception:
+        pass
+    _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(_root, 'assets', 'name_tables', 'element.json')
+
+
 _SAO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_ASSET = os.path.join(_SAO_ROOT, 'assets', 'name_tables', 'element.json')
+_ASSET = _resolve_element_asset()
 
 # Built-in fallback mirrors the shipped element.json (proto EDamageProperty).
 _FALLBACK: Dict[int, Dict[str, str]] = {

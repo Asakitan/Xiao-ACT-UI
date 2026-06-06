@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import json
 import time
 from typing import Any, Callable, Iterable, Mapping, Optional
@@ -23,6 +24,23 @@ def default_plugin_dirs(base_dir: str) -> list[str]:
 
 
 def project_base_dir() -> str:
+    """插件根目录解析 (打包友好 / onedir-aware)。
+
+    冻结 onedir 下本模块在 ``<exe>/runtime/act_platform/runtime.pyc``, 但 plugins/ 与
+    web/assets/proto 一样由 build_release.bat 提升到 exe 顶层 (= ``config.BASE_DIR``)。
+    把根目录解析到 BASE_DIR 而非 ``__file__`` 有两个好处:
+      1. 用户把自带插件放顶层 ``plugins/`` 或 ``user_plugins/`` 不会被更新覆盖
+         (runtime/ 树每次更新都会被整体重写);
+      2. 与 config.resource_path / 名字表读取器的 BASE_DIR-first 约定一致。
+    非冻结(dev 树)回退到 ``__file__`` 相对 = ``sao_auto`` 项目根。
+    """
+    if getattr(sys, "frozen", False):
+        try:
+            from config import BASE_DIR  # = dirname(sys.executable), exe 顶层
+            if BASE_DIR:
+                return BASE_DIR
+        except Exception:
+            pass
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 

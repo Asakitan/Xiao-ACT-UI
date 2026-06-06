@@ -57,16 +57,52 @@ REORG_PKG_HIDDENIMPORTS = (
     + collect_submodules('sao_theme')
     + collect_submodules('packet_parser')
     + collect_submodules('act_platform')
+    # v4.0.0 拆分新增的两个客户端子包，之前漏挂安全网：
+    #   act_replay  — act_platform.runtime 在函数内懒导入 (harness/importer/timeline)，
+    #                 PyInstaller 静态分析容易漏，ACT 回放/时间轴/离线导入靠它。
+    #   ui_gpu      — sao_theme.__init__ 模块级导入 SAOPopUpMenu (GPU 弹出菜单)。
+    # 两者都是带 __init__.py 的纯 .py 小包，collect_submodules 安全(不像 mem_probe)。
+    + collect_submodules('act_replay')
+    + collect_submodules('ui_gpu')
 )
 # 注: utils.window_effects / vision.skill_recognition 是重构前就无任何代码 import
 # 的孤立模块（已核验 main 分支亦无引用）。PyInstaller noarchive 对「零引用包内子
 # 模块」按依赖图优化不写出 runtime/.pyc（collect_submodules / hiddenimports / a.pure
 # 注入均无法强制），但因全仓无人 import 它们，不影响运行时；一旦未来有代码引用，
 # collect_submodules 即会随引用链收入。
-# Round 70 (v3.2.15): mem_probe/ directory was removed in round 26.
-# MEM_PROBE_HIDDENIMPORTS, MEM_PROBE_BINARIES, and the ('mem_probe',
-# 'mem_probe') data entry below were all cleaned out together — none
-# of them resolve to anything now that the package is gone.
+# Round 71 (v4.0.0): mem_probe/ EXISTS and IS a genuine runtime dependency —
+# the earlier "removed in round 26" note was wrong. The memory/hybrid/auto data
+# source is lazily imported at runtime by:
+#   net/packet_bridge.py:520            from mem_probe.unified_source import UnifiedDataSource
+#   gui_modules/sao_gui_engine_lifecycle_mixin.py:425
+#                                       from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
+# Both are function-level imports PyInstaller's static analysis will NOT follow,
+# so memory-mode is dead in the frozen client unless we force-collect them.
+# We list ONLY the verified runtime closure of unified_source + mem_state_bridge
+# (16 modules, all confirmed on disk). We do NOT collect_submodules('mem_probe')
+# — that would drag in the dev-only il2cpp DUMPER tree (GameAssembly.dll,
+# global-metadata.dat, DummyDll/, cli/fingerprint/dump_tool/find_owner/refresh/
+# rebuild_bundle/metadata_registration/code_registration/forward_walk/verify_klass).
+# The AVX2 core _sao_cy_memscan.pyd already ships via CYTHON_ACCEL_BINARIES glob;
+# mem_probe.cy_memscan is the pure-Python facade over it (no extra binary).
+MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
+    'mem_probe',
+    'mem_probe.cy_memscan',
+    'mem_probe.process',
+    'mem_probe.unified_source',
+    'mem_probe.il2cpp',
+    'mem_probe.il2cpp.mem_state_bridge',
+    'mem_probe.il2cpp.mem_self_state_provider',
+    'mem_probe.il2cpp.mem_state_anchor',
+    'mem_probe.il2cpp.static_dps_source',
+    'mem_probe.il2cpp.static_resolver',
+    'mem_probe.il2cpp.script_parser',
+    'mem_probe.il2cpp.dump_cs_parser',
+    'mem_probe.il2cpp.instance_cache',
+    'mem_probe.il2cpp.bundle_loader',
+    'mem_probe.il2cpp.bundle_store',
+    'mem_probe.il2cpp.mem_skill_slots',
+]
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
 GPU_RENDER_BINARIES = (
@@ -98,10 +134,18 @@ a = Analysis(
         # skillfx_pipeline._load_fragment FileNotFoundError → _tls.failed=True
         # → SkillFX 永远走 CPU/PIL fallback)
         ('shaders', 'shaders'),
+        # ACT 插件树 — 与 web/assets/proto 同等待遇: dest 写 'plugins', 在
+        # contents_directory='runtime' 下 PyInstaller 先把它放进 runtime/plugins/,
+        # 再由 build_release.bat 的提升循环 move 到 exe 顶层 plugins/。
+        # 加载器 act_platform/runtime.py project_base_dir() 冻结时解析到 config.BASE_DIR
+        # (exe 顶层) → 扫 <exe>/plugins + <exe>/user_plugins, 用户自带插件放顶层不被更新覆盖。
+        # ⚠ dest 必须是 'plugins'(→runtime/plugins) 不能写 'runtime/plugins'(会双层套娃成
+        #   runtime/runtime/plugins)。plugin.py 以原始 .py 进包(加载器按路径 spec_from_file_location)。
+        ('plugins', 'plugins'),
         # 图标
         ('icon.ico', '.'),
     ] + GPU_RENDER_DATAS,
-    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + REORG_PKG_HIDDENIMPORTS + [
+    hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + REORG_PKG_HIDDENIMPORTS + MEM_PROBE_RUNTIME_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
         'clr',
         'clr_loader',

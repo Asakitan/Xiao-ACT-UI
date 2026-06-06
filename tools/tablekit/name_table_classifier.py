@@ -16,7 +16,23 @@ import importlib
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SAO = os.path.dirname(os.path.dirname(_HERE))
 _REPO = os.path.dirname(_SAO)
-_ASSETS = os.path.join(_SAO, "assets")
+
+
+def _resolve_assets_dir() -> str:
+    """assets/ 根目录解析 (onedir 友好)。冻结后 assets/ 被提升到 BASE_DIR(exe 顶层),
+    而 __file__ 落在 runtime/tools/tablekit/ → runtime/assets 已被搬空。优先
+    config.resource_path(BASE_DIR 优先, BUNDLE_DIR 回退), 回退 __file__ 相对(dev 树)。"""
+    try:
+        from config import resource_path  # BASE_DIR-first, BUNDLE_DIR fallback
+        cand = resource_path("assets")
+        if os.path.isdir(cand):
+            return cand
+    except Exception:
+        pass
+    return os.path.join(_SAO, "assets")
+
+
+_ASSETS = _resolve_assets_dir()
 _DATATOOLS_CN = os.path.join(_REPO, "StarResonanceDps", "DataTools", "Data", "CN")
 _RESONANCE_METER = os.path.join(_REPO, "resonance-logs-cn", "src-tauri", "meter-data")
 _RESONANCE_CONFIG = os.path.join(_REPO, "resonance-logs-cn", "src", "lib", "config")

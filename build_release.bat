@@ -43,12 +43,16 @@ rem update.exe: copy next to main exe
 copy /y "%DIST_DIR%\update.exe" "%CLIENT_DIR%\update.exe" >nul
 
 rem Lift modular data folders OUT of runtime\ to top level so they can be updated independently
-for %%D in (web assets proto) do (
+rem plugins included: PluginManager.project_base_dir() resolves to exe top level (config.BASE_DIR),
+rem so bundled ACT plugins must sit at top-level plugins\, alongside web\assets\proto.
+for %%D in (web assets proto plugins) do (
     if exist "%CLIENT_DIR%\runtime\%%D" (
         echo   moving runtime\%%D -^> %%D
         move /y "%CLIENT_DIR%\runtime\%%D" "%CLIENT_DIR%\%%D" >nul
     )
 )
+rem User drop-in plugins live here and survive updates (never shipped/overwritten).
+if not exist "%CLIENT_DIR%\user_plugins" mkdir "%CLIENT_DIR%\user_plugins"
 if exist "%CLIENT_DIR%\runtime\icon.ico" (
     move /y "%CLIENT_DIR%\runtime\icon.ico" "%CLIENT_DIR%\icon.ico" >nul
 )
