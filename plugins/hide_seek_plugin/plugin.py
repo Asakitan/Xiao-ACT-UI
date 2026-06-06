@@ -43,7 +43,20 @@ def on_load(ctx):
         render=_render,
         on_action=_on_action,
     )
+    # Customizable hotkey — toggles the automation; rebindable in the keybinding
+    # editor. Demonstrates the plugin custom-hotkey capability.
+    ctx.register_hotkey("toggle", _toggle, default_key="F12", label="自动躲猫猫开关")
     ctx.log("hide_seek_plugin loaded (idle)")
+
+
+def _toggle():
+    if _running():
+        _stop("hotkey")
+    elif _ctx is not None:
+        try:
+            _start()
+        except Exception as exc:
+            _ctx.log(f"hotkey start failed: {exc}")
 
 
 def on_disable():

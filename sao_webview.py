@@ -98,6 +98,7 @@ from act_platform.runtime import (
     act_plugin_enable,
     act_plugin_list,
     act_plugin_menu,
+    act_plugin_pin,
     act_plugin_reload,
     act_plugin_status,
     act_plugin_ui_action,
@@ -762,6 +763,9 @@ class SAOWebAPI:
 
     def reload_plugins(self, plugin_id=''):
         return json.dumps(act_plugin_reload(self._g, str(plugin_id or '')), ensure_ascii=False)
+
+    def pin_plugin(self, plugin_id, pinned=True):
+        return json.dumps(act_plugin_pin(self._g, str(plugin_id or ''), bool(pinned)), ensure_ascii=False)
 
     # ── plugin UI panels + render hooks/overlays (shared with plugin_layer.js) ──
     def get_plugin_ui_panels(self):

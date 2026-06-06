@@ -7,7 +7,8 @@
   "enabled": false,
   "capabilities": [
     "plugin_manager",
-    {"id": "render_hooks", "title": "Surface render interception", "actions": ["set_mode"]}
+    {"id": "render_hooks", "title": "Surface render interception", "actions": ["set_mode"]},
+    {"id": "ui_panels", "title": "Render skin control"}
   ],
   "settings_schema": {
     "mode": {"type": "string", "default": "skin", "description": "off | skin | takeover"},

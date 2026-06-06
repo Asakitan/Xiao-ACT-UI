@@ -279,6 +279,10 @@ class PluginRecord:
             "permissions": list(self.permissions),
             "capabilities": [dict(cap) for cap in self.capabilities],
             "capability_ids": [str(cap.get("id")) for cap in self.capabilities if cap.get("id")],
+            # A plugin only "has a panel" if it DECLARES one — the manifest must
+            # list a ``ui_panels`` capability. Lets the menu/manager know even
+            # while the plugin is disabled (and so not yet runtime-registered).
+            "declares_panel": any(str(cap.get("id")) == "ui_panels" for cap in self.capabilities),
             "failures": self.failures,
             "event_failures": self.event_failures,
             "last_error": self.last_error,
@@ -638,6 +642,17 @@ class PluginContext:
     def clear_overlay(self, surface: Optional[str] = None) -> None:
         self._manager._clear_overlay(self._record.plugin_id, surface)
 
+    def register_hotkey(self, hotkey_id: str, callback: Callable[[], Any],
+                        default_key: str = "", label: str = "") -> str:
+        """Register a customizable global hotkey for this plugin.
+
+        Returns the action id ``plugin.<plugin_id>.<hotkey_id>``. The default key
+        (e.g. ``"F6"``) seeds the shared hotkey settings; the user can rebind it
+        in the normal keybinding editor. ``callback()`` fires when pressed.
+        """
+        return self._manager._register_hotkey(
+            self._record.plugin_id, hotkey_id, callback, default_key, label)
+
     def request_redraw(self, surface: str = "", reason: str = "") -> dict[str, Any]:
         """Ask all host surfaces (or one) to repaint plugin content."""
         return self.emit("plugin_ui_invalidate", {
@@ -856,6 +871,13 @@ class PluginManager:
         #: Guards all _timers mutations + the timer rearm/cancel decision so a
         #: repeating timer cannot rearm itself past a concurrent unload.
         self._timers_lock = threading.RLock()
+        #: action ("plugin.<id>.<hotkey>") -> {plugin_id, hotkey_id, callback, default_key, label}
+        self._hotkeys: Dict[str, dict[str, Any]] = {}
+        #: Guards _hotkeys — registered/cleared on the main thread, read from the
+        #: pynput hotkey-listener thread (snapshot under lock to avoid races).
+        self._hotkeys_lock = threading.RLock()
+        #: pinned plugin ids fallback when no settings object is attached.
+        self._pinned_cache: list[str] = []
         #: True once load_all() has run — lets ensure_act_plugin_manager(load=True)
         #: be idempotent instead of reloading every plugin on every call.
         self._initial_loaded = False
@@ -983,7 +1005,20 @@ class PluginManager:
         return self.load_all()
 
     def list_plugins(self) -> list[dict[str, Any]]:
-        return [self._records[key].to_status() for key in sorted(self._records)]
+        pinned = set(self.pinned_plugins())
+        hotkeys_by_plugin: dict[str, int] = {}
+        with self._hotkeys_lock:
+            metas = list(self._hotkeys.values())
+        for meta in metas:
+            pid = str(meta.get("plugin_id") or "")
+            hotkeys_by_plugin[pid] = hotkeys_by_plugin.get(pid, 0) + 1
+        out: list[dict[str, Any]] = []
+        for key in sorted(self._records):
+            status = self._records[key].to_status()
+            status["pinned"] = key in pinned
+            status["hotkey_count"] = hotkeys_by_plugin.get(key, 0)
+            out.append(status)
+        return out
 
     def list_extensions(self, kind: str = "") -> dict[str, list[dict[str, Any]]] | list[dict[str, Any]]:
         if kind:
@@ -1193,6 +1228,119 @@ class PluginManager:
         for timer in list(bucket.values()):
             timer.cancel()
 
+    # ── plugin hotkeys (customizable) ──────────────────────────────────────
+    def _register_hotkey(self, plugin_id: str, hotkey_id: str,
+                         callback: Callable[[], Any], default_key: str = "",
+                         label: str = "") -> str:
+        if not callable(callback):
+            raise TypeError("hotkey callback must be callable")
+        hid = _safe_id(hotkey_id)
+        if not hid:
+            raise ValueError(f"invalid hotkey id: {hotkey_id!r}")
+        action = f"plugin.{plugin_id}.{hid}"
+        with self._hotkeys_lock:
+            self._hotkeys[action] = {
+                "action": action,
+                "plugin_id": str(plugin_id or ""),
+                "hotkey_id": hid,
+                "callback": callback,
+                "default_key": str(default_key or "").upper(),
+                "label": str(label or hid),
+            }
+        return action
+
+    def list_hotkeys(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        # Snapshot under the lock: read from the pynput listener thread while
+        # load/unload mutates _hotkeys on the main thread.
+        with self._hotkeys_lock:
+            items = sorted(self._hotkeys.items())
+        for action, meta in items:
+            record = self._records.get(str(meta.get("plugin_id") or ""))
+            out.append({
+                "action": action,
+                "plugin_id": meta.get("plugin_id"),
+                "hotkey_id": meta.get("hotkey_id"),
+                "label": meta.get("label"),
+                "default_key": meta.get("default_key"),
+                "current_key": self._current_hotkey(action, str(meta.get("default_key") or "")),
+                "active": bool(record and record.active and record.enabled),
+            })
+        return out
+
+    def _current_hotkey(self, action: str, default_key: str) -> str:
+        if self.settings is not None and hasattr(self.settings, "get"):
+            raw = self.settings.get("hotkeys", {}) or {}
+            if isinstance(raw, Mapping) and action in raw:
+                value = raw.get(action)
+                if isinstance(value, Mapping):
+                    return str(value.get("key") or value.get("name") or default_key)
+                return str(value or default_key)
+        return default_key
+
+    def hotkey_actions(self) -> dict[str, Callable[[], Any]]:
+        """{action: dispatch} for the host hotkey manager (active plugins only)."""
+        out: dict[str, Callable[[], Any]] = {}
+        with self._hotkeys_lock:
+            items = list(self._hotkeys.items())
+        for action, meta in items:
+            record = self._records.get(str(meta.get("plugin_id") or ""))
+            if record and record.active and record.enabled:
+                out[action] = lambda a=action: self.dispatch_hotkey(a)
+        return out
+
+    def dispatch_hotkey(self, action: str) -> bool:
+        with self._hotkeys_lock:
+            meta = self._hotkeys.get(str(action or ""))
+        if not meta:
+            return False
+        record = self._records.get(str(meta.get("plugin_id") or ""))
+        if not (record and record.active and record.enabled):
+            return False
+        callback = meta.get("callback")
+        if not callable(callback):
+            return False
+        try:
+            # Callback runs OUTSIDE the lock (it may re-enter the manager).
+            callback()
+            return True
+        except Exception as exc:
+            self._record_failure(str(meta.get("plugin_id") or ""), exc)
+            return False
+
+    def _clear_plugin_hotkeys(self, plugin_id: str) -> None:
+        with self._hotkeys_lock:
+            stale = [a for a, m in self._hotkeys.items() if str(m.get("plugin_id") or "") == str(plugin_id or "")]
+            for action in stale:
+                self._hotkeys.pop(action, None)
+
+    # ── pinned plugins (promoted to the top of the plugin menu) ────────────
+    def pinned_plugins(self) -> list[str]:
+        if self.settings is not None and hasattr(self.settings, "get"):
+            raw = self.settings.get("act_pinned_plugins", []) or []
+            if isinstance(raw, (list, tuple)):
+                return [str(x) for x in raw]
+        return list(self._pinned_cache)
+
+    def set_pinned(self, plugin_id: str, pinned: bool = True) -> list[str]:
+        current = list(self.pinned_plugins())
+        pid = str(plugin_id or "")
+        if pinned and pid not in current:
+            current.append(pid)
+        elif not pinned and pid in current:
+            current = [x for x in current if x != pid]
+        if self.settings is not None and hasattr(self.settings, "set"):
+            self.settings.set("act_pinned_plugins", current)
+            save = getattr(self.settings, "save", None)
+            if callable(save):
+                try:
+                    save()
+                except Exception:
+                    pass
+        else:
+            self._pinned_cache = current
+        return current
+
     def apply_render_hooks(self, surface: str, payload: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
         def _on_error(plugin_id: str, exc: BaseException) -> None:
             self._record_failure(plugin_id, exc)
@@ -1228,6 +1376,8 @@ class PluginManager:
             "event_bus": self.event_bus.snapshot(),
             "ui_panels": self.list_ui_panels(),
             "render": self.render_registry.status(),
+            "hotkeys": self.list_hotkeys(),
+            "pinned": self.pinned_plugins(),
         }
 
     def engine_status(self) -> dict[str, Any]:
@@ -1299,6 +1449,8 @@ class PluginManager:
         self.render_registry.unregister_plugin(str(plugin_id or ""))
         # Cancel any scheduler/loop timers the plugin started.
         self._clear_plugin_timers(str(plugin_id or ""))
+        # Drop the plugin's registered hotkeys.
+        self._clear_plugin_hotkeys(str(plugin_id or ""))
         if record is not None:
             # Remove modules the plugin loaded via ctx.load_local (no sys.modules leak).
             for mod_name in list(record.loaded_local_modules):

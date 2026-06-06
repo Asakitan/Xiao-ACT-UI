@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 from act_platform.runtime import (
     act_plugin_disable,
     act_plugin_enable,
+    act_plugin_pin,
     act_plugin_reload,
     act_plugin_status,
 )
@@ -335,20 +336,32 @@ class PluginManagerPanel:
                 pady=5,
             ).pack(fill='x', padx=10, pady=(0, 6))
 
+        pinned = bool(plugin.get('pinned'))
         actions = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
         actions.pack(fill='x', padx=10, pady=(0, 9))
         self._action_button(actions, '启用 Enable', lambda pid=plugin_id: self._enable(pid), enabled=not enabled)
         self._action_button(actions, '禁用 Disable', lambda pid=plugin_id: self._disable(pid), enabled=enabled)
         self._action_button(actions, '重载 Reload', lambda pid=plugin_id: self._reload(pid), enabled=enabled)
+        self._action_button(
+            actions, ('★ 取消置顶' if pinned else '☆ 置顶 Pin'),
+            lambda pid=plugin_id, pn=pinned: self._pin(pid, not pn))
 
     def _format_meta(self, plugin: Mapping[str, Any]) -> str:
         games = ','.join(str(x) for x in (plugin.get('game_ids') or [])) or '-'
         perms = ','.join(str(x) for x in (plugin.get('permissions') or [])) or '-'
         caps = ','.join(str(x) for x in (plugin.get('capability_ids') or [])) or '-'
+        flags = []
+        if plugin.get('pinned'):
+            flags.append('★PINNED')
+        flags.append('面板' if plugin.get('declares_panel') else '无面板')
+        hk = int(plugin.get('hotkey_count') or 0)
+        if hk:
+            flags.append(f'热键×{hk}')
         return (
             f"id={plugin.get('id') or '-'}  v{plugin.get('version') or '-'}  "
             f"subs={plugin.get('subscription_count') or 0}  "
             f"fail={plugin.get('failures') or 0}/{plugin.get('event_failures') or 0}\n"
+            f"{' · '.join(flags)}\n"
             f"games={games}  perms={perms}  caps={caps}\n"
             f"entry={plugin.get('entry') or '-'}"
         )
@@ -394,6 +407,19 @@ class PluginManagerPanel:
         if isinstance(result, Mapping) and result.get('ok') is False:
             self._status_var.set(str(result.get('message') or 'Disable failed'))
         self.refresh()
+
+    def _pin(self, plugin_id: str, pinned: bool) -> None:
+        result = act_plugin_pin(self.owner, plugin_id, pinned)
+        if isinstance(result, Mapping) and result.get('ok') is False:
+            self._status_var.set(str(result.get('message') or 'Pin failed'))
+        self.refresh()
+        # Reflect the new pin order in the SAO menu if it is open.
+        refresh_menu = getattr(self.owner, '_refresh_menu_if_open', None)
+        if callable(refresh_menu):
+            try:
+                refresh_menu()
+            except Exception:
+                pass
 
 
 __all__ = ["PluginManagerPanel"]

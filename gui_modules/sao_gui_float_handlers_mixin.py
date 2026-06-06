@@ -177,7 +177,38 @@ class SAOPlayerGUIFloatHandlersMixin:
             'show_plugins': lambda: self.root.after(0, self._show_plugin_popup_menu),
             'boss_raid_start': lambda: self.root.after(0, self._toggle_boss_raid),
             'boss_raid_next_phase': lambda: self.root.after(0, self._boss_raid_next_phase),
-        })
+        }, hotkey_provider=self._plugin_hotkey_map)
+
+    def _plugin_hotkey_map(self):
+        """Resolve plugin-registered hotkeys for the hotkey listener.
+
+        Returns ``{action: {'key': 'F6', 'callback': fn}}`` for active plugins,
+        honouring a user override in ``settings['hotkeys']`` over the plugin's
+        declared default. Plugin callbacks are marshalled to the Tk thread.
+        """
+        out = {}
+        try:
+            from act_platform.runtime import ensure_act_plugin_manager
+            mgr = ensure_act_plugin_manager(self, load=False)
+            saved = self.settings.get('hotkeys', {}) or {}
+            for hk in mgr.list_hotkeys():
+                if not hk.get('active'):
+                    continue
+                action = str(hk.get('action') or '')
+                key = ''
+                if isinstance(saved, dict) and action in saved:
+                    v = saved[action]
+                    key = (v.get('key') or v.get('name')) if isinstance(v, dict) else str(v)
+                key = str(key or hk.get('default_key') or '').upper()
+                if not key:
+                    continue
+                out[action] = {
+                    'key': key,
+                    'callback': (lambda a=action, m=mgr: self.root.after(0, lambda: m.dispatch_hotkey(a))),
+                }
+        except Exception:
+            pass
+        return out
 
     def _create_floating_widget(self):
         """SAO 菜单点击锚点窗口 (不渲染 HP — HP 由 sao_gui_hp.HpOverlay 独立渲染).

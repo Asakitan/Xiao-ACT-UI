@@ -16,6 +16,7 @@ import unittest
 
 from act_platform.event_bus import EventBus
 from act_platform.plugins import PluginManager
+from act_platform.runtime import act_plugin_menu
 from act_platform.render_hooks import OVERRIDE_KEY, RenderHookRegistry
 from act_platform.ui_spec import UI, normalize_ui_spec
 
@@ -337,6 +338,87 @@ class PluginCapabilityTests(unittest.TestCase):
             for _ in range(4):
                 rt.ensure_act_plugin_manager(owner, load=True)
             self.assertEqual(mod.reload_count(), 1)
+
+
+PIN_HOTKEY_PLUGIN = '''
+fired = {"n": 0}
+_ctx = None
+def on_load(ctx):
+    global _ctx
+    _ctx = ctx
+    ctx.register_ui_panel("p", {"title": "P"}, render=lambda _p: ctx.ui.panel("P", []))
+    ctx.register_hotkey("go", lambda: fired.__setitem__("n", fired["n"] + 1),
+                        default_key="F7", label="Go")
+'''
+
+
+class PinHotkeyDeclareTests(unittest.TestCase):
+    def _mgr(self, root, caps):
+        _write_plugin(
+            os.path.join(root, "ph"),
+            {"id": "ph", "name": "PH", "version": "1.0.0", "entry": "plugin.py",
+             "enabled": True, "capabilities": caps},
+            PIN_HOTKEY_PLUGIN)
+        m = PluginManager(plugin_dirs=[root])
+        m.discover()
+        self.assertTrue(m.load_plugin("ph"), m.status()["plugins"][0]["last_error"])
+        return m
+
+    def test_declares_panel_from_manifest(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_decl_") as root:
+            m = self._mgr(root, [{"id": "ui_panels", "title": "P"}])
+            self.assertTrue(m.status()["plugins"][0]["declares_panel"])
+        with tempfile.TemporaryDirectory(prefix="act_decl2_") as root2:
+            # No ui_panels capability -> declares_panel False even though it
+            # registers a panel at runtime (the manifest is the declaration).
+            _write_plugin(
+                os.path.join(root2, "nopanel"),
+                {"id": "nopanel", "name": "NP", "version": "1.0.0", "entry": "plugin.py",
+                 "enabled": True, "capabilities": []},
+                "def on_load(ctx):\n    ctx.log('x')\n")
+            m2 = PluginManager(plugin_dirs=[root2])
+            m2.discover()
+            m2.load_plugin("nopanel")
+            self.assertFalse(m2.status()["plugins"][0]["declares_panel"])
+
+    def test_hotkey_register_dispatch_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_hk_") as root:
+            m = self._mgr(root, [{"id": "ui_panels"}])
+            hks = m.list_hotkeys()
+            self.assertEqual(hks[0]["action"], "plugin.ph.go")
+            self.assertEqual(hks[0]["default_key"], "F7")
+            self.assertIn("plugin.ph.go", m.hotkey_actions())
+            mod = __import__("sys").modules["act_plugin_ph"]
+            self.assertTrue(m.dispatch_hotkey("plugin.ph.go"))
+            self.assertEqual(mod.fired["n"], 1)
+            m.unload_plugin("ph")
+            self.assertEqual(m.list_hotkeys(), [])
+            self.assertFalse(m.dispatch_hotkey("plugin.ph.go"))
+
+    def test_pin_promotes_in_menu(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="act_pin_") as root:
+            # two plugins; pin the second -> it sorts first
+            for pid in ("aaa", "zzz"):
+                _write_plugin(
+                    os.path.join(root, pid),
+                    {"id": pid, "name": pid, "version": "1.0.0", "entry": "plugin.py", "enabled": True},
+                    "def on_load(ctx):\n    pass\n")
+            m = PluginManager(plugin_dirs=[root])
+            m.discover()
+            m.load_all()
+            self.assertEqual(m.set_pinned("zzz", True), ["zzz"])
+            self.assertTrue({p["id"]: p for p in m.status()["plugins"]}["zzz"]["pinned"])
+
+            class Owner:
+                pass
+            owner = Owner()
+            owner._act_plugin_manager = m
+            menu = act_plugin_menu(owner)
+            self.assertEqual(menu["plugins"][0]["id"], "zzz")
+            self.assertTrue(menu["plugins"][0]["pinned"])
+            self.assertEqual([it["type"] for it in menu["items"][:3]], ["manage", "panels", "reload"])
+            m.set_pinned("zzz", False)
+            self.assertNotIn("zzz", m.pinned_plugins())
 
 
 class BundledExampleTests(unittest.TestCase):

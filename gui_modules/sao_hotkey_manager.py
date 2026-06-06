@@ -87,9 +87,13 @@ class SAOHotkeyManager:
         'F9': 120, 'F10': 121, 'F11': 122, 'F12': 123,
     }
 
-    def __init__(self, settings: Any, actions: Dict[str, Any]):
+    def __init__(self, settings: Any, actions: Dict[str, Any],
+                 hotkey_provider: Any = None):
         self.settings = settings
         self.actions = actions
+        # Optional callable returning {action: {'vk': int} | {'key': 'F6'},
+        # 'callback': fn} for dynamically-registered (plugin) hotkeys.
+        self.hotkey_provider = hotkey_provider
         self._listener = None
         self._pressed_keys: set = set()
         self._start()
@@ -134,6 +138,27 @@ class SAOHotkeyManager:
                 vk = self._FKEY_VK.get(info.upper())
             if vk and vk in self._pressed_keys:
                 cb = self.actions.get(action)
+                if cb:
+                    cb()
+                    self._pressed_keys.clear()
+                    return
+        # Dynamically-registered (plugin) hotkeys, re-resolved each press so
+        # newly loaded plugins work without restarting the listener.
+        if self.hotkey_provider is None:
+            return
+        try:
+            dynamic = self.hotkey_provider() or {}
+        except Exception:
+            dynamic = {}
+        for action, info in dynamic.items():
+            if not isinstance(info, dict):
+                continue
+            vk = info.get('vk')
+            if not vk:
+                key = str(info.get('key') or '').upper()
+                vk = self._FKEY_VK.get(key)
+            if vk and vk in self._pressed_keys:
+                cb = info.get('callback')
                 if cb:
                     cb()
                     self._pressed_keys.clear()

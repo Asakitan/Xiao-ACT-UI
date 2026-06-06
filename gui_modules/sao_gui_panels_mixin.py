@@ -134,9 +134,13 @@ class SAOPlayerGUIPanelsMixin:
                 panel.refresh()
             except Exception:
                 pass
+        try:
+            self._refresh_menu_if_open()
+        except Exception:
+            pass
 
     def _show_plugin_popup_menu(self):
-        """SAO 插件 popup 菜单 — 插件管理 + 各插件(打开面板/启停)."""
+        """SAO 插件 popup 菜单 — 插件管理 + 各插件(打开面板/启停/置顶)."""
         import tkinter as tk
 
         from act_platform.runtime import act_plugin_menu
@@ -144,27 +148,31 @@ class SAOPlayerGUIPanelsMixin:
         try:
             data = act_plugin_menu(self)
         except Exception:
-            data = {'ok': False, 'items': []}
+            data = {'ok': False, 'plugins': []}
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label='⚙ 插件管理面板 Manage',
                          command=lambda: self._open_act_plugin_manager('manage'))
-        menu.add_command(label='🧩 插件面板 Panels',
+        menu.add_command(label='⬢ 插件面板 Panels',
                          command=lambda: self._open_act_plugin_manager('panels'))
         menu.add_separator()
-        items = [it for it in (data.get('items') or []) if it.get('type') == 'plugin']
+        items = list(data.get('plugins') or [])
         if not items:
             menu.add_command(label='(未发现插件 No plugins)', state='disabled')
         for it in items:
             pid = str(it.get('id') or '')
             name = str(it.get('label') or pid)
             enabled = bool(it.get('enabled'))
+            pinned = bool(it.get('pinned'))
             sub = tk.Menu(menu, tearoff=0)
-            if it.get('panels'):
-                sub.add_command(label='打开面板 Open panel',
-                                command=lambda: self._open_act_plugin_manager('panels'))
             sub.add_command(label=('禁用 Disable' if enabled else '启用 Enable'),
                             command=lambda p=pid, en=enabled: self._toggle_plugin_enabled(p, en))
-            prefix = '● ' if it.get('active') else ('◐ ' if enabled else '○ ')
+            sub.add_command(label=('取消置顶 Unpin' if pinned else '置顶 Pin'),
+                            command=lambda p=pid, pn=pinned: self._pin_plugin_from_menu(p, not pn))
+            # Only plugins that DECLARE a panel get the open-panel entry.
+            if it.get('declares_panel'):
+                sub.add_command(label='打开面板 Open panel',
+                                command=lambda: self._open_act_plugin_manager('panels'))
+            prefix = ('★ ' if pinned else '') + ('● ' if it.get('active') else ('◐ ' if enabled else '○ '))
             menu.add_cascade(label=prefix + name, menu=sub)
         try:
             x = self.root.winfo_pointerx()

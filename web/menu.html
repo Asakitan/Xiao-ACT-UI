@@ -3478,10 +3478,13 @@ html, body {
             <li class="item" data-name="act" data-idx="5">
                 <div class="in-circle"><span class="sao-icon sao-icon-act"></span></div>
             </li>
-            <li class="item" data-name="theme" data-idx="6">
+            <li class="item" data-name="plugins" data-idx="6">
+                <div class="in-circle"><span style="font-size:17px;line-height:1;color:var(--menu-icon);">⬢</span></div>
+            </li>
+            <li class="item" data-name="theme" data-idx="7">
                 <div class="in-circle"><span class="sao-icon sao-icon-theme"></span></div>
             </li>
-            <li class="item" data-name="about" data-idx="7">
+            <li class="item" data-name="about" data-idx="8">
                 <div class="in-circle"><span class="sao-icon sao-icon-about"></span></div>
             </li>
         </ul>
@@ -3860,7 +3863,6 @@ html, body {
             <ul class="child-menu" id="sub-panels" data-group="panels">
                 <li data-action="toggle_auto_script"><i class="menu-glyph mi-play"></i><span>自动按键 Auto Key Engine</span><small class="shortcut">F6</small></li>
                 <li data-action="toggle_recognition"><i class="menu-glyph mi-play"></i><span>识别 开/关</span><small class="shortcut">F5</small></li>
-                <li data-action="show_plugins"><i class="menu-glyph mi-mid"></i><span>🧩 插件菜单 Plugins</span><small class="shortcut">F11</small></li>
                 <li data-action="toggle_commander"><i class="menu-glyph mi-play"></i><span>团本指挥 Commander</span></li>
                 <li data-action="toggle_session_players"><i class="menu-glyph mi-mid"></i><span>本次登录玩家 Session Players</span></li>
                 <li class="sep"></li>
@@ -3930,9 +3932,18 @@ html, body {
                 </li>
             </ul>
 
+            <!-- Plugins sub-menu (专用插件分类 tab board — pin/toggle/manage) -->
+            <ul class="child-menu" id="sub-plugins" data-group="plugins">
+                <li data-action="toggle_plugin_manager"><i class="menu-glyph mi-mid"></i><span>⚙ 插件管理面板 Manage</span></li>
+                <li data-action="reload_plugins_all"><i class="menu-glyph mi-mid"></i><span>↻ 重载全部插件 Reload</span></li>
+                <li class="sep"></li>
+                <li class="widget-row" style="padding:0;">
+                    <div id="plugins-cat-list" style="display:flex;flex-direction:column;gap:4px;"><div class="ppm-empty">加载中…</div></div>
+                </li>
+            </ul>
+
             <!-- ACT sub-menu -->
             <ul class="child-menu" id="sub-act" data-group="act">
-                <li data-action="toggle_plugin_manager"><i class="menu-glyph mi-mid"></i><span>ACT 插件管理 Plugin Manager</span></li>
                 <li data-action="toggle_trigger_timer_manager"><i class="menu-glyph mi-mid"></i><span>ACT 触发/计时 Trigger Timer</span></li>
                 <li data-action="toggle_data_source_health"><i class="menu-glyph mi-mid"></i><span>ACT 数据源健康 Data Source Health</span></li>
                 <li data-action="toggle_report_export"><i class="menu-glyph mi-mid"></i><span>ACT 报告/导出 Report Export</span></li>
@@ -4719,6 +4730,7 @@ function activateCircle(name) {
         var sub = document.getElementById('sub-' + name);
         if (sub) {
             sub.classList.add('show');
+            if (name === 'plugins' && window.renderPluginsCategory) window.renderPluginsCategory();
             _syncSessionPlayersAnchor(true);
             playSound('snd-menu');
             /* Update line height using rendered height so large panels also fit */
@@ -4870,6 +4882,15 @@ document.querySelectorAll('.child-menu li').forEach(function(li) {
         }
         if (action === 'show_plugins') {
             showPluginPopup();
+            return;
+        }
+        if (action === 'reload_plugins_all') {
+            var ar = window.pywebview && window.pywebview.api;
+            if (ar && ar.reload_plugins) {
+                Promise.resolve(ar.reload_plugins('')).then(function () {
+                    if (window.renderPluginsCategory) window.renderPluginsCategory();
+                });
+            }
             return;
         }
         if (action && window.pywebview && window.pywebview.api) {
@@ -7461,29 +7482,69 @@ setTimeout(function() {
         var ov = document.getElementById('plugin-popup-overlay');
         if (ov) ov.style.display = 'none';
     };
+    // Shared plugin row builder (pinned-first list with toggle + pin buttons).
+    function buildPluginRows(plugins) {
+        var html = '';
+        (plugins || []).forEach(function (it) {
+            var st = it.active ? '● 运行' : (it.enabled ? '◐ 已启用' : '○ 已禁用');
+            var flags = (it.pinned ? '★' : '') + (it.declares_panel ? ' ▣' : '')
+                + ((it.hotkey_count || 0) ? ' ⌨' + it.hotkey_count : '');
+            html += '<div class="ppm-row">'
+                + '<span class="ppm-name">' + esc(it.label) + ' <small>' + st + ' ' + flags + '</small></span>'
+                + '<button class="ppm-btn" data-pin="' + esc(it.id) + '" data-pinned="' + (it.pinned ? 1 : 0) + '">'
+                + (it.pinned ? '取消置顶' : '置顶') + '</button>'
+                + '<button class="ppm-btn" data-id="' + esc(it.id) + '" data-en="' + (it.enabled ? 1 : 0) + '">'
+                + (it.enabled ? '禁用' : '启用') + '</button></div>';
+        });
+        return html;
+    }
+    function fetchPluginMenu() {
+        var a = api();
+        if (!a || !a.get_plugin_menu) return Promise.resolve(null);
+        return Promise.resolve(a.get_plugin_menu()).then(parse).catch(function () { return null; });
+    }
     window.renderPluginPopup = function () {
         var list = document.getElementById('ppm-list');
-        var a = api();
         if (!list) return;
+        var a = api();
         if (!a || !a.get_plugin_menu) { list.innerHTML = '<div class="ppm-empty">插件接口不可用</div>'; return; }
-        Promise.resolve(a.get_plugin_menu()).then(function (r) {
-            var data = parse(r) || { items: [] };
-            var items = data.items || [];
-            var html = '';
-            items.forEach(function (it) {
-                if (it.type === 'manage') {
-                    html += '<div class="ppm-row ppm-manage" data-manage="1">⚙ ' + esc(it.label) + '</div><div class="ppm-sep"></div>';
-                } else {
-                    var st = it.active ? '● 运行' : (it.enabled ? '◐ 已启用' : '○ 已禁用');
-                    html += '<div class="ppm-row"><span class="ppm-name" data-manage="1">' + esc(it.label)
-                        + ' <small>' + st + '</small></span>'
-                        + '<button class="ppm-btn" data-id="' + esc(it.id) + '" data-en="' + (it.enabled ? 1 : 0) + '">'
-                        + (it.enabled ? '禁用' : '启用') + '</button></div>';
-                }
-            });
-            list.innerHTML = html || '<div class="ppm-empty">未发现插件 No plugins</div>';
-        }).catch(function () { list.innerHTML = '<div class="ppm-empty">读取失败</div>'; });
+        fetchPluginMenu().then(function (data) {
+            var plugins = (data && data.plugins) || [];
+            var html = '<div class="ppm-row ppm-manage" data-manage="1">⚙ 插件管理面板 Manage</div><div class="ppm-sep"></div>';
+            list.innerHTML = plugins.length ? (html + buildPluginRows(plugins))
+                : (html + '<div class="ppm-empty">未发现插件 No plugins</div>');
+        });
     };
+    // Inline plugin category (the dedicated 「插件」 tab board panel).
+    window.renderPluginsCategory = function () {
+        var list = document.getElementById('plugins-cat-list');
+        if (!list) return;
+        fetchPluginMenu().then(function (data) {
+            var plugins = (data && data.plugins) || [];
+            list.innerHTML = plugins.length ? buildPluginRows(plugins)
+                : '<div class="ppm-empty">未发现插件 (plugins/&lt;id&gt;/)</div>';
+        });
+    };
+    // Delegated clicks for the inline category list. MUST bind on the list
+    // container (not document): the enclosing `.child-menu li` handler calls
+    // e.stopPropagation(), so a document-level listener would never fire — but
+    // the container is a descendant of that li, so it fires first while bubbling.
+    var _catList = document.getElementById('plugins-cat-list');
+    if (_catList) _catList.addEventListener('click', function (e) {
+        var t = e.target;
+        if (!t.classList || !t.classList.contains('ppm-btn')) return;
+        var a = api();
+        if (!a) return;
+        if (t.getAttribute('data-pin')) {
+            var pid = t.getAttribute('data-pin');
+            var pinned = t.getAttribute('data-pinned') === '1';
+            if (a.pin_plugin) Promise.resolve(a.pin_plugin(pid, !pinned)).then(window.renderPluginsCategory);
+        } else if (t.getAttribute('data-id')) {
+            var id = t.getAttribute('data-id');
+            var en = t.getAttribute('data-en') === '1';
+            Promise.resolve(en ? a.disable_plugin(id) : a.enable_plugin(id)).then(window.renderPluginsCategory);
+        }
+    });
     document.addEventListener('click', function (e) {
         var ov = document.getElementById('plugin-popup-overlay');
         if (!ov || ov.style.display === 'none') return;
@@ -7495,7 +7556,16 @@ setTimeout(function() {
             window.hidePluginPopup();
             return;
         }
-        if (t.classList && t.classList.contains('ppm-btn')) {
+        if (t.classList && t.classList.contains('ppm-btn') && t.getAttribute('data-pin')) {
+            var a3 = api();
+            var pid = t.getAttribute('data-pin');
+            var pinned = t.getAttribute('data-pinned') === '1';
+            if (a3 && a3.pin_plugin) {
+                Promise.resolve(a3.pin_plugin(pid, !pinned)).then(function () { window.renderPluginPopup(); });
+            }
+            return;
+        }
+        if (t.classList && t.classList.contains('ppm-btn') && t.getAttribute('data-id')) {
             var a2 = api();
             var id = t.getAttribute('data-id');
             var en = t.getAttribute('data-en') === '1';

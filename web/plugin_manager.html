@@ -372,6 +372,9 @@ button.close {
         var cls = 'plugin-card' + (active ? ' active' : '') + (!enabled ? ' disabled' : '');
         var stateBadges = [];
         stateBadges.push(badge(active ? 'ACTIVE' : (enabled ? 'LOADED OFF' : 'DISABLED'), active ? 'ok' : (enabled ? 'warn' : '')));
+        if (plugin.pinned) stateBadges.push(badge('★ PINNED', 'warn'));
+        stateBadges.push(badge(plugin.declares_panel ? '▣ 面板' : '无面板', plugin.declares_panel ? 'ok' : ''));
+        if ((plugin.hotkey_count || 0) > 0) stateBadges.push(badge('⌨ ' + plugin.hotkey_count, 'ok'));
         if (plugin.loaded) stateBadges.push(badge('LOADED', 'ok'));
         if ((plugin.failures || 0) > 0) stateBadges.push(badge('FAIL ' + plugin.failures, 'bad'));
         if ((plugin.event_failures || 0) > 0) stateBadges.push(badge('EVENT ' + plugin.event_failures, 'bad'));
@@ -382,6 +385,7 @@ button.close {
         actions += '<button type="button" class="primary" onclick="PluginManager.enable(' + idArg + ')"' + (canEnable ? '' : ' disabled') + '>启用 Enable</button>';
         actions += '<button type="button" class="danger" onclick="PluginManager.disable(' + idArg + ')"' + (enabled ? '' : ' disabled') + '>禁用 Disable</button>';
         actions += '<button type="button" onclick="PluginManager.reload(' + idArg + ')"' + (enabled ? '' : ' disabled') + '>重载 Reload</button>';
+        actions += '<button type="button" onclick="PluginManager.pin(' + idArg + ',' + (plugin.pinned ? 'false' : 'true') + ')">' + (plugin.pinned ? '★ 取消置顶' : '☆ 置顶 Pin') + '</button>';
         return '<article class="' + cls + '">' +
             '<div class="card-top"><div><div class="plugin-name">' + esc(plugin.name || plugin.id) + '</div><div class="plugin-id">' + esc(plugin.id || '') + '</div></div><div class="badges">' + stateBadges.join('') + '</div></div>' +
             '<div class="meta-grid">' +
@@ -448,6 +452,12 @@ button.close {
         disable: function (id) {
             return apiCall('disable_plugin', [id]).then(function (data) {
                 showToast(data.ok === false ? (data.message || 'Disable failed') : id + ' disabled');
+                return PluginManager.refresh();
+            });
+        },
+        pin: function (id, pinned) {
+            return apiCall('pin_plugin', [id, pinned]).then(function (data) {
+                showToast(data.ok === false ? (data.message || 'Pin failed') : (pinned ? id + ' pinned' : id + ' unpinned'));
                 return PluginManager.refresh();
             });
         },

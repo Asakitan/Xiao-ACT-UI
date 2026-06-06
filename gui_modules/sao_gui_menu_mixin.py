@@ -50,6 +50,8 @@ from act_platform.runtime import (
     act_graph_timeseries_status,
     act_plugin_disable,
     act_plugin_enable,
+    act_plugin_menu,
+    act_plugin_pin,
     act_plugin_reload,
     act_plugin_status,
     act_report_status,
@@ -164,9 +166,11 @@ class SAOPlayerGUIMenuMixin:
             plugin_sig = (
                 int(plugin_status.get('plugin_count', 0) or 0),
                 int(plugin_status.get('active_count', 0) or 0),
+                tuple(str(x) for x in (plugin_status.get('pinned') or [])),
+                tuple(int(p.get('hotkey_count') or 0) for p in (plugin_status.get('plugins') or [])),
             )
         except Exception:
-            plugin_sig = (0, 0)
+            plugin_sig = (0, 0, (), ())
         try:
             trigger_status = self._get_act_trigger_menu_status()
             trigger_sig = (
@@ -441,7 +445,6 @@ class SAOPlayerGUIMenuMixin:
         session_count = len(getattr(self, '_session_players', {}) or {})
         auto_items = [
             {'icon': '⚡', 'label': ak_label, 'command': self._toggle_auto_script},
-            {'icon': '🧩', 'label': '插件菜单 Plugins', 'command': self._show_plugin_popup_menu},
             {'icon': '◆', 'label': 'AutoKey Quick Panel', 'command': self._toggle_autokey_panel},
             {'icon': '◇', 'label': 'AutoKey Detail Editor', 'command': self._toggle_autokey_detail_panel},
         ]
@@ -520,8 +523,6 @@ class SAOPlayerGUIMenuMixin:
         ])
 
         act_items = [
-            {'icon': '☌', 'label': f'ACT插件: {plugin_active}/{plugin_total}', 'command': self._show_act_plugin_status_menu},
-            {'icon': '☌', 'label': 'ACT插件管理面板', 'command': self._toggle_act_plugin_manager_panel},
             {'icon': '⏱', 'label': f'ACT触发/计时: {trigger_total}/{trigger_timers}', 'command': self._toggle_act_trigger_timer_panel},
             {'icon': '◉', 'label': f'ACT数据源健康: {source_label}/{source_health_state}', 'command': self._toggle_act_data_source_health_panel},
             {'icon': '⬇', 'label': f'ACT报告/导出: {report_state}/{report_total_damage}', 'command': self._toggle_act_report_export_panel},
@@ -533,9 +534,9 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '⌁', 'label': f'ACT图表/曲线: {graph_state}/{graph_metric}/{graph_count}', 'command': self._toggle_act_graph_timeseries_panel},
             {'icon': '◎', 'label': f'ACT成员钻取: {combatant_state}/{combatant_id}/{combatant_count}', 'command': self._toggle_act_combatant_drilldown_panel},
             {'icon': '✦', 'label': f'ACT技能钻取: {skill_state}/{skill_id}/{skill_ref_count}', 'command': self._toggle_act_skill_drilldown_panel},
-            {'icon': '↻', 'label': '重载ACT插件', 'command': self._reload_act_plugins_menu},
-            {'icon': '◆', 'label': '切换首个ACT插件', 'command': self._toggle_first_act_plugin_menu},
         ]
+
+        plugin_items = self._build_plugin_menu_items()
 
         return {
             '控制': [
@@ -548,6 +549,7 @@ class SAOPlayerGUIMenuMixin:
             'Burst': burst_items,
             '面板': panel_items,
             'ACT': act_items,
+            '插件': plugin_items,
             '皮肤': skin_items,
             '关于': [
                 {'icon': '◇', 'label': '关于本程序', 'command': self._show_about},
@@ -564,6 +566,60 @@ class SAOPlayerGUIMenuMixin:
             return act_plugin_status(self)
         except Exception as exc:
             return {'ok': False, 'message': str(exc), 'plugin_count': 0, 'active_count': 0, 'plugins': []}
+
+    def _build_plugin_menu_items(self):
+        """专属「插件」分类条目: 管理/面板/重载 + 置顶插件优先 + 全部插件(点按开关)。
+
+        - 插件按 pin 置顶 (act_plugin_menu 已排序), ★=置顶 ●=运行 ○=已停。
+        - ▣ 表示插件声明了面板; ⌨N 表示注册了 N 个热键。
+        - 点插件行 = 启用/禁用切换 (「常用插件菜单可开关」)。pin/打开面板/热键
+          细配在「插件管理面板」或 F11 popup 子菜单里。
+        """
+        try:
+            data = act_plugin_menu(self)
+        except Exception:
+            data = {'plugins': []}
+        items = [
+            {'icon': '⚙', 'label': '插件管理面板 Manage', 'command': lambda: self._open_act_plugin_manager('manage')},
+            {'icon': '⬢', 'label': '插件面板 Panels', 'command': lambda: self._open_act_plugin_manager('panels')},
+            {'icon': '↻', 'label': '重载全部插件 Reload', 'command': self._reload_act_plugins_menu},
+        ]
+        plugins = data.get('plugins') or []
+        if not plugins:
+            items.append({'icon': '·', 'label': '未发现插件 (plugins/<id>/)', 'command': lambda: None})
+            return items
+        for p in plugins:
+            pid = str(p.get('id') or '')
+            name = str(p.get('label') or pid)
+            on = bool(p.get('enabled'))
+            pinned = bool(p.get('pinned'))
+            icon = '★' if pinned else ('●' if p.get('active') else '○')
+            flags = ''
+            if p.get('declares_panel'):
+                flags += ' ▣'
+            hk = int(p.get('hotkey_count') or 0)
+            if hk:
+                flags += f' ⌨{hk}'
+            label = f'{name}  [{"ON" if on else "OFF"}]{flags}'
+            items.append({
+                'icon': icon, 'label': label,
+                'command': lambda pid=pid, on=on: self._toggle_plugin_enabled(pid, on),
+            })
+        return items
+
+    def _pin_plugin_from_menu(self, plugin_id, pinned):
+        """切换插件置顶 (供 popup 子菜单调用)。"""
+        try:
+            act_plugin_pin(self, plugin_id, bool(pinned))
+        except Exception:
+            pass
+        panel = getattr(self, '_act_plugin_manager_panel', None)
+        if panel is not None:
+            try:
+                panel.refresh()
+            except Exception:
+                pass
+        self._refresh_menu_if_open()
 
     def _get_act_trigger_menu_status(self):
         try:
@@ -691,6 +747,7 @@ class SAOPlayerGUIMenuMixin:
             {'name': 'Burst', 'icon': 'B', 'can_active': True},
             {'name': '面板', 'icon': '◆', 'can_active': True},
             {'name': 'ACT', 'icon': 'A', 'can_active': True},
+            {'name': '插件', 'icon': '⬢', 'can_active': True},
             {'name': '皮肤', 'icon': 'P', 'can_active': True},
             {'name': '关于', 'icon': 'ℹ', 'can_active': True},
         ]
