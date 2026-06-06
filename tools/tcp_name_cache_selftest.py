@@ -201,6 +201,33 @@ class TcpNameCacheTests(unittest.TestCase):
                 self.assertEqual(resolver.skill(2414), "神圣壁垒")
                 self.assertEqual(resolver.resolve("player", 36668136, default=""), "")
 
+    def test_name_resolver_reuses_tcp_preparse_cache_until_file_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "cache.json")
+
+            def write_skill(text: str, mtime: int) -> None:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump({"names": {"by_kind": {"skill": {"2414": {"text": text}}}}}, f, ensure_ascii=False)
+                os.utime(path, (mtime, mtime))
+
+            write_skill("神圣壁垒", 1)
+            from tools.tablekit import name_tables
+            original_json_load = json.load
+            with mock.patch.object(name_tables, "_SOURCES", {}), \
+                 mock.patch.object(name_tables, "_TCP_PREPARSE_CACHE", path), \
+                 mock.patch.object(name_tables, "_TCP_PREPARSE_LOCAL_CACHE", os.path.join(td, "missing.local.json")):
+                name_tables.names.reload()
+                resolver = name_tables.NameResolver()
+                with mock.patch.object(name_tables.json, "load", wraps=original_json_load) as mocked_load:
+                    self.assertEqual(resolver.skill(2414), "神圣壁垒")
+                    self.assertEqual(resolver.skill(2414), "神圣壁垒")
+                    self.assertEqual(mocked_load.call_count, 1)
+
+                    write_skill("二段名字", 2)
+                    self.assertEqual(resolver.skill(2414), "二段名字")
+                    self.assertEqual(mocked_load.call_count, 2)
+                name_tables.names.reload()
+
     def test_name_resolver_merges_ignored_local_cache_text_only(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             shared = os.path.join(td, "shared.json")

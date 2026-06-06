@@ -159,7 +159,7 @@ class _FakeRuntimeActGui(SAOPlayerGUIPacketCallbacksMixin, SAOPlayerGUIDpsThemeM
     def _boss_monster_usable(self, monster):
         return bool(monster)
 
-    def _push_dps_act_snapshot(self):
+    def _push_dps_act_snapshot(self, *args, **kwargs):
         self.push_count += 1
         self.last_snapshot = self._get_dps_act_snapshot()
 
@@ -202,7 +202,7 @@ class _FakeWebViewRuntimeActGui:
     def _boss_monster_usable(self, monster):
         return bool(monster)
 
-    def _push_dps_act_snapshot(self):
+    def _push_dps_act_snapshot(self, *args, **kwargs):
         self.push_count += 1
         self.last_snapshot = self._build_dps_act_snapshot()
 

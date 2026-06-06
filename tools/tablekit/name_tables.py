@@ -68,6 +68,11 @@ _TCP_PREPARSE_LOCAL_CACHE = os.environ.get(
     "SAO_TCP_PREPARSE_NAME_CACHE_LOCAL",
     os.path.join(_EXTRACTED, "tcp_preparse_name_cache.local.json"),
 )
+_TCP_PREPARSE_CACHE_LOCK = threading.RLock()
+_TCP_PREPARSE_CACHE_BY_KIND: Dict[
+    str,
+    tuple[tuple[tuple[str, Optional[int], Optional[int]], ...], Dict[int, str]],
+] = {}
 
 # 每个 kind 的数据源 (高优先级在前)
 _SOURCES = {
@@ -191,12 +196,30 @@ def _tcp_preparse_cache_paths() -> tuple[str, ...]:
     return tuple(paths)
 
 
-def _load_tcp_preparse_cache(kind: str) -> Dict[int, str]:
-    out: Dict[int, str] = {}
-    if kind not in _SOURCES and kind != "skill":
-        return out
+def _tcp_preparse_cache_signature() -> tuple[tuple[str, Optional[int], Optional[int]], ...]:
+    signature = []
     for path in _tcp_preparse_cache_paths():
-        if not os.path.isfile(path):
+        try:
+            st = os.stat(path)
+        except OSError:
+            signature.append((path, None, None))
+            continue
+        signature.append((path, int(st.st_mtime_ns), int(st.st_size)))
+    return tuple(signature)
+
+
+def _load_tcp_preparse_cache(kind: str) -> Dict[int, str]:
+    if kind not in _SOURCES and kind != "skill":
+        return {}
+    signature = _tcp_preparse_cache_signature()
+    with _TCP_PREPARSE_CACHE_LOCK:
+        cached = _TCP_PREPARSE_CACHE_BY_KIND.get(kind)
+        if cached and cached[0] == signature:
+            return cached[1]
+
+    out: Dict[int, str] = {}
+    for path, mtime_ns, _size in signature:
+        if mtime_ns is None:
             continue
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -221,6 +244,8 @@ def _load_tcp_preparse_cache(kind: str) -> Dict[int, str]:
             text = text.strip()
             if text:
                 out[iid] = text
+    with _TCP_PREPARSE_CACHE_LOCK:
+        _TCP_PREPARSE_CACHE_BY_KIND[kind] = (signature, out)
     return out
 
 
@@ -370,6 +395,8 @@ class NameResolver:
     def reload(self):
         with self._lock:
             self._tables.clear()
+        with _TCP_PREPARSE_CACHE_LOCK:
+            _TCP_PREPARSE_CACHE_BY_KIND.clear()
 
 
 # 模块级单例

@@ -400,9 +400,17 @@ def _read_selective_policy(owner: Any) -> dict[str, Any]:
 
 def should_record_owner_combat_event(owner: Any, event: Mapping[str, Any]) -> dict[str, Any]:
     """Return a selective-parsing decision for a live/replay combat event."""
+    policy = _read_selective_policy(owner)
+    if not policy.get("enabled"):
+        result = {"record": True, "reason": "record_all_default", "policy": policy}
+        try:
+            setattr(owner, "_act_selective_last_decision", result)
+        except Exception:
+            pass
+        return result
     decision = should_record_event(
         event,
-        _read_selective_policy(owner),
+        policy,
         self_uid=_self_uid(owner),
         party_ids=_party_ids(owner),
     )
