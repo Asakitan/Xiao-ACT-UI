@@ -455,18 +455,10 @@ class SAOPlayerGUIStatusUpdaterMixin:
                 'display_time': 6.5,
             }
         if state == 'error':
-            error = ''
-            try:
-                error = str(getattr(snapshot, 'error', '') or '').strip()
-            except Exception:
-                error = ''
-            body = error or '更新服务暂不可用，请稍后重试。'
-            return {
-                'key': f'error:{latest_version}:{body}',
-                'title': 'UPDATE ERROR',
-                'message': body,
-                'display_time': 5.2,
-            }
+            # Startup checks can fail transiently while DNS/network is still
+            # warming up. Keep those errors in the updater panel and in the
+            # manual-check dialog, but do not surface a scary entity alert.
+            return None
         return None
 
     def _maybe_show_update_popup(self, snapshot=None):
@@ -475,7 +467,7 @@ class SAOPlayerGUIStatusUpdaterMixin:
         #      — 信息已经更显眼地呈现在面板里, 重复弹只会刷屏。
         #   2) downloading 状态本身就有进度条 (面板/状态面板) 在持续显示,
         #      不需要再来一发短暂的 entity alert。
-        #   只保留 available / ready / error 这种"重要事件型"的一次性提示。
+        #   只保留 available / ready 这种"重要事件型"的一次性提示。
         try:
             panel_visible = bool(self._update_panel and self._update_panel.winfo_exists())
         except Exception:
@@ -490,8 +482,8 @@ class SAOPlayerGUIStatusUpdaterMixin:
             # 下载进度由专用面板/状态面板显示, 不再 entity 弹窗。
             self._last_update_popup_key = popup_key
             return
-        if panel_visible and not popup_key.startswith('error:'):
-            # 已经有面板在前台讲同一件事, 静音 entity alert (error 例外)。
+        if panel_visible:
+            # 已经有面板在前台讲同一件事, 静音 entity alert。
             self._last_update_popup_key = popup_key
             return
         self._last_update_popup_key = popup_key
@@ -733,7 +725,58 @@ class SAOPlayerGUIStatusUpdaterMixin:
         self._set_update_button(self._update_primary_btn, view['primary_text'], view['primary_action'], side=tk.LEFT)
         self._set_update_button(self._update_secondary_btn, view['secondary_text'], view['secondary_action'], side=tk.RIGHT)
 
+    def _defer_update_check_until_menu_closed(self, callback: Callable[[], None]) -> bool:
+        """Delay manual update UI until the GPU popup has finished closing."""
+        if getattr(self, '_destroyed', False):
+            return True
+        menu = getattr(self, '_sao_menu', None)
+        try:
+            menu_visible = bool(menu is not None and getattr(menu, 'visible', False))
+        except Exception:
+            menu_visible = False
+        if not menu_visible:
+            return False
+        if getattr(self, '_update_check_deferred_from_menu', False):
+            return True
+        self._update_check_deferred_from_menu = True
+        try:
+            if not bool(getattr(menu, '_closing', False)):
+                menu.close()
+        except Exception:
+            pass
+
+        def _resume(remaining: int = 8):
+            if getattr(self, '_destroyed', False):
+                self._update_check_deferred_from_menu = False
+                return
+            try:
+                still_visible = bool(menu is not None and getattr(menu, 'visible', False))
+            except Exception:
+                still_visible = False
+            if still_visible and remaining > 0:
+                try:
+                    self.root.after(80, lambda: _resume(remaining - 1))
+                    return
+                except Exception:
+                    pass
+            self._update_check_deferred_from_menu = False
+            callback()
+
+        try:
+            self.root.after(80, _resume)
+        except Exception:
+            self._update_check_deferred_from_menu = False
+            callback()
+        return True
+
     def _check_for_updates_interactive(self):
+        if self._defer_update_check_until_menu_closed(self._run_update_check_interactive):
+            return
+        self._run_update_check_interactive()
+
+    def _run_update_check_interactive(self):
+        if getattr(self, '_destroyed', False):
+            return
         try:
             from updater.sao_updater import (
                 get_manager,
@@ -743,8 +786,6 @@ class SAOPlayerGUIStatusUpdaterMixin:
         except Exception as e:
             SAODialog.showinfo(self._float, '更新', f'更新模块不可用: {e}')
             return
-        if self._sao_menu is not None and self._sao_menu.visible:
-            self._sao_menu.close()
         mgr = get_manager()
         st = mgr.snapshot()
 
@@ -860,4 +901,3 @@ class SAOPlayerGUIStatusUpdaterMixin:
         else:
             SAODialog.ask(self._float, '发现更新', body,
                           on_ok=_do_download)
-
