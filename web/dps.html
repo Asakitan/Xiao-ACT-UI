@@ -1122,6 +1122,12 @@ body{padding:10px}
     font-size:9px;
     color:var(--text-muted);
 }
+/* MEM cross-check badge: the game's own DamageDataMgr total next to the TCP figure. */
+.mem-badge{
+    color:#7fd6ff;
+    opacity:0.85;
+    font-weight:600;
+}
 .empty{
     height:100%;
     display:flex;
@@ -1814,7 +1820,7 @@ function _renderList() {
             +     '</div>'
             +     '<div class="entity-value">'
             +       '<div class="entity-value-main">' + _fmtNum(amount) + '</div>'
-            +       '<div class="entity-value-sub">' + _fmtNum(rate) + '/s · ' + _pct(pct) + '</div>'
+            +       '<div class="entity-value-sub">' + _fmtNum(rate) + '/s · ' + _pct(pct) + ((_currentTab !== 'heal' && entity.mem_damage_total) ? ' · <span class="mem-badge">MEM ' + _fmtNum(entity.mem_damage_total) + '</span>' : '') + '</div>'
             +     '</div>'
             +   '</div>'
             + '</div>';
