@@ -29,6 +29,7 @@ ZMixAttr<T> 的 T 变化, 故 ZAttrReader 在运行时用 TCP 已知值按 klass
 """
 from __future__ import annotations
 
+import glob
 import os
 import sys
 import time
@@ -142,31 +143,63 @@ class EntityMgrReader:
         self._last_check: float = 0.0
         self._full_si: Optional[ScriptIndex] = None
 
-    def _resolve_mgr_klass(self) -> int:
-        """优先 bundle; 不命中则 lazy-load script.json (一次性加载 ~250MB)."""
-        sr = self._src.sr
-        kp = sr.resolve_klass(ENTITY_MGR_CLASS) or 0
-        if kp:
-            return kp
-        # bundle 不含 ZEntityMgr (只有 130 个 curated klass), 回落到完整 script.json
-        if self._full_si is None:
-            try:
-                # 推断 dump_id下的 script.json 路径
-                here = os.path.dirname(os.path.abspath(__file__))
-                sj_path = os.path.join(here, "out", self._src.dump_id, "dumper_out", "script.json")
-                if not os.path.isfile(sj_path):
-                    return 0
-                self._full_si = ScriptIndex.load(sj_path)
-            except Exception as e:
-                print(f"[entity-mgr] script.json load failed: {e}", file=sys.stderr)
-                return 0
-        rva = self._full_si.find_klass(ENTITY_MGR_CLASS)
-        if not rva:
-            return 0
+    def _klass_name(self, kp: int) -> str:
+        """Read an Il2CppClass name (klass+0x10 -> char*) for validation."""
         try:
-            return sr.pm.read_u64(sr.ga + rva) or 0
+            pm = self._src.sr.pm
+            np = pm.read_u64(kp + 0x10)
+            if not (0x10000 <= (np or 0) <= 0x7FFFFFFFFFFF):
+                return ""
+            b = pm.read_bytes(np, 40)
+            return b.split(b"\x00", 1)[0].decode("utf-8", "replace") if b else ""
         except Exception:
-            return 0
+            return ""
+
+    def _resolve_mgr_klass(self) -> int:
+        """Resolve ZEntityMgr's Il2CppClass* robustly, version-independently.
+
+        Tries the active bundle, then EVERY on-disk dump's script.json (newest
+        first), validating each candidate by reading the live klass name. No
+        hard-coded dump_id (which drifts on every game update); the result is
+        cached and re-validated so a relaunch/patch can't silently use a stale
+        klass.
+        """
+        if self._mgr_klass and self._klass_name(self._mgr_klass) == "ZEntityMgr":
+            return self._mgr_klass
+        self._mgr_klass = 0
+        sr = self._src.sr
+        ga = int(sr.ga)
+        # 1) active bundle (fast path when the curated bundle includes it)
+        try:
+            kp = sr.resolve_klass(ENTITY_MGR_CLASS) or 0
+            if kp and self._klass_name(kp) == "ZEntityMgr":
+                self._mgr_klass = kp
+                return kp
+        except Exception:
+            pass
+        # 2) any on-disk dump's script.json, newest first, validated by klass name
+        here = os.path.dirname(os.path.abspath(__file__))
+        out_dir = os.path.join(here, "out")
+        try:
+            sjs = glob.glob(os.path.join(out_dir, "*", "script.json")) + \
+                glob.glob(os.path.join(out_dir, "*", "dumper_out", "script.json"))
+            sjs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        except Exception:
+            sjs = []
+        for sj in sjs:
+            try:
+                si = ScriptIndex.load(sj)
+                rva = si.find_klass(ENTITY_MGR_CLASS)
+                if not rva:
+                    continue
+                kp = sr.pm.read_u64(ga + rva) or 0
+                if kp and self._klass_name(kp) == "ZEntityMgr":
+                    self._mgr_klass = kp
+                    return kp
+            except Exception as e:
+                print(f"[entity-mgr] resolve via {os.path.basename(os.path.dirname(sj))} "
+                      f"failed: {e}", file=sys.stderr)
+        return 0
 
     # ---------- 锚点扫描 ----------
 

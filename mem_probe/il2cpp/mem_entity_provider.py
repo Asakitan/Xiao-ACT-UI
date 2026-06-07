@@ -1,0 +1,101 @@
+# -*- coding: utf-8 -*-
+"""mem_entity_provider - live entity HP snapshots for the app (read-only).
+
+Ties the version-robust ZEntityMgr locator (EntityMgrReader, klass resolved by
+name) to the combat-attr reader (EntityCombatReader) and exposes a simple
+snapshot of every entity that currently has an HP bar:
+
+    prov = MemEntityProvider(static_dps_source, self_uid=...)
+    for e in prov.snapshot():
+        # {uuid, config_uuid, kind, cur_hp, max_hp, hp_pct, obj}
+        ...
+    boss = prov.boss()   # the highest-max-HP combat entity (boss/dummy)
+
+This is the unique value memory adds over TCP: real-time HP for ALL visible
+entities, including pre-pull / off-screen targets the packet stream hasn't
+reported yet. Names / breaking-stage / overdrive / cast remain TCP-owned (the
+packet parser already decodes them); callers correlate by uuid.
+"""
+from __future__ import annotations
+
+from typing import List, Optional
+
+from mem_probe.il2cpp.mem_entity_mgr import (
+    EntityMgrReader, ENTITY_DICT_OFF, BOSS_DICT_OFF, MONSTER_DICT_OFF, NPC_DICT_OFF,
+    ENT_UUID_OFF, ENT_CONFIG_OFF,
+)
+from mem_probe.il2cpp.mem_entity_combat import EntityCombatReader
+
+
+class MemEntityProvider:
+    """Read-only live entity HP snapshots, resolved structurally (no fixed base)."""
+
+    def __init__(self, dps_source, *, self_uid: int = 0):
+        self._src = dps_source
+        self._emr = EntityMgrReader(dps_source)
+        self._pm = dps_source.sr.pm
+        self._ecr = EntityCombatReader(self._pm)
+        self._self_uid = int(self_uid or 0)
+
+    def set_self_uid(self, uid: int) -> None:
+        self._self_uid = int(uid or 0)
+
+    def locate(self, *, force: bool = False) -> int:
+        """Return the live ZEntityMgr address (cached, klass+uuid revalidated)."""
+        return int(self._emr.locate(self._self_uid, force_rescan=force) or 0)
+
+    def snapshot(self, *, include_monsters: bool = True, include_npcs: bool = False,
+                 max_per_dict: int = 128) -> List[dict]:
+        """Return one dict per combat entity (entity that has an HP bar)."""
+        mgr = self.locate()
+        if not mgr:
+            return []
+        dicts = [("entity", ENTITY_DICT_OFF), ("boss", BOSS_DICT_OFF)]
+        if include_monsters:
+            dicts.append(("monster", MONSTER_DICT_OFF))
+        if include_npcs:
+            dicts.append(("npc", NPC_DICT_OFF))
+        out: List[dict] = []
+        seen = set()
+        for kind, off in dicts:
+            d = self._pm.read_u64(mgr + off)
+            if not d:
+                continue
+            for _key, ent in self._emr._read_dict_entries(d, max_entries=max_per_dict):
+                if ent in seen:
+                    continue
+                seen.add(ent)
+                c = self._ecr.read_combat(ent)
+                if not c:
+                    continue
+                try:
+                    uuid = self._pm.read_i64(ent + ENT_UUID_OFF) or 0
+                    cfg = self._pm.read_i64(ent + ENT_CONFIG_OFF) or 0
+                except Exception:
+                    continue
+                out.append({
+                    "uuid": int(uuid), "config_uuid": int(cfg), "kind": kind,
+                    "cur_hp": c["cur_hp"], "max_hp": c["max_hp"],
+                    "hp_pct": c["hp_pct"], "obj": int(ent),
+                })
+        return out
+
+    def boss(self) -> Optional[dict]:
+        """Best boss candidate: a bossDict entry, else the highest-max-HP entity."""
+        snap = self.snapshot()
+        if not snap:
+            return None
+        bosses = [e for e in snap if e["kind"] == "boss"]
+        pool = bosses or snap
+        return max(pool, key=lambda e: e["max_hp"])
+
+    def entity_hp(self, uuid: int) -> Optional[dict]:
+        """HP snapshot for one uuid (None if not currently shown)."""
+        uuid = int(uuid or 0)
+        for e in self.snapshot():
+            if e["uuid"] == uuid:
+                return e
+        return None
+
+
+__all__ = ["MemEntityProvider"]
