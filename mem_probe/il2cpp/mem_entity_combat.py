@@ -56,7 +56,13 @@ VALUES_TUPLE_STRIDE = 0x10   # sizeof ValueTuple<uint, object[]> in the array
 VALUES_TUPLE_ARR_OFF = 0x8   # tuple.Item2 (object[]) within the element
 VALUE_PAGE_SIZE = 32         # ValueSegmentSize
 
+# Il2CppString layout (x64): length @+0x10 (int32), UTF-16LE chars @+0x14.
+STR_LEN_OFF = 0x10
+STR_CHARS_OFF = 0x14
+STR_MAX_CHARS = 64           # names are short; cap rejects non-string pointers
+
 # attr ids (== packet_parser.enums.AttrType)
+A_NAME = 1                   # AttrType.NAME -> the entity's resolved display-name string
 A_HP, A_MAX_HP = 11310, 11320
 A_MAX_EXT, A_EXT, A_MAX_STUN, A_STUN = 440, 441, 442, 443
 A_OVERDRIVE, A_BREAK_STAGE = 444, 455
@@ -191,6 +197,67 @@ class EntityCombatReader:
                 if vidx is not None and vidx >= 0:
                     out[int(key)] = self._value_at(vals, vidx)
         return out
+
+    def _attr_object_at(self, vals: int, vidx: int) -> int:
+        """Return the raw ZAttr object pointer for a value index (undecoded), or 0."""
+        if vidx is None or vidx < 0:
+            return 0
+        arrp = self.pm.read_u64(vals + ARRAY_ELEMS_OFF
+                                + (vidx >> 5) * VALUES_TUPLE_STRIDE + VALUES_TUPLE_ARR_OFF)
+        if not _plaus(arrp):
+            return 0
+        return self.pm.read_u64(arrp + ARRAY_ELEMS_OFF + (vidx & 31) * 8)
+
+    def _read_il2cpp_string(self, sp: int) -> str:
+        """Decode an Il2CppString object -> str. Layout (x64): length @+0x10 (int32),
+        UTF-16LE chars @+0x14. Sanity-capped so a non-string pointer just yields ''."""
+        if not _plaus(sp):
+            return ""
+        n = self.pm.read_u32(sp + STR_LEN_OFF) or 0
+        if n <= 0 or n > STR_MAX_CHARS:
+            return ""
+        raw = self.pm.read_bytes(sp + STR_CHARS_OFF, n * 2)
+        if not raw or len(raw) < n * 2:
+            return ""
+        try:
+            s = raw.decode("utf-16-le", "replace").strip()
+        except Exception:
+            return ""
+        # reject control/garbage (a real name is printable; allow CJK + ascii)
+        if not s or any(ord(c) < 0x20 for c in s):
+            return ""
+        return s
+
+    def read_name_attr(self, ent_addr: int) -> str:
+        """Read the entity's NAME attr (id=1) as the game's resolved display-name string,
+        independent of our JSON tables. '' when the entity has no NAME attr (many monsters
+        carry only a template id). The authoritative source for the JSON self-heal."""
+        attrs = self.pm.read_u64(ent_addr + ENT_ATTRS_OFF)
+        if not _plaus(attrs):
+            return ""
+        ip = self.pm.read_u64(attrs + COLL_INDEXPART_OFF)
+        vals = self.pm.read_u64(attrs + COLL_VALUES_OFF)
+        if not (_plaus(ip) and _plaus(vals)):
+            return ""
+        for k in range(INDEX_SEG_COUNT):
+            segp = self.pm.read_u64(ip + INDEX_KEYSEG_OFF + k * 8)
+            if not _plaus(segp):
+                continue
+            cnt = self.pm.read_u32(segp + KEYSEG_COUNT_OFF) or 0
+            if cnt <= 0 or cnt > INDEX_SEG_SIZE:
+                continue
+            vip = self.pm.read_u64(ip + INDEX_VALIDX_OFF + k * 8)
+            if not _plaus(vip):
+                continue
+            for pos in range(cnt):
+                if int(self.pm.read_u32(segp + pos * 4)) != A_NAME:
+                    continue
+                o = self._attr_object_at(vals, self.pm.read_i32(vip + pos * 4))
+                if not _plaus(o):
+                    return ""
+                # ZAttr<string>.value_ (reference type) is the string ptr at obj+0x18
+                return self._read_il2cpp_string(self.pm.read_u64(o + ATTR_VAL8_OFF))
+        return ""
 
     def is_combat_entity(self, ent_addr: int) -> bool:
         """True if the entity's _indexPart carries the HP attr ids (has an HP bar)."""

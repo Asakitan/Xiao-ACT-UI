@@ -95,6 +95,11 @@ class MemStateBridge:
         self._mem_dmg_empty_logged: bool = False
         self._mem_dmg_err_logged: bool = False
         self._entity_diag_logged: bool = False
+        # JSON name self-heal: TCP sends only template ids, so read the game's real NAME
+        # from memory and overlay it into the runtime name cache when it differs.
+        self._name_cache = None
+        self._name_cache_checked: bool = False
+        self._name_overlay_logged: bool = False
         self._nr = None
         self._nr_tried = False
 
@@ -189,12 +194,33 @@ class MemStateBridge:
                 # (no TCP) and feed the uuid->name path the boss bar / drilldown read.
                 if snap:
                     nr = self._name_resolver()
+                    cache = self._mem_name_cache()
                     for e in snap:
                         uuid = int(e["uuid"])
                         bid = int(e.get("base_id") or 0)
                         cached = self._named.get(uuid)
                         if cached is None or cached[0] != bid:   # resolve+push once / per base_id
                             nm = (nr.monster(bid, default="") if (nr and bid) else "") or ""
+                            # JSON self-heal: TCP sends only template ids, so the game's REAL
+                            # display name (its NAME attr) is the authority. Overlay it when it
+                            # differs from our table. Skip players ((uuid&0xFFFF)==640).
+                            if cache is not None and bid > 0 and (uuid & 0xFFFF) != 640:
+                                try:
+                                    real = prov.read_name(int(e.get("obj") or 0))
+                                except Exception:
+                                    real = ""
+                                if real and real != nm:
+                                    kind = "boss" if e.get("kind") == "boss" else "monster"
+                                    try:
+                                        cache.observe_name(kind, bid, real,
+                                                            source="mem", confidence="mem")
+                                    except Exception:
+                                        pass
+                                    if not self._name_overlay_logged:
+                                        self._name_overlay_logged = True
+                                        print(f"[MemName] overlay {kind}#{bid}: "
+                                              f"table={nm!r} -> mem={real!r}")
+                                    nm = real
                             self._named[uuid] = (bid, nm)
                             if nm and self.dps_tracker is not None:
                                 try:
@@ -241,6 +267,14 @@ class MemStateBridge:
             except Exception:
                 traceback.print_exc()
             self._entity_stop.wait(self._entity_interval)
+
+    def _mem_name_cache(self):
+        """The shared TcpNameCache (PacketBridge owns it) used as the name overlay sink.
+        Lazily fetched once; None when unavailable (then the self-heal simply no-ops)."""
+        if not self._name_cache_checked:
+            self._name_cache_checked = True
+            self._name_cache = getattr(self.packet_bridge, "tcp_name_cache", None)
+        return self._name_cache
 
     def _poll_mem_damage(self) -> None:
         """Read the game's DamageDataMgr table -> dps_tracker (cross-check badge / memory

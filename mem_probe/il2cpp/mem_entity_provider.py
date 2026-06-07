@@ -98,6 +98,15 @@ class MemEntityProvider:
             })
         return out
 
+    def read_name(self, ent_addr: int) -> str:
+        """The game's resolved display name for an entity (its NAME attr), or '' if absent
+        (many monsters carry only a template id). Authoritative for the JSON self-heal --
+        read straight from the game's own memory, independent of our offline tables."""
+        try:
+            return self._ecr.read_name_attr(int(ent_addr or 0)) if ent_addr else ""
+        except Exception:
+            return ""
+
     def boss(self) -> Optional[dict]:
         """Best boss candidate: a bossDict entry, else the highest-max-HP entity."""
         snap = self.snapshot()
