@@ -99,9 +99,10 @@ class MemStateBridge:
         # from memory and overlay it into the runtime name cache when it differs.
         self._name_cache = None
         self._name_cache_checked: bool = False
-        self._name_overlay_logged: bool = False
-        self._name_diag_count: int = 0
-        self._entity_snap_logged: bool = False
+        # base_id -> the entity's real NAME attr ('' when it carries only a template id,
+        # which is most monsters). Read once per base_id (the index walk is not free) and
+        # reused; also dedups the overlay write.
+        self._mem_name_seen: dict = {}
         self._nr = None
         self._nr_tried = False
 
@@ -192,12 +193,6 @@ class MemStateBridge:
                 self._poll_mem_damage()
                 snap = prov.snapshot()
                 self.last_entities = snap
-                if not self._entity_snap_logged and snap is not None:
-                    self._entity_snap_logged = True
-                    _kc = {}
-                    for _e in snap:
-                        _kc[_e.get("kind")] = _kc.get(_e.get("kind"), 0) + 1
-                    print(f"[MemBridge.entity] first snapshot: {len(snap)} entities kinds={_kc}")
                 # resolve display names from MEM: ZEntity.BaseId -> offline name table
                 # (no TCP) and feed the uuid->name path the boss bar / drilldown read.
                 if snap:
@@ -209,34 +204,29 @@ class MemStateBridge:
                         cached = self._named.get(uuid)
                         if cached is None or cached[0] != bid:   # resolve+push once / per base_id
                             nm = (nr.monster(bid, default="") if (nr and bid) else "") or ""
-                            # JSON self-heal: TCP sends only template ids, so the game's REAL
-                            # display name (its NAME attr) is the authority. Overlay it when it
-                            # differs from our table. Skip players ((uuid&0xFFFF)==640).
-                            real = ""
-                            _diag = self._name_diag_count < 12
-                            if _diag or (bid > 0 and (uuid & 0xFFFF) != 640):
+                            # JSON self-heal: TCP sends only template ids, so when an entity DOES
+                            # carry a real NAME attr in memory and it differs from our table, the
+                            # memory name is the authority -> overlay it. Most monsters carry no
+                            # NAME attr; players are skipped (suffix 640). Read once per base_id.
+                            if (cache is not None and bid > 0 and (uuid & 0xFFFF) != 640
+                                    and bid not in self._mem_name_seen):
                                 try:
                                     real = prov.read_name(int(e.get("obj") or 0))
                                 except Exception:
                                     real = ""
-                            if _diag:
-                                self._name_diag_count += 1
-                                print(f"[MemName.diag] kind={e.get('kind')} "
-                                      f"suffix={uuid & 0xFFFF} bid={bid} "
-                                      f"json={nm!r} mem={real!r}")
-                            if cache is not None and bid > 0 and (uuid & 0xFFFF) != 640 \
-                                    and real and real != nm:
-                                kind = "boss" if e.get("kind") == "boss" else "monster"
-                                try:
-                                    cache.observe_name(kind, bid, real,
-                                                        source="mem", confidence="mem")
-                                except Exception:
-                                    pass
-                                if not self._name_overlay_logged:
-                                    self._name_overlay_logged = True
+                                self._mem_name_seen[bid] = real
+                                if real and real != nm:
+                                    kind = "boss" if e.get("kind") == "boss" else "monster"
+                                    try:
+                                        cache.observe_name(kind, bid, real,
+                                                            source="mem", confidence="mem")
+                                    except Exception:
+                                        pass
                                     print(f"[MemName] overlay {kind}#{bid}: "
                                           f"table={nm!r} -> mem={real!r}")
-                                nm = real
+                            _seen = self._mem_name_seen.get(bid)
+                            if _seen:                       # reuse the memory name for display
+                                nm = _seen
                             self._named[uuid] = (bid, nm)
                             if nm and self.dps_tracker is not None:
                                 try:
