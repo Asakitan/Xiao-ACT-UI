@@ -9536,11 +9536,16 @@ class SAOWebViewGUI:
                                 _bb_direct_data = main_m.to_dict() if hasattr(main_m, 'to_dict') else {}
                                 _bb_src = 'packet'
                                 # Additional units for secondary panels
+                                from gui_modules.sao_gui_state_mixin import _bb_resolve_unit_name as _bb_name
                                 for m in _recent_monsters[1:]:
                                     if len(_bb_additional) >= 4: break
                                     d = m.to_dict() if hasattr(m, 'to_dict') else {}
+                                    # hybrid: MEM-resolved name (uuid->name from the mem bridge)
+                                    # when TCP has none yet -- same resolver as the main slot.
+                                    _add_name = (_bb_name(d, getattr(m, 'uuid', 0), self._dps_tracker)
+                                                 or str(d.get('name', 'Unit'))[:20])
                                     _bb_additional.append({
-                                        'name': str(d.get('name', 'Unit'))[:20],
+                                        'name': _add_name,
                                         'hp_pct': round(float(d.get('hp_pct', 0.0)), 3),
                                         'extinction_pct': round(float(d.get('extinction_pct', 0.0)), 3),
                                         'has_break_data': bool(d.get('has_break_data', False)),
