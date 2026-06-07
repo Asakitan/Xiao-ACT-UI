@@ -390,6 +390,7 @@ class PacketBridge:
         self._plugin_manager = plugin_manager
         self._event_bus = event_bus if isinstance(event_bus, EventBus) else None
         self._mem_source = None                  # UnifiedDataSource 实例 (lazy)
+        self._mem_authoritative = False          # mem owns real-time self state when True
         self._last_name_resolver_reload_ts: float = 0.0
         try:
             self._tcp_name_cache = TcpNameCache(path=runtime_cache_path(), on_save=self._on_tcp_name_cache_saved)
@@ -477,6 +478,12 @@ class PacketBridge:
 
     def _use_packet_source(self, component: str) -> bool:
         return self._get_component_source(component, 'packet') == 'packet'
+
+    def set_mem_authoritative(self, value: bool) -> None:
+        """Called by the mem bridge: True when the memory source owns real-time self
+        state (hybrid). TCP then defers self hp/stamina/skills/level to memory and
+        keeps only identity/anchor + damage events. Auto-cleared on mem->TCP fallback."""
+        self._mem_authoritative = bool(value)
 
     def start(self):
         """启动抓包，后台线程运行.
@@ -1591,11 +1598,16 @@ class PacketBridge:
         # string check); previously this function paid that 6+ times per
         # bridge publish. Caching keeps results stable across the function
         # and reduces the bridge thread's per-event Python overhead.
+        # Memory-authoritative hybrid: when the mem source is healthy it OWNS the
+        # real-time self state, so TCP defers (avoids double-push / jitter). TCP
+        # still supplies identity (uid/name/fight_point) as the bootstrap + anchor,
+        # plus damage events. Auto-resumes when the mem source falls back to TCP.
+        mem_auth = bool(getattr(self, '_mem_authoritative', False))
         use_identity = self._use_packet_source('identity')
-        use_level = self._use_packet_source('level')
-        use_hp = self._use_packet_source('hp')
-        use_stamina = self._use_packet_source('stamina')
-        use_skills = self._use_packet_source('skills')
+        use_level = self._use_packet_source('level') and not mem_auth
+        use_hp = self._use_packet_source('hp') and not mem_auth
+        use_stamina = self._use_packet_source('stamina') and not mem_auth
+        use_skills = self._use_packet_source('skills') and not mem_auth
         # Cache the lock-guarded state snapshot too — `_state_mgr.state` is a
         # @property that acquires the GameStateManager lock on every access.
         # We read it for stamina_max defaults and skill_slot diff comparison.
