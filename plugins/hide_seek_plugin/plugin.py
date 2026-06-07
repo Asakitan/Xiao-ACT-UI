@@ -9,7 +9,7 @@ surface:
 
 * ``ctx.load_local("hide_seek_engine.py")`` — load the bundled engine module
   (its own ``import cv2 / numpy / config / utils.window_locator`` still resolve
-  from the shared main-program process — "从主程序获取依赖").
+  from the shared main-program process).
 * ``ctx.get_engine("window_locator")`` — reuse the host's shared WindowLocator.
 * ``ctx.set_interval`` — the 50 s persistent-alert refresh loop.
 * ``ctx.notify`` / ``ctx.dismiss_notify`` — the owner-agnostic alert that works
