@@ -86,6 +86,8 @@ class MemStateBridge:
         self._entity_interval: float = 0.7
         self.last_entities: list = []
         self.last_boss_mem: Optional[dict] = None
+        self._nr = None
+        self._nr_tried = False
 
     # ───────── public ─────────
 
@@ -154,6 +156,20 @@ class MemStateBridge:
                 prov.set_self_uid(int(self.last_uid or 0))
                 snap = prov.snapshot()
                 self.last_entities = snap
+                # resolve display names from MEM: ZEntity.BaseId -> offline name table
+                # (no TCP) and feed the uuid->name path the boss bar / drilldown read.
+                if snap:
+                    nr = self._name_resolver()
+                    for e in snap:
+                        bid = int(e.get("base_id") or 0)
+                        nm = nr.monster(bid, default="") if (nr and bid) else ""
+                        if nm:
+                            e["name"] = nm
+                            if self.dps_tracker is not None:
+                                try:
+                                    self.dps_tracker.update_monster_info(int(e["uuid"]), nm)
+                                except Exception:
+                                    pass
                 boss = max(snap, key=lambda e: e["max_hp"]) if snap else None
                 self.last_boss_mem = boss
                 if boss and self.state_mgr is not None:
@@ -193,6 +209,17 @@ class MemStateBridge:
         """'tcp' 或 'memory' — 主程序可强制切换."""
         if self._provider:
             self._provider.force_mode(mode)
+
+    def _name_resolver(self):
+        """Lazily fetch the app's offline id->name resolver (cached; None if absent)."""
+        if not self._nr_tried:
+            self._nr_tried = True
+            try:
+                from tools.tablekit.name_tables import names as _NR
+                self._nr = _NR
+            except Exception:
+                self._nr = None
+        return self._nr
 
     def _build_anchor_pack(self) -> AnchorPack:
         """Build a semantic anchor pack from the live PacketBridge parser."""

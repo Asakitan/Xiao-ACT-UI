@@ -22,7 +22,7 @@ from typing import List, Optional
 
 from mem_probe.il2cpp.mem_entity_mgr import (
     EntityMgrReader, ENTITY_DICT_OFF, BOSS_DICT_OFF, MONSTER_DICT_OFF, NPC_DICT_OFF,
-    ENT_UUID_OFF, ENT_CONFIG_OFF,
+    ENT_UUID_OFF, ENT_CONFIG_OFF, ENT_BASEID_OFF,
 )
 from mem_probe.il2cpp.mem_entity_combat import EntityCombatReader
 
@@ -71,11 +71,12 @@ class MemEntityProvider:
                 try:
                     uuid = self._pm.read_i64(ent + ENT_UUID_OFF) or 0
                     cfg = self._pm.read_i64(ent + ENT_CONFIG_OFF) or 0
+                    base_id = self._pm.read_i32(ent + ENT_BASEID_OFF) or 0
                 except Exception:
                     continue
                 out.append({
-                    "uuid": int(uuid), "config_uuid": int(cfg), "kind": kind,
-                    "cur_hp": c["cur_hp"], "max_hp": c["max_hp"],
+                    "uuid": int(uuid), "config_uuid": int(cfg), "base_id": int(base_id),
+                    "kind": kind, "cur_hp": c["cur_hp"], "max_hp": c["max_hp"],
                     "hp_pct": c["hp_pct"], "obj": int(ent),
                 })
         return out

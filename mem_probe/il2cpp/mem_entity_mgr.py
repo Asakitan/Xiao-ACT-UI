@@ -70,8 +70,10 @@ ENTRY_SIZE = 24
 
 # ZEntity 字段 (fdc7111b)
 ENT_UUID_OFF = 0xC0
-ENT_CONFIG_OFF = 0xC8   # ConfigUuid — template/config id (→ 名字表)
+ENT_CONFIG_OFF = 0xC8   # ConfigUuid (runtime instance id; == uuid for pooled mobs)
+ENT_ENTID_OFF = 0xD0
 ENT_CHARID_OFF = 0xD8
+ENT_BASEID_OFF = 0xE0   # BaseId — the monster/template id -> name table (e.g. 122=精英守护木桩)
 ENT_ATTRS_OFF = 0x48    # attrs_ → ZAttrCollection
 ENT_STATE_OFF = 0x28
 
