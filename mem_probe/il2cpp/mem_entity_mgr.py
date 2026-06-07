@@ -183,7 +183,12 @@ class EntityMgrReader:
             return None
 
         kp_bytes = klass_ptr.to_bytes(8, "little")
-        MIN_HEAP = 0x0000_0001_0000_0000
+        # Some game versions lay out il2cpp data + the managed heap entirely in the
+        # low 4 GB (observed klass~0x33M, mgr~0x66M, dict objects~0x7fM). A 4 GB
+        # floor wrongly rejects those, so use the same permissive bound as the rest
+        # of the probe (>= 1 MB). The 4-distinct-dict + entityDict-count gate keeps
+        # false positives out.
+        MIN_HEAP = 0x0000_0000_0010_0000
         MAX_HEAP = 0x0000_7FFF_FFFF_FFFF
 
         def _looks_heap(p: int) -> bool:

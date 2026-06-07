@@ -43,6 +43,16 @@ def _run_dumper(game_assembly: str, metadata: str, out_dir: str) -> int:
         print(proc.stdout)
     if proc.stderr:
         print(proc.stderr, file=sys.stderr)
+    # Il2CppDumper finishes with "Press any key to exit..." -> Console.ReadKey(),
+    # which throws (non-zero exit) under redirected stdin AFTER all artifacts are
+    # already written. Treat the run as successful when the outputs exist so the
+    # pipeline isn't aborted by that cosmetic crash.
+    produced = (os.path.isfile(os.path.join(out_dir, "script.json"))
+                and os.path.isfile(os.path.join(out_dir, "dump.cs")))
+    if proc.returncode != 0 and produced:
+        print("[warn] Il2CppDumper exited non-zero on the 'press any key' prompt "
+              "(redirected stdin); artifacts present -> treating as success.")
+        return 0
     return proc.returncode
 
 
