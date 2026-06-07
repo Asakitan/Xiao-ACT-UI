@@ -103,6 +103,17 @@ class MemStateBridge:
         self._name_cache_checked: bool = False
         self._nr = None
         self._nr_tried = False
+        # nameplate name harvest: read the game's *rendered* over-head name from the UI
+        # nameplate widgets (uuid->name) and overlay it where the offline JSON is wrong
+        # or missing. The displayed name isn't on the entity/combat-row, only the UI.
+        # The first sweep is heavy (~8s, full private heap) so it runs in a one-shot
+        # background thread; warm sweeps reuse a region hint (~0.1s). Each base is
+        # resolved once, then never harvested again (no ongoing cost).
+        self._np_reader: Any = None
+        self._np_resolved_bases: set = set()
+        self._np_harvest_busy: bool = False
+        self._np_last_harvest: float = 0.0
+        self._np_harvest_interval: float = 8.0
 
     # ───────── public ─────────
 
@@ -194,6 +205,10 @@ class MemStateBridge:
                 # resolve display names from MEM: ZEntity.BaseId -> offline name table
                 # (no TCP) and feed the uuid->name path the boss bar / drilldown read.
                 if snap:
+                    # authoritative over-head name from the UI nameplate (overlays the
+                    # JSON when wrong/missing); runs in the background, sets _named for
+                    # corrected bases so the loop below picks the corrected name up.
+                    self._maybe_harvest_nameplates(snap)
                     nr = self._name_resolver()
                     for e in snap:
                         uuid = int(e["uuid"])
@@ -338,6 +353,86 @@ class MemStateBridge:
             except Exception:
                 self._nr = None
         return self._nr
+
+    def _harvest_pm(self):
+        """The shared StarProcess handle for the nameplate sweep (or None)."""
+        pm = getattr(self._entity_provider, "_pm", None)
+        if pm is not None:
+            return pm
+        src = getattr(self._provider, "_src", None)
+        sr = getattr(src, "sr", None)
+        return getattr(sr, "pm", None)
+
+    def _maybe_harvest_nameplates(self, snap) -> None:
+        """Trigger a (throttled, background) nameplate name harvest when a base_id
+        present in ``snap`` hasn't been confirmed against the rendered UI name yet.
+
+        The over-head name is the authority the JSON should match; this corrects the
+        JSON (e.g. 114 '木桩' -> '敌方木桩') and fills gaps, all auto-offset, no TCP.
+        """
+        try:
+            uuid_to_base = {int(e["uuid"]): int(e.get("base_id") or 0)
+                            for e in snap if int(e.get("base_id") or 0) > 0}
+            unresolved = any(b not in self._np_resolved_bases for b in uuid_to_base.values())
+            if (not unresolved or self._np_harvest_busy
+                    or (time.time() - self._np_last_harvest) < self._np_harvest_interval):
+                return
+            pm = self._harvest_pm()
+            if pm is None:
+                return
+            self._np_harvest_busy = True
+            self._np_last_harvest = time.time()
+            t = threading.Thread(target=self._run_nameplate_harvest,
+                                 args=(pm, dict(uuid_to_base)),
+                                 name="mem-nameplate", daemon=True)
+            t.start()
+        except Exception:
+            traceback.print_exc()
+
+    def _run_nameplate_harvest(self, pm, uuid_to_base) -> None:
+        """Worker: sweep nameplates, overlay corrected/missing names, push to the panel."""
+        try:
+            if self._np_reader is None:
+                from mem_probe.il2cpp.mem_nameplate_reader import NameplateReader
+                self._np_reader = NameplateReader(pm)
+            res = self._np_reader.harvest(uuid_to_base)
+            names = res.get("names") or {}
+            nr = self._name_resolver()
+            cache = self._mem_name_cache()
+            base_to_uuids: dict = {}
+            for u, b in uuid_to_base.items():
+                base_to_uuids.setdefault(b, []).append(u)
+            for base, nm in names.items():
+                self._np_resolved_bases.add(base)
+                if not nm:
+                    continue
+                try:
+                    json_nm = (nr.monster(base, default="") if nr else "") or ""
+                except Exception:
+                    json_nm = ""
+                if nm == json_nm:
+                    continue                                  # JSON already correct
+                # persist the authoritative game name into the overlay cache
+                if cache is not None:
+                    try:
+                        cache.observe_name("monster", base, nm,
+                                           source="mem_nameplate", confidence="mem")
+                    except Exception:
+                        pass
+                # update the live panel now: re-key these uuids to the corrected name
+                for u in base_to_uuids.get(base, []):
+                    self._named[u] = (base, nm)
+                    if self.dps_tracker is not None:
+                        try:
+                            self.dps_tracker.update_monster_info(u, nm)
+                        except Exception:
+                            pass
+                print(f"[MemBridge.nameplate] base_id={base} "
+                      f"{('JSON='+json_nm) if json_nm else '(JSON gap)'} -> '{nm}' overlaid")
+        except Exception:
+            traceback.print_exc()
+        finally:
+            self._np_harvest_busy = False
 
     def _build_anchor_pack(self) -> AnchorPack:
         """Build a semantic anchor pack from the live PacketBridge parser."""
