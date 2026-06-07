@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.2.0"
+APP_VERSION = "4.2.1"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v4.2.0: Mem Scope — memory-scan explorer + plugin mem API.
 #   1) New read-only MemAccess facade (mem_probe/mem_access.py) exposes every
