@@ -54,7 +54,10 @@ extensions = [
     Extension(
         name='_sao_cy_memscan',
         sources=[os.path.join(HERE, 'mem_probe', '_sao_cy_memscan.pyx')],
-        extra_compile_args=['/std:c++17'],
+        # /wd4551 + /wd4018 silence Cython runtime boilerplate noise
+        # ((void)__Pyx_*; casts and generated signed/unsigned comparisons),
+        # not anything in our source.
+        extra_compile_args=['/std:c++17', '/wd4551', '/wd4018'],
         language='c++',
     ),
 ]
