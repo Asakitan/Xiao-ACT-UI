@@ -79,6 +79,21 @@ def force_enable_avx2() -> None:
         _fast.force_enable_avx2()
 
 
+def read_words_many(handle: int, addrs, word_size: int):
+    """Batch cross-process read of N scattered addresses in one nogil C loop.
+
+    Returns a list of unsigned ints (None where the read failed), or None when
+    the Cython extension is unavailable (caller should use its own fallback).
+    """
+    if _fast is not None and hasattr(_fast, "read_words_many"):
+        return _fast.read_words_many(int(handle), list(addrs), int(word_size))
+    return None
+
+
+def has_batch_read() -> bool:
+    return _fast is not None and hasattr(_fast, "read_words_many")
+
+
 def find_aligned_u64(buf, needle: int, max_hits: int = 4096) -> List[int]:
     if _fast is not None and hasattr(_fast, "find_aligned_u64"):
         view = _writable_view(buf)

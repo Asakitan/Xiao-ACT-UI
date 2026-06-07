@@ -352,6 +352,47 @@ class StarProcess:
             return None
         return int.from_bytes(b, "little", signed=False)
 
+    # ───── 批量读 (跨进程 0 延迟优化) ─────
+    def read_u64_many(self, addrs) -> list:
+        """Batch-read 8-byte words at each address -> list (None on fail).
+
+        Uses the Cython nogil batch RPM (one GIL release for the whole batch,
+        no per-read ctypes/pymem overhead); falls back to a direct-ctypes loop.
+        """
+        return self._read_words_many(addrs, 8)
+
+    def read_u32_many(self, addrs) -> list:
+        return self._read_words_many(addrs, 4)
+
+    def _read_words_many(self, addrs, word_size: int) -> list:
+        addrs = list(addrs)
+        if not addrs:
+            return []
+        try:
+            from mem_probe import cy_memscan as _cy
+            res = _cy.read_words_many(self._handle, addrs, word_size)
+            if res is not None:
+                return res
+        except Exception:
+            pass
+        # direct-ctypes fallback (skips pymem's per-call overhead; still per-syscall)
+        RPM = ctypes.windll.kernel32.ReadProcessMemory
+        h = self._handle
+        buf = (ctypes.c_uint64 if word_size == 8 else ctypes.c_uint32)()
+        got = ctypes.c_size_t()
+        pbuf = ctypes.byref(buf)
+        pgot = ctypes.byref(got)
+        out: list = []
+        for a in addrs:
+            try:
+                if RPM(h, ctypes.c_void_p(int(a)), pbuf, word_size, pgot) and got.value == word_size:
+                    out.append(int(buf.value))
+                else:
+                    out.append(None)
+            except Exception:
+                out.append(None)
+        return out
+
     def read_ptr(self, addr: int) -> Optional[int]:
         """读 64-bit 指针 (x64 Windows 用户态地址)."""
         return self.read_u64(addr)

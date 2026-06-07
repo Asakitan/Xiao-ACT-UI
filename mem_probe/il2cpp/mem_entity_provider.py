@@ -56,7 +56,8 @@ class MemEntityProvider:
             dicts.append(("monster", MONSTER_DICT_OFF))
         if include_npcs:
             dicts.append(("npc", NPC_DICT_OFF))
-        out: List[dict] = []
+        # collect unique entities from all dicts, then batch every read
+        ents: List = []
         seen = set()
         for kind, off in dicts:
             d = self._pm.read_u64(mgr + off)
@@ -66,24 +67,35 @@ class MemEntityProvider:
                 if ent in seen:
                     continue
                 seen.add(ent)
-                c = self._ecr.read_combat(ent)
-                if not c:
-                    continue
-                try:
-                    uuid = self._pm.read_i64(ent + ENT_UUID_OFF) or 0
-                    cfg = self._pm.read_i64(ent + ENT_CONFIG_OFF) or 0
-                    base_id = self._pm.read_i32(ent + ENT_BASEID_OFF) or 0
-                except Exception:
-                    continue
-                out.append({
-                    "uuid": int(uuid), "config_uuid": int(cfg), "base_id": int(base_id),
-                    "kind": kind, "cur_hp": c["cur_hp"], "max_hp": c["max_hp"],
-                    "hp_pct": c["hp_pct"], "obj": int(ent),
-                    "breaking_stage": c.get("breaking_stage"),
-                    "overdrive": c.get("overdrive"),
-                    "stun": c.get("stun"),
-                    "cast_skill_id": c.get("cast_skill_id"),
-                })
+                ents.append((kind, ent))
+        if not ents:
+            return []
+        # one batched combat read for all entities (HP + state)
+        combat = self._ecr.read_combat_batch([e for _, e in ents])
+        live = [(kind, e) for kind, e in ents if combat.get(e)]
+        if not live:
+            return []
+        # batched id reads: Uuid@0xC0 / ConfigUuid@0xC8 / BaseId@0xE0 (one RPM batch)
+        id_addrs = []
+        for _, e in live:
+            id_addrs += [e + ENT_UUID_OFF, e + ENT_CONFIG_OFF, e + ENT_BASEID_OFF]
+        idv = self._pm.read_u64_many(id_addrs)
+        out: List[dict] = []
+        for i, (kind, e) in enumerate(live):
+            c = combat[e]
+            uuid = idv[3 * i] or 0
+            cfg = idv[3 * i + 1] or 0
+            base = idv[3 * i + 2]
+            base_id = (int(base) & 0xFFFFFFFF) if base is not None else 0
+            out.append({
+                "uuid": int(uuid), "config_uuid": int(cfg), "base_id": int(base_id),
+                "kind": kind, "cur_hp": c["cur_hp"], "max_hp": c["max_hp"],
+                "hp_pct": c["hp_pct"], "obj": int(e),
+                "breaking_stage": c.get("breaking_stage"),
+                "overdrive": c.get("overdrive"),
+                "stun": c.get("stun"),
+                "cast_skill_id": c.get("cast_skill_id"),
+            })
         return out
 
     def boss(self) -> Optional[dict]:

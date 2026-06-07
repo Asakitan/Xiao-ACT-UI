@@ -21,6 +21,12 @@ from __future__ import annotations
 import struct
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from mem_probe import cy_memscan as _cymem
+    _HAS_BATCH = bool(_cymem.has_batch_read())
+except Exception:
+    _HAS_BATCH = False
+
 # ZEntity / ZAttrCollection field offsets (verified vs dump fdc7111b / 8144ccfd)
 ENT_ATTRS_OFF = 0x48        # ZEntity.attrs_ -> ZAttrCollection
 COLL_INDEXPART_OFF = 0x18   # ZAttrCacheSlim._indexPart (native Burst index)
@@ -222,7 +228,11 @@ class EntityCombatReader:
         return int(cur), int(maxhp)
 
     def _build_layout(self, ip: int, vals: int, wanted) -> Dict[int, tuple]:
-        """Decode the Burst index ONCE for the wanted attr ids -> {attr_id: (vidx, type)}."""
+        """Decode the Burst index ONCE -> {attr_id: (obj_ptr, val_off, type_char)}.
+
+        Caches the resolved ZAttr OBJECT pointer (the object persists; only its
+        value_ mutates), so each per-tick read is 1 RPM/attr -- no pointer chasing.
+        """
         want = set(wanted)
         lay: Dict[int, tuple] = {}
         for k in range(INDEX_SEG_COUNT):
@@ -247,86 +257,147 @@ class EntityCombatReader:
                 arrp = self.pm.read_u64(vals + ARRAY_ELEMS_OFF
                                         + (vidx >> 5) * VALUES_TUPLE_STRIDE + VALUES_TUPLE_ARR_OFF)
                 obj = self.pm.read_u64(arrp + ARRAY_ELEMS_OFF + (vidx & 31) * 8) if _plaus(arrp) else 0
-                tc = _TYPE_CHAR.get(self._kname(self.pm.read_u64(obj))) if _plaus(obj) else None
+                if not _plaus(obj):
+                    continue
+                tc = _TYPE_CHAR.get(self._kname(self.pm.read_u64(obj)))
                 if tc:
-                    lay[int(key)] = (int(vidx), tc)
+                    off = ATTR_VAL8_OFF if tc == "L" else ATTR_VAL4_OFF
+                    lay[int(key)] = (int(obj), off, tc)
         return lay
 
-    def _read_typed(self, vals: int, vidx: int, tc: str):
-        """Read a value by cached (vidx, type) -- 2-3 reads, no index decode."""
-        arrp = self.pm.read_u64(vals + ARRAY_ELEMS_OFF
-                                + (vidx >> 5) * VALUES_TUPLE_STRIDE + VALUES_TUPLE_ARR_OFF)
-        if not _plaus(arrp):
-            return None
-        obj = self.pm.read_u64(arrp + ARRAY_ELEMS_OFF + (vidx & 31) * 8)
-        if not _plaus(obj):
+    @staticmethod
+    def _interp(raw, tc: str):
+        """Interpret an 8-byte batch read as the typed attr value."""
+        if raw is None:
             return None
         if tc == "L":
-            return self.pm.read_i64(obj + ATTR_VAL8_OFF)
+            return raw if raw < (1 << 63) else raw - (1 << 64)
         if tc == "I":
-            return self.pm.read_i32(obj + ATTR_VAL4_OFF)
+            v = raw & 0xFFFFFFFF
+            return v - (1 << 32) if v >= (1 << 31) else v
         if tc == "F":
-            raw = self.pm.read_bytes(obj + ATTR_VAL4_OFF, 4)
-            return struct.unpack("<f", raw)[0] if raw else 0.0
+            return struct.unpack("<f", (raw & 0xFFFFFFFF).to_bytes(4, "little"))[0]
         if tc == "B":
-            raw = self.pm.read_bytes(obj + ATTR_VAL4_OFF, 1)
-            return bool(raw[0]) if raw else False
+            return bool(raw & 0xFF)
         return None
 
-    def read_combat(self, ent_addr: int) -> Optional[dict]:
-        """Full combat snapshot: HP + breaking/overdrive/stun/cast, decoded by attr id.
-
-        Uses a per-entity layout cache (decode the Burst index once, then only re-read
-        the ~6 combat values each tick). Falls back to the HP invariant. Returns None
-        for non-combat entities (no HP attr).
-        """
+    def _layout_for(self, ent_addr: int):
+        """Return (ip, layout) for an entity (layout cached by _indexPart ptr)."""
         attrs = self.pm.read_u64(ent_addr + ENT_ATTRS_OFF)
         if not _plaus(attrs):
-            return None
+            return 0, None
         ip = self.pm.read_u64(attrs + COLL_INDEXPART_OFF)
         vals = self.pm.read_u64(attrs + COLL_VALUES_OFF)
         if not (_plaus(ip) and _plaus(vals)):
-            return None
+            return 0, None
         lay = self._layout_cache.get(ip)
         if lay is None:
             if len(self._layout_cache) > 512:
                 self._layout_cache.clear()
             lay = self._build_layout(ip, vals, COMBAT_ATTR_IDS)
             self._layout_cache[ip] = lay
+        return ip, lay
 
-        def rd(aid):
-            t = lay.get(aid)
-            return self._read_typed(vals, t[0], t[1]) if t else None
-
-        cur = rd(A_HP)
-        mx = rd(A_MAX_HP)
+    def _combat_from_amap(self, amap: Dict[int, object]) -> Optional[dict]:
+        cur = amap.get(A_HP)
+        mx = amap.get(A_MAX_HP)
         if not (isinstance(cur, int) and isinstance(mx, int) and mx > 0
                 and 0 <= cur <= MAX_HP_PLAUSIBLE):
-            # stale cache (ip reused for a different entity) -> rebuild once
-            lay = self._build_layout(ip, vals, COMBAT_ATTR_IDS)
-            self._layout_cache[ip] = lay
-            cur, mx = rd(A_HP), rd(A_MAX_HP)
-            if not (isinstance(cur, int) and isinstance(mx, int) and mx > 0
-                    and 0 <= cur <= MAX_HP_PLAUSIBLE):
-                hp = self.read_hp(ent_addr)        # invariant fallback
-                if hp is None:
-                    return None
-                cur, mx = hp
+            return None
 
-        def _num(aid):
-            v = rd(aid)
+        def _n(aid):
+            v = amap.get(aid)
             return int(v) if isinstance(v, (int, float)) else None
 
-        sk = rd(A_SKILL_ID)
+        sk = amap.get(A_SKILL_ID)
         return {
             "cur_hp": int(cur), "max_hp": int(mx),
             "hp_pct": (cur / mx) if mx else 0.0,
-            "breaking_stage": _num(A_BREAK_STAGE),
-            "overdrive": _num(A_OVERDRIVE),
-            "stun": _num(A_STUN),
-            "extinction": _num(A_EXT),
+            "breaking_stage": _n(A_BREAK_STAGE),
+            "overdrive": _n(A_OVERDRIVE),
+            "stun": _n(A_STUN),
+            "extinction": _n(A_EXT),
             "cast_skill_id": (int(sk) if isinstance(sk, (int, float)) and sk else None),
         }
+
+    def read_combat(self, ent_addr: int) -> Optional[dict]:
+        """Single-entity combat snapshot (HP + state), via the cached obj-ptr layout."""
+        ip, lay = self._layout_for(ent_addr)
+        # non-combat entity (no HP attr in the index) -> cheap reject, no value reads
+        if not lay or A_HP not in lay or A_MAX_HP not in lay:
+            return None
+        amap = {aid: self._interp(self.pm.read_u64(t[0] + t[1]), t[2]) for aid, t in lay.items()}
+        c = self._combat_from_amap(amap)
+        if c is not None:
+            return c
+        # HP attr present but value implausible -> stale obj-ptr (pooled reuse) -> rebuild once
+        self._layout_cache.pop(ip, None)
+        ip, lay = self._layout_for(ent_addr)
+        if lay and A_HP in lay and A_MAX_HP in lay:
+            amap = {aid: self._interp(self.pm.read_u64(t[0] + t[1]), t[2]) for aid, t in lay.items()}
+            return self._combat_from_amap(amap)
+        return None
+
+    def read_combat_batch(self, ent_addrs) -> Dict[int, Optional[dict]]:
+        """Combat for many entities with batched cross-process reads (~3 RPM batches
+        total instead of hundreds of individual reads). Returns {ent_addr: dict|None}."""
+        ent_addrs = list(ent_addrs)
+        if not ent_addrs:
+            return {}
+        if not _HAS_BATCH:
+            # No Cython nogil batch RPM compiled in -> the single obj-ptr path
+            # (pymem reads, cached layout) is faster than a 3-phase ctypes batch.
+            out0: Dict[int, Optional[dict]] = {}
+            for e in ent_addrs:
+                c = self.read_combat(e)
+                if c is not None:
+                    out0[e] = c
+            return out0
+        # batch A: attrs ptr per entity
+        attrs_list = self.pm.read_u64_many([e + ENT_ATTRS_OFF for e in ent_addrs])
+        # batch B: _indexPart + _values per valid entity
+        ipval_addrs = []
+        valid = []
+        for e, attrs in zip(ent_addrs, attrs_list):
+            if attrs and _plaus(attrs):
+                ipval_addrs.append(attrs + COLL_INDEXPART_OFF)
+                ipval_addrs.append(attrs + COLL_VALUES_OFF)
+                valid.append(e)
+        ipvals = self.pm.read_u64_many(ipval_addrs) if ipval_addrs else []
+        ent_ip: Dict[int, int] = {}
+        specs = []          # (ent, attr_id, type_char)
+        val_addrs = []
+        for i, e in enumerate(valid):
+            ip = ipvals[2 * i]
+            vals = ipvals[2 * i + 1]
+            if not (ip and vals and _plaus(ip) and _plaus(vals)):
+                continue
+            lay = self._layout_cache.get(ip)
+            if lay is None:
+                if len(self._layout_cache) > 512:
+                    self._layout_cache.clear()
+                lay = self._build_layout(ip, vals, COMBAT_ATTR_IDS)
+                self._layout_cache[ip] = lay
+            if A_HP not in lay or A_MAX_HP not in lay:
+                continue                       # non-combat entity -> skip (no reads)
+            ent_ip[e] = ip
+            for aid, (obj, off, tc) in lay.items():
+                specs.append((e, aid, tc))
+                val_addrs.append(obj + off)
+        # batch C: all combat values in one nogil RPM loop
+        raw = self.pm.read_u64_many(val_addrs) if val_addrs else []
+        amaps: Dict[int, dict] = {}
+        for (e, aid, tc), rv in zip(specs, raw):
+            amaps.setdefault(e, {})[aid] = self._interp(rv, tc)
+        out: Dict[int, Optional[dict]] = {}
+        for e in ent_ip:                       # only entities that had HP attrs
+            c = self._combat_from_amap(amaps.get(e, {}))
+            if c is None:
+                self._layout_cache.pop(ent_ip[e], None)   # stale -> single rebuild
+                c = self.read_combat(e)
+            if c is not None:
+                out[e] = c
+        return out
 
 
 __all__ = ["EntityCombatReader"]
