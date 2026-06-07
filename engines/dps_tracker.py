@@ -263,6 +263,7 @@ class DpsTracker:
         self._mem_damage: Dict[int, int] = {}
         self._mem_primary: bool = False     # memory mode: MEM totals are the primary value
         self._mem_combat_start: float = 0.0  # MEM combat clock (no timestamps in the table)
+        self._mem_skill_damage: Dict[int, Dict[int, int]] = {}  # uid -> {skillId: damage}
         self._load_player_cache()
 
     def set_self_uid(self, uid: int):
@@ -294,6 +295,35 @@ class DpsTracker:
         DPS uses the TCP encounter window (MEM has no timestamps)."""
         with self._lock:
             self._mem_primary = bool(value)
+
+    def set_mem_skill_damage(self, uid_to_skills: Optional[Dict[int, Dict[int, int]]]) -> None:
+        """Store per-player per-skill MEM damage ({uid: {skillId: damage}}) for the detail
+        view's skill breakdown (memory mode / hybrid cross-check). Skill names resolve via
+        the same path as TCP skills; crit/hit columns degrade (MEM has totals only)."""
+        with self._lock:
+            self._mem_skill_damage = {
+                int(u): {int(s): int(v) for s, v in (sk or {}).items() if v}
+                for u, sk in (uid_to_skills or {}).items()
+            }
+
+    def _mem_skill_rows_locked(self, uid: int, entity_total: int) -> List[Dict[str, Any]]:
+        """Build skill rows from the MEM per-skill table (name-resolved, total desc)."""
+        sk = self._mem_skill_damage.get(int(uid)) or {}
+        tot = max(int(entity_total or 0), 1)
+        rows = []
+        for sid, dmg in sk.items():
+            rows.append({
+                'skill_id': int(sid),
+                'skill_name': self._resolve_skill_name_locked(int(sid), int(sid)),
+                'total': int(dmg),
+                'pct': round(int(dmg) / tot, 3),
+                'hits': 0, 'crit_hits': 0, 'crit_rate': 0.0,
+                'max_hit': 0, 'min_hit': 0, 'avg_hit': 0,
+                'heal_total': 0, 'heal_hits': 0,
+                'damage_source': 'mem',
+            })
+        rows.sort(key=lambda r: r['total'], reverse=True)
+        return rows
 
     def set_boss_uuid(self, uuid: int):
         """Set the current boss monster UUID for boss-only damage filtering."""
@@ -901,10 +931,32 @@ class DpsTracker:
         with self._lock:
             entity = self._entities.get(uid)
             if not entity:
+                # memory mode: no TCP entity -> synthesize the detail from the MEM table.
+                if self._mem_primary and (uid in self._mem_skill_damage or uid in self._mem_damage):
+                    pc = self._player_cache.get(str(uid)) or {}
+                    total = int(self._mem_damage.get(uid, 0))
+                    return {
+                        'uid': int(uid),
+                        'name': pc.get('name') or f'Player_{uid}',
+                        'profession': pc.get('profession') or '',
+                        'is_self': (uid == self._self_uid),
+                        'damage_total': total, 'mem_damage_total': total,
+                        'dps': 0, 'heal_total': 0, 'crit_rate': 0.0, 'damage_hits': 0,
+                        'damage_pct': 1.0, 'damage_source': 'mem',
+                        'skills': self._mem_skill_rows_locked(uid, total),
+                        'targets': [], 'elements': [],
+                    }
                 return None
             d = entity.to_dict(include_skills=True, include_targets=True,
                                include_elements=True)
             _annotate_skill_rows(d.get('skills'))
+            # MEM per-skill breakdown: replace skills in memory mode, else attach as cross-check.
+            _mrows = self._mem_skill_rows_locked(uid, int(d.get('damage_total') or 0))
+            if _mrows:
+                if self._mem_primary:
+                    d['skills'] = _mrows
+                else:
+                    d['mem_skills'] = _mrows
             # ACT per-target cross-tab: resolve target names — monsters from the
             # uuid->name side map (fed by update_monster_info), players from the
             # tracked entity list.

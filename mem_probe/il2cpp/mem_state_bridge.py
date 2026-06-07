@@ -234,6 +234,17 @@ class MemStateBridge:
                             # hybrid -> TCP primary + MEM cross-check badge.
                             ds = str(getattr(self.packet_bridge, '_data_source_mode', '') or '').lower()
                             self.dps_tracker.set_mem_primary(ds == 'memory')
+                            # per-skill breakdown for the top players (bound nested reads)
+                            try:
+                                skills = {}
+                                for u, _v in sorted(totals.items(), key=lambda x: -x[1])[:6]:
+                                    sd = self._damage_reader.read_player_skill_damage(int(u))
+                                    if sd:
+                                        skills[int(u) >> 16] = sd
+                                if skills:
+                                    self.dps_tracker.set_mem_skill_damage(skills)
+                            except Exception:
+                                pass
                             if not self._mem_dmg_logged:
                                 self._mem_dmg_logged = True
                                 top = max(totals.items(), key=lambda x: x[1])
