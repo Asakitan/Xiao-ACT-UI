@@ -258,11 +258,24 @@ class DpsTracker:
         self._player_cache: Dict[str, Dict[str, Any]] = {}
         self._player_cache_dirty: bool = False
         self._player_cache_last_save: float = 0.0
+        # MEM-sourced per-uid damage totals (from DamageDataMgr via the mem bridge);
+        # attached to entities in get_snapshot as 'mem_damage_total'. {uid: total}.
+        self._mem_damage: Dict[int, int] = {}
         self._load_player_cache()
 
     def set_self_uid(self, uid: int):
         with self._lock:
             self._self_uid = uid
+
+    def set_mem_damage(self, uid_to_total: Optional[Dict[int, int]]) -> None:
+        """Store MEM-sourced per-uid damage totals (the game's own DamageDataMgr table).
+
+        Keyed by uid = playerUuid >> 16 (verified == CharSerialize.CharId). Attached to
+        each entity in get_snapshot as 'mem_damage_total' for the cross-check badge /
+        memory mode. TCP stays authoritative; this never feeds on_damage_event.
+        """
+        with self._lock:
+            self._mem_damage = {int(k): int(v) for k, v in (uid_to_total or {}).items() if v}
 
     def set_boss_uuid(self, uuid: int):
         """Set the current boss monster UUID for boss-only damage filtering."""
@@ -702,6 +715,12 @@ class DpsTracker:
         )
         if include_skills:
             _annotate_entity_skill_rows(entities)
+        # Attach MEM-sourced damage totals (DamageDataMgr) for the cross-check badge.
+        if self._mem_damage:
+            for e in entities:
+                md = self._mem_damage.get(e.get('uid'))
+                if md is not None:
+                    e['mem_damage_total'] = int(md)
 
         display_damage = self._total_damage_boss if (
             self._boss_uuid and self._total_damage_boss > 0

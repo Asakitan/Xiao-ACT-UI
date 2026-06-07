@@ -88,6 +88,8 @@ class MemStateBridge:
         self.last_boss_mem: Optional[dict] = None
         self._named: dict = {}          # uuid -> resolved name (push to tracker once)
         self._last_scene_id: int = 0
+        self._damage_reader: Any = None
+        self.last_mem_damage: dict = {}   # uid(=uuid>>16) -> MEM damage total
         self._nr = None
         self._nr_tried = False
 
@@ -149,6 +151,11 @@ class MemStateBridge:
                         from mem_probe.il2cpp.mem_entity_provider import MemEntityProvider
                         prov = MemEntityProvider(src, self_uid=uid)
                         self._entity_provider = prov
+                        try:
+                            from mem_probe.il2cpp.mem_damage_reader import MemDamageReader
+                            self._damage_reader = MemDamageReader(src)
+                        except Exception:
+                            self._damage_reader = None
                     else:
                         self._entity_stop.wait(self._entity_interval)
                         continue
@@ -211,6 +218,16 @@ class MemStateBridge:
                             self.state_mgr.update(dungeon_scene_id=smid, dungeon_name=nm)
                         except Exception:
                             pass
+                # MEM damage table (DamageDataMgr) -> dps_tracker for the cross-check
+                # badge / memory mode. uid = playerUuid >> 16 (== CharSerialize.CharId).
+                if self._damage_reader is not None and self.dps_tracker is not None:
+                    try:
+                        totals = self._damage_reader.read_player_totals()
+                        if totals:
+                            self.last_mem_damage = {(int(u) >> 16): int(v) for u, v in totals.items()}
+                            self.dps_tracker.set_mem_damage(self.last_mem_damage)
+                    except Exception:
+                        pass
             except Exception:
                 traceback.print_exc()
             self._entity_stop.wait(self._entity_interval)
