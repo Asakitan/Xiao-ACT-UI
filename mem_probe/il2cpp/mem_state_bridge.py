@@ -78,6 +78,14 @@ class MemStateBridge:
         self.last_skill_cd_count: int = 0
         self.last_resources: dict = {}
         self.last_is_dead: bool = False
+        # entity-HP arm (MEM-driven boss/entity HP; additive, never fights live TCP)
+        self._entity_enabled: bool = True
+        self._entity_provider: Any = None
+        self._entity_thread: Optional[threading.Thread] = None
+        self._entity_stop = threading.Event()
+        self._entity_interval: float = 0.7
+        self.last_entities: list = []
+        self.last_boss_mem: Optional[dict] = None
 
     # ───────── public ─────────
 
@@ -106,6 +114,11 @@ class MemStateBridge:
             )
             self._provider.start()
             self._log("[MemBridge] started (memory-first, TCP fallback enabled)")
+            if self._entity_enabled:
+                self._entity_stop.clear()
+                self._entity_thread = threading.Thread(
+                    target=self._entity_loop, name="mem-entity-hp", daemon=True)
+                self._entity_thread.start()
             return True
         except Exception as e:
             self._log(f"[MemBridge] start failed: {e}")
@@ -113,7 +126,62 @@ class MemStateBridge:
             self._provider = None
             return False
 
+    def _entity_loop(self):
+        """Poll ZEntityMgr for live entity/boss HP and fill the boss bar pre-pull.
+
+        Additive only: pushes boss HP with source='memory' ONLY when TCP is not
+        actively owning the boss bar (source in none/memory/estimate), so it never
+        overrides a live packet HP during combat. Surfaces ``last_entities`` for
+        plugins/UI (all visible mobs, real-time, including off-screen/pre-pull).
+        """
+        prov = None
+        while not self._entity_stop.is_set():
+            try:
+                if prov is None:
+                    p = self._provider
+                    src = getattr(p, "_src", None) if p is not None else None
+                    uid = int(self.last_uid or 0)
+                    if src is not None and uid > 0:
+                        from mem_probe.il2cpp.mem_entity_provider import MemEntityProvider
+                        prov = MemEntityProvider(src, self_uid=uid)
+                        self._entity_provider = prov
+                    else:
+                        self._entity_stop.wait(self._entity_interval)
+                        continue
+                if self.mode == "tcp":          # mem source fell back to TCP -> idle
+                    self._entity_stop.wait(self._entity_interval)
+                    continue
+                prov.set_self_uid(int(self.last_uid or 0))
+                snap = prov.snapshot()
+                self.last_entities = snap
+                boss = max(snap, key=lambda e: e["max_hp"]) if snap else None
+                self.last_boss_mem = boss
+                if boss and self.state_mgr is not None:
+                    st = getattr(self.state_mgr, "state", None)
+                    src_now = str(getattr(st, "boss_hp_source", "none") or "none")
+                    if src_now in ("none", "memory", "estimate"):
+                        try:
+                            self.state_mgr.update(
+                                boss_current_hp=int(boss["cur_hp"]),
+                                boss_total_hp=int(boss["max_hp"]),
+                                boss_hp_est_pct=max(0.0, min(1.0, float(boss["hp_pct"]))),
+                                boss_hp_source="memory",
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                traceback.print_exc()
+            self._entity_stop.wait(self._entity_interval)
+
     def stop(self):
+        self._entity_stop.set()
+        if self._entity_thread:
+            try:
+                self._entity_thread.join(timeout=2.0)
+            except Exception:
+                pass
+            self._entity_thread = None
+        self._entity_provider = None
         if self._provider:
             try:
                 self._provider.stop()
