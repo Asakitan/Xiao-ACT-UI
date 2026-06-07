@@ -61,7 +61,7 @@ def _defaults():
     return {
         "auto_detect": True, "require_foreground": True, "legato_overlap": False,
         "page_size": 8, "extra_midi_dir": "", "last_file": "",
-        "speed": 1.0, "mode_system": "auto",
+        "speed": 1.0, "mode_system": "auto", "transpose": 0,
     }
 
 
@@ -170,6 +170,11 @@ def _load_file(path):
             _api.set_mode_system(_player, mode)
     try:
         _player.set_legato_overlap(bool(_get("legato_overlap")), save=False)
+    except Exception:
+        pass
+    try:
+        # 恢复用户手动移调（在自动八度之上的微调），保证重启/换曲后参数不丢。
+        _player.set_transpose(int(_clampf(int(_get("transpose") or 0), -36, 36)))
     except Exception:
         pass
     _derive_channels()
@@ -665,12 +670,15 @@ def _on_action(action_id, payload=None):
             _ctx.set_setting("speed", _player.state.speed)
         elif action_id == "transpose_up":
             _player.set_transpose(int(_clampf(_player._user_transpose + 1, -36, 36)))
+            _ctx.set_setting("transpose", _player._user_transpose)
         elif action_id == "transpose_down":
             _player.set_transpose(int(_clampf(_player._user_transpose - 1, -36, 36)))
+            _ctx.set_setting("transpose", _player._user_transpose)
         elif action_id == "transpose_auto":
             _player._user_transpose = 0
             if getattr(_player.parser, "notes", None):
                 _player._analyze_and_setup_mapping()
+            _ctx.set_setting("transpose", 0)
         elif action_id == "mode_classic":
             _api.set_mode_system(_player, "classic"); _ctx.set_setting("mode_system", "classic")
         elif action_id == "mode_extended":
@@ -747,9 +755,13 @@ def _hk_stop():
 
 # ── 进度刷新 ────────────────────────────────────────────────────────────────
 def _tick_redraw():
+    # 播放中只动画「可视化」子窗口（钢琴键盘 / 音符卷帘），**不**重绘主控面板：否则主控
+    # 的按钮（尤其"停止"）每 0.3s 被销毁重建，会卡顿、闪烁且点不中。主控的状态/进度在用户
+    # 操作时由动作回调即时重绘；播放时的实时反馈交给可视化窗口。
     try:
         if _player and _player.state.is_playing and not _player.state.is_paused:
-            _ctx.request_redraw()
+            _ctx.request_redraw("midi_kbd")
+            _ctx.request_redraw("midi_roll")
     except Exception:
         pass
 

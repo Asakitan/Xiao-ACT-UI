@@ -724,9 +724,24 @@ class PluginDetachedPanel:
     def _subscribe(self) -> None:
         try:
             from act_platform.runtime import ensure_act_event_bus
+
+            def _on_invalidate(event):
+                # Only repaint when the redraw is global (no surface) or targets
+                # THIS panel. A plugin animating its viz window (e.g. note-roll)
+                # targets that panel id, so an interactive panel in another window
+                # is not torn down + rebuilt under the user's cursor.
+                payload = (event or {}).get('payload') or {}
+                pid = str(payload.get('plugin_id') or '')
+                if pid and pid != self.plugin_id:
+                    return
+                surface = str(payload.get('surface') or payload.get('panel_id') or '')
+                if surface and self.panel_id and surface != self.panel_id:
+                    return
+                self._dirty = True
+
             self._sub_token = ensure_act_event_bus(self.owner).subscribe(
-                'plugin_ui_invalidate', lambda _e: setattr(self, '_dirty', True),
-                owner_id=f'detached_{self.plugin_id}')
+                'plugin_ui_invalidate', _on_invalidate,
+                owner_id=f'detached_{self.plugin_id}_{self.panel_id}')
         except Exception:
             self._sub_token = ''
 

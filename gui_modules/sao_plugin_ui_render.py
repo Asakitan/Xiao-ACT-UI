@@ -341,6 +341,9 @@ class PluginPanelList:
         self._dirty = True
         self._after_id: Optional[str] = None
         self._sub_token = ""
+        #: panel ids currently shown — so a redraw targeted at a panel we don't
+        #: list (e.g. a plugin's hidden/animating viz window) doesn't rebuild us.
+        self._shown_ids: set = set()
         self._frame = tk.Frame(parent, bg=parent["bg"])
         self._frame.pack(fill="both", expand=True)
         self._subscribe()
@@ -354,9 +357,18 @@ class PluginPanelList:
         try:
             from act_platform.runtime import ensure_act_event_bus
             bus = ensure_act_event_bus(self.owner)
+
+            def _on_invalidate(event):
+                # Global redraws (no surface) always refresh; a redraw targeted at
+                # a specific panel only refreshes if that panel is one we list.
+                payload = (event or {}).get("payload") or {}
+                surface = str(payload.get("surface") or payload.get("panel_id") or "")
+                if surface and surface not in self._shown_ids:
+                    return
+                self._dirty = True
+
             self._sub_token = bus.subscribe(
-                "plugin_ui_invalidate", lambda _e: setattr(self, "_dirty", True),
-                owner_id="entity_plugin_panel_list")
+                "plugin_ui_invalidate", _on_invalidate, owner_id="entity_plugin_panel_list")
         except Exception:
             self._sub_token = ""
 
@@ -416,6 +428,7 @@ class PluginPanelList:
         # Only top-level panels show here; ``hidden`` sub-panels are summoned by
         # their plugin (ctx.open_window), not listed as separate entries.
         active = [p for p in panels if p.get("available") and not p.get("hidden")]
+        self._shown_ids = {str(p.get("id") or "") for p in active}
         if not active:
             tk.Label(self._frame, text="无插件 UI 面板\n启用注册了 register_ui_panel 的插件后显示在这里。",
                      bg=self._frame["bg"], fg=pal["label"], justify="center",

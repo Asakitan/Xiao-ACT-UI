@@ -26,10 +26,14 @@ from act_platform.ui_spec import UI, normalize_ui_spec
 
 PLUGIN_CODE = r'''
 def on_load(ctx):
+    def _act(a, p):
+        if a == "pop":
+            ctx.open_window("sub")
+        elif a == "redraw":
+            ctx.request_redraw("sub")     # targeted redraw (host filters by surface)
     ctx.register_ui_panel(
         "main", {"title": "Main", "width": 480, "height": 640, "min_width": 360},
-        render=lambda p: ctx.ui.panel("Main", []),
-        on_action=lambda a, p: (ctx.open_window("sub") if a == "pop" else None))
+        render=lambda p: ctx.ui.panel("Main", []), on_action=_act)
     ctx.register_ui_panel(
         "sub", {"title": "Sub", "width": 300, "height": 200, "hidden": True},
         render=lambda p: ctx.ui.panel("Sub", []))
@@ -91,6 +95,19 @@ class PluginWindowTests(unittest.TestCase):
             self.assertTrue(captured)
             self.assertEqual(captured[0]["plugin_id"], "windemo")
             self.assertEqual(captured[0]["panel_id"], "sub")
+
+    def test_request_redraw_carries_surface(self) -> None:
+        # The host renderers filter plugin_ui_invalidate by surface so animating
+        # one panel doesn't rebuild interactive panels in other windows.
+        with tempfile.TemporaryDirectory(prefix="pw_redraw_") as root:
+            mgr = _make_manager(root)
+            mgr.enable_plugin("windemo")
+            got = []
+            mgr.event_bus.subscribe("plugin_ui_invalidate",
+                                    lambda e: got.append(e.get("payload")),
+                                    owner_id="test")
+            mgr.invoke_ui_action("main", "redraw", {})
+            self.assertTrue(any(p.get("surface") == "sub" for p in got), got)
 
     def test_negative_size_clamped(self) -> None:
         with tempfile.TemporaryDirectory(prefix="pw_clamp_") as root:
