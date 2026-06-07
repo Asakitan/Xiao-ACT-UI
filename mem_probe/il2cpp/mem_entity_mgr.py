@@ -177,7 +177,19 @@ class EntityMgrReader:
                 return kp
         except Exception:
             pass
-        # 2) any on-disk dump's script.json, newest first, validated by klass name
+        # 2) in-memory live locator: derive the klass pointer by NAME from process
+        #    memory (no dump, no script.json, version-robust, onedir-safe). This is
+        #    the production path for frozen clients and for new game versions.
+        try:
+            from mem_probe.il2cpp.auto_registration_locator import build_live_class_index
+            idx = build_live_class_index(sr.pm, {ENTITY_MGR_CLASS}, time_budget_s=30)
+            kp = int(idx.get(ENTITY_MGR_CLASS, 0) or 0)
+            if kp and self._klass_name(kp) == "ZEntityMgr":
+                self._mgr_klass = kp
+                return kp
+        except Exception as e:
+            print(f"[entity-mgr] live locator failed: {e}", file=sys.stderr)
+        # 3) any on-disk dump's script.json (dev fallback), newest first, name-validated
         here = os.path.dirname(os.path.abspath(__file__))
         out_dir = os.path.join(here, "out")
         try:
