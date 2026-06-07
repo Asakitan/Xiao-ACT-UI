@@ -98,6 +98,14 @@ class UnifiedDataSource:
 
     # ───────── public API expected by PacketBridge ─────────
 
+    def set_dps_tracker(self, tracker) -> None:
+        """Forward a late-bound DPS tracker to the underlying MemStateBridge so its
+        entity loop can push the MEM damage table / per-skill breakdown."""
+        try:
+            self._bridge.dps_tracker = tracker
+        except Exception:
+            pass
+
     def start(self, *, defer: Optional[bool] = None) -> bool:
         """Start or arm the underlying read-only memory self-state bridge."""
         if self._started:

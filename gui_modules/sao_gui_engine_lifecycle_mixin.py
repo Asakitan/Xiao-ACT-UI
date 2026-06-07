@@ -174,6 +174,15 @@ class SAOPlayerGUIEngineLifecycleMixin:
             self._dps_tracker.register_finalized_hook(self._on_dps_report_finalized)
             ensure_act_event_bus(self)
             ensure_act_plugin_manager(self, load=True)
+            # Wire the tracker into the packet bridge so the (deferred, hybrid) memory
+            # source can push the MEM damage table / per-skill breakdown into the DPS
+            # panel. The mem source is created lazily on the first TCP scene trigger,
+            # which happens after this point, so it picks up the tracker.
+            try:
+                if getattr(self, '_packet_engine', None) is not None:
+                    self._packet_engine.set_dps_tracker(self._dps_tracker)
+            except Exception:
+                pass
             print('[SAO Entity] DPS tracker initialized')
         except Exception as e:
             print(f'[SAO Entity] DPS tracker init failed: {e}')

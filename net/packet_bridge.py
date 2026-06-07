@@ -390,6 +390,7 @@ class PacketBridge:
         self._plugin_manager = plugin_manager
         self._event_bus = event_bus if isinstance(event_bus, EventBus) else None
         self._mem_source = None                  # UnifiedDataSource 实例 (lazy)
+        self._dps_tracker = None                 # set by GUI; mem source pushes MEM dmg table here
         self._mem_authoritative = False          # mem owns real-time self state when True
         self._last_name_resolver_reload_ts: float = 0.0
         try:
@@ -555,6 +556,19 @@ class PacketBridge:
         except Exception:
             PacketBridge._name_tables_warmed = False
 
+    def set_dps_tracker(self, tracker) -> None:
+        """Wire the DPS tracker so the (lazily-created) memory source can push the
+        MEM damage table / per-skill breakdown into the DPS panel. The mem source is
+        created on the first TCP scene trigger -- usually after this is called -- but
+        forward to a live source too in case the order ever flips."""
+        self._dps_tracker = tracker
+        ms = self._mem_source
+        if ms is not None:
+            try:
+                ms.set_dps_tracker(tracker)
+            except Exception:
+                pass
+
     def _start_memory_source(self) -> bool:
         """Lazy-import + start UnifiedDataSource. Returns True on success."""
         try:
@@ -573,6 +587,7 @@ class PacketBridge:
                 on_scene_change=self._on_scene_change,
                 on_status_change=self._on_mem_status_change,
                 packet_bridge=self,
+                dps_tracker=self._dps_tracker,
                 settings=self._settings,
             )
             defer_default = self._data_source_mode in ('auto', 'hybrid')
