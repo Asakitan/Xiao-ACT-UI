@@ -113,6 +113,16 @@
             else b.addEventListener("click", function () { if (onAction) onAction(node.action || "", node.payload || {}); });
             return b;
         }
+        if (t === "input") {
+            var inp = el("input", "splg-input");
+            inp.type = node.input_type === "number" ? "number"
+                     : (node.input_type === "password" ? "password" : "text");
+            inp.setAttribute("data-splg-id", node.id || "");
+            if (node.value != null) inp.value = node.value;
+            if (node.placeholder) inp.placeholder = node.placeholder;
+            if (node.width) inp.style.width = node.width + "px";
+            return inp;
+        }
         if (t === "table") return renderTable(node);
         if (t === "canvas") return renderCanvas(node);
         return null;
@@ -200,14 +210,57 @@
         }[c] || "#73d7ff";
     }
 
+    // Collect live text-input values within one panel mount into {id: value}.
+    function collectInputs(root) {
+        var out = {};
+        if (!root || !root.querySelectorAll) return out;
+        var list = root.querySelectorAll("input[data-splg-id]");
+        for (var i = 0; i < list.length; i++) {
+            var id = list[i].getAttribute("data-splg-id");
+            if (id) out[id] = list[i].value;
+        }
+        return out;
+    }
+
     function renderSpec(spec, mount, onAction) {
+        // Snapshot live inputs: the innerHTML teardown below would otherwise drop
+        // focus + typed text every poll/redraw (Tk reconciles in place; here we
+        // must restore by hand to keep 1:1 parity with the Entity renderer).
+        var prev = {};
+        if (mount.querySelectorAll) {
+            var existing = mount.querySelectorAll("input[data-splg-id]");
+            for (var i = 0; i < existing.length; i++) {
+                var pid = existing[i].getAttribute("data-splg-id");
+                if (!pid) continue;
+                prev[pid] = { v: existing[i].value, f: (document.activeElement === existing[i]),
+                              s: existing[i].selectionStart, e: existing[i].selectionEnd };
+            }
+        }
+        // Wrap onAction so a button fire carries the panel's input values — only
+        // when inputs exist, so input-less panels keep their exact payload.
+        var wrapped = onAction ? function (action, payload) {
+            payload = payload || {};
+            var inputs = collectInputs(mount);
+            if (Object.keys(inputs).length) payload.inputs = inputs;
+            onAction(action, payload);
+        } : null;
         mount.innerHTML = "";
         spec = spec || {};
         if (spec.title) mount.appendChild(el("div", "splg-text splg-st-title", esc(spec.title)));
         (spec.nodes || []).forEach(function (n) {
-            try { var e = renderNode(n, onAction); if (e) mount.appendChild(e); }
+            try { var e = renderNode(n, wrapped); if (e) mount.appendChild(e); }
             catch (_) { mount.appendChild(el("div", "splg-text splg-st-bad", "[render error]")); }
         });
+        // Restore typed text / focus on inputs that survived the rebuild.
+        var rebuilt = mount.querySelectorAll ? mount.querySelectorAll("input[data-splg-id]") : [];
+        for (var j = 0; j < rebuilt.length; j++) {
+            var rid = rebuilt[j].getAttribute("data-splg-id");
+            var p = prev[rid];
+            if (!p) continue;
+            var seed = rebuilt[j].value;                   // server value from the new spec
+            if (p.f || seed === "") rebuilt[j].value = p.v; // clobber guard: keep user text
+            if (p.f) { rebuilt[j].focus(); try { rebuilt[j].setSelectionRange(p.s, p.e); } catch (_) {} }
+        }
     }
 
     // ── injected stylesheet (SAO cyan/gold theme, scoped to .splg-*) ─────────
@@ -246,6 +299,10 @@
             ".splg-btn:hover{box-shadow:0 0 12px rgba(107,214,255,.3);}",
             ".splg-btn-primary{border-color:rgba(255,214,117,.74);color:#fff8da;}.splg-btn-danger{border-color:rgba(255,107,130,.7);}",
             ".splg-btn:disabled{opacity:.5;cursor:default;}",
+            ".splg-input{pointer-events:auto;border:1px solid rgba(117,205,255,.5);background:rgba(8,14,22,.55);",
+            "  color:#e8f6ff;border-radius:7px;padding:5px 9px;font-size:12px;margin:4px 6px 4px 0;min-width:120px;}",
+            ".splg-input:focus{border-color:rgba(255,214,117,.74);outline:none;box-shadow:0 0 10px rgba(107,214,255,.25);}",
+            ".splg-input::placeholder{color:#9fc0d8;}",
             ".splg-table{width:100%;border-collapse:collapse;font-size:12px;}",
             ".splg-table th{color:#9fc0d8;font-weight:700;text-align:left;padding:2px 6px;border-bottom:1px solid rgba(117,205,255,.2);}",
             ".splg-table td{color:#e8f6ff;padding:2px 6px;}.splg-row-hi td{color:#ffd46f;font-weight:700;}",

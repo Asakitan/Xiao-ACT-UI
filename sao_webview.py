@@ -73,6 +73,12 @@ from act_platform.runtime import (
     act_action_log_search,
     act_action_log_status,
     act_aggregate_status,
+    act_mem_scope_status,
+    act_mem_search,
+    act_mem_search_status,
+    act_mem_narrow,
+    act_mem_search_cancel,
+    act_mem_attr_map,
     act_combatant_drilldown_back,
     act_combatant_drilldown_filter,
     act_combatant_drilldown_focus_target,
@@ -564,6 +570,29 @@ class SAOWebAPI:
             ensure_ascii=False,
         )
 
+    def get_mem_scope_status(self, query='', dtype='i32', job_id=''):
+        return json.dumps(
+            act_mem_scope_status(self._g, query=str(query or ''), dtype=str(dtype or 'i32'),
+                                 job_id=str(job_id or '')),
+            ensure_ascii=False,
+        )
+
+    def mem_search(self, value='', dtype='i32', align=0):
+        return json.dumps(act_mem_search(self._g, value=value, dtype=str(dtype or 'i32'),
+                                         align=int(align or 0)), ensure_ascii=False)
+
+    def mem_search_status(self, job_id=''):
+        return json.dumps(act_mem_search_status(self._g, job_id=str(job_id or '')), ensure_ascii=False)
+
+    def mem_narrow(self, job_id='', value=''):
+        return json.dumps(act_mem_narrow(self._g, job_id=str(job_id or ''), value=value), ensure_ascii=False)
+
+    def mem_search_cancel(self, job_id=''):
+        return json.dumps(act_mem_search_cancel(self._g, job_id=str(job_id or '')), ensure_ascii=False)
+
+    def mem_attr_map(self, ent_addr=''):
+        return json.dumps(act_mem_attr_map(self._g, ent_addr=ent_addr), ensure_ascii=False)
+
     def play_timeline(self, speed=1.0):
         return json.dumps(act_timeline_play(self._g, speed=float(speed or 1.0)), ensure_ascii=False)
 
@@ -889,6 +918,15 @@ class SAOWebAPI:
                 self._g._show_act_aggregate()
         threading.Thread(target=_do, daemon=True).start()
 
+    def toggle_mem_scope(self):
+        """Show/hide the memory-scan explorer (Mem Scope) overlay."""
+        def _do():
+            if self._g._mem_scope_visible:
+                self._g._hide_mem_scope()
+            else:
+                self._g._show_mem_scope()
+        threading.Thread(target=_do, daemon=True).start()
+
     def toggle_action_log(self):
         """Show/hide the ACT action-log overlay."""
         def _do():
@@ -1035,6 +1073,7 @@ class SAOWebAPI:
                 getattr(self._g, 'offline_import_win', None),
                 getattr(self._g, 'timeline_vcr_win', None),
                 getattr(self._g, 'act_aggregate_win', None),
+                getattr(self._g, 'mem_scope_win', None),
                 getattr(self._g, 'action_log_win', None),
                 getattr(self._g, 'death_recap_win', None),
                 getattr(self._g, 'graph_timeseries_win', None),
@@ -2339,6 +2378,10 @@ class SAOWebViewGUI:
         # ACT Semantic Aggregate cockpit panel
         self.act_aggregate_win = None
         self._act_aggregate_visible = False
+
+        # Mem Scope — memory-scan explorer panel
+        self.mem_scope_win = None
+        self._mem_scope_visible = False
 
         # ACT Action Log panel
         self.action_log_win = None
@@ -4348,6 +4391,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # Mem Scope — memory-scan explorer (CE-lite), parity with Entity panel
+        mem_scope_url = _web_file_uri('mem_scope.html')
+        _ms_w = max(780, int(min(_sw, 1920) * 0.52))
+        _ms_h = max(620, int(min(_sh, 1080) * 0.62))
+        _ms_x = max(16, int(monitor_left + (_sw - _ms_w) * 0.30))
+        _ms_y = max(22, int(monitor_top + (_sh - _ms_h) * 0.12))
+        self.mem_scope_win = webview.create_window(
+            'SAO-MemScope', mem_scope_url,
+            width=_ms_w, height=_ms_h,
+            x=_ms_x, y=_ms_y,
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         # ACT Action Log — searchable EventBus table for WebView parity
         action_log_url = _web_file_uri('act_action_log.html')
         _al_w = max(760, int(min(_sw, 1920) * 0.48))
@@ -5600,6 +5661,7 @@ class SAOWebViewGUI:
             (getattr(g, 'offline_import_win', None), 'offline_import'),
             (getattr(g, 'timeline_vcr_win', None), 'timeline_vcr'),
             (getattr(g, 'act_aggregate_win', None), 'act_aggregate'),
+            (getattr(g, 'mem_scope_win', None), 'mem_scope'),
             (getattr(g, 'action_log_win', None), 'action_log'),
             (getattr(g, 'death_recap_win', None), 'death_recap'),
             (getattr(g, 'graph_timeseries_win', None), 'graph_timeseries'),
@@ -5880,6 +5942,14 @@ class SAOWebViewGUI:
                 if self.act_aggregate_win:
                     self._set_window_alpha('SAO-ActAggregate', 0.0)
                     self.act_aggregate_win.hide()
+                    self._ensure_hidden_panels_passthrough()
+            except Exception:
+                pass
+            try:
+                self._mem_scope_visible = False
+                if self.mem_scope_win:
+                    self._set_window_alpha('SAO-MemScope', 0.0)
+                    self.mem_scope_win.hide()
                     self._ensure_hidden_panels_passthrough()
             except Exception:
                 pass
@@ -7165,6 +7235,63 @@ class SAOWebViewGUI:
         except Exception:
             pass
         self._act_aggregate_visible = False
+
+    # ── Mem Scope panel ──
+
+    def _eval_mem_scope(self, js):
+        try:
+            if self.mem_scope_win:
+                self.mem_scope_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _ensure_mem_scope_clickable(self):
+        """Remove WS_EX_TRANSPARENT so the mem scope panel receives clicks."""
+        try:
+            hwnd = ctypes.windll.user32.FindWindowW(None, 'SAO-MemScope')
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            if ex & _WS_EX_TRANSPARENT:
+                user32.SetWindowLongW(
+                    hwnd, _GWL_EXSTYLE,
+                    (ex & ~_WS_EX_TRANSPARENT) | _WS_EX_LAYERED)
+        except Exception:
+            pass
+
+    def _show_mem_scope(self):
+        try:
+            if self.mem_scope_win and not self._mem_scope_visible:
+                self._set_window_alpha('SAO-MemScope', 0.0)
+                self.mem_scope_win.show()
+                self._eval_mem_scope('if(window.MemScope&&MemScope.fadeIn)MemScope.fadeIn()')
+                self._eval_mem_scope('if(window.MemScope&&MemScope.refresh)MemScope.refresh()')
+                threading.Timer(
+                    0.03,
+                    lambda: self._animate_window_alpha('SAO-MemScope', 0.0, 1.0, duration_ms=220, steps=8),
+                ).start()
+                self._mem_scope_visible = True
+                self._ensure_mem_scope_clickable()
+                threading.Timer(0.5, self._ensure_mem_scope_clickable).start()
+        except Exception:
+            pass
+
+    def _hide_mem_scope(self):
+        try:
+            if self.mem_scope_win and self._mem_scope_visible:
+                self._eval_mem_scope('if(window.MemScope&&MemScope.fadeOut)MemScope.fadeOut()')
+                def _finish():
+                    try:
+                        if self.mem_scope_win:
+                            self.mem_scope_win.hide()
+                            self._ensure_hidden_panels_passthrough()
+                    except Exception:
+                        pass
+                threading.Timer(0.25, _finish).start()
+        except Exception:
+            pass
+        self._mem_scope_visible = False
 
     # ── ACT Action Log panel ──
 
@@ -8545,6 +8672,11 @@ class SAOWebViewGUI:
         except Exception:
             pass
         try:
+            if self.mem_scope_win:
+                self.mem_scope_win.destroy()
+        except Exception:
+            pass
+        try:
             if self.action_log_win:
                 self.action_log_win.destroy()
         except Exception:
@@ -9235,6 +9367,7 @@ class SAOWebViewGUI:
             'toggle_offline_import': lambda: (self._show_offline_import() if not self._offline_import_visible else self._hide_offline_import()),
             'toggle_timeline_vcr': lambda: (self._show_timeline_vcr() if not self._timeline_vcr_visible else self._hide_timeline_vcr()),
             'toggle_act_aggregate': lambda: (self._show_act_aggregate() if not self._act_aggregate_visible else self._hide_act_aggregate()),
+            'toggle_mem_scope': lambda: (self._show_mem_scope() if not self._mem_scope_visible else self._hide_mem_scope()),
             'toggle_action_log': lambda: (self._show_action_log() if not self._action_log_visible else self._hide_action_log()),
             'toggle_death_recap': lambda: (self._show_death_recap() if not self._death_recap_visible else self._hide_death_recap()),
             'toggle_graph_timeseries': lambda: (self._show_graph_timeseries() if not self._graph_timeseries_visible else self._hide_graph_timeseries()),

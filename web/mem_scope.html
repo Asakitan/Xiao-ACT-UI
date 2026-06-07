@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SAO Mem Scope</title>
+<style>
+/* Layout/sizing only; all colors come from act_panel_theme.css var(--act-*) so
+   the panel follows the host light/dark theme and stays 1:1 with the Tk twin. */
+:root { --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --r-md: 6px; }
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; min-height: 100%; overflow: hidden; user-select: none; }
+body { padding: 12px; }
+.shell { opacity: 0; transform: translateY(8px) scale(.99); transition: opacity .22s ease, transform .22s ease; }
+.shell.visible { opacity: 1; transform: translateY(0) scale(1); }
+.header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.kicker { letter-spacing: .18em; font-size: 10px; color: var(--act-gold); text-transform: uppercase; }
+.title { margin-top: 2px; font-size: 19px; font-weight: 700; letter-spacing: .06em; color: var(--act-text); }
+.header-actions { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.header-actions label { font-size: 11px; color: var(--act-muted); }
+input#query { width: 180px; }
+.body { margin-top: var(--sp-3); height: calc(100vh - 96px); overflow: auto; padding-right: var(--sp-1); }
+
+.ms-badges { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.ms-badge { font-size: 11px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--acc, var(--act-cyan)); color: var(--acc, var(--act-cyan)); background: color-mix(in srgb, var(--acc, var(--act-cyan)) 14%, transparent); }
+.ms-section { margin-bottom: var(--sp-3); border: 1px solid var(--act-edge-soft); border-radius: var(--r-md); background: var(--act-card-bg); overflow: hidden; }
+.ms-sec-head { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); background: var(--act-card-bg-2); border-bottom: 1px solid var(--act-edge-soft); }
+.ms-sec-rail { width: 4px; align-self: stretch; min-height: 20px; background: var(--acc, var(--act-cyan)); border-radius: 2px; }
+.ms-sec-title { font-size: 14px; font-weight: 700; color: var(--act-gold); letter-spacing: .05em; }
+.ms-sec-badge { margin-left: auto; font-size: 11px; color: var(--act-muted); }
+.ms-sec-body { padding: var(--sp-2) var(--sp-3); }
+.ms-kv { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin: 2px 0; }
+.ms-k { color: var(--act-muted); }
+.ms-v { color: var(--act-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ms-cat { display: flex; align-items: baseline; gap: 8px; margin: 3px 0; }
+.ms-cat-name { color: var(--act-gold); font-weight: 700; font-size: 12px; min-width: 130px; }
+.ms-cat-hint { color: var(--act-muted); font-size: 11px; }
+table.ms-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ms-table th { color: var(--act-muted); font-weight: 700; text-align: left; padding: 2px 6px; border-bottom: 1px solid var(--act-edge-soft); }
+.ms-table td { color: var(--act-text); padding: 2px 6px; font-variant-numeric: tabular-nums; }
+.ms-res { display: flex; align-items: center; gap: 6px; margin: 1px 0; font-family: Consolas, monospace; font-size: 11px; }
+.ms-res .line { color: var(--act-text); flex: 1; word-break: break-all; }
+.ms-empty { color: var(--act-muted); font-size: 12px; padding: 8px 0; }
+.ms-err { color: #ff6b82; font-size: 12px; }
+button.ms-mini { background: transparent; border: 1px solid var(--act-cyan); color: var(--act-cyan); border-radius: 6px; font-size: 10px; padding: 2px 7px; cursor: pointer; }
+button.ms-mini:hover { background: color-mix(in srgb, var(--act-cyan) 18%, transparent); }
+.toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--act-card-bg-2); color: var(--act-text); border: 1px solid var(--act-edge-soft); border-radius: 8px; padding: 6px 14px; font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.on { opacity: 1; }
+</style>
+<link rel="stylesheet" href="act_panel_theme.css" />
+<script src="act_panel_theme.js"></script>
+</head>
+<body>
+<div class="shell" id="shell">
+    <div class="header">
+        <div><div class="kicker">MEMORY SCANNER</div><div class="title">MEM SCOPE 内存浏览器</div></div>
+        <div class="header-actions">
+            <div class="pill" id="status-pill">READY</div>
+            <label for="dtype">类型</label>
+            <select id="dtype">
+                <option value="i32" selected>i32</option>
+                <option value="u32">u32</option>
+                <option value="i64">i64</option>
+                <option value="u64">u64</option>
+                <option value="f32">f32</option>
+                <option value="utf16">utf16</option>
+            </select>
+            <input id="query" type="text" placeholder="搜索值 / Search value" />
+            <button class="primary" type="button" onclick="MemScope.search()">搜索</button>
+            <button type="button" onclick="MemScope.narrow()">收敛</button>
+            <button type="button" onclick="MemScope.clear()">清除</button>
+            <button class="close" type="button" onclick="MemScope.close()">×</button>
+        </div>
+    </div>
+    <div class="body" id="content"><div class="ms-empty">正在读取内存引擎状态…<br/>LOADING MEM SCOPE</div></div>
+    <div class="toast" id="toast"></div>
+</div>
+<script src="pywebview-shim.js"></script>
+<script src="plugin_layer.js"></script>
+<script>
+(function () {
+    "use strict";
+    var shell = document.getElementById('shell');
+    var content = document.getElementById('content');
+    var statusPill = document.getElementById('status-pill');
+    var queryInput = document.getElementById('query');
+    var dtypeSelect = document.getElementById('dtype');
+    var toastEl = document.getElementById('toast');
+    var jobId = '';
+    var pollTimer = null;
+    var lastData = null;
+
+    function esc(v) {
+        return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function api() { return window.pywebview && window.pywebview.api; }
+    function toast(msg) {
+        toastEl.textContent = msg; toastEl.classList.add('on');
+        setTimeout(function () { toastEl.classList.remove('on'); }, 1600);
+    }
+
+    function section(title, badge, acc, innerHtml) {
+        return '<div class="ms-section" style="--acc:' + acc + '">'
+            + '<div class="ms-sec-head"><span class="ms-sec-rail"></span>'
+            + '<span class="ms-sec-title">' + esc(title) + '</span>'
+            + (badge != null ? '<span class="ms-sec-badge">' + esc(badge) + '</span>' : '')
+            + '</div><div class="ms-sec-body">' + innerHtml + '</div></div>';
+    }
+
+    function renderTable(cols, rows) {
+        var h = '<table class="ms-table"><thead><tr>';
+        cols.forEach(function (c) { h += '<th>' + esc(c[1]) + '</th>'; });
+        h += '</tr></thead><tbody>';
+        rows.forEach(function (r) {
+            h += '<tr>';
+            cols.forEach(function (c) { h += '<td>' + esc(r[c[0]] == null ? '' : r[c[0]]) + '</td>'; });
+            h += '</tr>';
+        });
+        return h + '</tbody></table>';
+    }
+
+    function hintLine(r) {
+        var av = r.as || {}, bits = [esc(r.addr)];
+        if ('u32' in av) bits.push('u32=' + av.u32);
+        if ('i32' in av && av.i32 !== av.u32) bits.push('i32=' + av.i32);
+        if ('f32' in av) bits.push('f32=' + av.f32);
+        if (av.utf16) bits.push("'" + esc(av.utf16) + "'");
+        else if (av.cstr) bits.push('"' + esc(av.cstr) + '"');
+        if (av.ptr) bits.push('-&gt;' + av.ptr);
+        var loc = r['in'] || {};
+        if (loc.module) bits.push('in ' + esc(loc.module) + '+' + loc.offset);
+        else if (loc.region) bits.push('[' + esc(loc.region) + ']');
+        if (r.klass_hint) bits.push('~' + esc(r.klass_hint));
+        return bits.join(' · ');
+    }
+
+    function render(d) {
+        d = d || {};
+        var st = d.status || {};
+        var active = !!st.active;
+        statusPill.textContent = active ? 'HYBRID' : 'TCP-ONLY';
+        var html = '<div class="ms-badges">';
+        html += '<span class="ms-badge" style="--acc:' + (active ? 'var(--act-cyan)' : '#ffb454') + '">'
+            + (active ? 'HYBRID' : 'TCP-ONLY') + '</span>';
+        if (st.provider_mode) html += '<span class="ms-badge">reader=' + esc(st.provider_mode) + '</span>';
+        if (st.process) html += '<span class="ms-badge">' + esc(st.process) + '</span>';
+        if (st.module_base) html += '<span class="ms-badge">GA ' + esc(st.module_base) + '</span>';
+        html += '</div>';
+
+        if (!active) {
+            html += '<div class="ms-empty">' + esc(st.hint || '切换数据源到 hybrid 模式以启用内存浏览器。') + '</div>';
+            html += catalogHtml(d, true);
+            content.innerHTML = html;
+            return;
+        }
+        html += catalogHtml(d, false);
+        html += selfHtml(d);
+        html += entitiesHtml(d);
+        html += damageHtml(d);
+        html += searchHtml(d);
+        content.innerHTML = html;
+        wireResultButtons();
+    }
+
+    function catalogHtml(d, hintOnly) {
+        var cats = (d.catalog && d.catalog.categories) || [];
+        if (!cats.length) return '';
+        var inner = '';
+        cats.forEach(function (c) {
+            var ok = !!c.available;
+            inner += '<div class="ms-cat">'
+                + '<span class="ms-badge" style="--acc:' + (ok ? 'var(--act-cyan)' : '#ffb454') + '">'
+                + (ok ? '可用' : '未就绪') + '</span>'
+                + '<span class="ms-cat-name">' + esc(c.name || c.id) + '</span>'
+                + '<span class="ms-cat-hint">' + esc(c.hint || '') + '</span></div>';
+        });
+        return section('资源目录 Catalog', cats.length, 'var(--act-gold)', inner);
+    }
+
+    function selfHtml(d) {
+        var s = d.self || {};
+        if (!s.ok) return '';
+        var skip = { ok: 1, reason: 1, hint: 1, resources: 1 }, inner = '';
+        Object.keys(s).forEach(function (k) {
+            if (skip[k]) return;
+            inner += '<div class="ms-kv"><span class="ms-k">' + esc(k) + '</span><span class="ms-v">' + esc(s[k]) + '</span></div>';
+        });
+        return section('自身状态 Self', null, 'var(--act-cyan)', inner);
+    }
+
+    function entitiesHtml(d) {
+        var rows = (d.entities && d.entities.entities) || [];
+        if (!rows.length) return section('实体 Entities', 0, '#ff6b82', '<div class="ms-empty">暂无可见战斗实体（开怪后出现）。</div>');
+        var cols = [['kind', '类型'], ['name', '名字'], ['cur_hp', 'HP'], ['max_hp', 'MaxHP'], ['hp_pct', '%'], ['base_id', 'BaseId'], ['obj', '地址']];
+        return section('实体 Entities', rows.length, '#ff6b82', renderTable(cols, rows.slice(0, 40)));
+    }
+
+    function damageHtml(d) {
+        var totals = (d.damage && d.damage.totals) || {};
+        var keys = Object.keys(totals);
+        if (!keys.length) return section('伤害总表 Damage', 0, 'var(--act-gold)', '<div class="ms-empty">暂无伤害数据。</div>');
+        var rows = keys.map(function (k) { return { uid: k, total: totals[k] }; });
+        rows.sort(function (a, b) { return Number(b.total) - Number(a.total); });
+        return section('伤害总表 Damage', keys.length, 'var(--act-gold)', renderTable([['uid', 'UID'], ['total', '总伤害']], rows.slice(0, 20)));
+    }
+
+    function searchHtml(d) {
+        var s = d.search || {};
+        var results = s.results || [];
+        var count = s.count || 0;
+        var badge = count ? (results.length + '/' + count) : '0';
+        var inner = '';
+        if (!jobId) {
+            inner = '<div class="ms-empty">输入一个值（如当前 HP），选类型，点「搜索」。命中后变化数值再点「收敛」逐步缩小。</div>';
+        } else if (s.error) {
+            inner = '<div class="ms-err">错误: ' + esc(s.error) + '</div>';
+        } else if (s.state === 'running') {
+            inner = '<div class="ms-empty">扫描中… ' + Math.round((s.progress || 0) * 100) + '%</div>';
+        } else if (!results.length) {
+            inner = '<div class="ms-empty">无命中（共 ' + count + ' 个，可能为 0）。</div>';
+        } else {
+            if (s.truncated) inner += '<div class="ms-empty">显示 ' + results.length + ' / ' + count + ' 条</div>';
+            results.forEach(function (r) {
+                inner += '<div class="ms-res"><span class="line">' + hintLine(r) + '</span>'
+                    + '<button class="ms-mini" data-copy="' + esc(r.addr) + '">复制</button>'
+                    + '<button class="ms-mini" data-attr="' + esc(r.addr) + '">attr</button></div>';
+            });
+        }
+        return section('搜索结果 Search', badge, 'var(--act-cyan)', inner);
+    }
+
+    function wireResultButtons() {
+        content.querySelectorAll('button[data-copy]').forEach(function (b) {
+            b.addEventListener('click', function () { copyAddr(b.getAttribute('data-copy')); });
+        });
+        content.querySelectorAll('button[data-attr]').forEach(function (b) {
+            b.addEventListener('click', function () { readAttr(b.getAttribute('data-attr')); });
+        });
+    }
+
+    function copyAddr(addr) {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(addr);
+        } catch (_) {}
+        toast('已复制 ' + addr);
+    }
+
+    function readAttr(addr) {
+        var a = api();
+        if (!a || !a.mem_attr_map) return;
+        Promise.resolve(a.mem_attr_map(addr)).then(function (j) {
+            var res = JSON.parse(j);
+            if (res.ok) {
+                var attrs = res.attrs || {};
+                toast(addr + ' attr_map: ' + Object.keys(attrs).length + ' 项');
+            } else { toast(addr + ': ' + (res.hint || res.reason)); }
+        }).catch(function () {});
+    }
+
+    function refresh() {
+        var a = api();
+        if (!a || !a.get_mem_scope_status) { statusPill.textContent = 'NO API'; return; }
+        Promise.resolve(a.get_mem_scope_status(queryInput.value || '', dtypeSelect.value || 'i32', jobId))
+            .then(function (j) { return JSON.parse(j); })
+            .then(function (data) {
+                lastData = data;
+                if (window.PluginHooks) {
+                    lastData = window.PluginHooks.tap('mem_scope', lastData, function (p) { lastData = p; render(p); });
+                }
+                render(lastData);
+            }).catch(function () { statusPill.textContent = 'API ERROR'; });
+    }
+
+    function startPoll() {
+        stopPoll();
+        pollTimer = setInterval(function () {
+            var a = api();
+            if (!jobId || !a || !a.mem_search_status) { stopPoll(); return; }
+            Promise.resolve(a.mem_search_status(jobId)).then(function (j) {
+                var js = JSON.parse(j);
+                refresh();
+                if (js.done) stopPoll();
+            }).catch(function () { stopPoll(); });
+        }, 500);
+    }
+    function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+    function doSearch() {
+        var a = api(); var value = (queryInput.value || '').trim();
+        if (!value) { toast('请输入搜索值'); return; }
+        if (!a || !a.mem_search) return;
+        Promise.resolve(a.mem_search(value, dtypeSelect.value || 'i32', 0)).then(function (j) {
+            var res = JSON.parse(j);
+            if (res.ok) { jobId = res.job_id || ''; startPoll(); refresh(); }
+            else { toast('搜索失败: ' + (res.hint || res.reason)); }
+        }).catch(function () {});
+    }
+
+    function doNarrow() {
+        var a = api(); if (!jobId || !a || !a.mem_narrow) return;
+        Promise.resolve(a.mem_narrow(jobId, (queryInput.value || '').trim())).then(function (j) {
+            var res = JSON.parse(j);
+            if (res.ok) { startPoll(); refresh(); } else { toast('收敛失败: ' + (res.hint || res.reason)); }
+        }).catch(function () {});
+    }
+
+    function doClear() {
+        var a = api();
+        if (jobId && a && a.mem_search_cancel) { try { a.mem_search_cancel(jobId); } catch (_) {} }
+        jobId = ''; stopPoll(); refresh();
+    }
+
+    function close() {
+        var a = api();
+        if (a && a.toggle_mem_scope) a.toggle_mem_scope();
+    }
+
+    window.MemScope = {
+        refresh: refresh, search: doSearch, narrow: doNarrow, clear: doClear, close: close,
+        fadeIn: function () { shell.classList.add('visible'); },
+        fadeOut: function () { shell.classList.remove('visible'); }
+    };
+
+    queryInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
+    dtypeSelect.addEventListener('change', refresh);
+    setTimeout(function () { shell.classList.add('visible'); refresh(); }, 80);
+})();
+</script>
+</body>
+</html>

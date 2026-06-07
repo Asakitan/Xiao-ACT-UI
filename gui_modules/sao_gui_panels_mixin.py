@@ -61,6 +61,7 @@ from typing import Any, Optional
 from utils.perf_probe import probe as _probe
 from gui_modules.sao_gui_action_log import ActionLogPanel
 from gui_modules.sao_gui_act_aggregate import ActAggregatePanel
+from gui_modules.sao_gui_mem_scope import MemScopePanel
 from gui_modules.sao_gui_commander import CommanderPanel
 from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel
 from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
@@ -329,6 +330,19 @@ class SAOPlayerGUIPanelsMixin:
             self._apply_act_panel_theme()
             self.root.after(120, lambda: self._raise_panel_window(self._act_aggregate_panel))
 
+    def _toggle_mem_scope_panel(self):
+        """打开/关闭 内存浏览器 Mem Scope 面板 (tkinter)."""
+        self._dismiss_sao_menu_for_panel()
+        if not self._mem_scope_panel:
+            self._mem_scope_panel = MemScopePanel(self.root, self)
+            self._apply_act_panel_theme()
+        if self._mem_scope_panel.is_visible():
+            self._mem_scope_panel.hide()
+        else:
+            self._mem_scope_panel.show()
+            self._apply_act_panel_theme()
+            self.root.after(120, lambda: self._raise_panel_window(self._mem_scope_panel))
+
     def _toggle_act_death_recap_panel(self):
         """打开/关闭 ACT 死亡回放面板 (tkinter)."""
         self._dismiss_sao_menu_for_panel()
@@ -451,6 +465,7 @@ class SAOPlayerGUIPanelsMixin:
             ('act_graph_timeseries', getattr(self._act_graph_timeseries_panel, '_win', None)),
             ('act_combatant_drilldown', getattr(self._act_combatant_drilldown_panel, '_win', None)),
             ('act_skill_drilldown', getattr(self._act_skill_drilldown_panel, '_win', None)),
+            ('mem_scope', getattr(self._mem_scope_panel, '_win', None)),
         ]
 
         if not self._panels_hidden:
@@ -506,6 +521,7 @@ class SAOPlayerGUIPanelsMixin:
         '_act_graph_timeseries_panel',
         '_act_combatant_drilldown_panel',
         '_act_skill_drilldown_panel',
+        '_mem_scope_panel',
     )
 
     def _act_panel_theme(self) -> str:

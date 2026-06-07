@@ -541,6 +541,7 @@ class SAOPlayerGUIMenuMixin:
             {'icon': '⌁', 'label': f'ACT图表/曲线: {graph_state}/{graph_metric}/{graph_count}', 'command': self._toggle_act_graph_timeseries_panel},
             {'icon': '◎', 'label': f'ACT成员钻取: {combatant_state}/{combatant_id}/{combatant_count}', 'command': self._toggle_act_combatant_drilldown_panel},
             {'icon': '✦', 'label': f'ACT技能钻取: {skill_state}/{skill_id}/{skill_ref_count}', 'command': self._toggle_act_skill_drilldown_panel},
+            {'icon': '⌗', 'label': f'内存浏览器 Mem Scope: {mem_mode_disp}', 'command': self._toggle_mem_scope_panel},
         ]
 
         plugin_items = self._build_plugin_menu_items()

@@ -4100,7 +4100,116 @@ def act_data_source_diagnose(owner: Any, *, now: float | None = None) -> dict[st
     return out
 
 
+# ── Memory-scan access (read-only facade for plugins + the Mem Scope panel) ────
+
+def _mem_access(owner: Any):
+    from mem_probe.mem_access import MemAccess
+    return MemAccess(owner)
+
+
+def act_mem_status(owner: Any, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).status()
+
+
+def act_mem_catalog(owner: Any, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).catalog()
+
+
+def act_mem_self(owner: Any, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).self_state()
+
+
+def act_mem_entities(owner: Any, *, include_monsters: bool = True,
+                     include_npcs: bool = False, max_per_dict: int = 128, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).entities(include_monsters=bool(include_monsters),
+                                       include_npcs=bool(include_npcs),
+                                       max_per_dict=int(max_per_dict or 128))
+
+
+def act_mem_boss(owner: Any, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).boss()
+
+
+def act_mem_damage(owner: Any, *, total_type: int = 1, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).damage_totals(total_type=int(total_type or 1))
+
+
+def act_mem_skill_damage(owner: Any, *, uuid: Any = 0, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).skill_damage(uuid)
+
+
+def act_mem_attr_map(owner: Any, *, ent_addr: Any = 0, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).attr_map(ent_addr)
+
+
+def act_mem_resolve_name(owner: Any, *, kind: str = "monster", id: Any = 0, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).resolve_name(str(kind or "monster"), id)
+
+
+def act_mem_read(owner: Any, *, addr: Any = 0, dtype: str = "u64", **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).read_at(addr, str(dtype or "u64"))
+
+
+def act_mem_read_many(owner: Any, *, addrs: Any = (), dtype: str = "u64", **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).read_many(addrs if isinstance(addrs, (list, tuple)) else (), str(dtype or "u64"))
+
+
+def act_mem_search(owner: Any, *, value: Any = None, dtype: str = "i32", align: int = 0, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).search(value, str(dtype or "i32"), align=int(align or 0))
+
+
+def act_mem_search_status(owner: Any, *, job_id: str = "", **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).search_status(str(job_id or ""))
+
+
+def act_mem_narrow(owner: Any, *, job_id: str = "", value: Any = None, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).narrow(str(job_id or ""), value)
+
+
+def act_mem_search_cancel(owner: Any, *, job_id: str = "", **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).search_cancel(str(job_id or ""))
+
+
+def act_mem_search_list(owner: Any, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).search_list()
+
+
+def act_mem_scope_status(owner: Any, *, query: str = "", dtype: str = "i32",
+                         job_id: str = "", **_: Any) -> dict[str, Any]:
+    """One-shot Mem Scope panel refresh: status + catalog + live data (+ search job)."""
+    ma = _mem_access(owner)
+    status = ma.status()
+    out: dict[str, Any] = {
+        "ok": True, "status": status, "catalog": ma.catalog(),
+        "query": str(query or ""), "dtype": str(dtype or "i32"), "job_id": str(job_id or ""),
+    }
+    if status.get("active"):
+        out["self"] = ma.self_state()
+        out["entities"] = ma.entities()
+        out["damage"] = ma.damage_totals()
+        if job_id:
+            out["search"] = ma.search_status(str(job_id))
+    return out
+
+
 __all__ = [
+    "act_mem_status",
+    "act_mem_catalog",
+    "act_mem_self",
+    "act_mem_entities",
+    "act_mem_boss",
+    "act_mem_damage",
+    "act_mem_skill_damage",
+    "act_mem_attr_map",
+    "act_mem_resolve_name",
+    "act_mem_read",
+    "act_mem_read_many",
+    "act_mem_search",
+    "act_mem_search_status",
+    "act_mem_narrow",
+    "act_mem_search_cancel",
+    "act_mem_search_list",
+    "act_mem_scope_status",
     "act_combatant_drilldown_back",
     "act_combatant_drilldown_filter",
     "act_combatant_drilldown_focus_target",

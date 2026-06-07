@@ -38,6 +38,15 @@ _TALIGN = {"right": "e", "center": "center", "left": "w"}
 _CONTAINER_TYPES = ("panel", "section", "card", "row", "group")
 
 
+def _validate_number(proposed: str) -> bool:
+    """Soft numeric guard for input_type=number: allow empty / sign / digits /
+    one dot / hex-ish chars (so 0x.. addresses can be typed). Never hard-blocks."""
+    if proposed in ("", "-", "+", "0x", "0X"):
+        return True
+    allowed = set("0123456789abcdefABCDEFxX.-+")
+    return all(ch in allowed for ch in proposed)
+
+
 def _pal() -> dict:
     """Resolve the live SAO panel palette (respects runtime theme switches)."""
     g = lambda name, fallback: getattr(_theme, name, fallback)
@@ -175,6 +184,10 @@ class SpecRenderer:
         self.on_action = on_action
         self._nodes: Optional[list] = None
         self._title: Optional[tk.Widget] = None
+        # Live ``input`` widgets by id, read into payload["inputs"] on a button fire.
+        # Per-renderer, so naturally scoped to one panel (PluginPanelList builds one
+        # SpecRenderer per card; each detached window owns its own).
+        self._inputs: dict = {}
 
     def set_on_action(self, on_action: Optional[Callable[[str, dict], None]]) -> None:
         self.on_action = on_action
@@ -267,6 +280,10 @@ class SpecRenderer:
             return ("title" in rn.parts) == bool(str(ns.get("title") or ""))
         if t == "table":
             return _table_key(rn.spec or {}) == _table_key(ns)
+        if t == "input":
+            # Reuse only when the id matches, so two inputs never swap identity
+            # (and the live tk.Entry / user text survives the redraw).
+            return str((rn.spec or {}).get("id") or "") == str(ns.get("id") or "")
         return True
 
     def _build(self, parent, ns, pal, is_row) -> Optional[_RNode]:
@@ -277,6 +294,7 @@ class SpecRenderer:
             "text": self._build_text, "kv": self._build_kv, "bar": self._build_bar,
             "badge": self._build_badge, "divider": self._build_divider,
             "spacer": self._build_spacer, "button": self._build_button,
+            "input": self._build_input,
             "table": self._build_table, "canvas": self._build_canvas,
         }.get(t)
         return builder(parent, ns, pal) if builder else None
@@ -297,6 +315,8 @@ class SpecRenderer:
             rn.widget.config(height=max(0, int(ns.get("size") or 8)))
         elif t == "button":
             self._update_button(rn, ns, pal)
+        elif t == "input":
+            self._update_input(rn, ns, pal)
         elif t == "table":
             self._update_table(rn, ns, pal)
         elif t == "canvas":
@@ -401,12 +421,95 @@ class SpecRenderer:
                          fg=_btn_fg(str(ns.get("style") or "default"), pal),
                          state=("disabled" if rn.parts["disabled"] else "normal"))
 
+    # ── text input (round-trips into payload["inputs"] on a button fire) ───────
+    def _build_input(self, parent, ns, pal) -> _RNode:
+        iid = str(ns.get("id") or "")
+        seed = str(ns.get("value") or "")
+        placeholder = str(ns.get("placeholder") or "")
+        itype = str(ns.get("input_type") or "text")
+        var = tk.StringVar(value=seed)
+        w = tk.Entry(parent, textvariable=var, bg=pal["header_bg"], fg=pal["value"],
+                     insertbackground=pal["value"], relief="flat", highlightthickness=1,
+                     highlightbackground=pal["border"], highlightcolor=pal["accent"],
+                     font=("Segoe UI", 10))
+        width = int(ns.get("width") or 0)
+        pack_kw = {"pady": 2} if width > 0 else {"fill": "x", "pady": 2}
+        if width > 0:
+            w.config(width=max(4, int(width / 8)))
+        is_placeholder = False
+        if itype == "password":
+            w.config(show="•")
+        if not seed and placeholder and itype != "password":
+            is_placeholder = True
+            var.set(placeholder)
+            w.config(fg=pal["label"])
+        rn = _RNode("input", w, spec=ns, pack_kw=pack_kw)
+        rn.parts = {"var": var, "id": iid, "placeholder": placeholder, "itype": itype,
+                    "is_placeholder": is_placeholder, "last_seed": seed}
+
+        def _on_focus_in(_e=None, r=rn, p=pal):
+            if r.parts.get("is_placeholder"):
+                r.parts["is_placeholder"] = False
+                r.parts["var"].set("")
+                r.widget.config(fg=p["value"])
+
+        def _on_focus_out(_e=None, r=rn, p=pal):
+            ph = r.parts.get("placeholder") or ""
+            if ph and not r.parts["var"].get() and r.parts.get("itype") != "password":
+                r.parts["is_placeholder"] = True
+                r.parts["var"].set(ph)
+                r.widget.config(fg=p["label"])
+
+        w.bind("<FocusIn>", _on_focus_in)
+        w.bind("<FocusOut>", _on_focus_out)
+        if itype == "number":
+            w.config(validate="key",
+                     validatecommand=(w.register(_validate_number), "%P"))
+        if iid:
+            self._inputs[iid] = rn
+        return rn
+
+    def _update_input(self, rn, ns, pal) -> None:
+        # Clobber guard: only overwrite the field when the server value actually
+        # changed AND the user is not editing it — a steady/empty spec value must
+        # never wipe what the user typed across the timed redraw.
+        seed = str(ns.get("value") or "")
+        try:
+            focused = (rn.widget.focus_get() is rn.widget)
+        except Exception:
+            focused = False
+        if (not focused and not rn.parts.get("is_placeholder")
+                and seed != rn.parts.get("last_seed", "")):
+            rn.parts["var"].set(seed)
+            if seed:
+                rn.parts["is_placeholder"] = False
+                rn.widget.config(fg=pal["value"])
+        rn.parts["last_seed"] = seed
+
+    def _collect_inputs(self) -> dict:
+        out: dict = {}
+        for iid, rn in list(self._inputs.items()):
+            try:
+                if not rn.widget.winfo_exists():
+                    self._inputs.pop(iid, None)
+                    continue
+                out[iid] = "" if rn.parts.get("is_placeholder") else rn.parts["var"].get()
+            except Exception:
+                self._inputs.pop(iid, None)
+        return out
+
     def _fire(self, rn: _RNode) -> None:
         if rn.parts.get("disabled"):
             return
         if callable(self.on_action):
+            payload = dict(rn.parts.get("payload") or {})
+            # Only attach input values when this panel actually has inputs, so a
+            # button in an input-less panel keeps its exact payload (backward compat).
+            inputs = self._collect_inputs()
+            if inputs:
+                payload["inputs"] = inputs
             try:
-                self.on_action(rn.parts.get("action", ""), dict(rn.parts.get("payload") or {}))
+                self.on_action(rn.parts.get("action", ""), payload)
             except Exception:
                 pass
 

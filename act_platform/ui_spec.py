@@ -49,10 +49,12 @@ BADGE_STYLES = ("muted", "ok", "warn", "bad", "gold", "accent")
 BUTTON_STYLES = ("default", "primary", "danger", "ghost")
 BAR_COLORS = ("cyan", "gold", "ok", "warn", "bad", "accent", "heal")
 ALIGNS = ("left", "center", "right")
+INPUT_TYPES = ("text", "number", "password")
+MAX_INPUT_VAL = 2000
 
 # Container + leaf node kinds.
 CONTAINER_KINDS = ("panel", "section", "card", "row", "group")
-LEAF_KINDS = ("text", "kv", "bar", "badge", "divider", "spacer", "button", "table", "canvas")
+LEAF_KINDS = ("text", "kv", "bar", "badge", "divider", "spacer", "button", "input", "table", "canvas")
 NODE_KINDS = CONTAINER_KINDS + LEAF_KINDS
 
 # Free-form 2D drawing (piano keyboards, note rolls, meters…). Ops are a tiny
@@ -292,6 +294,15 @@ def _normalize_node(node: Any, depth: int, budget: list[int]) -> Optional[dict]:
         if node.get("disabled"):
             out["disabled"] = True
         return out
+    if kind == "input":
+        return {
+            "type": "input",
+            "id": _s(node.get("id"), 80),
+            "value": _s(node.get("value"), MAX_INPUT_VAL),
+            "placeholder": _s(node.get("placeholder"), 200),
+            "input_type": _choice(node.get("input_type"), INPUT_TYPES, "text"),
+            "width": max(0, min(2000, _ci(node.get("width"), 0))),
+        }
     if kind == "table":
         return _normalize_table(node)
     if kind == "canvas":
@@ -408,6 +419,16 @@ class UI:
         if disabled:
             node["disabled"] = True
         return node
+
+    @staticmethod
+    def input(id: Any, value: Any = "", placeholder: Any = "",
+              input_type: str = "text", width: int = 0) -> dict:
+        """A text field. ``id`` keys the value into ``payload["inputs"]`` when a
+        sibling button fires. ``input_type``: text/number/password. ``width`` px
+        (0 = flex). Rendered identically on Tk and WebView."""
+        return {"type": "input", "id": _s(id, 80), "value": _s(value, MAX_INPUT_VAL),
+                "placeholder": _s(placeholder, 200), "input_type": input_type,
+                "width": max(0, int(width or 0))}
 
     @staticmethod
     def table(columns: Optional[Iterable[Any]] = None, rows: Optional[Iterable[Any]] = None,

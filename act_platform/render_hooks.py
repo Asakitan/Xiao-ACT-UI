@@ -47,6 +47,7 @@ KNOWN_SURFACES = (
     "mapbanner",
     "commander",
     "buff_coverage",
+    "mem_scope",       # memory-scan explorer panel
     "plugin_ui",       # the plugin panel surface itself
 )
 

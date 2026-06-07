@@ -376,6 +376,17 @@ class EngineAccess:
         owner = self.owner
         if owner is None:
             return default
+        if key == "memory_bridge":
+            # The live bridge is nested under _packet_engine._mem_source._bridge in
+            # hybrid/auto/memory mode — a path the flat alias table cannot express.
+            try:
+                from mem_probe.mem_access import resolve_bridge
+                bridge = resolve_bridge(owner)
+            except Exception:
+                bridge = None
+            if bridge is not None:
+                return bridge
+            # else fall through to the flat alias lookup (covers memory-only / stubs)
         for canonical, aliases in _ENGINE_HANDLE_ALIASES.items():
             alias_keys = {_normalize_engine_name(alias) for alias in aliases}
             if key != canonical and key not in alias_keys:
@@ -462,10 +473,27 @@ class PluginContext:
         self.engine = EngineAccess(manager, record)
         #: Declarative UI builder (see :mod:`act_platform.ui_spec`).
         self.ui = UI
+        self._mem_access: Any = None
 
     @property
     def plugin_id(self) -> str:
         return self._record.plugin_id
+
+    @property
+    def mem(self) -> Any:
+        """Read-only memory-scan facade (see :mod:`mem_probe.mem_access`).
+
+        Hybrid-gated: in TCP-only mode every method returns
+        ``{"ok": False, "reason": "mode_tcp", ...}``.  In hybrid/auto/memory it
+        exposes ``self_state/entities/boss/damage_totals/skill_damage/attr_map/
+        resolve_name/read_at/search/...`` plus ``catalog()`` and ``status()``.
+        """
+        facade = self._mem_access
+        if facade is None:
+            from mem_probe.mem_access import MemAccess
+            facade = MemAccess(self.owner)
+            self._mem_access = facade
+        return facade
 
     @property
     def event_bus(self) -> EventBus:

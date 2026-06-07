@@ -343,8 +343,26 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.1.23"
+APP_VERSION = "4.2.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v4.2.0: Mem Scope — memory-scan explorer + plugin mem API.
+#   1) New read-only MemAccess facade (mem_probe/mem_access.py) exposes every
+#      memory-scan-readable resource (self/entities/boss/damage/skill-damage/
+#      attr_map/name-resolve/raw-read) plus an async value-search job manager
+#      (decode-hint per hit: u32/i32/f32/utf16/cstr/ptr + module+offset + klass).
+#      Hybrid-gated and JSON-safe (addresses as hex, uuids as strings); never
+#      writes process memory.
+#   2) Plugin SDK: ctx.mem facade + act_mem_* runtime actions
+#      (ctx.call_runtime("mem_*")); fixed ctx.get_engine("memory_bridge") to
+#      resolve the live bridge nested under _packet_engine._mem_source in hybrid.
+#   3) Declarative UI gains an `input` text-field leaf (Tk + WebView 1:1) with
+#      value round-trip into payload["inputs"] and focus/text preservation
+#      across timed redraws — usable by any plugin panel.
+#   4) New first-class Mem Scope panel (Entity sao_gui_mem_scope.py + WebView
+#      mem_scope.html, contract act_mem_scope_status): browse the resource
+#      catalog with per-item hints, view live self/entities/damage, and run a
+#      manual value search with decoded hints + narrow convergence. Added a new
+#      `mem_scope` render surface for plugin hooks/overlays.
 # v4.0.0: ACT platform + self-contained name-table pipeline (major release).
 #   Aggregates 3 days / 109 commits (6f837b4..) since v3.2.22 into a major
 #   version. The release turns the 3.x ACT work into a first-class platform

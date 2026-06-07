@@ -4,8 +4,15 @@
 
 - 当前工作分支：`3.0.0`
 - 运行版本来源：`config.py` 中的 `APP_VERSION` / `APP_VERSION_LABEL`
-- 当前源码版本：`4.0.0`
+- 当前源码版本：`4.2.0`
 - 默认运行平台：Windows 10 / 11
+
+## v4.2.0 重点：Mem Scope 内存浏览器 + 插件内存 API
+
+- **MemAccess facade**（`mem_probe/mem_access.py`，全只读、hybrid 门控、JSON 安全）：把 mem_scan 全部可读资源（self / entities / boss / damage / 逐技能伤害 / 按地址 attr_map / 名字解析 / 任意地址读）做成稳定接口，外加异步按值搜索 job 管理器（每个命中带多路解码提示：u32/i32/f32/utf16/cstr/指针 + 所在模块+偏移 + 疑似 klass）。地址以十六进制串、uuid 以字符串返回；绝不写内存。
+- **插件 SDK**：新增 `ctx.mem` 门面 + `act_mem_*` 运行时动作（`ctx.call_runtime("mem_*")`）；修复 `ctx.get_engine("memory_bridge")` 在 hybrid 模式取不到真正活引擎（嵌套于 `_packet_engine._mem_source`）的问题。
+- **声明式 UI 新增 `input` 文本框叶子**（Tk + WebView 1:1），按钮触发时把同面板输入值回传到 `payload["inputs"]`，并在定时重绘中保持焦点/已输入文本；任意插件面板可复用。
+- **新增一等公民 Mem Scope 面板**（Entity `sao_gui_mem_scope.py` + WebView `mem_scope.html`，契约 `act_mem_scope_status`）：浏览资源目录（每条带提示）、查看实时 self/entities/damage、手动按值搜索 + 多帧 narrow 收敛。并新增 `mem_scope` 渲染面供插件 hook/overlay。
 
 ## v4.0.0 大版本重点
 
