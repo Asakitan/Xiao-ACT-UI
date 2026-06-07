@@ -35,10 +35,17 @@ except Exception:  # pragma: no cover
 
 UUID_OFF = 0x10
 NAME_OFF = 0x60
+TYPE_OFF = 0x50                            # plate-type enum (int32)
 NAME_FROM_UUID = NAME_OFF - UUID_OFF      # name ptr sits 0x50 ahead of the uuid slot
+TYPE_FROM_UUID = TYPE_OFF - UUID_OFF      # 0x40 ahead of the uuid slot
 STR_LEN_OFF = 0x10
 STR_CHARS_OFF = 0x14
 STR_MAX_CHARS = 64
+# plate type (widget+0x50): which kind of label this widget renders. Verified live
+# across 12 monster + 2 NPC plates (each NPC has a name plate AND a title plate).
+PLATE_NPC_NAME = 1        # NPC proper name (雷沃兰德 / 露西小姐)
+PLATE_MONSTER = 3         # monster/dummy 'NN 级 <name>'
+PLATE_NPC_TITLE = 100     # NPC occupation/title (练习室管理员 / 工作人员) -- NOT the name
 # 'NN 级 ' monster nameplate prefix (full/half-width digits + optional spaces)
 _LEVEL_RE = re.compile(r"^[\s　]*[0-9０-９]+[\s　]*级[\s　]*")
 
@@ -85,11 +92,10 @@ class NameplateReader:
         return (text or "").strip(), False
 
     # ---- the heap sweep ----
-    def _scan_region(self, r, want, by_uuid: Dict[int, List[str]]) -> bool:
-        """Scan one region for uuid slots and decode the nameplate name 0x50 ahead.
-
-        Appends decoded names into ``by_uuid``. Returns True if this region held at
-        least one confirmed nameplate (so it can be remembered as a hint region).
+    def _scan_region(self, r, want, by_uuid: Dict[int, List[Tuple[int, str]]]) -> bool:
+        """Scan one region for uuid slots and decode the plate (type@+0x40, name@+0x50
+        ahead of the uuid). Appends (plate_type, name) into ``by_uuid``. Returns True
+        if this region held a confirmed nameplate (so it's remembered as a hint).
         """
         had = False
         off = 0
@@ -106,24 +112,26 @@ class NameplateReader:
                         for p in range(0, (len(blob) // 8) * 8, 8)
                         if int.from_bytes(mv[p:p + 8], "little") in want]
             for hit_off, val in hits:
-                s = self._read_str(self.pm.read_u64(r.base + off + hit_off + NAME_FROM_UUID))
+                a = r.base + off + hit_off
+                s = self._read_str(self.pm.read_u64(a + NAME_FROM_UUID))
                 if s:
+                    ptype = self.pm.read_u32(a + TYPE_FROM_UUID) or 0
                     lst = by_uuid.setdefault(int(val), [])
-                    if s not in lst:
-                        lst.append(s)
+                    if (ptype, s) not in lst:
+                        lst.append((ptype, s))
                     had = True
             off += n
         return had
 
-    def _collect(self, uuids) -> Dict[int, List[str]]:
-        """Return {uuid -> [nameplate strings]}.
+    def _collect(self, uuids) -> Dict[int, List[Tuple[int, str]]]:
+        """Return {uuid -> [(plate_type, nameplate string), ...]}.
 
         Warm path: scan only the remembered hint region(s) (the nameplate region is
         stable within a session). Cold/stale path: full private-heap sweep, which
         rebuilds the hint. Keeps the heavy scan in Cython and warm reads cheap.
         """
         want = {int(u) & 0xFFFFFFFFFFFFFFFF for u in uuids if int(u) > 0}
-        by_uuid: Dict[int, List[str]] = {}
+        by_uuid: Dict[int, List[Tuple[int, str]]] = {}
         if not want:
             return by_uuid
         regions = list(self.pm.iter_regions(only_readable=True, only_private=True))
@@ -155,23 +163,30 @@ class NameplateReader:
         """
         uuid_to_base = {int(u): int(b) for u, b in (uuid_to_base or {}).items() if int(u) > 0}
         by_uuid = self._collect(uuid_to_base.keys())
-        self.last_raw = by_uuid
+        self.last_raw = {u: [s for _, s in plates] for u, plates in by_uuid.items()}
 
         names: Dict[int, str] = {}
         ambiguous: Dict[int, List[str]] = {}
         # aggregate per base_id (several entities can share one base)
-        per_base: Dict[int, List[str]] = {}
-        for uuid, strs in by_uuid.items():
-            per_base.setdefault(uuid_to_base.get(uuid, 0), []).extend(strs)
-        for base, strs in per_base.items():
+        per_base: Dict[int, List[Tuple[int, str]]] = {}
+        for uuid, plates in by_uuid.items():
+            per_base.setdefault(uuid_to_base.get(uuid, 0), []).extend(plates)
+        for base, plates in per_base.items():
             if base <= 0:
                 continue
-            leveled = [self.strip_level(s)[0] for s in strs if self.strip_level(s)[1]]
+            # monster: the level-prefixed plate is the unambiguous name (robust even
+            # if the type enum ever shifts)
+            leveled = [self.strip_level(s)[0] for _, s in plates if self.strip_level(s)[1]]
             if leveled:
-                # monster: the level-prefixed plate is the unambiguous name
                 names[base] = max(set(leveled), key=leveled.count)
                 continue
-            bare = sorted(set(s for s in strs if s))
+            # NPC: the plate whose type == PLATE_NPC_NAME is the proper name (not the
+            # title plate PLATE_NPC_TITLE)
+            npc_named = [s for t, s in plates if t == PLATE_NPC_NAME and s]
+            if npc_named:
+                names[base] = max(set(npc_named), key=npc_named.count)
+                continue
+            bare = sorted(set(s for _, s in plates if s))
             if len(bare) == 1:
                 names[base] = bare[0]
             elif len(bare) > 1:

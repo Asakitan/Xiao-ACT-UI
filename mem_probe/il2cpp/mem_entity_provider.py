@@ -98,6 +98,48 @@ class MemEntityProvider:
             })
         return out
 
+    def enumerate_ids(self, *, include_monsters: bool = True, include_npcs: bool = True,
+                      max_per_dict: int = 128) -> List[dict]:
+        """Return [{uuid, base_id, kind}] for entities WITHOUT the HP gate.
+
+        ``snapshot()`` only returns combat entities (those with an HP bar), so it
+        drops non-combat NPCs. The nameplate name harvest needs those NPCs too, keyed
+        by uuid -> base_id (template id @0xE0). Read-only; ids batched in one RPM call.
+        """
+        mgr = self.locate()
+        if not mgr:
+            return []
+        dicts = [("boss", BOSS_DICT_OFF)]
+        if include_monsters:
+            dicts.append(("monster", MONSTER_DICT_OFF))
+        if include_npcs:
+            dicts.append(("npc", NPC_DICT_OFF))
+        ents: List = []
+        seen = set()
+        for kind, off in dicts:
+            d = self._pm.read_u64(mgr + off)
+            if not d:
+                continue
+            for _key, ent in self._emr._read_dict_entries(d, max_entries=max_per_dict):
+                if ent in seen:
+                    continue
+                seen.add(ent)
+                ents.append((kind, ent))
+        if not ents:
+            return []
+        id_addrs = []
+        for _, e in ents:
+            id_addrs += [e + ENT_UUID_OFF, e + ENT_BASEID_OFF]
+        idv = self._pm.read_u64_many(id_addrs)
+        out: List[dict] = []
+        for i, (kind, e) in enumerate(ents):
+            uuid = idv[2 * i] or 0
+            base = idv[2 * i + 1]
+            base_id = (int(base) & 0xFFFFFFFF) if base is not None else 0
+            if int(uuid) > 0 and base_id > 0:
+                out.append({"uuid": int(uuid), "base_id": int(base_id), "kind": kind})
+        return out
+
     def read_name(self, ent_addr: int) -> str:
         """The game's resolved display name for an entity (its NAME attr), or '' if absent
         (many monsters carry only a template id). Authoritative for the JSON self-heal --

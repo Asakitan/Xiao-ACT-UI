@@ -112,8 +112,10 @@ class MemStateBridge:
         self._np_reader: Any = None
         self._np_resolved_bases: set = set()
         self._np_harvest_busy: bool = False
+        self._np_bootstrapped: bool = False   # swept npcs at least once (snap has none)
         self._np_last_harvest: float = 0.0
-        self._np_harvest_interval: float = 8.0
+        self._np_harvest_interval: float = 8.0    # min gap between sweeps
+        self._np_periodic_interval: float = 60.0  # idle re-sweep (warm ~0.1s) for new mobs/npcs
 
     # ───────── public ─────────
 
@@ -364,34 +366,59 @@ class MemStateBridge:
         return getattr(sr, "pm", None)
 
     def _maybe_harvest_nameplates(self, snap) -> None:
-        """Trigger a (throttled, background) nameplate name harvest when a base_id
-        present in ``snap`` hasn't been confirmed against the rendered UI name yet.
+        """Trigger a (throttled, background) nameplate name harvest.
 
-        The over-head name is the authority the JSON should match; this corrects the
-        JSON (e.g. 114 '木桩' -> '敌方木桩') and fills gaps, all auto-offset, no TCP.
+        Fires when a visible monster base_id isn't confirmed yet, once to bootstrap
+        NPCs (the snap carries no npcs), and on a slow idle timer to catch new
+        mobs/npcs. The over-head name is the authority the JSON should match; this
+        corrects the JSON (e.g. 114 '木桩' -> '敌方木桩') and fills gaps (npc names),
+        all auto-offset, no TCP.
         """
         try:
-            uuid_to_base = {int(e["uuid"]): int(e.get("base_id") or 0)
-                            for e in snap if int(e.get("base_id") or 0) > 0}
-            unresolved = any(b not in self._np_resolved_bases for b in uuid_to_base.values())
+            snap_bases = {int(e.get("base_id") or 0) for e in snap}
+            snap_bases.discard(0)
+            now = time.time()
+            unresolved = (bool(snap_bases - self._np_resolved_bases)
+                          or not self._np_bootstrapped
+                          or (now - self._np_last_harvest) >= self._np_periodic_interval)
             if (not unresolved or self._np_harvest_busy
-                    or (time.time() - self._np_last_harvest) < self._np_harvest_interval):
+                    or (now - self._np_last_harvest) < self._np_harvest_interval):
                 return
             pm = self._harvest_pm()
             if pm is None:
                 return
             self._np_harvest_busy = True
-            self._np_last_harvest = time.time()
-            t = threading.Thread(target=self._run_nameplate_harvest,
-                                 args=(pm, dict(uuid_to_base)),
-                                 name="mem-nameplate", daemon=True)
-            t.start()
+            self._np_last_harvest = now
+            threading.Thread(target=self._run_nameplate_harvest, args=(pm,),
+                             name="mem-nameplate", daemon=True).start()
         except Exception:
             traceback.print_exc()
 
-    def _run_nameplate_harvest(self, pm, uuid_to_base) -> None:
-        """Worker: sweep nameplates, overlay corrected/missing names, push to the panel."""
+    def _run_nameplate_harvest(self, pm) -> None:
+        """Worker: enumerate monsters+npcs, sweep their nameplate widgets, and overlay
+        the corrected/missing name -- routed to the 'monster' kind for mobs and the
+        'npc' kind for NPCs (the plate-type field picks the NPC name over its title).
+        Monster names are also pushed to the live panel; NPCs are JSON-only.
+        """
         try:
+            prov = self._entity_provider
+            # no HP gate -- include non-combat NPCs that snapshot() filters out
+            full = (prov.enumerate_ids(include_monsters=True, include_npcs=True)
+                    if prov is not None else None)
+            self._np_bootstrapped = True
+            if not full:
+                return
+            uuid_to_base: dict = {}
+            base_kind: dict = {}
+            base_to_uuids: dict = {}
+            for e in full:
+                b = int(e.get("base_id") or 0)
+                u = int(e.get("uuid") or 0)
+                if b <= 0 or u <= 0:
+                    continue
+                uuid_to_base[u] = b
+                base_kind[b] = str(e.get("kind") or "monster")
+                base_to_uuids.setdefault(b, []).append(u)
             if self._np_reader is None:
                 from mem_probe.il2cpp.mem_nameplate_reader import NameplateReader
                 self._np_reader = NameplateReader(pm)
@@ -399,15 +426,17 @@ class MemStateBridge:
             names = res.get("names") or {}
             nr = self._name_resolver()
             cache = self._mem_name_cache()
-            base_to_uuids: dict = {}
-            for u, b in uuid_to_base.items():
-                base_to_uuids.setdefault(b, []).append(u)
             for base, nm in names.items():
+                if base in self._np_resolved_bases:
+                    continue                                  # handled once; no re-overlay
                 self._np_resolved_bases.add(base)
                 if not nm:
                     continue
+                kind = base_kind.get(base, "monster")
+                if kind not in ("monster", "boss", "npc"):
+                    kind = "monster"
                 try:
-                    json_nm = (nr.monster(base, default="") if nr else "") or ""
+                    json_nm = (nr.resolve(kind, base, default="") if nr else "") or ""
                 except Exception:
                     json_nm = ""
                 if nm == json_nm:
@@ -415,19 +444,20 @@ class MemStateBridge:
                 # persist the authoritative game name into the overlay cache
                 if cache is not None:
                     try:
-                        cache.observe_name("monster", base, nm,
+                        cache.observe_name(kind, base, nm,
                                            source="mem_nameplate", confidence="mem")
                     except Exception:
                         pass
-                # update the live panel now: re-key these uuids to the corrected name
-                for u in base_to_uuids.get(base, []):
-                    self._named[u] = (base, nm)
-                    if self.dps_tracker is not None:
-                        try:
-                            self.dps_tracker.update_monster_info(u, nm)
-                        except Exception:
-                            pass
-                print(f"[MemBridge.nameplate] base_id={base} "
+                # combat entities also go to the live panel (npcs aren't shown there)
+                if kind in ("monster", "boss"):
+                    for u in base_to_uuids.get(base, []):
+                        self._named[u] = (base, nm)
+                        if self.dps_tracker is not None:
+                            try:
+                                self.dps_tracker.update_monster_info(u, nm)
+                            except Exception:
+                                pass
+                print(f"[MemBridge.nameplate] {kind} base_id={base} "
                       f"{('JSON='+json_nm) if json_nm else '(JSON gap)'} -> '{nm}' overlaid")
         except Exception:
             traceback.print_exc()
