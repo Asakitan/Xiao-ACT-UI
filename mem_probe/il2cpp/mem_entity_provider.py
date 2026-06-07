@@ -11,10 +11,11 @@ snapshot of every entity that currently has an HP bar:
         ...
     boss = prov.boss()   # the highest-max-HP combat entity (boss/dummy)
 
-This is the unique value memory adds over TCP: real-time HP for ALL visible
-entities, including pre-pull / off-screen targets the packet stream hasn't
-reported yet. Names / breaking-stage / overdrive / cast remain TCP-owned (the
-packet parser already decodes them); callers correlate by uuid.
+This is the unique value memory adds over TCP: real-time HP + combat state
+(breaking_stage / overdrive / stun / cast_skill_id, decoded by attr id from the
+ZAttrCacheSlim index) for ALL visible entities, including pre-pull / off-screen
+targets the packet stream hasn't reported yet. Display names come from the
+entity BaseId via the offline name table (callers resolve).
 """
 from __future__ import annotations
 
@@ -78,6 +79,10 @@ class MemEntityProvider:
                     "uuid": int(uuid), "config_uuid": int(cfg), "base_id": int(base_id),
                     "kind": kind, "cur_hp": c["cur_hp"], "max_hp": c["max_hp"],
                     "hp_pct": c["hp_pct"], "obj": int(ent),
+                    "breaking_stage": c.get("breaking_stage"),
+                    "overdrive": c.get("overdrive"),
+                    "stun": c.get("stun"),
+                    "cast_skill_id": c.get("cast_skill_id"),
                 })
         return out
 

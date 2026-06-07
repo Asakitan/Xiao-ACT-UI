@@ -8,10 +8,11 @@ The displayed monster/boss HP lives in the entity's attribute cache:
     ZAttr<T> = { bool isDefault_; T value_; object bindWatchers_ } after the 0x10
     il2cpp header -> value_ @ obj+0x14 (Int/Float/Bool) or obj+0x18 (Long/String/ref).
 
-attr_id -> slot is encoded in the native _indexPart (@attrs+0x18) Burst index, which
-is a hash structure (not slot-ordered); rather than reverse the SIMD index we use the
-HP invariant: CurHp/MaxHp are the LongAttr pair with 0 <= CurHp <= MaxHp in HP range.
-Presence of attr ids 11310(HP)/11320(MAX_HP) in _indexPart gates "is a combat entity".
+attr_id -> value is decoded structurally from the Burst _indexPart (@attrs+0x18):
+KeySegment*[32] (8 attr ids + count each) parallel to int*[32] valueIndices, then the
+value index pages into _values (32/page). read_attr_map() returns the full {attr_id:
+value} map, so HP/breaking/overdrive/stun/cast are read deterministically by attr id
+(== packet_parser.enums.AttrType). The HP invariant remains a fallback in read_hp.
 
 All offsets are field offsets within IL2CPP objects (stable across base/ASLR); the
 only version-sensitive inputs are the class layout, taken from the live dump.
@@ -31,10 +32,26 @@ ATTR_VAL4_OFF = 0x14        # ZAttr<int/float/bool>.value_
 ATTR_VAL8_OFF = 0x18        # ZAttr<long/string/ref>.value_
 CLASS_NAME_OFF = 0x10       # Il2CppClass.name (char*)
 
+# ZAttrCacheSlim._indexPart layout (from dump.cs struct ZAttrCacheSlim, TypeDefIndex
+# 32284): SegmentSize=8, SegmentCount=32, ValueSegmentSize=32. The indexPart is a
+# native Burst block; KeySegment*[32] starts at +0x10 (each KeySegment = uint Keys[8]
+# @0x0 + int Count @0x20), and the parallel int*[32] valueIndices at +0x110. Lookup:
+# attr_id -> (seg,pos) in KeySegments -> vIdx = valueIndices[seg][pos] -> value lives in
+# _values[vIdx>>5].Item2[vIdx&31] (ValueSegmentSize=32 paging). Verified live vs HP.
+INDEX_KEYSEG_OFF = 0x10
+INDEX_VALIDX_OFF = 0x110
+INDEX_SEG_COUNT = 32
+INDEX_SEG_SIZE = 8
+KEYSEG_COUNT_OFF = 0x20
+VALUES_TUPLE_STRIDE = 0x10   # sizeof ValueTuple<uint, object[]> in the array
+VALUES_TUPLE_ARR_OFF = 0x8   # tuple.Item2 (object[]) within the element
+VALUE_PAGE_SIZE = 32         # ValueSegmentSize
+
 # attr ids (== packet_parser.enums.AttrType)
 A_HP, A_MAX_HP = 11310, 11320
 A_MAX_EXT, A_EXT, A_MAX_STUN, A_STUN = 440, 441, 442, 443
 A_OVERDRIVE, A_BREAK_STAGE = 444, 455
+A_SKILL_ID = 100             # current cast skill id (present only while casting)
 
 MAX_HP_PLAUSIBLE = 5_000_000_000   # exclude server-time longs (~1.7e12)
 
@@ -99,6 +116,66 @@ class EntityCombatReader:
                 out.append((j, t, bool(raw[0]) if raw else False))
         return out
 
+    def _attr_value(self, o: int):
+        """Decode a ZAttr<T> object to its scalar value (or None for ref types)."""
+        if not _plaus(o):
+            return None
+        t = self._kname(self.pm.read_u64(o))
+        if t == "LongAttr":
+            return self.pm.read_i64(o + ATTR_VAL8_OFF)
+        if t == "IntAttr":
+            return self.pm.read_i32(o + ATTR_VAL4_OFF)
+        if t == "FloatAttr":
+            raw = self.pm.read_bytes(o + ATTR_VAL4_OFF, 4)
+            return struct.unpack("<f", raw)[0] if raw else 0.0
+        if t == "BoolAttr":
+            raw = self.pm.read_bytes(o + ATTR_VAL4_OFF, 1)
+            return bool(raw[0]) if raw else False
+        return None
+
+    def _value_at(self, vals: int, vidx: int):
+        """_values[vidx>>5].Item2[vidx&31] -> scalar attr value (paged by 32)."""
+        if vidx < 0:
+            return None
+        arrp = self.pm.read_u64(vals + ARRAY_ELEMS_OFF
+                                + (vidx >> 5) * VALUES_TUPLE_STRIDE + VALUES_TUPLE_ARR_OFF)
+        if not _plaus(arrp):
+            return None
+        o = self.pm.read_u64(arrp + ARRAY_ELEMS_OFF + (vidx & 31) * 8)
+        return self._attr_value(o)
+
+    def read_attr_map(self, ent_addr: int) -> Dict[int, object]:
+        """Decode the entity's full {attr_id: value} map from the Burst index.
+
+        Walks the KeySegment*[32] keys (8 attr ids + count each) parallel to the
+        int*[32] valueIndices, then resolves each value index into the paged _values.
+        Deterministic (attr_id-keyed) -- the structural decode of ZAttrCacheSlim.
+        """
+        attrs = self.pm.read_u64(ent_addr + ENT_ATTRS_OFF)
+        if not _plaus(attrs):
+            return {}
+        ip = self.pm.read_u64(attrs + COLL_INDEXPART_OFF)
+        vals = self.pm.read_u64(attrs + COLL_VALUES_OFF)
+        if not (_plaus(ip) and _plaus(vals)):
+            return {}
+        out: Dict[int, object] = {}
+        for k in range(INDEX_SEG_COUNT):
+            segp = self.pm.read_u64(ip + INDEX_KEYSEG_OFF + k * 8)
+            if not _plaus(segp):
+                continue
+            cnt = self.pm.read_u32(segp + KEYSEG_COUNT_OFF) or 0
+            if cnt <= 0 or cnt > INDEX_SEG_SIZE:
+                continue
+            vip = self.pm.read_u64(ip + INDEX_VALIDX_OFF + k * 8)
+            if not _plaus(vip):
+                continue
+            for pos in range(cnt):
+                key = self.pm.read_u32(segp + pos * 4)
+                vidx = self.pm.read_i32(vip + pos * 4)
+                if vidx is not None and vidx >= 0:
+                    out[int(key)] = self._value_at(vals, vidx)
+        return out
+
     def is_combat_entity(self, ent_addr: int) -> bool:
         """True if the entity's _indexPart carries the HP attr ids (has an HP bar)."""
         attrs = self.pm.read_u64(ent_addr + ENT_ATTRS_OFF)
@@ -138,16 +215,35 @@ class EntityCombatReader:
         return int(cur), int(maxhp)
 
     def read_combat(self, ent_addr: int) -> Optional[dict]:
-        """Full combat snapshot: hp + breaking/overdrive/stun where identifiable."""
-        if not self.is_combat_entity(ent_addr):
-            return None
-        hp = self.read_hp(ent_addr)
-        if hp is None:
-            return None
-        cur, mx = hp
+        """Full combat snapshot: HP + breaking/overdrive/stun/cast, decoded by attr id.
+
+        HP comes from the deterministic attr map (11310/11320); falls back to the HP
+        invariant if the id-keyed values are absent. Returns None for non-combat
+        entities (no HP attr). Combat-state keys are None when the entity lacks them.
+        """
+        amap = self.read_attr_map(ent_addr)
+        cur = amap.get(A_HP)
+        mx = amap.get(A_MAX_HP)
+        if not (isinstance(cur, int) and isinstance(mx, int) and mx > 0
+                and 0 <= cur <= MAX_HP_PLAUSIBLE):
+            hp = self.read_hp(ent_addr)            # invariant fallback
+            if hp is None:
+                return None
+            cur, mx = hp
+
+        def _num(aid):
+            v = amap.get(aid)
+            return int(v) if isinstance(v, (int, float)) else None
+
+        sk = amap.get(A_SKILL_ID)
         return {
-            "cur_hp": cur, "max_hp": mx,
+            "cur_hp": int(cur), "max_hp": int(mx),
             "hp_pct": (cur / mx) if mx else 0.0,
+            "breaking_stage": _num(A_BREAK_STAGE),
+            "overdrive": _num(A_OVERDRIVE),
+            "stun": _num(A_STUN),
+            "extinction": _num(A_EXT),
+            "cast_skill_id": (int(sk) if isinstance(sk, (int, float)) and sk else None),
         }
 
 

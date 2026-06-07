@@ -176,13 +176,17 @@ class MemStateBridge:
                     st = getattr(self.state_mgr, "state", None)
                     src_now = str(getattr(st, "boss_hp_source", "none") or "none")
                     if src_now in ("none", "memory", "estimate"):
+                        upd = dict(
+                            boss_current_hp=int(boss["cur_hp"]),
+                            boss_total_hp=int(boss["max_hp"]),
+                            boss_hp_est_pct=max(0.0, min(1.0, float(boss["hp_pct"]))),
+                            boss_hp_source="memory",
+                        )
+                        bs = boss.get("breaking_stage")
+                        if isinstance(bs, int):
+                            upd["boss_breaking_stage"] = bs
                         try:
-                            self.state_mgr.update(
-                                boss_current_hp=int(boss["cur_hp"]),
-                                boss_total_hp=int(boss["max_hp"]),
-                                boss_hp_est_pct=max(0.0, min(1.0, float(boss["hp_pct"]))),
-                                boss_hp_source="memory",
-                            )
+                            self.state_mgr.update(**upd)
                         except Exception:
                             pass
             except Exception:
