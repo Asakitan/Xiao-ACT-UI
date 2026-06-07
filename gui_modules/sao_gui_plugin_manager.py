@@ -27,7 +27,7 @@ from act_platform.runtime import (
     act_plugin_ui_render,
     act_plugin_uninstall,
 )
-from gui_modules.sao_plugin_ui_render import PluginPanelList, render_spec_into
+from gui_modules.sao_plugin_ui_render import PluginPanelList, SpecRenderer
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
     _SAO_PANEL_BG,
@@ -496,9 +496,13 @@ class PluginDetachedPanel:
         self._sub_token = ''
         self._dirty = True
         self._title = self.plugin_id
-        #: Last painted spec signature — skip rebuilding widgets when unchanged
-        #: (idle panels never repaint; only animating specs trigger a rebuild).
+        #: Last painted spec signature — skip the reconcile walk when unchanged.
         self._last_render_sig = ''
+        #: Persistent reconciling renderer for the single shown panel.
+        self._renderer: Optional[SpecRenderer] = None
+        self._renderer_pid = ''
+        self._panel_card: Optional[tk.Frame] = None
+        self._placeholder: Optional[tk.Widget] = None
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -642,6 +646,16 @@ class PluginDetachedPanel:
             self._dirty = True
         return _handler
 
+    def _teardown_renderer(self) -> None:
+        if self._panel_card is not None:
+            try:
+                self._panel_card.destroy()
+            except Exception:
+                pass
+        self._panel_card = None
+        self._renderer = None
+        self._renderer_pid = ''
+
     def _refresh(self) -> None:
         host = self._panel_host
         if host is None:
@@ -649,38 +663,54 @@ class PluginDetachedPanel:
         panels = [p for p in self._panels_for_plugin()
                   if p.get('available')
                   and (not self.panel_id or str(p.get('id')) == self.panel_id)]
-        rendered = []
-        for panel in panels:
-            pid = str(panel.get('id') or '')
-            try:
-                spec = (act_plugin_ui_render(self.owner, pid) or {}).get('spec') or {}
-            except Exception:
-                spec = {'version': 1, 'title': pid, 'nodes': []}
-            rendered.append((pid, spec))
-        # Engine-level cache: only tear down + rebuild the widgets when the spec
-        # actually changed since the last paint. An idle panel never repaints; an
-        # animating one (note roll playhead) rebuilds only its changed frames.
+        target = panels[0] if panels else None
+        if target is None:
+            # Plugin/panel unavailable → drop the renderer, show a placeholder.
+            self._teardown_renderer()
+            if self._placeholder is None or not self._placeholder.winfo_exists():
+                self._placeholder = tk.Label(
+                    host, text='插件未提供面板或未激活\n(enable it in the manager)',
+                    bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, justify='center',
+                    font=('Segoe UI', 10), pady=20)
+                self._placeholder.pack(fill='x')
+            self._last_render_sig = ''
+            return
+        pid = str(target.get('id') or '')
         try:
-            sig = json.dumps(rendered, ensure_ascii=False, sort_keys=True, default=str)
+            spec = (act_plugin_ui_render(self.owner, pid) or {}).get('spec') or {}
         except Exception:
-            sig = repr(rendered)
-        if sig == self._last_render_sig and host.winfo_children():
-            return
-        self._last_render_sig = sig
-        for child in list(host.winfo_children()):
-            child.destroy()
-        if not rendered:
-            tk.Label(host, text='插件未提供面板或未激活\n(enable it in the manager)',
-                     bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, justify='center',
-                     font=('Segoe UI', 10), pady=20).pack(fill='x')
-            return
-        for pid, spec in rendered:
+            spec = {'version': 1, 'title': pid, 'nodes': []}
+        # Build the card + persistent SpecRenderer once; reconcile (in-place
+        # update, no widget teardown) on every later refresh so the panel never
+        # flickers and its buttons stay clickable during live animation.
+        if (self._renderer is None or self._renderer_pid != pid
+                or self._panel_card is None or not self._panel_card.winfo_exists()):
+            self._teardown_renderer()
+            if self._placeholder is not None:
+                try:
+                    self._placeholder.destroy()
+                except Exception:
+                    pass
+                self._placeholder = None
             card = tk.Frame(host, bg=_SAO_PANEL_BODY_BG, highlightthickness=1,
                             highlightbackground=_SAO_PANEL_BORDER)
             card.pack(fill='x', pady=6, padx=2)
-            inner = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
-            inner.pack(fill='x', padx=10, pady=8)
-            render_spec_into(inner, spec, on_action=self._make_action(pid))
+            body = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
+            body.pack(fill='x', padx=10, pady=8)
+            self._panel_card = card
+            self._renderer = SpecRenderer(body, self._make_action(pid))
+            self._renderer_pid = pid
+            self._last_render_sig = ''
+        # Skip the reconcile walk entirely when the spec is byte-identical (idle).
+        try:
+            sig = json.dumps(spec, ensure_ascii=False, sort_keys=True, default=str)
+        except Exception:
+            sig = repr(spec)
+        if sig == self._last_render_sig:
+            return
+        self._last_render_sig = sig
+        self._renderer.set_on_action(self._make_action(pid))
+        self._renderer.render(spec)
 
     def _build_hotkeys(self) -> None:
         host = self._hotkey_host

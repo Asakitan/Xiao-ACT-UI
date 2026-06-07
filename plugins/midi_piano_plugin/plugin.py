@@ -755,11 +755,11 @@ def _hk_stop():
 
 # ── 进度刷新 ────────────────────────────────────────────────────────────────
 def _tick_redraw():
-    # 播放中只动画「可视化」子窗口（钢琴键盘 / 音符卷帘），**不**重绘主控面板：否则主控
-    # 的按钮（尤其"停止"）每 0.3s 被销毁重建，会卡顿、闪烁且点不中。主控的状态/进度在用户
-    # 操作时由动作回调即时重绘；播放时的实时反馈交给可视化窗口。
+    # 播放中实时刷新主控(进度条) + 可视化窗口(钢琴键盘 / 音符卷帘)。渲染器是**原地更新**
+    # (不销毁控件)，所以主控进度条平滑走动、按钮始终可点、不闪烁。
     try:
         if _player and _player.state.is_playing and not _player.state.is_paused:
+            _ctx.request_redraw("midi_piano")
             _ctx.request_redraw("midi_kbd")
             _ctx.request_redraw("midi_roll")
     except Exception:
