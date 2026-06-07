@@ -90,6 +90,7 @@ class MemStateBridge:
         self._last_scene_id: int = 0
         self._damage_reader: Any = None
         self.last_mem_damage: dict = {}   # uid(=uuid>>16) -> MEM damage total
+        self._mem_dmg_logged: bool = False
         self._nr = None
         self._nr_tried = False
 
@@ -224,8 +225,21 @@ class MemStateBridge:
                     try:
                         totals = self._damage_reader.read_player_totals()
                         if totals:
-                            self.last_mem_damage = {(int(u) >> 16): int(v) for u, v in totals.items()}
-                            self.dps_tracker.set_mem_damage(self.last_mem_damage)
+                            # Key by BOTH the full uuid and uuid>>16: the dps_tracker
+                            # entity uid may be either (verified uuid>>16 == CharId).
+                            md = {}
+                            for u, v in totals.items():
+                                u = int(u); v = int(v)
+                                md[u] = v
+                                md[u >> 16] = v
+                            self.last_mem_damage = md
+                            self.dps_tracker.set_mem_damage(md)
+                            if not self._mem_dmg_logged:
+                                self._mem_dmg_logged = True
+                                top = max(totals.items(), key=lambda x: x[1])
+                                self._log(f"[MemBridge] MEM damage table live: {len(totals)} "
+                                          f"players; top uuid={top[0]} (uid={top[0] >> 16}) "
+                                          f"= {top[1]:,}")
                     except Exception:
                         pass
             except Exception:
