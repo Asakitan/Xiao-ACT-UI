@@ -1436,17 +1436,13 @@ function _fmtNum(v) {
     return Math.round(v).toLocaleString();
 }
 
-// MEM cross-check badge: the game's own DamageDataMgr total, plus a drift % vs the TCP
-// figure (signals packet loss) -- shown only in hybrid (damage_source !== 'mem').
+// MEM cross-check badge: the game's own DamageDataMgr cumulative total. No drift % -- it is a
+// cumulative/session total (matches the game's damage-stat panel) and does NOT share the
+// per-encounter window of the TCP value, so a TCP-vs-MEM delta would be apples-to-oranges.
 function _memBadge(tcpAmount, entity) {
     var mem = Number((entity && entity.mem_damage_total) || 0);
     if (!mem) return '';
-    var txt = 'MEM ' + _fmtNum(mem);
-    if (entity.damage_source !== 'mem') {
-        var d = (Number(tcpAmount || 0) - mem) / mem;
-        if (Math.abs(d) >= 0.02) txt += ' Δ' + (d > 0 ? '+' : '') + Math.round(d * 100) + '%';
-    }
-    return ' · <span class="mem-badge">' + txt + '</span>';
+    return ' · <span class="mem-badge">MEM ' + _fmtNum(mem) + '</span>';
 }
 
 function _fmtTime(s) {

@@ -2323,16 +2323,12 @@ class DpsOverlay:
                            shadow_color=_fx_shadow, shadow_blur=5 if _fx_shadow else 0)
         pct = int(round(float(row['pct'] or 0.0) * 100))
         val_sub = f'{_fmt_num(row["rate"])}/s · {pct}%'
-        # MEM cross-check: the game's own DamageDataMgr total + drift% vs TCP (packet loss).
+        # MEM cross-check: the game's own DamageDataMgr cumulative total. No drift% -- it is a
+        # cumulative/session total (matches the game's damage-stat panel) and does NOT share the
+        # per-encounter window of the TCP value, so a TCP-vs-MEM delta is apples-to-oranges.
         # Parity with web/dps.html _memBadge.
         if (not row.get('is_heal')) and row.get('mem_damage_total'):
-            _mem = int(row['mem_damage_total'])
-            _badge = f'MEM {_fmt_num(_mem)}'
-            if _mem > 0:
-                _d = (float(row.get('amount') or 0) - _mem) / _mem
-                if abs(_d) >= 0.02:
-                    _badge += f' Δ{"+" if _d > 0 else ""}{round(_d * 100)}%'
-            val_sub += f' · {_badge}'
+            val_sub += f' · MEM {_fmt_num(int(row["mem_damage_total"]))}'
         sw_ = self._tracked_text_width(draw, val_sub, font_sub, 0.75)
         self._draw_tracked(draw, (x + w - 10 - sw_, y + 22), val_sub,
                            font_sub, self.TEXT_MUTED, 0.75)
