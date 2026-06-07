@@ -923,6 +923,20 @@ class AnchorMemoryReader:
             cur_pid = self._read_i32(pl + 0x10)
             if cur_pid and cur_pid > 0:
                 out['profession_id'] = cur_pid
+        # SceneData (current map/scene). MapId@0x10, LevelMapId@0x40, LineId@0x80
+        # (dump.cs SceneData TypeDefIndex 11418). Name resolved app-side via the
+        # offline scene/dungeon table -> no TCP needed.
+        sd = self._read_u64(cs + 0x20)
+        if sd:
+            mid = self._read_u32(sd + 0x10) or 0
+            if mid:
+                out['scene_map_id'] = int(mid)
+            lvl = self._read_u32(sd + 0x40) or 0
+            if lvl:
+                out['scene_level_map_id'] = int(lvl)
+            line = self._read_u32(sd + 0x80) or 0
+            if line:
+                out['scene_line_id'] = int(line)
         out['resolved'] = resolved.to_dict()
         return out
 

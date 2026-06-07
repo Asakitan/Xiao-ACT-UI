@@ -86,6 +86,7 @@ class MemStateBridge:
         self._entity_interval: float = 0.7
         self.last_entities: list = []
         self.last_boss_mem: Optional[dict] = None
+        self._last_scene_id: int = 0
         self._nr = None
         self._nr_tried = False
 
@@ -187,6 +188,18 @@ class MemStateBridge:
                             upd["boss_breaking_stage"] = bs
                         try:
                             self.state_mgr.update(**upd)
+                        except Exception:
+                            pass
+                # scene name from memory (self CharSerialize.SceneData.MapId -> table)
+                ls = getattr(self._provider, "last_snap", None)
+                smid = int(getattr(ls, "scene_map_id", 0) or 0) if ls else 0
+                if smid and smid != self._last_scene_id and self.state_mgr is not None:
+                    self._last_scene_id = smid
+                    nr = self._name_resolver()
+                    nm = nr.dungeon(smid, default="") if nr else ""
+                    if nm:
+                        try:
+                            self.state_mgr.update(dungeon_scene_id=smid, dungeon_name=nm)
                         except Exception:
                             pass
             except Exception:

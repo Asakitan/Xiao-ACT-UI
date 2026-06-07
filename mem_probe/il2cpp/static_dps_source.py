@@ -77,6 +77,8 @@ class SelfSnapshot:
     # 体力 (Phase 1)
     energy_limit: int = 0      # EnergyItem.EnergyLimit
     extra_energy_limit: int = 0  # EnergyItem.ExtraEnergyLimit
+    # 场景 (CharSerialize.SceneData.MapId)
+    scene_map_id: int = 0
 
 
 class StaticDpsSource:

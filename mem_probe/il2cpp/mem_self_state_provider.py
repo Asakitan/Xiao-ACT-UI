@@ -249,6 +249,7 @@ class MemSelfStateProvider:
                                 snap.fight_point = int(data.get('fight_point') or 0)
                                 snap.energy_limit = int(data.get('energy_limit') or 0)
                                 snap.extra_energy_limit = int(data.get('extra_energy_limit') or 0)
+                                snap.scene_map_id = int(data.get('scene_map_id') or 0)
                                 try:
                                     self._src.fill_extended(snap)
                                 except Exception:
