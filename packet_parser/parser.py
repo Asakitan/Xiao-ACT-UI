@@ -15,7 +15,7 @@ from typing import Optional, Callable, Dict, Any, List
 
 from packet_parser import helpers as _helpers
 from packet_parser.enums import (
-    MessageType, NotifyMethod, _NOTIFY_METHOD_NAMES, AttrType,
+    MessageType, NotifyMethod, _NOTIFY_METHOD_NAMES, AttrType, BASE_LEVEL_CAP,
     SERVICE_UUID_C3SB, BuffEventType, _BOSS_BUFF_EVENTS, WIPE_BUFF_BASE_ID,
     DamageType, EntityType, SkillCDType, CHAR_FIELD_NAMES,
     _HANDLED_CHAR_FIELDS, _RESET_IGNORE_TARGETS,
@@ -1867,9 +1867,10 @@ class PacketParser:
             )
             _append_packet_debug('role_level', role_level_debug)
             if role_level > 0:
-                player.level = role_level
+                # 生体元等级 base is capped; a higher value is season-inclusive.
+                player.level = min(role_level, BASE_LEVEL_CAP)
                 changed = True
-                print(f'[Parser] SyncContainerData: 等级 Lv.{role_level} uid={uid}', flush=True)
+                print(f'[Parser] SyncContainerData: 等级 Lv.{player.level} uid={uid}', flush=True)
             else:
                 logger.warning(
                     f'[Parser] SyncContainerData RoleLevel(pb2): level=0! uid={uid}'
@@ -2373,10 +2374,11 @@ class PacketParser:
                 lv = _CY_PACKET.read_le_u32_at(data, pos)
                 debug_info['u32'] = lv
                 if lv > 0:
-                    player.level = lv
+                    # 生体元等级 base is capped; a higher value is season-inclusive.
+                    player.level = min(lv, BASE_LEVEL_CAP)
                     changed = True
                     debug_info['role_level'] = lv
-                    logger.info(f'[Parser] DirtyData Level -> {lv}')
+                    logger.info(f'[Parser] DirtyData Level -> {lv} (base={player.level})')
             elif pos + 4 <= len(data):
                 debug_info['u32'] = _CY_PACKET.read_le_u32_at(data, pos)
                 debug_info['raw_hex'] = data[pos:].hex()[:128]
@@ -3778,10 +3780,14 @@ class PacketParser:
                     changed = True
                     logger.info(f'[Parser] AttrCollection NAME={name!r} uid={uid}')
             elif attr_id == AttrType.LEVEL:
+                # AttrLevel(10000) for self reports the season-inclusive 显示等级
+                # (e.g. 92), not the 生体元等级 base (capped). Clamp so the season
+                # level never overwrites the base; the (+XX) extra comes from
+                # AttrSeasonLevel / season medal instead.
                 lv = int_value
                 logger.info(f'[Parser] AttrCollection LEVEL={lv} raw={raw_data.hex()} uid={uid}')
                 if lv > 0:
-                    player.level = lv
+                    player.level = min(lv, BASE_LEVEL_CAP)
                     changed = True
             elif attr_id == AttrType.RANK_LEVEL:
                 rl = int_value

@@ -123,6 +123,14 @@ _NOTIFY_METHOD_NAMES = {
 }
 
 
+# 生体元等级 (base character level) hard cap. The season system (赛季等级)
+# extends beyond this as the (+XX) extra level, which several packet fields
+# report as a season-inclusive value. Any base-level source above this cap is
+# carrying a season-inclusive value and must not raise the base. Bump this if
+# the game raises the base level cap.
+BASE_LEVEL_CAP = 60
+
+
 class AttrType:
     NAME = 0x01
     ID = 0x0A
