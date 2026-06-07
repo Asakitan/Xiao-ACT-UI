@@ -50,6 +50,13 @@ DEFAULT_BUNDLE_CLASSES = [
     "Zproto.ClientHitPartInfo",
     "Zproto.UseSkill",
     "Zproto.UseSkillParam",
+    # Entity / combat readers (memory-driven hybrid). Including these makes the
+    # 256KB bundle a self-sufficient per-version offset table -> onedir clients
+    # resolve these by klass name without the 250MB script.json.
+    "Panda.ZGame.ZEntityMgr",
+    "Panda.ZGame.ZEntity",
+    "Panda.Hud.HudGmRender",
+    "Panda.Hud.HudGm",
 ]
 
 
