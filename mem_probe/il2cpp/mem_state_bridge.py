@@ -147,10 +147,13 @@ class MemStateBridge:
                 if prov is None:
                     p = self._provider
                     src = getattr(p, "_src", None) if p is not None else None
-                    uid = int(self.last_uid or 0)
-                    if src is not None and uid > 0:
+                    # NOTE: do NOT require self.last_uid > 0. In hybrid the self-state
+                    # path may never resolve (full-heap scan disabled outside memory mode),
+                    # but ZEntityMgr / DamageDataMgr locate independently (best-by-count +
+                    # klass sentinel). Start as soon as the StaticDpsSource is available.
+                    if src is not None:
                         from mem_probe.il2cpp.mem_entity_provider import MemEntityProvider
-                        prov = MemEntityProvider(src, self_uid=uid)
+                        prov = MemEntityProvider(src, self_uid=int(self.last_uid or 0))
                         self._entity_provider = prov
                         try:
                             from mem_probe.il2cpp.mem_damage_reader import MemDamageReader
@@ -160,9 +163,6 @@ class MemStateBridge:
                     else:
                         self._entity_stop.wait(self._entity_interval)
                         continue
-                if self.mode == "tcp":          # mem source fell back to TCP -> idle
-                    self._entity_stop.wait(self._entity_interval)
-                    continue
                 prov.set_self_uid(int(self.last_uid or 0))
                 snap = prov.snapshot()
                 self.last_entities = snap
