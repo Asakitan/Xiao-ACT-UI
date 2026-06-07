@@ -134,6 +134,19 @@ pre { margin: 8px 0 0; white-space: pre-wrap; word-break: break-word; user-selec
 ::-webkit-scrollbar-thumb { background: rgba(117,205,255,.38); border-radius: 999px; }
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
+<style>
+/* Flat override (ACT panel only) — this page is dark-bespoke (own palette, not act tokens):
+   flatten gradients/glow/scanlines/clip to solid dark; keep its dark identity + the .card left rail. */
+.shell{background:rgba(13,22,36,.97)!important;box-shadow:none!important;}
+.shell::before{display:none!important;content:none!important;}
+.header{background:rgba(15,32,52,.82)!important;}
+.kicker{text-shadow:none!important;}
+button{background:rgba(34,72,108,.50)!important;box-shadow:none!important;clip-path:none!important;}
+button:hover{box-shadow:none!important;transform:none!important;background:rgba(46,90,130,.55)!important;}
+.card{background:rgba(18,32,50,.86)!important;}
+.diag-item{background:rgba(12,20,32,.50)!important;}
+.pill,.badge{box-shadow:none!important;}
+</style>
 <script src="act_panel_theme.js"></script>
 </head>
 <body>

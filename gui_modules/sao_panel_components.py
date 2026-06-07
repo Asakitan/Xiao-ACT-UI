@@ -254,7 +254,8 @@ def status_badge(parent: tk.Misc, text: str, *, kind: str = "gold") -> tk.Label:
     bg = _accent_soft(kind)
     return tk.Label(
         parent, text=str(text or "-"), bg=bg, fg=fg, font=FONT_SMALL,
-        padx=SP_SM, pady=2, highlightthickness=1, highlightbackground=_accent(kind),
+        padx=SP_SM, pady=2, bd=0, relief='flat',
+        highlightthickness=1, highlightbackground=_accent(kind), highlightcolor=_accent(kind),
     )
 
 
@@ -284,9 +285,9 @@ def metric_tile(parent: tk.Misc, label: str, value: Any, *, sub: str = "", accen
     card_bg = _pc('card_bg', ui._SAO_PANEL_BODY_BG)
     border = _pc('border', ui._SAO_PANEL_BORDER)
     card = tk.Frame(parent, bg=card_bg, highlightthickness=1, highlightbackground=border)
-    tk.Frame(card, bg=color, height=4).pack(fill='x')           # 4px 顶部强调条（原 3px 像渲染瑕疵）
+    tk.Frame(card, bg=color, width=3).pack(side='left', fill='y')   # 3px 左侧强调条（扁平单通道）
     inner = tk.Frame(card, bg=card_bg)
-    inner.pack(fill='both', expand=True, padx=SP_MD, pady=(SP_SM, SP_SM))
+    inner.pack(side='left', fill='both', expand=True, padx=SP_MD, pady=(SP_SM, SP_SM))
     tk.Label(inner, text=str(label or "-").upper(), bg=card_bg, fg=_pc('label_fg', ui._SAO_PANEL_LABEL_FG), font=FONT_SMALL).pack(anchor='w')
     tk.Label(inner, text=str(value if value not in (None, '') else "0"), bg=card_bg, fg=_pc('value_fg', ui._SAO_PANEL_VALUE_FG), font=FONT_VALUE).pack(anchor='w', pady=(2, 0))
     if sub:
@@ -300,7 +301,7 @@ def section_card(parent: tk.Misc, title: str, *, subtitle: str = "", badge: str 
     box = tk.Frame(parent, bg=body_bg, highlightthickness=1, highlightbackground=_pc('border', ui._SAO_PANEL_BORDER))
     head = tk.Frame(box, bg=header_bg)
     head.pack(fill='x')
-    tk.Frame(head, bg=_accent(accent), width=4).pack(side='left', fill='y')   # 左侧强调轨（按 section 配色）
+    tk.Frame(head, bg=_accent(accent), width=3).pack(side='left', fill='y')   # 3px 左侧强调轨（扁平单通道）
     text_box = tk.Frame(head, bg=header_bg)
     text_box.pack(side='left', fill='x', expand=True, padx=(SP_SM, SP_XS), pady=SP_SM)
     tk.Label(text_box, text=str(title or "SECTION"), bg=header_bg, fg=_pc('gold', ui._SAO_PANEL_GOLD), font=FONT_TITLE, anchor='w').pack(fill='x')
@@ -358,7 +359,7 @@ def detail_row(parent: tk.Misc, text: str, *, accent: str = "cyan", zebra: bool 
     base_bg = _pc('card_bg_alt', ui._SAO_PANEL_HEADER_BG) if zebra else _pc('card_bg', ui._SAO_PANEL_BODY_BG)
     fg = _pc('value_fg', ui._SAO_PANEL_VALUE_FG) if strong else _pc('label_fg', ui._SAO_PANEL_LABEL_FG)
     row = tk.Frame(parent, bg=base_bg, cursor='hand2' if callable(command) else '')
-    tk.Frame(row, bg=_accent(accent), width=2).pack(side='left', fill='y')
+    tk.Frame(row, bg=_accent(accent), width=3).pack(side='left', fill='y')
     if expanded is not None:
         tk.Label(row, text=('▾' if expanded else '▸'), bg=base_bg, fg=_accent(accent), font=FONT_META).pack(side='left', padx=(SP_XS, 0))
     tk.Label(row, text=str(text), bg=base_bg, fg=fg, font=FONT_META, anchor='w', justify='left').pack(

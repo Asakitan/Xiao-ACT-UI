@@ -52,6 +52,26 @@ button { cursor: pointer; white-space: nowrap; }
 .toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 </style>
 <link rel="stylesheet" href="act_panel_theme.css" />
+<style>
+/* Flat override (ACT panel only): kill shared decorative chrome + flatten per-page accents to a single 3px left rail. */
+.shell,.panel,.plugin-shell{border:1px solid var(--act-edge)!important;border-radius:4px!important;background:var(--act-shell-bg)!important;box-shadow:none!important;}
+.shell::before,.shell::after,.panel::before,.panel::after,.plugin-shell::before,.plugin-shell::after{display:none!important;content:none!important;}
+.header,.plugin-header,header{background:var(--act-shell-bg-2)!important;border-bottom:1px solid var(--act-edge-soft)!important;}
+button,input,select,.action-btn{clip-path:none!important;border-radius:3px!important;box-shadow:none!important;}
+button:hover,.action-btn:hover{box-shadow:none!important;transform:none!important;background:var(--act-card-bg-2)!important;}
+.main,.list,.plugin-list,.side,.side-panel,.section,.summary,.chart-wrap,.preview{box-shadow:none!important;}
+.bar{background:var(--act-gold)!important;}.skill-row.heal .bar{background:var(--act-ok)!important;}
+.pill,.badge,.status-pill{background:transparent!important;}
+.aca-tile::before,.metric::before,.group-card::before{content:none!important;display:none!important;}
+.aca-tile{border-left:3px solid var(--acc,var(--act-cyan))!important;}
+.metric{border-left:3px solid var(--act-cyan)!important;}
+.group-card{border-left:3px solid var(--act-gold)!important;}
+.aca-fill{box-shadow:none!important;}
+.aca-row.zebra{background:var(--act-card-bg-2)!important;}
+.aca-badge,.aca-sec-badge{background:transparent!important;border-radius:3px!important;}
+.group-head:hover{background:var(--act-card-bg-2)!important;}
+.death td{box-shadow:none!important;background:transparent!important;border-left:3px solid var(--act-danger)!important;}
+</style>
 <script src="act_panel_theme.js"></script>
 <script src="act_panel_util.js"></script>
 </head>

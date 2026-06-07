@@ -180,11 +180,11 @@ class ActAggregatePanel:
             _apply_window_icon(win)
         except Exception:
             pass
-        header = _sao_panel_header(win, 'ACT SEMANTIC COCKPIT', on_close=self.hide)
+        header = _sao_panel_header(win, 'ACT SEMANTIC COCKPIT', on_close=self.hide, flat=True)
         header.pack(fill='x')
         _bind_panel_drag(win, header)
 
-        body = _sao_panel_body(win)
+        body = _sao_panel_body(win, flat=True)
         body.pack(fill='both', expand=True, padx=1, pady=(0, 1))
 
         toolbar = tk.Frame(body, bg=_SAO_PANEL_BODY_BG)

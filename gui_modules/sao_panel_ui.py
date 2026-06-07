@@ -406,11 +406,14 @@ def _hex_rgba(hex_color: str, alpha: int = 255):
 _close_btn_photo_cache: Dict[str, Tuple[Any, Any]] = {}
 
 
-def _make_panel_close_button(parent, command, bg=_SAO_PANEL_HEADER_BG):
+def _make_panel_close_button(parent, command, bg=_SAO_PANEL_HEADER_BG, *, flat=False):
     size = 18
     scale = 4
     sw = size * scale
-    cache_key = f'{size}_{bg}'
+    # flat ACT panels recolor the close-X via the danger token (light #ef684e /
+    # dark #ff707a); non-flat callers keep the legacy literal + old cache shape.
+    danger = _theme_color('danger', '#ff707a') if flat else '#ff707a'
+    cache_key = f'{size}_{bg}_{danger}' if flat else f'{size}_{bg}'
     cached = _close_btn_photo_cache.get(cache_key)
     if cached is not None:
         normal, hover = cached
@@ -421,13 +424,13 @@ def _make_panel_close_button(parent, command, bg=_SAO_PANEL_HEADER_BG):
         def S(v):
             return int(round(v * scale))
 
-        draw.line((S(4), S(4), S(14), S(14)), fill=_hex_rgba('#ff707a'), width=max(1, S(2)))
-        draw.line((S(4), S(14), S(14), S(4)), fill=_hex_rgba('#ff707a'), width=max(1, S(2)))
+        draw.line((S(4), S(4), S(14), S(14)), fill=_hex_rgba(danger), width=max(1, S(2)))
+        draw.line((S(4), S(14), S(14), S(4)), fill=_hex_rgba(danger), width=max(1, S(2)))
         normal = ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
 
         img_h = Image.new('RGBA', (sw, sw), (0, 0, 0, 0))
         draw_h = ImageDraw.Draw(img_h)
-        draw_h.ellipse((S(1), S(1), S(17), S(17)), outline=_hex_rgba('#ff707a', 210), width=max(1, S(1)))
+        draw_h.ellipse((S(1), S(1), S(17), S(17)), outline=_hex_rgba(danger, 210), width=max(1, S(1)))
         draw_h.line((S(4), S(4), S(14), S(14)), fill=_hex_rgba('#ffffff'), width=max(1, S(2)))
         draw_h.line((S(4), S(14), S(14), S(4)), fill=_hex_rgba('#ffffff'), width=max(1, S(2)))
         hover = ImageTk.PhotoImage(img_h.resize((size, size), Image.LANCZOS))
@@ -443,7 +446,7 @@ def _make_panel_close_button(parent, command, bg=_SAO_PANEL_HEADER_BG):
     return lbl
 
 
-def _sao_panel_header(parent, title_icon, title_text=None, close_cmd=None, on_close=None):
+def _sao_panel_header(parent, title_icon, title_text=None, close_cmd=None, on_close=None, *, flat=False):
     """创建 SAO 风格深色标题栏，返回 header。
 
     Legacy callers pass ``(parent, icon, title, close_cmd)`` and unpack
@@ -469,11 +472,12 @@ def _sao_panel_header(parent, title_icon, title_text=None, close_cmd=None, on_cl
     tk.Label(hdr, text=f'{title_icon} {title_text}',
              bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG,
              font=get_sao_font(9, True)).pack(side=tk.LEFT, padx=(7, 4))
-    tk.Frame(hdr, bg=_SAO_PANEL_GOLD, width=24, height=2).pack(side=tk.LEFT, padx=(3, 0), pady=(18, 0))
-    # 右侧系统标记
-    tk.Label(hdr, text='◇', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_SEP,
-             font=get_sao_font(7)).pack(side=tk.RIGHT, padx=(0, 2))
-    close_lbl = _make_panel_close_button(hdr, close_cb, bg=_SAO_PANEL_HEADER_BG)
+    if not flat:
+        # 装饰金条 + 右侧 ◇ 系统标记（扁平 ACT 面板去掉，只留左侧 accent 条 + 标题）
+        tk.Frame(hdr, bg=_SAO_PANEL_GOLD, width=24, height=2).pack(side=tk.LEFT, padx=(3, 0), pady=(18, 0))
+        tk.Label(hdr, text='◇', bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_SEP,
+                 font=get_sao_font(7)).pack(side=tk.RIGHT, padx=(0, 2))
+    close_lbl = _make_panel_close_button(hdr, close_cb, bg=_SAO_PANEL_HEADER_BG, flat=flat)
     close_lbl.pack(side=tk.RIGHT, padx=(6, 8))
     class _HeaderProxy:
         def __init__(self, frame, close_button):
@@ -530,23 +534,25 @@ def _bind_panel_drag(hdr, close_lbl=None, start_fn=None, move_fn=None):
     _do(hdr)
 
 
-def _sao_panel_body(parent):
-    """创建 SAO 风格面板内容区 (带角标装饰)"""
+def _sao_panel_body(parent, *, flat=False):
+    """创建 SAO 风格面板内容区。flat=True 时去掉 2px 青条/角块/焦点辉光（扁平 ACT 面板）。"""
     tk.Frame(parent, bg=_SAO_PANEL_SEP, height=1).pack(fill=tk.X)
-    tk.Frame(parent, bg=_SAO_PANEL_ACCENT, height=2).pack(fill=tk.X)
+    if not flat:
+        tk.Frame(parent, bg=_SAO_PANEL_ACCENT, height=2).pack(fill=tk.X)
     body = tk.Frame(
         parent,
         bg=_SAO_PANEL_BODY_BG,
         highlightthickness=1,
         highlightbackground=_SAO_PANEL_BORDER,
-        highlightcolor=_SAO_PANEL_ACCENT,
+        highlightcolor=_SAO_PANEL_BORDER if flat else _SAO_PANEL_ACCENT,
     )
     body.pack(fill=tk.BOTH, expand=True, padx=1, pady=(0, 1))
-    try:
-        tk.Frame(body, bg=_SAO_PANEL_ACCENT, width=34, height=2).place(x=0, y=0)
-        tk.Frame(body, bg=_SAO_PANEL_GOLD, width=34, height=2).place(relx=1.0, rely=1.0, anchor='se')
-    except Exception:
-        pass
+    if not flat:
+        try:
+            tk.Frame(body, bg=_SAO_PANEL_ACCENT, width=34, height=2).place(x=0, y=0)
+            tk.Frame(body, bg=_SAO_PANEL_GOLD, width=34, height=2).place(relx=1.0, rely=1.0, anchor='se')
+        except Exception:
+            pass
     for delay in (0, 80, 240):
         try:
             body.after(delay, lambda root=body: _style_panel_descendants(root))
