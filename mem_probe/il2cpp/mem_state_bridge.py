@@ -91,6 +91,10 @@ class MemStateBridge:
         self._damage_reader: Any = None
         self.last_mem_damage: dict = {}   # uid(=uuid>>16) -> MEM damage total
         self._mem_dmg_logged: bool = False
+        self._mem_dmg_gate_logged: bool = False
+        self._mem_dmg_empty_logged: bool = False
+        self._mem_dmg_err_logged: bool = False
+        self._entity_diag_logged: bool = False
         self._nr = None
         self._nr_tried = False
 
@@ -126,6 +130,9 @@ class MemStateBridge:
                 self._entity_thread = threading.Thread(
                     target=self._entity_loop, name="mem-entity-hp", daemon=True)
                 self._entity_thread.start()
+            # direct print -- on_log is swallowed in hybrid; confirm start + dps_tracker wiring
+            print(f"[MemBridge] start(): entity_enabled={self._entity_enabled} "
+                  f"dps_tracker={'ok' if self.dps_tracker else 'None'}")
             return True
         except Exception as e:
             self._log(f"[MemBridge] start failed: {e}")
@@ -158,9 +165,18 @@ class MemStateBridge:
                         try:
                             from mem_probe.il2cpp.mem_damage_reader import MemDamageReader
                             self._damage_reader = MemDamageReader(src)
-                        except Exception:
+                        except Exception as _dr_exc:
                             self._damage_reader = None
+                            print(f"[MemBridge.entity] MemDamageReader init failed: {_dr_exc}")
+                        # direct print -- bridge on_log is swallowed in hybrid (see _poll_mem_damage)
+                        print(f"[MemBridge.entity] loop active: src=ok damage_reader="
+                              f"{'ok' if self._damage_reader else 'None'} dps_tracker="
+                              f"{'ok' if self.dps_tracker else 'None'} last_uid={self.last_uid}")
                     else:
+                        if not self._entity_diag_logged:
+                            self._entity_diag_logged = True
+                            print(f"[MemBridge.entity] waiting on StaticDpsSource "
+                                  f"(provider={'set' if p is not None else 'None'}, _src=None)")
                         self._entity_stop.wait(self._entity_interval)
                         continue
                 prov.set_self_uid(int(self.last_uid or 0))
@@ -231,11 +247,23 @@ class MemStateBridge:
         mode). Independent of the entity snapshot, so it runs BEFORE the slow first
         ZEntityMgr scan and the MEM badge appears within ~1-2s. uid = playerUuid >> 16
         (== CharSerialize.CharId; dps_tracker keys entities by uuid>>16)."""
+        # NOTE: print() directly (not self._log) -- in hybrid the bridge's on_log is
+        # UnifiedDataSource._on_bridge_log, which swallows messages. Direct prints are
+        # the only way the user sees what this path does. One-shot per outcome.
         if self._damage_reader is None or self.dps_tracker is None:
+            if not self._mem_dmg_gate_logged:
+                self._mem_dmg_gate_logged = True
+                print(f"[MemBridge.dmg] blocked: damage_reader="
+                      f"{'ok' if self._damage_reader else 'None'} dps_tracker="
+                      f"{'ok' if self.dps_tracker else 'None'}")
             return
         try:
             totals = self._damage_reader.read_player_totals()
             if not totals:
+                if not self._mem_dmg_empty_logged:
+                    self._mem_dmg_empty_logged = True
+                    print("[MemBridge.dmg] read_player_totals() empty -- "
+                          "DamageDataMgr not located yet or no combat damage recorded.")
                 return
             md = {int(u) >> 16: int(v) for u, v in totals.items()}
             self.last_mem_damage = md
@@ -255,10 +283,15 @@ class MemStateBridge:
             if not self._mem_dmg_logged:
                 self._mem_dmg_logged = True
                 top = max(totals.items(), key=lambda x: x[1])
-                self._log(f"[MemBridge] MEM damage table live: {len(totals)} players; "
-                          f"top uuid={top[0]} (uid={top[0] >> 16}) = {top[1]:,}")
-        except Exception:
-            pass
+                print(f"[MemBridge] MEM damage table live: {len(totals)} players; "
+                      f"top uuid={top[0]} (uid={top[0] >> 16}) = {top[1]:,}; "
+                      f"mode={ds!r} mem_primary={ds == 'memory'}")
+        except Exception as exc:
+            if not self._mem_dmg_err_logged:
+                self._mem_dmg_err_logged = True
+                import traceback
+                traceback.print_exc()
+                print(f"[MemBridge.dmg] read failed: {exc}")
 
     def stop(self):
         self._entity_stop.set()
