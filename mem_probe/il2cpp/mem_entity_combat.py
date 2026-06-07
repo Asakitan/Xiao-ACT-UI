@@ -24,8 +24,11 @@ from typing import Dict, List, Optional, Tuple
 try:
     from mem_probe import cy_memscan as _cymem
     _HAS_BATCH = bool(_cymem.has_batch_read())
+    _HAS_FULLDECODE = bool(_cymem.has_full_combat_decode())
 except Exception:
+    _cymem = None
     _HAS_BATCH = False
+    _HAS_FULLDECODE = False
 
 # ZEntity / ZAttrCollection field offsets (verified vs dump fdc7111b / 8144ccfd)
 ENT_ATTRS_OFF = 0x48        # ZEntity.attrs_ -> ZAttrCollection
@@ -339,65 +342,48 @@ class EntityCombatReader:
         return None
 
     def read_combat_batch(self, ent_addrs) -> Dict[int, Optional[dict]]:
-        """Combat for many entities with batched cross-process reads (~3 RPM batches
-        total instead of hundreds of individual reads). Returns {ent_addr: dict|None}."""
+        """Combat (HP + state) for many entities. Returns {ent_addr: dict} (combat only).
+
+        Fast path: the whole decode (reads + index walk + value reads) runs in one
+        Cython nogil pass (read_entity_combat_many) -> no per-entity Python/GIL cost.
+        Fallback: the single obj-ptr loop (cached layout, pymem reads) -- this beats a
+        Python-orchestrated batch, whose per-entity dict building dominates the cost.
+        """
         ent_addrs = list(ent_addrs)
         if not ent_addrs:
             return {}
-        if not _HAS_BATCH:
-            # No Cython nogil batch RPM compiled in -> the single obj-ptr path
-            # (pymem reads, cached layout) is faster than a 3-phase ctypes batch.
-            out0: Dict[int, Optional[dict]] = {}
-            for e in ent_addrs:
-                c = self.read_combat(e)
-                if c is not None:
-                    out0[e] = c
-            return out0
-        # batch A: attrs ptr per entity
-        attrs_list = self.pm.read_u64_many([e + ENT_ATTRS_OFF for e in ent_addrs])
-        # batch B: _indexPart + _values per valid entity
-        ipval_addrs = []
-        valid = []
-        for e, attrs in zip(ent_addrs, attrs_list):
-            if attrs and _plaus(attrs):
-                ipval_addrs.append(attrs + COLL_INDEXPART_OFF)
-                ipval_addrs.append(attrs + COLL_VALUES_OFF)
-                valid.append(e)
-        ipvals = self.pm.read_u64_many(ipval_addrs) if ipval_addrs else []
-        ent_ip: Dict[int, int] = {}
-        specs = []          # (ent, attr_id, type_char)
-        val_addrs = []
-        for i, e in enumerate(valid):
-            ip = ipvals[2 * i]
-            vals = ipvals[2 * i + 1]
-            if not (ip and vals and _plaus(ip) and _plaus(vals)):
-                continue
-            lay = self._layout_cache.get(ip)
-            if lay is None:
-                if len(self._layout_cache) > 512:
-                    self._layout_cache.clear()
-                lay = self._build_layout(ip, vals, COMBAT_ATTR_IDS)
-                self._layout_cache[ip] = lay
-            if A_HP not in lay or A_MAX_HP not in lay:
-                continue                       # non-combat entity -> skip (no reads)
-            ent_ip[e] = ip
-            for aid, (obj, off, tc) in lay.items():
-                specs.append((e, aid, tc))
-                val_addrs.append(obj + off)
-        # batch C: all combat values in one nogil RPM loop
-        raw = self.pm.read_u64_many(val_addrs) if val_addrs else []
-        amaps: Dict[int, dict] = {}
-        for (e, aid, tc), rv in zip(specs, raw):
-            amaps.setdefault(e, {})[aid] = self._interp(rv, tc)
-        out: Dict[int, Optional[dict]] = {}
-        for e in ent_ip:                       # only entities that had HP attrs
-            c = self._combat_from_amap(amaps.get(e, {}))
-            if c is None:
-                self._layout_cache.pop(ent_ip[e], None)   # stale -> single rebuild
-                c = self.read_combat(e)
+        if _HAS_FULLDECODE and _cymem is not None:
+            try:
+                flat = _cymem.read_entity_combat_many(self.pm._handle, ent_addrs)
+            except Exception:
+                flat = None
+            if flat is not None and len(flat) == len(ent_addrs) * 7:
+                out: Dict[int, dict] = {}
+                _v = lambda x: (None if x < 0 else int(x))
+                for i, e in enumerate(ent_addrs):
+                    b = i * 7
+                    cur = flat[b]
+                    mx = flat[b + 1]
+                    if cur < 0 or mx <= 0:
+                        continue               # non-combat
+                    sk = flat[b + 6]
+                    out[e] = {
+                        "cur_hp": int(cur), "max_hp": int(mx),
+                        "hp_pct": (cur / mx) if mx else 0.0,
+                        "breaking_stage": _v(flat[b + 2]),
+                        "overdrive": _v(flat[b + 3]),
+                        "stun": _v(flat[b + 4]),
+                        "extinction": _v(flat[b + 5]),
+                        "cast_skill_id": (int(sk) if sk > 0 else None),
+                    }
+                return out
+        # fallback: single obj-ptr loop
+        out2: Dict[int, dict] = {}
+        for e in ent_addrs:
+            c = self.read_combat(e)
             if c is not None:
-                out[e] = c
-        return out
+                out2[e] = c
+        return out2
 
 
 __all__ = ["EntityCombatReader"]

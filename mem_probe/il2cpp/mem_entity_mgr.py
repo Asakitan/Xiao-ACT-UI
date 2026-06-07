@@ -287,11 +287,14 @@ class EntityMgrReader:
 
     def locate(self, player_uuid: int, force_rescan: bool = False) -> Optional[int]:
         """返回 ZEntityMgr 实例地址. 缓存已找到的 mgr_addr, 用 player_uuid 校验依然有效."""
-        if not force_rescan and self._mgr_addr and self._last_uuid == player_uuid:
-            # 校验缓存仍指向有效对象
+        if not force_rescan and self._mgr_addr:
+            # Validate the cached mgr by KLASS SENTINEL (the instance's klass ptr at
+            # obj+0 == ZEntityMgr klass), NOT by uid: the caller passes the self
+            # CharId, but the mgr stores the composite playerUuid_, so a uid check
+            # never matched and forced a full heap re-scan EVERY tick (the lag).
             try:
-                cur_uuid = self._src.sr.pm.read_u64(self._mgr_addr + PLAYERUUID_OFF)
-                if cur_uuid == player_uuid:
+                kp = self._resolve_mgr_klass()
+                if kp and self._src.sr.pm.read_u64(self._mgr_addr) == kp:
                     return self._mgr_addr
             except Exception:
                 pass

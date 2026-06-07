@@ -94,6 +94,19 @@ def has_batch_read() -> bool:
     return _fast is not None and hasattr(_fast, "read_words_many")
 
 
+def read_entity_combat_many(handle: int, ent_addrs):
+    """Full per-entity combat decode (HP + state) in one nogil pass. Returns a flat
+    list of 7 ints per entity [cur, max, break, overdrive, stun, ext, cast] (cur=-1 =>
+    non-combat), or None when the Cython extension lacks it."""
+    if _fast is not None and hasattr(_fast, "read_entity_combat_many"):
+        return _fast.read_entity_combat_many(int(handle), list(ent_addrs))
+    return None
+
+
+def has_full_combat_decode() -> bool:
+    return _fast is not None and hasattr(_fast, "read_entity_combat_many")
+
+
 def find_aligned_u64(buf, needle: int, max_hits: int = 4096) -> List[int]:
     if _fast is not None and hasattr(_fast, "find_aligned_u64"):
         view = _writable_view(buf)
