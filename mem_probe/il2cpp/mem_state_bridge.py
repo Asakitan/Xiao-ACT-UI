@@ -164,6 +164,9 @@ class MemStateBridge:
                         self._entity_stop.wait(self._entity_interval)
                         continue
                 prov.set_self_uid(int(self.last_uid or 0))
+                # MEM damage table first (fast DamageDataMgr locate) so the DPS badge shows
+                # before the slow first ZEntityMgr best-by-count scan in snapshot().
+                self._poll_mem_damage()
                 snap = prov.snapshot()
                 self.last_entities = snap
                 # resolve display names from MEM: ZEntity.BaseId -> offline name table
@@ -219,43 +222,43 @@ class MemStateBridge:
                             self.state_mgr.update(dungeon_scene_id=smid, dungeon_name=nm)
                         except Exception:
                             pass
-                # MEM damage table (DamageDataMgr) -> dps_tracker for the cross-check
-                # badge / memory mode. uid = playerUuid >> 16 (== CharSerialize.CharId).
-                if self._damage_reader is not None and self.dps_tracker is not None:
-                    try:
-                        totals = self._damage_reader.read_player_totals()
-                        if totals:
-                            # uid = playerUuid >> 16 (== CharSerialize.CharId; the dps_tracker
-                            # keys entities by uuid>>16 -- verified at get_entity_detail).
-                            md = {int(u) >> 16: int(v) for u, v in totals.items()}
-                            self.last_mem_damage = md
-                            self.dps_tracker.set_mem_damage(md)
-                            # memory mode -> MEM is the primary DPS table (synthesized);
-                            # hybrid -> TCP primary + MEM cross-check badge.
-                            ds = str(getattr(self.packet_bridge, '_data_source_mode', '') or '').lower()
-                            self.dps_tracker.set_mem_primary(ds == 'memory')
-                            # per-skill breakdown for the top players (bound nested reads)
-                            try:
-                                skills = {}
-                                for u, _v in sorted(totals.items(), key=lambda x: -x[1])[:6]:
-                                    sd = self._damage_reader.read_player_skill_damage(int(u))
-                                    if sd:
-                                        skills[int(u) >> 16] = sd
-                                if skills:
-                                    self.dps_tracker.set_mem_skill_damage(skills)
-                            except Exception:
-                                pass
-                            if not self._mem_dmg_logged:
-                                self._mem_dmg_logged = True
-                                top = max(totals.items(), key=lambda x: x[1])
-                                self._log(f"[MemBridge] MEM damage table live: {len(totals)} "
-                                          f"players; top uuid={top[0]} (uid={top[0] >> 16}) "
-                                          f"= {top[1]:,}")
-                    except Exception:
-                        pass
             except Exception:
                 traceback.print_exc()
             self._entity_stop.wait(self._entity_interval)
+
+    def _poll_mem_damage(self) -> None:
+        """Read the game's DamageDataMgr table -> dps_tracker (cross-check badge / memory
+        mode). Independent of the entity snapshot, so it runs BEFORE the slow first
+        ZEntityMgr scan and the MEM badge appears within ~1-2s. uid = playerUuid >> 16
+        (== CharSerialize.CharId; dps_tracker keys entities by uuid>>16)."""
+        if self._damage_reader is None or self.dps_tracker is None:
+            return
+        try:
+            totals = self._damage_reader.read_player_totals()
+            if not totals:
+                return
+            md = {int(u) >> 16: int(v) for u, v in totals.items()}
+            self.last_mem_damage = md
+            self.dps_tracker.set_mem_damage(md)
+            ds = str(getattr(self.packet_bridge, '_data_source_mode', '') or '').lower()
+            self.dps_tracker.set_mem_primary(ds == 'memory')
+            try:
+                skills = {}
+                for u, _v in sorted(totals.items(), key=lambda x: -x[1])[:6]:
+                    sd = self._damage_reader.read_player_skill_damage(int(u))
+                    if sd:
+                        skills[int(u) >> 16] = sd
+                if skills:
+                    self.dps_tracker.set_mem_skill_damage(skills)
+            except Exception:
+                pass
+            if not self._mem_dmg_logged:
+                self._mem_dmg_logged = True
+                top = max(totals.items(), key=lambda x: x[1])
+                self._log(f"[MemBridge] MEM damage table live: {len(totals)} players; "
+                          f"top uuid={top[0]} (uid={top[0] >> 16}) = {top[1]:,}")
+        except Exception:
+            pass
 
     def stop(self):
         self._entity_stop.set()
