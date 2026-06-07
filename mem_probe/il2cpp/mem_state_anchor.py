@@ -186,24 +186,54 @@ class AnchorMemoryReader:
     # to private+readable.
     CHAR_SCAN_CHUNK = 8 * 1024 * 1024
     UID_SCAN_CHUNK = 16 * 1024 * 1024
+    # Half-width of the bounded re-acquisition window around the last-known base.
+    # A 4 MB half means a single <=8 MB read, sub-ms in the Cython scanner.
+    WINDOW_HALF_BYTES = 4 * 1024 * 1024
 
     def __init__(self, process: Optional[StarProcess] = None, max_scan_regions_mb: int = 0):
         self.pm = process or StarProcess()
         self._cached_regions = None
+        self._cached_ranked = None
         self._cache_ts = 0.0
         self._regen_ttl = 5.0
         self._resolved_cache: Optional[ResolvedSelf] = None
         self._resolved_cache_uid: int = 0
         self._resolved_cache_ts: float = 0.0
+        # klass-sentinel SESSION cache (in-memory only, never persisted to disk;
+        # the base address changes every game launch — see hybrid-base-discovery
+        # skill: no blindly-trusted cross-restart anchors).
+        self._resolved_cache_klass: int = 0
+        self._resolved_cache_pid: int = 0
+        self._resolved_cache_ga_base: int = 0
+        # Window-scan hints survive a cache drop so a moved object can be re-found
+        # cheaply near its previous neighbourhood before escalating to a full scan.
+        self._last_known_base: int = 0
+        self._last_known_uid: int = 0
         self.max_scan_regions_mb = max(0, int(max_scan_regions_mb or 0))
         self.last_region_scan_bytes: int = 0
         self.last_region_scan_limited: bool = False
+        # Telemetry for the data-source health panel.
+        self.last_scan_mode: str = "none"   # cache-hit | window-hit | full-scan | miss
+        self.last_scan_time_s: float = 0.0
+        self.last_confidence: float = 0.0
 
     def close(self):
         try:
             self.pm.close()
         except Exception:
             pass
+
+    def _ga_base(self) -> int:
+        """GameAssembly/main-module base for the current process (0 on failure).
+
+        Part of the session-cache invalidation set: a base change means the game
+        relaunched (ASLR), so any cached object address is stale.
+        """
+        try:
+            mod = self.pm.main_module()
+            return int(getattr(mod, "base", 0) or 0)
+        except Exception:
+            return 0
 
     def _regions(self):
         now = time.time()
@@ -220,10 +250,66 @@ class AnchorMemoryReader:
                 regions.append(region)
                 total_bytes += size
             self._cached_regions = regions
+            self._cached_ranked = None
             self.last_region_scan_bytes = total_bytes
             self.last_region_scan_limited = limited
             self._cache_ts = now
         return self._cached_regions
+
+    @staticmethod
+    def _score_region(region) -> float:
+        """Heuristic score: 'most-likely IL2CPP GC heap' first.
+
+        bdwgc super-blocks are large, committed, private, read-write regions.
+        Pure arithmetic on already-enumerated fields — no extra RPC. Higher =
+        scanned earlier; full-heap coverage is preserved (ranking only reorders).
+        """
+        size = max(0, int(getattr(region, "size", 0) or 0))
+        if bool(getattr(region, "is_image", False)):
+            return 0.0
+        # Size band dominates (cap at 256 MB so a few huge regions don't starve).
+        size_score = min(size, 256 * 1024 * 1024) / float(256 * 1024 * 1024)
+        score = size_score * 3.0
+        if size >= 4 * 1024 * 1024:
+            score += 0.5
+        # Protection: the managed heap is read-write.
+        protect = int(getattr(region, "protect", 0) or 0) & 0xFF
+        if protect == 0x04:            # PAGE_READWRITE
+            prot_factor = 1.0
+        elif protect in (0x02, 0x08):  # READONLY / WRITECOPY
+            prot_factor = 0.1
+        elif protect & 0xF0:           # any EXECUTE_* — code, not heap
+            prot_factor = 0.0001
+        else:
+            prot_factor = 0.3
+        score *= prot_factor
+        if size < 64 * 1024:           # tiny: stacks/TLS, deprioritise (not excluded)
+            score *= 0.25
+        return score
+
+    def _ranked_regions(self):
+        """`_regions()` ordered GC-heap-first; cached under the same TTL gate.
+
+        Stable sort → tie-break stays address order. The owning-region search
+        and full-heap fallback both still visit every region; this only changes
+        the order so a strong-anchor caller validates-and-stops sooner.
+        """
+        if self._cached_ranked is None:
+            self._cached_ranked = sorted(
+                list(self._regions()), key=self._score_region, reverse=True
+            )
+        return self._cached_ranked
+
+    def _owning_region(self, addr: int):
+        """Return the cached region containing ``addr`` (or None)."""
+        if not addr:
+            return None
+        for region in self._regions():
+            base = int(getattr(region, "base", 0) or 0)
+            size = int(getattr(region, "size", 0) or 0)
+            if base <= addr < base + size:
+                return region
+        return None
 
     def _read(self, addr: int, n: int) -> Optional[bytes]:
         return self.pm.read_bytes(addr, n)
@@ -350,7 +436,7 @@ class AnchorMemoryReader:
             return
         emitted = 0
         needle = int(anchor.uid) & 0xFFFFFFFFFFFFFFFF
-        for region in self._regions():
+        for region in self._ranked_regions():
             base = region.base
             size = region.size
             if size < 0x80:
@@ -481,98 +567,211 @@ class AnchorMemoryReader:
                 off += chunk
         return results
 
+    def _build_resolved(self, cs_base: int, info: dict, all_matched: Set[int],
+                        anchor_skills: Set[int], t0: float) -> ResolvedSelf:
+        conf = info['confidence']
+        if anchor_skills:
+            skill_conf = min(1.0, len(all_matched) / max(1, min(32, len(anchor_skills))))
+            conf = min(1.0, (conf * 0.65) + (skill_conf * 0.35))
+        return ResolvedSelf(
+            char_serialize_obj=cs_base,
+            user_fight_attr_obj=info['ufa'],
+            char_base_obj=info['cb'],
+            energy_item_obj=info['ei'],
+            role_level_obj=info['rl'],
+            profession_list_obj=info['pl'],
+            matched_skill_ids=all_matched,
+            scan_time_s=time.time() - t0,
+            confidence=conf,
+            used_anchors=info['used'],
+        )
+
+    def _validate_candidate(self, cs_base: int, anchor: AnchorPack,
+                            anchor_skills: Set[int], min_skill_matches: int,
+                            t0: float) -> Optional[ResolvedSelf]:
+        """Validate one CharSerialize candidate; shared by full + window scans."""
+        ok, info = self._validate_self(cs_base, anchor)
+        if not ok:
+            return None
+        all_matched = self._read_skill_matches_from_attr(info['ufa'], anchor_skills)
+        if len(all_matched) < min_skill_matches:
+            return None
+        return self._build_resolved(cs_base, info, all_matched, anchor_skills, t0)
+
+    # ---------- klass-sentinel SESSION cache (in-memory, PID-scoped) ----------
+
+    def _drop_cache(self) -> None:
+        self._resolved_cache = None
+        self._resolved_cache_uid = 0
+        self._resolved_cache_klass = 0
+        # NOTE: keep _last_known_base/_last_known_uid as a window-scan hint.
+
+    def _remember(self, anchor: AnchorPack, resolved: ResolvedSelf) -> None:
+        """Store the resolved self into the session cache + klass sentinel.
+
+        Honors the "no klass → no anchor" rule: if obj+0 is not a plausible heap
+        pointer we keep only the window hint and refuse to cache a base we cannot
+        validate. Never persisted to disk — the base is session-volatile (ASLR).
+        """
+        cs = int(resolved.char_serialize_obj or 0)
+        self._last_known_base = cs
+        self._last_known_uid = int(anchor.uid or 0)
+        klass = self._read_u64(cs)
+        if not self._plausible_ptr(klass):
+            self._drop_cache()
+            return
+        self._resolved_cache = resolved
+        self._resolved_cache_uid = int(anchor.uid or 0)
+        self._resolved_cache_ts = time.time()
+        self._resolved_cache_klass = int(klass)
+        try:
+            self._resolved_cache_pid = int(getattr(self.pm, "pid", 0) or 0)
+        except Exception:
+            self._resolved_cache_pid = 0
+        self._resolved_cache_ga_base = self._ga_base()
+
+    def _cache_check(self, anchor: AnchorPack, anchor_skills: Set[int],
+                     min_skill_matches: int, t0: float) -> Optional[ResolvedSelf]:
+        cached = self._resolved_cache
+        if cached is None or self._resolved_cache_uid != int(anchor.uid or 0):
+            return None
+        # PID guard — a relaunch is a different process.
+        if self._resolved_cache_pid:
+            try:
+                if int(getattr(self.pm, "pid", 0) or 0) != self._resolved_cache_pid:
+                    self._drop_cache(); return None
+            except Exception:
+                self._drop_cache(); return None
+        # ga_base guard — module rebased (ASLR / relaunch).
+        if self._resolved_cache_ga_base and self._ga_base() != self._resolved_cache_ga_base:
+            self._drop_cache(); return None
+        # KLASS SENTINEL — obj+0 must still equal the klass captured at resolve.
+        klass = self._read_u64(cached.char_serialize_obj)
+        if not klass or int(klass) != self._resolved_cache_klass:
+            self._drop_cache(); return None
+        # Semantic re-validation (CharId / HP / level / profession) + skill match.
+        ok, info = self._validate_self(cached.char_serialize_obj, anchor)
+        if not ok:
+            self._drop_cache(); return None
+        matched = self._read_skill_matches_from_attr(info['ufa'], anchor_skills)
+        if anchor_skills and not matched:
+            self._drop_cache(); return None
+        fresh = ResolvedSelf(
+            char_serialize_obj=cached.char_serialize_obj,
+            user_fight_attr_obj=info['ufa'],
+            char_base_obj=info['cb'],
+            energy_item_obj=info['ei'],
+            role_level_obj=info['rl'],
+            profession_list_obj=info['pl'],
+            matched_skill_ids=matched or cached.matched_skill_ids,
+            scan_time_s=time.time() - t0,
+            confidence=info['confidence'],
+            used_anchors=info['used'] + ', cache=hit',
+        )
+        self._resolved_cache = fresh
+        self._resolved_cache_ts = time.time()
+        self._last_known_base = int(cached.char_serialize_obj or 0)
+        return fresh
+
+    def reacquire_self(self, anchor: AnchorPack, hint_addr: int, *,
+                       window_bytes: Optional[int] = None) -> Optional[ResolvedSelf]:
+        """Bounded re-acquisition: scan a window around ``hint_addr``.
+
+        Used when the session cache is dropped (object moved within the heap) so
+        self is re-found cheaply near its previous neighbourhood before paying a
+        full ranked scan. Read-only; returns the first validated candidate, else
+        None (caller escalates to the ranked full scan).
+        """
+        if anchor.uid <= 0 or not self._plausible_ptr(hint_addr):
+            return None
+        region = self._owning_region(hint_addr)
+        if region is None:
+            return None
+        half = int(window_bytes if window_bytes else self.WINDOW_HALF_BYTES)
+        r_base = int(region.base)
+        r_end = r_base + int(region.size)
+        lo = max(r_base, hint_addr - half) & ~0x7
+        hi = min(r_end, hint_addr + half)
+        n = hi - lo
+        if n < 0x80:
+            return None
+        blob = self._read(lo, n)
+        if blob is None:
+            return None
+        anchor_skills = set(anchor.skill_level_ids)
+        min_skill_matches = 0
+        if anchor_skills:
+            min_skill_matches = min(8, max(2, len(anchor_skills) // 32))
+        t0 = time.time()
+        needle = int(anchor.uid) & 0xFFFFFFFFFFFFFFFF
+        for hit_off in _cy.find_aligned_u64(blob, needle, 256):
+            cs_base = lo + int(hit_off) - CHAR_SERIALIZE['CharId'][0]
+            if cs_base < r_base:
+                continue
+            resolved = self._validate_candidate(cs_base, anchor, anchor_skills,
+                                                 min_skill_matches, t0)
+            if resolved is not None:
+                return resolved
+        return None
+
+    def _finish_scan(self, anchor: AnchorPack, resolved: ResolvedSelf,
+                     mode: str, t0: float) -> ResolvedSelf:
+        self._remember(anchor, resolved)
+        self.last_scan_mode = mode
+        self.last_scan_time_s = time.time() - t0
+        self.last_confidence = float(getattr(resolved, "confidence", 0.0) or 0.0)
+        return resolved
+
     def find_self(self, anchor: AnchorPack) -> Optional[ResolvedSelf]:
         """Find the live player via anchor-driven scanning.
 
-        Strategy: use TCP-confirmed ``uid`` as the first hard anchor and scan
-        for ``CharSerialize.CharId`` with Cython.  Each candidate is then
-        validated through normal object pointers and finally through
-        ``UserFightAttr.CdInfo`` skill ids.  This avoids static RVA/klass
-        trust and also avoids the invalid old ``array_ptr - 0xE8`` formula:
-        ``CdInfo`` is a pointer to a RepeatedField object, not an inline
-        struct next to ``UserFightAttr``.
+        Order: (1) klass-sentinel session cache, (2) bounded window re-scan
+        around the last-known base, (3) GC-heap-first ranked full scan. The uid
+        (``CharSerialize.CharId`` at +0x10) is the first hard anchor; each
+        candidate is validated through object pointers and ``CdInfo`` skill ids.
+        No static RVA/klass trust; no persisted base (session-volatile, ASLR).
         """
         if anchor.uid <= 0:
+            self.last_scan_mode = "miss"
             return None
         t0 = time.time()
         anchor_skills = set(anchor.skill_level_ids)
         strong_anchor = anchor.is_strong()
-        cached = self._resolved_cache
-        if cached is not None and self._resolved_cache_uid == int(anchor.uid or 0):
-            ok, info = self._validate_self(cached.char_serialize_obj, anchor)
-            if ok:
-                matched = self._read_skill_matches_from_attr(info['ufa'], anchor_skills)
-                if not anchor_skills or matched:
-                    fresh = ResolvedSelf(
-                        char_serialize_obj=cached.char_serialize_obj,
-                        user_fight_attr_obj=info['ufa'],
-                        char_base_obj=info['cb'],
-                        energy_item_obj=info['ei'],
-                        role_level_obj=info['rl'],
-                        profession_list_obj=info['pl'],
-                        matched_skill_ids=matched or cached.matched_skill_ids,
-                        scan_time_s=time.time() - t0,
-                        confidence=info['confidence'],
-                        used_anchors=info['used'] + ', cache=hit',
-                    )
-                    self._resolved_cache = fresh
-                    self._resolved_cache_ts = time.time()
-                    return fresh
-            self._resolved_cache = None
-            self._resolved_cache_uid = 0
         min_skill_matches = 0
         if anchor_skills:
             min_skill_matches = min(8, max(2, len(anchor_skills) // 32))
 
-        def _build(cs_base: int, info: dict, all_matched: Set[int]) -> ResolvedSelf:
-            conf = info['confidence']
-            if anchor_skills:
-                skill_conf = min(1.0, len(all_matched) / max(1, min(32, len(anchor_skills))))
-                conf = min(1.0, (conf * 0.65) + (skill_conf * 0.35))
-            return ResolvedSelf(
-                char_serialize_obj=cs_base,
-                user_fight_attr_obj=info['ufa'],
-                char_base_obj=info['cb'],
-                energy_item_obj=info['ei'],
-                role_level_obj=info['rl'],
-                profession_list_obj=info['pl'],
-                matched_skill_ids=all_matched,
-                scan_time_s=time.time() - t0,
-                confidence=conf,
-                used_anchors=info['used'],
-            )
+        # 1) session cache (klass sentinel + PID/ga_base guards)
+        hit = self._cache_check(anchor, anchor_skills, min_skill_matches, t0)
+        if hit is not None:
+            return self._finish_scan(anchor, hit, "cache-hit", t0)
 
-        def _validate(cs_base: int) -> Optional[ResolvedSelf]:
-            ok, info = self._validate_self(cs_base, anchor)
-            if not ok:
-                return None
-            all_matched = self._read_skill_matches_from_attr(info['ufa'], anchor_skills)
-            if len(all_matched) < min_skill_matches:
-                return None
-            return _build(cs_base, info, all_matched)
+        # 2) bounded window re-acquisition around the last-known base
+        if self._last_known_base and self._last_known_uid == int(anchor.uid or 0):
+            win = self.reacquire_self(anchor, self._last_known_base)
+            if win is not None:
+                return self._finish_scan(anchor, win, "window-hit", t0)
 
+        # 3) GC-heap-first ranked full scan
         if strong_anchor:
-            # The uid is a plain i64, so in a multi-GB heap thousands of unrelated
-            # qwords collide with it (observed 1655 hits, the real CharSerialize at
-            # index #1108).  But a strong anchor adds a hard uid+hp+level+profession
-            # gate that only the live self can clear, so we scan lazily and return
-            # on the FIRST validated hit — stopping the heap sweep the moment self
-            # is found instead of always collecting every collision first.
+            # uid is a plain i64 so a multi-GB heap has thousands of collisions,
+            # but a strong anchor's uid+hp+level+profession gate is unique to the
+            # live self, so we scan lazily and return on the FIRST validated hit.
             for cs_base in self._iter_uid_candidates(anchor):
-                resolved = _validate(cs_base)
+                resolved = self._validate_candidate(cs_base, anchor, anchor_skills,
+                                                     min_skill_matches, t0)
                 if resolved is not None:
-                    self._resolved_cache = resolved
-                    self._resolved_cache_uid = int(anchor.uid or 0)
-                    self._resolved_cache_ts = time.time()
-                    return resolved
+                    return self._finish_scan(anchor, resolved, "full-scan", t0)
+            self.last_scan_mode = "miss"
+            self.last_scan_time_s = time.time() - t0
             return None
 
-        # Weak (uid-only) anchor: there is no hard level/profession gate, so a
-        # random uid-collision could pass the looser plausibility check.  Collect
-        # every candidate and keep the most plausible full snapshot.
+        # Weak (uid-only) anchor: no hard level/profession gate, so keep the most
+        # plausible full snapshot rather than the first collision.
         best: Optional[ResolvedSelf] = None
         for cs_base in self._iter_uid_candidates(anchor):
-            resolved = _validate(cs_base)
+            resolved = self._validate_candidate(cs_base, anchor, anchor_skills,
+                                                 min_skill_matches, t0)
             if resolved is None:
                 continue
             if best is None or resolved.confidence > best.confidence:
@@ -580,10 +779,9 @@ class AnchorMemoryReader:
                 if resolved.confidence >= 0.95:
                     break
         if best is not None:
-            self._resolved_cache = best
-            self._resolved_cache_uid = int(anchor.uid or 0)
-            self._resolved_cache_ts = time.time()
-            return best
+            return self._finish_scan(anchor, best, "full-scan", t0)
+        self.last_scan_mode = "miss"
+        self.last_scan_time_s = time.time() - t0
         return None
 
     def _validate_self(self, cs_base: int, anchor: AnchorPack) -> Tuple[bool, dict]:

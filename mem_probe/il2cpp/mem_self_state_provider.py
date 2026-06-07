@@ -344,10 +344,16 @@ class MemSelfStateProvider:
         reader = self._anchor_reader
         region_mb = 0.0
         limited = False
+        scan_mode = "none"
+        scan_time_ms = 0.0
+        scan_confidence = 0.0
         if reader is not None:
             try:
                 region_mb = round(float(getattr(reader, "last_region_scan_bytes", 0) or 0) / (1024 * 1024), 3)
                 limited = bool(getattr(reader, "last_region_scan_limited", False))
+                scan_mode = str(getattr(reader, "last_scan_mode", "none") or "none")
+                scan_time_ms = round(float(getattr(reader, "last_scan_time_s", 0.0) or 0.0) * 1000.0, 2)
+                scan_confidence = round(float(getattr(reader, "last_confidence", 0.0) or 0.0), 4)
             except Exception:
                 pass
         scan_in_progress = False
@@ -368,6 +374,9 @@ class MemSelfStateProvider:
             "provider_scan_in_progress": scan_in_progress,
             "provider_region_scan_mb": region_mb,
             "provider_region_scan_limited": limited,
+            "provider_scan_mode": scan_mode,
+            "provider_scan_time_ms": scan_time_ms,
+            "provider_scan_confidence": scan_confidence,
         }
 
 
