@@ -1436,6 +1436,19 @@ function _fmtNum(v) {
     return Math.round(v).toLocaleString();
 }
 
+// MEM cross-check badge: the game's own DamageDataMgr total, plus a drift % vs the TCP
+// figure (signals packet loss) -- shown only in hybrid (damage_source !== 'mem').
+function _memBadge(tcpAmount, entity) {
+    var mem = Number((entity && entity.mem_damage_total) || 0);
+    if (!mem) return '';
+    var txt = 'MEM ' + _fmtNum(mem);
+    if (entity.damage_source !== 'mem') {
+        var d = (Number(tcpAmount || 0) - mem) / mem;
+        if (Math.abs(d) >= 0.02) txt += ' Δ' + (d > 0 ? '+' : '') + Math.round(d * 100) + '%';
+    }
+    return ' · <span class="mem-badge">' + txt + '</span>';
+}
+
 function _fmtTime(s) {
     s = Number(s || 0);
     var mm = Math.floor(s / 60);
@@ -1820,7 +1833,7 @@ function _renderList() {
             +     '</div>'
             +     '<div class="entity-value">'
             +       '<div class="entity-value-main">' + _fmtNum(amount) + '</div>'
-            +       '<div class="entity-value-sub">' + _fmtNum(rate) + '/s · ' + _pct(pct) + ((_currentTab !== 'heal' && entity.mem_damage_total) ? ' · <span class="mem-badge">MEM ' + _fmtNum(entity.mem_damage_total) + '</span>' : '') + '</div>'
+            +       '<div class="entity-value-sub">' + _fmtNum(rate) + '/s · ' + _pct(pct) + _memBadge(amount, entity) + '</div>'
             +     '</div>'
             +   '</div>'
             + '</div>';
