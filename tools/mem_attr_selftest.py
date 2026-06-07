@@ -135,6 +135,59 @@ def check(name, cond):
         _fails.append(name)
 
 
+def test_entity_integration():
+    """F-C: synth ZEntity -> attrs_ -> calibrated ZAttrReader -> numeric fields."""
+    print("test_entity_integration (F-C)")
+    try:
+        from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader, EntitySnap
+    except Exception as exc:  # heavy import chain (StaticDpsSource); skip if unavailable
+        print(f"  [SKIP] mem_entity_mgr import failed: {exc}")
+        return
+
+    mem = FakeMem()
+    a_hp = _mk_imixattr(mem, KL_LONG, 3_000_000_000, LONG_VALUE_OFF, 8)
+    a_max = _mk_imixattr(mem, KL_LONG, 5_000_000_000, LONG_VALUE_OFF, 8)
+    a_stage = _mk_imixattr(mem, KL_INT, 2, INT_VALUE_OFF, 4)
+    a_over = _mk_imixattr(mem, KL_INT, 1, INT_VALUE_OFF, 4)
+    dict_addr = _mk_dict(mem, [
+        (HP, a_hp), (MAX_HP, a_max), (BREAKING_STAGE, a_stage), (IN_OVERDRIVE, a_over),
+    ])
+    attrs = _mk_attrs(mem, dict_addr)
+    # synth ZEntity (fdc7111b offsets)
+    ent = mem.alloc(0x140)
+    mem.wu64(ent + 0x48, attrs)     # attrs_
+    mem.w64(ent + 0xC0, 7777)       # Uuid
+    mem.w64(ent + 0xC8, 30100)      # ConfigUuid (template)
+    mem.w64(ent + 0xD8, 99)         # CharId
+    mem.w32(ent + 0x28, 1)          # entityState_
+
+    src = type("Src", (), {"sr": type("SR", (), {"pm": mem})(), "dump_id": "test"})()
+    emr = EntityMgrReader(src)
+
+    r = ZAttrReader(mem, ga_base=0x140000000)
+    n = emr.calibrate_attrs(ent, r, {MAX_HP: 5_000_000_000, HP: 3_000_000_000,
+                                     BREAKING_STAGE: 2, IN_OVERDRIVE: 1},
+                            ga_base=0x140000000)
+    check("calibrate_attrs via entity -> 2 klasses", n == 2)
+
+    snap = emr.read_entity_numeric(ent, r)
+    check("read_entity_numeric returns snap", snap is not None)
+    check("uuid read", snap and snap.uuid == 7777)
+    check("config_uuid (template) read", snap and snap.config_uuid == 30100)
+    check("cur_hp filled", snap and snap.cur_hp == 3_000_000_000)
+    check("max_hp filled", snap and snap.max_hp == 5_000_000_000)
+    check("breaking_stage filled", snap and snap.breaking_stage == 2)
+    check("in_overdrive filled", snap and snap.in_overdrive == 1)
+    check("attrs_read flag set", snap and snap.attrs_read is True)
+    check("hp_pct computed ~0.6", snap and abs(snap.hp_pct - 0.6) < 0.01)
+
+    # Without a reader -> v1 identity only, no numeric fill
+    snap2 = emr.read_entity_numeric(ent, None)
+    check("no reader -> attrs_read False", snap2 and snap2.attrs_read is False)
+    check("no reader -> cur_hp 0", snap2 and snap2.cur_hp == 0)
+    check("no reader -> still has uuid/config", snap2 and snap2.uuid == 7777 and snap2.config_uuid == 30100)
+
+
 def main():
     mem = FakeMem()
     # Boss-like attrs: HP/MAX_HP are <long> (need i64), stage/overdrive are <int>.
@@ -180,6 +233,8 @@ def main():
     r.calibrate(attrs, {}, ga_base=0x999000000)
     check("ga change clears calibration", r.is_calibrated(0x999000000) is False)
     check("read after invalidation -> empty", r.read_attrs(attrs, [HP, MAX_HP]) == {})
+
+    test_entity_integration()
 
     print()
     if _fails:

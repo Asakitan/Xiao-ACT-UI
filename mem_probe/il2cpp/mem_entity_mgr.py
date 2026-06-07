@@ -3,26 +3,29 @@
 通过堆扫描定位 ZEntityMgr 单例实例 (用已知 player_uuid 作锚点),
 然后读 bossDict_/monsterDict_/npcDict_ (.NET Dictionary<long, ZEntity>) 列出实体.
 
-ZEntityMgr 字段 (来自 dump @ ef9ef95a):
+ZEntityMgr 字段 (verified against dump fdc7111b):
   +0x10  long                       playerUuid_
   +0x18  PlayerEnt                  playerEnt_
   +0x28  Dictionary<long, ZEntity>  entityDict_
-  +0x68  Dictionary<long, ZEntity>  bossDict_         ← BOSS HP 主源
-  +0x70  Dictionary<long, ZEntity>  monsterDict_
-  +0x78  Dictionary<long, ZEntity>  npcDict_
+  +0x60  Dictionary<long, ZEntity>  bossDict_         ← BOSS HP 主源
+  +0x68  Dictionary<long, ZEntity>  monsterDict_
+  +0x70  Dictionary<long, ZEntity>  npcDict_
 
-ZEntity 字段:
-  +0x30  ZAttrCollection                              attrs_
+ZEntity 字段 (verified against dump fdc7111b):
+  +0x28  EEntityState                                 entityState_
+  +0x48  ZAttrCollection                              attrs_
   +0xC0  long                                         Uuid
-  +0xD8  long                                         CharId    (ConfigUuid @ +0xC8)
+  +0xC8  long                                         ConfigUuid  (template id → 名字表)
+  +0xD8  long                                         CharId
 
-ZAttrCollection (HP 数据走 attrs):
-  +0x18  ZAttrCacheSlim   cacheSlim_   (含 _values: ValueTuple<uint, object[]>[])
-  +0x28  Dictionary<uint, IMixAttr>  mixItemDict_
+ZAttrCollection (HP/状态/仇恨等数值走 attrs):
+  +0x18  ZAttrCacheSlim              cacheSlim_   (Burst/SIMD cache — 不解码)
+  +0x28  Dictionary<uint, IMixAttr>  mixItemDict_  ← 由 mem_attr_reader.ZAttrReader 解码
 
-⚠ 当前未做 ZAttrCacheSlim 解码 (索引部分 IntPtr → 需要本地结构推断),
-故本模块 v1 只输出: uuid + entType + 是否激活 (entityState_).
-HP 字段后续追加.
+v2: 接入 ZAttrReader 后可输出 HP/MaxHp/breaking_stage/extinction/stunned/overdrive/
+hated_char 等数值 (attr id = packet_parser.enums.AttrType)。ZAttr 的 Value 偏移随
+ZMixAttr<T> 的 T 变化, 故 ZAttrReader 在运行时用 TCP 已知值按 klass 标定一次。
+未提供/未标定 reader 时退回 v1 行为 (uuid + config_uuid + state)。
 """
 from __future__ import annotations
 
@@ -64,11 +67,28 @@ ENTRY_KEY_OFF = 8
 ENTRY_VAL_OFF = 16
 ENTRY_SIZE = 24
 
-# ZEntity 字段
+# ZEntity 字段 (fdc7111b)
 ENT_UUID_OFF = 0xC0
+ENT_CONFIG_OFF = 0xC8   # ConfigUuid — template/config id (→ 名字表)
 ENT_CHARID_OFF = 0xD8
-ENT_ATTRS_OFF = 0x48   # attrs_ 字段在 dump 里看到 +0x48 ZAttrCollection
+ENT_ATTRS_OFF = 0x48    # attrs_ → ZAttrCollection
 ENT_STATE_OFF = 0x28
+
+# Combat attribute ids (== packet_parser.enums.AttrType) read via ZAttrReader.
+A_HP = 11310
+A_MAX_HP = 11320
+A_MAX_EXTINCTION = 440
+A_EXTINCTION = 441
+A_MAX_STUNNED = 442
+A_STUNNED = 443
+A_IN_OVERDRIVE = 444
+A_BREAKING_STAGE = 455
+A_HATED_CHAR_ID = 471
+A_SKILL_ID = 0x64       # current/triggered skill id
+_ENTITY_NUMERIC_ATTRS = (
+    A_HP, A_MAX_HP, A_MAX_EXTINCTION, A_EXTINCTION, A_MAX_STUNNED, A_STUNNED,
+    A_IN_OVERDRIVE, A_BREAKING_STAGE, A_HATED_CHAR_ID, A_SKILL_ID,
+)
 
 
 @dataclass
@@ -77,9 +97,23 @@ class EntitySnap:
     char_id: int = 0
     state: int = 0
     obj_addr: int = 0
-    # HP 占位 — 待 ZAttrCacheSlim 解码后填
+    config_uuid: int = 0          # template id → 名字表
+    # 数值字段 (经 ZAttrReader 解码; reader 未标定时保持 0/None)
     cur_hp: int = 0
     max_hp: int = 0
+    breaking_stage: int = 0
+    extinction: int = 0
+    max_extinction: int = 0
+    stunned: int = 0
+    max_stunned: int = 0
+    in_overdrive: int = 0
+    hated_char_id: int = 0
+    cast_skill_id: int = 0
+    attrs_read: bool = False      # True if ZAttr numeric fields were filled
+
+    @property
+    def hp_pct(self) -> float:
+        return (float(self.cur_hp) / float(self.max_hp)) if self.max_hp > 0 else 0.0
 
 
 @dataclass
@@ -265,13 +299,81 @@ class EntityMgrReader:
         pm = self._src.sr.pm
         try:
             uuid = pm.read_i64(ent_addr + ENT_UUID_OFF) or 0
+            cfg = pm.read_i64(ent_addr + ENT_CONFIG_OFF) or 0
             cid = pm.read_i64(ent_addr + ENT_CHARID_OFF) or 0
             st = pm.read_i32(ent_addr + ENT_STATE_OFF) or 0
         except Exception:
             return None
         if uuid <= 0:
             return None
-        return EntitySnap(uuid=uuid, char_id=cid, state=st, obj_addr=ent_addr)
+        return EntitySnap(uuid=uuid, char_id=cid, state=st, obj_addr=ent_addr,
+                          config_uuid=cfg)
+
+    # ---------- v2: ZAttr 数值 ----------
+
+    def _entity_attrs_obj(self, ent_addr: int) -> int:
+        """Return the entity's ``ZAttrCollection`` pointer (attrs_ @ +0x48)."""
+        if not ent_addr:
+            return 0
+        try:
+            return int(self._src.sr.pm.read_u64(ent_addr + ENT_ATTRS_OFF) or 0)
+        except Exception:
+            return 0
+
+    def calibrate_attrs(self, ent_addr: int, attr_reader, known: dict,
+                        ga_base: int = 0) -> int:
+        """Calibrate ``attr_reader`` against this entity using TCP-known values.
+
+        ``known`` = ``{attr_id: expected_value}`` (e.g. ``{A_MAX_HP: boss_max_hp}``
+        from the TCP parser). Returns the number of klasses calibrated. Done once
+        per session; the reader then decodes every same-typed attr.
+        """
+        attrs = self._entity_attrs_obj(ent_addr)
+        if not attrs or attr_reader is None:
+            return 0
+        try:
+            return int(attr_reader.calibrate(attrs, known, ga_base=ga_base) or 0)
+        except Exception:
+            return 0
+
+    def fill_entity_numeric(self, snap: EntitySnap, attr_reader) -> EntitySnap:
+        """Fill ``snap``'s numeric fields from memory via a calibrated reader.
+
+        No-op (leaves zeros, ``attrs_read=False``) when the reader is missing or
+        not yet calibrated — callers then fall back to TCP for those fields.
+        """
+        if snap is None or attr_reader is None or not snap.obj_addr:
+            return snap
+        attrs = self._entity_attrs_obj(snap.obj_addr)
+        if not attrs:
+            return snap
+        try:
+            vals = attr_reader.read_attrs(attrs, _ENTITY_NUMERIC_ATTRS)
+        except Exception:
+            return snap
+        if not vals:
+            return snap
+        snap.cur_hp = int(vals.get(A_HP, 0) or 0)
+        snap.max_hp = int(vals.get(A_MAX_HP, 0) or 0)
+        snap.breaking_stage = int(vals.get(A_BREAKING_STAGE, 0) or 0)
+        snap.extinction = int(vals.get(A_EXTINCTION, 0) or 0)
+        snap.max_extinction = int(vals.get(A_MAX_EXTINCTION, 0) or 0)
+        snap.stunned = int(vals.get(A_STUNNED, 0) or 0)
+        snap.max_stunned = int(vals.get(A_MAX_STUNNED, 0) or 0)
+        snap.in_overdrive = int(vals.get(A_IN_OVERDRIVE, 0) or 0)
+        snap.hated_char_id = int(vals.get(A_HATED_CHAR_ID, 0) or 0)
+        snap.cast_skill_id = int(vals.get(A_SKILL_ID, 0) or 0)
+        snap.attrs_read = True
+        return snap
+
+    def read_entity_numeric(self, ent_addr: int, attr_reader=None) -> Optional[EntitySnap]:
+        """Read one entity with v1 identity + (if reader calibrated) numeric attrs."""
+        snap = self._read_entity(ent_addr)
+        if snap is None:
+            return None
+        if attr_reader is not None:
+            self.fill_entity_numeric(snap, attr_reader)
+        return snap
 
     def read(self, player_uuid: int, force_rescan: bool = False,
              include_monsters: bool = False, include_npcs: bool = False) -> Optional[EntityMgrSnap]:
