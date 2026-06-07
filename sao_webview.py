@@ -97,6 +97,8 @@ from act_platform.runtime import (
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_hotkeys,
+    act_plugin_import,
+    act_plugin_import_dialog,
     act_plugin_list,
     act_plugin_menu,
     act_plugin_pin,
@@ -106,6 +108,7 @@ from act_platform.runtime import (
     act_plugin_ui_action,
     act_plugin_ui_panels,
     act_plugin_ui_render,
+    act_plugin_uninstall,
     act_render_apply_hooks,
     act_render_overlays,
     act_render_surfaces,
@@ -768,6 +771,18 @@ class SAOWebAPI:
 
     def pin_plugin(self, plugin_id, pinned=True):
         return json.dumps(act_plugin_pin(self._g, str(plugin_id or ''), bool(pinned)), ensure_ascii=False)
+
+    def import_plugin_dialog(self):
+        """Open a native file picker for a .zip plugin and one-click import it."""
+        return json.dumps(act_plugin_import_dialog(self._g), ensure_ascii=False)
+
+    def import_plugin(self, archive_path=''):
+        """Import a .zip plugin by path (no dialog)."""
+        return json.dumps(act_plugin_import(self._g, str(archive_path or '')), ensure_ascii=False)
+
+    def uninstall_plugin(self, plugin_id):
+        """Uninstall a user-installed plugin (delete its user_plugins dir)."""
+        return json.dumps(act_plugin_uninstall(self._g, str(plugin_id or '')), ensure_ascii=False)
 
     def get_plugin_hotkeys(self):
         return json.dumps(act_plugin_hotkeys(self._g), ensure_ascii=False)

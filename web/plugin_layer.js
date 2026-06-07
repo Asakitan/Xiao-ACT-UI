@@ -114,7 +114,60 @@
             return b;
         }
         if (t === "table") return renderTable(node);
+        if (t === "canvas") return renderCanvas(node);
         return null;
+    }
+
+    function canvasColor(c, dflt) {
+        if (!c) return dflt || "";
+        c = String(c);
+        if (c.charAt(0) === "#") return c;
+        var map = {
+            white: "#f3f5f7", black: "#1b1f24", grid: "rgba(117,205,255,.20)",
+            bg: "", body: "", border: "rgba(117,205,255,.34)", sep: "rgba(117,205,255,.20)",
+            header: "rgba(18,31,47,.82)", transparent: "",
+            title: "#ffd46f", subtitle: "#73d7ff", value: "#e8f6ff", label: "#9fc0d8",
+            muted: "#9fc0d8", gold: "#ffd46f", accent: "#73d7ff", cyan: "#73d7ff",
+            ok: "#7df2bf", heal: "#7df2bf", warn: "#ffd46f", bad: "#ff6b82", mono: "#e8f6ff"
+        };
+        return map.hasOwnProperty(c.toLowerCase()) ? map[c.toLowerCase()] : (dflt || "");
+    }
+
+    function renderCanvas(node) {
+        var w = +node.width || 1, h = +node.height || 1;
+        var wrap = el("div", "splg-canvaswrap");
+        var cnv = document.createElement("canvas");
+        cnv.width = w; cnv.height = h;
+        cnv.style.maxWidth = "100%";
+        var ctx = cnv.getContext("2d");
+        var bg = canvasColor(node.bg, "");
+        if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h); }
+        (node.ops || []).forEach(function (op) {
+            var k = op.op, fill, outline;
+            if (k === "rect") {
+                fill = canvasColor(op.fill, ""); outline = canvasColor(op.outline, "");
+                if (fill) { ctx.fillStyle = fill; ctx.fillRect(op.x, op.y, op.w, op.h); }
+                if (outline) { ctx.strokeStyle = outline; ctx.lineWidth = op.width || 1; ctx.strokeRect(op.x, op.y, op.w, op.h); }
+            } else if (k === "oval") {
+                fill = canvasColor(op.fill, ""); outline = canvasColor(op.outline, "");
+                ctx.beginPath();
+                ctx.ellipse(op.x + op.w / 2, op.y + op.h / 2, Math.max(0, op.w / 2), Math.max(0, op.h / 2), 0, 0, 2 * Math.PI);
+                if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+                if (outline) { ctx.strokeStyle = outline; ctx.lineWidth = op.width || 1; ctx.stroke(); }
+            } else if (k === "line") {
+                ctx.strokeStyle = canvasColor(op.fill, "#e8f6ff"); ctx.lineWidth = op.width || 1;
+                ctx.beginPath(); ctx.moveTo(op.x1, op.y1); ctx.lineTo(op.x2, op.y2); ctx.stroke();
+            } else if (k === "text") {
+                ctx.fillStyle = canvasColor(op.fill, "#e8f6ff");
+                ctx.font = (op.bold ? "bold " : "") + (op.size || 10) + "px 'Segoe UI',sans-serif";
+                var a = op.anchor || "nw";
+                ctx.textAlign = a.indexOf("e") >= 0 ? "right" : ((a === "n" || a === "s" || a === "center") ? "center" : "left");
+                ctx.textBaseline = a.indexOf("s") >= 0 ? "bottom" : ((a === "center" || a === "w" || a === "e") ? "middle" : "top");
+                ctx.fillText(String(op.text || ""), op.x, op.y);
+            }
+        });
+        wrap.appendChild(cnv);
+        return wrap;
     }
 
     function renderTable(node) {
@@ -196,7 +249,8 @@
             ".splg-table{width:100%;border-collapse:collapse;font-size:12px;}",
             ".splg-table th{color:#9fc0d8;font-weight:700;text-align:left;padding:2px 6px;border-bottom:1px solid rgba(117,205,255,.2);}",
             ".splg-table td{color:#e8f6ff;padding:2px 6px;}.splg-row-hi td{color:#ffd46f;font-weight:700;}",
-            ".splg-tabtitle{color:#9fc0d8;font-weight:700;font-size:12px;margin:4px 0 2px;}"
+            ".splg-tabtitle{color:#9fc0d8;font-weight:700;font-size:12px;margin:4px 0 2px;}",
+            ".splg-canvaswrap{margin:4px 0;overflow-x:auto;}.splg-canvaswrap canvas{display:block;border-radius:6px;}"
         ].join("\n");
         var st = el("style");
         st.id = "sao-plugin-layer-style";

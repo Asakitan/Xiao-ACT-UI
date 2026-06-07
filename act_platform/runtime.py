@@ -44,6 +44,7 @@ def _aggregate_dimension(summary: Mapping[str, Any], rows: list[dict[str, Any]],
         return aggregate_by_field(rows, group_field, top_n=top_n)
     return list(summary.get("skill_damage") or [])
 
+from . import native_dialog, plugin_deps, plugin_install
 from .event_bus import EventBus
 from .plugins import PluginManager
 from .selective_parsing import normalize_policy, should_record_event
@@ -267,9 +268,15 @@ def build_plugin_manager(
         snapshot_provider=snapshot_provider,
         owner_provider=owner_provider,
         settings=settings,
+        user_plugin_dirs=[os.path.join(base_dir, "user_plugins")],
     )
     manager.discover()
     return manager
+
+
+def _user_plugins_dir() -> str:
+    """The update-safe, writable dir where one-click-imported plugins live."""
+    return os.path.join(project_base_dir(), "user_plugins")
 
 
 def ensure_act_plugin_manager(owner: Any, *, load: bool = False,
@@ -500,6 +507,120 @@ def act_plugin_reload(owner: Any, plugin_id: str = "") -> dict[str, Any]:
         return manager.reload_all()
     except Exception as exc:
         return {"ok": False, "message": str(exc)}
+
+
+def act_plugin_import(owner: Any, archive_path: str, *, enable: bool = True) -> dict[str, Any]:
+    """一键导入：把一个 ``.zip`` 插件包装进 ``user_plugins/`` 并（默认）启用即用。
+
+    纯 Python 插件无需编译——加载器在 dev 与 onedir 冻结态都直接运行时 import 原始
+    ``.py``。带原生扩展(.pyd)或第三方依赖的插件需由**作者**预编译 / vendor 进包。
+    流程：安装(防穿越解压→user_plugins/<id>) → 依赖引导 → 单插件 refresh(不动其他
+    有状态插件) → 启用加载 → 回状态。
+    """
+    archive_path = str(archive_path or "").strip()
+    if not archive_path:
+        return {"ok": False, "message": "未提供插件包路径", "errors": ["no path"]}
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "errors": [str(exc)]}
+
+    result = plugin_install.install_plugin_archive(archive_path, _user_plugins_dir())
+    if not result.get("ok"):
+        return result
+
+    plugin_id = str(result.get("id") or "")
+    installed_path = str(result.get("path") or "")
+
+    # 首次加载前满足插件声明的依赖(dev: pip→libs；冻结: 仅 vendor/libs)。尽力而为，
+    # 依赖缺失只提示不阻断导入(插件可能本就不需要、或主程序已带)。
+    deps: dict[str, Any] = {}
+    try:
+        deps = plugin_deps.ensure_requirements(installed_path, install=True).get("deps") or {}
+    except Exception as exc:
+        deps = {"_error": str(exc)}
+
+    loaded = False
+    load_error = ""
+    try:
+        manager.refresh_plugin(installed_path)
+        if enable:
+            manager.enable_plugin(plugin_id)
+            for plug in manager.list_plugins():
+                if str(plug.get("id")) == plugin_id:
+                    loaded = bool(plug.get("active"))
+                    load_error = str(plug.get("last_error") or "")
+                    break
+    except Exception as exc:
+        load_error = str(exc)
+
+    try:
+        status = manager.status()
+    except Exception:
+        status = {}
+
+    missing = [k for k, v in deps.items() if v == "missing"] if isinstance(deps, dict) else []
+    ok = bool(result.get("ok") and (loaded or not enable) and not load_error)
+    message = str(result.get("message") or "")
+    if load_error:
+        message = f"已导入但加载失败: {load_error}"
+    elif missing:
+        message = (message + f"  ⚠ 缺少依赖 {', '.join(missing)}(需作者 vendor 进包)").strip()
+    return {
+        "ok": ok,
+        "id": plugin_id,
+        "name": result.get("name"),
+        "version": result.get("version"),
+        "path": installed_path,
+        "replaced": bool(result.get("replaced")),
+        "enabled": bool(enable),
+        "loaded": loaded,
+        "deps": deps,
+        "load_error": load_error,
+        "message": message,
+        "status": status,
+        "errors": [load_error] if load_error else [],
+    }
+
+
+def act_plugin_import_dialog(owner: Any) -> dict[str, Any]:
+    """弹原生文件选择器选 ``.zip`` 插件包并导入(Entity / WebView 两端均可)。"""
+    try:
+        path = native_dialog.open_plugin_archive(initial_dir=_user_plugins_dir())
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "errors": [str(exc)]}
+    if not path:
+        return {"ok": False, "cancelled": True, "message": "已取消导入", "errors": []}
+    return act_plugin_import(owner, path)
+
+
+def act_plugin_uninstall(owner: Any, plugin_id: str) -> dict[str, Any]:
+    """卸载一个**用户安装**的插件(卸载并删除其 user_plugins 目录)。内置插件不可删。"""
+    plugin_id = str(plugin_id or "").strip()
+    if not plugin_id:
+        return {"ok": False, "message": "未提供插件 id", "errors": ["no id"]}
+    try:
+        manager = ensure_act_plugin_manager(owner, load=True)
+    except Exception as exc:
+        return {"ok": False, "message": str(exc), "errors": [str(exc)]}
+    if not manager.is_user_plugin(plugin_id):
+        return {"ok": False, "id": plugin_id, "message": "内置插件不可卸载(只能禁用)",
+                "errors": ["builtin plugin not removable"]}
+    path = ""
+    for plug in manager.list_plugins():
+        if str(plug.get("id")) == plugin_id:
+            path = str(plug.get("path") or "")
+            break
+    manager.forget_plugin(plugin_id)  # unload + drop record (releases subs/timers)
+    result = plugin_install.remove_installed_plugin(path, _user_plugins_dir())
+    if not result.get("ok"):
+        return result
+    try:
+        status = manager.status()
+    except Exception:
+        status = {}
+    return {"ok": True, "id": plugin_id, "message": result.get("message") or "已卸载插件",
+            "status": status, "errors": []}
 
 
 def act_plugin_menu(owner: Any) -> dict[str, Any]:
@@ -4023,6 +4144,9 @@ __all__ = [
     "act_plugin_list",
     "act_plugin_reload",
     "act_plugin_status",
+    "act_plugin_import",
+    "act_plugin_import_dialog",
+    "act_plugin_uninstall",
     "act_plugin_menu",
     "act_plugin_pin",
     "act_plugin_hotkeys",

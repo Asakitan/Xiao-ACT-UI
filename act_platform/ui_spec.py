@@ -25,6 +25,7 @@ misbehaving plugin cannot bloat or crash the UI thread.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable, List, Mapping, Optional
 
 UI_SPEC_VERSION = 1
@@ -36,6 +37,8 @@ MAX_TABLE_ROWS = 200
 MAX_TABLE_COLS = 16
 MAX_TEXT_LEN = 4000
 MAX_TITLE_LEN = 200
+MAX_CANVAS_OPS = 4000
+MAX_CANVAS_DIM = 4096
 
 # Style tokens understood by *both* renderers (Tk maps to colors, web to CSS classes).
 TEXT_STYLES = (
@@ -49,8 +52,17 @@ ALIGNS = ("left", "center", "right")
 
 # Container + leaf node kinds.
 CONTAINER_KINDS = ("panel", "section", "card", "row", "group")
-LEAF_KINDS = ("text", "kv", "bar", "badge", "divider", "spacer", "button", "table")
+LEAF_KINDS = ("text", "kv", "bar", "badge", "divider", "spacer", "button", "table", "canvas")
 NODE_KINDS = CONTAINER_KINDS + LEAF_KINDS
+
+# Free-form 2D drawing (piano keyboards, note rolls, meters…). Ops are a tiny
+# fixed vocabulary both renderers understand; colors are theme tokens or #hex.
+CANVAS_OPS = ("rect", "oval", "line", "text")
+_HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+CANVAS_COLOR_TOKENS = set(TEXT_STYLES) | set(BAR_COLORS) | {
+    "white", "black", "bg", "body", "border", "sep", "grid", "header", "transparent",
+}
+CANVAS_ANCHORS = ("nw", "n", "ne", "w", "center", "e", "sw", "s", "se")
 
 
 def _s(value: Any, limit: int = MAX_TEXT_LEN) -> str:
@@ -81,6 +93,68 @@ def _json_scalar(value: Any) -> Any:
     if isinstance(value, (int, float)):
         return value
     return _s(value)
+
+
+def _ci(value: Any, default: int = 0) -> int:
+    try:
+        num = float(value)
+        if num != num:  # NaN
+            return default
+        return int(round(num))
+    except Exception:
+        return default
+
+
+def _canvas_color(value: Any, default: str = "") -> str:
+    """A canvas color: ``#rgb``/``#rrggbb`` passes through; else a theme token."""
+    text = str(value or "").strip()
+    if not text:
+        return default
+    if _HEX_RE.match(text):
+        return text
+    low = text.lower()
+    return low if low in CANVAS_COLOR_TOKENS else default
+
+
+def _normalize_canvas(node: Mapping[str, Any]) -> dict:
+    width = max(1, min(MAX_CANVAS_DIM, _ci(node.get("width"), 320)))
+    height = max(1, min(MAX_CANVAS_DIM, _ci(node.get("height"), 160)))
+    ops: List[dict] = []
+    raw_ops = node.get("ops")
+    if isinstance(raw_ops, (list, tuple)):
+        for op in list(raw_ops)[:MAX_CANVAS_OPS]:
+            if not isinstance(op, Mapping):
+                continue
+            kind = str(op.get("op") or "").strip().lower()
+            if kind in ("rect", "oval"):
+                ops.append({
+                    "op": kind,
+                    "x": _ci(op.get("x")), "y": _ci(op.get("y")),
+                    "w": max(0, _ci(op.get("w"))), "h": max(0, _ci(op.get("h"))),
+                    "fill": _canvas_color(op.get("fill")),
+                    "outline": _canvas_color(op.get("outline")),
+                    "width": max(0, min(20, _ci(op.get("width"), 0))),
+                })
+            elif kind == "line":
+                ops.append({
+                    "op": "line",
+                    "x1": _ci(op.get("x1")), "y1": _ci(op.get("y1")),
+                    "x2": _ci(op.get("x2")), "y2": _ci(op.get("y2")),
+                    "fill": _canvas_color(op.get("fill"), "value"),
+                    "width": max(1, min(20, _ci(op.get("width"), 1))),
+                })
+            elif kind == "text":
+                ops.append({
+                    "op": "text",
+                    "x": _ci(op.get("x")), "y": _ci(op.get("y")),
+                    "text": _s(op.get("text"), 200),
+                    "fill": _canvas_color(op.get("fill"), "value"),
+                    "size": max(6, min(48, _ci(op.get("size"), 10))),
+                    "anchor": _choice(op.get("anchor"), CANVAS_ANCHORS, "nw"),
+                    "bold": bool(op.get("bold")),
+                })
+    return {"type": "canvas", "width": width, "height": height,
+            "bg": _canvas_color(node.get("bg"), "body"), "ops": ops}
 
 
 # ── Normalization ────────────────────────────────────────────────────────────
@@ -220,6 +294,8 @@ def _normalize_node(node: Any, depth: int, budget: list[int]) -> Optional[dict]:
         return out
     if kind == "table":
         return _normalize_table(node)
+    if kind == "canvas":
+        return _normalize_canvas(node)
     return None
 
 
@@ -338,6 +414,36 @@ class UI:
               highlight_key: str = "", title: Any = "") -> dict:
         return {"type": "table", "columns": list(columns or []), "rows": list(rows or []),
                 "highlight_key": _s(highlight_key, 80), "title": _s(title, MAX_TITLE_LEN)}
+
+    # ── free-form 2D drawing (piano keyboards, note rolls, meters…) ──────────
+    @staticmethod
+    def canvas(width: int, height: int, ops: Optional[Iterable[Any]] = None,
+               bg: str = "body") -> dict:
+        """A drawing surface. ``ops`` are op dicts (see :meth:`rect`/:meth:`line`/
+        :meth:`ctext`); colors are theme tokens (accent/gold/ok/white/black/…) or
+        ``#hex``. Rendered identically on Tk and WebView."""
+        return {"type": "canvas", "width": int(width), "height": int(height),
+                "bg": bg, "ops": list(ops or [])}
+
+    @staticmethod
+    def rect(x, y, w, h, fill: str = "", outline: str = "", width: int = 0) -> dict:
+        return {"op": "rect", "x": x, "y": y, "w": w, "h": h,
+                "fill": fill, "outline": outline, "width": width}
+
+    @staticmethod
+    def oval(x, y, w, h, fill: str = "", outline: str = "", width: int = 0) -> dict:
+        return {"op": "oval", "x": x, "y": y, "w": w, "h": h,
+                "fill": fill, "outline": outline, "width": width}
+
+    @staticmethod
+    def line(x1, y1, x2, y2, fill: str = "value", width: int = 1) -> dict:
+        return {"op": "line", "x1": x1, "y1": y1, "x2": x2, "y2": y2, "fill": fill, "width": width}
+
+    @staticmethod
+    def ctext(x, y, text: Any, fill: str = "value", size: int = 10,
+              anchor: str = "nw", bold: bool = False) -> dict:
+        return {"op": "text", "x": x, "y": y, "text": _s(text, 200),
+                "fill": fill, "size": size, "anchor": anchor, "bold": bool(bold)}
 
 
 __all__ = [

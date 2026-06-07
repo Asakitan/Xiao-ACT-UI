@@ -57,6 +57,9 @@ _ENGINE_HANDLE_ALIASES: dict[str, tuple[str, ...]] = {
 _RUNTIME_ACTION_ALIASES: dict[str, str] = {
     "plugin_status": "act_plugin_status",
     "plugin_list": "act_plugin_list",
+    "plugin_import": "act_plugin_import",
+    "plugin_import_dialog": "act_plugin_import_dialog",
+    "plugin_uninstall": "act_plugin_uninstall",
     "history_status": "act_history_status",
     "history_load": "act_history_load",
     "history_delete": "act_history_delete",
@@ -233,6 +236,23 @@ def _normalize_extension(kind: str, plugin_id: str, extension_id: Any,
                 normalized[key] = float(value)
             except Exception:
                 pass
+    # Window-size hints for panels opened in their own host window (ui_panels).
+    # A plugin may declare these on register_ui_panel; the host uses them and
+    # falls back to its default when absent (see PluginContext.open_window).
+    for key in ("width", "height", "min_width", "min_height"):
+        value = src.get(key)
+        if value is not None:
+            try:
+                normalized[key] = max(0, int(value))
+            except Exception:
+                pass
+    # ``hidden`` panels are registered (renderable + summonable via
+    # ctx.open_window) but NOT listed as separate entries — a plugin's
+    # sub-panels live under the plugin, summoned by its own primary panel.
+    # ``primary`` marks the panel a host opens by default for the whole plugin.
+    for key in ("hidden", "primary"):
+        if src.get(key) is not None:
+            normalized[key] = bool(src.get(key))
     for key in ("schema", "settings_schema"):
         value = src.get(key)
         if isinstance(value, Mapping):
@@ -264,6 +284,11 @@ class PluginRecord:
     extensions: dict[str, list[str]] = field(default_factory=dict)
     logs: list[str] = field(default_factory=list)
     loaded_local_modules: list[str] = field(default_factory=list)
+    #: sys.path entries this plugin added (its own vendor/ + libs/, plus any
+    #: ctx.ensure_requirements paths). Restored on unload so deps don't leak.
+    added_sys_paths: list[str] = field(default_factory=list)
+    #: {dist: 'libs'|'vendor'|'pip→libs'|'site(fallback)'|'missing'} after deps bootstrap.
+    deps_summary: dict[str, str] = field(default_factory=dict)
 
     def to_status(self) -> dict[str, Any]:
         return {
@@ -290,6 +315,7 @@ class PluginRecord:
             "subscription_count": len(self.subscriptions),
             "extensions": {kind: list(ids) for kind, ids in sorted(self.extensions.items()) if ids},
             "extension_count": sum(len(ids) for ids in self.extensions.values()),
+            "deps": dict(self.deps_summary),
             "logs": list(self.logs[-20:]),
         }
 
@@ -661,6 +687,23 @@ class PluginContext:
             "reason": str(reason or ""),
         })
 
+    def open_window(self, panel_id: str = "", width: int = 0, height: int = 0) -> dict[str, Any]:
+        """Ask the host to open one of this plugin's panels in its own window.
+
+        ``panel_id`` selects which registered ``ui_panel`` to show (defaults to
+        the plugin's primary panel); ``width``/``height`` override the panel's
+        declared size for this window (0 = use the panel meta size, else the host
+        default). The host opens a real, freely-movable window — not an in-place
+        view. Entity mode opens a detached Tk window; both renderers listen for
+        the emitted ``plugin_open_window`` event.
+        """
+        return self.emit("plugin_open_window", {
+            "plugin_id": self._record.plugin_id,
+            "panel_id": str(panel_id or ""),
+            "width": max(0, int(width or 0)),
+            "height": max(0, int(height or 0)),
+        })
+
     # ── schedulers / loops (timing primitives for heavy plugins) ──────────
     def set_interval(self, callback: Callable[[], Any], seconds: float) -> str:
         """Call ``callback`` every ``seconds`` on a daemon thread until cleared."""
@@ -747,6 +790,26 @@ class PluginContext:
             except Exception:
                 pass
         return self.notify("PLUGIN", str(message), duration_s=3.0)
+
+    def ensure_requirements(self, install: bool = True) -> dict[str, Any]:
+        """Satisfy this plugin's ``requirements.txt`` from its own ``vendor/``/``libs/``.
+
+        Generalized dependency bootstrap (see :mod:`act_platform.plugin_deps`):
+        prepends the plugin's ``engine/`` ``libs/`` ``vendor/`` to ``sys.path`` so
+        a bundled (vendored) pure-Python dep imports without touching the global
+        site-packages; in a non-frozen dev tree it can ``pip install --target``
+        into ``libs/`` first. Paths are restored on unload. ``install=False``
+        skips the pip step (validate/path-prepend only).
+        """
+        from . import plugin_deps
+        rec = plugin_deps.ensure_requirements(self._record.path, log=self.log, install=bool(install))
+        for path in rec.get("added", []) or []:
+            if path not in self._record.added_sys_paths:
+                self._record.added_sys_paths.append(path)
+        deps = rec.get("deps")
+        if isinstance(deps, Mapping):
+            self._record.deps_summary = {str(k): str(v) for k, v in deps.items()}
+        return rec
 
     def load_local(self, relative_path: str) -> ModuleType:
         """Load a Python module bundled inside this plugin's own directory.
@@ -850,8 +913,17 @@ class PluginManager:
                  snapshot_provider: Optional[Callable[[], Mapping[str, Any]]] = None,
                  owner_provider: Optional[Callable[[], Any]] = None,
                  settings: Any = None,
-                 max_failures: int = 3) -> None:
+                 max_failures: int = 3,
+                 user_plugin_dirs: Optional[Iterable[str]] = None) -> None:
         self.plugin_dirs = [os.path.abspath(path) for path in (plugin_dirs or []) if path]
+        #: Writable dirs where one-click-imported plugins live (eligible for
+        #: uninstall). Built-in ``plugins/`` is never user-writable. Defaults to
+        #: any ``plugin_dirs`` entry literally named ``user_plugins``.
+        if user_plugin_dirs is not None:
+            self.user_plugin_dirs = [os.path.abspath(path) for path in user_plugin_dirs if path]
+        else:
+            self.user_plugin_dirs = [d for d in self.plugin_dirs
+                                     if os.path.basename(d).lower() == "user_plugins"]
         self.event_bus = event_bus or EventBus()
         self.snapshot_provider = snapshot_provider
         self.owner_provider = owner_provider
@@ -924,6 +996,43 @@ class PluginManager:
                     rec.enabled = bool(persisted[pid])
         return list(self._records.values())
 
+    def refresh_plugin(self, plug_dir: str) -> Optional[PluginRecord]:
+        """(Re)read a single plugin directory and register/replace its record.
+
+        Used by one-click import to add a freshly installed plugin **without** a
+        full :meth:`reload_all` (which would restart every other stateful
+        plugin). Raises if the manifest is missing/invalid so the caller can
+        surface the error. Upgrading an already-loaded plugin unloads the old
+        copy first (running its ``on_unload``/releasing subscriptions+timers).
+        """
+        plug_dir = os.path.abspath(str(plug_dir or ""))
+        manifest_path = os.path.join(plug_dir, MANIFEST_FILE)
+        if not os.path.isfile(manifest_path):
+            raise FileNotFoundError(MANIFEST_FILE)
+        record = self._read_manifest(plug_dir, manifest_path)
+        persisted = self._persisted_enabled()
+        if record.plugin_id in persisted and not record.last_error:
+            record.enabled = bool(persisted[record.plugin_id])
+        existing = self._records.get(record.plugin_id)
+        if existing is not None and existing.loaded:
+            self.unload_plugin(record.plugin_id)
+        self._records[record.plugin_id] = record
+        return record
+
+    def is_user_plugin(self, plugin_id: str) -> bool:
+        record = self._records.get(str(plugin_id or ""))
+        return bool(record and self._is_user_path(record.path))
+
+    def _is_user_path(self, path: str) -> bool:
+        path = os.path.abspath(str(path or ""))
+        for root in getattr(self, "user_plugin_dirs", []) or []:
+            try:
+                if os.path.commonpath([root, path]) == root and path != root:
+                    return True
+            except ValueError:
+                continue
+        return False
+
     def load_all(self) -> dict[str, Any]:
         if not self._records:
             self.discover()
@@ -942,6 +1051,10 @@ class PluginManager:
         if not record.enabled:
             return False
         try:
+            # Make the plugin's own bundled deps (vendor/ + libs/) importable
+            # before its entry module runs, so a vendored pure-Python dependency
+            # resolves without the plugin having to call ctx.ensure_requirements.
+            self._prepare_plugin_sys_path(record)
             module = self._load_module(record)
             record.module = module
             record.context = PluginContext(self, record)
@@ -987,6 +1100,15 @@ class PluginManager:
         record.active = False
         return True
 
+    def forget_plugin(self, plugin_id: str) -> bool:
+        """Unload and drop a plugin's record entirely (used after uninstall)."""
+        plugin_id = str(plugin_id or "")
+        if plugin_id not in self._records:
+            return False
+        self.unload_plugin(plugin_id)
+        self._records.pop(plugin_id, None)
+        return True
+
     def enable_plugin(self, plugin_id: str) -> bool:
         record = self._records.get(str(plugin_id or ""))
         if record is None:
@@ -1029,6 +1151,7 @@ class PluginManager:
             status = self._records[key].to_status()
             status["pinned"] = key in pinned
             status["hotkey_count"] = hotkeys_by_plugin.get(key, 0)
+            status["user_installed"] = self._is_user_path(self._records[key].path)
             out.append(status)
         return out
 
@@ -1523,6 +1646,15 @@ class PluginManager:
             for mod_name in list(record.loaded_local_modules):
                 sys.modules.pop(mod_name, None)
             record.loaded_local_modules.clear()
+            # Restore sys.path: drop the plugin's own vendor/libs (+ensure_requirements)
+            # entries so a disabled plugin's bundled deps stop shadowing globals.
+            for path in list(record.added_sys_paths):
+                try:
+                    while path in sys.path:
+                        sys.path.remove(path)
+                except Exception:
+                    pass
+            record.added_sys_paths.clear()
             record.extensions.clear()
 
     def _read_manifest(self, plug_dir: str, manifest_path: str) -> PluginRecord:
@@ -1551,6 +1683,24 @@ class PluginManager:
             capabilities=_normalize_capabilities(manifest.get("capabilities", [])),
             settings_schema=manifest.get("settings_schema") if isinstance(manifest.get("settings_schema"), dict) else {},
         )
+
+    def _prepare_plugin_sys_path(self, record: PluginRecord) -> None:
+        """Prepend the plugin's own ``vendor/`` + ``libs/`` so bundled deps win.
+
+        Lets an author ship a pure-Python dependency in ``vendor/`` (or fetched
+        into ``libs/`` via ``ctx.ensure_requirements``) and just ``import`` it —
+        no global install. Added entries are tracked on the record and removed on
+        unload (see :meth:`_unregister_plugin_extensions`).
+        """
+        for sub in ("vendor", "libs"):
+            path = os.path.abspath(os.path.join(record.path, sub))
+            if not os.path.isdir(path):
+                continue
+            while path in sys.path:
+                sys.path.remove(path)
+            sys.path.insert(0, path)
+            if path not in record.added_sys_paths:
+                record.added_sys_paths.append(path)
 
     def _load_module(self, record: PluginRecord) -> ModuleType:
         entry_path = os.path.abspath(os.path.join(record.path, record.entry))

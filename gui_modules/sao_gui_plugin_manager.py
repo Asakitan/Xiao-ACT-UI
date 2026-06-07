@@ -8,13 +8,16 @@ read-only except for enable/disable/reload actions.
 
 from __future__ import annotations
 
+import json
 import tkinter as tk
+from tkinter import filedialog
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from act_platform.runtime import (
     act_plugin_disable,
     act_plugin_enable,
     act_plugin_hotkeys,
+    act_plugin_import,
     act_plugin_pin,
     act_plugin_reload,
     act_plugin_set_hotkey,
@@ -22,6 +25,7 @@ from act_platform.runtime import (
     act_plugin_ui_action,
     act_plugin_ui_panels,
     act_plugin_ui_render,
+    act_plugin_uninstall,
 )
 from gui_modules.sao_plugin_ui_render import PluginPanelList, render_spec_into
 from gui_modules.sao_panel_ui import (
@@ -156,6 +160,7 @@ class PluginManagerPanel:
         ).pack(side='left', padx=(12, 0))
         for label, cmd in (
             ('刷新 Refresh', self.refresh),
+            ('导入 Import', self._import_plugin),
             ('全部重载 Reload', self._reload_all),
             ('关闭 Close', self.hide),
         ):
@@ -350,6 +355,9 @@ class PluginManagerPanel:
         self._action_button(
             actions, ('★ 取消置顶' if pinned else '☆ 置顶 Pin'),
             lambda pid=plugin_id, pn=pinned: self._pin(pid, not pn))
+        if bool(plugin.get('user_installed')):
+            self._action_button(
+                actions, '卸载 Uninstall', lambda pid=plugin_id: self._uninstall(pid))
 
     def _format_meta(self, plugin: Mapping[str, Any]) -> str:
         games = ','.join(str(x) for x in (plugin.get('game_ids') or [])) or '-'
@@ -388,6 +396,37 @@ class PluginManagerPanel:
             pady=3,
         )
         btn.pack(side='left', padx=(0, 7))
+
+    def _import_plugin(self) -> None:
+        try:
+            path = filedialog.askopenfilename(
+                parent=self._win,
+                title='导入插件 Import plugin',
+                filetypes=(
+                    ('SAO 插件包 plugin package', '*.zip *.saoplugin'),
+                    ('All files', '*.*'),
+                ),
+            )
+        except Exception as exc:
+            self._status_var.set(str(exc))
+            return
+        if not path:
+            self._status_var.set('已取消导入 Import cancelled')
+            return
+        try:
+            result = act_plugin_import(self.owner, str(path))
+        except Exception as exc:
+            result = {"ok": False, "message": str(exc)}
+        self._status_var.set(str(result.get('message') or ('已导入' if result.get('ok') else '导入失败')))
+        self.refresh()
+
+    def _uninstall(self, plugin_id: str) -> None:
+        try:
+            result = act_plugin_uninstall(self.owner, plugin_id)
+        except Exception as exc:
+            result = {"ok": False, "message": str(exc)}
+        self._status_var.set(str(result.get('message') or ('已卸载' if result.get('ok') else '卸载失败')))
+        self.refresh()
 
     def _reload_all(self) -> None:
         result = act_plugin_reload(self.owner)
@@ -440,10 +479,16 @@ class PluginDetachedPanel:
     ``settings['hotkeys']`` namespace. Auto-refreshes on ``plugin_ui_invalidate``.
     """
 
-    def __init__(self, root: tk.Misc, owner: Any, plugin_id: str):
+    def __init__(self, root: tk.Misc, owner: Any, plugin_id: str,
+                 panel_id: str = '', width: int = 0, height: int = 0):
         self.root = root
         self.owner = owner
         self.plugin_id = str(plugin_id or '')
+        #: When set, this window shows only this one registered panel (its own
+        #: window). Empty → resolved to the plugin's primary panel in _build().
+        self.panel_id = str(panel_id or '')
+        self._want_w = int(width or 0)
+        self._want_h = int(height or 0)
         self._win: Optional[tk.Toplevel] = None
         self._panel_host: Optional[tk.Frame] = None
         self._hotkey_host: Optional[tk.Frame] = None
@@ -451,6 +496,9 @@ class PluginDetachedPanel:
         self._sub_token = ''
         self._dirty = True
         self._title = self.plugin_id
+        #: Last painted spec signature — skip rebuilding widgets when unchanged
+        #: (idle panels never repaint; only animating specs trigger a rebuild).
+        self._last_render_sig = ''
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -505,13 +553,52 @@ class PluginDetachedPanel:
             pass
         return self.plugin_id
 
+    def _panels_for_plugin(self) -> list:
+        try:
+            return [p for p in (act_plugin_ui_panels(self.owner).get('panels') or [])
+                    if str(p.get('plugin_id')) == self.plugin_id]
+        except Exception:
+            return []
+
+    def _target_panel_meta(self) -> Dict[str, Any]:
+        """The meta of the panel this window shows (declared size lives here)."""
+        panels = self._panels_for_plugin()
+        if self.panel_id:
+            for p in panels:
+                if str(p.get('id')) == self.panel_id:
+                    return dict(p)
+            return {}
+        # No specific panel → resolve the plugin's *main* panel. Order: explicit
+        # primary flag → id == plugin_id → first non-hidden (sub-panels are
+        # hidden) → first. NOTE: panel ids need not equal the plugin id (e.g.
+        # midi_piano_plugin's main panel id is "midi_piano"), so id-match alone
+        # would wrongly fall through to the alphabetically-first sub-panel.
+        for p in panels:
+            if p.get('primary'):
+                return dict(p)
+        for p in panels:
+            if str(p.get('id')) == self.plugin_id:
+                return dict(p)
+        for p in panels:
+            if not p.get('hidden'):
+                return dict(p)
+        return dict(panels[0]) if panels else {}
+
     def _build(self) -> None:
-        self._title = self._plugin_name()
+        meta = self._target_panel_meta()
+        if not self.panel_id:
+            self.panel_id = str(meta.get('id') or '')
+        # Size: explicit arg > plugin-declared meta > host default (460x620).
+        w = self._want_w or int(meta.get('width') or 0) or 460
+        h = self._want_h or int(meta.get('height') or 0) or 620
+        min_w = int(meta.get('min_width') or 0) or 300
+        min_h = int(meta.get('min_height') or 0) or 280
+        self._title = str(meta.get('title') or self._plugin_name())
         win = tk.Toplevel(self.root)
         self._win = win
         win.title(f'SAO Plugin · {self._title}')
-        win.geometry('430x540+230+140')
-        win.minsize(320, 320)
+        win.geometry(f'{int(w)}x{int(h)}+230+140')
+        win.minsize(min(int(w), int(min_w)), min(int(h), int(min_h)))
         win.configure(bg=_SAO_PANEL_BG)
         try:
             win.overrideredirect(True)
@@ -559,29 +646,40 @@ class PluginDetachedPanel:
         host = self._panel_host
         if host is None:
             return
+        panels = [p for p in self._panels_for_plugin()
+                  if p.get('available')
+                  and (not self.panel_id or str(p.get('id')) == self.panel_id)]
+        rendered = []
+        for panel in panels:
+            pid = str(panel.get('id') or '')
+            try:
+                spec = (act_plugin_ui_render(self.owner, pid) or {}).get('spec') or {}
+            except Exception:
+                spec = {'version': 1, 'title': pid, 'nodes': []}
+            rendered.append((pid, spec))
+        # Engine-level cache: only tear down + rebuild the widgets when the spec
+        # actually changed since the last paint. An idle panel never repaints; an
+        # animating one (note roll playhead) rebuilds only its changed frames.
+        try:
+            sig = json.dumps(rendered, ensure_ascii=False, sort_keys=True, default=str)
+        except Exception:
+            sig = repr(rendered)
+        if sig == self._last_render_sig and host.winfo_children():
+            return
+        self._last_render_sig = sig
         for child in list(host.winfo_children()):
             child.destroy()
-        try:
-            panels = [p for p in (act_plugin_ui_panels(self.owner).get('panels') or [])
-                      if str(p.get('plugin_id')) == self.plugin_id and p.get('available')]
-        except Exception:
-            panels = []
-        if not panels:
+        if not rendered:
             tk.Label(host, text='插件未提供面板或未激活\n(enable it in the manager)',
                      bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_LABEL_FG, justify='center',
                      font=('Segoe UI', 10), pady=20).pack(fill='x')
             return
-        for panel in panels:
-            pid = str(panel.get('id') or '')
+        for pid, spec in rendered:
             card = tk.Frame(host, bg=_SAO_PANEL_BODY_BG, highlightthickness=1,
                             highlightbackground=_SAO_PANEL_BORDER)
             card.pack(fill='x', pady=6, padx=2)
             inner = tk.Frame(card, bg=_SAO_PANEL_BODY_BG)
             inner.pack(fill='x', padx=10, pady=8)
-            try:
-                spec = (act_plugin_ui_render(self.owner, pid) or {}).get('spec') or {}
-            except Exception:
-                spec = {'version': 1, 'title': pid, 'nodes': []}
             render_spec_into(inner, spec, on_action=self._make_action(pid))
 
     def _build_hotkeys(self) -> None:
@@ -665,7 +763,10 @@ class PluginDetachedPanel:
             except Exception:
                 pass
         try:
-            self._after_id = self.root.after(700, self._tick)
+            # 200ms poll: responsive enough for animated specs (note-roll
+            # playhead). Idle panels are cheap — the spec-signature cache in
+            # _refresh skips the widget rebuild when nothing changed.
+            self._after_id = self.root.after(200, self._tick)
         except Exception:
             self._after_id = None
 

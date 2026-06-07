@@ -102,6 +102,8 @@ def _render_node(parent: tk.Misc, node: Mapping[str, Any], pal: dict,
         _render_button(parent, node, pal, on_action)
     elif kind == "table":
         _render_table(parent, node, pal)
+    elif kind == "canvas":
+        _render_canvas(parent, node, pal)
 
 
 def _render_container(parent: tk.Misc, node: Mapping[str, Any], pal: dict,
@@ -271,6 +273,59 @@ def render_spec_into(parent: tk.Misc, spec: Any,
 
 # ── higher-level helpers ─────────────────────────────────────────────────────
 
+def _canvas_fill(value: Any, pal: dict, default: str = "") -> str:
+    """Map a canvas color token (or #hex passthrough) to a concrete Tk color."""
+    text = str(value or "")
+    if not text:
+        return default
+    if text.startswith("#"):
+        return text
+    return {
+        "white": "#f3f5f7", "black": "#1b1f24", "grid": pal["sep"],
+        "bg": pal["body"], "body": pal["body"], "border": pal["border"], "sep": pal["sep"],
+        "header": pal["header_bg"], "transparent": "",
+        "title": pal["gold"], "subtitle": pal["accent"], "value": pal["value"],
+        "label": pal["label"], "muted": pal["label"], "gold": pal["gold"],
+        "accent": pal["accent"], "cyan": pal["accent"], "heal": _OK,
+        "ok": _OK, "warn": _WARN, "bad": _BAD, "mono": pal["value"],
+    }.get(text.lower(), default)
+
+
+def _render_canvas(parent: tk.Misc, node: Mapping[str, Any], pal: dict) -> None:
+    w = int(node.get("width") or 1)
+    h = int(node.get("height") or 1)
+    bg = _canvas_fill(node.get("bg"), pal, pal["body"]) or pal["body"]
+    cv = tk.Canvas(parent, width=w, height=h, bg=bg, highlightthickness=0, bd=0)
+    cv.pack(fill="x", pady=4)
+    anchors = {"nw": "nw", "n": "n", "ne": "ne", "w": "w", "center": "center",
+               "e": "e", "sw": "sw", "s": "s", "se": "se"}
+    for op in node.get("ops") or []:
+        kind = str(op.get("op") or "")
+        if kind in ("rect", "oval"):
+            x, y = int(op.get("x", 0)), int(op.get("y", 0))
+            x2, y2 = x + int(op.get("w", 0)), y + int(op.get("h", 0))
+            fill = _canvas_fill(op.get("fill"), pal, "")
+            outline = _canvas_fill(op.get("outline"), pal, "")
+            kwargs = {"fill": fill or "", "outline": outline or "",
+                      "width": int(op.get("width", 0) or (1 if outline else 0))}
+            if kind == "rect":
+                cv.create_rectangle(x, y, x2, y2, **kwargs)
+            else:
+                cv.create_oval(x, y, x2, y2, **kwargs)
+        elif kind == "line":
+            cv.create_line(int(op.get("x1", 0)), int(op.get("y1", 0)),
+                           int(op.get("x2", 0)), int(op.get("y2", 0)),
+                           fill=_canvas_fill(op.get("fill"), pal, pal["value"]) or pal["value"],
+                           width=int(op.get("width", 1) or 1))
+        elif kind == "text":
+            font = ("Segoe UI", int(op.get("size", 10) or 10),
+                    "bold" if op.get("bold") else "normal")
+            cv.create_text(int(op.get("x", 0)), int(op.get("y", 0)),
+                           text=str(op.get("text") or ""),
+                           fill=_canvas_fill(op.get("fill"), pal, pal["value"]) or pal["value"],
+                           font=font, anchor=anchors.get(str(op.get("anchor") or "nw"), "nw"))
+
+
 class PluginPanelList:
     """A scrollable, auto-redrawing list of plugin UI panels.
 
@@ -358,7 +413,9 @@ class PluginPanelList:
             panels = (list_panels(self.owner) or {}).get("panels") or []
         except Exception:
             panels = []
-        active = [p for p in panels if p.get("available")]
+        # Only top-level panels show here; ``hidden`` sub-panels are summoned by
+        # their plugin (ctx.open_window), not listed as separate entries.
+        active = [p for p in panels if p.get("available") and not p.get("hidden")]
         if not active:
             tk.Label(self._frame, text="无插件 UI 面板\n启用注册了 register_ui_panel 的插件后显示在这里。",
                      bg=self._frame["bg"], fg=pal["label"], justify="center",

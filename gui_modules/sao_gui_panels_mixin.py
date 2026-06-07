@@ -106,6 +106,7 @@ class SAOPlayerGUIPanelsMixin:
     def _open_act_plugin_manager(self, tab='manage'):
         """打开 ACT 插件管理面板并切到指定页签 (manage / panels)."""
         self._dismiss_sao_menu_for_panel()
+        self._ensure_plugin_window_bridge()
         if not self._act_plugin_manager_panel:
             self._act_plugin_manager_panel = PluginManagerPanel(self.root, self)
             self._apply_act_panel_theme()
@@ -118,17 +119,52 @@ class SAOPlayerGUIPanelsMixin:
         self._apply_act_panel_theme()
         self.root.after(120, lambda: self._raise_panel_window(panel))
 
-    def _open_plugin_detached_panel(self, plugin_id):
-        """打开某插件的独立分离面板 (渲染插件自己的 GUI + 热键配置)."""
+    def _ensure_plugin_window_bridge(self):
+        """订阅 ``plugin_open_window``：让插件用 ``ctx.open_window`` 弹出独立窗口。
+
+        幂等。插件按钮动作在 Tk 主线程触发，发布的事件在此同线程回调；为稳妥仍
+        marshal 到 ``root.after``。任何面板可见前都会先经过 manager / 分离面板 /
+        popup 三个入口之一，故此处必被激活。
+        """
+        if getattr(self, '_plugin_window_bridge_token', None):
+            return
+        try:
+            from act_platform.runtime import ensure_act_event_bus
+            bus = ensure_act_event_bus(self)
+
+            def _on_open(event):
+                payload = (event or {}).get('payload') or {}
+                pid = str(payload.get('plugin_id') or '')
+                if not pid:
+                    return
+                panel_id = str(payload.get('panel_id') or '')
+                w = int(payload.get('width') or 0)
+                h = int(payload.get('height') or 0)
+                try:
+                    self.root.after(0, lambda: self._open_plugin_detached_panel(pid, panel_id, w, h))
+                except Exception:
+                    pass
+
+            self._plugin_window_bridge_token = bus.subscribe(
+                'plugin_open_window', _on_open, owner_id='entity_plugin_window_bridge')
+        except Exception:
+            self._plugin_window_bridge_token = ''
+
+    def _open_plugin_detached_panel(self, plugin_id, panel_id='', width=0, height=0):
+        """打开某插件某面板的独立窗口 (一个面板一个窗口；尺寸由插件声明，缺省则默认)."""
         self._dismiss_sao_menu_for_panel()
+        self._ensure_plugin_window_bridge()
         panels = getattr(self, '_plugin_detached_panels', None)
         if panels is None:
             panels = {}
             self._plugin_detached_panels = panels
-        panel = panels.get(plugin_id)
+        key = (str(plugin_id or ''), str(panel_id or ''))
+        panel = panels.get(key)
         if panel is None or not panel._exists():
-            panel = PluginDetachedPanel(self.root, self, plugin_id)
-            panels[plugin_id] = panel
+            panel = PluginDetachedPanel(self.root, self, plugin_id,
+                                        panel_id=str(panel_id or ''),
+                                        width=int(width or 0), height=int(height or 0))
+            panels[key] = panel
         panel.show()
         try:
             self.root.after(120, lambda: self._raise_panel_window(panel))

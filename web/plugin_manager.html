@@ -281,6 +281,7 @@ button.close {
         <div class="header-actions">
             <div class="status-pill" id="plugin-count">0 ACTIVE</div>
             <button class="primary" type="button" onclick="PluginManager.refresh()">刷新 Refresh</button>
+            <button type="button" onclick="PluginManager.importPlugin()">导入 Import</button>
             <button type="button" onclick="PluginManager.reloadAll()">重载 Reload</button>
             <button class="close" type="button" onclick="PluginManager.close()">×</button>
         </div>
@@ -303,8 +304,9 @@ button.close {
             </div>
             <div class="side-title">SDK QUICK START</div>
             <div class="help">
-                放入 <strong>plugins/&lt;plugin_id&gt;/plugin.json</strong> 与 <strong>plugin.py</strong>。<br/><br/>
-                插件可实现 <strong>on_load(ctx)</strong>、<strong>on_enable()</strong>、<strong>on_disable()</strong>、<strong>on_unload()</strong>。<br/><br/>
+                <strong>一键导入</strong>：点上方「导入 Import」选一个 <strong>.zip</strong> 插件包(内含 plugin.json + plugin.py)，自动装进 <strong>user_plugins/</strong> 并启用即用，无需编译。<br/><br/>
+                或手动放入 <strong>plugins/&lt;plugin_id&gt;/plugin.json</strong> 与 <strong>plugin.py</strong>。<br/><br/>
+                插件可实现 <strong>on_load(ctx)</strong>、<strong>on_enable()</strong>、<strong>on_disable()</strong>、<strong>on_unload()</strong>。第三方依赖写进 <strong>requirements.txt</strong> 并 vendor 进 <strong>vendor/</strong>，用 <strong>ctx.ensure_requirements()</strong> 加载。<br/><br/>
                 推荐用 <strong>@ctx.on("damage")</strong>、<strong>ctx.on_snapshot(cb)</strong>、<strong>ctx.subscribe_once(topic, cb)</strong> 监听事件；用 <strong>ctx.set_defaults({...})</strong> 与 <strong>ctx.setting(key)</strong> 管理插件设置。
             </div>
         </aside>
@@ -386,6 +388,9 @@ button.close {
         actions += '<button type="button" class="danger" onclick="PluginManager.disable(' + idArg + ')"' + (enabled ? '' : ' disabled') + '>禁用 Disable</button>';
         actions += '<button type="button" onclick="PluginManager.reload(' + idArg + ')"' + (enabled ? '' : ' disabled') + '>重载 Reload</button>';
         actions += '<button type="button" onclick="PluginManager.pin(' + idArg + ',' + (plugin.pinned ? 'false' : 'true') + ')">' + (plugin.pinned ? '★ 取消置顶' : '☆ 置顶 Pin') + '</button>';
+        if (plugin.user_installed) {
+            actions += '<button type="button" class="danger" onclick="PluginManager.uninstall(' + idArg + ')">卸载 Uninstall</button>';
+        }
         return '<article class="' + cls + '">' +
             '<div class="card-top"><div><div class="plugin-name">' + esc(plugin.name || plugin.id) + '</div><div class="plugin-id">' + esc(plugin.id || '') + '</div></div><div class="badges">' + stateBadges.join('') + '</div></div>' +
             '<div class="meta-grid">' +
@@ -434,6 +439,19 @@ button.close {
         reloadAll: function () {
             return apiCall('reload_plugins', ['']).then(function (data) {
                 showToast(data.ok === false ? (data.message || 'Reload failed') : '插件已重载');
+                return PluginManager.refresh();
+            });
+        },
+        importPlugin: function () {
+            return apiCall('import_plugin_dialog', []).then(function (data) {
+                if (data && data.cancelled) { showToast('已取消导入'); return data; }
+                showToast(data.ok === false ? (data.message || '导入失败') : (data.message || '已导入'));
+                return PluginManager.refresh();
+            });
+        },
+        uninstall: function (id) {
+            return apiCall('uninstall_plugin', [id]).then(function (data) {
+                showToast(data.ok === false ? (data.message || '卸载失败') : (data.message || (id + ' 已卸载')));
                 return PluginManager.refresh();
             });
         },
@@ -490,7 +508,7 @@ button.close {
             var grid = document.getElementById('panels-grid');
             var renderSpec = window.PluginHooks && window.PluginHooks.renderSpec;
             return apiCall('get_plugin_ui_panels', []).then(function (data) {
-                var panels = (data && data.panels || []).filter(function (p) { return p.available; });
+                var panels = (data && data.panels || []).filter(function (p) { return p.available && !p.hidden; });
                 if (!panels.length) {
                     grid.innerHTML = '<div class="empty">无插件 UI 面板<br/>启用注册了 register_ui_panel 的插件后显示在这里。</div>';
                     return;
