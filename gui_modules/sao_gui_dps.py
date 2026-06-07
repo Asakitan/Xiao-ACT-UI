@@ -322,7 +322,7 @@ class _RowState:
         'target_bar_pct',
         'disp_y', 'target_y',
         'fx_tier', 'fx_start',
-        'mem_damage_total',
+        'mem_damage_total', 'mem_dps',
     )
 
     def __init__(self, uid: int):
@@ -352,6 +352,7 @@ class _RowState:
         self.fx_tier = ''
         self.fx_start = 0.0
         self.mem_damage_total = 0
+        self.mem_dps = 0
 
     @_probe.decorate('ui.dps.update_targets')
     def update_targets(self, data: dict) -> None:
@@ -364,6 +365,7 @@ class _RowState:
         self.is_self = bool(data.get('is_self'))
         self.damage_total = int(data.get('damage_total') or 0)
         self.mem_damage_total = int(data.get('mem_damage_total') or 0)
+        self.mem_dps = int(data.get('mem_dps') or 0)
         self.heal_total = int(data.get('heal_total') or 0)
         self.damage_pct = float(data.get('damage_pct') or 0)
         self.target_damage = float(data.get('damage_total') or 0)
@@ -1513,6 +1515,7 @@ class DpsOverlay:
                 # already present per combat_analytics _entity_rows) -- the live path emits
                 # it at row.mem_damage_total but the ACT path early-returns before that.
                 'mem_damage_total': int(ent.get('mem_damage_total') or 0),
+                'mem_dps': int(ent.get('mem_dps') or 0),
                 'is_heal': is_heal,
                 'fx_tier': '',
                 'fx_start': 0.0,
@@ -1554,6 +1557,7 @@ class DpsOverlay:
                     'pct': (amount / total) if total > 0 else 0.0,
                     'bar_pct': (amount / max_amount) if max_amount > 0 else 0.0,
                     'mem_damage_total': int(ent.get('mem_damage_total') or 0),
+                    'mem_dps': int(ent.get('mem_dps') or 0),
                     'is_heal': is_heal,
                     'fx_tier': '',
                     'fx_start': 0.0,
@@ -1590,6 +1594,7 @@ class DpsOverlay:
                 'pct': (amount / total) if total > 0 else 0.0,
                 'bar_pct': (amount / max_amount) if max_amount > 0 else 0.0,
                 'mem_damage_total': row.mem_damage_total,
+                'mem_dps': row.mem_dps,
                 'is_heal': is_heal,
                 'fx_tier': row.fx_tier,
                 'fx_start': row.fx_start,
@@ -2323,12 +2328,11 @@ class DpsOverlay:
                            shadow_color=_fx_shadow, shadow_blur=5 if _fx_shadow else 0)
         pct = int(round(float(row['pct'] or 0.0) * 100))
         val_sub = f'{_fmt_num(row["rate"])}/s · {pct}%'
-        # MEM cross-check: the game's own DamageDataMgr cumulative total. No drift% -- it is a
-        # cumulative/session total (matches the game's damage-stat panel) and does NOT share the
-        # per-encounter window of the TCP value, so a TCP-vs-MEM delta is apples-to-oranges.
-        # Parity with web/dps.html _memBadge.
-        if (not row.get('is_heal')) and row.get('mem_damage_total'):
-            val_sub += f' · MEM {_fmt_num(int(row["mem_damage_total"]))}'
+        # MEM cross-check: per-encounter DPS from the game's own DamageDataMgr (cumulative total
+        # scoped to the MEM combat window). The cumulative total is meaningless as a per-fight
+        # figure (only accrues at the Association dummy), so show DPS. Parity with _memBadge.
+        if (not row.get('is_heal')) and row.get('mem_dps'):
+            val_sub += f' · MEM {_fmt_num(int(row["mem_dps"]))}/s'
         sw_ = self._tracked_text_width(draw, val_sub, font_sub, 0.75)
         self._draw_tracked(draw, (x + w - 10 - sw_, y + 22), val_sub,
                            font_sub, self.TEXT_MUTED, 0.75)

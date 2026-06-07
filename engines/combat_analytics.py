@@ -186,8 +186,10 @@ def _entity_rows(live: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "damage_pct": _safe_float(entity.get("damage_pct"), 0.0),
             "crit_rate": _safe_float(entity.get("crit_rate"), 0.0),
             "is_self": bool(entity.get("is_self", False)),
-            # MEM cross-check (DamageDataMgr total); 0 when absent.
+            # MEM cross-check (DamageDataMgr); per-encounter DPS is the displayed figure,
+            # cumulative total kept for reference. 0 when absent.
             "mem_damage_total": _safe_int(entity.get("mem_damage_total"), 0),
+            "mem_dps": _safe_int(entity.get("mem_dps"), 0),
         })
     return rows
 

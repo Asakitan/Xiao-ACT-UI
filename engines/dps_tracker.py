@@ -263,6 +263,9 @@ class DpsTracker:
         self._mem_damage: Dict[int, int] = {}
         self._mem_primary: bool = False     # memory mode: MEM totals are the primary value
         self._mem_combat_start: float = 0.0  # MEM combat clock (no timestamps in the table)
+        # MEM totals are cumulative (the game's dummy-meter); _mem_baseline snapshots each
+        # uid's total at the MEM combat (re)start so we can derive per-encounter damage/DPS.
+        self._mem_baseline: Dict[int, int] = {}
         self._mem_skill_damage: Dict[int, Dict[int, int]] = {}  # uid -> {skillId: damage}
         self._load_player_cache()
 
@@ -282,10 +285,14 @@ class DpsTracker:
             tot = sum(new.values())
             prev = sum(self._mem_damage.values())
             # Start/restart the MEM combat clock on first data or a big drop (new fight).
+            # Capture the per-uid baseline at (re)start so encounter damage = now - baseline
+            # (the cumulative dummy-meter total is otherwise useless as a per-fight figure).
             if tot > 0 and (self._mem_combat_start <= 0 or tot < prev * 0.5):
                 self._mem_combat_start = time.time()
+                self._mem_baseline = dict(new)
             elif tot <= 0:
                 self._mem_combat_start = 0.0
+                self._mem_baseline = {}
             self._mem_damage = new
             # invalidate the fast-snapshot cache so get_snapshot_fast / poll_overlay_state
             # rebuild with fresh MEM totals (the cache serves up to ~150ms ignoring _dirty).
@@ -768,12 +775,21 @@ class DpsTracker:
         )
         if include_skills:
             _annotate_entity_skill_rows(entities)
-        # Attach MEM-sourced damage totals (DamageDataMgr) for the cross-check badge.
+        # Attach MEM-sourced per-encounter damage + DPS (DamageDataMgr) for the cross-check
+        # badge. MEM totals are cumulative (the game's dummy meter), so scope to the MEM combat
+        # window via the baseline captured at (re)start, then divide by the MEM elapsed.
         if self._mem_damage:
+            _mem_elapsed = (max(now - self._mem_combat_start, 0.001)
+                            if self._mem_combat_start > 0 else 0.0)
             for e in entities:
-                md = self._mem_damage.get(e.get('uid'))
-                if md is not None:
-                    e['mem_damage_total'] = int(md)
+                _uid = e.get('uid')
+                md = self._mem_damage.get(_uid)
+                if md is None:
+                    continue
+                _enc = max(int(md) - int(self._mem_baseline.get(_uid, 0)), 0)
+                e['mem_damage_total'] = int(md)            # cumulative (reference)
+                e['mem_encounter_damage'] = _enc           # since the MEM combat (re)start
+                e['mem_dps'] = int(_enc / _mem_elapsed) if _mem_elapsed > 0 else 0
 
         # P1: memory mode -> the game's own DamageDataMgr table is the primary DPS.
         mem_override_total = None
@@ -786,26 +802,28 @@ class DpsTracker:
             if entities:
                 # hybrid: keep the TCP rows (names/crit/hits), swap damage to the MEM total.
                 for e in entities:
-                    mt = e.get('mem_damage_total')
-                    if mt is None:
+                    if e.get('mem_damage_total') is None:
                         continue
+                    mt = int(e.get('mem_encounter_damage') or 0)   # per-encounter, not cumulative
                     e['tcp_damage_total'] = e.get('damage_total')
-                    e['damage_total'] = int(mt)
-                    e['dps'] = int(int(mt) / eff_elapsed)
+                    e['damage_total'] = mt
+                    e['dps'] = int(mt / eff_elapsed)
                     e['damage_source'] = 'mem'
             else:
                 # memory mode: no TCP entities -> synthesize the table from MEM totals.
                 for uid, total in self._mem_damage.items():
                     pc = self._player_cache.get(str(uid)) or {}
+                    _enc = max(int(total) - int(self._mem_baseline.get(uid, 0)), 0)
                     entities.append({
                         'uid': int(uid),
                         'name': pc.get('name') or f'Player_{uid}',
                         'profession': pc.get('profession') or '',
                         'fight_point': int(pc.get('fight_point') or 0),
                         'is_self': (int(uid) == self._self_uid),
-                        'damage_total': int(total),
+                        'damage_total': _enc,            # per-encounter, not cumulative
                         'mem_damage_total': int(total),
-                        'dps': int(int(total) / eff_elapsed),
+                        'mem_encounter_damage': _enc,
+                        'dps': int(_enc / eff_elapsed),
                         'heal_total': 0, 'hps': 0,
                         'crit_rate': 0.0, 'damage_hits': 0,
                         'damage_source': 'mem',

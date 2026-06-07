@@ -1436,13 +1436,13 @@ function _fmtNum(v) {
     return Math.round(v).toLocaleString();
 }
 
-// MEM cross-check badge: the game's own DamageDataMgr cumulative total. No drift % -- it is a
-// cumulative/session total (matches the game's damage-stat panel) and does NOT share the
-// per-encounter window of the TCP value, so a TCP-vs-MEM delta would be apples-to-oranges.
+// MEM cross-check badge: per-encounter DPS from the game's own DamageDataMgr (its cumulative
+// total scoped to the MEM combat window). The raw total is meaningless as a per-fight figure
+// (only accrues at the Association dummy), so the badge shows DPS, matching the Tk _draw_row.
 function _memBadge(tcpAmount, entity) {
-    var mem = Number((entity && entity.mem_damage_total) || 0);
-    if (!mem) return '';
-    return ' · <span class="mem-badge">MEM ' + _fmtNum(mem) + '</span>';
+    var mdps = Number((entity && entity.mem_dps) || 0);
+    if (!mdps) return '';
+    return ' · <span class="mem-badge">MEM ' + _fmtNum(mdps) + '/s</span>';
 }
 
 function _fmtTime(s) {
