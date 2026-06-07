@@ -97,12 +97,10 @@ class MemStateBridge:
         self._entity_diag_logged: bool = False
         # JSON name self-heal: TCP sends only template ids, so read the game's real NAME
         # from memory and overlay it into the runtime name cache when it differs.
+        # Shared TcpNameCache (PacketBridge owns it); the route-2 table walk overlays
+        # authoritative id->name into it. Lazily fetched via _mem_name_cache().
         self._name_cache = None
         self._name_cache_checked: bool = False
-        # base_id -> the entity's real NAME attr ('' when it carries only a template id,
-        # which is most monsters). Read once per base_id (the index walk is not free) and
-        # reused; also dedups the overlay write.
-        self._mem_name_seen: dict = {}
         self._nr = None
         self._nr_tried = False
 
@@ -197,36 +195,12 @@ class MemStateBridge:
                 # (no TCP) and feed the uuid->name path the boss bar / drilldown read.
                 if snap:
                     nr = self._name_resolver()
-                    cache = self._mem_name_cache()
                     for e in snap:
                         uuid = int(e["uuid"])
                         bid = int(e.get("base_id") or 0)
                         cached = self._named.get(uuid)
                         if cached is None or cached[0] != bid:   # resolve+push once / per base_id
                             nm = (nr.monster(bid, default="") if (nr and bid) else "") or ""
-                            # JSON self-heal: TCP sends only template ids, so when an entity DOES
-                            # carry a real NAME attr in memory and it differs from our table, the
-                            # memory name is the authority -> overlay it. Most monsters carry no
-                            # NAME attr; players are skipped (suffix 640). Read once per base_id.
-                            if (cache is not None and bid > 0 and (uuid & 0xFFFF) != 640
-                                    and bid not in self._mem_name_seen):
-                                try:
-                                    real = prov.read_name(int(e.get("obj") or 0))
-                                except Exception:
-                                    real = ""
-                                self._mem_name_seen[bid] = real
-                                if real and real != nm:
-                                    kind = "boss" if e.get("kind") == "boss" else "monster"
-                                    try:
-                                        cache.observe_name(kind, bid, real,
-                                                            source="mem", confidence="mem")
-                                    except Exception:
-                                        pass
-                                    print(f"[MemName] overlay {kind}#{bid}: "
-                                          f"table={nm!r} -> mem={real!r}")
-                            _seen = self._mem_name_seen.get(bid)
-                            if _seen:                       # reuse the memory name for display
-                                nm = _seen
                             self._named[uuid] = (bid, nm)
                             if nm and self.dps_tracker is not None:
                                 try:
