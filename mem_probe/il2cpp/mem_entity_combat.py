@@ -52,6 +52,9 @@ A_HP, A_MAX_HP = 11310, 11320
 A_MAX_EXT, A_EXT, A_MAX_STUN, A_STUN = 440, 441, 442, 443
 A_OVERDRIVE, A_BREAK_STAGE = 444, 455
 A_SKILL_ID = 100             # current cast skill id (present only while casting)
+# attrs read every tick for the combat snapshot — only these are resolved (not all 107)
+COMBAT_ATTR_IDS = (A_HP, A_MAX_HP, A_BREAK_STAGE, A_OVERDRIVE, A_STUN, A_EXT, A_SKILL_ID)
+_TYPE_CHAR = {"LongAttr": "L", "IntAttr": "I", "FloatAttr": "F", "BoolAttr": "B"}
 
 MAX_HP_PLAUSIBLE = 5_000_000_000   # exclude server-time longs (~1.7e12)
 
@@ -67,6 +70,10 @@ class EntityCombatReader:
     def __init__(self, pm):
         self.pm = pm
         self._klass_name: Dict[int, str] = {}     # klass ptr -> name (session cache)
+        # per-entity attr layout cache keyed by _indexPart ptr: {attr_id: (vidx, type)}.
+        # The Burst index decode is the expensive part (~hundreds of reads); it is
+        # stable for an entity, so decode once and only re-read the few values/tick.
+        self._layout_cache: Dict[int, Dict[int, tuple]] = {}
 
     def _kname(self, kp: int) -> str:
         if kp in self._klass_name:
@@ -214,28 +221,103 @@ class EntityCombatReader:
                 break
         return int(cur), int(maxhp)
 
+    def _build_layout(self, ip: int, vals: int, wanted) -> Dict[int, tuple]:
+        """Decode the Burst index ONCE for the wanted attr ids -> {attr_id: (vidx, type)}."""
+        want = set(wanted)
+        lay: Dict[int, tuple] = {}
+        for k in range(INDEX_SEG_COUNT):
+            if len(lay) >= len(want):
+                break
+            segp = self.pm.read_u64(ip + INDEX_KEYSEG_OFF + k * 8)
+            if not _plaus(segp):
+                continue
+            cnt = self.pm.read_u32(segp + KEYSEG_COUNT_OFF) or 0
+            if cnt <= 0 or cnt > INDEX_SEG_SIZE:
+                continue
+            vip = self.pm.read_u64(ip + INDEX_VALIDX_OFF + k * 8)
+            if not _plaus(vip):
+                continue
+            for pos in range(cnt):
+                key = self.pm.read_u32(segp + pos * 4)
+                if key not in want:
+                    continue
+                vidx = self.pm.read_i32(vip + pos * 4)
+                if vidx is None or vidx < 0:
+                    continue
+                arrp = self.pm.read_u64(vals + ARRAY_ELEMS_OFF
+                                        + (vidx >> 5) * VALUES_TUPLE_STRIDE + VALUES_TUPLE_ARR_OFF)
+                obj = self.pm.read_u64(arrp + ARRAY_ELEMS_OFF + (vidx & 31) * 8) if _plaus(arrp) else 0
+                tc = _TYPE_CHAR.get(self._kname(self.pm.read_u64(obj))) if _plaus(obj) else None
+                if tc:
+                    lay[int(key)] = (int(vidx), tc)
+        return lay
+
+    def _read_typed(self, vals: int, vidx: int, tc: str):
+        """Read a value by cached (vidx, type) -- 2-3 reads, no index decode."""
+        arrp = self.pm.read_u64(vals + ARRAY_ELEMS_OFF
+                                + (vidx >> 5) * VALUES_TUPLE_STRIDE + VALUES_TUPLE_ARR_OFF)
+        if not _plaus(arrp):
+            return None
+        obj = self.pm.read_u64(arrp + ARRAY_ELEMS_OFF + (vidx & 31) * 8)
+        if not _plaus(obj):
+            return None
+        if tc == "L":
+            return self.pm.read_i64(obj + ATTR_VAL8_OFF)
+        if tc == "I":
+            return self.pm.read_i32(obj + ATTR_VAL4_OFF)
+        if tc == "F":
+            raw = self.pm.read_bytes(obj + ATTR_VAL4_OFF, 4)
+            return struct.unpack("<f", raw)[0] if raw else 0.0
+        if tc == "B":
+            raw = self.pm.read_bytes(obj + ATTR_VAL4_OFF, 1)
+            return bool(raw[0]) if raw else False
+        return None
+
     def read_combat(self, ent_addr: int) -> Optional[dict]:
         """Full combat snapshot: HP + breaking/overdrive/stun/cast, decoded by attr id.
 
-        HP comes from the deterministic attr map (11310/11320); falls back to the HP
-        invariant if the id-keyed values are absent. Returns None for non-combat
-        entities (no HP attr). Combat-state keys are None when the entity lacks them.
+        Uses a per-entity layout cache (decode the Burst index once, then only re-read
+        the ~6 combat values each tick). Falls back to the HP invariant. Returns None
+        for non-combat entities (no HP attr).
         """
-        amap = self.read_attr_map(ent_addr)
-        cur = amap.get(A_HP)
-        mx = amap.get(A_MAX_HP)
+        attrs = self.pm.read_u64(ent_addr + ENT_ATTRS_OFF)
+        if not _plaus(attrs):
+            return None
+        ip = self.pm.read_u64(attrs + COLL_INDEXPART_OFF)
+        vals = self.pm.read_u64(attrs + COLL_VALUES_OFF)
+        if not (_plaus(ip) and _plaus(vals)):
+            return None
+        lay = self._layout_cache.get(ip)
+        if lay is None:
+            if len(self._layout_cache) > 512:
+                self._layout_cache.clear()
+            lay = self._build_layout(ip, vals, COMBAT_ATTR_IDS)
+            self._layout_cache[ip] = lay
+
+        def rd(aid):
+            t = lay.get(aid)
+            return self._read_typed(vals, t[0], t[1]) if t else None
+
+        cur = rd(A_HP)
+        mx = rd(A_MAX_HP)
         if not (isinstance(cur, int) and isinstance(mx, int) and mx > 0
                 and 0 <= cur <= MAX_HP_PLAUSIBLE):
-            hp = self.read_hp(ent_addr)            # invariant fallback
-            if hp is None:
-                return None
-            cur, mx = hp
+            # stale cache (ip reused for a different entity) -> rebuild once
+            lay = self._build_layout(ip, vals, COMBAT_ATTR_IDS)
+            self._layout_cache[ip] = lay
+            cur, mx = rd(A_HP), rd(A_MAX_HP)
+            if not (isinstance(cur, int) and isinstance(mx, int) and mx > 0
+                    and 0 <= cur <= MAX_HP_PLAUSIBLE):
+                hp = self.read_hp(ent_addr)        # invariant fallback
+                if hp is None:
+                    return None
+                cur, mx = hp
 
         def _num(aid):
-            v = amap.get(aid)
+            v = rd(aid)
             return int(v) if isinstance(v, (int, float)) else None
 
-        sk = amap.get(A_SKILL_ID)
+        sk = rd(A_SKILL_ID)
         return {
             "cur_hp": int(cur), "max_hp": int(mx),
             "hp_pct": (cur / mx) if mx else 0.0,

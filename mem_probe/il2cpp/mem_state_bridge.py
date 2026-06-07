@@ -83,9 +83,10 @@ class MemStateBridge:
         self._entity_provider: Any = None
         self._entity_thread: Optional[threading.Thread] = None
         self._entity_stop = threading.Event()
-        self._entity_interval: float = 0.7
+        self._entity_interval: float = 1.0
         self.last_entities: list = []
         self.last_boss_mem: Optional[dict] = None
+        self._named: dict = {}          # uuid -> resolved name (push to tracker once)
         self._last_scene_id: int = 0
         self._nr = None
         self._nr_tried = False
@@ -162,15 +163,23 @@ class MemStateBridge:
                 if snap:
                     nr = self._name_resolver()
                     for e in snap:
+                        uuid = int(e["uuid"])
                         bid = int(e.get("base_id") or 0)
-                        nm = nr.monster(bid, default="") if (nr and bid) else ""
-                        if nm:
-                            e["name"] = nm
-                            if self.dps_tracker is not None:
+                        cached = self._named.get(uuid)
+                        if cached is None or cached[0] != bid:   # resolve+push once / per base_id
+                            nm = (nr.monster(bid, default="") if (nr and bid) else "") or ""
+                            self._named[uuid] = (bid, nm)
+                            if nm and self.dps_tracker is not None:
                                 try:
-                                    self.dps_tracker.update_monster_info(int(e["uuid"]), nm)
+                                    self.dps_tracker.update_monster_info(uuid, nm)
                                 except Exception:
                                     pass
+                        else:
+                            nm = cached[1]
+                        if nm:
+                            e["name"] = nm
+                    if len(self._named) > 1024:
+                        self._named.clear()
                 boss = max(snap, key=lambda e: e["max_hp"]) if snap else None
                 self.last_boss_mem = boss
                 if boss and self.state_mgr is not None:
