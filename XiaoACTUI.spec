@@ -110,6 +110,7 @@ MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
     'mem_probe.il2cpp.mem_attr_reader',
     'mem_probe.il2cpp.auto_registration_locator',
     'mem_probe.il2cpp.resolver',
+    'mem_probe.il2cpp.mem_damage_reader',
 ]
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
