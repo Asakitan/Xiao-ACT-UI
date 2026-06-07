@@ -67,19 +67,65 @@ class StaticResolver:
         self.si = script_index
         self.dci = dump_cs_index
         self._klass_cache: Dict[str, int] = {}
+        self._live_index: Optional[Dict[str, int]] = None  # in-memory fallback (lazy)
 
     # ---------- klass / instance ----------
+
+    def _klass_name(self, kp: int) -> str:
+        try:
+            np = self.pm.read_u64(kp + 0x10)
+            if not (0x10000 <= (np or 0) <= 0x7FFFFFFFFFFF):
+                return ""
+            b = self.pm.read_bytes(np, 48)
+            return b.split(b"\x00", 1)[0].decode("utf-8", "replace") if b else ""
+        except Exception:
+            return ""
+
+    # Critical classes resolved in one in-memory pass when the bundle is stale/missing.
+    _LIVE_CLASSES = {
+        "Zproto.CharSerialize", "Zproto.UserFightAttr", "Zproto.CharBaseInfo",
+        "Zproto.RoleLevel", "Zproto.ProfessionList", "Zproto.EnergyItem",
+        "Zproto.SceneData", "Zproto.SkillCDInfo",
+        "Zproto.UserFightAttrContainerArchive", "Zproto.CharSerializeContainerArchive",
+        "Panda.ZGame.ZEntityMgr", "Panda.ZGame.ZEntity",
+    }
+
+    def _live_resolve(self, class_name: str) -> int:
+        """In-memory klass-by-name fallback (version-robust, no dump, onedir-safe)."""
+        if self._live_index is None:
+            try:
+                from mem_probe.il2cpp.auto_registration_locator import build_live_class_index
+                want = set(self._LIVE_CLASSES) | {class_name}
+                self._live_index = build_live_class_index(self.pm, want, time_budget_s=40)
+            except Exception:
+                self._live_index = {}
+        kp = int(self._live_index.get(class_name, 0) or 0)
+        if kp:
+            return kp
+        short = class_name.rsplit(".", 1)[-1]
+        for full, p in self._live_index.items():
+            if full.rsplit(".", 1)[-1] == short:
+                return int(p)
+        return 0
 
     def resolve_klass(self, class_name: str) -> Optional[int]:
         if class_name in self._klass_cache:
             return self._klass_cache[class_name]
+        short = class_name.rsplit(".", 1)[-1]
+        # 1) bundle/script.json klass_rva, VALIDATED by live klass name (catches a
+        #    stale bundle from a previous game version -> self-heal via live locator).
         rva = self.si.find_klass(class_name)
-        if rva is None:
-            return None
-        kp = self.pm.read_u64(self.ga + rva)
-        if kp:
+        if rva is not None:
+            kp = self.pm.read_u64(self.ga + rva)
+            if kp and self._klass_name(kp) == short:
+                self._klass_cache[class_name] = kp
+                return kp
+        # 2) in-memory live locator (no dump / onedir / new game version)
+        kp = self._live_resolve(class_name)
+        if kp and self._klass_name(kp) == short:
             self._klass_cache[class_name] = kp
-        return kp
+            return kp
+        return None
 
     def find_instances(self, klass_ptr: int, max_region: Optional[int] = None,
                        max_hits: int = 4096, progress: bool = False) -> List[int]:
