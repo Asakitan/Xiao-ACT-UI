@@ -102,6 +102,14 @@ MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
     'mem_probe.il2cpp.bundle_loader',
     'mem_probe.il2cpp.bundle_store',
     'mem_probe.il2cpp.mem_skill_slots',
+    # memory-driven hybrid: entity/boss HP + names + version-robust klass resolution.
+    # All function-level lazy imports -> invisible to PyInstaller static analysis.
+    'mem_probe.il2cpp.mem_entity_mgr',
+    'mem_probe.il2cpp.mem_entity_combat',
+    'mem_probe.il2cpp.mem_entity_provider',
+    'mem_probe.il2cpp.mem_attr_reader',
+    'mem_probe.il2cpp.auto_registration_locator',
+    'mem_probe.il2cpp.resolver',
 ]
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制
@@ -144,6 +152,13 @@ a = Analysis(
         ('plugins', 'plugins'),
         # 图标
         ('icon.ico', '.'),
+        # IL2CPP per-version offset bundles (klass RVAs + field offsets). Ships under
+        # the mem_probe package (NOT lifted like assets), so bundle_store/static_dps_source
+        # __file__-relative paths resolve in onedir. Field offsets are the durable payload;
+        # for a NEW game version with no matching bundle, auto_registration_locator derives
+        # klass pointers from process memory (no dump) and StaticResolver self-heals.
+        ('mem_probe/il2cpp/_cache/bundle.json', 'mem_probe/il2cpp/_cache'),
+        ('mem_probe/il2cpp/_cache/bundles', 'mem_probe/il2cpp/_cache/bundles'),
     ] + GPU_RENDER_DATAS,
     hiddenimports=LOCAL_HIDDENIMPORTS + WEBVIEW_PLATFORM_HIDDENIMPORTS + PROTOBUF_HIDDENIMPORTS + CLR_LOADER_HIDDENIMPORTS + GUI_MODULES_HIDDENIMPORTS + REORG_PKG_HIDDENIMPORTS + MEM_PROBE_RUNTIME_HIDDENIMPORTS + [
         # pythonnet (.NET interop)
