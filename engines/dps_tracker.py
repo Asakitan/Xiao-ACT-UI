@@ -287,6 +287,9 @@ class DpsTracker:
             elif tot <= 0:
                 self._mem_combat_start = 0.0
             self._mem_damage = new
+            # invalidate the fast-snapshot cache so get_snapshot_fast / poll_overlay_state
+            # rebuild with fresh MEM totals (the cache serves up to ~150ms ignoring _dirty).
+            self._snapshot_cache = None
 
     def set_mem_primary(self, value: bool) -> None:
         """When True (memory mode), the snapshot shows the game's own DamageDataMgr totals
@@ -295,6 +298,7 @@ class DpsTracker:
         DPS uses the TCP encounter window (MEM has no timestamps)."""
         with self._lock:
             self._mem_primary = bool(value)
+            self._snapshot_cache = None
 
     def set_mem_skill_damage(self, uid_to_skills: Optional[Dict[int, Dict[int, int]]]) -> None:
         """Store per-player per-skill MEM damage ({uid: {skillId: damage}}) for the detail
@@ -305,6 +309,7 @@ class DpsTracker:
                 int(u): {int(s): int(v) for s, v in (sk or {}).items() if v}
                 for u, sk in (uid_to_skills or {}).items()
             }
+            self._snapshot_cache = None
 
     def _mem_skill_rows_locked(self, uid: int, entity_total: int) -> List[Dict[str, Any]]:
         """Build skill rows from the MEM per-skill table (name-resolved, total desc)."""

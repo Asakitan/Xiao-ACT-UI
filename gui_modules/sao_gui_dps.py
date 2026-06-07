@@ -1509,6 +1509,10 @@ class DpsOverlay:
                 'rate': float(ent.get(rate_key) or 0),
                 'pct': (amount / total) if total > 0 else float(ent.get('damage_pct') or 0.0),
                 'bar_pct': (amount / max_amount) if max_amount > 0 else 0.0,
+                # carry the MEM cross-check total straight from the render_spec ent (it is
+                # already present per combat_analytics _entity_rows) -- the live path emits
+                # it at row.mem_damage_total but the ACT path early-returns before that.
+                'mem_damage_total': int(ent.get('mem_damage_total') or 0),
                 'is_heal': is_heal,
                 'fx_tier': '',
                 'fx_start': 0.0,
@@ -1549,6 +1553,7 @@ class DpsOverlay:
                     'rate': float(ent.get('hps' if is_heal else 'dps') or 0),
                     'pct': (amount / total) if total > 0 else 0.0,
                     'bar_pct': (amount / max_amount) if max_amount > 0 else 0.0,
+                    'mem_damage_total': int(ent.get('mem_damage_total') or 0),
                     'is_heal': is_heal,
                     'fx_tier': '',
                     'fx_start': 0.0,
