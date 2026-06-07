@@ -261,6 +261,8 @@ class DpsTracker:
         # MEM-sourced per-uid damage totals (from DamageDataMgr via the mem bridge);
         # attached to entities in get_snapshot as 'mem_damage_total'. {uid: total}.
         self._mem_damage: Dict[int, int] = {}
+        self._mem_primary: bool = False     # memory mode: MEM totals are the primary value
+        self._mem_combat_start: float = 0.0  # MEM combat clock (no timestamps in the table)
         self._load_player_cache()
 
     def set_self_uid(self, uid: int):
@@ -275,7 +277,23 @@ class DpsTracker:
         memory mode. TCP stays authoritative; this never feeds on_damage_event.
         """
         with self._lock:
-            self._mem_damage = {int(k): int(v) for k, v in (uid_to_total or {}).items() if v}
+            new = {int(k): int(v) for k, v in (uid_to_total or {}).items() if v}
+            tot = sum(new.values())
+            prev = sum(self._mem_damage.values())
+            # Start/restart the MEM combat clock on first data or a big drop (new fight).
+            if tot > 0 and (self._mem_combat_start <= 0 or tot < prev * 0.5):
+                self._mem_combat_start = time.time()
+            elif tot <= 0:
+                self._mem_combat_start = 0.0
+            self._mem_damage = new
+
+    def set_mem_primary(self, value: bool) -> None:
+        """When True (memory mode), the snapshot shows the game's own DamageDataMgr totals
+        as the primary value: per-entity damage_total/dps/pct are re-derived from MEM (the
+        original TCP value is kept as tcp_damage_total), entities re-sorted, totals adjusted.
+        DPS uses the TCP encounter window (MEM has no timestamps)."""
+        with self._lock:
+            self._mem_primary = bool(value)
 
     def set_boss_uuid(self, uuid: int):
         """Set the current boss monster UUID for boss-only damage filtering."""
@@ -722,21 +740,70 @@ class DpsTracker:
                 if md is not None:
                     e['mem_damage_total'] = int(md)
 
-        display_damage = self._total_damage_boss if (
-            self._boss_uuid and self._total_damage_boss > 0
-        ) else self._total_damage
+        # P1: memory mode -> the game's own DamageDataMgr table is the primary DPS.
+        mem_override_total = None
+        eff_elapsed = elapsed
+        mem_active = False
+        if self._mem_primary and self._mem_damage:
+            # elapsed: the TCP fight window if one is tracked, else the MEM combat clock.
+            if not self._encounter_start and self._mem_combat_start:
+                eff_elapsed = max(0.001, now - self._mem_combat_start)
+            if entities:
+                # hybrid: keep the TCP rows (names/crit/hits), swap damage to the MEM total.
+                for e in entities:
+                    mt = e.get('mem_damage_total')
+                    if mt is None:
+                        continue
+                    e['tcp_damage_total'] = e.get('damage_total')
+                    e['damage_total'] = int(mt)
+                    e['dps'] = int(int(mt) / eff_elapsed)
+                    e['damage_source'] = 'mem'
+            else:
+                # memory mode: no TCP entities -> synthesize the table from MEM totals.
+                for uid, total in self._mem_damage.items():
+                    pc = self._player_cache.get(str(uid)) or {}
+                    entities.append({
+                        'uid': int(uid),
+                        'name': pc.get('name') or f'Player_{uid}',
+                        'profession': pc.get('profession') or '',
+                        'fight_point': int(pc.get('fight_point') or 0),
+                        'is_self': (int(uid) == self._self_uid),
+                        'damage_total': int(total),
+                        'mem_damage_total': int(total),
+                        'dps': int(int(total) / eff_elapsed),
+                        'heal_total': 0, 'hps': 0,
+                        'crit_rate': 0.0, 'damage_hits': 0,
+                        'damage_source': 'mem',
+                    })
+            entities.sort(key=lambda e: int(e.get('damage_total') or 0), reverse=True)
+            _mtot = sum(int(e.get('damage_total') or 0) for e in entities)
+            _mmax = max((int(e.get('damage_total') or 0) for e in entities), default=0)
+            for e in entities:
+                _dt = int(e.get('damage_total') or 0)
+                e['damage_pct'] = round(_dt / _mtot, 4) if _mtot else 0.0
+                e['bar_pct'] = round(_dt / _mmax, 4) if _mmax else 0.0
+            mem_override_total = _mtot
+            mem_active = bool(_mtot > 0)
+
+        display_damage = mem_override_total if mem_override_total is not None else (
+            self._total_damage_boss if (self._boss_uuid and self._total_damage_boss > 0)
+            else self._total_damage)
 
         snapshot = {
-            'encounter_active': bool(self._encounter_start and self._has_meaningful_data_locked()),
-            'encounter_started_at': self._encounter_start,
+            'encounter_active': bool(mem_active
+                                     or (self._encounter_start and self._has_meaningful_data_locked())),
+            'encounter_started_at': (self._mem_combat_start
+                                     if (mem_active and not self._encounter_start)
+                                     else self._encounter_start),
             'encounter_ended_at': self._encounter_end,
-            'elapsed_s': round(elapsed, 1),
+            'elapsed_s': round(eff_elapsed, 1),
             'total_damage': display_damage,
             'total_damage_all': self._total_damage,
             'total_heal': self._total_heal,
-            'total_dps': int(display_damage / elapsed),
-            'total_hps': int(self._total_heal / elapsed),
+            'total_dps': int(display_damage / eff_elapsed),
+            'total_hps': int(self._total_heal / eff_elapsed),
             'entities': entities,
+            'data_source': 'mem' if mem_active else 'tcp',
         }
         if self._last_hit_fx:
             try:

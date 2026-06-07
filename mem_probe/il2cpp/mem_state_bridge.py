@@ -225,15 +225,15 @@ class MemStateBridge:
                     try:
                         totals = self._damage_reader.read_player_totals()
                         if totals:
-                            # Key by BOTH the full uuid and uuid>>16: the dps_tracker
-                            # entity uid may be either (verified uuid>>16 == CharId).
-                            md = {}
-                            for u, v in totals.items():
-                                u = int(u); v = int(v)
-                                md[u] = v
-                                md[u >> 16] = v
+                            # uid = playerUuid >> 16 (== CharSerialize.CharId; the dps_tracker
+                            # keys entities by uuid>>16 -- verified at get_entity_detail).
+                            md = {int(u) >> 16: int(v) for u, v in totals.items()}
                             self.last_mem_damage = md
                             self.dps_tracker.set_mem_damage(md)
+                            # memory mode -> MEM is the primary DPS table (synthesized);
+                            # hybrid -> TCP primary + MEM cross-check badge.
+                            ds = str(getattr(self.packet_bridge, '_data_source_mode', '') or '').lower()
+                            self.dps_tracker.set_mem_primary(ds == 'memory')
                             if not self._mem_dmg_logged:
                                 self._mem_dmg_logged = True
                                 top = max(totals.items(), key=lambda x: x[1])
