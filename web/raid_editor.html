@@ -318,7 +318,7 @@ function renderReactions() {
     if (!st.mem_available) {
         banner.style.display = 'block';
         banner.style.cssText = 'display:block;padding:6px 8px;margin:4px 0;border-radius:6px;background:rgba(215,155,6,.15);border:1px solid rgba(215,155,6,.5);color:#ffd46f;font-size:10px;';
-        banner.textContent = '内存未启用 — 切换数据源到 hybrid 模式以启用 Boss 反应 (data_source=' + _esc(st.data_source) + ')';
+        banner.textContent = 'Boss 反应未就绪 — 启动识别后即可自动记录并编辑 (当前数据源: ' + _esc(st.data_source) + ')';
     } else {
         banner.style.display = 'none';
     }

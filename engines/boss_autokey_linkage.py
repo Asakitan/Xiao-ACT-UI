@@ -465,8 +465,18 @@ def build_boss_reactions_state(settings, engine, state_mgr,
         status = engine.get_status() if engine else {}
     except Exception:
         status = {}
-    data_source = str(getattr(gs, "data_source", "") or "") if gs else ""
-    mem_available = bool(data_source in ("memory", "hybrid", "auto") and engine is not None)
+    # Availability is gated on the user's SELECTED data-source mode, not the live
+    # gs.data_source (which GameState never populates — the old check was always
+    # False, hiding recorded skills behind the "switch to hybrid" banner). Boss
+    # skills are now recorded in BOTH tcp (buff_list diff) and hybrid/memory feeds,
+    # so the editor is usable whenever recognition is running (engine present).
+    def _setting(key):
+        try:
+            return str(settings.get(key) or "")
+        except Exception:
+            return ""
+    data_source = (_setting("mem_data_source") or _setting("data_source") or "tcp").lower()
+    mem_available = bool(engine is not None and data_source in ("tcp", "memory", "hybrid", "auto"))
     mappings = cfg.get("mappings", [])
     current = {
         "uuid": str(_int(status.get("boss_uuid"), 0)),

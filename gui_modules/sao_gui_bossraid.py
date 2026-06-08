@@ -517,8 +517,8 @@ class BossRaidPanel:
             st = {}
         self._react_state = st
         if not st.get('mem_available'):
-            self._render_empty('内存未启用',
-                               '切换数据源到 hybrid 模式以启用 Boss 反应 (data_source=%s)'
+            self._render_empty('Boss 反应未就绪',
+                               '启动识别后即可自动记录并编辑 Boss 反应 (当前数据源: %s)'
                                % st.get('data_source', 'tcp'))
             return
         if self._react_scene is None:
