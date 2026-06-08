@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.4.11"
+APP_VERSION = "4.4.12"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v4.4.0: Boss 技能聚合 — 按地图/场景/Boss 持久记录出招, 详细编辑面板标记特殊技能.
 #   1) Boss skills/mechanics are read from the BuffComp buff list (a new transient
