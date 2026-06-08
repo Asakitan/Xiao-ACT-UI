@@ -1009,9 +1009,6 @@ var _lastShieldPct = 0;
 var _lastBreakingStage = -1;
 var _lastBreakPct = -1;
 var _lastHpPct = 1;
-var _lastStopTicking = false;
-var _breakEverHadGauge = false;  // true once break gauge was seen > 50%
-var _firstBreakSeen = false;     // true once first valid breaking_stage received
 
 /*
  * Break state machine:
@@ -1034,11 +1031,9 @@ var _firstBreakSeen = false;     // true once first valid breaking_stage receive
  *   refilled → normal: after completion animation (520ms)
  */
 var _breakState = 'normal';   // 'normal' | 'broken' | 'recovering' | 'refilled'
-var _breakStaleTimer = null;  // fallback: stale-detection timer
 var _recoverEndTimer = null;
 var _breakEnteredTs = 0;      // timestamp when entered broken state
-var _refillCompletedTs = 0;   // timestamp when refilled→normal, cooldown guard
-var _refillsCompleted = 0;     // count of completed refills; skip 4s lock on first repair to avoid freeze
+var _refillCompletedTs = 0;   // timestamp when entered refilled (cleared on new break)
 
 /* ── Client-side recovery interpolation ──
  * The protocol has no dedicated break-recovery-rate attr (IDs 446-449 unassigned).
@@ -1353,18 +1348,13 @@ function _hideBossBar() {
         _lastBreakingStage = -1;
         _lastBreakPct = -1;
         _lastHpPct = 1;
-        _lastStopTicking = false;
         _breakState = 'normal';
-        _breakEverHadGauge = false;
-        _firstBreakSeen = false;
         _refillCompletedTs = 0;
-        _refillsCompleted = 0;
         // Reset name/text to defaults
         var _nameEl = document.getElementById('boss-name');
         if (_nameEl) _nameEl.textContent = 'Enemy';
         _cancelRecoverInterpolation();
         _clearShieldGhost(true);
-        if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
         if (_recoverEndTimer) { clearTimeout(_recoverEndTimer); _recoverEndTimer = null; }
         if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
         _clearClassList(root, ['shield-hit-break', 'shield-hit-restore', 'break-hit', 'break-recover-hit']);
@@ -1668,12 +1658,9 @@ function updateBossBar(data) {
     }
     var breakFill = document.getElementById('break-fill');
     var breakTrack = breakFill.parentElement;
-    // During broken/recovering/refilled states the state machine owns the visual —
-    // don't let stale server data overwrite the 0% / interpolated width.
-    // Post-refill grace: after refilled→normal, lock visual for 2.0s (skipped on first repair)
-    // so the raw server data (which lags) doesn't flash the bar to 0%.
-    var _postRefillLock = (_refillCompletedTs > 0 && (Date.now() - _refillCompletedTs) < 2000 && _refillsCompleted >= 2);
-    var _breakVisualLocked = (_breakState === 'broken' || _breakState === 'refilled' || _recoverInterpolating || _postRefillLock);
+    // During broken/recovering/refilled the state machine owns the visual — don't let
+    // the live server gauge overwrite the 0% / interpolated width.
+    var _breakVisualLocked = (_breakState === 'broken' || _breakState === 'refilled' || _recoverInterpolating);
     if (!_breakVisualLocked && _breakDataAvailable) {
         breakFill.style.width = Math.round(breakPct * 100) + '%';
     }
@@ -1685,31 +1672,15 @@ function updateBossBar(data) {
         document.getElementById('stage-text').textContent = 'P' + Math.max(1, stage);
     }
 
-    // 首次看到 breaking_stage=0 时 (boss 已处于 break 状态),
-    // 强制 breakPct=0 避免显示陈旧的 extinction 值.
-    if (stage === 0 && _breakState === 'normal' && !_firstBreakSeen) {
-        breakPct = 0;
-        if (!_breakVisualLocked) {
-            breakFill.style.width = '0%';
-        }
-    }
-    if (stage >= 0) _firstBreakSeen = true;
-
-    if (!_breakVisualLocked && (_breakDataAvailable || (stage === 0 && !_firstBreakSeen))) {
+    if (!_breakVisualLocked && _breakDataAvailable) {
         document.getElementById('break-text').textContent = Math.round(breakPct * 100) + '%';
-    } else if (_postRefillLock) {
-        // During post-refill grace: show 100% text
-        document.getElementById('break-text').textContent = '100%';
     }
 
-    var stopTicking = !!data.stop_breaking_ticking;
-
-    // ── Break state machine ──
-    _updateBreakState(breakPct, stage, stopTicking, breakFill, breakTrack);
+    // ── Signal-driven break state machine (breaking_stage transitions only) ──
+    _updateBreakState(breakPct, stage, breakFill, breakTrack);
 
     _lastBreakingStage = stage;
     _lastBreakPct = breakPct;
-    _lastStopTicking = stopTicking;
 
     root.classList.toggle('invincible', !!data.invincible);
     root.classList.toggle('overdrive', !!data.in_overdrive && !data.invincible);
@@ -1742,122 +1713,51 @@ window.addEventListener('resize', function() {
     setTimeout(_reportRegions, 50);
 });
 
-/* ── Break state machine ── */
-function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
-    // Track whether we've ever seen a meaningful break gauge
-    if (breakPct > 0.50) _breakEverHadGauge = true;
+/* ── Signal-driven break state machine ──
+ * Driven purely by breaking_stage transitions — 0 = Breaking (broken), 1 = BreakEnd
+ * (normal), -1 = no data. No stale/cooldown/raw-pct heuristics: the source signal
+ * (TCP packet or per-tick MEM read) is trusted directly.
+ */
+var BREAK_STUCK_FAILSAFE_MS = 30000;  // anti-stuck: force recovery if break signal goes silent
+
+function _beginBreakRecovery(fill, track) {
+    if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
+    _breakState = 'recovering';
+    fill.classList.add('recovering');
+    track.classList.add('recovering');
+    _triggerBreakRecovery('recovering');
+    _startRecoverInterpolation(fill);
+    _triggerRecoverFastFill();
+}
+
+function _updateBreakState(breakPct, stage, fill, track) {
     switch (_breakState) {
     case 'normal':
-        // If TCP event already triggered this break, skip heuristics for 2.5s
-        if (_tcpBreakTriggered && (Date.now() - _tcpBreakTs) < 2500) break;
-        // Post-refill cooldown: skip ALL break heuristics for 4s after refilled→normal
-        // (skipped on first repair per user request; use 2nd+ repair logic)
-        if (_refillCompletedTs > 0 && (Date.now() - _refillCompletedTs) < 4000 && _refillsCompleted >= 2) break;
-        // Packet signal: breaking_stage transitions to 0 (fallback)
-        if ((_lastBreakingStage >= 1 || _lastBreakingStage === -1) && stage !== _lastBreakingStage && stage === 0) {
+        // Enter broken when the boss transitions into the Breaking stage.
+        if (stage === 0 && _lastBreakingStage !== 0) {
             _enterBroken(fill, track);
-            return;
         }
-        // Packet signal: stop_breaking_ticking just turned on
-        if (stopTicking && !_lastStopTicking && breakPct <= 0.08) {
-            _enterBroken(fill, track);
-            return;
-        }
-        // Guard: never trigger stale-data break if gauge was never seen above 50%
-        if (!_breakEverHadGauge) break;
-        // Under-attack stall: gauge stuck ≤8% while boss HP is dropping
-        var hpDropping = (_lastHpChangedTs > 0 && (Date.now() - _lastHpChangedTs) < 3000);
-        if (hpDropping && breakPct <= 0.08 && breakPct === _lastBreakPct && _lastBreakPct >= 0) {
-            if (!_breakStaleTimer) {
-                _breakStaleTimer = setTimeout(function() {
-                    _breakStaleTimer = null;
-                    if (_breakState === 'normal') {
-                        var bf = document.getElementById('break-fill');
-                        _enterBroken(bf, bf.parentElement);
-                    }
-                }, 350);
-            }
-        }
-        // Fallback: gauge stuck at ≤8% — start stale timer
-        if (breakPct <= 0.08 && _lastBreakPct <= 0.08 && _lastBreakPct >= 0) {
-            if (!_breakStaleTimer) {
-                _breakStaleTimer = setTimeout(function() {
-                    _breakStaleTimer = null;
-                    if (_breakState === 'normal') {
-                        var bf = document.getElementById('break-fill');
-                        _enterBroken(bf, bf.parentElement);
-                    }
-                }, 500);
-            }
-        } else {
-            // Gauge moving or above threshold — cancel stale timer
-            if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
-        }
-        // Also clear under-attack stale timer if gauge is above 8%
-        if (breakPct > 0.08 && _breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
         break;
 
     case 'broken':
-        // Stale-data guard: ignore high breakPct / stage signals for 3 s after entering broken.
-        // The server often hasn't sent extinction=0 yet, so old 90 %+ data is stale.
-        var _brokenAge = Date.now() - _breakEnteredTs;
-        if (_brokenAge < 3000 && breakPct >= 0.50) break;  // discard stale high readings
-        // Recovery-complete during hold: BreakEnd signal (stage 0→1) or raw pct ≥90%
-        if ((stage === 1 && _lastBreakingStage !== 1) || breakPct >= 0.90) {
-            if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
-            _breakState = 'recovering';
-            fill.classList.add('recovering');
-            track.classList.add('recovering');
-            _triggerBreakRecovery('recovering');
-            _startRecoverInterpolation(fill);
-            _triggerRecoverFastFill();
-            return;
-        }
-        // Packet-based early recovery: if gauge rises substantially, skip the hold.
-        // Guard: must be at least 2s into broken state to avoid server jitter
-        // causing premature recovery, and gauge must show meaningful rise (>15%).
-        if (_brokenAge >= 2000 && breakPct > _lastBreakPct && breakPct > 0.15) {
-            if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
-            _breakState = 'recovering';
-            fill.classList.add('recovering');
-            track.classList.add('recovering');
-            _triggerBreakRecovery('recovering');
-            _startRecoverInterpolation(fill);
+        // Leave broken the moment the break signal clears (stage back to 1/-1).
+        if (stage !== 0) {
+            _beginBreakRecovery(fill, track);
+        } else if ((Date.now() - _breakEnteredTs) > BREAK_STUCK_FAILSAFE_MS) {
+            // Anti-stuck failsafe (not a data heuristic): break signal went silent.
+            _beginBreakRecovery(fill, track);
         }
         break;
 
     case 'recovering':
-        // Track highest raw breakPct during recovery (for re-break detection)
-        _recoverRawPeakPct = Math.max(_recoverRawPeakPct, breakPct);
-        // BreakEnd packet → fast-fill to 100%
-        if (stage === 1 && _lastBreakingStage !== 1) {
-            _triggerRecoverFastFill();
-            return;
-        }
-        // Raw server data jumps to ≥95% → fast-fill (even during interpolation)
-        if (breakPct >= 0.95 && _recoverPhase !== 'fastfill') {
-            _triggerRecoverFastFill();
-            return;
-        }
-        // stop_breaking_ticking turned OFF while recovering → break ended
-        if (!stopTicking && _lastStopTicking && breakPct > 0.5) {
-            _triggerRecoverFastFill();
-            return;
-        }
-        // Safety: auto-refill if stuck recovering for too long (14 s)
-        if (_recoverInterpolating && (Date.now() - _recoverStartTs) > 14000) {
-            _triggerRecoverFastFill();
-            return;
-        }
-        // Guard: genuine re-break — only if raw data actually rose above 50%
-        // then crashed back, indicating server reported substantial recovery
-        // before it was interrupted by a new break.
-        if (breakPct <= 0.05 && _recoverRawPeakPct > 0.50) {
+        // Re-break during the recovery animation: stage dropped back to 0.
+        if (stage === 0 && _lastBreakingStage !== 0) {
             _cancelRecoverInterpolation();
             fill.classList.remove('recovering', 'fast-filling');
             track.classList.remove('broken', 'recovering');
             _enterBroken(fill, track);
         }
+        // (fill-animation completion → _enterRefilled handled by the interpolation RAF)
         break;
 
     case 'refilled':
@@ -1867,16 +1767,13 @@ function _updateBreakState(breakPct, stage, stopTicking, fill, track) {
 }
 
 function _enterBroken(fill, track) {
-    // Phase 1 (0–2.5 s): show broken state, play burst VFX.
-    // Phase 2 (2.5–8 s): bar recovers over 5.5 s.
-    // Packet data can still trigger _enterRefilled() early once in 'recovering'.
+    // Bar forced to 0%, burst VFX. Stays broken until breaking_stage leaves 0 (handled
+    // per-tick in _updateBreakState) — no auto-advance hold timer.
     _breakState = 'broken';
     _breakEnteredTs = Date.now();
-    _tcpBreakTriggered = false;  // reset for next cycle
-    _refillCompletedTs = 0;     // clear cooldown on new break
+    _refillCompletedTs = 0;
     _cancelRecoverInterpolation();
     if (_breakHoldTimer) { clearTimeout(_breakHoldTimer); _breakHoldTimer = null; }
-    if (_breakStaleTimer) { clearTimeout(_breakStaleTimer); _breakStaleTimer = null; }
     if (_recoverEndTimer) { clearTimeout(_recoverEndTimer); _recoverEndTimer = null; }
     fill.classList.remove('recovering', 'full', 'fast-filling');
     track.classList.remove('recovering');
@@ -1887,18 +1784,6 @@ function _enterBroken(fill, track) {
     if (breakText) breakText.textContent = '0%';
     _lastBreakPct = 0;
     _triggerBreakBurst();
-    // After 2.5 s, start recovery animation
-    _breakHoldTimer = setTimeout(function() {
-        _breakHoldTimer = null;
-        if (_breakState !== 'broken') return;  // already handled (re-break / hide)
-        var bf = document.getElementById('break-fill');
-        var bt = bf.parentElement;
-        _breakState = 'recovering';
-        bf.classList.add('recovering');
-        bt.classList.add('recovering');
-        _triggerBreakRecovery('recovering');
-        _startRecoverInterpolation(bf);
-    }, 2500);
 }
 
 function _enterRefilled(fill, track) {
@@ -1913,24 +1798,18 @@ function _enterRefilled(fill, track) {
         fill.classList.remove('recovering');
         track.classList.remove('broken', 'recovering');
         _breakState = 'normal';
-        _refillCompletedTs = Date.now();  // start post-refill cooldown
-        _refillsCompleted = (_refillsCompleted || 0) + 1;
-        _breakEverHadGauge = false;       // reset so stale heuristics require fresh >50%
         _recoverEndTimer = null;
     }, 520);
 }
 
-var _tcpBreakTriggered = false;  // TCP event already handled this break cycle
-var _tcpBreakTs = 0;             // timestamp of last TCP break trigger
-
 function triggerBreakEffect(type) {
+    // TCP break buff-event (a real signal, not a heuristic). When MEM owns break in
+    // hybrid, the per-tick breaking_stage drives the state machine and self-corrects
+    // any stale double-trigger from this entry within one tick.
     if (!_visible) return;
     if (type === 'enter_breaking' || type === 'into_fracture_state') {
-        // TCP is authoritative — force broken state regardless of current state
         var bf = document.getElementById('break-fill');
         var bt = bf.parentElement;
-        _tcpBreakTriggered = true;
-        _tcpBreakTs = Date.now();
         if (_breakState === 'normal' || _breakState === 'refilled') {
             _enterBroken(bf, bt);
         } else if (_breakState === 'recovering') {
@@ -1940,7 +1819,7 @@ function triggerBreakEffect(type) {
             bt.classList.remove('broken', 'recovering');
             _enterBroken(bf, bt);
         }
-        // If already 'broken', just refresh the VFX timestamp
+        // If already 'broken', no-op (burst already playing)
     } else if (type === 'shield_broken') {
         // TCP shield-broken: force shield break VFX regardless of shield_active state
         _lastShieldActive = true;

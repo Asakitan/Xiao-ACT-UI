@@ -467,8 +467,7 @@ class BossHpOverlay:
     RECOVER_SLOWTAIL_PCT = 0.98
     RECOVER_FASTFILL_S = 0.42   # current→100% (cubic ease-out)
     REFILLED_HOLD_S = 0.52      # hold at 100% then → normal
-    POST_REFILL_COOLDOWN_S = 4.0
-    TCP_COOLDOWN_S = 2.5
+    BREAK_STUCK_FAILSAFE_S = 30.0  # anti-stuck: force recovery if break signal goes silent
 
     TICK_MS = 16          # damping coefficient base; not scheduling rate (overlay_scheduler owns Hz)
     IDLE_TICK_MS = 50
@@ -505,25 +504,14 @@ class BossHpOverlay:
         self._target_break_pct = 1.0
         self._breaking_stage = 0
         self._last_breaking_stage = -1
-        # Webview-parity break state machine (4 states)
+        # Signal-driven break state machine (4 states)
         self._break_state = 'normal'    # 'normal' | 'broken' | 'recovering' | 'refilled'
         self._has_break_data = False
-        self._stop_breaking_ticking = False
-        self._last_stop_breaking_ticking = False
-        self._first_break_seen = False
         self._last_break_pct = 1.0
-        self._break_ever_had_gauge = False
 
         # Break timing state
         self._break_entered_ts = 0.0
-        self._break_hold_timer = 0.0    # when to transition broken→recovering
         self._refill_completed_ts = 0.0
-        self._refills_completed = 0
-        self._tcp_break_triggered = False
-        self._tcp_break_ts = 0.0
-        self._break_stale_ts = 0.0      # when stale detection started
-        self._last_hp_changed_ts = 0.0
-        self._prev_hp_for_break = -1.0
 
         # Recovering sub-phases: 'idle'|'filling'|'capped'|'slowtail'|'fastfill'
         self._recover_phase = 'idle'
@@ -831,29 +819,10 @@ class BossHpOverlay:
         self._additional_units = self._normalize_additional_units(
             data.get('additional') or [])
 
+        # Shield is signal-driven (TCP-authoritative): trust shield_active + shield_pct
+        # directly; no liveness guessing.
         shield_active = bool(data.get('shield_active', False))
         shield_pct = max(0.0, min(1.0, float(data.get('shield_pct') or 0)))
-
-        # ── Shield liveness heuristic ──
-        # If shield_active is True but shield_pct is 0 and the boss HP has been
-        # decreasing, the server likely stopped sending ShieldList updates after
-        # the shield was depleted. Force shield_active = False so the overlay
-        # correctly hides the shield bar.
-        if shield_active and shield_pct < 0.001:
-            _now_sh = time.time()
-            if not hasattr(self, '_shield_zero_ts'):
-                self._shield_zero_ts: float = 0.0
-            if self._prev_hp_for_break > 0 and hp_pct < self._prev_hp_for_break - 0.001:
-                # Boss HP is actively decreasing while shield reports 0% —
-                # the shield was likely consumed. If this has been the case
-                # for more than 0.8s, force-clear the active flag.
-                if self._shield_zero_ts == 0.0:
-                    self._shield_zero_ts = _now_sh
-                elif _now_sh - self._shield_zero_ts > 0.8:
-                    shield_active = False
-            else:
-                # Reset timer when HP is stable or increasing
-                self._shield_zero_ts = 0.0
 
         if self._last_shield_active and not shield_active:
             # Shield just broke → retain a ghost shell and fire the full
@@ -876,42 +845,24 @@ class BossHpOverlay:
         stage = int(data.get('breaking_stage') if data.get('breaking_stage') is not None else -1)
         ext_pct = max(0.0, min(1.0, float(data.get('extinction_pct') or 0)))
         has_break = bool(data.get('has_break_data', False))
-        stop_ticking = bool(data.get('stop_breaking_ticking', False))
-
-        # Track HP changes for stale break detection.
-        if abs(hp_pct - self._prev_hp_for_break) > 0.005:
-            self._last_hp_changed_ts = time.time()
-            self._prev_hp_for_break = hp_pct
-
-        # Track if break gauge has ever been significantly filled.
-        if ext_pct > 0.50:
-            self._break_ever_had_gauge = True
 
         self._breaking_stage = stage
         self._has_break_data = has_break
-        self._stop_breaking_ticking = stop_ticking
 
-        # Visual locking: don't move the break bar while the state machine
-        # is controlling it (broken, recovering, refilled, or post-refill cooldown).
-        post_refill_lock = (self._refill_completed_ts > 0
-                            and time.time() - self._refill_completed_ts < 2.0
-                            and self._refills_completed >= 2)
+        # Visual locking: don't move the live break gauge while the state machine owns
+        # the bar (broken holds 0%, recovering/refilled run the fill animation).
         visual_locked = (self._break_state in ('broken', 'refilled')
-                         or self._recover_interpolating
-                         or post_refill_lock)
+                         or self._recover_interpolating)
 
         if not visual_locked and has_break:
             self._target_break_pct = ext_pct
         elif self._break_state == 'broken':
             self._target_break_pct = 0.0
 
-        # Run break state machine.
-        self._update_break_state(ext_pct, stage, stop_ticking)
+        # Run signal-driven break state machine (breaking_stage transitions only).
+        self._update_break_state(ext_pct, stage)
 
         self._last_breaking_stage = stage
-        self._last_stop_breaking_ticking = stop_ticking
-        if stage >= 0:
-            self._first_break_seen = True
         self._last_break_pct = ext_pct
 
         self._in_overdrive = bool(data.get('in_overdrive', False))
@@ -995,13 +946,12 @@ class BossHpOverlay:
     # ──────────────────────────────────────────
 
     def _enter_broken(self) -> None:
-        """Transition to broken state: bar forced to 0%, burst VFX fires."""
+        """Enter broken state: bar forced to 0%, burst VFX fires. Stays broken until the
+        break signal clears (breaking_stage leaves 0) — no auto-advance hold timer."""
         self._break_state = 'broken'
         self._break_entered_ts = time.time()
-        self._tcp_break_triggered = False
         self._refill_completed_ts = 0.0
         self._cancel_recover()
-        self._break_stale_ts = 0.0
 
         # Force bar to 0%.
         self._target_break_pct = 0.0
@@ -1009,9 +959,6 @@ class BossHpOverlay:
         self._last_break_pct = 0.0
 
         self._trigger_break_burst_fx()
-
-        # Schedule hold→recovering transition.
-        self._break_hold_timer = time.time() + self.BREAK_HOLD_S
 
     def _begin_recovery(self) -> None:
         """Transition from broken to recovering with interpolation."""
@@ -1021,7 +968,6 @@ class BossHpOverlay:
         self._recover_current_pct = 0.0
         self._recover_interpolating = True
         self._recover_raw_peak_pct = 0.0
-        self._break_hold_timer = 0.0
         self._trigger_break_recovery_fx('recovering')
 
     def _trigger_recover_fastfill(self) -> None:
@@ -1052,112 +998,42 @@ class BossHpOverlay:
         # Schedule transition back to normal.
         self._refill_completed_ts = time.time() + self.REFILLED_HOLD_S
 
-    def _update_break_state(self, break_pct: float, stage: int,
-                            stop_ticking: bool) -> None:
-        """Webview-parity break state machine dispatch."""
+    def _update_break_state(self, break_pct: float, stage: int) -> None:
+        """Signal-driven break state machine.
+
+        Driven purely by ``breaking_stage`` transitions — 0 = Breaking (broken),
+        1 = BreakEnd (normal), -1 = no data. No stale/cooldown/raw-pct heuristics:
+        the source signal (TCP packet or per-tick MEM read) is trusted directly.
+        """
         now = time.time()
         prev_stage = self._last_breaking_stage
-        prev_stop = self._last_stop_breaking_ticking
-
-        if break_pct > 0.50:
-            self._break_ever_had_gauge = True
 
         if self._break_state == 'normal':
-            # Guard: TCP cooldown.
-            if self._tcp_break_triggered and now - self._tcp_break_ts < self.TCP_COOLDOWN_S:
-                return
-            # Guard: post-refill cooldown (after 2nd+ repair).
-            if (self._refill_completed_ts > 0
-                    and now - self._refill_completed_ts < self.POST_REFILL_COOLDOWN_S
-                    and self._refills_completed >= 2):
-                return
-
-            # Trigger 1: breaking_stage transitions to 0 from ≥1 or -1.
-            if (prev_stage >= 1 or prev_stage == -1) and stage != prev_stage and stage == 0:
+            # Enter broken when the boss transitions into the Breaking stage.
+            if stage == 0 and prev_stage != 0:
                 self._enter_broken()
-                return
-
-            # Trigger 2: stop_breaking_ticking edge False→True with low break%.
-            if stop_ticking and not prev_stop and break_pct <= 0.08:
-                self._enter_broken()
-                return
-
-            if not self._break_ever_had_gauge:
-                return
-
-            # Trigger 3: stale detection — break stuck ≤8% while HP dropping.
-            hp_dropping = (self._last_hp_changed_ts > 0
-                           and now - self._last_hp_changed_ts < 3.0)
-            if hp_dropping and break_pct <= 0.08 and break_pct == self._last_break_pct and self._last_break_pct >= 0:
-                if self._break_stale_ts == 0.0:
-                    self._break_stale_ts = now
-                elif now - self._break_stale_ts >= 0.35:
-                    self._break_stale_ts = 0.0
-                    self._enter_broken()
-                    return
-            elif break_pct <= 0.08 and self._last_break_pct <= 0.08 and self._last_break_pct >= 0:
-                if self._break_stale_ts == 0.0:
-                    self._break_stale_ts = now
-                elif now - self._break_stale_ts >= 0.50:
-                    self._break_stale_ts = 0.0
-                    self._enter_broken()
-                    return
-            else:
-                self._break_stale_ts = 0.0
-
-            if break_pct > 0.08 and self._break_stale_ts:
-                self._break_stale_ts = 0.0
 
         elif self._break_state == 'broken':
-            broken_age = now - self._break_entered_ts
-
-            # Early exit: stage→1 (BreakEnd packet) or raw pct very high.
-            if (stage == 1 and prev_stage != 1) or (broken_age > 3.0 and break_pct >= 0.90):
+            # Leave broken the moment the break signal clears (stage back to 1/-1).
+            if stage != 0:
                 self._begin_recovery()
                 self._trigger_recover_fastfill()
-                return
-
-            # Early exit: break pct rising above 15% after 2s hold.
-            if broken_age >= 2.0 and break_pct > self._last_break_pct and break_pct > 0.15:
+            # Anti-stuck failsafe (not a data heuristic): if the signal goes silent
+            # while still reading 0, don't stay broken forever.
+            elif now - self._break_entered_ts > self.BREAK_STUCK_FAILSAFE_S:
                 self._begin_recovery()
-                return
-
-            # Normal hold→recovering after BREAK_HOLD_S.
-            if self._break_hold_timer > 0 and now >= self._break_hold_timer:
-                self._begin_recovery()
-                return
+                self._trigger_recover_fastfill()
 
         elif self._break_state == 'recovering':
-            self._recover_raw_peak_pct = max(self._recover_raw_peak_pct, break_pct)
-
-            # Fast-fill triggers.
-            if stage == 1 and prev_stage != 1:
-                self._trigger_recover_fastfill()
-                return
-            if break_pct >= 0.95 and self._recover_phase != 'fastfill':
-                self._trigger_recover_fastfill()
-                return
-            if not stop_ticking and prev_stop and break_pct > 0.5:
-                self._trigger_recover_fastfill()
-                return
-            # Safety: if recovering for >14s, force fast-fill.
-            if self._recover_interpolating and now - self._recover_start_ts > 14.0:
-                self._trigger_recover_fastfill()
-                return
-
-            # Re-break guard: if break% drops ≤5% and peak was >50%.
-            if break_pct <= 0.05 and self._recover_raw_peak_pct > 0.50:
+            # Re-break during the recovery animation: stage dropped back to 0.
+            if stage == 0 and prev_stage != 0:
                 self._cancel_recover()
                 self._enter_broken()
-                return
+            # (fill-animation completion → _enter_refilled in _advance_recovery)
 
         elif self._break_state == 'refilled':
-            # Wait for refilled hold timer to expire.
             if self._refill_completed_ts > 0 and now >= self._refill_completed_ts:
                 self._break_state = 'normal'
-                self._refill_completed_ts = now  # record for post-refill cooldown
-                self._refills_completed = (self._refills_completed or 0) + 1
-                self._break_ever_had_gauge = False
 
     def _advance_recovery(self, now: float) -> None:
         """Advance the recovering sub-phase interpolation (called from _advance)."""
@@ -1217,12 +1093,12 @@ class BossHpOverlay:
         self._flash_start = time.time()
 
     def trigger_break_effect(self, effect_type: str) -> None:
-        """TCP-driven break event (called from sao_gui.py)."""
+        """TCP break buff-event (a real signal, not a heuristic). When MEM owns break in
+        hybrid, the per-tick breaking_stage drives the state machine and self-corrects
+        any stale double-trigger from this entry within one tick."""
         if not self._visible:
             return
         if effect_type in ('enter_breaking', 'into_fracture_state'):
-            self._tcp_break_triggered = True
-            self._tcp_break_ts = time.time()
             if self._break_state in ('normal', 'refilled'):
                 self._enter_broken()
             elif self._break_state == 'recovering':

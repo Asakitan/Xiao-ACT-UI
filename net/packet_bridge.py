@@ -702,6 +702,33 @@ class PacketBridge:
             return self._parser.get_monsters().get(uuid)
         return None
 
+    def boss_break_source(self) -> str:
+        """Who owns the boss break signal right now: 'mem' or 'tcp'.
+
+        TCP mode -> always 'tcp' (no mem source). hybrid/auto/memory -> 'mem' once the
+        MEM bridge has acquired a correct base (sticky), else 'tcp'. Shield is NOT
+        covered here — shield always comes from TCP regardless of this result.
+        """
+        if self._data_source_mode == 'tcp':
+            return 'tcp'
+        ms = self._mem_source
+        try:
+            if ms is not None and ms.base_acquired():
+                return 'mem'
+        except Exception:
+            pass
+        return 'tcp'
+
+    def get_boss_break_mem(self):
+        """MEM boss break dict {breaking_stage, extinction_pct, has_break_data} or None."""
+        ms = self._mem_source
+        if ms is None:
+            return None
+        try:
+            return ms.boss_break()
+        except Exception:
+            return None
+
     def get_players(self) -> dict:
         """Return all tracked players {uid → PlayerData} from the parser."""
         if self._parser:

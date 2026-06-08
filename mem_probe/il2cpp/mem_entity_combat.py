@@ -68,7 +68,8 @@ A_MAX_EXT, A_EXT, A_MAX_STUN, A_STUN = 440, 441, 442, 443
 A_OVERDRIVE, A_BREAK_STAGE = 444, 455
 A_SKILL_ID = 100             # current cast skill id (present only while casting)
 # attrs read every tick for the combat snapshot — only these are resolved (not all 107)
-COMBAT_ATTR_IDS = (A_HP, A_MAX_HP, A_BREAK_STAGE, A_OVERDRIVE, A_STUN, A_EXT, A_SKILL_ID)
+COMBAT_ATTR_IDS = (A_HP, A_MAX_HP, A_BREAK_STAGE, A_OVERDRIVE, A_STUN, A_EXT,
+                   A_MAX_EXT, A_SKILL_ID)
 _TYPE_CHAR = {"LongAttr": "L", "IntAttr": "I", "FloatAttr": "F", "BoolAttr": "B"}
 
 MAX_HP_PLAUSIBLE = 5_000_000_000   # exclude server-time longs (~1.7e12)
@@ -403,6 +404,7 @@ class EntityCombatReader:
             "overdrive": _n(A_OVERDRIVE),
             "stun": _n(A_STUN),
             "extinction": _n(A_EXT),
+            "max_extinction": _n(A_MAX_EXT),
             "cast_skill_id": (int(sk) if isinstance(sk, (int, float)) and sk else None),
         }
 
@@ -437,14 +439,18 @@ class EntityCombatReader:
             return {}
         if _HAS_FULLDECODE and _cymem is not None:
             try:
-                flat = _cymem.read_entity_combat_many(self.pm._handle, ent_addrs)
+                # pass the auto-resolved offsets so the nogil kernel self-heals too
+                # (wrapper falls back to the baked-offset call on a pre-rebuild kernel)
+                flat = _cymem.read_entity_combat_many(
+                    self.pm._handle, ent_addrs,
+                    self.off_ent_attrs, self.off_coll_indexpart, self.off_coll_values)
             except Exception:
                 flat = None
-            if flat is not None and len(flat) == len(ent_addrs) * 7:
+            if flat is not None and len(flat) == len(ent_addrs) * 8:
                 out: Dict[int, dict] = {}
                 _v = lambda x: (None if x < 0 else int(x))
                 for i, e in enumerate(ent_addrs):
-                    b = i * 7
+                    b = i * 8
                     cur = flat[b]
                     mx = flat[b + 1]
                     if cur < 0 or mx <= 0:
@@ -457,6 +463,7 @@ class EntityCombatReader:
                         "overdrive": _v(flat[b + 3]),
                         "stun": _v(flat[b + 4]),
                         "extinction": _v(flat[b + 5]),
+                        "max_extinction": _v(flat[b + 7]),
                         "cast_skill_id": (int(sk) if sk > 0 else None),
                     }
                 return out

@@ -28,6 +28,8 @@ import threading
 import time
 from typing import Any, Dict, List
 
+from engines.combat_analytics import mem_boss_break_override
+
 
 def _boss_bar_main_key(_m, _recent_targets):
     """Boss-bar primary-target sort key. Hoisted from _compute_boss_hp_delta
@@ -621,6 +623,18 @@ class SAOPlayerGUIStateMixin:
                         None, getattr(self, '_bb_last_target_uuid', 0),
                         getattr(self, '_dps_tracker', None)),
                 }
+            # Break source priority: in hybrid/auto/memory, once the MEM base is acquired
+            # (sticky), boss break (stage + gauge%) comes from MEM; in TCP mode / before
+            # base it stays TCP. Shield is NEVER overridden — TCP-only. Applied before the
+            # motion-sig / build_boss_bar_sig push gate so MEM-only break changes still push.
+            _bb_mem_break = mem_boss_break_override(_bridge)
+            if _bb_mem_break is not None:
+                (_bb_data['breaking_stage'],
+                 _bb_data['has_break_data'],
+                 _bb_data['extinction_pct']) = _bb_mem_break
+                _bb_data['extinction'] = 0
+                _bb_data['max_extinction'] = 0
+                _bb_data['stop_breaking_ticking'] = False
             if _bb_show and not _bb_raid_active:
                 _bb_hp_motion_sig = (
                     int(self._bb_last_target_uuid or 0),

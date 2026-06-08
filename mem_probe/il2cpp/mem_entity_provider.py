@@ -94,6 +94,8 @@ class MemEntityProvider:
                 "breaking_stage": c.get("breaking_stage"),
                 "overdrive": c.get("overdrive"),
                 "stun": c.get("stun"),
+                "extinction": c.get("extinction"),
+                "max_extinction": c.get("max_extinction"),
                 "cast_skill_id": c.get("cast_skill_id"),
             })
         return out

@@ -114,6 +114,20 @@ class UnifiedDataSource:
         except Exception:
             pass
 
+    def base_acquired(self) -> bool:
+        """True once the MEM bridge has read a valid entity snapshot (correct base)."""
+        try:
+            return bool(self._bridge.base_acquired())
+        except Exception:
+            return False
+
+    def boss_break(self):
+        """Latest MEM boss break dict {breaking_stage, extinction_pct, has_break_data} or None."""
+        try:
+            return self._bridge.boss_break()
+        except Exception:
+            return None
+
     def start(self, *, defer: Optional[bool] = None) -> bool:
         """Start or arm the underlying read-only memory self-state bridge."""
         if self._started:
