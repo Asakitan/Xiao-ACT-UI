@@ -1015,13 +1015,15 @@ class BossRaidEngine:
             edge = _string(action.get("cast_edge")).lower()
             dur = action.get("cast_duration_ms")
 
-            if edge == "start" and skill_id:
+            if edge == "start":
                 self._boss_cast_skill_id = skill_id
-                self._boss_cast_skill_name = name
+                # instant skills (counterattacks) have no skill id — label them so the
+                # editor can still bind a reaction to "this boss's action".
+                self._boss_cast_skill_name = name or ('动作/反击' if not skill_id else '')
                 self._boss_cast_active = True
                 self._boss_cast_start_ts = time.time()
                 self._boss_cast_duration_ms = _coerce_int(dur, 0)
-                self._record_observed_skill_locked(base_id, skill_id, name, dur)
+                self._record_observed_skill_locked(base_id, skill_id, self._boss_cast_skill_name, dur)
                 boss_name = _string(action.get("boss_name"))
                 if base_id and boss_name:
                     self._observed_boss_names[int(base_id)] = boss_name
@@ -1084,8 +1086,8 @@ class BossRaidEngine:
 
     def _record_observed_skill_locked(self, base_id: int, skill_id: int,
                                       name: str, dur: Any):
-        if skill_id <= 0:
-            return
+        if skill_id < 0:
+            return  # skill_id 0 == an instant action (counterattack) with no id
         by_skill = self._observed_boss_skills.setdefault(int(base_id), {})
         rec = by_skill.get(skill_id)
         if rec is None:

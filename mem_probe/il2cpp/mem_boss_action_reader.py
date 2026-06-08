@@ -28,6 +28,11 @@ ENT_STATEMACHINE_OFF = 0x70   # ZEntity.stateMachine_ -> ZStateMachine
 ENT_BUFFCOMP_OFF = 0x98       # ZEntity.buffComp_ -> BuffComp
 SM_CURSTATE_OFF = 0x20        # ZStateMachine.currentState_ (EActorState int)
 ACTOR_STATE_SINGING = 1       # EActorState.ActorStateSinging (casting/channel)
+ACTOR_STATE_SKILL = 2         # EActorState.ActorStateSkill (instant skill/counterattack)
+# An entity is "performing a skill action" in these states. Verified live: a
+# counterattacking dummy flips into Skill(2) ~1/sec WITHOUT setting cast_skill_id
+# (attr 100), so actor_state — not attr 100 alone — is the reliable action signal.
+_ACTIVE_ACTOR_STATES = (ACTOR_STATE_SINGING, ACTOR_STATE_SKILL)
 
 BUFFCOMP_LIST_OFF = 0x30      # BuffComp.buffList_ -> ZList<BuffItem>
 ZLIST_ITEMS_OFF = 0x10        # ZList.items_ (T[])
@@ -142,6 +147,16 @@ class BossActionTracker:
     # ── public ────────────────────────────────────────────────────────────────
     def update(self, snap: List[dict], boss: Optional[dict]) -> List[dict]:
         """Rich per-tick update over the full entity snapshot. Never raises."""
+        # Read the boss's actor_state once so its instant skills (which don't set
+        # cast_skill_id) are still detected on the rich path; non-boss entities use
+        # the cheaper skill-id-only path.
+        boss_uuid = int((boss or {}).get("uuid") or 0)
+        boss_actor = None
+        if boss and self._probe and (boss.get("obj")):
+            try:
+                boss_actor = self._probe.read_actor_state(int(boss["obj"]))
+            except Exception:
+                boss_actor = None
         records: List[dict] = []
         live = set()
         for e in (snap or []):
@@ -153,7 +168,7 @@ class BossActionTracker:
                 continue
             live.add(uuid)
             try:
-                rec = self._process_rich(e)
+                rec = self._process_rich(e, boss_actor if uuid == boss_uuid else None)
                 if rec is not None:
                     records.append(rec)
             except Exception:
@@ -177,9 +192,7 @@ class BossActionTracker:
                 self._prev[uuid] = st
             if obj:
                 st["obj"] = int(obj)
-            if actor_state is not None:
-                st["actor_state"] = int(actor_state)
-            edge = self._apply_skill_locked(st, skill)
+            edge = self._apply_action_locked(st, skill, actor_state)
             if edge == "none":
                 return None
             rec = self._record_from_state(st, edge)
@@ -197,7 +210,7 @@ class BossActionTracker:
             return dict(r) if r else None
 
     # ── rich path ───────────────────────────────────────────────────────────--
-    def _process_rich(self, e: dict) -> Optional[dict]:
+    def _process_rich(self, e: dict, actor_state: Optional[int] = None) -> Optional[dict]:
         uuid = int(e.get("uuid") or 0)
         skill = int(e.get("cast_skill_id") or 0)
         with self._lock:
@@ -219,7 +232,7 @@ class BossActionTracker:
             st["max_hp"] = int(e.get("max_hp") or 0)
             st["hp_pct"] = float(e.get("hp_pct") or 0.0)
 
-            edge = self._apply_skill_locked(st, skill)
+            edge = self._apply_action_locked(st, skill, actor_state)
             # while casting, try to upgrade duration via the BuffComp probe (1Hz only)
             if st["skill_id"] and not st.get("duration_locked") and self._probe and st.get("obj"):
                 self._try_buff_duration_locked(st)
@@ -230,32 +243,46 @@ class BossActionTracker:
         return rec
 
     # ── edge detection (call under lock) ──────────────────────────────────────
-    def _apply_skill_locked(self, st: dict, skill: int) -> str:
-        prev = int(st.get("skill_id") or 0)
-        if skill and skill != prev:
-            # new cast (chained casts also land here: implicit end of prev)
-            if prev:
-                self._learn_locked(prev, st)
+    def _apply_action_locked(self, st: dict, skill: int, actor_state: Optional[int]) -> str:
+        """Detect a skill-action start/end. An action is 'active' when the entity is
+        casting a skill (cast_skill_id>0) OR its actor_state is an active skill state
+        (Singing/Skill) — the latter catches instant skills (e.g. a counterattack)
+        that never populate cast_skill_id."""
+        skill = int(skill or 0)
+        if actor_state is not None:
+            st["actor_state"] = int(actor_state)
+        active = bool(skill) or (actor_state in _ACTIVE_ACTOR_STATES)
+        prev_active = bool(st.get("active"))
+        prev_skill = int(st.get("skill_id") or 0)
+        # chained: a NEW named skill replaces a still-active named one
+        chained = active and prev_active and skill and prev_skill and skill != prev_skill
+        if active and (not prev_active or chained):
+            if prev_active:
+                self._learn_locked(prev_skill, st)
+            st["active"] = True
             st["skill_id"] = skill
-            st["skill_name"] = self._skill_name(skill)
+            st["skill_name"] = self._skill_name(skill) if skill else ""
             st["cast_started_at"] = time.monotonic()
             st["duration_locked"] = False
             st["duration_src"] = "none"
-            # emit a learned estimate immediately if we have one
-            learned = self._learned.get(skill)
+            learned = self._learned.get(skill) if skill else None
             if learned:
                 st["cast_duration_ms"] = int(learned)
                 st["duration_src"] = "learned"
             else:
                 st["cast_duration_ms"] = None
-            # baseline buff set so the probe can spot the new cast buff
             st["buff_baseline"] = self._buff_uuids(st.get("obj") or 0)
             return "start"
-        if not skill and prev:
-            self._learn_locked(prev, st)
+        if not active and prev_active:
+            self._learn_locked(prev_skill, st)
+            st["active"] = False
             st["skill_id"] = 0
             st["skill_name"] = ""
             return "end"
+        # skill id appeared after the action already started — fill it in, no edge
+        if active and skill and not prev_skill:
+            st["skill_id"] = skill
+            st["skill_name"] = self._skill_name(skill)
         return "none"
 
     def _try_buff_duration_locked(self, st: dict) -> None:
@@ -290,7 +317,7 @@ class BossActionTracker:
             return set()
 
     def _new_state(self, uuid: int) -> dict:
-        return {"uuid": uuid, "base_id": 0, "name": "", "obj": 0,
+        return {"uuid": uuid, "base_id": 0, "name": "", "obj": 0, "active": False,
                 "skill_id": 0, "skill_name": "", "cast_started_at": 0.0,
                 "cast_duration_ms": None, "duration_src": "none", "duration_locked": False,
                 "actor_state": None, "breaking_stage": None, "overdrive": None,
@@ -299,7 +326,7 @@ class BossActionTracker:
 
     def _record_from_state(self, st: dict, edge: str) -> dict:
         started = st.get("cast_started_at") or 0.0
-        elapsed = int(max(0.0, (time.monotonic() - started)) * 1000.0) if (started and st["skill_id"]) else 0
+        elapsed = int(max(0.0, (time.monotonic() - started)) * 1000.0) if (started and st.get("active")) else 0
         return {
             "boss_uuid": int(st["uuid"]),
             "boss_base_id": int(st.get("base_id") or 0),
@@ -308,7 +335,7 @@ class BossActionTracker:
             "skill_name": str(st.get("skill_name") or ""),
             "cast_edge": edge,
             "actor_state": st.get("actor_state"),
-            "cast_active": bool(st.get("skill_id")),
+            "cast_active": bool(st.get("active")),
             "cast_started_at": float(started),
             "cast_elapsed_ms": elapsed,
             "cast_duration_ms": st.get("cast_duration_ms"),

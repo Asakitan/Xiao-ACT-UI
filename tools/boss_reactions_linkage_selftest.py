@@ -93,6 +93,24 @@ def test_boss_cast_match():
     check("cast_end no fire", sent == [], repr(sent))
 
 
+def test_instant_action():
+    print("[instant action skill_id=0]")
+    # an instant counterattack (no cast id) must still fire an "any skill" mapping
+    lk, sent = _linkage(_cfg([
+        {"trigger_type": "boss_cast", "skill_id": 0, "boss_base_id": 122,
+         "action_key": "SPACE", "cooldown_s": 0},
+    ]))
+    _fire(lk, {"cast_edge": "start", "skill_id": 0, "boss_base_id": 122})
+    check("instant action fires any-skill mapping", sent == [("SPACE", "tap", 80, 1)], repr(sent))
+    # but a per-skill mapping must NOT fire on a 0-id action
+    lk2, sent2 = _linkage(_cfg([
+        {"trigger_type": "boss_cast", "skill_id": 555, "boss_base_id": 122,
+         "action_key": "Q", "cooldown_s": 0},
+    ]))
+    _fire(lk2, {"cast_edge": "start", "skill_id": 0, "boss_base_id": 122})
+    check("per-skill mapping ignores 0-id action", sent2 == [])
+
+
 def test_base_scope():
     print("[boss_base_id scope]")
     lk, sent = _linkage(_cfg([
@@ -150,6 +168,7 @@ def test_disabled():
 def main():
     test_backcompat()
     test_boss_cast_match()
+    test_instant_action()
     test_base_scope()
     test_offensive_edges()
     test_cooldown()

@@ -294,7 +294,9 @@ class BossAutoKeyLinkage:
         cast_dur = action.get("cast_duration_ms")
 
         fired_types = []
-        if skill_id and cast_edge == "start":
+        # fire on any cast-start edge, including instant skills (skill_id 0, e.g. a
+        # counterattack); skill_id matching below still scopes per-skill mappings.
+        if cast_edge == "start":
             fired_types.append("boss_cast")
         if action.get("breaking_edge"):
             fired_types.append("boss_breaking")
