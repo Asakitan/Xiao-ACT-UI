@@ -58,6 +58,20 @@ DEFAULT_CLASSES: List[str] = [
     "Zproto.ProfessionList",
     "Zproto.SceneData",
     "Zproto.SceneLuaData",
+    # Panda.ZGame runtime classes the live mem readers resolve field offsets from
+    # by name (auto_offsets). Curating them lets DumpCsIndex.field_offset self-heal
+    # these readers on a game patch instead of falling back to hardcoded literals:
+    #   ZEntityMgr/ZEntity/ZAttrCollection -> mem_entity_mgr / _provider / _combat / _attr
+    #   DamageDataMgr/DamageData           -> mem_damage_reader
+    #   ZStateMachine/BuffComp/BuffItem    -> mem_boss_action_reader
+    "Panda.ZGame.ZEntityMgr",
+    "Panda.ZGame.ZEntity",
+    "Panda.ZGame.ZAttrCollection",
+    "Panda.ZGame.DamageDataMgr",
+    "Panda.ZGame.DamageData",
+    "Panda.ZGame.ZStateMachine",
+    "Panda.ZGame.BuffComp",
+    "Panda.ZGame.BuffItem",
 ]
 
 

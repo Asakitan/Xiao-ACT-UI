@@ -72,6 +72,10 @@ CASES = [
     ("Panda.ZGame.ZEntity", "buffComp_", 0x98),
     ("Panda.ZGame.ZStateMachine", "currentState_", 0x20),
     ("Panda.ZGame.BuffComp", "buffList_", 0x30),
+    ("Panda.ZGame.BuffItem", "BuffUuid", 0x10),
+    ("Panda.ZGame.BuffItem", "BuffBaseId", 0x14),
+    ("Panda.ZGame.BuffItem", "CreateTime", 0x30),
+    ("Panda.ZGame.BuffItem", "Duration", 0x38),
 ]
 
 
@@ -91,20 +95,40 @@ def _build_dci(path):
     return DumpCsIndex(classes)
 
 
+def _full_dump_dci():
+    """The complete on-disk dump_cs_index (newest), for classes not yet curated into
+    the shipping bundle (e.g. DamageDataMgr/BuffItem until the next rebuild)."""
+    import glob
+    cands = sorted(glob.glob(os.path.join(os.path.dirname(_HERE), "il2cpp", "out",
+                                          "*", "dump_cs_index.json")),
+                   key=os.path.getmtime, reverse=True)
+    for p in cands:
+        try:
+            return DumpCsIndex.load_from_json(p)
+        except Exception:
+            continue
+    return None
+
+
 def main() -> int:
     if not os.path.isfile(_BUNDLE):
         print(f"[SKIP] no bundle at {_BUNDLE}")
         return 0
     dci = _build_dci(_BUNDLE)
+    full = _full_dump_dci()   # fallback for classes not in the curated bundle yet
     ok = fail = 0
     for cls, field, literal in CASES:
         got = _ao.field_offset(dci, cls, field)
+        src = "bundle"
+        if got is None and full is not None:   # not curated -> validate name vs full dump
+            got = _ao.field_offset(full, cls, field)
+            src = "dump"
         status = "OK" if got == literal else "FAIL"
         if got == literal:
             ok += 1
         else:
             fail += 1
-        print(f"  [{status}] {cls}.{field}: dump=0x{(got or -1):X} literal=0x{literal:X}")
+        print(f"  [{status}] {cls}.{field}: {src}=0x{(got or -1):X} literal=0x{literal:X}")
 
     # fallback behaviour: an unknown class/field keeps the literal, and a real dump
     # value is preferred when it differs from the (stale) literal.

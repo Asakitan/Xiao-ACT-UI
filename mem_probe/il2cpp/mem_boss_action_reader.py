@@ -81,6 +81,14 @@ class BossDurationProbe:
             "a": ("currentState_", SM_CURSTATE_OFF)})["a"]
         self.off_buffcomp_list = _ao.resolve(resolver, "Panda.ZGame.BuffComp", {
             "a": ("buffList_", BUFFCOMP_LIST_OFF)})["a"]
+        bi = _ao.resolve(resolver, "Panda.ZGame.BuffItem", {
+            "off_bi_uuid": ("BuffUuid", BUFFITEM_UUID_OFF),
+            "off_bi_baseid": ("BuffBaseId", BUFFITEM_BASEID_OFF),
+            "off_bi_create": ("CreateTime", BUFFITEM_CREATE_OFF),
+            "off_bi_duration": ("Duration", BUFFITEM_DURATION_OFF),
+        })
+        for _k, _v in bi.items():
+            setattr(self, _k, _v)
 
     def read_actor_state(self, ent_addr: int) -> Optional[int]:
         """ZEntity.stateMachine_.currentState_ (EActorState). None on bad read."""
@@ -117,10 +125,10 @@ class BossDurationProbe:
                 continue
             try:
                 out.append({
-                    "uuid": int(self.pm.read_u32(bi + BUFFITEM_UUID_OFF) or 0),
-                    "base_id": int(self.pm.read_u32(bi + BUFFITEM_BASEID_OFF) or 0),
-                    "create_ms": int(self.pm.read_i64(bi + BUFFITEM_CREATE_OFF) or 0),
-                    "duration_ms": int(self.pm.read_i64(bi + BUFFITEM_DURATION_OFF) or 0),
+                    "uuid": int(self.pm.read_u32(bi + self.off_bi_uuid) or 0),
+                    "base_id": int(self.pm.read_u32(bi + self.off_bi_baseid) or 0),
+                    "create_ms": int(self.pm.read_i64(bi + self.off_bi_create) or 0),
+                    "duration_ms": int(self.pm.read_i64(bi + self.off_bi_duration) or 0),
                 })
             except Exception:
                 continue
