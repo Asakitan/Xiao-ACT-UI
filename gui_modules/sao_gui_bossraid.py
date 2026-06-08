@@ -86,7 +86,226 @@ def _trigger_text(trigger: Optional[Dict[str, Any]]) -> str:
     return f'{trigger_type}: {value}'
 
 
-class BossRaidPanel:
+class _BossReactionsEditorMixin:
+    """Shared scene→boss→observed-skill reaction editor, used by both the quick
+    BossRaid panel and the detailed editor. Container-agnostic: each host sets
+    self._rx_container (the frame to render into) + self._rx_rerender (a re-render
+    callback) via _render_reactions(); reaction state lives on the host
+    (_react_state / _react_boss / _react_scene / _load_reactions / _save_reaction)."""
+
+    _TAG_BADGE = {
+        'cast': ('施法', '#2b6f8a'), 'enrage': ('狂暴', '#c0392b'),
+        'invincible': ('无敌', '#8e44ad'), 'shield': ('护盾', '#2e6fb0'),
+        'super_armor': ('霸体', '#c97a1a'), 'breaking': ('破防', '#b8860b'),
+        'fracture': ('碎裂', '#a85432'), 'stun': ('眩晕', '#b59b00'),
+        'hp_line': ('血线', '#cf3a2f'), 'time': ('定时', '#3f8f4f'),
+        'death': ('死亡', '#555a63'), 'body_part': ('部位', '#2f8f8f'),
+        'mechanic': ('机制', '#555a63'),
+    }
+
+    def _init_reactions_state(self, load_reactions_fn, save_reaction_fn):
+        self._load_reactions = load_reactions_fn
+        self._save_reaction = save_reaction_fn
+        self._react_state = {}
+        self._react_boss = 0
+        self._react_scene = None
+
+    def _rx_empty(self, title: str, subtitle: str) -> None:
+        wrap = tk.Frame(self._rx_container, bg=PANEL_BG)
+        wrap.pack(fill=tk.X, pady=18)
+        tk.Label(wrap, text=title, bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(10),
+                 justify='center').pack()
+        if subtitle:
+            tk.Label(wrap, text=subtitle, bg=PANEL_BG, fg=TEXT_DIM, font=panel_font(8),
+                     justify='center', wraplength=320).pack(pady=(4, 0))
+
+    def _render_badges(self, parent, rec: Dict[str, Any]) -> None:
+        import tkinter as _tk
+        tags = list(rec.get('tags') or [])
+        if not tags:
+            return
+        bar = _tk.Frame(parent, bg=PANEL_CARD)
+        bar.pack(fill=tk.X, pady=(2, 0))
+        for t in tags:
+            label, color = self._TAG_BADGE.get(t, (t, '#555a63'))
+            if t == 'hp_line' and rec.get('hp_line_pct') is not None:
+                label = '血线~%d%%' % int(round(float(rec['hp_line_pct']) * 100))
+            elif t == 'time' and rec.get('time_fixed_s') is not None:
+                label = '定时~%ds' % int(round(float(rec['time_fixed_s'])))
+            _tk.Label(bar, text=label, bg=color, fg='#ffffff', font=panel_font(7),
+                      padx=4, pady=0).pack(side=tk.LEFT, padx=(0, 3))
+
+    def _render_reactions(self, container, rerender) -> None:
+        """Render the full reactions editor into `container`; `rerender` re-runs
+        the host's render after scene/boss changes + saves."""
+        import tkinter as _tk
+        self._rx_container = container
+        self._rx_rerender = rerender
+        if not self._load_reactions:
+            self._rx_empty('Boss 反应不可用', '内存引擎未接入')
+            return
+        try:
+            st = self._load_reactions(self._react_scene) or {}
+        except Exception:
+            st = {}
+        self._react_state = st
+        if not st.get('mem_available'):
+            self._rx_empty('Boss 反应未就绪',
+                           '启动识别后即可自动记录并编辑 Boss 反应 (当前数据源: %s)'
+                           % st.get('data_source', 'tcp'))
+            return
+        if self._react_scene is None:
+            self._react_scene = str(st.get('selected_scene_key') or '0')
+
+        # ── scene selector (map / 场景) ──
+        scenes = list(st.get('scenes') or [])
+        scene_row = tk.Frame(container, bg=PANEL_BG)
+        scene_row.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(scene_row, text='场景', bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(9)).pack(side=tk.LEFT)
+        if scenes:
+            sopts = {}
+            for s in scenes:
+                nm = s.get('name') or ('场景#%s' % s.get('scene_key'))
+                sopts['%s (%d)' % (nm, int(s.get('boss_count') or 0))] = str(s.get('scene_key'))
+            svar = _tk.StringVar()
+            scur = next((l for l, k in sopts.items() if k == self._react_scene), list(sopts)[0])
+            svar.set(scur)
+
+            def _pick_scene(lbl, _o=sopts):
+                self._react_scene = _o.get(lbl, self._react_scene)
+                self._react_boss = 0   # reset boss when the scene changes
+                self._rx_rerender()
+            som = _tk.OptionMenu(scene_row, svar, *sopts.keys(), command=_pick_scene)
+            som.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            som.pack(side=tk.LEFT, padx=(6, 6))
+
+        # ── boss selector (scene-scoped) ──
+        bosses = list(st.get('bosses') or [])
+        if not self._react_boss and bosses:
+            self._react_boss = int(bosses[0].get('base_id') or 0)
+        sel_row = tk.Frame(container, bg=PANEL_BG)
+        sel_row.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(sel_row, text='Boss', bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(9)).pack(side=tk.LEFT)
+        if bosses:
+            opts = {}
+            for b in bosses:
+                lbl = '%s (%d)' % (b.get('name') or ('#%d' % int(b.get('base_id') or 0)),
+                                   int(b.get('observed_count') or 0))
+                opts[lbl] = int(b.get('base_id') or 0)
+            var = _tk.StringVar()
+            cur = next((l for l, bid in opts.items() if bid == self._react_boss), list(opts)[0])
+            var.set(cur)
+
+            def _pick(lbl, _opts=opts):
+                self._react_boss = _opts.get(lbl, self._react_boss)
+                self._rx_rerender()
+            om = _tk.OptionMenu(sel_row, var, *opts.keys(), command=_pick)
+            om.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+            om.pack(side=tk.LEFT, padx=(6, 6))
+        make_action_button(sel_row, '从内存导入', lambda: self._rx_rerender()).pack(side=tk.RIGHT)
+
+        make_section_title(container, '观测技能 / 机制 (Observed)')
+        obs = list((st.get('observed_skills') or {}).get(str(self._react_boss)) or [])
+        if not obs:
+            self._rx_empty('暂无观测', '打这个 Boss 时它放的技能/机制会自动出现')
+        else:
+            for s in obs:
+                dur = ('%dms' % s['last_cast_duration_ms']) if s.get('last_cast_duration_ms') else '?'
+                label = '#%d %s ×%d · %s' % (int(s.get('id') or 0), s.get('name') or '',
+                                             int(s.get('count') or 0), dur)
+                if s.get('kind') == 'skill':
+                    self._render_reaction_row('boss_cast', int(s.get('skill_id') or 0), label, rec=s)
+                else:
+                    self._render_obs_info(label, s)
+        make_section_title(container, '进攻窗口 / Offensive Windows')
+        for trig, label in (('boss_breaking', '破防 Breaking'),
+                            ('boss_overdrive', '过载 / 狂暴 Overdrive'),
+                            ('boss_stun', '眩晕 Stun')):
+            self._render_reaction_row(trig, 0, label)
+
+    def _render_obs_info(self, label: str, rec: Dict[str, Any]) -> None:
+        """Non-skill observation (mechanic / state) — marked with badges, info only.
+        Reactions for breaking/overdrive/stun are bound in the offensive section."""
+        card = tk.Frame(self._rx_container, bg=PANEL_CARD, highlightbackground=PANEL_EDGE,
+                        highlightthickness=1, padx=8, pady=4)
+        card.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(card, text=label, bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(9),
+                 anchor='w').pack(fill=tk.X)
+        self._render_badges(card, rec)
+
+    def _find_react_mapping(self, trig: str, skill_id: int):
+        for m in (self._react_state.get('mappings') or []):
+            if m.get('trigger_type') != trig:
+                continue
+            if int(m.get('boss_base_id') or 0) != int(self._react_boss):
+                continue
+            if trig == 'boss_cast' and int(m.get('skill_id') or 0) != int(skill_id):
+                continue
+            return m
+        return None
+
+    def _render_reaction_row(self, trig: str, skill_id: int, label: str,
+                             rec: Optional[Dict[str, Any]] = None) -> None:
+        import tkinter as _tk
+        m = self._find_react_mapping(trig, skill_id) or {}
+        card = tk.Frame(self._rx_container, bg=PANEL_CARD, highlightbackground=PANEL_EDGE,
+                        highlightthickness=1, padx=8, pady=5)
+        card.pack(fill=tk.X, pady=(0, 4))
+        apply_surface_chrome(card, accent=CYAN)
+        tk.Label(card, text=label, bg=PANEL_CARD, fg=GOLD, font=panel_font(9, bold=True),
+                 anchor='w').pack(fill=tk.X)
+        if rec:
+            self._render_badges(card, rec)
+        row = tk.Frame(card, bg=PANEL_CARD)
+        row.pack(fill=tk.X, pady=(3, 0))
+        key_var = _tk.StringVar(value=str(m.get('action_key') or ''))
+        delay_var = _tk.StringVar(value=str(int(m.get('delay_ms') or 0)))
+        cd_var = _tk.StringVar(value=str(m.get('cooldown_s') if m.get('cooldown_s') is not None else 3))
+        en_var = _tk.IntVar(value=1 if (m.get('enabled', False) and m.get('id')) else 0)
+
+        def _field(text, var, w):
+            tk.Label(row, text=text, bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT)
+            _tk.Entry(row, textvariable=var, width=w, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 6))
+        _field('键', key_var, 5)
+        _field('延迟ms', delay_var, 6)
+        _field('CDs', cd_var, 4)
+        _tk.Checkbutton(row, text='启用', variable=en_var, bg=PANEL_CARD, fg=TEXT_MAIN,
+                        font=panel_font(8), selectcolor=PANEL_CARD_ALT).pack(side=tk.LEFT)
+        mid = str(m.get('id') or '')
+        make_action_button(
+            row, '保存',
+            lambda: self._save_reaction_row(trig, skill_id, mid, key_var, delay_var, cd_var, en_var),
+            kind='accent', width=4).pack(side=tk.RIGHT)
+
+    def _save_reaction_row(self, trig, skill_id, mid, key_var, delay_var, cd_var, en_var) -> None:
+        if not self._save_reaction:
+            return
+
+        def _i(s, d=0):
+            try:
+                return int(float(s))
+            except Exception:
+                return d
+
+        def _f(s, d=0.0):
+            try:
+                return float(s)
+            except Exception:
+                return d
+        mapping = {
+            'id': mid, 'enabled': bool(en_var.get()), 'trigger_type': trig,
+            'skill_id': int(skill_id), 'boss_base_id': int(self._react_boss),
+            'action_key': (key_var.get() or '').strip().upper(),
+            'delay_ms': _i(delay_var.get()), 'cooldown_s': _f(cd_var.get(), 3.0),
+        }
+        try:
+            self._save_reaction(mapping)
+        except Exception:
+            pass
+        self._rx_rerender()
+
+
+class BossRaidPanel(_BossReactionsEditorMixin):
     def __init__(
         self,
         master: tk.Tk,
@@ -479,197 +698,9 @@ class BossRaidPanel:
                 lambda _event, uuid=int(entity.get('uuid') or 0), current=role: self._toggle_role(uuid, current),
             )
 
-    # tag → (badge label, background hex) for marking special boss moves
-    _TAG_BADGE = {
-        'cast': ('施法', '#2b6f8a'), 'enrage': ('狂暴', '#c0392b'),
-        'invincible': ('无敌', '#8e44ad'), 'shield': ('护盾', '#2e6fb0'),
-        'super_armor': ('霸体', '#c97a1a'), 'breaking': ('破防', '#b8860b'),
-        'fracture': ('碎裂', '#a85432'), 'stun': ('眩晕', '#b59b00'),
-        'hp_line': ('血线', '#cf3a2f'), 'time': ('定时', '#3f8f4f'),
-        'death': ('死亡', '#555a63'), 'body_part': ('部位', '#2f8f8f'),
-        'mechanic': ('机制', '#555a63'),
-    }
-
-    def _render_badges(self, parent, rec: Dict[str, Any]) -> None:
-        import tkinter as _tk
-        tags = list(rec.get('tags') or [])
-        if not tags:
-            return
-        bar = _tk.Frame(parent, bg=PANEL_CARD)
-        bar.pack(fill=tk.X, pady=(2, 0))
-        for t in tags:
-            label, color = self._TAG_BADGE.get(t, (t, '#555a63'))
-            if t == 'hp_line' and rec.get('hp_line_pct') is not None:
-                label = '血线~%d%%' % int(round(float(rec['hp_line_pct']) * 100))
-            elif t == 'time' and rec.get('time_fixed_s') is not None:
-                label = '定时~%ds' % int(round(float(rec['time_fixed_s'])))
-            _tk.Label(bar, text=label, bg=color, fg='#ffffff', font=panel_font(7),
-                      padx=4, pady=0).pack(side=tk.LEFT, padx=(0, 3))
-
     def _render_reactions_tab(self) -> None:
-        import tkinter as _tk
-        if not self._load_reactions:
-            self._render_empty('Boss 反应不可用', '内存引擎未接入')
-            return
-        try:
-            st = self._load_reactions(self._react_scene) or {}
-        except Exception:
-            st = {}
-        self._react_state = st
-        if not st.get('mem_available'):
-            self._render_empty('Boss 反应未就绪',
-                               '启动识别后即可自动记录并编辑 Boss 反应 (当前数据源: %s)'
-                               % st.get('data_source', 'tcp'))
-            return
-        if self._react_scene is None:
-            self._react_scene = str(st.get('selected_scene_key') or '0')
-
-        # ── scene selector (map / 场景) ──
-        scenes = list(st.get('scenes') or [])
-        scene_row = tk.Frame(self._content_body, bg=PANEL_BG)
-        scene_row.pack(fill=tk.X, pady=(0, 4))
-        tk.Label(scene_row, text='场景', bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(9)).pack(side=tk.LEFT)
-        if scenes:
-            sopts = {}
-            for s in scenes:
-                nm = s.get('name') or ('场景#%s' % s.get('scene_key'))
-                sopts['%s (%d)' % (nm, int(s.get('boss_count') or 0))] = str(s.get('scene_key'))
-            svar = _tk.StringVar()
-            scur = next((l for l, k in sopts.items() if k == self._react_scene), list(sopts)[0])
-            svar.set(scur)
-
-            def _pick_scene(lbl, _o=sopts):
-                self._react_scene = _o.get(lbl, self._react_scene)
-                self._react_boss = 0   # reset boss when the scene changes
-                self._render_if_needed(force=True)
-            som = _tk.OptionMenu(scene_row, svar, *sopts.keys(), command=_pick_scene)
-            som.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
-            som.pack(side=tk.LEFT, padx=(6, 6))
-
-        # ── boss selector (scene-scoped) ──
-        bosses = list(st.get('bosses') or [])
-        if not self._react_boss and bosses:
-            self._react_boss = int(bosses[0].get('base_id') or 0)
-        sel_row = tk.Frame(self._content_body, bg=PANEL_BG)
-        sel_row.pack(fill=tk.X, pady=(0, 6))
-        tk.Label(sel_row, text='Boss', bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(9)).pack(side=tk.LEFT)
-        if bosses:
-            opts = {}
-            for b in bosses:
-                lbl = '%s (%d)' % (b.get('name') or ('#%d' % int(b.get('base_id') or 0)),
-                                   int(b.get('observed_count') or 0))
-                opts[lbl] = int(b.get('base_id') or 0)
-            var = _tk.StringVar()
-            cur = next((l for l, bid in opts.items() if bid == self._react_boss), list(opts)[0])
-            var.set(cur)
-
-            def _pick(lbl, _opts=opts):
-                self._react_boss = _opts.get(lbl, self._react_boss)
-                self._render_if_needed(force=True)
-            om = _tk.OptionMenu(sel_row, var, *opts.keys(), command=_pick)
-            om.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
-            om.pack(side=tk.LEFT, padx=(6, 6))
-        make_action_button(sel_row, '从内存导入', lambda: self._render_if_needed(force=True)).pack(side=tk.RIGHT)
-
-        make_section_title(self._content_body, '观测技能 / 机制 (Observed)')
-        obs = list((st.get('observed_skills') or {}).get(str(self._react_boss)) or [])
-        if not obs:
-            self._render_empty('暂无观测', '打这个 Boss 时它放的技能/机制会自动出现')
-        else:
-            for s in obs:
-                dur = ('%dms' % s['last_cast_duration_ms']) if s.get('last_cast_duration_ms') else '?'
-                label = '#%d %s ×%d · %s' % (int(s.get('id') or 0), s.get('name') or '',
-                                             int(s.get('count') or 0), dur)
-                if s.get('kind') == 'skill':
-                    self._render_reaction_row('boss_cast', int(s.get('skill_id') or 0), label, rec=s)
-                else:
-                    self._render_obs_info(label, s)
-        make_section_title(self._content_body, '进攻窗口 / Offensive Windows')
-        for trig, label in (('boss_breaking', '破防 Breaking'),
-                            ('boss_overdrive', '过载 / 狂暴 Overdrive'),
-                            ('boss_stun', '眩晕 Stun')):
-            self._render_reaction_row(trig, 0, label)
-
-    def _render_obs_info(self, label: str, rec: Dict[str, Any]) -> None:
-        """Non-skill observation (mechanic / state) — marked with badges, info only.
-        Reactions for breaking/overdrive/stun are bound in the offensive section."""
-        card = tk.Frame(self._content_body, bg=PANEL_CARD, highlightbackground=PANEL_EDGE,
-                        highlightthickness=1, padx=8, pady=4)
-        card.pack(fill=tk.X, pady=(0, 4))
-        tk.Label(card, text=label, bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(9),
-                 anchor='w').pack(fill=tk.X)
-        self._render_badges(card, rec)
-
-    def _find_react_mapping(self, trig: str, skill_id: int):
-        for m in (self._react_state.get('mappings') or []):
-            if m.get('trigger_type') != trig:
-                continue
-            if int(m.get('boss_base_id') or 0) != int(self._react_boss):
-                continue
-            if trig == 'boss_cast' and int(m.get('skill_id') or 0) != int(skill_id):
-                continue
-            return m
-        return None
-
-    def _render_reaction_row(self, trig: str, skill_id: int, label: str,
-                             rec: Optional[Dict[str, Any]] = None) -> None:
-        import tkinter as _tk
-        m = self._find_react_mapping(trig, skill_id) or {}
-        card = tk.Frame(self._content_body, bg=PANEL_CARD, highlightbackground=PANEL_EDGE,
-                        highlightthickness=1, padx=8, pady=5)
-        card.pack(fill=tk.X, pady=(0, 4))
-        apply_surface_chrome(card, accent=CYAN)
-        tk.Label(card, text=label, bg=PANEL_CARD, fg=GOLD, font=panel_font(9, bold=True),
-                 anchor='w').pack(fill=tk.X)
-        if rec:
-            self._render_badges(card, rec)
-        row = tk.Frame(card, bg=PANEL_CARD)
-        row.pack(fill=tk.X, pady=(3, 0))
-        key_var = _tk.StringVar(value=str(m.get('action_key') or ''))
-        delay_var = _tk.StringVar(value=str(int(m.get('delay_ms') or 0)))
-        cd_var = _tk.StringVar(value=str(m.get('cooldown_s') if m.get('cooldown_s') is not None else 3))
-        en_var = _tk.IntVar(value=1 if (m.get('enabled', False) and m.get('id')) else 0)
-
-        def _field(text, var, w):
-            tk.Label(row, text=text, bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT)
-            _tk.Entry(row, textvariable=var, width=w, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 6))
-        _field('键', key_var, 5)
-        _field('延迟ms', delay_var, 6)
-        _field('CDs', cd_var, 4)
-        _tk.Checkbutton(row, text='启用', variable=en_var, bg=PANEL_CARD, fg=TEXT_MAIN,
-                        font=panel_font(8), selectcolor=PANEL_CARD_ALT).pack(side=tk.LEFT)
-        mid = str(m.get('id') or '')
-        make_action_button(
-            row, '保存',
-            lambda: self._save_reaction_row(trig, skill_id, mid, key_var, delay_var, cd_var, en_var),
-            kind='accent', width=4).pack(side=tk.RIGHT)
-
-    def _save_reaction_row(self, trig, skill_id, mid, key_var, delay_var, cd_var, en_var) -> None:
-        if not self._save_reaction:
-            return
-
-        def _i(s, d=0):
-            try:
-                return int(float(s))
-            except Exception:
-                return d
-
-        def _f(s, d=0.0):
-            try:
-                return float(s)
-            except Exception:
-                return d
-        mapping = {
-            'id': mid, 'enabled': bool(en_var.get()), 'trigger_type': trig,
-            'skill_id': int(skill_id), 'boss_base_id': int(self._react_boss),
-            'action_key': (key_var.get() or '').strip().upper(),
-            'delay_ms': _i(delay_var.get()), 'cooldown_s': _f(cd_var.get(), 3.0),
-        }
-        try:
-            self._save_reaction(mapping)
-        except Exception:
-            pass
-        self._render_if_needed(force=True)
+        self._render_reactions(self._content_body,
+                               lambda: self._render_if_needed(force=True))
 
     def _render_phases_tab(self) -> None:
         make_section_title(self._content_body, 'Raid Phases')

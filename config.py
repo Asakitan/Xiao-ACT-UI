@@ -343,8 +343,18 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.4.13"
+APP_VERSION = "4.4.14"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v4.4.14: hybrid Boss 反应修复.
+#   1) hybrid 下编辑器一直提示「切 hybrid」且看不到记录: build_boss_reactions_state
+#      用 gs.data_source 判 mem_available, 但 GameState 根本没这字段(写入被静默丢弃)→
+#      永远 False → 编辑器短路成横幅, 不渲染已记录技能(记录本身是通的, mem bridge
+#      实时读 boss_raid_engine, set_boss_raid_engine 透传到活 bridge)。改为按用户选的
+#      数据源模式(settings mem_data_source/data_source)判定; tcp 与 hybrid/memory 双路
+#      都记录, 故识别运行即可用。TCP 为主仲裁(MEM_PRIORITY_WINDOW)不动。
+#   2) 反应编辑器抽成共享 _BossReactionsEditorMixin: 快捷面板(BossRaidPanel)与详细
+#      面板(BossRaidDetailPanel)1:1 复用, 详细面板也能浏览场景→Boss→观测技能并编辑
+#      反应(独立子帧重绘, 不丢 profile 编辑)。
 # v4.4.13: HUD 三个小修.
 #   1) Boss 计时只在用户开了 bossraid profile (STATE_RUNNING) 时显示；自由战斗 /
 #      自带狂暴的 boss 不再把左下角身份牌的时钟换成 boss 时间 (boss 血条保留)。

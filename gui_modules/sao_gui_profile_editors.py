@@ -30,6 +30,7 @@ from sao_web_panel_common import (
     panel_font,
     place_corner_accents,
 )
+from gui_modules.sao_gui_bossraid import _BossReactionsEditorMixin
 
 from engines.auto_key_engine import (
     clone_profile as clone_auto_key_profile,
@@ -796,7 +797,7 @@ class AutoKeyDetailPanel(_DetailEditorBase):
         self._render()
 
 
-class BossRaidDetailPanel(_DetailEditorBase):
+class BossRaidDetailPanel(_BossReactionsEditorMixin, _DetailEditorBase):
     TRIGGER_TYPES = (
         'manual',
         'time',
@@ -816,7 +817,9 @@ class BossRaidDetailPanel(_DetailEditorBase):
 
     def __init__(self, master: tk.Tk, load_fn: Callable[[], dict],
                  save_fn: Callable[[dict], Any],
-                 author_fn: Optional[Callable[[], dict]] = None):
+                 author_fn: Optional[Callable[[], dict]] = None,
+                 load_reactions_fn: Optional[Callable[..., dict]] = None,
+                 save_reaction_fn: Optional[Callable[[dict], Any]] = None):
         super().__init__(master, 'BossRaid Detail Editor',
                          'Profile, phase and timeline editor')
         self._load = load_fn
@@ -828,6 +831,10 @@ class BossRaidDetailPanel(_DetailEditorBase):
         self._profile_vars: Dict[str, tk.Variable] = {}
         self._description_text: Optional[tk.Text] = None
         self._phase_vars: List[Dict[str, Any]] = []
+        # shared scene→boss→skill reaction editor (same memory/TCP feed as the
+        # quick BossRaid panel); None callbacks → section is hidden.
+        self._init_reactions_state(load_reactions_fn, save_reaction_fn)
+        self._reactions_frame: Optional[tk.Frame] = None
 
     def _on_show(self) -> None:
         self._reload(keep_selected=True)
@@ -964,6 +971,26 @@ class BossRaidDetailPanel(_DetailEditorBase):
         self._phase_vars = []
         for idx, phase in enumerate(list(profile.get('phases') or [])):
             self._render_phase_card(idx, phase)
+
+        # ── Boss 反应 / Reactions — same memory/TCP-driven editor as the quick
+        # panel, so reactions can be recorded + edited from the detail panel too.
+        if getattr(self, '_load_reactions', None):
+            make_section_title(self._editor_body, 'Boss 反应 / Reactions')
+            self._reactions_frame = tk.Frame(self._editor_body, bg=PANEL_BG)
+            self._reactions_frame.pack(fill=tk.X)
+            self._render_detail_reactions()
+
+    def _render_detail_reactions(self) -> None:
+        """Re-render ONLY the reactions sub-frame (keeps profile/phase edits)."""
+        frame = getattr(self, '_reactions_frame', None)
+        if frame is None:
+            return
+        clear_frame(frame)
+        self._render_reactions(frame, self._render_detail_reactions)
+        try:
+            self._refresh_scrollregions()
+        except Exception:
+            pass
 
     def _render_phase_card(self, index: int, phase: Dict[str, Any]) -> None:
         assert self._editor_body is not None

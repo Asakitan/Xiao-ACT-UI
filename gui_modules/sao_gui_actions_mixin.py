@@ -135,6 +135,8 @@ class SAOPlayerGUIActionsMixin:
                 load_fn=self._load_boss_raid_config,
                 save_fn=self._save_boss_raid_config,
                 author_fn=getattr(self, '_boss_raid_author_snapshot', None),
+                load_reactions_fn=self._load_boss_reactions_state,
+                save_reaction_fn=self._save_boss_reaction,
             )
         self._bossraid_detail_panel.toggle()
         self.root.after(120, lambda: self._raise_panel_window(self._bossraid_detail_panel))
