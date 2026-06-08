@@ -212,12 +212,17 @@ body{padding:10px}
         <div id="tab-reactions" style="display:none">
             <div id="react-banner" style="display:none"></div>
             <div style="display:flex;align-items:center;gap:6px;margin:4px 0;">
+                <span style="font-size:10px;color:#9fc0d8;">场景</span>
+                <select id="react-scene" onchange="onReactSceneChange()"
+                    style="flex:1;background:rgba(8,14,22,.6);color:#e8f6ff;border:1px solid rgba(117,205,255,.4);border-radius:5px;padding:3px 6px;font-size:11px;"></select>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;margin:4px 0;">
                 <span style="font-size:10px;color:#9fc0d8;">Boss</span>
                 <select id="react-boss" onchange="onReactBossChange()"
                     style="flex:1;background:rgba(8,14,22,.6);color:#e8f6ff;border:1px solid rgba(117,205,255,.4);border-radius:5px;padding:3px 6px;font-size:11px;"></select>
                 <div class="action-btn" style="padding:3px 8px;font-size:10px;" onclick="RaidEditor.loadReactions()">从内存导入</div>
             </div>
-            <div class="phase-header">观测技能 / Observed Skills</div>
+            <div class="phase-header">观测技能 / 机制 (Observed)</div>
             <div id="react-skill-list"></div>
             <div class="phase-header" style="margin-top:8px;">进攻窗口 / Offensive Windows</div>
             <div id="react-window-list"></div>
@@ -261,14 +266,35 @@ function switchTab(tab) {
 // 鈹€鈹€ Boss Reactions editor 鈹€鈹€
 var _reactState = null;
 var _reactBoss = 0;
+var _reactScene = null;
+
+var _TAG_BADGE = {
+    cast: ['施法', '#2b6f8a'], enrage: ['狂暴', '#c0392b'], invincible: ['无敌', '#8e44ad'],
+    shield: ['护盾', '#2e6fb0'], super_armor: ['霸体', '#c97a1a'], breaking: ['破防', '#b8860b'],
+    fracture: ['碎裂', '#a85432'], stun: ['眩晕', '#b59b00'], hp_line: ['血线', '#cf3a2f'],
+    time: ['定时', '#3f8f4f'], death: ['死亡', '#555a63'], body_part: ['部位', '#2f8f8f'],
+    mechanic: ['机制', '#555a63']
+};
 
 function _api() { return (window.pywebview && window.pywebview.api) || null; }
 function _esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
+function _badges(rec) {
+    var tags = (rec && rec.tags) || [];
+    if (!tags.length) return '';
+    return '<div style="display:flex;gap:3px;flex-wrap:wrap;margin:2px 0;">' + tags.map(function (t) {
+        var d = _TAG_BADGE[t] || [t, '#555a63'];
+        var lbl = d[0];
+        if (t === 'hp_line' && rec.hp_line_pct != null) lbl = '血线~' + Math.round(rec.hp_line_pct * 100) + '%';
+        else if (t === 'time' && rec.time_fixed_s != null) lbl = '定时~' + Math.round(rec.time_fixed_s) + 's';
+        return '<span style="background:' + d[1] + ';color:#fff;font-size:9px;padding:1px 4px;border-radius:3px;">' + _esc(lbl) + '</span>';
+    }).join('') + '</div>';
+}
+
 function loadReactions() {
     var a = _api();
     if (!a || !a.get_boss_reactions) { return; }
-    Promise.resolve(a.get_boss_reactions()).then(function (j) {
+    Promise.resolve(a.get_boss_reactions(_reactScene)).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         if (r && r.ok) { _reactState = r.state; renderReactions(); }
     }).catch(function () {});
@@ -296,7 +322,16 @@ function renderReactions() {
     } else {
         banner.style.display = 'none';
     }
-    // boss selector
+    // scene selector
+    if (_reactScene == null) _reactScene = String(st.selected_scene_key || '0');
+    var ssel = document.getElementById('react-scene');
+    var scenes = st.scenes || [];
+    if (ssel) ssel.innerHTML = scenes.map(function (s) {
+        var nm = (s.name || ('场景#' + s.scene_key)) + ' (' + (s.boss_count || 0) + ')';
+        return '<option value="' + _esc(s.scene_key) + '"' + (String(s.scene_key) === String(_reactScene) ? ' selected' : '') + '>' + _esc(nm) + '</option>';
+    }).join('') || '<option value="0">（未知场景）</option>';
+
+    // boss selector (scene-scoped)
     var sel = document.getElementById('react-boss');
     var bosses = st.bosses || [];
     if (!_reactBoss && bosses.length) _reactBoss = bosses[0].base_id;
@@ -305,29 +340,33 @@ function renderReactions() {
         return '<option value="' + b.base_id + '"' + (Number(b.base_id) === Number(_reactBoss) ? ' selected' : '') + '>' + _esc(label) + '</option>';
     }).join('') || '<option value="0">（暂无观测到的 Boss）</option>';
 
-    // observed skills for the selected boss
-    var skills = (st.observed_skills && st.observed_skills[String(_reactBoss)]) || [];
+    // observed skills / mechanics for the selected boss
+    var obs = (st.observed_skills && st.observed_skills[String(_reactBoss)]) || [];
     var list = document.getElementById('react-skill-list');
-    if (!skills.length) {
-        list.innerHTML = '<div class="empty-state" style="font-size:10px;">打这个 Boss 时它放过的技能会自动出现在这里。</div>';
+    if (!obs.length) {
+        list.innerHTML = '<div class="empty-state" style="font-size:10px;">打这个 Boss 时它放的技能/机制会自动出现在这里。</div>';
     } else {
-        list.innerHTML = skills.map(function (s) {
-            var m = _findMapping('boss_cast', s.skill_id, _reactBoss) || {};
+        list.innerHTML = obs.map(function (s) {
             var dur = (s.last_cast_duration_ms ? (s.last_cast_duration_ms + 'ms') : '?');
-            return _reactRow('boss_cast', s.skill_id,
-                '#' + s.skill_id + ' ' + _esc(s.name || '') + ' ×' + s.count + ' · ' + dur, m);
+            var label = '#' + (s.id || 0) + ' ' + _esc(s.name || '') + ' ×' + s.count + ' · ' + dur;
+            if (s.kind === 'skill') {
+                var m = _findMapping('boss_cast', s.skill_id, _reactBoss) || {};
+                return _reactRow('boss_cast', s.skill_id, label, m, s);
+            }
+            return '<div class="entity-card" style="display:block;padding:5px 7px;margin:3px 0;">' +
+                '<div style="font-size:11px;color:#e8f6ff;">' + label + '</div>' + _badges(s) + '</div>';
         }).join('');
     }
 
     // offensive windows
-    var wins = [['boss_breaking', '破防 Breaking'], ['boss_overdrive', '过载 Overdrive'], ['boss_stun', '眩晕 Stun']];
+    var wins = [['boss_breaking', '破防 Breaking'], ['boss_overdrive', '过载 / 狂暴 Overdrive'], ['boss_stun', '眩晕 Stun']];
     document.getElementById('react-window-list').innerHTML = wins.map(function (w) {
         var m = _findMapping(w[0], 0, _reactBoss) || {};
         return _reactRow(w[0], 0, w[1], m);
     }).join('');
 }
 
-function _reactRow(trig, skillId, label, m) {
+function _reactRow(trig, skillId, label, m, rec) {
     var id = m.id || '';
     var key = m.action_key || '';
     var delay = m.delay_ms || 0;
@@ -336,6 +375,7 @@ function _reactRow(trig, skillId, label, m) {
     var tag = trig + '_' + skillId;
     return '<div class="entity-card" style="display:block;padding:5px 7px;margin:3px 0;">' +
         '<div style="font-size:11px;color:#ffd46f;margin-bottom:3px;">' + _esc(label) + '</div>' +
+        (rec ? _badges(rec) : '') +
         '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;font-size:10px;color:#9fc0d8;">' +
         '键<input id="rk_' + tag + '" value="' + _esc(key) + '" maxlength="8" style="width:46px;' + _inpCss() + '">' +
         '延迟<input id="rd_' + tag + '" value="' + delay + '" style="width:50px;' + _inpCss() + '">ms' +
@@ -352,6 +392,13 @@ function onReactBossChange() {
     renderReactions();
 }
 
+function onReactSceneChange() {
+    var sel = document.getElementById('react-scene');
+    _reactScene = String(sel.value || '0');
+    _reactBoss = 0;   // reset boss when scene changes
+    loadReactions();
+}
+
 function saveReaction(trig, skillId, id) {
     var tag = trig + '_' + skillId;
     var key = (document.getElementById('rk_' + tag).value || '').trim().toUpperCase();
@@ -365,7 +412,7 @@ function saveReaction(trig, skillId, id) {
     };
     var a = _api();
     if (!a || !a.save_boss_reaction) return;
-    Promise.resolve(a.save_boss_reaction(JSON.stringify(m))).then(function (j) {
+    Promise.resolve(a.save_boss_reaction(JSON.stringify(m), _reactScene)).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         if (r && r.ok) { _reactState = r.state; renderReactions(); }
     }).catch(function () {});

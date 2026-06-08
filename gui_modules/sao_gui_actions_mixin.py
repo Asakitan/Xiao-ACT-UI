@@ -98,13 +98,15 @@ class SAOPlayerGUIActionsMixin:
         self._bossraid_panel.toggle()
         self.root.after(120, lambda: self._raise_panel_window(self._bossraid_panel))
 
-    def _load_boss_reactions_state(self) -> Dict[str, Any]:
-        """Data contract for the BossRaid panel's Boss 反应 tab (mem-driven editor)."""
+    def _load_boss_reactions_state(self, scene_key=None) -> Dict[str, Any]:
+        """Data contract for the BossRaid panel's Boss 反应 tab (mem-driven editor).
+        `scene_key` selects which map/scene to browse (None = live scene)."""
         from engines.boss_autokey_linkage import build_boss_reactions_state
         return build_boss_reactions_state(
             self._cfg_settings_ref,
             getattr(self, '_boss_raid_engine', None),
-            getattr(self, '_state_mgr', None))
+            getattr(self, '_state_mgr', None),
+            scene_key=scene_key)
 
     def _save_boss_reaction(self, mapping: Dict[str, Any]) -> Any:
         """Upsert one boss-reaction linkage mapping (boss_cast / offensive window)."""

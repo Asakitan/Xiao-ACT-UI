@@ -68,7 +68,8 @@ from engines.dps_tracker import DpsTracker
 from engines.dps_history import DpsHistoryStore
 from engines.encounter_manager import EncounterManager
 from engines.act_trigger_engine import ActTriggerEngine
-from engines.combat_analytics import boss_state_from_monster_update, build_act_snapshot
+from engines.combat_analytics import (
+    boss_state_from_monster_update, build_act_snapshot, mem_boss_break_override)
 from act_platform.runtime import (
     act_action_log_copy,
     act_action_log_filter,
@@ -1775,43 +1776,38 @@ class SAOWebAPI:
 
     # ── Boss Reactions editor (memory-driven, in the raid editor) ──
 
-    def get_boss_reactions(self):
+    def _boss_reactions_state(self, scene_key=None):
+        return build_boss_reactions_state(
+            self._g._cfg_settings_ref,
+            getattr(self._g, '_boss_raid_engine', None),
+            getattr(self._g, '_state_mgr', None),
+            scene_key=scene_key)
+
+    def get_boss_reactions(self, scene_key=None):
         try:
-            state = build_boss_reactions_state(
-                self._g._cfg_settings_ref,
-                getattr(self._g, '_boss_raid_engine', None),
-                getattr(self._g, '_state_mgr', None))
-            return json.dumps({'ok': True, 'state': state}, ensure_ascii=False)
+            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key)}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
-    def save_boss_reaction(self, mapping_json):
+    def save_boss_reaction(self, mapping_json, scene_key=None):
         try:
             m = json.loads(mapping_json) if isinstance(mapping_json, str) else mapping_json
             upsert_mapping(self._g._cfg_settings_ref, m)
-            state = build_boss_reactions_state(
-                self._g._cfg_settings_ref,
-                getattr(self._g, '_boss_raid_engine', None),
-                getattr(self._g, '_state_mgr', None))
-            return json.dumps({'ok': True, 'state': state}, ensure_ascii=False)
+            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key)}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
-    def delete_boss_reaction(self, mapping_id):
+    def delete_boss_reaction(self, mapping_id, scene_key=None):
         try:
             delete_mapping(self._g._cfg_settings_ref, str(mapping_id))
-            state = build_boss_reactions_state(
-                self._g._cfg_settings_ref,
-                getattr(self._g, '_boss_raid_engine', None),
-                getattr(self._g, '_state_mgr', None))
-            return json.dumps({'ok': True, 'state': state}, ensure_ascii=False)
+            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key)}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
-    def import_observed_skills(self, base_id=0):
+    def import_observed_skills(self, base_id=0, scene_key=None):
         try:
             engine = getattr(self._g, '_boss_raid_engine', None)
-            obs = engine.get_observed_boss_skills(int(base_id) or None) if engine else {}
+            obs = engine.get_observed_boss_skills(int(base_id) or None, scene_key) if engine else {}
             return json.dumps({'ok': True, 'observed_skills': obs}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
@@ -9676,6 +9672,17 @@ class SAOWebViewGUI:
                         _bb_stop_ticking = False
                         _bb_overdrive = getattr(gs, 'boss_in_overdrive', False)
                         _bb_invincible = getattr(gs, 'boss_invincible', False)
+
+                    # Break source priority: in hybrid/auto/memory, once the MEM base is
+                    # acquired (sticky), boss break (stage + gauge%) comes from MEM; in TCP
+                    # mode / before base it stays TCP. Shield is NEVER overridden — TCP-only.
+                    _bb_mem_break = mem_boss_break_override(
+                        getattr(self, '_packet_engine', None))
+                    if _bb_mem_break is not None:
+                        _bb_breaking, _bb_has_break, _bb_extinction = _bb_mem_break
+                        _bb_extinction_raw = 0
+                        _bb_max_extinction = 0
+                        _bb_stop_ticking = False
 
                     _bb_sig = (
                         _bb_show,

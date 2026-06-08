@@ -125,6 +125,34 @@ class EngineRecordingTest(unittest.TestCase):
         eng2 = self._engine()
         self.assertEqual([b["base_id"] for b in eng2.get_observed_bosses("101")], [500])
 
+    def test_contract_is_scene_aware_and_tagged(self):
+        from engines.boss_autokey_linkage import build_boss_reactions_state
+        eng = self._engine()
+        eng.on_mem_boss_action({"boss_base_id": 500, "boss_name": "苍之冠", "boss_uuid": 1,
+                                "skill_id": 700, "skill_name": "角斗同步", "cast_edge": "start",
+                                "cast_duration_ms": 3000, "overdrive": True})
+        eng.on_boss_event({"event_type": 47, "host_uuid": 1})   # SHIELD_BROKEN
+        st = build_boss_reactions_state({}, eng, eng._state_mgr)
+        self.assertEqual(st["current_scene"]["name"], "幻华领域")
+        self.assertEqual(st["selected_scene_key"], "101")
+        self.assertIn("101", [s["scene_key"] for s in st["scenes"]])
+        self.assertEqual([b["base_id"] for b in st["bosses"]], [500])
+        obs = st["observed_skills"]["500"]
+        skill = next(o for o in obs if o["kind"] == "skill")
+        self.assertIn("enrage", skill["tags"])
+        self.assertTrue(any(o["kind"] == "mechanic" and "shield" in o["tags"] for o in obs))
+
+    def test_contract_scene_switch_scopes_bosses(self):
+        from engines.boss_autokey_linkage import build_boss_reactions_state
+        eng = self._engine()
+        eng.on_mem_boss_action({"boss_base_id": 500, "skill_id": 700, "cast_edge": "start"})
+        eng._state_mgr.update(dungeon_scene_id=202, dungeon_name="另一个场景")
+        eng.on_mem_boss_action({"boss_base_id": 600, "skill_id": 800, "cast_edge": "start"})
+        st101 = build_boss_reactions_state({}, eng, eng._state_mgr, scene_key="101")
+        st202 = build_boss_reactions_state({}, eng, eng._state_mgr, scene_key="202")
+        self.assertEqual([b["base_id"] for b in st101["bosses"]], [500])
+        self.assertEqual([b["base_id"] for b in st202["bosses"]], [600])
+
 
 if __name__ == "__main__":
     loader = unittest.TestLoader()

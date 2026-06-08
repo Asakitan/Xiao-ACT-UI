@@ -428,26 +428,43 @@ class BossAutoKeyLinkage:
 #  Boss Reactions editor (shared by Tk + WebView)
 # ════════════════════════════════════════
 
-def build_boss_reactions_state(settings, engine, state_mgr) -> Dict[str, Any]:
+def build_boss_reactions_state(settings, engine, state_mgr,
+                               scene_key: Any = None) -> Dict[str, Any]:
     """Single data contract for the dual-UI Boss Reactions editor.
 
-    Assembles the linkage mappings + the engine's live cast state + memory-
-    discovered observed skills/bosses + the data-source banner flag, so the Tk
-    panel and the WebView raid editor render identically from one payload."""
+    Assembles the linkage mappings + the engine's live cast state + the persisted
+    per-scene/per-boss observed skills & mechanics (tagged) + the data-source
+    banner flag, so the Tk panel and the WebView raid editor render identically.
+    `scene_key` selects which map/scene to browse; None defaults to the live one."""
     cfg = load_linkage_config(settings)
+    gs = getattr(state_mgr, "state", None) if state_mgr else None
+    cur_scene_id = _int(getattr(gs, "dungeon_scene_id", 0), 0) if gs else 0
+    cur_dungeon_id = _int(getattr(gs, "dungeon_id", 0), 0) if gs else 0
+    cur_scene_name = _s(getattr(gs, "dungeon_name", "")) if gs else ""
+    cur_scene_key = str(cur_scene_id or cur_dungeon_id or 0)
+    selected = str(scene_key) if scene_key not in (None, "") else cur_scene_key
+
     try:
-        observed = engine.get_observed_boss_skills() if engine else {}
+        scenes = engine.get_observed_scenes() if engine else []
+    except Exception:
+        scenes = []
+    # always surface the live scene so the user sees where they are, even pre-obs
+    if cur_scene_key and cur_scene_key not in {str(s.get("scene_key")) for s in scenes}:
+        scenes = [{"scene_key": cur_scene_key, "scene_id": cur_scene_id,
+                   "dungeon_id": cur_dungeon_id, "name": cur_scene_name,
+                   "boss_count": 0, "last_seen": 0.0}] + scenes
+    try:
+        observed = engine.get_observed_boss_skills(None, selected) if engine else {}
     except Exception:
         observed = {}
     try:
-        bosses = engine.get_observed_bosses() if engine else []
+        bosses = engine.get_observed_bosses(selected) if engine else []
     except Exception:
         bosses = []
     try:
         status = engine.get_status() if engine else {}
     except Exception:
         status = {}
-    gs = getattr(state_mgr, "state", None) if state_mgr else None
     data_source = str(getattr(gs, "data_source", "") or "") if gs else ""
     mem_available = bool(data_source in ("memory", "hybrid", "auto") and engine is not None)
     mappings = cfg.get("mappings", [])
@@ -468,6 +485,10 @@ def build_boss_reactions_state(settings, engine, state_mgr) -> Dict[str, Any]:
         "data_source": data_source or "tcp",
         "mem_available": mem_available,
         "self_dead": _bool(status.get("self_dead"), False),
+        "current_scene": {"scene_key": cur_scene_key, "scene_id": cur_scene_id,
+                          "dungeon_id": cur_dungeon_id, "name": cur_scene_name},
+        "selected_scene_key": selected,
+        "scenes": scenes,
         "current_boss": current,
         "bosses": bosses,
         "observed_skills": {str(bid): recs for bid, recs in observed.items()},
