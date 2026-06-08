@@ -38,6 +38,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from mem_probe.il2cpp.static_dps_source import StaticDpsSource
 from mem_probe.il2cpp.script_parser import ScriptIndex
+from mem_probe.il2cpp import auto_offsets as _ao
 
 
 # ────────── 常量 ──────────
@@ -144,6 +145,35 @@ class EntityMgrReader:
         self._last_uuid: int = 0
         self._last_check: float = 0.0
         self._full_si: Optional[ScriptIndex] = None
+        # auto-offset: resolve ZEntityMgr/ZEntity field offsets BY NAME from the dump
+        # once, with the verified literals as fallback. The inline heap scan and the
+        # batched id reads then use these ints exactly like the old constants, so the
+        # layout self-heals on a game patch with zero per-tick cost.
+        self._resolve_offsets()
+
+    def _resolve_offsets(self) -> None:
+        mgr = _ao.resolve(self._src, ENTITY_MGR_CLASS, {
+            "off_player_uuid": ("playerUuid_", PLAYERUUID_OFF),
+            "off_entity_dict": ("entityDict_", ENTITY_DICT_OFF),
+            "off_boss_dict": ("bossDict_", BOSS_DICT_OFF),
+            "off_monster_dict": ("monsterDict_", MONSTER_DICT_OFF),
+            "off_npc_dict": ("npcDict_", NPC_DICT_OFF),
+        })
+        ent = _ao.resolve(self._src, ENTITY_CLASS, {
+            "off_ent_attrs": ("attrs_", ENT_ATTRS_OFF),
+            "off_ent_state": ("entityState_", ENT_STATE_OFF),
+            "off_ent_uuid": ("Uuid", ENT_UUID_OFF),
+            "off_ent_config": ("ConfigUuid", ENT_CONFIG_OFF),
+            "off_ent_entid": ("EntId", ENT_ENTID_OFF),
+            "off_ent_charid": ("CharId", ENT_CHARID_OFF),
+            "off_ent_baseid": ("BaseId", ENT_BASEID_OFF),
+        })
+        for k, v in {**mgr, **ent}.items():
+            setattr(self, k, int(v))
+        # bytes that must be in-bounds for the inline mgr-field reads in _scan_for_mgr
+        self._scan_field_span = max(
+            self.off_player_uuid, self.off_entity_dict, self.off_boss_dict,
+            self.off_monster_dict, self.off_npc_dict) + 8
 
     def _klass_name(self, kp: int) -> str:
         """Read an Il2CppClass name (klass+0x10 -> char*) for validation."""
@@ -257,18 +287,18 @@ class EntityMgrReader:
                 start = 0
                 while True:
                     idx = blob.find(kp_bytes, start)
-                    if idx < 0 or idx + NPC_DICT_OFF + 8 > n:
+                    if idx < 0 or idx + self._scan_field_span > n:
                         break
                     if (idx & 0x7) == 0:
-                        # 内联读 6 字段
-                        bd = int.from_bytes(view[idx + BOSS_DICT_OFF:idx + BOSS_DICT_OFF + 8], "little")
-                        md = int.from_bytes(view[idx + MONSTER_DICT_OFF:idx + MONSTER_DICT_OFF + 8], "little")
-                        nd = int.from_bytes(view[idx + NPC_DICT_OFF:idx + NPC_DICT_OFF + 8], "little")
-                        ed = int.from_bytes(view[idx + ENTITY_DICT_OFF:idx + ENTITY_DICT_OFF + 8], "little")
+                        # 内联读 6 字段 (auto-resolved offsets)
+                        bd = int.from_bytes(view[idx + self.off_boss_dict:idx + self.off_boss_dict + 8], "little")
+                        md = int.from_bytes(view[idx + self.off_monster_dict:idx + self.off_monster_dict + 8], "little")
+                        nd = int.from_bytes(view[idx + self.off_npc_dict:idx + self.off_npc_dict + 8], "little")
+                        ed = int.from_bytes(view[idx + self.off_entity_dict:idx + self.off_entity_dict + 8], "little")
                         if (_looks_heap(bd) and _looks_heap(md) and _looks_heap(nd)
                                 and _looks_heap(ed) and len({bd, md, nd, ed}) == 4):
                             obj = r.base + off + idx
-                            puid = int.from_bytes(view[idx + PLAYERUUID_OFF:idx + PLAYERUUID_OFF + 8], "little", signed=True)
+                            puid = int.from_bytes(view[idx + self.off_player_uuid:idx + self.off_player_uuid + 8], "little", signed=True)
                             # entityDict_.count 校验 (跨内存读, 因为 ed 在另一块)
                             try:
                                 ed_cnt = pm.read_i32(ed + DICT_COUNT_OFF)
@@ -353,10 +383,10 @@ class EntityMgrReader:
             return None
         pm = self._src.sr.pm
         try:
-            uuid = pm.read_i64(ent_addr + ENT_UUID_OFF) or 0
-            cfg = pm.read_i64(ent_addr + ENT_CONFIG_OFF) or 0
-            cid = pm.read_i64(ent_addr + ENT_CHARID_OFF) or 0
-            st = pm.read_i32(ent_addr + ENT_STATE_OFF) or 0
+            uuid = pm.read_i64(ent_addr + self.off_ent_uuid) or 0
+            cfg = pm.read_i64(ent_addr + self.off_ent_config) or 0
+            cid = pm.read_i64(ent_addr + self.off_ent_charid) or 0
+            st = pm.read_i32(ent_addr + self.off_ent_state) or 0
         except Exception:
             return None
         if uuid <= 0:
@@ -371,7 +401,7 @@ class EntityMgrReader:
         if not ent_addr:
             return 0
         try:
-            return int(self._src.sr.pm.read_u64(ent_addr + ENT_ATTRS_OFF) or 0)
+            return int(self._src.sr.pm.read_u64(ent_addr + self.off_ent_attrs) or 0)
         except Exception:
             return 0
 
@@ -438,19 +468,19 @@ class EntityMgrReader:
         pm = self._src.sr.pm
         snap = EntityMgrSnap(mgr_addr=addr, player_uuid=player_uuid, fetched_at=time.time())
         # bossDict_
-        bd = pm.read_u64(addr + BOSS_DICT_OFF)
+        bd = pm.read_u64(addr + self.off_boss_dict)
         for key, val in self._read_dict_entries(bd, max_entries=32):
             es = self._read_entity(val)
             if es:
                 snap.bosses.append(es)
         if include_monsters:
-            md = pm.read_u64(addr + MONSTER_DICT_OFF)
+            md = pm.read_u64(addr + self.off_monster_dict)
             for key, val in self._read_dict_entries(md, max_entries=128):
                 es = self._read_entity(val)
                 if es:
                     snap.monsters.append(es)
         if include_npcs:
-            nd = pm.read_u64(addr + NPC_DICT_OFF)
+            nd = pm.read_u64(addr + self.off_npc_dict)
             for key, val in self._read_dict_entries(nd, max_entries=128):
                 es = self._read_entity(val)
                 if es:

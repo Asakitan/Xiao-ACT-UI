@@ -82,8 +82,24 @@ class EntityCombatReader:
     """Reads HP/state from a ZEntity's attribute cache. ``pm`` needs read_u64/i64/
     u32/i32/bytes."""
 
-    def __init__(self, pm):
+    def __init__(self, pm, *, resolver=None):
         self.pm = pm
+        # auto-offset: resolve ZEntity.attrs_ + the ZAttrCacheSlim base (cacheSlim_)
+        # by name from the dump, literal fallback. _indexPart/_values are the Burst
+        # struct's inline fields (inner deltas 0x0/0x8), kept structural. The cython
+        # fast path (read_entity_combat_many) carries its own offsets; these drive the
+        # Python paths (read_attr_map / read_name_attr / read_combat -> boss-cast loop).
+        from mem_probe.il2cpp import auto_offsets as _ao
+        ent = _ao.resolve(resolver, "Panda.ZGame.ZEntity", {
+            "off_ent_attrs": ("attrs_", ENT_ATTRS_OFF),
+        })
+        coll = _ao.resolve(resolver, "Panda.ZGame.ZAttrCollection", {
+            "cacheslim": ("cacheSlim_", COLL_INDEXPART_OFF),
+        })
+        self.off_ent_attrs = ent["off_ent_attrs"]
+        cs = coll["cacheslim"]
+        self.off_coll_indexpart = cs + (COLL_INDEXPART_OFF - COLL_INDEXPART_OFF)  # _indexPart @ inner 0x0
+        self.off_coll_values = cs + (COLL_VALUES_OFF - COLL_INDEXPART_OFF)        # _values   @ inner 0x8
         self._klass_name: Dict[int, str] = {}     # klass ptr -> name (session cache)
         # per-entity attr layout cache keyed by _indexPart ptr: {attr_id: (vidx, type)}.
         # The Burst index decode is the expensive part (~hundreds of reads); it is
@@ -105,10 +121,10 @@ class EntityCombatReader:
 
     def _object_array(self, ent_addr: int):
         """Return (arr_addr, length) of the entity's cacheSlim object[] (or (0,0))."""
-        attrs = self.pm.read_u64(ent_addr + ENT_ATTRS_OFF)
+        attrs = self.pm.read_u64(ent_addr + self.off_ent_attrs)
         if not _plaus(attrs):
             return 0, 0, 0
-        vals = self.pm.read_u64(attrs + COLL_VALUES_OFF)
+        vals = self.pm.read_u64(attrs + self.off_coll_values)
         if not _plaus(vals):
             return 0, 0, attrs
         arr = self.pm.read_u64(vals + VALUES_ELEM0_ARR_OFF)
@@ -173,11 +189,11 @@ class EntityCombatReader:
         int*[32] valueIndices, then resolves each value index into the paged _values.
         Deterministic (attr_id-keyed) -- the structural decode of ZAttrCacheSlim.
         """
-        attrs = self.pm.read_u64(ent_addr + ENT_ATTRS_OFF)
+        attrs = self.pm.read_u64(ent_addr + self.off_ent_attrs)
         if not _plaus(attrs):
             return {}
-        ip = self.pm.read_u64(attrs + COLL_INDEXPART_OFF)
-        vals = self.pm.read_u64(attrs + COLL_VALUES_OFF)
+        ip = self.pm.read_u64(attrs + self.off_coll_indexpart)
+        vals = self.pm.read_u64(attrs + self.off_coll_values)
         if not (_plaus(ip) and _plaus(vals)):
             return {}
         out: Dict[int, object] = {}
@@ -232,11 +248,11 @@ class EntityCombatReader:
         """Read the entity's NAME attr (id=1) as the game's resolved display-name string,
         independent of our JSON tables. '' when the entity has no NAME attr (many monsters
         carry only a template id). The authoritative source for the JSON self-heal."""
-        attrs = self.pm.read_u64(ent_addr + ENT_ATTRS_OFF)
+        attrs = self.pm.read_u64(ent_addr + self.off_ent_attrs)
         if not _plaus(attrs):
             return ""
-        ip = self.pm.read_u64(attrs + COLL_INDEXPART_OFF)
-        vals = self.pm.read_u64(attrs + COLL_VALUES_OFF)
+        ip = self.pm.read_u64(attrs + self.off_coll_indexpart)
+        vals = self.pm.read_u64(attrs + self.off_coll_values)
         if not (_plaus(ip) and _plaus(vals)):
             return ""
         for k in range(INDEX_SEG_COUNT):
@@ -261,10 +277,10 @@ class EntityCombatReader:
 
     def is_combat_entity(self, ent_addr: int) -> bool:
         """True if the entity's _indexPart carries the HP attr ids (has an HP bar)."""
-        attrs = self.pm.read_u64(ent_addr + ENT_ATTRS_OFF)
+        attrs = self.pm.read_u64(ent_addr + self.off_ent_attrs)
         if not _plaus(attrs):
             return False
-        ip = self.pm.read_u64(attrs + COLL_INDEXPART_OFF)
+        ip = self.pm.read_u64(attrs + self.off_coll_indexpart)
         if not _plaus(ip):
             return False
         blob = self.pm.read_bytes(ip, 0x4000)
@@ -353,11 +369,11 @@ class EntityCombatReader:
 
     def _layout_for(self, ent_addr: int):
         """Return (ip, layout) for an entity (layout cached by _indexPart ptr)."""
-        attrs = self.pm.read_u64(ent_addr + ENT_ATTRS_OFF)
+        attrs = self.pm.read_u64(ent_addr + self.off_ent_attrs)
         if not _plaus(attrs):
             return 0, None
-        ip = self.pm.read_u64(attrs + COLL_INDEXPART_OFF)
-        vals = self.pm.read_u64(attrs + COLL_VALUES_OFF)
+        ip = self.pm.read_u64(attrs + self.off_coll_indexpart)
+        vals = self.pm.read_u64(attrs + self.off_coll_values)
         if not (_plaus(ip) and _plaus(vals)):
             return 0, None
         lay = self._layout_cache.get(ip)

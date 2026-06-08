@@ -66,12 +66,16 @@ class ZAttrReader:
     ``read_bytes / read_u32 / read_u64 / read_i64 / read_i32``.
     """
 
-    def __init__(self, pm, *, ga_base: int = 0):
+    def __init__(self, pm, *, ga_base: int = 0, resolver=None):
         self.pm = pm
         # klass_ptr -> (value_offset, width_bytes)  (width in {4, 8})
         self._klass_value_off: Dict[int, Tuple[int, int]] = {}
         self._calibrated_ga: int = 0
         self._req_ga: int = int(ga_base or 0)
+        # auto-offset: ZAttrCollection.mixItemDict_ by name (dump), literal fallback.
+        from mem_probe.il2cpp import auto_offsets as _ao
+        self.off_mixdict = _ao.resolve(resolver, "Panda.ZGame.ZAttrCollection", {
+            "mixdict": ("mixItemDict_", MIXDICT_OFF)})["mixdict"]
 
     # ---------- dict walk ----------
 
@@ -121,7 +125,7 @@ class ZAttrReader:
         """``attrs_obj`` (ZAttrCollection) -> ``{attr_id: imixattr_ptr}``."""
         if not _plausible_ptr(attrs_obj):
             return {}
-        mixdict = self.pm.read_u64(attrs_obj + MIXDICT_OFF)
+        mixdict = self.pm.read_u64(attrs_obj + self.off_mixdict)
         if not _plausible_ptr(mixdict):
             return {}
         return dict(self._read_dict_entries(mixdict))

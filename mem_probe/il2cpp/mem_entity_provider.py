@@ -21,10 +21,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from mem_probe.il2cpp.mem_entity_mgr import (
-    EntityMgrReader, ENTITY_DICT_OFF, BOSS_DICT_OFF, MONSTER_DICT_OFF, NPC_DICT_OFF,
-    ENT_UUID_OFF, ENT_CONFIG_OFF, ENT_BASEID_OFF,
-)
+from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
 from mem_probe.il2cpp.mem_entity_combat import EntityCombatReader
 
 
@@ -35,7 +32,9 @@ class MemEntityProvider:
         self._src = dps_source
         self._emr = EntityMgrReader(dps_source)
         self._pm = dps_source.sr.pm
-        self._ecr = EntityCombatReader(self._pm)
+        # thread the resolver in so the combat reader resolves its own field offsets
+        # (ZEntity.attrs_, ZAttrCollection.cacheSlim_) by name (auto), literal fallback.
+        self._ecr = EntityCombatReader(self._pm, resolver=dps_source.sr)
         self._self_uid = int(self_uid or 0)
 
     def set_self_uid(self, uid: int) -> None:
@@ -51,11 +50,12 @@ class MemEntityProvider:
         mgr = self.locate()
         if not mgr:
             return []
-        dicts = [("entity", ENTITY_DICT_OFF), ("boss", BOSS_DICT_OFF)]
+        emr = self._emr
+        dicts = [("entity", emr.off_entity_dict), ("boss", emr.off_boss_dict)]
         if include_monsters:
-            dicts.append(("monster", MONSTER_DICT_OFF))
+            dicts.append(("monster", emr.off_monster_dict))
         if include_npcs:
-            dicts.append(("npc", NPC_DICT_OFF))
+            dicts.append(("npc", emr.off_npc_dict))
         # collect unique entities from all dicts, then batch every read
         ents: List = []
         seen = set()
@@ -78,7 +78,7 @@ class MemEntityProvider:
         # batched id reads: Uuid@0xC0 / ConfigUuid@0xC8 / BaseId@0xE0 (one RPM batch)
         id_addrs = []
         for _, e in live:
-            id_addrs += [e + ENT_UUID_OFF, e + ENT_CONFIG_OFF, e + ENT_BASEID_OFF]
+            id_addrs += [e + emr.off_ent_uuid, e + emr.off_ent_config, e + emr.off_ent_baseid]
         idv = self._pm.read_u64_many(id_addrs)
         out: List[dict] = []
         for i, (kind, e) in enumerate(live):
@@ -109,11 +109,12 @@ class MemEntityProvider:
         mgr = self.locate()
         if not mgr:
             return []
-        dicts = [("boss", BOSS_DICT_OFF)]
+        emr = self._emr
+        dicts = [("boss", emr.off_boss_dict)]
         if include_monsters:
-            dicts.append(("monster", MONSTER_DICT_OFF))
+            dicts.append(("monster", emr.off_monster_dict))
         if include_npcs:
-            dicts.append(("npc", NPC_DICT_OFF))
+            dicts.append(("npc", emr.off_npc_dict))
         ents: List = []
         seen = set()
         for kind, off in dicts:
@@ -129,7 +130,7 @@ class MemEntityProvider:
             return []
         id_addrs = []
         for _, e in ents:
-            id_addrs += [e + ENT_UUID_OFF, e + ENT_BASEID_OFF]
+            id_addrs += [e + emr.off_ent_uuid, e + emr.off_ent_baseid]
         idv = self._pm.read_u64_many(id_addrs)
         out: List[dict] = []
         for i, (kind, e) in enumerate(ents):
