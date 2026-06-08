@@ -94,12 +94,23 @@ def has_batch_read() -> bool:
     return _fast is not None and hasattr(_fast, "read_words_many")
 
 
-def read_entity_combat_many(handle: int, ent_addrs):
+def read_entity_combat_many(handle: int, ent_addrs,
+                            off_attrs: int = 0x48, off_indexpart: int = 0x18,
+                            off_values: int = 0x20):
     """Full per-entity combat decode (HP + state) in one nogil pass. Returns a flat
-    list of 7 ints per entity [cur, max, break, overdrive, stun, ext, cast] (cur=-1 =>
-    non-combat), or None when the Cython extension lacks it."""
+    list of 8 ints per entity [cur, max, break, overdrive, stun, ext, cast, max_ext]
+    (cur=-1 => non-combat), or None when the Cython extension lacks it.
+
+    off_attrs/off_indexpart/off_values are the game-version-specific ZEntity.attrs_ /
+    ZAttrCollection.cacheSlim_ offsets (resolved by name; defaults = verified layout)."""
     if _fast is not None and hasattr(_fast, "read_entity_combat_many"):
-        return _fast.read_entity_combat_many(int(handle), list(ent_addrs))
+        try:
+            return _fast.read_entity_combat_many(int(handle), list(ent_addrs),
+                                                 int(off_attrs), int(off_indexpart),
+                                                 int(off_values))
+        except TypeError:
+            # pre-rebuild kernel without the offset params -> baked-offset call
+            return _fast.read_entity_combat_many(int(handle), list(ent_addrs))
     return None
 
 
