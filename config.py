@@ -346,7 +346,7 @@ WINDOW_SIZE = "900x980"
 APP_VERSION = "4.4.17"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v4.4.17: hybrid 内存补充化 — 干掉 mem 每 tick O(N) 读, 人群/20人本不再卡.
-#   主人实测 hybrid 下 mem DPS/Boss HP 仍卡; 定向: hybrid 走 TCP 为主, mem 只补
+#   实测 hybrid 下 mem DPS/Boss HP 仍卡; 定向: hybrid 走 TCP 为主, mem 只补
 #   名字 / TCP 不发的基址。调查确认 DPS 行+Boss HP 本就 TCP 为主(dps_tracker
 #   _mem_primary=False; Boss HP 仅 boss_hp_source∈none/memory/estimate 时由 mem 补)。
 #   卡的根因 = MemStateBridge._entity_loop(1Hz)每 tick 两次 O(N) 持 GIL 内存读:
