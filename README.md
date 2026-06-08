@@ -4,8 +4,16 @@
 
 - 当前工作分支：`3.0.0`
 - 运行版本来源：`config.py` 中的 `APP_VERSION` / `APP_VERSION_LABEL`
-- 当前源码版本：`4.4.16`
+- 当前源码版本：`4.4.17`
 - 默认运行平台：Windows 10 / 11
+
+## v4.4.17 重点：hybrid 内存补充化（干掉 mem 每 tick O(N) 读，人群/20 人本不再卡）
+
+- **方向**（主人定）：hybrid 仍走 **TCP 为主**，mem 只补「名字 + TCP 不发送的基址」给 TCP 做补充。调查确认 DPS 行 + Boss HP 在 hybrid 下**本就 TCP 为主**（`dps_tracker._mem_primary=False`；Boss HP 仅 `boss_hp_source ∈ none/memory/estimate` 时由 mem 补）。卡的根因是 `MemStateBridge._entity_loop`（1Hz）每 tick 两次 O(N) 持 GIL 内存读——`prov.snapshot()`（读每个可见实体，随人群涨）+ `_poll_mem_damage()`（整张伤害表 + top6，随队伍涨）。
+- **慢化采集**：非 memory 模式（hybrid/auto）下，`_entity_loop` 在「定位到 boss 且 `_base_acquired`」后退到 **4s**（冷启动 / boss 消失自动回 1s，不延迟 boss 定位与破防切源）；**memory 模式恒 1s 全量，零变化**（mem 仍主源）。
+- **O(1) Boss 路**：`_boss_cast_loop`（~12.5Hz）本就用缓存 obj 指针调 `read_combat`（已返回 `cur/max/hp_pct/breaking/extinction`，之前只取 `cast_skill_id`）；现额外节流 ~3.5Hz 重算 `last_boss_break` + push Boss HP（自门控同慢循环，仅 TCP 未占条时写 `memory`）。Boss 血条/破防反而**更快**（12.5Hz > 1Hz）。
+- **防陈旧守卫**：信任缓存 boss obj 前用 `read_u64(obj+uuid 偏移)` 复核仍是同一 uuid，防池化复用把回收对象的 HP 当成 boss（窗口从 ≤4s 收到一个快 tick ~80ms）。
+- **净效果**：hybrid 每秒 mem 开销 **O(N)→O(1)**；TCP 仍是权威实时源；mem 只补名字 / 基址 / 破防湮灭 / max_hp 引导。仅改 `mem_state_bridge.py`；无进程单测 17 绿 + boss 全套 42 绿。
 
 ## v4.4.16 重点：Boss 反应编辑器（真名映射 + 聚合视图 + 开页不卡）
 

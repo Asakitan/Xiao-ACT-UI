@@ -343,8 +343,26 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.4.16"
+APP_VERSION = "4.4.17"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v4.4.17: hybrid 内存补充化 — 干掉 mem 每 tick O(N) 读, 人群/20人本不再卡.
+#   主人实测 hybrid 下 mem DPS/Boss HP 仍卡; 定向: hybrid 走 TCP 为主, mem 只补
+#   名字 / TCP 不发的基址。调查确认 DPS 行+Boss HP 本就 TCP 为主(dps_tracker
+#   _mem_primary=False; Boss HP 仅 boss_hp_source∈none/memory/estimate 时由 mem 补)。
+#   卡的根因 = MemStateBridge._entity_loop(1Hz)每 tick 两次 O(N) 持 GIL 内存读:
+#   prov.snapshot()(读每个可见实体, 随人群涨)+ _poll_mem_damage()(整张伤害表+top6,
+#   随队伍涨)。修法(只动 mem_state_bridge.py):
+#   1) 慢化采集: 非 memory 模式(hybrid/auto)下 _entity_loop 在「定位到 boss 且
+#      base_acquired」后退到 4s(冷启动/boss 消失自动回到 1s, 不延迟 boss 定位/破防切源);
+#      memory 模式恒 1s 全量(零变化, mem 仍主源)。
+#   2) O(1) Boss 路: _boss_cast_loop(~12.5Hz)本就用缓存 obj 调 read_combat(已返回
+#      cur/max/hp_pct/breaking/extinction), 之前只取 cast_skill_id; 现额外节流~3.5Hz
+#      重算 last_boss_break + push Boss HP(自门控同慢循环, 仅 TCP 未占条时写 memory),
+#      Boss 血条/破防反而更新(12.5Hz>1Hz)。
+#   3) 防陈旧守卫: 信任缓存 boss obj 前用 read_u64(obj+uuid 偏移)复核仍是同一 uuid,
+#      防池化复用把回收对象 HP 当 boss(把窗口从≤4s 收到一个快 tick~80ms)。
+#   净效果: hybrid 每秒 mem 开销 O(N)→O(1); TCP 仍权威实时源; mem 只补名字/基址/
+#      破防湮灭/max_hp 引导。无进程单测 17 绿(节奏门控/快推/守卫/节流), boss 全套 42 绿。
 # v4.4.16: Boss 反应编辑器 — 名字映射 + 聚合视图 + 开页不卡.
 #   1) 三处 ID 都映射成真名(读时, 走权威名表 names.*, 历史记录一并修复):
 #      场景 names.dungeon、Boss names.boss/monster、技能 names.skill→boss_skill→

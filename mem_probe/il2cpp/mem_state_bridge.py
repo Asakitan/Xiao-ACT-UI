@@ -84,6 +84,14 @@ class MemStateBridge:
         self._entity_thread: Optional[threading.Thread] = None
         self._entity_stop = threading.Event()
         self._entity_interval: float = 1.0
+        # Cadence policy: memory mode keeps the full 1s O(N) entity scan (mem is the
+        # primary source). In a TCP-primary mode (hybrid/auto) the snapshot+damage
+        # harvest is only a SUPPLEMENT (names / boss locate / cross-check), so it backs
+        # off to _entity_interval_slow once a boss is located + base acquired — the O(1)
+        # boss loop carries the live boss bar. This is the crowd / 20-player lag fix:
+        # the per-tick O(N) GIL-holding reads stop scaling with entity/player count.
+        self._entity_interval_fast: float = 1.0   # cold-start / memory-mode cadence
+        self._entity_interval_slow: float = 4.0   # hybrid steady-state harvest cadence
         self.last_entities: list = []
         self.last_boss_mem: Optional[dict] = None
         # sticky "correct base acquired" flag: once a non-empty entity snapshot is
@@ -100,6 +108,11 @@ class MemStateBridge:
         self._boss_cast_thread: Optional[threading.Thread] = None
         self._boss_cast_stop = threading.Event()
         self._boss_cast_interval: float = 0.08   # ~12.5Hz boss-only cast poll (low latency)
+        # In a TCP-primary mode the O(1) boss loop owns the boss bar / break; throttle
+        # its state_mgr push + break recompute to ~3.5Hz (the UI pulls last_boss_break
+        # at 20Hz, so this is ample and far fresher than the old 1Hz entity loop).
+        self._boss_fast_push_min_dt: float = 0.28
+        self._last_boss_fast_push: float = 0.0
         self._named: dict = {}          # uuid -> resolved name (push to tracker once)
         self._last_scene_id: int = 0
         self._damage_reader: Any = None
@@ -172,6 +185,85 @@ class MemStateBridge:
             traceback.print_exc()
             self._provider = None
             return False
+
+    # ───────── data-source cadence (TCP-primary supplement vs memory-primary) ─────────
+
+    def _mode(self) -> str:
+        return str(getattr(self.packet_bridge, "_data_source_mode", "") or "").lower()
+
+    def _mem_is_supplement(self) -> bool:
+        """True when memory is NOT the primary source (TCP-primary modes: hybrid /
+        auto / tcp). Mirrors dps_tracker.set_mem_primary(ds == 'memory'): in these
+        modes mem only supplements TCP, so its O(N) work backs off."""
+        return self._mode() != "memory"
+
+    def _next_entity_interval(self) -> float:
+        """Entity-loop sleep. Memory mode keeps the full 1s scan. A TCP-primary mode
+        backs the O(N) snapshot+damage harvest off to the slow interval once a boss is
+        located and the base is acquired — but stays fast while cold so boss-locate /
+        base acquisition (which flips boss-break ownership to MEM) isn't delayed; a boss
+        despawn (last_boss_mem→None) auto-re-tightens to fast."""
+        if not self._mem_is_supplement():
+            return self._entity_interval_fast
+        cold = (self.last_boss_mem is None) or (not self._base_acquired)
+        return self._entity_interval_fast if cold else self._entity_interval_slow
+
+    def _boss_obj_is(self, prov, obj: int, uuid: int) -> bool:
+        """O(1) guard that the cached boss obj still hosts `uuid` (pool reuse between
+        slow snapshots would otherwise let read_combat report a recycled occupant's HP
+        as the boss). Can't verify (no pm) → don't block (status quo); read error →
+        treat stale and yield to the slow loop's relocation."""
+        try:
+            pm = getattr(prov, "_pm", None)
+            if pm is None:
+                return True
+            emr = getattr(prov, "_emr", None)
+            off = int(getattr(emr, "off_ent_uuid", 0xC0)) if emr is not None else 0xC0
+            return int(pm.read_u64(obj + off) or 0) == int(uuid)
+        except Exception:
+            return False
+
+    def _boss_fast_push(self, boss: dict, c: dict) -> None:
+        """O(1) boss bar / break from the read_combat dict the cast loop already has.
+        Keeps the cached boss dict fresh between slow snapshots, and (throttled ~3.5Hz)
+        recomputes last_boss_break + pushes boss HP — self-gated identically to the slow
+        entity loop (writes boss_hp_source='memory' only when TCP isn't owning the bar).
+        Supplement-mode only; in memory mode the 1Hz entity loop owns these."""
+        for k in ("cur_hp", "max_hp", "hp_pct", "breaking_stage", "extinction", "max_extinction"):
+            if c.get(k) is not None:
+                boss[k] = c[k]
+        now = time.monotonic()
+        if (now - self._last_boss_fast_push) < self._boss_fast_push_min_dt:
+            return
+        self._last_boss_fast_push = now
+        bs = c.get("breaking_stage")
+        ext = c.get("extinction")
+        mext = c.get("max_extinction")
+        pct = (ext / mext) if (ext and mext and mext > 0) else 0.0
+        self.last_boss_break = {
+            "breaking_stage": int(bs) if isinstance(bs, int) else -1,
+            "extinction_pct": max(0.0, min(1.0, pct)),
+            "has_break_data": bool(isinstance(bs, int) and bs >= 0),
+        }
+        if self.state_mgr is None or not c.get("max_hp"):
+            return
+        st = getattr(self.state_mgr, "state", None)
+        src_now = str(getattr(st, "boss_hp_source", "none") or "none")
+        if src_now not in ("none", "memory", "estimate"):
+            return
+        cur = int(c.get("cur_hp") or 0)
+        mx = int(c.get("max_hp") or 0)
+        hp_pct = c.get("hp_pct")
+        hp_pct = float(hp_pct) if hp_pct is not None else (cur / mx if mx > 0 else 0.0)
+        upd = dict(boss_current_hp=cur, boss_total_hp=mx,
+                   boss_hp_est_pct=max(0.0, min(1.0, hp_pct)),
+                   boss_hp_source="memory")
+        if isinstance(bs, int):
+            upd["boss_breaking_stage"] = bs
+        try:
+            self.state_mgr.update(**upd)
+        except Exception:
+            pass
 
     def _entity_loop(self):
         """Poll ZEntityMgr for live entity/boss HP and fill the boss bar pre-pull.
@@ -332,7 +424,7 @@ class MemStateBridge:
                             pass
             except Exception:
                 traceback.print_exc()
-            self._entity_stop.wait(self._entity_interval)
+            self._entity_stop.wait(self._next_entity_interval())
 
     def _mem_name_cache(self):
         """The shared TcpNameCache (PacketBridge owns it) used as the name overlay sink.
@@ -368,7 +460,7 @@ class MemStateBridge:
             md = {int(u) >> 16: int(v) for u, v in totals.items()}
             self.last_mem_damage = md
             self.dps_tracker.set_mem_damage(md)
-            ds = str(getattr(self.packet_bridge, '_data_source_mode', '') or '').lower()
+            ds = self._mode()
             self.dps_tracker.set_mem_primary(ds == 'memory')
             try:
                 skills = {}
@@ -420,7 +512,12 @@ class MemStateBridge:
                     if obj and uuid:
                         ecr = getattr(prov, "_ecr", None)
                         c = ecr.read_combat(obj) if ecr is not None else None
-                        if c is not None:
+                        if c is not None and self._boss_obj_is(prov, obj, uuid):
+                            # supplement modes (TCP-primary): this O(1) boss read carries
+                            # the live boss bar / break so the entity loop's O(N) scan can
+                            # back off. memory mode: the 1Hz entity loop owns the bar.
+                            if self._mem_is_supplement():
+                                self._boss_fast_push(boss, c)
                             skill = int(c.get("cast_skill_id") or 0)
                             actor = None
                             probe = getattr(tr, "_probe", None)
@@ -787,11 +884,112 @@ class MemStateBridge:
 
 # ───────── selftest ─────────
 
+def _unit_selftest() -> int:
+    """No-process unit checks for the TCP-primary-supplement cadence + O(1) boss push
+    (run: python mem_probe/il2cpp/mem_state_bridge.py --unit)."""
+    passed = [0]
+    failed = [0]
+
+    def ck(name, cond):
+        if cond:
+            passed[0] += 1
+            print(f"  [ok] {name}")
+        else:
+            failed[0] += 1
+            print(f"  [FAIL] {name}")
+
+    class _State:
+        def __init__(self, src="none"):
+            self.boss_hp_source = src
+
+    class _GS:
+        def __init__(self, src="none"):
+            self.state = _State(src)
+            self.updates = []
+
+        def update(self, **kw):
+            self.updates.append(kw)
+
+    class _PB:
+        def __init__(self, mode):
+            self._data_source_mode = mode
+
+    class _PM:
+        def __init__(self, uuid):
+            self._uuid = uuid
+
+        def read_u64(self, addr):
+            return self._uuid
+
+    class _EMR:
+        off_ent_uuid = 0xC0
+
+    class _Prov:
+        def __init__(self, uuid):
+            self._pm = _PM(uuid)
+            self._emr = _EMR()
+
+    print("[cadence gating]")
+    br = MemStateBridge(state_mgr=_GS(), packet_bridge=_PB("memory"))
+    br.last_boss_mem = {"uuid": 1}
+    br._base_acquired = True
+    ck("memory -> fast(1.0) regardless of boss", br._next_entity_interval() == br._entity_interval_fast)
+    br.packet_bridge._data_source_mode = "hybrid"
+    ck("hybrid+boss+base -> slow(4.0)", br._next_entity_interval() == br._entity_interval_slow)
+    br.last_boss_mem = None
+    ck("hybrid+no boss -> fast (cold)", br._next_entity_interval() == br._entity_interval_fast)
+    br.last_boss_mem = {"uuid": 1}
+    br._base_acquired = False
+    ck("hybrid+boss+!base -> fast (cold)", br._next_entity_interval() == br._entity_interval_fast)
+
+    print("[fast boss push]")
+    gs = _GS(src="none")
+    br2 = MemStateBridge(state_mgr=gs, packet_bridge=_PB("hybrid"))
+    boss = {"uuid": 7, "obj": 0x1000}
+    c = {"cur_hp": 300, "max_hp": 1000, "hp_pct": 0.3,
+         "breaking_stage": 2, "extinction": 50, "max_extinction": 100}
+    br2._boss_fast_push(boss, c)
+    ck("boss dict HP refreshed in place", boss.get("cur_hp") == 300 and boss.get("breaking_stage") == 2)
+    ck("last_boss_break stage", br2.last_boss_break and br2.last_boss_break["breaking_stage"] == 2)
+    ck("last_boss_break ext% = 0.5", abs(br2.last_boss_break["extinction_pct"] - 0.5) < 1e-6)
+    ck("hp push when src=none", any(u.get("boss_hp_source") == "memory" for u in gs.updates))
+    ck("hp push value", gs.updates and gs.updates[-1].get("boss_current_hp") == 300)
+    n0 = len(gs.updates)
+    br2._boss_fast_push(boss, c)
+    ck("throttled: no second push", len(gs.updates) == n0)
+    br2._last_boss_fast_push = 0.0
+    br2._boss_fast_push(boss, c)
+    ck("pushes again after throttle window", len(gs.updates) == n0 + 1)
+
+    gs2 = _GS(src="packet")   # TCP owns the bar
+    br3 = MemStateBridge(state_mgr=gs2, packet_bridge=_PB("hybrid"))
+    br3._boss_fast_push({"uuid": 7}, dict(c))
+    ck("no push when src=packet (TCP owns)",
+       not any(u.get("boss_hp_source") == "memory" for u in gs2.updates))
+
+    print("[staleness guard]")
+    br4 = MemStateBridge(packet_bridge=_PB("hybrid"))
+    ck("guard true on uuid match", br4._boss_obj_is(_Prov(0x55), 0x1000, 0x55) is True)
+    ck("guard false on uuid mismatch", br4._boss_obj_is(_Prov(0x99), 0x1000, 0x55) is False)
+
+    print("[mode helpers]")
+    ck("hybrid is supplement", MemStateBridge(packet_bridge=_PB("hybrid"))._mem_is_supplement() is True)
+    ck("auto is supplement", MemStateBridge(packet_bridge=_PB("auto"))._mem_is_supplement() is True)
+    ck("memory is primary", MemStateBridge(packet_bridge=_PB("memory"))._mem_is_supplement() is False)
+
+    print(f"\n{passed[0]} passed, {failed[0]} failed")
+    return 1 if failed[0] else 0
+
+
 def _selftest():
     import argparse
+    import sys
     p = argparse.ArgumentParser()
     p.add_argument("--seconds", type=int, default=10)
+    p.add_argument("--unit", action="store_true", help="no-process unit checks")
     args = p.parse_args()
+    if args.unit:
+        sys.exit(_unit_selftest())
 
     class _StubGS:
         def __init__(self):
