@@ -1573,15 +1573,16 @@ class BossRaidEngine:
             return
         status = self._build_status_locked()
         enrage_rem = status["enrage_remaining_s"]
-        if enrage_rem > 0:
-            mins = int(enrage_rem) // 60
-            secs = int(enrage_rem) % 60
-            timer_text = f"{mins}:{secs:02d}"
+        # Only surface a boss timer while a user-started raid profile is RUNNING.
+        # During free-combat observation (no profile, or an enrage-boss the user
+        # hasn't started a raid for) the HUD must keep its wall clock, not boss time.
+        if self._state != self.STATE_RUNNING:
+            timer_text = ''
+        elif enrage_rem > 0:
+            timer_text = f"{int(enrage_rem) // 60}:{int(enrage_rem) % 60:02d}"
         else:
             elapsed = status["elapsed_s"]
-            mins = int(elapsed) // 60
-            secs = int(elapsed) % 60
-            timer_text = f"{mins}:{secs:02d}"
+            timer_text = f"{int(elapsed) // 60}:{int(elapsed) % 60:02d}"
 
         self._state_mgr.update(
             boss_raid_active=True,

@@ -319,6 +319,10 @@ class GameStateManager:
                 prev_lv = getattr(self, '_prev_level_base', self._state.level_base)
                 if prev_lv > 0:
                     kwargs['level_base'] = prev_lv
+            # 生体元 base 等级硬上限 60；赛季合算等级走 level_extra 显示为 (+XX)。
+            # 内存路读 RoleLevel.Level 可能带回赛季合算值，这里收口防止显示成 Lv.93。
+            if 'level_base' in kwargs and int(kwargs.get('level_base') or 0) > 60:
+                kwargs['level_base'] = 60
             if 'level_extra' in kwargs and kwargs['level_extra'] == 0:
                 prev_lv_extra = getattr(self, '_prev_level_extra', self._state.level_extra)
                 if prev_lv_extra > 0:

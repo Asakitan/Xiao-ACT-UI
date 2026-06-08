@@ -343,8 +343,14 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.4.12"
+APP_VERSION = "4.4.13"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v4.4.13: HUD 三个小修.
+#   1) Boss 计时只在用户开了 bossraid profile (STATE_RUNNING) 时显示；自由战斗 /
+#      自带狂暴的 boss 不再把左下角身份牌的时钟换成 boss 时间 (boss 血条保留)。
+#   2) Boss 计时字号放大到与时钟一致 (Tk 18→30px, Web 13→30px)。
+#   3) 等级 base 硬上限 60 (GameState 收口)：内存路 RoleLevel.Level 带回赛季合算值
+#      时不再显示成 Lv.93，正确显示 Lv.60(+93)，赛季走 (+XX)。
 # v4.4.0: Boss 技能聚合 — 按地图/场景/Boss 持久记录出招, 详细编辑面板标记特殊技能.
 #   1) Boss skills/mechanics are read from the BuffComp buff list (a new transient
 #      buff base_id = a cast); fixed a ZList<T> offset bug (items_@0x18/size_@0x20,

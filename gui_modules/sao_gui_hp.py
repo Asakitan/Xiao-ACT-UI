@@ -2072,7 +2072,9 @@ class HpOverlay:
         # Web: 30px clock with em-dashes "─ HH:MM:SS ─", color muted olive.
         #      Boss-timer font 13-18px cyan or urgent-red.
         if self._boss_timer_text:
-            bt_font = _load_font('sao', 18)
+            # match the clock size (30px), centred like it, so the boss timer
+            # reads at a glance instead of being a tiny line above the name.
+            bt_font = _load_font('sao', 30)
             txt = self._boss_timer_text
             if self._boss_timer_urgent:
                 pulse = (now % 0.8) / 0.8
@@ -2089,7 +2091,7 @@ class HpOverlay:
                 col = CYAN
             tw = _text_width(draw, txt, bt_font)
             bx = ID_X + (ID_W - tw) // 2
-            by = ID_Y + 26 + y_off
+            by = ID_Y + (ID_H - 34) // 2 + y_off
             if draw_shadow:
                 draw.text(
                     (bx, by), txt,

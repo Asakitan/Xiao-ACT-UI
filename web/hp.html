@@ -1223,9 +1223,11 @@ function setBossTimer(text, urgency) {
     el.textContent = text;
     el.classList.add('active');
     el.classList.toggle('urgent', urgency === 'urgent');
-    // Restore boss timer styling (override clock muted style)
+    // Restore boss timer styling (override clock muted style); match clock size.
     el.style.color = '';
     el.style.textShadow = '';
+    el.style.fontSize = '30px';
+    el.style.letterSpacing = '3px';
     if (link) link.style.display = 'none';
     _bossTimerActive = true;
 }
