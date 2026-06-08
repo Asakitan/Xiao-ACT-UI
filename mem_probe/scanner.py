@@ -167,9 +167,28 @@ def narrow(
     value,
     dtype: str,
 ) -> List[int]:
-    """在已有候选集中再搜目标值, 返回仍然匹配的子集."""
+    """在已有候选集中再搜目标值, 返回仍然匹配的子集.
+
+    第 1 帧 scan 后候选集可达 max_hits (~2e5-3e5) 个地址; 逐个 read_bytes 会发
+    同样多次跨进程 RPC。对定宽整型/浮点 (4/8 字节, 按原始位比较), 改为一次
+    read_words_many 批量 nogil 读 + 进程内比较 (N 次 RPC → 1 次)。utf16/变长仍走
+    逐地址回退。
+    """
     needle = encode_value(value, dtype)
     n = len(needle)
+    addrs = list(addrs)
+    if not addrs:
+        return []
+    # 快路径: 定宽 4/8 字节 word 一次批量读, 进程内按位比较 (浮点也按原始位)
+    if n in (4, 8) and dtype in ("i32", "u32", "i64", "u64", "f32", "f64"):
+        target = int.from_bytes(needle, "little", signed=False)
+        try:
+            words = pm._read_words_many(addrs, n)
+        except Exception:
+            words = None
+        if words is not None and len(words) == len(addrs):
+            return [a for a, w in zip(addrs, words) if w is not None and w == target]
+    # 回退 / 变长 (utf16): 逐地址读 + 字节比较
     out: List[int] = []
     for addr in addrs:
         b = pm.read_bytes(addr, n)

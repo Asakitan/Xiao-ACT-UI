@@ -81,6 +81,23 @@ class MemDamageReader:
         self.pm = dps_source.sr.pm
         self._klass = 0
         self._inst = 0
+        # auto-offset: DamageDataMgr / DamageData fields by name from the dump,
+        # literal fallback (the curated bundle may omit DamageDataMgr -> falls back;
+        # add it to the bundle class list to activate self-heal). The ZDictionary
+        # entry offsets stay literal — it's an open generic (no fields in the dump).
+        from mem_probe.il2cpp import auto_offsets as _ao
+        ddm = _ao.resolve(self._src, DDM_CLASS, {
+            "off_isactive": ("IsActive", DDM_ISACTIVE_OFF),
+            "off_damagevalue": ("damageValue_", DDM_DAMAGEVALUE_OFF),
+            "off_totalplayer": ("totalPlayerValue_", DDM_TOTALPLAYER_OFF),
+        })
+        for _k, _v in ddm.items():
+            setattr(self, _k, _v)
+        self.off_dmg_actual = _ao.resolve(self._src, "Panda.ZGame.DamageData", {
+            "a": ("actualValue", DMG_ACTUALVALUE_OFF)})["a"]
+        # inner damageValue_[uuid] is ZDictionary<int, DamageData(struct)>; the value
+        # sits at Entry+0x10, so actualValue is Entry-relative ENTRY_VAL_OFF + its offset.
+        self.off_skill_entry_actual = ENTRY_VAL_OFF + self.off_dmg_actual
 
     def _kname(self, kp: int) -> str:
         if not _plaus(kp):
@@ -114,8 +131,8 @@ class MemDamageReader:
                 continue
             for h in _cy.find_aligned_u64(blob, kp, 64):
                 a = r.base + h
-                ab = self.pm.read_bytes(a + DDM_ISACTIVE_OFF, 1)
-                if ab and ab[0] == 1 and _plaus(self.pm.read_u64(a + DDM_TOTALPLAYER_OFF)):
+                ab = self.pm.read_bytes(a + self.off_isactive, 1)
+                if ab and ab[0] == 1 and _plaus(self.pm.read_u64(a + self.off_totalplayer)):
                     self._inst = a
                     return a
         return 0
@@ -140,7 +157,7 @@ class MemDamageReader:
             yield base + i * stride
 
     def _inner_for_total_type(self, inst: int, total_type: int) -> int:
-        tpv = self.pm.read_u64(inst + DDM_TOTALPLAYER_OFF)
+        tpv = self.pm.read_u64(inst + self.off_totalplayer)
         for e in self._entry_addrs(tpv):
             if self.pm.read_i32(e + ENTRY_KEY_OFF) == total_type:
                 return int(self.pm.read_u64(e + ENTRY_VAL_OFF) or 0)
@@ -165,7 +182,7 @@ class MemDamageReader:
         inst = self.locate()
         if not inst:
             return {}
-        dmgv = self.pm.read_u64(inst + DDM_DAMAGEVALUE_OFF)
+        dmgv = self.pm.read_u64(inst + self.off_damagevalue)
         inner = 0
         for e in self._entry_addrs(dmgv):
             if self.pm.read_i64(e + ENTRY_KEY_OFF) == int(uuid):
@@ -174,7 +191,7 @@ class MemDamageReader:
         out: Dict[int, int] = {}
         for e in self._entry_addrs(inner, stride=SKILL_ENTRY_STRIDE):
             skill = self.pm.read_i32(e + ENTRY_KEY_OFF)
-            actual = int(self.pm.read_i64(e + SKILL_ENTRY_ACTUAL_OFF) or 0)
+            actual = int(self.pm.read_i64(e + self.off_skill_entry_actual) or 0)
             if skill and 0 < actual <= (1 << 60):
                 out[int(skill)] = actual
         return out
