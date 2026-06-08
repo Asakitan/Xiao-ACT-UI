@@ -35,6 +35,48 @@ from mem_probe.il2cpp.instance_cache import clear_cache
 DEFAULT_BUNDLE_CLASSES = bundle_build.DEFAULT_CLASSES
 
 
+def ensure_current(*, auto_dump: bool = False, background: bool = True,
+                   game_dir: str = r"E:\星痕共鸣(2001991)") -> str:
+    """Make sure the running game's version has a registered offset bundle.
+
+    The intelligent path needs NO action: offsets are resolved live from the game's
+    metadata (live_field_resolver), so a weekly patch self-heals at runtime even
+    with a stale/absent bundle. This helper only keeps the *optional* fallback
+    bundle fresh (faster klass RVA + offline analysis), and only in a full dev
+    install that ships Il2CppDumper.
+
+    Returns:
+      'current'     — a bundle for this version is already registered.
+      'healed-live' — no bundle/dumper for this version; the live resolver carries
+                      offsets at runtime (nothing to do — the normal frozen case).
+      'rebuilding'  — auto_dump + dumper present: a background re-dump+rebuild started.
+      'rebuilt'     — same, run synchronously (background=False).
+      'no-game'     — Star.exe not running.
+    """
+    info = bundle_store.compute_running_game_key()
+    if info is None:
+        return "no-game"
+    key = info[0]
+    if bundle_store.find_bundle_for_key(key):
+        return "current"
+    from mem_probe.il2cpp.dump_tool import DUMPER_EXE
+    if not (auto_dump and os.path.isfile(DUMPER_EXE)):
+        return "healed-live"   # live field resolver self-heals; bundle is optional
+    if background:
+        import threading
+
+        def _work():
+            try:
+                main(["--force", "--game-dir", game_dir])
+            except Exception:
+                pass
+
+        threading.Thread(target=_work, name="bundle-refresh", daemon=True).start()
+        return "rebuilding"
+    main(["--force", "--game-dir", game_dir])
+    return "rebuilt"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="刷新游戏基址 + 偏移库")
     ap.add_argument("--game-dir", default=r"E:\星痕共鸣(2001991)")
