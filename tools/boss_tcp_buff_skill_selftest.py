@@ -28,6 +28,18 @@ def _monster(uuid, buffs, **kw):
 
 
 class TcpBuffSkillTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        fd, self._store_path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        os.remove(self._store_path)
+        os.environ["SAO_BOSS_SKILL_STORE"] = self._store_path
+
+    def tearDown(self):
+        os.environ.pop("SAO_BOSS_SKILL_STORE", None)
+        if os.path.exists(self._store_path):
+            os.remove(self._store_path)
+
     def _engine(self):
         self.fired = []
         eng = BossRaidEngine(GameStateManager(), settings={},

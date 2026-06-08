@@ -14,6 +14,20 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import BASE_DIR
 from tools.tablekit.combat_preparse import enrich_boss_event
+from engines.boss_skill_store import (
+    BossSkillStore, KIND_SKILL, KIND_MECHANIC, KIND_STATE,
+)
+
+# Synthetic observation ids for tracked boss states (kept disjoint from real
+# skill/event ids by their KIND_STATE namespace).
+_STATE_ENRAGE = 1
+_STATE_INVINCIBLE = 2
+
+# BuffEventType → semantic tag for mechanic observations.
+_EVENT_TAG = {
+    12: "death", 15: "body_part", 17: "body_part", 47: "shield",
+    51: "super_armor", 58: "breaking", 88: "fracture",
+}
 
 from utils.perf_probe import probe as _probe
 import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
@@ -540,6 +554,11 @@ class BossRaidEngine:
         # observed skills per boss: base_id -> {skill_id -> {name, count, last_cast_duration_ms, last_ts}}
         self._observed_boss_skills: Dict[int, Dict[int, Dict[str, Any]]] = {}
         self._observed_boss_names: Dict[int, str] = {}   # base_id -> boss display name
+        # persisted scene→boss→observation aggregate (survives restarts)
+        self._skill_store = BossSkillStore()
+        self._boss_base_id: int = 0          # base/template id of the tracked boss
+        self._obs_prev_overdrive: bool = False   # state-onset memos (record-once)
+        self._obs_prev_invincible: bool = False
         self._boss_cast_skill_id: int = 0
         self._boss_cast_skill_name: str = ""
         self._boss_cast_active: bool = False
@@ -676,6 +695,7 @@ class BossRaidEngine:
             self._entities.clear()
             self._entity_order.clear()
             self._boss_manually_set = False
+        self._skill_store.save()   # flush observed skills/mechanics to disk
         self._push_game_state_clear()
 
     def next_phase(self):
@@ -708,6 +728,7 @@ class BossRaidEngine:
             self._entities.clear()
             self._entity_order.clear()
             self._boss_manually_set = False
+        self._skill_store.save()   # flush observed skills/mechanics to disk
         self._push_game_state_clear()
 
     # ── Entity role management (for visual editor) ──
@@ -729,6 +750,8 @@ class BossRaidEngine:
         self._mem_prev_stun = False
         self._mem_prev_breaking = -1
         self._tcp_prev_buff_ids.clear()
+        self._obs_prev_overdrive = False
+        self._obs_prev_invincible = False
 
     def set_entity_role(self, uuid: int, role: str):
         """Set entity role: 'boss' or 'enemy'. Called from visual editor overlay.
@@ -935,6 +958,7 @@ class BossRaidEngine:
                 return
 
             self._last_monster_data = monster_data
+            self._boss_base_id = int(monster_data.get("template_id") or 0) or self._boss_base_id
             if max_hp > 0:
                 self._boss_hp = hp
                 self._boss_max_hp = max_hp
@@ -943,6 +967,7 @@ class BossRaidEngine:
             self._boss_in_overdrive = bool(monster_data.get("in_overdrive"))
             self._boss_shield_active = bool(monster_data.get("shield_active"))
             self._boss_shield_pct = float(monster_data.get("shield_pct") or 0.0)
+            self._observe_state_transitions_locked()
 
             # pure-TCP boss-skill detection (no-op while a memory feed is live)
             tcp_forwards = self._tcp_detect_boss_skills_locked(uuid, monster_data)
@@ -958,8 +983,6 @@ class BossRaidEngine:
         if not event:
             return
         with self._lock:
-            if self._state != self.STATE_RUNNING:
-                return
             event_type = event.get("event_type", 0)
             fact = event.get("combat_fact") if isinstance(event.get("combat_fact"), dict) else enrich_boss_event(event)
             boss_mechanic_key = _string(event.get("boss_mechanic_key") or fact.get("boss_mechanic_key"))
@@ -973,6 +996,11 @@ class BossRaidEngine:
             self._last_boss_mechanic_key = boss_mechanic_key
             self._last_boss_mechanic_label = boss_mechanic_label
             self._last_boss_trigger_family = trigger_family
+            # record the mechanic into the persisted aggregate (free combat too)
+            self._record_boss_event_locked(event_type, boss_mechanic_label or boss_mechanic_key, trigger_family)
+
+            if self._state != self.STATE_RUNNING:
+                return
 
             # Check for breaking/buff_event/shield_broken phase triggers
             profile = self._profile or {}
@@ -1042,31 +1070,15 @@ class BossRaidEngine:
         Returns the linkage-forward dict (or None). skill_id is the buff/skill
         base_id read from the data source (memory or TCP BuffInfoSync)."""
         base_id = _coerce_int(action.get("boss_base_id"), 0)
+        if base_id:
+            self._boss_base_id = int(base_id)
         skill_id = _coerce_int(action.get("skill_id"), 0)
         name = _string(action.get("skill_name"))
         edge = _string(action.get("cast_edge")).lower()
         dur = action.get("cast_duration_ms")
 
-        if edge == "start":
-            self._boss_cast_skill_id = skill_id
-            # instant skills (counterattacks) have no skill id — label them so the
-            # editor can still bind a reaction to "this boss's action".
-            self._boss_cast_skill_name = name or ('动作/反击' if not skill_id else '')
-            self._boss_cast_active = True
-            self._boss_cast_start_ts = time.time()
-            self._boss_cast_duration_ms = _coerce_int(dur, 0)
-            self._record_observed_skill_locked(base_id, skill_id, self._boss_cast_skill_name, dur)
-            boss_name = _string(action.get("boss_name"))
-            if base_id and boss_name:
-                self._observed_boss_names[int(base_id)] = boss_name
-        elif edge == "end":
-            self._boss_cast_active = False
-        else:
-            self._boss_cast_active = bool(action.get("cast_active"))
-            if isinstance(dur, (int, float)) and dur:
-                self._boss_cast_duration_ms = int(dur)
-
-        # offensive-window rising edges (memoized to avoid level-triggered spam)
+        # apply the boss's concurrent state FIRST (offensive-window rising edges,
+        # memoized) so a skill recorded below gets the correct coincident tags.
         overdrive = bool(action.get("overdrive"))
         overdrive_edge = overdrive and not self._mem_prev_overdrive
         self._mem_prev_overdrive = overdrive
@@ -1088,9 +1100,29 @@ class BossRaidEngine:
         if isinstance(ext, (int, float)):
             self._boss_extinction_pct = float(ext)
 
+        if edge == "start":
+            self._boss_cast_skill_id = skill_id
+            # instant skills (counterattacks) have no skill id — label them so the
+            # editor can still bind a reaction to "this boss's action".
+            self._boss_cast_skill_name = name or ('动作/反击' if not skill_id else '')
+            self._boss_cast_active = True
+            self._boss_cast_start_ts = time.time()
+            self._boss_cast_duration_ms = _coerce_int(dur, 0)
+            self._record_observed_skill_locked(base_id, skill_id, self._boss_cast_skill_name, dur)
+            boss_name = _string(action.get("boss_name"))
+            if base_id and boss_name:
+                self._observed_boss_names[int(base_id)] = boss_name
+        elif edge == "end":
+            self._boss_cast_active = False
+        else:
+            self._boss_cast_active = bool(action.get("cast_active"))
+            if isinstance(dur, (int, float)) and dur:
+                self._boss_cast_duration_ms = int(dur)
+
         if self._state == self.STATE_RUNNING and edge == "start" and skill_id:
             self._maybe_advance_on_mem_skill_locked(skill_id, name)
 
+        self._observe_state_transitions_locked()
         self._push_game_state_locked(time.time())
 
         forward = None
@@ -1173,27 +1205,116 @@ class BossRaidEngine:
             rec["name"] = name
         if isinstance(dur, (int, float)) and dur > 0:
             rec["last_cast_duration_ms"] = int(dur)
+        # persisted aggregate: scene → boss → skill, tagged with concurrent state
+        if base_id:
+            self._boss_base_id = int(base_id)
+        self._observe_to_store_locked(
+            int(skill_id or 0), name, KIND_SKILL,
+            tags=self._derive_state_tags_locked(),
+            duration_ms=int(dur) if isinstance(dur, (int, float)) and dur > 0 else None)
 
-    def get_observed_boss_skills(self, base_id: Optional[int] = None) -> Dict[int, List[Dict[str, Any]]]:
-        """Editor data source: {base_id: [skill_rec, ...]} sorted by count desc."""
-        with self._lock:
-            if base_id is not None:
-                src = {int(base_id): self._observed_boss_skills.get(int(base_id), {})}
-            else:
-                src = dict(self._observed_boss_skills)
-            return {bid: sorted([dict(r) for r in recs.values()], key=lambda r: -r["count"])
-                    for bid, recs in src.items()}
+    # ── observation aggregation (persisted store) ──────────────────────────────
+    def _current_scene_locked(self) -> Dict[str, Any]:
+        sm = self._state_mgr
+        sid = did = 0
+        name = ""
+        if sm is not None:
+            try:
+                st = sm.state
+                sid = int(getattr(st, "dungeon_scene_id", 0) or 0)
+                did = int(getattr(st, "dungeon_id", 0) or 0)
+                name = _string(getattr(st, "dungeon_name", "") or "")
+            except Exception:
+                pass
+        return {"scene_key": str(sid or did or 0), "scene_id": sid,
+                "dungeon_id": did, "name": name}
 
-    def get_observed_bosses(self) -> List[Dict[str, Any]]:
-        """Editor boss selector: [{base_id, name, observed_count}] sorted by activity."""
-        with self._lock:
-            out = []
-            for bid, recs in self._observed_boss_skills.items():
-                cnt = sum(int(r.get("count") or 0) for r in recs.values())
-                out.append({"base_id": int(bid),
-                            "name": self._observed_boss_names.get(int(bid), ""),
-                            "observed_count": cnt})
-            return sorted(out, key=lambda b: -b["observed_count"])
+    def _boss_hp_pct_locked(self) -> Optional[float]:
+        if self._boss_max_hp > 0:
+            return max(0.0, min(1.0, self._boss_hp / self._boss_max_hp))
+        return None
+
+    def _elapsed_s_locked(self) -> Optional[float]:
+        if self._state == self.STATE_RUNNING and self._start_time > 0:
+            return max(0.0, time.time() - self._start_time)
+        return None
+
+    def _derive_state_tags_locked(self) -> List[str]:
+        """Tag a cast with the boss's concurrent special state so the editor can
+        mark e.g. a shield/enrage/invincible-coincident skill."""
+        tags: List[str] = []
+        if self._boss_in_overdrive:
+            tags.append("enrage")
+        if self._boss_invincible:
+            tags.append("invincible")
+        if self._boss_shield_active:
+            tags.append("shield")
+        if self._boss_breaking_stage and self._boss_breaking_stage >= 1:
+            tags.append("breaking")
+        if self._boss_stun:
+            tags.append("stun")
+        return tags
+
+    def _observe_to_store_locked(self, obs_id: int, name: str, kind: str,
+                                 tags: Optional[List[str]] = None,
+                                 duration_ms: Optional[int] = None) -> None:
+        if not self._boss_base_id:
+            return
+        scene = self._current_scene_locked()
+        bname = self._observed_boss_names.get(self._boss_base_id, "") \
+            or _string((self._last_monster_data or {}).get("name"))
+        try:
+            self._skill_store.observe(
+                scene_key=scene["scene_key"], scene_id=scene["scene_id"],
+                dungeon_id=scene["dungeon_id"], scene_name=scene["name"],
+                boss_base_id=self._boss_base_id, boss_name=bname,
+                obs_id=obs_id, name=name, kind=kind, tags=tags or [],
+                duration_ms=duration_ms, hp_pct=self._boss_hp_pct_locked(),
+                elapsed_s=self._elapsed_s_locked(), max_hp=int(self._boss_max_hp or 0))
+        except Exception:
+            pass
+
+    def _record_boss_event_locked(self, event_type: int, label: str, family: str) -> None:
+        tag = _EVENT_TAG.get(int(event_type or 0)) or (family or "mechanic")
+        nm = label or family or ("机制#%d" % int(event_type or 0))
+        self._observe_to_store_locked(int(event_type or 0), nm, KIND_MECHANIC, tags=[tag])
+
+    def _observe_state_transitions_locked(self) -> None:
+        """Record enrage / invincibility ONSET (rising edge) with the HP%/elapsed
+        at which it happened, so the editor can mark blood-line / timed states."""
+        if not self._boss_base_id:
+            return
+        od = bool(self._boss_in_overdrive)
+        if od and not self._obs_prev_overdrive:
+            self._observe_to_store_locked(_STATE_ENRAGE, "狂暴/过载", KIND_STATE, tags=["enrage"])
+        self._obs_prev_overdrive = od
+        inv = bool(self._boss_invincible)
+        if inv and not self._obs_prev_invincible:
+            self._observe_to_store_locked(_STATE_INVINCIBLE, "无敌", KIND_STATE, tags=["invincible"])
+        self._obs_prev_invincible = inv
+
+    def get_observed_scenes(self) -> List[Dict[str, Any]]:
+        """Editor scene selector: [{scene_key, scene_id, dungeon_id, name, boss_count}]."""
+        return self._skill_store.scenes()
+
+    def get_observed_boss_skills(self, base_id: Optional[int] = None,
+                                 scene_key: Optional[str] = None) -> Dict[int, List[Dict[str, Any]]]:
+        """Editor data source: {base_id: [observation, ...]} from the persisted
+        store, optionally scoped to a scene. Observations carry tags / hp-line /
+        timed markers."""
+        store = self._skill_store
+        if base_id is not None:
+            return {int(base_id): store.observations(scene_key, int(base_id))}
+        out: Dict[int, List[Dict[str, Any]]] = {}
+        for b in store.bosses(scene_key):
+            bid = int(b["base_id"])
+            if bid not in out:
+                out[bid] = store.observations(scene_key, bid)
+        return out
+
+    def get_observed_bosses(self, scene_key: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Editor boss selector: [{base_id, name, scene_key, observed_count}]."""
+        return self._skill_store.bosses(scene_key)
 
     def on_self_dead_change(self, is_dead: bool):
         """Mem bridge -> player death gate. Suppresses auto-dodge/offense while dead."""
@@ -1274,6 +1395,7 @@ class BossRaidEngine:
     def _run_loop(self):
         while self._running:
             time.sleep(0.25)
+            self._skill_store.maybe_save()   # throttled flush during long fights
             with self._lock:
                 if self._state != self.STATE_RUNNING:
                     continue
