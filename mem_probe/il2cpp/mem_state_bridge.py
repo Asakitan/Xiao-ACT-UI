@@ -114,7 +114,12 @@ class MemStateBridge:
         self._boss_fast_push_min_dt: float = 0.28
         self._last_boss_fast_push: float = 0.0
         self._named: dict = {}          # uuid -> resolved name (push to tracker once)
-        self._last_scene_id: int = 0
+        self._last_scene_pushed: tuple = (0, "")
+        # live map/scene display-name reader (SceneTable + localization pool); heavy
+        # one-shot build runs on a background thread, then lookups are an O(1) cached dict.
+        self._map_reader: Any = None
+        self._map_reader_built: bool = False
+        self._map_reader_busy: bool = False
         self._damage_reader: Any = None
         self.last_mem_damage: dict = {}   # uid(=uuid>>16) -> MEM damage total
         self._mem_dmg_logged: bool = False
@@ -412,16 +417,18 @@ class MemStateBridge:
                             self.state_mgr.update(**upd)
                         except Exception:
                             pass
-                # scene name from memory (self CharSerialize.SceneData.MapId -> table)
-                ls = getattr(self._provider, "last_snap", None)
-                smid = int(getattr(ls, "scene_map_id", 0) or 0) if ls else 0
-                if smid and smid != self._last_scene_id and self.state_mgr is not None:
-                    self._last_scene_id = smid
-                    nr = self._name_resolver()
-                    nm = nr.dungeon(smid, default="") if nr else ""
-                    if nm:
+                # scene name from memory: prefer the live SceneTable display name (the
+                # top-left UI map name, e.g. "协会活动中心") read via SceneConfigMgr.
+                # curSceneId_ — CharSerialize.SceneData is null in many scenes.
+                if self.state_mgr is not None:
+                    smid, nm = self._current_scene_named()
+                    if smid and (smid, nm) != self._last_scene_pushed:
+                        self._last_scene_pushed = (smid, nm)
+                        upd = {"dungeon_scene_id": smid}
+                        if nm:
+                            upd["dungeon_name"] = nm
                         try:
-                            self.state_mgr.update(dungeon_scene_id=smid, dungeon_name=nm)
+                            self.state_mgr.update(**upd)
                         except Exception:
                             pass
             except Exception:
@@ -571,6 +578,43 @@ class MemStateBridge:
             except Exception:
                 self._nr = None
         return self._nr
+
+    def _current_scene_named(self):
+        """(scene_id, localized_name) for the current scene. Prefers the live
+        SceneTable name via SceneConfigMgr.curSceneId_ (reliable); the reader's first
+        build is heavy (heap scans) so it runs once on a background thread, until then
+        we fall back to the provider's scene id + the offline dungeon table."""
+        r = self._map_reader
+        if r is not None and r.ready:
+            sid = r.current_scene_id()
+            if sid:
+                return sid, r.name_for_scene(sid)
+        if not self._map_reader_built and not self._map_reader_busy:
+            self._map_reader_busy = True
+            threading.Thread(target=self._build_map_reader, name="mem-mapname",
+                             daemon=True).start()
+        ls = getattr(self._provider, "last_snap", None)
+        smid = int(getattr(ls, "scene_map_id", 0) or 0) if ls else 0
+        nr = self._name_resolver()
+        nm = (nr.dungeon(smid, default="") if (nr and smid) else "")
+        return smid, nm
+
+    def _build_map_reader(self) -> None:
+        try:
+            src = getattr(self._entity_provider, "_src", None) \
+                or getattr(self._provider, "_src", None)
+            if src is None or getattr(src, "sr", None) is None:
+                return
+            from mem_probe.il2cpp.mem_map_name_reader import MapNameReader
+            r = MapNameReader(src)
+            if r.build():
+                self._map_reader = r
+                print(f"[MemBridge] map-name reader ready: {len(r._scene_names)} scenes")
+        except Exception:
+            traceback.print_exc()
+        finally:
+            self._map_reader_built = True
+            self._map_reader_busy = False
 
     def _harvest_pm(self):
         """The shared StarProcess handle for the nameplate sweep (or None)."""
