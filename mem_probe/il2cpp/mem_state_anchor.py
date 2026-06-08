@@ -230,14 +230,13 @@ class AnchorMemoryReader:
         self.last_confidence: float = 0.0
 
     def _init_layout(self, resolver) -> None:
-        """Resolve the proto field layouts by name from the dump (literal fallback)."""
+        """Resolve the proto field layouts by name (live memory -> dump -> literal)."""
         from mem_probe.il2cpp import auto_offsets as _ao
-        dci = _ao.dci_of(resolver)
 
         def _R(literal_map, class_name):
             out = {}
             for fname, (off, typ) in literal_map.items():
-                g = _ao.field_offset(dci, class_name, fname)
+                g = _ao.offset(resolver, class_name, fname)
                 use = g if (g is not None and (g != 0 or off == 0)) else off
                 out[fname] = (int(use), typ)
             return out
