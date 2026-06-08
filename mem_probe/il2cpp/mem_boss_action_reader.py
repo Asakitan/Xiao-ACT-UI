@@ -35,8 +35,10 @@ ACTOR_STATE_SKILL = 2         # EActorState.ActorStateSkill (instant skill/count
 _ACTIVE_ACTOR_STATES = (ACTOR_STATE_SINGING, ACTOR_STATE_SKILL)
 
 BUFFCOMP_LIST_OFF = 0x30      # BuffComp.buffList_ -> ZList<BuffItem>
-ZLIST_ITEMS_OFF = 0x10        # ZList.items_ (T[])
-ZLIST_SIZE_OFF = 0x18         # ZList.size_ (int)
+# ZList<T> layout: header(0x10) + recyclePooledObj_ bool(0x10) -> items_ @ 0x18,
+# size_ @ 0x20 (NOT 0x10/0x18 — there is a bool field before items_).
+ZLIST_ITEMS_OFF = 0x18        # ZList.items_ (T[])
+ZLIST_SIZE_OFF = 0x20         # ZList.size_ (int)
 ARR_LEN_OFF = 0x18            # T[].Length
 ARR_ELEMS_OFF = 0x20          # T[] first element
 BUFFITEM_UUID_OFF = 0x10      # BuffItem.BuffUuid (int)
@@ -169,8 +171,23 @@ class BossActionTracker:
             live.add(uuid)
             try:
                 rec = self._process_rich(e, boss_actor if uuid == boss_uuid else None)
-                if rec is not None:
-                    records.append(rec)
+                if rec is None:
+                    continue
+                # overlay the boss's specific named skill from BuffComp (real skill
+                # id + name + cast duration); takes precedence over actor_state.
+                if uuid == boss_uuid and e.get("obj"):
+                    bs = self.detect_buff_skill(uuid, int(e["obj"]))
+                    if bs is not None:
+                        base_id, nm, dur, kind = bs
+                        rec["skill_id"] = int(base_id)
+                        rec["skill_name"] = nm
+                        rec["skill_kind"] = kind
+                        if dur:
+                            rec["cast_duration_ms"] = int(dur)
+                            rec["cast_duration_src"] = "buff"
+                        rec["cast_edge"] = "start"
+                        rec["cast_active"] = True
+                records.append(rec)
             except Exception:
                 continue
         with self._lock:
@@ -323,8 +340,64 @@ class BossActionTracker:
         except Exception:
             return set()
 
+    # ── named boss-skill detection via the buff list ──────────────────────────
+    _SKILL_PRIO = {"boss_mechanic_skill": 3, "boss_mechanic": 2, "boss_skill": 1}
+
+    def _skill_name_hint(self, base_id: int):
+        """Best-effort, NON-authoritative display name for a buff base_id. The id
+        itself (read from memory) is the authority; this offline-table lookup may be
+        version-offset, so it is only a UI hint and never used for matching/filtering."""
+        nr = self._names
+        if nr is None or base_id <= 0:
+            return "", ""
+        for kind in ("boss_mechanic_skill", "boss_skill", "boss_mechanic", "buff"):
+            fn = getattr(nr, kind, None)
+            if callable(fn):
+                try:
+                    nm = fn(int(base_id), default="")
+                    if nm:
+                        return str(nm), kind
+                except Exception:
+                    continue
+        return "", ""
+
+    def detect_buff_skill(self, uuid: int, obj: int):
+        """Return (base_id, name_hint, duration_ms, kind) for a NEW buff that appeared
+        on this entity since last call, else None. The boss's skills/mechanics surface
+        as transient buffs in BuffComp; the base_id + duration are read from memory
+        (authoritative). Persistent buffs (present from the baseline) never re-fire, so
+        only real skill casts emit. Name is a best-effort hint only -- the player maps
+        reactions by the memory base_id, so an offset name table can't break matching."""
+        if not (self._probe and obj):
+            return None
+        with self._lock:
+            st = self._prev.get(uuid)
+            if st is None:
+                st = self._new_state(uuid)
+                self._prev[uuid] = st
+            cur = {}
+            try:
+                for b in self._probe.read_buffs(int(obj)):
+                    bid = int(b["base_id"])
+                    if bid > 0:
+                        cur[bid] = int(b["duration_ms"] or 0)
+            except Exception:
+                return None
+            prev = st.get("buff_skills")
+            st["buff_skills"] = set(cur)
+            if prev is None:        # first sight -> seed baseline, don't fire
+                return None
+            new_ids = set(cur) - prev
+            if not new_ids:
+                return None
+            # the longest-duration new buff is the most likely telegraphed cast
+            best = max(new_ids, key=lambda bid: cur[bid])
+            name, kind = self._skill_name_hint(best)
+            return best, name, cur[best], kind
+
     def _new_state(self, uuid: int) -> dict:
         return {"uuid": uuid, "base_id": 0, "name": "", "obj": 0, "active": False,
+                "buff_skills": None,   # None until first buff read (seeds baseline)
                 "skill_id": 0, "skill_name": "", "cast_started_at": 0.0,
                 "cast_duration_ms": None, "duration_src": "none", "duration_locked": False,
                 "actor_state": None, "breaking_stage": None, "overdrive": None,
