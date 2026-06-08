@@ -343,8 +343,28 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.3.12"
+APP_VERSION = "4.4.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v4.4.0: Boss 技能聚合 — 按地图/场景/Boss 持久记录出招, 详细编辑面板标记特殊技能.
+#   1) Boss skills/mechanics are read from the BuffComp buff list (a new transient
+#      buff base_id = a cast); fixed a ZList<T> offset bug (items_@0x18/size_@0x20,
+#      a recyclePooledObj_ bool precedes items_) that made every buff read empty.
+#      base_id + Duration are memory-authoritative; the offline name table is only
+#      a hint. Symmetric TCP path: _tcp_detect_boss_skills_locked diffs
+#      monster.buff_list (BuffInfoSync) for new base_ids; a memory-priority gate
+#      (MEM_PRIORITY_WINDOW=3s) keeps memory authoritative in hybrid, TCP in pure-TCP.
+#   2) New persisted aggregate (engines/boss_skill_store.py, atomic-write like
+#      TcpNameCache): scene → boss → observation. Three kinds — skill (cast),
+#      mechanic (breaking/shield/super_armor/fracture/death/body_part from
+#      on_boss_event), state (enrage/invincible ONSET with HP%/elapsed). Tagged
+#      with concurrent state; hp_line / time cues derived from spread. Keyed by the
+#      live scene (GameState dungeon_scene_id/dungeon_id/dungeon_name); survives
+#      restarts. Saved on stop/reset + throttled in the run loop.
+#   3) Reactions editor is now scene-aware (build_boss_reactions_state scene_key):
+#      scene selector → scene-scoped bosses → observed skills/mechanics with colored
+#      type badges (施法/狂暴/无敌/护盾/霸体/破防/碎裂/眩晕/血线/定时/死亡/部位).
+#      Tk (sao_gui_bossraid) + WebView (raid_editor.html) render 1:1; skills get the
+#      inline reaction editor, mechanics/states render as marked info rows.
 # v4.3.0: 内存驱动 Boss 反应 — bossraid 读内存 boss 动作/技能 → autokey 自动躲技能/自动操作.
 #   1) New mem boss-action feed (mem_probe/il2cpp/mem_boss_action_reader.py):
 #      BossActionTracker edge-detects cast_skill_id (attr 100) per tick for any

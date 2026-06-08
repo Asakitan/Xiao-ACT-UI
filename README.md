@@ -4,8 +4,14 @@
 
 - 当前工作分支：`3.0.0`
 - 运行版本来源：`config.py` 中的 `APP_VERSION` / `APP_VERSION_LABEL`
-- 当前源码版本：`4.3.0`
+- 当前源码版本：`4.4.0`
 - 默认运行平台：Windows 10 / 11
+
+## v4.4.0 重点：Boss 技能聚合（按地图/场景/Boss 记录 + 标记特殊技能）
+
+- **Boss 技能源 = buff 列表**：boss 每次出招会在 `BuffComp` buff 列表里新增一个瞬时 buff，`base_id` 即技能身份、`Duration` 即读条窗口。修了一个 `ZList<T>` 偏移 bug（`items_@0x18`/`size_@0x20`，`items_` 前有 `recyclePooledObj_` bool）——之前所有 buff 读成空就是它。`base_id`+时长内存权威，离线名字表只当提示。**对称 TCP 路径**：`_tcp_detect_boss_skills_locked` diff `monster.buff_list`（`BuffInfoSync`）的新 base_id；`MEM_PRIORITY_WINDOW=3s` 自仲裁——hybrid 用内存、纯 TCP 用包，不双触发。
+- **持久聚合**（`engines/boss_skill_store.py`，原子写）：场景 → Boss → 观测，跨重启留存。三类观测：技能（出招）、机制（破防/护盾/霸体/碎裂/死亡/部位，来自 `on_boss_event`）、状态（狂暴/无敌**起手**，带 HP%/用时）。按并发状态打标签，血线/定时由离散度自动推导。按当前场景（`GameState` dungeon_scene_id/dungeon_id/dungeon_name）归档。
+- **场景化反应编辑器**（契约 `build_boss_reactions_state` 加 `scene_key`）：场景选择器 → 该场景的 Boss → 观测技能/机制，带彩色类型徽章（施法/狂暴/无敌/护盾/霸体/破防/碎裂/眩晕/血线/定时/死亡/部位）。Tk（`sao_gui_bossraid`）与 WebView（`raid_editor.html`）1:1；技能行内联反应编辑，机制/状态作为标记信息行。
 
 ## v4.3.0 重点：内存驱动 Boss 反应（自动躲技能 / 自动操作）
 
