@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.3.0"
+APP_VERSION = "4.3.12"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # v4.3.0: 内存驱动 Boss 反应 — bossraid 读内存 boss 动作/技能 → autokey 自动躲技能/自动操作.
 #   1) New mem boss-action feed (mem_probe/il2cpp/mem_boss_action_reader.py):
