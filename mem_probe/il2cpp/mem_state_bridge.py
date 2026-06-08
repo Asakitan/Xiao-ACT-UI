@@ -86,6 +86,14 @@ class MemStateBridge:
         self._entity_interval: float = 1.0
         self.last_entities: list = []
         self.last_boss_mem: Optional[dict] = None
+        # sticky "correct base acquired" flag: once a non-empty entity snapshot is
+        # read (proves ZEntityMgr base is correct + entities readable), this latches
+        # True for the session and never resets. It is the signal the boss-bar feeder
+        # uses to switch boss-break ownership from TCP to MEM in hybrid/auto/memory.
+        self._base_acquired: bool = False
+        # MEM-authoritative boss break snapshot (stage + extinction gauge%), refreshed
+        # per entity tick. Shield is NOT here — shield always comes from TCP.
+        self.last_boss_break: Optional[dict] = None
         # boss-action feed (cast_skill_id edge-detect + state) -> bossraid/autokey
         self._boss_action_tracker: Any = None
         self.last_boss_actions: list = []
@@ -201,10 +209,13 @@ class MemStateBridge:
                             # on_event left unset: the bridge forwards explicitly from
                             # both loops (fast = low-latency cast edges; 1Hz = offensive
                             # windows) so a record is never double-forwarded.
+                            _prov_src = getattr(prov, "_src", None)
                             self._boss_action_tracker = BossActionTracker(
                                 prov._ecr, pm=prov._pm,
                                 name_resolver=self._name_resolver(),
-                                duration_probe=BossDurationProbe(prov._pm))
+                                duration_probe=BossDurationProbe(
+                                    prov._pm,
+                                    resolver=(_prov_src.sr if _prov_src is not None else None)))
                             self._boss_cast_stop.clear()
                             self._boss_cast_thread = threading.Thread(
                                 target=self._boss_cast_loop, name="mem-boss-cast", daemon=True)
@@ -229,6 +240,10 @@ class MemStateBridge:
                 self._poll_mem_damage()
                 snap = prov.snapshot()
                 self.last_entities = snap
+                if snap and not self._base_acquired:
+                    # non-empty snapshot -> ZEntityMgr base is correct and entities
+                    # are readable. Latch sticky (never resets for this bridge).
+                    self._base_acquired = True
                 # resolve display names from MEM: ZEntity.BaseId -> offline name table
                 # (no TCP) and feed the uuid->name path the boss bar / drilldown read.
                 if snap:
@@ -257,6 +272,20 @@ class MemStateBridge:
                         self._named.clear()
                 boss = max(snap, key=lambda e: e["max_hp"]) if snap else None
                 self.last_boss_mem = boss
+                # MEM-authoritative boss break (stage + extinction gauge%); shield
+                # stays TCP-only and is never derived here.
+                if boss:
+                    bs = boss.get("breaking_stage")
+                    ext = boss.get("extinction")
+                    mext = boss.get("max_extinction")
+                    pct = (ext / mext) if (ext and mext and mext > 0) else 0.0
+                    self.last_boss_break = {
+                        "breaking_stage": int(bs) if isinstance(bs, int) else -1,
+                        "extinction_pct": max(0.0, min(1.0, pct)),
+                        "has_break_data": bool(isinstance(bs, int) and bs >= 0),
+                    }
+                else:
+                    self.last_boss_break = None
                 # boss-action feed: rich per-tick edge-detect + duration upgrade.
                 # Forward the boss's current record every tick so offensive windows
                 # (breaking/overdrive/stun) reach the linkage even without a cast edge;
@@ -717,6 +746,14 @@ class MemStateBridge:
                     pass
 
     # ───────── 查询 ─────────
+
+    def base_acquired(self) -> bool:
+        """True once a non-empty entity snapshot has been read (correct base latched)."""
+        return self._base_acquired
+
+    def boss_break(self) -> Optional[dict]:
+        """Latest MEM boss break {breaking_stage, extinction_pct, has_break_data}, or None."""
+        return self.last_boss_break
 
     def snapshot(self):
         """返回内存源的最新原始 SelfSnapshot (含 skill_cds/resources 等)."""

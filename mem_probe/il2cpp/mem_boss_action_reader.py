@@ -65,26 +65,40 @@ class BossDurationProbe:
     """Best-effort cast-duration decoder. Isolated so a bad read never breaks the
     reliable edge feed. Reads are bounded; failure returns None/empty."""
 
-    def __init__(self, pm: Any):
+    def __init__(self, pm: Any, *, resolver=None):
         self.pm = pm
+        # auto-offset: ZEntity.stateMachine_/buffComp_, ZStateMachine.currentState_,
+        # BuffComp.buffList_ by name from the dump (literal fallback). BuffItem/ZList
+        # stay literal (BuffItem not in the curated bundle; ZList is an open generic).
+        from mem_probe.il2cpp import auto_offsets as _ao
+        ent = _ao.resolve(resolver, "Panda.ZGame.ZEntity", {
+            "off_statemachine": ("stateMachine_", ENT_STATEMACHINE_OFF),
+            "off_buffcomp": ("buffComp_", ENT_BUFFCOMP_OFF),
+        })
+        self.off_statemachine = ent["off_statemachine"]
+        self.off_buffcomp = ent["off_buffcomp"]
+        self.off_sm_curstate = _ao.resolve(resolver, "Panda.ZGame.ZStateMachine", {
+            "a": ("currentState_", SM_CURSTATE_OFF)})["a"]
+        self.off_buffcomp_list = _ao.resolve(resolver, "Panda.ZGame.BuffComp", {
+            "a": ("buffList_", BUFFCOMP_LIST_OFF)})["a"]
 
     def read_actor_state(self, ent_addr: int) -> Optional[int]:
         """ZEntity.stateMachine_.currentState_ (EActorState). None on bad read."""
         if not _plaus(ent_addr):
             return None
-        sm = self.pm.read_u64(ent_addr + ENT_STATEMACHINE_OFF)
+        sm = self.pm.read_u64(ent_addr + self.off_statemachine)
         if not _plaus(sm):
             return None
-        return self.pm.read_i32(sm + SM_CURSTATE_OFF)
+        return self.pm.read_i32(sm + self.off_sm_curstate)
 
     def read_buffs(self, ent_addr: int) -> List[dict]:
         """Read BuffComp -> [{uuid, base_id, create_ms, duration_ms}, ...]. Bounded."""
         if not _plaus(ent_addr):
             return []
-        comp = self.pm.read_u64(ent_addr + ENT_BUFFCOMP_OFF)
+        comp = self.pm.read_u64(ent_addr + self.off_buffcomp)
         if not _plaus(comp):
             return []
-        zlist = self.pm.read_u64(comp + BUFFCOMP_LIST_OFF)
+        zlist = self.pm.read_u64(comp + self.off_buffcomp_list)
         if not _plaus(zlist):
             return []
         size = self.pm.read_u32(zlist + ZLIST_SIZE_OFF) or 0

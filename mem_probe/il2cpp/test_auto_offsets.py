@@ -67,6 +67,11 @@ CASES = [
     ("Zproto.SceneData", "MapId", 0x10),
     ("Zproto.SceneData", "LevelMapId", 0x40),
     ("Zproto.SceneData", "LineId", 0x80),
+    # mem_boss_action_reader (BuffItem not in curated bundle -> stays literal)
+    ("Panda.ZGame.ZEntity", "stateMachine_", 0x70),
+    ("Panda.ZGame.ZEntity", "buffComp_", 0x98),
+    ("Panda.ZGame.ZStateMachine", "currentState_", 0x20),
+    ("Panda.ZGame.BuffComp", "buffList_", 0x30),
 ]
 
 
