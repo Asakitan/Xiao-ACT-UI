@@ -58,6 +58,17 @@ DEFAULT_CLASSES: List[str] = [
     "Zproto.ProfessionList",
     "Zproto.SceneData",
     "Zproto.SceneLuaData",
+    # buff / skill / damage wire types (TCP parser + boss-skill aggregation)
+    "Zproto.BuffDBInfo",
+    "Zproto.BuffDBData",
+    "Zproto.BuffInfo",
+    "Zproto.BuffInfoSync",
+    "Zproto.SyncDamageInfo",
+    "Zproto.SyncHitInfo",
+    "Zproto.ClientHitInfo",
+    "Zproto.ClientHitPartInfo",
+    "Zproto.UseSkill",
+    "Zproto.UseSkillParam",
     # Panda.ZGame runtime classes the live mem readers resolve field offsets from
     # by name (auto_offsets). Curating them lets DumpCsIndex.field_offset self-heal
     # these readers on a game patch instead of falling back to hardcoded literals:
@@ -72,6 +83,9 @@ DEFAULT_CLASSES: List[str] = [
     "Panda.ZGame.ZStateMachine",
     "Panda.ZGame.BuffComp",
     "Panda.ZGame.BuffItem",
+    # HUD GM render (debug overlay anchor used by some probes)
+    "Panda.Hud.HudGmRender",
+    "Panda.Hud.HudGm",
 ]
 
 

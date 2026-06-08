@@ -30,34 +30,9 @@ from mem_probe.il2cpp import mem_dump_metadata as mdm
 from mem_probe.il2cpp.instance_cache import clear_cache
 
 
-# bundle 默认含的类 (combat / self / common). 加新 class 改这里.
-DEFAULT_BUNDLE_CLASSES = [
-    "Zproto.CharSerialize",
-    "Zproto.UserFightAttr",
-    "Zproto.UserFightAttrContainerArchive",
-    "Zproto.CharSerializeContainerArchive",
-    "Zproto.CharBaseInfo",
-    "Zproto.SceneData",
-    "Zproto.SceneLuaData",
-    "Zproto.BuffDBInfo",
-    "Zproto.BuffDBData",
-    "Zproto.BuffInfo",
-    "Zproto.BuffInfoSync",
-    "Zproto.SkillCDInfo",
-    "Zproto.SyncDamageInfo",
-    "Zproto.SyncHitInfo",
-    "Zproto.ClientHitInfo",
-    "Zproto.ClientHitPartInfo",
-    "Zproto.UseSkill",
-    "Zproto.UseSkillParam",
-    # Entity / combat readers (memory-driven hybrid). Including these makes the
-    # 256KB bundle a self-sufficient per-version offset table -> onedir clients
-    # resolve these by klass name without the 250MB script.json.
-    "Panda.ZGame.ZEntityMgr",
-    "Panda.ZGame.ZEntity",
-    "Panda.Hud.HudGmRender",
-    "Panda.Hud.HudGm",
-]
+# Single source of truth for the curated class set lives in bundle_build; the
+# refresh pipeline reuses it so a new reader's class only has to be added once.
+DEFAULT_BUNDLE_CLASSES = bundle_build.DEFAULT_CLASSES
 
 
 def main(argv=None):
