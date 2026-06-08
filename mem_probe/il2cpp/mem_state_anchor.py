@@ -95,6 +95,12 @@ ENERGY_ITEM = {
 PROFESSION_LIST = {
     'CurProfessionId': (0x10, 'i32'),
 }
+# SceneData (CharSerialize.SceneData -> current map/scene); TypeDefIndex 11418.
+SCENE_DATA = {
+    'MapId': (0x10, 'u32'),
+    'LevelMapId': (0x40, 'u32'),
+    'LineId': (0x80, 'u32'),
+}
 
 # Conservative self-player plausibility guardrails used when TCP only gives a
 # uid.  These are deliberately broad enough for future gear/level growth but
@@ -190,8 +196,14 @@ class AnchorMemoryReader:
     # A 4 MB half means a single <=8 MB read, sub-ms in the Cython scanner.
     WINDOW_HALF_BYTES = 4 * 1024 * 1024
 
-    def __init__(self, process: Optional[StarProcess] = None, max_scan_regions_mb: int = 0):
+    def __init__(self, process: Optional[StarProcess] = None, max_scan_regions_mb: int = 0,
+                 *, resolver=None):
         self.pm = process or StarProcess()
+        # auto-offset: override each {field:(offset,type)} layout's offset with the
+        # dump-resolved offset (by name), keeping the type tag and the literal as
+        # fallback. The anchor SCAN still uses TCP semantic ids; this only makes the
+        # post-scan proto field reads self-heal on a game patch.
+        self._init_layout(resolver)
         self._cached_regions = None
         self._cached_ranked = None
         self._cache_ts = 0.0
@@ -216,6 +228,28 @@ class AnchorMemoryReader:
         self.last_scan_mode: str = "none"   # cache-hit | window-hit | full-scan | miss
         self.last_scan_time_s: float = 0.0
         self.last_confidence: float = 0.0
+
+    def _init_layout(self, resolver) -> None:
+        """Resolve the proto field layouts by name from the dump (literal fallback)."""
+        from mem_probe.il2cpp import auto_offsets as _ao
+        dci = _ao.dci_of(resolver)
+
+        def _R(literal_map, class_name):
+            out = {}
+            for fname, (off, typ) in literal_map.items():
+                g = _ao.field_offset(dci, class_name, fname)
+                use = g if (g is not None and (g != 0 or off == 0)) else off
+                out[fname] = (int(use), typ)
+            return out
+
+        self.CHAR_SERIALIZE = _R(CHAR_SERIALIZE, "Zproto.CharSerialize")
+        self.USER_FIGHT_ATTR = _R(USER_FIGHT_ATTR, "Zproto.UserFightAttr")
+        self.CHAR_BASE_INFO = _R(CHAR_BASE_INFO, "Zproto.CharBaseInfo")
+        self.ROLE_LEVEL = _R(ROLE_LEVEL, "Zproto.RoleLevel")
+        self.ENERGY_ITEM = _R(ENERGY_ITEM, "Zproto.EnergyItem")
+        self.PROFESSION_LIST = _R(PROFESSION_LIST, "Zproto.ProfessionList")
+        self.SKILL_CD_INFO = _R(SKILL_CD_INFO, "Zproto.SkillCDInfo")
+        self.SCENE_DATA = _R(SCENE_DATA, "Zproto.SceneData")
 
     def close(self):
         try:
@@ -452,7 +486,7 @@ class AnchorMemoryReader:
                 if remaining <= 0:
                     return
                 for hit_off in _cy.find_aligned_u64(blob, needle, remaining):
-                    cs_base = base + off + int(hit_off) - CHAR_SERIALIZE['CharId'][0]
+                    cs_base = base + off + int(hit_off) - self.CHAR_SERIALIZE['CharId'][0]
                     if cs_base >= base:
                         yield cs_base
                         emitted += 1
@@ -475,7 +509,7 @@ class AnchorMemoryReader:
         """
         if not anchor_skills or not self._plausible_ptr(attr):
             return set()
-        rf = self._read_u64(attr + USER_FIGHT_ATTR['CdInfo'][0])
+        rf = self._read_u64(attr + self.USER_FIGHT_ATTR['CdInfo'][0])
         if not self._plausible_ptr(rf):
             return set()
         count = self._read_u32(rf + 0x18) or 0
@@ -496,9 +530,9 @@ class AnchorMemoryReader:
             ptr = int.from_bytes(ptr_blob[i * 8:i * 8 + 8], 'little', signed=False)
             if not self._plausible_ptr(ptr):
                 continue
-            sid = self._read_i32(ptr + SKILL_CD_INFO['SkillLevelId'][0])
+            sid = self._read_i32(ptr + self.SKILL_CD_INFO['SkillLevelId'][0])
             if sid in anchor_skills:
-                dur = self._read_i32(ptr + SKILL_CD_INFO['Duration'][0])
+                dur = self._read_i32(ptr + self.SKILL_CD_INFO['Duration'][0])
                 if dur is None or dur < 0 or dur > 600_000:
                     continue
                 matched.add(int(sid))
@@ -547,6 +581,10 @@ class AnchorMemoryReader:
                 # adding confidence.
                 if len(results) >= 1024:
                     return results
+                # auto-offset (hoisted out of the per-candidate loop): SkillCDInfo
+                # SkillLevelId / Duration, dump-resolved with literal fallback.
+                _off_sid = self.SKILL_CD_INFO['SkillLevelId'][0]
+                _off_dur = self.SKILL_CD_INFO['Duration'][0]
                 for c in cands:
                     arr_ptr = c['array_ptr']
                     cnt = c['count']
@@ -557,8 +595,8 @@ class AnchorMemoryReader:
                         # in this loop (too expensive across thousands of
                         # candidates).
                         continue
-                    sid = self._read_i32(elem_ptr + 0x10)
-                    dur = self._read_i32(elem_ptr + 0x20)
+                    sid = self._read_i32(elem_ptr + _off_sid)
+                    dur = self._read_i32(elem_ptr + _off_dur)
                     if sid is None or dur is None or dur < 0 or dur > 600_000:
                         continue
                     if sid not in anchor_skill_set:
@@ -705,7 +743,7 @@ class AnchorMemoryReader:
         t0 = time.time()
         needle = int(anchor.uid) & 0xFFFFFFFFFFFFFFFF
         for hit_off in _cy.find_aligned_u64(blob, needle, 256):
-            cs_base = lo + int(hit_off) - CHAR_SERIALIZE['CharId'][0]
+            cs_base = lo + int(hit_off) - self.CHAR_SERIALIZE['CharId'][0]
             if cs_base < r_base:
                 continue
             resolved = self._validate_candidate(cs_base, anchor, anchor_skills,
@@ -791,69 +829,72 @@ class AnchorMemoryReader:
         passed = 0
         plausibility_score = 0
         plausibility_used: List[str] = []
+        # auto-offset: dump-resolved field offsets (literal fallback)
+        CS, UFA, CBI, RL, PL = (self.CHAR_SERIALIZE, self.USER_FIGHT_ATTR,
+                                self.CHAR_BASE_INFO, self.ROLE_LEVEL, self.PROFESSION_LIST)
         # CharId
         if anchor.uid > 0:
             checks += 1
-            cid = self._read_i64(cs_base + 0x10)
+            cid = self._read_i64(cs_base + CS['CharId'][0])
             if cid == anchor.uid:
                 passed += 1
             else:
                 return False, info
         # Attr pointer must be a real heap pointer
-        attr = self._read_u64(cs_base + 0x88)
+        attr = self._read_u64(cs_base + CS['Attr'][0])
         if not attr or attr < 0x1000:
             return False, info
         info['ufa'] = attr
         # UserFightAttr HP must be internally sane.  MaxHp alone is not enough:
         # uid-only scans can find arbitrary integers with an adjacent positive
         # qword that looks like MaxHp.
-        cur = self._read_i64(attr + 0x10)
-        mx = self._read_i64(attr + 0x18)
+        cur = self._read_i64(attr + UFA['CurHp'][0])
+        mx = self._read_i64(attr + UFA['MaxHp'][0])
         if not self._plausible_hp(cur, mx):
             return False, info
         checks += 1
         passed += 1
         plausibility_score += 2
         plausibility_used.append('hp')
-        dead = self._read_i32(attr + 0x38)
+        dead = self._read_i32(attr + UFA['IsDead'][0])
         if dead is not None:
             if int(dead) not in (0, 1):
                 return False, info
             plausibility_score += 1
             plausibility_used.append('dead')
         # CharBase pointer
-        cb = self._read_u64(cs_base + 0x18)
+        cb = self._read_u64(cs_base + CS['CharBase'][0])
         if self._plausible_ptr(cb):
             info['cb'] = cb
-            cb_uid = self._read_i64(cb + 0x10)
+            cb_uid = self._read_i64(cb + CBI['CharId'][0])
             if anchor.uid > 0 and cb_uid == anchor.uid:
                 plausibility_score += 2
                 plausibility_used.append('char_base.uid')
-            name = self._read_il2cpp_string(cb + 0x30)
+            name = self._read_il2cpp_string(cb + CBI['Name'][0])
             if self._plausible_char_name(name):
                 plausibility_score += 2
                 plausibility_used.append('name')
-            init_pid = self._read_i32(cb + 0xc8)
+            init_pid = self._read_i32(cb + CBI['InitProfessionId'][0])
             if self._plausible_profession_id(init_pid):
                 plausibility_score += 1
                 plausibility_used.append('char_base.prof')
         # EnergyItem pointer
-        ei = self._read_u64(cs_base + 0x70)
+        ei = self._read_u64(cs_base + CS['EnergyItem'][0])
         if self._plausible_ptr(ei):
             info['ei'] = ei
         # RoleLevel
-        rl = self._read_u64(cs_base + 0xb8)
+        rl = self._read_u64(cs_base + CS['RoleLevel'][0])
         if self._plausible_ptr(rl):
             info['rl'] = rl
-            lv_probe = self._read_i32(rl + 0x10)
+            lv_probe = self._read_i32(rl + RL['Level'][0])
             if self._plausible_level(lv_probe):
                 plausibility_score += 1
                 plausibility_used.append('level')
         # ProfessionList
-        pl = self._read_u64(cs_base + 0x1f8)
+        pl = self._read_u64(cs_base + CS['ProfessionList'][0])
         if self._plausible_ptr(pl):
             info['pl'] = pl
-            cur_pid = self._read_i32(pl + 0x10)
+            cur_pid = self._read_i32(pl + PL['CurProfessionId'][0])
             if self._plausible_profession_id(cur_pid):
                 plausibility_score += 1
                 plausibility_used.append('profession')
@@ -893,48 +934,52 @@ class AnchorMemoryReader:
         out: dict = {}
         cs = resolved.char_serialize_obj
         attr = resolved.user_fight_attr_obj
-        # uid / hp
-        out['uid'] = self._read_i64(cs + 0x10)
-        cur = self._read_i64(attr + 0x10)
-        mx = self._read_i64(attr + 0x18)
+        CS, UFA = self.CHAR_SERIALIZE, self.USER_FIGHT_ATTR
+        # uid / hp (auto-offset: dump-resolved field offsets, literal fallback)
+        out['uid'] = self._read_i64(cs + CS['CharId'][0])
+        cur = self._read_i64(attr + UFA['CurHp'][0])
+        mx = self._read_i64(attr + UFA['MaxHp'][0])
         out['cur_hp'] = cur
         out['max_hp'] = mx
-        out['is_dead'] = self._read_i32(attr + 0x38)
-        out['origin_energy'] = self._read_f32(attr + 0x20)
+        out['is_dead'] = self._read_i32(attr + UFA['IsDead'][0])
+        out['origin_energy'] = self._read_f32(attr + UFA['OriginEnergy'][0])
         # CharBase
         if resolved.char_base_obj:
             cb = resolved.char_base_obj
-            out['name'] = self._read_il2cpp_string(cb + 0x30) or ''
-            out['fight_point'] = self._read_i32(cb + 0xe8)
-            out['init_profession_id'] = self._read_i32(cb + 0xc8)
+            CBI = self.CHAR_BASE_INFO
+            out['name'] = self._read_il2cpp_string(cb + CBI['Name'][0]) or ''
+            out['fight_point'] = self._read_i32(cb + CBI['FightPoint'][0])
+            out['init_profession_id'] = self._read_i32(cb + CBI['InitProfessionId'][0])
         # RoleLevel
         if resolved.role_level_obj:
             rl = resolved.role_level_obj
-            out['level_base'] = self._read_i32(rl + 0x10)
-            out['season_exp'] = self._read_i64(rl + 0x18)
+            RL = self.ROLE_LEVEL
+            out['level_base'] = self._read_i32(rl + RL['Level'][0])
+            out['season_exp'] = self._read_i64(rl + RL['CurLevelExp'][0])
         # EnergyItem (limit only — MapField deferred)
         if resolved.energy_item_obj:
             ei = resolved.energy_item_obj
-            out['energy_limit'] = self._read_u32(ei + 0x10)
-            out['extra_energy_limit'] = self._read_u32(ei + 0x14)
+            EI = self.ENERGY_ITEM
+            out['energy_limit'] = self._read_u32(ei + EI['EnergyLimit'][0])
+            out['extra_energy_limit'] = self._read_u32(ei + EI['ExtraEnergyLimit'][0])
         # ProfessionList.CurProfessionId
         if resolved.profession_list_obj:
             pl = resolved.profession_list_obj
-            cur_pid = self._read_i32(pl + 0x10)
+            cur_pid = self._read_i32(pl + self.PROFESSION_LIST['CurProfessionId'][0])
             if cur_pid and cur_pid > 0:
                 out['profession_id'] = cur_pid
-        # SceneData (current map/scene). MapId@0x10, LevelMapId@0x40, LineId@0x80
-        # (dump.cs SceneData TypeDefIndex 11418). Name resolved app-side via the
-        # offline scene/dungeon table -> no TCP needed.
-        sd = self._read_u64(cs + 0x20)
+        # SceneData (current map/scene). Name resolved app-side via the offline
+        # scene/dungeon table -> no TCP needed.
+        sd = self._read_u64(cs + CS['SceneData'][0])
         if sd:
-            mid = self._read_u32(sd + 0x10) or 0
+            SD = self.SCENE_DATA
+            mid = self._read_u32(sd + SD['MapId'][0]) or 0
             if mid:
                 out['scene_map_id'] = int(mid)
-            lvl = self._read_u32(sd + 0x40) or 0
+            lvl = self._read_u32(sd + SD['LevelMapId'][0]) or 0
             if lvl:
                 out['scene_level_map_id'] = int(lvl)
-            line = self._read_u32(sd + 0x80) or 0
+            line = self._read_u32(sd + SD['LineId'][0]) or 0
             if line:
                 out['scene_line_id'] = int(line)
         out['resolved'] = resolved.to_dict()

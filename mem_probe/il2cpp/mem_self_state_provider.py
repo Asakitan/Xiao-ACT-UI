@@ -165,6 +165,7 @@ class MemSelfStateProvider:
             self._anchor_reader = AnchorMemoryReader(
                 self._src.sr.pm,
                 max_scan_regions_mb=self.max_scan_regions_mb,
+                resolver=self._src.sr,   # auto-offset: resolve proto layouts by name
             )
             self._set_mode("memory")
         except Exception as e:

@@ -41,6 +41,32 @@ CASES = [
     # ZAttrCollection (mem_entity_combat cacheSlim_, mem_attr_reader mixItemDict_)
     ("Panda.ZGame.ZAttrCollection", "cacheSlim_", 0x18),
     ("Panda.ZGame.ZAttrCollection", "mixItemDict_", 0x28),
+    # mem_state_anchor self-state layouts
+    ("Zproto.CharSerialize", "CharId", 0x10),
+    ("Zproto.CharSerialize", "Attr", 0x88),
+    ("Zproto.CharSerialize", "CharBase", 0x18),
+    ("Zproto.CharSerialize", "EnergyItem", 0x70),
+    ("Zproto.CharSerialize", "RoleLevel", 0xB8),
+    ("Zproto.CharSerialize", "ProfessionList", 0x1F8),
+    ("Zproto.CharSerialize", "SceneData", 0x20),
+    ("Zproto.UserFightAttr", "CurHp", 0x10),
+    ("Zproto.UserFightAttr", "MaxHp", 0x18),
+    ("Zproto.UserFightAttr", "OriginEnergy", 0x20),
+    ("Zproto.UserFightAttr", "IsDead", 0x38),
+    ("Zproto.UserFightAttr", "CdInfo", 0x50),
+    ("Zproto.CharBaseInfo", "Name", 0x30),
+    ("Zproto.CharBaseInfo", "FightPoint", 0xE8),
+    ("Zproto.CharBaseInfo", "InitProfessionId", 0xC8),
+    ("Zproto.RoleLevel", "Level", 0x10),
+    ("Zproto.RoleLevel", "CurLevelExp", 0x18),
+    ("Zproto.EnergyItem", "EnergyLimit", 0x10),
+    ("Zproto.EnergyItem", "ExtraEnergyLimit", 0x14),
+    ("Zproto.ProfessionList", "CurProfessionId", 0x10),
+    ("Zproto.SkillCDInfo", "SkillLevelId", 0x10),
+    ("Zproto.SkillCDInfo", "Duration", 0x20),
+    ("Zproto.SceneData", "MapId", 0x10),
+    ("Zproto.SceneData", "LevelMapId", 0x40),
+    ("Zproto.SceneData", "LineId", 0x80),
 ]
 
 
