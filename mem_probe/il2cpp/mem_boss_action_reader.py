@@ -192,7 +192,8 @@ class BossActionTracker:
                 continue
             live.add(uuid)
             try:
-                rec = self._process_rich(e, boss_actor if uuid == boss_uuid else None)
+                is_boss = (uuid == boss_uuid)
+                rec = self._process_rich(e, boss_actor if is_boss else None, is_boss=is_boss)
                 if rec is None:
                     continue
                 # overlay the boss's specific named skill from BuffComp (real skill
@@ -204,7 +205,10 @@ class BossActionTracker:
                         rec["skill_id"] = int(base_id)
                         rec["skill_name"] = nm
                         rec["skill_kind"] = kind
-                        if dur:
+                        # only treat the buff Duration as a cast window if it is a
+                        # plausible cast length — a long-lived buff (e.g. a 480s enrage
+                        # timer) is a real skill but NOT a cast duration.
+                        if dur and _DUR_MIN_MS <= dur <= _DUR_MAX_MS:
                             rec["cast_duration_ms"] = int(dur)
                             rec["cast_duration_src"] = "buff"
                         rec["cast_edge"] = "start"
@@ -249,7 +253,8 @@ class BossActionTracker:
             return dict(r) if r else None
 
     # ── rich path ───────────────────────────────────────────────────────────--
-    def _process_rich(self, e: dict, actor_state: Optional[int] = None) -> Optional[dict]:
+    def _process_rich(self, e: dict, actor_state: Optional[int] = None,
+                      is_boss: bool = True) -> Optional[dict]:
         uuid = int(e.get("uuid") or 0)
         skill = int(e.get("cast_skill_id") or 0)
         with self._lock:
@@ -271,9 +276,12 @@ class BossActionTracker:
             st["max_hp"] = int(e.get("max_hp") or 0)
             st["hp_pct"] = float(e.get("hp_pct") or 0.0)
 
-            edge = self._apply_action_locked(st, skill, actor_state)
-            # while casting, try to upgrade duration via the BuffComp probe (1Hz only)
-            if st["skill_id"] and not st.get("duration_locked") and self._probe and st.get("obj"):
+            edge = self._apply_action_locked(st, skill, actor_state, is_boss)
+            # while casting, try to upgrade duration via the BuffComp probe (boss-only,
+            # 1Hz): reading buffs for EVERY casting entity in a crowd was the per-tick
+            # O(N) GIL-holding hot path that made hybrid laggy with many players.
+            if is_boss and st["skill_id"] and not st.get("duration_locked") \
+                    and self._probe and st.get("obj"):
                 self._try_buff_duration_locked(st)
             rec = self._record_from_state(st, edge)
             self._records[uuid] = rec
@@ -282,7 +290,8 @@ class BossActionTracker:
         return rec
 
     # ── edge detection (call under lock) ──────────────────────────────────────
-    def _apply_action_locked(self, st: dict, skill: int, actor_state: Optional[int]) -> str:
+    def _apply_action_locked(self, st: dict, skill: int, actor_state: Optional[int],
+                             is_boss: bool = True) -> str:
         """Detect a skill-action start/end. An action is 'active' when the entity is
         casting a skill (cast_skill_id>0) OR its actor_state is an active skill state
         (Singing/Skill) — the latter catches instant skills (e.g. a counterattack)
@@ -312,7 +321,7 @@ class BossActionTracker:
                 st["duration_src"] = "learned"
             else:
                 st["cast_duration_ms"] = None
-            st["buff_baseline"] = self._buff_uuids(st.get("obj") or 0)
+            st["buff_baseline"] = self._buff_uuids(st.get("obj") or 0) if is_boss else set()
             return "start"
         if not active and prev_active:
             self._learn_locked(prev_skill, st)

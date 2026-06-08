@@ -343,8 +343,16 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.4.14"
+APP_VERSION = "4.4.15"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v4.4.15: hybrid 多人(20人本/拥挤场景)卡顿修复 — mem 每 tick O(N) buff 读取.
+#   BossActionTracker.update 对快照里 EVERY casting entity 都 read_buffs(BuffComp
+#   的 Python 逐项 RPM 循环, 持 GIL)来取施法时长/baseline, 但桥只用 boss 那条记录,
+#   其余全丢弃。人多/拥挤场景下这是 O(N) 持锁内存读, 拖垮主线程(TCP 路无此问题,
+#   故纯 TCP 20 人不卡)。改为 buff 读取仅对 boss(is_boss 门控); 非 boss 仍走廉价的
+#   快照 skill-id/actor-state 边沿检测(零内存读)。顺带: detect_buff_skill overlay
+#   的时长加 [200,10000]ms 合理区间校验, 不把 480s 狂暴计时类长 buff 当施法时长。
+#   新增 perf 回归测试(30 个施法非 boss + 1 boss → buff 读取 <=20)。
 # v4.4.14: hybrid Boss 反应修复.
 #   1) hybrid 下编辑器一直提示「切 hybrid」且看不到记录: build_boss_reactions_state
 #      用 gs.data_source 判 mem_available, 但 GameState 根本没这字段(写入被静默丢弃)→

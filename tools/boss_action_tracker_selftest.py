@@ -111,10 +111,12 @@ def test_buff_duration():
     probe = _StubProbe()
     tr = BossActionTracker(None, name_resolver=_Names(), duration_probe=probe)
     probe.buffs = []                        # baseline at cast-start: no buffs
-    tr.update([_ent(1, 100)], None)         # start (baseline captured = {})
+    # buff-duration upgrade is boss-only (non-boss buff reads were the crowd hot
+    # path), so the tracked entity must be the boss here.
+    tr.update([_ent(1, 100)], _ent(1, 100))         # start (baseline captured = {})
     # the cast-channel buff now appears with a real Duration
     probe.buffs = [{"uuid": 7, "base_id": 9001, "create_ms": 5000, "duration_ms": 1500}]
-    recs = tr.update([_ent(1, 100)], None)  # still casting -> probe upgrades
+    recs = tr.update([_ent(1, 100)], _ent(1, 100))  # still casting -> probe upgrades
     rec = recs[0] if recs else tr.boss_action(1)
     check("src=buff", rec["cast_duration_src"] == "buff", rec["cast_duration_src"])
     check("duration=1500", rec["cast_duration_ms"] == 1500, repr(rec["cast_duration_ms"]))
@@ -122,9 +124,9 @@ def test_buff_duration():
     probe2 = _StubProbe()
     tr2 = BossActionTracker(None, duration_probe=probe2)
     probe2.buffs = []
-    tr2.update([_ent(2, 100)], None)
+    tr2.update([_ent(2, 100)], _ent(2, 100))
     probe2.buffs = [{"uuid": 8, "base_id": 1, "create_ms": 1, "duration_ms": 99999}]  # too long
-    tr2.update([_ent(2, 100)], None)
+    tr2.update([_ent(2, 100)], _ent(2, 100))
     check("implausible buff ignored", tr2.boss_action(2)["cast_duration_src"] != "buff")
 
 
@@ -158,6 +160,38 @@ def test_prune_and_json():
     check("idle departed pruned", tr.boss_action(big) is None)
 
 
+def test_boss_only_buff_reads():
+    """Perf guard: reading buffs (RPM loop) for EVERY casting entity in a crowd was
+    the per-tick O(N) GIL-holding hot path that made hybrid laggy with many players.
+    Only the boss may read buffs; non-boss casters use the cheap snapshot path."""
+    print("[boss-only buff reads]")
+
+    class _CountProbe(BossDurationProbe):
+        def __init__(self):
+            super().__init__(pm=None)
+            self.reads = 0
+
+        def read_actor_state(self, obj):
+            return 0
+
+        def read_buffs(self, obj):
+            self.reads += 1
+            return []
+
+        def pick_cast_buff(self, buffs, baseline):
+            return None
+
+    probe = _CountProbe()
+    tr = BossActionTracker(None, duration_probe=probe)
+    boss = _ent(999, 700)
+    crowd = [_ent(u, 500) for u in range(1, 31)] + [boss]   # 30 casting non-boss + boss
+    for _ in range(5):
+        tr.update(crowd, boss)
+    # 30 non-boss casters over 5 ticks would be 150+ read_buffs if not gated;
+    # boss-only keeps it tiny (baseline + per-tick probe + detect_buff_skill).
+    check("non-boss casters skip buff reads", probe.reads <= 20, f"{probe.reads} reads")
+
+
 def main():
     test_edges()
     test_chain()
@@ -165,6 +199,7 @@ def main():
     test_buff_duration()
     test_fast_path()
     test_prune_and_json()
+    test_boss_only_buff_reads()
     print(f"\n{_passed} passed, {_failed} failed")
     return 1 if _failed else 0
 
