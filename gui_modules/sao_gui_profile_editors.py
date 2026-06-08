@@ -5,6 +5,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from sao_theme import SAODialog
+
 from sao_web_panel_common import (
     PANEL_BG,
     PANEL_BG_ALT,
@@ -680,10 +682,16 @@ class AutoKeyDetailPanel(_DetailEditorBase):
     def _delete_selected(self) -> None:
         if not self._draft:
             return
-        if not messagebox.askyesno('AutoKey', 'Delete this AutoKey profile?'):
-            return
+        # SAODialog (not tk messagebox): the editor is an overrideredirect topmost
+        # Toplevel, so a native messagebox opens BEHIND it and looks like nothing
+        # happened. SAODialog is callback-based and stays above the overlay.
+        pid = self._draft.get('id')
+        SAODialog.ask(self._win, 'AutoKey', 'Delete this AutoKey profile?',
+                      on_ok=lambda: self._confirm_delete_profile(pid))
+
+    def _confirm_delete_profile(self, pid) -> None:
         config = self._load() or {}
-        delete_auto_key_profile(config, self._draft.get('id'))
+        delete_auto_key_profile(config, pid)
         self._save(config)
         self._selected_id = _first_profile_id(config)
         self._set_status('Deleted profile')
@@ -1156,10 +1164,15 @@ class BossRaidDetailPanel(_BossReactionsEditorMixin, _DetailEditorBase):
     def _delete_selected(self) -> None:
         if not self._draft:
             return
-        if not messagebox.askyesno('BossRaid', 'Delete this BossRaid profile?'):
-            return
+        # SAODialog (not tk messagebox): the editor is an overrideredirect topmost
+        # Toplevel, so a native messagebox opens BEHIND it. SAODialog stays on top.
+        pid = self._draft.get('id')
+        SAODialog.ask(self._win, 'BossRaid', 'Delete this BossRaid profile?',
+                      on_ok=lambda: self._confirm_delete_profile(pid))
+
+    def _confirm_delete_profile(self, pid) -> None:
         config = self._load() or {}
-        delete_boss_raid_profile(config, self._draft.get('id'))
+        delete_boss_raid_profile(config, pid)
         self._save(config)
         self._selected_id = _first_profile_id(config)
         self._set_status('Deleted profile')

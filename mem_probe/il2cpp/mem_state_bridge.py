@@ -349,7 +349,9 @@ class MemStateBridge:
                         bid = int(e.get("base_id") or 0)
                         cached = self._named.get(uuid)
                         if cached is None or cached[0] != bid:   # resolve+push once / per base_id
-                            nm = (nr.monster(bid, default="") if (nr and bid) else "") or ""
+                            # bosses live in the boss table, not monster -> try boss first
+                            nm = ((nr.boss(bid, default="") or nr.monster(bid, default=""))
+                                  if (nr and bid) else "") or ""
                             self._named[uuid] = (bid, nm)
                             if nm and self.dps_tracker is not None:
                                 try:

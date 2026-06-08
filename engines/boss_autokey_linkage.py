@@ -554,8 +554,12 @@ def build_boss_reactions_state(settings, engine, state_mgr,
     except Exception:
         bosses = []
     for b in bosses:
-        if not _s(b.get("name")):
-            b["name"] = _resolve_boss_name(nm, _int(b.get("base_id"), 0))
+        stored = _s(b.get("name"))
+        resolved = _resolve_boss_name(nm, _int(b.get("base_id"), 0))
+        if resolved:
+            b["name"] = resolved          # authoritative (live cache → table) wins
+        elif stored.isdigit():
+            b["name"] = ""                # bogus uuid-ish stored name → UI falls back to #base_id
     try:
         status = engine.get_status(include_entities=False) if engine else {}
     except TypeError:
