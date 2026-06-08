@@ -145,6 +145,46 @@ def _ga_base(pm: Any, modules) -> int:
     return 0
 
 
+# GameAssembly (base, size) is constant for a process lifetime; status/read polls
+# were re-enumerating modules and re-scanning for it on every call. Memoize per
+# process handle so a cache hit skips the list_modules() walk entirely.
+_GA_BS_CACHE: dict = {}
+
+
+def _ga_base_size(pm: Any, modules=None):
+    """Return cached (ga_base, ga_size) for GameAssembly.dll.
+
+    On a cache miss enumerates modules (using ``modules`` if already fetched by the
+    caller, else ``pm.list_modules()``) and derives base+size once. Only a
+    successful resolve is cached, keyed by process identity so a re-attach (new
+    handle) naturally re-resolves rather than serving a stale base."""
+    try:
+        key = (id(pm), int(getattr(pm, "pid", 0) or 0), int(getattr(pm, "_handle", 0) or 0))
+    except Exception:
+        key = (id(pm), 0, 0)
+    hit = _GA_BS_CACHE.get(key)
+    if hit is not None:
+        return hit
+    if modules is None:
+        try:
+            modules = pm.list_modules()
+        except Exception:
+            modules = []
+    base = _ga_base(pm, modules)
+    size = 0
+    if base:
+        for m in modules:
+            if int(getattr(m, "base", 0) or 0) == base:
+                size = int(getattr(m, "size", 0) or 0)
+                break
+    res = (base, size)
+    if base:
+        if len(_GA_BS_CACHE) > 32:        # bound the cache (re-attaches accumulate keys)
+            _GA_BS_CACHE.clear()
+        _GA_BS_CACHE[key] = res
+    return res
+
+
 def _maybe_klass_name(pm: Any, klass_ptr: int, ga_base: int, ga_size: int) -> str:
     if not (ga_base and ga_size and ga_base <= klass_ptr < ga_base + ga_size):
         return ""
@@ -329,12 +369,7 @@ class MemSearchManager:
                     modules = pm.list_modules()
                 except Exception:
                     modules = []
-                ga = (_ga_base(pm, modules), 0)
-                if ga[0]:
-                    for m in modules:
-                        if int(getattr(m, "base", 0) or 0) == ga[0]:
-                            ga = (ga[0], int(getattr(m, "size", 0) or 0))
-                            break
+                ga = _ga_base_size(pm, modules)
                 out["results"] = [decode_hint(pm, a, modules, ga=ga)
                                   for a in job.hits[:self.RETURN_CAP]]
             else:
@@ -527,10 +562,8 @@ class MemAccess:
             except Exception:
                 process = ""
             try:
-                for m in pm.list_modules():
-                    if str(getattr(m, "name", "")).lower() == "gameassembly.dll":
-                        module_base = _hex(m.base)
-                        break
+                gb, _gs = _ga_base_size(pm)   # cached; skips list_modules on a hit
+                module_base = _hex(gb) if gb else ""
             except Exception:
                 module_base = ""
         return {
@@ -809,13 +842,7 @@ class MemAccess:
             modules = pm.list_modules()
         except Exception:
             modules = []
-        ga = _ga_base(pm, modules)
-        ga_t = (ga, 0)
-        if ga:
-            for m in modules:
-                if int(getattr(m, "base", 0) or 0) == ga:
-                    ga_t = (ga, int(getattr(m, "size", 0) or 0))
-                    break
+        ga_t = _ga_base_size(pm, modules)
         return {"ok": True, "hint": decode_hint(pm, a, modules, ga=ga_t)}
 
     def read_many(self, addrs: Sequence, dtype: str = "u64") -> dict:
@@ -831,13 +858,7 @@ class MemAccess:
             modules = pm.list_modules()
         except Exception:
             modules = []
-        ga = _ga_base(pm, modules)
-        ga_t = (ga, 0)
-        if ga:
-            for m in modules:
-                if int(getattr(m, "base", 0) or 0) == ga:
-                    ga_t = (ga, int(getattr(m, "size", 0) or 0))
-                    break
+        ga_t = _ga_base_size(pm, modules)
         out = []
         for a in list(addrs)[:256]:
             ca = self._coerce_addr(a)
