@@ -171,6 +171,13 @@ class GameState:
     boss_extinction_pct: float = 0.0
     boss_in_overdrive: bool = False
     boss_invincible: bool = False
+    # ── memory-driven boss action feed (cast_skill_id edge) ──
+    boss_cast_skill_id: int = 0            # skill the boss is currently casting (0=none)
+    boss_cast_skill_name: str = ''
+    boss_cast_active: bool = False
+    boss_cast_duration_ms: int = 0         # best-effort cast window (0=unknown)
+    boss_stun: bool = False
+    self_dead: bool = False                # mirrors boss_raid_engine self-dead gate
 
     # ── ACT / TCP normalized context ──
     dungeon_id: int = 0
@@ -245,6 +252,12 @@ class GameState:
             'boss_extinction_pct': round(self.boss_extinction_pct, 4),
             'boss_in_overdrive': self.boss_in_overdrive,
             'boss_invincible': self.boss_invincible,
+            'boss_cast_skill_id': self.boss_cast_skill_id,
+            'boss_cast_skill_name': self.boss_cast_skill_name,
+            'boss_cast_active': self.boss_cast_active,
+            'boss_cast_duration_ms': self.boss_cast_duration_ms,
+            'boss_stun': self.boss_stun,
+            'self_dead': self.self_dead,
             'dungeon_id': self.dungeon_id,
             'dungeon_scene_id': self.dungeon_scene_id,
             'dungeon_difficulty': self.dungeon_difficulty,

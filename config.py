@@ -343,8 +343,29 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.2.1"
+APP_VERSION = "4.3.0"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v4.3.0: 内存驱动 Boss 反应 — bossraid 读内存 boss 动作/技能 → autokey 自动躲技能/自动操作.
+#   1) New mem boss-action feed (mem_probe/il2cpp/mem_boss_action_reader.py):
+#      BossActionTracker edge-detects cast_skill_id (attr 100) per tick for any
+#      boss/monster + breaking/overdrive/stun/hp; a 10-20Hz boss-cast fast poll in
+#      mem_state_bridge gives <100ms cast-start latency. Best-effort cast DURATION
+#      via BossDurationProbe (BuffComp.BuffItem.Duration, offsets verified vs dump
+#      fdc7111b) with a learned-EMA fallback. Exposed read-only via MemAccess
+#      boss_actions()/boss_action() + act_mem_boss_actions.
+#   2) bossraid engine on_mem_boss_action: updates cast state, records observed
+#      skills per boss (auto-discovery), fires boss_skill phase triggers from the
+#      mem skill_id, pushes boss_cast_* to GameState, implements the missing
+#      on_self_dead_change gate, forwards to the linkage with rising-edge flags.
+#   3) BossAutoKeyLinkage upgraded from alert-text to skill_id-accurate: new
+#      trigger types boss_cast / boss_breaking / boss_overdrive / boss_stun, new
+#      on_boss_action entry, per-mapping skill_id/boss_base_id scope + delay_ms/
+#      lead_ms/sequence dispatch (auto-dodge + offensive combos). Back-compat.
+#   4) New Boss 反应 visual editor in the BossRaid panel (Tk sao_gui_bossraid tab
+#      + WebView raid_editor.html tab, contract build_boss_reactions_state): pick
+#      a boss, see memory-discovered observed skills, assign reaction keys/timing.
+#      One optional autokey condition boss_casting_skill_is. PacketBridge now
+#      forwards boss_raid_engine into the hybrid mem source.
 # v4.2.0: Mem Scope — memory-scan explorer + plugin mem API.
 #   1) New read-only MemAccess facade (mem_probe/mem_access.py) exposes every
 #      memory-scan-readable resource (self/entities/boss/damage/skill-damage/

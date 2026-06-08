@@ -161,13 +161,13 @@ body{padding:10px}
 .action-btn:hover{background:rgba(249,249,249,0.78)}
 .action-btn.accent{background:var(--gold);color:#fff;border-color:var(--gold)}
 .action-btn.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
-/* 鈹€鈹€ Status bar 鈹€鈹€ */
+/* --- Status bar --- */
 .status-bar{
     padding:5px 14px;font-size:9px;letter-spacing:0.8px;
     color:var(--text-muted);border-top:1px solid rgba(182,186,192,0.22);
     display:flex;justify-content:space-between;flex-shrink:0;
 }
-/* 鈹€鈹€ Empty state 鈹€鈹€ */
+/* --- Empty state --- */
 .empty-state{
     text-align:center;padding:32px 16px;
     color:var(--text-muted);font-size:11px;letter-spacing:0.8px;line-height:1.8;
@@ -189,6 +189,7 @@ body{padding:10px}
         <div class="tab active" data-tab="entities" onclick="switchTab('entities')">Entities</div>
         <div class="tab" data-tab="phases" onclick="switchTab('phases')">Phases</div>
         <div class="tab" data-tab="timeline" onclick="switchTab('timeline')">Timeline</div>
+        <div class="tab" data-tab="reactions" onclick="switchTab('reactions')">Boss 反应</div>
     </div>
     <!-- Content -->
     <div class="content" id="content">
@@ -207,6 +208,19 @@ body{padding:10px}
             <div class="empty-state">
                 Phase timeline alerts will appear here during combat.
             </div>
+        </div>
+        <div id="tab-reactions" style="display:none">
+            <div id="react-banner" style="display:none"></div>
+            <div style="display:flex;align-items:center;gap:6px;margin:4px 0;">
+                <span style="font-size:10px;color:#9fc0d8;">Boss</span>
+                <select id="react-boss" onchange="onReactBossChange()"
+                    style="flex:1;background:rgba(8,14,22,.6);color:#e8f6ff;border:1px solid rgba(117,205,255,.4);border-radius:5px;padding:3px 6px;font-size:11px;"></select>
+                <div class="action-btn" style="padding:3px 8px;font-size:10px;" onclick="RaidEditor.loadReactions()">从内存导入</div>
+            </div>
+            <div class="phase-header">观测技能 / Observed Skills</div>
+            <div id="react-skill-list"></div>
+            <div class="phase-header" style="margin-top:8px;">进攻窗口 / Offensive Windows</div>
+            <div id="react-window-list"></div>
         </div>
     </div>
     <!-- Action buttons -->
@@ -240,6 +254,121 @@ function switchTab(tab) {
     document.getElementById('tab-entities').style.display = tab === 'entities' ? '' : 'none';
     document.getElementById('tab-phases').style.display = tab === 'phases' ? '' : 'none';
     document.getElementById('tab-timeline').style.display = tab === 'timeline' ? '' : 'none';
+    document.getElementById('tab-reactions').style.display = tab === 'reactions' ? '' : 'none';
+    if (tab === 'reactions') loadReactions();
+}
+
+// 鈹€鈹€ Boss Reactions editor 鈹€鈹€
+var _reactState = null;
+var _reactBoss = 0;
+
+function _api() { return (window.pywebview && window.pywebview.api) || null; }
+function _esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+function loadReactions() {
+    var a = _api();
+    if (!a || !a.get_boss_reactions) { return; }
+    Promise.resolve(a.get_boss_reactions()).then(function (j) {
+        var r = (typeof j === 'string') ? JSON.parse(j) : j;
+        if (r && r.ok) { _reactState = r.state; renderReactions(); }
+    }).catch(function () {});
+}
+
+function _findMapping(trig, skillId, baseId) {
+    var ms = (_reactState && _reactState.mappings) || [];
+    for (var i = 0; i < ms.length; i++) {
+        var m = ms[i];
+        if (m.trigger_type !== trig) continue;
+        if (Number(m.boss_base_id || 0) !== Number(baseId || 0)) continue;
+        if (trig === 'boss_cast' && Number(m.skill_id || 0) !== Number(skillId || 0)) continue;
+        return m;
+    }
+    return null;
+}
+
+function renderReactions() {
+    var st = _reactState || {};
+    var banner = document.getElementById('react-banner');
+    if (!st.mem_available) {
+        banner.style.display = 'block';
+        banner.style.cssText = 'display:block;padding:6px 8px;margin:4px 0;border-radius:6px;background:rgba(215,155,6,.15);border:1px solid rgba(215,155,6,.5);color:#ffd46f;font-size:10px;';
+        banner.textContent = '内存未启用 — 切换数据源到 hybrid 模式以启用 Boss 反应 (data_source=' + _esc(st.data_source) + ')';
+    } else {
+        banner.style.display = 'none';
+    }
+    // boss selector
+    var sel = document.getElementById('react-boss');
+    var bosses = st.bosses || [];
+    if (!_reactBoss && bosses.length) _reactBoss = bosses[0].base_id;
+    sel.innerHTML = bosses.map(function (b) {
+        var label = (b.name || ('#' + b.base_id)) + ' (' + b.observed_count + ')';
+        return '<option value="' + b.base_id + '"' + (Number(b.base_id) === Number(_reactBoss) ? ' selected' : '') + '>' + _esc(label) + '</option>';
+    }).join('') || '<option value="0">（暂无观测到的 Boss）</option>';
+
+    // observed skills for the selected boss
+    var skills = (st.observed_skills && st.observed_skills[String(_reactBoss)]) || [];
+    var list = document.getElementById('react-skill-list');
+    if (!skills.length) {
+        list.innerHTML = '<div class="empty-state" style="font-size:10px;">打这个 Boss 时它放过的技能会自动出现在这里。</div>';
+    } else {
+        list.innerHTML = skills.map(function (s) {
+            var m = _findMapping('boss_cast', s.skill_id, _reactBoss) || {};
+            var dur = (s.last_cast_duration_ms ? (s.last_cast_duration_ms + 'ms') : '?');
+            return _reactRow('boss_cast', s.skill_id,
+                '#' + s.skill_id + ' ' + _esc(s.name || '') + ' ×' + s.count + ' · ' + dur, m);
+        }).join('');
+    }
+
+    // offensive windows
+    var wins = [['boss_breaking', '破防 Breaking'], ['boss_overdrive', '过载 Overdrive'], ['boss_stun', '眩晕 Stun']];
+    document.getElementById('react-window-list').innerHTML = wins.map(function (w) {
+        var m = _findMapping(w[0], 0, _reactBoss) || {};
+        return _reactRow(w[0], 0, w[1], m);
+    }).join('');
+}
+
+function _reactRow(trig, skillId, label, m) {
+    var id = m.id || '';
+    var key = m.action_key || '';
+    var delay = m.delay_ms || 0;
+    var cd = (m.cooldown_s != null ? m.cooldown_s : 3);
+    var en = (m.enabled !== false && !!id);
+    var tag = trig + '_' + skillId;
+    return '<div class="entity-card" style="display:block;padding:5px 7px;margin:3px 0;">' +
+        '<div style="font-size:11px;color:#ffd46f;margin-bottom:3px;">' + _esc(label) + '</div>' +
+        '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;font-size:10px;color:#9fc0d8;">' +
+        '键<input id="rk_' + tag + '" value="' + _esc(key) + '" maxlength="8" style="width:46px;' + _inpCss() + '">' +
+        '延迟<input id="rd_' + tag + '" value="' + delay + '" style="width:50px;' + _inpCss() + '">ms' +
+        'CD<input id="rc_' + tag + '" value="' + cd + '" style="width:40px;' + _inpCss() + '">s' +
+        '<label style="display:flex;align-items:center;gap:2px;"><input type="checkbox" id="re_' + tag + '"' + (en ? ' checked' : '') + '>启用</label>' +
+        '<div class="action-btn" style="padding:2px 8px;font-size:10px;" onclick="saveReaction(\'' + trig + '\',' + skillId + ',\'' + id + '\')">保存</div>' +
+        '</div></div>';
+}
+function _inpCss() { return 'background:rgba(8,14,22,.6);color:#e8f6ff;border:1px solid rgba(117,205,255,.4);border-radius:4px;padding:2px 4px;margin:0 3px;'; }
+
+function onReactBossChange() {
+    var sel = document.getElementById('react-boss');
+    _reactBoss = Number(sel.value || 0);
+    renderReactions();
+}
+
+function saveReaction(trig, skillId, id) {
+    var tag = trig + '_' + skillId;
+    var key = (document.getElementById('rk_' + tag).value || '').trim().toUpperCase();
+    var delay = parseInt(document.getElementById('rd_' + tag).value || '0', 10) || 0;
+    var cd = parseFloat(document.getElementById('rc_' + tag).value || '3') || 0;
+    var en = document.getElementById('re_' + tag).checked;
+    var m = {
+        id: id || '', enabled: en, trigger_type: trig,
+        skill_id: skillId, boss_base_id: _reactBoss,
+        action_key: key, delay_ms: delay, cooldown_s: cd,
+    };
+    var a = _api();
+    if (!a || !a.save_boss_reaction) return;
+    Promise.resolve(a.save_boss_reaction(JSON.stringify(m))).then(function (j) {
+        var r = (typeof j === 'string') ? JSON.parse(j) : j;
+        if (r && r.ok) { _reactState = r.state; renderReactions(); }
+    }).catch(function () {});
 }
 
 // 鈹€鈹€ Entity list rendering 鈹€鈹€
@@ -420,6 +549,7 @@ window.RaidEditor = {
     updatePhases: updatePhases,
     updateStatus: updateStatus,
     updateFull: updateFull,
+    loadReactions: loadReactions,
     fadeIn: fadeIn,
     fadeOut: fadeOut,
 };

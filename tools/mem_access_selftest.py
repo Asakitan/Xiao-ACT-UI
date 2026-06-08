@@ -151,7 +151,7 @@ def test_tcp_gate():
     check("entities gated", ma.entities().get("reason") == "mode_tcp")
     check("search gated", ma.search(1, "i32").get("reason") == "mode_tcp")
     check("status not gated", ma.status().get("ok") is True and ma.status().get("active") is False)
-    check("catalog not gated", len(ma.catalog().get("categories") or []) == 9)
+    check("catalog not gated", len(ma.catalog().get("categories") or []) == 10)
 
 
 def test_no_bridge():

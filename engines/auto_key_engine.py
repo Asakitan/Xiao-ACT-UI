@@ -264,7 +264,7 @@ def normalize_condition(raw: Any) -> Optional[Dict[str, Any]]:
     elif condition_type in (
         "profession_is", "player_name_is", "dungeon_is",
         "last_skill_is", "last_skill_category_is", "last_skill_kind_is", "last_buff_category_is",
-        "boss_mechanic_is", "boss_mechanic_family_is",
+        "boss_mechanic_is", "boss_mechanic_family_is", "boss_casting_skill_is",
     ):
         normalized["value"] = _string(raw.get("value"))
     elif condition_type in ("last_skill_is_ultimate", "last_skill_is_boss_mechanic"):
@@ -944,6 +944,17 @@ class AutoKeyEngine:
                     return False
             elif cond_type == "in_combat_is":
                 if bool(getattr(gs, "in_combat", False)) != _coerce_bool(condition.get("value"), True):
+                    return False
+            elif cond_type == "boss_casting_skill_is":
+                # memory boss-action feed: fire while the boss is casting this skill
+                value = _string(condition.get("value"))
+                if not value:
+                    return False
+                if not bool(getattr(gs, "boss_cast_active", False)):
+                    return False
+                sid = str(_coerce_int(getattr(gs, "boss_cast_skill_id", 0), 0))
+                nm = _string(getattr(gs, "boss_cast_skill_name", ""))
+                if value not in (sid, nm):
                     return False
         return True
 

@@ -92,9 +92,24 @@ class SAOPlayerGUIActionsMixin:
                 on_reset=lambda: (
                     self._boss_raid_engine.reset() if self._boss_raid_engine else None
                 ),
+                load_reactions_fn=self._load_boss_reactions_state,
+                save_reaction_fn=self._save_boss_reaction,
             )
         self._bossraid_panel.toggle()
         self.root.after(120, lambda: self._raise_panel_window(self._bossraid_panel))
+
+    def _load_boss_reactions_state(self) -> Dict[str, Any]:
+        """Data contract for the BossRaid panel's Boss 反应 tab (mem-driven editor)."""
+        from engines.boss_autokey_linkage import build_boss_reactions_state
+        return build_boss_reactions_state(
+            self._cfg_settings_ref,
+            getattr(self, '_boss_raid_engine', None),
+            getattr(self, '_state_mgr', None))
+
+    def _save_boss_reaction(self, mapping: Dict[str, Any]) -> Any:
+        """Upsert one boss-reaction linkage mapping (boss_cast / offensive window)."""
+        from engines.boss_autokey_linkage import upsert_mapping
+        return upsert_mapping(self._cfg_settings_ref, mapping)
 
     def _toggle_autokey_detail_panel(self):
         """Open/close the full AutoKey profile editor."""

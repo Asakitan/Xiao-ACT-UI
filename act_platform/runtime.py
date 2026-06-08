@@ -4130,6 +4130,14 @@ def act_mem_boss(owner: Any, **_: Any) -> dict[str, Any]:
     return _mem_access(owner).boss()
 
 
+def act_mem_boss_actions(owner: Any, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).boss_actions()
+
+
+def act_mem_boss_action(owner: Any, *, uuid: Any = 0, **_: Any) -> dict[str, Any]:
+    return _mem_access(owner).boss_action(uuid)
+
+
 def act_mem_damage(owner: Any, *, total_type: int = 1, **_: Any) -> dict[str, Any]:
     return _mem_access(owner).damage_totals(total_type=int(total_type or 1))
 
@@ -4198,6 +4206,8 @@ __all__ = [
     "act_mem_self",
     "act_mem_entities",
     "act_mem_boss",
+    "act_mem_boss_actions",
+    "act_mem_boss_action",
     "act_mem_damage",
     "act_mem_skill_damage",
     "act_mem_attr_map",

@@ -86,6 +86,12 @@ class MemStateBridge:
         self._entity_interval: float = 1.0
         self.last_entities: list = []
         self.last_boss_mem: Optional[dict] = None
+        # boss-action feed (cast_skill_id edge-detect + state) -> bossraid/autokey
+        self._boss_action_tracker: Any = None
+        self.last_boss_actions: list = []
+        self._boss_cast_thread: Optional[threading.Thread] = None
+        self._boss_cast_stop = threading.Event()
+        self._boss_cast_interval: float = 0.08   # ~12.5Hz boss-only cast poll (low latency)
         self._named: dict = {}          # uuid -> resolved name (push to tracker once)
         self._last_scene_id: int = 0
         self._damage_reader: Any = None
@@ -187,6 +193,25 @@ class MemStateBridge:
                         except Exception as _dr_exc:
                             self._damage_reader = None
                             print(f"[MemBridge.entity] MemDamageReader init failed: {_dr_exc}")
+                        # boss-action tracker: edge-detect cast_skill_id on the live
+                        # entity snapshot (reuses prov._ecr / prov._pm; never blocks).
+                        try:
+                            from mem_probe.il2cpp.mem_boss_action_reader import (
+                                BossActionTracker, BossDurationProbe)
+                            # on_event left unset: the bridge forwards explicitly from
+                            # both loops (fast = low-latency cast edges; 1Hz = offensive
+                            # windows) so a record is never double-forwarded.
+                            self._boss_action_tracker = BossActionTracker(
+                                prov._ecr, pm=prov._pm,
+                                name_resolver=self._name_resolver(),
+                                duration_probe=BossDurationProbe(prov._pm))
+                            self._boss_cast_stop.clear()
+                            self._boss_cast_thread = threading.Thread(
+                                target=self._boss_cast_loop, name="mem-boss-cast", daemon=True)
+                            self._boss_cast_thread.start()
+                        except Exception as _ba_exc:
+                            self._boss_action_tracker = None
+                            print(f"[MemBridge.entity] BossActionTracker init failed: {_ba_exc}")
                         # direct print -- bridge on_log is swallowed in hybrid (see _poll_mem_damage)
                         print(f"[MemBridge.entity] loop active: src=ok damage_reader="
                               f"{'ok' if self._damage_reader else 'None'} dps_tracker="
@@ -232,6 +257,21 @@ class MemStateBridge:
                         self._named.clear()
                 boss = max(snap, key=lambda e: e["max_hp"]) if snap else None
                 self.last_boss_mem = boss
+                # boss-action feed: rich per-tick edge-detect + duration upgrade.
+                # Forward the boss's current record every tick so offensive windows
+                # (breaking/overdrive/stun) reach the linkage even without a cast edge;
+                # the fast loop handles low-latency cast-start separately.
+                if self._boss_action_tracker is not None:
+                    try:
+                        self.last_boss_actions = self._boss_action_tracker.update(snap, boss)
+                        if boss:
+                            buuid = int(boss.get("uuid") or 0)
+                            brec = next((r for r in self.last_boss_actions
+                                         if int(r.get("boss_uuid") or 0) == buuid), None)
+                            if brec is not None:
+                                self._on_boss_action_event(brec)
+                    except Exception:
+                        traceback.print_exc()
                 if boss and self.state_mgr is not None:
                     st = getattr(self.state_mgr, "state", None)
                     src_now = str(getattr(st, "boss_hp_source", "none") or "none")
@@ -324,8 +364,56 @@ class MemStateBridge:
                 traceback.print_exc()
                 print(f"[MemBridge.dmg] read failed: {exc}")
 
+    def _on_boss_action_event(self, rec: dict) -> None:
+        """Forward a boss cast/state edge to the boss raid engine (skill_id-accurate)."""
+        eng = self.boss_raid_engine
+        if eng is None:
+            return
+        fn = getattr(eng, "on_mem_boss_action", None)
+        if callable(fn):
+            try:
+                fn(rec)
+            except Exception:
+                traceback.print_exc()
+
+    def _boss_cast_loop(self):
+        """Low-latency boss-only cast poll (~12.5Hz). Reads just the current boss's
+        combat snapshot (cached obj-ptr layout -> ~7 RPM) + state-machine actor state,
+        so a cast-start edge reaches auto-dodge within ~50-100ms instead of ~1s."""
+        while not self._boss_cast_stop.is_set():
+            try:
+                tr = self._boss_action_tracker
+                boss = self.last_boss_mem
+                prov = self._entity_provider
+                if tr is not None and boss and prov is not None:
+                    obj = int(boss.get("obj") or 0)
+                    uuid = int(boss.get("uuid") or 0)
+                    if obj and uuid:
+                        ecr = getattr(prov, "_ecr", None)
+                        c = ecr.read_combat(obj) if ecr is not None else None
+                        if c is not None:
+                            skill = int(c.get("cast_skill_id") or 0)
+                            actor = None
+                            probe = getattr(tr, "_probe", None)
+                            if probe is not None:
+                                actor = probe.read_actor_state(obj)
+                            rec = tr.update_fast(uuid, skill, actor, obj=obj)
+                            if rec is not None:   # cast edge -> forward low-latency
+                                self._on_boss_action_event(rec)
+            except Exception:
+                pass
+            self._boss_cast_stop.wait(self._boss_cast_interval)
+
     def stop(self):
         self._entity_stop.set()
+        self._boss_cast_stop.set()
+        if self._boss_cast_thread:
+            try:
+                self._boss_cast_thread.join(timeout=2.0)
+            except Exception:
+                pass
+            self._boss_cast_thread = None
+        self._boss_action_tracker = None
         if self._entity_thread:
             try:
                 self._entity_thread.join(timeout=2.0)

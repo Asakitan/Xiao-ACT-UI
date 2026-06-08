@@ -391,6 +391,7 @@ class PacketBridge:
         self._event_bus = event_bus if isinstance(event_bus, EventBus) else None
         self._mem_source = None                  # UnifiedDataSource 实例 (lazy)
         self._dps_tracker = None                 # set by GUI; mem source pushes MEM dmg table here
+        self._boss_raid_engine = None            # set by GUI; mem boss-action feed -> on_mem_boss_action
         self._mem_authoritative = False          # mem owns real-time self state when True
         self._last_name_resolver_reload_ts: float = 0.0
         try:
@@ -569,6 +570,18 @@ class PacketBridge:
             except Exception:
                 pass
 
+    def set_boss_raid_engine(self, engine) -> None:
+        """Wire the boss raid engine so the (lazily-created) memory source can push
+        the boss-action feed (cast_skill_id edge -> on_mem_boss_action). The mem
+        source is created on the first TCP scene trigger, usually after this call."""
+        self._boss_raid_engine = engine
+        ms = self._mem_source
+        if ms is not None:
+            try:
+                ms.set_boss_raid_engine(engine)
+            except Exception:
+                pass
+
     def _start_memory_source(self) -> bool:
         """Lazy-import + start UnifiedDataSource. Returns True on success."""
         try:
@@ -588,6 +601,7 @@ class PacketBridge:
                 on_status_change=self._on_mem_status_change,
                 packet_bridge=self,
                 dps_tracker=self._dps_tracker,
+                boss_raid_engine=self._boss_raid_engine,
                 settings=self._settings,
             )
             defer_default = self._data_source_mode in ('auto', 'hybrid')

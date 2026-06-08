@@ -4,8 +4,15 @@
 
 - 当前工作分支：`3.0.0`
 - 运行版本来源：`config.py` 中的 `APP_VERSION` / `APP_VERSION_LABEL`
-- 当前源码版本：`4.2.0`
+- 当前源码版本：`4.3.0`
 - 默认运行平台：Windows 10 / 11
+
+## v4.3.0 重点：内存驱动 Boss 反应（自动躲技能 / 自动操作）
+
+- **内存 Boss 动作 feed**（`mem_probe/il2cpp/mem_boss_action_reader.py`）：`BossActionTracker` 每 tick 边沿检测任意 boss/怪的 `cast_skill_id`（attr 100，开始施法 0→技能id）+ 破防/过载/眩晕/血量；`mem_state_bridge` 加 10–20Hz boss 专用快轮询，施法开始到事件 <100ms。施法时长尽力深挖：`BossDurationProbe` 读 `BuffComp.BuffItem.Duration`（偏移对照 dump fdc7111b 已验证），失败回退「学习」EMA。只读，经 `MemAccess.boss_actions()` 暴露。
+- **bossraid 引擎接入**：`on_mem_boss_action` 更新施法态、自动发现每个 boss 放过的技能、用内存 skill_id 触发现有 `boss_skill` phase 触发、补上缺失的 `on_self_dead_change` 死亡门控。
+- **BossAutoKeyLinkage 从「警报文字」升级为「技能 id 精确」**：新增触发类型 `boss_cast`/`boss_breaking`/`boss_overdrive`/`boss_stun` + `on_boss_action` 入口，按 `skill_id`/`boss_base_id` 匹配，支持 `delay_ms`/`lead_ms`/`sequence`（自动躲技能 + 进攻连招）。完全向后兼容旧映射。
+- **新增「Boss 反应」可视化编辑器**（BossRaid 面板 Tk tab + WebView `raid_editor.html` tab，契约 `build_boss_reactions_state`）：选 boss → 看内存自动发现的它放过的技能 → 给每个技能/进攻窗口指派反应按键与时机。纯 TCP 模式显示「切 hybrid」横幅。
 
 ## v4.2.0 重点：Mem Scope 内存浏览器 + 插件内存 API
 

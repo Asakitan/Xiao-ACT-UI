@@ -286,6 +286,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 self._cfg_settings_ref,
                 on_alert=_on_boss_alert_with_linkage,
                 on_sound=lambda name: play_sound(name),
+                on_boss_action=self._on_boss_action_with_gate,
             )
 
             # ── 初始化 ULW 覆盖层 ──
@@ -419,6 +420,14 @@ class SAOPlayerGUIEngineLifecycleMixin:
             try:
                 if getattr(self, '_packet_engine', None) is not None:
                     self._mem_bridge = None
+                    # hybrid: the live MemStateBridge is built inside PacketBridge's
+                    # mem source -- forward the boss raid engine so the boss-action
+                    # feed (cast_skill_id edge) reaches on_mem_boss_action.
+                    try:
+                        self._packet_engine.set_boss_raid_engine(
+                            getattr(self, '_boss_raid_engine', None))
+                    except Exception:
+                        pass
                     print('[MemBridge] deferred to PacketBridge TCP scene/full-sync trigger')
                 else:
                     from mem_probe.il2cpp.mem_state_bridge import MemStateBridge
@@ -446,6 +455,23 @@ class SAOPlayerGUIEngineLifecycleMixin:
             print(f'[SAO Entity] Data engine failed: {e}')
             import traceback; traceback.print_exc()
             self._recognition_active = False
+
+    def _on_boss_action_with_gate(self, action):
+        """Gate the memory boss-action feed before driving the auto-key linkage.
+
+        Mirrors the AutoKeyEngine gate: only react while recognition is active and
+        the player is alive (suppress auto-dodge / offense while dead)."""
+        if not bool(getattr(self, '_recognition_active', False)):
+            return
+        gs = getattr(self._state_mgr, 'state', None) if getattr(self, '_state_mgr', None) else None
+        if gs is not None and bool(getattr(gs, 'self_dead', False)):
+            return
+        linkage = getattr(self, '_boss_autokey_linkage', None)
+        if linkage is not None:
+            try:
+                linkage.on_boss_action(action)
+            except Exception:
+                pass
 
     # ────────────────────────────────────────────
     #  SkillFX / Burst Mode Ready helpers

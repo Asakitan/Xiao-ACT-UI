@@ -55,6 +55,9 @@ from engines.boss_raid_engine import (
 from engines.boss_autokey_linkage import (
     BossAutoKeyLinkage,
     build_linkage_state,
+    build_boss_reactions_state,
+    upsert_mapping,
+    delete_mapping,
     default_linkage_config,
     load_linkage_config,
     make_default_mapping,
@@ -1767,6 +1770,49 @@ class SAOWebAPI:
             if linkage:
                 linkage.reset()
             return json.dumps({'ok': True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    # ── Boss Reactions editor (memory-driven, in the raid editor) ──
+
+    def get_boss_reactions(self):
+        try:
+            state = build_boss_reactions_state(
+                self._g._cfg_settings_ref,
+                getattr(self._g, '_boss_raid_engine', None),
+                getattr(self._g, '_state_mgr', None))
+            return json.dumps({'ok': True, 'state': state}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def save_boss_reaction(self, mapping_json):
+        try:
+            m = json.loads(mapping_json) if isinstance(mapping_json, str) else mapping_json
+            upsert_mapping(self._g._cfg_settings_ref, m)
+            state = build_boss_reactions_state(
+                self._g._cfg_settings_ref,
+                getattr(self._g, '_boss_raid_engine', None),
+                getattr(self._g, '_state_mgr', None))
+            return json.dumps({'ok': True, 'state': state}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def delete_boss_reaction(self, mapping_id):
+        try:
+            delete_mapping(self._g._cfg_settings_ref, str(mapping_id))
+            state = build_boss_reactions_state(
+                self._g._cfg_settings_ref,
+                getattr(self._g, '_boss_raid_engine', None),
+                getattr(self._g, '_state_mgr', None))
+            return json.dumps({'ok': True, 'state': state}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def import_observed_skills(self, base_id=0):
+        try:
+            engine = getattr(self._g, '_boss_raid_engine', None)
+            obs = engine.get_observed_boss_skills(int(base_id) or None) if engine else {}
+            return json.dumps({'ok': True, 'observed_skills': obs}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
@@ -6091,7 +6137,16 @@ class SAOWebViewGUI:
                 on_alert=_on_boss_alert_with_linkage,
                 on_sound=self._play_sound,
                 on_entity_update=self._on_raid_entity_update,
+                on_boss_action=self._on_boss_action_with_gate,
             )
+            # hybrid: forward the boss raid engine into the (deferred) mem source so
+            # the boss-action feed reaches on_mem_boss_action.
+            try:
+                pe = getattr(self, '_packet_engine', None)
+                if pe is not None and hasattr(pe, 'set_boss_raid_engine'):
+                    pe.set_boss_raid_engine(self._boss_raid_engine)
+            except Exception:
+                pass
             self._sync_boss_raid_menu()
 
             # 启动定时缓存保存 (每30秒)
@@ -6762,6 +6817,21 @@ class SAOWebViewGUI:
         """Callback from BossRaidEngine when entity list changes."""
         if self._raid_editor_visible:
             self._push_raid_editor_entities(entities)
+
+    def _on_boss_action_with_gate(self, action):
+        """Gate the memory boss-action feed before driving the auto-key linkage
+        (recognition active + player alive)."""
+        if not bool(getattr(self, '_recognition_active', False)):
+            return
+        gs = getattr(self._state_mgr, 'state', None) if getattr(self, '_state_mgr', None) else None
+        if gs is not None and bool(getattr(gs, 'self_dead', False)):
+            return
+        linkage = getattr(self, '_boss_autokey_linkage', None)
+        if linkage is not None:
+            try:
+                linkage.on_boss_action(action)
+            except Exception:
+                pass
 
     # ── Commander panel ──
 

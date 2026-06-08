@@ -563,6 +563,10 @@ class MemAccess:
              ep is not None, {"include_monsters": True, "max_per_dict": 128}),
             ("boss", "Boss", "mem_boss",
              "当前最高血量实体（bossDict 优先）的 HP 快照。", ep is not None, {}),
+            ("boss_actions", "Boss 动作/技能 Actions", "mem_boss_actions",
+             "每个 boss/怪正在施放的技能(cast_skill_id 边沿)+破防/过载/眩晕态+尽力而为的施法时长。"
+             "驱动 bossraid 自动躲技能/自动操作。",
+             getattr(bridge, "_boss_action_tracker", None) is not None, {}),
             ("damage_totals", "伤害总表 Damage", "mem_damage",
              "游戏自带 DamageDataMgr 的每玩家总伤/总治疗/总承伤（uuid→total）。",
              dr is not None, {"total_type": 1}),
@@ -644,6 +648,41 @@ class MemAccess:
                 return _err("not_armed", "实体读取器尚未挂载（hybrid 预热中，约 1-2s）")
             rows = []
         return {"ok": True, "count": len(rows), "entities": [self._ent_row(e) for e in rows]}
+
+    def boss_actions(self) -> dict:
+        gate = self._gate()
+        if gate:
+            return gate
+        b = self._bridge()
+        recs = getattr(b, "last_boss_actions", None)
+        if recs is None:
+            tr = getattr(b, "_boss_action_tracker", None)
+            if tr is None:
+                return _err("not_armed", "Boss 动作读取器尚未挂载（hybrid 预热中）")
+            try:
+                recs = tr.actions()
+            except Exception as exc:
+                return _err("process_gone", f"Boss 动作读取失败: {exc}")
+        rows = [self._action_row(r) for r in (recs or []) if isinstance(r, dict)]
+        return {"ok": True, "count": len(rows), "actions": rows}
+
+    def boss_action(self, uuid) -> dict:
+        gate = self._gate()
+        if gate:
+            return gate
+        try:
+            uuid = int(str(uuid).strip(), 0) if isinstance(uuid, str) else int(uuid)
+        except Exception:
+            return _err("bad_arg", f"uuid 非法: {uuid!r}")
+        b = self._bridge()
+        tr = getattr(b, "_boss_action_tracker", None)
+        if tr is None:
+            return _err("not_armed", "Boss 动作读取器尚未挂载")
+        try:
+            rec = tr.boss_action(uuid)
+        except Exception as exc:
+            return _err("process_gone", f"Boss 动作读取失败: {exc}")
+        return {"ok": True, "action": self._action_row(rec) if rec else None}
 
     def boss(self) -> dict:
         gate = self._gate()
@@ -836,6 +875,30 @@ class MemAccess:
         except Exception:
             return None
         return a if _plaus(a) else None
+
+    @staticmethod
+    def _action_row(r: dict) -> dict:
+        r = r or {}
+        return {
+            "boss_uuid": str(int(r.get("boss_uuid", 0) or 0)),
+            "boss_base_id": int(r.get("boss_base_id", 0) or 0),
+            "boss_name": str(r.get("boss_name", "") or ""),
+            "skill_id": int(r.get("skill_id", 0) or 0),
+            "skill_name": str(r.get("skill_name", "") or ""),
+            "cast_edge": str(r.get("cast_edge", "none") or "none"),
+            "cast_active": bool(r.get("cast_active", False)),
+            "actor_state": r.get("actor_state"),
+            "cast_elapsed_ms": int(r.get("cast_elapsed_ms", 0) or 0),
+            "cast_duration_ms": r.get("cast_duration_ms"),
+            "cast_duration_src": str(r.get("cast_duration_src", "none") or "none"),
+            "breaking_stage": r.get("breaking_stage"),
+            "overdrive": r.get("overdrive"),
+            "stun": r.get("stun"),
+            "extinction": r.get("extinction"),
+            "hp": _num(r.get("hp", 0)),
+            "max_hp": _num(r.get("max_hp", 0)),
+            "hp_pct": round(float(r.get("hp_pct", 0) or 0), 4),
+        }
 
     @staticmethod
     def _ent_row(e: dict) -> dict:

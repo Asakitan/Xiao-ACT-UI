@@ -517,7 +517,8 @@ class BossRaidEngine:
     def __init__(self, state_mgr, settings,
                  on_alert: Optional[Callable[[str, str], None]] = None,
                  on_sound: Optional[Callable[[str], None]] = None,
-                 on_entity_update: Optional[Callable[[List[Dict[str, Any]]], None]] = None):
+                 on_entity_update: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
+                 on_boss_action: Optional[Callable[[Dict[str, Any]], None]] = None):
         """
         Args:
             state_mgr: GameStateManager instance
@@ -525,12 +526,31 @@ class BossRaidEngine:
             on_alert: callback(title, message) for visual alert
             on_sound: callback(sound_name) for playing sound
             on_entity_update: callback([entity_dict, ...]) for visual editor entity list
+            on_boss_action: callback(action_record) forwarding the mem boss-action
+                feed to the auto-key linkage (skill_id-accurate, gated by the host)
         """
         self._state_mgr = state_mgr
         self._settings = settings
         self._on_alert = on_alert
         self._on_sound = on_sound
         self._on_entity_update_cb = on_entity_update
+        self._on_boss_action_cb = on_boss_action
+
+        # ── memory-driven boss action state (cast_skill_id edge feed) ──
+        # observed skills per boss: base_id -> {skill_id -> {name, count, last_cast_duration_ms, last_ts}}
+        self._observed_boss_skills: Dict[int, Dict[int, Dict[str, Any]]] = {}
+        self._observed_boss_names: Dict[int, str] = {}   # base_id -> boss display name
+        self._boss_cast_skill_id: int = 0
+        self._boss_cast_skill_name: str = ""
+        self._boss_cast_active: bool = False
+        self._boss_cast_start_ts: float = 0.0
+        self._boss_cast_duration_ms: int = 0
+        self._boss_stun: bool = False
+        self._self_dead: bool = False
+        # rising-edge memo for offensive windows (avoid level-triggered spam)
+        self._mem_prev_overdrive: bool = False
+        self._mem_prev_stun: bool = False
+        self._mem_prev_breaking: int = -1
 
         self._lock = threading.Lock()
         self._state = self.STATE_IDLE
@@ -677,6 +697,7 @@ class BossRaidEngine:
             self._boss_in_overdrive = False
             self._boss_invincible = False
             self._immune_streak = 0
+            self._clear_mem_cast_state_locked()
             self._clear_last_boss_mechanic_locked()
             self._last_monster_data = None
             self._entities.clear()
@@ -691,6 +712,17 @@ class BossRaidEngine:
         self._last_boss_mechanic_key = ""
         self._last_boss_mechanic_label = ""
         self._last_boss_trigger_family = ""
+
+    def _clear_mem_cast_state_locked(self):
+        self._boss_cast_skill_id = 0
+        self._boss_cast_skill_name = ""
+        self._boss_cast_active = False
+        self._boss_cast_start_ts = 0.0
+        self._boss_cast_duration_ms = 0
+        self._boss_stun = False
+        self._mem_prev_overdrive = False
+        self._mem_prev_stun = False
+        self._mem_prev_breaking = -1
 
     def set_entity_role(self, uuid: int, role: str):
         """Set entity role: 'boss' or 'enemy'. Called from visual editor overlay.
@@ -965,6 +997,134 @@ class BossRaidEngine:
                         self._advance_phase()
             self._push_game_state_locked(time.time())
 
+    # ── Memory-driven boss action feed (cast_skill_id edge) ──
+
+    def on_mem_boss_action(self, action: Dict[str, Any]):
+        """Consume a memory boss-action record (cast edge + state). Updates cast
+        state, records observed skills, fires boss_skill phase triggers, pushes
+        GameState, and forwards to the auto-key linkage with rising-edge flags.
+        Runs even when not RUNNING so free-combat observation + offensive windows
+        work (mirrors on_monster_update tracking while idle)."""
+        if not action:
+            return
+        forward = None
+        with self._lock:
+            base_id = _coerce_int(action.get("boss_base_id"), 0)
+            skill_id = _coerce_int(action.get("skill_id"), 0)
+            name = _string(action.get("skill_name"))
+            edge = _string(action.get("cast_edge")).lower()
+            dur = action.get("cast_duration_ms")
+
+            if edge == "start" and skill_id:
+                self._boss_cast_skill_id = skill_id
+                self._boss_cast_skill_name = name
+                self._boss_cast_active = True
+                self._boss_cast_start_ts = time.time()
+                self._boss_cast_duration_ms = _coerce_int(dur, 0)
+                self._record_observed_skill_locked(base_id, skill_id, name, dur)
+                boss_name = _string(action.get("boss_name"))
+                if base_id and boss_name:
+                    self._observed_boss_names[int(base_id)] = boss_name
+            elif edge == "end":
+                self._boss_cast_active = False
+            else:
+                self._boss_cast_active = bool(action.get("cast_active"))
+                if isinstance(dur, (int, float)) and dur:
+                    self._boss_cast_duration_ms = int(dur)
+
+            # offensive-window rising edges (memoized to avoid level-triggered spam)
+            overdrive = bool(action.get("overdrive"))
+            overdrive_edge = overdrive and not self._mem_prev_overdrive
+            self._mem_prev_overdrive = overdrive
+            self._boss_in_overdrive = overdrive
+
+            stun = bool(action.get("stun"))
+            stun_edge = stun and not self._mem_prev_stun
+            self._mem_prev_stun = stun
+            self._boss_stun = stun
+
+            bs = action.get("breaking_stage")
+            breaking_edge = False
+            if isinstance(bs, int) and bs >= 0:
+                breaking_edge = (bs != self._mem_prev_breaking)
+                self._mem_prev_breaking = bs
+                self._boss_breaking_stage = bs
+
+            ext = action.get("extinction")
+            if isinstance(ext, (int, float)):
+                self._boss_extinction_pct = float(ext)
+
+            if self._state == self.STATE_RUNNING and edge == "start" and skill_id:
+                self._maybe_advance_on_mem_skill_locked(skill_id, name)
+
+            self._push_game_state_locked(time.time())
+
+            if self._on_boss_action_cb:
+                forward = dict(action)
+                forward["breaking_edge"] = breaking_edge
+                forward["overdrive_edge"] = overdrive_edge
+                forward["stun_edge"] = stun_edge
+
+        if forward is not None:
+            try:
+                self._on_boss_action_cb(forward)
+            except Exception:
+                pass
+
+    def _maybe_advance_on_mem_skill_locked(self, skill_id: int, skill_name: str):
+        phases = list((self._profile or {}).get("phases") or [])
+        if self._current_phase_idx >= len(phases) - 1:
+            return
+        trig = (phases[self._current_phase_idx + 1].get("trigger") or {})
+        ttype = _string(trig.get("type"))
+        if ttype in ("boss_skill", "boss_mechanic_skill", "ultimate_skill"):
+            tval = _string(trig.get("value"))
+            if not tval or tval in (str(skill_id), skill_name):
+                self._advance_phase()
+
+    def _record_observed_skill_locked(self, base_id: int, skill_id: int,
+                                      name: str, dur: Any):
+        if skill_id <= 0:
+            return
+        by_skill = self._observed_boss_skills.setdefault(int(base_id), {})
+        rec = by_skill.get(skill_id)
+        if rec is None:
+            rec = {"skill_id": skill_id, "name": name or "", "count": 0,
+                   "last_cast_duration_ms": None, "last_ts": 0.0}
+            by_skill[skill_id] = rec
+        rec["count"] += 1
+        rec["last_ts"] = time.time()
+        if name and not rec["name"]:
+            rec["name"] = name
+        if isinstance(dur, (int, float)) and dur > 0:
+            rec["last_cast_duration_ms"] = int(dur)
+
+    def get_observed_boss_skills(self, base_id: Optional[int] = None) -> Dict[int, List[Dict[str, Any]]]:
+        """Editor data source: {base_id: [skill_rec, ...]} sorted by count desc."""
+        with self._lock:
+            if base_id is not None:
+                src = {int(base_id): self._observed_boss_skills.get(int(base_id), {})}
+            else:
+                src = dict(self._observed_boss_skills)
+            return {bid: sorted([dict(r) for r in recs.values()], key=lambda r: -r["count"])
+                    for bid, recs in src.items()}
+
+    def get_observed_bosses(self) -> List[Dict[str, Any]]:
+        """Editor boss selector: [{base_id, name, observed_count}] sorted by activity."""
+        with self._lock:
+            out = []
+            for bid, recs in self._observed_boss_skills.items():
+                cnt = sum(int(r.get("count") or 0) for r in recs.values())
+                out.append({"base_id": int(bid),
+                            "name": self._observed_boss_names.get(int(bid), ""),
+                            "observed_count": cnt})
+            return sorted(out, key=lambda b: -b["observed_count"])
+
+    def on_self_dead_change(self, is_dead: bool):
+        """Mem bridge -> player death gate. Suppresses auto-dodge/offense while dead."""
+        with self._lock:
+            self._self_dead = bool(is_dead)
+
     def get_status(self) -> Dict[str, Any]:
         """Return current engine status dict."""
         with self._lock:
@@ -1027,6 +1187,12 @@ class BossRaidEngine:
             "last_boss_mechanic_key": self._last_boss_mechanic_key,
             "last_boss_mechanic_label": self._last_boss_mechanic_label,
             "last_boss_trigger_family": self._last_boss_trigger_family,
+            "boss_cast_skill_id": self._boss_cast_skill_id,
+            "boss_cast_skill_name": self._boss_cast_skill_name,
+            "boss_cast_active": self._boss_cast_active,
+            "boss_cast_duration_ms": self._boss_cast_duration_ms,
+            "boss_stun": self._boss_stun,
+            "self_dead": self._self_dead,
             "entities": self._get_entities_locked(),
         }
 
@@ -1206,6 +1372,8 @@ class BossRaidEngine:
 
     def _push_game_state_locked(self, now: float):
         """Push boss raid fields to GameStateManager (called under lock)."""
+        if self._state_mgr is None:
+            return
         status = self._build_status_locked()
         enrage_rem = status["enrage_remaining_s"]
         if enrage_rem > 0:
@@ -1236,6 +1404,12 @@ class BossRaidEngine:
             boss_extinction_pct=status["boss_extinction_pct"],
             boss_in_overdrive=status["boss_in_overdrive"],
             boss_invincible=status["boss_invincible"],
+            boss_cast_skill_id=status["boss_cast_skill_id"],
+            boss_cast_skill_name=status["boss_cast_skill_name"],
+            boss_cast_active=status["boss_cast_active"],
+            boss_cast_duration_ms=status["boss_cast_duration_ms"],
+            boss_stun=status["boss_stun"],
+            self_dead=status["self_dead"],
             last_boss_event=status.get("last_boss_event") or {},
         )
 
@@ -1259,6 +1433,12 @@ class BossRaidEngine:
             boss_extinction_pct=0.0,
             boss_in_overdrive=False,
             boss_invincible=False,
+            boss_cast_skill_id=0,
+            boss_cast_skill_name='',
+            boss_cast_active=False,
+            boss_cast_duration_ms=0,
+            boss_stun=False,
+            self_dead=self._self_dead,
             last_boss_event={},
         )
 

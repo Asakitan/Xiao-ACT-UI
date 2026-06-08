@@ -1,0 +1,358 @@
+# -*- coding: utf-8 -*-
+"""mem_boss_action_reader - memory-driven boss action/skill feed (read-only).
+
+Turns the per-tick combat attrs (already decoded by EntityCombatReader) into a
+structured "boss action" stream: which skill an entity is CASTING (edge-detected
+from attr 100 / A_SKILL_ID flipping 0 -> positive), its breaking/overdrive/stun/
+hp state, and a best-effort cast DURATION so a downstream auto-dodge can be timed.
+
+Cast duration is genuinely hard (no per-entity float in the dump; ZActionAnimInfo
+.GetTotalTime is a method over Unity clips). Two layered sources, both honest:
+  - learned: measure observed cast length (wall clock between the start/end edges)
+    and EMA it per skill_id; available from the 2nd cast of a skill. The floor.
+  - buff:    read BuffComp -> BuffItem.Duration (a real ms field, offsets verified
+    vs dump fdc7111b) for a buff that appears at cast-start; the precise upgrade.
+
+Read-only. Never blocks the hot loop (the buff probe runs on the 1Hz path only,
+is bounded, and degrades to None). All offsets are IL2CPP field offsets (stable
+across base/ASLR).
+"""
+from __future__ import annotations
+
+import threading
+import time
+from typing import Any, Callable, Dict, List, Optional
+
+# ── verified offsets (dump fdc7111b) ──────────────────────────────────────────
+ENT_STATEMACHINE_OFF = 0x70   # ZEntity.stateMachine_ -> ZStateMachine
+ENT_BUFFCOMP_OFF = 0x98       # ZEntity.buffComp_ -> BuffComp
+SM_CURSTATE_OFF = 0x20        # ZStateMachine.currentState_ (EActorState int)
+ACTOR_STATE_SINGING = 1       # EActorState.ActorStateSinging (casting/channel)
+
+BUFFCOMP_LIST_OFF = 0x30      # BuffComp.buffList_ -> ZList<BuffItem>
+ZLIST_ITEMS_OFF = 0x10        # ZList.items_ (T[])
+ZLIST_SIZE_OFF = 0x18         # ZList.size_ (int)
+ARR_LEN_OFF = 0x18            # T[].Length
+ARR_ELEMS_OFF = 0x20          # T[] first element
+BUFFITEM_UUID_OFF = 0x10      # BuffItem.BuffUuid (int)
+BUFFITEM_BASEID_OFF = 0x14    # BuffItem.BuffBaseId (int)
+BUFFITEM_CREATE_OFF = 0x30    # BuffItem.CreateTime (long ms)
+BUFFITEM_DURATION_OFF = 0x38  # BuffItem.Duration (long ms)
+
+_PTR_LO = 0x10000
+_PTR_HI = 0x7FFFFFFFFFFF
+_MAX_BUFFS = 64
+_DUR_MIN_MS = 200
+_DUR_MAX_MS = 10_000
+_LEARN_ALPHA = 0.4            # EMA weight for newly-observed cast lengths
+
+
+def _plaus(p: Any) -> bool:
+    try:
+        return _PTR_LO <= int(p) <= _PTR_HI
+    except Exception:
+        return False
+
+
+class BossDurationProbe:
+    """Best-effort cast-duration decoder. Isolated so a bad read never breaks the
+    reliable edge feed. Reads are bounded; failure returns None/empty."""
+
+    def __init__(self, pm: Any):
+        self.pm = pm
+
+    def read_actor_state(self, ent_addr: int) -> Optional[int]:
+        """ZEntity.stateMachine_.currentState_ (EActorState). None on bad read."""
+        if not _plaus(ent_addr):
+            return None
+        sm = self.pm.read_u64(ent_addr + ENT_STATEMACHINE_OFF)
+        if not _plaus(sm):
+            return None
+        return self.pm.read_i32(sm + SM_CURSTATE_OFF)
+
+    def read_buffs(self, ent_addr: int) -> List[dict]:
+        """Read BuffComp -> [{uuid, base_id, create_ms, duration_ms}, ...]. Bounded."""
+        if not _plaus(ent_addr):
+            return []
+        comp = self.pm.read_u64(ent_addr + ENT_BUFFCOMP_OFF)
+        if not _plaus(comp):
+            return []
+        zlist = self.pm.read_u64(comp + BUFFCOMP_LIST_OFF)
+        if not _plaus(zlist):
+            return []
+        size = self.pm.read_u32(zlist + ZLIST_SIZE_OFF) or 0
+        if size <= 0:
+            return []
+        size = min(int(size), _MAX_BUFFS)
+        items = self.pm.read_u64(zlist + ZLIST_ITEMS_OFF)
+        if not _plaus(items):
+            return []
+        arr_len = self.pm.read_u32(items + ARR_LEN_OFF) or 0
+        n = min(size, int(arr_len))
+        out: List[dict] = []
+        for i in range(n):
+            bi = self.pm.read_u64(items + ARR_ELEMS_OFF + i * 8)
+            if not _plaus(bi):
+                continue
+            try:
+                out.append({
+                    "uuid": int(self.pm.read_u32(bi + BUFFITEM_UUID_OFF) or 0),
+                    "base_id": int(self.pm.read_u32(bi + BUFFITEM_BASEID_OFF) or 0),
+                    "create_ms": int(self.pm.read_i64(bi + BUFFITEM_CREATE_OFF) or 0),
+                    "duration_ms": int(self.pm.read_i64(bi + BUFFITEM_DURATION_OFF) or 0),
+                })
+            except Exception:
+                continue
+        return out
+
+    def pick_cast_buff(self, buffs: List[dict], baseline_uuids: set) -> Optional[int]:
+        """Choose the cast-channel buff: one that appeared since `baseline_uuids`
+        with a plausible duration. Returns its duration_ms or None."""
+        cands = [b for b in buffs
+                 if b["uuid"] not in baseline_uuids
+                 and _DUR_MIN_MS <= b["duration_ms"] <= _DUR_MAX_MS]
+        if not cands:
+            return None
+        # most-recently created wins the tie (the cast just started)
+        cands.sort(key=lambda b: -b["create_ms"])
+        return int(cands[0]["duration_ms"])
+
+
+class BossActionTracker:
+    """Edge-detects boss/monster casts and assembles JSON-safe action records.
+
+    Fed by the mem entity loop: ``update(snap, boss)`` per ~1Hz rich tick, and
+    ``update_fast(uuid, skill_id, actor_state, ...)`` per ~10Hz boss-only tick for
+    low-latency cast-start detection. Both share the per-uuid prev state under a
+    lock so whichever sees the edge first wins; the other is a no-op edge."""
+
+    def __init__(self, ecr: Any, *, pm: Any = None, name_resolver: Any = None,
+                 duration_probe: Optional[BossDurationProbe] = None,
+                 on_event: Optional[Callable[[dict], None]] = None):
+        self._ecr = ecr
+        self._pm = pm if pm is not None else getattr(ecr, "pm", None)
+        self._names = name_resolver
+        self._probe = duration_probe or (BossDurationProbe(self._pm) if self._pm else None)
+        self._on_event = on_event
+        self._lock = threading.RLock()
+        self._prev: Dict[int, dict] = {}     # uuid -> state
+        self._learned: Dict[int, int] = {}   # skill_id -> EMA cast length (ms)
+        self._records: Dict[int, dict] = {}  # uuid -> latest action record
+
+    # ── public ────────────────────────────────────────────────────────────────
+    def update(self, snap: List[dict], boss: Optional[dict]) -> List[dict]:
+        """Rich per-tick update over the full entity snapshot. Never raises."""
+        records: List[dict] = []
+        live = set()
+        for e in (snap or []):
+            try:
+                uuid = int(e.get("uuid") or 0)
+            except Exception:
+                uuid = 0
+            if not uuid:
+                continue
+            live.add(uuid)
+            try:
+                rec = self._process_rich(e)
+                if rec is not None:
+                    records.append(rec)
+            except Exception:
+                continue
+        with self._lock:
+            self._prune(live)
+        return records
+
+    def update_fast(self, uuid: int, skill_id: int, actor_state: Optional[int] = None,
+                    *, obj: int = 0) -> Optional[dict]:
+        """Low-latency boss-only update: edge-detect from skill_id alone, reusing
+        the base_id/name cached by the rich path. Returns the record on an edge."""
+        uuid = int(uuid or 0)
+        if not uuid:
+            return None
+        skill = int(skill_id or 0)
+        with self._lock:
+            st = self._prev.get(uuid)
+            if st is None:
+                st = self._new_state(uuid)
+                self._prev[uuid] = st
+            if obj:
+                st["obj"] = int(obj)
+            if actor_state is not None:
+                st["actor_state"] = int(actor_state)
+            edge = self._apply_skill_locked(st, skill)
+            if edge == "none":
+                return None
+            rec = self._record_from_state(st, edge)
+            self._records[uuid] = rec
+        self._emit(rec)
+        return rec
+
+    def actions(self) -> List[dict]:
+        with self._lock:
+            return [dict(r) for r in self._records.values()]
+
+    def boss_action(self, uuid: int) -> Optional[dict]:
+        with self._lock:
+            r = self._records.get(int(uuid or 0))
+            return dict(r) if r else None
+
+    # ── rich path ───────────────────────────────────────────────────────────--
+    def _process_rich(self, e: dict) -> Optional[dict]:
+        uuid = int(e.get("uuid") or 0)
+        skill = int(e.get("cast_skill_id") or 0)
+        with self._lock:
+            st = self._prev.get(uuid)
+            if st is None:
+                st = self._new_state(uuid)
+                self._prev[uuid] = st
+            # cache identity + state from the rich snapshot
+            st["base_id"] = int(e.get("base_id") or st.get("base_id") or 0)
+            nm = e.get("name")
+            if nm:
+                st["name"] = str(nm)
+            st["obj"] = int(e.get("obj") or st.get("obj") or 0)
+            st["breaking_stage"] = e.get("breaking_stage")
+            st["overdrive"] = e.get("overdrive")
+            st["stun"] = e.get("stun")
+            st["extinction"] = e.get("extinction")
+            st["hp"] = int(e.get("cur_hp") or 0)
+            st["max_hp"] = int(e.get("max_hp") or 0)
+            st["hp_pct"] = float(e.get("hp_pct") or 0.0)
+
+            edge = self._apply_skill_locked(st, skill)
+            # while casting, try to upgrade duration via the BuffComp probe (1Hz only)
+            if st["skill_id"] and not st.get("duration_locked") and self._probe and st.get("obj"):
+                self._try_buff_duration_locked(st)
+            rec = self._record_from_state(st, edge)
+            self._records[uuid] = rec
+        if edge != "none":
+            self._emit(rec)
+        return rec
+
+    # ── edge detection (call under lock) ──────────────────────────────────────
+    def _apply_skill_locked(self, st: dict, skill: int) -> str:
+        prev = int(st.get("skill_id") or 0)
+        if skill and skill != prev:
+            # new cast (chained casts also land here: implicit end of prev)
+            if prev:
+                self._learn_locked(prev, st)
+            st["skill_id"] = skill
+            st["skill_name"] = self._skill_name(skill)
+            st["cast_started_at"] = time.monotonic()
+            st["duration_locked"] = False
+            st["duration_src"] = "none"
+            # emit a learned estimate immediately if we have one
+            learned = self._learned.get(skill)
+            if learned:
+                st["cast_duration_ms"] = int(learned)
+                st["duration_src"] = "learned"
+            else:
+                st["cast_duration_ms"] = None
+            # baseline buff set so the probe can spot the new cast buff
+            st["buff_baseline"] = self._buff_uuids(st.get("obj") or 0)
+            return "start"
+        if not skill and prev:
+            self._learn_locked(prev, st)
+            st["skill_id"] = 0
+            st["skill_name"] = ""
+            return "end"
+        return "none"
+
+    def _try_buff_duration_locked(self, st: dict) -> None:
+        try:
+            buffs = self._probe.read_buffs(int(st["obj"]))
+        except Exception:
+            return
+        dur = self._probe.pick_cast_buff(buffs, st.get("buff_baseline") or set())
+        if dur:
+            st["cast_duration_ms"] = int(dur)
+            st["duration_src"] = "buff"
+            st["duration_locked"] = True
+
+    def _learn_locked(self, skill_id: int, st: dict) -> None:
+        started = st.get("cast_started_at")
+        if not started:
+            return
+        observed = int(max(0.0, (time.monotonic() - started)) * 1000.0)
+        if not (_DUR_MIN_MS <= observed <= _DUR_MAX_MS):
+            return
+        prev = self._learned.get(skill_id)
+        self._learned[skill_id] = observed if prev is None else int(
+            prev * (1 - _LEARN_ALPHA) + observed * _LEARN_ALPHA)
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+    def _buff_uuids(self, obj: int) -> set:
+        if not (self._probe and obj):
+            return set()
+        try:
+            return {b["uuid"] for b in self._probe.read_buffs(int(obj))}
+        except Exception:
+            return set()
+
+    def _new_state(self, uuid: int) -> dict:
+        return {"uuid": uuid, "base_id": 0, "name": "", "obj": 0,
+                "skill_id": 0, "skill_name": "", "cast_started_at": 0.0,
+                "cast_duration_ms": None, "duration_src": "none", "duration_locked": False,
+                "actor_state": None, "breaking_stage": None, "overdrive": None,
+                "stun": None, "extinction": None, "hp": 0, "max_hp": 0, "hp_pct": 0.0,
+                "buff_baseline": set()}
+
+    def _record_from_state(self, st: dict, edge: str) -> dict:
+        started = st.get("cast_started_at") or 0.0
+        elapsed = int(max(0.0, (time.monotonic() - started)) * 1000.0) if (started and st["skill_id"]) else 0
+        return {
+            "boss_uuid": int(st["uuid"]),
+            "boss_base_id": int(st.get("base_id") or 0),
+            "boss_name": str(st.get("name") or ""),
+            "skill_id": int(st.get("skill_id") or 0),
+            "skill_name": str(st.get("skill_name") or ""),
+            "cast_edge": edge,
+            "actor_state": st.get("actor_state"),
+            "cast_active": bool(st.get("skill_id")),
+            "cast_started_at": float(started),
+            "cast_elapsed_ms": elapsed,
+            "cast_duration_ms": st.get("cast_duration_ms"),
+            "cast_duration_src": str(st.get("duration_src") or "none"),
+            "breaking_stage": st.get("breaking_stage"),
+            "overdrive": st.get("overdrive"),
+            "stun": st.get("stun"),
+            "extinction": st.get("extinction"),
+            "hp": int(st.get("hp") or 0),
+            "max_hp": int(st.get("max_hp") or 0),
+            "hp_pct": float(st.get("hp_pct") or 0.0),
+            "ts": time.time(),
+        }
+
+    def _skill_name(self, skill_id: int) -> str:
+        nr = self._names
+        if nr is None or not skill_id:
+            return ""
+        for meth in ("skill", "boss_skill", "monster_skill"):
+            fn = getattr(nr, meth, None)
+            if callable(fn):
+                try:
+                    nm = fn(int(skill_id), default="")
+                    if nm:
+                        return str(nm)
+                except Exception:
+                    continue
+        return ""
+
+    def _prune(self, live: set) -> None:
+        if len(self._prev) <= 1024:
+            dead = [u for u in self._prev if u not in live and not self._prev[u].get("skill_id")]
+        else:
+            dead = [u for u in self._prev if u not in live]
+        for u in dead:
+            self._prev.pop(u, None)
+            self._records.pop(u, None)
+
+    def _emit(self, rec: dict) -> None:
+        if self._on_event:
+            try:
+                self._on_event(rec)
+            except Exception:
+                pass
+
+
+__all__ = ["BossActionTracker", "BossDurationProbe"]

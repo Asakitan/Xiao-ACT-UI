@@ -106,6 +106,14 @@ class UnifiedDataSource:
         except Exception:
             pass
 
+    def set_boss_raid_engine(self, engine) -> None:
+        """Forward a late-bound boss raid engine so the mem boss-action feed reaches
+        on_mem_boss_action (auto-dodge / offensive automation)."""
+        try:
+            self._bridge.boss_raid_engine = engine
+        except Exception:
+            pass
+
     def start(self, *, defer: Optional[bool] = None) -> bool:
         """Start or arm the underlying read-only memory self-state bridge."""
         if self._started:
