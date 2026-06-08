@@ -428,15 +428,106 @@ class BossAutoKeyLinkage:
 #  Boss Reactions editor (shared by Tk + WebView)
 # ════════════════════════════════════════
 
+# ── name resolution (authoritative live cache → static tables, pure dict lookup) ──
+
+# skill ids can live in any of several name tables (a boss cast / mechanic / monster
+# skill); probe them in order and take the first real hit.
+_SKILL_NAME_KINDS = ("skill", "boss_skill", "boss_mechanic_skill",
+                     "monster_skill", "ultimate_skill", "scripted_skill")
+
+
+def _name_resolver():
+    try:
+        from tools.tablekit.name_tables import names
+        return names
+    except Exception:
+        return None
+
+
+def _lookup(nm, kind: str, id_: int) -> str:
+    if not nm or not id_:
+        return ""
+    fn = getattr(nm, kind, None)
+    if not callable(fn):
+        return ""
+    try:
+        return (fn(id_, default="") or "").strip()
+    except Exception:
+        return ""
+
+
+def _resolve_skill_name(nm, sid: int) -> str:
+    for kind in _SKILL_NAME_KINDS:
+        v = _lookup(nm, kind, sid)
+        if v:
+            return v
+    return ""
+
+
+def _resolve_boss_name(nm, bid: int) -> str:
+    return _lookup(nm, "boss", bid) or _lookup(nm, "monster", bid)
+
+
+def _resolve_scene_name(nm, scene_id: int, dungeon_id: int) -> str:
+    return _lookup(nm, "dungeon", dungeon_id) or _lookup(nm, "dungeon", scene_id)
+
+
+def _build_boss_detail(sel_boss: int, boss_name: str, obs: list) -> Dict[str, Any]:
+    """Group one boss's observations into the aggregation views the editor renders:
+    casts (the buffs it applies), mechanics/states, and a time-ordered timeline.
+    Plus a per-boss-unit summary."""
+    skills = [o for o in obs if o.get("kind") == "skill"]
+    mechanics = [o for o in obs if o.get("kind") in ("mechanic", "state")]
+    timeline = []
+    for o in obs:
+        at = o.get("time_fixed_s")
+        fixed = at is not None
+        if at is None:
+            at = o.get("elapsed_s")
+        if at is None:
+            continue
+        timeline.append({
+            "id": _int(o.get("id"), 0),
+            "skill_id": _int(o.get("skill_id") or o.get("id"), 0),
+            "name": _s(o.get("name")), "kind": _s(o.get("kind")),
+            "at_s": round(float(at), 1), "is_fixed": bool(fixed),
+            "count": _int(o.get("count"), 0), "tags": list(o.get("tags") or []),
+            "hp_line_pct": o.get("hp_line_pct"),
+        })
+    timeline.sort(key=lambda r: r["at_s"])
+    durs = [int(o["last_cast_duration_ms"]) for o in skills if o.get("last_cast_duration_ms")]
+    hp_lines = sorted({round(float(o["hp_line_pct"]), 4) for o in obs
+                       if o.get("hp_line_pct") is not None}, reverse=True)
+    summary = {
+        "skill_count": len(skills),
+        "mechanic_count": len(mechanics),
+        "hp_line_count": len(hp_lines),
+        "hp_lines": hp_lines,
+        "approx_duration_ms": max(durs) if durs else None,
+        "total_observed": sum(_int(o.get("count"), 0) for o in obs),
+    }
+    return {"base_id": int(sel_boss), "name": boss_name, "summary": summary,
+            "skills": skills, "mechanics": mechanics, "timeline": timeline}
+
+
 def build_boss_reactions_state(settings, engine, state_mgr,
-                               scene_key: Any = None) -> Dict[str, Any]:
+                               scene_key: Any = None,
+                               boss_base_id: Any = None) -> Dict[str, Any]:
     """Single data contract for the dual-UI Boss Reactions editor.
 
     Assembles the linkage mappings + the engine's live cast state + the persisted
-    per-scene/per-boss observed skills & mechanics (tagged) + the data-source
-    banner flag, so the Tk panel and the WebView raid editor render identically.
-    `scene_key` selects which map/scene to browse; None defaults to the live one."""
+    per-scene/per-boss observed skills & mechanics (tagged, name-resolved) grouped
+    into casts/mechanics/timeline aggregation views, so the Tk panel and the
+    WebView raid editor render identically. `scene_key` selects which map/scene to
+    browse (None = live); `boss_base_id` selects which boss (None = first/live).
+
+    Names (scene / boss / skill) are resolved at read time from the authoritative
+    name cache, so historical observations recorded before a name was known still
+    display correctly. Observations are scoped to the SELECTED boss only (not every
+    boss in the scene) — combined with the entity-free status read, this is what
+    keeps opening the editor cheap in crowded raids."""
     cfg = load_linkage_config(settings)
+    nm = _name_resolver()
     gs = getattr(state_mgr, "state", None) if state_mgr else None
     cur_scene_id = _int(getattr(gs, "dungeon_scene_id", 0), 0) if gs else 0
     cur_dungeon_id = _int(getattr(gs, "dungeon_id", 0), 0) if gs else 0
@@ -445,26 +536,56 @@ def build_boss_reactions_state(settings, engine, state_mgr,
     selected = str(scene_key) if scene_key not in (None, "") else cur_scene_key
 
     try:
-        scenes = engine.get_observed_scenes() if engine else []
+        scenes = [dict(s) for s in (engine.get_observed_scenes() if engine else [])]
     except Exception:
         scenes = []
+    for s in scenes:
+        if not _s(s.get("name")):
+            s["name"] = _resolve_scene_name(nm, _int(s.get("scene_id"), 0),
+                                            _int(s.get("dungeon_id"), 0))
     # always surface the live scene so the user sees where they are, even pre-obs
     if cur_scene_key and cur_scene_key not in {str(s.get("scene_key")) for s in scenes}:
         scenes = [{"scene_key": cur_scene_key, "scene_id": cur_scene_id,
-                   "dungeon_id": cur_dungeon_id, "name": cur_scene_name,
+                   "dungeon_id": cur_dungeon_id,
+                   "name": cur_scene_name or _resolve_scene_name(nm, cur_scene_id, cur_dungeon_id),
                    "boss_count": 0, "last_seen": 0.0}] + scenes
     try:
-        observed = engine.get_observed_boss_skills(None, selected) if engine else {}
-    except Exception:
-        observed = {}
-    try:
-        bosses = engine.get_observed_bosses(selected) if engine else []
+        bosses = [dict(b) for b in (engine.get_observed_bosses(selected) if engine else [])]
     except Exception:
         bosses = []
+    for b in bosses:
+        if not _s(b.get("name")):
+            b["name"] = _resolve_boss_name(nm, _int(b.get("base_id"), 0))
     try:
-        status = engine.get_status() if engine else {}
+        status = engine.get_status(include_entities=False) if engine else {}
+    except TypeError:
+        status = engine.get_status() if engine else {}   # engine predates the kwarg
     except Exception:
         status = {}
+
+    # selected boss: explicit → first recorded → live target
+    sel_boss = _int(boss_base_id, 0)
+    if not sel_boss and bosses:
+        sel_boss = _int(bosses[0].get("base_id"), 0)
+    if not sel_boss:
+        sel_boss = _int(status.get("boss_base_id"), 0)
+    observed_skills: Dict[str, Any] = {}
+    boss_detail = None
+    if engine is not None and sel_boss:
+        try:
+            obs_map = engine.get_observed_boss_skills(sel_boss, selected) or {}
+            obs = list(obs_map.get(sel_boss) or obs_map.get(str(sel_boss)) or [])
+        except Exception:
+            obs = []
+        for o in obs:
+            if o.get("kind") == "skill" and not _s(o.get("name")):
+                o["name"] = _resolve_skill_name(nm, _int(o.get("id"), 0))
+        bname = next((_s(b.get("name")) for b in bosses
+                      if _int(b.get("base_id"), 0) == sel_boss), "") \
+            or _resolve_boss_name(nm, sel_boss)
+        observed_skills = {str(sel_boss): obs}
+        boss_detail = _build_boss_detail(sel_boss, bname, obs)
+
     # Availability is gated on the user's SELECTED data-source mode, not the live
     # gs.data_source (which GameState never populates — the old check was always
     # False, hiding recorded skills behind the "switch to hybrid" banner). Boss
@@ -478,10 +599,13 @@ def build_boss_reactions_state(settings, engine, state_mgr,
     data_source = (_setting("mem_data_source") or _setting("data_source") or "tcp").lower()
     mem_available = bool(engine is not None and data_source in ("tcp", "memory", "hybrid", "auto"))
     mappings = cfg.get("mappings", [])
+    cast_name = _s(status.get("boss_cast_skill_name")) \
+        or _resolve_skill_name(nm, _int(status.get("boss_cast_skill_id"), 0))
     current = {
         "uuid": str(_int(status.get("boss_uuid"), 0)),
+        "base_id": _int(status.get("boss_base_id"), 0),
         "cast_skill_id": _int(status.get("boss_cast_skill_id"), 0),
-        "cast_skill_name": _s(status.get("boss_cast_skill_name")),
+        "cast_skill_name": cast_name,
         "cast_active": _bool(status.get("boss_cast_active"), False),
         "breaking_stage": status.get("boss_breaking_stage"),
         "in_overdrive": _bool(status.get("boss_in_overdrive"), False),
@@ -496,12 +620,15 @@ def build_boss_reactions_state(settings, engine, state_mgr,
         "mem_available": mem_available,
         "self_dead": _bool(status.get("self_dead"), False),
         "current_scene": {"scene_key": cur_scene_key, "scene_id": cur_scene_id,
-                          "dungeon_id": cur_dungeon_id, "name": cur_scene_name},
+                          "dungeon_id": cur_dungeon_id,
+                          "name": cur_scene_name or _resolve_scene_name(nm, cur_scene_id, cur_dungeon_id)},
         "selected_scene_key": selected,
+        "selected_boss_base_id": int(sel_boss),
         "scenes": scenes,
         "current_boss": current,
         "bosses": bosses,
-        "observed_skills": {str(bid): recs for bid, recs in observed.items()},
+        "observed_skills": observed_skills,
+        "boss_detail": boss_detail,
         "mappings": mappings,
         "offensive_windows": [m for m in mappings
                               if _s(m.get("trigger_type")) in ("boss_breaking", "boss_overdrive", "boss_stun")],

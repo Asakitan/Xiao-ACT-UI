@@ -1776,31 +1776,32 @@ class SAOWebAPI:
 
     # ── Boss Reactions editor (memory-driven, in the raid editor) ──
 
-    def _boss_reactions_state(self, scene_key=None):
+    def _boss_reactions_state(self, scene_key=None, boss_base_id=None):
         return build_boss_reactions_state(
             self._g._cfg_settings_ref,
             getattr(self._g, '_boss_raid_engine', None),
             getattr(self._g, '_state_mgr', None),
-            scene_key=scene_key)
+            scene_key=scene_key,
+            boss_base_id=boss_base_id)
 
-    def get_boss_reactions(self, scene_key=None):
+    def get_boss_reactions(self, scene_key=None, boss_base_id=None):
         try:
-            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key)}, ensure_ascii=False)
+            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key, boss_base_id)}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
-    def save_boss_reaction(self, mapping_json, scene_key=None):
+    def save_boss_reaction(self, mapping_json, scene_key=None, boss_base_id=None):
         try:
             m = json.loads(mapping_json) if isinstance(mapping_json, str) else mapping_json
             upsert_mapping(self._g._cfg_settings_ref, m)
-            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key)}, ensure_ascii=False)
+            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key, boss_base_id)}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
-    def delete_boss_reaction(self, mapping_id, scene_key=None):
+    def delete_boss_reaction(self, mapping_id, scene_key=None, boss_base_id=None):
         try:
             delete_mapping(self._g._cfg_settings_ref, str(mapping_id))
-            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key)}, ensure_ascii=False)
+            return json.dumps({'ok': True, 'state': self._boss_reactions_state(scene_key, boss_base_id)}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 

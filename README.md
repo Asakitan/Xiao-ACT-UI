@@ -4,8 +4,14 @@
 
 - 当前工作分支：`3.0.0`
 - 运行版本来源：`config.py` 中的 `APP_VERSION` / `APP_VERSION_LABEL`
-- 当前源码版本：`4.4.0`
+- 当前源码版本：`4.4.16`
 - 默认运行平台：Windows 10 / 11
+
+## v4.4.16 重点：Boss 反应编辑器（真名映射 + 聚合视图 + 开页不卡）
+
+- **三处 ID 全映射成真名**（读时解析，走权威名表 `names.*`，历史记录一并修复）：场景 `names.dungeon`、Boss `names.boss/monster`、技能 `names.skill→boss_skill→boss_mechanic_skill→…` 级联。实测截图里的 `#500116`→「友方木人掉血buff」、`#121`→「友方木桩」。场景无副本名时回退 `场景#id`（木桩练习区本就无副本名；真副本由 TCP `dungeon_name` 落库）。
+- **聚合视图**（契约 `build_boss_reactions_state` 新出 `boss_detail`）：技能/Buff（可绑反应）、机制/状态（徽章）、**时间线**（按出招时刻排序）、**Boss 单位摘要**（技能 N · 机制 M · 血线 K · 时长~Tms）。Tk（`sao_gui_bossraid`）与 WebView（`raid_editor.html`）1:1 同款渲染。
+- **开页卡顿修复**：编辑器契约改用 `get_status(include_entities=False)`——不再在锁内建 O(N) 实体表；观测只取选中 Boss（非场景内全部 Boss）；250ms 轮询仅 Entities tab 才建实体表；每 tick 的 `_push_game_state_locked` 也停建实体表（后台同省）。契约多传 `boss_base_id`，切 Boss 服务端重算分组（双端 reload 对称）。
 
 ## v4.4.0 重点：Boss 技能聚合（按地图/场景/Boss 记录 + 标记特殊技能）
 

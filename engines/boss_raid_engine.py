@@ -1321,14 +1321,18 @@ class BossRaidEngine:
         with self._lock:
             self._self_dead = bool(is_dead)
 
-    def get_status(self) -> Dict[str, Any]:
-        """Return current engine status dict."""
+    def get_status(self, include_entities: bool = True) -> Dict[str, Any]:
+        """Return current engine status dict. `include_entities=False` skips the
+        O(N) per-entity list build — used by the boss-reactions editor path and
+        the 250ms game-state push, which need only the boss scalars (this is the
+        crowd / 20-player lag fix: the entity build no longer runs under the lock
+        for consumers that never read it)."""
         with self._lock:
-            return self._build_status_locked()
+            return self._build_status_locked(include_entities=include_entities)
 
     # ── Internal ──
 
-    def _build_status_locked(self) -> Dict[str, Any]:
+    def _build_status_locked(self, include_entities: bool = True) -> Dict[str, Any]:
         now = time.time()
         profile = self._profile or {}
         elapsed = (now - self._start_time) if self._state == self.STATE_RUNNING else 0.0
@@ -1373,6 +1377,7 @@ class BossRaidEngine:
             "boss_current_hp": boss_current_hp,
             "boss_hp_source": hp_source,
             "boss_uuid": self._boss_uuid,
+            "boss_base_id": self._boss_base_id,
             "boss_shield_active": self._boss_shield_active,
             "boss_shield_pct": round(self._boss_shield_pct, 4),
             "boss_breaking_stage": self._boss_breaking_stage,
@@ -1389,7 +1394,7 @@ class BossRaidEngine:
             "boss_cast_duration_ms": self._boss_cast_duration_ms,
             "boss_stun": self._boss_stun,
             "self_dead": self._self_dead,
-            "entities": self._get_entities_locked(),
+            "entities": self._get_entities_locked() if include_entities else [],
         }
 
     def _run_loop(self):
@@ -1571,7 +1576,7 @@ class BossRaidEngine:
         """Push boss raid fields to GameStateManager (called under lock)."""
         if self._state_mgr is None:
             return
-        status = self._build_status_locked()
+        status = self._build_status_locked(include_entities=False)
         enrage_rem = status["enrage_remaining_s"]
         # Only surface a boss timer while a user-started raid profile is RUNNING.
         # During free-combat observation (no profile, or an enrage-boss the user

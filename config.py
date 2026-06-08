@@ -343,8 +343,21 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.4.15"
+APP_VERSION = "4.4.16"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
+# v4.4.16: Boss 反应编辑器 — 名字映射 + 聚合视图 + 开页不卡.
+#   1) 三处 ID 都映射成真名(读时, 走权威名表 names.*, 历史记录一并修复):
+#      场景 names.dungeon、Boss names.boss/monster、技能 names.skill→boss_skill→
+#      boss_mechanic_skill→… 级联。实测截图里的 #500116→「友方木人掉血buff」、
+#      #121→「友方木桩」。场景无 dungeon 名时回退「场景#id」(木桩区本就无副本名,
+#      真副本由 TCP dungeon_name 落库)。
+#   2) 聚合视图: build_boss_reactions_state 新出 boss_detail — 技能/Buff(可绑反应)、
+#      机制/状态(徽章)、时间线(按出招时刻排序)、Boss 单位摘要(技能N·机制M·血线K·
+#      时长~Tms)。Tk 与 Web raid_editor 1:1 同款渲染。
+#   3) 开页卡顿修复: 编辑器契约改用 get_status(include_entities=False) — 不再在锁内
+#      建 O(N) 实体表; 观测只取选中 Boss(非场景内全部 Boss); 250ms 轮询仅 Entities
+#      tab 才建实体表; 每 tick 的 _push_game_state_locked 也停建实体表(后台同样省)。
+#      contract 多传 boss_base_id, 选 Boss 服务端重算分组(双端 reload 对称)。
 # v4.4.15: hybrid 多人(20人本/拥挤场景)卡顿修复 — mem 每 tick O(N) buff 读取.
 #   BossActionTracker.update 对快照里 EVERY casting entity 都 read_buffs(BuffComp
 #   的 Python 逐项 RPM 循环, 持 GIL)来取施法时长/baseline, 但桥只用 boss 那条记录,

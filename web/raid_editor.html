@@ -222,8 +222,13 @@ body{padding:10px}
                     style="flex:1;background:rgba(8,14,22,.6);color:#e8f6ff;border:1px solid rgba(117,205,255,.4);border-radius:5px;padding:3px 6px;font-size:11px;"></select>
                 <div class="action-btn" style="padding:3px 8px;font-size:10px;" onclick="RaidEditor.loadReactions()">从内存导入</div>
             </div>
-            <div class="phase-header">观测技能 / 机制 (Observed)</div>
+            <div id="react-summary" style="font-size:10px;color:#9fc0d8;margin:3px 0;"></div>
+            <div class="phase-header">技能 / Buff (施放)</div>
             <div id="react-skill-list"></div>
+            <div class="phase-header" id="react-mech-header" style="margin-top:8px;display:none;">机制 / 状态 (Mechanics)</div>
+            <div id="react-mech-list"></div>
+            <div class="phase-header" id="react-timeline-header" style="margin-top:8px;display:none;">时间线 (Timeline)</div>
+            <div id="react-timeline-list"></div>
             <div class="phase-header" style="margin-top:8px;">进攻窗口 / Offensive Windows</div>
             <div id="react-window-list"></div>
         </div>
@@ -294,10 +299,29 @@ function _badges(rec) {
 function loadReactions() {
     var a = _api();
     if (!a || !a.get_boss_reactions) { return; }
-    Promise.resolve(a.get_boss_reactions(_reactScene)).then(function (j) {
+    Promise.resolve(a.get_boss_reactions(_reactScene, _reactBoss || null)).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         if (r && r.ok) { _reactState = r.state; renderReactions(); }
     }).catch(function () {});
+}
+
+function _obsLabel(s) {
+    var sid = Number(s.id || 0);
+    var nm = (s.name || '');
+    var dur = (s.last_cast_duration_ms ? (s.last_cast_duration_ms + 'ms') : '?');
+    var head = nm ? (nm + ' #' + sid) : ('#' + sid);
+    return head + ' ×' + Number(s.count || 0) + ' · ' + dur;
+}
+
+function _timelineRow(t) {
+    var at = Number(t.at_s || 0);
+    var clock = at >= 60 ? (Math.floor(at / 60) + ':' + ('0' + (Math.floor(at) % 60)).slice(-2)) : (Math.round(at) + 's');
+    var prefix = t.is_fixed ? '⏱' : '~';
+    var nm = (t.name || '') || ('#' + Number(t.id || 0));
+    return '<div class="entity-card" style="display:block;padding:4px 7px;margin:2px 0;">' +
+        '<div style="display:flex;gap:6px;align-items:center;font-size:11px;">' +
+        '<span style="color:#75cdff;font-weight:600;min-width:48px;">' + _esc(prefix + clock) + '</span>' +
+        '<span style="color:#e8f6ff;flex:1;">' + _esc(nm) + '</span></div>' + _badges(t) + '</div>';
 }
 
 function _findMapping(trig, skillId, baseId) {
@@ -334,29 +358,44 @@ function renderReactions() {
     // boss selector (scene-scoped)
     var sel = document.getElementById('react-boss');
     var bosses = st.bosses || [];
-    if (!_reactBoss && bosses.length) _reactBoss = bosses[0].base_id;
+    if (!_reactBoss) _reactBoss = Number(st.selected_boss_base_id || (bosses[0] && bosses[0].base_id) || 0);
     sel.innerHTML = bosses.map(function (b) {
         var label = (b.name || ('#' + b.base_id)) + ' (' + b.observed_count + ')';
         return '<option value="' + b.base_id + '"' + (Number(b.base_id) === Number(_reactBoss) ? ' selected' : '') + '>' + _esc(label) + '</option>';
     }).join('') || '<option value="0">（暂无观测到的 Boss）</option>';
 
-    // observed skills / mechanics for the selected boss
-    var obs = (st.observed_skills && st.observed_skills[String(_reactBoss)]) || [];
+    var detail = st.boss_detail || {};
+    var sum = detail.summary || {};
+    var sparts = ['技能 ' + (sum.skill_count || 0), '机制 ' + (sum.mechanic_count || 0)];
+    if (sum.hp_line_count) sparts.push('血线 ' + sum.hp_line_count);
+    if (sum.approx_duration_ms) sparts.push('时长~' + sum.approx_duration_ms + 'ms');
+    document.getElementById('react-summary').textContent = detail.base_id ? sparts.join(' · ') : '';
+
+    // casts / buffs (reaction-bindable)
+    var skills = detail.skills || [];
     var list = document.getElementById('react-skill-list');
-    if (!obs.length) {
-        list.innerHTML = '<div class="empty-state" style="font-size:10px;">打这个 Boss 时它放的技能/机制会自动出现在这里。</div>';
+    if (!skills.length) {
+        list.innerHTML = '<div class="empty-state" style="font-size:10px;">打这个 Boss 时它施放的技能会自动出现在这里。</div>';
     } else {
-        list.innerHTML = obs.map(function (s) {
-            var dur = (s.last_cast_duration_ms ? (s.last_cast_duration_ms + 'ms') : '?');
-            var label = '#' + (s.id || 0) + ' ' + _esc(s.name || '') + ' ×' + s.count + ' · ' + dur;
-            if (s.kind === 'skill') {
-                var m = _findMapping('boss_cast', s.skill_id, _reactBoss) || {};
-                return _reactRow('boss_cast', s.skill_id, label, m, s);
-            }
-            return '<div class="entity-card" style="display:block;padding:5px 7px;margin:3px 0;">' +
-                '<div style="font-size:11px;color:#e8f6ff;">' + label + '</div>' + _badges(s) + '</div>';
+        list.innerHTML = skills.map(function (s) {
+            var sid = Number(s.skill_id || s.id || 0);
+            var m = _findMapping('boss_cast', sid, _reactBoss) || {};
+            return _reactRow('boss_cast', sid, _obsLabel(s), m, s);
         }).join('');
     }
+
+    // mechanics / states (info + badges)
+    var mechs = detail.mechanics || [];
+    document.getElementById('react-mech-header').style.display = mechs.length ? '' : 'none';
+    document.getElementById('react-mech-list').innerHTML = mechs.map(function (s) {
+        return '<div class="entity-card" style="display:block;padding:5px 7px;margin:3px 0;">' +
+            '<div style="font-size:11px;color:#e8f6ff;">' + _esc(_obsLabel(s)) + '</div>' + _badges(s) + '</div>';
+    }).join('');
+
+    // timeline (time-ordered, read-only)
+    var tl = detail.timeline || [];
+    document.getElementById('react-timeline-header').style.display = tl.length ? '' : 'none';
+    document.getElementById('react-timeline-list').innerHTML = tl.map(_timelineRow).join('');
 
     // offensive windows
     var wins = [['boss_breaking', '破防 Breaking'], ['boss_overdrive', '过载 / 狂暴 Overdrive'], ['boss_stun', '眩晕 Stun']];
@@ -389,7 +428,7 @@ function _inpCss() { return 'background:rgba(8,14,22,.6);color:#e8f6ff;border:1p
 function onReactBossChange() {
     var sel = document.getElementById('react-boss');
     _reactBoss = Number(sel.value || 0);
-    renderReactions();
+    loadReactions();   // reload: contract returns the grouped detail for this boss
 }
 
 function onReactSceneChange() {
@@ -412,7 +451,7 @@ function saveReaction(trig, skillId, id) {
     };
     var a = _api();
     if (!a || !a.save_boss_reaction) return;
-    Promise.resolve(a.save_boss_reaction(JSON.stringify(m), _reactScene)).then(function (j) {
+    Promise.resolve(a.save_boss_reaction(JSON.stringify(m), _reactScene, _reactBoss)).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         if (r && r.ok) { _reactState = r.state; renderReactions(); }
     }).catch(function () {});

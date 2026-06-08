@@ -135,9 +135,19 @@ class _BossReactionsEditorMixin:
             _tk.Label(bar, text=label, bg=color, fg='#ffffff', font=panel_font(7),
                       padx=4, pady=0).pack(side=tk.LEFT, padx=(0, 3))
 
+    @staticmethod
+    def _obs_label(rec: Dict[str, Any]) -> str:
+        sid = int(rec.get('id') or 0)
+        nm = (rec.get('name') or '').strip()
+        cnt = int(rec.get('count') or 0)
+        dur = ('%dms' % rec['last_cast_duration_ms']) if rec.get('last_cast_duration_ms') else '?'
+        head = ('%s #%d' % (nm, sid)) if nm else ('#%d' % sid)
+        return '%s ×%d · %s' % (head, cnt, dur)
+
     def _render_reactions(self, container, rerender) -> None:
         """Render the full reactions editor into `container`; `rerender` re-runs
-        the host's render after scene/boss changes + saves."""
+        the host's render after scene/boss changes + saves. Observations come back
+        name-resolved + grouped (casts / mechanics / timeline) per selected boss."""
         import tkinter as _tk
         self._rx_container = container
         self._rx_rerender = rerender
@@ -145,7 +155,7 @@ class _BossReactionsEditorMixin:
             self._rx_empty('Boss 反应不可用', '内存引擎未接入')
             return
         try:
-            st = self._load_reactions(self._react_scene) or {}
+            st = self._load_reactions(self._react_scene, self._react_boss or None) or {}
         except Exception:
             st = {}
         self._react_state = st
@@ -156,6 +166,8 @@ class _BossReactionsEditorMixin:
             return
         if self._react_scene is None:
             self._react_scene = str(st.get('selected_scene_key') or '0')
+        # the contract resolves the default boss; mirror it so save/match align
+        self._react_boss = int(st.get('selected_boss_base_id') or self._react_boss or 0)
 
         # ── scene selector (map / 场景) ──
         scenes = list(st.get('scenes') or [])
@@ -184,7 +196,7 @@ class _BossReactionsEditorMixin:
         if not self._react_boss and bosses:
             self._react_boss = int(bosses[0].get('base_id') or 0)
         sel_row = tk.Frame(container, bg=PANEL_BG)
-        sel_row.pack(fill=tk.X, pady=(0, 6))
+        sel_row.pack(fill=tk.X, pady=(0, 2))
         tk.Label(sel_row, text='Boss', bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(9)).pack(side=tk.LEFT)
         if bosses:
             opts = {}
@@ -204,24 +216,67 @@ class _BossReactionsEditorMixin:
             om.pack(side=tk.LEFT, padx=(6, 6))
         make_action_button(sel_row, '从内存导入', lambda: self._rx_rerender()).pack(side=tk.RIGHT)
 
-        make_section_title(container, '观测技能 / 机制 (Observed)')
-        obs = list((st.get('observed_skills') or {}).get(str(self._react_boss)) or [])
-        if not obs:
-            self._rx_empty('暂无观测', '打这个 Boss 时它放的技能/机制会自动出现')
+        detail = st.get('boss_detail') or {}
+        self._render_boss_summary(detail.get('summary') or {})
+
+        # ── casts / buffs (reaction-bindable) ──
+        skills = list(detail.get('skills') or [])
+        make_section_title(container, '技能 / Buff (施放)')
+        if not skills:
+            self._rx_empty('暂无技能', '打这个 Boss 时它施放的技能会自动出现')
         else:
-            for s in obs:
-                dur = ('%dms' % s['last_cast_duration_ms']) if s.get('last_cast_duration_ms') else '?'
-                label = '#%d %s ×%d · %s' % (int(s.get('id') or 0), s.get('name') or '',
-                                             int(s.get('count') or 0), dur)
-                if s.get('kind') == 'skill':
-                    self._render_reaction_row('boss_cast', int(s.get('skill_id') or 0), label, rec=s)
-                else:
-                    self._render_obs_info(label, s)
+            for s in skills:
+                self._render_reaction_row('boss_cast', int(s.get('skill_id') or s.get('id') or 0),
+                                          self._obs_label(s), rec=s)
+
+        # ── mechanics / states (info + badges) ──
+        mechanics = list(detail.get('mechanics') or [])
+        if mechanics:
+            make_section_title(container, '机制 / 状态 (Mechanics)')
+            for s in mechanics:
+                self._render_obs_info(self._obs_label(s), s)
+
+        # ── timeline (time-ordered, read-only) ──
+        timeline = list(detail.get('timeline') or [])
+        if timeline:
+            make_section_title(container, '时间线 (Timeline)')
+            for t in timeline:
+                self._render_timeline_row(t)
+
         make_section_title(container, '进攻窗口 / Offensive Windows')
         for trig, label in (('boss_breaking', '破防 Breaking'),
                             ('boss_overdrive', '过载 / 狂暴 Overdrive'),
                             ('boss_stun', '眩晕 Stun')):
             self._render_reaction_row(trig, 0, label)
+
+    def _render_boss_summary(self, summary: Dict[str, Any]) -> None:
+        if not summary:
+            return
+        parts = ['技能 %d' % int(summary.get('skill_count') or 0),
+                 '机制 %d' % int(summary.get('mechanic_count') or 0)]
+        if int(summary.get('hp_line_count') or 0):
+            parts.append('血线 %d' % int(summary['hp_line_count']))
+        if summary.get('approx_duration_ms'):
+            parts.append('时长~%dms' % int(summary['approx_duration_ms']))
+        tk.Label(self._rx_container, text=' · '.join(parts), bg=PANEL_BG, fg=TEXT_DIM,
+                 font=panel_font(8), anchor='w').pack(fill=tk.X, pady=(0, 4))
+
+    def _render_timeline_row(self, t: Dict[str, Any]) -> None:
+        import tkinter as _tk
+        card = tk.Frame(self._rx_container, bg=PANEL_CARD, highlightbackground=PANEL_EDGE,
+                        highlightthickness=1, padx=8, pady=3)
+        card.pack(fill=tk.X, pady=(0, 3))
+        top = tk.Frame(card, bg=PANEL_CARD)
+        top.pack(fill=tk.X)
+        at = float(t.get('at_s') or 0.0)
+        clock = ('%d:%02d' % (int(at) // 60, int(at) % 60)) if at >= 60 else ('%.0fs' % at)
+        prefix = '⏱' if t.get('is_fixed') else '~'
+        _tk.Label(top, text='%s%s' % (prefix, clock), bg=PANEL_CARD, fg=CYAN,
+                  font=panel_font(8, bold=True), width=7, anchor='w').pack(side=tk.LEFT)
+        nm = (t.get('name') or '').strip() or ('#%d' % int(t.get('id') or 0))
+        _tk.Label(top, text=nm, bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(8),
+                  anchor='w').pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
+        self._render_badges(card, t)
 
     def _render_obs_info(self, label: str, rec: Dict[str, Any]) -> None:
         """Non-skill observation (mechanic / state) — marked with badges, info only.
@@ -515,7 +570,13 @@ class BossRaidPanel(_BossReactionsEditorMixin):
             pass
         engine = self._engine_ref() if self._engine_ref else None
         if engine and hasattr(engine, 'get_status'):
+            # only the Entities tab consumes the (O(N)) entity list; skip building
+            # it on the 250ms poll for every other tab so an open editor adds no
+            # per-tick lock pressure during a crowded raid.
+            want_entities = self._current_tab == 'entities'
             try:
+                self._status = engine.get_status(include_entities=want_entities) or {}
+            except TypeError:
                 self._status = engine.get_status() or {}
             except Exception:
                 self._status = {}

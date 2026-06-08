@@ -153,11 +153,81 @@ class EngineRecordingTest(unittest.TestCase):
         self.assertEqual([b["base_id"] for b in st101["bosses"]], [500])
         self.assertEqual([b["base_id"] for b in st202["bosses"]], [600])
 
+    def test_contract_boss_detail_grouped_and_scoped(self):
+        from engines.boss_autokey_linkage import build_boss_reactions_state
+        eng = self._engine()
+        eng.on_mem_boss_action({"boss_base_id": 500, "boss_name": "苍之冠", "boss_uuid": 1,
+                                "skill_id": 700, "skill_name": "角斗同步", "cast_edge": "start",
+                                "cast_duration_ms": 3000})
+        eng.on_boss_event({"event_type": 47, "host_uuid": 1})   # SHIELD_BROKEN mechanic
+        st = build_boss_reactions_state({}, eng, eng._state_mgr, boss_base_id=500)
+        self.assertEqual(st["selected_boss_base_id"], 500)
+        bd = st["boss_detail"]
+        self.assertIsNotNone(bd)
+        self.assertEqual(bd["base_id"], 500)
+        self.assertEqual(bd["name"], "苍之冠")
+        self.assertTrue(any(s["id"] == 700 for s in bd["skills"]))
+        self.assertTrue(any(m["id"] == 47 for m in bd["mechanics"]))
+        self.assertGreaterEqual(bd["summary"]["skill_count"], 1)
+        self.assertGreaterEqual(bd["summary"]["mechanic_count"], 1)
+        # back-compat: observed_skills still carries the selected boss
+        self.assertIn("500", st["observed_skills"])
+
+    def test_contract_light_status_has_no_entities(self):
+        # the editor path must not pay the O(N) entity build (crowd-lag fix)
+        from engines.boss_autokey_linkage import build_boss_reactions_state
+        eng = self._engine()
+        eng.on_mem_boss_action({"boss_base_id": 500, "skill_id": 700, "cast_edge": "start"})
+        light = eng.get_status(include_entities=False)
+        self.assertEqual(light["entities"], [])
+        self.assertEqual(eng.get_status()["entities"], light["entities"])  # both empty here, but call path differs
+        # build_boss_reactions_state must succeed using the light read
+        st = build_boss_reactions_state({}, eng, eng._state_mgr)
+        self.assertTrue(st["ok"])
+
+
+class ContractUnitTest(unittest.TestCase):
+    """Pure-function coverage for the reactions contract (no game/engine)."""
+
+    def test_name_helpers_never_throw(self):
+        from engines.boss_autokey_linkage import (
+            _name_resolver, _resolve_skill_name, _resolve_boss_name, _resolve_scene_name)
+        nm = _name_resolver()
+        self.assertIsInstance(_resolve_skill_name(nm, 700), str)
+        self.assertIsInstance(_resolve_boss_name(nm, 500), str)
+        self.assertIsInstance(_resolve_scene_name(nm, 101, 0), str)
+        self.assertEqual(_resolve_skill_name(None, 700), "")   # no resolver → empty
+        self.assertEqual(_resolve_boss_name(None, 0), "")
+
+    def test_build_boss_detail_groups_and_sorts_timeline(self):
+        from engines.boss_autokey_linkage import _build_boss_detail
+        obs = [
+            {"id": 2, "skill_id": 2, "kind": "skill", "name": "B", "count": 3,
+             "elapsed_s": 30.0, "time_fixed_s": 30.0, "last_cast_duration_ms": 1200},
+            {"id": 1, "skill_id": 1, "kind": "skill", "name": "A", "count": 2, "elapsed_s": 10.0},
+            {"id": 47, "kind": "mechanic", "name": "破盾", "count": 1, "elapsed_s": 20.0,
+             "tags": ["shield"]},
+            {"id": 9, "kind": "state", "name": "狂暴", "count": 1, "tags": ["enrage"],
+             "hp_line_pct": 0.5},   # no time → excluded from timeline
+        ]
+        bd = _build_boss_detail(500, "苍之冠", obs)
+        self.assertEqual(bd["base_id"], 500)
+        self.assertEqual([s["id"] for s in bd["skills"]], [2, 1])
+        self.assertEqual([m["id"] for m in bd["mechanics"]], [47, 9])
+        self.assertEqual([t["id"] for t in bd["timeline"]], [1, 47, 2])   # by at_s 10,20,30
+        self.assertTrue(bd["timeline"][2]["is_fixed"])      # id 2 had time_fixed_s
+        self.assertFalse(bd["timeline"][0]["is_fixed"])     # id 1 only elapsed_s
+        self.assertEqual(bd["summary"]["skill_count"], 2)
+        self.assertEqual(bd["summary"]["mechanic_count"], 2)
+        self.assertEqual(bd["summary"]["approx_duration_ms"], 1200)
+        self.assertIn(0.5, bd["summary"]["hp_lines"])
+
 
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite = unittest.TestSuite([loader.loadTestsFromTestCase(StoreUnitTest),
-                                loader.loadTestsFromTestCase(EngineRecordingTest)])
+                                loader.loadTestsFromTestCase(EngineRecordingTest),
+                                loader.loadTestsFromTestCase(ContractUnitTest)])
     res = unittest.TextTestRunner(verbosity=1).run(suite)
     print(f"\n{res.testsRun - len(res.failures) - len(res.errors)} passed, "
           f"{len(res.failures) + len(res.errors)} failed")
