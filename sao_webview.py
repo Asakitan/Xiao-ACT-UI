@@ -6783,13 +6783,22 @@ class SAOWebViewGUI:
             pass
 
     def _push_raid_editor_status(self):
-        """Push engine status to the raid editor overlay."""
+        """Push engine status to the raid editor overlay.
+
+        This fires on the 20Hz recognition loop while the editor is visible, so it
+        must NOT pay the O(N) entity build (the crowd / 20-player lag the editor
+        change set out to kill): read the light status and drop the entities key so
+        updateStatus() leaves the throttled entity-card channel untouched."""
         if not self._raid_editor_visible:
             return
         try:
             engine = getattr(self, '_boss_raid_engine', None)
             if engine:
-                status = engine.get_status()
+                try:
+                    status = engine.get_status(include_entities=False)
+                except TypeError:
+                    status = engine.get_status()
+                status.pop('entities', None)
                 self._eval_raid_editor(
                     f'RaidEditor.updateStatus({json.dumps(status, ensure_ascii=False)})')
         except Exception:
