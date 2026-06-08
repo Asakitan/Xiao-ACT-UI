@@ -551,6 +551,11 @@ class BossRaidEngine:
         self._mem_prev_overdrive: bool = False
         self._mem_prev_stun: bool = False
         self._mem_prev_breaking: int = -1
+        # TCP-mode boss-skill detection (diff monster.buff_list for new base_ids).
+        # Memory is authoritative in hybrid; TCP only drives detection in pure-TCP
+        # mode, gated by "no memory action seen in MEM_PRIORITY_WINDOW seconds".
+        self._tcp_prev_buff_ids: Dict[int, set] = {}   # uuid -> set(buff base_id)
+        self._last_mem_boss_action_ts: float = 0.0
 
         self._lock = threading.Lock()
         self._state = self.STATE_IDLE
@@ -723,6 +728,7 @@ class BossRaidEngine:
         self._mem_prev_overdrive = False
         self._mem_prev_stun = False
         self._mem_prev_breaking = -1
+        self._tcp_prev_buff_ids.clear()
 
     def set_entity_role(self, uuid: int, role: str):
         """Set entity role: 'boss' or 'enemy'. Called from visual editor overlay.
@@ -893,6 +899,7 @@ class BossRaidEngine:
         """
         if not monster_data:
             return
+        tcp_forwards: List[Dict[str, Any]] = []
         with self._lock:
             if self._state != self.STATE_RUNNING:
                 # Still track even when idle so we can show info
@@ -936,6 +943,15 @@ class BossRaidEngine:
             self._boss_in_overdrive = bool(monster_data.get("in_overdrive"))
             self._boss_shield_active = bool(monster_data.get("shield_active"))
             self._boss_shield_pct = float(monster_data.get("shield_pct") or 0.0)
+
+            # pure-TCP boss-skill detection (no-op while a memory feed is live)
+            tcp_forwards = self._tcp_detect_boss_skills_locked(uuid, monster_data)
+
+        for fwd in tcp_forwards:
+            try:
+                self._on_boss_action_cb(fwd)
+            except Exception:
+                pass
 
     def on_boss_event(self, event: Dict[str, Any]):
         """Called from packet_parser boss event callback. Handles buff-based phase triggers."""
@@ -999,6 +1015,10 @@ class BossRaidEngine:
 
     # ── Memory-driven boss action feed (cast_skill_id edge) ──
 
+    # Pure-TCP boss-skill detection is suppressed while a memory boss-action feed
+    # has been seen within this many seconds (hybrid → memory is authoritative).
+    MEM_PRIORITY_WINDOW = 3.0
+
     def on_mem_boss_action(self, action: Dict[str, Any]):
         """Consume a memory boss-action record (cast edge + state). Updates cast
         state, records observed skills, fires boss_skill phase triggers, pushes
@@ -1009,69 +1029,122 @@ class BossRaidEngine:
             return
         forward = None
         with self._lock:
-            base_id = _coerce_int(action.get("boss_base_id"), 0)
-            skill_id = _coerce_int(action.get("skill_id"), 0)
-            name = _string(action.get("skill_name"))
-            edge = _string(action.get("cast_edge")).lower()
-            dur = action.get("cast_duration_ms")
-
-            if edge == "start":
-                self._boss_cast_skill_id = skill_id
-                # instant skills (counterattacks) have no skill id — label them so the
-                # editor can still bind a reaction to "this boss's action".
-                self._boss_cast_skill_name = name or ('动作/反击' if not skill_id else '')
-                self._boss_cast_active = True
-                self._boss_cast_start_ts = time.time()
-                self._boss_cast_duration_ms = _coerce_int(dur, 0)
-                self._record_observed_skill_locked(base_id, skill_id, self._boss_cast_skill_name, dur)
-                boss_name = _string(action.get("boss_name"))
-                if base_id and boss_name:
-                    self._observed_boss_names[int(base_id)] = boss_name
-            elif edge == "end":
-                self._boss_cast_active = False
-            else:
-                self._boss_cast_active = bool(action.get("cast_active"))
-                if isinstance(dur, (int, float)) and dur:
-                    self._boss_cast_duration_ms = int(dur)
-
-            # offensive-window rising edges (memoized to avoid level-triggered spam)
-            overdrive = bool(action.get("overdrive"))
-            overdrive_edge = overdrive and not self._mem_prev_overdrive
-            self._mem_prev_overdrive = overdrive
-            self._boss_in_overdrive = overdrive
-
-            stun = bool(action.get("stun"))
-            stun_edge = stun and not self._mem_prev_stun
-            self._mem_prev_stun = stun
-            self._boss_stun = stun
-
-            bs = action.get("breaking_stage")
-            breaking_edge = False
-            if isinstance(bs, int) and bs >= 0:
-                breaking_edge = (bs != self._mem_prev_breaking)
-                self._mem_prev_breaking = bs
-                self._boss_breaking_stage = bs
-
-            ext = action.get("extinction")
-            if isinstance(ext, (int, float)):
-                self._boss_extinction_pct = float(ext)
-
-            if self._state == self.STATE_RUNNING and edge == "start" and skill_id:
-                self._maybe_advance_on_mem_skill_locked(skill_id, name)
-
-            self._push_game_state_locked(time.time())
-
-            if self._on_boss_action_cb:
-                forward = dict(action)
-                forward["breaking_edge"] = breaking_edge
-                forward["overdrive_edge"] = overdrive_edge
-                forward["stun_edge"] = stun_edge
-
+            self._last_mem_boss_action_ts = time.time()   # memory feed is live
+            forward = self._apply_boss_action_locked(action)
         if forward is not None:
             try:
                 self._on_boss_action_cb(forward)
             except Exception:
                 pass
+
+    def _apply_boss_action_locked(self, action: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Shared body for memory + TCP boss actions (caller holds the lock).
+        Returns the linkage-forward dict (or None). skill_id is the buff/skill
+        base_id read from the data source (memory or TCP BuffInfoSync)."""
+        base_id = _coerce_int(action.get("boss_base_id"), 0)
+        skill_id = _coerce_int(action.get("skill_id"), 0)
+        name = _string(action.get("skill_name"))
+        edge = _string(action.get("cast_edge")).lower()
+        dur = action.get("cast_duration_ms")
+
+        if edge == "start":
+            self._boss_cast_skill_id = skill_id
+            # instant skills (counterattacks) have no skill id — label them so the
+            # editor can still bind a reaction to "this boss's action".
+            self._boss_cast_skill_name = name or ('动作/反击' if not skill_id else '')
+            self._boss_cast_active = True
+            self._boss_cast_start_ts = time.time()
+            self._boss_cast_duration_ms = _coerce_int(dur, 0)
+            self._record_observed_skill_locked(base_id, skill_id, self._boss_cast_skill_name, dur)
+            boss_name = _string(action.get("boss_name"))
+            if base_id and boss_name:
+                self._observed_boss_names[int(base_id)] = boss_name
+        elif edge == "end":
+            self._boss_cast_active = False
+        else:
+            self._boss_cast_active = bool(action.get("cast_active"))
+            if isinstance(dur, (int, float)) and dur:
+                self._boss_cast_duration_ms = int(dur)
+
+        # offensive-window rising edges (memoized to avoid level-triggered spam)
+        overdrive = bool(action.get("overdrive"))
+        overdrive_edge = overdrive and not self._mem_prev_overdrive
+        self._mem_prev_overdrive = overdrive
+        self._boss_in_overdrive = overdrive
+
+        stun = bool(action.get("stun"))
+        stun_edge = stun and not self._mem_prev_stun
+        self._mem_prev_stun = stun
+        self._boss_stun = stun
+
+        bs = action.get("breaking_stage")
+        breaking_edge = False
+        if isinstance(bs, int) and bs >= 0:
+            breaking_edge = (bs != self._mem_prev_breaking)
+            self._mem_prev_breaking = bs
+            self._boss_breaking_stage = bs
+
+        ext = action.get("extinction")
+        if isinstance(ext, (int, float)):
+            self._boss_extinction_pct = float(ext)
+
+        if self._state == self.STATE_RUNNING and edge == "start" and skill_id:
+            self._maybe_advance_on_mem_skill_locked(skill_id, name)
+
+        self._push_game_state_locked(time.time())
+
+        forward = None
+        if self._on_boss_action_cb:
+            forward = dict(action)
+            forward["breaking_edge"] = breaking_edge
+            forward["overdrive_edge"] = overdrive_edge
+            forward["stun_edge"] = stun_edge
+        return forward
+
+    def _tcp_detect_boss_skills_locked(self, uuid: int,
+                                       monster_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Pure-TCP equivalent of the memory buff-skill feed: a NEW base_id in the
+        boss's BuffInfoSync-fed buff_list = a skill/mechanic cast. Suppressed while
+        a memory feed is live (hybrid → memory is authoritative). Returns the
+        linkage-forward dicts to dispatch outside the lock."""
+        if time.time() - self._last_mem_boss_action_ts < self.MEM_PRIORITY_WINDOW:
+            return []
+        buff_list = monster_data.get("buff_list")
+        if not isinstance(buff_list, list):
+            return []
+        cur: Dict[int, int] = {}
+        for b in buff_list:
+            if isinstance(b, dict):
+                bid = _coerce_int(b.get("buff_id"), 0)
+                if bid > 0:
+                    cur[bid] = _coerce_int(b.get("duration"), 0)
+        prev = self._tcp_prev_buff_ids.get(uuid)
+        self._tcp_prev_buff_ids[uuid] = set(cur)
+        if prev is None:
+            return []   # first sight → seed baseline, don't fire on persistent buffs
+        new_ids = [bid for bid in cur if bid not in prev]
+        if not new_ids:
+            return []
+        # longest-duration new buff is the primary cast (symmetric with memory)
+        best = max(new_ids, key=lambda bid: cur[bid])
+        action = {
+            "boss_base_id": _coerce_int(monster_data.get("template_id"), 0),
+            "boss_name": _string(monster_data.get("name")),
+            "boss_uuid": uuid,
+            "skill_id": best,
+            "skill_name": "",   # name is an offline-table hint only; id is authoritative
+            "cast_edge": "start",
+            "cast_active": True,
+            "cast_duration_ms": cur[best],
+            "cast_duration_src": "tcp_buff",
+            "overdrive": bool(monster_data.get("in_overdrive")),
+            "stun": bool(monster_data.get("stunned")),
+            "breaking_stage": _coerce_int(monster_data.get("breaking_stage"), -1),
+            "extinction": float(monster_data.get("extinction_pct") or 0.0),
+            "source": "tcp",
+        }
+        fwd = self._apply_boss_action_locked(action)
+        return [fwd] if fwd is not None else []
 
     def _maybe_advance_on_mem_skill_locked(self, skill_id: int, skill_name: str):
         phases = list((self._profile or {}).get("phases") or [])
