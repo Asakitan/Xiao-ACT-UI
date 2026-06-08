@@ -265,7 +265,9 @@ class BossActionTracker:
             st["cast_started_at"] = time.monotonic()
             st["duration_locked"] = False
             st["duration_src"] = "none"
-            learned = self._learned.get(skill) if skill else None
+            # learned key includes base_id + skill so no-id actions (skill 0) learn
+            # per boss and don't collide across bosses.
+            learned = self._learned.get(self._learn_key(st, skill))
             if learned:
                 st["cast_duration_ms"] = int(learned)
                 st["duration_src"] = "learned"
@@ -296,6 +298,10 @@ class BossActionTracker:
             st["duration_src"] = "buff"
             st["duration_locked"] = True
 
+    @staticmethod
+    def _learn_key(st: dict, skill_id: int):
+        return (int(st.get("base_id") or 0), int(skill_id or 0))
+
     def _learn_locked(self, skill_id: int, st: dict) -> None:
         started = st.get("cast_started_at")
         if not started:
@@ -303,8 +309,9 @@ class BossActionTracker:
         observed = int(max(0.0, (time.monotonic() - started)) * 1000.0)
         if not (_DUR_MIN_MS <= observed <= _DUR_MAX_MS):
             return
-        prev = self._learned.get(skill_id)
-        self._learned[skill_id] = observed if prev is None else int(
+        key = self._learn_key(st, skill_id)
+        prev = self._learned.get(key)
+        self._learned[key] = observed if prev is None else int(
             prev * (1 - _LEARN_ALPHA) + observed * _LEARN_ALPHA)
 
     # ── helpers ───────────────────────────────────────────────────────────────
