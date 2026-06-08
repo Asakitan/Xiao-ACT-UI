@@ -282,6 +282,13 @@ class DpsTracker:
         """
         with self._lock:
             new = {int(k): int(v) for k, v in (uid_to_total or {}).items() if v}
+            # No-op guard: the mem bridge re-pushes the full table on every poll
+            # (~1-4s) even when the game's DamageDataMgr hasn't changed (e.g. idle
+            # after a fight). Nulling the snapshot cache unconditionally there forced
+            # a full _build_snapshot_locked rebuild the 150ms cache would have served
+            # — a regression vs pure TCP (where _mem_damage is empty). Skip when equal.
+            if new == self._mem_damage:
+                return
             tot = sum(new.values())
             prev = sum(self._mem_damage.values())
             # Start/restart the MEM combat clock on first data or a big drop (new fight).
@@ -304,6 +311,8 @@ class DpsTracker:
         original TCP value is kept as tcp_damage_total), entities re-sorted, totals adjusted.
         DPS uses the TCP encounter window (MEM has no timestamps)."""
         with self._lock:
+            if bool(value) == self._mem_primary:
+                return   # unchanged -> keep the cache (set on every mem poll)
             self._mem_primary = bool(value)
             self._snapshot_cache = None
 
@@ -312,10 +321,13 @@ class DpsTracker:
         view's skill breakdown (memory mode / hybrid cross-check). Skill names resolve via
         the same path as TCP skills; crit/hit columns degrade (MEM has totals only)."""
         with self._lock:
-            self._mem_skill_damage = {
+            new = {
                 int(u): {int(s): int(v) for s, v in (sk or {}).items() if v}
                 for u, sk in (uid_to_skills or {}).items()
             }
+            if new == self._mem_skill_damage:
+                return   # unchanged -> keep the cache (re-pushed every mem poll)
+            self._mem_skill_damage = new
             self._snapshot_cache = None
 
     def _mem_skill_rows_locked(self, uid: int, entity_total: int) -> List[Dict[str, Any]]:
