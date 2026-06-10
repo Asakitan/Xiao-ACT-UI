@@ -158,7 +158,11 @@ class GameState:
     boss_raid_phase: int = 0
     boss_raid_phase_name: str = ''
     boss_enrage_remaining: float = 0.0     # seconds till enrage (0=inactive)
+    boss_enrage_urgency: str = ''          # '' | 'warn' | 'urgent' (ID plate tier)
     boss_timer_text: str = ''              # formatted text for ID plate
+    # ── boss mechanic notification feed (raid profile mechanics) ──
+    boss_mechanic_event: dict = field(default_factory=dict)
+    boss_mechanic_countdowns: List = field(default_factory=list)
     boss_total_damage: int = 0
     boss_dps: int = 0
     boss_hp_est_pct: float = 1.0           # estimated boss HP% (1.0=full)
@@ -239,6 +243,9 @@ class GameState:
             'boss_raid_phase': self.boss_raid_phase,
             'boss_raid_phase_name': self.boss_raid_phase_name,
             'boss_enrage_remaining': round(self.boss_enrage_remaining, 1),
+            'boss_enrage_urgency': self.boss_enrage_urgency,
+            'boss_mechanic_event': dict(self.boss_mechanic_event or {}),
+            'boss_mechanic_countdowns': list(self.boss_mechanic_countdowns or []),
             'boss_timer_text': self.boss_timer_text,
             'boss_total_damage': self.boss_total_damage,
             'boss_dps': self.boss_dps,
@@ -379,6 +386,17 @@ class GameStateManager:
                 elif k == 'boss_timer_text':
                     if not isinstance(v, str) or len(v) > 40:
                         continue
+                elif k == 'boss_enrage_urgency':
+                    if not isinstance(v, str) or v not in ('', 'warn', 'urgent'):
+                        continue
+                elif k == 'boss_mechanic_event':
+                    if not isinstance(v, dict):
+                        continue
+                    v = dict(v)
+                elif k == 'boss_mechanic_countdowns':
+                    if not isinstance(v, list) or len(v) > 8:
+                        continue
+                    v = list(v)
                 elif k in ('boss_total_damage', 'boss_dps'):
                     if not isinstance(v, int) or v < 0:
                         continue

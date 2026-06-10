@@ -74,10 +74,12 @@ TRIGGER_TYPES = (
     "boss_breaking",    # offensive window: boss enters/changes breaking stage
     "boss_overdrive",   # offensive window: boss enters overdrive
     "boss_stun",        # offensive window: boss stunned
+    "mechanic",         # raid-profile mechanic resolved by the boss raid engine
 )
 
 # trigger types driven by the mem boss-action feed (not the alert text path)
-MEM_TRIGGER_TYPES = ("boss_cast", "boss_breaking", "boss_overdrive", "boss_stun")
+MEM_TRIGGER_TYPES = ("boss_cast", "boss_breaking", "boss_overdrive", "boss_stun",
+                     "mechanic")
 
 
 def _norm_sequence(raw: Any) -> list:
@@ -88,7 +90,9 @@ def _norm_sequence(raw: Any) -> list:
         k = _s(step.get("key")).upper()
         if not k:
             continue
-        out.append({"key": k, "delay_ms": _int(step.get("delay_ms"), 0, 0, 10000)})
+        out.append({"key": k,
+                    "delay_ms": _int(step.get("delay_ms"), 0, 0, 10000),
+                    "hold_ms": _int(step.get("hold_ms"), 0, 0, 10000)})
     return out
 
 
@@ -100,6 +104,7 @@ def make_default_mapping() -> Dict[str, Any]:
         "trigger_match": "",     # legacy text match (phase_enter/timeline_alert)
         "skill_id": 0,           # boss_cast: 0 = any skill, else exact match
         "boss_base_id": 0,       # 0 = any boss, else scope to this boss template
+        "mechanic_id": "",       # mechanic: "" = any mechanic, else exact id
         "delay_ms": 0,           # react N ms AFTER the edge (late press)
         "lead_ms": 0,            # react N ms BEFORE cast_end (needs cast_duration)
         "action_key": "",        # key to press (e.g. "1", "Q", "SPACE")
@@ -127,6 +132,7 @@ def normalize_mapping(raw: Any) -> Dict[str, Any]:
         "trigger_match": _s(src.get("trigger_match")),
         "skill_id": _int(src.get("skill_id"), 0, 0),
         "boss_base_id": _int(src.get("boss_base_id"), 0, 0),
+        "mechanic_id": _s(src.get("mechanic_id")),
         "delay_ms": _int(src.get("delay_ms"), 0, 0, 60000),
         "lead_ms": _int(src.get("lead_ms"), 0, 0, 60000),
         "action_key": _s(src.get("action_key")).upper(),
@@ -142,6 +148,7 @@ def normalize_mapping(raw: Any) -> Dict[str, Any]:
 def default_linkage_config() -> Dict[str, Any]:
     return {
         "enabled": False,
+        "dodge_enabled": True,   # master auto-dodge switch (mechanic inline dodges)
         "global_cooldown_s": 1.0,
         "debug_log": False,
         "mappings": [],
@@ -156,10 +163,18 @@ def normalize_linkage_config(raw: Any) -> Dict[str, Any]:
             mappings.append(normalize_mapping(item))
     return {
         "enabled": _bool(src.get("enabled"), False),
+        "dodge_enabled": _bool(src.get("dodge_enabled"), True),
         "global_cooldown_s": _float(src.get("global_cooldown_s"), 1.0, 0.0, 60.0),
         "debug_log": _bool(src.get("debug_log"), False),
         "mappings": mappings,
     }
+
+
+def set_dodge_enabled(settings, enabled: bool) -> Dict[str, Any]:
+    """Flip the master auto-dodge switch and persist (panic hotkey + editor)."""
+    cfg = load_linkage_config(settings)
+    cfg["dodge_enabled"] = bool(enabled)
+    return save_linkage_config(settings, cfg)
 
 
 def load_linkage_config(settings) -> Dict[str, Any]:
@@ -197,16 +212,21 @@ class BossAutoKeyLinkage:
 
     def __init__(self, settings,
                  send_key: Optional[Callable[[str, str, int, int], None]] = None,
-                 on_log: Optional[Callable[[str], None]] = None):
+                 on_log: Optional[Callable[[str], None]] = None,
+                 foreground_gate: Optional[Callable[[], bool]] = None):
         """
         Args:
             settings: SettingsManager instance
             send_key: callable(key, press_mode, hold_ms, press_count) → fires a keystroke
             on_log: callable(message) → debug log output
+            foreground_gate: callable() → False blocks key emission (game not
+                foreground); re-checked right before sending so delayed dodges
+                die when the game loses focus mid-wait
         """
         self._settings = settings
         self._send_key = send_key
         self._on_log = on_log
+        self._foreground_gate = foreground_gate
 
         self._lock = threading.Lock()
         self._last_fire: Dict[str, float] = {}   # mapping_id → last fire time
@@ -281,19 +301,34 @@ class BossAutoKeyLinkage:
 
         Fires `boss_cast` on a cast-start edge (matched by skill_id, scoped by
         boss_base_id) and the offensive windows `boss_breaking`/`boss_overdrive`/
-        `boss_stun` only on the rising edge (the engine sets *_edge flags)."""
+        `boss_stun` only on the rising edge (the engine sets *_edge flags).
+
+        Mechanic events (the engine resolved a raid-profile mechanic) carry
+        `mechanic_id` (+ optional inline `mechanic_dodge` dict and a
+        `dodge_wait_s` countdown alignment). The inline dodge is gated by the
+        independent `dodge_enabled` master switch; user-defined `mechanic`
+        trigger mappings go through the regular `enabled` path."""
         config = load_linkage_config(self._settings)
-        if not _bool(config.get("enabled"), False):
-            return
         if not isinstance(action, dict):
+            return
+        enabled = _bool(config.get("enabled"), False)
+        dodge_enabled = _bool(config.get("dodge_enabled"), True)
+        mechanic_id = _s(action.get("mechanic_id"))
+        inline_dodge = action.get("mechanic_dodge")
+        has_inline = mechanic_id and isinstance(inline_dodge, dict) and (
+            _s(inline_dodge.get("action_key")) or inline_dodge.get("sequence"))
+        if not enabled and not (dodge_enabled and has_inline):
             return
 
         base_id = _int(action.get("boss_base_id"), 0)
         skill_id = _int(action.get("skill_id"), 0)
         cast_edge = _s(action.get("cast_edge")).lower()
         cast_dur = action.get("cast_duration_ms")
+        dodge_wait = action.get("dodge_wait_s")
 
         fired_types = []
+        if mechanic_id:
+            fired_types.append("mechanic")
         # fire on any cast-start edge, including instant skills (skill_id 0, e.g. a
         # counterattack); skill_id matching below still scopes per-skill mappings.
         if cast_edge == "start":
@@ -309,6 +344,23 @@ class BossAutoKeyLinkage:
 
         with self._lock:
             now = time.time()
+            # mechanic inline dodge: independent of `enabled` and of the global
+            # cooldown (a dodge must never be starved by an offensive combo).
+            if has_inline and dodge_enabled:
+                mech_key = f"mech:{mechanic_id}"
+                per_cd = _float(inline_dodge.get("cooldown_s"), 3.0)
+                if not (per_cd > 0 and (now - self._last_fire.get(mech_key, 0.0)) < per_cd):
+                    self._last_fire[mech_key] = now
+                    self._fire_count += 1
+                    self._debug(config, f"[Linkage] MECH_DODGE fire: mech={mechanic_id} "
+                                         f"name='{action.get('mechanic_name') or ''}'")
+                    self._dispatch_mapping(inline_dodge, cast_dur,
+                                           wait_override_s=dodge_wait,
+                                           gate=self._dodge_still_enabled)
+                    return   # one fire per action
+
+            if not enabled:
+                return
             global_cd = _float(config.get("global_cooldown_s"), 1.0)
             if global_cd > 0 and (now - self._global_last_fire) < global_cd:
                 return
@@ -325,6 +377,10 @@ class BossAutoKeyLinkage:
                         m_skill = _int(mapping.get("skill_id"), 0)
                         if m_skill and m_skill != skill_id:
                             continue
+                    if trig_type == "mechanic":
+                        m_mech = _s(mapping.get("mechanic_id"))
+                        if m_mech and m_mech != mechanic_id:
+                            continue
                     key = _s(mapping.get("action_key"))
                     seq = mapping.get("sequence") or []
                     if not key and not seq:
@@ -339,36 +395,79 @@ class BossAutoKeyLinkage:
                     self._debug(config, f"[Linkage] BOSS_ACTION fire: type={trig_type} "
                                          f"skill={skill_id} base={base_id} "
                                          f"label='{mapping.get('action_label') or key}'")
-                    self._dispatch_mapping(mapping, cast_dur)
+                    self._dispatch_mapping(
+                        mapping, cast_dur,
+                        wait_override_s=dodge_wait if trig_type == "mechanic" else None)
                     return   # one fire per action
 
-    def _dispatch_mapping(self, mapping: Dict[str, Any], cast_dur: Any):
-        """Spawn the key send on a thread, honoring delay_ms / lead_ms / sequence."""
+    def _dodge_still_enabled(self) -> bool:
+        """Live re-read of the master dodge switch (panic kills in-flight waits)."""
+        try:
+            cfg = load_linkage_config(self._settings)
+            return _bool(cfg.get("dodge_enabled"), True)
+        except Exception:
+            return True
+
+    def _dispatch_mapping(self, mapping: Dict[str, Any], cast_dur: Any,
+                          wait_override_s: Any = None,
+                          gate: Optional[Callable[[], bool]] = None,
+                          skip_foreground: bool = False):
+        """Spawn the key send on a thread, honoring delay_ms / lead_ms / sequence.
+        `wait_override_s` replaces the delay/lead computation (countdown-aligned
+        mechanic dodges). `gate` is re-checked after the wait; the foreground
+        gate is re-checked too unless `skip_foreground` (editor dry-run)."""
         delay_ms = _int(mapping.get("delay_ms"), 0)
         lead_ms = _int(mapping.get("lead_ms"), 0)
         wait_s = max(0.0, delay_ms / 1000.0)
         if lead_ms and isinstance(cast_dur, (int, float)) and cast_dur > 0:
             wait_s = max(0.0, (float(cast_dur) - lead_ms) / 1000.0)
+        if isinstance(wait_override_s, (int, float)) and wait_override_s >= 0:
+            wait_s = float(wait_override_s)
         seq = list(mapping.get("sequence") or [])
         key = _s(mapping.get("action_key"))
         press_mode = _s(mapping.get("press_mode")) or "tap"
         hold_ms = _int(mapping.get("hold_ms"), 80)
         press_count = _int(mapping.get("press_count"), 1)
         send = self._send_key
+        fg_gate = None if skip_foreground else self._foreground_gate
         if not send:
             return
+
+        def _blocked() -> bool:
+            if gate is not None:
+                try:
+                    if not gate():
+                        return True
+                except Exception:
+                    pass
+            if fg_gate is not None:
+                try:
+                    if not fg_gate():
+                        return True
+                except Exception:
+                    pass
+            return False
 
         def _run():
             try:
                 if wait_s > 0:
                     time.sleep(wait_s)
+                if _blocked():
+                    return
                 if seq:
                     for step in seq:
                         d = _int(step.get("delay_ms"), 0)
                         if d > 0:
                             time.sleep(d / 1000.0)
+                            if _blocked():
+                                return
                         sk = _s(step.get("key"))
-                        if sk:
+                        if not sk:
+                            continue
+                        sh = _int(step.get("hold_ms"), 0)
+                        if sh > 0:
+                            send(sk, "hold", sh, 1)
+                        else:
                             send(sk, "tap", 0, 1)
                 elif key:
                     send(key, press_mode, hold_ms, press_count)
@@ -376,6 +475,18 @@ class BossAutoKeyLinkage:
                 pass
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def fire_mapping_test(self, mapping: Any) -> bool:
+        """Editor dry-run: fire a mapping/dodge dict immediately, skipping
+        enable flags, cooldowns and the foreground gate (keys land in whatever
+        window is focused — callers must warn the user)."""
+        if not isinstance(mapping, dict) or not self._send_key:
+            return False
+        if not (_s(mapping.get("action_key")) or mapping.get("sequence")):
+            return False
+        self._dispatch_mapping(mapping, None, wait_override_s=0.0,
+                               skip_foreground=True)
+        return True
 
     def _classify_alert(self, title: str, message: str):
         """Determine trigger_type and label from an alert."""
@@ -619,6 +730,7 @@ def build_boss_reactions_state(settings, engine, state_mgr,
     return {
         "ok": True,
         "enabled": _bool(cfg.get("enabled"), False),
+        "dodge_enabled": _bool(cfg.get("dodge_enabled"), True),
         "global_cooldown_s": cfg.get("global_cooldown_s", 1.0),
         "data_source": data_source or "tcp",
         "mem_available": mem_available,
@@ -672,4 +784,5 @@ __all__ = [
     "normalize_linkage_config",
     "normalize_mapping",
     "save_linkage_config",
+    "set_dodge_enabled",
 ]

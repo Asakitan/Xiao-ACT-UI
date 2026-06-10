@@ -32,7 +32,7 @@ _EVENT_TAG = {
 from utils.perf_probe import probe as _probe
 import _sao_cy_combat as _CY_COMBAT  # type: ignore[import-not-found]
 
-BOSS_RAID_SCHEMA_VERSION = 1
+BOSS_RAID_SCHEMA_VERSION = 2
 DEFAULT_BOSS_RAID_SERVER_URL = "http://doi.sakisense.top:15538"
 BOSS_RAID_EXPORT_DIR = os.path.join(BASE_DIR, "exports", "boss_raids")
 
@@ -158,6 +158,196 @@ def normalize_timeline(raw: Any) -> Dict[str, Any]:
     }
 
 
+def _coerce_id_list(raw: Any, cap: int = 64) -> List[int]:
+    """Sorted unique positive-int id list (skill/buff bindings)."""
+    out: List[int] = []
+    if isinstance(raw, (list, tuple, set)):
+        for v in raw:
+            iv = _coerce_int(v, 0)
+            if iv > 0 and iv not in out:
+                out.append(iv)
+    return sorted(out)[:cap]
+
+
+def _coerce_str_list(raw: Any, cap: int = 64) -> List[str]:
+    out: List[str] = []
+    if isinstance(raw, (list, tuple)):
+        for v in raw:
+            sv = _string(v)
+            if sv and sv not in out:
+                out.append(sv)
+    return out[:cap]
+
+
+def normalize_dodge_step(raw: Any) -> Optional[Dict[str, Any]]:
+    """One auto-dodge sequence step: key + pre-delay + optional hold duration."""
+    if not isinstance(raw, dict):
+        return None
+    key = _string(raw.get("key")).upper()
+    if not key:
+        return None
+    return {
+        "key": key,
+        "delay_ms": _coerce_int(raw.get("delay_ms"), 0, 0, 10000),
+        "hold_ms": _coerce_int(raw.get("hold_ms"), 0, 0, 10000),
+    }
+
+
+def make_default_dodge_inline() -> Dict[str, Any]:
+    return {
+        "action_key": "",
+        "action_label": "",
+        "press_mode": "tap",     # tap | hold
+        "hold_ms": 600,
+        "press_count": 1,
+        "sequence": [],          # [{key, delay_ms, hold_ms}] multi-key dodge
+        "delay_ms": 0,           # fire N ms after the mechanic event
+        "lead_ms": 300,          # fire N ms before countdown/cast end
+        "cooldown_s": 3.0,
+    }
+
+
+def normalize_dodge(raw: Any) -> Dict[str, Any]:
+    src = raw if isinstance(raw, dict) else {}
+    inline_src = src.get("inline") if isinstance(src.get("inline"), dict) else {}
+    press_mode = _string(inline_src.get("press_mode")).lower()
+    if press_mode not in ("tap", "hold"):
+        press_mode = "tap"
+    seq = []
+    for step in (inline_src.get("sequence") or []) if isinstance(inline_src.get("sequence"), list) else []:
+        ns = normalize_dodge_step(step)
+        if ns:
+            seq.append(ns)
+    default = make_default_dodge_inline()
+    inline = {
+        "action_key": _string(inline_src.get("action_key")).upper(),
+        "action_label": _string(inline_src.get("action_label")),
+        "press_mode": press_mode,
+        "hold_ms": _coerce_int(inline_src.get("hold_ms"), default["hold_ms"], 0, 10000),
+        "press_count": _coerce_int(inline_src.get("press_count"), 1, 1, 20),
+        "sequence": seq,
+        "delay_ms": _coerce_int(inline_src.get("delay_ms"), 0, 0, 60000),
+        "lead_ms": _coerce_int(inline_src.get("lead_ms"), default["lead_ms"], 0, 60000),
+        "cooldown_s": _coerce_float(inline_src.get("cooldown_s"), 3.0, 0.0, 600.0),
+    }
+    return {
+        "enabled": _coerce_bool(src.get("enabled"), False),
+        "linkage_id": _string(src.get("linkage_id")),
+        "inline": inline,
+    }
+
+
+def make_default_mechanic() -> Dict[str, Any]:
+    return {
+        "id": _new_id("mech"),
+        "name": "新机制",
+        "kind": "",              # free UI token (red_stack / purple_delay / ...)
+        "enabled": True,
+        "notes": "",
+        "color": "",
+        "phase_ids": [],         # [] = active in all phases
+        "detect": {
+            "skill_ids": [],          # OR-matched vs boss cast skill_id
+            "buff_ids": [],           # OR-matched vs new buff base_ids
+            "boss_base_id": 0,        # 0 = any boss
+            "hp_pct": 0.0,            # >0: fire when boss HP% crosses below
+            "time_into_phase_s": 0.0, # >0: phase-relative timer anchor
+            "time_into_fight_s": 0.0, # >0: fight-relative timer anchor
+            "repeat_interval_s": 0.0, # >0 with a time anchor: re-fire interval
+            "event": "",              # "" | breaking | shield_broken | overdrive | mechanic key text
+        },
+        "alert": {
+            "enabled": True,
+            "banner_text": "",        # "" -> mechanic name
+            "tts_text": "",           # "" -> mechanic name
+            "alert_type": "both",     # sound | visual | both
+            "countdown_s": 8.0,
+            "pre_warn_s": 3.0,
+            "cooldown_s": 5.0,        # dedup window per mechanic
+            "sound": "boss_alert",
+        },
+        "dodge": {"enabled": False, "linkage_id": "", "inline": make_default_dodge_inline()},
+    }
+
+
+def normalize_mechanic(raw: Any) -> Dict[str, Any]:
+    src = raw if isinstance(raw, dict) else {}
+    default = make_default_mechanic()
+    d = src.get("detect") if isinstance(src.get("detect"), dict) else {}
+    a = src.get("alert") if isinstance(src.get("alert"), dict) else {}
+    alert_type = _string(a.get("alert_type")).lower()
+    if alert_type not in ("sound", "visual", "both"):
+        alert_type = "both"
+    return {
+        "id": _string(src.get("id")) or default["id"],
+        "name": _string(src.get("name")) or default["name"],
+        "kind": _string(src.get("kind")),
+        "enabled": _coerce_bool(src.get("enabled"), True),
+        "notes": _string(src.get("notes")),
+        "color": _string(src.get("color")),
+        "phase_ids": _coerce_str_list(src.get("phase_ids")),
+        "detect": {
+            "skill_ids": _coerce_id_list(d.get("skill_ids")),
+            "buff_ids": _coerce_id_list(d.get("buff_ids")),
+            "boss_base_id": _coerce_int(d.get("boss_base_id"), 0, 0),
+            "hp_pct": _coerce_float(d.get("hp_pct"), 0.0, 0.0, 100.0),
+            "time_into_phase_s": _coerce_float(d.get("time_into_phase_s"), 0.0, 0.0, 86400.0),
+            "time_into_fight_s": _coerce_float(d.get("time_into_fight_s"), 0.0, 0.0, 86400.0),
+            "repeat_interval_s": _coerce_float(d.get("repeat_interval_s"), 0.0, 0.0, 86400.0),
+            "event": _string(d.get("event")),
+        },
+        "alert": {
+            "enabled": _coerce_bool(a.get("enabled"), True),
+            "banner_text": _string(a.get("banner_text")),
+            "tts_text": _string(a.get("tts_text")),
+            "alert_type": alert_type,
+            "countdown_s": _coerce_float(a.get("countdown_s"), 8.0, 0.0, 600.0),
+            "pre_warn_s": _coerce_float(a.get("pre_warn_s"), 3.0, 0.0, 600.0),
+            "cooldown_s": _coerce_float(a.get("cooldown_s"), 5.0, 0.0, 600.0),
+            "sound": _string(a.get("sound")) or "boss_alert",
+        },
+        "dodge": normalize_dodge(src.get("dodge")),
+    }
+
+
+def make_default_enrage(time_s: int = 0) -> Dict[str, Any]:
+    return {
+        "time_s": _coerce_int(time_s, 0, 0, 86400),
+        "anchor": "fight",            # fight | phase
+        "phase_id": "",               # anchor=phase: countdown starts on phase enter
+        "warn_threshold_s": 60,       # ID-plate amber tier
+        "urgent_threshold_s": 30,     # ID-plate red-pulse tier
+        "tts_milestones": [60, 30, 10],
+    }
+
+
+def normalize_enrage(raw: Any, legacy_time_s: int = 0) -> Dict[str, Any]:
+    src = raw if isinstance(raw, dict) else {}
+    anchor = _string(src.get("anchor")).lower()
+    if anchor not in ("fight", "phase"):
+        anchor = "fight"
+    milestones: List[int] = []
+    raw_ms = src.get("tts_milestones")
+    if isinstance(raw_ms, (list, tuple)):
+        for v in raw_ms:
+            iv = _coerce_int(v, 0)
+            if 0 < iv <= 3600 and iv not in milestones:
+                milestones.append(iv)
+    if not milestones and raw_ms is None:
+        milestones = [60, 30, 10]
+    time_s = _coerce_int(src.get("time_s"), 0, 0, 86400)
+    if time_s <= 0:
+        time_s = _coerce_int(legacy_time_s, 0, 0, 86400)
+    return {
+        "time_s": time_s,
+        "anchor": anchor,
+        "phase_id": _string(src.get("phase_id")),
+        "warn_threshold_s": _coerce_int(src.get("warn_threshold_s"), 60, 0, 3600),
+        "urgent_threshold_s": _coerce_int(src.get("urgent_threshold_s"), 30, 0, 3600),
+        "tts_milestones": sorted(milestones, reverse=True)[:8],
+    }
+
+
 def make_default_phase_trigger() -> Dict[str, Any]:
     return {
         "type": "manual",   # manual | time | dps_total | hp_pct | breaking | buff_event | shield_broken | overdrive | extinction_pct | breaking_stage | boss_mechanic | boss_mechanic_family | boss_skill | boss_mechanic_skill | ultimate_skill
@@ -210,9 +400,13 @@ def make_default_profile(author_snapshot: Optional[Dict[str, Any]] = None) -> Di
         "description": "",
         "boss_total_hp": 0,
         "enrage_time_s": 600,
+        "enrage": make_default_enrage(600),
         "simple_mode": True,
         "target_name_pattern": "",
+        "dungeon_id": 0,
+        "difficulty": "",
         "phases": [make_default_phase(1)],
+        "mechanics": [],
         "source": "local",
         "remote_id": None,
         "created_at": _utc_now_iso(),
@@ -244,16 +438,27 @@ def normalize_profile(raw: Any, author_snapshot: Optional[Dict[str, Any]] = None
         phases.append(normalize_phase(item, idx))
     if not phases:
         phases = [make_default_phase(1)]
+    enrage_time_s = _coerce_int(base.get("enrage_time_s"), 600, 0, 86400)
+    mechanics = []
+    raw_mechs = base.get("mechanics")
+    if isinstance(raw_mechs, list):
+        for item in raw_mechs:
+            if isinstance(item, dict):
+                mechanics.append(normalize_mechanic(item))
     return {
         "id": _string(base.get("id")) or default["id"],
         "schema_version": BOSS_RAID_SCHEMA_VERSION,
         "profile_name": _string(base.get("profile_name")) or default["profile_name"],
         "description": _string(base.get("description")),
         "boss_total_hp": _coerce_int(base.get("boss_total_hp"), 0, 0),
-        "enrage_time_s": _coerce_int(base.get("enrage_time_s"), 600, 0, 86400),
+        "enrage_time_s": enrage_time_s,
+        "enrage": normalize_enrage(base.get("enrage"), enrage_time_s),
         "simple_mode": _coerce_bool(base.get("simple_mode"), True),
         "target_name_pattern": _string(base.get("target_name_pattern")),
+        "dungeon_id": _coerce_int(base.get("dungeon_id"), 0, 0),
+        "difficulty": _string(base.get("difficulty")),
         "phases": phases,
+        "mechanics": mechanics,
         "source": profile_source,
         "remote_id": _string(base.get("remote_id")) or None,
         "created_at": _string(base.get("created_at")) or default["created_at"],
@@ -366,6 +571,30 @@ def delete_profile(config: Dict[str, Any], profile_id: str) -> Dict[str, Any]:
     return config
 
 
+def _reissue_profile_ids(profile: Dict[str, Any]) -> None:
+    """Re-id phases/timelines/mechanics in place, remapping the phase-id
+    references carried by mechanics[].phase_ids and enrage.phase_id."""
+    id_map: Dict[str, str] = {}
+    for phase in profile.get("phases", []) or []:
+        old = _string(phase.get("id"))
+        phase["id"] = _new_id("phase")
+        if old:
+            id_map[old] = phase["id"]
+        for tl in phase.get("timelines", []) or []:
+            tl["id"] = _new_id("tl")
+    for mech in profile.get("mechanics", []) or []:
+        if not isinstance(mech, dict):
+            continue
+        mech["id"] = _new_id("mech")
+        mech["phase_ids"] = [id_map.get(_string(p), _string(p))
+                             for p in (mech.get("phase_ids") or []) if _string(p)]
+    enrage = profile.get("enrage")
+    if isinstance(enrage, dict):
+        pid = _string(enrage.get("phase_id"))
+        if pid:
+            enrage["phase_id"] = id_map.get(pid, pid)
+
+
 def clone_profile(config: Dict[str, Any], profile_id: str,
                   author_snapshot=None) -> Optional[Dict[str, Any]]:
     profile = find_profile(config, profile_id)
@@ -380,10 +609,7 @@ def clone_profile(config: Dict[str, Any], profile_id: str,
     cloned["updated_at"] = _utc_now_iso()
     if author_snapshot:
         cloned["author_snapshot"] = _normalize_author(author_snapshot)
-    for phase in cloned.get("phases", []) or []:
-        phase["id"] = _new_id("phase")
-        for tl in phase.get("timelines", []) or []:
-            tl["id"] = _new_id("tl")
+    _reissue_profile_ids(cloned)
     upsert_profile(config, normalize_profile(cloned, author_snapshot=author_snapshot),
                    activate=False)
     return cloned
@@ -401,10 +627,53 @@ def summarize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
         "simple_mode": profile.get("simple_mode", True),
         "phase_count": len(phases),
         "timeline_count": tl_count,
+        "mechanic_count": len(profile.get("mechanics") or []),
+        "dungeon_id": profile.get("dungeon_id", 0),
+        "difficulty": profile.get("difficulty", ""),
         "source": profile.get("source", "local"),
         "remote_id": profile.get("remote_id"),
         "updated_at": profile.get("updated_at", ""),
     }
+
+
+def find_mechanic(profile: Dict[str, Any], mechanic_id: str) -> Optional[Dict[str, Any]]:
+    mid = _string(mechanic_id)
+    if not mid:
+        return None
+    for mech in profile.get("mechanics", []) or []:
+        if isinstance(mech, dict) and _string(mech.get("id")) == mid:
+            return mech
+    return None
+
+
+def bind_mechanic_skill(profile: Dict[str, Any], mechanic_id: str, skill_id: Any) -> bool:
+    """Append a skill id to a mechanic's detect.skill_ids (in place)."""
+    mech = find_mechanic(profile, mechanic_id)
+    sid = _coerce_int(skill_id, 0)
+    if not mech or sid <= 0:
+        return False
+    detect = mech.setdefault("detect", {})
+    ids = list(detect.get("skill_ids") or [])
+    if sid in ids:
+        return False
+    ids.append(sid)
+    detect["skill_ids"] = sorted(ids)
+    return True
+
+
+def unbind_mechanic_skill(profile: Dict[str, Any], mechanic_id: str, skill_id: Any) -> bool:
+    mech = find_mechanic(profile, mechanic_id)
+    sid = _coerce_int(skill_id, 0)
+    if not mech or sid <= 0:
+        return False
+    detect = mech.setdefault("detect", {})
+    ids = [i for i in (detect.get("skill_ids") or []) if _coerce_int(i, 0) != sid]
+    buff_ids = [i for i in (detect.get("buff_ids") or []) if _coerce_int(i, 0) != sid]
+    changed = (len(ids) != len(detect.get("skill_ids") or [])
+               or len(buff_ids) != len(detect.get("buff_ids") or []))
+    detect["skill_ids"] = ids
+    detect["buff_ids"] = buff_ids
+    return changed
 
 
 def build_boss_raid_state(config: Dict[str, Any],
@@ -462,10 +731,7 @@ def import_profile_from_path(path: str, author_snapshot=None) -> Dict[str, Any]:
     profile["source"] = "local"
     profile["created_at"] = _utc_now_iso()
     profile["updated_at"] = _utc_now_iso()
-    for phase in profile.get("phases", []) or []:
-        phase["id"] = _new_id("phase")
-        for tl in phase.get("timelines", []) or []:
-            tl["id"] = _new_id("tl")
+    _reissue_profile_ids(profile)
     return profile
 
 
@@ -532,7 +798,8 @@ class BossRaidEngine:
                  on_alert: Optional[Callable[[str, str], None]] = None,
                  on_sound: Optional[Callable[[str], None]] = None,
                  on_entity_update: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
-                 on_boss_action: Optional[Callable[[Dict[str, Any]], None]] = None):
+                 on_boss_action: Optional[Callable[[Dict[str, Any]], None]] = None,
+                 on_mechanic: Optional[Callable[[Dict[str, Any]], None]] = None):
         """
         Args:
             state_mgr: GameStateManager instance
@@ -542,6 +809,8 @@ class BossRaidEngine:
             on_entity_update: callback([entity_dict, ...]) for visual editor entity list
             on_boss_action: callback(action_record) forwarding the mem boss-action
                 feed to the auto-key linkage (skill_id-accurate, gated by the host)
+            on_mechanic: callback(mechanic_event) for the TTS/banner notification
+                stack; when absent, mechanic fires degrade to on_alert/on_sound
         """
         self._state_mgr = state_mgr
         self._settings = settings
@@ -549,6 +818,25 @@ class BossRaidEngine:
         self._on_sound = on_sound
         self._on_entity_update_cb = on_entity_update
         self._on_boss_action_cb = on_boss_action
+        self._on_mechanic = on_mechanic
+
+        # ── profile mechanics runtime (indexes prebuilt at start/reset) ──
+        self._mech_index_by_skill: Dict[int, List[Dict[str, Any]]] = {}
+        self._mech_event_anchored: List[Dict[str, Any]] = []
+        self._mech_time_anchored: List[Dict[str, Any]] = []
+        self._mech_hp_anchored: List[Dict[str, Any]] = []
+        self._mech_last_fire: Dict[str, float] = {}        # cooldown per mechanic id
+        self._mech_fired_once: set = set()                 # one-shot hp anchors
+        self._mech_time_fire_counts: Dict[Tuple, int] = {}  # time anchors (repeat)
+        self._mech_prev_hp_pct: float = 100.0
+        self._mech_countdowns: List[Dict[str, Any]] = []   # {id, name, color, ends_at, ...}
+        self._mech_countdowns_push: List[Dict[str, Any]] = []
+        self._mech_countdown_sig: Tuple = ()
+        self._last_mechanic_event: Dict[str, Any] = {}
+        self._unbound_skills: Dict[int, Dict[str, Any]] = {}   # binding inbox (≤64)
+        self._enrage_anchor_ts: float = 0.0
+        self._enrage_milestones_fired: set = set()
+        self._pending_mech_forwards: List[Dict[str, Any]] = []
 
         # ── memory-driven boss action state (cast_skill_id edge feed) ──
         # observed skills per boss: base_id -> {skill_id -> {name, count, last_cast_duration_ms, last_ts}}
@@ -666,6 +954,8 @@ class BossRaidEngine:
             self._entities.clear()
             self._entity_order.clear()
             self._boss_manually_set = False
+            self._rebuild_mechanic_index_locked()
+            self._maybe_anchor_enrage_locked()
 
         if not self._running:
             self._running = True
@@ -728,6 +1018,7 @@ class BossRaidEngine:
             self._entities.clear()
             self._entity_order.clear()
             self._boss_manually_set = False
+            self._rebuild_mechanic_index_locked()
         self._skill_store.save()   # flush observed skills/mechanics to disk
         self._push_game_state_clear()
 
@@ -977,6 +1268,7 @@ class BossRaidEngine:
                 self._on_boss_action_cb(fwd)
             except Exception:
                 pass
+        self._dispatch_mech_forwards()
 
     def on_boss_event(self, event: Dict[str, Any]):
         """Called from packet_parser boss event callback. Handles buff-based phase triggers."""
@@ -1039,7 +1331,10 @@ class BossRaidEngine:
                     }.get(trigger_type, trigger_type)
                     if skill_category == expected_category and (not trigger_text or trigger_text in (str(skill_id), skill_name, skill_category)):
                         self._advance_phase()
+            self._match_mechanic_on_event_locked(event_type, boss_mechanic_key,
+                                                 boss_mechanic_label, trigger_family)
             self._push_game_state_locked(time.time())
+        self._dispatch_mech_forwards()
 
     # ── Memory-driven boss action feed (cast_skill_id edge) ──
 
@@ -1064,6 +1359,7 @@ class BossRaidEngine:
                 self._on_boss_action_cb(forward)
             except Exception:
                 pass
+        self._dispatch_mech_forwards()
 
     def _apply_boss_action_locked(self, action: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Shared body for memory + TCP boss actions (caller holds the lock).
@@ -1100,6 +1396,7 @@ class BossRaidEngine:
         if isinstance(ext, (int, float)):
             self._boss_extinction_pct = float(ext)
 
+        mech_fwd = None
         if edge == "start":
             self._boss_cast_skill_id = skill_id
             # instant skills (counterattacks) have no skill id — label them so the
@@ -1112,12 +1409,22 @@ class BossRaidEngine:
             boss_name = _string(action.get("boss_name"))
             if base_id and boss_name:
                 self._observed_boss_names[int(base_id)] = boss_name
+            mech_fwd = self._match_mechanic_on_cast_locked(
+                int(base_id or self._boss_base_id), skill_id,
+                _coerce_int(dur, 0), self._boss_cast_skill_name)
         elif edge == "end":
             self._boss_cast_active = False
         else:
             self._boss_cast_active = bool(action.get("cast_active"))
             if isinstance(dur, (int, float)) and dur:
                 self._boss_cast_duration_ms = int(dur)
+
+        # state-edge anchored mechanics (detect.event = breaking/overdrive/stun)
+        for ev_name, ev_edge in (("breaking", breaking_edge),
+                                 ("overdrive", overdrive_edge),
+                                 ("stun", stun_edge)):
+            if ev_edge:
+                self._match_mechanic_on_state_edge_locked(ev_name)
 
         if self._state == self.STATE_RUNNING and edge == "start" and skill_id:
             self._maybe_advance_on_mem_skill_locked(skill_id, name)
@@ -1131,6 +1438,8 @@ class BossRaidEngine:
             forward["breaking_edge"] = breaking_edge
             forward["overdrive_edge"] = overdrive_edge
             forward["stun_edge"] = stun_edge
+            if mech_fwd:
+                forward.update(mech_fwd)
         return forward
 
     def _tcp_detect_boss_skills_locked(self, uuid: int,
@@ -1159,8 +1468,9 @@ class BossRaidEngine:
             return []
         # longest-duration new buff is the primary cast (symmetric with memory)
         best = max(new_ids, key=lambda bid: cur[bid])
+        base_id = _coerce_int(monster_data.get("template_id"), 0)
         action = {
-            "boss_base_id": _coerce_int(monster_data.get("template_id"), 0),
+            "boss_base_id": base_id,
             "boss_name": _string(monster_data.get("name")),
             "boss_uuid": uuid,
             "skill_id": best,
@@ -1175,8 +1485,24 @@ class BossRaidEngine:
             "extinction": float(monster_data.get("extinction_pct") or 0.0),
             "source": "tcp",
         }
+        fwds: List[Dict[str, Any]] = []
         fwd = self._apply_boss_action_locked(action)
-        return [fwd] if fwd is not None else []
+        if fwd is not None:
+            fwds.append(fwd)
+        # secondary simultaneous buffs: record + mechanic-match them too, so a
+        # mechanic bound to a non-primary buff id is never missed on pure TCP.
+        for bid in new_ids:
+            if bid == best:
+                continue
+            self._record_observed_skill_locked(base_id, bid, "", cur[bid])
+            mech_fwd = self._match_mechanic_on_cast_locked(base_id, bid, cur[bid], "")
+            if mech_fwd and self._on_boss_action_cb:
+                extra = {"boss_base_id": base_id, "boss_uuid": uuid,
+                         "skill_id": bid, "cast_duration_ms": cur[bid],
+                         "source": "tcp_mechanic"}
+                extra.update(mech_fwd)
+                fwds.append(extra)
+        return fwds
 
     def _maybe_advance_on_mem_skill_locked(self, skill_id: int, skill_name: str):
         phases = list((self._profile or {}).get("phases") or [])
@@ -1212,6 +1538,402 @@ class BossRaidEngine:
             int(skill_id or 0), name, KIND_SKILL,
             tags=self._derive_state_tags_locked(),
             duration_ms=int(dur) if isinstance(dur, (int, float)) and dur > 0 else None)
+
+    # ── profile mechanics runtime ───────────────────────────────────────────────
+
+    def _rebuild_mechanic_index_locked(self):
+        """Prebuild O(1) lookup structures from the active profile's mechanics
+        (called from start/reset; never per tick)."""
+        self._mech_index_by_skill = {}
+        self._mech_event_anchored = []
+        self._mech_time_anchored = []
+        self._mech_hp_anchored = []
+        self._mech_last_fire.clear()
+        self._mech_fired_once.clear()
+        self._mech_time_fire_counts.clear()
+        self._mech_prev_hp_pct = 100.0
+        self._mech_countdowns = []
+        self._mech_countdowns_push = []
+        self._mech_countdown_sig = ()
+        self._last_mechanic_event = {}
+        self._unbound_skills.clear()
+        self._enrage_anchor_ts = 0.0
+        self._enrage_milestones_fired.clear()
+        self._pending_mech_forwards = []
+        profile = self._profile or {}
+        for mech in profile.get("mechanics") or []:
+            if not isinstance(mech, dict) or not mech.get("enabled", True):
+                continue
+            det = mech.get("detect") or {}
+            for sid in list(det.get("skill_ids") or []) + list(det.get("buff_ids") or []):
+                sid = _coerce_int(sid, 0)
+                if sid > 0:
+                    self._mech_index_by_skill.setdefault(sid, []).append(mech)
+            if _string(det.get("event")):
+                self._mech_event_anchored.append(mech)
+            if _coerce_float(det.get("hp_pct"), 0.0) > 0:
+                self._mech_hp_anchored.append(mech)
+            if (_coerce_float(det.get("time_into_phase_s"), 0.0) > 0
+                    or _coerce_float(det.get("time_into_fight_s"), 0.0) > 0):
+                self._mech_time_anchored.append(mech)
+
+    def _mechanic_phase_ok_locked(self, mech: Dict[str, Any]) -> bool:
+        pids = mech.get("phase_ids") or []
+        if not pids:
+            return True
+        phases = list((self._profile or {}).get("phases") or [])
+        if self._current_phase_idx >= len(phases):
+            return False
+        cur_id = _string(phases[self._current_phase_idx].get("id"))
+        return cur_id in {_string(p) for p in pids}
+
+    def _maybe_anchor_enrage_locked(self):
+        """Arm the enrage countdown when its anchor point is reached."""
+        profile = self._profile or {}
+        enrage = profile.get("enrage") if isinstance(profile.get("enrage"), dict) else {}
+        anchor = _string(enrage.get("anchor")) or "fight"
+        if anchor != "phase":
+            self._enrage_anchor_ts = self._start_time
+            return
+        if self._enrage_anchor_ts > 0:
+            return
+        pid = _string(enrage.get("phase_id"))
+        phases = list(profile.get("phases") or [])
+        cur = phases[self._current_phase_idx] if self._current_phase_idx < len(phases) else {}
+        if pid and _string(cur.get("id")) == pid:
+            self._enrage_anchor_ts = time.time()
+            self._enrage_milestones_fired.clear()
+
+    def _enrage_state_locked(self, now: float) -> Dict[str, Any]:
+        """Unified enrage countdown state for tick + status + HUD tiers."""
+        profile = self._profile or {}
+        enrage = profile.get("enrage") if isinstance(profile.get("enrage"), dict) else {}
+        time_s = _coerce_int(enrage.get("time_s"), 0, 0) \
+            or _coerce_int(profile.get("enrage_time_s"), 0, 0)
+        warn_s = _coerce_int(enrage.get("warn_threshold_s"), 60, 0)
+        urgent_s = _coerce_int(enrage.get("urgent_threshold_s"), 30, 0)
+        milestones = [m for m in (enrage.get("tts_milestones") or [])
+                      if isinstance(m, int) and m > 0]
+        armed = False
+        remaining = float(time_s)
+        if time_s > 0 and self._state == self.STATE_RUNNING:
+            anchor = _string(enrage.get("anchor")) or "fight"
+            anchor_ts = self._start_time if anchor != "phase" else self._enrage_anchor_ts
+            if anchor_ts > 0:
+                armed = True
+                remaining = max(0.0, time_s - (now - anchor_ts))
+        urgency = ""
+        if armed and remaining > 0:
+            if urgent_s > 0 and remaining <= urgent_s:
+                urgency = "urgent"
+            elif warn_s > 0 and remaining <= warn_s:
+                urgency = "warn"
+        return {"time_s": time_s, "armed": armed, "remaining_s": remaining,
+                "urgency": urgency, "milestones": milestones}
+
+    def _note_unbound_skill_locked(self, skill_id: int, name: str = "",
+                                   dur: Any = None):
+        """Binding inbox: a detected cast no mechanic is bound to (bounded 64)."""
+        sid = int(skill_id or 0)
+        if sid <= 0:
+            return
+        now = time.time()
+        rec = self._unbound_skills.get(sid)
+        if rec is None:
+            if len(self._unbound_skills) >= 64:
+                oldest = min(self._unbound_skills.values(), key=lambda r: r["last_ts"])
+                self._unbound_skills.pop(int(oldest["skill_id"]), None)
+            rec = {"skill_id": sid, "name": "", "count": 0, "first_ts": now,
+                   "last_ts": 0.0, "boss_base_id": int(self._boss_base_id or 0),
+                   "last_cast_duration_ms": 0}
+            self._unbound_skills[sid] = rec
+        rec["count"] += 1
+        rec["last_ts"] = now
+        if name and not rec["name"]:
+            rec["name"] = _string(name)
+        if isinstance(dur, (int, float)) and dur > 0:
+            rec["last_cast_duration_ms"] = int(dur)
+
+    def _match_mechanic_on_cast_locked(self, base_id: int, skill_id: int,
+                                       cast_duration_ms: int,
+                                       name: str = "") -> Optional[Dict[str, Any]]:
+        """Resolve a cast skill/buff id to a profile mechanic; returns the
+        linkage-forward extras dict (mechanic_id/dodge) or None."""
+        if skill_id <= 0 or self._profile is None:
+            return None
+        mechs = self._mech_index_by_skill.get(int(skill_id))
+        if not mechs:
+            self._note_unbound_skill_locked(skill_id, name, cast_duration_ms)
+            return None
+        if self._state != self.STATE_RUNNING:
+            return None
+        for mech in mechs:
+            det = mech.get("detect") or {}
+            m_base = _coerce_int(det.get("boss_base_id"), 0)
+            if m_base and base_id and m_base != base_id:
+                continue
+            if not self._mechanic_phase_ok_locked(mech):
+                continue
+            return self._fire_mechanic_locked(mech, "cast", cast_duration_ms, skill_id)
+        return None
+
+    def _match_mechanic_on_state_edge_locked(self, edge_name: str):
+        """Event-anchored mechanics on breaking/overdrive/stun rising edges."""
+        if self._state != self.STATE_RUNNING or not self._mech_event_anchored:
+            return
+        for mech in self._mech_event_anchored:
+            if _string((mech.get("detect") or {}).get("event")) != edge_name:
+                continue
+            if not self._mechanic_phase_ok_locked(mech):
+                continue
+            fwd = self._fire_mechanic_locked(mech, "event", None, 0)
+            if fwd:
+                self._queue_mech_forward_locked(fwd)
+
+    def _match_mechanic_on_event_locked(self, event_type: int, mechanic_key: str,
+                                        mechanic_label: str, trigger_family: str):
+        """Event-anchored mechanics on packet boss events (text/key matched)."""
+        if self._state != self.STATE_RUNNING or not self._mech_event_anchored:
+            return
+        for mech in self._mech_event_anchored:
+            ev = _string((mech.get("detect") or {}).get("event"))
+            if not ev:
+                continue
+            if ev == "breaking":
+                hit = (int(event_type or 0) == 58)
+            elif ev == "shield_broken":
+                hit = (int(event_type or 0) == 47)
+            elif ev in ("overdrive", "stun"):
+                hit = False   # handled by the state-edge path
+            else:
+                hit = ev in (str(event_type), mechanic_key, mechanic_label, trigger_family)
+            if hit and self._mechanic_phase_ok_locked(mech):
+                fwd = self._fire_mechanic_locked(mech, "event", None, 0)
+                if fwd:
+                    self._queue_mech_forward_locked(fwd)
+
+    def _fire_mechanic_locked(self, mech: Dict[str, Any], source: str,
+                              cast_duration_ms: Any = None,
+                              skill_id: int = 0) -> Optional[Dict[str, Any]]:
+        """Fire one mechanic: cooldown dedup, countdown row, notification event,
+        and the linkage-forward extras for auto-dodge. Caller holds the lock."""
+        now = time.time()
+        mid = _string(mech.get("id"))
+        alert = mech.get("alert") or {}
+        cd = _coerce_float(alert.get("cooldown_s"), 5.0, 0.0)
+        if cd > 0 and (now - self._mech_last_fire.get(mid, 0.0)) < cd:
+            return None
+        self._mech_last_fire[mid] = now
+        name = _string(mech.get("name")) or "机制"
+        countdown_s = _coerce_float(alert.get("countdown_s"), 0.0, 0.0)
+        pre_warn_s = _coerce_float(alert.get("pre_warn_s"), 0.0, 0.0)
+        dodge = mech.get("dodge") if isinstance(mech.get("dodge"), dict) else {}
+        phases = list((self._profile or {}).get("phases") or [])
+        phase_name = _string(phases[self._current_phase_idx].get("name")) \
+            if self._current_phase_idx < len(phases) else ""
+        evt = {
+            "mechanic_id": mid,
+            "name": name,
+            "kind": _string(mech.get("kind")),
+            "color": _string(mech.get("color")),
+            "banner_text": _string(alert.get("banner_text")) or name,
+            "tts_text": _string(alert.get("tts_text")) or name,
+            "alert_type": _string(alert.get("alert_type")) or "both",
+            "alert_enabled": _coerce_bool(alert.get("enabled"), True),
+            "countdown_s": countdown_s,
+            "pre_warn_s": pre_warn_s,
+            "sound": _string(alert.get("sound")) or "boss_alert",
+            "source": _string(source),
+            "skill_id": int(skill_id or 0),
+            "cast_duration_ms": int(cast_duration_ms)
+                if isinstance(cast_duration_ms, (int, float)) and cast_duration_ms else 0,
+            "phase_idx": self._current_phase_idx,
+            "phase_name": phase_name,
+            "dodge_enabled": _coerce_bool(dodge.get("enabled"), False),
+            "ts": now,
+        }
+        self._last_mechanic_event = evt
+        if countdown_s > 0:
+            self._mech_countdowns.append({
+                "id": mid, "name": name, "color": evt["color"],
+                "ends_at": now + countdown_s, "countdown_s": countdown_s,
+                "pre_warn_s": pre_warn_s,
+            })
+            if len(self._mech_countdowns) > 6:
+                self._mech_countdowns.pop(0)
+            self._refresh_countdown_push_locked(now, force=True)
+        self._fire_mechanic_event_unlocked(evt)
+
+        fwd: Dict[str, Any] = {"mechanic_id": mid, "mechanic_name": name}
+        if evt["dodge_enabled"]:
+            inline = dodge.get("inline") if isinstance(dodge.get("inline"), dict) else None
+            if inline:
+                fwd["mechanic_dodge"] = inline
+                lead_ms = _coerce_int(inline.get("lead_ms"), 0, 0)
+                if countdown_s > 0:
+                    fwd["dodge_wait_s"] = max(0.0, countdown_s - lead_ms / 1000.0)
+        return fwd
+
+    def _fire_mechanic_event_unlocked(self, evt: Dict[str, Any]):
+        """Dispatch the mechanic notification off-lock (the engine lock is
+        non-reentrant). Falls back to the legacy alert/sound pipeline when no
+        notification stack is wired."""
+        if self._on_mechanic is not None:
+            cb = self._on_mechanic
+            payload = dict(evt)
+
+            def _dispatch():
+                try:
+                    cb(payload)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_dispatch, daemon=True).start()
+            return
+        if not evt.get("alert_enabled", True):
+            return
+        alert_type = evt.get("alert_type") or "both"
+        if alert_type in ("visual", "both"):
+            self._fire_alert_unlocked("Boss Mechanic",
+                                      _string(evt.get("banner_text")) or _string(evt.get("name")))
+        if alert_type in ("sound", "both"):
+            self._fire_sound_unlocked(_string(evt.get("sound")) or "boss_alert")
+
+    def _queue_mech_forward_locked(self, mech_fwd: Dict[str, Any]):
+        if not self._on_boss_action_cb:
+            return
+        fwd = {"boss_base_id": int(self._boss_base_id or 0),
+               "boss_uuid": int(self._boss_uuid or 0),
+               "source": "mechanic"}
+        fwd.update(mech_fwd)
+        self._pending_mech_forwards.append(fwd)
+
+    def _drain_mech_forwards(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            if not self._pending_mech_forwards:
+                return []
+            pending = self._pending_mech_forwards
+            self._pending_mech_forwards = []
+        return pending
+
+    def _dispatch_mech_forwards(self):
+        for fwd in self._drain_mech_forwards():
+            try:
+                self._on_boss_action_cb(fwd)
+            except Exception:
+                pass
+
+    def _refresh_countdown_push_locked(self, now: float, force: bool = False):
+        """Maintain the JSON-safe countdown list pushed to GameState; rebuilt
+        only when the int-second signature changes."""
+        if self._mech_countdowns:
+            self._mech_countdowns = [c for c in self._mech_countdowns
+                                     if c["ends_at"] > now]
+        sig = tuple((c["id"], int(c["ends_at"] - now)) for c in self._mech_countdowns)
+        if not force and sig == self._mech_countdown_sig:
+            return
+        self._mech_countdown_sig = sig
+        self._mech_countdowns_push = [
+            {"id": c["id"], "name": c["name"], "color": c.get("color", ""),
+             "remaining_s": round(max(0.0, c["ends_at"] - now), 1),
+             "countdown_s": c["countdown_s"],
+             "pre_warn_s": c.get("pre_warn_s", 0.0)}
+            for c in self._mech_countdowns]
+
+    def _tick_mechanics_locked(self, now: float, elapsed: float, phase_elapsed: float):
+        """4Hz upkeep: HP-crossing anchors, time anchors (early by countdown_s,
+        with repeats), countdown rows, enrage TTS milestones."""
+        # HP-crossing anchors (one-shot per mechanic)
+        if self._mech_hp_anchored and self._boss_max_hp > 0:
+            hp_pct = self._boss_hp / self._boss_max_hp * 100.0
+            prev = self._mech_prev_hp_pct
+            for mech in self._mech_hp_anchored:
+                thr = _coerce_float((mech.get("detect") or {}).get("hp_pct"), 0.0)
+                if thr <= 0:
+                    continue
+                key = (_string(mech.get("id")), "hp")
+                if key in self._mech_fired_once:
+                    continue
+                if hp_pct <= thr < prev:
+                    if self._mechanic_phase_ok_locked(mech):
+                        self._mech_fired_once.add(key)
+                        fwd = self._fire_mechanic_locked(mech, "hp", None, 0)
+                        if fwd:
+                            self._queue_mech_forward_locked(fwd)
+            self._mech_prev_hp_pct = hp_pct
+
+        # time anchors — alert fires countdown_s early so the bar hits 0 at impact
+        for mech in self._mech_time_anchored:
+            det = mech.get("detect") or {}
+            countdown_s = _coerce_float((mech.get("alert") or {}).get("countdown_s"), 0.0)
+            rep = _coerce_float(det.get("repeat_interval_s"), 0.0)
+            for anchor_key, base_elapsed, scope in (
+                    ("time_into_phase_s", phase_elapsed, self._current_phase_idx),
+                    ("time_into_fight_s", elapsed, -1)):
+                t0 = _coerce_float(det.get(anchor_key), 0.0)
+                if t0 <= 0:
+                    continue
+                if not self._mechanic_phase_ok_locked(mech):
+                    continue
+                eff = max(0.0, t0 - countdown_s)
+                key = (_string(mech.get("id")), anchor_key, scope)
+                cnt = self._mech_time_fire_counts.get(key, 0)
+                if cnt > 0 and rep <= 0:
+                    continue
+                target = eff + rep * cnt
+                if base_elapsed >= target:
+                    self._mech_time_fire_counts[key] = cnt + 1
+                    fwd = self._fire_mechanic_locked(mech, "time", None, 0)
+                    if fwd:
+                        self._queue_mech_forward_locked(fwd)
+
+        self._refresh_countdown_push_locked(now)
+
+        # enrage TTS milestones
+        est = self._enrage_state_locked(now)
+        if est["armed"] and est["remaining_s"] > 0:
+            for m in est["milestones"]:
+                if m in self._enrage_milestones_fired or est["remaining_s"] > m:
+                    continue
+                self._enrage_milestones_fired.add(m)
+                evt = {
+                    "mechanic_id": "enrage_milestone",
+                    "name": "狂暴倒计时",
+                    "kind": "enrage",
+                    "color": "#ef684e",
+                    "banner_text": f"狂暴 T-{m}s",
+                    "tts_text": f"距离狂暴还有{m}秒",
+                    "alert_type": "both",
+                    "alert_enabled": True,
+                    "countdown_s": 0.0,
+                    "pre_warn_s": 0.0,
+                    "sound": "boss_alert",
+                    "source": "enrage",
+                    "skill_id": 0,
+                    "cast_duration_ms": 0,
+                    "phase_idx": self._current_phase_idx,
+                    "phase_name": "",
+                    "dodge_enabled": False,
+                    "ts": now,
+                }
+                self._last_mechanic_event = evt
+                self._fire_mechanic_event_unlocked(evt)
+                break
+
+    def get_unbound_skills(self) -> List[Dict[str, Any]]:
+        """Binding inbox for the mechanics editor (newest first)."""
+        with self._lock:
+            rows = sorted(self._unbound_skills.values(),
+                          key=lambda r: r["last_ts"], reverse=True)
+            return [dict(r) for r in rows]
+
+    def clear_unbound_skill(self, skill_id: Any):
+        with self._lock:
+            self._unbound_skills.pop(_coerce_int(skill_id, 0), None)
+
+    def get_last_mechanic_event(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self._last_mechanic_event or {})
 
     # ── observation aggregation (persisted store) ──────────────────────────────
     def _current_scene_locked(self) -> Dict[str, Any]:
@@ -1337,8 +2059,8 @@ class BossRaidEngine:
         profile = self._profile or {}
         elapsed = (now - self._start_time) if self._state == self.STATE_RUNNING else 0.0
         phase_elapsed = (now - self._phase_start_time) if self._state == self.STATE_RUNNING else 0.0
-        enrage_time = int(profile.get("enrage_time_s") or 0)
-        enrage_remaining = max(0.0, enrage_time - elapsed) if enrage_time > 0 else 0.0
+        enrage_st = self._enrage_state_locked(now)
+        enrage_remaining = enrage_st["remaining_s"] if enrage_st["time_s"] > 0 else 0.0
         dps = int(self._total_damage / max(0.001, elapsed)) if elapsed > 0 else 0
         boss_hp_profile = int(profile.get("boss_total_hp") or 0)
 
@@ -1372,6 +2094,11 @@ class BossRaidEngine:
             "total_damage": self._total_damage,
             "dps": dps,
             "enrage_remaining_s": round(enrage_remaining, 1),
+            "enrage_armed": enrage_st["armed"],
+            "enrage_urgency": enrage_st["urgency"],
+            "mechanic_event": dict(self._last_mechanic_event or {}),
+            "mechanic_countdowns": list(self._mech_countdowns_push),
+            "unbound_skill_count": len(self._unbound_skills),
             "boss_hp_est_pct": round(boss_hp_pct, 4),
             "boss_total_hp": boss_total_hp,
             "boss_current_hp": boss_current_hp,
@@ -1402,17 +2129,18 @@ class BossRaidEngine:
             time.sleep(0.25)
             self._skill_store.maybe_save()   # throttled flush during long fights
             with self._lock:
-                if self._state != self.STATE_RUNNING:
-                    continue
-                try:
-                    self._tick_locked()
-                except Exception as e:
-                    print(f"[BossRaid] tick error: {e}")
-                # v3.1.7 round 16: drain any pending entity-update set by
-                # `on_damage_event`. Fires at most once per 250ms loop
-                # iteration; combined with the on_damage_event dirty-bit
-                # this keeps per-event cost down without losing UI updates.
-                self._maybe_flush_entity_update_locked()
+                if self._state == self.STATE_RUNNING:
+                    try:
+                        self._tick_locked()
+                    except Exception as e:
+                        print(f"[BossRaid] tick error: {e}")
+                    # v3.1.7 round 16: drain any pending entity-update set by
+                    # `on_damage_event`. Fires at most once per 250ms loop
+                    # iteration; combined with the on_damage_event dirty-bit
+                    # this keeps per-event cost down without losing UI updates.
+                    self._maybe_flush_entity_update_locked()
+            # tick-fired mechanic dodges dispatch outside the lock
+            self._dispatch_mech_forwards()
 
     def _maybe_flush_entity_update_locked(self) -> None:
         if not self._entity_update_dirty:
@@ -1440,9 +2168,12 @@ class BossRaidEngine:
         elapsed = now - self._start_time
         phase_elapsed = now - self._phase_start_time
 
+        # ── Mechanics upkeep (hp/time anchors, countdowns, enrage milestones) ──
+        self._tick_mechanics_locked(now, elapsed, phase_elapsed)
+
         # ── Enrage check ──
-        enrage_time = int(profile.get("enrage_time_s") or 0)
-        if enrage_time > 0 and elapsed >= enrage_time:
+        enrage_st = self._enrage_state_locked(now)
+        if enrage_st["armed"] and enrage_st["remaining_s"] <= 0:
             self._state = self.STATE_COMPLETED
             self._fire_alert_unlocked("Boss Raid", "⚠ ENRAGE — TIME UP!")
             self._fire_sound_unlocked("boss_alert")
@@ -1567,6 +2298,7 @@ class BossRaidEngine:
             return
         self._current_phase_idx += 1
         self._phase_start_time = time.time()
+        self._maybe_anchor_enrage_locked()
         phase = phases[self._current_phase_idx]
         phase_name = _string(phase.get("name")) or f"P{self._current_phase_idx + 1}"
         self._fire_alert_unlocked("Boss Raid", f"→ {phase_name}")
@@ -1594,6 +2326,9 @@ class BossRaidEngine:
             boss_raid_phase=status["phase_idx"],
             boss_raid_phase_name=status["phase_name"],
             boss_enrage_remaining=enrage_rem,
+            boss_enrage_urgency=status["enrage_urgency"],
+            boss_mechanic_event=status["mechanic_event"],
+            boss_mechanic_countdowns=status["mechanic_countdowns"],
             boss_timer_text=timer_text,
             boss_total_damage=status["total_damage"],
             boss_dps=status["dps"],
@@ -1623,6 +2358,9 @@ class BossRaidEngine:
             boss_raid_phase=0,
             boss_raid_phase_name='',
             boss_enrage_remaining=0.0,
+            boss_enrage_urgency='',
+            boss_mechanic_event={},
+            boss_mechanic_countdowns=[],
             boss_timer_text='',
             boss_total_damage=0,
             boss_dps=0,
