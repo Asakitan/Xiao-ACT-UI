@@ -208,7 +208,7 @@ def _normalize_dodge_direction(raw: Any) -> str:
     if not v:
         return ""
     low = v.lower()
-    if low in _CAM_DIRECTIONS or low == "away_boss":
+    if low in _CAM_DIRECTIONS or low in ("away_boss", "away_nearest"):
         return low
     for pfx in ("world:", "away_point:"):
         if low.startswith(pfx):

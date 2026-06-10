@@ -373,7 +373,7 @@ class _MechanicsEditorMixin:
         ('不移动', ''), ('向后撤(相对视角)', 'back'), ('向前', 'forward'),
         ('向左', 'left'), ('向右', 'right'), ('左后撤', 'back_left'),
         ('右后撤', 'back_right'), ('左前', 'forward_left'), ('右前', 'forward_right'),
-        ('远离Boss', 'away_boss'),
+        ('远离Boss', 'away_boss'), ('远离最近威胁', 'away_nearest'),
     )
 
     @staticmethod

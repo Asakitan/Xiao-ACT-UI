@@ -552,11 +552,13 @@ class SAOPlayerGUIEngineLifecycleMixin:
 
             def _go():
                 danger = None
-                if direction == 'away_boss':
-                    try:
+                try:
+                    if direction == 'away_boss':
                         danger = self._dodge_context.get_boss_pos(boss_base_id)
-                    except Exception:
-                        danger = None
+                    elif direction == 'away_nearest':
+                        danger = self._dodge_context.get_nearest_danger_pos()
+                except Exception:
+                    danger = None
                 director.dodge(inline, danger_pos=danger)
             import threading as _th
             if wait_s > 0.05:

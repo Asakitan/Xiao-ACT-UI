@@ -101,6 +101,14 @@ class WorldVecTest(unittest.TestCase):
         self.assertIn("W", keys)   # boss 在 +Z, 远离 = -Z = 前向
         self.assertEqual(lbl, "远离危险源")
 
+    def test_away_nearest_uses_danger_pos(self):
+        keys, lbl = resolve_dodge_keys(
+            {"direction": "away_nearest"},
+            cam_basis=self.basis, player_pos=(0.0, 50.0, 0.0),
+            danger_pos=(0.0, 50.0, 10.0))
+        self.assertIn("W", keys)
+        self.assertEqual(lbl, "远离最近威胁")
+
     def test_away_boss_degrades_without_danger(self):
         keys, lbl = resolve_dodge_keys(
             {"direction": "away_boss", "fallback_direction": "back"},

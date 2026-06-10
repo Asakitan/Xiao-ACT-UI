@@ -84,6 +84,34 @@ class DodgeContext:
         except Exception:
             return None
 
+    def get_nearest_danger_pos(self) -> Optional[Vec3]:
+        """最近敌对实体(boss/怪/召唤)世界坐标 — 远离最近威胁躲避用。
+
+        boss/怪走 stateMoveComp_.oldGoPosition_ 干净可读 (战斗召唤的 marker 怪
+        3000xxx 也在内); ZoneEnt/DummyEnt 的 AOE 圈在 ECS/native 无稳定偏移, 不计入。"""
+        try:
+            import math
+            snap = self._entity_mgr().read(player_uuid=0, include_monsters=True)
+            if not snap:
+                return None
+            pp = self.get_player_pos()
+            if not pp:
+                return None
+            rd = self._position()
+            best = None
+            best_d = 1e18
+            for es in list(snap.bosses) + list(snap.monsters):
+                pos = rd.read_entity_pos(es.obj_addr)
+                if not pos or not any(abs(c) > 1e-4 for c in pos):
+                    continue
+                dd = math.hypot(pp[0] - pos[0], pp[2] - pos[2])
+                if 0.5 < dd < best_d:    # 排除站在自己身上的
+                    best_d = dd
+                    best = pos
+            return best
+        except Exception:
+            return None
+
     def get_boss_pos(self, boss_base_id: int = 0) -> Optional[Vec3]:
         """best-effort boss 世界坐标。远程同步常不写 lastPosition_ → 可能 None。"""
         try:

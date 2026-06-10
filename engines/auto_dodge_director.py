@@ -113,12 +113,14 @@ def resolve_dodge_keys(spec: Dict, *,
             return _fallback("坐标解析失败")
         return (world_vec_to_keys(player_pos[0] - px, player_pos[2] - pz,
                                   fwd_v, rgt_v), "远离指定点")
-    if direction == "away_boss":
+    if direction in ("away_boss", "away_nearest"):
+        # 两者数学相同, 危险源由宿主 (boss位 / 最近威胁位) 注入 danger_pos
         if player_pos and danger_pos:
             return (world_vec_to_keys(player_pos[0] - danger_pos[0],
                                       player_pos[2] - danger_pos[2],
-                                      fwd_v, rgt_v), "远离危险源")
-        return _fallback("boss位未知")
+                                      fwd_v, rgt_v),
+                    "远离最近威胁" if direction == "away_nearest" else "远离危险源")
+        return _fallback("危险位未知")
     return _fallback("未知方向")
 
 

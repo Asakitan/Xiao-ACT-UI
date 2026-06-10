@@ -808,7 +808,8 @@ function _mForm(m) {
         + '方向 <select id="mf-dir" class="mech-input">'
         + [['', '不移动'], ['back', '向后撤(相对视角)'], ['forward', '向前'], ['left', '向左'],
            ['right', '向右'], ['back_left', '左后撤'], ['back_right', '右后撤'],
-           ['forward_left', '左前'], ['forward_right', '右前'], ['away_boss', '远离Boss']
+           ['forward_left', '左前'], ['forward_right', '右前'], ['away_boss', '远离Boss'],
+           ['away_nearest', '远离最近威胁']
           ].map(function (o) {
             return '<option value="' + o[0] + '"' + (curDir === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
           }).join('') + '</select> '
