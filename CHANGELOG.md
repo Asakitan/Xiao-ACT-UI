@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.30: Mem Scope 实时签名刷新修复.
+
+  1) `gui_modules/sao_gui_mem_scope.py` 的渲染签名现在覆盖 catalog、自身状态、
+     实体 HP/百分比、伤害总表、搜索结果地址/解码 hint 等实际渲染字段。修复实体数量、
+     伤害 key 数或搜索 count 不变但数值变化时, Mem Scope 仍显示旧数据的问题。
+
+  2) Mem Scope 在窗口销毁/重建时会清空 `_last_sig`, 避免新 `_rows` 容器因为命中
+     旧签名而跳过首屏渲染。新增 `tools/mem_scope_panel_selftest.py`。
+
+
+
 ## v4.4.29: Offline Import 渲染与 fallback 参数修复.
 
   1) `gui_modules/sao_gui_offline_import.py` 的行签名现在覆盖实际渲染的导入预览字段

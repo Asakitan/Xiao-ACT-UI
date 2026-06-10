@@ -99,6 +99,7 @@ class MemScopePanel:
                 pass
         self._win = None
         self._rows = None
+        self._reset_render_cache()
 
     def is_visible(self) -> bool:
         return bool(self._win is not None and self._exists() and self._win.state() != 'withdrawn')
@@ -260,6 +261,10 @@ class MemScopePanel:
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
         win.protocol('WM_DELETE_WINDOW', self.hide)
+        self._reset_render_cache()
+
+    def _reset_render_cache(self) -> None:
+        self._last_sig = ""
 
     # ── render ─────────────────────────────────────────────────────────────────
     def _render_status(self, status: Mapping[str, Any]) -> None:
@@ -446,12 +451,65 @@ class MemScopePanel:
         search = status.get('search') if isinstance(status.get('search'), Mapping) else {}
         ents = status.get('entities') if isinstance(status.get('entities'), Mapping) else {}
         dmg = status.get('damage') if isinstance(status.get('damage'), Mapping) else {}
-        return repr((
-            st.get('active'), st.get('armed'), st.get('process'),
-            self._job_id, search.get('state'), search.get('count'), search.get('progress'),
-            len(ents.get('entities') or []), len((dmg.get('totals') or {})),
-            (status.get('self') or {}).get('hp'), (status.get('self') or {}).get('uid'),
-        ))
+        cat = status.get('catalog') if isinstance(status.get('catalog'), Mapping) else {}
+        self_status = status.get('self') if isinstance(status.get('self'), Mapping) else {}
+        entity_rows = []
+        for row in [e for e in (ents.get('entities') or []) if isinstance(e, Mapping)][:40]:
+            entity_rows.append({
+                key: row.get(key)
+                for key in ('kind', 'name', 'cur_hp', 'max_hp', 'hp_pct', 'base_id', 'obj')
+            })
+        totals = dmg.get('totals') if isinstance(dmg.get('totals'), Mapping) else {}
+        damage_rows = [
+            {'uid': key, 'total': value}
+            for key, value in sorted(totals.items(), key=lambda kv: (-_to_num(kv[1]), str(kv[0])))[:20]
+        ]
+        search_results = []
+        for row in [r for r in (search.get('results') or []) if isinstance(r, Mapping)]:
+            search_results.append({
+                'addr': row.get('addr'),
+                'as': row.get('as'),
+                'in': row.get('in'),
+                'klass_hint': row.get('klass_hint'),
+            })
+        self_rows = {
+            str(key): value
+            for key, value in self_status.items()
+            if key not in {'ok', 'reason', 'hint', 'resources'}
+        }
+        catalog_rows = [
+            {
+                'id': row.get('id'),
+                'name': row.get('name'),
+                'available': bool(row.get('available')),
+                'hint': row.get('hint'),
+            }
+            for row in (cat.get('categories') or [])
+            if isinstance(row, Mapping)
+        ]
+        return json.dumps({
+            'status': {
+                'active': bool(st.get('active')),
+                'armed': bool(st.get('armed')),
+                'process': st.get('process'),
+                'module_base': st.get('module_base'),
+                'provider_mode': st.get('provider_mode'),
+                'hint': st.get('hint'),
+            },
+            'job_id': self._job_id,
+            'catalog': catalog_rows,
+            'self': self_rows,
+            'entities': entity_rows,
+            'damage': damage_rows,
+            'search': {
+                'state': search.get('state'),
+                'count': search.get('count'),
+                'progress': search.get('progress'),
+                'error': search.get('error'),
+                'truncated': bool(search.get('truncated')),
+                'results': search_results,
+            },
+        }, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _to_num(v: Any) -> float:
