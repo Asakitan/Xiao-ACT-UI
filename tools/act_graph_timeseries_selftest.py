@@ -8,6 +8,7 @@ import unittest
 
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
+from gui_modules.sao_gui_graph_timeseries import GraphTimeseriesPanel
 
 
 class FakeOwner:
@@ -74,6 +75,25 @@ class ActGraphTimeseriesRuntimeTests(unittest.TestCase):
         self.assertTrue(status["ok"])
         self.assertEqual(status["series"]["event_count"]["points"], [])
         self.assertEqual(status["time_range_ms"], 0)
+
+    def test_entity_signature_tracks_rendered_filter_and_status_fields(self) -> None:
+        points = [{"time_ms": 1000, "topic": "damage", "value": 100, "row_id": "r1"}]
+        base = {
+            "time_range_ms": 0,
+            "row_count": 1,
+            "encounter_id": "live",
+            "filters": {"query": "", "topic": ""},
+            "errors": [],
+        }
+        query_changed = dict(base, filters={"query": "boss", "topic": ""})
+        rows_changed = dict(base, row_count=2)
+        errors_changed = dict(base, errors=["late packet"])
+
+        sig = GraphTimeseriesPanel._series_signature("damage", points, base)
+
+        self.assertNotEqual(sig, GraphTimeseriesPanel._series_signature("damage", points, query_changed))
+        self.assertNotEqual(sig, GraphTimeseriesPanel._series_signature("damage", points, rows_changed))
+        self.assertNotEqual(sig, GraphTimeseriesPanel._series_signature("damage", points, errors_changed))
 
 
 if __name__ == "__main__":

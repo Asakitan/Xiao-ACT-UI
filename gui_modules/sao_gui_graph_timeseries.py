@@ -425,4 +425,14 @@ class GraphTimeseriesPanel:
         parts = []
         for point in points[-24:]:
             parts.append((point.get('time_ms'), point.get('topic'), point.get('value'), point.get('row_id')))
-        return repr((metric, int(status.get('time_range_ms') or 0), parts))
+        filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
+        return repr((
+            metric,
+            int(status.get('time_range_ms') or 0),
+            int(status.get('row_count') or len(points)),
+            str(status.get('encounter_id') or ''),
+            str(filters.get('query') or ''),
+            str(filters.get('topic') or ''),
+            tuple(str(err) for err in list(status.get('errors') or [])),
+            parts,
+        ))

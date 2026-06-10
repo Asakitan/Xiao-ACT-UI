@@ -8,6 +8,7 @@ from pathlib import Path
 import unittest
 
 from act_platform import runtime
+from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel
 
 
 class FakeTracker:
@@ -95,6 +96,24 @@ class ActCombatantDrilldownRuntimeTests(unittest.TestCase):
         self.assertFalse(status["ok"])
         self.assertEqual(status["summary"], {})
         self.assertTrue(status["errors"])
+
+    def test_entity_signature_tracks_rendered_summary_skill_and_side_fields(self) -> None:
+        base = {
+            "combatant_id": "1001",
+            "summary": {"name": "Kirito", "damage": 2500, "heal": 120, "dps": 1250, "crit_rate": 0.25, "damage_pct": 0.625},
+            "skills": [{"skill_id": 11, "name": "Slash", "amount": 1800, "hits": 3, "kind": "damage", "crit_rate": 0.333}],
+            "outgoing": [{"kind": "damage", "name": "Boss", "amount": 900}],
+            "filters": {"query": "", "focus_target": ""},
+        }
+        summary_changed = dict(base, summary=dict(base["summary"], dps=1300, crit_rate=0.5, damage_pct=0.7))
+        skill_changed = dict(base, skills=[dict(base["skills"][0], crit_rate=0.667)])
+        side_changed = dict(base, outgoing=[{"kind": "damage", "name": "Boss", "amount": 1200}])
+
+        sig = CombatantDrilldownPanel._signature(base)
+
+        self.assertNotEqual(sig, CombatantDrilldownPanel._signature(summary_changed))
+        self.assertNotEqual(sig, CombatantDrilldownPanel._signature(skill_changed))
+        self.assertNotEqual(sig, CombatantDrilldownPanel._signature(side_changed))
 
 
 if __name__ == "__main__":

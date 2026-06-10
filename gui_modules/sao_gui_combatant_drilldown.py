@@ -337,6 +337,32 @@ class CombatantDrilldownPanel:
         skills = []
         for skill in list(status.get('skills') or [])[:40]:
             if isinstance(skill, Mapping):
-                skills.append((skill.get('skill_id'), skill.get('name'), skill.get('amount'), skill.get('hits'), skill.get('kind')))
+                skills.append((
+                    skill.get('skill_id'),
+                    skill.get('base_skill_id'),
+                    skill.get('source_skill_id'),
+                    skill.get('name'),
+                    skill.get('amount'),
+                    skill.get('hits'),
+                    skill.get('kind'),
+                    skill.get('crit_rate'),
+                ))
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
-        return repr((status.get('combatant_id'), summary.get('damage'), summary.get('heal'), filters.get('query'), filters.get('focus_target'), skills))
+        outgoing = []
+        for item in list(status.get('outgoing') or [])[:8]:
+            if isinstance(item, Mapping):
+                outgoing.append((item.get('kind'), item.get('name'), item.get('amount')))
+        return repr((
+            status.get('combatant_id'),
+            summary.get('name'),
+            summary.get('damage'),
+            summary.get('heal'),
+            summary.get('dps'),
+            summary.get('hps'),
+            summary.get('crit_rate'),
+            summary.get('damage_pct'),
+            filters.get('query'),
+            filters.get('focus_target'),
+            skills,
+            outgoing,
+        ))

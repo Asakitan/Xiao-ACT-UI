@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.41: ACT Entity 面板渲染签名补全.
+
+  1) `gui_modules/sao_gui_graph_timeseries.py` 的 Entity Graph 面板渲染签名加入
+     `row_count`、`encounter_id`、`filters.query/topic` 与错误列表。修复点位数据相同但
+     筛选条件、行数或错误状态变化时, 指标区 badge/Rows/Error 信息跳过重绘的问题。
+
+  2) `gui_modules/sao_gui_combatant_drilldown.py` 的 Entity Combatant Drilldown
+     签名加入摘要 `name/dps/hps/crit_rate/damage_pct`、技能 `crit_rate`/关联 ID
+     与侧栏 outgoing 行。修复伤害/治疗未变但 DPS、暴击、占比、技能暴击或目标侧栏变化时
+     面板保持旧渲染的问题。扩展 Graph/Combatant selftest 覆盖这些字段。
+
+
+
 ## v4.4.40: Plugin UI builder 数值参数容错修复.
 
   1) `act_platform/ui_spec.py` 的 `UI.input(..., width=...)` 现在复用规范化器的
