@@ -186,6 +186,16 @@ class SAOPlayerGUIStateMixin:
             if panel:
                 try:
                     _level_sig = (self._level, self._level_extra, self._season_exp)
+                    _level_changed = _level_sig != self._last_player_panel_level_sig
+                    if hasattr(panel, 'update_profile'):
+                        panel.update_profile(
+                            self._username or 'Player',
+                            self._profession or '',
+                            repaint=not _level_changed,
+                        )
+                    else:
+                        panel._username = self._username or 'Player'
+                        panel._profession = self._profession or ''
                     if _level_sig != self._last_player_panel_level_sig:
                         self._last_player_panel_level_sig = _level_sig
                         panel.update_level(self._level, self._level_extra, self._season_exp)
@@ -867,10 +877,23 @@ class SAOPlayerGUIStateMixin:
                     # 同步 HP/STA 到菜单面板
                     _pp = getattr(self, '_player_panel', None)
                     if _pp:
-                        _pp._sta_hp = (hp, hp_max)
-                        _pp._sta_sta = (sta, sta_max)
                         _level_sig = (menu_level, menu_level_extra, menu_season_exp)
-                        if _level_sig != self._last_player_panel_level_sig:
+                        _level_changed = _level_sig != self._last_player_panel_level_sig
+                        if hasattr(_pp, 'update_vitals'):
+                            _pp.update_vitals(
+                                (hp, hp_max),
+                                (sta, sta_max),
+                                repaint=not _level_changed,
+                            )
+                        else:
+                            _pp._sta_hp = (hp, hp_max)
+                            _pp._sta_sta = (sta, sta_max)
+                            if (
+                                not _level_changed and
+                                getattr(_pp, '_active', False)
+                            ):
+                                _pp._redraw_top(_pp._target_w, _pp._top_h)
+                        if _level_changed:
                             self._last_player_panel_level_sig = _level_sig
                             _pp.update_level(menu_level, menu_level_extra, menu_season_exp)
 
@@ -1015,5 +1038,4 @@ class SAOPlayerGUIStateMixin:
                 self.root.after(200, self._recognition_loop)
             except Exception:
                 pass
-
 

@@ -148,6 +148,52 @@ class SAOPlayerPanel(tk.Frame):
             except Exception:
                 pass
 
+    def _repaint_top_if_active(self) -> None:
+        if not self._active:
+            return
+        if self._gpu_managed:
+            self._dispatch_gpu_paint()
+        elif not self._gpu_required:
+            self._redraw_top(self._target_w, self._top_h)
+
+    @staticmethod
+    def _coerce_stat_pair(value, default=(0, 0)) -> tuple[int, int]:
+        try:
+            cur, max_value = value
+        except Exception:
+            return default
+        try:
+            return max(0, int(cur or 0)), max(0, int(max_value or 0))
+        except Exception:
+            return default
+
+    def update_profile(self, username=None, profession=None,
+                       repaint: bool = True) -> bool:
+        """Update displayed player identity and repaint the top plate."""
+        next_username = self._username if username is None else str(username)
+        next_profession = self._profession if profession is None else str(profession)
+        if next_username == self._username and next_profession == self._profession:
+            return False
+        self._username = next_username
+        self._profession = next_profession
+        if repaint:
+            self._repaint_top_if_active()
+        return True
+
+    def update_vitals(self, hp=None, sta=None, repaint: bool = True) -> bool:
+        """Update HP/STA values shown in the player panel."""
+        cur_hp = self._coerce_stat_pair(getattr(self, '_sta_hp', (0, 0)))
+        cur_sta = self._coerce_stat_pair(getattr(self, '_sta_sta', (0, 0)))
+        next_hp = cur_hp if hp is None else self._coerce_stat_pair(hp, cur_hp)
+        next_sta = cur_sta if sta is None else self._coerce_stat_pair(sta, cur_sta)
+        if next_hp == cur_hp and next_sta == cur_sta:
+            return False
+        self._sta_hp = next_hp
+        self._sta_sta = next_sta
+        if repaint:
+            self._repaint_top_if_active()
+        return True
+
     def update_level(self, level: int, level_extra: int = 0,
                      season_exp: Optional[int] = None):
         """更新等级/赛季等级/EXP 信息。"""
@@ -163,11 +209,7 @@ class SAOPlayerPanel(tk.Frame):
         self._level = level
         self._level_extra = level_extra
         self._season_exp = next_exp
-        if self._active:
-            if self._gpu_managed:
-                self._dispatch_gpu_paint()
-            elif not self._gpu_required:
-                self._redraw_top(self._target_w, self._top_h)
+        self._repaint_top_if_active()
 
     def _animate_open(self):
         if self._gpu_managed:
@@ -494,4 +536,3 @@ class SAOPlayerPanel(tk.Frame):
             painter.tick(sx, sy, snap)
         except Exception:
             pass
-

@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.32: Player Panel 实时资料与 HP/STA 刷新修复.
+
+  1) `gui_modules/sao_player_panel.py` 新增 `update_vitals()` 并让状态同步路径通过它
+     更新 HP/STA。修复等级/EXP 没变化时, `_sta_hp`/`_sta_sta` 只被写字段但不触发
+     玩家面板重绘, 导致顶部 HP/STA 显示停留在旧值的问题。
+
+  2) 新增 `update_profile()` 并让 GameState/profile dialog 同步路径通过它更新已存在的
+     玩家面板。修复用户名或职业变化时只更新主 GUI 状态/菜单标题, 左侧 Player Panel
+     继续显示旧用户名的问题。新增 `tools/player_panel_selftest.py`。
+
+
+
 ## v4.4.31: Session Players 强制刷新与战力签名修复.
 
   1) `gui_modules/sao_session_players_panel.py` 的行签名在 Cython 基础签名外叠加

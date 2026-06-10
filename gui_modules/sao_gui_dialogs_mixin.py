@@ -90,8 +90,15 @@ class SAOPlayerGUIDialogsMixin:
         panel.update_level(self._level, self._level_extra, self._season_exp)
 
         # HP / STA 数据 (来自识别引擎)
-        panel._sta_hp = getattr(self, '_sta_hp', (0, 0))
-        panel._sta_sta = getattr(self, '_sta_sta', (0, 0))
+        if hasattr(panel, 'update_vitals'):
+            panel.update_vitals(
+                getattr(self, '_sta_hp', (0, 0)),
+                getattr(self, '_sta_sta', (0, 0)),
+                repaint=False,
+            )
+        else:
+            panel._sta_hp = getattr(self, '_sta_hp', (0, 0))
+            panel._sta_sta = getattr(self, '_sta_sta', (0, 0))
 
         # 菜单模式 (从 settings 恢复)
         saved_mode = self._get_setting('shift_mode', '普通模式')
@@ -278,12 +285,15 @@ class SAOPlayerGUIDialogsMixin:
                 self._sao_menu.username = username
                 self._sao_menu.description = profession or 'SAO Auto — 游戏辅助 UI'
             if self._player_panel:
-                self._player_panel._username = username
-                self._player_panel._profession = profession
-                if self._player_panel._active:
-                    self._player_panel._redraw_top(
-                        self._player_panel._target_w,
-                        self._player_panel._top_h)
+                if hasattr(self._player_panel, 'update_profile'):
+                    self._player_panel.update_profile(username, profession)
+                else:
+                    self._player_panel._username = username
+                    self._player_panel._profession = profession
+                    if self._player_panel._active:
+                        self._player_panel._redraw_top(
+                            self._player_panel._target_w,
+                            self._player_panel._top_h)
 
         def _open_profile_dialog():
             self._profile_dialog_pending = False
