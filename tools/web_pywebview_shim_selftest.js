@@ -134,6 +134,13 @@ function assert(cond, message) {
   assert(reportExport.includes("index: numericArg(args[0], 0)"), "report export should forward history index as a named payload field");
   assert(reportExport.includes("path: String(args[0] || '')"), "report export should forward import path as a named payload field");
 
+  const offlineImport = fs.readFileSync(path.join(root, "web/act_offline_import.html"), "utf8");
+  assert(!offlineImport.includes("{ args: args || [] }"), "offline import still sends bare fallback args");
+  assert(offlineImport.includes("offlinePayload(name, args || [])"), "offline import is missing fallback payload mapping");
+  assert(offlineImport.includes("history_limit: numericArg(args[0], 20)"), "offline import should forward history_limit as a named payload field");
+  assert(offlineImport.includes("path: String(args[0] || '')"), "offline import should forward import path as a named payload field");
+  assert(offlineImport.includes("index: numericArg(args[0], 0)"), "offline import should forward history index as a named payload field");
+
   const menu = fs.readFileSync(path.join(root, "web/menu.html"), "utf8");
   assert(menu.includes("_pdPanelCards"), "menu detached plugin panel should keep panel cards across polls");
   assert(!menu.includes("body.innerHTML = '';"), "menu detached plugin panel still clears all cards on each poll");

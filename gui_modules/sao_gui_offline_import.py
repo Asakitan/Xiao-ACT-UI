@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tkinter as tk
 from tkinter import filedialog
@@ -74,6 +75,7 @@ class OfflineImportPanel:
                 pass
         self._win = None
         self._rows = None
+        self._reset_render_cache()
 
     def is_visible(self) -> bool:
         return bool(self._win is not None and self._exists() and self._win.state() != 'withdrawn')
@@ -221,6 +223,10 @@ class OfflineImportPanel:
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
         win.protocol('WM_DELETE_WINDOW', self.hide)
+        self._reset_render_cache()
+
+    def _reset_render_cache(self) -> None:
+        self._last_rows_sig = ""
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         last = status.get('last_result') if isinstance(status.get('last_result'), Mapping) else {}
@@ -285,4 +291,29 @@ class OfflineImportPanel:
         history = status.get('history') if isinstance(status.get('history'), Mapping) else {}
         encounters = history.get('encounters') if isinstance(history.get('encounters'), list) else []
         last = status.get('last_result') if isinstance(status.get('last_result'), Mapping) else {}
-        return repr((status.get('status'), last.get('source_path'), last.get('format'), last.get('event_count'), len(encounters)))
+        preview = last.get('preview') if isinstance(last.get('preview'), Mapping) else {}
+        report = last.get('report') if isinstance(last.get('report'), Mapping) else {}
+        rendered_history = []
+        for idx, item in enumerate(encounters[:20]):
+            if not isinstance(item, Mapping):
+                continue
+            rendered_history.append({
+                'index': item.get('_history_index') if item.get('_history_index') is not None else idx,
+                'encounter_id': item.get('encounter_id'),
+                'total_damage': item.get('total_damage'),
+                'completed_local_time': item.get('completed_local_time'),
+            })
+        return json.dumps({
+            'status': status.get('status'),
+            'selected_file': status.get('selected_file'),
+            'last': {
+                'source_path': last.get('source_path'),
+                'format': last.get('format'),
+                'importer': last.get('importer'),
+                'event_count': last.get('event_count'),
+                'persisted': bool(last.get('persisted')),
+                'preview_encounter_id': preview.get('encounter_id'),
+                'report_encounter_id': report.get('encounter_id'),
+            },
+            'history': rendered_history,
+        }, ensure_ascii=False, sort_keys=True, default=str)

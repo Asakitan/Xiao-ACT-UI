@@ -116,6 +116,18 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     var toastTimer = null;
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
+    function numericArg(value, fallback) { var number = Number(value); return isFinite(number) ? number : fallback; }
+    function offlinePayload(name, args) {
+        args = args || [];
+        if (name === 'get_offline_import_status') return { history_limit: numericArg(args[0], 20) };
+        if (name === 'choose_offline_import_file') return {};
+        if (name === 'import_offline_report') {
+            return { path: String(args[0] || ''), persist: args[1] !== false, show: args[2] !== false };
+        }
+        if (name === 'load_history_report') return { index: numericArg(args[0], 0), show: args[1] !== false };
+        if (name === 'toggle_offline_import') return { action: 'toggle_offline_import' };
+        return { args: args };
+    }
     function apiCall(name, args) {
         var api = window.pywebview && window.pywebview.api;
         if (api && typeof api[name] === 'function') return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
@@ -127,7 +139,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                 load_history_report: 'act.history.load',
                 toggle_offline_import: 'ui.menu_action'
             };
-            var payload = name === 'toggle_offline_import' ? { action: 'toggle_offline_import' } : { args: args || [] };
+            var payload = offlinePayload(name, args || []);
             return window.bridge.cmd(cmdMap[name] || ('act.offline_import.' + name), payload).then(parseResult);
         }
         return Promise.resolve({ ok: false, message: 'Offline import API unavailable', errors: ['Offline import API unavailable'] });

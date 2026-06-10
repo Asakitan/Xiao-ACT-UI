@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.29: Offline Import 渲染与 fallback 参数修复.
+
+  1) `gui_modules/sao_gui_offline_import.py` 的行签名现在覆盖实际渲染的导入预览字段
+     和前 20 条 history 行内容, 并在窗口销毁/重建时清空缓存。修复历史数量不变但
+     伤害/完成时间变化、导入预览 encounter/importer/persisted 变化, 或重建窗口时
+     面板不刷新的问题。
+
+  2) `web/act_offline_import.html` 的 `window.bridge.cmd` fallback 不再发送裸
+     `{args:[...]}`。history_limit、导入 path/persist/show、history index/show
+     和关闭菜单 action 现在按命名字段传给 bridge。扩展 Python/JS 回归测试。
+
+
+
 ## v4.4.28: Report Export 渲染与 fallback 参数修复.
 
   1) `gui_modules/sao_gui_report_export.py` 在窗口销毁/重建时会清空 preview/history
