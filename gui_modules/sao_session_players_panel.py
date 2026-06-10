@@ -33,6 +33,16 @@ from utils.sao_sound import get_sao_font, get_cjk_font
 _SESSION_WHEEL_ROOTS: Dict[int, Dict[str, Any]] = {}
 
 
+def _session_rows_render_signature(rows) -> tuple[Any, tuple[str, ...]]:
+    """Track Cython row identity plus the power text actually rendered."""
+    power_text = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        power_text.append(str(row.get('fight_power') or ''))
+    return _CY_UI.session_rows_signature(list(rows or [])), tuple(power_text)
+
+
 def _dispatch_session_wheel(root, event):
     entry = _SESSION_WHEEL_ROOTS.get(id(root))
     if not entry:
@@ -599,8 +609,8 @@ class SAOSessionPlayersPanel(tk.Frame):
             except Exception:
                 rows = []
         rows = list(rows or [])
-        sig = _CY_UI.session_rows_signature(rows)
-        if sig == self._rows_sig and (not force or self._rows_sig is not None):
+        sig = _session_rows_render_signature(rows)
+        if sig == self._rows_sig and not force:
             return
         self._rows_sig = sig
         self._rows_data = rows

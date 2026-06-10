@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.31: Session Players 强制刷新与战力签名修复.
+
+  1) `gui_modules/sao_session_players_panel.py` 的行签名在 Cython 基础签名外叠加
+     实际渲染的 `fight_power` 文本。修复 rows_provider 只更新显示战力字符串,
+     或未提供 `fight_power_value` 时, 玩家列表跳过刷新并显示旧战力的问题。
+
+  2) `update_rows(..., force=True)` 不再因已有相同签名提前返回。强制打开/刷新会
+     重置 lazy render 状态、滚动起点与 GPU repaint/drain, 修复强制刷新被缓存吞掉的问题。
+     新增 `tools/session_players_panel_selftest.py`。
+
+
+
 ## v4.4.30: Mem Scope 实时签名刷新修复.
 
   1) `gui_modules/sao_gui_mem_scope.py` 的渲染签名现在覆盖 catalog、自身状态、
