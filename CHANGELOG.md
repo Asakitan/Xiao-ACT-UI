@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.38: Data Source 与 ACT 命令注册 fallback 修复.
+
+  1) `web/data_source_health.html` 的 WebView2 bridge fallback 现在会对
+     health/diagnose/copy 发送空命名 payload, 对 toggle 发送 `action` payload。
+     修复该页面与 pywebview shim/C# bridge payload 形状不一致、真实命令仍携带裸
+     `args` 的问题。
+
+  2) C# `ActBridge` 补齐 `act.offline_import.*`、`act.mini_parse.*` 与
+     `act.selective_parsing.*` 命令注册。修复已命名化的 Offline Import、Mini Parse
+     与 Selective Parsing Web fallback 在 native WebView2 host 下仍落到
+     `unknown_command` 的问题。扩展 shim selftest 与 `Session194ActBridgeTests`。
+
+
+
 ## v4.4.37: Death Recap WebView2 fallback 修复.
 
   1) `web/act_death_recap.html` 的 fallback 现在会传递 `limit`、`window_s`

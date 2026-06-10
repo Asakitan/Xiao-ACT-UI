@@ -180,6 +180,11 @@ function assert(cond, message) {
   assert(deathRecap.includes("window_s: numericArg(args[1], 8.0)"), "death recap should forward window_s");
   assert(deathRecap.includes("entity_id: args[2] == null || args[2] === '' ? null : args[2]"), "death recap should forward entity_id");
 
+  const dataSourceHealth = fs.readFileSync(path.join(root, "web/data_source_health.html"), "utf8");
+  assert(!dataSourceHealth.includes("{ args: args || [] }"), "data source health still sends bare fallback args");
+  assert(dataSourceHealth.includes("sourcePayload(name, args || [])"), "data source health is missing fallback payload mapping");
+  assert(dataSourceHealth.includes("name === 'get_data_source_health' || name === 'diagnose_data_source' || name === 'copy_data_source_health'"), "data source health should send empty payloads for data commands");
+
   const reportExport = fs.readFileSync(path.join(root, "web/act_report_export.html"), "utf8");
   assert(!reportExport.includes("{ args: args || [] }"), "report export still sends bare fallback args");
   assert(reportExport.includes("reportPayload(name, args || [])"), "report export is missing fallback payload mapping");

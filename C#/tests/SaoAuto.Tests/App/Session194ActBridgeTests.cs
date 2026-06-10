@@ -81,6 +81,9 @@ public class Session194ActBridgeTests
 
         Assert.Contains(BridgeCommands.ActSourcesHealth, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ActAggregateStatus, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.ActMiniParseStatus, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.ActSelectiveParsingUpdate, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.ActOfflineImportImport, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ActSkillStatus, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ActDeathRecapStatus, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ActRenderApplyHooks, lifecycle.Router.RegisteredCommands);
@@ -90,6 +93,7 @@ public class Session194ActBridgeTests
         lifecycle.Dispose();
 
         Assert.DoesNotContain(BridgeCommands.ActSourcesHealth, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.ActOfflineImportStatus, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.ActSkillStatus, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.ActDeathRecapStatus, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.ActRenderOverlays, lifecycle.Router.RegisteredCommands);

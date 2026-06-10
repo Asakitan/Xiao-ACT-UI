@@ -205,6 +205,13 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
         return result || {};
     }
 
+    function sourcePayload(name, args) {
+        args = args || [];
+        if (name === 'toggle_data_source_health') return { action: 'toggle_data_source_health' };
+        if (name === 'get_data_source_health' || name === 'diagnose_data_source' || name === 'copy_data_source_health') return {};
+        return { args: args };
+    }
+
     function apiCall(name, args) {
         var api = window.pywebview && window.pywebview.api;
         if (api && typeof api[name] === 'function') {
@@ -217,7 +224,7 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
                 copy_data_source_health: 'act.sources.copy',
                 toggle_data_source_health: 'ui.menu_action'
             };
-            var payload = name === 'toggle_data_source_health' ? { action: 'toggle_data_source_health' } : { args: args || [] };
+            var payload = sourcePayload(name, args || []);
             return window.bridge.cmd(cmdMap[name] || ('act.sources.' + name), payload).then(parseResult);
         }
         return Promise.resolve({ ok: false, status: 'missing', errors: ['Data source API unavailable'] });

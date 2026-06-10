@@ -101,10 +101,22 @@ public static class BridgeCommands
     public const string ActReportExport = "act.report.export";
     public const string ActReportCopy = "act.report.copy";
 
+    public const string ActMiniParseStatus = "act.mini_parse.status";
+    public const string ActMiniParsePreview = "act.mini_parse.preview";
+    public const string ActMiniParseCopy = "act.mini_parse.copy";
+
+    public const string ActSelectiveParsingStatus = "act.selective_parsing.status";
+    public const string ActSelectiveParsingUpdate = "act.selective_parsing.update";
+    public const string ActSelectiveParsingClear = "act.selective_parsing.clear";
+
     public const string ActHistoryStatus = "act.history.status";
     public const string ActHistoryLoad = "act.history.load";
     public const string ActHistoryDelete = "act.history.delete";
     public const string ActHistoryClear = "act.history.clear";
+
+    public const string ActOfflineImportChooseFile = "act.offline_import.choose_file";
+    public const string ActOfflineImportImport = "act.offline_import.import";
+    public const string ActOfflineImportStatus = "act.offline_import.status";
 
     public const string ActTimelineStatus = "act.timeline.status";
     public const string ActTimelinePlay = "act.timeline.play";
