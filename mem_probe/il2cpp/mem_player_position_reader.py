@@ -24,10 +24,13 @@ from mem_probe.il2cpp.live_field_resolver import LiveFieldResolver
 
 ENTITY_CLASS = "Panda.ZGame.ZEntity"
 MOVEMOD_CLASS = "MoveModuleComp"
+STATEMOVE_CLASS = "ZStateMoveComp"
 
 # 活体实证 fallback (auto-offset 解析失败时用)
+ENT_STATEMOVE_OFF = 0xA8      # ZEntity.stateMoveComp_
+STATEMOVE_OLDPOS_OFF = 0x54   # ZStateMoveComp.oldGoPosition_ (Vector3) — 本地+远程通用
 ENT_MOVEMOD_OFF = 0x88        # ZEntity.moveModuleComp_
-MOVEMOD_LASTPOS_OFF = 0x98    # MoveModuleComp.lastPosition_ (Vector3)
+MOVEMOD_LASTPOS_OFF = 0x98    # MoveModuleComp.lastPosition_ (仅本地受控玩家更新)
 
 _MIN_PTR = 0x10000
 _MAX_PTR = 0x7FFF_FFFF_FFFF
@@ -53,9 +56,15 @@ class PlayerPositionReader:
     def _resolve(self) -> Dict[str, int]:
         if self._off:
             return self._off
+        ent_smc = self._lfr.field_offset(ENTITY_CLASS, "stateMoveComp_")
+        smc_pos = self._lfr.field_offset(STATEMOVE_CLASS, "oldGoPosition_")
         ent_mm = self._lfr.field_offset(ENTITY_CLASS, "moveModuleComp_")
         mm_pos = self._lfr.field_offset(MOVEMOD_CLASS, "lastPosition_")
         self._off = {
+            # 主路: stateMoveComp_.oldGoPosition_ (本地玩家 + 远程 boss/怪 都更新)
+            "ent_statemove": int(ent_smc) if ent_smc else ENT_STATEMOVE_OFF,
+            "statemove_pos": int(smc_pos) if smc_pos else STATEMOVE_OLDPOS_OFF,
+            # 兜底: moveModuleComp_.lastPosition_ (仅本地受控玩家更新)
             "ent_movemod": int(ent_mm) if ent_mm else ENT_MOVEMOD_OFF,
             "movemod_pos": int(mm_pos) if mm_pos else MOVEMOD_LASTPOS_OFF,
         }
@@ -75,14 +84,23 @@ class PlayerPositionReader:
         return (x, y, z)
 
     def read_entity_pos(self, entity_obj: int) -> Optional[Vec3]:
-        """读一个 ZEntity 对象的当前世界坐标 (x, y_height, z)。"""
+        """读一个 ZEntity 对象的当前世界坐标 (x, y_height, z)。
+
+        主路 stateMoveComp_.oldGoPosition_ 对本地玩家和远程 boss/怪都更新 (实测 boss
+        房两只狼+小怪坐标全读到); 远程实体不写 moveModuleComp_.lastPosition_, 故仅
+        当主路读到全零 (未初始化) 才回退本地路。"""
         if not (_MIN_PTR <= (entity_obj or 0) <= _MAX_PTR):
             return None
         off = self._resolve()
+        smc = self._pm.read_u64(entity_obj + off["ent_statemove"]) or 0
+        if _MIN_PTR <= smc <= _MAX_PTR:
+            pos = self._read_vec3(smc + off["statemove_pos"])
+            if pos and any(abs(c) > 1e-4 for c in pos):
+                return pos
         mm = self._pm.read_u64(entity_obj + off["ent_movemod"]) or 0
-        if not (_MIN_PTR <= mm <= _MAX_PTR):
-            return None
-        return self._read_vec3(mm + off["movemod_pos"])
+        if _MIN_PTR <= mm <= _MAX_PTR:
+            return self._read_vec3(mm + off["movemod_pos"])
+        return None
 
 
 __all__ = ["PlayerPositionReader", "horiz_dist", "Vec3"]
