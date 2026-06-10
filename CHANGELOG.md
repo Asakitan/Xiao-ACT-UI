@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.45: ACT Web 刷新状态保留.
+
+  1) `web/act_action_log.html` 的主列表刷新现在会在普通 refresh、复制和 group
+     展开/收起后保留滚动位置；搜索、过滤、跳转和翻页仍会回到新结果顶部。修复 live/history
+     行为日志重绘后浏览位置跳回顶部、用户需要反复找回上下文的问题。
+
+  2) `web/act_timeline_vcr.html` 的事件列表现在在 refresh/play/pause/step/seek
+     后保留滚动位置, 并通过稳定 key 保留已展开事件 payload。修复 VCR 控制或刷新后
+     事件详情全部折叠、列表跳顶的问题。新增 `tools/web_act_render_state_selftest.js`
+     锁定 Web 渲染状态回归。
+
+
+
 ## v4.4.44: ACT Web 侧栏滚动补全.
 
   1) `web/act_report_export.html` 的 EXPORT SUMMARY/OFFLINE IMPORT/HISTORY

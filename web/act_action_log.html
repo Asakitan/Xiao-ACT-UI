@@ -219,8 +219,19 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             return '<section class="group-card ' + (open ? 'open' : '') + '" data-group="' + esc(key) + '"><button class="group-head" type="button" onclick="ActionLog.toggleGroup(\'' + jsq(key) + '\')"><span class="group-toggle">' + (open ? '▾' : '▸') + '</span><span class="group-title"><div class="group-name">' + esc(group.name || '-') + '</div><div class="group-meta">' + esc(meta) + '</div></span><span class="group-total">' + esc(group.total_value || 0) + '</span></button><div class="group-detail">' + rows.map(detailRow).join('') + (group.has_more_rows ? '<div class="detail-meta">还有更多明细，请缩小筛选或翻页查看。</div>' : '') + '</div></section>';
         }).join('');
     }
-    function render(data) {
+    function setRowsHtml(html, preserveScroll) {
+        var top = rowsEl.scrollTop || 0;
+        var left = rowsEl.scrollLeft || 0;
+        rowsEl.innerHTML = html;
+        if (preserveScroll) {
+            rowsEl.scrollTop = top;
+            rowsEl.scrollLeft = left;
+        }
+    }
+    function render(data, options) {
         data = data || {};
+        options = options || {};
+        var preserveScroll = options.preserveScroll !== false;
         var rows = data.rows || [];
         var groups = data.grouped_rows || [];
         var filters = data.filters || {};
@@ -240,20 +251,20 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         document.getElementById('sum-cursor').textContent = ActTime.fmtClock(cursorState.time_ms);
         document.getElementById('sum-filter').textContent = (filters.source || data.source || 'live').toUpperCase() + ' · ' + (filters.topic || 'ALL') + (filters.query ? (' / ' + filters.query) : '');
         document.getElementById('sum-errors').textContent = String((data.errors || []).length);
-        if (!rows.length) { rowsEl.innerHTML = '<div class="empty">暂无 ACT 行为日志。<br/>live 模式等待事件；history 模式需要 SQLite actions。</div>'; return; }
-        if (groups.length) { rowsEl.innerHTML = renderGroups(groups); return; }
-        rowsEl.innerHTML = '<table class="table"><thead><tr><th>Time</th><th>Topic</th><th>Action</th><th>Value</th><th>Source</th><th>Payload</th></tr></thead><tbody>' + rows.map(function (row) {
+        if (!rows.length) { setRowsHtml('<div class="empty">暂无 ACT 行为日志。<br/>live 模式等待事件；history 模式需要 SQLite actions。</div>', preserveScroll); return; }
+        if (groups.length) { setRowsHtml(renderGroups(groups), preserveScroll); return; }
+        setRowsHtml('<table class="table"><thead><tr><th>Time</th><th>Topic</th><th>Action</th><th>Value</th><th>Source</th><th>Payload</th></tr></thead><tbody>' + rows.map(function (row) {
             return '<tr class="' + (row.is_cursor ? 'cursor' : '') + '"><td>' + esc(ActTime.fmtClock(row.time_ms)) + '</td><td><span class="topic">' + esc(row.topic || '-') + '</span></td><td>' + esc(row.label || '-') + '</td><td>' + esc(row.value || '') + '</td><td>' + esc(row.source || '-') + '</td><td><div class="payload">actor=' + esc(row.actor || '-') + ' · target=' + esc(row.target || '-') + '</div></td></tr>';
-        }).join('') + '</tbody></table>';
+        }).join('') + '</tbody></table>', preserveScroll);
     }
     window.ActionLog = {
-        refresh: function () { return apiCall('get_action_log_status', [pageLimit, query.value || '', topic.value || '', Number(cursor.value || 0), source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data); if (data.ok === false) showToast(data.message || 'Action log failed'); return data; }); },
-        search: function () { pageOffset = 0; return apiCall('search_action_log', [query.value || '', pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data); return data; }); },
-        filter: function () { pageOffset = 0; return apiCall('filter_action_log', [topic.value || '', query.value || '', pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data); return data; }); },
-        jump: function () { return apiCall('jump_action_log_time', [Number(cursor.value || 0), pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data); return data; }); },
-        copy: function () { return apiCall('copy_action_log', [pageLimit, query.value || '', topic.value || '', source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data); showToast('Action log copied'); return data; }); },
-        prev: function () { pageOffset = Math.max(0, pageOffset - pageLimit); return ActionLog.refresh(); },
-        next: function () { if (lastCursor && lastCursor.has_next === false) { showToast('No next page'); return Promise.resolve(lastCursor); } pageOffset += pageLimit; return ActionLog.refresh(); },
+        refresh: function (options) { options = options || {}; return apiCall('get_action_log_status', [pageLimit, query.value || '', topic.value || '', Number(cursor.value || 0), source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: options.preserveScroll !== false }); if (data.ok === false) showToast(data.message || 'Action log failed'); return data; }); },
+        search: function () { pageOffset = 0; return apiCall('search_action_log', [query.value || '', pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
+        filter: function () { pageOffset = 0; return apiCall('filter_action_log', [topic.value || '', query.value || '', pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
+        jump: function () { return apiCall('jump_action_log_time', [Number(cursor.value || 0), pageLimit, source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { render(data, { preserveScroll: false }); return data; }); },
+        copy: function () { return apiCall('copy_action_log', [pageLimit, query.value || '', topic.value || '', source.value || 'live', encounter.value || '', pageOffset]).then(function (data) { if (data.text && navigator.clipboard) navigator.clipboard.writeText(data.text); render(data, { preserveScroll: true }); showToast('Action log copied'); return data; }); },
+        prev: function () { pageOffset = Math.max(0, pageOffset - pageLimit); return ActionLog.refresh({ preserveScroll: false }); },
+        next: function () { if (lastCursor && lastCursor.has_next === false) { showToast('No next page'); return Promise.resolve(lastCursor); } pageOffset += pageLimit; return ActionLog.refresh({ preserveScroll: false }); },
         toggleGroup: function (key) { expandedGroups[String(key || '')] = !expandedGroups[String(key || '')]; return ActionLog.refresh(); },
         close: function () { apiCall('toggle_action_log'); },
         fadeIn: function () { shell.classList.add('visible'); },
