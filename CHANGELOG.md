@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.44: ACT Web 侧栏滚动补全.
+
+  1) `web/act_report_export.html` 的 EXPORT SUMMARY/OFFLINE IMPORT/HISTORY
+     侧栏改为内部滚动。修复固定高度 WebView 中导入控件、历史搜索和清空按钮可能被
+     顶层 `overflow:hidden` 截断、只剩 history 子区域可滚的问题。
+
+  2) `web/act_death_recap.html` 的 SUMMARY 侧栏补齐 `overflow:auto`。
+     修复小高度窗口下 Copy JSON 与死亡摘要统计溢出到外层 hidden shell 后不可达的问题。
+     `tools/web_act_layout_selftest.py` 同步扩展到 Action Log、Report Export 与
+     Death Recap 的侧栏滚动检查。
+
+
+
 ## v4.4.43: ACT Web 面板裁剪修复.
 
   1) `web/act_graph_timeseries.html` 的最新点位列表现在为 6 行渲染预留足够高度,
