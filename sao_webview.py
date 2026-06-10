@@ -155,7 +155,11 @@ from act_platform.runtime import (
 )
 from config import (
     DEFAULT_HOTKEYS,
+    HOTKEY_MOD_ALL_VKS,
     get_skill_slot_rects,
+    hotkey_mods_down,
+    parse_hotkey,
+    select_hotkey_match,
     WEB_DIR,
     resource_path,
 )
@@ -6458,24 +6462,76 @@ class SAOWebViewGUI:
         except Exception:
             pass
 
-    def _hk_check(self):
-        # Merge saved hotkeys with defaults so new keys (like toggle_hide_seek)
-        # are always available even if settings.json doesn't contain them.
+    def _hk_plugin_map(self):
+        """插件快捷键 {action: {'key': 'CTRL+F8', 'callback': fn}} — 镜像
+        Entity 端 _plugin_hotkey_map。用户在 settings['hotkeys'] 的覆盖优先
+        于插件声明的 default_key; 每次按键现解析, 热加载的插件即时生效。
+        webview 无 Tk 主循环, 回调在监听/轮询线程直接派发。
+        """
+        out = {}
+        try:
+            from act_platform.runtime import ensure_act_plugin_manager
+            mgr = ensure_act_plugin_manager(self, load=False)
+            saved = getattr(self, '_cfg_settings_ref', None)
+            saved = {} if saved is None else (saved.get('hotkeys') or {})
+            for hk in mgr.list_hotkeys():
+                if not hk.get('active'):
+                    continue
+                action = str(hk.get('action') or '')
+                key = ''
+                if isinstance(saved, dict) and action in saved:
+                    v = saved[action]
+                    key = (v.get('key') or v.get('name')) if isinstance(v, dict) else str(v)
+                key = str(key or hk.get('default_key') or '').upper()
+                if not key:
+                    continue
+                out[action] = {
+                    'key': key,
+                    'callback': (lambda a=action, m=mgr: m.dispatch_hotkey(a)),
+                }
+        except Exception:
+            pass
+        return out
+
+    def _hk_clear_pressed_main(self):
+        # 触发后只清主键、保留修饰键 — pynput 不会为仍按住的 Ctrl 重发
+        # press 事件, 全清会让紧接着的下一个 Ctrl+F 组合丢失 Ctrl 状态。
+        self._hk_pressed = {k for k in self._hk_pressed
+                            if k in HOTKEY_MOD_ALL_VKS}
+
+    def _hk_bindings(self):
+        """全部活动绑定 [(parsed, (callback, vk))] — 内置在前 (并列特异度时
+        内置优先), 插件映射在后; 每次按键/轮询现解析。"""
         saved = getattr(self, '_cfg_settings_ref', None)
         user_hotkeys = {} if saved is None else (saved.get('hotkeys') or {})
+        # Merge saved hotkeys with defaults so new keys (like toggle_hide_seek)
+        # are always available even if settings.json doesn't contain them.
         hotkeys = {**DEFAULT_HOTKEYS, **user_hotkeys}
+        bindings = []
         for action, info in hotkeys.items():
-            vk = None
-            if isinstance(info, dict):
-                vk = info.get('vk')
-            elif isinstance(info, str) and info:
-                vk = self._FKEY_VK.get(info.upper())
-            if vk and vk in self._hk_pressed:
-                cb = self._hk_actions.get(action)
-                if cb:
-                    threading.Thread(target=cb, daemon=True).start()
-                    self._hk_pressed.clear()
-                    return
+            cb = self._hk_actions.get(action)
+            if cb is None:
+                continue
+            parsed = parse_hotkey(info)
+            if parsed:
+                bindings.append((parsed, (cb, parsed['vk'])))
+        for action, info in self._hk_plugin_map().items():
+            parsed = parse_hotkey(info)
+            cb = info.get('callback')
+            if parsed and cb:
+                bindings.append((parsed, (cb, parsed['vk'])))
+        return bindings
+
+    def _hk_check(self):
+        # 'F5' 与 'CTRL+F5' 等组合共存: select_hotkey_match 取最特异命中。
+        hit = select_hotkey_match(self._hk_bindings(), self._hk_pressed)
+        if hit:
+            cb, vk = hit
+            # 标记轮询沿状态, 防止 50ms 内 _hk_poll_tick 对同一次物理按键
+            # 再发一次 (pynput 钩子健康时两路都活着)。
+            self._hk_poll_prev[vk] = True
+            threading.Thread(target=cb, daemon=True).start()
+            self._hk_clear_pressed_main()
 
     def _hk_poll_tick(self):
         """Poll GetAsyncKeyState for F-key presses (called from recognition loop).
@@ -6486,28 +6542,26 @@ class SAOWebViewGUI:
         if not getattr(self, '_hk_poll_ok', False):
             return
         try:
-            # Merge saved hotkeys with defaults
-            saved = getattr(self, '_cfg_settings_ref', None)
-            user_hotkeys = {} if saved is None else (saved.get('hotkeys') or {})
-            hotkeys = {**DEFAULT_HOTKEYS, **user_hotkeys}
-            for action, info in hotkeys.items():
-                vk = None
-                if isinstance(info, dict):
-                    vk = info.get('vk')
-                elif isinstance(info, str) and info:
-                    vk = self._FKEY_VK.get(info.upper())
-                if not vk:
-                    continue
+            bindings = self._hk_bindings()
+            if not bindings:
+                return
+            # 同一主键可挂多个组合 (F5 / CTRL+F5): 先按 vk 统一算上升沿,
+            # 再对每个新落下的主键选最特异命中。不提前 return —— 同一 tick
+            # 内按下的第二个热键的沿不能被吞掉。
+            mods_down = hotkey_mods_down()
+            fresh = set()
+            for vk in {payload[1] for _parsed, payload in bindings}:
                 # GetAsyncKeyState returns short; bit 15 = currently pressed
-                state = self._hk_GetAsyncKeyState(vk)
-                is_pressed = bool(state & 0x8000)
-                was_pressed = self._hk_poll_prev.get(vk, False)
+                is_pressed = bool(self._hk_GetAsyncKeyState(vk) & 0x8000)
+                if is_pressed and not self._hk_poll_prev.get(vk, False):
+                    fresh.add(vk)
                 self._hk_poll_prev[vk] = is_pressed
-                if is_pressed and not was_pressed:
-                    cb = self._hk_actions.get(action)
-                    if cb:
-                        threading.Thread(target=cb, daemon=True).start()
-                        return
+            for vk in fresh:
+                hit = select_hotkey_match(
+                    [(p, pl) for p, pl in bindings if pl[1] == vk],
+                    {vk}, mods_down=mods_down)
+                if hit:
+                    threading.Thread(target=hit[0], daemon=True).start()
         except Exception:
             pass
 
@@ -6619,8 +6673,18 @@ class SAOWebViewGUI:
             cfg = load_linkage_config(self._cfg_settings_ref)
             new_state = not bool(cfg.get('dodge_enabled', True))
             set_linkage_dodge_enabled(self._cfg_settings_ref, new_state)
-            msg = ('已启用 (F12 紧急停用)' if new_state
-                   else '已禁用 (F12 重新启用)')
+            key = 'F12'
+            try:
+                saved = getattr(self, '_cfg_settings_ref', None)
+                v = ((saved.get('hotkeys') or {}) if saved is not None else {}).get('toggle_auto_dodge')
+                if isinstance(v, dict):
+                    v = v.get('key') or v.get('name')
+                if v:
+                    key = str(v).upper()
+            except Exception:
+                pass
+            msg = (f'已启用 ({key} 紧急停用)' if new_state
+                   else f'已禁用 ({key} 重新启用)')
             self._show_identity_alert_window('自动躲避', msg)
             print(f'[SAO] auto-dodge {"on" if new_state else "off"}')
         except Exception as e:

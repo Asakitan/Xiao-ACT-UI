@@ -1397,6 +1397,7 @@ class PluginManager:
                          label: str = "") -> str:
         if not callable(callback):
             raise TypeError("hotkey callback must be callable")
+        from config import normalize_hotkey
         hid = _safe_id(hotkey_id)
         if not hid:
             raise ValueError(f"invalid hotkey id: {hotkey_id!r}")
@@ -1407,10 +1408,47 @@ class PluginManager:
                 "plugin_id": str(plugin_id or ""),
                 "hotkey_id": hid,
                 "callback": callback,
-                "default_key": str(default_key or "").upper(),
+                # 规范化拼写 ('Control+F8'→'CTRL+F8'), 占用表才能按字符串比较
+                "default_key": (normalize_hotkey(default_key)
+                                or str(default_key or "").upper()),
                 "label": str(label or hid),
             }
+        # 一次性迁移: 旧版改键 UI 允许把插件键设成与内置键同键 (运行时被
+        # 内置永久遮蔽且无任何提示)。注册时发现存量覆盖与内置现值同键就
+        # 丢弃, 让新的不冲突默认键生效。
+        self._drop_shadowed_override(action)
         return action
+
+    def _drop_shadowed_override(self, action: str) -> None:
+        from config import DEFAULT_HOTKEYS, normalize_hotkey
+        if self.settings is None or not (hasattr(self.settings, "get")
+                                         and hasattr(self.settings, "set")):
+            return
+        raw = self.settings.get("hotkeys", {}) or {}
+        if not isinstance(raw, dict) or action not in raw:
+            return
+
+        def _canon(value: Any) -> Optional[str]:
+            if isinstance(value, Mapping):
+                value = value.get("key") or value.get("name") or ""
+            return normalize_hotkey(str(value or ""))
+
+        override = _canon(raw.get(action))
+        if override is None:
+            return
+        builtin_current = {_canon(raw.get(b_action, default))
+                           for b_action, default in DEFAULT_HOTKEYS.items()}
+        if override not in builtin_current:
+            return
+        raw = dict(raw)
+        raw.pop(action, None)
+        self.settings.set("hotkeys", raw)
+        save = getattr(self.settings, "save", None)
+        if callable(save):
+            try:
+                save()
+            except Exception:
+                pass
 
     def list_hotkeys(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -1440,6 +1478,45 @@ class PluginManager:
                     return str(value.get("key") or value.get("name") or default_key)
                 return str(value or default_key)
         return default_key
+
+    def occupied_hotkeys(self, exclude_action: str = "") -> dict[str, str]:
+        """当前已占用的快捷键 {键: 归属} — 改键 UI 置灰 + set_hotkey 拒冲突。
+
+        内置动作取 settings 覆盖后的现值 (归属为动作 id), 插件取
+        list_hotkeys 现值且仅计 active 的 (归属为 label)。键经
+        normalize_hotkey 规范化 ('Control+F8'→'CTRL+F8'), 与改键 UI 的
+        选项字符串可直接比较; 不可规范化的键按原样大写记录。
+        ``exclude_action`` 把正在改键的动作自身排除在外。
+        """
+        from config import DEFAULT_HOTKEYS, normalize_hotkey
+        exclude_action = str(exclude_action or "").lower()
+        raw: Mapping = {}
+        if self.settings is not None and hasattr(self.settings, "get"):
+            candidate = self.settings.get("hotkeys", {}) or {}
+            if isinstance(candidate, Mapping):
+                raw = candidate
+
+        def _canon(value: Any) -> str:
+            if isinstance(value, Mapping):
+                value = value.get("key") or value.get("name") or ""
+            text = str(value or "").strip().upper()
+            return normalize_hotkey(text) or text
+
+        occupied: dict[str, str] = {}
+        for action, default in DEFAULT_HOTKEYS.items():
+            if action == exclude_action:
+                continue
+            key = _canon(raw.get(action, default))
+            if key:
+                occupied.setdefault(key, action)
+        for hk in self.list_hotkeys():
+            action = str(hk.get("action") or "")
+            if not hk.get("active") or action == exclude_action:
+                continue
+            key = _canon(hk.get("current_key"))
+            if key:
+                occupied.setdefault(key, str(hk.get("label") or action))
+        return occupied
 
     def hotkey_actions(self) -> dict[str, Callable[[], Any]]:
         """{action: dispatch} for the host hotkey manager (active plugins only)."""
@@ -1482,25 +1559,42 @@ class PluginManager:
 
         Only registered plugin hotkeys may be rebound (so a plugin panel cannot
         clobber a built-in binding). An empty / 'default' key clears the override
-        so the plugin's declared default applies again. The key is stored as a
-        plain ``"F8"`` string, which ``SAOHotkeyManager`` resolves to a VK — the
-        same mechanism the built-in hotkeys use, avoiding a separate conflict set.
+        so the plugin's declared default applies again — refused when that
+        default is meanwhile occupied by another action. Keys are stored in the
+        canonical ``"F8"`` / ``"CTRL+F8"`` spelling (``config.normalize_hotkey``)
+        that the listeners parse via ``config.parse_hotkey``. Unparseable keys
+        and keys already bound elsewhere (built-in action or another active
+        plugin hotkey) are rejected with ``False``.
         """
+        from config import normalize_hotkey
         # Hotkey actions are stored lowercase (_safe_id); normalize callers'
         # input so a mixed-case action id still matches.
         action = str(action or "").lower()
         with self._hotkeys_lock:
-            if action not in self._hotkeys:
-                return False
+            meta = self._hotkeys.get(action)
+        if meta is None:
+            return False
         if self.settings is None or not (hasattr(self.settings, "get") and hasattr(self.settings, "set")):
             return False
         raw = self.settings.get("hotkeys", {}) or {}
         raw = dict(raw) if isinstance(raw, dict) else {}
         key_norm = str(key or "").strip().upper()
         if not key_norm or key_norm in ("DEFAULT", "(DEFAULT)", "默认", "NONE", "无"):
+            if action in raw:
+                # 清除覆盖会让声明默认键重新生效 — 默认键已被别的动作占走
+                # 时拒绝, 否则会悄悄造出双绑定 (运行时只响一个)。
+                default_canon = normalize_hotkey(str(meta.get("default_key") or ""))
+                if default_canon and default_canon in self.occupied_hotkeys(
+                        exclude_action=action):
+                    return False
             raw.pop(action, None)
         else:
-            raw[action] = key_norm
+            canon = normalize_hotkey(key_norm)
+            if canon is None:
+                return False
+            if canon in self.occupied_hotkeys(exclude_action=action):
+                return False
+            raw[action] = canon
         self.settings.set("hotkeys", raw)
         save = getattr(self.settings, "save", None)
         if callable(save):

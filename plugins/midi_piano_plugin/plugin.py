@@ -587,8 +587,8 @@ def _body_settings():
                     ui.button("每页 +", "page_size_up")]),
         ], accent="cyan"),
         ui.section("热键 / 信息", [
-            ui.kv("播放/暂停", "F8（可在键位编辑器改键）"),
-            ui.kv("停止", "F10（可在键位编辑器改键）"),
+            ui.kv("播放/暂停", "默认 CTRL+F8（可在键位编辑器改键）"),
+            ui.kv("停止", "默认 CTRL+F10（可在键位编辑器改键）"),
             ui.kv("依赖", _S.get("deps") or "—"),
             ui.text("试听用 WinMCI/pygame（本机扬声器，不驱动游戏）。", "muted"),
         ], accent="accent"),
@@ -818,8 +818,9 @@ def on_load(ctx):
                                     "width": _w, "height": _h, "hidden": True},
                               render=_make_subpanel_render(view), on_action=_on_action)
 
-    ctx.register_hotkey("play_pause", _hk_play_pause, default_key="F8", label="MIDI 播放/暂停")
-    ctx.register_hotkey("stop", _hk_stop, default_key="F10", label="MIDI 停止")
+    # CTRL+ 组合: 纯 F8/F10 已被主 UI 的 boss_raid_next_phase / hide_panels 占用。
+    ctx.register_hotkey("play_pause", _hk_play_pause, default_key="CTRL+F8", label="MIDI 播放/暂停")
+    ctx.register_hotkey("stop", _hk_stop, default_key="CTRL+F10", label="MIDI 停止")
     _S["redraw_token"] = ctx.set_interval(_tick_redraw, 0.3)
 
     ctx.log(f"midi_piano_plugin 已加载; deps={_S['deps']}; 曲库={len(_S['lib'])}首; 子面板={len(SUBPANELS)}")

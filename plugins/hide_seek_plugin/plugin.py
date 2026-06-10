@@ -45,7 +45,8 @@ def on_load(ctx):
     )
     # Customizable hotkey — toggles the automation; rebindable in the keybinding
     # editor. Demonstrates the plugin custom-hotkey capability.
-    ctx.register_hotkey("toggle", _toggle, default_key="F12", label="自动躲猫猫开关")
+    # CTRL+F12: 纯 F12 已被主 UI 的 toggle_auto_dodge (自动躲避急停) 占用。
+    ctx.register_hotkey("toggle", _toggle, default_key="CTRL+F12", label="自动躲猫猫开关")
     ctx.log("hide_seek_plugin loaded (idle)")
 
 

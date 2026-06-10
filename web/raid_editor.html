@@ -825,7 +825,8 @@ function _mForm(m) {
             + '<span style="font-size:9px;color:#75808d;">挪到离目标这么远即停</span></div>';
     }
     html += '<div style="font-size:9px;color:#9fc0d8;margin:2px 0;">视角方向最稳(永远可用); 远离Boss/最近威胁会持续挪到出安全距离即停(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。</div>'
-        + '<div style="font-size:9px;color:#ff9a8c;margin:2px 0;">⚠ 自动 WASD 位移属自动化操作, 在反作弊游戏里有账号风险, 默认关闭, 自行承担。随时 F12 全松键急停。</div>';
+        + '<div style="font-size:9px;color:#ff9a8c;margin:2px 0;">⚠ 自动 WASD 位移属自动化操作, 在反作弊游戏里有账号风险, 默认关闭, 自行承担。随时 '
+        + _esc(((_mechState || {}).master || {}).panic_hotkey || 'F12') + ' 全松键急停。</div>';
     // 阶段范围
     var phases = (_mechState && _mechState.phases) || [];
     var pids = d.phase_ids || [];

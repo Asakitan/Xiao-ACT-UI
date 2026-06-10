@@ -348,7 +348,7 @@ def on_load(ctx):
     _ctx = ctx
     ctx.register_ui_panel("p", {"title": "P"}, render=lambda _p: ctx.ui.panel("P", []))
     ctx.register_hotkey("go", lambda: fired.__setitem__("n", fired["n"] + 1),
-                        default_key="F7", label="Go")
+                        default_key="CTRL+F7", label="Go")
 '''
 
 
@@ -386,7 +386,7 @@ class PinHotkeyDeclareTests(unittest.TestCase):
             m = self._mgr(root, [{"id": "ui_panels"}])
             hks = m.list_hotkeys()
             self.assertEqual(hks[0]["action"], "plugin.ph.go")
-            self.assertEqual(hks[0]["default_key"], "F7")
+            self.assertEqual(hks[0]["default_key"], "CTRL+F7")
             self.assertIn("plugin.ph.go", m.hotkey_actions())
             mod = __import__("sys").modules["act_plugin_ph"]
             self.assertTrue(m.dispatch_hotkey("plugin.ph.go"))
@@ -413,16 +413,71 @@ class PinHotkeyDeclareTests(unittest.TestCase):
             s = Settings()
             m = self._mgr_with_settings(root, s)
             action = "plugin.ph.go"
-            self.assertEqual(m.list_hotkeys()[0]["current_key"], "F7")  # default
-            self.assertTrue(m.set_hotkey(action, "F8"))
-            self.assertEqual(s.d["hotkeys"][action], "F8")
-            self.assertEqual(m.list_hotkeys()[0]["current_key"], "F8")
+            self.assertEqual(m.list_hotkeys()[0]["current_key"], "CTRL+F7")  # default
+            # F8 是内置 boss_raid_next_phase 的现值 -> 冲突, 拒绝。
+            self.assertFalse(m.set_hotkey(action, "F8"))
+            self.assertNotIn(action, s.d.get("hotkeys", {}))
+            # 别名拼写也撞 (规范化后比较): 内置被改键到 CTRL+F9 时,
+            # ' control + f9 ' 规范化为同一键 -> 拒绝。
+            s.d["hotkeys"] = {"boss_raid_next_phase": "CTRL+F9"}
+            self.assertFalse(m.set_hotkey(action, " control + f9 "))
+            self.assertNotIn(action, s.d.get("hotkeys", {}))
+            s.d["hotkeys"] = {}
+            # F1 / CTRL+F8 空闲 -> 接受, 且按规范拼写存储。
+            self.assertTrue(m.set_hotkey(action, "F1"))
+            self.assertEqual(s.d["hotkeys"][action], "F1")
+            self.assertTrue(m.set_hotkey(action, "ctrl+f8"))
+            self.assertEqual(s.d["hotkeys"][action], "CTRL+F8")
+            self.assertEqual(m.list_hotkeys()[0]["current_key"], "CTRL+F8")
+            self.assertTrue(m.set_hotkey(action, "shift+ctrl+f8"))
+            self.assertEqual(s.d["hotkeys"][action], "CTRL+SHIFT+F8")
+            # 不可解析的键 -> 拒绝 (主键限 F1-F12)。
+            self.assertFalse(m.set_hotkey(action, "CTRL+A"))
+            self.assertEqual(s.d["hotkeys"][action], "CTRL+SHIFT+F8")
+            # 占用表: 内置现值 + 本插件现值都在, 排除自身后自己的键不在。
+            occ = m.occupied_hotkeys()
+            self.assertEqual(occ.get("F8"), "boss_raid_next_phase")
+            self.assertEqual(occ.get("CTRL+SHIFT+F8"), "Go")
+            self.assertNotIn("CTRL+SHIFT+F8",
+                             m.occupied_hotkeys(exclude_action=action))
+            # 声明默认键 (CTRL+F7) 被别的动作占走时, 重置回默认被拒绝 —
+            # 否则会悄悄造出双绑定。
+            s.d["hotkeys"]["boss_raid_start"] = "CTRL+F7"
+            self.assertFalse(m.set_hotkey(action, "default"))
+            self.assertEqual(s.d["hotkeys"][action], "CTRL+SHIFT+F8")
+            del s.d["hotkeys"]["boss_raid_start"]
             # clear -> back to declared default
             m.set_hotkey(action, "default")
             self.assertNotIn(action, s.d.get("hotkeys", {}))
-            self.assertEqual(m.list_hotkeys()[0]["current_key"], "F7")
+            self.assertEqual(m.list_hotkeys()[0]["current_key"], "CTRL+F7")
             # cannot rebind a non-plugin (built-in) action
             self.assertFalse(m.set_hotkey("toggle_recognition", "F8"))
+
+    def test_shadowed_override_dropped_on_register(self) -> None:
+        # 旧版改键 UI 允许把插件键设成与内置同键 (被永久遮蔽); 注册时
+        # 应丢弃这类存量覆盖, 让新的不冲突默认键生效。
+        class Settings:
+            def __init__(self):
+                self.d = {"hotkeys": {"plugin.ph.go": "F8",
+                                      "plugin.other.x": "CTRL+F1"}}
+
+            def get(self, k, default=None):
+                return self.d.get(k, default)
+
+            def set(self, k, v):
+                self.d[k] = v
+
+            def save(self):
+                pass
+
+        with tempfile.TemporaryDirectory(prefix="act_mig_") as root:
+            s = Settings()
+            m = self._mgr_with_settings(root, s)
+            # F8 撞内置 boss_raid_next_phase -> 覆盖被丢弃, 回到声明默认
+            self.assertNotIn("plugin.ph.go", s.d["hotkeys"])
+            self.assertEqual(m.list_hotkeys()[0]["current_key"], "CTRL+F7")
+            # 不冲突的他人覆盖原样保留
+            self.assertEqual(s.d["hotkeys"].get("plugin.other.x"), "CTRL+F1")
 
     def _mgr_with_settings(self, root, settings):
         _write_plugin(

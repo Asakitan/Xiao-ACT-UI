@@ -110,6 +110,15 @@ def build_mechanics_state(settings, engine, state_mgr,
         except Exception:
             return default
 
+    def _panic_hotkey() -> str:
+        # 急停键即主 UI 的 toggle_auto_dodge 绑定 — 跟随用户改键, 标签
+        # 才不会和实际监听漂移 (默认 F12)。
+        hk = _setting("hotkeys", {})
+        value = hk.get("toggle_auto_dodge") if isinstance(hk, dict) else None
+        if isinstance(value, dict):
+            value = value.get("key") or value.get("name")
+        return str(value or "").strip().upper() or "F12"
+
     health = sao_tts.peek_tts_health()
     master = {
         "tts_enabled": bool(_setting("tts_enabled", True)),
@@ -118,7 +127,7 @@ def build_mechanics_state(settings, engine, state_mgr,
         "dodge_enabled": bool(linkage.get("dodge_enabled", True)),
         "directional_dodge_enabled": bool(_setting("directional_dodge_enabled", False)),
         "linkage_enabled": bool(linkage.get("enabled", False)),
-        "panic_hotkey": "F12",
+        "panic_hotkey": _panic_hotkey(),
         "zh_voice": health.get("zh_voice"),
     }
 

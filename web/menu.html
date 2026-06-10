@@ -7639,14 +7639,30 @@ setTimeout(function() {
         Promise.resolve(a.get_plugin_hotkeys()).then(parse).then(function (data) {
             var hks = ((data && data.hotkeys) || []).filter(function (h) { return h.plugin_id === _pdPlugin; });
             if (!hks.length) { hkBox.innerHTML = ''; return; }
+            var occupied = (data && data.occupied) || {};
+            // 可选键位: 纯 F 键 + CTRL/ALT 组合 (Tk sao_gui_plugin_manager._HK_CHOICES 与此 1:1)。
+            var GROUPS = [['', 'F 键'], ['CTRL+', 'CTRL 组合'], ['ALT+', 'ALT 组合']];
             var html = '<div class="pd-hk-title">快捷键 HOTKEYS</div>';
             hks.forEach(function (h) {
                 var cur = String(h.current_key || '').toUpperCase();
-                var opts = '<option value="">默认 Default</option>';
-                for (var i = 1; i <= 12; i++) {
-                    var k = 'F' + i;
-                    opts += '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' + k + '</option>';
-                }
+                // 「默认」项: 声明默认键被别的动作占走时置灰 (set_hotkey 的
+                // 清除分支会拒绝)。
+                var dk = String(h.default_key || '').toUpperCase();
+                var dTaken = dk && occupied[dk] && dk !== cur;
+                var opts = '<option value=""' + (dTaken ? ' disabled' : '') + '>默认 Default'
+                    + (dTaken ? ' (' + dk + ' · ' + esc(String(occupied[dk])) + ')' : '') + '</option>';
+                GROUPS.forEach(function (g) {
+                    opts += '<optgroup label="' + g[1] + '">';
+                    for (var i = 1; i <= 12; i++) {
+                        var k = g[0] + 'F' + i;
+                        // 被占用的键置灰并标注归属 (动作自身现值豁免)。
+                        var taken = occupied[k] && k !== cur;
+                        opts += '<option value="' + k + '"' + (k === cur ? ' selected' : '')
+                            + (taken ? ' disabled' : '') + '>' + k
+                            + (taken ? ' · ' + esc(String(occupied[k])) : '') + '</option>';
+                    }
+                    opts += '</optgroup>';
+                });
                 html += '<div class="pd-hk-row"><span>' + esc(h.label || h.hotkey_id) + '</span>'
                     + '<select data-action="' + esc(h.action) + '">' + opts + '</select></div>';
             });
@@ -7658,7 +7674,10 @@ setTimeout(function() {
         if (!sel || sel.tagName !== 'SELECT' || !sel.getAttribute('data-action')) return;
         if (!sel.closest || !sel.closest('#pd-hotkeys')) return;
         var a = api();
-        if (a && a.set_plugin_hotkey) a.set_plugin_hotkey(sel.getAttribute('data-action'), sel.value);
+        if (!a || !a.set_plugin_hotkey) return;
+        // set 被拒 (键被占用/不可解析) 时重建下拉, 选项回弹到改前值。
+        Promise.resolve(a.set_plugin_hotkey(sel.getAttribute('data-action'), sel.value))
+            .then(function () { buildPluginDetachedHotkeys(); });
     });
     document.addEventListener('click', function (e) {
         if (e.target.id === 'plugin-detached-overlay' || e.target.id === 'pd-close') window.hidePluginDetached();

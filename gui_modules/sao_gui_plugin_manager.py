@@ -468,6 +468,10 @@ class PluginManagerPanel:
 
 
 _FKEYS = [f'F{i}' for i in range(1, 13)]
+# 可选键位: 纯 F 键 + CTRL/ALT 组合 (web menu.html 改键下拉与此 1:1)。
+_HK_CHOICES = (_FKEYS
+               + [f'CTRL+{k}' for k in _FKEYS]
+               + [f'ALT+{k}' for k in _FKEYS])
 _HK_DEFAULT = '默认 Default'
 
 
@@ -727,10 +731,13 @@ class PluginDetachedPanel:
         for child in list(host.winfo_children()):
             child.destroy()
         try:
-            hotkeys = [h for h in (act_plugin_hotkeys(self.owner).get('hotkeys') or [])
+            data = act_plugin_hotkeys(self.owner)
+            hotkeys = [h for h in (data.get('hotkeys') or [])
                        if str(h.get('plugin_id')) == self.plugin_id]
+            occupied = {str(k).upper(): str(v)
+                        for k, v in (data.get('occupied') or {}).items()}
         except Exception:
-            hotkeys = []
+            hotkeys, occupied = [], {}
         if not hotkeys:
             return
         tk.Frame(host, bg=_SAO_PANEL_SEP, height=1).pack(fill='x', pady=(2, 6))
@@ -744,11 +751,33 @@ class PluginDetachedPanel:
             tk.Label(row, text=str(hk.get('label') or hk.get('hotkey_id') or action),
                      bg=_SAO_PANEL_BODY_BG, fg=_SAO_PANEL_VALUE_FG, anchor='w',
                      font=('Segoe UI', 9)).pack(side='left', fill='x', expand=True)
-            var = tk.StringVar(value=(cur if cur in _FKEYS else _HK_DEFAULT))
-            opt = tk.OptionMenu(row, var, _HK_DEFAULT, *_FKEYS,
+            var = tk.StringVar(value=(cur if cur in _HK_CHOICES else _HK_DEFAULT))
+            opt = tk.OptionMenu(row, var, _HK_DEFAULT, *_HK_CHOICES,
                                 command=lambda v, a=action: self._set_hotkey(a, v))
             opt.configure(bg=_SAO_PANEL_HEADER_BG, fg=_SAO_PANEL_HEADER_FG, relief='flat',
                           bd=0, highlightthickness=0, font=('Segoe UI', 9), padx=8)
+            # 三列布局 (F / CTRL+F / ALT+F); 被占用的键置灰并标注归属
+            # (动作自身现值豁免)。entry 0 是「默认」— 声明默认键被别的
+            # 动作占走时同样置灰 (set_hotkey 的清除分支会拒绝)。
+            menu = opt['menu']
+            default_key = str(hk.get('default_key') or '').upper()
+            d_owner = occupied.get(default_key)
+            if d_owner and default_key != cur:
+                try:
+                    menu.entryconfig(0, state='disabled',
+                                     label=f'{_HK_DEFAULT} ({default_key} · {d_owner})')
+                except Exception:
+                    pass
+            for idx, choice in enumerate(_HK_CHOICES, start=1):
+                try:
+                    if idx in (13, 25):
+                        menu.entryconfig(idx, columnbreak=1)
+                    owner_label = occupied.get(choice)
+                    if owner_label and choice != cur:
+                        menu.entryconfig(idx, state='disabled',
+                                         label=f'{choice} · {owner_label}')
+                except Exception:
+                    pass
             opt.pack(side='right')
 
     def _set_hotkey(self, action: str, value: str) -> None:

@@ -685,12 +685,17 @@ def act_plugin_pin(owner: Any, plugin_id: str, pinned: bool = True) -> dict[str,
 
 
 def act_plugin_hotkeys(owner: Any) -> dict[str, Any]:
-    """List plugin-registered hotkeys (for the keybinding editor + menu)."""
+    """List plugin-registered hotkeys (for the keybinding editor + menu).
+
+    ``occupied`` 给改键 UI 置灰用: {键: 归属} 含内置动作现值与 active
+    插件键现值 (调用方需把动作自身的现值豁免)。
+    """
     try:
         manager = ensure_act_plugin_manager(owner, load=True)
-        return {"ok": True, "hotkeys": manager.list_hotkeys()}
+        return {"ok": True, "hotkeys": manager.list_hotkeys(),
+                "occupied": manager.occupied_hotkeys()}
     except Exception as exc:
-        return {"ok": False, "message": str(exc), "hotkeys": []}
+        return {"ok": False, "message": str(exc), "hotkeys": [], "occupied": {}}
 
 
 def act_plugin_hotkey_dispatch(owner: Any, action: str) -> dict[str, Any]:

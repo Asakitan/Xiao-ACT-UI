@@ -210,8 +210,17 @@ class SAOPlayerGUIFloatHandlersMixin:
                     director.release_all()
                 except Exception:
                     pass
-            msg = ('已启用 (F12 紧急停用)' if new_state
-                   else '已禁用 (F12 重新启用)')
+            key = 'F12'
+            try:
+                v = (self.settings.get('hotkeys', {}) or {}).get('toggle_auto_dodge')
+                if isinstance(v, dict):
+                    v = v.get('key') or v.get('name')
+                if v:
+                    key = str(v).upper()
+            except Exception:
+                pass
+            msg = (f'已启用 ({key} 紧急停用)' if new_state
+                   else f'已禁用 ({key} 重新启用)')
             if getattr(self, '_alert_overlay', None):
                 self._alert_overlay.show_alert('自动躲避', msg)
             print(f'[SAO Entity] auto-dodge {"on" if new_state else "off"}')

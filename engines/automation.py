@@ -4,7 +4,14 @@
 import threading
 
 from engines.auto_key_engine import AutoKeyEngine
-from config import DEFAULT_HOTKEYS, SettingsManager
+from config import (
+    DEFAULT_HOTKEYS,
+    HOTKEY_FKEY_VK,
+    HOTKEY_MOD_ALL_VKS,
+    SettingsManager,
+    parse_hotkey,
+    select_hotkey_match,
+)
 from engines.game_state import GameStateManager
 from net.packet_bridge import PacketBridge
 from vision.recognition import RecognitionEngine
@@ -22,11 +29,8 @@ class AutomationCore:
         self._hk_pressed = set()
         self._hk_actions = {}
 
-    _FKEY_VK = {
-        "F1": 112, "F2": 113, "F3": 114, "F4": 115,
-        "F5": 116, "F6": 117, "F7": 118, "F8": 119,
-        "F9": 120, "F10": 121, "F11": 122, "F12": 123,
-    }
+    # F键虚拟键码表 — 共享表在 config.HOTKEY_FKEY_VK
+    _FKEY_VK = HOTKEY_FKEY_VK
 
     def start(self):
         self.packet.start()
@@ -113,16 +117,23 @@ class AutomationCore:
             pass
 
     def _hk_check(self):
-        saved = self.settings.get("hotkeys", DEFAULT_HOTKEYS)
-        for action, info in saved.items():
-            vk = None
-            if isinstance(info, dict):
-                vk = info.get("vk")
-            elif isinstance(info, str) and info:
-                vk = self._FKEY_VK.get(info.upper())
-            if vk and vk in self._hk_pressed:
-                cb = self._hk_actions.get(action)
-                if cb:
-                    threading.Thread(target=cb, daemon=True).start()
-                    self._hk_pressed.clear()
-                    return
+        # 组合键支持 (与 SAOHotkeyManager / sao_webview 同一套 config 共享
+        # 逻辑): 候选收齐后 select_hotkey_match 取最特异命中。内置键与保存
+        # 值 merge — 部分 dict 不能把内置默认杀掉。
+        saved = self.settings.get("hotkeys", {}) or {}
+        merged = {**DEFAULT_HOTKEYS, **saved} if isinstance(saved, dict) \
+            else dict(DEFAULT_HOTKEYS)
+        candidates = []
+        for action, info in merged.items():
+            cb = self._hk_actions.get(action)
+            if cb is None:
+                continue
+            parsed = parse_hotkey(info)
+            if parsed:
+                candidates.append((parsed, cb))
+        cb = select_hotkey_match(candidates, self._hk_pressed)
+        if cb:
+            threading.Thread(target=cb, daemon=True).start()
+            # 只清主键、保留修饰键 (pynput 不会为按住的 Ctrl 重发事件)
+            self._hk_pressed = {k for k in self._hk_pressed
+                                if k in HOTKEY_MOD_ALL_VKS}

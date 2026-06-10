@@ -11,7 +11,7 @@
 - **原生资源管理器选曲**：comdlg32 `GetOpenFileNameW`（不依赖 Tk root，Entity/WebView 两种模式都能弹出），所选目录自动并入曲库扫描。
 - **子面板**：钢琴键盘(键位使用分布/音域/覆盖率)、音符卷帘(播放事件时间轴表)、MIDI 分析(BPM/音部/调号/60-88覆盖率)、设置。每个都 `register_ui_panel` 独立注册（host「插件面板」里可单独唤出），主面板顶部也有「视图切换」可就地唤出。
 - 本机试听（不驱动游戏）：Windows 自带合成器(WinMCI) 优先，pygame 兜底；无需 SoundFont。
-- folder-scan 曲库（`assets/midi`，可加 `extra_midi_dir`）；可改键热键（默认 F8 播放/暂停、F10 停止）；前台门控（仅游戏在前台时注入）。
+- folder-scan 曲库（`assets/midi`，可加 `extra_midi_dir`）；可改键热键（默认 CTRL+F8 播放/暂停、CTRL+F10 停止，避开主 UI 的 F8/F10）；前台门控（仅游戏在前台时注入）。
 - 面板在 Entity(Tk) 与 WebView 双端渲染（用平台声明式 `ctx.ui`）。
 
 ## 目录

@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.4.53"
+APP_VERSION = "4.4.54"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # 完整版本历史见 CHANGELOG.md。
 
@@ -599,6 +599,142 @@ DEFAULT_HOTKEYS = {
     "show_plugins": "F11",
     "toggle_auto_dodge": "F12",
 }
+
+# ── 快捷键组合解析 (三套监听器共用: SAOHotkeyManager / sao_webview / automation) ──
+# F 键虚拟键码 (Windows VK)。
+HOTKEY_FKEY_VK = {
+    "F1": 112, "F2": 113, "F3": 114, "F4": 115,
+    "F5": 116, "F6": 117, "F7": 118, "F8": 119,
+    "F9": 120, "F10": 121, "F11": 122, "F12": 123,
+}
+# 修饰键 VK 组: pynput 上报左右具体码 (162/163 等), GetAsyncKeyState
+# 轮询路径用通用码 (17/18/16), 两路都要认。
+HOTKEY_MODIFIER_VKS = {
+    "CTRL": (17, 162, 163),
+    "ALT": (18, 164, 165),
+    "SHIFT": (16, 160, 161),
+}
+HOTKEY_MOD_ALL_VKS = frozenset(
+    v for vks in HOTKEY_MODIFIER_VKS.values() for v in vks)
+_HOTKEY_MOD_ALIASES = {"CONTROL": "CTRL", "MENU": "ALT"}
+
+
+def parse_hotkey(spec):
+    """解析快捷键定义 → ``{'vk': int, 'mods': frozenset[str]}`` 或 None。
+
+    接受 ``"F5"`` / ``"CTRL+F5"`` / ``"Ctrl+Alt+F12"`` 字符串,
+    ``{'vk': N[, 'mods': [...]]}`` 自定义 VK dict, 以及插件映射的
+    ``{'key': 'CTRL+F8'}`` 形式。字符串主键限 F1-F12 (dict 的 vk 不限);
+    解析失败返回 None, 该绑定不触发。
+    """
+    if isinstance(spec, dict):
+        raw_vk = spec.get("vk")
+        if raw_vk:
+            try:
+                vk = int(raw_vk)
+            except (TypeError, ValueError):
+                return None
+            mods = set()
+            for m in (spec.get("mods") or ()):
+                m = _HOTKEY_MOD_ALIASES.get(str(m).upper(), str(m).upper())
+                if m not in HOTKEY_MODIFIER_VKS:
+                    return None
+                mods.add(m)
+            return {"vk": vk, "mods": frozenset(mods)}
+        spec = spec.get("key") or spec.get("name") or ""
+    if not isinstance(spec, str) or not spec.strip():
+        return None
+    mods = set()
+    vk = None
+    for part in spec.upper().split("+"):
+        part = _HOTKEY_MOD_ALIASES.get(part.strip(), part.strip())
+        if part in HOTKEY_MODIFIER_VKS:
+            mods.add(part)
+        elif part in HOTKEY_FKEY_VK and vk is None:
+            vk = HOTKEY_FKEY_VK[part]
+        else:
+            return None
+    if vk is None:
+        return None
+    return {"vk": vk, "mods": frozenset(mods)}
+
+
+_HOTKEY_VK_TO_FKEY = {v: k for k, v in HOTKEY_FKEY_VK.items()}
+
+# GetAsyncKeyState 句柄: 修饰键实测状态的权威来源。pynput 的 WH_KEYBOARD_LL
+# 钩子在安全桌面 (UAC/Win+L) 和独占输入游戏下会丢 key-up, 残留在 pressed
+# 集合里的脏修饰键会永久卡死匹配 — 所以匹配时优先实测, 集合推断只作回退。
+try:
+    import ctypes as _ctypes_hotkey
+    _HOTKEY_GAKS = _ctypes_hotkey.windll.user32.GetAsyncKeyState
+except Exception:
+    _HOTKEY_GAKS = None
+
+
+def normalize_hotkey(spec):
+    """规范化拼写 → ``'CTRL+ALT+F5'`` (修饰键固定 CTRL,ALT,SHIFT 序)。
+
+    'control + f8' / 'MENU+F5' 等别名拼写都收敛到唯一形式, 占用表和
+    冲突拒绝才能按字符串比较。主键不是 F1-F12 或解析失败返回 None。
+    """
+    parsed = parse_hotkey(spec)
+    if not parsed:
+        return None
+    name = _HOTKEY_VK_TO_FKEY.get(parsed["vk"])
+    if not name:
+        return None
+    mods = [m for m in ("CTRL", "ALT", "SHIFT") if m in parsed["mods"]]
+    return "+".join(mods + [name])
+
+
+def hotkey_mods_down(pressed_vks=frozenset()):
+    """当前按住的修饰键集合 (如 ``{'CTRL'}``)。
+
+    优先 GetAsyncKeyState 实测; 不可用 (非 Windows / ctypes 失败) 时
+    回退从 ``pressed_vks`` 推断。
+    """
+    if _HOTKEY_GAKS is not None:
+        try:
+            return {m for m, vks in HOTKEY_MODIFIER_VKS.items()
+                    if any(_HOTKEY_GAKS(v) & 0x8000 for v in vks)}
+        except Exception:
+            pass
+    return {m for m, vks in HOTKEY_MODIFIER_VKS.items()
+            if any(v in pressed_vks for v in vks)}
+
+
+def hotkey_matches(parsed, pressed_vks, mods_down=None):
+    """子集匹配: 主键按下 + 要求的修饰键全按住; 多余的修饰键不挡触发。
+
+    多余修饰键不挡是刻意的: 躲避自动化会注入 SHIFT, 急停键 (纯 F12)
+    必须在 Shift 被按住时照样触发。'F5' 与 'CTRL+F5' 的互斥共存由调度
+    方负责 — 同主键多个候选命中时用 ``select_hotkey_match`` 取修饰键
+    最多的 (最特异优先), Ctrl+F5 命中组合而不是裸键。
+    """
+    if not parsed or parsed["vk"] not in pressed_vks:
+        return False
+    if mods_down is None:
+        mods_down = hotkey_mods_down(pressed_vks)
+    return parsed["mods"] <= mods_down
+
+
+def select_hotkey_match(candidates, pressed_vks, mods_down=None):
+    """从 ``[(parsed, payload), ...]`` 里选出命中的最特异绑定的 payload。
+
+    并列特异度取先出现的 — 调用方把内置绑定排在插件绑定前面即保持
+    内置优先的既有语义。无命中返回 None。
+    """
+    if mods_down is None:
+        mods_down = hotkey_mods_down(pressed_vks)
+    best = None
+    best_n = -1
+    for parsed, payload in candidates:
+        if not hotkey_matches(parsed, pressed_vks, mods_down=mods_down):
+            continue
+        n = len(parsed["mods"])
+        if n > best_n:
+            best, best_n = payload, n
+    return best
 
 
 def _get_config_dir():

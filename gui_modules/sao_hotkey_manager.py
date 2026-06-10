@@ -17,7 +17,13 @@ import sys
 import threading
 from typing import Any, Dict
 
-from config import DEFAULT_HOTKEYS
+from config import (
+    DEFAULT_HOTKEYS,
+    HOTKEY_FKEY_VK,
+    HOTKEY_MOD_ALL_VKS,
+    parse_hotkey,
+    select_hotkey_match,
+)
 
 # ── pynput is an optional runtime dependency. When absent, the hotkey
 # listener silently no-ops so the rest of the GUI still runs. Mirrors
@@ -80,12 +86,8 @@ class SAOHotkeyManager:
     concrete type).
     """
 
-    # F键虚拟键码表 (Windows VK codes)
-    _FKEY_VK = {
-        'F1': 112, 'F2': 113, 'F3': 114, 'F4': 115,
-        'F5': 116, 'F6': 117, 'F7': 118, 'F8': 119,
-        'F9': 120, 'F10': 121, 'F11': 122, 'F12': 123,
-    }
+    # F键虚拟键码表 (Windows VK codes) — 共享表在 config.HOTKEY_FKEY_VK
+    _FKEY_VK = HOTKEY_FKEY_VK
 
     def __init__(self, settings: Any, actions: Dict[str, Any],
                  hotkey_provider: Any = None):
@@ -129,40 +131,45 @@ class SAOHotkeyManager:
             pass
 
     def _check_combos(self):
-        saved = self.settings.get('hotkeys', DEFAULT_HOTKEYS)
-        for action, info in saved.items():
-            vk = None
-            if isinstance(info, dict):
-                vk = info.get('vk')
-            elif isinstance(info, str) and info:
-                vk = self._FKEY_VK.get(info.upper())
-            if vk and vk in self._pressed_keys:
-                cb = self.actions.get(action)
-                if cb:
-                    cb()
-                    self._pressed_keys.clear()
-                    return
+        # 'F5' 与 'CTRL+F5' 等组合共存: 候选统一收集后由 select_hotkey_match
+        # 取最特异命中 (修饰键最多者优先, 并列时先收集的内置绑定赢)。
+        # 内置键与保存值做 merge — set_hotkey 可能写出只含插件项的部分
+        # dict, 不 merge 会把内置 F5-F12 全杀掉。
+        saved = self.settings.get('hotkeys', {}) or {}
+        merged = {**DEFAULT_HOTKEYS, **saved} if isinstance(saved, dict) \
+            else dict(DEFAULT_HOTKEYS)
+        candidates = []
+        for action, info in merged.items():
+            cb = self.actions.get(action)
+            if cb is None:
+                continue
+            parsed = parse_hotkey(info)
+            if parsed:
+                candidates.append((parsed, cb))
         # Dynamically-registered (plugin) hotkeys, re-resolved each press so
         # newly loaded plugins work without restarting the listener.
-        if self.hotkey_provider is None:
-            return
-        try:
-            dynamic = self.hotkey_provider() or {}
-        except Exception:
-            dynamic = {}
-        for action, info in dynamic.items():
-            if not isinstance(info, dict):
-                continue
-            vk = info.get('vk')
-            if not vk:
-                key = str(info.get('key') or '').upper()
-                vk = self._FKEY_VK.get(key)
-            if vk and vk in self._pressed_keys:
+        if self.hotkey_provider is not None:
+            try:
+                dynamic = self.hotkey_provider() or {}
+            except Exception:
+                dynamic = {}
+            for action, info in dynamic.items():
+                if not isinstance(info, dict):
+                    continue
                 cb = info.get('callback')
-                if cb:
-                    cb()
-                    self._pressed_keys.clear()
-                    return
+                parsed = parse_hotkey(info)
+                if parsed and cb:
+                    candidates.append((parsed, cb))
+        cb = select_hotkey_match(candidates, self._pressed_keys)
+        if cb:
+            cb()
+            self._clear_pressed_main_keys()
+
+    def _clear_pressed_main_keys(self):
+        # 触发后只清主键、保留修饰键 — pynput 不会为仍按住的 Ctrl 重发
+        # press 事件, 全清会让紧接着的下一个 Ctrl+F 组合丢失 Ctrl 状态。
+        self._pressed_keys = {k for k in self._pressed_keys
+                              if k in HOTKEY_MOD_ALL_VKS}
 
     def cleanup(self):
         # The listener thread is daemon=True so it auto-exits when the

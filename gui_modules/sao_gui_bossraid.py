@@ -381,8 +381,9 @@ class _MechanicsEditorMixin:
     # 共享文案 (Tk/Web 1:1, 改一处必同步另一处)
     _DODGE_DIR_HELP = ('视角方向最稳(永远可用); 远离Boss/最近威胁会持续挪到出安全距离即停'
                        '(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。')
+    # %s = 急停键 (master.panic_hotkey, 跟随 toggle_auto_dodge 实际绑定)
     _DODGE_DANGER = ('⚠ 自动 WASD 位移属自动化操作, 在反作弊游戏里有账号风险, 默认关闭, '
-                     '自行承担。随时 F12 全松键急停。')
+                     '自行承担。随时 %s 全松键急停。')
 
     @staticmethod
     def _dash_sequence(key='SHIFT', count=3, interval_ms=300):
@@ -946,7 +947,9 @@ class _MechanicsEditorMixin:
         tk.Label(form, text=self._DODGE_DIR_HELP,
                  bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
                  anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
-        tk.Label(form, text=self._DODGE_DANGER,
+        _panic = str((self._mech_state.get('master') or {}).get('panic_hotkey')
+                     or 'F12')
+        tk.Label(form, text=self._DODGE_DANGER % _panic,
                  bg=PANEL_CARD_ALT, fg=DANGER, font=panel_font(8),
                  anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(1, 0))
 
