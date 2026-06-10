@@ -75,6 +75,23 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "dps.toggle_enabled", "get_dps_enabled command mismatch");
 
+  await window.pywebview.api.set_buffmon_enabled(true);
+  last = calls[calls.length - 1];
+  assert(last.name === "buffmon.set_enabled", "set_buffmon_enabled command mismatch");
+  assert(last.payload.enabled === true, "set_buffmon_enabled flag was not forwarded");
+
+  await window.pywebview.api.get_buffmon_enabled();
+  last = calls[calls.length - 1];
+  assert(last.name === "buffmon.get_enabled", "get_buffmon_enabled command mismatch");
+
+  await window.pywebview.api.download_update();
+  last = calls[calls.length - 1];
+  assert(last.name === "updater.download", "download_update command mismatch");
+
+  await window.pywebview.api.apply_update();
+  last = calls[calls.length - 1];
+  assert(last.name === "updater.apply", "apply_update command mismatch");
+
   let dpsSnapshotApplied = false;
   window.DpsMeter = {
     showActSnapshot(payload) {

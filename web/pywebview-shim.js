@@ -110,6 +110,12 @@
         get_dps_enabled: function () {
             return call('dps.toggle_enabled', {}).then(normalizeOk);
         },
+        set_buffmon_enabled: function (enabled) {
+            return call('buffmon.set_enabled', { enabled: !!enabled }).then(normalizeOk);
+        },
+        get_buffmon_enabled: function () {
+            return call('buffmon.get_enabled', {}).then(normalizeOk);
+        },
         request_live_snapshot: function () {
             return call('state.snapshot', {}).then(function (snapshot) {
                 try {
@@ -128,6 +134,12 @@
         },
         export_last_report: function (fmt) {
             return call('act.report.export', { fmt: String(fmt || 'json') }).then(normalizeOk);
+        },
+        download_update: function () {
+            return call('updater.download', {}).then(normalizeOk);
+        },
+        apply_update: function () {
+            return call('updater.apply', {}).then(normalizeOk);
         },
         toggle_plugin_manager: function () {
             return call('ui.menu_action', { action: 'toggle_plugin_manager' });

@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.57: WebView2 BuffMon 与更新器 shim 桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `set_buffmon_enabled` / `get_buffmon_enabled`。
+     修复 WebView2 路径下菜单里的 Buff Monitor 开关因为 API 缺失而无法把启停参数传到
+     `buffmon.set_enabled` / `buffmon.get_enabled` 桥接命令的问题。
+
+  2) `web/pywebview-shim.js` 补齐 `download_update` / `apply_update`。
+     修复 WebView2 路径下更新下载与应用按钮因为 API 缺失而无法调用
+     `updater.download` / `updater.apply` 桥接命令的问题。
+
+
+
 ## v4.4.56: Web Trigger Timer 与 DPS shim 桥接修复.
 
   1) `web/trigger_timer_manager.html` 现在与 Tk 面板一致, 会合并 `triggers`
