@@ -54,6 +54,48 @@ function assert(cond, message) {
   last = calls[calls.length - 1];
   assert(last.name === "ui.toggle_menu", "toggle_menu command mismatch");
 
+  await window.pywebview.api.show_last_dps_report();
+  last = calls[calls.length - 1];
+  assert(last.name === "dps.show_last_report", "show_last_dps_report command mismatch");
+
+  await window.pywebview.api.show_last_report();
+  last = calls[calls.length - 1];
+  assert(last.name === "dps.show_last_report", "show_last_report command mismatch");
+
+  await window.pywebview.api.reset_dps();
+  last = calls[calls.length - 1];
+  assert(last.name === "dps.reset_combat", "reset_dps command mismatch");
+
+  await window.pywebview.api.set_dps_enabled(false);
+  last = calls[calls.length - 1];
+  assert(last.name === "dps.toggle_enabled", "set_dps_enabled command mismatch");
+  assert(last.payload.enabled === false, "set_dps_enabled flag was not forwarded");
+
+  await window.pywebview.api.get_dps_enabled();
+  last = calls[calls.length - 1];
+  assert(last.name === "dps.toggle_enabled", "get_dps_enabled command mismatch");
+
+  let dpsSnapshotApplied = false;
+  window.DpsMeter = {
+    showActSnapshot(payload) {
+      dpsSnapshotApplied = !!payload;
+    },
+  };
+  await window.pywebview.api.request_live_snapshot();
+  last = calls[calls.length - 1];
+  assert(last.name === "state.snapshot", "request_live_snapshot command mismatch");
+  assert(dpsSnapshotApplied, "request_live_snapshot should apply the returned snapshot when DpsMeter is present");
+
+  await window.pywebview.api.list_history(7);
+  last = calls[calls.length - 1];
+  assert(last.name === "act.history.status", "list_history command mismatch");
+  assert(last.payload.limit === 7, "list_history limit was not forwarded");
+
+  await window.pywebview.api.export_last_report("csv");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.report.export", "export_last_report command mismatch");
+  assert(last.payload.fmt === "csv", "export_last_report fmt was not forwarded");
+
   await window.pywebview.api.set_ctx_menu_active(true, { left: 1, top: 2, width: 3, height: 4 });
   last = calls[calls.length - 1];
   assert(last.name === "ui.set_ctx_menu_active", "set_ctx_menu_active command mismatch");
@@ -169,6 +211,8 @@ function assert(cond, message) {
   assert(triggerManager.includes("triggerPayload(name, args || [])"), "trigger manager is missing fallback payload mapping");
   assert(triggerManager.includes("toggle_trigger_timer_manager: 'ui.menu_action'"), "trigger manager close should map through ui.menu_action");
   assert(triggerManager.includes("apiCall('toggle_trigger_timer_manager', [])"), "trigger manager close should use bridge-aware apiCall");
+  assert(triggerManager.includes("function displayRules(data)"), "trigger manager should merge trigger and timer rows for rendering");
+  assert(triggerManager.includes("var rules = displayRules(data);"), "trigger manager render should use merged trigger/timer rows");
 
   const combatantDrilldown = fs.readFileSync(path.join(root, "web/act_combatant_drilldown.html"), "utf8");
   assert(combatantDrilldown.includes("'act.skill.open'"), "combatant drilldown should use explicit act.skill.open fallback");

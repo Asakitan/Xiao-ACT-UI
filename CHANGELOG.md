@@ -1,7 +1,19 @@
 # SAO Auto 版本历史
 
-逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
-
+逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
+
+## v4.4.56: Web Trigger Timer 与 DPS shim 桥接修复.
+
+  1) `web/trigger_timer_manager.html` 现在与 Tk 面板一致, 会合并 `triggers`
+     与 `timers` 后渲染并去重。修复只有 timer 行时, Web 面板列表显示为空的问题。
+
+  2) `web/pywebview-shim.js` 补齐 DPS 相关 WebView2 兼容 API:
+     `show_last_dps_report`、`show_last_report`、`reset_dps`、`set_dps_enabled`、
+     `get_dps_enabled`、`request_live_snapshot`、`list_history`、`export_last_report`。
+     修复 WebView2 路径下 DPS 菜单/面板按钮认为 API 不存在或参数没有传到桥接命令的问题。
+
+
+
 ## v4.4.55: Web 插件管理与插件表格滚动修复.
 
   1) `web/plugin_manager.html` 的右侧 SDK Quick Start 侧栏现在可滚动。

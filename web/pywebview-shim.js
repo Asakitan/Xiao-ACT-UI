@@ -39,6 +39,16 @@
         return value;
     }
 
+    function normalizeOk(result) {
+        if (result && result.error && result.ok == null) {
+            result.ok = false;
+            result.message = result.message || String(result.error);
+        } else if (result && result.ok == null) {
+            result.ok = true;
+        }
+        return result;
+    }
+
     var api = {
         play_sound: function (name) {
             return call('sound.play', { name: String(name || '') });
@@ -84,6 +94,40 @@
         },
         panel_action: function (action) {
             return call('ui.panel_action', { action: String(action || '') });
+        },
+        show_last_dps_report: function () {
+            return call('dps.show_last_report', {}).then(normalizeOk);
+        },
+        show_last_report: function () {
+            return call('dps.show_last_report', {}).then(normalizeOk);
+        },
+        reset_dps: function () {
+            return call('dps.reset_combat', {}).then(normalizeOk);
+        },
+        set_dps_enabled: function (enabled) {
+            return call('dps.toggle_enabled', { enabled: !!enabled }).then(normalizeOk);
+        },
+        get_dps_enabled: function () {
+            return call('dps.toggle_enabled', {}).then(normalizeOk);
+        },
+        request_live_snapshot: function () {
+            return call('state.snapshot', {}).then(function (snapshot) {
+                try {
+                    if (window.DpsMeter && typeof window.DpsMeter.showActSnapshot === 'function') {
+                        window.DpsMeter.showActSnapshot(snapshot || {});
+                    }
+                } catch (_) {}
+                return snapshot;
+            });
+        },
+        list_history: function (limit) {
+            return call('act.history.status', { limit: limit || 20, query: '' }).then(function (data) {
+                if (data && data.items == null && data.encounters) data.items = data.encounters;
+                return normalizeOk(data);
+            });
+        },
+        export_last_report: function (fmt) {
+            return call('act.report.export', { fmt: String(fmt || 'json') }).then(normalizeOk);
         },
         toggle_plugin_manager: function () {
             return call('ui.menu_action', { action: 'toggle_plugin_manager' });
