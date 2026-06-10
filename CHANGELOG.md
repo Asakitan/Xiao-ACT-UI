@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.33: Panel UI 主题同步与控件重刷修复.
+
+  1) `gui_modules/sao_panel_ui.py` 的面板主题常量同步不再只覆盖
+     `gui_modules.sao_gui_*`。顶层 `sao_gui` 兼容导入和其它 SAO 相关模块持有
+     `_SAO_PANEL_*` 常量时也会一起刷新, 修复主题切换后部分新建/重绘面板仍用旧色的问题。
+
+  2) `_style_panel_descendants()` 现在会安全跳过已销毁控件, 并补齐
+     Checkbutton/Radiobutton 的 bg/fg/select/active 样式。修复延迟重刷遇到销毁中面板时
+     递归异常风险, 以及筛选开关控件在主题切换后颜色不完整的问题。新增
+     `tools/panel_ui_theme_selftest.py`。
+
+
+
 ## v4.4.32: Player Panel 实时资料与 HP/STA 刷新修复.
 
   1) `gui_modules/sao_player_panel.py` 新增 `update_vitals()` 并让状态同步路径通过它

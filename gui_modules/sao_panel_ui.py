@@ -160,6 +160,18 @@ _SAO_PANEL_VALUE_FG = '#646364'    # 数值文字
 
 _SAO_PANEL_THEME = 'light'
 _SAO_PANEL_ROOTS = []
+_SAO_PANEL_CONSTANT_NAMES = (
+    '_SAO_PANEL_BG',
+    '_SAO_PANEL_HEADER_BG',
+    '_SAO_PANEL_HEADER_FG',
+    '_SAO_PANEL_BORDER',
+    '_SAO_PANEL_ACCENT',
+    '_SAO_PANEL_GOLD',
+    '_SAO_PANEL_SEP',
+    '_SAO_PANEL_BODY_BG',
+    '_SAO_PANEL_LABEL_FG',
+    '_SAO_PANEL_VALUE_FG',
+)
 _SAO_PANEL_PALETTES = {
     'light': {
         'bg': '#e8ebee',
@@ -232,7 +244,15 @@ def _sync_imported_sao_panel_constants() -> None:
         '_SAO_PANEL_VALUE_FG': _SAO_PANEL_VALUE_FG,
     }
     for name, module in list(sys.modules.items()):
-        if not name.startswith('gui_modules.sao_gui_'):
+        if module is None or module is sys.modules.get(__name__):
+            continue
+        if not (
+            name == 'sao_gui'
+            or name.startswith('sao_gui.')
+            or name.startswith('gui_modules.')
+        ):
+            continue
+        if not any(hasattr(module, attr) for attr in _SAO_PANEL_CONSTANT_NAMES):
             continue
         for attr, value in values.items():
             if hasattr(module, attr):
@@ -563,9 +583,21 @@ def _sao_panel_body(parent, *, flat=False):
 
 def _style_panel_descendants(root):
     """Apply one-shot SAO styling to simple Tk controls created in a panel."""
-    for child in list(root.winfo_children()):
-        cls = child.winfo_class()
-        _apply_sao_theme_to_widget(child)
+    try:
+        children = list(root.winfo_children())
+    except Exception:
+        return
+    for child in children:
+        try:
+            if hasattr(child, 'winfo_exists') and not child.winfo_exists():
+                continue
+            cls = child.winfo_class()
+        except Exception:
+            continue
+        try:
+            _apply_sao_theme_to_widget(child)
+        except Exception:
+            pass
         try:
             if cls == 'Button':
                 child.configure(
@@ -626,6 +658,17 @@ def _style_panel_descendants(root):
                 )
             elif cls == 'Canvas':
                 child.configure(bg=_SAO_PANEL_BODY_BG, highlightthickness=0, bd=0)
+            elif cls in {'Checkbutton', 'Radiobutton'}:
+                child.configure(
+                    bg=_SAO_PANEL_BODY_BG,
+                    fg=_SAO_PANEL_VALUE_FG,
+                    selectcolor=_SAO_PANEL_HEADER_BG,
+                    activebackground=_SAO_PANEL_BODY_BG,
+                    activeforeground=_SAO_PANEL_GOLD,
+                    relief=tk.FLAT,
+                    bd=0,
+                    highlightthickness=0,
+                )
         except Exception:
             pass
         _style_panel_descendants(child)
