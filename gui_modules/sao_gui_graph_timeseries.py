@@ -68,6 +68,7 @@ class GraphTimeseriesPanel:
         self._zoom_var = tk.StringVar(value="0")
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
+        self._last_request_key: tuple[Any, ...] = ()
         self._last_series_sig = ""
         self._show_raw_points = tk.BooleanVar(value=False)
 
@@ -107,26 +108,31 @@ class GraphTimeseriesPanel:
 
     def refresh(self) -> Dict[str, Any]:
         now = time.time()
-        if self._last_status and now - self._last_refresh_at < 0.35:
-            self._render_status(self._last_status)
-            return self._last_status
         try:
             zoom_ms = int(self._zoom_var.get() or 0)
         except Exception:
             zoom_ms = 0
+        metric = self._metric_var.get()
+        query = self._query_var.get()
+        topic = self._topic_var.get()
+        request_key = (metric, query, topic, zoom_ms)
+        if self._last_status and request_key == self._last_request_key and now - self._last_refresh_at < 0.35:
+            self._render_status(self._last_status)
+            return self._last_status
         try:
             status = act_graph_timeseries_status(
                 self.owner,
-                metric=self._metric_var.get(),
+                metric=metric,
                 limit=120,
-                query=self._query_var.get(),
-                topic=self._topic_var.get(),
+                query=query,
+                topic=topic,
                 time_range_ms=zoom_ms,
             )
         except Exception as exc:
-            status = {"ok": False, "message": str(exc), "series": {}, "metrics": [], "time_range_ms": 0, "filters": {"query": self._query_var.get(), "topic": self._topic_var.get()}, "errors": [str(exc)]}
+            status = {"ok": False, "message": str(exc), "series": {}, "metrics": [], "time_range_ms": 0, "filters": {"query": query, "topic": topic}, "errors": [str(exc)]}
         self._last_status = dict(status or {})
         self._last_refresh_at = now
+        self._last_request_key = request_key
         self._render_status(self._last_status)
         return self._last_status
 
@@ -168,6 +174,7 @@ class GraphTimeseriesPanel:
     def _apply_result(self, result: Mapping[str, Any], message: str) -> Dict[str, Any]:
         self._last_status = dict(result or {})
         self._last_refresh_at = time.time()
+        self._last_request_key = ()
         self._status_var.set(message)
         self._render_status(self._last_status)
         return self._last_status

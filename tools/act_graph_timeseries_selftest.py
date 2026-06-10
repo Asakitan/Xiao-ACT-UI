@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import time
 import unittest
+from unittest import mock
 
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
@@ -13,6 +15,17 @@ from gui_modules.sao_gui_graph_timeseries import GraphTimeseriesPanel
 
 class FakeOwner:
     pass
+
+
+class FakeVar:
+    def __init__(self, value: str = "") -> None:
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+    def set(self, value: object) -> None:
+        self.value = str(value)
 
 
 class ActGraphTimeseriesRuntimeTests(unittest.TestCase):
@@ -94,6 +107,42 @@ class ActGraphTimeseriesRuntimeTests(unittest.TestCase):
         self.assertNotEqual(sig, GraphTimeseriesPanel._series_signature("damage", points, query_changed))
         self.assertNotEqual(sig, GraphTimeseriesPanel._series_signature("damage", points, rows_changed))
         self.assertNotEqual(sig, GraphTimeseriesPanel._series_signature("damage", points, errors_changed))
+
+    def test_tk_refresh_cache_reuses_only_same_request_parameters(self) -> None:
+        panel = GraphTimeseriesPanel.__new__(GraphTimeseriesPanel)
+        panel.owner = FakeOwner()
+        panel._metric_var = FakeVar("damage")
+        panel._query_var = FakeVar("Kirito")
+        panel._topic_var = FakeVar("damage")
+        panel._zoom_var = FakeVar("1500")
+        panel._last_status = {"ok": True, "selected_metric": "damage", "series": {"cached": True}}
+        panel._last_refresh_at = time.time()
+        panel._last_request_key = ("damage", "Kirito", "damage", 1500)
+        rendered: list[dict] = []
+        panel._render_status = lambda status: rendered.append(dict(status))
+
+        with mock.patch("gui_modules.sao_gui_graph_timeseries.act_graph_timeseries_status") as status_fn:
+            cached = panel.refresh()
+
+        self.assertEqual(cached["series"], {"cached": True})
+        self.assertEqual(rendered[-1]["series"], {"cached": True})
+        status_fn.assert_not_called()
+
+        panel._metric_var.set("heal")
+        status_payload = {"ok": True, "selected_metric": "heal", "series": {"fresh": True}, "filters": {"query": "Kirito", "topic": "damage"}}
+        with mock.patch("gui_modules.sao_gui_graph_timeseries.act_graph_timeseries_status", return_value=status_payload) as status_fn:
+            refreshed = panel.refresh()
+
+        self.assertEqual(refreshed["selected_metric"], "heal")
+        self.assertEqual(panel._last_request_key, ("heal", "Kirito", "damage", 1500))
+        status_fn.assert_called_once_with(
+            panel.owner,
+            metric="heal",
+            limit=120,
+            query="Kirito",
+            topic="damage",
+            time_range_ms=1500,
+        )
 
 
 if __name__ == "__main__":

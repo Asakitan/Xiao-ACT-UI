@@ -53,6 +53,7 @@ class DeathRecapPanel:
         self._window_var = tk.StringVar(value="8")
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
+        self._last_request_key: tuple[Any, ...] = ()
         self._last_rows_sig = ""
         self._expanded_rows: set[str] = set()
 
@@ -92,24 +93,27 @@ class DeathRecapPanel:
 
     def refresh(self) -> Dict[str, Any]:
         now = time.time()
-        if self._last_status and now - self._last_refresh_at < 0.35:
-            self._render_status(self._last_status)
-            return self._last_status
         try:
             window_s = float(self._window_var.get() or 8.0)
         except Exception:
             window_s = 8.0
+        entity_id = self._entity_var.get() or None
+        request_key = (entity_id or "", window_s)
+        if self._last_status and request_key == self._last_request_key and now - self._last_refresh_at < 0.35:
+            self._render_status(self._last_status)
+            return self._last_status
         try:
             status = act_death_recap_status(
                 self.owner,
                 limit=80,
                 window_s=window_s,
-                entity_id=self._entity_var.get() or None,
+                entity_id=entity_id,
             )
         except Exception as exc:
             status = {"ok": False, "message": str(exc), "death": None, "rows": [], "summary": {}, "errors": [str(exc)]}
         self._last_status = dict(status or {})
         self._last_refresh_at = now
+        self._last_request_key = request_key
         self._render_status(self._last_status)
         return self._last_status
 

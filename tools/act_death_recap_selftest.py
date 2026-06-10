@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import json
+import time
 import unittest
+from unittest import mock
 
 from act_platform import runtime
 from act_platform.events import make_event
 from act_platform.runtime import ensure_act_event_bus
+from gui_modules.sao_gui_death_recap import DeathRecapPanel
 
 
 SELF_UID = 36668136
@@ -16,6 +19,17 @@ SELF_UID = 36668136
 
 class FakeOwner:
     pass
+
+
+class FakeVar:
+    def __init__(self, value: str = "") -> None:
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+    def set(self, value: object) -> None:
+        self.value = str(value)
 
 
 def _publish(owner: FakeOwner, topic: str, payload: dict, ts: float) -> None:
@@ -78,6 +92,33 @@ class ActDeathRecapRuntimeTests(unittest.TestCase):
         self.assertIsNone(status["death"])
         self.assertEqual(status["rows"], [])
         self.assertEqual(status["summary"]["event_count"], 0)
+
+    def test_tk_refresh_cache_reuses_only_same_request_parameters(self) -> None:
+        panel = DeathRecapPanel.__new__(DeathRecapPanel)
+        panel.owner = FakeOwner()
+        panel._entity_var = FakeVar("1001")
+        panel._window_var = FakeVar("5.0")
+        panel._last_status = {"ok": True, "summary": {"event_count": 1}, "rows": []}
+        panel._last_refresh_at = time.time()
+        panel._last_request_key = ("1001", 5.0)
+        rendered: list[dict] = []
+        panel._render_status = lambda status: rendered.append(dict(status))
+
+        with mock.patch("gui_modules.sao_gui_death_recap.act_death_recap_status") as status_fn:
+            cached = panel.refresh()
+
+        self.assertEqual(cached["summary"]["event_count"], 1)
+        self.assertEqual(rendered[-1]["summary"]["event_count"], 1)
+        status_fn.assert_not_called()
+
+        panel._window_var.set("12.5")
+        status_payload = {"ok": True, "summary": {"event_count": 2}, "death": None, "rows": []}
+        with mock.patch("gui_modules.sao_gui_death_recap.act_death_recap_status", return_value=status_payload) as status_fn:
+            refreshed = panel.refresh()
+
+        self.assertEqual(refreshed["summary"]["event_count"], 2)
+        self.assertEqual(panel._last_request_key, ("1001", 12.5))
+        status_fn.assert_called_once_with(panel.owner, limit=80, window_s=12.5, entity_id="1001")
 
 
 if __name__ == "__main__":

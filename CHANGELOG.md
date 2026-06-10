@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.49: ACT Tk Death/Graph 刷新缓存参数修复.
+
+  1) `gui_modules/sao_gui_death_recap.py` 的 350ms refresh 缓存现在按
+     `entity_id/window_s` 建 key。修复快速切换死亡回放实体或时间窗口时,
+     Death Recap Tk 面板可能显示上一组窗口结果的问题。
+
+  2) `gui_modules/sao_gui_graph_timeseries.py` 的 350ms refresh 缓存现在按
+     `metric/query/topic/time_range_ms` 建 key。修复快速切换指标、主题、搜索词或时间范围时,
+     Graph Timeseries Tk 面板可能复用旧图表状态、没有把新参数传到后端的问题。
+
+
+
 ## v4.4.48: ACT Tk Drilldown 刷新缓存参数修复.
 
   1) `gui_modules/sao_gui_combatant_drilldown.py` 的 350ms refresh 缓存现在按
