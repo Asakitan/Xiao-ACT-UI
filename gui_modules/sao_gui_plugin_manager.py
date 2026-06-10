@@ -27,6 +27,7 @@ from act_platform.runtime import (
     act_plugin_ui_render,
     act_plugin_uninstall,
 )
+from gui_modules import sao_panel_ui as _panel_ui
 from gui_modules.sao_plugin_ui_render import PluginPanelList, SpecRenderer
 from gui_modules.sao_panel_ui import (
     _SAO_PANEL_ACCENT,
@@ -702,15 +703,22 @@ class PluginDetachedPanel:
             self._renderer_pid = pid
             self._last_render_sig = ''
         # Skip the reconcile walk entirely when the spec is byte-identical (idle).
-        try:
-            sig = json.dumps(spec, ensure_ascii=False, sort_keys=True, default=str)
-        except Exception:
-            sig = repr(spec)
+        sig = self._render_signature(spec)
         if sig == self._last_render_sig:
             return
         self._last_render_sig = sig
         self._renderer.set_on_action(self._make_action(pid))
         self._renderer.render(spec)
+
+    def _render_signature(self, spec: Any) -> str:
+        payload = {
+            'theme': getattr(_panel_ui, '_SAO_PANEL_THEME', ''),
+            'spec': spec,
+        }
+        try:
+            return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+        except Exception:
+            return repr(payload)
 
     def _build_hotkeys(self) -> None:
         host = self._hotkey_host

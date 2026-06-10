@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.34: Plugin Renderer 输入参数与主题签名修复.
+
+  1) `gui_modules/sao_plugin_ui_render.py` 的 input 复用路径现在会同步
+     `placeholder`、`input_type`、`width`、password show 与 number validate/pack 配置。
+     修复插件面板输入框 id 不变但参数变化时, Entity Tk 渲染保持旧占位文本、旧密码显示
+     或旧宽度的问题。
+
+  2) `gui_modules/sao_gui_plugin_manager.py` 的 detached plugin panel 渲染缓存签名加入当前
+     SAO panel theme。修复主题切换但 spec 不变时, detached 插件面板跳过 reconcile,
+     内容颜色/画布继续停留在旧主题的问题。新增 `tools/plugin_renderer_compat_selftest.py`。
+
+
+
 ## v4.4.33: Panel UI 主题同步与控件重刷修复.
 
   1) `gui_modules/sao_panel_ui.py` 的面板主题常量同步不再只覆盖

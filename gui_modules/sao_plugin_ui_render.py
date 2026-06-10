@@ -47,6 +47,22 @@ def _validate_number(proposed: str) -> bool:
     return all(ch in allowed for ch in proposed)
 
 
+def _input_width_px(width: Any) -> int:
+    try:
+        return max(0, int(width or 0))
+    except Exception:
+        return 0
+
+
+def _input_width_units(width: Any) -> int:
+    return max(4, int(_input_width_px(width) / 8))
+
+
+def _input_pack_kw(width: Any) -> dict:
+    width_px = _input_width_px(width)
+    return {"pady": 2, "fill": "none"} if width_px > 0 else {"fill": "x", "pady": 2}
+
+
 def _pal() -> dict:
     """Resolve the live SAO panel palette (respects runtime theme switches)."""
     g = lambda name, fallback: getattr(_theme, name, fallback)
@@ -432,10 +448,10 @@ class SpecRenderer:
                      insertbackground=pal["value"], relief="flat", highlightthickness=1,
                      highlightbackground=pal["border"], highlightcolor=pal["accent"],
                      font=("Segoe UI", 10))
-        width = int(ns.get("width") or 0)
-        pack_kw = {"pady": 2} if width > 0 else {"fill": "x", "pady": 2}
+        width = _input_width_px(ns.get("width"))
+        pack_kw = _input_pack_kw(width)
         if width > 0:
-            w.config(width=max(4, int(width / 8)))
+            w.config(width=_input_width_units(width))
         is_placeholder = False
         if itype == "password":
             w.config(show="•")
@@ -474,16 +490,54 @@ class SpecRenderer:
         # changed AND the user is not editing it — a steady/empty spec value must
         # never wipe what the user typed across the timed redraw.
         seed = str(ns.get("value") or "")
+        placeholder = str(ns.get("placeholder") or "")
+        itype = str(ns.get("input_type") or "text")
+        old_placeholder = str(rn.parts.get("placeholder") or "")
+        old_itype = str(rn.parts.get("itype") or "text")
+        was_placeholder = bool(rn.parts.get("is_placeholder"))
+        width = _input_width_px(ns.get("width"))
+        try:
+            if width > 0:
+                rn.widget.config(width=_input_width_units(width))
+            rn.pack_kw = _input_pack_kw(width)
+            rn.widget.pack_configure(**rn.pack_kw)
+        except Exception:
+            pass
+        try:
+            rn.widget.config(show=("•" if itype == "password" else ""))
+        except Exception:
+            pass
+        try:
+            if itype == "number":
+                rn.widget.config(validate="key",
+                                 validatecommand=(rn.widget.register(_validate_number), "%P"))
+            else:
+                rn.widget.config(validate="none")
+        except Exception:
+            pass
         try:
             focused = (rn.widget.focus_get() is rn.widget)
         except Exception:
             focused = False
-        if (not focused and not rn.parts.get("is_placeholder")
-                and seed != rn.parts.get("last_seed", "")):
-            rn.parts["var"].set(seed)
+        if not focused and (
+            seed != rn.parts.get("last_seed", "")
+            or (was_placeholder and placeholder != old_placeholder)
+            or itype != old_itype
+        ):
             if seed:
+                rn.parts["var"].set(seed)
                 rn.parts["is_placeholder"] = False
                 rn.widget.config(fg=pal["value"])
+            elif placeholder and itype != "password":
+                rn.parts["var"].set(placeholder)
+                rn.parts["is_placeholder"] = True
+                rn.widget.config(fg=pal["label"])
+            else:
+                rn.parts["var"].set("")
+                rn.parts["is_placeholder"] = False
+                rn.widget.config(fg=pal["value"])
+        rn.parts["placeholder"] = placeholder
+        rn.parts["itype"] = itype
         rn.parts["last_seed"] = seed
 
     def _collect_inputs(self) -> dict:
