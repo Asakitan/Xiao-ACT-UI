@@ -1,0 +1,81 @@
+# -*- coding: utf-8 -*-
+"""Static layout regression checks for ACT WebView panels."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent.parent
+WEB_DIR = ROOT / "web"
+
+
+def _read_web(name: str) -> str:
+    return (WEB_DIR / name).read_text(encoding="utf-8")
+
+
+def _css_block(source: str, selector: str) -> str:
+    match = re.search(rf"{re.escape(selector)}\s*\{{(?P<body>.*?)\}}", source, re.S)
+    if not match:
+        raise AssertionError(f"missing CSS block: {selector}")
+    return match.group("body")
+
+
+def _px_property(block: str, prop: str) -> int:
+    match = re.search(rf"\b{re.escape(prop)}\s*:\s*(\d+)px\b", block)
+    if not match:
+        raise AssertionError(f"missing px property: {prop}")
+    return int(match.group(1))
+
+
+def _property_value(block: str, prop: str) -> str:
+    match = re.search(rf"\b{re.escape(prop)}\s*:\s*([^;]+);", block)
+    if not match:
+        raise AssertionError(f"missing CSS property: {prop}")
+    return match.group(1).strip()
+
+
+def _assert_graph_points_scroll() -> None:
+    html = _read_web("act_graph_timeseries.html")
+    table = _css_block(html, ".table")
+    max_height = _px_property(table, "max-height")
+    overflow = _property_value(table, "overflow")
+    rendered_rows = re.search(r"points\.slice\(-(?P<count>\d+)\)", html)
+    if not rendered_rows:
+        raise AssertionError("graph timeseries must declare rendered point row count")
+    row_count = int(rendered_rows.group("count"))
+    if row_count < 6:
+        raise AssertionError("graph timeseries should keep the latest 6 point rows visible")
+    if max_height < 148:
+        raise AssertionError(
+            f"graph points max-height {max_height}px is too small for {row_count} rows"
+        )
+    if overflow == "hidden":
+        raise AssertionError("graph points table must scroll instead of clipping rows")
+
+
+def _assert_action_log_side_scroll() -> None:
+    html = _read_web("act_action_log.html")
+    side = _css_block(html, ".side")
+    overflow = _property_value(side, "overflow")
+    if overflow == "hidden":
+        raise AssertionError("action log side panel must scroll instead of clipping controls")
+    if overflow not in {"auto", "scroll"}:
+        raise AssertionError(f"unexpected action log side overflow: {overflow}")
+
+
+def main() -> int:
+    _assert_graph_points_scroll()
+    _assert_action_log_side_scroll()
+    print("OK ACT web layout: graph points and action-log side panel are scrollable")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"FAIL ACT web layout selftest: {exc}", file=sys.stderr)
+        raise SystemExit(1)

@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.43: ACT Web 面板裁剪修复.
+
+  1) `web/act_graph_timeseries.html` 的最新点位列表现在为 6 行渲染预留足够高度,
+     并改为内部滚动。修复底部 points 区仍渲染 6 行但 `110px + overflow:hidden`
+     导致末尾点位被截断、无法完整查看的问题。
+
+  2) `web/act_action_log.html` 的右侧 LOG CONTROL/STATUS 面板改为内部滚动。
+     修复固定高度 WebView 内筛选控件和状态行较多时, 侧栏被 `overflow:hidden`
+     截断、用户无法访问底部状态信息的问题。新增 `tools/web_act_layout_selftest.py`
+     锁定 ACT Web 布局裁剪回归。
+
+
+
 ## v4.4.42: ACT Entity Skill/Aggregate 签名补全.
 
   1) `gui_modules/sao_gui_skill_drilldown.py` 的 Entity Skill Drilldown 签名加入
