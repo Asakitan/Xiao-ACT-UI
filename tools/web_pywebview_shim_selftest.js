@@ -110,6 +110,27 @@ function assert(cond, message) {
   assert(last.payload.panel_id === "panel-1", "invoke_ui_action panel_id was not forwarded");
   assert(last.payload.action_id === "open", "invoke_ui_action action_id was not forwarded");
 
+  await window.pywebview.api.render_ui_panel("panel-2", { filter: "boss" });
+  last = calls[calls.length - 1];
+  assert(last.name === "act.plugins.render_ui_panel", "render_ui_panel command mismatch");
+  assert(last.payload.payload.filter === "boss", "render_ui_panel object payload was not preserved");
+
+  await window.pywebview.api.invoke_ui_action("panel-2", "apply", { threshold: 7 });
+  last = calls[calls.length - 1];
+  assert(last.name === "act.plugins.invoke_ui_action", "invoke_ui_action object command mismatch");
+  assert(last.payload.payload.threshold === 7, "invoke_ui_action object payload was not preserved");
+
+  await window.pywebview.api.act_render_overlays("dps");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.render.overlays", "act_render_overlays command mismatch");
+  assert(last.payload.surface === "dps", "act_render_overlays surface was not forwarded");
+
+  await window.pywebview.api.act_render_apply_hooks("dps", { total: 99 });
+  last = calls[calls.length - 1];
+  assert(last.name === "act.render.apply_hooks", "act_render_apply_hooks command mismatch");
+  assert(last.payload.surface === "dps", "act_render_apply_hooks surface was not forwarded");
+  assert(last.payload.payload.total === 99, "act_render_apply_hooks object payload was not preserved");
+
   for (const rel of ["web/act_graph_timeseries.html", "web/act_combatant_drilldown.html", "web/act_skill_drilldown.html"]) {
     const text = fs.readFileSync(path.join(root, rel), "utf8");
     assert(!text.includes("bridge.cmd(fallbackAction, args)"), `${rel} still sends bare fallback args`);
@@ -119,9 +140,15 @@ function assert(cond, message) {
   const pluginManager = fs.readFileSync(path.join(root, "web/plugin_manager.html"), "utf8");
   assert(!pluginManager.includes("{ args: args || [] }"), "plugin manager still sends bare fallback args");
   assert(pluginManager.includes("pluginCommand(name, args || [])"), "plugin manager is missing fallback payload mapping");
+  assert(pluginManager.includes("pluginPayloadArg(args, 2)"), "plugin manager should preserve object action payloads");
   assert(pluginManager.includes("PluginManager._panelCards"), "plugin manager should keep panel card entries across polls");
   assert(!pluginManager.includes("grid.innerHTML = '';"), "plugin manager still clears all panel cards on each poll");
   assert(pluginManager.includes("entry.renderSig === renderSig"), "plugin manager should skip unchanged panel specs");
+
+  const pluginLayer = fs.readFileSync(path.join(root, "web/plugin_layer.js"), "utf8");
+  assert(!pluginLayer.includes('window.bridge.cmd("act." + name, { args: args || [] })'), "plugin layer still sends bare bridge args");
+  assert(pluginLayer.includes('name: "act.plugins.invoke_ui_action"'), "plugin layer should map fallback UI actions to act.plugins.invoke_ui_action");
+  assert(pluginLayer.includes('name: "act.render.apply_hooks"'), "plugin layer should map render hooks to the bridge command");
 
   const triggerManager = fs.readFileSync(path.join(root, "web/trigger_timer_manager.html"), "utf8");
   assert(!triggerManager.includes("{ args: args || [] }"), "trigger manager still sends bare fallback args");

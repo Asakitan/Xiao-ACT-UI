@@ -82,12 +82,15 @@ public class Session194ActBridgeTests
         Assert.Contains(BridgeCommands.ActSourcesHealth, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ActAggregateStatus, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ActSkillStatus, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.ActRenderApplyHooks, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.ActRenderOverlays, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.ActTriggersStatus, lifecycle.Router.RegisteredCommands);
 
         lifecycle.Dispose();
 
         Assert.DoesNotContain(BridgeCommands.ActSourcesHealth, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.ActSkillStatus, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.ActRenderOverlays, lifecycle.Router.RegisteredCommands);
     }
 
     [Fact]

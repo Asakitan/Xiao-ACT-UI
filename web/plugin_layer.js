@@ -39,9 +39,44 @@
             catch (_) { return Promise.resolve(null); }
         }
         if (window.bridge && typeof window.bridge.cmd === "function") {
-            return window.bridge.cmd("act." + name, { args: args || [] }).then(parse).catch(function () { return null; });
+            var mapped = pluginBridgeCommand(name, args || []);
+            return window.bridge.cmd(mapped.name, mapped.payload).then(parse).catch(function () { return null; });
         }
         return Promise.resolve(null);
+    }
+
+    function pluginPayloadArg(args, index) {
+        if (!args || args.length <= index || args[index] == null) return "";
+        return args[index];
+    }
+
+    function pluginBridgeCommand(name, args) {
+        if (name === "invoke_ui_action") {
+            return {
+                name: "act.plugins.invoke_ui_action",
+                payload: {
+                    panel_id: String(args[0] || ""),
+                    action_id: String(args[1] || ""),
+                    payload: pluginPayloadArg(args, 2)
+                }
+            };
+        }
+        if (name === "act_render_overlays") {
+            return { name: "act.render.overlays", payload: { surface: String(args[0] || "") } };
+        }
+        if (name === "act_render_apply_hooks") {
+            return {
+                name: "act.render.apply_hooks",
+                payload: {
+                    surface: String(args[0] || ""),
+                    payload: pluginPayloadArg(args, 1)
+                }
+            };
+        }
+        if (name === "act_render_surfaces") {
+            return { name: "act.render.surfaces", payload: {} };
+        }
+        return { name: "act." + name, payload: { args: args || [] } };
     }
 
     function esc(v) {

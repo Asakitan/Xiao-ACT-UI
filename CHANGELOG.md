@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.35: WebView2 插件桥接参数修复.
+
+  1) `web/pywebview-shim.js` 与 `web/plugin_manager.html` 的插件 render/action fallback
+     现在会保留对象 payload, 不再把对象参数转换成 `"[object Object]"`。修复 WebView2
+     fallback 下插件面板 render payload 或 action payload 丢字段的问题。
+
+  2) `web/plugin_layer.js` 的 bridge fallback 改为发送命名 payload 和真实
+     `act.plugins.*` / `act.render.*` 命令。C# `ActBridge` 同步注册 render hook/overlay
+     命令, 避免插件 overlay/action fallback 落到 `unknown_command`。更新
+     `tools/web_pywebview_shim_selftest.js` 与 `Session194ActBridgeTests`。
+
+
+
 ## v4.4.34: Plugin Renderer 输入参数与主题签名修复.
 
   1) `gui_modules/sao_plugin_ui_render.py` 的 input 复用路径现在会同步

@@ -34,6 +34,11 @@
         }
     }
 
+    function pluginPayload(value) {
+        if (value == null) return '';
+        return value;
+    }
+
     var api = {
         play_sound: function (name) {
             return call('sound.play', { name: String(name || '') });
@@ -328,10 +333,19 @@
             return call('act.plugins.ui_panels', {});
         },
         render_ui_panel: function (panelId, payload) {
-            return call('act.plugins.render_ui_panel', { panel_id: String(panelId || ''), payload: String(payload || '') });
+            return call('act.plugins.render_ui_panel', { panel_id: String(panelId || ''), payload: pluginPayload(payload) });
         },
         invoke_ui_action: function (panelId, actionId, payload) {
-            return call('act.plugins.invoke_ui_action', { panel_id: String(panelId || ''), action_id: String(actionId || ''), payload: String(payload || '') });
+            return call('act.plugins.invoke_ui_action', { panel_id: String(panelId || ''), action_id: String(actionId || ''), payload: pluginPayload(payload) });
+        },
+        act_render_surfaces: function () {
+            return call('act.render.surfaces', {});
+        },
+        act_render_overlays: function (surface) {
+            return call('act.render.overlays', { surface: String(surface || '') });
+        },
+        act_render_apply_hooks: function (surface, payload) {
+            return call('act.render.apply_hooks', { surface: String(surface || ''), payload: pluginPayload(payload) });
         },
         get_trigger_status: function () {
             return call('act.triggers.status', {});
@@ -355,5 +369,5 @@
 
     window.pywebview = window.pywebview || {};
     window.pywebview.api = api;
-    window.__pywebviewShim = { version: 's193' };
+    window.__pywebviewShim = { version: 's194' };
 })();

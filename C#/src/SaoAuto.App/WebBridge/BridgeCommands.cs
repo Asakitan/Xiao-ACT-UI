@@ -160,6 +160,10 @@ public static class BridgeCommands
     public const string ActPluginsRenderUiPanel = "act.plugins.render_ui_panel";
     public const string ActPluginsInvokeUiAction = "act.plugins.invoke_ui_action";
 
+    public const string ActRenderSurfaces = "act.render.surfaces";
+    public const string ActRenderApplyHooks = "act.render.apply_hooks";
+    public const string ActRenderOverlays = "act.render.overlays";
+
     public const string ActTriggersStatus = "act.triggers.status";
     public const string ActTriggersEnable = "act.triggers.enable";
     public const string ActTriggersDisable = "act.triggers.disable";
