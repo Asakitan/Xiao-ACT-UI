@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.42: ACT Entity Skill/Aggregate 签名补全.
+
+  1) `gui_modules/sao_gui_skill_drilldown.py` 的 Entity Skill Drilldown 签名加入
+     `summary.name/kind/damage/heal` 等事实区字段。修复技能名称、类型或 damage/heal
+     事实变化但 amount/casts/hits 未变时, 摘要卡和 SKILL FACTS 区保持旧渲染的问题。
+
+  2) `gui_modules/sao_gui_act_aggregate.py` 的 Entity Aggregate 签名加入
+     `overview.dps/hps/span/dungeon/mode`、source badges、group 标题/元数据/展开行
+     与 graph preview 点位。修复聚合值未变但顶部概览、分组说明、展开 payload 或趋势预览
+     改变时, 面板跳过重绘导致显示不全/旧数据的问题。扩展 Skill/Aggregate selftest。
+
+
+
 ## v4.4.41: ACT Entity 面板渲染签名补全.
 
   1) `gui_modules/sao_gui_graph_timeseries.py` 的 Entity Graph 面板渲染签名加入

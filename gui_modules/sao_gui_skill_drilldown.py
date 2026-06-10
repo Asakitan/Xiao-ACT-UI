@@ -359,4 +359,18 @@ class SkillDrilldownPanel:
             if isinstance(ref, Mapping):
                 refs.append((ref.get('id'), ref.get('time_ms'), ref.get('topic'), ref.get('label'), ref.get('value'), ref.get('payload') if str(ref.get('id')) in self._expanded_refs else None))
         filters = status.get('filters') if isinstance(status.get('filters'), Mapping) else {}
-        return repr((status.get('combatant_id'), status.get('skill_id'), summary.get('amount'), status.get('casts'), status.get('hits'), status.get('crit_rate'), filters.get('query'), tuple(sorted(self._expanded_refs)), refs))
+        return repr((
+            status.get('combatant_id'),
+            status.get('skill_id'),
+            summary.get('name'),
+            summary.get('kind'),
+            summary.get('amount'),
+            summary.get('damage'),
+            summary.get('heal'),
+            status.get('casts'),
+            status.get('hits'),
+            status.get('crit_rate'),
+            filters.get('query'),
+            tuple(sorted(self._expanded_refs)),
+            refs,
+        ))

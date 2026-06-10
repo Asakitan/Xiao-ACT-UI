@@ -436,11 +436,52 @@ class ActAggregatePanel:
     def _signature(self, status: Mapping[str, Any]) -> str:
         counts = status.get('raw_counts') if isinstance(status.get('raw_counts'), Mapping) else {}
         overview = status.get('overview') if isinstance(status.get('overview'), Mapping) else {}
+        groups_sig = []
+        for item in list(status.get('groups') or [])[:20]:
+            if not isinstance(item, Mapping):
+                continue
+            row_sig = []
+            for ridx, row in enumerate(list(item.get('rows') or [])[:6]):
+                if not isinstance(row, Mapping):
+                    continue
+                row_key = f"{item.get('key')}:{ridx}"
+                row_sig.append((
+                    row.get('time_ms'), row.get('topic'), row.get('source'),
+                    row.get('actor'), row.get('actor_uid'),
+                    row.get('target'), row.get('target_uid'),
+                    row.get('label'), row.get('value'),
+                    row.get('payload') if row_key in self._expanded_rows else None,
+                ))
+            groups_sig.append((
+                item.get('key'), item.get('name'),
+                item.get('damage'), item.get('heal'), item.get('total_value'), item.get('count'),
+                item.get('duration_ms'), item.get('first_time_ms'), item.get('last_time_ms'),
+                tuple(item.get('actors') or item.get('actor_uids') or ()),
+                tuple(item.get('targets') or item.get('target_uids') or ()),
+                tuple(item.get('skills') or item.get('skill_ids') or ()),
+                tuple(item.get('sources') or ()),
+                tuple(item.get('dungeons') or ()),
+                row_sig,
+            ))
+        graph = status.get('graph') if isinstance(status.get('graph'), Mapping) else {}
+        series = graph.get('series') if isinstance(graph.get('series'), Mapping) else {}
+        graph_sig = []
+        for metric in ('damage', 'heal', 'event_count'):
+            item = series.get(metric) if isinstance(series.get(metric), Mapping) else {}
+            graph_sig.append((
+                metric,
+                tuple((p.get('time_ms'), p.get('topic'), p.get('value'), p.get('row_id'))
+                      for p in list(item.get('points') or [])[-24:]
+                      if isinstance(p, Mapping)),
+            ))
         return repr((
             tuple(sorted((counts or {}).items())),
-            overview.get('damage'), overview.get('heal'), overview.get('elapsed_s'),
+            overview.get('damage'), overview.get('heal'), overview.get('dps'), overview.get('hps'),
+            overview.get('elapsed_s'), overview.get('span_ms'), overview.get('dungeon_name'), overview.get('mode'),
+            tuple((src.get('source'), src.get('count')) for src in list(status.get('source_mix') or []) if isinstance(src, Mapping)),
             str(status.get('group_by') or ''), str(status.get('group_field') or ''),
-            [(item.get('key'), item.get('damage'), item.get('total_value'), item.get('count')) for item in list(status.get('groups') or [])[:20] if isinstance(item, Mapping)],
+            groups_sig,
+            graph_sig,
             tuple(sorted(self._expanded_groups)),
             tuple(sorted(self._expanded_rows)),
             self._query_var.get(), self._source_var.get(),

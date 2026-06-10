@@ -15,6 +15,15 @@ from engines.act_aggregate import (
 )
 from act_platform.event_bus import EventBus
 from act_platform.runtime import act_aggregate_status
+from gui_modules.sao_gui_act_aggregate import ActAggregatePanel
+
+
+class _FakeVar:
+    def __init__(self, value: str = "") -> None:
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
 
 
 def _events():
@@ -171,6 +180,31 @@ class ActAggregateTests(unittest.TestCase):
         self.assertGreaterEqual(len(status["timeline_clusters"]), 2)
         self.assertGreaterEqual(len(status["skill_damage"]), 3)
         self.assertGreaterEqual(len(status["monster_damage"]), 2)
+
+    def test_entity_signature_tracks_rendered_overview_group_and_graph_fields(self) -> None:
+        panel = ActAggregatePanel.__new__(ActAggregatePanel)
+        panel._expanded_groups = set()
+        panel._expanded_rows = set()
+        panel._query_var = _FakeVar("")
+        panel._source_var = _FakeVar("live")
+        base = {
+            "raw_counts": {"rows": 4, "skills": 1, "monsters": 1, "dungeons": 1},
+            "overview": {"damage": 1000, "heal": 0, "dps": 500, "hps": 0, "elapsed_s": 2, "dungeon_name": "North Cave", "mode": "live"},
+            "source_mix": [{"source": "packet", "count": 3}],
+            "group_by": "skill",
+            "group_field": "",
+            "groups": [{"key": "11", "name": "Slash", "damage": 1000, "count": 2, "duration_ms": 500, "targets": ["Wolf"], "sources": ["packet"]}],
+            "graph": {"series": {"damage": {"points": [{"time_ms": 100, "value": 1000}]}}},
+        }
+        overview_changed = dict(base, overview=dict(base["overview"], dps=600, dungeon_name="South Cave"))
+        group_changed = dict(base, groups=[dict(base["groups"][0], name="Slash II", targets=["Boss"])])
+        graph_changed = dict(base, graph={"series": {"damage": {"points": [{"time_ms": 100, "value": 1500}]}}})
+
+        sig = panel._signature(base)
+
+        self.assertNotEqual(sig, panel._signature(overview_changed))
+        self.assertNotEqual(sig, panel._signature(group_changed))
+        self.assertNotEqual(sig, panel._signature(graph_changed))
 
 
 if __name__ == "__main__":

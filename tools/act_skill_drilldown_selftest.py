@@ -9,6 +9,7 @@ import unittest
 
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
+from gui_modules.sao_gui_skill_drilldown import SkillDrilldownPanel
 
 
 class FakeTracker:
@@ -123,6 +124,29 @@ class ActSkillDrilldownRuntimeTests(unittest.TestCase):
         self.assertFalse(status["ok"])
         self.assertEqual(status["summary"], {})
         self.assertTrue(status["errors"])
+
+    def test_entity_signature_tracks_rendered_summary_facts(self) -> None:
+        base = {
+            "combatant_id": "1001",
+            "skill_id": "11",
+            "summary": {"name": "Slash", "kind": "damage", "amount": 1800, "damage": 1800, "heal": 0},
+            "casts": 2,
+            "hits": 3,
+            "crit_rate": 0.333,
+            "timeline_refs": [{"id": "evt-1", "time_ms": 1000, "topic": "damage", "label": "Slash", "value": 900}],
+            "filters": {"query": ""},
+        }
+        name_changed = dict(base, summary=dict(base["summary"], name="Slash II"))
+        kind_changed = dict(base, summary=dict(base["summary"], kind="heal"))
+        facts_changed = dict(base, summary=dict(base["summary"], damage=1700, heal=100))
+
+        panel = SkillDrilldownPanel.__new__(SkillDrilldownPanel)
+        panel._expanded_refs = set()
+        sig = panel._signature(base)
+
+        self.assertNotEqual(sig, panel._signature(name_changed))
+        self.assertNotEqual(sig, panel._signature(kind_changed))
+        self.assertNotEqual(sig, panel._signature(facts_changed))
 
 
 if __name__ == "__main__":
