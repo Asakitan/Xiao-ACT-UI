@@ -383,6 +383,62 @@ button.close {
         return { name: cmd, payload: { args: args } };
     }
 
+    function sigOf(value) {
+        try { return JSON.stringify(value == null ? null : value); } catch (_) { return String(value); }
+    }
+
+    function panelKey(panel) {
+        return String(panel && (panel.id || panel.panel_id) || '');
+    }
+
+    function clearPanelCards(grid, html) {
+        var cards = PluginManager._panelCards || {};
+        Object.keys(cards).forEach(function (key) {
+            var entry = cards[key];
+            if (entry && entry.card && entry.card.parentNode) entry.card.parentNode.removeChild(entry.card);
+        });
+        PluginManager._panelCards = Object.create(null);
+        PluginManager._panelEmptyHtml = html || '';
+        if (html && grid.__panelEmptyHtml !== html) {
+            grid.innerHTML = html;
+            grid.__panelEmptyHtml = html;
+        } else if (!html && grid.__panelEmptyHtml) {
+            grid.textContent = '';
+            grid.__panelEmptyHtml = '';
+        }
+    }
+
+    function panelEntry(grid, panel) {
+        var key = panelKey(panel);
+        if (!key) return null;
+        var cards = PluginManager._panelCards || (PluginManager._panelCards = Object.create(null));
+        var entry = cards[key];
+        if (!entry || !entry.card || !entry.card.isConnected) {
+            var card = document.createElement('div');
+            card.className = 'panel-card';
+            var head = document.createElement('div');
+            head.className = 'panel-card-head';
+            card.appendChild(head);
+            var body = document.createElement('div');
+            card.appendChild(body);
+            entry = cards[key] = {
+                card: card,
+                head: head,
+                body: body,
+                action: function (action, payload) { PluginManager.panelAction(key, action, payload); },
+                metaSig: '',
+                renderSig: ''
+            };
+        }
+        var label = (panel.title || panel.id) + ' · ' + (panel.plugin_id || '');
+        if (entry.metaSig !== label) {
+            entry.head.textContent = label;
+            entry.metaSig = label;
+        }
+        grid.appendChild(entry.card);
+        return entry;
+    }
+
     function showToast(message) {
         toast.textContent = String(message || '');
         toast.classList.add('visible');
@@ -537,31 +593,43 @@ button.close {
         renderPanels: function () {
             var grid = document.getElementById('panels-grid');
             var renderSpec = window.PluginHooks && window.PluginHooks.renderSpec;
+            var seq = ++PluginManager._panelSeq;
             return apiCall('get_plugin_ui_panels', []).then(function (data) {
+                if (seq !== PluginManager._panelSeq) return;
                 var panels = (data && data.panels || []).filter(function (p) { return p.available && !p.hidden; });
                 if (!panels.length) {
-                    grid.innerHTML = '<div class="empty">无插件 UI 面板<br/>启用注册了 register_ui_panel 的插件后显示在这里。</div>';
+                    clearPanelCards(grid, '<div class="empty">无插件 UI 面板<br/>启用注册了 register_ui_panel 的插件后显示在这里。</div>');
                     return;
                 }
-                grid.innerHTML = '';
+                if (grid.__panelEmptyHtml) {
+                    grid.textContent = '';
+                    grid.__panelEmptyHtml = '';
+                }
+                var seen = Object.create(null);
                 panels.forEach(function (p) {
-                    var card = document.createElement('div');
-                    card.className = 'panel-card';
-                    var head = document.createElement('div');
-                    head.className = 'panel-card-head';
-                    head.textContent = (p.title || p.id) + ' · ' + (p.plugin_id || '');
-                    card.appendChild(head);
-                    var body = document.createElement('div');
-                    card.appendChild(body);
-                    grid.appendChild(card);
-                    apiCall('render_ui_panel', [p.id, '']).then(function (r) {
+                    var key = panelKey(p);
+                    var entry = panelEntry(grid, p);
+                    if (!entry) return;
+                    seen[key] = true;
+                    apiCall('render_ui_panel', [key, '']).then(function (r) {
+                        if (seq !== PluginManager._panelSeq || !entry.card.isConnected) return;
                         var spec = (r && r.spec) || { nodes: [] };
+                        var renderSig = (renderSpec ? 'hook:' : 'text:') + sigOf(spec);
+                        if (entry.renderSig === renderSig) return;
+                        entry.renderSig = renderSig;
                         if (renderSpec) {
-                            renderSpec(spec, body, function (action, payload) { PluginManager.panelAction(p.id, action, payload); });
+                            renderSpec(spec, entry.body, entry.action);
                         } else {
-                            body.textContent = JSON.stringify(spec);
+                            entry.body.textContent = JSON.stringify(spec);
                         }
                     });
+                });
+                var cards = PluginManager._panelCards || {};
+                Object.keys(cards).forEach(function (key) {
+                    if (seen[key]) return;
+                    var entry = cards[key];
+                    if (entry && entry.card && entry.card.parentNode) entry.card.parentNode.removeChild(entry.card);
+                    delete cards[key];
                 });
             });
         }
@@ -569,6 +637,8 @@ button.close {
 
     window.PluginManager = PluginManager;
     PluginManager._panelsActive = false;
+    PluginManager._panelCards = Object.create(null);
+    PluginManager._panelSeq = 0;
     setInterval(function () { if (PluginManager._panelsActive) PluginManager.renderPanels(); }, 1000);
     window.addEventListener('pywebviewready', function () { PluginManager.refresh(); });
     setTimeout(function () {

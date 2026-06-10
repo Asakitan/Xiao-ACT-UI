@@ -7514,8 +7514,13 @@ setTimeout(function() {
     // ── Detached per-plugin panel (the plugin's own GUI + hotkey config) ──
     var _pdPlugin = '';
     var _pdTimer = null;
+    var _pdPanelCards = Object.create(null);
     window.showPluginDetached = function (pluginId) {
-        _pdPlugin = String(pluginId || '');
+        var nextPlugin = String(pluginId || '');
+        if (_pdPlugin !== nextPlugin) {
+            _pdPlugin = nextPlugin;
+            resetDetachedPanelCards();
+        }
         var ov = document.getElementById('plugin-detached-overlay');
         if (ov) ov.style.display = 'flex';
         renderPluginDetachedPanels();
@@ -7542,6 +7547,46 @@ setTimeout(function() {
         };
     }
     var _pdSeq = 0;
+    function pdSig(value) {
+        try { return JSON.stringify(value == null ? null : value); } catch (_) { return String(value); }
+    }
+    function pdPanelKey(panel) {
+        return String(panel && (panel.id || panel.panel_id) || '');
+    }
+    function resetDetachedPanelCards(emptyHtml) {
+        var body = document.getElementById('pd-body');
+        Object.keys(_pdPanelCards).forEach(function (key) {
+            var entry = _pdPanelCards[key];
+            if (entry && entry.card && entry.card.parentNode) entry.card.parentNode.removeChild(entry.card);
+        });
+        _pdPanelCards = Object.create(null);
+        if (!body) return;
+        if (emptyHtml) {
+            if (body.__pdEmptyHtml !== emptyHtml) {
+                body.innerHTML = emptyHtml;
+                body.__pdEmptyHtml = emptyHtml;
+            }
+        } else if (body.__pdEmptyHtml) {
+            body.textContent = '';
+            body.__pdEmptyHtml = '';
+        }
+    }
+    function detachedPanelEntry(body, panel) {
+        var key = pdPanelKey(panel);
+        if (!key) return null;
+        var entry = _pdPanelCards[key];
+        if (!entry || !entry.card || !entry.card.isConnected) {
+            var card = document.createElement('div');
+            card.style.marginBottom = '8px';
+            entry = _pdPanelCards[key] = {
+                card: card,
+                action: pdAction(key),
+                renderSig: ''
+            };
+        }
+        body.appendChild(entry.card);
+        return entry;
+    }
     function renderPluginDetachedPanels() {
         var a = api();
         var body = document.getElementById('pd-body');
@@ -7558,18 +7603,32 @@ setTimeout(function() {
                 return p.plugin_id === _pdPlugin && p.available;
             });
             if (title) title.textContent = (panels[0] && panels[0].title) || _pdPlugin;
-            if (!panels.length) { body.innerHTML = '<div class="ppm-empty">插件未提供面板或未激活</div>'; return; }
-            body.innerHTML = '';
+            if (!panels.length) { resetDetachedPanelCards('<div class="ppm-empty">插件未提供面板或未激活</div>'); return; }
+            if (body.__pdEmptyHtml) {
+                body.textContent = '';
+                body.__pdEmptyHtml = '';
+            }
+            var seen = Object.create(null);
             panels.forEach(function (p) {
-                var card = document.createElement('div');
-                card.style.marginBottom = '8px';
-                body.appendChild(card);
-                Promise.resolve(a.render_ui_panel(p.id, '')).then(parse).then(function (r) {
-                    if (mySeq !== _pdSeq || !card.isConnected) return;
+                var key = pdPanelKey(p);
+                var entry = detachedPanelEntry(body, p);
+                if (!entry) return;
+                seen[key] = true;
+                Promise.resolve(a.render_ui_panel(key, '')).then(parse).then(function (r) {
+                    if (mySeq !== _pdSeq || !entry.card.isConnected) return;
                     var spec = (r && r.spec) || { nodes: [] };
-                    if (renderSpec) renderSpec(spec, card, pdAction(p.id));
-                    else card.textContent = JSON.stringify(spec);
+                    var renderSig = (renderSpec ? 'hook:' : 'text:') + pdSig(spec);
+                    if (entry.renderSig === renderSig) return;
+                    entry.renderSig = renderSig;
+                    if (renderSpec) renderSpec(spec, entry.card, entry.action);
+                    else entry.card.textContent = JSON.stringify(spec);
                 });
+            });
+            Object.keys(_pdPanelCards).forEach(function (key) {
+                if (seen[key]) return;
+                var entry = _pdPanelCards[key];
+                if (entry && entry.card && entry.card.parentNode) entry.card.parentNode.removeChild(entry.card);
+                delete _pdPanelCards[key];
             });
         });
     }

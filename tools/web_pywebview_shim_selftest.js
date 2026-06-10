@@ -86,10 +86,18 @@ function assert(cond, message) {
   const pluginManager = fs.readFileSync(path.join(root, "web/plugin_manager.html"), "utf8");
   assert(!pluginManager.includes("{ args: args || [] }"), "plugin manager still sends bare fallback args");
   assert(pluginManager.includes("pluginCommand(name, args || [])"), "plugin manager is missing fallback payload mapping");
+  assert(pluginManager.includes("PluginManager._panelCards"), "plugin manager should keep panel card entries across polls");
+  assert(!pluginManager.includes("grid.innerHTML = '';"), "plugin manager still clears all panel cards on each poll");
+  assert(pluginManager.includes("entry.renderSig === renderSig"), "plugin manager should skip unchanged panel specs");
 
   const triggerManager = fs.readFileSync(path.join(root, "web/trigger_timer_manager.html"), "utf8");
   assert(!triggerManager.includes("{ args: args || [] }"), "trigger manager still sends bare fallback args");
   assert(triggerManager.includes("triggerPayload(name, args || [])"), "trigger manager is missing fallback payload mapping");
+
+  const menu = fs.readFileSync(path.join(root, "web/menu.html"), "utf8");
+  assert(menu.includes("_pdPanelCards"), "menu detached plugin panel should keep panel cards across polls");
+  assert(!menu.includes("body.innerHTML = '';"), "menu detached plugin panel still clears all cards on each poll");
+  assert(menu.includes("entry.renderSig === renderSig"), "menu detached plugin panel should skip unchanged specs");
 
   console.log("web_pywebview_shim_selftest: ok");
 })().catch((err) => {

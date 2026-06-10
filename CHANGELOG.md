@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.23: 插件面板轮询增量渲染.
+
+  1) `web/plugin_manager.html` 的 Panels 标签不再每秒清空 `panels-grid` 并重建
+     所有卡片。面板卡片、标题和 action callback 现在按 panel id 复用, spec 未变化时
+     跳过 `PluginHooks.renderSpec`, 避免输入焦点/滚动/按钮状态被轮询刷新打断。
+
+  2) `web/menu.html` 的 detached plugin panel 不再每 800ms 清空 `pd-body`。
+     每个插件面板按 id 保留 DOM entry 并用 spec 签名跳过未变化渲染, 同时保留异步序号
+     防止过期 render 结果写回。扩展 `tools/web_pywebview_shim_selftest.js` 加回归守卫。
+
+
+
 ## v4.4.22: WebView2 核心 UI shim + 插件/触发器 fallback 参数修复.
 
   1) `pywebview-shim.js` 补齐 `exit_app`、`toggle_menu`、`context_action`、
