@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.53: ACT Web 观测侧栏滚动修复.
+
+  1) `web/data_source_health.html` 的右侧 Runtime Summary/Diagnostics 栏现在可滚动。
+     修复诊断项过多时, 侧栏因为 `overflow:hidden` 裁掉下半部分内容的问题。
+
+  2) `web/trigger_timer_manager.html` 的右侧 Runtime/Recent/Rule Source 栏现在可滚动。
+     修复近期事件或说明内容过多时, 侧栏内容被裁剪且无法查看的问题。扩展
+     `tools/web_act_layout_selftest.py` 覆盖这两个 Web 面板。
+
+
+
 ## v4.4.52: ACT Tk Data Source Health 渲染签名补全.
 
   1) `gui_modules/sao_gui_data_source_health.py` 的 source 渲染签名现在包含

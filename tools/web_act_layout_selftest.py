@@ -71,6 +71,8 @@ def main() -> int:
     _assert_side_scroll("act_action_log.html", "action log")
     _assert_side_scroll("act_report_export.html", "report export")
     _assert_side_scroll("act_death_recap.html", "death recap")
+    _assert_side_scroll("data_source_health.html", "data source health")
+    _assert_side_scroll("trigger_timer_manager.html", "trigger timer manager")
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 
