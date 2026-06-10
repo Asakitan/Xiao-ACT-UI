@@ -2,7 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
-## v4.4.17: hybrid 内存补充化 — 干掉 mem 每 tick O(N) 读, 人群/20人本不再卡.
+## v4.4.20: Web 插件层稳态渲染 + settings 新目录可靠保存.
+
+  1) WebView 插件层增加 spec/overlay/override 签名闸: 800ms 轮询拿到相同内容时不再
+     清空并重建 DOM, 减少插件 overlay 空转开销, 避免输入焦点/滚动/点击状态被重复重建
+     打扰。空 spec 现在与 Entity 渲染器一致显示 muted "(empty)", 只有标题的 takeover
+     spec 也不会被误判为空而直接移除。
+
+  2) SettingsManager.save 先创建目标目录, 并初始化/清理临时文件路径后再 fallback 直写。
+     修复新配置目录尚不存在时保存失败且被吞掉的问题, 防止首次运行或自定义 settings 路径
+     下用户改动丢失。smoke 测试新增新目录保存回归覆盖。
+
+
+
+## v4.4.17: hybrid 内存补充化 — 干掉 mem 每 tick O(N) 读, 人群/20人本不再卡.
   实测 hybrid 下 mem DPS/Boss HP 仍卡; 定向: hybrid 走 TCP 为主, mem 只补
   名字 / TCP 不发的基址。调查确认 DPS 行+Boss HP 本就 TCP 为主(dps_tracker
   _mem_primary=False; Boss HP 仅 boss_hp_source∈none/memory/estimate 时由 mem 补)。

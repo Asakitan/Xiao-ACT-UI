@@ -210,6 +210,15 @@
         }[c] || "#73d7ff";
     }
 
+    function specSignature(value) {
+        try { return JSON.stringify(value || {}); }
+        catch (_) { return String(Date.now()); }
+    }
+
+    function hasRenderableSpec(spec) {
+        return !!(spec && (spec.title || ((spec.nodes || []).length)));
+    }
+
     // Collect live text-input values within one panel mount into {id: value}.
     function collectInputs(root) {
         var out = {};
@@ -223,6 +232,13 @@
     }
 
     function renderSpec(spec, mount, onAction) {
+        spec = spec || {};
+        if (!(spec.nodes || []).length && !spec.title) {
+            spec = { nodes: [{ type: "text", text: "(empty)", style: "muted", align: "left" }] };
+        }
+        var sig = specSignature(spec);
+        if (mount.__splg_sig === sig && mount.__splg_rendered
+                && mount.__splg_on_action === onAction) return;
         // Snapshot live inputs: the innerHTML teardown below would otherwise drop
         // focus + typed text every poll/redraw (Tk reconciles in place; here we
         // must restore by hand to keep 1:1 parity with the Entity renderer).
@@ -245,7 +261,6 @@
             onAction(action, payload);
         } : null;
         mount.innerHTML = "";
-        spec = spec || {};
         if (spec.title) mount.appendChild(el("div", "splg-text splg-st-title", esc(spec.title)));
         (spec.nodes || []).forEach(function (n) {
             try { var e = renderNode(n, wrapped); if (e) mount.appendChild(e); }
@@ -261,6 +276,9 @@
             if (p.f || seed === "") rebuilt[j].value = p.v; // clobber guard: keep user text
             if (p.f) { rebuilt[j].focus(); try { rebuilt[j].setSelectionRange(p.s, p.e); } catch (_) {} }
         }
+        mount.__splg_sig = sig;
+        mount.__splg_on_action = onAction;
+        mount.__splg_rendered = true;
     }
 
     // ── injected stylesheet (SAO cyan/gold theme, scoped to .splg-*) ─────────
@@ -334,7 +352,15 @@
         return call("act_render_overlays", [SURFACE]).then(function (data) {
             var mount = overlayMount();
             var overlays = (data && data.overlays) || [];
-            if (!overlays.length) { mount.innerHTML = ""; mount.style.display = "none"; return; }
+            var sig = specSignature(overlays);
+            if (!overlays.length) {
+                if (mount.__splg_overlay_sig !== sig) mount.innerHTML = "";
+                mount.__splg_overlay_sig = sig;
+                mount.style.display = "none";
+                return;
+            }
+            if (mount.__splg_overlay_sig === sig && mount.style.display !== "none") return;
+            mount.__splg_overlay_sig = sig;
             mount.style.display = "block";
             mount.innerHTML = "";
             overlays.forEach(function (ov) {
@@ -348,11 +374,17 @@
     // ── override layer (full takeover from a render hook) ────────────────────
     function showOverride(spec) {
         var ov = document.getElementById("sao-plugin-override");
-        if (!spec || !(spec.nodes || []).length) {
-            if (ov) ov.remove();
+        if (!hasRenderableSpec(spec)) {
+            if (ov) {
+                ov.__splg_override_sig = "";
+                ov.remove();
+            }
             return;
         }
         if (!ov) { ov = el("div"); ov.id = "sao-plugin-override"; document.body.appendChild(ov); }
+        var sig = specSignature(spec);
+        if (ov.__splg_override_sig === sig) return;
+        ov.__splg_override_sig = sig;
         renderSpec(spec, ov, null);
     }
 

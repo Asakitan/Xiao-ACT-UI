@@ -343,7 +343,7 @@ UPDATE_TARGET = "windows-x64"
 
 WINDOW_TITLE = "SAO Auto - Game HUD"
 WINDOW_SIZE = "900x980"
-APP_VERSION = "4.4.19"
+APP_VERSION = "4.4.20"
 APP_VERSION_LABEL = f"v{APP_VERSION}"
 # 完整版本历史见 CHANGELOG.md。
 
@@ -650,11 +650,13 @@ class SettingsManager:
         self._data[key] = value
 
     def save(self):
+        tmp_path = ""
         try:
             for legacy_key in self._LEGACY_KEYS:
                 self._data.pop(legacy_key, None)
             # Atomic write to improve reliability on exit/crash (80% failure rate fixed)
             dir_name = os.path.dirname(self._path) or os.getcwd()
+            os.makedirs(dir_name, exist_ok=True)
             with tempfile.NamedTemporaryFile(
                 mode="w", dir=dir_name, delete=False, encoding="utf-8", suffix=".tmp.json"
             ) as tmp:
@@ -673,6 +675,8 @@ class SettingsManager:
                 pass
             # fallback to direct write
             try:
+                dir_name = os.path.dirname(self._path) or os.getcwd()
+                os.makedirs(dir_name, exist_ok=True)
                 with open(self._path, "w", encoding="utf-8") as handle:
                     json.dump(self._data, handle, indent=2, ensure_ascii=False)
                     handle.flush()

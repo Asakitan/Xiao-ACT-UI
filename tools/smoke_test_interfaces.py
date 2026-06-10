@@ -192,10 +192,20 @@ section("Phase C — Smoke-call key entry points")
 
 def smoke_config():
     import config
+    import json
+    import os
+    import tempfile
     assert isinstance(config.APP_VERSION, str)
     assert config.APP_VERSION_LABEL.startswith("v")
     rects = config.get_skill_slot_rects((0, 0, 1920, 1080))
     assert isinstance(rects, list)
+    with tempfile.TemporaryDirectory() as root:
+        path = os.path.join(root, "nested", "settings.json")
+        sm = config.SettingsManager(path)
+        sm.set("probe", "ok")
+        sm.save()
+        with open(path, "r", encoding="utf-8") as handle:
+            assert json.load(handle).get("probe") == "ok"
 
 
 def smoke_uihelpers_layout():
