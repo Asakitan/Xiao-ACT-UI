@@ -287,7 +287,7 @@ class EntityCombatReader:
         blob = self.pm.read_bytes(ip, 0x4000)
         if not blob:
             return False
-        ids = {int.from_bytes(blob[o:o + 4], "little") for o in range(0, len(blob) - 4, 4)}
+        ids = {int.from_bytes(blob[o:o + 4], "little") for o in range(0, len(blob) - 3, 4)}
         return A_HP in ids and A_MAX_HP in ids
 
     def read_hp(self, ent_addr: int) -> Optional[Tuple[int, int]]:
@@ -388,8 +388,11 @@ class EntityCombatReader:
     def _combat_from_amap(self, amap: Dict[int, object]) -> Optional[dict]:
         cur = amap.get(A_HP)
         mx = amap.get(A_MAX_HP)
-        if not (isinstance(cur, int) and isinstance(mx, int) and mx > 0
-                and 0 <= cur <= MAX_HP_PLAUSIBLE):
+        # same acceptance predicate as the Cython fast path (read_entity_combat_many):
+        # 0 <= cur <= mx <= plausible cap -- keeps fallback and fast path consistent
+        # (a server-time long surfacing as MaxHp must be rejected here too)
+        if not (isinstance(cur, int) and isinstance(mx, int)
+                and 0 < mx <= MAX_HP_PLAUSIBLE and 0 <= cur <= mx):
             return None
 
         def _n(aid):
