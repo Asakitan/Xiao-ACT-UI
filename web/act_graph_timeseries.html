@@ -165,9 +165,20 @@
         return parseMaybeJson(await window.pywebview.api[name](...args));
       }
       if (window.bridge && typeof window.bridge.cmd === 'function') {
-        return parseMaybeJson(await window.bridge.cmd(fallbackAction, args));
+        return parseMaybeJson(await window.bridge.cmd(fallbackAction, fallbackPayload(fallbackAction, args)));
       }
       return {};
+    }
+    function fallbackPayload(action, args) {
+      args = args || [];
+      if (action === 'act.graph.status') return { metric: String(args[0] || ''), limit: args[1] || 120, query: String(args[2] || ''), topic: String(args[3] || ''), time_range_ms: args[4] || 0 };
+      if (action === 'act.graph.select_metric') return { metric: String(args[0] || 'damage'), limit: args[1] || 120 };
+      if (action === 'act.graph.zoom') return { time_range_ms: args[0] || 0, limit: args[1] || 120 };
+      if (action === 'act.graph.filter') return { query: String(args[0] || ''), topic: String(args[1] || ''), limit: args[2] || 120 };
+      if (action === 'act.graph.export') return { metric: String(args[0] || ''), limit: args[1] || 120, query: String(args[2] || ''), topic: String(args[3] || '') };
+      if (action === 'act.action_log.jump_to_time') return { cursor_ms: args[0] || 0, limit: 80, source: String(args[1] || 'live'), encounter_id: String(args[2] || ''), offset: 0 };
+      if (action === 'ui.menu_action') return { action: String(args[0] || '') };
+      return { args: args };
     }
     function fmt(value) {
       const n = Number(value || 0);

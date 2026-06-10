@@ -105,8 +105,17 @@
     function parseMaybeJson(value) { if (typeof value === 'string') { try { return JSON.parse(value); } catch (_) { return {}; } } return value || {}; }
     async function callApi(name, fallbackAction, ...args) {
       if (window.pywebview && window.pywebview.api && typeof window.pywebview.api[name] === 'function') return parseMaybeJson(await window.pywebview.api[name](...args));
-      if (window.bridge && typeof window.bridge.cmd === 'function') return parseMaybeJson(await window.bridge.cmd(fallbackAction, args));
+      if (window.bridge && typeof window.bridge.cmd === 'function') return parseMaybeJson(await window.bridge.cmd(fallbackAction, fallbackPayload(fallbackAction, args)));
       return {};
+    }
+    function fallbackPayload(action, args) {
+      args = args || [];
+      if (action === 'act.skill.status' || action === 'act.skill.filter' || action === 'act.skill.copy') {
+        return { combatant_id: String(args[0] || ''), skill_id: String(args[1] || ''), query: String(args[2] || ''), limit: args[3] || 80 };
+      }
+      if (action === 'act.skill.back') return {};
+      if (action === 'ui.menu_action') return { action: String(args[0] || '') };
+      return { args: args };
     }
     function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
     function fmt(v) { const n = Number(v || 0); if (!Number.isFinite(n)) return esc(v); if (Math.abs(n) >= 1000000) return (n/1000000).toFixed(2)+'m'; if (Math.abs(n) >= 1000) return (n/1000).toFixed(1)+'k'; return String(Math.round(n)); }

@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.21: WebView2 shim 参数透传 + ACT 下钻 fallback 修复.
+
+  1) `pywebview-shim.js` 的 `get_aggregate_status` 补传 `group_by/group_field`。
+     修复 WebView2 shim 路径下 ACT 聚合驾驶舱切换维度/自定义字段时参数被截断,
+     后端始终按默认 skill 聚合的问题。
+
+  2) 补 `show_action_log_at` shim, 并把 Graph/Combatant/Skill 三个 ACT 面板的
+     `window.bridge.cmd` fallback 从裸数组改成命名 payload。无 pywebview.api 包装或
+     shim 方法缺失时, C#/bridge handler 仍能读到 `cursor_ms`、`combatant_id`、
+     `skill_id`、`query` 等字段。新增 `tools/web_pywebview_shim_selftest.js` 覆盖。
+
+
+
 ## v4.4.20: Web 插件层稳态渲染 + settings 新目录可靠保存.
 
   1) WebView 插件层增加 spec/overlay/override 签名闸: 800ms 轮询拿到相同内容时不再

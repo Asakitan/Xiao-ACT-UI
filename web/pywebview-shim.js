@@ -146,8 +146,17 @@
         get_timeline_status: function (limit, query) {
             return call('act.timeline.status', { limit: limit || 80, query: String(query || '') });
         },
-        get_aggregate_status: function (limit, query, source, windowMs, topN, encounterId) {
-            return call('act.aggregate.status', { limit: limit || 1000, query: String(query || ''), source: String(source || 'live'), window_ms: windowMs || 1000, top_n: topN || 20, encounter_id: String(encounterId || '') });
+        get_aggregate_status: function (limit, query, source, windowMs, topN, encounterId, groupBy, groupField) {
+            return call('act.aggregate.status', {
+                limit: limit || 1000,
+                query: String(query || ''),
+                source: String(source || 'live'),
+                window_ms: windowMs || 1000,
+                top_n: topN || 20,
+                encounter_id: String(encounterId || ''),
+                group_by: String(groupBy || 'skill'),
+                group_field: String(groupField || '')
+            });
         },
         play_timeline: function (speed) {
             return call('act.timeline.play', { speed: speed || 1 });
@@ -178,6 +187,9 @@
         },
         jump_action_log_time: function (cursorMs, limit, source, encounterId, offset) {
             return call('act.action_log.jump_to_time', { cursor_ms: cursorMs || 0, limit: limit || 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 });
+        },
+        show_action_log_at: function (cursorMs, source, encounterId) {
+            return call('act.action_log.jump_to_time', { cursor_ms: cursorMs || 0, limit: 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: 0 });
         },
         copy_action_log: function (limit, query, topic, source, encounterId, offset) {
             return call('act.action_log.copy', { limit: limit || 80, query: String(query || ''), topic: String(topic || ''), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 });
