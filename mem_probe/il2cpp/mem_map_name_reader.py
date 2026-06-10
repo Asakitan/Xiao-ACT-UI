@@ -22,35 +22,19 @@ cache. Read-only; never raises.
 """
 from __future__ import annotations
 
-import struct
 from typing import Dict, Optional
 
-from mem_probe.il2cpp.auto_registration_locator import build_live_class_index
 from mem_probe.il2cpp.mem_config_table_reader import MemConfigTableReader
+from mem_probe.il2cpp.mem_string_pool import (
+    StringPoolBridge, POOL_CLS, _FALLBACK, _plaus, _is_cjk,
+    CLASS_FIELDS_OFF, FI_NAME_OFF, FI_PARENT_OFF, FI_OFF_OFF, FI_STRIDE,
+    STR_LEN_OFF, STR_CHARS_OFF, ARR_LEN_OFF, ARR_ELEMS_OFF, NATIVEARRAY_LEN_OFF,
+)
 
-# IL2CPP / .NET structural layout (runtime-defined, layout-stable across game patches)
-CLASS_FIELDS_OFF = 0x80          # Il2CppClass.fields -> Il2CppFieldInfo[]
-FI_NAME_OFF, FI_PARENT_OFF, FI_OFF_OFF, FI_STRIDE = 0x0, 0x10, 0x18, 0x20
-STR_LEN_OFF, STR_CHARS_OFF = 0x10, 0x14          # Il2CppString
-ARR_LEN_OFF, ARR_ELEMS_OFF = 0x18, 0x20          # IL2CPP array
-NATIVEARRAY_LEN_OFF = 0x8                         # NativeArray<T>: m_Buffer@0, m_Length@8
 PROXYMGR_STATIC_FIELDS_OFF = 0xB8                 # Il2CppClass.static_fields (route2)
 
 SCENE_CLS = "Bokura.SceneTableBase"
-POOL_CLS = "Panda.Module.StringPoolRuntimeImpl"
 PROXY_CLS = "Table.Utility.TableProxyManager"
-
-# layout fallbacks if the live field-table walk can't resolve a name (kept tiny)
-_FALLBACK = {("StringPoolRuntimeImpl", "allLocalizationString_"): 0x10,
-             ("StringPoolRuntimeImpl", "indexes_"): 0x18}
-
-
-def _plaus(p: Optional[int]) -> bool:
-    return bool(p and 0x10000 <= p <= 0x7FFFFFFFFFFF)
-
-
-def _is_cjk(s: str) -> bool:
-    return any("一" <= c <= "鿿" for c in (s or ""))
 
 
 class MapNameReader:
@@ -61,101 +45,27 @@ class MapNameReader:
         self._sr = dps_source.sr
         self.pm = dps_source.sr.pm
         self._cfg = MemConfigTableReader(dps_source)
-        self._klass: Dict[str, int] = {}
-        self._field: Dict[tuple, Optional[int]] = {}
-        self._pool_arr = 0
-        self._pool_len = 0
-        self._pool_kv: Dict[int, int] = {}
+        self._pool = StringPoolBridge(dps_source)
         self._scene_names: Dict[int, str] = {}
         self._scene_cfg = 0
         self._ready = False
 
-    # ── auto offset: klass by name + field offset by live field table ──────────
+    # ── klass/field/string resolution: delegated to the shared bridge ─────────
     def _resolve_klass(self, full: str) -> int:
-        if full in self._klass:
-            return self._klass[full]
-        idx = build_live_class_index(self.pm, {full}, time_budget_s=90)
-        kp = int(idx.get(full, 0) or 0)
-        self._klass[full] = kp
-        return kp
+        return self._pool.resolve_klass(full)
 
     def _field_off(self, klass: int, field: str) -> Optional[int]:
-        key = (klass, field)
-        if key in self._field:
-            return self._field[key]
-        off = None
-        fields = self.pm.read_u64(klass + CLASS_FIELDS_OFF) if _plaus(klass) else 0
-        if _plaus(fields):
-            want = field.encode("utf-8")
-            backing = ("<%s>k__BackingField" % field).encode("utf-8")
-            for i in range(512):
-                fi = fields + i * FI_STRIDE
-                if self.pm.read_u64(fi + FI_PARENT_OFF) != klass:
-                    break
-                namep = self.pm.read_u64(fi + FI_NAME_OFF)
-                nm = self.pm.read_bytes(namep, 64) if _plaus(namep) else None
-                if nm:
-                    nm = nm.split(b"\x00", 1)[0]
-                    if nm == want or nm == backing:
-                        off = self.pm.read_i32(fi + FI_OFF_OFF)
-                        break
-        self._field[key] = off
-        return off
+        return self._pool.field_off(klass, field)
 
     def _read_str(self, sp: int) -> str:
-        if not _plaus(sp):
-            return ""
-        ln = self.pm.read_u32(sp + STR_LEN_OFF) or 0
-        if ln <= 0 or ln > 128:
-            return ""
-        raw = self.pm.read_bytes(sp + STR_CHARS_OFF, ln * 2)
-        return raw.decode("utf-16-le", "replace") if raw else ""
+        return self._pool.read_str(sp)
 
-    # ── localization pool: name_mlid -> CN string ─────────────────────────────
+    # ── localization pool: name_mlid -> CN string (StringPoolBridge) ──────────
     def _ensure_pool(self) -> bool:
-        if self._pool_kv:
-            return True
-        pk = self._resolve_klass(POOL_CLS)
-        if not pk:
-            return False
-        arr_off = self._field_off(pk, "allLocalizationString_") \
-            or _FALLBACK[("StringPoolRuntimeImpl", "allLocalizationString_")]
-        idx_off = self._field_off(pk, "indexes_") \
-            or _FALLBACK[("StringPoolRuntimeImpl", "indexes_")]
-        # find_instances yields many klass-metadata false hits; validate the real
-        # impl by a sane string[] pool + a sane indexes_ NativeArray + a real string.
-        for p in self._sr.find_instances(pk, max_hits=4000):
-            arr = self.pm.read_u64(p + arr_off)
-            if not _plaus(arr):
-                continue
-            alen = self.pm.read_u32(arr + ARR_LEN_OFF) or 0
-            if not (10000 <= alen <= 500000):
-                continue
-            if not self._read_str(self.pm.read_u64(arr + ARR_ELEMS_OFF)):
-                continue
-            ibuf = self.pm.read_u64(p + idx_off)
-            ilen = self.pm.read_i32(p + idx_off + NATIVEARRAY_LEN_OFF) or 0
-            if not (_plaus(ibuf) and 1000 <= ilen <= 2_000_000):
-                continue
-            raw = self.pm.read_bytes(ibuf, ilen * 8) or b""
-            kv: Dict[int, int] = {}
-            for j in range(len(raw) // 8):
-                k, v = struct.unpack_from("<ii", raw, j * 8)
-                if 0 <= v < alen:
-                    kv[k] = v
-            if len(kv) < 1000:
-                continue
-            self._pool_arr, self._pool_len, self._pool_kv = arr, alen, kv
-            return True
-        return False
+        return self._pool.build()
 
     def _resolve_mlid(self, mlid: Optional[int]) -> str:
-        if not mlid:
-            return ""
-        v = self._pool_kv.get(int(mlid))
-        if v is None or not (0 <= v < self._pool_len):
-            return ""
-        return self._read_str(self.pm.read_u64(self._pool_arr + ARR_ELEMS_OFF + v * 8))
+        return self._pool.resolve(mlid)
 
     # ── scene table: scene id -> name (auto-detected name column) ─────────────
     def _ensure_scene_index(self) -> bool:
