@@ -86,6 +86,7 @@ class ReportExportPanel:
         self._win = None
         self._rows = None
         self._history = None
+        self._reset_render_cache()
 
     def is_visible(self) -> bool:
         return bool(self._win is not None and self._exists() and self._win.state() != 'withdrawn')
@@ -359,6 +360,11 @@ class ReportExportPanel:
         self._history = tk.Frame(right, bg=_SAO_PANEL_BODY_BG)
         self._history.pack(fill='both', expand=True)
         win.protocol('WM_DELETE_WINDOW', self.hide)
+        self._reset_render_cache()
+
+    def _reset_render_cache(self) -> None:
+        self._last_render_sig = ""
+        self._last_history_sig = ""
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         preview = status.get('preview') or {}

@@ -127,6 +127,13 @@ function assert(cond, message) {
   assert(!triggerManager.includes("{ args: args || [] }"), "trigger manager still sends bare fallback args");
   assert(triggerManager.includes("triggerPayload(name, args || [])"), "trigger manager is missing fallback payload mapping");
 
+  const reportExport = fs.readFileSync(path.join(root, "web/act_report_export.html"), "utf8");
+  assert(!reportExport.includes("{ args: args || [] }"), "report export still sends bare fallback args");
+  assert(reportExport.includes("reportPayload(name, args || [])"), "report export is missing fallback payload mapping");
+  assert(reportExport.includes("fmt: String(args[0] || 'json')"), "report export should forward fmt as a named payload field");
+  assert(reportExport.includes("index: numericArg(args[0], 0)"), "report export should forward history index as a named payload field");
+  assert(reportExport.includes("path: String(args[0] || '')"), "report export should forward import path as a named payload field");
+
   const menu = fs.readFileSync(path.join(root, "web/menu.html"), "utf8");
   assert(menu.includes("_pdPanelCards"), "menu detached plugin panel should keep panel cards across polls");
   assert(!menu.includes("body.innerHTML = '';"), "menu detached plugin panel still clears all cards on each poll");

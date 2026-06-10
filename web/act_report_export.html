@@ -157,6 +157,31 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         return result || {};
     }
 
+    function numericArg(value, fallback) {
+        var number = Number(value);
+        return isFinite(number) ? number : fallback;
+    }
+
+    function reportPayload(name, args) {
+        args = args || [];
+        if (name === 'get_report_export_status') return { limit: numericArg(args[0], 20), fmt: String(args[1] || 'json') };
+        if (name === 'export_last_report' || name === 'copy_report_export') return { fmt: String(args[0] || 'json') };
+        if (name === 'get_mini_parse_status' || name === 'preview_mini_parse' || name === 'copy_mini_parse') {
+            return { formatter_id: String(args[0] || 'summary_table') };
+        }
+        if (name === 'get_selective_parsing_status' || name === 'clear_selective_parsing') return {};
+        if (name === 'update_selective_parsing') return { policy: args[0] || {} };
+        if (name === 'get_history_status') return { limit: numericArg(args[0], 20), query: String(args[1] || '') };
+        if (name === 'load_history_report') return { index: numericArg(args[0], 0), show: args[1] !== false };
+        if (name === 'delete_history_report') return { index: numericArg(args[0], 0) };
+        if (name === 'clear_history_reports' || name === 'choose_offline_import_file') return {};
+        if (name === 'import_offline_report') {
+            return { path: String(args[0] || ''), persist: args[1] !== false, show: args[2] !== false };
+        }
+        if (name === 'toggle_report_export') return { action: 'toggle_report_export' };
+        return { args: args };
+    }
+
     function apiCall(name, args) {
         var api = window.pywebview && window.pywebview.api;
         if (api && typeof api[name] === 'function') {
@@ -181,7 +206,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                 import_offline_report: 'act.offline_import.import',
                 toggle_report_export: 'ui.menu_action'
             };
-            var payload = name === 'toggle_report_export' ? { action: 'toggle_report_export' } : { args: args || [] };
+            var payload = reportPayload(name, args || []);
             return window.bridge.cmd(cmdMap[name] || ('act.report.' + name), payload).then(parseResult);
         }
         return Promise.resolve({ ok: false, message: 'Report/export API unavailable', errors: ['Report/export API unavailable'] });

@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.28: Report Export 渲染与 fallback 参数修复.
+
+  1) `gui_modules/sao_gui_report_export.py` 在窗口销毁/重建时会清空 preview/history
+     渲染签名。修复生命周期销毁后用相同报告状态重新打开时, 新容器可能因为命中旧签名
+     而不渲染预览或历史列表的问题。
+
+  2) `web/act_report_export.html` 的 `window.bridge.cmd` fallback 不再发送裸
+     `{args:[...]}`。报告格式、history index、show 标志、离线导入 path/persist/show
+     和 mini-parse formatter 现在按命名字段传给 `act.report.*`、`act.history.*`、
+     `act.offline_import.*` 等命令。扩展 Python/JS 回归测试。
+
+
+
 ## v4.4.27: Entity Timeline VCR 签名刷新修复.
 
   1) `gui_modules/sao_gui_timeline_vcr.py` 的列表渲染签名现在包含 source、
