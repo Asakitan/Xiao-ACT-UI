@@ -110,9 +110,34 @@ class SAOPlayerGUIActionsMixin:
                 getattr(self, '_state_mgr', None),
                 scene_key=scene_key, boss_base_id=boss_base_id)
 
+        def _hot_apply():
+            bms.hot_apply_to_engine(self._cfg_settings_ref,
+                                    getattr(self, '_boss_raid_engine', None))
+
         def _save_mech(mech):
             cfg = bms.upsert_mechanic(self._cfg_settings_ref, mech)
             self._presynthesize_active_profile()
+            _hot_apply()
+            return cfg
+
+        def _delete_mech(mid):
+            cfg = bms.delete_mechanic(self._cfg_settings_ref, mid)
+            _hot_apply()
+            return cfg
+
+        def _create_from_skill(sid, nm='', dur=None):
+            cfg = bms.create_mechanic_from_skill(self._cfg_settings_ref, sid, nm, dur)
+            _hot_apply()
+            return cfg
+
+        def _bind(mid, sid):
+            cfg = bms.bind_skill_to_mechanic(self._cfg_settings_ref, mid, sid)
+            _hot_apply()
+            return cfg
+
+        def _unbind(mid, sid):
+            cfg = bms.unbind_skill_from_mechanic(self._cfg_settings_ref, mid, sid)
+            _hot_apply()
             return cfg
 
         def _test(mech, kinds):
@@ -133,13 +158,12 @@ class SAOPlayerGUIActionsMixin:
         return {
             'load': _load,
             'save_mech': _save_mech,
-            'delete_mech': lambda mid: bms.delete_mechanic(self._cfg_settings_ref, mid),
+            'delete_mech': _delete_mech,
             'test': _test,
             'set_master': lambda flags: bms.set_mechanics_master(self._cfg_settings_ref, flags),
-            'create_from_skill': lambda sid, nm='', dur=None: (
-                bms.create_mechanic_from_skill(self._cfg_settings_ref, sid, nm, dur)),
-            'bind': lambda mid, sid: bms.bind_skill_to_mechanic(self._cfg_settings_ref, mid, sid),
-            'unbind': lambda mid, sid: bms.unbind_skill_from_mechanic(self._cfg_settings_ref, mid, sid),
+            'create_from_skill': _create_from_skill,
+            'bind': _bind,
+            'unbind': _unbind,
             'search_catalog': bms.search_skill_catalog,
         }
 

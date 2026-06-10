@@ -1837,6 +1837,15 @@ class SAOWebAPI:
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
+    def _mechanics_hot_apply(self):
+        """编辑落盘后热应用进正在运行的引擎 (无需重按 START)。"""
+        try:
+            from engines import boss_mechanics_state as bms
+            bms.hot_apply_to_engine(self._g._cfg_settings_ref,
+                                    getattr(self._g, '_boss_raid_engine', None))
+        except Exception:
+            pass
+
     def save_mechanic(self, mech_json, scene_key=None, boss_base_id=None):
         try:
             from engines import boss_mechanics_state as bms
@@ -1846,6 +1855,7 @@ class SAOWebAPI:
                 self._g._presynthesize_active_profile_web()
             except Exception:
                 pass
+            self._mechanics_hot_apply()
             return self._mechanics_reply(scene_key, boss_base_id)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
@@ -1854,6 +1864,7 @@ class SAOWebAPI:
         try:
             from engines import boss_mechanics_state as bms
             bms.delete_mechanic(self._g._cfg_settings_ref, str(mechanic_id))
+            self._mechanics_hot_apply()
             return self._mechanics_reply(scene_key, boss_base_id)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
@@ -1864,6 +1875,7 @@ class SAOWebAPI:
             from engines import boss_mechanics_state as bms
             bms.create_mechanic_from_skill(self._g._cfg_settings_ref, skill_id,
                                            skill_name, cast_duration_ms)
+            self._mechanics_hot_apply()
             return self._mechanics_reply(scene_key, boss_base_id)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
@@ -1872,6 +1884,7 @@ class SAOWebAPI:
         try:
             from engines import boss_mechanics_state as bms
             bms.bind_skill_to_mechanic(self._g._cfg_settings_ref, mechanic_id, skill_id)
+            self._mechanics_hot_apply()
             return self._mechanics_reply(scene_key, boss_base_id)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
@@ -1880,6 +1893,7 @@ class SAOWebAPI:
         try:
             from engines import boss_mechanics_state as bms
             bms.unbind_skill_from_mechanic(self._g._cfg_settings_ref, mechanic_id, skill_id)
+            self._mechanics_hot_apply()
             return self._mechanics_reply(scene_key, boss_base_id)
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)

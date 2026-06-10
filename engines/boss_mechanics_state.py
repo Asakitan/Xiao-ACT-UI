@@ -164,6 +164,16 @@ def build_mechanics_state(settings, engine, state_mgr,
     # 已观测技能 (绑定下拉数据源, 含离线枚举写入的 config 标签观测)
     sel_boss = _i(boss_base_id)
     selected_scene = _s(scene_key) or None
+    if not sel_boss:
+        # 智能默认: 机制里出现最多的 boss_base_id (示例档案绑 103309 → 直接
+        # 给出 P3 boss 的候选技能, 而不是观测库里的第一个 P1 boss)
+        counts: Dict[int, int] = {}
+        for mech in mechanics:
+            bid = _i((mech.get("detect") or {}).get("boss_base_id"))
+            if bid > 0:
+                counts[bid] = counts.get(bid, 0) + 1
+        if counts:
+            sel_boss = max(counts, key=lambda k: counts[k])
     observed: List[Dict[str, Any]] = []
     if engine is not None:
         try:
@@ -298,6 +308,20 @@ def unbind_skill_from_mechanic(settings, mechanic_id: str, skill_id: Any,
         det["buff_ids"] = [x for x in (det.get("buff_ids") or []) if _i(x) != sid]
         break
     return save_boss_raid_config(settings, config)
+
+
+def hot_apply_to_engine(settings, engine, profile_id: Optional[str] = None) -> bool:
+    """编辑保存/收件箱绑定后把新机制热应用进正在运行的引擎 (无需重按 START)。"""
+    if engine is None or not hasattr(engine, "reload_active_profile"):
+        return False
+    config = load_boss_raid_config(settings)
+    profile = _target_profile(config, _s(profile_id))
+    if not profile:
+        return False
+    try:
+        return bool(engine.reload_active_profile(profile))
+    except Exception:
+        return False
 
 
 def set_mechanics_master(settings, flags: Any) -> Dict[str, Any]:

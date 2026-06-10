@@ -1541,25 +1541,28 @@ class BossRaidEngine:
 
     # ── profile mechanics runtime ───────────────────────────────────────────────
 
-    def _rebuild_mechanic_index_locked(self):
+    def _rebuild_mechanic_index_locked(self, preserve_runtime: bool = False):
         """Prebuild O(1) lookup structures from the active profile's mechanics
-        (called from start/reset; never per tick)."""
+        (called from start/reset; never per tick). `preserve_runtime` keeps
+        cooldowns / fire counters / countdown rows / binding inbox alive so an
+        editor save can hot-apply mid-fight without resetting state."""
         self._mech_index_by_skill = {}
         self._mech_event_anchored = []
         self._mech_time_anchored = []
         self._mech_hp_anchored = []
-        self._mech_last_fire.clear()
-        self._mech_fired_once.clear()
-        self._mech_time_fire_counts.clear()
-        self._mech_prev_hp_pct = 100.0
-        self._mech_countdowns = []
-        self._mech_countdowns_push = []
-        self._mech_countdown_sig = ()
-        self._last_mechanic_event = {}
-        self._unbound_skills.clear()
-        self._enrage_anchor_ts = 0.0
-        self._enrage_milestones_fired.clear()
-        self._pending_mech_forwards = []
+        if not preserve_runtime:
+            self._mech_last_fire.clear()
+            self._mech_fired_once.clear()
+            self._mech_time_fire_counts.clear()
+            self._mech_prev_hp_pct = 100.0
+            self._mech_countdowns = []
+            self._mech_countdowns_push = []
+            self._mech_countdown_sig = ()
+            self._last_mechanic_event = {}
+            self._unbound_skills.clear()
+            self._enrage_anchor_ts = 0.0
+            self._enrage_milestones_fired.clear()
+            self._pending_mech_forwards = []
         profile = self._profile or {}
         for mech in profile.get("mechanics") or []:
             if not isinstance(mech, dict) or not mech.get("enabled", True):
@@ -1919,6 +1922,25 @@ class BossRaidEngine:
                 self._last_mechanic_event = evt
                 self._fire_mechanic_event_unlocked(evt)
                 break
+
+    def reload_active_profile(self, profile: Dict[str, Any]) -> bool:
+        """Hot-apply edited mechanics/enrage to the loaded profile without
+        restarting the raid: editor saves and inbox bindings take effect
+        immediately, while runtime counters/cooldowns/inbox survive."""
+        if not isinstance(profile, dict):
+            return False
+        with self._lock:
+            cur = self._profile
+            if not cur or _string(cur.get("id")) != _string(profile.get("id")):
+                return False
+            self._profile = normalize_profile(copy.deepcopy(profile))
+            self._rebuild_mechanic_index_locked(preserve_runtime=True)
+            # ids that just got bound leave the inbox
+            for sid in list(self._unbound_skills):
+                if sid in self._mech_index_by_skill:
+                    self._unbound_skills.pop(sid, None)
+            self._maybe_anchor_enrage_locked()
+        return True
 
     def get_unbound_skills(self) -> List[Dict[str, Any]]:
         """Binding inbox for the mechanics editor (newest first)."""

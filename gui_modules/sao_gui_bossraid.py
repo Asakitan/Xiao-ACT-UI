@@ -407,11 +407,11 @@ class _MechanicsEditorMixin:
             return
         st = self._mech_call('load') or {}
         self._mech_state = st
+        self._render_mech_master(st.get('master') or {})
         if not st.get('ok'):
             self._mx_empty('没有可编辑的档案',
                            '先在 Phases 页创建档案, 或导入 assets/boss_raids 下的机制示例 JSON')
             return
-        self._render_mech_master(st.get('master') or {})
         inbox = list(st.get('inbox') or [])
         if inbox:
             make_section_title(container, '未绑定技能收件箱')
