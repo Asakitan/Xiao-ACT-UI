@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest import mock
 
 from act_platform import runtime
+from gui_modules.sao_gui_data_source_health import DataSourceHealthPanel
 
 
 class FakePacketEngine:
@@ -78,6 +80,51 @@ class ActDataSourceHealthTests(unittest.TestCase):
         self.assertEqual(result["status"], "missing")
         self.assertTrue(result["errors"])
         self.assertTrue(any(item["level"] == "error" for item in result["diagnostics"]))
+
+    def test_panel_refresh_does_not_reuse_recent_diagnose_payload(self) -> None:
+        panel = DataSourceHealthPanel.__new__(DataSourceHealthPanel)
+        panel.owner = object()
+        panel._last_status = {}
+        panel._last_refresh_at = 0.0
+        panel._last_request_key = ()
+        rendered: list[dict] = []
+        panel._render_status = lambda status: rendered.append(dict(status))
+
+        diagnose_payload = {"ok": False, "status": "missing", "sources": {"summary": {}}, "diagnostics": [{"level": "error", "message": "missing"}]}
+        with mock.patch("gui_modules.sao_gui_data_source_health.act_data_source_diagnose", return_value=diagnose_payload) as diagnose_fn:
+            diagnosed = panel.diagnose()
+
+        self.assertEqual(diagnosed["status"], "missing")
+        self.assertEqual(panel._last_request_key, ("diagnose",))
+        diagnose_fn.assert_called_once_with(panel.owner)
+
+        health_payload = {"ok": True, "status": "running", "sources": {"summary": {"data_source": "hybrid"}}, "latency_ms": 1, "last_event_ms": 2, "errors": []}
+        with mock.patch("gui_modules.sao_gui_data_source_health.act_data_source_health", return_value=health_payload) as health_fn:
+            refreshed = panel.refresh()
+
+        self.assertEqual(refreshed["status"], "running")
+        self.assertEqual(panel._last_request_key, ("health",))
+        self.assertEqual(rendered[-1]["status"], "running")
+        health_fn.assert_called_once_with(panel.owner)
+
+        with mock.patch("gui_modules.sao_gui_data_source_health.act_data_source_health") as health_fn:
+            cached = panel.refresh()
+
+        self.assertEqual(cached["status"], "running")
+        health_fn.assert_not_called()
+
+    def test_panel_destroy_resets_render_signatures(self) -> None:
+        panel = DataSourceHealthPanel.__new__(DataSourceHealthPanel)
+        panel._win = None
+        panel._list = None
+        panel._diag = None
+        panel._last_sources_sig = "sources-stale"
+        panel._last_diag_sig = "diag-stale"
+
+        panel.destroy()
+
+        self.assertEqual(panel._last_sources_sig, "")
+        self.assertEqual(panel._last_diag_sig, "")
 
 
 if __name__ == "__main__":

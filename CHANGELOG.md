@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.51: ACT Tk Data Source Health 缓存修复.
+
+  1) `gui_modules/sao_gui_data_source_health.py` 的 350ms refresh 缓存现在区分
+     `health` 与 `diagnose` 结果。修复点击 Diagnose 后立刻 Refresh 时,
+     面板可能复用诊断结果、没有重新调用 health 状态的问题。
+
+  2) `DataSourceHealthPanel.destroy()` 现在会清理 source/diagnostics 渲染签名。
+     修复窗口销毁后重开时, 如果状态内容相同, 新建的空列表/诊断栏可能因为旧签名
+     命中而跳过重渲染的问题。
+
+
+
 ## v4.4.50: ACT Tk Report/Timeline 刷新缓存参数修复.
 
   1) `gui_modules/sao_gui_report_export.py` 的 350ms refresh 缓存现在按

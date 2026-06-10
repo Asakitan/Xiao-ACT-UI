@@ -41,6 +41,7 @@ class DataSourceHealthPanel:
         self._status_var = tk.StringVar(value="Ready")
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
+        self._last_request_key: tuple[str, ...] = ()
         self._last_sources_sig = ""
         self._last_diag_sig = ""
 
@@ -75,13 +76,15 @@ class DataSourceHealthPanel:
         self._win = None
         self._list = None
         self._diag = None
+        self._reset_render_cache()
 
     def is_visible(self) -> bool:
         return bool(self._win is not None and self._exists() and self._win.state() != 'withdrawn')
 
     def refresh(self) -> Dict[str, Any]:
         now = time.time()
-        if self._last_status and now - self._last_refresh_at < 0.35:
+        request_key = ("health",)
+        if self._last_status and request_key == self._last_request_key and now - self._last_refresh_at < 0.35:
             self._render_status(self._last_status)
             return self._last_status
         try:
@@ -90,6 +93,7 @@ class DataSourceHealthPanel:
             status = {"ok": False, "status": "error", "sources": {"summary": {}}, "latency_ms": 0, "last_event_ms": 0, "errors": [str(exc)]}
         self._last_status = dict(status or {})
         self._last_refresh_at = now
+        self._last_request_key = request_key
         self._render_status(self._last_status)
         return self._last_status
 
@@ -100,6 +104,7 @@ class DataSourceHealthPanel:
             status = {"ok": False, "status": "error", "sources": {"summary": {}}, "latency_ms": 0, "last_event_ms": 0, "errors": [str(exc)], "diagnostics": [{"level": "error", "message": str(exc)}]}
         self._last_status = dict(status or {})
         self._last_refresh_at = time.time()
+        self._last_request_key = ("diagnose",)
         self._render_status(self._last_status)
         return self._last_status
 
@@ -346,6 +351,10 @@ class DataSourceHealthPanel:
                 padx=8,
                 pady=7,
             ).pack(fill='x')
+
+    def _reset_render_cache(self) -> None:
+        self._last_sources_sig = ""
+        self._last_diag_sig = ""
 
     @staticmethod
     def _sources_signature(sources: Mapping[str, Any]) -> str:
