@@ -597,6 +597,7 @@ DEFAULT_HOTKEYS = {
     "toggle_topmost": "F9",
     "hide_panels": "F10",
     "show_plugins": "F11",
+    "toggle_auto_dodge": "F12",
 }
 
 

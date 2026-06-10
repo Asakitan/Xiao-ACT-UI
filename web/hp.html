@@ -968,6 +968,10 @@ body {
 .id-plate .id-boss-timer.active {
     display: block;
 }
+.id-plate .id-boss-timer.warn {
+    color: rgba(212, 156, 23, 0.95);
+    text-shadow: 0 0 10px rgba(212, 156, 23, 0.45);
+}
 .id-plate .id-boss-timer.urgent {
     color: rgba(255, 90, 60, 0.95);
     text-shadow: 0 0 10px rgba(255, 60, 40, 0.5);
@@ -1209,11 +1213,12 @@ function setPlayerInfo(info) {
 /* ═══ Boss Raid Timer / System Clock API ═══ */
 var _bossTimerActive = false;
 function setBossTimer(text, urgency) {
-    // text = '' → hide boss timer, show clock; urgency = 'normal' | 'urgent'
+    // text = '' → hide boss timer, show clock; urgency = 'normal' | 'warn' | 'urgent'
     var el = document.getElementById('id-boss-timer');
     var link = document.getElementById('id-link');
     if (!text) {
         el.classList.remove('urgent');
+        el.classList.remove('warn');
         el.classList.add('active');  // keep visible for clock
         if (link) link.style.display = 'none';
         _bossTimerActive = false;
@@ -1223,6 +1228,7 @@ function setBossTimer(text, urgency) {
     el.textContent = text;
     el.classList.add('active');
     el.classList.toggle('urgent', urgency === 'urgent');
+    el.classList.toggle('warn', urgency === 'warn');
     // Restore boss timer styling (override clock muted style); match clock size.
     el.style.color = '';
     el.style.textShadow = '';

@@ -918,7 +918,9 @@ class SAOPlayerGUIStateMixin:
                             _boss_active = getattr(gs, 'boss_raid_active', False)
                             _boss_enrage = float(getattr(gs, 'boss_enrage_remaining', 0) or 0)
                             if _boss_active and _boss_text:
-                                _boss_urgency = 'urgent' if 0 < _boss_enrage < 60 else 'normal'
+                                # engine pushes the threshold-config tier; legacy rule as fallback
+                                _boss_urgency = getattr(gs, 'boss_enrage_urgency', '') or (
+                                    'urgent' if 0 < _boss_enrage < 60 else 'normal')
                             else:
                                 _boss_text = ''
                                 _boss_urgency = 'normal'

@@ -76,9 +76,12 @@ from engines.dps_tracker import DpsTracker
 from engines.encounter_manager import EncounterManager
 from act_platform.runtime import ensure_act_event_bus, ensure_act_plugin_manager, shutdown_act_plugin_manager
 from utils.sao_sound import play_sound
+from utils import sao_tts
+from engines.mechanic_alert_controller import MechanicAlertController
 
 from gui_modules.sao_gui_alert import AlertOverlay
 from gui_modules.sao_gui_map_banner import MapBannerOverlay
+from gui_modules.sao_gui_mech_banner import MechBannerOverlay
 from gui_modules.sao_gui_bosshp import BossHpOverlay
 from gui_modules.sao_gui_buffmon import SelfBuffOverlay, BossBuffOverlay
 from gui_modules.sao_gui_dps import DpsOverlay
@@ -268,6 +271,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 self._cfg_settings_ref,
                 send_key=self._send_linked_key,
                 on_log=lambda msg: print(msg),
+                foreground_gate=self._auto_key_engine.is_game_foreground,
             )
 
             def _on_boss_alert_with_linkage(title, message):
@@ -287,6 +291,7 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 on_alert=_on_boss_alert_with_linkage,
                 on_sound=lambda name: play_sound(name),
                 on_boss_action=self._on_boss_action_with_gate,
+                on_mechanic=self._on_mechanic_event,
             )
 
             # ── 初始化 ULW 覆盖层 ──
@@ -377,6 +382,21 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 self._map_banner_overlay = None
 
             try:
+                self._mech_banner_overlay = MechBannerOverlay(self.root, self._cfg_settings_ref)
+                self._mech_alert_controller = MechanicAlertController(
+                    on_banner=self._mech_banner_overlay.show_mechanic,
+                    banner_enabled_fn=lambda: bool(
+                        self._get_setting('mech_banner_enabled', True)),
+                )
+                sao_tts.set_tts_enabled(bool(self._get_setting('tts_enabled', True)))
+                sao_tts.set_tts_volume(int(self._get_setting('tts_volume', 80) or 80))
+                print('[SAO Entity] Mech banner overlay + alert controller initialized')
+            except Exception as e:
+                print(f'[SAO Entity] Mech banner overlay init failed: {e}')
+                self._mech_banner_overlay = None
+                self._mech_alert_controller = None
+
+            try:
                 self._skillfx_overlay = BurstReadyOverlay(self.root, self._cfg_settings_ref)
                 print('[SAO Entity] SkillFX (Burst) overlay initialized')
             except Exception as e:
@@ -455,6 +475,16 @@ class SAOPlayerGUIEngineLifecycleMixin:
             print(f'[SAO Entity] Data engine failed: {e}')
             import traceback; traceback.print_exc()
             self._recognition_active = False
+
+    def _on_mechanic_event(self, evt):
+        """Engine mechanic event → TTS + top banner (controller may lag engine
+        creation during bring-up; events before it exists are dropped)."""
+        controller = getattr(self, '_mech_alert_controller', None)
+        if controller is not None:
+            try:
+                controller.on_mechanic(evt)
+            except Exception:
+                pass
 
     def _on_boss_action_with_gate(self, action):
         """Gate the memory boss-action feed before driving the auto-key linkage.

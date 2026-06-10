@@ -63,7 +63,10 @@ from engines.boss_autokey_linkage import (
     make_default_mapping,
     normalize_linkage_config,
     save_linkage_config,
+    set_dodge_enabled as set_linkage_dodge_enabled,
 )
+from engines.mechanic_alert_controller import MechanicAlertController
+from utils import sao_tts
 from engines.dps_tracker import DpsTracker
 from engines.dps_history import DpsHistoryStore
 from engines.encounter_manager import EncounterManager
@@ -2342,6 +2345,10 @@ class SAOWebViewGUI:
         self.alert_win = None
         # 切换地图中央横幅 (延迟 3s 后淡入地图名)
         self.mapbanner_win = None
+        self.mech_banner_win = None
+        self._mech_banner_hwnd = 0
+        self._mech_banner_shown = False
+        self._mech_alert_controller = None
         self._mapbanner_hwnd = 0
         self._mapbanner_nonce = 0
         self._mapbanner_last_name = ''
@@ -4185,6 +4192,24 @@ class SAOWebViewGUI:
             js_api=self._api,
         )
 
+        # Mechanic banner — 顶部居中机制提醒堆叠条 (倒计时进度条), 纯覆盖层鼠标穿透
+        mech_banner_url = _web_file_uri('mech_banner.html')
+        mech_banner_w = 600
+        mech_banner_h = 3 * 64 + 2 * 8 + 12
+        self.mech_banner_win = webview.create_window(
+            'SAO MechBanner', mech_banner_url,
+            width=self._to_webview_px(mech_banner_w),
+            height=self._to_webview_px(mech_banner_h),
+            x=self._to_webview_px(monitor_left + max(0, int((_sw - mech_banner_w) / 2))),
+            y=self._to_webview_px(monitor_top + max(0, int(_sh * 0.08))),
+            frameless=True,
+            easy_drag=False,
+            transparent=True,
+            hidden=True,
+            on_top=True,
+            js_api=self._api,
+        )
+
         # Boss HP overlay — covers native boss bar
         # Reference 1080p: bar 466×61 at (740, 15)-(1206, 76), anchor (1206, 76)
         boss_hp_url = _web_file_uri('boss_hp.html')
@@ -4841,6 +4866,7 @@ class SAOWebViewGUI:
         _apply_for('SAO SkillFX', self.skillfx_win)
         _apply_for('SAO Alert', self.alert_win)
         _apply_for('SAO MapBanner', self.mapbanner_win)
+        _apply_for('SAO MechBanner', self.mech_banner_win)
         _apply_for('SAO-BossHP', self.boss_hp_win)
         # DPS 窗口只做 Win32 色键, 不设 .NET TransparencyKey
         # (TransparencyKey 会令 HTML 透明区域变成鼠标穿透, 导致按钮/行无法点击)
@@ -5692,6 +5718,7 @@ class SAOWebViewGUI:
             (getattr(g, 'skillfx_win', None), 'skillfx'),
             (getattr(g, 'alert_win', None), 'alert'),
             (getattr(g, 'mapbanner_win', None), 'mapbanner'),
+            (getattr(g, 'mech_banner_win', None), 'mech_banner'),
             (getattr(g, 'boss_hp_win', None), 'boss_hp'),
             (getattr(g, 'dps_win', None), 'dps'),
             (getattr(g, 'buff_coverage_win', None), 'buff_coverage'),
@@ -6113,7 +6140,19 @@ class SAOWebViewGUI:
                 self._cfg_settings_ref,
                 send_key=self._send_linked_key,
                 on_log=lambda msg: print(msg),
+                foreground_gate=self._auto_key_engine.is_game_foreground,
             )
+            try:
+                self._mech_alert_controller = MechanicAlertController(
+                    on_banner=self._push_mech_banner,
+                    banner_enabled_fn=lambda: bool(
+                        self._get_setting('mech_banner_enabled', True)),
+                )
+                sao_tts.set_tts_enabled(bool(self._get_setting('tts_enabled', True)))
+                sao_tts.set_tts_volume(int(self._get_setting('tts_volume', 80) or 80))
+            except Exception as _mac_exc:
+                print(f'[SAO] mech alert controller init failed: {_mac_exc}')
+                self._mech_alert_controller = None
 
             def _on_boss_alert_with_linkage(title, message):
                 # v2.1.17: BossRaidEngine separately calls on_sound("boss_alert")
@@ -6135,6 +6174,7 @@ class SAOWebViewGUI:
                 on_sound=self._play_sound,
                 on_entity_update=self._on_raid_entity_update,
                 on_boss_action=self._on_boss_action_with_gate,
+                on_mechanic=self._on_mechanic_event,
             )
             # hybrid: forward the boss raid engine into the (deferred) mem source so
             # the boss-action feed reaches on_mem_boss_action.
@@ -6198,6 +6238,7 @@ class SAOWebViewGUI:
             'boss_raid_start': self._toggle_boss_raid,
             'boss_raid_next_phase': self._boss_raid_next_phase,
             'show_plugins': lambda: (self._show_plugin_manager() if not self._plugin_manager_visible else self._hide_plugin_manager()),
+            'toggle_auto_dodge': self._toggle_auto_dodge,
         }
         self._hk_pressed = set()
         self._hk_listener = None
@@ -6338,6 +6379,71 @@ class SAOWebViewGUI:
                 self.mapbanner_win.evaluate_js(js)
         except Exception:
             pass
+
+    def _eval_mech_banner(self, js):
+        try:
+            if self.mech_banner_win:
+                self.mech_banner_win.evaluate_js(js)
+        except Exception:
+            pass
+
+    def _push_mech_banner(self, entry):
+        """机制横幅推一行 (懒显示窗口, 常驻鼠标穿透覆盖层)。"""
+        try:
+            if not self.mech_banner_win:
+                return
+            if not self._mech_banner_shown:
+                self._mech_banner_shown = True
+                try:
+                    self.mech_banner_win.show()
+                except Exception:
+                    pass
+                self._setup_mech_banner_click_through()
+            payload = json.dumps(entry or {}, ensure_ascii=False)
+            self._eval_mech_banner(
+                f'if (window.MechBanner) MechBanner.push({payload})')
+        except Exception:
+            pass
+
+    def _setup_mech_banner_click_through(self, _wait_retries: int = 20):
+        """Make mechanic banner overlay fully click-through (纯覆盖层)。"""
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, 'SAO MechBanner')
+            if not hwnd and _wait_retries > 0:
+                threading.Timer(0.1, lambda: self._setup_mech_banner_click_through(
+                    _wait_retries - 1)).start()
+                return
+            if not hwnd:
+                return
+            self._mech_banner_hwnd = hwnd
+            ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            ex |= (_WS_EX_TRANSPARENT | _WS_EX_LAYERED)
+            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex)
+        except Exception:
+            pass
+
+    def _on_mechanic_event(self, evt):
+        """引擎机制事件 → TTS + 顶部横幅 (controller 缺位时静默丢弃)。"""
+        controller = getattr(self, '_mech_alert_controller', None)
+        if controller is not None:
+            try:
+                controller.on_mechanic(evt)
+            except Exception:
+                pass
+
+    def _toggle_auto_dodge(self):
+        """紧急停用/恢复自动躲避总开关 (默认 F12)。"""
+        try:
+            cfg = load_linkage_config(self._cfg_settings_ref)
+            new_state = not bool(cfg.get('dodge_enabled', True))
+            set_linkage_dodge_enabled(self._cfg_settings_ref, new_state)
+            msg = ('已启用 (F12 紧急停用)' if new_state
+                   else '已禁用 (F12 重新启用)')
+            self._show_identity_alert_window('自动躲避', msg)
+            print(f'[SAO] auto-dodge {"on" if new_state else "off"}')
+        except Exception as e:
+            print(f'[SAO] toggle_auto_dodge failed: {e}')
 
     def _eval_boss_hp(self, js):
         try:
@@ -9554,7 +9660,9 @@ class SAOWebViewGUI:
                     _boss_active = getattr(gs, 'boss_raid_active', False)
                     _boss_enrage = float(getattr(gs, 'boss_enrage_remaining', 0) or 0)
                     if _boss_active and _boss_text:
-                        _boss_urgency = 'urgent' if 0 < _boss_enrage < 60 else 'normal'
+                        # engine pushes the threshold-config tier; legacy rule as fallback
+                        _boss_urgency = getattr(gs, 'boss_enrage_urgency', '') or (
+                            'urgent' if 0 < _boss_enrage < 60 else 'normal')
                     else:
                         _boss_text = ''
                         _boss_urgency = ''

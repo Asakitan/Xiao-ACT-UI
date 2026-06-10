@@ -193,7 +193,23 @@ class SAOPlayerGUIFloatHandlersMixin:
             'show_plugins': lambda: self.root.after(0, self._show_plugin_popup_menu),
             'boss_raid_start': lambda: self.root.after(0, self._toggle_boss_raid),
             'boss_raid_next_phase': lambda: self.root.after(0, self._boss_raid_next_phase),
+            'toggle_auto_dodge': lambda: self.root.after(0, self._toggle_auto_dodge),
         }, hotkey_provider=self._plugin_hotkey_map)
+
+    def _toggle_auto_dodge(self):
+        """紧急停用/恢复自动躲避总开关 (默认 F12)。"""
+        try:
+            from engines.boss_autokey_linkage import load_linkage_config, set_dodge_enabled
+            cfg = load_linkage_config(self._cfg_settings_ref)
+            new_state = not bool(cfg.get('dodge_enabled', True))
+            set_dodge_enabled(self._cfg_settings_ref, new_state)
+            msg = ('已启用 (F12 紧急停用)' if new_state
+                   else '已禁用 (F12 重新启用)')
+            if getattr(self, '_alert_overlay', None):
+                self._alert_overlay.show_alert('自动躲避', msg)
+            print(f'[SAO Entity] auto-dodge {"on" if new_state else "off"}')
+        except Exception as e:
+            print(f'[SAO Entity] toggle_auto_dodge failed: {e}')
 
     def _plugin_hotkey_map(self):
         """Resolve plugin-registered hotkeys for the hotkey listener.

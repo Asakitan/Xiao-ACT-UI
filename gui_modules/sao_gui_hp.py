@@ -606,6 +606,7 @@ class HpOverlay:
         self._hp_group_hidden = False
         self._boss_timer_text = ''
         self._boss_timer_urgent = False
+        self._boss_timer_warn = False
 
         # Entry / exit
         self._fade_alpha = 0.0
@@ -983,6 +984,7 @@ class HpOverlay:
                        urgency: str = 'normal') -> None:
         self._boss_timer_text = str(text or '')
         self._boss_timer_urgent = (urgency == 'urgent')
+        self._boss_timer_warn = (urgency == 'warn')
         self._schedule_tick(immediate=True)
 
     def _format_sta_text(self) -> str:
@@ -1117,7 +1119,10 @@ class HpOverlay:
             cover_q = int((cover_q / 50.0) * 16)
             cover_sweep_q = int(cover_sweep_q // 12)
             if self._boss_timer_text:
-                clock_q = 0
+                # clock_q is unused while the boss timer shows; carry the
+                # warn tier in it so a tier flip changes the idle signature
+                # without widening the Cython call.
+                clock_q = 2 if self._boss_timer_warn else 0
                 link_q = 0
             else:
                 clock_q = int(now)
@@ -1406,6 +1411,7 @@ class HpOverlay:
             max_int,
             self._boss_timer_text,
             self._boss_timer_urgent,
+            self._boss_timer_warn,
             urgent_q,
         )
         if self._shadow_cache is None or self._shadow_sig != shadow_sig:
@@ -1531,7 +1537,8 @@ class HpOverlay:
             int(self.WIDTH), int(self.HEIGHT), y_off,
             self._profession, self._name, self._level,
             hp_int, max_int, hp_fill_q, sta_pct_q,
-            self._boss_timer_text, self._boss_timer_urgent, urgent_q,
+            self._boss_timer_text, self._boss_timer_urgent,
+            self._boss_timer_warn, urgent_q,
             tl_pulse_q, br_pulse_q, scan_q,
             outer_q, cover_q, cover_sweep_q,
             flash_age, hp_group_alpha_q,
@@ -2087,6 +2094,8 @@ class HpOverlay:
                     int(URGENT_RED[2] * gain),
                     255,
                 )
+            elif self._boss_timer_warn:
+                col = (212, 156, 23, 255)   # amber tier (<warn threshold)
             else:
                 col = CYAN
             tw = _text_width(draw, txt, bt_font)

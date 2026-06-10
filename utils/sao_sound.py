@@ -93,14 +93,18 @@ def _player_loop():
             return
         if item is None:
             return
-        path, volume = item
+        if len(item) == 3:
+            path, volume, kind = item
+        else:
+            path, volume = item
+            kind = 'sfx'
         try:
-            _play_one_sync(path, volume)
+            _play_one_sync(path, volume, kind)
         except Exception:
             pass
 
 
-def _play_one_sync(path: str, volume: float) -> None:
+def _play_one_sync(path: str, volume: float, kind: str = 'sfx') -> None:
     if _init_pygame():
         try:
             import pygame
@@ -110,11 +114,15 @@ def _play_one_sync(path: str, volume: float) -> None:
                     snd = pygame.mixer.Sound(path)
                     _sound_cache[path] = snd
             snd.set_volume(float(volume))
-            snd.play()
+            if kind == 'tts':
+                # 专用预留通道: 新播报自然打断上一条播报, 不与 SFX 抢通道
+                pygame.mixer.Channel(0).play(snd)
+            else:
+                snd.play()
             return
         except Exception:
             pass
-    # 回退: winsound (仅支持 .wav, mp3 不支持)
+    # 回退: winsound (仅支持 .wav, mp3 不支持; SND_ASYNC 自打断)
     try:
         import winsound
         if path.lower().endswith('.wav'):
@@ -137,6 +145,10 @@ def _init_pygame():
     try:
         import pygame
         pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
+        try:
+            pygame.mixer.set_reserved(1)   # Channel(0) 专供 TTS 播报
+        except Exception:
+            pass
         _pygame_inited = True
         _has_pygame = True
     except Exception:
@@ -299,6 +311,19 @@ def play_sound(name: str, volume: float = 0.7):
         # Queue saturated under storms of clicks: drop the request
         # rather than block the caller (we are usually on the Tk
         # main thread or a GLFW after_idle deferred handler).
+        pass
+
+
+def play_tts_file(path: str, volume: float):
+    """播放一段 TTS wav (非阻塞, 专用通道, 新播报打断旧播报)。"""
+    if not _sound_enabled:
+        return
+    if not path or not os.path.exists(path):
+        return
+    _ensure_player_thread()
+    try:
+        _play_queue.put_nowait((path, max(0.0, min(1.0, float(volume))), 'tts'))
+    except _queue_mod.Full:
         pass
 
 

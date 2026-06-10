@@ -253,6 +253,7 @@ class SAOPlayerGUILifecycleMixin:
         # 销毁 ULW 覆盖层 + 配置面板
         for ov in [self._dps_overlay, self._boss_hp_overlay, self._hp_overlay,
                    self._alert_overlay, getattr(self, '_map_banner_overlay', None),
+                   getattr(self, '_mech_banner_overlay', None),
                    self._skillfx_overlay,
                    self._self_buff_overlay, self._boss_buff_overlay]:
             try:
@@ -290,6 +291,8 @@ class SAOPlayerGUILifecycleMixin:
         self._hp_overlay = None
         self._alert_overlay = None
         self._map_banner_overlay = None
+        self._mech_banner_overlay = None
+        self._mech_alert_controller = None
         self._skillfx_overlay = None
         self._self_buff_overlay = None
         self._boss_buff_overlay = None

@@ -796,6 +796,10 @@ class AutoKeyEngine:
         except Exception:
             return False
 
+    def is_game_foreground(self) -> bool:
+        """Foreground gate shared with the boss-mechanic dodge dispatcher."""
+        return self._is_game_foreground()
+
     def _slot_map(self, gs) -> Dict[int, Dict[str, Any]]:
         slots = getattr(gs, "skill_slots", []) or []
         cached = self._slot_map_cache
