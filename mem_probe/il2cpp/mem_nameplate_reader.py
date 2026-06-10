@@ -26,6 +26,7 @@ Verified live (2026-06-08, training hall): baseid 114->敌方木桩, 115->精英
 from __future__ import annotations
 
 import re
+from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
 try:
@@ -92,25 +93,41 @@ class NameplateReader:
         return (text or "").strip(), False
 
     # ---- the heap sweep ----
-    def _scan_region(self, r, want, by_uuid: Dict[int, List[Tuple[int, str]]]) -> bool:
+    _CHUNK = 64 * 1024 * 1024
+
+    def _scan_region(self, r, want, by_uuid: Dict[int, List[Tuple[int, str]]],
+                     scratch=None) -> bool:
         """Scan one region for uuid slots and decode the plate (type@+0x40, name@+0x50
         ahead of the uuid). Appends (plate_type, name) into ``by_uuid``. Returns True
         if this region held a confirmed nameplate (so it's remembered as a hint).
+
+        ``scratch`` is an optional reusable bytearray (allocated once per harvest by
+        _collect): the chunk is RPM'd straight into it and scanned in place, so the
+        sweep does zero per-chunk allocations/copies.
         """
         had = False
         off = 0
+        read_into = getattr(self.pm, "read_bytes_into", None)
+        use_scratch = (scratch is not None and read_into is not None
+                       and _cy is not None and hasattr(_cy, "find_aligned_u64_in_set"))
         while off < r.size:
-            n = min(64 * 1024 * 1024, r.size - off)
-            blob = self.pm.read_bytes(r.base + off, n)
-            if not blob:
-                break
-            if _cy is not None and hasattr(_cy, "find_aligned_u64_in_set"):
-                hits = _cy.find_aligned_u64_in_set(blob, want, 8192)
-            else:  # pragma: no cover - pure-Python fallback
-                mv = memoryview(blob)
-                hits = [(p, int.from_bytes(mv[p:p + 8], "little"))
-                        for p in range(0, (len(blob) // 8) * 8, 8)
-                        if int.from_bytes(mv[p:p + 8], "little") in want]
+            n = min(self._CHUNK, r.size - off)
+            if use_scratch:
+                got = read_into(r.base + off, scratch, n)
+                if got <= 0:
+                    break
+                hits = _cy.find_aligned_u64_in_set(memoryview(scratch)[:got], want, 8192)
+            else:
+                blob = self.pm.read_bytes(r.base + off, n)
+                if not blob:
+                    break
+                if _cy is not None and hasattr(_cy, "find_aligned_u64_in_set"):
+                    hits = _cy.find_aligned_u64_in_set(blob, want, 8192)
+                else:  # pragma: no cover - pure-Python fallback
+                    mv = memoryview(blob)
+                    hits = [(p, int.from_bytes(mv[p:p + 8], "little"))
+                            for p in range(0, (len(blob) // 8) * 8, 8)
+                            if int.from_bytes(mv[p:p + 8], "little") in want]
             for hit_off, val in hits:
                 a = r.base + off + hit_off
                 s = self._read_str(self.pm.read_u64(a + NAME_FROM_UUID))
@@ -135,16 +152,22 @@ class NameplateReader:
         if not want:
             return by_uuid
         regions = list(self.pm.iter_regions(only_readable=True, only_private=True))
+        # One scratch buffer per harvest, sized to the largest chunk we'll read;
+        # freed when _collect returns (not kept resident on the reader).
+        max_chunk = 0
+        for r in regions:
+            max_chunk = max(max_chunk, min(self._CHUNK, r.size))
+        scratch = bytearray(max_chunk) if max_chunk > 0 else None
         hint = set(self._hint_bases)
         new_hint: List[int] = []
         if hint:
             for r in regions:
-                if r.base in hint and self._scan_region(r, want, by_uuid):
+                if r.base in hint and self._scan_region(r, want, by_uuid, scratch):
                     new_hint.append(r.base)
         if not by_uuid:                      # cold start or hint went stale -> full sweep
             new_hint = []
             for r in regions:
-                if self._scan_region(r, want, by_uuid):
+                if self._scan_region(r, want, by_uuid, scratch):
                     new_hint.append(r.base)
         if new_hint:
             self._hint_bases = new_hint
@@ -176,15 +199,16 @@ class NameplateReader:
                 continue
             # monster: the level-prefixed plate is the unambiguous name (robust even
             # if the type enum ever shifts)
-            leveled = [self.strip_level(s)[0] for _, s in plates if self.strip_level(s)[1]]
+            stripped = [self.strip_level(s) for _, s in plates]
+            leveled = [name for name, had_level in stripped if had_level]
             if leveled:
-                names[base] = max(set(leveled), key=leveled.count)
+                names[base] = Counter(leveled).most_common(1)[0][0]
                 continue
             # NPC: the plate whose type == PLATE_NPC_NAME is the proper name (not the
             # title plate PLATE_NPC_TITLE)
             npc_named = [s for t, s in plates if t == PLATE_NPC_NAME and s]
             if npc_named:
-                names[base] = max(set(npc_named), key=npc_named.count)
+                names[base] = Counter(npc_named).most_common(1)[0][0]
                 continue
             bare = sorted(set(s for _, s in plates if s))
             if len(bare) == 1:

@@ -205,17 +205,27 @@ def locate_v2(pm: StarProcess, fp: dict) -> List[int]:
     region_count = 0
     scanned = 0
     t0 = time.time()
+    chunk_size = 16 * 1024 * 1024
+    # Reusable chunk buffer: RPM straight into it (no pymem double-copy, no
+    # per-chunk allocation). Falls back to read_bytes when unavailable.
+    read_into = getattr(pm, "read_bytes_into", None)
+    scratch = bytearray(chunk_size) if read_into is not None else None
     for region in pm.iter_regions(only_readable=True, only_private=True):
         if region.size > _MAX_REGION_SIZE:
             continue
         region_count += 1
-        chunk_size = 16 * 1024 * 1024
         offset = 0
         while offset < region.size:
             n = min(chunk_size, region.size - offset)
-            blob = pm.read_bytes(region.base + offset, n)
-            if blob is None:
-                break
+            if scratch is not None:
+                got = read_into(region.base + offset, scratch, n)
+                if got <= 0:
+                    break
+                blob = memoryview(scratch)[:got]
+            else:
+                blob = pm.read_bytes(region.base + offset, n)
+                if blob is None:
+                    break
             scanned += len(blob)
             remaining = 100 - len(matches) + 1
             if remaining <= 0:

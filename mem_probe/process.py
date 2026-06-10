@@ -55,6 +55,18 @@ _READABLE_PROTECTS = (
     | PAGE_EXECUTE_WRITECOPY
 )
 
+# 模块级缓存 ReadProcessMemory 原型 (argtypes 只配置一次, 避免每次调用重设)。
+# 用私有 WinDLL 实例, 不动 ctypes.windll.kernel32 共享缓存上的函数原型。
+_RPM_DIRECT = ctypes.WinDLL("kernel32").ReadProcessMemory
+_RPM_DIRECT.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_size_t,
+    ctypes.POINTER(ctypes.c_size_t),
+]
+_RPM_DIRECT.restype = wintypes.BOOL
+
 
 class _MEMORY_BASIC_INFORMATION64(ctypes.Structure):
     _fields_ = [
@@ -327,6 +339,33 @@ class StarProcess:
             return self._pm.read_bytes(addr, n)
         except Exception:
             return None
+
+    def read_bytes_into(self, addr: int, buf, n: Optional[int] = None) -> int:
+        """把目标进程内存直接读进调用方提供的可写缓冲 (bytearray/memoryview).
+
+        跳过 pymem 的 create_string_buffer + .raw 两次拷贝, 扫堆循环配合一块
+        复用缓冲可把每 chunk 的分配/拷贝开销整段去掉。返回实际读到的字节数
+        (失败返回 0; 与 read_bytes 一样, RPM 碰到不可读页时整次失败)。
+        """
+        want = len(buf) if n is None else int(n)
+        if want <= 0:
+            return 0
+        try:
+            c_buf = (ctypes.c_char * want).from_buffer(buf)
+        except (TypeError, ValueError):
+            return 0
+        got = ctypes.c_size_t(0)
+        try:
+            ok = _RPM_DIRECT(
+                ctypes.c_void_p(self._handle),
+                ctypes.c_void_p(int(addr)),
+                c_buf,
+                ctypes.c_size_t(want),
+                ctypes.byref(got),
+            )
+        except Exception:
+            return 0
+        return int(got.value) if ok else 0
 
     def read_i32(self, addr: int) -> Optional[int]:
         b = self.read_bytes(addr, 4)

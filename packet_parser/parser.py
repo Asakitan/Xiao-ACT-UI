@@ -750,9 +750,13 @@ class PacketParser:
         # Auto-detect profession from observed skill IDs when SyncContainerData missed
         self._try_detect_profession(player, skill_level_id)
 
+        # One wall-clock sample per CD delta: all timestamps below derive from it
+        # (single syscall, and the entry's fields stay mutually consistent).
+        now = time.time()
+
         total_ms = int(skill_cd.get('duration') or 0)
         if total_ms <= 0:
-            player.skill_last_use_at[skill_level_id] = time.time()
+            player.skill_last_use_at[skill_level_id] = now
             if skill_level_id in player.skill_cd_map:
                 del player.skill_cd_map[skill_level_id]
                 return True
@@ -761,17 +765,17 @@ class PacketParser:
         # Expiry check: if begin_time + duration < server_time, CD already expired
         begin_time_ms = int(skill_cd.get('begin_time') or 0)
         if begin_time_ms > 0 and self._server_time_offset_ms is not None:
-            server_now_ms = int(time.time() * 1000 + self._server_time_offset_ms)
+            server_now_ms = int(now * 1000 + self._server_time_offset_ms)
             _ts_2020 = 1577836800000
             if begin_time_ms > _ts_2020 and (begin_time_ms + total_ms) < server_now_ms:
                 # CD already expired — treat as ready
-                player.skill_last_use_at[skill_level_id] = time.time()
+                player.skill_last_use_at[skill_level_id] = now
                 if skill_level_id in player.skill_cd_map:
                     del player.skill_cd_map[skill_level_id]
                     return True
                 return seen_changed
 
-        observed_at_ms = int(time.time() * 1000)
+        observed_at_ms = int(now * 1000)
 
         # SkillCD proto (from SyncToMeDelta) only has 5 fields and does NOT
         # include ChargeCount, SubCDRatio, SubCDFixed, AccelerateCDRatio.
@@ -858,10 +862,10 @@ class PacketParser:
 
             if new_entry['begin_time'] != prev.get('begin_time'):
                 # Only treat a *new* begin_time as a fresh skill cast.
-                player.skill_last_use_at[skill_level_id] = time.time()
+                player.skill_last_use_at[skill_level_id] = now
                 # Keep vcd_speed_ratio — player buff doesn't change per-cast
         else:
-            player.skill_last_use_at[skill_level_id] = time.time()
+            player.skill_last_use_at[skill_level_id] = now
 
         player.skill_cd_map[skill_level_id] = new_entry
         return True

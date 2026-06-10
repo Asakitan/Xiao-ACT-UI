@@ -24,11 +24,10 @@ def _as_bytes(buf) -> bytes:
 def _writable_view(buf):
     """Return a writable memoryview of ``buf``.
 
-    The Cython memoryview signatures on the compiled extension demand a
-    writable buffer.  Plain ``bytes`` and read-only numpy arrays need to be
-    copied first; the wrapper releases the temporary view once the call
-    returns.  The caller is expected to use ``view.release()`` after use
-    (helpers above already do that).
+    Legacy-compat only: old compiled extensions demanded a writable buffer,
+    forcing a full copy of every ``bytes`` chunk scanned.  Current builds use
+    ``const`` memoryviews and take read-only buffers directly (zero copy);
+    this helper is kept as the fallback when an old .pyd is on sys.path.
     """
     if isinstance(buf, memoryview):
         return buf if not buf.readonly else memoryview(bytes(buf))
@@ -42,6 +41,32 @@ def _writable_view(buf):
         data = bytearray(mv.tobytes())
         mv.release()
     return memoryview(data)
+
+
+def _probe_readonly_support() -> bool:
+    """One-time probe: does the loaded extension accept read-only buffers?"""
+    if _fast is None or not hasattr(_fast, "find_aligned_u64"):
+        return False
+    try:
+        _fast.find_aligned_u64(b"\x00" * 8, 1, 1)
+        return True
+    except Exception:
+        return False
+
+
+_READONLY_OK = _probe_readonly_support()
+
+
+def _call_fast(fn, buf, *args):
+    """Invoke a scan kernel, passing ``buf`` zero-copy when supported."""
+    if _READONLY_OK:
+        return fn(buf, *args)
+    view = _writable_view(buf)
+    try:
+        return fn(view, *args)
+    finally:
+        if view is not buf:
+            view.release()
 
 
 def cpu_features() -> dict:
@@ -64,8 +89,8 @@ def backend_info() -> dict:
         "extension_loaded": _fast is not None,
         "backend": backend,
         "features": features,
-        "readonly_buffers_supported": False,
-        "bytes_copy_required": _fast is not None,
+        "readonly_buffers_supported": _READONLY_OK,
+        "bytes_copy_required": (_fast is not None) and (not _READONLY_OK),
     }
 
 
@@ -120,12 +145,7 @@ def has_full_combat_decode() -> bool:
 
 def find_aligned_u64(buf, needle: int, max_hits: int = 4096) -> List[int]:
     if _fast is not None and hasattr(_fast, "find_aligned_u64"):
-        view = _writable_view(buf)
-        try:
-            return list(_fast.find_aligned_u64(view, needle, max_hits))
-        finally:
-            if view is not buf:
-                view.release()
+        return list(_call_fast(_fast.find_aligned_u64, buf, needle, max_hits))
     data = _as_bytes(buf)
     target = int(needle).to_bytes(8, "little", signed=False)
     hits: List[int] = []
@@ -139,12 +159,7 @@ def find_aligned_u64(buf, needle: int, max_hits: int = 4096) -> List[int]:
 
 def find_aligned_u32(buf, needle: int, max_hits: int = 4096) -> List[int]:
     if _fast is not None and hasattr(_fast, "find_aligned_u32"):
-        view = _writable_view(buf)
-        try:
-            return list(_fast.find_aligned_u32(view, needle, max_hits))
-        finally:
-            if view is not buf:
-                view.release()
+        return list(_call_fast(_fast.find_aligned_u32, buf, needle, max_hits))
     data = _as_bytes(buf)
     target = (int(needle) & 0xFFFFFFFF).to_bytes(4, "little", signed=False)
     hits: List[int] = []
@@ -158,12 +173,7 @@ def find_aligned_u32(buf, needle: int, max_hits: int = 4096) -> List[int]:
 
 def find_aligned_u64_in_set(buf, needles: Iterable[int], max_hits: int = 4096) -> List[Tuple[int, int]]:
     if _fast is not None and hasattr(_fast, "find_aligned_u64_in_set"):
-        view = _writable_view(buf)
-        try:
-            return list(_fast.find_aligned_u64_in_set(view, list(needles), max_hits))
-        finally:
-            if view is not buf:
-                view.release()
+        return list(_call_fast(_fast.find_aligned_u64_in_set, buf, list(needles), max_hits))
     wanted = {int(v) & 0xFFFFFFFFFFFFFFFF for v in needles}
     data = _as_bytes(buf)
     hits: List[Tuple[int, int]] = []
@@ -178,12 +188,7 @@ def find_aligned_u64_in_set(buf, needles: Iterable[int], max_hits: int = 4096) -
 
 def find_aligned_u32_in_set(buf, needles: Iterable[int], max_hits: int = 4096) -> List[Tuple[int, int]]:
     if _fast is not None and hasattr(_fast, "find_aligned_u32_in_set"):
-        view = _writable_view(buf)
-        try:
-            return list(_fast.find_aligned_u32_in_set(view, list(needles), max_hits))
-        finally:
-            if view is not buf:
-                view.release()
+        return list(_call_fast(_fast.find_aligned_u32_in_set, buf, list(needles), max_hits))
     wanted = {int(v) & 0xFFFFFFFF for v in needles}
     data = _as_bytes(buf)
     hits: List[Tuple[int, int]] = []
@@ -204,12 +209,8 @@ def scan_repeated_field_candidates(buf, min_count: int = 50, max_count: int = 10
     8 bytes look like a valid heap pointer.
     """
     if _fast is not None and hasattr(_fast, "scan_repeated_field_candidates"):
-        view = _writable_view(buf)
-        try:
-            return list(_fast.scan_repeated_field_candidates(view, int(min_count), int(max_count)))
-        finally:
-            if view is not buf:
-                view.release()
+        return list(_call_fast(_fast.scan_repeated_field_candidates, buf,
+                               int(min_count), int(max_count)))
     # Pure-Python fallback
     data = _as_bytes(buf)
     out: List[dict] = []
@@ -235,15 +236,9 @@ def find_skill_cd_arrays_in_blob(buf, region_base: int, skill_ids,
     element0_ptr, in_blob, fast_match}.
     """
     if _fast is not None and hasattr(_fast, "find_skill_cd_arrays_in_blob"):
-        view = _writable_view(buf)
-        try:
-            return list(_fast.find_skill_cd_arrays_in_blob(
-                view, int(region_base), list(skill_ids),
-                int(min_count), int(max_count), int(max_candidates),
-            ))
-        finally:
-            if view is not buf:
-                view.release()
+        return list(_call_fast(_fast.find_skill_cd_arrays_in_blob, buf,
+                               int(region_base), list(skill_ids),
+                               int(min_count), int(max_count), int(max_candidates)))
     # Pure-Python fallback
     data = _as_bytes(buf)
     out: List[dict] = []
@@ -280,12 +275,8 @@ def find_skill_cd_arrays_in_blob(buf, region_base: int, skill_ids,
 
 def find_pattern_masked(buf, pattern: Sequence[int], mask: Sequence[int], max_hits: int = 4096) -> List[int]:
     if _fast is not None and hasattr(_fast, "find_pattern_masked"):
-        view = _writable_view(buf)
-        try:
-            return list(_fast.find_pattern_masked(view, list(pattern), list(mask) if mask is not None else None, max_hits))
-        finally:
-            if view is not buf:
-                view.release()
+        return list(_call_fast(_fast.find_pattern_masked, buf,
+                               list(pattern), list(mask) if mask is not None else None, max_hits))
     data = _as_bytes(buf)
     pat = bytes(pattern)
     m = bytes(mask)
@@ -306,12 +297,7 @@ def find_pattern_masked(buf, pattern: Sequence[int], mask: Sequence[int], max_hi
 
 def narrow_u32_batch(packed, expected: int):
     if _fast is not None and hasattr(_fast, "narrow_u32_batch"):
-        view = _writable_view(packed)
-        try:
-            return list(_fast.narrow_u32_batch(view, expected))
-        finally:
-            if view is not packed:
-                view.release()
+        return list(_call_fast(_fast.narrow_u32_batch, packed, expected))
     data = _as_bytes(packed)
     target = int(expected) & 0xFFFFFFFF
     return [i for i in range(0, len(data) - 3, 4)
@@ -320,12 +306,7 @@ def narrow_u32_batch(packed, expected: int):
 
 def narrow_u64_batch(packed, expected: int):
     if _fast is not None and hasattr(_fast, "narrow_u64_batch"):
-        view = _writable_view(packed)
-        try:
-            return list(_fast.narrow_u64_batch(view, expected))
-        finally:
-            if view is not packed:
-                view.release()
+        return list(_call_fast(_fast.narrow_u64_batch, packed, expected))
     data = _as_bytes(packed)
     target = int(expected) & 0xFFFFFFFFFFFFFFFF
     return [i for i in range(0, len(data) - 7, 8)
@@ -335,13 +316,9 @@ def narrow_u64_batch(packed, expected: int):
 def find_aligned_u64_with_anchor(buf, anchor_value: int, anchor_off: int, fp_size: int,
                                  expected_slots, max_hits: int = 4096) -> List[int]:
     if _fast is not None and hasattr(_fast, "find_aligned_u64_with_anchor"):
-        view = _writable_view(buf)
-        try:
-            return list(_fast.find_aligned_u64_with_anchor(
-                view, anchor_value, anchor_off, fp_size, dict(expected_slots or {}), max_hits))
-        finally:
-            if view is not buf:
-                view.release()
+        return list(_call_fast(_fast.find_aligned_u64_with_anchor, buf,
+                               anchor_value, anchor_off, fp_size,
+                               dict(expected_slots or {}), max_hits))
     data = _as_bytes(buf)
     anchor = int(anchor_value).to_bytes(8, "little", signed=False)
     hits: List[int] = []
