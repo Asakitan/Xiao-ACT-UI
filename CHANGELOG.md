@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.52: ACT Tk Data Source Health 渲染签名补全.
+
+  1) `gui_modules/sao_gui_data_source_health.py` 的 source 渲染签名现在包含
+     `_format_source()` 已显示的 `requested_mode`。修复数据源请求模式变化时,
+     source 卡片可能因为旧签名命中而不重绘的问题。
+
+  2) 同一签名现在包含 `_format_source()` 已显示的 `uptime_s`。修复 uptime 变化时,
+     source 卡片可能继续显示旧运行时长的问题。扩展 Data Source Health selftest
+     覆盖这两个可见字段。
+
+
+
 ## v4.4.51: ACT Tk Data Source Health 缓存修复.
 
   1) `gui_modules/sao_gui_data_source_health.py` 的 350ms refresh 缓存现在区分

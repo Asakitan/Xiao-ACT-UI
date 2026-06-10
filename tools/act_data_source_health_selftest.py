@@ -126,6 +126,24 @@ class ActDataSourceHealthTests(unittest.TestCase):
         self.assertEqual(panel._last_sources_sig, "")
         self.assertEqual(panel._last_diag_sig, "")
 
+    def test_sources_signature_tracks_displayed_requested_mode_and_uptime(self) -> None:
+        base = {
+            "packet": {
+                "data_source": "hybrid",
+                "status": "running",
+                "running": True,
+                "requested_mode": "packet",
+                "uptime_s": 1,
+            }
+        }
+        requested_changed = {"packet": dict(base["packet"], requested_mode="hybrid")}
+        uptime_changed = {"packet": dict(base["packet"], uptime_s=2)}
+
+        sig = DataSourceHealthPanel._sources_signature(base)
+
+        self.assertNotEqual(sig, DataSourceHealthPanel._sources_signature(requested_changed))
+        self.assertNotEqual(sig, DataSourceHealthPanel._sources_signature(uptime_changed))
+
 
 if __name__ == "__main__":
     unittest.main()

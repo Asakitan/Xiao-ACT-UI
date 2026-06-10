@@ -367,6 +367,8 @@ class DataSourceHealthPanel:
                 'data_source': source.get('data_source'),
                 'mode': source.get('mode'),
                 'status': source.get('status'),
+                'requested_mode': source.get('requested_mode'),
+                'uptime_s': source.get('uptime_s'),
                 'running': bool(source.get('running')),
                 'alive': bool(source.get('alive')),
                 'active': bool(source.get('active')),
