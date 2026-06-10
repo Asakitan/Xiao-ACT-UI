@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 import unittest
+from unittest import mock
 
 from act_platform import runtime
 from gui_modules.sao_gui_combatant_drilldown import CombatantDrilldownPanel
@@ -39,6 +41,17 @@ class FakeOwner:
     def __init__(self) -> None:
         self._dps_tracker = FakeTracker()
         self._act_combatant_drilldown_state = {}
+
+
+class FakeVar:
+    def __init__(self, value: str = "") -> None:
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+    def set(self, value: object) -> None:
+        self.value = str(value)
 
 
 class ActCombatantDrilldownRuntimeTests(unittest.TestCase):
@@ -114,6 +127,34 @@ class ActCombatantDrilldownRuntimeTests(unittest.TestCase):
         self.assertNotEqual(sig, CombatantDrilldownPanel._signature(summary_changed))
         self.assertNotEqual(sig, CombatantDrilldownPanel._signature(skill_changed))
         self.assertNotEqual(sig, CombatantDrilldownPanel._signature(side_changed))
+
+    def test_tk_refresh_cache_reuses_only_same_request_parameters(self) -> None:
+        panel = CombatantDrilldownPanel.__new__(CombatantDrilldownPanel)
+        panel.owner = FakeOwner()
+        panel._combatant_var = FakeVar("1001")
+        panel._query_var = FakeVar("slash")
+        panel._focus_var = FakeVar("boss-7")
+        panel._last_status = {"ok": True, "summary": {"name": "cached"}}
+        panel._last_refresh_at = time.time()
+        panel._last_request_key = ("1001", "slash", "boss-7")
+        rendered: list[dict] = []
+        panel._render_status = lambda status: rendered.append(dict(status))
+
+        with mock.patch("gui_modules.sao_gui_combatant_drilldown.act_combatant_drilldown_status") as status_fn:
+            cached = panel.refresh()
+
+        self.assertEqual(cached["summary"]["name"], "cached")
+        self.assertEqual(rendered[-1]["summary"]["name"], "cached")
+        status_fn.assert_not_called()
+
+        panel._query_var.set("heal")
+        status_payload = {"ok": True, "summary": {"name": "fresh"}, "skills": [], "incoming": [], "outgoing": [], "filters": {"query": "heal", "focus_target": "boss-7"}}
+        with mock.patch("gui_modules.sao_gui_combatant_drilldown.act_combatant_drilldown_status", return_value=status_payload) as status_fn:
+            refreshed = panel.refresh()
+
+        self.assertEqual(refreshed["summary"]["name"], "fresh")
+        self.assertEqual(panel._last_request_key, ("1001", "heal", "boss-7"))
+        status_fn.assert_called_once_with(panel.owner, combatant_id="1001", query="heal", focus_target="boss-7")
 
 
 if __name__ == "__main__":

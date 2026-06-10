@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.48: ACT Tk Drilldown 刷新缓存参数修复.
+
+  1) `gui_modules/sao_gui_combatant_drilldown.py` 的 350ms refresh 缓存现在按
+     `combatant_id/query/focus_target` 建 key。修复快速切换成员、搜索词或目标焦点时,
+     Combatant Drilldown Tk 面板可能直接复用旧状态、没有把新参数传到后端的问题。
+
+  2) `gui_modules/sao_gui_skill_drilldown.py` 的 350ms refresh 缓存现在按
+     `combatant_id/skill_id/query` 建 key。修复快速切换技能或搜索词时,
+     Skill Drilldown Tk 面板可能显示上一技能详情的问题。扩展 Combatant/Skill
+     Drilldown selftest 覆盖相同参数复用与参数变化强制刷新。
+
+
+
 ## v4.4.47: ACT Tk 刷新缓存参数修复.
 
   1) `gui_modules/sao_gui_act_aggregate.py` 的 350ms refresh 缓存现在按

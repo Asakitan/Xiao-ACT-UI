@@ -48,6 +48,7 @@ class SkillDrilldownPanel:
         self._query_var = tk.StringVar(value="")
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
+        self._last_request_key: tuple[Any, ...] = ()
         self._last_sig = ""
         self._expanded_refs: set[str] = set()
 
@@ -59,6 +60,7 @@ class SkillDrilldownPanel:
         if query:
             self._query_var.set(str(query or ""))
         self._last_refresh_at = 0.0
+        self._last_request_key = ()
         self._last_sig = ""
         self._expanded_refs.clear()
         self.show()
@@ -100,20 +102,25 @@ class SkillDrilldownPanel:
 
     def refresh(self) -> Dict[str, Any]:
         now = time.time()
-        if self._last_status and now - self._last_refresh_at < 0.35:
+        combatant_id = self._combatant_var.get()
+        skill_id = self._skill_var.get()
+        query = self._query_var.get()
+        request_key = (combatant_id, skill_id, query)
+        if self._last_status and request_key == self._last_request_key and now - self._last_refresh_at < 0.35:
             self._render_status(self._last_status)
             return self._last_status
         try:
             status = act_skill_drilldown_status(
                 self.owner,
-                combatant_id=self._combatant_var.get(),
-                skill_id=self._skill_var.get(),
-                query=self._query_var.get(),
+                combatant_id=combatant_id,
+                skill_id=skill_id,
+                query=query,
             )
         except Exception as exc:
-            status = {"ok": False, "message": str(exc), "summary": {}, "timeline_refs": [], "casts": 0, "hits": 0, "crit_rate": 0.0, "filters": {"query": self._query_var.get()}, "errors": [str(exc)]}
+            status = {"ok": False, "message": str(exc), "summary": {}, "timeline_refs": [], "casts": 0, "hits": 0, "crit_rate": 0.0, "filters": {"query": query}, "errors": [str(exc)]}
         self._last_status = dict(status or {})
         self._last_refresh_at = now
+        self._last_request_key = request_key
         self._render_status(self._last_status)
         return self._last_status
 
@@ -140,6 +147,7 @@ class SkillDrilldownPanel:
     def _apply_result(self, result: Mapping[str, Any], message: str) -> Dict[str, Any]:
         self._last_status = dict(result or {})
         self._last_refresh_at = time.time()
+        self._last_request_key = ()
         self._status_var.set(message)
         self._render_status(self._last_status)
         return self._last_status
