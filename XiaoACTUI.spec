@@ -111,6 +111,11 @@ MEM_PROBE_RUNTIME_HIDDENIMPORTS = [
     'mem_probe.il2cpp.auto_registration_locator',
     'mem_probe.il2cpp.resolver',
     'mem_probe.il2cpp.mem_damage_reader',
+    # map-name chain: mem_state_bridge lazily imports MapNameReader (function
+    # level, invisible to static analysis); the string-pool bridge is its
+    # module-level dependency.
+    'mem_probe.il2cpp.mem_map_name_reader',
+    'mem_probe.il2cpp.mem_string_pool',
 ]
 
 # v2.3.0 GUI 链路重置 — 收集 skia / moderngl-window 原生二进制

@@ -172,6 +172,12 @@ body{padding:10px}
     text-align:center;padding:32px 16px;
     color:var(--text-muted);font-size:11px;letter-spacing:0.8px;line-height:1.8;
 }
+/* --- Mechanics editor inputs --- */
+.mech-input{
+    background:rgba(8,14,22,.6);color:#e8f6ff;
+    border:1px solid rgba(117,205,255,.4);border-radius:5px;
+    padding:2px 5px;font-size:10px;
+}
 </style>
 </head>
 <body>
@@ -190,6 +196,7 @@ body{padding:10px}
         <div class="tab" data-tab="phases" onclick="switchTab('phases')">Phases</div>
         <div class="tab" data-tab="timeline" onclick="switchTab('timeline')">Timeline</div>
         <div class="tab" data-tab="reactions" onclick="switchTab('reactions')">Boss 反应</div>
+        <div class="tab" data-tab="mechanics" onclick="switchTab('mechanics')">机制</div>
     </div>
     <!-- Content -->
     <div class="content" id="content">
@@ -232,6 +239,18 @@ body{padding:10px}
             <div class="phase-header" style="margin-top:8px;">进攻窗口 / Offensive Windows</div>
             <div id="react-window-list"></div>
         </div>
+        <div id="tab-mechanics" style="display:none">
+            <div id="mech-master"></div>
+            <div id="mech-zh-warn" style="display:none;padding:5px 8px;margin:4px 0;border-radius:6px;background:rgba(207,58,47,.15);border:1px solid rgba(207,58,47,.5);color:#ff9a8c;font-size:10px;">⚠ 未检测到中文语音 (SAPI zh-CN)，播报可能不准确</div>
+            <div class="phase-header" id="mech-inbox-header" style="display:none;">未绑定技能收件箱</div>
+            <div id="mech-inbox"></div>
+            <div class="phase-header" id="mech-list-header">机制列表</div>
+            <div id="mech-list"></div>
+            <div style="display:flex;align-items:center;gap:6px;margin:6px 0;">
+                <div class="action-btn accent" style="padding:3px 10px;font-size:10px;" onclick="mechNew()">+ 新建机制</div>
+                <span id="mech-profile-meta" style="flex:1;text-align:right;font-size:9px;color:#9fc0d8;"></span>
+            </div>
+        </div>
     </div>
     <!-- Action buttons -->
     <div class="action-row">
@@ -265,7 +284,9 @@ function switchTab(tab) {
     document.getElementById('tab-phases').style.display = tab === 'phases' ? '' : 'none';
     document.getElementById('tab-timeline').style.display = tab === 'timeline' ? '' : 'none';
     document.getElementById('tab-reactions').style.display = tab === 'reactions' ? '' : 'none';
+    document.getElementById('tab-mechanics').style.display = tab === 'mechanics' ? '' : 'none';
     if (tab === 'reactions') loadReactions();
+    if (tab === 'mechanics') loadMechanics();
 }
 
 // 鈹€鈹€ Boss Reactions editor 鈹€鈹€
@@ -455,6 +476,420 @@ function saveReaction(trig, skillId, id) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         if (r && r.ok) { _reactState = r.state; renderReactions(); }
     }).catch(function () {});
+}
+
+/* ── 机制编辑器 (与 Tk 简单/详细面板共用 build_mechanics_state 契约) ── */
+var _mechState = null;
+var _mechEditing = null;     // 正在编辑的机制 id
+var _mechDraft = null;       // 编辑草稿 (深拷贝)
+var _mechCatalog = [];
+var _MECH_COLORS = ['#ef684e', '#dea620', '#68e4ff', '#9ad334', '#8e44ad', '#2e6fb0'];
+
+function loadMechanics() {
+    var a = _api();
+    if (!a || !a.get_mechanics) return;
+    Promise.resolve(a.get_mechanics(null, null)).then(function (j) {
+        var r = (typeof j === 'string') ? JSON.parse(j) : j;
+        if (r && r.ok) { _mechState = r.state; renderMechanics(); }
+    }).catch(function () {});
+}
+
+function _mechReply(p) {
+    Promise.resolve(p).then(function (j) {
+        var r = (typeof j === 'string') ? JSON.parse(j) : j;
+        if (r && r.ok && r.state) { _mechState = r.state; renderMechanics(); }
+    }).catch(function () {});
+}
+
+function renderMechanics() {
+    var st = _mechState || {};
+    var master = st.master || {};
+    document.getElementById('mech-zh-warn').style.display =
+        (master.zh_voice === false) ? '' : 'none';
+    var mEl = document.getElementById('mech-master');
+    mEl.innerHTML = '<div class="entity-card" style="display:block;padding:6px 8px;margin:3px 0;">'
+        + '<div style="display:flex;align-items:center;gap:10px;font-size:10px;color:#e8f6ff;flex-wrap:wrap;">'
+        + _mSwitch('TTS播报', 'tts_enabled', master.tts_enabled)
+        + _mSwitch('横幅提醒', 'banner_enabled', master.banner_enabled)
+        + _mSwitch('自动躲避', 'dodge_enabled', master.dodge_enabled)
+        + '<span style="color:#9fc0d8;">紧急停用: ' + _esc(master.panic_hotkey || 'F12') + '</span>'
+        + '<span style="color:#9fc0d8;">音量 <input type="number" min="0" max="100" value="' + Number(master.tts_volume || 80)
+        + '" style="width:46px;" class="mech-input" onchange="mechMaster({tts_volume:this.value})"></span>'
+        + '</div></div>';
+    if (!st.ok) {
+        document.getElementById('mech-inbox-header').style.display = 'none';
+        document.getElementById('mech-inbox').innerHTML = '';
+        document.getElementById('mech-list-header').textContent = '机制列表';
+        document.getElementById('mech-list').innerHTML =
+            '<div class="empty-state">没有可编辑的档案<br/><span style="font-size:9px;">先创建档案, 或导入 assets/boss_raids 下的机制示例 JSON</span></div>';
+        document.getElementById('mech-profile-meta').textContent = '';
+        return;
+    }
+    var inbox = st.inbox || [];
+    document.getElementById('mech-inbox-header').style.display = inbox.length ? '' : 'none';
+    document.getElementById('mech-inbox').innerHTML = inbox.slice(0, 6).map(_mInboxRow).join('');
+    var mechs = st.mechanics || [];
+    document.getElementById('mech-list-header').textContent = '机制列表 (' + mechs.length + ')';
+    document.getElementById('mech-list').innerHTML = mechs.map(_mCard).join('')
+        || '<div class="empty-state">还没有机制 — 点「新建机制」或从收件箱一键创建</div>';
+    var prof = st.profile || {};
+    var enr = prof.enrage || {};
+    document.getElementById('mech-profile-meta').textContent =
+        '狂暴 ' + Number(enr.time_s || prof.enrage_time_s || 0) + 's · 档案: ' + (prof.name || '');
+}
+
+function _mSwitch(label, key, value) {
+    return '<label style="display:flex;align-items:center;gap:3px;cursor:pointer;">'
+        + '<input type="checkbox"' + (value ? ' checked' : '')
+        + ' onchange="mechMaster({' + key + ':this.checked})">' + _esc(label) + '</label>';
+}
+
+function mechMaster(flags) {
+    var a = _api();
+    if (!a || !a.set_mechanics_master) return;
+    Promise.resolve(a.set_mechanics_master(JSON.stringify(flags))).then(function () {
+        loadMechanics();
+    }).catch(function () {});
+}
+
+function _mInboxRow(rec) {
+    var sid = Number(rec.skill_id || 0);
+    var dur = rec.last_cast_duration_ms;
+    var label = (rec.name || '技能') + ' #' + sid + ' ×' + Number(rec.count || 0)
+        + (dur ? (' · ' + dur + 'ms') : '');
+    var mechs = (_mechState && _mechState.mechanics) || [];
+    var bindSel = mechs.length
+        ? '<select class="mech-input" style="max-width:110px;" onchange="if(this.value){mechBind(this.value,' + sid + ')}">'
+          + '<option value="">绑定到▾</option>'
+          + mechs.map(function (m) {
+                return '<option value="' + _esc(m.id) + '">' + _esc(m.name) + '</option>';
+            }).join('') + '</select>'
+        : '';
+    return '<div class="entity-card" style="display:flex;align-items:center;gap:6px;padding:4px 7px;margin:2px 0;">'
+        + '<span style="flex:1;font-size:10px;color:#e8f6ff;">' + _esc(label) + '</span>'
+        + bindSel
+        + '<div class="action-btn accent" style="padding:2px 8px;font-size:10px;" onclick="mechCreateFromSkill('
+        + sid + ',' + JSON.stringify(String(rec.name || '')).replace(/"/g, '&quot;') + ',' + (dur || 'null') + ')">建机制</div>'
+        + '</div>';
+}
+
+function mechCreateFromSkill(sid, name, dur) {
+    var a = _api();
+    if (!a || !a.create_mechanic_from_skill) return;
+    _mechReply(a.create_mechanic_from_skill(sid, name || '', dur));
+}
+
+function mechBind(mid, sid) {
+    var a = _api();
+    if (!a || !a.bind_mechanic_skill) return;
+    _mechReply(a.bind_mechanic_skill(mid, sid));
+}
+
+function _mCard(m) {
+    var names = m.skill_names || {};
+    var det = m.detect || {};
+    var ids = det.skill_ids || [];
+    var chips = ids.map(function (sid) {
+        var nm = (names[String(sid)] || '').trim();
+        return nm ? (nm + '#' + sid) : ('#' + sid);
+    });
+    var sum = m.summary || {};
+    var sub = [chips.length ? ('技能: ' + chips.join(', ')) : '未绑定技能',
+               sum.alert_desc || '', sum.dodge_desc || ''].filter(Boolean).join(' · ');
+    var mid = _esc(m.id);
+    var html = '<div class="entity-card" style="display:block;padding:6px 8px;margin:3px 0;border-left:3px solid ' + _esc(m.color || '#68e4ff') + ';">'
+        + '<div style="display:flex;align-items:center;gap:6px;">'
+        + '<input type="checkbox"' + (m.enabled !== false ? ' checked' : '')
+        + ' onchange="mechToggle(\'' + mid + '\', this.checked)">'
+        + '<span style="flex:1;font-size:11px;font-weight:600;color:#ffd46f;">' + _esc(m.name || '机制') + '</span>'
+        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(\'' + mid + '\',[\'tts\'])">🔊</div>'
+        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(\'' + mid + '\',[\'banner\'])">横幅</div>'
+        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechTest(\'' + mid + '\',[\'dodge\'])">按键</div>'
+        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechEdit(\'' + mid + '\')">编辑</div>'
+        + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechDelete(\'' + mid + '\')">删除</div>'
+        + '</div>'
+        + '<div style="font-size:9px;color:#9fc0d8;margin-top:2px;">' + _esc(sub) + '</div>';
+    if (_mechEditing === m.id) html += _mForm(m);
+    return html + '</div>';
+}
+
+function mechToggle(mid, enabled) {
+    var m = _mFind(mid);
+    if (!m) return;
+    var m2 = JSON.parse(JSON.stringify(m));
+    delete m2.summary; delete m2.skill_names;
+    m2.enabled = !!enabled;
+    var a = _api();
+    if (a && a.save_mechanic) _mechReply(a.save_mechanic(JSON.stringify(m2)));
+}
+
+function _mFind(mid) {
+    var mechs = (_mechState && _mechState.mechanics) || [];
+    for (var i = 0; i < mechs.length; i++) if (mechs[i].id === mid) return mechs[i];
+    return null;
+}
+
+function mechEdit(mid) {
+    if (_mechEditing === mid) { _mechEditing = null; _mechDraft = null; }
+    else {
+        _mechEditing = mid;
+        var m = _mFind(mid);
+        _mechDraft = m ? JSON.parse(JSON.stringify(m)) : null;
+        if (_mechDraft) { delete _mechDraft.summary; }
+        _mechCatalog = [];
+    }
+    renderMechanics();
+}
+
+function mechDelete(mid) {
+    var a = _api();
+    if (!a || !a.delete_mechanic) return;
+    if (_mechEditing === mid) { _mechEditing = null; _mechDraft = null; }
+    _mechReply(a.delete_mechanic(mid));
+}
+
+function mechTest(mid, kinds) {
+    var m = (_mechEditing === mid && _mechDraft) ? _mCollect() : _mFind(mid);
+    if (!m) return;
+    var a = _api();
+    if (a && a.test_mechanic) {
+        Promise.resolve(a.test_mechanic(JSON.stringify(m), JSON.stringify(kinds))).catch(function () {});
+    }
+}
+
+function mechNew() {
+    var used = ((_mechState && _mechState.mechanics) || []).length;
+    var draft = {
+        id: '', name: '新机制', color: _MECH_COLORS[used % _MECH_COLORS.length],
+        enabled: true, phase_ids: [],
+        detect: { skill_ids: [] },
+        alert: { tts_text: '', banner_text: '', countdown_s: 8, pre_warn_s: 3,
+                 cooldown_s: 5, alert_type: 'both', enabled: true },
+        dodge: { enabled: false, linkage_id: '', inline: {} }
+    };
+    var a = _api();
+    if (!a || !a.save_mechanic) return;
+    Promise.resolve(a.save_mechanic(JSON.stringify(draft))).then(function (j) {
+        var r = (typeof j === 'string') ? JSON.parse(j) : j;
+        if (r && r.ok && r.state) {
+            _mechState = r.state;
+            var mechs = _mechState.mechanics || [];
+            if (mechs.length) {
+                _mechEditing = mechs[mechs.length - 1].id;
+                _mechDraft = JSON.parse(JSON.stringify(mechs[mechs.length - 1]));
+                delete _mechDraft.summary;
+            }
+            renderMechanics();
+        }
+    }).catch(function () {});
+}
+
+function _mInput(id, label, value, width) {
+    return '<label style="display:inline-flex;align-items:center;gap:3px;margin-right:8px;color:#9fc0d8;">'
+        + _esc(label) + ' <input id="' + id + '" class="mech-input" style="width:' + (width || 60)
+        + 'px;" value="' + _esc(value == null ? '' : value) + '"></label>';
+}
+
+function _mForm(m) {
+    var d = _mechDraft || m;
+    var det = d.detect || {};
+    var alert = d.alert || {};
+    var dodge = d.dodge || {};
+    var inline = dodge.inline || {};
+    var names = m.skill_names || {};
+    var ids = det.skill_ids || [];
+    var seq = inline.sequence || [];
+    var preset = seq.length ? 'seq' : (inline.action_key
+        ? (String(inline.press_mode) === 'hold' ? 'hold' : 'tap') : 'none');
+    var html = '<div style="background:rgba(8,14,22,.55);border-radius:6px;padding:7px;margin-top:5px;font-size:10px;">';
+    // 名称 + 颜色
+    html += '<div style="margin-bottom:4px;">' + _mInput('mf-name', '名称', d.name, 110)
+        + ' 颜色 ' + _MECH_COLORS.map(function (c) {
+            return '<span onclick="mechPickColor(\'' + c + '\')" style="display:inline-block;width:13px;height:13px;background:' + c
+                + ';cursor:pointer;margin:0 1px;vertical-align:middle;'
+                + (d.color === c ? 'outline:2px solid #fff;' : '') + '"></span>';
+        }).join('') + '</div>';
+    // 检测
+    html += '<div class="phase-header" style="font-size:10px;">检测 (技能/Buff ID)</div><div style="margin:3px 0;">';
+    if (!ids.length) html += '<span style="color:#75808d;">未绑定 — 从下方添加</span>';
+    html += ids.map(function (sid) {
+        var nm = (names[String(sid)] || '').trim();
+        return '<span onclick="mechDraftRemoveSkill(' + sid + ')" style="display:inline-block;background:rgba(117,205,255,.18);color:#e8f6ff;padding:1px 6px;margin:1px;border-radius:4px;cursor:pointer;">'
+            + _esc(nm ? (nm + '#' + sid) : ('#' + sid)) + ' ✕</span>';
+    }).join('') + '</div>';
+    var observed = ((_mechState && _mechState.observed) || []).filter(function (o) {
+        return ids.indexOf(o.id) < 0;
+    });
+    if (observed.length) {
+        html += '<select id="mf-obs" class="mech-input" style="max-width:170px;" onchange="if(this.value){mechDraftAddSkill(Number(this.value))}">'
+            + '<option value="">添加观测技能▾</option>'
+            + observed.slice(0, 25).map(function (o) {
+                return '<option value="' + o.id + '">' + _esc((o.name || '技能') + ' #' + o.id + ' ×' + (o.count || 0)) + '</option>';
+            }).join('') + '</select> ';
+    }
+    html += _mInput('mf-manual', '手动ID', '', 70)
+        + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddManual()">添加</span> '
+        + _mInput('mf-q', '技能库', '', 90)
+        + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechCatalogSearch()">搜索</span>';
+    html += (_mechCatalog || []).map(function (h) {
+        return '<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">'
+            + '<span style="flex:1;color:#e8f6ff;">' + _esc(h.name + ' #' + h.id + ' (' + (h.kind || '') + ')') + '</span>'
+            + '<span class="action-btn accent" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddSkill(' + h.id + ')">绑定</span></div>';
+    }).join('');
+    // 提醒
+    html += '<div class="phase-header" style="font-size:10px;">提醒</div>'
+        + '<div style="margin:3px 0;">' + _mInput('mf-tts', 'TTS文案', alert.tts_text, 170)
+        + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechFormTest([\'tts\'])">试听</span></div>'
+        + '<div style="margin:3px 0;">' + _mInput('mf-banner', '横幅文案', alert.banner_text, 170) + '</div>'
+        + '<div style="margin:3px 0;">' + _mInput('mf-cd', '倒计时s', alert.countdown_s, 44)
+        + _mInput('mf-pre', '预警s', alert.pre_warn_s, 44)
+        + _mInput('mf-cool', '冷却s', alert.cooldown_s, 44) + '</div>';
+    // 躲避
+    html += '<div class="phase-header" style="font-size:10px;">自动躲避</div><div style="margin:3px 0;">'
+        + '<label style="margin-right:8px;color:#e8f6ff;"><input type="checkbox" id="mf-dodge-en"'
+        + (dodge.enabled ? ' checked' : '') + '> 启用</label>'
+        + '<select id="mf-preset" class="mech-input" onchange="mechPresetChange(this.value)">'
+        + [['none', '无'], ['tap', '轻点按键'], ['hold', '按住按键'], ['seq', '按键序列']].map(function (p) {
+            return '<option value="' + p[0] + '"' + (preset === p[0] ? ' selected' : '') + '>' + p[1] + '</option>';
+        }).join('') + '</select> '
+        + _mInput('mf-lead', '提前ms', inline.lead_ms != null ? inline.lead_ms : 300, 52) + '</div>';
+    if (preset === 'tap' || preset === 'hold') {
+        html += '<div style="margin:3px 0;">' + _mInput('mf-key', '键', inline.action_key, 50)
+            + (preset === 'hold' ? _mInput('mf-hold', '按住ms', inline.hold_ms != null ? inline.hold_ms : 600, 52) : '')
+            + '</div>';
+    } else if (preset === 'seq') {
+        html += seq.map(function (s, i) {
+            return '<div style="margin:2px 0;">步' + (i + 1) + ' '
+                + _mInput('mf-sk-' + i, '键', s.key, 46)
+                + _mInput('mf-sd-' + i, '延迟ms', s.delay_ms || 0, 50)
+                + _mInput('mf-sh-' + i, '按住ms', s.hold_ms || 0, 50)
+                + '<span class="action-btn" style="padding:1px 6px;font-size:10px;" onclick="mechSeqRemove(' + i + ')">✕</span></div>';
+        }).join('')
+        + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechSeqAdd()">+ 加一步</span>';
+    }
+    // 阶段范围
+    var phases = (_mechState && _mechState.phases) || [];
+    var pids = d.phase_ids || [];
+    html += '<div style="margin:5px 0;">阶段范围 <select id="mf-phase" class="mech-input">'
+        + '<option value=""' + (!pids.length ? ' selected' : '') + '>全部阶段</option>'
+        + phases.map(function (p) {
+            return '<option value="' + _esc(p.id) + '"' + (pids.indexOf(p.id) >= 0 ? ' selected' : '') + '>' + _esc(p.name || p.id) + '</option>';
+        }).join('') + '</select></div>';
+    html += '<div style="display:flex;justify-content:flex-end;gap:6px;margin-top:4px;">'
+        + '<div class="action-btn" style="padding:2px 10px;font-size:10px;" onclick="mechCancelEdit()">取消</div>'
+        + '<div class="action-btn accent" style="padding:2px 10px;font-size:10px;" onclick="mechSaveForm()">保存</div></div>';
+    return html + '</div>';
+}
+
+function _mNum(id, dflt) {
+    var el = document.getElementById(id);
+    if (!el) return dflt;
+    var v = parseFloat(el.value);
+    return isNaN(v) ? dflt : v;
+}
+
+function _mVal(id) {
+    var el = document.getElementById(id);
+    return el ? String(el.value || '').trim() : '';
+}
+
+function _mCollect() {
+    var d = _mechDraft || {};
+    var det = d.detect = d.detect || {};
+    var alert = d.alert = d.alert || {};
+    var dodge = d.dodge = d.dodge || {};
+    var inline = dodge.inline = dodge.inline || {};
+    if (document.getElementById('mf-name')) d.name = _mVal('mf-name') || '机制';
+    if (document.getElementById('mf-tts')) alert.tts_text = _mVal('mf-tts');
+    if (document.getElementById('mf-banner')) alert.banner_text = _mVal('mf-banner');
+    alert.countdown_s = _mNum('mf-cd', alert.countdown_s != null ? alert.countdown_s : 8);
+    alert.pre_warn_s = _mNum('mf-pre', alert.pre_warn_s != null ? alert.pre_warn_s : 3);
+    alert.cooldown_s = _mNum('mf-cool', alert.cooldown_s != null ? alert.cooldown_s : 5);
+    var den = document.getElementById('mf-dodge-en');
+    if (den) dodge.enabled = !!den.checked;
+    inline.lead_ms = Math.round(_mNum('mf-lead', inline.lead_ms != null ? inline.lead_ms : 300));
+    var preset = _mVal('mf-preset') || 'none';
+    if (preset === 'tap') {
+        inline.press_mode = 'tap';
+        inline.action_key = _mVal('mf-key').toUpperCase();
+        inline.sequence = [];
+    } else if (preset === 'hold') {
+        inline.press_mode = 'hold';
+        inline.action_key = _mVal('mf-key').toUpperCase();
+        inline.hold_ms = Math.round(_mNum('mf-hold', 600));
+        inline.sequence = [];
+    } else if (preset === 'seq') {
+        var steps = [];
+        for (var i = 0; ; i++) {
+            var kEl = document.getElementById('mf-sk-' + i);
+            if (!kEl) break;
+            var key = String(kEl.value || '').trim().toUpperCase();
+            if (!key) continue;
+            steps.push({ key: key,
+                         delay_ms: Math.round(_mNum('mf-sd-' + i, 0)),
+                         hold_ms: Math.round(_mNum('mf-sh-' + i, 0)) });
+        }
+        inline.sequence = steps;
+        inline.action_key = '';
+    } else {
+        inline.action_key = '';
+        inline.sequence = [];
+    }
+    var ph = _mVal('mf-phase');
+    d.phase_ids = ph ? [ph] : [];
+    return d;
+}
+
+function mechPickColor(c) { _mCollect(); if (_mechDraft) _mechDraft.color = c; renderMechanics(); }
+function mechDraftAddSkill(sid) {
+    _mCollect();
+    if (!_mechDraft) return;
+    var det = _mechDraft.detect = _mechDraft.detect || {};
+    var ids = det.skill_ids = det.skill_ids || [];
+    if (sid > 0 && ids.indexOf(sid) < 0) { ids.push(sid); ids.sort(function (a, b) { return a - b; }); }
+    renderMechanics();
+}
+function mechDraftAddManual() {
+    var sid = parseInt(_mVal('mf-manual'), 10);
+    if (sid > 0) mechDraftAddSkill(sid);
+}
+function mechDraftRemoveSkill(sid) {
+    _mCollect();
+    if (!_mechDraft) return;
+    var det = _mechDraft.detect || {};
+    det.skill_ids = (det.skill_ids || []).filter(function (x) { return Number(x) !== Number(sid); });
+    renderMechanics();
+}
+function mechCatalogSearch() {
+    var q = _mVal('mf-q');
+    var a = _api();
+    if (!q || !a || !a.search_skill_catalog) return;
+    _mCollect();
+    Promise.resolve(a.search_skill_catalog(q, 10)).then(function (j) {
+        var r = (typeof j === 'string') ? JSON.parse(j) : j;
+        _mechCatalog = (r && r.ok) ? (r.results || []) : [];
+        renderMechanics();
+    }).catch(function () {});
+}
+function mechPresetChange(_v) { _mCollect(); if (_v === 'seq' && _mechDraft && !(_mechDraft.dodge.inline.sequence || []).length) { _mechDraft.dodge.inline.sequence = [{ key: '', delay_ms: 0, hold_ms: 0 }]; } renderMechanics(); }
+function mechSeqAdd() { _mCollect(); if (_mechDraft) { var inl = _mechDraft.dodge.inline; (inl.sequence = inl.sequence || []).push({ key: '', delay_ms: 0, hold_ms: 0 }); } renderMechanics(); }
+function mechSeqRemove(i) { _mCollect(); if (_mechDraft) { (_mechDraft.dodge.inline.sequence || []).splice(i, 1); } renderMechanics(); }
+function mechFormTest(kinds) {
+    var m = _mCollect();
+    var a = _api();
+    if (m && a && a.test_mechanic) {
+        Promise.resolve(a.test_mechanic(JSON.stringify(m), JSON.stringify(kinds))).catch(function () {});
+    }
+}
+function mechCancelEdit() { _mechEditing = null; _mechDraft = null; _mechCatalog = []; renderMechanics(); }
+function mechSaveForm() {
+    var m = _mCollect();
+    var a = _api();
+    if (!m || !a || !a.save_mechanic) return;
+    var m2 = JSON.parse(JSON.stringify(m));
+    delete m2.summary; delete m2.skill_names;
+    _mechEditing = null; _mechDraft = null; _mechCatalog = [];
+    _mechReply(a.save_mechanic(JSON.stringify(m2)));
 }
 
 // 鈹€鈹€ Entity list rendering 鈹€鈹€

@@ -94,9 +94,67 @@ class SAOPlayerGUIActionsMixin:
                 ),
                 load_reactions_fn=self._load_boss_reactions_state,
                 save_reaction_fn=self._save_boss_reaction,
+                mechanics_api=self._mechanics_editor_api(),
             )
         self._bossraid_panel.toggle()
         self.root.after(120, lambda: self._raise_panel_window(self._bossraid_panel))
+
+    def _mechanics_editor_api(self) -> Dict[str, Any]:
+        """机制编辑器回调集 (简单面板 + 详细面板共用同一契约)。"""
+        from engines import boss_mechanics_state as bms
+
+        def _load(scene_key=None, boss_base_id=None):
+            return bms.build_mechanics_state(
+                self._cfg_settings_ref,
+                getattr(self, '_boss_raid_engine', None),
+                getattr(self, '_state_mgr', None),
+                scene_key=scene_key, boss_base_id=boss_base_id)
+
+        def _save_mech(mech):
+            cfg = bms.upsert_mechanic(self._cfg_settings_ref, mech)
+            self._presynthesize_active_profile()
+            return cfg
+
+        def _test(mech, kinds):
+            kinds = tuple(kinds or ())
+            controller = getattr(self, '_mech_alert_controller', None)
+            if controller is not None and ({'tts', 'banner'} & set(kinds)):
+                controller.test_mechanic(mech, kinds)
+            if 'dodge' in kinds:
+                linkage = getattr(self, '_boss_autokey_linkage', None)
+                inline = ((mech.get('dodge') or {}).get('inline')
+                          if isinstance(mech, dict) else None)
+                if linkage is not None and isinstance(inline, dict):
+                    if linkage.fire_mapping_test(inline) and self._alert_overlay:
+                        self._alert_overlay.show_alert(
+                            '按键试发', '按键将发送到当前前台窗口')
+            return {'ok': True}
+
+        return {
+            'load': _load,
+            'save_mech': _save_mech,
+            'delete_mech': lambda mid: bms.delete_mechanic(self._cfg_settings_ref, mid),
+            'test': _test,
+            'set_master': lambda flags: bms.set_mechanics_master(self._cfg_settings_ref, flags),
+            'create_from_skill': lambda sid, nm='', dur=None: (
+                bms.create_mechanic_from_skill(self._cfg_settings_ref, sid, nm, dur)),
+            'bind': lambda mid, sid: bms.bind_skill_to_mechanic(self._cfg_settings_ref, mid, sid),
+            'unbind': lambda mid, sid: bms.unbind_skill_from_mechanic(self._cfg_settings_ref, mid, sid),
+            'search_catalog': bms.search_skill_catalog,
+        }
+
+    def _presynthesize_active_profile(self):
+        controller = getattr(self, '_mech_alert_controller', None)
+        if controller is None:
+            return
+        try:
+            cfg = self._load_boss_raid_config()
+            from engines.boss_raid_engine import active_profile
+            profile = active_profile(cfg)
+            if profile:
+                controller.presynthesize_profile(profile)
+        except Exception:
+            pass
 
     def _load_boss_reactions_state(self, scene_key=None, boss_base_id=None) -> Dict[str, Any]:
         """Data contract for the BossRaid panel's Boss 反应 tab (mem-driven editor).
@@ -139,6 +197,7 @@ class SAOPlayerGUIActionsMixin:
                 author_fn=getattr(self, '_boss_raid_author_snapshot', None),
                 load_reactions_fn=self._load_boss_reactions_state,
                 save_reaction_fn=self._save_boss_reaction,
+                mechanics_api=self._mechanics_editor_api(),
             )
         self._bossraid_detail_panel.toggle()
         self.root.after(120, lambda: self._raise_panel_window(self._bossraid_detail_panel))

@@ -1816,6 +1816,111 @@ class SAOWebAPI:
         except Exception as e:
             return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
 
+    # ── Mechanics editor (shared contract with the Tk panels) ──
+
+    def _mechanics_state(self, scene_key=None, boss_base_id=None):
+        from engines import boss_mechanics_state as bms
+        return bms.build_mechanics_state(
+            self._g._cfg_settings_ref,
+            getattr(self._g, '_boss_raid_engine', None),
+            getattr(self._g, '_state_mgr', None),
+            scene_key=scene_key, boss_base_id=boss_base_id)
+
+    def _mechanics_reply(self, scene_key=None, boss_base_id=None):
+        return json.dumps({'ok': True,
+                           'state': self._mechanics_state(scene_key, boss_base_id)},
+                          ensure_ascii=False)
+
+    def get_mechanics(self, scene_key=None, boss_base_id=None):
+        try:
+            return self._mechanics_reply(scene_key, boss_base_id)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def save_mechanic(self, mech_json, scene_key=None, boss_base_id=None):
+        try:
+            from engines import boss_mechanics_state as bms
+            mech = json.loads(mech_json) if isinstance(mech_json, str) else mech_json
+            bms.upsert_mechanic(self._g._cfg_settings_ref, mech)
+            try:
+                self._g._presynthesize_active_profile_web()
+            except Exception:
+                pass
+            return self._mechanics_reply(scene_key, boss_base_id)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def delete_mechanic(self, mechanic_id, scene_key=None, boss_base_id=None):
+        try:
+            from engines import boss_mechanics_state as bms
+            bms.delete_mechanic(self._g._cfg_settings_ref, str(mechanic_id))
+            return self._mechanics_reply(scene_key, boss_base_id)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def create_mechanic_from_skill(self, skill_id, skill_name='', cast_duration_ms=None,
+                                   scene_key=None, boss_base_id=None):
+        try:
+            from engines import boss_mechanics_state as bms
+            bms.create_mechanic_from_skill(self._g._cfg_settings_ref, skill_id,
+                                           skill_name, cast_duration_ms)
+            return self._mechanics_reply(scene_key, boss_base_id)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def bind_mechanic_skill(self, mechanic_id, skill_id, scene_key=None, boss_base_id=None):
+        try:
+            from engines import boss_mechanics_state as bms
+            bms.bind_skill_to_mechanic(self._g._cfg_settings_ref, mechanic_id, skill_id)
+            return self._mechanics_reply(scene_key, boss_base_id)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def unbind_mechanic_skill(self, mechanic_id, skill_id, scene_key=None, boss_base_id=None):
+        try:
+            from engines import boss_mechanics_state as bms
+            bms.unbind_skill_from_mechanic(self._g._cfg_settings_ref, mechanic_id, skill_id)
+            return self._mechanics_reply(scene_key, boss_base_id)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def set_mechanics_master(self, flags_json):
+        try:
+            from engines import boss_mechanics_state as bms
+            flags = json.loads(flags_json) if isinstance(flags_json, str) else flags_json
+            master = bms.set_mechanics_master(self._g._cfg_settings_ref, flags)
+            return json.dumps({'ok': True, 'master': master}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def search_skill_catalog(self, query, limit=30):
+        try:
+            from engines import boss_mechanics_state as bms
+            return json.dumps({'ok': True,
+                               'results': bms.search_skill_catalog(query, int(limit or 30))},
+                              ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
+    def test_mechanic(self, mech_json, kinds_json='["tts","banner"]'):
+        try:
+            mech = json.loads(mech_json) if isinstance(mech_json, str) else mech_json
+            kinds = json.loads(kinds_json) if isinstance(kinds_json, str) else (kinds_json or [])
+            kinds = [str(k) for k in kinds]
+            result = {'ok': True}
+            controller = getattr(self._g, '_mech_alert_controller', None)
+            if controller is not None and ({'tts', 'banner'} & set(kinds)):
+                result.update(controller.test_mechanic(mech, kinds))
+            if 'dodge' in kinds:
+                linkage = getattr(self._g, '_boss_autokey_linkage', None)
+                inline = ((mech.get('dodge') or {}).get('inline')
+                          if isinstance(mech, dict) else None)
+                if linkage is not None and isinstance(inline, dict):
+                    result['dodge'] = bool(linkage.fire_mapping_test(inline))
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'ok': False, 'message': str(e)}, ensure_ascii=False)
+
     # ── Sound settings ──
     def set_sound_enabled(self, enabled):
         """Global SFX on/off."""
@@ -2200,6 +2305,54 @@ class RaidEditorAPI:
 
     def play_sound(self, name: str):
         threading.Thread(target=self._g._play_sound, args=(name,), daemon=True).start()
+
+    # ── delegations to the main SAOWebAPI ──
+    # pywebview ≥4 exposes js_api per window, so the raid-editor window needs
+    # explicit pass-throughs for the reactions + mechanics editor endpoints.
+
+    def get_panel_themes(self):
+        return self._g._api.get_panel_themes()
+
+    def get_boss_reactions(self, scene_key=None, boss_base_id=None):
+        return self._g._api.get_boss_reactions(scene_key, boss_base_id)
+
+    def save_boss_reaction(self, mapping_json, scene_key=None, boss_base_id=None):
+        return self._g._api.save_boss_reaction(mapping_json, scene_key, boss_base_id)
+
+    def delete_boss_reaction(self, mapping_id, scene_key=None, boss_base_id=None):
+        return self._g._api.delete_boss_reaction(mapping_id, scene_key, boss_base_id)
+
+    def import_observed_skills(self, base_id=0, scene_key=None):
+        return self._g._api.import_observed_skills(base_id, scene_key)
+
+    def get_mechanics(self, scene_key=None, boss_base_id=None):
+        return self._g._api.get_mechanics(scene_key, boss_base_id)
+
+    def save_mechanic(self, mech_json, scene_key=None, boss_base_id=None):
+        return self._g._api.save_mechanic(mech_json, scene_key, boss_base_id)
+
+    def delete_mechanic(self, mechanic_id, scene_key=None, boss_base_id=None):
+        return self._g._api.delete_mechanic(mechanic_id, scene_key, boss_base_id)
+
+    def create_mechanic_from_skill(self, skill_id, skill_name='', cast_duration_ms=None,
+                                   scene_key=None, boss_base_id=None):
+        return self._g._api.create_mechanic_from_skill(
+            skill_id, skill_name, cast_duration_ms, scene_key, boss_base_id)
+
+    def bind_mechanic_skill(self, mechanic_id, skill_id, scene_key=None, boss_base_id=None):
+        return self._g._api.bind_mechanic_skill(mechanic_id, skill_id, scene_key, boss_base_id)
+
+    def unbind_mechanic_skill(self, mechanic_id, skill_id, scene_key=None, boss_base_id=None):
+        return self._g._api.unbind_mechanic_skill(mechanic_id, skill_id, scene_key, boss_base_id)
+
+    def set_mechanics_master(self, flags_json):
+        return self._g._api.set_mechanics_master(flags_json)
+
+    def search_skill_catalog(self, query, limit=30):
+        return self._g._api.search_skill_catalog(query, limit)
+
+    def test_mechanic(self, mech_json, kinds_json='["tts","banner"]'):
+        return self._g._api.test_mechanic(mech_json, kinds_json)
 
 
 class CommanderAPI:
@@ -6420,6 +6573,20 @@ class SAOWebViewGUI:
             ex = user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
             ex |= (_WS_EX_TRANSPARENT | _WS_EX_LAYERED)
             user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex)
+        except Exception:
+            pass
+
+    def _presynthesize_active_profile_web(self):
+        """机制保存后预合成激活档案的 TTS 文案 (战斗路径纯缓存命中)。"""
+        controller = getattr(self, '_mech_alert_controller', None)
+        if controller is None:
+            return
+        try:
+            from engines.boss_raid_engine import active_profile
+            cfg = load_boss_raid_config(self._cfg_settings_ref)
+            profile = active_profile(cfg)
+            if profile:
+                controller.presynthesize_profile(profile)
         except Exception:
             pass
 

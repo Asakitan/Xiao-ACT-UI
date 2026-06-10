@@ -360,7 +360,573 @@ class _BossReactionsEditorMixin:
         self._rx_rerender()
 
 
-class BossRaidPanel(_BossReactionsEditorMixin):
+class _MechanicsEditorMixin:
+    """机制编辑器 (容器无关), 简单面板 / 详细编辑器 / Web 三处共用同一数据契约
+    (engines.boss_mechanics_state.build_mechanics_state)。宿主提供
+    self._mech_api: {'load','save_mech','delete_mech','test','set_master',
+    'create_from_skill','bind','unbind','search_catalog'} 可调用集合。"""
+
+    _MECH_COLORS = ('#ef684e', '#dea620', '#68e4ff', '#9ad334', '#8e44ad', '#2e6fb0')
+    _DODGE_PRESETS = ('无', '轻点按键', '按住按键', '按键序列')
+
+    def _init_mechanics(self, mech_api: Optional[Dict[str, Callable]]) -> None:
+        self._mech_api = mech_api or {}
+        self._mech_state: Dict[str, Any] = {}
+        self._mech_editing: Optional[str] = None    # mechanic id being edited
+        self._mech_draft: Dict[str, Any] = {}
+        self._mech_vars: Dict[str, Any] = {}
+        self._mech_catalog_results: list = []
+        self._mech_rev = 0
+
+    def _mech_bump(self) -> None:
+        self._mech_rev += 1
+
+    def _mech_call(self, name: str, *args, **kw):
+        fn = self._mech_api.get(name)
+        if not fn:
+            return None
+        try:
+            return fn(*args, **kw)
+        except Exception:
+            return None
+
+    def _mx_empty(self, title: str, subtitle: str = '') -> None:
+        wrap = tk.Frame(self._mx_container, bg=PANEL_BG)
+        wrap.pack(fill=tk.X, pady=18)
+        tk.Label(wrap, text=title, bg=PANEL_BG, fg=TEXT_MUTED, font=panel_font(10),
+                 justify='center').pack()
+        if subtitle:
+            tk.Label(wrap, text=subtitle, bg=PANEL_BG, fg=TEXT_DIM, font=panel_font(8),
+                     justify='center', wraplength=320).pack(pady=(4, 0))
+
+    def _render_mechanics(self, container, rerender) -> None:
+        self._mx_container = container
+        self._mx_rerender = rerender
+        if not self._mech_api.get('load'):
+            self._mx_empty('机制编辑器不可用', '引擎未接入')
+            return
+        st = self._mech_call('load') or {}
+        self._mech_state = st
+        if not st.get('ok'):
+            self._mx_empty('没有可编辑的档案',
+                           '先在 Phases 页创建档案, 或导入 assets/boss_raids 下的机制示例 JSON')
+            return
+        self._render_mech_master(st.get('master') or {})
+        inbox = list(st.get('inbox') or [])
+        if inbox:
+            make_section_title(container, '未绑定技能收件箱')
+            for rec in inbox[:6]:
+                self._render_mech_inbox_row(rec)
+        make_section_title(container, '机制列表 (%d)' % len(st.get('mechanics') or []))
+        for mech in st.get('mechanics') or []:
+            self._render_mech_card(mech)
+        foot = tk.Frame(container, bg=PANEL_BG)
+        foot.pack(fill=tk.X, pady=(6, 2))
+        make_action_button(foot, '+ 新建机制', self._mech_new, kind='accent').pack(side=tk.LEFT)
+        prof = st.get('profile') or {}
+        enr = prof.get('enrage') or {}
+        tk.Label(foot,
+                 text='狂暴 %ds · 档案: %s' % (int(enr.get('time_s') or prof.get('enrage_time_s') or 0),
+                                              prof.get('name') or ''),
+                 bg=PANEL_BG, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.RIGHT)
+
+    # ── 总开关行 ──
+
+    def _render_mech_master(self, master: Dict[str, Any]) -> None:
+        import tkinter as _tk
+        bar = tk.Frame(self._mx_container, bg=PANEL_CARD, highlightbackground=PANEL_EDGE,
+                       highlightthickness=1, padx=8, pady=5)
+        bar.pack(fill=tk.X, pady=(0, 5))
+        apply_surface_chrome(bar, accent=GOLD)
+        row = tk.Frame(bar, bg=PANEL_CARD)
+        row.pack(fill=tk.X)
+
+        def _switch(text, key, value):
+            var = _tk.IntVar(value=1 if value else 0)
+
+            def _flip():
+                self._mech_call('set_master', {key: bool(var.get())})
+                self._mech_bump()
+            cb = _tk.Checkbutton(row, text=text, variable=var, command=_flip,
+                                 bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(8),
+                                 selectcolor=PANEL_CARD_ALT, activebackground=PANEL_CARD)
+            cb.pack(side=tk.LEFT, padx=(0, 8))
+            return var
+        _switch('TTS播报', 'tts_enabled', master.get('tts_enabled', True))
+        _switch('横幅提醒', 'banner_enabled', master.get('banner_enabled', True))
+        _switch('自动躲避', 'dodge_enabled', master.get('dodge_enabled', True))
+        tk.Label(row, text='紧急停用: %s' % (master.get('panic_hotkey') or 'F12'),
+                 bg=PANEL_CARD, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT, padx=(4, 8))
+        vol_var = _tk.StringVar(value=str(int(master.get('tts_volume') or 80)))
+        tk.Label(row, text='音量', bg=PANEL_CARD, fg=TEXT_MUTED,
+                 font=panel_font(8)).pack(side=tk.LEFT)
+        _tk.Spinbox(row, from_=0, to=100, width=4, textvariable=vol_var,
+                    font=panel_font(8),
+                    command=lambda: self._mech_call('set_master',
+                                                    {'tts_volume': vol_var.get()})
+                    ).pack(side=tk.LEFT, padx=(2, 0))
+        if master.get('zh_voice') is False:
+            tk.Label(bar, text='⚠ 未检测到中文语音 (SAPI zh-CN), 播报可能不准确',
+                     bg=PANEL_CARD, fg=DANGER, font=panel_font(8),
+                     anchor='w').pack(fill=tk.X, pady=(3, 0))
+
+    # ── 收件箱 ──
+
+    def _render_mech_inbox_row(self, rec: Dict[str, Any]) -> None:
+        import tkinter as _tk
+        card = tk.Frame(self._mx_container, bg=PANEL_CARD, highlightbackground=PANEL_EDGE,
+                        highlightthickness=1, padx=8, pady=4)
+        card.pack(fill=tk.X, pady=(0, 3))
+        sid = int(rec.get('skill_id') or 0)
+        nm = (rec.get('name') or '').strip()
+        dur = rec.get('last_cast_duration_ms')
+        label = '%s #%d ×%d%s' % (nm or '技能', sid, int(rec.get('count') or 0),
+                                  (' · %dms' % dur) if dur else '')
+        tk.Label(card, text=label, bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(8),
+                 anchor='w').pack(side=tk.LEFT, fill=tk.X, expand=True)
+        mech_opts = {m.get('name') or m.get('id'): m.get('id')
+                     for m in (self._mech_state.get('mechanics') or [])}
+        if mech_opts:
+            var = _tk.StringVar(value='绑定到▾')
+
+            def _bind(lbl, _o=mech_opts, _sid=sid):
+                mid = _o.get(lbl)
+                if mid:
+                    self._mech_call('bind', mid, _sid)
+                    self._mech_bump()
+                    self._mx_rerender()
+            om = _tk.OptionMenu(card, var, *mech_opts.keys(), command=_bind)
+            om.config(font=panel_font(8), bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
+                      highlightthickness=0)
+            om.pack(side=tk.RIGHT, padx=(4, 0))
+        make_action_button(
+            card, '建机制',
+            lambda _sid=sid, _nm=nm, _dur=dur: (
+                self._mech_call('create_from_skill', _sid, _nm, _dur),
+                self._mech_bump(), self._mx_rerender()),
+            kind='accent', width=6).pack(side=tk.RIGHT)
+
+    # ── 机制卡片 ──
+
+    def _render_mech_card(self, mech: Dict[str, Any]) -> None:
+        import tkinter as _tk
+        mid = str(mech.get('id') or '')
+        card = tk.Frame(self._mx_container, bg=PANEL_CARD, highlightbackground=PANEL_EDGE,
+                        highlightthickness=1, padx=8, pady=5)
+        card.pack(fill=tk.X, pady=(0, 4))
+        accent = mech.get('color') or CYAN
+        try:
+            apply_surface_chrome(card, accent=accent)
+        except Exception:
+            apply_surface_chrome(card, accent=CYAN)
+        head = tk.Frame(card, bg=PANEL_CARD)
+        head.pack(fill=tk.X)
+        en_var = _tk.IntVar(value=1 if mech.get('enabled', True) else 0)
+
+        def _flip_enable(_m=mech, _v=en_var):
+            m2 = dict(_m)
+            m2['enabled'] = bool(_v.get())
+            self._mech_call('save_mech', m2)
+            self._mech_bump()
+        _tk.Checkbutton(head, variable=en_var, command=_flip_enable, bg=PANEL_CARD,
+                        selectcolor=PANEL_CARD_ALT, activebackground=PANEL_CARD
+                        ).pack(side=tk.LEFT)
+        try:
+            tk.Frame(head, bg=mech.get('color') or '#68e4ff', width=8, height=8
+                     ).pack(side=tk.LEFT, padx=(0, 5))
+        except Exception:
+            pass
+        tk.Label(head, text=mech.get('name') or '机制', bg=PANEL_CARD, fg=GOLD,
+                 font=panel_font(9, bold=True), anchor='w'
+                 ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        for txt, cb in (('删除', lambda _mid=mid: self._mech_delete(_mid)),
+                        ('编辑', lambda _mid=mid: self._mech_edit(_mid)),
+                        ('按键', lambda _m=mech: self._mech_test(_m, ('dodge',))),
+                        ('横幅', lambda _m=mech: self._mech_test(_m, ('banner',))),
+                        ('🔊', lambda _m=mech: self._mech_test(_m, ('tts',)))):
+            make_action_button(head, txt, cb, width=4).pack(side=tk.RIGHT, padx=(3, 0))
+
+        summary = mech.get('summary') or {}
+        names = mech.get('skill_names') or {}
+        det = mech.get('detect') or {}
+        chips = []
+        for sid in det.get('skill_ids') or []:
+            nm = (names.get(str(sid)) or '').strip()
+            chips.append('%s#%d' % (nm, sid) if nm else '#%d' % sid)
+        sub = ' · '.join(filter(None, [
+            ('技能: ' + ', '.join(chips)) if chips else '未绑定技能',
+            summary.get('alert_desc') or '',
+            summary.get('dodge_desc') or '',
+        ]))
+        tk.Label(card, text=sub, bg=PANEL_CARD, fg=TEXT_DIM, font=panel_font(8),
+                 anchor='w', wraplength=420, justify='left').pack(fill=tk.X, pady=(2, 0))
+        if self._mech_editing == mid:
+            self._render_mech_form(card, mech)
+
+    def _mech_new(self) -> None:
+        used = len(self._mech_state.get('mechanics') or [])
+        draft = {
+            'id': '', 'name': '新机制',
+            'color': self._MECH_COLORS[used % len(self._MECH_COLORS)],
+            'enabled': True, 'phase_ids': [],
+            'detect': {'skill_ids': []},
+            'alert': {'tts_text': '', 'banner_text': '', 'countdown_s': 8,
+                      'pre_warn_s': 3, 'cooldown_s': 5, 'alert_type': 'both',
+                      'enabled': True},
+            'dodge': {'enabled': False, 'linkage_id': '', 'inline': {}},
+        }
+        cfg = self._mech_call('save_mech', draft)
+        self._mech_bump()
+        # 进入新机制的编辑态: 从返回配置里找到刚插入的 id
+        try:
+            profiles = list((cfg or {}).get('profiles') or [])
+            active_id = (cfg or {}).get('active_profile_id')
+            prof = next((p for p in profiles if p.get('id') == active_id), None)
+            mechs = list((prof or {}).get('mechanics') or [])
+            if mechs:
+                self._mech_editing = str(mechs[-1].get('id'))
+        except Exception:
+            self._mech_editing = None
+        self._mx_rerender()
+
+    def _mech_edit(self, mid: str) -> None:
+        self._mech_editing = None if self._mech_editing == mid else mid
+        self._mech_catalog_results = []
+        self._mech_bump()
+        self._mx_rerender()
+
+    def _mech_delete(self, mid: str) -> None:
+        self._mech_call('delete_mech', mid)
+        if self._mech_editing == mid:
+            self._mech_editing = None
+        self._mech_bump()
+        self._mx_rerender()
+
+    def _mech_test(self, mech: Dict[str, Any], kinds) -> None:
+        self._mech_call('test', mech, tuple(kinds))
+
+    # ── 编辑表单 (卡片内行展开) ──
+
+    def _render_mech_form(self, card, mech: Dict[str, Any]) -> None:
+        import tkinter as _tk
+        if not isinstance(self._mech_draft, dict) or \
+                self._mech_draft.get('id') != mech.get('id'):
+            import copy as _copy
+            self._mech_draft = _copy.deepcopy(mech)
+            self._mech_draft.pop('summary', None)
+            self._mech_draft.pop('skill_names', None)
+        draft = self._mech_draft
+        det = draft.setdefault('detect', {})
+        alert = draft.setdefault('alert', {})
+        dodge = draft.setdefault('dodge', {})
+        inline = dodge.setdefault('inline', {})
+        form = tk.Frame(card, bg=PANEL_CARD_ALT, padx=8, pady=6)
+        form.pack(fill=tk.X, pady=(5, 0))
+        v: Dict[str, Any] = {}
+        self._mech_vars = v
+
+        def _row(parent):
+            r = tk.Frame(parent, bg=PANEL_CARD_ALT)
+            r.pack(fill=tk.X, pady=(0, 3))
+            return r
+
+        def _field(parent, text, key, value, width=8):
+            tk.Label(parent, text=text, bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                     font=panel_font(8)).pack(side=tk.LEFT)
+            var = _tk.StringVar(value=str(value if value is not None else ''))
+            v[key] = var
+            _tk.Entry(parent, textvariable=var, width=width, font=panel_font(8)
+                      ).pack(side=tk.LEFT, padx=(2, 8))
+            return var
+
+        r1 = _row(form)
+        _field(r1, '名称', 'name', draft.get('name') or '', 14)
+        tk.Label(r1, text='颜色', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                 font=panel_font(8)).pack(side=tk.LEFT)
+        for c in self._MECH_COLORS:
+            sw = tk.Frame(r1, bg=c, width=14, height=14, cursor='hand2',
+                          highlightthickness=2 if draft.get('color') == c else 0,
+                          highlightbackground=TEXT_MAIN)
+            sw.pack(side=tk.LEFT, padx=1)
+            sw.bind('<Button-1>',
+                    lambda _e, _c=c: (self._mech_collect_draft(),
+                                      draft.__setitem__('color', _c),
+                                      self._mx_rerender()))
+
+        # 检测: 绑定 chips + 添加来源
+        make_section_title(form, '检测 (技能/Buff ID)')
+        chips_row = _row(form)
+        names = (mech.get('skill_names') or {})
+        bound = list(det.get('skill_ids') or [])
+        if not bound:
+            tk.Label(chips_row, text='未绑定 — 从下方添加', bg=PANEL_CARD_ALT,
+                     fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT)
+        for sid in bound:
+            nm = (names.get(str(sid)) or '').strip()
+            chip = tk.Label(chips_row, text='%s#%d ✕' % (nm + ' ' if nm else '', sid),
+                            bg=PANEL_EDGE, fg=TEXT_MAIN, font=panel_font(8),
+                            padx=5, pady=1, cursor='hand2')
+            chip.pack(side=tk.LEFT, padx=(0, 4))
+            chip.bind('<Button-1>',
+                      lambda _e, _sid=sid: (self._mech_collect_draft(),
+                                            det.__setitem__('skill_ids',
+                                                            [x for x in det.get('skill_ids') or []
+                                                             if int(x) != int(_sid)]),
+                                            self._mx_rerender()))
+        add_row = _row(form)
+        observed = [o for o in (self._mech_state.get('observed') or [])
+                    if int(o.get('id') or 0) not in set(int(x) for x in bound)]
+        if observed:
+            obs_opts = {}
+            for o in observed[:25]:
+                lbl = '%s #%d ×%d' % ((o.get('name') or '技能'), int(o.get('id') or 0),
+                                      int(o.get('count') or 0))
+                obs_opts[lbl] = int(o.get('id') or 0)
+            ovar = _tk.StringVar(value='添加观测技能▾')
+
+            def _add_obs(lbl, _o=obs_opts):
+                sid = _o.get(lbl)
+                if sid:
+                    self._mech_collect_draft()
+                    ids = list(det.get('skill_ids') or [])
+                    if sid not in ids:
+                        ids.append(sid)
+                        det['skill_ids'] = sorted(ids)
+                    self._mx_rerender()
+            om = _tk.OptionMenu(add_row, ovar, *obs_opts.keys(), command=_add_obs)
+            om.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN,
+                      highlightthickness=0)
+            om.pack(side=tk.LEFT, padx=(0, 6))
+        manual_var = _field(add_row, '手动ID', 'manual_sid', '', 9)
+
+        def _add_manual():
+            try:
+                sid = int(float(manual_var.get()))
+            except Exception:
+                return
+            if sid > 0:
+                self._mech_collect_draft()
+                ids = list(det.get('skill_ids') or [])
+                if sid not in ids:
+                    ids.append(sid)
+                    det['skill_ids'] = sorted(ids)
+                self._mx_rerender()
+        make_action_button(add_row, '添加', _add_manual, width=4).pack(side=tk.LEFT)
+        search_row = _row(form)
+        search_var = _field(search_row, '技能库', 'catalog_q', '', 12)
+
+        def _do_search():
+            self._mech_collect_draft()
+            self._mech_catalog_results = list(
+                self._mech_call('search_catalog', search_var.get()) or [])[:10]
+            self._mx_rerender()
+        make_action_button(search_row, '搜索', _do_search, width=4).pack(side=tk.LEFT)
+        for hit in self._mech_catalog_results:
+            hit_row = _row(form)
+            tk.Label(hit_row, text='%s #%d (%s)' % (hit.get('name'), int(hit.get('id') or 0),
+                                                    hit.get('kind') or ''),
+                     bg=PANEL_CARD_ALT, fg=TEXT_MAIN, font=panel_font(8),
+                     anchor='w').pack(side=tk.LEFT, fill=tk.X, expand=True)
+            make_action_button(
+                hit_row, '绑定',
+                lambda _sid=int(hit.get('id') or 0): (
+                    self._mech_collect_draft(),
+                    det.__setitem__('skill_ids',
+                                    sorted(set(list(det.get('skill_ids') or []) + [_sid]))),
+                    self._mx_rerender()),
+                kind='accent', width=4).pack(side=tk.RIGHT)
+
+        # 提醒
+        make_section_title(form, '提醒')
+        a1 = _row(form)
+        _field(a1, 'TTS文案', 'tts_text', alert.get('tts_text') or '', 22)
+        make_action_button(a1, '试听',
+                           lambda: self._mech_test(self._mech_collect_draft(), ('tts',)),
+                           width=4).pack(side=tk.LEFT)
+        a2 = _row(form)
+        _field(a2, '横幅文案', 'banner_text', alert.get('banner_text') or '', 22)
+        a3 = _row(form)
+        _field(a3, '倒计时s', 'countdown_s', alert.get('countdown_s'), 5)
+        _field(a3, '预警s', 'pre_warn_s', alert.get('pre_warn_s'), 5)
+        _field(a3, '冷却s', 'cooldown_s', alert.get('cooldown_s'), 5)
+
+        # 躲避
+        make_section_title(form, '自动躲避')
+        d1 = _row(form)
+        den_var = _tk.IntVar(value=1 if dodge.get('enabled') else 0)
+        v['dodge_enabled'] = den_var
+        _tk.Checkbutton(d1, text='启用', variable=den_var, bg=PANEL_CARD_ALT,
+                        fg=TEXT_MAIN, font=panel_font(8), selectcolor=PANEL_CARD,
+                        activebackground=PANEL_CARD_ALT).pack(side=tk.LEFT, padx=(0, 8))
+        seq = list(inline.get('sequence') or [])
+        preset_idx = 3 if seq else (
+            2 if str(inline.get('press_mode')) == 'hold' and inline.get('action_key') else (
+                1 if inline.get('action_key') else 0))
+        pvar = _tk.StringVar(value=self._DODGE_PRESETS[preset_idx])
+        v['dodge_preset'] = pvar
+
+        def _preset_pick(lbl):
+            self._mech_collect_draft()
+            if lbl == '按键序列' and not (inline.get('sequence') or []):
+                inline['sequence'] = [{'key': '', 'delay_ms': 0, 'hold_ms': 0}]
+            if lbl != '按键序列':
+                inline['sequence'] = []
+            inline['press_mode'] = 'hold' if lbl == '按住按键' else 'tap'
+            self._mx_rerender()
+        pm = _tk.OptionMenu(d1, pvar, *self._DODGE_PRESETS, command=_preset_pick)
+        pm.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+        pm.pack(side=tk.LEFT, padx=(0, 8))
+        _field(d1, '提前ms', 'lead_ms', inline.get('lead_ms', 300), 6)
+        preset_lbl = pvar.get()
+        if preset_lbl in ('轻点按键', '按住按键'):
+            d2 = _row(form)
+            _field(d2, '键', 'dodge_key', inline.get('action_key') or '', 6)
+            if preset_lbl == '按住按键':
+                _field(d2, '按住ms', 'dodge_hold', inline.get('hold_ms', 600), 6)
+        elif preset_lbl == '按键序列':
+            v['seq_vars'] = []
+            for idx, step in enumerate(seq):
+                sr = _row(form)
+                kv = _tk.StringVar(value=str(step.get('key') or ''))
+                dv = _tk.StringVar(value=str(int(step.get('delay_ms') or 0)))
+                hv = _tk.StringVar(value=str(int(step.get('hold_ms') or 0)))
+                v['seq_vars'].append((kv, dv, hv))
+                tk.Label(sr, text='步%d 键' % (idx + 1), bg=PANEL_CARD_ALT,
+                         fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.LEFT)
+                _tk.Entry(sr, textvariable=kv, width=6, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 4))
+                tk.Label(sr, text='延迟ms', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                         font=panel_font(8)).pack(side=tk.LEFT)
+                _tk.Entry(sr, textvariable=dv, width=6, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 4))
+                tk.Label(sr, text='按住ms', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                         font=panel_font(8)).pack(side=tk.LEFT)
+                _tk.Entry(sr, textvariable=hv, width=6, font=panel_font(8)).pack(side=tk.LEFT, padx=(2, 4))
+                make_action_button(
+                    sr, '✕',
+                    lambda _i=idx: (self._mech_collect_draft(),
+                                    inline['sequence'].pop(_i),
+                                    self._mx_rerender()),
+                    width=2).pack(side=tk.RIGHT)
+            seq_btn_row = _row(form)
+            make_action_button(
+                seq_btn_row, '+ 加一步',
+                lambda: (self._mech_collect_draft(),
+                         inline.setdefault('sequence', []).append(
+                             {'key': '', 'delay_ms': 0, 'hold_ms': 0}),
+                         self._mx_rerender()),
+                width=8).pack(side=tk.LEFT)
+
+        # 阶段范围
+        ph_row = _row(form)
+        phases = list(self._mech_state.get('phases') or [])
+        ph_opts = {'全部阶段': ''}
+        for p in phases:
+            ph_opts[p.get('name') or p.get('id')] = p.get('id')
+        cur_pids = list(draft.get('phase_ids') or [])
+        cur_lbl = '全部阶段'
+        if cur_pids:
+            cur_lbl = next((lbl for lbl, pid in ph_opts.items() if pid and pid in cur_pids),
+                           '全部阶段')
+        phvar = _tk.StringVar(value=cur_lbl)
+        v['phase_pick'] = (phvar, ph_opts)
+        tk.Label(ph_row, text='阶段范围', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                 font=panel_font(8)).pack(side=tk.LEFT)
+        phm = _tk.OptionMenu(ph_row, phvar, *ph_opts.keys())
+        phm.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+        phm.pack(side=tk.LEFT, padx=(4, 0))
+
+        btns = _row(form)
+        make_action_button(btns, '保存', self._mech_save_form, kind='accent',
+                           width=6).pack(side=tk.RIGHT)
+        make_action_button(btns, '取消',
+                           lambda: (setattr(self, '_mech_editing', None),
+                                    setattr(self, '_mech_draft', {}),
+                                    self._mech_bump(), self._mx_rerender()),
+                           width=6).pack(side=tk.RIGHT, padx=(0, 6))
+
+    def _mech_collect_draft(self) -> Dict[str, Any]:
+        """把当前表单变量回收进草稿 (供重渲染/试发/保存共用)。"""
+        v = self._mech_vars or {}
+        draft = self._mech_draft or {}
+        det = draft.setdefault('detect', {})
+        alert = draft.setdefault('alert', {})
+        dodge = draft.setdefault('dodge', {})
+        inline = dodge.setdefault('inline', {})
+
+        def _sv(key, default=''):
+            var = v.get(key)
+            try:
+                return var.get() if var is not None else default
+            except Exception:
+                return default
+
+        def _num(key, default):
+            try:
+                return float(_sv(key, default))
+            except Exception:
+                return default
+        if 'name' in v:
+            draft['name'] = (_sv('name') or '机制').strip()
+        if 'tts_text' in v:
+            alert['tts_text'] = _sv('tts_text').strip()
+        if 'banner_text' in v:
+            alert['banner_text'] = _sv('banner_text').strip()
+        if 'countdown_s' in v:
+            alert['countdown_s'] = _num('countdown_s', 8)
+        if 'pre_warn_s' in v:
+            alert['pre_warn_s'] = _num('pre_warn_s', 3)
+        if 'cooldown_s' in v:
+            alert['cooldown_s'] = _num('cooldown_s', 5)
+        if 'dodge_enabled' in v:
+            dodge['enabled'] = bool(v['dodge_enabled'].get())
+        if 'lead_ms' in v:
+            inline['lead_ms'] = int(_num('lead_ms', 300))
+        preset = _sv('dodge_preset', '无')
+        if preset == '轻点按键':
+            inline['press_mode'] = 'tap'
+            inline['action_key'] = _sv('dodge_key').strip().upper()
+            inline['sequence'] = []
+        elif preset == '按住按键':
+            inline['press_mode'] = 'hold'
+            inline['action_key'] = _sv('dodge_key').strip().upper()
+            inline['hold_ms'] = int(_num('dodge_hold', 600))
+            inline['sequence'] = []
+        elif preset == '按键序列':
+            steps = []
+            for kv, dv, hv in v.get('seq_vars') or []:
+                key = (kv.get() or '').strip().upper()
+                if not key:
+                    continue
+                try:
+                    delay = int(float(dv.get() or 0))
+                except Exception:
+                    delay = 0
+                try:
+                    hold = int(float(hv.get() or 0))
+                except Exception:
+                    hold = 0
+                steps.append({'key': key, 'delay_ms': delay, 'hold_ms': hold})
+            inline['sequence'] = steps
+            inline['action_key'] = ''
+        else:
+            inline['action_key'] = ''
+            inline['sequence'] = []
+        pick = v.get('phase_pick')
+        if pick:
+            phvar, ph_opts = pick
+            pid = ph_opts.get(phvar.get() or '全部阶段', '')
+            draft['phase_ids'] = [pid] if pid else []
+        return draft
+
+    def _mech_save_form(self) -> None:
+        draft = self._mech_collect_draft()
+        self._mech_call('save_mech', draft)
+        self._mech_editing = None
+        self._mech_draft = {}
+        self._mech_bump()
+        self._mx_rerender()
+
+
+class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
     def __init__(
         self,
         master: tk.Tk,
@@ -373,6 +939,7 @@ class BossRaidPanel(_BossReactionsEditorMixin):
         on_reset: Optional[Callable[[], None]] = None,
         load_reactions_fn: Optional[Callable[[], dict]] = None,
         save_reaction_fn: Optional[Callable[[dict], Any]] = None,
+        mechanics_api: Optional[Dict[str, Callable]] = None,
     ):
         self._master = master
         self._load = load_fn
@@ -384,6 +951,7 @@ class BossRaidPanel(_BossReactionsEditorMixin):
         self._on_reset = on_reset or (lambda: None)
         self._load_reactions = load_reactions_fn
         self._save_reaction = save_reaction_fn
+        self._init_mechanics(mechanics_api)
         self._react_state: Dict[str, Any] = {}
         self._react_boss: int = 0
         self._react_scene: Optional[str] = None   # selected scene_key (None = live)
@@ -516,6 +1084,7 @@ class BossRaidPanel(_BossReactionsEditorMixin):
             ('phases', 'Phases'),
             ('timeline', 'Timeline'),
             ('reactions', 'Boss 反应'),
+            ('mechanics', '机制'),
         ):
             slot = tk.Frame(tab_bar, bg=PANEL_BG_ALT)
             slot.pack(side=tk.LEFT, expand=True, fill=tk.BOTH)
@@ -617,6 +1186,9 @@ class BossRaidPanel(_BossReactionsEditorMixin):
             self._render_phases_tab()
         elif self._current_tab == 'reactions':
             self._render_reactions_tab()
+        elif self._current_tab == 'mechanics':
+            self._render_mechanics(self._content_body,
+                                   lambda: self._render_if_needed(force=True))
         else:
             self._render_timeline_tab()
         try:
@@ -629,6 +1201,9 @@ class BossRaidPanel(_BossReactionsEditorMixin):
             # Stable while editing so the live 250ms poll never clobbers the Entry
             # widgets; re-render happens on tab-enter, scene/boss change, and save.
             return ('reactions', str(self._react_scene), int(self._react_boss))
+        if self._current_tab == 'mechanics':
+            # 同上: 编辑期间签名稳定, 重渲染由显式动作驱动 (_mech_bump)。
+            return ('mechanics', int(self._mech_rev), str(self._mech_editing))
         profile = self._active_profile()
         phases = list((profile or {}).get('phases') or [])
         entities = list(self._status.get('entities') or [])

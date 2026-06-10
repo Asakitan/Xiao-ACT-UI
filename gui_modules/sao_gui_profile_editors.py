@@ -32,7 +32,7 @@ from sao_web_panel_common import (
     panel_font,
     place_corner_accents,
 )
-from gui_modules.sao_gui_bossraid import _BossReactionsEditorMixin
+from gui_modules.sao_gui_bossraid import _BossReactionsEditorMixin, _MechanicsEditorMixin
 
 from engines.auto_key_engine import (
     clone_profile as clone_auto_key_profile,
@@ -805,7 +805,7 @@ class AutoKeyDetailPanel(_DetailEditorBase):
         self._render()
 
 
-class BossRaidDetailPanel(_BossReactionsEditorMixin, _DetailEditorBase):
+class BossRaidDetailPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin, _DetailEditorBase):
     TRIGGER_TYPES = (
         'manual',
         'time',
@@ -827,7 +827,8 @@ class BossRaidDetailPanel(_BossReactionsEditorMixin, _DetailEditorBase):
                  save_fn: Callable[[dict], Any],
                  author_fn: Optional[Callable[[], dict]] = None,
                  load_reactions_fn: Optional[Callable[..., dict]] = None,
-                 save_reaction_fn: Optional[Callable[[dict], Any]] = None):
+                 save_reaction_fn: Optional[Callable[[dict], Any]] = None,
+                 mechanics_api: Optional[Dict[str, Callable]] = None):
         super().__init__(master, 'BossRaid Detail Editor',
                          'Profile, phase and timeline editor')
         self._load = load_fn
@@ -843,6 +844,9 @@ class BossRaidDetailPanel(_BossReactionsEditorMixin, _DetailEditorBase):
         # quick BossRaid panel); None callbacks → section is hidden.
         self._init_reactions_state(load_reactions_fn, save_reaction_fn)
         self._reactions_frame: Optional[tk.Frame] = None
+        # shared mechanics editor (same contract as quick panel + web editor)
+        self._init_mechanics(mechanics_api)
+        self._mechanics_frame: Optional[tk.Frame] = None
 
     def _on_show(self) -> None:
         self._reload(keep_selected=True)
@@ -988,6 +992,13 @@ class BossRaidDetailPanel(_BossReactionsEditorMixin, _DetailEditorBase):
             self._reactions_frame.pack(fill=tk.X)
             self._render_detail_reactions()
 
+        # ── 机制 / Mechanics — same shared editor as the quick panel + web.
+        if getattr(self, '_mech_api', None) and self._mech_api.get('load'):
+            make_section_title(self._editor_body, '机制 / Mechanics')
+            self._mechanics_frame = tk.Frame(self._editor_body, bg=PANEL_BG)
+            self._mechanics_frame.pack(fill=tk.X)
+            self._render_detail_mechanics()
+
     def _render_detail_reactions(self) -> None:
         """Re-render ONLY the reactions sub-frame (keeps profile/phase edits)."""
         frame = getattr(self, '_reactions_frame', None)
@@ -995,6 +1006,18 @@ class BossRaidDetailPanel(_BossReactionsEditorMixin, _DetailEditorBase):
             return
         clear_frame(frame)
         self._render_reactions(frame, self._render_detail_reactions)
+        try:
+            self._refresh_scrollregions()
+        except Exception:
+            pass
+
+    def _render_detail_mechanics(self) -> None:
+        """Re-render ONLY the mechanics sub-frame (keeps profile/phase edits)."""
+        frame = getattr(self, '_mechanics_frame', None)
+        if frame is None:
+            return
+        clear_frame(frame)
+        self._render_mechanics(frame, self._render_detail_mechanics)
         try:
             self._refresh_scrollregions()
         except Exception:
