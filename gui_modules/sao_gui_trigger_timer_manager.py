@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
 
@@ -44,6 +45,7 @@ class TriggerTimerManagerPanel:
         self._summary_var = tk.StringVar(value="0 RULES")
         self._status_var = tk.StringVar(value="Ready")
         self._last_status: Dict[str, Any] = {}
+        self._last_render_sig = ""
 
     def show(self) -> None:
         if self._win is None or not self._exists():
@@ -76,6 +78,7 @@ class TriggerTimerManagerPanel:
         self._win = None
         self._list = None
         self._recent = None
+        self._last_render_sig = ""
 
     def is_visible(self) -> bool:
         return bool(self._win is not None and self._exists() and self._win.state() != 'withdrawn')
@@ -169,9 +172,10 @@ class TriggerTimerManagerPanel:
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
         win.protocol('WM_DELETE_WINDOW', self.hide)
+        self._last_render_sig = ""
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
-        rules = list(status.get('triggers') or [])
+        rules = self._display_rules(status)
         timers = list(status.get('timers') or [])
         self._summary_var.set(f'{len(rules)} RULES / {len(timers)} TIMERS')
         errors = status.get('errors') or []
@@ -181,6 +185,10 @@ class TriggerTimerManagerPanel:
         self._status_var.set(str(message))
         if self._list is None:
             return
+        render_sig = self._render_signature(status)
+        if render_sig == self._last_render_sig:
+            return
+        self._last_render_sig = render_sig
         for child in list(self._list.winfo_children()):
             child.destroy()
         if not rules:
@@ -342,6 +350,47 @@ class TriggerTimerManagerPanel:
             count = len(result.get('events') or [])
             self._status_var.set(str(result.get('message') or f'Test events: {count}'))
         self.refresh()
+
+    @staticmethod
+    def _display_rules(status: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+        """Merge trigger rows with timer-only rows while avoiding duplicate IDs."""
+        merged: list[Mapping[str, Any]] = []
+        seen: set[str] = set()
+        for source in (status.get('triggers') or [], status.get('timers') or []):
+            if not isinstance(source, list):
+                continue
+            for rule in source:
+                if not isinstance(rule, Mapping):
+                    continue
+                try:
+                    key = str(rule.get('id') or '') or json.dumps(
+                        rule,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                except Exception:
+                    key = repr(rule)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(rule)
+        return merged
+
+    @classmethod
+    def _render_signature(cls, status: Mapping[str, Any]) -> str:
+        try:
+            return json.dumps(
+                {
+                    "rules": cls._display_rules(status),
+                    "recent": list(status.get('recent') or [])[:6],
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+                default=str,
+            )
+        except Exception:
+            return repr((cls._display_rules(status), list(status.get('recent') or [])[:6]))
 
 
 __all__ = ["TriggerTimerManagerPanel"]

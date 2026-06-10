@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.26: Entity 触发/计时面板渲染修复.
+
+  1) `gui_modules/sao_gui_trigger_timer_manager.py` 增加列表渲染签名。
+     相同触发器/近期事件状态重复刷新时不再销毁并重建全部 Tk 子控件,
+     避免滚动位置、按钮焦点和点击节奏被手动刷新/重载打断。
+
+  2) Entity 触发/计时面板现在会合并 `triggers` 与 `timers` 行并按 rule id 去重。
+     修复 status 只提供独立 `timers` 列表时摘要显示有计时器、列表却进入空态的问题。
+     新增 `tools/trigger_timer_panel_selftest.py` 覆盖 timer-only 与重复刷新场景。
+
+
+
 ## v4.4.25: ACT 下钻页长列表滚动修复.
 
   1) `web/act_combatant_drilldown.html` 的技能列表/侧栏 section 不再
