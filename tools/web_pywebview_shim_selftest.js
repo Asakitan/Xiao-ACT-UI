@@ -162,6 +162,7 @@ function assert(cond, message) {
   assert(!pluginLayer.includes('window.bridge.cmd("act." + name, { args: args || [] })'), "plugin layer still sends bare bridge args");
   assert(pluginLayer.includes('name: "act.plugins.invoke_ui_action"'), "plugin layer should map fallback UI actions to act.plugins.invoke_ui_action");
   assert(pluginLayer.includes('name: "act.render.apply_hooks"'), "plugin layer should map render hooks to the bridge command");
+  assert(pluginLayer.includes(".splg-tablewrap{max-width:100%;overflow-x:auto;"), "plugin layer table wrapper should scroll wide plugin tables");
 
   const triggerManager = fs.readFileSync(path.join(root, "web/trigger_timer_manager.html"), "utf8");
   assert(!triggerManager.includes("{ args: args || [] }"), "trigger manager still sends bare fallback args");

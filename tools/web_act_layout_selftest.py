@@ -56,14 +56,18 @@ def _assert_graph_points_scroll() -> None:
         raise AssertionError("graph points table must scroll instead of clipping rows")
 
 
-def _assert_side_scroll(file_name: str, label: str) -> None:
+def _assert_selector_scroll(file_name: str, selector: str, label: str) -> None:
     html = _read_web(file_name)
-    side = _css_block(html, ".side")
+    side = _css_block(html, selector)
     overflow = _property_value(side, "overflow")
     if overflow == "hidden":
         raise AssertionError(f"{label} side panel must scroll instead of clipping controls")
     if overflow not in {"auto", "scroll"}:
         raise AssertionError(f"unexpected {label} side overflow: {overflow}")
+
+
+def _assert_side_scroll(file_name: str, label: str) -> None:
+    _assert_selector_scroll(file_name, ".side", label)
 
 
 def main() -> int:
@@ -73,6 +77,7 @@ def main() -> int:
     _assert_side_scroll("act_death_recap.html", "death recap")
     _assert_side_scroll("data_source_health.html", "data source health")
     _assert_side_scroll("trigger_timer_manager.html", "trigger timer manager")
+    _assert_selector_scroll("plugin_manager.html", ".side-panel", "plugin manager")
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 

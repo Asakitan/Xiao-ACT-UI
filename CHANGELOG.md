@@ -2,6 +2,27 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.55: Web 插件管理与插件表格滚动修复.
+
+  1) `web/plugin_manager.html` 的右侧 SDK Quick Start 侧栏现在可滚动。
+     修复插件说明内容较长时, 因 `overflow:hidden` 裁掉下半部分帮助文本的问题。
+
+  2) `web/plugin_layer.js` 为插件 UI 表格容器补齐横向滚动样式。
+     修复插件声明式面板渲染宽表格时, 列内容可能被外层面板裁掉且无法横向查看的问题。
+     扩展 Web layout/shim selftest 覆盖这两个回归点。
+
+
+
+## v4.4.54: 全局快捷键组合键与冲突守卫修复.
+
+  1) 全局快捷键支持 `CTRL/ALT/SHIFT + F1-F12` 组合键规范化与匹配。
+     修复插件快捷键和内置快捷键在不同监听路径下解析不一致的问题。
+
+  2) 插件快捷键现在会避让内置占用键并清理已被遮蔽的旧覆盖。
+     修复插件键位可能覆盖主程序快捷键, 或因冲突导致用户按键无效的问题。
+
+
+
 ## v4.4.53: ACT Web 观测侧栏滚动修复.
 
   1) `web/data_source_health.html` 的右侧 Runtime Summary/Diagnostics 栏现在可滚动。

@@ -357,6 +357,7 @@
             ".splg-input:focus{border-color:rgba(255,214,117,.74);outline:none;box-shadow:0 0 10px rgba(107,214,255,.25);}",
             ".splg-input::placeholder{color:#9fc0d8;}",
             ".splg-table{width:100%;border-collapse:collapse;font-size:12px;}",
+            ".splg-tablewrap{max-width:100%;overflow-x:auto;margin:4px 0;}",
             ".splg-table th{color:#9fc0d8;font-weight:700;text-align:left;padding:2px 6px;border-bottom:1px solid rgba(117,205,255,.2);}",
             ".splg-table td{color:#e8f6ff;padding:2px 6px;}.splg-row-hi td{color:#ffd46f;font-weight:700;}",
             ".splg-tabtitle{color:#9fc0d8;font-weight:700;font-size:12px;margin:4px 0 2px;}",
