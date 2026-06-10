@@ -84,6 +84,58 @@ class DodgeContext:
         except Exception:
             return None
 
+    def prewarm(self) -> None:
+        """后台预热: 把相机/实体管理器/玩家的冷定位堆扫(各~7s)挡在闭环外, 之后所有
+        读都走缓存 O(1)。在 director 创建时起守护线程调一次即可。"""
+        try:
+            self.get_cam_basis()
+        except Exception:
+            pass
+        try:
+            self._entity_mgr().locate(0)
+            self.get_player_pos()
+        except Exception:
+            pass
+
+    def read_obj_pos(self, obj: int) -> Optional[Vec3]:
+        """O(1) 读一个已知实体对象的世界坐标 (闭环精准出圈每 tick 调)。"""
+        try:
+            return self._position().read_entity_pos(obj) if obj else None
+        except Exception:
+            return None
+
+    def lock_danger_obj(self, direction: str, boss_base_id: int = 0) -> int:
+        """进闭环前定位一次危险源实体对象地址 (O(N) 一次), 之后 read_obj_pos O(1)。
+        away_boss→按 base_id 找 boss; away_nearest→最近敌对实体。失败返回 0。"""
+        try:
+            import math
+            snap = self._entity_mgr().read(player_uuid=0, include_monsters=True)
+            if not snap:
+                return 0
+            rd = self._position()
+            cands = list(snap.bosses) + list(snap.monsters)
+            if str(direction) == "away_boss":
+                for es in snap.bosses:
+                    if not boss_base_id or int(es.config_uuid or 0) == int(boss_base_id):
+                        pos = rd.read_entity_pos(es.obj_addr)
+                        if pos and any(abs(c) > 1e-4 for c in pos):
+                            return es.obj_addr
+                cands = list(snap.bosses) or cands
+            pp = self.get_player_pos()
+            best, best_d = 0, 1e18
+            for es in cands:
+                pos = rd.read_entity_pos(es.obj_addr)
+                if not pos or not any(abs(c) > 1e-4 for c in pos):
+                    continue
+                if not pp:
+                    return es.obj_addr
+                dd = math.hypot(pp[0] - pos[0], pp[2] - pos[2])
+                if 0.5 < dd < best_d:
+                    best_d, best = dd, es.obj_addr
+            return best
+        except Exception:
+            return 0
+
     def get_nearest_danger_pos(self) -> Optional[Vec3]:
         """最近敌对实体(boss/怪/召唤)世界坐标 — 远离最近威胁躲避用。
 

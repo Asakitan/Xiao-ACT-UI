@@ -54,8 +54,10 @@ def _resolve_detect_name(nm, sid: int) -> str:
     return _resolve_skill_name(nm, sid) or _lookup(nm, "buff", sid)
 
 
-def mechanic_summary(mech: Dict[str, Any]) -> Dict[str, Any]:
-    """卡片行的轻量摘要 (双端同样渲染)。"""
+def mechanic_summary(mech: Dict[str, Any],
+                     directional_on: bool = True) -> Dict[str, Any]:
+    """卡片行的轻量摘要 (双端同样渲染)。directional_on=总开关「定向移动」状态,
+    关时方向摘要标注「(总开关未开·不执行)」, 不谎报生效 (修审计 UI P1)。"""
     alert = mech.get("alert") or {}
     dodge = mech.get("dodge") or {}
     inline = dodge.get("inline") or {}
@@ -69,9 +71,11 @@ def mechanic_summary(mech: Dict[str, Any]) -> Dict[str, Any]:
         direction = _s(inline.get("direction"))
         if direction:
             from engines.auto_dodge_director import direction_label
-            parts.append("移动:" + (direction_label(direction)
-                                    or ("远离" if direction.startswith("away")
-                                        else direction)))
+            lbl = direction_label(direction) or (
+                "远离" if direction.startswith("away") else direction)
+            if not directional_on:
+                lbl += "(总开关未开·不执行)"
+            parts.append("移动:" + lbl)
         if seq and len(seq) >= 2 and len(keys) == 1 and "" not in keys:
             parts.append("冲刺 %s×%d" % (next(iter(keys)), len(seq)))
         elif seq:
@@ -161,7 +165,8 @@ def build_mechanics_state(settings, engine, state_mgr,
             bound_ids.add(_i(sid))
             names[str(sid)] = _resolve_detect_name(nm, _i(sid))
         m["skill_names"] = names
-        m["summary"] = mechanic_summary(m)
+        m["summary"] = mechanic_summary(
+            m, directional_on=bool(master.get("directional_dodge_enabled")))
         mechanics.append(m)
     out["mechanics"] = mechanics
 

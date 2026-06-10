@@ -512,11 +512,23 @@ class SAOPlayerGUIEngineLifecycleMixin:
             return director
         try:
             from engines.auto_dodge_director import AutoDodgeDirector
+            from engines.boss_autokey_linkage import load_linkage_config
             from mem_probe.il2cpp.mem_dodge_context import DodgeContext
             from mem_probe.il2cpp.static_dps_source import StaticDpsSource
             ctx = DodgeContext(StaticDpsSource())
-            gate = getattr(getattr(self, '_auto_key_engine', None),
-                           'is_game_foreground', None)
+            fg = getattr(getattr(self, '_auto_key_engine', None),
+                         'is_game_foreground', None)
+
+            def gate():
+                # 前台门 AND 躲避总开关: F12 翻 dodge_enabled 后, 延迟期/在途的闭环
+                # 下一 tick _blocked() 即停 (修审计 P2 急停竞态)
+                try:
+                    if fg is not None and not fg():
+                        return False
+                    return bool(load_linkage_config(self._cfg_settings_ref)
+                                .get('dodge_enabled', True))
+                except Exception:
+                    return True
             director = AutoDodgeDirector(
                 self._send_key_event,
                 get_cam_basis=ctx.get_cam_basis,
@@ -524,6 +536,9 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 gate=gate)
             self._auto_dodge_director = director
             self._dodge_context = ctx
+            # 后台预热相机/实体冷定位堆扫(~20s), 否则第一次躲避会迟到
+            import threading as _th
+            _th.Thread(target=ctx.prewarm, daemon=True).start()
         except Exception as e:
             print(f'[Dodge] director init failed: {e}')
             self._auto_dodge_director = None
@@ -551,15 +566,22 @@ class SAOPlayerGUIEngineLifecycleMixin:
             boss_base_id = int(action.get('boss_base_id') or 0)
 
             def _go():
-                danger = None
-                try:
-                    if direction == 'away_boss':
-                        danger = self._dodge_context.get_boss_pos(boss_base_id)
-                    elif direction == 'away_nearest':
-                        danger = self._dodge_context.get_nearest_danger_pos()
-                except Exception:
-                    danger = None
-                director.dodge(inline, danger_pos=danger)
+                ctx = self._dodge_context
+                if direction.startswith('away'):
+                    # 闭环精准出圈: 进循环前定位一次危险 obj (O(N)), 之后每 tick 只读
+                    # 该 obj 的坐标 (O(1)), 不再每 tick 全实体堆读 (修审计性能 P2)
+                    try:
+                        obj = ctx.lock_danger_obj(direction, boss_base_id)
+                    except Exception:
+                        obj = 0
+                    danger0 = None
+                    get_danger = None
+                    if obj:
+                        danger0 = ctx.read_obj_pos(obj)
+                        get_danger = lambda _o=obj: ctx.read_obj_pos(_o)
+                    director.dodge(inline, danger_pos=danger0, get_danger_pos=get_danger)
+                else:
+                    director.dodge(inline)
             import threading as _th
             if wait_s > 0.05:
                 t = _th.Timer(wait_s, _go)

@@ -34,6 +34,7 @@ _DIR_LABELS = {
     "forward": "向前", "back": "向后撤", "left": "向左", "right": "向右",
     "forward_left": "左前", "forward_right": "右前",
     "back_left": "左后撤", "back_right": "右后撤",
+    "away_boss": "远离Boss", "away_nearest": "远离最近威胁",
 }
 
 
@@ -144,6 +145,7 @@ class AutoDodgeDirector:
         self._gate = gate
         self._held: List[str] = []
         self._lock = threading.Lock()
+        self._epoch = 0          # 单飞: 每次新 dodge +1, 旧循环检测到不等即退出
 
     def _blocked(self) -> bool:
         if self._gate is None:
@@ -160,52 +162,123 @@ class AutoDodgeDirector:
         except Exception:
             pass
 
-    def dodge(self, spec: Dict, *, danger_pos=None) -> Dict:
-        """执行一次定向躲避。返回 {keys, label, fired}。非定向 spec 直接 no-op。"""
-        cam = None
-        pos = None
-        try:
-            cam = self._cam() if self._cam else None
-        except Exception:
-            cam = None
-        try:
-            pos = self._pos() if self._pos else None
-        except Exception:
-            pos = None
+    def _next_epoch(self) -> int:
+        with self._lock:
+            self._epoch += 1
+            return self._epoch
+
+    def dodge(self, spec: Dict, *, danger_pos=None, get_danger_pos=None) -> Dict:
+        """执行一次定向躲避。返回 {keys, label, fired}。非定向 spec 直接 no-op。
+
+        get_danger_pos (可选): 危险源世界坐标的 O(1) 读回调 (宿主已锁定 obj)。提供且方向
+        为 away_* 时走**闭环精准出圈**——持续读玩家/危险位重算 WASD, 一旦水平距 ≥ 安全
+        距离(spec.exit_margin_m)立即松键停下('跑出去一点就行')。否则按住固定 move_ms。"""
+        cam = self._cam_safe()
+        pos = self._pos_safe()
         keys, label = resolve_dodge_keys(spec, cam_basis=cam, player_pos=pos,
                                          danger_pos=danger_pos)
         if not keys:
             return {"keys": [], "label": label, "fired": False}
-        move_ms = int(spec.get("move_ms") or 600)
-        move_ms = max(80, min(4000, move_ms))
-        threading.Thread(target=self._run_move, args=(keys, move_ms),
+        epoch = self._next_epoch()
+        move_ms = max(80, min(6000, int(spec.get("move_ms") or 600)))
+        direction = str(spec.get("direction") or "")
+        if get_danger_pos is not None and direction.startswith("away"):
+            safe_dist = float(spec.get("exit_margin_m") or 0) or 6.0
+            fb = list(_CAM_DIRS.get(str(spec.get("fallback_direction") or "back"),
+                                    (-1, 0)))
+            threading.Thread(target=self._run_until_clear,
+                             args=(epoch, spec, get_danger_pos, safe_dist, move_ms,
+                                   _axis_keys(fb[0], fb[1])),
+                             daemon=True).start()
+            return {"keys": keys, "label": "%s·精准出圈" % label, "fired": True}
+        threading.Thread(target=self._run_move, args=(epoch, keys, move_ms),
                          daemon=True).start()
         return {"keys": keys, "label": label, "fired": True}
 
-    def _run_move(self, keys: List[str], move_ms: int) -> None:
-        if self._blocked():
-            return
+    def _cam_safe(self):
+        try:
+            return self._cam() if self._cam else None
+        except Exception:
+            return None
+
+    def _pos_safe(self):
+        try:
+            return self._pos() if self._pos else None
+        except Exception:
+            return None
+
+    def _apply_keys(self, target: List[str]) -> None:
+        """把 _held 调整到 target 键集 (只对变化的键 press/release, 不抖)。"""
         with self._lock:
-            self._held = list(keys)
-            for k in keys:
+            cur = set(self._held)
+            want = set(target)
+            for k in cur - want:
+                self._press(k, up=True)
+            for k in want - cur:
                 self._press(k, up=False)
+            self._held = list(want)
+
+    def _run_move(self, epoch: int, keys: List[str], move_ms: int) -> None:
+        if self._blocked() or epoch != self._epoch:
+            return
+        self._apply_keys(keys)
         try:
             step = 0.05
             waited = 0.0
             while waited < move_ms / 1000.0:
-                if self._blocked():
+                if self._blocked() or epoch != self._epoch:
                     break
                 time.sleep(step)
                 waited += step
         finally:
-            with self._lock:
-                for k in keys:
-                    self._press(k, up=True)
-                self._held = []
+            self._release_if_mine(epoch)
+
+    def _run_until_clear(self, epoch: int, spec: Dict, get_danger_pos: Callable,
+                         safe_dist: float, max_ms: int, fallback_keys: List[str]) -> None:
+        """闭环: 持续把人物往远离危险源方向挪, 水平距≥safe_dist即停 (精准出圈)。
+        热路径 O(1): 每 tick 只读玩家位(O(1)) + 危险位(宿主 O(1) 回调) + 相机基(节流缓存);
+        任一读不到→降级到相机相对 fallback 纯按键(不再读内存)。"""
+        import math
+        tick = 0.07
+        t0 = time.time()
+        try:
+            while (time.time() - t0) < max_ms / 1000.0:
+                if self._blocked() or epoch != self._epoch:
+                    break
+                pp = self._pos_safe()
+                dp = None
+                try:
+                    dp = get_danger_pos()
+                except Exception:
+                    dp = None
+                cam = self._cam_safe()
+                if not pp or not dp or not cam:
+                    self._apply_keys(fallback_keys)   # 降级: 不读内存的纯按键后撤
+                    time.sleep(tick)
+                    continue
+                if math.hypot(pp[0] - dp[0], pp[2] - dp[2]) >= safe_dist:
+                    break                              # 出圈了, 停 (跑出去一点就行)
+                keys = world_vec_to_keys(pp[0] - dp[0], pp[2] - dp[2],
+                                         cam["forward"], cam["right"])
+                if not keys:
+                    keys = fallback_keys
+                self._apply_keys(keys)
+                time.sleep(tick)
+        finally:
+            self._release_if_mine(epoch)
+
+    def _release_if_mine(self, epoch: int) -> None:
+        with self._lock:
+            if epoch != self._epoch:
+                return        # 已被新 dodge 接管, 别松别人按的键
+            for k in list(self._held):
+                self._press(k, up=True)
+            self._held = []
 
     def release_all(self) -> None:
-        """急停: 松开所有按住的移动键 (F12 / panic 调用)。"""
+        """急停: 松开所有按住的移动键并作废在途循环 (F12 / panic 调用)。"""
         with self._lock:
+            self._epoch += 1      # 作废所有在飞循环
             for k in list(self._held):
                 self._press(k, up=True)
             self._held = []

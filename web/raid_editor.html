@@ -804,18 +804,28 @@ function _mForm(m) {
     }
     // 定向移动 (按住 WASD 挪位)
     var curDir = String(inline.direction || '');
-    html += '<div class="phase-header" style="font-size:10px;">定向移动 (WASD 挪位)</div><div style="margin:3px 0;">'
-        + '方向 <select id="mf-dir" class="mech-input">'
-        + [['', '不移动'], ['back', '向后撤(相对视角)'], ['forward', '向前'], ['left', '向左'],
-           ['right', '向右'], ['back_left', '左后撤'], ['back_right', '右后撤'],
-           ['forward_left', '左前'], ['forward_right', '右前'], ['away_boss', '远离Boss'],
-           ['away_nearest', '远离最近威胁']
+    var dirMasterOn = !!((_mechState && _mechState.master) || {}).directional_dodge_enabled;
+    var dis = dirMasterOn ? '' : ' disabled';
+    html += '<div class="phase-header" style="font-size:10px;">定向移动 (WASD 挪位)</div>';
+    if (!dirMasterOn) {
+        html += '<div style="font-size:10px;color:#ffd46f;margin:2px 0;">● 顶部「定向移动」总开关未开 — 此处方向不会执行 (仅保存配置)</div>';
+    }
+    html += '<div style="margin:3px 0;">方向 <select id="mf-dir" class="mech-input"' + dis + '>'
+        + [['', '不移动'], ['back', '视角 ▸ ↓向后撤'], ['forward', '视角 ▸ ↑向前'],
+           ['left', '视角 ▸ ←向左'], ['right', '视角 ▸ →向右'],
+           ['back_left', '视角 ▸ ↙左后撤'], ['back_right', '视角 ▸ ↘右后撤'],
+           ['forward_left', '视角 ▸ ↖左前'], ['forward_right', '视角 ▸ ↗右前'],
+           ['away_boss', '远离 ▸ 远离Boss(需进本)'], ['away_nearest', '远离 ▸ 远离最近威胁(需进本)']
           ].map(function (o) {
             return '<option value="' + o[0] + '"' + (curDir === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
           }).join('') + '</select> '
-        + _mInput('mf-move', '按住ms', inline.move_ms != null ? inline.move_ms : 600, 52) + '</div>'
-        + '<div style="font-size:9px;color:#75808d;margin:2px 0;">相对视角方向最稳; 远离Boss需进本读到boss位'
-        + '(读不到自动用后备方向)。需总开关「定向移动」开启, F12 急停松键。</div>';
+        + _mInput('mf-move', '超时ms', inline.move_ms != null ? inline.move_ms : 600, 52) + '</div>';
+    if (curDir.indexOf('away') === 0) {
+        html += '<div style="margin:3px 0;">' + _mInput('mf-exit', '出圈到此距离(m)', inline.exit_margin_m != null ? inline.exit_margin_m : 6, 48)
+            + '<span style="font-size:9px;color:#75808d;">挪到离目标这么远即停</span></div>';
+    }
+    html += '<div style="font-size:9px;color:#9fc0d8;margin:2px 0;">视角方向最稳(永远可用); 远离Boss/最近威胁会持续挪到出安全距离即停(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。</div>'
+        + '<div style="font-size:9px;color:#ff9a8c;margin:2px 0;">⚠ 自动 WASD 位移属自动化操作, 在反作弊游戏里有账号风险, 默认关闭, 自行承担。随时 F12 全松键急停。</div>';
     // 阶段范围
     var phases = (_mechState && _mechState.phases) || [];
     var pids = d.phase_ids || [];
@@ -895,6 +905,7 @@ function _mCollect() {
     var dirEl = document.getElementById('mf-dir');
     if (dirEl) inline.direction = String(dirEl.value || '');
     if (document.getElementById('mf-move')) inline.move_ms = Math.round(_mNum('mf-move', 600));
+    if (document.getElementById('mf-exit')) inline.exit_margin_m = Math.round(_mNum('mf-exit', 6) * 10) / 10;
     var ph = _mVal('mf-phase');
     d.phase_ids = ph ? [ph] : [];
     return d;

@@ -153,6 +153,61 @@ class DispatchTest(unittest.TestCase):
         self.assertFalse(r["fired"])
         self.assertEqual(events, [])
 
+    def test_closed_loop_stops_when_clear(self):
+        # 玩家固定在原点, 危险源固定在 (0,_,3); safe_dist=2 → 已出圈, 闭环秒退不按键
+        events = []
+        d = AutoDodgeDirector(
+            lambda k, down: events.append((k, down)),
+            get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
+            get_player_pos=lambda: (0.0, 0.0, 0.0), gate=lambda: True)
+        r = d.dodge({"direction": "away_nearest", "exit_margin_m": 2.0, "move_ms": 1000},
+                    danger_pos=(0.0, 0.0, 3.0),
+                    get_danger_pos=lambda: (0.0, 0.0, 3.0))
+        self.assertTrue(r["fired"])
+        time.sleep(0.3)
+        # dist=3 >= safe 2 → 一进循环就 break, 不应留下按住的键
+        downs = [k for k, dn in events if dn]
+        ups = [k for k, dn in events if not dn]
+        self.assertEqual(set(downs), set(ups))   # 按下的都松开了
+
+    def test_closed_loop_moves_then_releases_when_out(self):
+        # 玩家逐步远离危险源, 到 safe_dist 后停; 用可变 danger 距离模拟出圈
+        events = []
+        state = {"d": 1.0}
+        d = AutoDodgeDirector(
+            lambda k, down: events.append((k, down)),
+            get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
+            get_player_pos=lambda: (0.0, 0.0, 0.0), gate=lambda: True)
+
+        def danger():
+            state["d"] += 1.5      # 每次读, 危险源"变远"模拟玩家撤离
+            return (0.0, 0.0, state["d"])
+        r = d.dodge({"direction": "away_boss", "exit_margin_m": 5.0, "move_ms": 2000},
+                    danger_pos=(0.0, 0.0, 1.0), get_danger_pos=danger)
+        self.assertTrue(r["fired"])
+        self.assertIn("精准出圈", r["label"])
+        time.sleep(0.6)
+        downs = [k for k, dn in events if dn]
+        ups = [k for k, dn in events if not dn]
+        self.assertTrue(downs)                 # 出圈前确实按了键移动
+        self.assertEqual(set(downs), set(ups)) # 出圈后全松开
+
+    def test_epoch_single_flight_cancels_old_loop(self):
+        # release_all (F12) 递增 epoch, 在途循环下一 tick 退出且松键
+        events = []
+        d = AutoDodgeDirector(
+            lambda k, down: events.append((k, down)),
+            get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
+            get_player_pos=lambda: (0.0, 0.0, 0.0), gate=lambda: True)
+        d.dodge({"direction": "away_nearest", "exit_margin_m": 50.0, "move_ms": 3000},
+                danger_pos=(0.0, 0.0, 1.0), get_danger_pos=lambda: (0.0, 0.0, 1.0))
+        time.sleep(0.15)
+        d.release_all()             # F12
+        time.sleep(0.2)
+        ups = [k for k, dn in events if not dn]
+        self.assertTrue(ups)        # release_all 松开了在途按键
+        self.assertEqual(d._held, [])
+
 
 if __name__ == "__main__":
     suite = unittest.TestSuite()

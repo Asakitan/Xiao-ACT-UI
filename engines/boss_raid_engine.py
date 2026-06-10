@@ -232,9 +232,10 @@ def make_default_dodge_inline() -> Dict[str, Any]:
         "lead_ms": 300,          # fire N ms before countdown/cast end
         "cooldown_s": 3.0,
         # 定向躲避 (auto_dodge_director): 按住 WASD 把人物挪开。空=不定向。
-        "direction": "",         # ''|forward|back|left|right|forward_left|.. |world:dx,dz|away_point:x,z|away_boss
-        "move_ms": 600,          # WASD 按住时长
+        "direction": "",         # ''|forward|back|left|right|forward_left|.. |world:dx,dz|away_point:x,z|away_boss|away_nearest
+        "move_ms": 600,          # WASD 按住时长 (相机相对) / 闭环出圈的超时上限
         "fallback_direction": "back",  # 世界/away 模式无相机或无目标时的后备相机相对方向
+        "exit_margin_m": 6.0,    # away_* 闭环精准出圈: 水平距≥此值即停 ('跑出去一点就行')
     }
 
 
@@ -261,9 +262,10 @@ def normalize_dodge(raw: Any) -> Dict[str, Any]:
         "lead_ms": _coerce_int(inline_src.get("lead_ms"), default["lead_ms"], 0, 60000),
         "cooldown_s": _coerce_float(inline_src.get("cooldown_s"), 3.0, 0.0, 600.0),
         "direction": _normalize_dodge_direction(inline_src.get("direction")),
-        "move_ms": _coerce_int(inline_src.get("move_ms"), default["move_ms"], 80, 4000),
+        "move_ms": _coerce_int(inline_src.get("move_ms"), default["move_ms"], 80, 6000),
         "fallback_direction": _normalize_cam_direction(
             inline_src.get("fallback_direction"), "back"),
+        "exit_margin_m": _coerce_float(inline_src.get("exit_margin_m"), 6.0, 1.0, 40.0),
     }
     return {
         "enabled": _coerce_bool(src.get("enabled"), False),

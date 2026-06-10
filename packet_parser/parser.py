@@ -3059,6 +3059,14 @@ class PacketParser:
             'element': int(element),
             'timestamp': time.time(),
         }
+        # 命中世界坐标 (SyncDamageInfo.DamagePos field19): 用于把伤害与预警圈/最近实体
+        # 做位置关联 (编号圈伤害归属的近似源)。服务端不一定每包都带, 缺则 None。
+        try:
+            dp = getattr(dmg, 'DamagePos', None)
+            if dp is not None and (dp.x or dp.y or dp.z):
+                event['damage_pos'] = (float(dp.x), float(dp.y), float(dp.z))
+        except Exception:
+            pass
         if entity_target_fallback:
             event['entity_target_fallback'] = entity_target_fallback
         self.stats['damage_events'] += 1

@@ -370,11 +370,19 @@ class _MechanicsEditorMixin:
     _DODGE_PRESETS = ('无', '轻点按键', '按住按键', '连续冲刺', '按键序列')
     # 定向移动 (按住 WASD 把人物挪开): 标签 → direction 值
     _DODGE_DIRECTIONS = (
-        ('不移动', ''), ('向后撤(相对视角)', 'back'), ('向前', 'forward'),
-        ('向左', 'left'), ('向右', 'right'), ('左后撤', 'back_left'),
-        ('右后撤', 'back_right'), ('左前', 'forward_left'), ('右前', 'forward_right'),
-        ('远离Boss', 'away_boss'), ('远离最近威胁', 'away_nearest'),
+        ('不移动', ''),
+        ('视角 ▸ ↓向后撤', 'back'), ('视角 ▸ ↑向前', 'forward'),
+        ('视角 ▸ ←向左', 'left'), ('视角 ▸ →向右', 'right'),
+        ('视角 ▸ ↙左后撤', 'back_left'), ('视角 ▸ ↘右后撤', 'back_right'),
+        ('视角 ▸ ↖左前', 'forward_left'), ('视角 ▸ ↗右前', 'forward_right'),
+        ('远离 ▸ 远离Boss(需进本)', 'away_boss'),
+        ('远离 ▸ 远离最近威胁(需进本)', 'away_nearest'),
     )
+    # 共享文案 (Tk/Web 1:1, 改一处必同步另一处)
+    _DODGE_DIR_HELP = ('视角方向最稳(永远可用); 远离Boss/最近威胁会持续挪到出安全距离即停'
+                       '(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。')
+    _DODGE_DANGER = ('⚠ 自动 WASD 位移属自动化操作, 在反作弊游戏里有账号风险, 默认关闭, '
+                     '自行承担。随时 F12 全松键急停。')
 
     @staticmethod
     def _dash_sequence(key='SHIFT', count=3, interval_ms=300):
@@ -909,6 +917,12 @@ class _MechanicsEditorMixin:
 
         # 定向移动 (按住 WASD 把人物挪开; 需总开关「定向移动」开启)
         make_section_title(form, '定向移动 (WASD 挪位)')
+        dir_master_on = bool((self._mech_state.get('master') or {})
+                             .get('directional_dodge_enabled', False))
+        if not dir_master_on:
+            tk.Label(form, text='● 顶部「定向移动」总开关未开 — 此处方向不会执行 (仅保存配置)',
+                     bg=PANEL_CARD_ALT, fg=GOLD, font=panel_font(8),
+                     anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(0, 2))
         mv = _row(form)
         cur_dir = str(inline.get('direction') or '')
         dir_lbls = {lbl: val for lbl, val in self._DODGE_DIRECTIONS}
@@ -916,16 +930,25 @@ class _MechanicsEditorMixin:
                            '不移动')
         dvar = _tk.StringVar(value=cur_dir_lbl)
         v['dodge_direction'] = (dvar, dir_lbls)
+        st = 'normal' if dir_master_on else 'disabled'
         tk.Label(mv, text='方向', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
                  font=panel_font(8)).pack(side=tk.LEFT)
         dmenu = _tk.OptionMenu(mv, dvar, *[l for l, _ in self._DODGE_DIRECTIONS])
-        dmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+        dmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN,
+                     highlightthickness=0, state=st)
         dmenu.pack(side=tk.LEFT, padx=(2, 8))
-        _field(mv, '按住ms', 'move_ms', inline.get('move_ms', 600), 6)
-        tk.Label(form, text='相对视角方向最稳; 远离Boss需进本读到boss位(读不到自动用后备方向)。'
-                          '与连冲/按键可叠加, F12 急停松键。',
+        _field(mv, '超时ms', 'move_ms', inline.get('move_ms', 600), 6)
+        if cur_dir.startswith('away'):   # 仅"远离"类才显示精准出圈余量
+            mv2 = _row(form)
+            _field(mv2, '出圈到此距离(m)', 'exit_margin_m', inline.get('exit_margin_m', 6.0), 6)
+            tk.Label(mv2, text='挪到离目标这么远即停 (越大越安全/越远离输出位)',
+                     bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT)
+        tk.Label(form, text=self._DODGE_DIR_HELP,
                  bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
                  anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
+        tk.Label(form, text=self._DODGE_DANGER,
+                 bg=PANEL_CARD_ALT, fg=DANGER, font=panel_font(8),
+                 anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(1, 0))
 
         # 阶段范围
         ph_row = _row(form)
@@ -1000,6 +1023,8 @@ class _MechanicsEditorMixin:
             inline['lead_ms'] = int(_num('lead_ms', 300))
         if 'move_ms' in v:
             inline['move_ms'] = int(_num('move_ms', 600))
+        if 'exit_margin_m' in v:
+            inline['exit_margin_m'] = round(_num('exit_margin_m', 6.0), 1)
         dpick = v.get('dodge_direction')
         if dpick:
             dvar, dir_lbls = dpick
