@@ -17,6 +17,7 @@ from engines.boss_raid_engine import (
 from engines.boss_autokey_linkage import (
     load_linkage_config,
     set_dodge_enabled,
+    _lookup,
     _name_resolver,
     _resolve_skill_name,
     _resolve_boss_name,
@@ -48,12 +49,18 @@ def _target_profile(config: Dict[str, Any],
     return active_profile(config)
 
 
+def _resolve_detect_name(nm, sid: int) -> str:
+    """检测 id 既可能是技能也可能是 buff (点名机制全是 buff), 两类表都查。"""
+    return _resolve_skill_name(nm, sid) or _lookup(nm, "buff", sid)
+
+
 def mechanic_summary(mech: Dict[str, Any]) -> Dict[str, Any]:
     """卡片行的轻量摘要 (双端同样渲染)。"""
     alert = mech.get("alert") or {}
     dodge = mech.get("dodge") or {}
     inline = dodge.get("inline") or {}
-    skill_ids = list((mech.get("detect") or {}).get("skill_ids") or [])
+    det = mech.get("detect") or {}
+    skill_ids = list(det.get("skill_ids") or []) + list(det.get("buff_ids") or [])
     dodge_desc = ""
     if dodge.get("enabled"):
         if inline.get("sequence"):
@@ -139,7 +146,7 @@ def build_mechanics_state(settings, engine, state_mgr,
         names = {}
         for sid in list(det.get("skill_ids") or []) + list(det.get("buff_ids") or []):
             bound_ids.add(_i(sid))
-            names[str(sid)] = _resolve_skill_name(nm, _i(sid))
+            names[str(sid)] = _resolve_detect_name(nm, _i(sid))
         m["skill_names"] = names
         m["summary"] = mechanic_summary(m)
         mechanics.append(m)

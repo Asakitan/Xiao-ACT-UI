@@ -531,8 +531,12 @@ class _MechanicsEditorMixin:
         en_var = _tk.IntVar(value=1 if mech.get('enabled', True) else 0)
 
         def _flip_enable(_m=mech, _v=en_var):
-            if self._mech_editing and self._mech_editing != _m.get('id'):
+            if self._mech_editing:
                 self._mech_collect_draft()
+                if self._mech_editing == _m.get('id'):
+                    # keep the open form's draft in sync, or 保存 would
+                    # silently flip enabled back to the stale value
+                    self._mech_draft['enabled'] = bool(_v.get())
             m2 = dict(_m)
             m2.pop('summary', None)
             m2.pop('skill_names', None)
@@ -564,13 +568,20 @@ class _MechanicsEditorMixin:
         for sid in det.get('skill_ids') or []:
             nm = (names.get(str(sid)) or '').strip()
             chips.append('%s#%d' % (nm, sid) if nm else '#%d' % sid)
+        for bid in det.get('buff_ids') or []:
+            nm = (names.get(str(bid)) or '').strip()
+            chips.append('%s#%d' % (nm, bid) if nm else '#%d' % bid)
         sub = ' · '.join(filter(None, [
-            ('技能: ' + ', '.join(chips)) if chips else '未绑定技能',
+            ('检测: ' + ', '.join(chips)) if chips else '未绑定检测ID',
             summary.get('alert_desc') or '',
             summary.get('dodge_desc') or '',
         ]))
         tk.Label(card, text=sub, bg=PANEL_CARD, fg=TEXT_DIM, font=panel_font(8),
                  anchor='w', wraplength=420, justify='left').pack(fill=tk.X, pady=(2, 0))
+        notes = (mech.get('notes') or '').strip()
+        if notes:
+            tk.Label(card, text=notes, bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8),
+                     anchor='w', wraplength=420, justify='left').pack(fill=tk.X, pady=(2, 0))
         if self._mech_editing == mid:
             self._render_mech_form(card, mech)
 
@@ -602,14 +613,20 @@ class _MechanicsEditorMixin:
 
     def _mech_edit(self, mid: str) -> None:
         self._mech_editing = None if self._mech_editing == mid else mid
+        # collapse = cancel: always restart from the saved state so a reopened
+        # form never refills from a stale draft
+        self._mech_draft = {}
         self._mech_catalog_results = []
         self._mech_bump()
         self._mx_rerender()
 
     def _mech_delete(self, mid: str) -> None:
+        if self._mech_editing and self._mech_editing != mid:
+            self._mech_collect_draft()
         self._mech_call('delete_mech', mid)
         if self._mech_editing == mid:
             self._mech_editing = None
+            self._mech_draft = {}
         self._mech_bump()
         self._mx_rerender()
 
@@ -664,26 +681,41 @@ class _MechanicsEditorMixin:
                                       draft.__setitem__('color', _c),
                                       self._mx_rerender()))
 
-        # 检测: 绑定 chips + 添加来源
+        # 说明 / 躲法 (机制卡片直读这段文字, 写全机制描述和怎么躲)
+        make_section_title(form, '说明 (机制 & 躲法)')
+        notes_box = _tk.Text(form, height=4, width=52, font=panel_font(8),
+                             bg=PANEL_CARD, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
+                             wrap='char', relief='flat', padx=4, pady=3)
+        notes_box.insert('1.0', (draft.get('notes') or '').strip())
+        notes_box.pack(fill=tk.X, pady=(0, 4))
+        v['notes_widget'] = notes_box
+
+        # 检测: 绑定 chips (技能 + Buff, 每 3 个换行) + 添加来源
         make_section_title(form, '检测 (技能/Buff ID)')
-        chips_row = _row(form)
         names = (mech.get('skill_names') or {})
         bound = list(det.get('skill_ids') or [])
-        if not bound:
-            tk.Label(chips_row, text='未绑定 — 从下方添加', bg=PANEL_CARD_ALT,
+        bound_buffs = list(det.get('buff_ids') or [])
+        chip_items = [('skill_ids', sid) for sid in bound] + \
+                     [('buff_ids', bid) for bid in bound_buffs]
+        if not chip_items:
+            tk.Label(_row(form), text='未绑定 — 从下方添加', bg=PANEL_CARD_ALT,
                      fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT)
-        for sid in bound:
-            nm = (names.get(str(sid)) or '').strip()
-            chip = tk.Label(chips_row, text='%s#%d ✕' % (nm + ' ' if nm else '', sid),
-                            bg=PANEL_EDGE, fg=TEXT_MAIN, font=panel_font(8),
-                            padx=5, pady=1, cursor='hand2')
+        chips_row = None
+        for idx, (det_key, cid) in enumerate(chip_items):
+            if idx % 3 == 0:
+                chips_row = _row(form)
+            nm = (names.get(str(cid)) or '').strip()
+            prefix = 'B ' if det_key == 'buff_ids' else ''
+            chip = tk.Label(chips_row, text='%s%s#%d ✕' % (prefix, nm + ' ' if nm else '', cid),
+                            bg=PANEL_EDGE, fg=CYAN if det_key == 'buff_ids' else TEXT_MAIN,
+                            font=panel_font(8), padx=5, pady=1, cursor='hand2')
             chip.pack(side=tk.LEFT, padx=(0, 4))
             chip.bind('<Button-1>',
-                      lambda _e, _sid=sid: (self._mech_collect_draft(),
-                                            det.__setitem__('skill_ids',
-                                                            [x for x in det.get('skill_ids') or []
-                                                             if int(x) != int(_sid)]),
-                                            self._mx_rerender()))
+                      lambda _e, _k=det_key, _cid=cid: (
+                          self._mech_collect_draft(),
+                          det.__setitem__(_k, [x for x in det.get(_k) or []
+                                               if int(x) != int(_cid)]),
+                          self._mx_rerender()))
         add_row = _row(form)
         observed = [o for o in (self._mech_state.get('observed') or [])
                     if int(o.get('id') or 0) not in set(int(x) for x in bound)]
@@ -708,21 +740,27 @@ class _MechanicsEditorMixin:
             om.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN,
                       highlightthickness=0)
             om.pack(side=tk.LEFT, padx=(0, 6))
-        manual_var = _field(add_row, '手动ID', 'manual_sid', '', 9)
+        manual_var = _field(add_row, '技能ID', 'manual_sid', '', 9)
 
-        def _add_manual():
+        def _add_manual_to(det_key, var):
             try:
-                sid = int(float(manual_var.get()))
+                cid = int(float(var.get()))
             except Exception:
                 return
-            if sid > 0:
+            if cid > 0:
                 self._mech_collect_draft()
-                ids = list(det.get('skill_ids') or [])
-                if sid not in ids:
-                    ids.append(sid)
-                    det['skill_ids'] = sorted(ids)
+                ids = list(det.get(det_key) or [])
+                if cid not in ids:
+                    ids.append(cid)
+                    det[det_key] = sorted(ids)
                 self._mx_rerender()
-        make_action_button(add_row, '添加', _add_manual, width=4).pack(side=tk.LEFT)
+        make_action_button(add_row, '添加',
+                           lambda: _add_manual_to('skill_ids', manual_var),
+                           width=4).pack(side=tk.LEFT)
+        buff_var = _field(add_row, 'BuffID', 'manual_bid', '', 9)
+        make_action_button(add_row, '添加',
+                           lambda: _add_manual_to('buff_ids', buff_var),
+                           width=4).pack(side=tk.LEFT)
         search_row = _row(form)
         search_var = _field(search_row, '技能库', 'catalog_q', '', 12)
 
@@ -877,6 +915,12 @@ class _MechanicsEditorMixin:
                 return default
         if 'name' in v:
             draft['name'] = (_sv('name') or '机制').strip()
+        nw = v.get('notes_widget')
+        if nw is not None:
+            try:
+                draft['notes'] = nw.get('1.0', 'end').strip()
+            except Exception:
+                pass
         if 'tts_text' in v:
             alert['tts_text'] = _sv('tts_text').strip()
         if 'banner_text' in v:
@@ -902,11 +946,11 @@ class _MechanicsEditorMixin:
             inline['hold_ms'] = int(_num('dodge_hold', 600))
             inline['sequence'] = []
         elif preset == '按键序列':
+            # keep empty-key steps so indexes stay aligned with the rendered
+            # rows (✕ deletes by index); they are filtered out at save time
             steps = []
             for kv, dv, hv in v.get('seq_vars') or []:
                 key = (kv.get() or '').strip().upper()
-                if not key:
-                    continue
                 try:
                     delay = int(float(dv.get() or 0))
                 except Exception:
@@ -930,6 +974,10 @@ class _MechanicsEditorMixin:
 
     def _mech_save_form(self) -> None:
         draft = self._mech_collect_draft()
+        inline = ((draft.get('dodge') or {}).get('inline') or {})
+        if inline.get('sequence'):
+            inline['sequence'] = [s for s in inline['sequence']
+                                  if (s.get('key') or '').strip()]
         self._mech_call('save_mech', draft)
         self._mech_editing = None
         self._mech_draft = {}

@@ -842,7 +842,10 @@ class BossRaidEngine:
         self._enrage_anchor_ts: float = 0.0
         self._enrage_milestones_fired: set = set()
         self._pending_mech_forwards: List[Dict[str, Any]] = []
-        self._self_buff_prev: set = set()   # last self-buff id snapshot (edge detect)
+        # last self-buff id snapshot for edge detect; None = no snapshot yet
+        # (an empty set is a VALID snapshot — a player with zero buffs must
+        # still trigger on the first new point-name buff)
+        self._self_buff_prev: Optional[set] = None
 
         # ── memory-driven boss action state (cast_skill_id edge feed) ──
         # observed skills per boss: base_id -> {skill_id -> {name, count, last_cast_duration_ms, last_ts}}
@@ -1569,7 +1572,7 @@ class BossRaidEngine:
             self._enrage_anchor_ts = 0.0
             self._enrage_milestones_fired.clear()
             self._pending_mech_forwards = []
-            self._self_buff_prev = set()
+            self._self_buff_prev = None
         profile = self._profile or {}
         for mech in profile.get("mechanics") or []:
             if not isinstance(mech, dict) or not mech.get("enabled", True):
@@ -1711,7 +1714,7 @@ class BossRaidEngine:
                 self._self_buff_prev = cur
                 return
             prev = self._self_buff_prev
-            new_ids = cur - prev if prev else set()
+            new_ids = cur - prev if prev is not None else set()
             self._self_buff_prev = cur
             for bid in new_ids:
                 if bid not in self._mech_index_by_skill:

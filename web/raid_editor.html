@@ -577,25 +577,27 @@ function _mInboxRow(rec) {
 function mechCreateFromSkill(sid, name, dur) {
     var a = _api();
     if (!a || !a.create_mechanic_from_skill) return;
+    if (_mechEditing) _mCollect();   // preserve open-form input across the reload
     _mechReply(a.create_mechanic_from_skill(sid, name || '', dur));
 }
 
 function mechBind(mid, sid) {
     var a = _api();
     if (!a || !a.bind_mechanic_skill) return;
+    if (_mechEditing) _mCollect();   // preserve open-form input across the reload
     _mechReply(a.bind_mechanic_skill(mid, sid));
 }
 
 function _mCard(m) {
     var names = m.skill_names || {};
     var det = m.detect || {};
-    var ids = det.skill_ids || [];
+    var ids = (det.skill_ids || []).concat(det.buff_ids || []);
     var chips = ids.map(function (sid) {
         var nm = (names[String(sid)] || '').trim();
         return nm ? (nm + '#' + sid) : ('#' + sid);
     });
     var sum = m.summary || {};
-    var sub = [chips.length ? ('技能: ' + chips.join(', ')) : '未绑定技能',
+    var sub = [chips.length ? ('检测: ' + chips.join(', ')) : '未绑定检测ID',
                sum.alert_desc || '', sum.dodge_desc || ''].filter(Boolean).join(' · ');
     var mid = _esc(m.id);
     var html = '<div class="entity-card" style="display:block;padding:6px 8px;margin:3px 0;border-left:3px solid ' + _esc(m.color || '#68e4ff') + ';">'
@@ -610,6 +612,11 @@ function _mCard(m) {
         + '<div class="action-btn" style="padding:2px 6px;font-size:10px;" onclick="mechDelete(\'' + mid + '\')">删除</div>'
         + '</div>'
         + '<div style="font-size:9px;color:#9fc0d8;margin-top:2px;">' + _esc(sub) + '</div>';
+    var notes = String(m.notes || '').trim();
+    if (notes) {
+        html += '<div style="font-size:10px;color:#cfe3f2;margin-top:3px;line-height:1.5;white-space:pre-wrap;">'
+            + _esc(notes) + '</div>';
+    }
     if (_mechEditing === m.id) html += _mForm(m);
     return html + '</div>';
 }
@@ -617,6 +624,11 @@ function _mCard(m) {
 function mechToggle(mid, enabled) {
     var m = _mFind(mid);
     if (!m) return;
+    if (_mechEditing) {
+        _mCollect();   // preserve open-form input across the reload
+        // keep the open form's draft in sync, or 保存 would flip enabled back
+        if (_mechEditing === mid && _mechDraft) _mechDraft.enabled = !!enabled;
+    }
     var m2 = JSON.parse(JSON.stringify(m));
     delete m2.summary; delete m2.skill_names;
     m2.enabled = !!enabled;
@@ -710,13 +722,23 @@ function _mForm(m) {
                 + ';cursor:pointer;margin:0 1px;vertical-align:middle;'
                 + (d.color === c ? 'outline:2px solid #fff;' : '') + '"></span>';
         }).join('') + '</div>';
+    // 说明 / 躲法
+    html += '<div class="phase-header" style="font-size:10px;">说明 (机制 & 躲法)</div>'
+        + '<textarea id="mf-notes" class="mech-input" rows="4" style="width:96%;resize:vertical;'
+        + 'font-size:10px;line-height:1.5;">' + _esc(d.notes == null ? '' : d.notes) + '</textarea>';
     // 检测
+    var buffIds = det.buff_ids || [];
     html += '<div class="phase-header" style="font-size:10px;">检测 (技能/Buff ID)</div><div style="margin:3px 0;">';
-    if (!ids.length) html += '<span style="color:#75808d;">未绑定 — 从下方添加</span>';
+    if (!ids.length && !buffIds.length) html += '<span style="color:#75808d;">未绑定 — 从下方添加</span>';
     html += ids.map(function (sid) {
         var nm = (names[String(sid)] || '').trim();
         return '<span onclick="mechDraftRemoveSkill(' + sid + ')" style="display:inline-block;background:rgba(117,205,255,.18);color:#e8f6ff;padding:1px 6px;margin:1px;border-radius:4px;cursor:pointer;">'
             + _esc(nm ? (nm + '#' + sid) : ('#' + sid)) + ' ✕</span>';
+    }).join('');
+    html += buffIds.map(function (bid) {
+        var nm = (names[String(bid)] || '').trim();
+        return '<span onclick="mechDraftRemoveBuff(' + bid + ')" style="display:inline-block;background:rgba(104,228,255,.12);color:#8fdcff;padding:1px 6px;margin:1px;border-radius:4px;cursor:pointer;">'
+            + _esc('B ' + (nm ? (nm + '#' + bid) : ('#' + bid))) + ' ✕</span>';
     }).join('') + '</div>';
     var observed = ((_mechState && _mechState.observed) || []).filter(function (o) {
         return ids.indexOf(o.id) < 0;
@@ -728,8 +750,10 @@ function _mForm(m) {
                 return '<option value="' + o.id + '">' + _esc((o.name || '技能') + ' #' + o.id + ' ×' + (o.count || 0)) + '</option>';
             }).join('') + '</select> ';
     }
-    html += _mInput('mf-manual', '手动ID', '', 70)
+    html += _mInput('mf-manual', '技能ID', '', 70)
         + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddManual()">添加</span> '
+        + _mInput('mf-manual-buff', 'BuffID', '', 70)
+        + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddManualBuff()">添加</span> '
         + _mInput('mf-q', '技能库', '', 90)
         + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechCatalogSearch()">搜索</span>';
     html += (_mechCatalog || []).map(function (h) {
@@ -801,6 +825,8 @@ function _mCollect() {
     var dodge = d.dodge = d.dodge || {};
     var inline = dodge.inline = dodge.inline || {};
     if (document.getElementById('mf-name')) d.name = _mVal('mf-name') || '机制';
+    var notesEl = document.getElementById('mf-notes');
+    if (notesEl) d.notes = String(notesEl.value || '').trim();
     if (document.getElementById('mf-tts')) alert.tts_text = _mVal('mf-tts');
     if (document.getElementById('mf-banner')) alert.banner_text = _mVal('mf-banner');
     alert.countdown_s = _mNum('mf-cd', alert.countdown_s != null ? alert.countdown_s : 8);
@@ -820,12 +846,13 @@ function _mCollect() {
         inline.hold_ms = Math.round(_mNum('mf-hold', 600));
         inline.sequence = [];
     } else if (preset === 'seq') {
+        // keep empty-key steps so indexes stay aligned with the rendered rows
+        // (✕ deletes by index); they are filtered out at save time
         var steps = [];
         for (var i = 0; ; i++) {
             var kEl = document.getElementById('mf-sk-' + i);
             if (!kEl) break;
             var key = String(kEl.value || '').trim().toUpperCase();
-            if (!key) continue;
             steps.push({ key: key,
                          delay_ms: Math.round(_mNum('mf-sd-' + i, 0)),
                          hold_ms: Math.round(_mNum('mf-sh-' + i, 0)) });
@@ -854,11 +881,30 @@ function mechDraftAddManual() {
     var sid = parseInt(_mVal('mf-manual'), 10);
     if (sid > 0) mechDraftAddSkill(sid);
 }
+function mechDraftAddBuff(bid) {
+    _mCollect();
+    if (!_mechDraft) return;
+    var det = _mechDraft.detect = _mechDraft.detect || {};
+    var ids = det.buff_ids = det.buff_ids || [];
+    if (bid > 0 && ids.indexOf(bid) < 0) { ids.push(bid); ids.sort(function (a, b) { return a - b; }); }
+    renderMechanics();
+}
+function mechDraftAddManualBuff() {
+    var bid = parseInt(_mVal('mf-manual-buff'), 10);
+    if (bid > 0) mechDraftAddBuff(bid);
+}
 function mechDraftRemoveSkill(sid) {
     _mCollect();
     if (!_mechDraft) return;
     var det = _mechDraft.detect || {};
     det.skill_ids = (det.skill_ids || []).filter(function (x) { return Number(x) !== Number(sid); });
+    renderMechanics();
+}
+function mechDraftRemoveBuff(bid) {
+    _mCollect();
+    if (!_mechDraft) return;
+    var det = _mechDraft.detect || {};
+    det.buff_ids = (det.buff_ids || []).filter(function (x) { return Number(x) !== Number(bid); });
     renderMechanics();
 }
 function mechCatalogSearch() {
@@ -889,6 +935,11 @@ function mechSaveForm() {
     if (!m || !a || !a.save_mechanic) return;
     var m2 = JSON.parse(JSON.stringify(m));
     delete m2.summary; delete m2.skill_names;
+    if (m2.dodge && m2.dodge.inline && (m2.dodge.inline.sequence || []).length) {
+        m2.dodge.inline.sequence = m2.dodge.inline.sequence.filter(function (s) {
+            return String((s && s.key) || '').trim();
+        });
+    }
     _mechEditing = null; _mechDraft = null; _mechCatalog = [];
     _mechReply(a.save_mechanic(JSON.stringify(m2)));
 }
@@ -1040,9 +1091,6 @@ function _fmtNum(v) {
 function _fmtTime(s) {
     s = Math.max(0, Math.floor(s || 0));
     return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
-}
-function _esc(s) {
-    var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML;
 }
 
 // 鈹€鈹€ Drag 鈹€鈹€

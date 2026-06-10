@@ -326,6 +326,48 @@ class MechanicsTest(unittest.TestCase):
         self.assertEqual(len(gs.boss_mechanic_countdowns), 1)
         self.assertEqual(gs.boss_mechanic_countdowns[0]["name"], "测试机制")
 
+    # ── 拆箱即用示例档案 ──
+
+    def test_example_profile_out_of_box(self):
+        import json
+        path = os.path.join(_ROOT, "assets", "boss_raids",
+                            "13023_噩梦P3_机制示例.json")
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        prof = normalize_profile(payload["profile"])
+        mechs = prof.get("mechanics") or []
+        self.assertEqual(len(mechs), 16)
+        for m in mechs:
+            det = m.get("detect") or {}
+            bound = list(det.get("skill_ids") or []) + \
+                list(det.get("buff_ids") or [])
+            self.assertTrue(bound, "未绑定检测id: %s" % m.get("name"))
+            self.assertTrue(m.get("enabled"), m.get("name"))
+            notes = m.get("notes") or ""
+            self.assertIn("机制：", notes, m.get("name"))
+            self.assertIn("躲法：", notes, m.get("name"))
+            tts = (m.get("alert") or {}).get("tts_text") or ""
+            self.assertTrue(0 < len(tts) <= 10,
+                            "TTS应为简易机制名: %s=%r" % (m.get("name"), tts))
+            self.assertTrue((m.get("alert") or {}).get("banner_text"),
+                            m.get("name"))
+        eng = self._engine(prof)
+        eng.on_self_buff_change([])        # baseline snapshot (zero buffs)
+        eng.on_self_buff_change([829304])  # 你被点了红色分摊
+        self.assertTrue(self._wait(lambda: len(self.events) >= 1))
+        self.assertEqual(self.events[0].get("tts_text"), "红色分摊")
+
+    def test_state_contract_resolves_buff_names(self):
+        from engines.boss_mechanics_state import (
+            mechanic_summary, _resolve_detect_name,
+        )
+        from engines.boss_autokey_linkage import _name_resolver
+        m = _mech(detect={"skill_ids": [], "buff_ids": [829304]})
+        self.assertEqual(mechanic_summary(m)["bound_count"], 1)
+        nm = _name_resolver()
+        if nm is not None:
+            self.assertEqual(_resolve_detect_name(nm, 829304), "分摊·普")
+
     # ── linkage ──
 
     def _linkage(self, cfg=None):
