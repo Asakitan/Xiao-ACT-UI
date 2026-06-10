@@ -3,9 +3,22 @@
 
 from __future__ import annotations
 
+import time
 import unittest
+from unittest import mock
 
 from gui_modules.sao_gui_timeline_vcr import TimelineVcrPanel
+
+
+class FakeVar:
+    def __init__(self, value: str = "") -> None:
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+    def set(self, value: object) -> None:
+        self.value = str(value)
 
 
 def _event(**overrides):
@@ -77,6 +90,32 @@ class TimelineVcrPanelSignatureTests(unittest.TestCase):
         panel.destroy()
 
         self.assertEqual(panel._last_events_sig, "")
+
+    def test_refresh_cache_reuses_only_same_query(self) -> None:
+        panel = self._panel()
+        panel.owner = object()
+        panel._query_var = FakeVar("damage")
+        panel._last_status = {"ok": True, "events": [{"id": "cached"}]}
+        panel._last_refresh_at = time.time()
+        panel._last_request_key = ("damage",)
+        rendered: list[dict] = []
+        panel._render_status = lambda status: rendered.append(dict(status))
+
+        with mock.patch("gui_modules.sao_gui_timeline_vcr.act_timeline_status") as status_fn:
+            cached = panel.refresh()
+
+        self.assertEqual(cached["events"][0]["id"], "cached")
+        self.assertEqual(rendered[-1]["events"][0]["id"], "cached")
+        status_fn.assert_not_called()
+
+        panel._query_var.set("heal")
+        status_payload = {"ok": True, "events": [{"id": "fresh"}], "filters": {"query": "heal"}}
+        with mock.patch("gui_modules.sao_gui_timeline_vcr.act_timeline_status", return_value=status_payload) as status_fn:
+            refreshed = panel.refresh()
+
+        self.assertEqual(refreshed["events"][0]["id"], "fresh")
+        self.assertEqual(panel._last_request_key, ("heal",))
+        status_fn.assert_called_once_with(panel.owner, limit=80, query="heal")
 
 
 if __name__ == "__main__":

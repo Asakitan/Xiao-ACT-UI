@@ -52,6 +52,7 @@ class ReportExportPanel:
         self._format_var = tk.StringVar(value="json")
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
+        self._last_request_key: tuple[Any, ...] = ()
         self._last_render_sig = ""
         self._last_history_sig = ""
 
@@ -93,15 +94,18 @@ class ReportExportPanel:
 
     def refresh(self) -> Dict[str, Any]:
         now = time.time()
-        if self._last_status and now - self._last_refresh_at < 0.35:
+        fmt = self._format_var.get()
+        request_key = (fmt,)
+        if self._last_status and request_key == self._last_request_key and now - self._last_refresh_at < 0.35:
             self._render_status(self._last_status)
             return self._last_status
         try:
-            status = act_report_status(self.owner, limit=20, fmt=self._format_var.get())
+            status = act_report_status(self.owner, limit=20, fmt=fmt)
         except Exception as exc:
             status = {"ok": False, "message": str(exc), "preview": {}, "history": [], "errors": [str(exc)]}
         self._last_status = dict(status or {})
         self._last_refresh_at = now
+        self._last_request_key = request_key
         self._render_status(self._last_status)
         return self._last_status
 
@@ -174,6 +178,7 @@ class ReportExportPanel:
             self._status_var.set(str(result.get('message') or 'Export failed'))
         self._last_status = dict(result or {})
         self._last_refresh_at = time.time()
+        self._last_request_key = ()
         self._render_status(self._last_status)
         return self._last_status
 
@@ -184,6 +189,7 @@ class ReportExportPanel:
             result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
         self._status_var.set(str(result.get('message') or ('Loaded' if result.get('ok') else 'Load failed')))
         self._last_refresh_at = 0.0
+        self._last_request_key = ()
         self.refresh()
         return dict(result or {})
 
@@ -194,6 +200,7 @@ class ReportExportPanel:
             result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
         self._status_var.set(str(result.get('message') or ('Deleted' if result.get('ok') else 'Delete failed')))
         self._last_refresh_at = 0.0
+        self._last_request_key = ()
         self._last_history_sig = ""
         self.refresh()
         return dict(result or {})
@@ -205,6 +212,7 @@ class ReportExportPanel:
             result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
         self._status_var.set(str(result.get('message') or ('Cleared' if result.get('ok') else 'Clear failed')))
         self._last_refresh_at = 0.0
+        self._last_request_key = ()
         self._last_history_sig = ""
         self.refresh()
         return dict(result or {})
@@ -238,6 +246,7 @@ class ReportExportPanel:
             result = {"ok": False, "message": str(exc), "errors": [str(exc)]}
         self._status_var.set(str(result.get('message') or ('Imported' if result.get('ok') else 'Import failed')))
         self._last_refresh_at = 0.0
+        self._last_request_key = ()
         self._last_history_sig = ""
         self._last_render_sig = ""
         self.refresh()

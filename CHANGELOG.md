@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.50: ACT Tk Report/Timeline 刷新缓存参数修复.
+
+  1) `gui_modules/sao_gui_report_export.py` 的 350ms refresh 缓存现在按
+     `fmt` 建 key。修复快速切换预览/导出格式时, Report Export Tk 面板可能
+     复用上一格式的报告预览结果的问题。导出、载入、删除、导入后也会清理 refresh key。
+
+  2) `gui_modules/sao_gui_timeline_vcr.py` 的 350ms refresh 缓存现在按
+     `query` 建 key。修复快速修改时间线过滤词时, Timeline VCR Tk 面板可能
+     复用旧事件列表、没有把新查询传到后端的问题。播放/暂停/步进/seek/filter
+     动作后也会清理 refresh key。
+
+
+
 ## v4.4.49: ACT Tk Death/Graph 刷新缓存参数修复.
 
   1) `gui_modules/sao_gui_death_recap.py` 的 350ms refresh 缓存现在按
