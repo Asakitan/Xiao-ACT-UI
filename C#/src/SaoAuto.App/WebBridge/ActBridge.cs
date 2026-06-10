@@ -44,6 +44,8 @@ public sealed class ActBridge : IDisposable
         BridgeCommands.ActActionLogFilter,
         BridgeCommands.ActActionLogJumpToTime,
         BridgeCommands.ActActionLogCopy,
+        BridgeCommands.ActDeathRecapStatus,
+        BridgeCommands.ActDeathRecapCopy,
         BridgeCommands.ActGraphStatus,
         BridgeCommands.ActGraphSelectMetric,
         BridgeCommands.ActGraphZoom,

@@ -129,6 +129,9 @@ public static class BridgeCommands
     public const string ActActionLogJumpToTime = "act.action_log.jump_to_time";
     public const string ActActionLogCopy = "act.action_log.copy";
 
+    public const string ActDeathRecapStatus = "act.death_recap.status";
+    public const string ActDeathRecapCopy = "act.death_recap.copy";
+
     public const string ActGraphStatus = "act.graph.status";
     public const string ActGraphSelectMetric = "act.graph.select_metric";
     public const string ActGraphZoom = "act.graph.zoom";

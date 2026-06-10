@@ -111,12 +111,28 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     var toastTimer = null;
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
+    function numericArg(value, fallback) {
+        var n = Number(value);
+        return isFinite(n) ? n : fallback;
+    }
+    function deathRecapPayload(name, args) {
+        args = args || [];
+        if (name === 'get_death_recap_status' || name === 'copy_death_recap') {
+            return {
+                limit: numericArg(args[0], 80),
+                window_s: numericArg(args[1], 8.0),
+                entity_id: args[2] == null || args[2] === '' ? null : args[2]
+            };
+        }
+        if (name === 'toggle_death_recap') return { action: 'toggle_death_recap' };
+        return { args: args };
+    }
     function apiCall(name, args) {
         var api = window.pywebview && window.pywebview.api;
         if (api && typeof api[name] === 'function') return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
         if (window.bridge && typeof window.bridge.cmd === 'function') {
             var map = { get_death_recap_status: 'act.death_recap.status', copy_death_recap: 'act.death_recap.copy', toggle_death_recap: 'ui.menu_action' };
-            var payload = name === 'toggle_death_recap' ? { action: 'toggle_death_recap' } : { args: args || [] };
+            var payload = deathRecapPayload(name, args || []);
             return window.bridge.cmd(map[name] || name, payload).then(parseResult);
         }
         return Promise.resolve({ ok: false, message: 'Death recap API unavailable', rows: [], summary: {} });

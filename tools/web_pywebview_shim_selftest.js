@@ -82,6 +82,13 @@ function assert(cond, message) {
   assert(last.payload.dtype === "u32", "get_mem_scope_status dtype was not forwarded");
   assert(last.payload.job_id === "job-1", "get_mem_scope_status job_id was not forwarded");
 
+  await window.pywebview.api.get_death_recap_status(55, 12.5, "1001");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.death_recap.status", "get_death_recap_status command mismatch");
+  assert(last.payload.limit === 55, "get_death_recap_status limit was not forwarded");
+  assert(last.payload.window_s === 12.5, "get_death_recap_status window_s was not forwarded");
+  assert(last.payload.entity_id === "1001", "get_death_recap_status entity_id was not forwarded");
+
   await window.pywebview.api.mem_search("123", "i64", 4);
   last = calls[calls.length - 1];
   assert(last.name === "act.mem_scope.search", "mem_search command mismatch");
@@ -166,6 +173,12 @@ function assert(cond, message) {
   assert(actionLog.includes("source: String(args[4] || 'live')"), "action log status should forward source");
   assert(actionLog.includes("encounter_id: String(args[5] || '')"), "action log status should forward encounter_id");
   assert(actionLog.includes("offset: numericArg(args[6], 0)"), "action log status should forward offset");
+
+  const deathRecap = fs.readFileSync(path.join(root, "web/act_death_recap.html"), "utf8");
+  assert(!deathRecap.includes("{ args: args || [] }"), "death recap still sends bare fallback args");
+  assert(deathRecap.includes("deathRecapPayload(name, args || [])"), "death recap is missing fallback payload mapping");
+  assert(deathRecap.includes("window_s: numericArg(args[1], 8.0)"), "death recap should forward window_s");
+  assert(deathRecap.includes("entity_id: args[2] == null || args[2] === '' ? null : args[2]"), "death recap should forward entity_id");
 
   const reportExport = fs.readFileSync(path.join(root, "web/act_report_export.html"), "utf8");
   assert(!reportExport.includes("{ args: args || [] }"), "report export still sends bare fallback args");

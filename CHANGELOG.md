@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.37: Death Recap WebView2 fallback 修复.
+
+  1) `web/act_death_recap.html` 的 fallback 现在会传递 `limit`、`window_s`
+     与 `entity_id` 命名 payload。修复 Death Recap 在 WebView2 bridge 路径下
+     时间窗口、目标实体和行数参数落入裸 `args` 后无法被后端读取的问题。
+
+  2) C# `ActBridge` 新增 `act.death_recap.status` / `act.death_recap.copy`
+     命令注册。修复 Death Recap 通过 native WebView2 host 调用时落到
+     `unknown_command` 的问题。扩展 `tools/web_pywebview_shim_selftest.js`
+     与 `Session194ActBridgeTests`。
+
+
+
 ## v4.4.36: ACT Timeline 与 Action Log fallback 参数修复.
 
   1) `web/act_timeline_vcr.html` 的 WebView2 bridge fallback 现在会把
