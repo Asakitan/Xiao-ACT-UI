@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.36: ACT Timeline 与 Action Log fallback 参数修复.
+
+  1) `web/act_timeline_vcr.html` 的 WebView2 bridge fallback 现在会把
+     `limit`、`query`、`speed`、`delta_ms`、`cursor_ms` 等参数映射成命名 payload。
+     修复无 pywebview 直连时 Timeline VCR 的筛选、步进、seek、速度参数落入裸
+     `args` 而后端无法读取的问题。
+
+  2) `web/act_action_log.html` 的 fallback 现在会传递 `limit`、`query`、`topic`、
+     `cursor_ms`、`source`、`encounter_id` 与 `offset`。修复 Action Log 在 WebView2
+     fallback 下 history/live 来源、翻页、跳转和筛选参数丢失的问题。扩展
+     `tools/web_pywebview_shim_selftest.js` 覆盖这两个页面。
+
+
+
 ## v4.4.35: WebView2 插件桥接参数修复.
 
   1) `web/pywebview-shim.js` 与 `web/plugin_manager.html` 的插件 render/action fallback

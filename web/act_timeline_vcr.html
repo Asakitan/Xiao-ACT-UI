@@ -120,6 +120,22 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
 
     function esc(value) { return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function parseResult(result) { if (typeof result === 'string') { try { return JSON.parse(result); } catch (_) { return { ok: false, message: result }; } } return result || {}; }
+    function numericArg(value, fallback) {
+        var n = Number(value);
+        return isFinite(n) ? n : fallback;
+    }
+    function timelinePayload(name, args) {
+        args = args || [];
+        if (name === 'get_timeline_status') return { limit: numericArg(args[0], 80), query: String(args[1] || '') };
+        if (name === 'play_timeline') return { speed: numericArg(args[0], 1) };
+        if (name === 'pause_timeline') return {};
+        if (name === 'step_timeline') return { delta_ms: numericArg(args[0], 1000) };
+        if (name === 'seek_timeline') return { cursor_ms: numericArg(args[0], 0) };
+        if (name === 'set_timeline_speed') return { speed: numericArg(args[0], 1) };
+        if (name === 'filter_timeline') return { query: String(args[0] || '') };
+        if (name === 'toggle_timeline_vcr') return { action: 'toggle_timeline_vcr' };
+        return { args: args };
+    }
     function apiCall(name, args) {
         var api = window.pywebview && window.pywebview.api;
         if (api && typeof api[name] === 'function') return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
@@ -129,7 +145,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                 step_timeline: 'act.timeline.step', seek_timeline: 'act.timeline.seek', set_timeline_speed: 'act.timeline.speed', filter_timeline: 'act.timeline.filter',
                 toggle_timeline_vcr: 'ui.menu_action'
             };
-            var payload = name === 'toggle_timeline_vcr' ? { action: 'toggle_timeline_vcr' } : { args: args || [] };
+            var payload = timelinePayload(name, args || []);
             return window.bridge.cmd(cmdMap[name] || ('act.timeline.' + name), payload).then(parseResult);
         }
         return Promise.resolve({ ok: false, message: 'Timeline API unavailable', events: [] });

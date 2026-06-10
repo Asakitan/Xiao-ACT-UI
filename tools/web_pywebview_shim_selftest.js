@@ -154,6 +154,19 @@ function assert(cond, message) {
   assert(!triggerManager.includes("{ args: args || [] }"), "trigger manager still sends bare fallback args");
   assert(triggerManager.includes("triggerPayload(name, args || [])"), "trigger manager is missing fallback payload mapping");
 
+  const timelineVcr = fs.readFileSync(path.join(root, "web/act_timeline_vcr.html"), "utf8");
+  assert(!timelineVcr.includes("{ args: args || [] }"), "timeline VCR still sends bare fallback args");
+  assert(timelineVcr.includes("timelinePayload(name, args || [])"), "timeline VCR is missing fallback payload mapping");
+  assert(timelineVcr.includes("delta_ms: numericArg(args[0], 1000)"), "timeline VCR should forward step delta_ms");
+  assert(timelineVcr.includes("cursor_ms: numericArg(args[0], 0)"), "timeline VCR should forward seek cursor_ms");
+
+  const actionLog = fs.readFileSync(path.join(root, "web/act_action_log.html"), "utf8");
+  assert(!actionLog.includes("{ args: args || [] }"), "action log still sends bare fallback args");
+  assert(actionLog.includes("actionLogPayload(name, args || [])"), "action log is missing fallback payload mapping");
+  assert(actionLog.includes("source: String(args[4] || 'live')"), "action log status should forward source");
+  assert(actionLog.includes("encounter_id: String(args[5] || '')"), "action log status should forward encounter_id");
+  assert(actionLog.includes("offset: numericArg(args[6], 0)"), "action log status should forward offset");
+
   const reportExport = fs.readFileSync(path.join(root, "web/act_report_export.html"), "utf8");
   assert(!reportExport.includes("{ args: args || [] }"), "report export still sends bare fallback args");
   assert(reportExport.includes("reportPayload(name, args || [])"), "report export is missing fallback payload mapping");
