@@ -76,6 +76,13 @@ public static class BridgeCommands
     public const string NotifyHpHitRegionsReady = "ui.notify_hp_hit_regions_ready";
     public const string ExitApplication = "ui.exit";
     public const string SetPanelVisible = "ui.set_panel_visible";
+    public const string ToggleMenu = "ui.toggle_menu";
+    public const string ContextAction = "ui.context_action";
+    public const string MenuAction = "ui.menu_action";
+    public const string WindowDrag = "ui.window_drag";
+    public const string SetCtxMenuActive = "ui.set_ctx_menu_active";
+    public const string ClosePanel = "ui.close_panel";
+    public const string PanelAction = "ui.panel_action";
 
     // Updater
     public const string CheckUpdate = "updater.check";
@@ -134,6 +141,15 @@ public static class BridgeCommands
     public const string ActPluginsEnable = "act.plugins.enable";
     public const string ActPluginsDisable = "act.plugins.disable";
     public const string ActPluginsReload = "act.plugins.reload";
+    public const string ActPluginsPin = "act.plugins.pin";
+    public const string ActPluginsImportDialog = "act.plugins.import_dialog";
+    public const string ActPluginsImport = "act.plugins.import";
+    public const string ActPluginsUninstall = "act.plugins.uninstall";
+    public const string ActPluginsHotkeys = "act.plugins.hotkeys";
+    public const string ActPluginsSetHotkey = "act.plugins.set_hotkey";
+    public const string ActPluginsUiPanels = "act.plugins.ui_panels";
+    public const string ActPluginsRenderUiPanel = "act.plugins.render_ui_panel";
+    public const string ActPluginsInvokeUiAction = "act.plugins.invoke_ui_action";
 
     public const string ActTriggersStatus = "act.triggers.status";
     public const string ActTriggersEnable = "act.triggers.enable";

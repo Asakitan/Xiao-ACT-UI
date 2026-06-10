@@ -47,11 +47,32 @@
         exit_application: function () {
             return call('ui.exit', {});
         },
+        exit_app: function () {
+            return call('ui.exit', {});
+        },
         set_panel_visible: function (panel, visible) {
             return call('ui.set_panel_visible', { panel: String(panel || ''), visible: !!visible });
         },
+        toggle_menu: function () {
+            return call('ui.toggle_menu', {});
+        },
+        context_action: function (action) {
+            return call('ui.context_action', { action: String(action || '') });
+        },
         menu_action: function (action) {
             return call('ui.menu_action', { action: String(action || '') });
+        },
+        window_drag: function (dx, dy) {
+            return call('ui.window_drag', { dx: dx || 0, dy: dy || 0 });
+        },
+        set_ctx_menu_active: function (active, bounds) {
+            return call('ui.set_ctx_menu_active', { active: !!active, bounds: bounds || null });
+        },
+        close_panel: function () {
+            return call('ui.close_panel', {});
+        },
+        panel_action: function (action) {
+            return call('ui.panel_action', { action: String(action || '') });
         },
         toggle_plugin_manager: function () {
             return call('ui.menu_action', { action: 'toggle_plugin_manager' });
@@ -257,6 +278,33 @@
         reload_plugins: function (pluginId) {
             var payload = pluginId ? { plugin_id: String(pluginId || '') } : {};
             return call('act.plugins.reload', payload);
+        },
+        pin_plugin: function (pluginId, pinned) {
+            return call('act.plugins.pin', { plugin_id: String(pluginId || ''), pinned: pinned !== false });
+        },
+        import_plugin_dialog: function () {
+            return call('act.plugins.import_dialog', {});
+        },
+        import_plugin: function (archivePath) {
+            return call('act.plugins.import', { archive_path: String(archivePath || '') });
+        },
+        uninstall_plugin: function (pluginId) {
+            return call('act.plugins.uninstall', { plugin_id: String(pluginId || '') });
+        },
+        get_plugin_hotkeys: function () {
+            return call('act.plugins.hotkeys', {});
+        },
+        set_plugin_hotkey: function (action, key) {
+            return call('act.plugins.set_hotkey', { action: String(action || ''), key: String(key || '') });
+        },
+        get_plugin_ui_panels: function () {
+            return call('act.plugins.ui_panels', {});
+        },
+        render_ui_panel: function (panelId, payload) {
+            return call('act.plugins.render_ui_panel', { panel_id: String(panelId || ''), payload: String(payload || '') });
+        },
+        invoke_ui_action: function (panelId, actionId, payload) {
+            return call('act.plugins.invoke_ui_action', { panel_id: String(panelId || ''), action_id: String(actionId || ''), payload: String(payload || '') });
         },
         get_trigger_status: function () {
             return call('act.triggers.status', {});

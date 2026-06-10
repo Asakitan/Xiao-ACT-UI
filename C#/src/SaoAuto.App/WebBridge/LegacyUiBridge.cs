@@ -6,13 +6,12 @@ namespace SaoAuto.App.WebBridge;
 
 /// <summary>
 /// S193 — Stub responder for the pywebview-shim's <c>ui.*</c>
-/// commands. Pages built against the Python panel call hit-region /
-/// panel-visibility / exit-application APIs; we acknowledge them so
-/// the page's promise chains complete, log the payload at debug
-/// level for future wiring, and that's it. None of these have a real
-/// C# consumer yet (no native click-through, no Tk-style panel
-/// visibility flag); a future session can plug each into a real
-/// handler without touching the JS shim.
+/// commands. Pages built against the Python panel call hit-region,
+/// context-menu, drag, panel-visibility, menu-action, and exit APIs; we
+/// acknowledge them so the page's promise chains complete, log the payload
+/// at debug level for future wiring, and route exit aliases to the supplied
+/// shutdown action. A future session can plug each non-exit command into a
+/// real native handler without touching the JS shim.
 ///
 /// Reply shape: <c>{ok:bool, command:string}</c>. <c>ui.exit</c>
 /// returns immediately and schedules an <c>Application.Shutdown</c>
@@ -38,11 +37,25 @@ public sealed class LegacyUiBridge : IDisposable
             BridgeCommands.NotifyHpHitRegionsReady,
             BridgeCommands.ExitApplication,
             BridgeCommands.SetPanelVisible,
+            BridgeCommands.ToggleMenu,
+            BridgeCommands.ContextAction,
+            BridgeCommands.MenuAction,
+            BridgeCommands.WindowDrag,
+            BridgeCommands.SetCtxMenuActive,
+            BridgeCommands.ClosePanel,
+            BridgeCommands.PanelAction,
         };
         router.Register(BridgeCommands.SetHitRegions, p => Ack("set_hit_regions", p));
         router.Register(BridgeCommands.NotifyHpHitRegionsReady, p => Ack("notify_hp_hit_regions_ready", p));
         router.Register(BridgeCommands.ExitApplication, HandleExit);
         router.Register(BridgeCommands.SetPanelVisible, p => Ack("set_panel_visible", p));
+        router.Register(BridgeCommands.ToggleMenu, p => Ack("toggle_menu", p));
+        router.Register(BridgeCommands.ContextAction, p => HandleAction("context_action", p));
+        router.Register(BridgeCommands.MenuAction, p => HandleAction("menu_action", p));
+        router.Register(BridgeCommands.WindowDrag, p => Ack("window_drag", p));
+        router.Register(BridgeCommands.SetCtxMenuActive, p => Ack("set_ctx_menu_active", p));
+        router.Register(BridgeCommands.ClosePanel, p => Ack("close_panel", p));
+        router.Register(BridgeCommands.PanelAction, p => Ack("panel_action", p));
     }
 
     public void Dispose()
@@ -65,5 +78,15 @@ public sealed class LegacyUiBridge : IDisposable
         _log.LogInformation("[LegacyUiBridge] exit requested via bridge");
         _exitAction?.Invoke();
         return new JsonObject { ["ok"] = true, ["command"] = "exit" };
+    }
+
+    private JsonObject HandleAction(string command, JsonObject? payload)
+    {
+        var action = payload?["action"]?.GetValue<string>() ?? string.Empty;
+        if (string.Equals(action, "exit", StringComparison.Ordinal))
+        {
+            return HandleExit(payload);
+        }
+        return Ack(command, payload);
     }
 }

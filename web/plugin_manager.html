@@ -348,9 +348,39 @@ button.close {
             return Promise.resolve(api[name].apply(api, args || [])).then(parseResult);
         }
         if (window.bridge && typeof window.bridge.cmd === 'function') {
-            return window.bridge.cmd('act.plugins.' + name, { args: args || [] }).then(parseResult);
+            var mapped = pluginCommand(name, args || []);
+            return window.bridge.cmd(mapped.name, mapped.payload).then(parseResult);
         }
         return Promise.resolve({ ok: false, message: 'Plugin API unavailable' });
+    }
+
+    function pluginCommand(name, args) {
+        var maps = {
+            get_plugin_status: 'act.plugins.status',
+            list_plugins: 'act.plugins.list',
+            enable_plugin: 'act.plugins.enable',
+            disable_plugin: 'act.plugins.disable',
+            reload_plugins: 'act.plugins.reload',
+            pin_plugin: 'act.plugins.pin',
+            import_plugin_dialog: 'act.plugins.import_dialog',
+            import_plugin: 'act.plugins.import',
+            uninstall_plugin: 'act.plugins.uninstall',
+            get_plugin_hotkeys: 'act.plugins.hotkeys',
+            set_plugin_hotkey: 'act.plugins.set_hotkey',
+            get_plugin_ui_panels: 'act.plugins.ui_panels',
+            render_ui_panel: 'act.plugins.render_ui_panel',
+            invoke_ui_action: 'act.plugins.invoke_ui_action'
+        };
+        var cmd = maps[name] || ('act.plugins.' + name);
+        if (name === 'get_plugin_status' || name === 'list_plugins' || name === 'import_plugin_dialog' || name === 'get_plugin_hotkeys' || name === 'get_plugin_ui_panels') return { name: cmd, payload: {} };
+        if (name === 'enable_plugin' || name === 'disable_plugin' || name === 'uninstall_plugin') return { name: cmd, payload: { plugin_id: String(args[0] || '') } };
+        if (name === 'reload_plugins') return { name: cmd, payload: args[0] ? { plugin_id: String(args[0] || '') } : {} };
+        if (name === 'pin_plugin') return { name: cmd, payload: { plugin_id: String(args[0] || ''), pinned: args[1] !== false } };
+        if (name === 'import_plugin') return { name: cmd, payload: { archive_path: String(args[0] || '') } };
+        if (name === 'set_plugin_hotkey') return { name: cmd, payload: { action: String(args[0] || ''), key: String(args[1] || '') } };
+        if (name === 'render_ui_panel') return { name: cmd, payload: { panel_id: String(args[0] || ''), payload: String(args[1] || '') } };
+        if (name === 'invoke_ui_action') return { name: cmd, payload: { panel_id: String(args[0] || ''), action_id: String(args[1] || ''), payload: String(args[2] || '') } };
+        return { name: cmd, payload: { args: args } };
     }
 
     function showToast(message) {

@@ -214,9 +214,17 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
                 reload_triggers: 'act.triggers.reload',
                 test_trigger: 'act.triggers.test'
             };
-            return window.bridge.cmd(cmdMap[name] || ('act.triggers.' + name), { args: args || [] }).then(parseResult);
+            return window.bridge.cmd(cmdMap[name] || ('act.triggers.' + name), triggerPayload(name, args || [])).then(parseResult);
         }
         return Promise.resolve({ ok: false, message: 'Trigger API unavailable' });
+    }
+
+    function triggerPayload(name, args) {
+        if (name === 'get_trigger_status' || name === 'reload_triggers') return {};
+        if (name === 'enable_trigger' || name === 'disable_trigger' || name === 'test_trigger') {
+            return { rule_id: String(args[0] || '') };
+        }
+        return { args: args };
     }
 
     function showToast(message) {

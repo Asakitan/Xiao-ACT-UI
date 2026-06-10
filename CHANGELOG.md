@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.22: WebView2 核心 UI shim + 插件/触发器 fallback 参数修复.
+
+  1) `pywebview-shim.js` 补齐 `exit_app`、`toggle_menu`、`context_action`、
+     `set_ctx_menu_active`、`window_drag`、`close_panel`、`panel_action` 等核心
+     UI 别名, 并让 C# `LegacyUiBridge` 注册对应 `ui.*` 命令。修复 WebView2 shim
+     路径下 HP/Menu/Panel 页面按钮可能 TypeError、unknown_command 或无反馈的问题。
+
+  2) 插件管理页和触发器管理页的 `window.bridge.cmd` fallback 不再发送裸
+     `{args:[...]}`。插件 ID、触发器 rule_id、pin 标志、插件 UI panel/action
+     payload 现在按命名字段透传。新增/扩展 JS 与 C# bridge 回归测试。
+
+
+
 ## v4.4.21: WebView2 shim 参数透传 + ACT 下钻 fallback 修复.
 
   1) `pywebview-shim.js` 的 `get_aggregate_status` 补传 `group_by/group_field`。
