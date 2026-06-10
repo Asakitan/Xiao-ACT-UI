@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import unittest
 
 from act_platform import runtime
@@ -48,6 +49,13 @@ class FakeOwner:
 
 
 class ActSkillDrilldownRuntimeTests(unittest.TestCase):
+    def test_html_sections_are_scrollable(self) -> None:
+        html = (Path(__file__).resolve().parents[1] / "web" / "act_skill_drilldown.html").read_text(encoding="utf-8")
+
+        self.assertIn("height:max(275px, calc(100vh - 230px))", html)
+        self.assertIn(".section { min-height:0; padding:10px; overflow:auto; }", html)
+        self.assertNotIn(".section { min-height:275px; padding:10px; overflow:hidden; }", html)
+
     def _owner_with_events(self) -> FakeOwner:
         owner = FakeOwner()
         bus = ensure_act_event_bus(owner)

@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.25: ACT 下钻页长列表滚动修复.
+
+  1) `web/act_combatant_drilldown.html` 的技能列表/侧栏 section 不再
+     `overflow:hidden` 裁掉长内容。主 layout 现在按视口高度约束, section 内部滚动,
+     窄屏堆叠时限制单 section 高度。
+
+  2) `web/act_skill_drilldown.html` 的 timeline refs / facts section 同步改为
+     可滚动布局, 修复长时间线、展开 payload 或 facts 较多时底部内容不可见的问题。
+     两个 selftest 增加 HTML CSS 回归断言。
+
+
+
 ## v4.4.24: Mem Scope 与面板主题 WebView2 shim 补齐.
 
   1) `pywebview-shim.js` 补齐 `get_mem_scope_status`、`mem_search`、
