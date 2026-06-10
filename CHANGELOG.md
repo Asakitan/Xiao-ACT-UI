@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.40: Plugin UI builder 数值参数容错修复.
+
+  1) `act_platform/ui_spec.py` 的 `UI.input(..., width=...)` 现在复用规范化器的
+     宽度容错与夹取逻辑。修复插件作者传入 `"auto"`、空值或浮点字符串时, builder
+     在渲染前直接抛 `ValueError`、导致插件面板无法显示的问题。
+
+  2) `UI.canvas(width, height, ...)` 现在对宽高使用与 `normalize_ui_spec` 一致的
+     默认值和最大尺寸夹取。修复 canvas 宽高为浮点字符串或非法值时, 规范化器尚未接手
+     就抛异常的问题。新增 `tools/act_plugin_window_selftest.py` 覆盖宽松数值参数。
+
+
+
 ## v4.4.39: Combatant Drilldown 与 Trigger Timer bridge fallback 修复.
 
   1) `web/act_combatant_drilldown.html` 与 `web/pywebview-shim.js` 新增

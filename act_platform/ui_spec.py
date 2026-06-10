@@ -428,7 +428,7 @@ class UI:
         (0 = flex). Rendered identically on Tk and WebView."""
         return {"type": "input", "id": _s(id, 80), "value": _s(value, MAX_INPUT_VAL),
                 "placeholder": _s(placeholder, 200), "input_type": input_type,
-                "width": max(0, int(width or 0))}
+                "width": max(0, min(2000, _ci(width, 0)))}
 
     @staticmethod
     def table(columns: Optional[Iterable[Any]] = None, rows: Optional[Iterable[Any]] = None,
@@ -443,7 +443,9 @@ class UI:
         """A drawing surface. ``ops`` are op dicts (see :meth:`rect`/:meth:`line`/
         :meth:`ctext`); colors are theme tokens (accent/gold/ok/white/black/…) or
         ``#hex``. Rendered identically on Tk and WebView."""
-        return {"type": "canvas", "width": int(width), "height": int(height),
+        return {"type": "canvas",
+                "width": max(1, min(MAX_CANVAS_DIM, _ci(width, 320))),
+                "height": max(1, min(MAX_CANVAS_DIM, _ci(height, 160))),
                 "bg": bg, "ops": list(ops or [])}
 
     @staticmethod

@@ -128,6 +128,18 @@ class PluginWindowTests(unittest.TestCase):
 
 
 class CanvasSpecTests(unittest.TestCase):
+    def test_builder_numeric_parameters_are_tolerant(self) -> None:
+        spec = normalize_ui_spec(UI.panel("Loose", [
+            UI.input("query", width="auto"),
+            UI.input("fixed", width="120.4"),
+            UI.canvas("810.5", "bad", [], bg="body"),
+        ]))
+
+        self.assertEqual(spec["nodes"][0]["width"], 0)
+        self.assertEqual(spec["nodes"][1]["width"], 120)
+        self.assertEqual(spec["nodes"][2]["width"], 810)
+        self.assertEqual(spec["nodes"][2]["height"], 160)
+
     def test_canvas_normalizes_ops_and_clamps(self) -> None:
         cv = UI.canvas(810, 150, [
             UI.rect(0, 0, 16, 150, fill="white", outline="border", width=1),
