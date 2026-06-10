@@ -65,14 +65,22 @@ def mechanic_summary(mech: Dict[str, Any]) -> Dict[str, Any]:
     if dodge.get("enabled"):
         seq = inline.get("sequence") or []
         keys = {(_s(s.get("key"))).upper() for s in seq}
+        parts = []
+        direction = _s(inline.get("direction"))
+        if direction:
+            from engines.auto_dodge_director import direction_label
+            parts.append("移动:" + (direction_label(direction)
+                                    or ("远离" if direction.startswith("away")
+                                        else direction)))
         if seq and len(seq) >= 2 and len(keys) == 1 and "" not in keys:
-            dodge_desc = "冲刺 %s×%d" % (next(iter(keys)), len(seq))
+            parts.append("冲刺 %s×%d" % (next(iter(keys)), len(seq)))
         elif seq:
-            dodge_desc = "序列×%d" % len(seq)
+            parts.append("序列×%d" % len(seq))
         elif _s(inline.get("action_key")):
             mode = "按住%dms" % _i(inline.get("hold_ms"), 0) \
                 if _s(inline.get("press_mode")) == "hold" else "轻点"
-            dodge_desc = "%s %s" % (_s(inline.get("action_key")), mode)
+            parts.append("%s %s" % (_s(inline.get("action_key")), mode))
+        dodge_desc = " ".join(parts)
     return {
         "bound_count": len(skill_ids),
         "alert_desc": "TTS·横幅 %.0fs/预警%.0fs" % (
@@ -104,6 +112,7 @@ def build_mechanics_state(settings, engine, state_mgr,
         "tts_volume": _i(_setting("tts_volume", 80), 80),
         "banner_enabled": bool(_setting("mech_banner_enabled", True)),
         "dodge_enabled": bool(linkage.get("dodge_enabled", True)),
+        "directional_dodge_enabled": bool(_setting("directional_dodge_enabled", False)),
         "linkage_enabled": bool(linkage.get("enabled", False)),
         "panic_hotkey": "F12",
         "zh_voice": health.get("zh_voice"),
@@ -348,6 +357,8 @@ def set_mechanics_master(settings, flags: Any) -> Dict[str, Any]:
         sao_tts.set_tts_volume(vol)
     if "banner_enabled" in flags:
         settings.set("mech_banner_enabled", bool(flags["banner_enabled"]))
+    if "directional_dodge_enabled" in flags:
+        settings.set("directional_dodge_enabled", bool(flags["directional_dodge_enabled"]))
     try:
         settings.save()
     except Exception:
@@ -359,6 +370,7 @@ def set_mechanics_master(settings, flags: Any) -> Dict[str, Any]:
         "tts_volume": _i(settings.get("tts_volume", 80), 80),
         "banner_enabled": bool(settings.get("mech_banner_enabled", True)),
         "dodge_enabled": bool(load_linkage_config(settings).get("dodge_enabled", True)),
+        "directional_dodge_enabled": bool(settings.get("directional_dodge_enabled", False)),
     }
 
 

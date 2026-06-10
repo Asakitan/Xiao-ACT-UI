@@ -203,6 +203,13 @@ class SAOPlayerGUIFloatHandlersMixin:
             cfg = load_linkage_config(self._cfg_settings_ref)
             new_state = not bool(cfg.get('dodge_enabled', True))
             set_dodge_enabled(self._cfg_settings_ref, new_state)
+            # 急停: 立刻松开定向躲避按住的所有 WASD 键, 杀掉在途位移
+            director = getattr(self, '_auto_dodge_director', None)
+            if director is not None:
+                try:
+                    director.release_all()
+                except Exception:
+                    pass
             msg = ('已启用 (F12 紧急停用)' if new_state
                    else '已禁用 (F12 重新启用)')
             if getattr(self, '_alert_overlay', None):

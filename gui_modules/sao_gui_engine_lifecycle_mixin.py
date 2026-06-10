@@ -502,6 +502,71 @@ class SAOPlayerGUIEngineLifecycleMixin:
                 linkage.on_boss_action(action)
             except Exception:
                 pass
+        self._maybe_directional_dodge(action)
+
+    def _get_auto_dodge_director(self):
+        """Lazy AutoDodgeDirector (定向躲避): 自带只读 mem 源, 相机基/玩家位/boss位
+        三个已逆向读取器收口。首次创建会开一个只读进程句柄 (与 ACE 兼容)。"""
+        director = getattr(self, '_auto_dodge_director', None)
+        if director is not None:
+            return director
+        try:
+            from engines.auto_dodge_director import AutoDodgeDirector
+            from mem_probe.il2cpp.mem_dodge_context import DodgeContext
+            from mem_probe.il2cpp.static_dps_source import StaticDpsSource
+            ctx = DodgeContext(StaticDpsSource())
+            gate = getattr(getattr(self, '_auto_key_engine', None),
+                           'is_game_foreground', None)
+            director = AutoDodgeDirector(
+                self._send_key_event,
+                get_cam_basis=ctx.get_cam_basis,
+                get_player_pos=ctx.get_player_pos,
+                gate=gate)
+            self._auto_dodge_director = director
+            self._dodge_context = ctx
+        except Exception as e:
+            print(f'[Dodge] director init failed: {e}')
+            self._auto_dodge_director = None
+        return self._auto_dodge_director
+
+    def _maybe_directional_dodge(self, action):
+        """机制躲避带 direction 时, 把人物按 WASD 挪开 (主开关
+        directional_dodge_enabled, 默认关; 与 linkage dodge_enabled / F12 共用急停)。"""
+        try:
+            if not bool(self._get_setting('directional_dodge_enabled', False)):
+                return
+            from engines.boss_autokey_linkage import load_linkage_config
+            if not bool(load_linkage_config(self._cfg_settings_ref).get('dodge_enabled', True)):
+                return
+            inline = action.get('mechanic_dodge') if isinstance(action, dict) else None
+            if not isinstance(inline, dict):
+                return
+            direction = str(inline.get('direction') or '').strip()
+            if not direction:
+                return
+            director = self._get_auto_dodge_director()
+            if director is None:
+                return
+            wait_s = float(action.get('dodge_wait_s') or 0.0)
+            boss_base_id = int(action.get('boss_base_id') or 0)
+
+            def _go():
+                danger = None
+                if direction == 'away_boss':
+                    try:
+                        danger = self._dodge_context.get_boss_pos(boss_base_id)
+                    except Exception:
+                        danger = None
+                director.dodge(inline, danger_pos=danger)
+            import threading as _th
+            if wait_s > 0.05:
+                t = _th.Timer(wait_s, _go)
+                t.daemon = True
+                t.start()
+            else:
+                _go()
+        except Exception as e:
+            print(f'[Dodge] directional dodge failed: {e}')
 
     # ────────────────────────────────────────────
     #  SkillFX / Burst Mode Ready helpers

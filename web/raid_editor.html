@@ -512,6 +512,7 @@ function renderMechanics() {
         + _mSwitch('TTS播报', 'tts_enabled', master.tts_enabled)
         + _mSwitch('横幅提醒', 'banner_enabled', master.banner_enabled)
         + _mSwitch('自动躲避', 'dodge_enabled', master.dodge_enabled)
+        + _mSwitch('定向移动', 'directional_dodge_enabled', master.directional_dodge_enabled)
         + '<span style="color:#9fc0d8;">紧急停用: ' + _esc(master.panic_hotkey || 'F12') + '</span>'
         + '<span style="color:#9fc0d8;">音量 <input type="number" min="0" max="100" value="' + Number(master.tts_volume || 80)
         + '" style="width:46px;" class="mech-input" onchange="mechMaster({tts_volume:this.value})"></span>'
@@ -801,6 +802,19 @@ function _mForm(m) {
         }).join('')
         + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechSeqAdd()">+ 加一步</span>';
     }
+    // 定向移动 (按住 WASD 挪位)
+    var curDir = String(inline.direction || '');
+    html += '<div class="phase-header" style="font-size:10px;">定向移动 (WASD 挪位)</div><div style="margin:3px 0;">'
+        + '方向 <select id="mf-dir" class="mech-input">'
+        + [['', '不移动'], ['back', '向后撤(相对视角)'], ['forward', '向前'], ['left', '向左'],
+           ['right', '向右'], ['back_left', '左后撤'], ['back_right', '右后撤'],
+           ['forward_left', '左前'], ['forward_right', '右前'], ['away_boss', '远离Boss']
+          ].map(function (o) {
+            return '<option value="' + o[0] + '"' + (curDir === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
+          }).join('') + '</select> '
+        + _mInput('mf-move', '按住ms', inline.move_ms != null ? inline.move_ms : 600, 52) + '</div>'
+        + '<div style="font-size:9px;color:#75808d;margin:2px 0;">相对视角方向最稳; 远离Boss需进本读到boss位'
+        + '(读不到自动用后备方向)。需总开关「定向移动」开启, F12 急停松键。</div>';
     // 阶段范围
     var phases = (_mechState && _mechState.phases) || [];
     var pids = d.phase_ids || [];
@@ -877,6 +891,9 @@ function _mCollect() {
         inline.action_key = '';
         inline.sequence = [];
     }
+    var dirEl = document.getElementById('mf-dir');
+    if (dirEl) inline.direction = String(dirEl.value || '');
+    if (document.getElementById('mf-move')) inline.move_ms = Math.round(_mNum('mf-move', 600));
     var ph = _mVal('mf-phase');
     d.phase_ids = ph ? [ph] : [];
     return d;

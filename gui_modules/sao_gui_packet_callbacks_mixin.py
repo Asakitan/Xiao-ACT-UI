@@ -232,6 +232,27 @@ class SAOPlayerGUIPacketCallbacksMixin:
         except Exception as e:
             print(f"[Linkage] send_key error: {e}")
 
+    def _send_key_event(self, key: str, down: bool):
+        """低层按下/松开 (定向躲避按住 WASD 用; 同 SendInput wVk 路径)。"""
+        try:
+            from engines.auto_key_engine import (
+                VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP)
+            import ctypes as _ct
+            k = (key or "").strip().upper()
+            vk = VK_NAME_MAP.get(k)
+            if vk is None and len(k) == 1 and k.isalpha():
+                vk = ord(k)
+            if vk is None:
+                return
+            extra = _ct.c_ulong(0)
+            ki = KEYBDINPUT(wVk=int(vk), wScan=0,
+                            dwFlags=0 if down else KEYEVENTF_KEYUP, time=0,
+                            dwExtraInfo=_ct.pointer(extra))
+            ev = INPUT(type=INPUT_KEYBOARD, ki=ki)
+            _ct.windll.user32.SendInput(1, _ct.byref(ev), _ct.sizeof(INPUT))
+        except Exception as e:
+            print(f"[Dodge] key_event error: {e}")
+
     def _on_packet_damage(self, event):
         """Damage event callback from packet_parser → boss raid engine + DPS tracker."""
         event = self._normalize_damage_event_for_self(event)

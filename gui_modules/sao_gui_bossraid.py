@@ -368,6 +368,13 @@ class _MechanicsEditorMixin:
 
     _MECH_COLORS = ('#ef684e', '#dea620', '#68e4ff', '#9ad334', '#8e44ad', '#2e6fb0')
     _DODGE_PRESETS = ('无', '轻点按键', '按住按键', '连续冲刺', '按键序列')
+    # 定向移动 (按住 WASD 把人物挪开): 标签 → direction 值
+    _DODGE_DIRECTIONS = (
+        ('不移动', ''), ('向后撤(相对视角)', 'back'), ('向前', 'forward'),
+        ('向左', 'left'), ('向右', 'right'), ('左后撤', 'back_left'),
+        ('右后撤', 'back_right'), ('左前', 'forward_left'), ('右前', 'forward_right'),
+        ('远离Boss', 'away_boss'),
+    )
 
     @staticmethod
     def _dash_sequence(key='SHIFT', count=3, interval_ms=300):
@@ -473,6 +480,8 @@ class _MechanicsEditorMixin:
         _switch('TTS播报', 'tts_enabled', master.get('tts_enabled', True))
         _switch('横幅提醒', 'banner_enabled', master.get('banner_enabled', True))
         _switch('自动躲避', 'dodge_enabled', master.get('dodge_enabled', True))
+        _switch('定向移动', 'directional_dodge_enabled',
+                master.get('directional_dodge_enabled', False))
         tk.Label(row, text='紧急停用: %s' % (master.get('panic_hotkey') or 'F12'),
                  bg=PANEL_CARD, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT, padx=(4, 8))
         vol_var = _tk.StringVar(value=str(int(master.get('tts_volume') or 80)))
@@ -898,6 +907,26 @@ class _MechanicsEditorMixin:
                          self._mx_rerender()),
                 width=8).pack(side=tk.LEFT)
 
+        # 定向移动 (按住 WASD 把人物挪开; 需总开关「定向移动」开启)
+        make_section_title(form, '定向移动 (WASD 挪位)')
+        mv = _row(form)
+        cur_dir = str(inline.get('direction') or '')
+        dir_lbls = {lbl: val for lbl, val in self._DODGE_DIRECTIONS}
+        cur_dir_lbl = next((lbl for lbl, val in self._DODGE_DIRECTIONS if val == cur_dir),
+                           '不移动')
+        dvar = _tk.StringVar(value=cur_dir_lbl)
+        v['dodge_direction'] = (dvar, dir_lbls)
+        tk.Label(mv, text='方向', bg=PANEL_CARD_ALT, fg=TEXT_MUTED,
+                 font=panel_font(8)).pack(side=tk.LEFT)
+        dmenu = _tk.OptionMenu(mv, dvar, *[l for l, _ in self._DODGE_DIRECTIONS])
+        dmenu.config(font=panel_font(8), bg=PANEL_CARD, fg=TEXT_MAIN, highlightthickness=0)
+        dmenu.pack(side=tk.LEFT, padx=(2, 8))
+        _field(mv, '按住ms', 'move_ms', inline.get('move_ms', 600), 6)
+        tk.Label(form, text='相对视角方向最稳; 远离Boss需进本读到boss位(读不到自动用后备方向)。'
+                          '与连冲/按键可叠加, F12 急停松键。',
+                 bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
+                 anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
+
         # 阶段范围
         ph_row = _row(form)
         phases = list(self._mech_state.get('phases') or [])
@@ -969,6 +998,12 @@ class _MechanicsEditorMixin:
             dodge['enabled'] = bool(v['dodge_enabled'].get())
         if 'lead_ms' in v:
             inline['lead_ms'] = int(_num('lead_ms', 300))
+        if 'move_ms' in v:
+            inline['move_ms'] = int(_num('move_ms', 600))
+        dpick = v.get('dodge_direction')
+        if dpick:
+            dvar, dir_lbls = dpick
+            inline['direction'] = dir_lbls.get(dvar.get() or '不移动', '')
         preset = _sv('dodge_preset', '无')
         if preset == '轻点按键':
             inline['press_mode'] = 'tap'

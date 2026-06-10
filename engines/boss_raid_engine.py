@@ -193,6 +193,33 @@ def normalize_dodge_step(raw: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+_CAM_DIRECTIONS = ("forward", "back", "left", "right",
+                   "forward_left", "forward_right", "back_left", "back_right")
+
+
+def _normalize_cam_direction(raw: Any, default: str = "") -> str:
+    v = _string(raw).lower()
+    return v if v in _CAM_DIRECTIONS else default
+
+
+def _normalize_dodge_direction(raw: Any) -> str:
+    """方向值: 空 / 相机相对8向 / world:dx,dz / away_point:x,z / away_boss。"""
+    v = _string(raw).strip()
+    if not v:
+        return ""
+    low = v.lower()
+    if low in _CAM_DIRECTIONS or low == "away_boss":
+        return low
+    for pfx in ("world:", "away_point:"):
+        if low.startswith(pfx):
+            try:
+                a, b = [float(x) for x in v[len(pfx):].split(",")[:2]]
+                return "%s%g,%g" % (pfx, a, b)
+            except Exception:
+                return ""
+    return ""
+
+
 def make_default_dodge_inline() -> Dict[str, Any]:
     return {
         "action_key": "",
@@ -204,6 +231,10 @@ def make_default_dodge_inline() -> Dict[str, Any]:
         "delay_ms": 0,           # fire N ms after the mechanic event
         "lead_ms": 300,          # fire N ms before countdown/cast end
         "cooldown_s": 3.0,
+        # 定向躲避 (auto_dodge_director): 按住 WASD 把人物挪开。空=不定向。
+        "direction": "",         # ''|forward|back|left|right|forward_left|.. |world:dx,dz|away_point:x,z|away_boss
+        "move_ms": 600,          # WASD 按住时长
+        "fallback_direction": "back",  # 世界/away 模式无相机或无目标时的后备相机相对方向
     }
 
 
@@ -229,6 +260,10 @@ def normalize_dodge(raw: Any) -> Dict[str, Any]:
         "delay_ms": _coerce_int(inline_src.get("delay_ms"), 0, 0, 60000),
         "lead_ms": _coerce_int(inline_src.get("lead_ms"), default["lead_ms"], 0, 60000),
         "cooldown_s": _coerce_float(inline_src.get("cooldown_s"), 3.0, 0.0, 600.0),
+        "direction": _normalize_dodge_direction(inline_src.get("direction")),
+        "move_ms": _coerce_int(inline_src.get("move_ms"), default["move_ms"], 80, 4000),
+        "fallback_direction": _normalize_cam_direction(
+            inline_src.get("fallback_direction"), "back"),
     }
     return {
         "enabled": _coerce_bool(src.get("enabled"), False),
