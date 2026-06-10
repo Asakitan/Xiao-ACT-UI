@@ -63,8 +63,12 @@ def mechanic_summary(mech: Dict[str, Any]) -> Dict[str, Any]:
     skill_ids = list(det.get("skill_ids") or []) + list(det.get("buff_ids") or [])
     dodge_desc = ""
     if dodge.get("enabled"):
-        if inline.get("sequence"):
-            dodge_desc = "序列×%d" % len(inline["sequence"])
+        seq = inline.get("sequence") or []
+        keys = {(_s(s.get("key"))).upper() for s in seq}
+        if seq and len(seq) >= 2 and len(keys) == 1 and "" not in keys:
+            dodge_desc = "冲刺 %s×%d" % (next(iter(keys)), len(seq))
+        elif seq:
+            dodge_desc = "序列×%d" % len(seq)
         elif _s(inline.get("action_key")):
             mode = "按住%dms" % _i(inline.get("hold_ms"), 0) \
                 if _s(inline.get("press_mode")) == "hold" else "轻点"

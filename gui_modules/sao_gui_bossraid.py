@@ -367,7 +367,22 @@ class _MechanicsEditorMixin:
     'create_from_skill','bind','unbind','search_catalog'} 可调用集合。"""
 
     _MECH_COLORS = ('#ef684e', '#dea620', '#68e4ff', '#9ad334', '#8e44ad', '#2e6fb0')
-    _DODGE_PRESETS = ('无', '轻点按键', '按住按键', '按键序列')
+    _DODGE_PRESETS = ('无', '轻点按键', '按住按键', '连续冲刺', '按键序列')
+
+    @staticmethod
+    def _dash_sequence(key='SHIFT', count=3, interval_ms=300):
+        """连续冲刺: 同一键每 interval_ms 触发一次, 共 count 次 (第一步无前延)。"""
+        key = (key or 'SHIFT').strip().upper() or 'SHIFT'
+        try:
+            count = max(1, min(8, int(count)))
+        except Exception:
+            count = 3
+        try:
+            interval_ms = max(0, int(interval_ms))
+        except Exception:
+            interval_ms = 300
+        return [{'key': key, 'delay_ms': (0 if i == 0 else interval_ms), 'hold_ms': 0}
+                for i in range(count)]
 
     def _init_mechanics(self, mech_api: Optional[Dict[str, Callable]]) -> None:
         self._mech_api = mech_api or {}
@@ -808,7 +823,13 @@ class _MechanicsEditorMixin:
                         fg=TEXT_MAIN, font=panel_font(8), selectcolor=PANEL_CARD,
                         activebackground=PANEL_CARD_ALT).pack(side=tk.LEFT, padx=(0, 8))
         seq = list(inline.get('sequence') or [])
-        preset_idx = 3 if seq else (
+        # 连续冲刺 = 同键、均匀间隔、零按住的序列 (≥2 步)
+        is_dash = bool(seq) and len(seq) >= 2 and \
+            len({(s.get('key') or '').upper() for s in seq}) == 1 and \
+            all(int(s.get('hold_ms') or 0) == 0 for s in seq) and \
+            all(int(s.get('delay_ms') or 0) == int(seq[1].get('delay_ms') or 0)
+                for s in seq[1:])
+        preset_idx = (3 if is_dash else 4) if seq else (
             2 if str(inline.get('press_mode')) == 'hold' and inline.get('action_key') else (
                 1 if inline.get('action_key') else 0))
         pvar = _tk.StringVar(value=self._DODGE_PRESETS[preset_idx])
@@ -816,9 +837,11 @@ class _MechanicsEditorMixin:
 
         def _preset_pick(lbl):
             self._mech_collect_draft()
-            if lbl == '按键序列' and not (inline.get('sequence') or []):
+            if lbl == '连续冲刺' and not is_dash:
+                inline['sequence'] = self._dash_sequence()
+            elif lbl == '按键序列' and not (inline.get('sequence') or []):
                 inline['sequence'] = [{'key': '', 'delay_ms': 0, 'hold_ms': 0}]
-            if lbl != '按键序列':
+            elif lbl not in ('按键序列', '连续冲刺'):
                 inline['sequence'] = []
             inline['press_mode'] = 'hold' if lbl == '按住按键' else 'tap'
             self._mx_rerender()
@@ -832,6 +855,17 @@ class _MechanicsEditorMixin:
             _field(d2, '键', 'dodge_key', inline.get('action_key') or '', 6)
             if preset_lbl == '按住按键':
                 _field(d2, '按住ms', 'dodge_hold', inline.get('hold_ms', 600), 6)
+        elif preset_lbl == '连续冲刺':
+            d2 = _row(form)
+            dash_key = (seq[0].get('key') if seq else '') or 'SHIFT'
+            dash_n = len(seq) if seq else 3
+            dash_iv = int(seq[1].get('delay_ms')) if len(seq) >= 2 else 300
+            _field(d2, '键', 'dash_key', dash_key, 6)
+            _field(d2, '次数', 'dash_count', dash_n, 4)
+            _field(d2, '间隔ms', 'dash_interval', dash_iv, 6)
+            tk.Label(form, text='躲避时连续点该键 N 次 (默认 Shift×3 每 0.3s), 适合冲刺位移躲圈',
+                     bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
+                     anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
         elif preset_lbl == '按键序列':
             v['seq_vars'] = []
             for idx, step in enumerate(seq):
@@ -945,6 +979,11 @@ class _MechanicsEditorMixin:
             inline['action_key'] = _sv('dodge_key').strip().upper()
             inline['hold_ms'] = int(_num('dodge_hold', 600))
             inline['sequence'] = []
+        elif preset == '连续冲刺':
+            inline['sequence'] = self._dash_sequence(
+                _sv('dash_key', 'SHIFT'), _num('dash_count', 3),
+                _num('dash_interval', 300))
+            inline['action_key'] = ''
         elif preset == '按键序列':
             # keep empty-key steps so indexes stay aligned with the rendered
             # rows (✕ deletes by index); they are filtered out at save time

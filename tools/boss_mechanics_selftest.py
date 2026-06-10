@@ -357,6 +357,34 @@ class MechanicsTest(unittest.TestCase):
         self.assertTrue(self._wait(lambda: len(self.events) >= 1))
         self.assertEqual(self.events[0].get("tts_text"), "红色分摊")
 
+    def test_dash_dodge_sequence_roundtrip_and_summary(self):
+        from engines.boss_raid_engine import normalize_mechanic
+        from engines.boss_mechanics_state import mechanic_summary
+        dash = [{"key": "SHIFT", "delay_ms": 0, "hold_ms": 0},
+                {"key": "SHIFT", "delay_ms": 300, "hold_ms": 0},
+                {"key": "SHIFT", "delay_ms": 300, "hold_ms": 0}]
+        m = _mech(dodge={"enabled": True,
+                         "inline": {"action_key": "", "sequence": dash,
+                                    "lead_ms": 300}})
+        n = normalize_mechanic(m)
+        seq = (n.get("dodge") or {}).get("inline", {}).get("sequence") or []
+        self.assertEqual(len(seq), 3)
+        self.assertTrue(all(s["key"] == "SHIFT" for s in seq))
+        self.assertEqual([s["delay_ms"] for s in seq], [0, 300, 300])
+        desc = mechanic_summary(n)["dodge_desc"]
+        self.assertIn("冲刺", desc)
+        self.assertIn("SHIFT", desc)
+
+    def test_dash_dodge_fires_three_shifts(self):
+        seq = [{"key": "SHIFT", "delay_ms": 0, "hold_ms": 0},
+               {"key": "SHIFT", "delay_ms": 10, "hold_ms": 0},
+               {"key": "SHIFT", "delay_ms": 10, "hold_ms": 0}]
+        lk = self._linkage()
+        ok = lk.fire_mapping_test({"action_key": "", "sequence": seq})
+        self.assertTrue(ok)
+        self.assertTrue(self._wait(lambda: len(self.sent) >= 3))
+        self.assertEqual([s[0] for s in self.sent[:3]], ["SHIFT", "SHIFT", "SHIFT"])
+
     def test_state_contract_resolves_buff_names(self):
         from engines.boss_mechanics_state import (
             mechanic_summary, _resolve_detect_name,

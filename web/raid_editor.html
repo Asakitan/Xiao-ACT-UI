@@ -712,7 +712,11 @@ function _mForm(m) {
     var names = m.skill_names || {};
     var ids = det.skill_ids || [];
     var seq = inline.sequence || [];
-    var preset = seq.length ? 'seq' : (inline.action_key
+    var isDash = seq.length >= 2
+        && seq.every(function (s) { return (s.key || '').toUpperCase() === (seq[0].key || '').toUpperCase(); })
+        && seq.every(function (s) { return !Number(s.hold_ms || 0); })
+        && seq.slice(1).every(function (s) { return Number(s.delay_ms || 0) === Number(seq[1].delay_ms || 0); });
+    var preset = seq.length ? (isDash ? 'dash' : 'seq') : (inline.action_key
         ? (String(inline.press_mode) === 'hold' ? 'hold' : 'tap') : 'none');
     var html = '<div style="background:rgba(8,14,22,.55);border-radius:6px;padding:7px;margin-top:5px;font-size:10px;">';
     // 名称 + 颜色
@@ -774,7 +778,7 @@ function _mForm(m) {
         + '<label style="margin-right:8px;color:#e8f6ff;"><input type="checkbox" id="mf-dodge-en"'
         + (dodge.enabled ? ' checked' : '') + '> 启用</label>'
         + '<select id="mf-preset" class="mech-input" onchange="mechPresetChange(this.value)">'
-        + [['none', '无'], ['tap', '轻点按键'], ['hold', '按住按键'], ['seq', '按键序列']].map(function (p) {
+        + [['none', '无'], ['tap', '轻点按键'], ['hold', '按住按键'], ['dash', '连续冲刺'], ['seq', '按键序列']].map(function (p) {
             return '<option value="' + p[0] + '"' + (preset === p[0] ? ' selected' : '') + '>' + p[1] + '</option>';
         }).join('') + '</select> '
         + _mInput('mf-lead', '提前ms', inline.lead_ms != null ? inline.lead_ms : 300, 52) + '</div>';
@@ -782,6 +786,11 @@ function _mForm(m) {
         html += '<div style="margin:3px 0;">' + _mInput('mf-key', '键', inline.action_key, 50)
             + (preset === 'hold' ? _mInput('mf-hold', '按住ms', inline.hold_ms != null ? inline.hold_ms : 600, 52) : '')
             + '</div>';
+    } else if (preset === 'dash') {
+        html += '<div style="margin:3px 0;">' + _mInput('mf-dash-key', '键', (seq[0] && seq[0].key) || 'SHIFT', 50)
+            + _mInput('mf-dash-count', '次数', seq.length || 3, 40)
+            + _mInput('mf-dash-iv', '间隔ms', (seq[1] && seq[1].delay_ms) || 300, 52) + '</div>'
+            + '<div style="font-size:9px;color:#75808d;margin:2px 0;">躲避时连续点该键 N 次 (默认 Shift×3 每 0.3s)，适合冲刺位移躲圈</div>';
     } else if (preset === 'seq') {
         html += seq.map(function (s, i) {
             return '<div style="margin:2px 0;">步' + (i + 1) + ' '
@@ -845,6 +854,11 @@ function _mCollect() {
         inline.action_key = _mVal('mf-key').toUpperCase();
         inline.hold_ms = Math.round(_mNum('mf-hold', 600));
         inline.sequence = [];
+    } else if (preset === 'dash') {
+        inline.sequence = _dashSequence(_mVal('mf-dash-key'),
+                                        _mNum('mf-dash-count', 3),
+                                        _mNum('mf-dash-iv', 300));
+        inline.action_key = '';
     } else if (preset === 'seq') {
         // keep empty-key steps so indexes stay aligned with the rendered rows
         // (✕ deletes by index); they are filtered out at save time
@@ -918,7 +932,24 @@ function mechCatalogSearch() {
         renderMechanics();
     }).catch(function () {});
 }
-function mechPresetChange(_v) { _mCollect(); if (_v === 'seq' && _mechDraft && !(_mechDraft.dodge.inline.sequence || []).length) { _mechDraft.dodge.inline.sequence = [{ key: '', delay_ms: 0, hold_ms: 0 }]; } renderMechanics(); }
+function _dashSequence(key, count, interval) {
+    key = String(key || 'SHIFT').trim().toUpperCase() || 'SHIFT';
+    count = Math.max(1, Math.min(8, Math.round(count || 3)));
+    interval = Math.max(0, Math.round(interval || 300));
+    var out = [];
+    for (var i = 0; i < count; i++) out.push({ key: key, delay_ms: i === 0 ? 0 : interval, hold_ms: 0 });
+    return out;
+}
+function mechPresetChange(_v) {
+    _mCollect();
+    if (_mechDraft) {
+        var inl = _mechDraft.dodge.inline;
+        if (_v === 'dash') { inl.sequence = _dashSequence('SHIFT', 3, 300); inl.action_key = ''; }
+        else if (_v === 'seq' && !(inl.sequence || []).length) { inl.sequence = [{ key: '', delay_ms: 0, hold_ms: 0 }]; }
+        else if (_v !== 'seq') { inl.sequence = []; }
+    }
+    renderMechanics();
+}
 function mechSeqAdd() { _mCollect(); if (_mechDraft) { var inl = _mechDraft.dodge.inline; (inl.sequence = inl.sequence || []).push({ key: '', delay_ms: 0, hold_ms: 0 }); } renderMechanics(); }
 function mechSeqRemove(i) { _mCollect(); if (_mechDraft) { (_mechDraft.dodge.inline.sequence || []).splice(i, 1); } renderMechanics(); }
 function mechFormTest(kinds) {
