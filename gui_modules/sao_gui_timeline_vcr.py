@@ -94,6 +94,7 @@ class TimelineVcrPanel:
                 pass
         self._win = None
         self._events = None
+        self._reset_render_cache()
 
     def is_visible(self) -> bool:
         return bool(self._win is not None and self._exists() and self._win.state() != 'withdrawn')
@@ -231,6 +232,7 @@ class TimelineVcrPanel:
         canvas.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
         win.protocol('WM_DELETE_WINDOW', self.hide)
+        self._reset_render_cache()
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         events = list(status.get('events') or [])
@@ -243,7 +245,7 @@ class TimelineVcrPanel:
         )
         if self._events is None:
             return
-        sig = self._events_signature(events) + repr(sorted(self._expanded_events))
+        sig = self._render_signature(status, events)
         if sig == self._last_events_sig:
             return
         self._last_events_sig = sig
@@ -348,17 +350,55 @@ class TimelineVcrPanel:
             self._expanded_events.remove(event_id)
         else:
             self._expanded_events.add(event_id)
-        self._last_events_sig = ""
+        self._reset_render_cache()
         self._render_status(self._last_status)
+
+    def _reset_render_cache(self) -> None:
+        self._last_events_sig = ""
+
+    def _render_signature(self, status: Mapping[str, Any], events: list[Any]) -> str:
+        try:
+            return json.dumps(
+                {
+                    "events": self._events_signature(events),
+                    "expanded": sorted(self._expanded_events),
+                    "cursor_ms": status.get('cursor_ms'),
+                    "speed": status.get('speed'),
+                    "playing": bool(status.get('playing')),
+                    "encounter_id": status.get('encounter_id'),
+                    "errors": list(status.get('errors') or []),
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+                default=str,
+            )
+        except Exception:
+            return repr((
+                self._events_signature(events),
+                sorted(self._expanded_events),
+                status.get('cursor_ms'),
+                status.get('speed'),
+                status.get('playing'),
+                status.get('encounter_id'),
+                status.get('errors'),
+            ))
 
     @staticmethod
     def _events_signature(events: list[Any]) -> str:
-        parts = []
+        parts: list[dict[str, Any]] = []
         for event in events[:80]:
             if not isinstance(event, Mapping):
                 continue
-            parts.append((event.get('id'), event.get('topic'), event.get('time_ms'), event.get('label'), event.get('value')))
-        return repr(parts)
+            parts.append({
+                "id": event.get('id'),
+                "topic": event.get('topic'),
+                "time_ms": event.get('time_ms'),
+                "label": event.get('label'),
+                "value": event.get('value'),
+                "source": event.get('source'),
+                "payload": event.get('payload'),
+            })
+        return json.dumps({"count": len(events), "rows": parts}, sort_keys=True, ensure_ascii=False, default=str)
 
     @staticmethod
     def _fmt(value: Any) -> str:

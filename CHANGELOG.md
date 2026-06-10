@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.27: Entity Timeline VCR 签名刷新修复.
+
+  1) `gui_modules/sao_gui_timeline_vcr.py` 的列表渲染签名现在包含 source、
+     payload、事件总数、展开状态以及 cursor/speed/playing/errors 等 VCR 状态。
+     修复事件主体未变但来源、展开 payload、播放速度或第 80 条后的数量变化时,
+     面板指标和展开内容不刷新的问题。
+
+  2) Timeline VCR 的窗口销毁/重建会重置 `_last_events_sig`。
+     修复生命周期销毁后用相同 status 重新打开时, 新 `_events` 容器可能因为命中旧签名
+     而跳过首屏渲染的问题。新增 `tools/timeline_vcr_panel_selftest.py`。
+
+
+
 ## v4.4.26: Entity 触发/计时面板渲染修复.
 
   1) `gui_modules/sao_gui_trigger_timer_manager.py` 增加列表渲染签名。
