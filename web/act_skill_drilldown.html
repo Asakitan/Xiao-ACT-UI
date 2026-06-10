@@ -122,19 +122,37 @@
     function pct(v) { return (Number(v || 0) * 100).toFixed(1) + '%'; }
     window.SkillDrilldown = {
       last: null,
+      expandedRefs: {},
       fadeIn() { document.body.classList.add('visible'); },
       fadeOut() { document.body.classList.remove('visible'); },
       _cid() { return document.getElementById('combatantId').value.trim(); },
       _sid() { return document.getElementById('skillId').value.trim(); },
       _query() { return document.getElementById('query').value; },
-      async refresh() { const status = await callApi('get_skill_drilldown_status', 'act.skill.status', this._cid(), this._sid(), this._query(), 80); this.render(status); },
-      async filter() { const status = await callApi('filter_skill_drilldown', 'act.skill.filter', this._cid(), this._sid(), this._query(), 80); this.render(status); },
-      async copy() { const copied = await callApi('copy_skill_drilldown', 'act.skill.copy', this._cid(), this._sid(), this._query(), 80); this.render(copied); try { await navigator.clipboard.writeText(copied.text || JSON.stringify(copied)); } catch (_) {} },
-      async back() { const status = await callApi('back_skill_drilldown', 'act.skill.back'); document.getElementById('combatantId').value = ''; document.getElementById('skillId').value = ''; this.render(status); },
+      _refKey(ref, idx) { return String(ref.id || ref.event_id || ref.key || ((ref.time_ms || 0) + '|' + (ref.topic || '') + '|' + (ref.label || '') + '|' + idx)); },
+      _setTimelineHtml(html, preserveScroll) {
+        const timeline = document.getElementById('timeline');
+        const scroller = timeline.parentElement || timeline;
+        const top = scroller.scrollTop || 0;
+        const left = scroller.scrollLeft || 0;
+        timeline.innerHTML = html;
+        if (preserveScroll) { scroller.scrollTop = top; scroller.scrollLeft = left; }
+      },
+      async refresh(options) { options = options || {}; const status = await callApi('get_skill_drilldown_status', 'act.skill.status', this._cid(), this._sid(), this._query(), 80); this.render(status, { preserveScroll: options.preserveScroll !== false }); },
+      async filter() { const status = await callApi('filter_skill_drilldown', 'act.skill.filter', this._cid(), this._sid(), this._query(), 80); this.render(status, { preserveScroll: false }); },
+      async copy() { const copied = await callApi('copy_skill_drilldown', 'act.skill.copy', this._cid(), this._sid(), this._query(), 80); this.render(copied, { preserveScroll: true }); try { await navigator.clipboard.writeText(copied.text || JSON.stringify(copied)); } catch (_) {} },
+      async back() { const status = await callApi('back_skill_drilldown', 'act.skill.back'); document.getElementById('combatantId').value = ''; document.getElementById('skillId').value = ''; this.render(status, { preserveScroll: false }); },
       async close() { this.fadeOut(); await callApi('toggle_skill_drilldown', 'ui.menu_action', 'toggle_skill_drilldown'); },
-      toggleRef(el) { var pre = el.querySelector('.ref-payload'); if (pre) pre.style.display = (pre.style.display === 'none' ? '' : 'none'); },
-      render(status) {
+      toggleRef(el) {
+        var pre = el.querySelector('.ref-payload'); if (!pre) return;
+        var key = el.getAttribute('data-key') || '';
+        var open = pre.style.display !== 'none';
+        pre.style.display = open ? 'none' : '';
+        if (key) { if (open) { delete this.expandedRefs[key]; } else { this.expandedRefs[key] = true; } }
+      },
+      render(status, options) {
         status = status || {}; this.last = status;
+        options = options || {};
+        const preserveScroll = options.preserveScroll !== false;
         const s = status.summary || {}; const refs = status.timeline_refs || []; const filters = status.filters || {};
         if (status.combatant_id) document.getElementById('combatantId').value = status.combatant_id;
         if (status.skill_id) document.getElementById('skillId').value = status.skill_id;
@@ -143,7 +161,11 @@
         document.getElementById('summary').innerHTML = [
           ['Skill', s.name || '-'], ['Kind', s.kind || '-'], ['Amount', fmt(s.amount)], ['Casts', fmt(status.casts)], ['Hits', fmt(status.hits)], ['Crit', pct(status.crit_rate)]
         ].map(([k,v]) => '<div class="card"><div class="label">'+esc(k)+'</div><div class="value">'+esc(v)+'</div></div>').join('');
-        document.getElementById('timeline').innerHTML = refs.length ? refs.map(ref => '<div class="event-wrap" onclick="SkillDrilldown.toggleRef(this)"><div class="event-row"><span class="event-time">'+esc(ActTime.fmtClock(ref.time_ms))+'</span><span class="event-topic">'+esc(ref.topic || '-')+'</span><span class="event-label">'+esc(ref.label || '-')+'</span><span class="event-value">'+esc(fmt(ref.value))+'</span></div><pre class="ref-payload" style="display:none;">'+esc(JSON.stringify(ref.payload || {}))+'</pre></div>').join('') : '<div class="empty">No timeline refs</div>';
+        this._setTimelineHtml(refs.length ? refs.map((ref, idx) => {
+          const key = this._refKey(ref, idx);
+          const open = !!this.expandedRefs[key];
+          return '<div class="event-wrap" data-key="'+esc(key)+'" onclick="SkillDrilldown.toggleRef(this)"><div class="event-row"><span class="event-time">'+esc(ActTime.fmtClock(ref.time_ms))+'</span><span class="event-topic">'+esc(ref.topic || '-')+'</span><span class="event-label">'+esc(ref.label || '-')+'</span><span class="event-value">'+esc(fmt(ref.value))+'</span></div><pre class="ref-payload" style="'+(open ? '' : 'display:none;')+'">'+esc(JSON.stringify(ref.payload || {}))+'</pre></div>';
+        }).join('') : '<div class="empty">No timeline refs</div>', preserveScroll);
         document.getElementById('facts').innerHTML = [
           ['combatant', status.combatant_id || '-'], ['skill_id', status.skill_id || '-'], ['damage', fmt(s.damage)], ['heal', fmt(s.heal)], ['refs', refs.length], ['query', filters.query || '-']
         ].map(([k,v]) => '<div class="mini-row"><span>'+esc(k)+'</span><span>'+esc(v)+'</span></div>').join('');

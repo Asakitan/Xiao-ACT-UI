@@ -31,4 +31,24 @@ assert(timeline.includes("delete expandedEvents[key]"), "timeline VCR must clear
 assert(timeline.includes("render(data, { preserveScroll: false })"), "timeline VCR filtering should reset scroll");
 assert(timeline.includes("render(data, { preserveScroll: true })"), "timeline VCR VCR controls should preserve scroll");
 
+const aggregate = read("web/act_aggregate.html");
+assert(aggregate.includes("var collapsedSections = {}"), "aggregate must persist collapsed section state");
+assert(aggregate.includes("function setContentHtml(html, preserveScroll)"), "aggregate must centralize content updates");
+assert(aggregate.includes("content.scrollTop"), "aggregate must preserve main content scrollTop");
+assert(aggregate.includes("data-section-key"), "aggregate sections must carry stable collapse keys");
+assert(aggregate.includes("collapsedSections[key] = true"), "aggregate must record collapsed sections");
+assert(aggregate.includes("delete collapsedSections[key]"), "aggregate must clear reopened sections");
+assert(aggregate.includes("rerender() { render(lastData, lastGraph, { preserveScroll: true })"), "aggregate row expansion should preserve scroll");
+assert(aggregate.includes("refresh({ preserveScroll: false })"), "aggregate query/source/group changes should reset scroll");
+
+const skillDrilldown = read("web/act_skill_drilldown.html");
+assert(skillDrilldown.includes("expandedRefs: {}"), "skill drilldown must persist expanded timeline refs");
+assert(skillDrilldown.includes("_setTimelineHtml(html, preserveScroll)"), "skill drilldown must centralize timeline updates");
+assert(skillDrilldown.includes("scroller.scrollTop"), "skill drilldown must preserve timeline scrollTop");
+assert(skillDrilldown.includes("data-key"), "skill drilldown refs must carry stable expansion keys");
+assert(skillDrilldown.includes("this.expandedRefs[key] = true"), "skill drilldown must record opened refs");
+assert(skillDrilldown.includes("delete this.expandedRefs[key]"), "skill drilldown must clear closed refs");
+assert(skillDrilldown.includes("this.render(status, { preserveScroll: false })"), "skill drilldown filtering/back should reset scroll");
+assert(skillDrilldown.includes("this.render(copied, { preserveScroll: true })"), "skill drilldown copy should preserve scroll");
+
 console.log("web_act_render_state_selftest: ok");

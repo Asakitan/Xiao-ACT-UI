@@ -169,6 +169,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     var toast = document.getElementById('toast');
 
     var expanded = {};      // group key -> true (mirrors Tk _expanded_groups)
+    var collapsedSections = {}; // section prefix -> true
     var lastData = null;    // last aggregate payload, for re-render on expand
     var lastGraph = null;   // last graph payload
 
@@ -290,11 +291,12 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                     + '</div>';
             });
         }
-        return '<div class="aca-section" style="--acc:' + acc(kind) + ';">'
+        var sectionCollapsed = !!collapsedSections[prefix];
+        return '<div class="aca-section" data-section-key="' + esc(prefix) + '" style="--acc:' + acc(kind) + ';">'
             + '<div class="aca-sec-head" data-toggle="1"><div class="aca-sec-rail"></div>'
             + '<div class="aca-sec-titles"><div class="aca-sec-title">' + esc(title) + '</div>' + (sub ? '<div class="aca-sec-sub">' + esc(sub) + '</div>' : '') + '</div>'
             + '<div class="aca-sec-badge">' + items.length + '</div></div>'
-            + '<div class="aca-sec-body">' + rows + '</div></div>';
+            + '<div class="aca-sec-body' + (sectionCollapsed ? ' collapsed' : '') + '">' + rows + '</div></div>';
     }
 
     function graphSection(graph) {
@@ -314,16 +316,29 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
                 + '<div class="aca-row-meta">' + pts.length + ' 个采样点 · 峰值 ' + fmt(peak) + '</div>'
                 + '<div class="aca-bar"><div class="aca-fill" style="width:' + (ratio * 100).toFixed(1) + '%;"></div></div></div>';
         });
-        return '<div class="aca-section" style="--acc:' + acc('cyan') + ';">'
+        var sectionCollapsed = !!collapsedSections.graph;
+        return '<div class="aca-section" data-section-key="graph" style="--acc:' + acc('cyan') + ';">'
             + '<div class="aca-sec-head" data-toggle="1"><div class="aca-sec-rail"></div>'
             + '<div class="aca-sec-titles"><div class="aca-sec-title">趋势预览 / TREND</div></div>'
             + '<div class="aca-sec-badge">' + (graph && graph.row_count || 0) + '</div></div>'
-            + '<div class="aca-sec-body">' + rows + '</div></div>';
+            + '<div class="aca-sec-body' + (sectionCollapsed ? ' collapsed' : '') + '">' + rows + '</div></div>';
     }
 
-    function render(data, graph) {
+    function setContentHtml(html, preserveScroll) {
+        var top = content.scrollTop || 0;
+        var left = content.scrollLeft || 0;
+        content.innerHTML = html;
+        if (preserveScroll) {
+            content.scrollTop = top;
+            content.scrollLeft = left;
+        }
+    }
+
+    function render(data, graph, options) {
+        options = options || {};
+        var preserveScroll = options.preserveScroll !== false;
         if (!data || !data.ok) {
-            content.innerHTML = '<div class="empty">暂无 ACT 聚合数据<br/>NO AGGREGATE DATA</div>';
+            setContentHtml('<div class="empty">暂无 ACT 聚合数据<br/>NO AGGREGATE DATA</div>', preserveScroll);
             overviewSide.innerHTML = '';
             sourceMix.innerHTML = '';
             return;
@@ -357,7 +372,7 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         html += section(gb, '按 ' + dimLabel + ' 聚合', '', dimAccent, data.groups || [], dimValueKey);
         html += graphSection(graph);
 
-        content.innerHTML = html;
+        setContentHtml(html, preserveScroll);
 
         // side: overview context card
         var s = '';
@@ -375,12 +390,23 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         sourceMix.innerHTML = mix || '<div class="aca-ctx"><span>No sources</span><strong>-</strong></div>';
     }
 
-    function rerender() { render(lastData, lastGraph); }
+    function rerender() { render(lastData, lastGraph, { preserveScroll: true }); }
 
     // event delegation: section collapse + row expand
     content.addEventListener('click', function (e) {
         var head = e.target.closest && e.target.closest('.aca-sec-head');
-        if (head) { var body = head.nextElementSibling; if (body) body.classList.toggle('collapsed'); return; }
+        if (head) {
+            var sectionEl = head.closest && head.closest('.aca-section');
+            var body = head.nextElementSibling;
+            var key = sectionEl && sectionEl.dataset ? sectionEl.dataset.sectionKey : '';
+            if (body) {
+                var collapsed = body.classList.toggle('collapsed');
+                if (key) {
+                    if (collapsed) { collapsedSections[key] = true; } else { delete collapsedSections[key]; }
+                }
+            }
+            return;
+        }
         var row = e.target.closest && e.target.closest('.aca-row');
         if (row && row.dataset.key) {
             var k = row.dataset.key;
@@ -389,14 +415,15 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
         }
     });
 
-    function refresh() {
+    function refresh(options) {
+        options = options || {};
         statusPill.textContent = 'LOADING';
         var query = queryInput.value || '';
         var source = sourceSelect.value || 'live';
         var groupBy = groupBySelect.value || 'skill';
         var groupField = groupFieldInput.value || '';
         var api = window.pywebview && window.pywebview.api;
-        if (!api || !api.get_aggregate_status) { render(null); statusPill.textContent = 'NO API'; return; }
+        if (!api || !api.get_aggregate_status) { render(null, null, { preserveScroll: false }); statusPill.textContent = 'NO API'; return; }
         var graphP = (api.get_graph_timeseries_status)
             ? Promise.resolve(api.get_graph_timeseries_status(null, 120, query, null, null)).then(function (j) { try { return JSON.parse(j); } catch (e) { return null; } }).catch(function () { return null; })
             : Promise.resolve(null);
@@ -407,13 +434,13 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
             // or take the surface over (override painted by plugin_layer.js).
             if (window.PluginHooks) {
                 lastData = window.PluginHooks.tap('act_aggregate', lastData, function (p) {
-                    lastData = p; render(p, lastGraph);
+                    lastData = p; render(p, lastGraph, { preserveScroll: options.preserveScroll !== false });
                 });
             }
-            render(lastData, lastGraph);
+            render(lastData, lastGraph, { preserveScroll: options.preserveScroll !== false });
             statusPill.textContent = lastData && lastData.ok ? 'OK' : 'ERROR';
         }).catch(function () {
-            render(null); statusPill.textContent = 'API ERROR';
+            render(null, null, { preserveScroll: false }); statusPill.textContent = 'API ERROR';
         });
     }
 
@@ -437,10 +464,10 @@ button:hover,.action-btn:hover{box-shadow:none!important;transform:none!importan
     };
 
     var qTimer = null;
-    queryInput.addEventListener('input', function () { clearTimeout(qTimer); qTimer = setTimeout(refresh, 300); });
-    sourceSelect.addEventListener('change', refresh);
-    groupBySelect.addEventListener('change', refresh);
-    groupFieldInput.addEventListener('change', refresh);
+    queryInput.addEventListener('input', function () { clearTimeout(qTimer); qTimer = setTimeout(function () { refresh({ preserveScroll: false }); }, 300); });
+    sourceSelect.addEventListener('change', function () { refresh({ preserveScroll: false }); });
+    groupBySelect.addEventListener('change', function () { refresh({ preserveScroll: false }); });
+    groupFieldInput.addEventListener('change', function () { refresh({ preserveScroll: false }); });
 
     setTimeout(function () { shell.classList.add('visible'); refresh(); }, 80);
 })();

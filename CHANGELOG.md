@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.46: ACT Web 钻取状态保留.
+
+  1) `web/act_aggregate.html` 现在会保留主内容滚动位置, 并把 section
+     折叠/展开状态保存到 JS 状态表。修复刷新、插件 hook 重绘或展开聚合行后,
+     Aggregate Cockpit 回到顶部且折叠区全部重新展开的问题。
+
+  2) `web/act_skill_drilldown.html` 现在会保留 timeline refs 的滚动位置与已展开
+     payload。修复 Copy/Refresh 后用户正在查看的技能事件详情全部折叠、滚动位置丢失的问题。
+     `tools/web_act_render_state_selftest.js` 同步覆盖 Aggregate 与 Skill Drilldown。
+
+
+
 ## v4.4.45: ACT Web 刷新状态保留.
 
   1) `web/act_action_log.html` 的主列表刷新现在会在普通 refresh、复制和 group
