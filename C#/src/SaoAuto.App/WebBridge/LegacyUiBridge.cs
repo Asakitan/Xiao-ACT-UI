@@ -7,7 +7,7 @@ namespace SaoAuto.App.WebBridge;
 /// <summary>
 /// S193 — Stub responder for the pywebview-shim's <c>ui.*</c>
 /// commands. Pages built against the Python panel call hit-region,
-/// context-menu, drag, panel-visibility, menu-action, and exit APIs; we
+/// context-menu, drag, panel-theme, panel-visibility, menu-action, and exit APIs; we
 /// acknowledge them so the page's promise chains complete, log the payload
 /// at debug level for future wiring, and route exit aliases to the supplied
 /// shutdown action. A future session can plug each non-exit command into a
@@ -37,6 +37,8 @@ public sealed class LegacyUiBridge : IDisposable
             BridgeCommands.NotifyHpHitRegionsReady,
             BridgeCommands.ExitApplication,
             BridgeCommands.SetPanelVisible,
+            BridgeCommands.GetPanelThemes,
+            BridgeCommands.SetPanelTheme,
             BridgeCommands.ToggleMenu,
             BridgeCommands.ContextAction,
             BridgeCommands.MenuAction,
@@ -49,6 +51,8 @@ public sealed class LegacyUiBridge : IDisposable
         router.Register(BridgeCommands.NotifyHpHitRegionsReady, p => Ack("notify_hp_hit_regions_ready", p));
         router.Register(BridgeCommands.ExitApplication, HandleExit);
         router.Register(BridgeCommands.SetPanelVisible, p => Ack("set_panel_visible", p));
+        router.Register(BridgeCommands.GetPanelThemes, _ => DefaultPanelThemes());
+        router.Register(BridgeCommands.SetPanelTheme, p => Ack("set_panel_theme", p));
         router.Register(BridgeCommands.ToggleMenu, p => Ack("toggle_menu", p));
         router.Register(BridgeCommands.ContextAction, p => HandleAction("context_action", p));
         router.Register(BridgeCommands.MenuAction, p => HandleAction("menu_action", p));
@@ -78,6 +82,19 @@ public sealed class LegacyUiBridge : IDisposable
         _log.LogInformation("[LegacyUiBridge] exit requested via bridge");
         _exitAction?.Invoke();
         return new JsonObject { ["ok"] = true, ["command"] = "exit" };
+    }
+
+    private static JsonObject DefaultPanelThemes()
+    {
+        return new JsonObject
+        {
+            ["dps"] = "dark",
+            ["hp"] = "dark",
+            ["bosshp"] = "dark",
+            ["skillfx"] = "dark",
+            ["alert"] = "dark",
+            ["act"] = "dark",
+        };
     }
 
     private JsonObject HandleAction(string command, JsonObject? payload)

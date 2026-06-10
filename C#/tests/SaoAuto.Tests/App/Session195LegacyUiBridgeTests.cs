@@ -19,6 +19,8 @@ public class Session195LegacyUiBridgeTests
             BridgeCommands.NotifyHpHitRegionsReady,
             BridgeCommands.ExitApplication,
             BridgeCommands.SetPanelVisible,
+            BridgeCommands.GetPanelThemes,
+            BridgeCommands.SetPanelTheme,
             BridgeCommands.ToggleMenu,
             BridgeCommands.ContextAction,
             BridgeCommands.MenuAction,
@@ -57,5 +59,22 @@ public class Session195LegacyUiBridgeTests
         router.Dispatch(Cmd(BridgeCommands.MenuAction, new JsonObject { ["action"] = "exit" }));
 
         Assert.Equal(3, exits);
+    }
+
+    [Fact]
+    public void GetPanelThemesReturnsPageConsumableDefaults()
+    {
+        var router = new BridgeRouter();
+        using var bridge = new LegacyUiBridge(router);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.GetPanelThemes));
+        var payload = reply!.Payload!;
+
+        Assert.Equal("dark", payload["dps"]!.GetValue<string>());
+        Assert.Equal("dark", payload["hp"]!.GetValue<string>());
+        Assert.Equal("dark", payload["bosshp"]!.GetValue<string>());
+        Assert.Equal("dark", payload["skillfx"]!.GetValue<string>());
+        Assert.Equal("dark", payload["alert"]!.GetValue<string>());
+        Assert.Equal("dark", payload["act"]!.GetValue<string>());
     }
 }

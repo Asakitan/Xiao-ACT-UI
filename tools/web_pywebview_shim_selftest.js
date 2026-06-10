@@ -60,6 +60,39 @@ function assert(cond, message) {
   assert(last.payload.active === true, "set_ctx_menu_active active flag was not forwarded");
   assert(last.payload.bounds.left === 1, "set_ctx_menu_active bounds were not forwarded");
 
+  await window.pywebview.api.get_panel_themes();
+  last = calls[calls.length - 1];
+  assert(last.name === "ui.get_panel_themes", "get_panel_themes command mismatch");
+
+  await window.pywebview.api.set_panel_theme("act", "light");
+  last = calls[calls.length - 1];
+  assert(last.name === "ui.set_panel_theme", "set_panel_theme command mismatch");
+  assert(last.payload.panel === "act", "set_panel_theme panel was not forwarded");
+  assert(last.payload.theme === "light", "set_panel_theme theme was not forwarded");
+
+  await window.pywebview.api.toggle_mem_scope();
+  last = calls[calls.length - 1];
+  assert(last.name === "ui.menu_action", "toggle_mem_scope command mismatch");
+  assert(last.payload.action === "toggle_mem_scope", "toggle_mem_scope action was not forwarded");
+
+  await window.pywebview.api.get_mem_scope_status("hp", "u32", "job-1");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.mem_scope.status", "get_mem_scope_status command mismatch");
+  assert(last.payload.query === "hp", "get_mem_scope_status query was not forwarded");
+  assert(last.payload.dtype === "u32", "get_mem_scope_status dtype was not forwarded");
+  assert(last.payload.job_id === "job-1", "get_mem_scope_status job_id was not forwarded");
+
+  await window.pywebview.api.mem_search("123", "i64", 4);
+  last = calls[calls.length - 1];
+  assert(last.name === "act.mem_scope.search", "mem_search command mismatch");
+  assert(last.payload.value === "123", "mem_search value was not forwarded");
+  assert(last.payload.align === 4, "mem_search align was not forwarded");
+
+  await window.pywebview.api.mem_attr_map("0x1234");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.mem_scope.attr_map", "mem_attr_map command mismatch");
+  assert(last.payload.ent_addr === "0x1234", "mem_attr_map ent_addr was not forwarded");
+
   await window.pywebview.api.enable_plugin("plugin-1");
   last = calls[calls.length - 1];
   assert(last.name === "act.plugins.enable", "enable_plugin command mismatch");

@@ -53,6 +53,12 @@
         set_panel_visible: function (panel, visible) {
             return call('ui.set_panel_visible', { panel: String(panel || ''), visible: !!visible });
         },
+        get_panel_themes: function () {
+            return call('ui.get_panel_themes', {});
+        },
+        set_panel_theme: function (panel, theme) {
+            return call('ui.set_panel_theme', { panel: String(panel || ''), theme: String(theme || '') });
+        },
         toggle_menu: function () {
             return call('ui.toggle_menu', {});
         },
@@ -94,6 +100,9 @@
         },
         toggle_act_aggregate: function () {
             return call('ui.menu_action', { action: 'toggle_act_aggregate' });
+        },
+        toggle_mem_scope: function () {
+            return call('ui.menu_action', { action: 'toggle_mem_scope' });
         },
         toggle_action_log: function () {
             return call('ui.menu_action', { action: 'toggle_action_log' });
@@ -178,6 +187,24 @@
                 group_by: String(groupBy || 'skill'),
                 group_field: String(groupField || '')
             });
+        },
+        get_mem_scope_status: function (query, dtype, jobId) {
+            return call('act.mem_scope.status', { query: String(query || ''), dtype: String(dtype || 'i32'), job_id: String(jobId || '') });
+        },
+        mem_search: function (value, dtype, align) {
+            return call('act.mem_scope.search', { value: value == null ? '' : String(value), dtype: String(dtype || 'i32'), align: align || 0 });
+        },
+        mem_search_status: function (jobId) {
+            return call('act.mem_scope.search_status', { job_id: String(jobId || '') });
+        },
+        mem_narrow: function (jobId, value) {
+            return call('act.mem_scope.narrow', { job_id: String(jobId || ''), value: value == null ? '' : String(value) });
+        },
+        mem_search_cancel: function (jobId) {
+            return call('act.mem_scope.cancel', { job_id: String(jobId || '') });
+        },
+        mem_attr_map: function (entAddr) {
+            return call('act.mem_scope.attr_map', { ent_addr: String(entAddr || '') });
         },
         play_timeline: function (speed) {
             return call('act.timeline.play', { speed: speed || 1 });

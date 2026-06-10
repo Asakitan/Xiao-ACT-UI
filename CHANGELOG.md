@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.24: Mem Scope 与面板主题 WebView2 shim 补齐.
+
+  1) `pywebview-shim.js` 补齐 `get_mem_scope_status`、`mem_search`、
+     `mem_search_status`、`mem_narrow`、`mem_search_cancel`、`mem_attr_map` 和
+     `toggle_mem_scope`。C# `ActBridge` 同步注册 `act.mem_scope.*` 命令, 修复
+     WebView2 shim 路径下 Mem Scope 直接显示 `NO API`、搜索/收敛/关闭不可用的问题。
+
+  2) 补齐 `get_panel_themes/set_panel_theme` shim 和 C# `LegacyUiBridge` 命令。
+     `get_panel_themes` 在无原生设置后端时返回页面可直接消费的默认 dark 主题对象,
+     避免主题初始化/切换在 WebView2 shim 路径下静默失效。扩展 JS/C# 回归测试。
+
+
+
 ## v4.4.23: 插件面板轮询增量渲染.
 
   1) `web/plugin_manager.html` 的 Panels 标签不再每秒清空 `panels-grid` 并重建

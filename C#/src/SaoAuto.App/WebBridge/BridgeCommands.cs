@@ -76,6 +76,8 @@ public static class BridgeCommands
     public const string NotifyHpHitRegionsReady = "ui.notify_hp_hit_regions_ready";
     public const string ExitApplication = "ui.exit";
     public const string SetPanelVisible = "ui.set_panel_visible";
+    public const string GetPanelThemes = "ui.get_panel_themes";
+    public const string SetPanelTheme = "ui.set_panel_theme";
     public const string ToggleMenu = "ui.toggle_menu";
     public const string ContextAction = "ui.context_action";
     public const string MenuAction = "ui.menu_action";
@@ -113,6 +115,13 @@ public static class BridgeCommands
     public const string ActTimelineFilter = "act.timeline.filter";
 
     public const string ActAggregateStatus = "act.aggregate.status";
+
+    public const string ActMemScopeStatus = "act.mem_scope.status";
+    public const string ActMemScopeSearch = "act.mem_scope.search";
+    public const string ActMemScopeSearchStatus = "act.mem_scope.search_status";
+    public const string ActMemScopeNarrow = "act.mem_scope.narrow";
+    public const string ActMemScopeCancel = "act.mem_scope.cancel";
+    public const string ActMemScopeAttrMap = "act.mem_scope.attr_map";
 
     public const string ActActionLogStatus = "act.action_log.status";
     public const string ActActionLogSearch = "act.action_log.search";
