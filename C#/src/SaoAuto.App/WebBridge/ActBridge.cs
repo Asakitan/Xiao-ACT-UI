@@ -68,6 +68,7 @@ public sealed class ActBridge : IDisposable
         BridgeCommands.ActSkillFilter,
         BridgeCommands.ActSkillCopy,
         BridgeCommands.ActSkillBack,
+        BridgeCommands.ActSkillOpen,
         BridgeCommands.ActPluginsStatus,
         BridgeCommands.ActPluginsList,
         BridgeCommands.ActPluginsEnable,

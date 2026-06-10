@@ -159,6 +159,7 @@ public static class BridgeCommands
     public const string ActSkillFilter = "act.skill.filter";
     public const string ActSkillCopy = "act.skill.copy";
     public const string ActSkillBack = "act.skill.back";
+    public const string ActSkillOpen = "act.skill.open";
 
     public const string ActPluginsStatus = "act.plugins.status";
     public const string ActPluginsList = "act.plugins.list";

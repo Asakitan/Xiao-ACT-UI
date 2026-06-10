@@ -138,6 +138,12 @@ function assert(cond, message) {
   assert(last.payload.surface === "dps", "act_render_apply_hooks surface was not forwarded");
   assert(last.payload.payload.total === 99, "act_render_apply_hooks object payload was not preserved");
 
+  await window.pywebview.api.open_skill_drilldown("1001", "slash-7");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.skill.open", "open_skill_drilldown command mismatch");
+  assert(last.payload.combatant_id === "1001", "open_skill_drilldown combatant_id was not forwarded");
+  assert(last.payload.skill_id === "slash-7", "open_skill_drilldown skill_id was not forwarded");
+
   for (const rel of ["web/act_graph_timeseries.html", "web/act_combatant_drilldown.html", "web/act_skill_drilldown.html"]) {
     const text = fs.readFileSync(path.join(root, rel), "utf8");
     assert(!text.includes("bridge.cmd(fallbackAction, args)"), `${rel} still sends bare fallback args`);
@@ -160,6 +166,12 @@ function assert(cond, message) {
   const triggerManager = fs.readFileSync(path.join(root, "web/trigger_timer_manager.html"), "utf8");
   assert(!triggerManager.includes("{ args: args || [] }"), "trigger manager still sends bare fallback args");
   assert(triggerManager.includes("triggerPayload(name, args || [])"), "trigger manager is missing fallback payload mapping");
+  assert(triggerManager.includes("toggle_trigger_timer_manager: 'ui.menu_action'"), "trigger manager close should map through ui.menu_action");
+  assert(triggerManager.includes("apiCall('toggle_trigger_timer_manager', [])"), "trigger manager close should use bridge-aware apiCall");
+
+  const combatantDrilldown = fs.readFileSync(path.join(root, "web/act_combatant_drilldown.html"), "utf8");
+  assert(combatantDrilldown.includes("'act.skill.open'"), "combatant drilldown should use explicit act.skill.open fallback");
+  assert(combatantDrilldown.includes("skill_id: String(args[1] || '')"), "combatant drilldown should forward skill_id when opening skill drilldown");
 
   const timelineVcr = fs.readFileSync(path.join(root, "web/act_timeline_vcr.html"), "utf8");
   assert(!timelineVcr.includes("{ args: args || [] }"), "timeline VCR still sends bare fallback args");

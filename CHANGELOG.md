@@ -2,6 +2,20 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.39: Combatant Drilldown 与 Trigger Timer bridge fallback 修复.
+
+  1) `web/act_combatant_drilldown.html` 与 `web/pywebview-shim.js` 新增
+     `act.skill.open` 命名 fallback, 点击成员技能行时会把 `combatant_id` 与
+     `skill_id` 一起传给 native bridge。修复 WebView2 fallback 下把 combatant id
+     误当 `ui.menu_action.action`、技能 ID 丢失, 导致无法打开指定技能钻取的问题。
+
+  2) `web/trigger_timer_manager.html` 的关闭按钮现在复用 bridge-aware `apiCall`,
+     并将 `toggle_trigger_timer_manager` 映射到 `ui.menu_action` 的命名 payload。
+     修复无 pywebview shim 的 native WebView2 host 下 Trigger Timer 关闭按钮失效的问题。
+     C# `ActBridge` 同步注册 `act.skill.open`, 并扩展 shim/C# 回归测试。
+
+
+
 ## v4.4.38: Data Source 与 ACT 命令注册 fallback 修复.
 
   1) `web/data_source_health.html` 的 WebView2 bridge fallback 现在会对

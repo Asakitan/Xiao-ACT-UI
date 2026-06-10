@@ -212,7 +212,8 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
                 enable_trigger: 'act.triggers.enable',
                 disable_trigger: 'act.triggers.disable',
                 reload_triggers: 'act.triggers.reload',
-                test_trigger: 'act.triggers.test'
+                test_trigger: 'act.triggers.test',
+                toggle_trigger_timer_manager: 'ui.menu_action'
             };
             return window.bridge.cmd(cmdMap[name] || ('act.triggers.' + name), triggerPayload(name, args || [])).then(parseResult);
         }
@@ -224,6 +225,7 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
         if (name === 'enable_trigger' || name === 'disable_trigger' || name === 'test_trigger') {
             return { rule_id: String(args[0] || '') };
         }
+        if (name === 'toggle_trigger_timer_manager') return { action: 'toggle_trigger_timer_manager' };
         return { args: args };
     }
 
@@ -336,11 +338,9 @@ button.close { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-s
             });
         },
         close: function () {
-            var api = window.pywebview && window.pywebview.api;
             TriggerTimerManager.fadeOut();
             setTimeout(function () {
-                if (api && typeof api.menu_action === 'function') api.menu_action('toggle_trigger_timer_manager');
-                else if (api && typeof api.toggle_trigger_timer_manager === 'function') api.toggle_trigger_timer_manager();
+                apiCall('toggle_trigger_timer_manager', []);
             }, 120);
         },
         updateStatus: function (data) { render(parseResult(data)); }

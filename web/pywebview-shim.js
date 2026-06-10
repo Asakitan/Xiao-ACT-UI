@@ -289,6 +289,9 @@
         copy_skill_drilldown: function (combatantId, skillId, query, limit) {
             return call('act.skill.copy', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: limit || 80 });
         },
+        open_skill_drilldown: function (combatantId, skillId) {
+            return call('act.skill.open', { combatant_id: String(combatantId || ''), skill_id: String(skillId || '') });
+        },
         back_skill_drilldown: function () {
             return call('act.skill.back', {});
         },

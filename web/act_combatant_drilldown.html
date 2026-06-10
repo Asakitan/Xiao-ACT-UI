@@ -111,6 +111,7 @@
       if (action === 'act.combatant.filter') return { combatant_id: String(args[0] || ''), query: String(args[1] || '') };
       if (action === 'act.combatant.focus_target') return { combatant_id: String(args[0] || ''), target_id: String(args[1] || '') };
       if (action === 'act.combatant.back') return {};
+      if (action === 'act.skill.open') return { combatant_id: String(args[0] || ''), skill_id: String(args[1] || '') };
       if (action === 'ui.menu_action') return { action: String(args[0] || '') };
       return { args: args };
     }
@@ -130,7 +131,7 @@
       async openSkill(skillId) {
         const cid = this._id() || (this.last && this.last.combatant_id) || '';
         if (!cid || !skillId) { document.getElementById('status').textContent = 'Need combatant UID + skill id'; return; }
-        await callApi('open_skill_drilldown', 'ui.menu_action', String(cid), String(skillId));
+        await callApi('open_skill_drilldown', 'act.skill.open', String(cid), String(skillId));
         document.getElementById('status').textContent = 'Opened skill ' + skillId;
       },
       render(status) {
