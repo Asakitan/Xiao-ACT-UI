@@ -66,6 +66,7 @@ class ActionLogPanel:
         self._offset_var = tk.StringVar(value="0")
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
+        self._last_request_key: tuple[Any, ...] = ()
         self._last_rows_sig = ""
         self._expanded_groups: set[str] = set()
         self._show_raw_rows = tk.BooleanVar(value=False)
@@ -106,34 +107,45 @@ class ActionLogPanel:
 
     def refresh(self) -> Dict[str, Any]:
         now = time.time()
-        if self._last_status and now - self._last_refresh_at < 0.35:
-            self._render_status(self._last_status)
-            return self._last_status
         try:
             cursor_ms = int(self._cursor_var.get() or 0)
         except Exception:
             cursor_ms = 0
         offset = self._current_offset()
+        query = self._query_var.get()
+        topic = self._topic_var.get()
+        source = self._source_var.get()
+        encounter_id = self._encounter_var.get()
+        request_key = (query, topic, cursor_ms, source, encounter_id, offset)
+        if (
+            self._last_status
+            and request_key == self._last_request_key
+            and now - self._last_refresh_at < 0.35
+        ):
+            self._render_status(self._last_status)
+            return self._last_status
         try:
             status = act_action_log_status(
                 self.owner,
                 limit=80,
-                query=self._query_var.get(),
-                topic=self._topic_var.get(),
+                query=query,
+                topic=topic,
                 cursor_ms=cursor_ms,
-                source=self._source_var.get(),
-                encounter_id=self._encounter_var.get(),
+                source=source,
+                encounter_id=encounter_id,
                 offset=offset,
             )
         except Exception as exc:
-            status = {"ok": False, "message": str(exc), "rows": [], "columns": [], "filters": {"query": self._query_var.get(), "topic": self._topic_var.get()}, "cursor": {"time_ms": cursor_ms, "offset": offset, "row_count": 0}, "analytics": {}, "errors": [str(exc)]}
+            status = {"ok": False, "message": str(exc), "rows": [], "columns": [], "filters": {"query": query, "topic": topic, "source": source, "encounter_id": encounter_id}, "cursor": {"time_ms": cursor_ms, "offset": offset, "row_count": 0}, "analytics": {}, "errors": [str(exc)]}
         self._last_status = dict(status or {})
         self._last_refresh_at = now
+        self._last_request_key = request_key
         self._render_status(self._last_status)
         return self._last_status
 
     def force_refresh(self) -> Dict[str, Any]:
         self._last_refresh_at = 0.0
+        self._last_request_key = ()
         self._last_rows_sig = ""
         return self.refresh()
 
@@ -232,6 +244,7 @@ class ActionLogPanel:
     def _apply_result(self, result: Mapping[str, Any], message: str) -> Dict[str, Any]:
         self._last_status = dict(result or {})
         self._last_refresh_at = time.time()
+        self._last_request_key = ()
         self._status_var.set(message)
         self._render_status(self._last_status)
         return self._last_status

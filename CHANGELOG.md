@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.4.47: ACT Tk 刷新缓存参数修复.
+
+  1) `gui_modules/sao_gui_act_aggregate.py` 的 350ms refresh 缓存现在按
+     `query/source/group_by/group_field` 建 key。修复快速切换搜索、来源或聚合维度时,
+     Aggregate Tk 面板直接复用旧状态、没有把新参数传到后端的问题。
+
+  2) `gui_modules/sao_gui_action_log.py` 的 350ms refresh 缓存现在按
+     `query/topic/cursor/source/encounter/offset` 建 key。修复刷新按钮或来源/页码变化过快时,
+     Action Log Tk 面板显示旧请求结果的问题。扩展 Aggregate/Action Log selftest
+     覆盖相同参数复用与参数变化强制刷新。
+
+
+
 ## v4.4.46: ACT Web 钻取状态保留.
 
   1) `web/act_aggregate.html` 现在会保留主内容滚动位置, 并把 section

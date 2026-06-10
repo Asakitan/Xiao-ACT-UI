@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from engines.act_aggregate import (
     aggregate_damage_by_dungeon,
@@ -205,6 +206,48 @@ class ActAggregateTests(unittest.TestCase):
         self.assertNotEqual(sig, panel._signature(overview_changed))
         self.assertNotEqual(sig, panel._signature(group_changed))
         self.assertNotEqual(sig, panel._signature(graph_changed))
+
+    def test_refresh_cache_is_scoped_to_request_parameters(self) -> None:
+        panel = ActAggregatePanel.__new__(ActAggregatePanel)
+        panel.owner = object()
+        panel._query_var = _FakeVar("boss")
+        panel._source_var = _FakeVar("live")
+        panel._group_by_var = _FakeVar("技能")
+        panel._group_field_var = _FakeVar("")
+        panel._last_status = {"ok": True, "stale": True}
+        panel._last_refresh_at = __import__("time").time()
+        panel._last_request_key = ("old", "live", "skill", "")
+        panel._render_status = lambda _status: None
+
+        with (
+            mock.patch("gui_modules.sao_gui_act_aggregate.act_aggregate_status") as aggregate_status,
+            mock.patch("gui_modules.sao_gui_act_aggregate.act_graph_timeseries_status", return_value={"ok": True}),
+            mock.patch("gui_modules.sao_gui_act_aggregate.act_render_apply_hooks", return_value={"ok": False}),
+        ):
+            aggregate_status.return_value = {"ok": True, "overview": {}, "raw_counts": {}, "groups": []}
+            panel.refresh()
+
+        aggregate_status.assert_called_once()
+        self.assertEqual(aggregate_status.call_args.kwargs["query"], "boss")
+        self.assertEqual(panel._last_request_key, ("boss", "live", "skill", ""))
+
+    def test_refresh_cache_reuses_same_request(self) -> None:
+        panel = ActAggregatePanel.__new__(ActAggregatePanel)
+        panel._query_var = _FakeVar("boss")
+        panel._source_var = _FakeVar("live")
+        panel._group_by_var = _FakeVar("技能")
+        panel._group_field_var = _FakeVar("")
+        panel._last_status = {"ok": True, "cached": True}
+        panel._last_refresh_at = __import__("time").time()
+        panel._last_request_key = ("boss", "live", "skill", "")
+        rendered = []
+        panel._render_status = lambda status: rendered.append(status)
+
+        with mock.patch("gui_modules.sao_gui_act_aggregate.act_aggregate_status") as aggregate_status:
+            self.assertEqual(panel.refresh(), {"ok": True, "cached": True})
+
+        aggregate_status.assert_not_called()
+        self.assertEqual(rendered, [{"ok": True, "cached": True}])
 
 
 if __name__ == "__main__":

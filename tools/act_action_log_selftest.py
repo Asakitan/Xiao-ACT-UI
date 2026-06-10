@@ -16,10 +16,22 @@ if ROOT not in sys.path:
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
 from engines.dps_history import DpsHistoryStore
+from gui_modules.sao_gui_action_log import ActionLogPanel
 
 
 class FakeOwner:
     pass
+
+
+class _FakeVar:
+    def __init__(self, value: str = "") -> None:
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+    def set(self, value: object) -> None:
+        self.value = str(value)
 
 
 class ActActionLogRuntimeTests(unittest.TestCase):
@@ -410,6 +422,56 @@ class ActActionLogRuntimeTests(unittest.TestCase):
         self.assertIn(6007, group["dungeon_ids"])
         self.assertEqual(group["rows"][0]["dungeon"], "普通-哥布林巢穴")
         self.assertEqual(group["rows"][0]["payload"].get("dungeon_name"), "普通-哥布林巢穴")
+
+    def test_panel_refresh_cache_is_scoped_to_request_parameters(self) -> None:
+        panel = ActionLogPanel.__new__(ActionLogPanel)
+        panel.owner = FakeOwner()
+        panel._query_var = _FakeVar("boss")
+        panel._topic_var = _FakeVar("damage")
+        panel._cursor_var = _FakeVar("1200")
+        panel._source_var = _FakeVar("history")
+        panel._encounter_var = _FakeVar("enc-1")
+        panel._offset_var = _FakeVar("2")
+        panel._last_status = {"ok": True, "stale": True}
+        panel._last_refresh_at = __import__("time").time()
+        panel._last_request_key = ("old", "damage", 1200, "history", "enc-1", 2)
+        panel._render_status = lambda _status: None
+
+        from unittest import mock
+
+        with mock.patch("gui_modules.sao_gui_action_log.act_action_log_status") as status_fn:
+            status_fn.return_value = {"ok": True, "rows": [], "cursor": {}, "analytics": {}}
+            panel.refresh()
+
+        status_fn.assert_called_once()
+        self.assertEqual(status_fn.call_args.kwargs["query"], "boss")
+        self.assertEqual(status_fn.call_args.kwargs["topic"], "damage")
+        self.assertEqual(status_fn.call_args.kwargs["cursor_ms"], 1200)
+        self.assertEqual(status_fn.call_args.kwargs["source"], "history")
+        self.assertEqual(status_fn.call_args.kwargs["encounter_id"], "enc-1")
+        self.assertEqual(status_fn.call_args.kwargs["offset"], 2)
+
+    def test_panel_refresh_cache_reuses_same_request(self) -> None:
+        panel = ActionLogPanel.__new__(ActionLogPanel)
+        panel._query_var = _FakeVar("boss")
+        panel._topic_var = _FakeVar("damage")
+        panel._cursor_var = _FakeVar("1200")
+        panel._source_var = _FakeVar("history")
+        panel._encounter_var = _FakeVar("enc-1")
+        panel._offset_var = _FakeVar("2")
+        panel._last_status = {"ok": True, "cached": True}
+        panel._last_refresh_at = __import__("time").time()
+        panel._last_request_key = ("boss", "damage", 1200, "history", "enc-1", 2)
+        rendered = []
+        panel._render_status = lambda status: rendered.append(status)
+
+        from unittest import mock
+
+        with mock.patch("gui_modules.sao_gui_action_log.act_action_log_status") as status_fn:
+            self.assertEqual(panel.refresh(), {"ok": True, "cached": True})
+
+        status_fn.assert_not_called()
+        self.assertEqual(rendered, [{"ok": True, "cached": True}])
 
 
 if __name__ == "__main__":

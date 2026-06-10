@@ -71,6 +71,7 @@ class ActAggregatePanel:
         self._group_field_var = tk.StringVar(value="")        # 自定义字段名
         self._last_status: Dict[str, Any] = {}
         self._last_refresh_at = 0.0
+        self._last_request_key: tuple[Any, ...] = ()
         self._last_sig = ""
         self._expanded_groups: set[str] = set()
         self._expanded_rows: set[str] = set()                 # 展开看原始 payload 的事件行
@@ -111,13 +112,18 @@ class ActAggregatePanel:
 
     def refresh(self) -> Dict[str, Any]:
         now = time.time()
-        if self._last_status and now - self._last_refresh_at < 0.35:
-            self._render_status(self._last_status)
-            return self._last_status
         query = self._query_var.get()
         source = self._source_var.get()
         group_by = self._DIMENSION_BY_LABEL.get(self._group_by_var.get(), "skill")
         group_field = self._group_field_var.get().strip()
+        request_key = (query, source, group_by, group_field)
+        if (
+            self._last_status
+            and request_key == self._last_request_key
+            and now - self._last_refresh_at < 0.35
+        ):
+            self._render_status(self._last_status)
+            return self._last_status
         try:
             status = act_aggregate_status(self.owner, limit=1000, query=query, source=source, window_ms=1000, top_n=20,
                                           group_by=group_by, group_field=group_field)
@@ -139,11 +145,13 @@ class ActAggregatePanel:
             pass
         self._last_status = status
         self._last_refresh_at = now
+        self._last_request_key = request_key
         self._render_status(status)
         return status
 
     def filter(self) -> Dict[str, Any]:
         self._last_refresh_at = 0.0
+        self._last_request_key = ()
         self._last_sig = ""
         return self.refresh()
 
