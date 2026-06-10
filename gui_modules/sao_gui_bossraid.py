@@ -445,6 +445,9 @@ class _MechanicsEditorMixin:
             var = _tk.IntVar(value=1 if value else 0)
 
             def _flip():
+                # preserve any in-progress edit-form input before the re-render
+                if self._mech_editing:
+                    self._mech_collect_draft()
                 self._mech_call('set_master', {key: bool(var.get())})
                 self._mech_bump()
             cb = _tk.Checkbutton(row, text=text, variable=var, command=_flip,
@@ -492,6 +495,8 @@ class _MechanicsEditorMixin:
             def _bind(lbl, _o=mech_opts, _sid=sid):
                 mid = _o.get(lbl)
                 if mid:
+                    if self._mech_editing:
+                        self._mech_collect_draft()
                     self._mech_call('bind', mid, _sid)
                     self._mech_bump()
                     self._mx_rerender()
@@ -499,12 +504,14 @@ class _MechanicsEditorMixin:
             om.config(font=panel_font(8), bg=PANEL_CARD_ALT, fg=TEXT_MAIN,
                       highlightthickness=0)
             om.pack(side=tk.RIGHT, padx=(4, 0))
-        make_action_button(
-            card, '建机制',
-            lambda _sid=sid, _nm=nm, _dur=dur: (
-                self._mech_call('create_from_skill', _sid, _nm, _dur),
-                self._mech_bump(), self._mx_rerender()),
-            kind='accent', width=6).pack(side=tk.RIGHT)
+
+        def _create(_sid=sid, _nm=nm, _dur=dur):
+            if self._mech_editing:
+                self._mech_collect_draft()
+            self._mech_call('create_from_skill', _sid, _nm, _dur)
+            self._mech_bump()
+            self._mx_rerender()
+        make_action_button(card, '建机制', _create, kind='accent', width=6).pack(side=tk.RIGHT)
 
     # ── 机制卡片 ──
 
@@ -524,7 +531,11 @@ class _MechanicsEditorMixin:
         en_var = _tk.IntVar(value=1 if mech.get('enabled', True) else 0)
 
         def _flip_enable(_m=mech, _v=en_var):
+            if self._mech_editing and self._mech_editing != _m.get('id'):
+                self._mech_collect_draft()
             m2 = dict(_m)
+            m2.pop('summary', None)
+            m2.pop('skill_names', None)
             m2['enabled'] = bool(_v.get())
             self._mech_call('save_mech', m2)
             self._mech_bump()

@@ -547,6 +547,7 @@ function _mSwitch(label, key, value) {
 function mechMaster(flags) {
     var a = _api();
     if (!a || !a.set_mechanics_master) return;
+    if (_mechEditing) _mCollect();   // preserve open-form input across the reload
     Promise.resolve(a.set_mechanics_master(JSON.stringify(flags))).then(function () {
         loadMechanics();
     }).catch(function () {});

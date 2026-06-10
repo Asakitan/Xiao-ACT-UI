@@ -247,8 +247,9 @@ def make_default_mechanic() -> Dict[str, Any]:
         "color": "",
         "phase_ids": [],         # [] = active in all phases
         "detect": {
-            "skill_ids": [],          # OR-matched vs boss cast skill_id
-            "buff_ids": [],           # OR-matched vs new buff base_ids
+            "skill_ids": [],          # OR-matched vs boss cast skill_id (SkillTable id)
+            "buff_ids": [],           # OR-matched vs new buff base_ids (BuffComp/self)
+            "source": "any",          # any | boss | self — which buff list carries it
             "boss_base_id": 0,        # 0 = any boss
             "hp_pct": 0.0,            # >0: fire when boss HP% crosses below
             "time_into_phase_s": 0.0, # >0: phase-relative timer anchor
@@ -278,6 +279,9 @@ def normalize_mechanic(raw: Any) -> Dict[str, Any]:
     alert_type = _string(a.get("alert_type")).lower()
     if alert_type not in ("sound", "visual", "both"):
         alert_type = "both"
+    source = _string(d.get("source")).lower()
+    if source not in ("any", "boss", "self"):
+        source = "any"
     return {
         "id": _string(src.get("id")) or default["id"],
         "name": _string(src.get("name")) or default["name"],
@@ -289,6 +293,7 @@ def normalize_mechanic(raw: Any) -> Dict[str, Any]:
         "detect": {
             "skill_ids": _coerce_id_list(d.get("skill_ids")),
             "buff_ids": _coerce_id_list(d.get("buff_ids")),
+            "source": source,
             "boss_base_id": _coerce_int(d.get("boss_base_id"), 0, 0),
             "hp_pct": _coerce_float(d.get("hp_pct"), 0.0, 0.0, 100.0),
             "time_into_phase_s": _coerce_float(d.get("time_into_phase_s"), 0.0, 0.0, 86400.0),
@@ -837,6 +842,7 @@ class BossRaidEngine:
         self._enrage_anchor_ts: float = 0.0
         self._enrage_milestones_fired: set = set()
         self._pending_mech_forwards: List[Dict[str, Any]] = []
+        self._self_buff_prev: set = set()   # last self-buff id snapshot (edge detect)
 
         # ── memory-driven boss action state (cast_skill_id edge feed) ──
         # observed skills per boss: base_id -> {skill_id -> {name, count, last_cast_duration_ms, last_ts}}
@@ -1563,6 +1569,7 @@ class BossRaidEngine:
             self._enrage_anchor_ts = 0.0
             self._enrage_milestones_fired.clear()
             self._pending_mech_forwards = []
+            self._self_buff_prev = set()
         profile = self._profile or {}
         for mech in profile.get("mechanics") or []:
             if not isinstance(mech, dict) or not mech.get("enabled", True):
@@ -1659,26 +1666,67 @@ class BossRaidEngine:
 
     def _match_mechanic_on_cast_locked(self, base_id: int, skill_id: int,
                                        cast_duration_ms: int,
-                                       name: str = "") -> Optional[Dict[str, Any]]:
-        """Resolve a cast skill/buff id to a profile mechanic; returns the
-        linkage-forward extras dict (mechanic_id/dodge) or None."""
+                                       name: str = "",
+                                       feed: str = "boss") -> Optional[Dict[str, Any]]:
+        """Resolve a cast skill id / buff base_id to a profile mechanic; returns
+        the linkage-forward extras dict (mechanic_id/dodge) or None. `feed` is the
+        carrier the id came from ('boss' = boss buff/cast list, 'self' = the local
+        player's buff list); a mechanic only matches when its detect.source is
+        'any' or equals `feed`."""
         if skill_id <= 0 or self._profile is None:
             return None
         mechs = self._mech_index_by_skill.get(int(skill_id))
         if not mechs:
-            self._note_unbound_skill_locked(skill_id, name, cast_duration_ms)
+            if feed == "boss":
+                self._note_unbound_skill_locked(skill_id, name, cast_duration_ms)
             return None
         if self._state != self.STATE_RUNNING:
             return None
         for mech in mechs:
             det = mech.get("detect") or {}
+            src = _string(det.get("source")) or "any"
+            if src != "any" and src != feed:
+                continue
             m_base = _coerce_int(det.get("boss_base_id"), 0)
-            if m_base and base_id and m_base != base_id:
+            # boss_base_id scopes the boss feed; the self feed carries no boss id
+            if feed == "boss" and m_base and base_id and m_base != base_id:
                 continue
             if not self._mechanic_phase_ok_locked(mech):
                 continue
-            return self._fire_mechanic_locked(mech, "cast", cast_duration_ms, skill_id)
+            return self._fire_mechanic_locked(mech, feed, cast_duration_ms, skill_id)
         return None
+
+    def on_self_buff_change(self, buff_ids):
+        """Feed the local player's current buff base_ids. New ids (since the last
+        snapshot) are matched against self/any-source mechanics so point-named
+        mechanics (你被点了分摊/分散/死刑) fire off YOUR buff list, which the boss
+        feed never sees. Reuses the existing self_buffs snapshot — no new reads."""
+        try:
+            cur = set(int(b) for b in (buff_ids or []) if int(b) > 0)
+        except Exception:
+            return
+        forwards: List[Dict[str, Any]] = []
+        with self._lock:
+            if self._state != self.STATE_RUNNING or self._profile is None:
+                self._self_buff_prev = cur
+                return
+            prev = self._self_buff_prev
+            new_ids = cur - prev if prev else set()
+            self._self_buff_prev = cur
+            for bid in new_ids:
+                if bid not in self._mech_index_by_skill:
+                    continue
+                fwd = self._match_mechanic_on_cast_locked(0, bid, 0, "", feed="self")
+                if fwd:
+                    self._queue_mech_forward_locked(fwd)
+            if self._pending_mech_forwards:
+                forwards = self._pending_mech_forwards
+                self._pending_mech_forwards = []
+        for fwd in forwards:
+            try:
+                self._on_boss_action_cb(fwd)
+            except Exception:
+                pass
 
     def _match_mechanic_on_state_edge_locked(self, edge_name: str):
         """Event-anchored mechanics on breaking/overdrive/stun rising edges."""
@@ -1724,7 +1772,10 @@ class BossRaidEngine:
         mid = _string(mech.get("id"))
         alert = mech.get("alert") or {}
         cd = _coerce_float(alert.get("cooldown_s"), 5.0, 0.0)
-        if cd > 0 and (now - self._mech_last_fire.get(mid, 0.0)) < cd:
+        last = self._mech_last_fire.get(mid, 0.0)
+        # cooldown gate with a 0.1s floor: even cooldown_s=0 dedups two bound ids
+        # of one mechanic appearing in the same snapshot (one fire, not two).
+        if (now - last) < max(cd, 0.1):
             return None
         self._mech_last_fire[mid] = now
         name = _string(mech.get("name")) or "机制"
@@ -1885,9 +1936,11 @@ class BossRaidEngine:
                     continue
                 target = eff + rep * cnt
                 if base_elapsed >= target:
-                    self._mech_time_fire_counts[key] = cnt + 1
                     fwd = self._fire_mechanic_locked(mech, "time", None, 0)
-                    if fwd:
+                    # only consume the repeat slot when the fire actually landed,
+                    # so a cooldown-swallowed fire isn't lost forever
+                    if fwd is not None:
+                        self._mech_time_fire_counts[key] = cnt + 1
                         self._queue_mech_forward_locked(fwd)
 
         self._refresh_countdown_push_locked(now)

@@ -201,6 +201,36 @@ class MechanicsTest(unittest.TestCase):
         eng.on_mem_boss_action(_cast(555))
         self.assertTrue(self._wait(lambda: len(self.events) >= 1))
 
+    def test_self_buff_feed_fires_self_source(self):
+        prof = _profile([_mech(skill_ids=(), detect={"buff_ids": [829304],
+                                                     "source": "self"})])
+        eng = self._engine(prof)
+        eng.on_self_buff_change([100, 200])           # baseline
+        eng.on_self_buff_change([100, 200, 829304])   # you got point-named
+        self.assertTrue(self._wait(lambda: len(self.events) >= 1))
+        self.assertEqual(self.events[0]["mechanic_id"], "m1")
+        self.assertEqual(self.events[0]["source"], "self")
+
+    def test_source_isolation_boss_feed_skips_self_mech(self):
+        prof = _profile([_mech(skill_ids=(), detect={"buff_ids": [829304],
+                                                     "source": "self"})])
+        eng = self._engine(prof)
+        # the same buff id arriving on the BOSS feed must NOT fire a self-source mech
+        eng.on_mem_boss_action(_cast(829304))
+        time.sleep(0.1)
+        self.assertEqual(self.events, [])
+
+    def test_self_buff_no_refire_on_persistent(self):
+        prof = _profile([_mech(skill_ids=(), detect={"buff_ids": [829305],
+                                                     "source": "self"})])
+        eng = self._engine(prof)
+        eng.on_self_buff_change([829305])
+        self._wait(lambda: len(self.events) >= 1)
+        self.events.clear()
+        eng.on_self_buff_change([829305])   # still present, not a new edge
+        time.sleep(0.1)
+        self.assertEqual(self.events, [], "persistent self-buff must not refire")
+
     def test_unbound_inbox(self):
         eng = self._engine(_profile([_mech()]))
         eng.on_mem_boss_action(_cast(777, dur=2500))

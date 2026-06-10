@@ -1856,6 +1856,18 @@ class PacketBridge:
                         'name': _get_skill_name(bid),
                     })
                 updates['self_buffs'] = packed
+                # Boss raid mechanics: point-named mechanic buffs (分摊/分散/死刑)
+                # land on the TARGETED player, not the boss — feed our own buff
+                # ids so a self-source mechanic fires off this list (the boss-buff
+                # feed never sees them).
+                eng = getattr(self, '_boss_raid_engine', None)
+                if eng is not None:
+                    fn = getattr(eng, 'on_self_buff_change', None)
+                    if callable(fn):
+                        try:
+                            fn([p['id'] for p in packed])
+                        except Exception:
+                            pass
                 # Debug: 第一次拿到自身 buff 时打印一次
                 if not getattr(self, '_dbg_buffmon_first', False):
                     self._dbg_buffmon_first = True
