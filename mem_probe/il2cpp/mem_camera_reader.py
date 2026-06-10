@@ -76,6 +76,7 @@ class CameraReader:
         self._brain_klass = 0
         self._off_brain = 0
         self._off_camstate = 0
+        self._off_quat = None     # 缓存 RawOrientation 在 camstate 内的偏移 (位置锚定后)
         self._last_locate = 0.0
 
     # ---- klass 名校验 ----
@@ -117,7 +118,13 @@ class CameraReader:
         kp = int(idx.get(CAMMGR_CLASS, 0) or 0)
         if not kp:
             return False
-        kb = kp.to_bytes(8, "little")
+        # 堆扫定位是这里唯一的重计算(扫数百 MB 找 klass 指针, >>1e5 次比对)→ 必须走
+        # cy_memscan.find_aligned_u64 (nogil/AVX2 ~16GB/s), 纯 Python blob.find 慢几十倍
+        # (实测冷定位 ~20s)。这是 CLAUDE.md "全堆扫不留 Python 内层" 的强制下放点。
+        try:
+            from mem_probe import cy_memscan as _cy
+        except Exception:
+            _cy = None
         t0 = time.time()
         for r in pm.iter_regions(only_readable=True):
             if time.time() - t0 > 60:
@@ -127,14 +134,19 @@ class CameraReader:
                 blob = pm.read_bytes(r.base + off, min(chunk, r.size - off))
                 if blob is None:
                     break
-                s = 0
-                while True:
-                    i = blob.find(kb, s)
-                    if i < 0:
-                        break
-                    s = i + 8
-                    if i & 0x7:
-                        continue
+                if _cy is not None:
+                    hits = _cy.find_aligned_u64(blob, kp, 256)
+                else:
+                    hits, s = [], 0
+                    kb = kp.to_bytes(8, "little")
+                    while True:
+                        i = blob.find(kb, s)
+                        if i < 0:
+                            break
+                        s = i + 8
+                        if (i & 0x7) == 0:
+                            hits.append(i)
+                for i in hits:
                     obj = r.base + off + i
                     brain = pm.read_u64(obj + self._off_brain) or 0
                     if brain <= _KLASS_HI or not (_MIN_PTR <= brain <= _MAX_PTR):
@@ -146,35 +158,76 @@ class CameraReader:
                 off += chunk
         return False
 
-    def _find_orientation_quat(self) -> Optional[Tuple[float, float, float, float]]:
-        """在内联 CameraState 结构里扫真实相机朝向四元数 (自识别)。"""
+    @staticmethod
+    def _is_unit_quat(q) -> bool:
+        ss = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]
+        return 0.96 < ss < 1.04
+
+    def _find_orientation_quat(self, player_pos=None
+                               ) -> Optional[Tuple[float, float, float, float]]:
+        """定位 RawOrientation 四元数。靠四元数分量做启发式不稳(随相机角度剧变,
+        yaw≈0 时只 2 个分量非零)。改用 **RawPosition 锚定**: 相机世界坐标必在玩家
+        附近, 找到它→紧随其后(0x10~0x30 内)的单位四元数就是 RawOrientation。
+        偏移找到后缓存, 之后直读 + 单位校验, 失效再重找 (auto-offset 补丁自愈)。"""
         base = self._brain + self._off_camstate
         buf = self._pm.read_bytes(base, CAMSTATE_SCAN_LEN)
         if not buf or len(buf) < 16:
             return None
-        best = None
+        # 缓存命中: 直读上次找到的偏移
+        if self._off_quat is not None and self._off_quat + 16 <= len(buf):
+            q = struct.unpack_from("<4f", buf, self._off_quat)
+            if self._is_unit_quat(q) and 1.0 <= abs(_quat_pitch_deg(q)) <= 85.0:
+                return q
+            self._off_quat = None      # 失效, 重找
+        # 1) 找 RawPosition: 内联结构里最接近玩家(给了player_pos)的 vec3, Y 接近;
+        #    没给 player_pos 时退而求其次找"像世界坐标"的 vec3 (|y|<2000 且有量级)
+        best_pos_off = -1
+        best_score = 1e18
+        for off in range(0, len(buf) - 12, 4):
+            v = struct.unpack_from("<3f", buf, off)
+            if any(c != c for c in v):    # NaN
+                continue
+            if not (abs(v[0]) < 1e5 and abs(v[2]) < 1e5 and abs(v[1]) < 5000):
+                continue
+            if abs(v[0]) < 1 and abs(v[2]) < 1:
+                continue
+            if player_pos is not None:
+                d = math.hypot(v[0] - player_pos[0], v[2] - player_pos[2]) \
+                    + abs(v[1] - player_pos[1])
+                if d < best_score and d < 120.0:   # 相机在玩家 ~120m 内
+                    best_score, best_pos_off = d, off
+            else:
+                if best_pos_off < 0:
+                    best_pos_off = off
+        # 2) RawOrientation = RawPosition 之后 0x0C~0x30 内的单位四元数(俯角合理)
+        if best_pos_off >= 0:
+            for off in range(best_pos_off + 12, min(best_pos_off + 0x34, len(buf) - 16), 4):
+                q = struct.unpack_from("<4f", buf, off)
+                if self._is_unit_quat(q):
+                    p = abs(_quat_pitch_deg(q))
+                    if 1.0 <= p <= 85.0 and not all(abs(c) > 0.999 or abs(c) < 1e-3
+                                                    for c in q):
+                        self._off_quat = off
+                        return q
+        # 3) 兜底: 全结构扫第一个非平凡单位四元数(俯角合理)
         for off in range(0, len(buf) - 16, 4):
             q = struct.unpack_from("<4f", buf, off)
-            ss = sum(c * c for c in q)
-            if not (0.97 < ss < 1.03):
+            if not self._is_unit_quat(q):
                 continue
-            # 排除平凡轴对齐 (默认/未初始化): 至少 3 个分量非零且无单一分量≈±1
             nz = sum(1 for c in q if abs(c) > 0.02)
-            if nz < 3 or any(abs(c) > 0.995 for c in q):
-                continue
-            pitch = abs(_quat_pitch_deg(q))
-            # gameplay 相机恒有真实俯角 (经验 5°~80°)
-            if 3.0 <= pitch <= 80.0:
-                best = q
-                break
-        return best
+            p = abs(_quat_pitch_deg(q))
+            if nz >= 2 and 1.0 <= p <= 85.0 and not any(abs(c) > 0.9999 for c in q):
+                self._off_quat = off
+                return q
+        return None
 
-    def read_basis(self) -> Optional[dict]:
-        """返回 {forward:(x,z), right:(x,z), yaw_deg} 世界 XZ 基, 或 None。"""
+    def read_basis(self, player_pos=None) -> Optional[dict]:
+        """返回 {forward:(x,z), right:(x,z), yaw_deg} 世界 XZ 基, 或 None。
+        传 player_pos 可用位置锚定稳健定位相机朝向四元数 (强烈建议传)。"""
         try:
             if not self._locate():
                 return None
-            q = self._find_orientation_quat()
+            q = self._find_orientation_quat(player_pos)
             if not q:
                 return None
             fwd = _quat_forward_xz(q)

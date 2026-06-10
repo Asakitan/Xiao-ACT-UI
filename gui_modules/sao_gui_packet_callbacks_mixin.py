@@ -205,25 +205,31 @@ class SAOPlayerGUIPacketCallbacksMixin:
 
     def _send_linked_key(self, key: str, press_mode: str = "tap",
                          hold_ms: int = 80, press_count: int = 1):
-        """发送联动按键 (Boss→AutoKey linkage)."""
+        """发送联动按键 (Boss→AutoKey linkage)。用 scancode (移动/Shift冲刺/E走等
+        躲避键游戏只认扫描码, wVk 不响应)。"""
         try:
             from engines.auto_key_engine import VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP
             import ctypes as _ct
+            KEYEVENTF_SCANCODE = 0x0008
             key = (key or "").strip().upper()
             vk = VK_NAME_MAP.get(key)
             if vk is None and len(key) == 1 and key.isalpha():
                 vk = ord(key)
             if vk is None:
                 return
+            scan = _ct.windll.user32.MapVirtualKeyW(int(vk), 0)
+            if not scan:
+                return
             hold_s = max(0.015, hold_ms / 1000.0) if press_mode == "hold" else 0.015
             extra = _ct.c_ulong(0)
             for _ in range(max(1, press_count)):
-                ki = KEYBDINPUT(wVk=int(vk), wScan=0, dwFlags=0, time=0,
-                                dwExtraInfo=_ct.pointer(extra))
+                ki = KEYBDINPUT(wVk=0, wScan=int(scan), dwFlags=KEYEVENTF_SCANCODE,
+                                time=0, dwExtraInfo=_ct.pointer(extra))
                 ev = INPUT(type=INPUT_KEYBOARD, ki=ki)
                 _ct.windll.user32.SendInput(1, _ct.byref(ev), _ct.sizeof(INPUT))
                 time.sleep(hold_s)
-                ki2 = KEYBDINPUT(wVk=int(vk), wScan=0, dwFlags=KEYEVENTF_KEYUP, time=0,
+                ki2 = KEYBDINPUT(wVk=0, wScan=int(scan),
+                                 dwFlags=KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, time=0,
                                  dwExtraInfo=_ct.pointer(extra))
                 ev2 = INPUT(type=INPUT_KEYBOARD, ki=ki2)
                 _ct.windll.user32.SendInput(1, _ct.byref(ev2), _ct.sizeof(INPUT))
@@ -233,20 +239,29 @@ class SAOPlayerGUIPacketCallbacksMixin:
             print(f"[Linkage] send_key error: {e}")
 
     def _send_key_event(self, key: str, down: bool):
-        """低层按下/松开 (定向躲避按住 WASD 用; 同 SendInput wVk 路径)。"""
+        """低层按下/松开 (定向躲避按住 WASD 用)。
+
+        ★关键: 游戏移动只认 **scancode (扫描码)** 不认 wVk (虚拟键)——用 wVk 发 WASD
+        游戏完全不响应(实测)。这里用 MapVirtualKey 把 vk 转成 scancode, 加
+        KEYEVENTF_SCANCODE 标志发送, WASD 才会真正驱动人物移动。"""
         try:
             from engines.auto_key_engine import (
                 VK_NAME_MAP, INPUT, KEYBDINPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP)
             import ctypes as _ct
+            KEYEVENTF_SCANCODE = 0x0008
+            MAPVK_VK_TO_VSC = 0
             k = (key or "").strip().upper()
             vk = VK_NAME_MAP.get(k)
             if vk is None and len(k) == 1 and k.isalpha():
                 vk = ord(k)
             if vk is None:
                 return
+            scan = _ct.windll.user32.MapVirtualKeyW(int(vk), MAPVK_VK_TO_VSC)
+            if not scan:
+                return
+            flags = KEYEVENTF_SCANCODE | (0 if down else KEYEVENTF_KEYUP)
             extra = _ct.c_ulong(0)
-            ki = KEYBDINPUT(wVk=int(vk), wScan=0,
-                            dwFlags=0 if down else KEYEVENTF_KEYUP, time=0,
+            ki = KEYBDINPUT(wVk=0, wScan=int(scan), dwFlags=flags, time=0,
                             dwExtraInfo=_ct.pointer(extra))
             ev = INPUT(type=INPUT_KEYBOARD, ki=ki)
             _ct.windll.user32.SendInput(1, _ct.byref(ev), _ct.sizeof(INPUT))

@@ -71,7 +71,8 @@ class DodgeContext:
         if self._cam_cache is not None and (now - self._cam_ts) < self._cam_ttl:
             return self._cam_cache
         try:
-            self._cam_cache = self._camera().read_basis()
+            # 传玩家位 → 相机读取器用 RawPosition 锚定稳健定位朝向四元数(任意 yaw/360°)
+            self._cam_cache = self._camera().read_basis(self.get_player_pos())
         except Exception:
             self._cam_cache = None
         self._cam_ts = now
