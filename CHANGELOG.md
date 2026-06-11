@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.51: Web 主菜单运行时数值归一化修复.
+
+  1) `web/menu.html` 修复 Info 面板 XP 条渲染。
+     `xp_pct` 现在先归一化为有限数并夹到 0..100,
+     避免异常状态 payload 生成 `NaN%` 或越界宽度。
+
+  2) `web/menu.html` 修复音量滑块桥接参数。
+     `set_sound_volume` 现在传递 0..100 的整数并同步回输入框,
+     避免非法输入把 `NaN` 或越界值交给后端。
+
 ## v4.5.50: Web AutoKey 与机制横幅数值渲染修复.
 
   1) `web/autokey_editor.html` 修复技能 CD 条和槽位参数渲染。

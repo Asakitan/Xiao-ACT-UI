@@ -4981,7 +4981,9 @@ document.getElementById('sound-enabled').addEventListener('change', function(e) 
 document.getElementById('sound-volume').addEventListener('input', function(e) {
     e.stopPropagation();
     if (window.pywebview && window.pywebview.api && window.pywebview.api.set_sound_volume) {
-        window.pywebview.api.set_sound_volume(parseInt(this.value));
+        var volume = _clampInt(this.value, 80, 0, 100);
+        this.value = volume;
+        window.pywebview.api.set_sound_volume(volume);
     }
 });
 
@@ -6115,7 +6117,10 @@ function showToast(msg, duration) {
 function updateInfo(data) {
     if (data.username) document.getElementById('info-username').textContent = data.username;
     if (data.level !== undefined) document.getElementById('info-level').textContent = 'Lv.' + data.level;
-    if (data.xp_pct !== undefined) document.getElementById('info-xp').style.width = data.xp_pct + '%';
+    if (data.xp_pct !== undefined) {
+        var xpPct = _clampNum(data.xp_pct, 0, 0, 100);
+        document.getElementById('info-xp').style.width = xpPct + '%';
+    }
     if (data.profession) document.getElementById('info-profession').textContent = data.profession;
     if (data.hp !== undefined) document.getElementById('info-hp').textContent = data.hp;
     if (data.sta !== undefined) document.getElementById('info-sta').textContent = data.sta;

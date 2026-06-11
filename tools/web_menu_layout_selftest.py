@@ -95,6 +95,23 @@ def main() -> int:
         raise AssertionError("menu.html must provide a safe leaderboard rank label helper")
     if "return (s || '').replace(/&/g,'&amp;')" in html:
         raise AssertionError("_escHtml must coerce non-string values and escape quotes for attribute reuse")
+    menu_raw_patterns = [
+        "document.getElementById('info-xp').style.width = data.xp_pct + '%';",
+        "window.pywebview.api.set_sound_volume(parseInt(this.value));",
+    ]
+    for pattern in menu_raw_patterns:
+        if pattern in html:
+            raise AssertionError("menu runtime values must be normalized before rendering or bridge calls: " + pattern)
+    menu_safe_required = [
+        "var xpPct = _clampNum(data.xp_pct, 0, 0, 100);",
+        "document.getElementById('info-xp').style.width = xpPct + '%';",
+        "var volume = _clampInt(this.value, 80, 0, 100);",
+        "this.value = volume;",
+        "window.pywebview.api.set_sound_volume(volume);",
+    ]
+    for snippet in menu_safe_required:
+        if snippet not in html:
+            raise AssertionError("missing safe menu runtime value snippet: " + snippet)
     boss_raid_raw_patterns = [
         "'<div class=\"boss-raid-card-meta\">HP: ' + (p.boss_total_hp || '?')",
         "' · HP: ' + (item.boss_total_hp || '?')",
