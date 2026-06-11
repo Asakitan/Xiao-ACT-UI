@@ -28,10 +28,14 @@ public sealed class MenuStateBridge : IDisposable
             BridgeCommands.GetAutoKeyState,
             BridgeCommands.GetBossRaidState,
             BridgeCommands.SetBossRaidEnabled,
+            BridgeCommands.SetBossRaidActiveProfile,
+            BridgeCommands.CreateBossRaidProfile,
         };
         _router.Register(BridgeCommands.GetAutoKeyState, _ => HandleAutoKeyState());
         _router.Register(BridgeCommands.GetBossRaidState, _ => HandleBossRaidState());
         _router.Register(BridgeCommands.SetBossRaidEnabled, HandleSetBossRaidEnabled);
+        _router.Register(BridgeCommands.SetBossRaidActiveProfile, HandleSetBossRaidActiveProfile);
+        _router.Register(BridgeCommands.CreateBossRaidProfile, _ => HandleCreateBossRaidProfile());
     }
 
     public void Dispose()
@@ -68,6 +72,46 @@ public sealed class MenuStateBridge : IDisposable
         {
             ["ok"] = true,
             ["enabled"] = enabled,
+            ["state"] = BuildBossRaidState(_settings, _states),
+        };
+    }
+
+    private JsonObject HandleSetBossRaidActiveProfile(JsonObject? payload)
+    {
+        var id = ReadString(payload, "id");
+        if (string.IsNullOrWhiteSpace(id))
+            id = ReadString(payload, "profile_id");
+        if (string.IsNullOrWhiteSpace(id))
+            return new JsonObject { ["ok"] = false, ["message"] = "Profile not found" };
+
+        var identityContext = CurrentIdentity(_states);
+        using var authorDoc = JsonDocument.Parse(AuthorObject(identityContext.Author).ToJsonString());
+        var author = authorDoc.RootElement.Clone();
+        var config = BossRaidConfigStore.Load(_settings, author);
+        if (BossRaidProfile.FindProfile(config, id) is null)
+            return new JsonObject { ["ok"] = false, ["message"] = "Profile not found" };
+
+        BossRaidConfigStore.Save(_settings, config with { ActiveProfileId = id });
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["state"] = BuildBossRaidState(_settings, _states),
+        };
+    }
+
+    private JsonObject HandleCreateBossRaidProfile()
+    {
+        var identityContext = CurrentIdentity(_states);
+        using var authorDoc = JsonDocument.Parse(AuthorObject(identityContext.Author).ToJsonString());
+        var author = authorDoc.RootElement.Clone();
+        var config = BossRaidConfigStore.Load(_settings, author);
+        var profile = BossRaidProfile.MakeDefaultProfile(author);
+        config = BossRaidProfile.UpsertProfile(config, profile, activate: true);
+        BossRaidConfigStore.Save(_settings, config);
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["profile_id"] = profile.Id,
             ["state"] = BuildBossRaidState(_settings, _states),
         };
     }
@@ -162,6 +206,14 @@ public sealed class MenuStateBridge : IDisposable
         ["profession_id"] = author.ProfessionId,
         ["profession_name"] = author.ProfessionName ?? string.Empty,
     };
+
+    private static string ReadString(JsonObject? payload, string key)
+    {
+        if (payload is null) return string.Empty;
+        return payload.TryGetPropertyValue(key, out var node) && node is not null
+            ? node.ToString()
+            : string.Empty;
+    }
 
     private static JsonObject AutoKeyUploadAuth(JsonObject identity) => new()
     {

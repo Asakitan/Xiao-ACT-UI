@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.16: WebView2 BossRaid 本地配置创建与激活修复.
+
+  1) `web/pywebview-shim.js` 补齐 `activate_boss_raid_profile(id)`,
+     C# `MenuStateBridge` 新增 `bossraid.profile.set_active`。
+     BossRaid 本地配置卡片点击现在会真实持久化 active profile 并返回完整菜单状态。
+
+  2) `web/pywebview-shim.js` 补齐 `create_boss_raid_profile()`,
+     C# `MenuStateBridge` 新增 `bossraid.profile.create`。
+     BossRaid 新建按钮现在会创建并激活默认 profile, 修复 WebView2 菜单无反馈的问题。
+
 ## v4.5.15: WebView2 BossRaid 导入入口与启用开关修复.
 
   1) `web/pywebview-shim.js` 补齐 `start_boss_raid_import_picker()`,

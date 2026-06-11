@@ -172,6 +172,12 @@
         set_boss_raid_enabled: function (enabled) {
             return call('bossraid.set_enabled', { enabled: !!enabled }).then(normalizeOk);
         },
+        activate_boss_raid_profile: function (id) {
+            return call('bossraid.profile.set_active', { id: String(id || '') }).then(normalizeOk);
+        },
+        create_boss_raid_profile: function () {
+            return call('bossraid.profile.create', {}).then(normalizeOk);
+        },
         save_autokey_actions: function (actionsJson) {
             return call('autokey.actions.save', {
                 actions_json: String(actionsJson || '[]')

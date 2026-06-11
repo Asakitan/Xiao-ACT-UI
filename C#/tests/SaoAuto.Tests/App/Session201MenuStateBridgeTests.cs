@@ -176,6 +176,52 @@ public class Session201MenuStateBridgeTests : IDisposable
     }
 
     [Fact]
+    public void SetBossRaidActiveProfilePersistsAndReturnsFreshState()
+    {
+        var router = new BridgeRouter();
+        var settings = NewSettings();
+        var alpha = BossRaidProfile.MakeDefaultProfile() with { Id = "br-a", ProfileName = "Alpha" };
+        var beta = BossRaidProfile.MakeDefaultProfile() with { Id = "br-b", ProfileName = "Beta" };
+        var config = BossRaidProfile.UpsertProfile(BossRaidProfile.DefaultConfig(), alpha, activate: true);
+        config = BossRaidProfile.UpsertProfile(config, beta);
+        BossRaidConfigStore.Save(settings, config);
+        using var bridge = new MenuStateBridge(router, settings, new GameStateManager());
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.SetBossRaidActiveProfile, new JsonObject
+        {
+            ["id"] = "br-b",
+        }));
+        var payload = reply!.Payload!;
+        var state = payload["state"]!.AsObject();
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("br-b", state["active_profile_id"]!.GetValue<string>());
+        Assert.Equal("Beta", state["active_profile_name"]!.GetValue<string>());
+        Assert.Equal("br-b", BossRaidConfigStore.Load(new SettingsManager(settings.Path)).ActiveProfileId);
+    }
+
+    [Fact]
+    public void CreateBossRaidProfilePersistsAndActivatesDefaultProfile()
+    {
+        var router = new BridgeRouter();
+        var settings = NewSettings();
+        using var bridge = new MenuStateBridge(router, settings, new GameStateManager());
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.CreateBossRaidProfile));
+        var payload = reply!.Payload!;
+        var state = payload["state"]!.AsObject();
+        var profileId = payload["profile_id"]!.GetValue<string>();
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.False(string.IsNullOrWhiteSpace(profileId));
+        Assert.Equal(profileId, state["active_profile_id"]!.GetValue<string>());
+        Assert.Equal("New Boss Raid", state["active_profile_name"]!.GetValue<string>());
+        Assert.Single(reloaded.Profiles);
+        Assert.Equal(profileId, reloaded.ActiveProfileId);
+    }
+
+    [Fact]
     public void DisposeUnregistersCommands()
     {
         var router = new BridgeRouter();
@@ -185,12 +231,16 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.Contains(BridgeCommands.GetAutoKeyState, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.GetBossRaidState, router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SetBossRaidEnabled, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SetBossRaidActiveProfile, router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.CreateBossRaidProfile, router.RegisteredCommands);
 
         bridge.Dispose();
 
         Assert.DoesNotContain(BridgeCommands.GetAutoKeyState, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.GetBossRaidState, router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SetBossRaidEnabled, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SetBossRaidActiveProfile, router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.CreateBossRaidProfile, router.RegisteredCommands);
     }
 
     [Fact]
@@ -205,6 +255,8 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.Contains(BridgeCommands.GetAutoKeyState, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.GetBossRaidState, lifecycle.Router.RegisteredCommands);
         Assert.Contains(BridgeCommands.SetBossRaidEnabled, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.SetBossRaidActiveProfile, lifecycle.Router.RegisteredCommands);
+        Assert.Contains(BridgeCommands.CreateBossRaidProfile, lifecycle.Router.RegisteredCommands);
 
         var reply = lifecycle.Router.Dispatch(Cmd(BridgeCommands.GetAutoKeyState));
         Assert.True(reply!.Payload!["ok"]!.GetValue<bool>());
@@ -214,6 +266,8 @@ public class Session201MenuStateBridgeTests : IDisposable
         Assert.DoesNotContain(BridgeCommands.GetAutoKeyState, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.GetBossRaidState, lifecycle.Router.RegisteredCommands);
         Assert.DoesNotContain(BridgeCommands.SetBossRaidEnabled, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.SetBossRaidActiveProfile, lifecycle.Router.RegisteredCommands);
+        Assert.DoesNotContain(BridgeCommands.CreateBossRaidProfile, lifecycle.Router.RegisteredCommands);
     }
 
     [Fact]
