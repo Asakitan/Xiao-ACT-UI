@@ -236,6 +236,70 @@ public class Session183BossRaidCloudPersistTests : IDisposable
     }
 
     [Fact]
+    public void UploadProfileRefreshesTokenAndPersistsRemoteId()
+    {
+        var router = new BridgeRouter();
+        var handler = new FakeHandler
+        {
+            Responder = req =>
+            {
+                if (req.RequestUri!.AbsolutePath.EndsWith("/api/upload-token/issue", StringComparison.Ordinal))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(
+                            "{\"token\":\"upload-token\",\"expires_at\":\"2026-05-21T00:00:00Z\",\"mode\":\"test\"}",
+                            Encoding.UTF8,
+                            "application/json"),
+                    };
+                }
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"id\":\"remote-upload\"}", Encoding.UTF8, "application/json"),
+                };
+            },
+        };
+        using var http = new HttpClient(handler);
+        using var client = new BossRaidCloudClient("http://example.com", http);
+        var settingsPath = Path.Combine(_workDir, $"settings-{Guid.NewGuid():N}.json");
+        File.WriteAllText(settingsPath, "{}");
+        var settings = new SettingsManager(settingsPath);
+        var profile = BossRaidProfile.MakeDefaultProfile() with
+        {
+            Id = "br-upload",
+            ProfileName = "Upload Boss",
+            BossTotalHp = 1200,
+        };
+        BossRaidConfigStore.Save(
+            settings,
+            BossRaidProfile.UpsertProfile(BossRaidProfile.DefaultConfig() with { Enabled = true }, profile, activate: true));
+        var states = new GameStateManager();
+        states.Replace(new GameState
+        {
+            PlayerId = "u1",
+            PlayerName = "Asuna",
+            ProfessionId = 7,
+            ProfessionName = "Rapier",
+        });
+        using var bridge = new BossRaidCloudBridge(router, client, settings, states: states);
+
+        var reply = router.Dispatch(Cmd(BridgeCommands.UploadBossRaid,
+            "{\"id\":\"br-upload\"}"));
+        var payload = reply!.Payload!;
+        var reloaded = BossRaidConfigStore.Load(new SettingsManager(settings.Path));
+        var saved = BossRaidProfile.FindProfile(reloaded, "br-upload")!;
+
+        Assert.True(payload["ok"]!.GetValue<bool>());
+        Assert.Equal("remote-upload", payload["remote_id"]!.GetValue<string>());
+        Assert.Equal("uploaded", saved.Source);
+        Assert.Equal("remote-upload", saved.RemoteId);
+        Assert.Equal("remote-upload", payload["state"]!["active_profile"]!["remote_id"]!.GetValue<string>());
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.True(handler.Requests[1].Headers.TryGetValues("X-SAO-Upload-Token", out var values));
+        Assert.Equal("upload-token", values!.Single());
+    }
+
+    [Fact]
     public void SetServerUrlPersistsAndNextSearchUsesUpdatedSettings()
     {
         var router = new BridgeRouter();

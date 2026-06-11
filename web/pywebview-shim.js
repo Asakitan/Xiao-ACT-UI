@@ -202,6 +202,9 @@
         refresh_boss_raid_upload_auth: function (force) {
             return call('bossraid.cloud.refresh_upload_auth', { force: !!force }).then(normalizeOk);
         },
+        upload_boss_raid_profile: function (id) {
+            return call('bossraid.cloud.upload', { id: String(id || '') }).then(normalizeOk);
+        },
         save_autokey_actions: function (actionsJson) {
             return call('autokey.actions.save', {
                 actions_json: String(actionsJson || '[]')

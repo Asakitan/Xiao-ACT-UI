@@ -2,6 +2,14 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.21: WebView2 BossRaid 云端上传桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐最后一个动态 BossRaid 缺口:
+     `upload_boss_raid_profile(id)` 转发到 C# `bossraid.cloud.upload`。
+     当菜单只传 profile id 时, C# 会读取本地 active/指定 profile, 自动刷新或复用
+     内存上传 token, 上传成功后持久化 `source=uploaded` 与 `remote_id`,
+     并返回完整 BossRaid 菜单状态。
+
 ## v4.5.20: WebView2 BossRaid 云端搜索与上传凭证桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `search_boss_raid_remote(query)`,

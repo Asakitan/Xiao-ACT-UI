@@ -301,9 +301,64 @@ public sealed class BossRaidCloudBridge : IDisposable
     {
         var token = payload?["token"]?.GetValue<string>() ?? string.Empty;
         var body = ExtractPayloadElement(payload, "profile");
+        if (body is null && payload?["token"] is null)
+            return HandleUploadLocalProfile(payload);
         if (body is null)
             return new JsonObject { ["ok"] = false, ["error"] = "missing_profile" };
         return InvokeWithClient((client, ct) => client.UploadAsync(body.Value, token, ct));
+    }
+
+    private JsonObject HandleUploadLocalProfile(JsonObject? payload)
+    {
+        if (_settings is null)
+            return new JsonObject { ["ok"] = false, ["error"] = "settings_unavailable" };
+
+        var author = CurrentAuthorElement();
+        var identity = CurrentIdentityObject();
+        var config = BossRaidConfigStore.Load(_settings, author);
+        var id = ReadString(payload?["id"]).Trim();
+        if (string.IsNullOrWhiteSpace(id))
+            id = ReadString(payload?["profile_id"]).Trim();
+        var profile = string.IsNullOrWhiteSpace(id)
+            ? BossRaidProfile.ActiveProfile(config)
+            : BossRaidProfile.FindProfile(config, id);
+        profile ??= BossRaidProfile.ActiveProfile(config);
+        if (profile is null)
+            return UploadError("No active profile");
+
+        var serverUrl = CurrentServerUrl();
+        if (!UploadAuthValid(identity, serverUrl))
+        {
+            var authReply = HandleRefreshUploadAuth(new JsonObject { ["force"] = false });
+            if (authReply["ok"]?.GetValue<bool>() != true)
+                return UploadError(authReply["message"]?.GetValue<string>() ?? "Upload token is empty");
+        }
+        if (string.IsNullOrWhiteSpace(_uploadToken))
+            return UploadError("Upload token is empty");
+
+        using var uploadDoc = JsonDocument.Parse(BuildUploadPayload(profile, identity).ToJsonString());
+        var reply = InvokeWithClient((client, ct) => client.UploadAsync(uploadDoc.RootElement.Clone(), _uploadToken, ct));
+        if (reply["ok"]?.GetValue<bool>() != true)
+            return UploadError(ReadString(reply["error"]));
+
+        var remoteId = ReadString(reply["data"]?["id"]).Trim();
+        var uploaded = profile with
+        {
+            Source = "uploaded",
+            RemoteId = string.IsNullOrWhiteSpace(remoteId) ? null : remoteId,
+            UpdatedAt = BossRaidProfile.UtcNowIsoFactory(),
+        };
+        config = BossRaidProfile.UpsertProfile(
+            config,
+            uploaded,
+            activate: string.Equals(config.ActiveProfileId, uploaded.Id, StringComparison.Ordinal));
+        BossRaidConfigStore.Save(_settings, config);
+        return new JsonObject
+        {
+            ["ok"] = true,
+            ["remote_id"] = uploaded.RemoteId is null ? null : JsonValue.Create(uploaded.RemoteId),
+            ["state"] = MenuStateBridge.BuildBossRaidState(_settings, _states),
+        };
     }
 
     private JsonObject HandleSetServerUrl(JsonObject? payload)
@@ -421,6 +476,35 @@ public sealed class BossRaidCloudBridge : IDisposable
             ["identity"] = CloneObject(identity),
             ["server_url"] = serverUrl,
         };
+    }
+
+    private JsonObject BuildUploadPayload(RaidProfile profile, JsonObject identity)
+    {
+        using var profileDoc = JsonDocument.Parse(BossRaidProfile.ExportProfileJson(profile));
+        var profileObj = JsonNode.Parse(profileDoc.RootElement.GetProperty("profile").GetRawText())!.AsObject();
+        return new JsonObject
+        {
+            ["profile_name"] = profile.ProfileName,
+            ["description"] = profile.Description,
+            ["boss_total_hp"] = profile.BossTotalHp,
+            ["enrage_time_s"] = profile.EnrageTimeS,
+            ["player_uid"] = identity["player_uid"]?.GetValue<string>() ?? string.Empty,
+            ["player_name"] = identity["player_name"]?.GetValue<string>() ?? string.Empty,
+            ["schema_version"] = BossRaidProfile.SchemaVersion,
+            ["profile"] = CloneObject(profileObj),
+        };
+    }
+
+    private JsonObject UploadError(string message)
+    {
+        var reply = new JsonObject
+        {
+            ["ok"] = false,
+            ["message"] = string.IsNullOrWhiteSpace(message) ? "Upload failed" : message,
+        };
+        if (_settings is not null)
+            reply["state"] = MenuStateBridge.BuildBossRaidState(_settings, _states);
+        return reply;
     }
 
     private bool UploadAuthValid(JsonObject identity, string serverUrl)
