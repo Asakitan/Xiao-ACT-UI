@@ -574,8 +574,8 @@ function _mechReply(p) {
 }
 
 function renderMechanics() {
-    var st = _mechState || {};
-    var master = st.master || {};
+    var st = _objectValue(_mechState);
+    var master = _objectValue(st.master);
     document.getElementById('mech-zh-warn').style.display =
         (master.zh_voice === false) ? '' : 'none';
     var mEl = document.getElementById('mech-master');
@@ -607,15 +607,15 @@ function renderMechanics() {
         document.getElementById('mech-profile-meta').textContent = '';
         return;
     }
-    var inbox = st.inbox || [];
+    var inbox = _objectItems(st.inbox);
     document.getElementById('mech-inbox-header').style.display = inbox.length ? '' : 'none';
     document.getElementById('mech-inbox').innerHTML = inbox.slice(0, 6).map(_mInboxRow).join('');
-    var mechs = st.mechanics || [];
+    var mechs = _objectItems(st.mechanics);
     document.getElementById('mech-list-header').textContent = '机制列表 (' + mechs.length + ')';
     document.getElementById('mech-list').innerHTML = mechs.map(_mCard).join('')
         || '<div class="empty-state">还没有机制 — 点「新建机制」或从收件箱一键创建</div>';
-    var prof = st.profile || {};
-    var enr = prof.enrage || {};
+    var prof = _objectValue(st.profile);
+    var enr = _objectValue(prof.enrage);
     var enrageSeconds = _clampInt(enr.time_s != null ? enr.time_s : prof.enrage_time_s, 0, 0, 86400);
     document.getElementById('mech-profile-meta').textContent =
         '狂暴 ' + enrageSeconds + 's · 档案: ' + (prof.name || '');
@@ -637,16 +637,18 @@ function mechMaster(flags) {
 }
 
 function _mInboxRow(rec) {
+    rec = _objectValue(rec);
     var sid = _clampInt(rec.skill_id, 0, 0, 999999999);
     var dur = rec.last_cast_duration_ms == null ? 0 : _clampInt(rec.last_cast_duration_ms, 0, 0, 600000);
     var count = _clampInt(rec.count, 0, 0, 999999);
     var label = (rec.name || '技能') + ' #' + sid + ' ×' + count
         + (dur > 0 ? (' · ' + dur + 'ms') : '');
-    var mechs = (_mechState && _mechState.mechanics) || [];
+    var mechs = _objectItems(_objectValue(_mechState).mechanics);
     var bindSel = mechs.length
         ? '<select class="mech-input" style="max-width:110px;" onchange="if(this.value){mechBind(this.value,' + sid + ')}">'
           + '<option value="">绑定到▾</option>'
           + mechs.map(function (m) {
+                m = _objectValue(m);
                 return '<option value="' + _esc(m.id) + '">' + _esc(m.name) + '</option>';
             }).join('') + '</select>'
         : '';
@@ -673,14 +675,15 @@ function mechBind(mid, sid) {
 }
 
 function _mCard(m) {
-    var names = m.skill_names || {};
-    var det = m.detect || {};
-    var ids = (det.skill_ids || []).concat(det.buff_ids || []);
+    m = _objectValue(m);
+    var names = _objectValue(m.skill_names);
+    var det = _objectValue(m.detect);
+    var ids = _listItems(det.skill_ids).concat(_listItems(det.buff_ids));
     var chips = ids.map(function (sid) {
         var nm = (names[String(sid)] || '').trim();
         return nm ? (nm + '#' + sid) : ('#' + sid);
     });
-    var sum = m.summary || {};
+    var sum = _objectValue(m.summary);
     var sub = [chips.length ? ('检测: ' + chips.join(', ')) : '未绑定检测ID',
                sum.alert_desc || '', sum.dodge_desc || ''].filter(Boolean).join(' · ');
     var midArg = _jsArg(m.id);
@@ -721,7 +724,7 @@ function mechToggle(mid, enabled) {
 }
 
 function _mFind(mid) {
-    var mechs = (_mechState && _mechState.mechanics) || [];
+    var mechs = _objectItems(_objectValue(_mechState).mechanics);
     for (var i = 0; i < mechs.length; i++) if (mechs[i].id === mid) return mechs[i];
     return null;
 }
@@ -755,7 +758,7 @@ function mechTest(mid, kinds) {
 }
 
 function mechNew() {
-    var used = ((_mechState && _mechState.mechanics) || []).length;
+    var used = _objectItems(_objectValue(_mechState).mechanics).length;
     var draft = {
         id: '', name: '新机制', color: _MECH_COLORS[used % _MECH_COLORS.length],
         enabled: true, phase_ids: [],
@@ -770,7 +773,7 @@ function mechNew() {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
         if (r && r.ok && r.state) {
             _mechState = r.state;
-            var mechs = _mechState.mechanics || [];
+            var mechs = _objectItems(_objectValue(_mechState).mechanics);
             if (mechs.length) {
                 _mechEditing = mechs[mechs.length - 1].id;
                 _mechDraft = JSON.parse(JSON.stringify(mechs[mechs.length - 1]));
@@ -788,14 +791,15 @@ function _mInput(id, label, value, width) {
 }
 
 function _mForm(m) {
-    var d = _mechDraft || m;
-    var det = d.detect || {};
-    var alert = d.alert || {};
-    var dodge = d.dodge || {};
-    var inline = dodge.inline || {};
-    var names = m.skill_names || {};
-    var ids = det.skill_ids || [];
-    var seq = inline.sequence || [];
+    m = _objectValue(m);
+    var d = _isObjectValue(_mechDraft) ? _mechDraft : m;
+    var det = _objectValue(d.detect);
+    var alert = _objectValue(d.alert);
+    var dodge = _objectValue(d.dodge);
+    var inline = _objectValue(dodge.inline);
+    var names = _objectValue(m.skill_names);
+    var ids = _listItems(det.skill_ids);
+    var seq = _objectItems(inline.sequence);
     var isDash = seq.length >= 2
         && seq.every(function (s) { return (s.key || '').toUpperCase() === (seq[0].key || '').toUpperCase(); })
         && seq.every(function (s) { return _isZeroStep(s.hold_ms); })
@@ -815,7 +819,7 @@ function _mForm(m) {
         + '<textarea id="mf-notes" class="mech-input" rows="4" style="width:96%;resize:vertical;'
         + 'font-size:10px;line-height:1.5;">' + _esc(d.notes == null ? '' : d.notes) + '</textarea>';
     // 检测
-    var buffIds = det.buff_ids || [];
+    var buffIds = _listItems(det.buff_ids);
     html += '<div class="phase-header" style="font-size:10px;">检测 (技能/Buff ID)</div>';
     html += '<div style="font-size:9px;color:#9fc0d8;margin:1px 0 3px;">● 至少绑定一个 Boss 技能/Buff ID 作触发条件 — 可从内存自动导入或技能库搜索</div>';
     html += '<div style="margin:3px 0;">';
@@ -830,7 +834,7 @@ function _mForm(m) {
         return '<span onclick="mechDraftRemoveBuff(' + bid + ')" style="display:inline-block;background:rgba(104,228,255,.12);color:#8fdcff;padding:1px 6px;margin:1px;border-radius:4px;cursor:pointer;">'
             + _esc('B ' + (nm ? (nm + '#' + bid) : ('#' + bid))) + ' ✕</span>';
     }).join('') + '</div>';
-    var observed = ((_mechState && _mechState.observed) || []).filter(function (o) {
+    var observed = _objectItems(_objectValue(_mechState).observed).filter(function (o) {
         return ids.indexOf(o.id) < 0;
     });
     if (observed.length) {
@@ -846,7 +850,7 @@ function _mForm(m) {
         + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddManualBuff()">添加</span> '
         + _mInput('mf-q', '技能库', '', 90)
         + '<span class="action-btn" style="padding:1px 7px;font-size:10px;" onclick="mechCatalogSearch()">搜索</span>';
-    html += (_mechCatalog || []).map(function (h) {
+    html += _objectItems(_mechCatalog).map(function (h) {
         return '<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">'
             + '<span style="flex:1;color:#e8f6ff;">' + _esc(h.name + ' #' + h.id + ' (' + (h.kind || '') + ')') + '</span>'
             + '<span class="action-btn accent" style="padding:1px 7px;font-size:10px;" onclick="mechDraftAddSkill(' + h.id + ')">绑定</span></div>';
@@ -889,7 +893,7 @@ function _mForm(m) {
     }
     // 定向移动 (按住 WASD 挪位)
     var curDir = String(inline.direction || '');
-    var dirMasterOn = !!((_mechState && _mechState.master) || {}).directional_dodge_enabled;
+    var dirMasterOn = !!_objectValue(_objectValue(_mechState).master).directional_dodge_enabled;
     var dis = dirMasterOn ? '' : ' disabled';
     html += '<div class="phase-header" style="font-size:10px;">定向移动 (WASD 挪位)</div>';
     if (!dirMasterOn) {
@@ -912,7 +916,7 @@ function _mForm(m) {
             + '<span style="font-size:9px;color:#75808d;">挪到离目标这么远即停</span></div>';
     }
     if (curDir.indexOf('goto') === 0 || curDir.indexOf('walk') === 0) {
-        var walkMasterOn = !!((_mechState && _mechState.master) || {}).auto_walk_enabled;
+        var walkMasterOn = !!_objectValue(_objectValue(_mechState).master).auto_walk_enabled;
         if (!walkMasterOn) {
             html += '<div style="font-size:10px;color:#ffd46f;margin:2px 0;">● 顶部「自动走位」总开关未开 — 走向类不会执行 (仅保存配置)</div>';
         }
@@ -921,10 +925,10 @@ function _mForm(m) {
     }
     html += '<div style="font-size:9px;color:#9fc0d8;margin:2px 0;">视角方向最稳(永远可用); 远离Boss/最近威胁会持续挪到出安全距离即停(精准出圈), 读不到目标位时退到后备方向。需顶部「定向移动」总开关开启。「走向」类(靠拢队友/走编号圈)是自动走位, 需额外开「自动走位」总开关, 读不到目标位时直接停(绝不盲走)。</div>'
         + '<div style="font-size:9px;color:#ff9a8c;margin:2px 0;">⚠ 自动 WASD 位移属自动化操作, 在反作弊游戏里有账号风险, 默认关闭, 自行承担。随时 '
-        + _esc(((_mechState || {}).master || {}).panic_hotkey || 'F12') + ' 全松键急停。</div>';
+        + _esc(_objectValue(_objectValue(_mechState).master).panic_hotkey || 'F12') + ' 全松键急停。</div>';
     // 阶段范围
-    var phases = (_mechState && _mechState.phases) || [];
-    var pids = d.phase_ids || [];
+    var phases = _objectItems(_objectValue(_mechState).phases);
+    var pids = _listItems(d.phase_ids);
     html += '<div style="margin:5px 0;">阶段范围 <select id="mf-phase" class="mech-input">'
         + '<option value=""' + (!pids.length ? ' selected' : '') + '>全部阶段</option>'
         + phases.map(function (p) {
@@ -948,11 +952,12 @@ function _mVal(id) {
 }
 
 function _mCollect() {
-    var d = _mechDraft || {};
-    var det = d.detect = d.detect || {};
-    var alert = d.alert = d.alert || {};
-    var dodge = d.dodge = d.dodge || {};
-    var inline = dodge.inline = dodge.inline || {};
+    var d = _isObjectValue(_mechDraft) ? _mechDraft : {};
+    if (_mechDraft && !_isObjectValue(_mechDraft)) _mechDraft = d;
+    var det = d.detect = _objectValue(d.detect);
+    var alert = d.alert = _objectValue(d.alert);
+    var dodge = d.dodge = _objectValue(d.dodge);
+    var inline = dodge.inline = _objectValue(dodge.inline);
     if (document.getElementById('mf-name')) d.name = _mVal('mf-name') || '机制';
     var notesEl = document.getElementById('mf-notes');
     if (notesEl) d.notes = String(notesEl.value || '').trim();
@@ -1011,8 +1016,8 @@ function mechPickColor(c) { _mCollect(); if (_mechDraft) _mechDraft.color = c; r
 function mechDraftAddSkill(sid) {
     _mCollect();
     if (!_mechDraft) return;
-    var det = _mechDraft.detect = _mechDraft.detect || {};
-    var ids = det.skill_ids = det.skill_ids || [];
+    var det = _mechDraft.detect = _objectValue(_mechDraft.detect);
+    var ids = det.skill_ids = _listItems(det.skill_ids);
     if (sid > 0 && ids.indexOf(sid) < 0) { ids.push(sid); ids.sort(function (a, b) { return a - b; }); }
     renderMechanics();
 }
@@ -1023,8 +1028,8 @@ function mechDraftAddManual() {
 function mechDraftAddBuff(bid) {
     _mCollect();
     if (!_mechDraft) return;
-    var det = _mechDraft.detect = _mechDraft.detect || {};
-    var ids = det.buff_ids = det.buff_ids || [];
+    var det = _mechDraft.detect = _objectValue(_mechDraft.detect);
+    var ids = det.buff_ids = _listItems(det.buff_ids);
     if (bid > 0 && ids.indexOf(bid) < 0) { ids.push(bid); ids.sort(function (a, b) { return a - b; }); }
     renderMechanics();
 }
@@ -1035,15 +1040,15 @@ function mechDraftAddManualBuff() {
 function mechDraftRemoveSkill(sid) {
     _mCollect();
     if (!_mechDraft) return;
-    var det = _mechDraft.detect || {};
-    det.skill_ids = (det.skill_ids || []).filter(function (x) { return Number(x) !== Number(sid); });
+    var det = _mechDraft.detect = _objectValue(_mechDraft.detect);
+    det.skill_ids = _listItems(det.skill_ids).filter(function (x) { return Number(x) !== Number(sid); });
     renderMechanics();
 }
 function mechDraftRemoveBuff(bid) {
     _mCollect();
     if (!_mechDraft) return;
-    var det = _mechDraft.detect || {};
-    det.buff_ids = (det.buff_ids || []).filter(function (x) { return Number(x) !== Number(bid); });
+    var det = _mechDraft.detect = _objectValue(_mechDraft.detect);
+    det.buff_ids = _listItems(det.buff_ids).filter(function (x) { return Number(x) !== Number(bid); });
     renderMechanics();
 }
 function mechCatalogSearch() {
@@ -1053,7 +1058,7 @@ function mechCatalogSearch() {
     _mCollect();
     Promise.resolve(a.search_skill_catalog(q, 10)).then(function (j) {
         var r = (typeof j === 'string') ? JSON.parse(j) : j;
-        _mechCatalog = (r && r.ok) ? (r.results || []) : [];
+        _mechCatalog = (r && r.ok) ? _objectItems(r.results) : [];
         renderMechanics();
     }).catch(function () {});
 }
@@ -1068,15 +1073,34 @@ function _dashSequence(key, count, interval) {
 function mechPresetChange(_v) {
     _mCollect();
     if (_mechDraft) {
-        var inl = _mechDraft.dodge.inline;
+        var dodge = _mechDraft.dodge = _objectValue(_mechDraft.dodge);
+        var inl = dodge.inline = _objectValue(dodge.inline);
         if (_v === 'dash') { inl.sequence = _dashSequence('SHIFT', 3, 300); inl.action_key = ''; }
-        else if (_v === 'seq' && !(inl.sequence || []).length) { inl.sequence = [{ key: '', delay_ms: 0, hold_ms: 0 }]; }
+        else if (_v === 'seq' && !_listItems(inl.sequence).length) { inl.sequence = [{ key: '', delay_ms: 0, hold_ms: 0 }]; }
         else if (_v !== 'seq') { inl.sequence = []; }
     }
     renderMechanics();
 }
-function mechSeqAdd() { _mCollect(); if (_mechDraft) { var inl = _mechDraft.dodge.inline; (inl.sequence = inl.sequence || []).push({ key: '', delay_ms: 0, hold_ms: 0 }); } renderMechanics(); }
-function mechSeqRemove(i) { _mCollect(); if (_mechDraft) { (_mechDraft.dodge.inline.sequence || []).splice(i, 1); } renderMechanics(); }
+function mechSeqAdd() {
+    _mCollect();
+    if (_mechDraft) {
+        var dodge = _mechDraft.dodge = _objectValue(_mechDraft.dodge);
+        var inl = dodge.inline = _objectValue(dodge.inline);
+        inl.sequence = _listItems(inl.sequence);
+        inl.sequence.push({ key: '', delay_ms: 0, hold_ms: 0 });
+    }
+    renderMechanics();
+}
+function mechSeqRemove(i) {
+    _mCollect();
+    if (_mechDraft) {
+        var dodge = _mechDraft.dodge = _objectValue(_mechDraft.dodge);
+        var inl = dodge.inline = _objectValue(dodge.inline);
+        inl.sequence = _listItems(inl.sequence);
+        inl.sequence.splice(i, 1);
+    }
+    renderMechanics();
+}
 function mechFormTest(kinds) {
     var m = _mCollect();
     var a = _api();
@@ -1091,11 +1115,12 @@ function mechSaveForm() {
     if (!m || !a || !a.save_mechanic) return;
     var m2 = JSON.parse(JSON.stringify(m));
     delete m2.summary; delete m2.skill_names;
-    if (m2.dodge && m2.dodge.inline && (m2.dodge.inline.sequence || []).length) {
-        m2.dodge.inline.sequence = m2.dodge.inline.sequence.filter(function (s) {
+    var dodge = m2.dodge = _objectValue(m2.dodge);
+    var inline = dodge.inline = _objectValue(dodge.inline);
+    var seq = _objectItems(_objectValue(_objectValue(m2.dodge).inline).sequence);
+    inline.sequence = seq.filter(function (s) {
             return String((s && s.key) || '').trim();
         });
-    }
     _mechEditing = null; _mechDraft = null; _mechCatalog = [];
     _mechReply(a.save_mechanic(JSON.stringify(m2)));
 }

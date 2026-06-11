@@ -138,6 +138,98 @@ def main() -> None:
             "var tl = detail.timeline || [];",
             "Raid editor reaction timeline must guard non-list payloads.",
         ),
+        (
+            "var st = _mechState || {};",
+            "Raid editor mechanics state must guard non-object payloads.",
+        ),
+        (
+            "var master = st.master || {};",
+            "Raid editor mechanics master payload must guard non-object data.",
+        ),
+        (
+            "var inbox = st.inbox || [];",
+            "Raid editor mechanics inbox payload must guard non-list data.",
+        ),
+        (
+            "var mechs = st.mechanics || [];",
+            "Raid editor mechanics list payload must guard non-list data.",
+        ),
+        (
+            "var prof = st.profile || {};",
+            "Raid editor mechanics profile payload must guard non-object data.",
+        ),
+        (
+            "var enr = prof.enrage || {};",
+            "Raid editor mechanics enrage payload must guard non-object data.",
+        ),
+        (
+            "var names = m.skill_names || {};",
+            "Raid editor mechanic cards/forms must guard skill-name payloads.",
+        ),
+        (
+            "var ids = (det.skill_ids || []).concat(det.buff_ids || []);",
+            "Raid editor mechanic cards must guard detection ID lists.",
+        ),
+        (
+            "var seq = inline.sequence || [];",
+            "Raid editor mechanic forms must guard sequence payloads.",
+        ),
+        (
+            "var observed = ((_mechState && _mechState.observed) || []).filter(function (o) {",
+            "Raid editor mechanic forms must guard observed payloads.",
+        ),
+        (
+            "html += (_mechCatalog || []).map(function (h) {",
+            "Raid editor mechanic forms must guard catalog payloads.",
+        ),
+        (
+            "var phases = (_mechState && _mechState.phases) || [];",
+            "Raid editor mechanic forms must guard phase payloads.",
+        ),
+        (
+            "var d = _mechDraft || {};",
+            "Raid editor mechanic draft collection must guard draft payload shape.",
+        ),
+        (
+            "var det = d.detect = d.detect || {};",
+            "Raid editor mechanic draft collection must guard detect payload shape.",
+        ),
+        (
+            "var ids = det.skill_ids = det.skill_ids || [];",
+            "Raid editor mechanic draft skill IDs must guard list payload shape.",
+        ),
+        (
+            "var ids = det.buff_ids = det.buff_ids || [];",
+            "Raid editor mechanic draft buff IDs must guard list payload shape.",
+        ),
+        (
+            "det.skill_ids = (det.skill_ids || []).filter(function (x) { return Number(x) !== Number(sid); });",
+            "Raid editor mechanic draft skill removal must guard list payload shape.",
+        ),
+        (
+            "det.buff_ids = (det.buff_ids || []).filter(function (x) { return Number(x) !== Number(bid); });",
+            "Raid editor mechanic draft buff removal must guard list payload shape.",
+        ),
+        (
+            "_mechCatalog = (r && r.ok) ? (r.results || []) : [];",
+            "Raid editor mechanic catalog search must guard result payload shape.",
+        ),
+        (
+            "else if (_v === 'seq' && !(inl.sequence || []).length)",
+            "Raid editor mechanic preset changes must guard sequence payload shape.",
+        ),
+        (
+            "(inl.sequence = inl.sequence || []).push({ key: '', delay_ms: 0, hold_ms: 0 });",
+            "Raid editor mechanic sequence add must guard sequence payload shape.",
+        ),
+        (
+            "(_mechDraft.dodge.inline.sequence || []).splice(i, 1);",
+            "Raid editor mechanic sequence removal must guard nested draft payload shape.",
+        ),
+        (
+            "if (m2.dodge && m2.dodge.inline && (m2.dodge.inline.sequence || []).length)",
+            "Raid editor mechanic save must guard nested sequence payload shape.",
+        ),
     ]
     for snippet, message in raid_forbidden:
         _check_absent(raid, snippet, message)
@@ -294,6 +386,102 @@ def main() -> None:
         (
             "var tl = _objectItems(detail.timeline);",
             "Raid editor reactions should normalize timeline list payloads.",
+        ),
+        (
+            "var st = _objectValue(_mechState);",
+            "Raid editor mechanics should normalize root state payloads.",
+        ),
+        (
+            "var master = _objectValue(st.master);",
+            "Raid editor mechanics should normalize master payloads.",
+        ),
+        (
+            "var inbox = _objectItems(st.inbox);",
+            "Raid editor mechanics should normalize inbox payloads.",
+        ),
+        (
+            "var mechs = _objectItems(st.mechanics);",
+            "Raid editor mechanics should normalize mechanic list payloads.",
+        ),
+        (
+            "var prof = _objectValue(st.profile);",
+            "Raid editor mechanics should normalize profile payloads.",
+        ),
+        (
+            "var enr = _objectValue(prof.enrage);",
+            "Raid editor mechanics should normalize enrage payloads.",
+        ),
+        (
+            "m = _objectValue(m);",
+            "Raid editor mechanic cards/forms should normalize mechanic rows.",
+        ),
+        (
+            "var names = _objectValue(m.skill_names);",
+            "Raid editor mechanic cards/forms should normalize skill-name maps.",
+        ),
+        (
+            "var ids = _listItems(det.skill_ids).concat(_listItems(det.buff_ids));",
+            "Raid editor mechanic cards should normalize detection ID lists.",
+        ),
+        (
+            "var seq = _objectItems(inline.sequence);",
+            "Raid editor mechanic forms should normalize sequence rows.",
+        ),
+        (
+            "var observed = _objectItems(_objectValue(_mechState).observed).filter(function (o) {",
+            "Raid editor mechanic forms should normalize observed rows.",
+        ),
+        (
+            "html += _objectItems(_mechCatalog).map(function (h) {",
+            "Raid editor mechanic forms should normalize catalog rows.",
+        ),
+        (
+            "var phases = _objectItems(_objectValue(_mechState).phases);",
+            "Raid editor mechanic forms should normalize phase rows.",
+        ),
+        (
+            "var d = _isObjectValue(_mechDraft) ? _mechDraft : {};",
+            "Raid editor mechanic draft collection should normalize draft payloads.",
+        ),
+        (
+            "var det = d.detect = _objectValue(d.detect);",
+            "Raid editor mechanic draft collection should normalize detect payloads.",
+        ),
+        (
+            "var ids = det.skill_ids = _listItems(det.skill_ids);",
+            "Raid editor mechanic draft skill IDs should normalize list payloads.",
+        ),
+        (
+            "var ids = det.buff_ids = _listItems(det.buff_ids);",
+            "Raid editor mechanic draft buff IDs should normalize list payloads.",
+        ),
+        (
+            "det.skill_ids = _listItems(det.skill_ids).filter(function (x) { return Number(x) !== Number(sid); });",
+            "Raid editor mechanic draft skill removal should normalize list payloads.",
+        ),
+        (
+            "det.buff_ids = _listItems(det.buff_ids).filter(function (x) { return Number(x) !== Number(bid); });",
+            "Raid editor mechanic draft buff removal should normalize list payloads.",
+        ),
+        (
+            "_mechCatalog = (r && r.ok) ? _objectItems(r.results) : [];",
+            "Raid editor mechanic catalog search should normalize result rows.",
+        ),
+        (
+            "else if (_v === 'seq' && !_listItems(inl.sequence).length)",
+            "Raid editor mechanic preset changes should normalize sequence lists.",
+        ),
+        (
+            "inl.sequence = _listItems(inl.sequence);",
+            "Raid editor mechanic sequence add/remove should normalize sequence lists.",
+        ),
+        (
+            "inl.sequence.splice(i, 1);",
+            "Raid editor mechanic sequence removal should mutate a normalized list.",
+        ),
+        (
+            "var seq = _objectItems(_objectValue(_objectValue(m2.dodge).inline).sequence);",
+            "Raid editor mechanic save should normalize nested sequence payloads.",
         ),
     ]
     for snippet, message in raid_required:

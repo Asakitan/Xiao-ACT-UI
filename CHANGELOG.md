@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.89: Raid Editor mechanics payload 防护修复.
+
+  1) `web/raid_editor.html` 修复 mechanics state/list/form payload 形状处理。
+     Raid Editor Web 现在归一机制总状态、主开关、收件箱、机制列表、档案与阶段列表,
+     避免坏 payload 打断机制列表或编辑表单渲染。
+
+  2) `web/raid_editor.html` 修复 mechanics draft/catalog/sequence 交互 payload 形状处理。
+     Raid Editor Web 现在归一草稿检测 ID、搜索结果、按键序列与保存前序列,
+     避免坏草稿或坏搜索结果打断添加/删除/保存机制的参数传递。
+
 ## v4.5.88: Raid Editor reaction payload 防护修复.
 
   1) `web/raid_editor.html` 修复 reaction badges/tags payload 形状处理。
