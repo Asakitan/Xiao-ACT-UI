@@ -474,10 +474,17 @@ class _MechanicsEditorMixin:
                        highlightthickness=1, padx=8, pady=5)
         bar.pack(fill=tk.X, pady=(0, 5))
         apply_surface_chrome(bar, accent=GOLD)
+        # 标题: 集中说明这是全局功能控制 (审查 UI#1)
+        tk.Label(bar, text='● 功能总开关', bg=PANEL_CARD, fg=GOLD,
+                 font=panel_font(9, bold=True)).pack(anchor='w')
+        # 基础(默认开): 提醒类, 不操作游戏
         row = tk.Frame(bar, bg=PANEL_CARD)
-        row.pack(fill=tk.X)
+        row.pack(fill=tk.X, pady=(2, 0))
+        # 高级(默认关): 自动化操作, 有账号风险
+        row2 = tk.Frame(bar, bg=PANEL_CARD)
+        row2.pack(fill=tk.X, pady=(2, 0))
 
-        def _switch(text, key, value):
+        def _switch(parent, text, key, value):
             var = _tk.IntVar(value=1 if value else 0)
 
             def _flip():
@@ -486,28 +493,36 @@ class _MechanicsEditorMixin:
                     self._mech_collect_draft()
                 self._mech_call('set_master', {key: bool(var.get())})
                 self._mech_bump()
-            cb = _tk.Checkbutton(row, text=text, variable=var, command=_flip,
+            cb = _tk.Checkbutton(parent, text=text, variable=var, command=_flip,
                                  bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(8),
                                  selectcolor=PANEL_CARD_ALT, activebackground=PANEL_CARD)
-            cb.pack(side=tk.LEFT, padx=(0, 8))
+            cb.pack(side=tk.LEFT, padx=(0, 6))
             return var
-        _switch('TTS播报', 'tts_enabled', master.get('tts_enabled', True))
-        _switch('横幅提醒', 'banner_enabled', master.get('banner_enabled', True))
-        _switch('自动躲避', 'dodge_enabled', master.get('dodge_enabled', True))
-        _switch('定向移动', 'directional_dodge_enabled',
-                master.get('directional_dodge_enabled', False))
-        _switch('自动走位', 'auto_walk_enabled',
-                master.get('auto_walk_enabled', False))
-        tk.Label(row, text='紧急停用: %s' % (master.get('panic_hotkey') or 'F12'),
-                 bg=PANEL_CARD, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT, padx=(4, 8))
+        tk.Label(row, text='提醒', bg=PANEL_CARD, fg=TEXT_MUTED,
+                 font=panel_font(8)).pack(side=tk.LEFT, padx=(0, 4))
+        _switch(row, 'TTS播报', 'tts_enabled', master.get('tts_enabled', True))
+        _switch(row, '横幅提醒', 'banner_enabled', master.get('banner_enabled', True))
         vol_var = _tk.StringVar(value=str(int(master.get('tts_volume') or 80)))
         tk.Label(row, text='音量', bg=PANEL_CARD, fg=TEXT_MUTED,
-                 font=panel_font(8)).pack(side=tk.LEFT)
+                 font=panel_font(8)).pack(side=tk.LEFT, padx=(6, 0))
         _tk.Spinbox(row, from_=0, to=100, width=4, textvariable=vol_var,
                     font=panel_font(8),
                     command=lambda: self._mech_call('set_master',
                                                     {'tts_volume': vol_var.get()})
                     ).pack(side=tk.LEFT, padx=(2, 0))
+        # 高级行: 自动化, 默认关 + 风险徽章 + 醒目急停
+        tk.Label(row2, text='自动', bg=PANEL_CARD, fg=TEXT_MUTED,
+                 font=panel_font(8)).pack(side=tk.LEFT, padx=(0, 4))
+        _switch(row2, '自动躲避', 'dodge_enabled', master.get('dodge_enabled', True))
+        _switch(row2, '定向移动', 'directional_dodge_enabled',
+                master.get('directional_dodge_enabled', False))
+        _switch(row2, '自动走位', 'auto_walk_enabled',
+                master.get('auto_walk_enabled', False))
+        tk.Label(row2, text='默认关·有风险', bg=DANGER, fg='#ffffff',
+                 font=panel_font(7)).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Label(row2, text='⏹ 急停 %s' % (master.get('panic_hotkey') or 'F12'),
+                 bg=PANEL_CARD, fg=DANGER,
+                 font=panel_font(8, bold=True)).pack(side=tk.LEFT, padx=(2, 0))
         if master.get('zh_voice') is False:
             tk.Label(bar, text='⚠ 未检测到中文语音 (SAPI zh-CN), 播报可能不准确',
                      bg=PANEL_CARD, fg=DANGER, font=panel_font(8),
@@ -627,12 +642,14 @@ class _MechanicsEditorMixin:
 
     def _mech_new(self) -> None:
         used = len(self._mech_state.get('mechanics') or [])
+        # 新手友好: TTS/横幅文案预填机制名 (而非留空), 改名后可再调 (审查 UI#2)
+        nm = '新机制'
         draft = {
-            'id': '', 'name': '新机制',
+            'id': '', 'name': nm,
             'color': self._MECH_COLORS[used % len(self._MECH_COLORS)],
             'enabled': True, 'phase_ids': [],
             'detect': {'skill_ids': []},
-            'alert': {'tts_text': '', 'banner_text': '', 'countdown_s': 8,
+            'alert': {'tts_text': nm, 'banner_text': nm, 'countdown_s': 8,
                       'pre_warn_s': 3, 'cooldown_s': 5, 'alert_type': 'both',
                       'enabled': True},
             'dodge': {'enabled': False, 'linkage_id': '', 'inline': {}},
@@ -732,6 +749,9 @@ class _MechanicsEditorMixin:
 
         # 检测: 绑定 chips (技能 + Buff, 每 3 个换行) + 添加来源
         make_section_title(form, '检测 (技能/Buff ID)')
+        tk.Label(form, text='● 至少绑定一个 Boss 技能/Buff ID 作触发条件 — 可从内存自动导入或技能库搜索',
+                 bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8),
+                 anchor='w', wraplength=380, justify='left').pack(fill=tk.X)
         names = (mech.get('skill_names') or {})
         bound = list(det.get('skill_ids') or [])
         bound_buffs = list(det.get('buff_ids') or [])

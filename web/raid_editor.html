@@ -177,6 +177,13 @@ body{padding:10px}
     background:rgba(8,14,22,.6);color:#e8f6ff;
     border:1px solid rgba(117,205,255,.4);border-radius:5px;
     padding:2px 5px;font-size:10px;
+    max-width:100%;box-sizing:border-box;
+}
+/* 超小屏(<560px)防固定宽度横向溢出: 缩字距 + 选择框不超容器 (审查 UI#3) */
+@media (max-width:560px){
+    .mech-input{font-size:9px;padding:2px 4px;}
+    .mech-input[style*="max-width"]{max-width:100% !important;}
+    .phase-header{font-size:9px;}
 }
 </style>
 </head>
@@ -506,15 +513,23 @@ function renderMechanics() {
         (master.zh_voice === false) ? '' : 'none';
     var mEl = document.getElementById('mech-master');
     mEl.innerHTML = '<div class="entity-card" style="display:block;padding:6px 8px;margin:3px 0;">'
-        + '<div style="display:flex;align-items:center;gap:10px;font-size:10px;color:#e8f6ff;flex-wrap:wrap;">'
+        + '<div style="font-size:11px;font-weight:bold;color:#ffd46f;margin-bottom:3px;">● 功能总开关</div>'
+        // 基础(默认开): 提醒类, 不操作游戏
+        + '<div style="display:flex;align-items:center;gap:8px;font-size:10px;color:#e8f6ff;flex-wrap:wrap;">'
+        + '<span style="color:#75808d;">提醒</span>'
         + _mSwitch('TTS播报', 'tts_enabled', master.tts_enabled)
         + _mSwitch('横幅提醒', 'banner_enabled', master.banner_enabled)
+        + '<span style="color:#9fc0d8;">音量 <input type="number" min="0" max="100" value="' + Number(master.tts_volume || 80)
+        + '" style="width:46px;" class="mech-input" onchange="mechMaster({tts_volume:this.value})"></span>'
+        + '</div>'
+        // 高级(默认关): 自动化操作, 有账号风险
+        + '<div style="display:flex;align-items:center;gap:8px;font-size:10px;color:#e8f6ff;flex-wrap:wrap;margin-top:3px;">'
+        + '<span style="color:#75808d;">自动</span>'
         + _mSwitch('自动躲避', 'dodge_enabled', master.dodge_enabled)
         + _mSwitch('定向移动', 'directional_dodge_enabled', master.directional_dodge_enabled)
         + _mSwitch('自动走位', 'auto_walk_enabled', master.auto_walk_enabled)
-        + '<span style="color:#9fc0d8;">紧急停用: ' + _esc(master.panic_hotkey || 'F12') + '</span>'
-        + '<span style="color:#9fc0d8;">音量 <input type="number" min="0" max="100" value="' + Number(master.tts_volume || 80)
-        + '" style="width:46px;" class="mech-input" onchange="mechMaster({tts_volume:this.value})"></span>'
+        + '<span style="background:#c0392b;color:#fff;font-size:8px;padding:1px 4px;border-radius:3px;">默认关·有风险</span>'
+        + '<span style="color:#ff6b5c;font-weight:bold;">⏹ 急停 ' + _esc(master.panic_hotkey || 'F12') + '</span>'
         + '</div></div>';
     if (!st.ok) {
         document.getElementById('mech-inbox-header').style.display = 'none';
@@ -732,7 +747,9 @@ function _mForm(m) {
         + 'font-size:10px;line-height:1.5;">' + _esc(d.notes == null ? '' : d.notes) + '</textarea>';
     // 检测
     var buffIds = det.buff_ids || [];
-    html += '<div class="phase-header" style="font-size:10px;">检测 (技能/Buff ID)</div><div style="margin:3px 0;">';
+    html += '<div class="phase-header" style="font-size:10px;">检测 (技能/Buff ID)</div>';
+    html += '<div style="font-size:9px;color:#9fc0d8;margin:1px 0 3px;">● 至少绑定一个 Boss 技能/Buff ID 作触发条件 — 可从内存自动导入或技能库搜索</div>';
+    html += '<div style="margin:3px 0;">';
     if (!ids.length && !buffIds.length) html += '<span style="color:#75808d;">未绑定 — 从下方添加</span>';
     html += ids.map(function (sid) {
         var nm = (names[String(sid)] || '').trim();
