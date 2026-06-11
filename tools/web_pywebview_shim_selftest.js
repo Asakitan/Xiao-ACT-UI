@@ -60,6 +60,13 @@ function assert(cond, message) {
   assert(last.name === "act.action_log.jump_to_time", "jump_action_log_time command mismatch");
   assert(last.payload.topic === "skill", "jump_action_log_time topic was not forwarded");
 
+  await window.pywebview.api.get_action_log_status("9999", "", "", "999999999", "live", "", "-5");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.action_log.status", "get_action_log_status command mismatch");
+  assert(last.payload.limit === 500, "action log limit should be clamped");
+  assert(last.payload.cursor_ms === 86400000, "action log cursor should be clamped");
+  assert(last.payload.offset === 0, "action log offset should be clamped");
+
   await window.pywebview.api.play_timeline(-99);
   last = calls[calls.length - 1];
   assert(last.name === "act.timeline.play", "play_timeline command mismatch");
@@ -407,6 +414,17 @@ function assert(cond, message) {
   assert(last.payload.window_s === 120, "get_death_recap_status window_s should be clamped");
   assert(last.payload.entity_id === "1001", "get_death_recap_status entity_id was not forwarded");
 
+  await window.pywebview.api.get_graph_timeseries_status("damage", "9999", "", "", "999999999");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.graph.status", "get_graph_timeseries_status command mismatch");
+  assert(last.payload.limit === 1000, "graph limit should be clamped");
+  assert(last.payload.time_range_ms === 86400000, "graph time range should be clamped");
+
+  await window.pywebview.api.get_skill_drilldown_status("c1", "s1", "", "9999");
+  last = calls[calls.length - 1];
+  assert(last.name === "act.skill.status", "get_skill_drilldown_status command mismatch");
+  assert(last.payload.limit === 500, "skill drilldown limit should be clamped");
+
   await window.pywebview.api.mem_search("123", "i64", 4);
   last = calls[calls.length - 1];
   assert(last.name === "act.mem_scope.search", "mem_search command mismatch");
@@ -507,6 +525,10 @@ function assert(cond, message) {
   assert(!shim.includes("limit: limit || 20, query: ''"), "pywebview shim must not pass raw history limits");
   assert(!shim.includes("window_s: window_s || 8.0"), "pywebview shim must not pass raw death recap windows");
   assert(!shim.includes("delta_ms: deltaMs || 1000"), "pywebview shim must not pass raw timeline step deltas");
+  assert(!shim.includes("cursor_ms: cursorMs || 0"), "pywebview shim must not pass raw action-log cursors");
+  assert(!shim.includes("time_range_ms: timeRangeMs || 0"), "pywebview shim must not pass raw graph time ranges");
+  assert(!shim.includes("limit: limit || 80"), "pywebview shim must not pass raw 80-row limits");
+  assert(!shim.includes("limit: limit || 120"), "pywebview shim must not pass raw graph limits");
 
   const timelineVcr = fs.readFileSync(path.join(root, "web/act_timeline_vcr.html"), "utf8");
   assert(!timelineVcr.includes("{ args: args || [] }"), "timeline VCR still sends bare fallback args");

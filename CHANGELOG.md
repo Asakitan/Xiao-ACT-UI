@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.64: pywebview shim ACT 查询参数修复.
+
+  1) `web/pywebview-shim.js` 修复 Action Log 查询参数边界。
+     status/search/filter/jump/copy 的 limit、cursor_ms 和 offset 现在统一夹取,
+     避免异常 Web 调用把无效分页或时间游标传到桥接层。
+
+  2) `web/pywebview-shim.js` 修复 Graph Timeseries 与 Skill Drilldown limit 参数。
+     图表 time_range_ms、图表 limit 和技能明细 limit 现在使用安全范围,
+     避免渲染请求过大或非有限值导致后端/前端状态异常。
+
 ## v4.5.63: pywebview shim 面板数值参数修复.
 
   1) `web/pywebview-shim.js` 修复通用面板数值参数边界。

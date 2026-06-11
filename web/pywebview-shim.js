@@ -504,41 +504,49 @@
             return call('act.timeline.filter', { query: String(query || '') });
         },
         get_action_log_status: function (limit, query, topic, cursorMs, source, encounterId, offset) {
-            return call('act.action_log.status', { limit: limit || 80, query: String(query || ''), topic: String(topic || ''), cursor_ms: cursorMs || 0, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 });
+            return call('act.action_log.status', {
+                limit: safeLimit(limit, 80, 500),
+                query: String(query || ''),
+                topic: String(topic || ''),
+                cursor_ms: clampInt(cursorMs, 0, 0, 86400000),
+                source: String(source || 'live'),
+                encounter_id: String(encounterId || ''),
+                offset: safeOffset(offset)
+            });
         },
         search_action_log: function (query, limit, source, encounterId, offset) {
-            return call('act.action_log.search', { query: String(query || ''), limit: limit || 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 });
+            return call('act.action_log.search', { query: String(query || ''), limit: safeLimit(limit, 80, 500), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: safeOffset(offset) });
         },
         filter_action_log: function (topic, query, limit, source, encounterId, offset) {
-            return call('act.action_log.filter', { topic: String(topic || ''), query: String(query || ''), limit: limit || 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 });
+            return call('act.action_log.filter', { topic: String(topic || ''), query: String(query || ''), limit: safeLimit(limit, 80, 500), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: safeOffset(offset) });
         },
         jump_action_log_time: function (cursorMs, limit, source, encounterId, offset, topic) {
-            var payload = { cursor_ms: cursorMs || 0, limit: limit || 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 };
+            var payload = { cursor_ms: clampInt(cursorMs, 0, 0, 86400000), limit: safeLimit(limit, 80, 500), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: safeOffset(offset) };
             if (arguments.length > 5) payload.topic = String(topic || '');
             return call('act.action_log.jump_to_time', payload);
         },
         show_action_log_at: function (cursorMs, source, encounterId, topic) {
-            var payload = { cursor_ms: cursorMs || 0, limit: 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: 0 };
+            var payload = { cursor_ms: clampInt(cursorMs, 0, 0, 86400000), limit: 80, source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: 0 };
             if (arguments.length > 3) payload.topic = String(topic || '');
             return call('act.action_log.jump_to_time', payload);
         },
         copy_action_log: function (limit, query, topic, source, encounterId, offset) {
-            return call('act.action_log.copy', { limit: limit || 80, query: String(query || ''), topic: String(topic || ''), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: offset || 0 });
+            return call('act.action_log.copy', { limit: safeLimit(limit, 80, 500), query: String(query || ''), topic: String(topic || ''), source: String(source || 'live'), encounter_id: String(encounterId || ''), offset: safeOffset(offset) });
         },
         get_graph_timeseries_status: function (metric, limit, query, topic, timeRangeMs) {
-            return call('act.graph.status', { metric: String(metric || ''), limit: limit || 120, query: String(query || ''), topic: String(topic || ''), time_range_ms: timeRangeMs || 0 });
+            return call('act.graph.status', { metric: String(metric || ''), limit: safeLimit(limit, 120, 1000), query: String(query || ''), topic: String(topic || ''), time_range_ms: clampInt(timeRangeMs, 0, 0, 86400000) });
         },
         select_graph_metric: function (metric, limit) {
-            return call('act.graph.select_metric', { metric: String(metric || 'damage'), limit: limit || 120 });
+            return call('act.graph.select_metric', { metric: String(metric || 'damage'), limit: safeLimit(limit, 120, 1000) });
         },
         zoom_graph_timeseries: function (timeRangeMs, limit) {
-            return call('act.graph.zoom', { time_range_ms: timeRangeMs || 0, limit: limit || 120 });
+            return call('act.graph.zoom', { time_range_ms: clampInt(timeRangeMs, 0, 0, 86400000), limit: safeLimit(limit, 120, 1000) });
         },
         filter_graph_timeseries: function (query, topic, limit) {
-            return call('act.graph.filter', { query: String(query || ''), topic: String(topic || ''), limit: limit || 120 });
+            return call('act.graph.filter', { query: String(query || ''), topic: String(topic || ''), limit: safeLimit(limit, 120, 1000) });
         },
         export_graph_timeseries: function (metric, limit, query, topic) {
-            return call('act.graph.export', { metric: String(metric || ''), limit: limit || 120, query: String(query || ''), topic: String(topic || '') });
+            return call('act.graph.export', { metric: String(metric || ''), limit: safeLimit(limit, 120, 1000), query: String(query || ''), topic: String(topic || '') });
         },
         toggle_graph_timeseries: function () {
             return call('ui.menu_action', { action: 'toggle_graph_timeseries' });
@@ -559,13 +567,13 @@
             return call('ui.menu_action', { action: 'toggle_combatant_drilldown' });
         },
         get_skill_drilldown_status: function (combatantId, skillId, query, limit) {
-            return call('act.skill.status', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: limit || 80 });
+            return call('act.skill.status', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: safeLimit(limit, 80, 500) });
         },
         filter_skill_drilldown: function (combatantId, skillId, query, limit) {
-            return call('act.skill.filter', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: limit || 80 });
+            return call('act.skill.filter', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: safeLimit(limit, 80, 500) });
         },
         copy_skill_drilldown: function (combatantId, skillId, query, limit) {
-            return call('act.skill.copy', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: limit || 80 });
+            return call('act.skill.copy', { combatant_id: String(combatantId || ''), skill_id: String(skillId || ''), query: String(query || ''), limit: safeLimit(limit, 80, 500) });
         },
         open_skill_drilldown: function (combatantId, skillId) {
             return call('act.skill.open', { combatant_id: String(combatantId || ''), skill_id: String(skillId || '') });
