@@ -49,6 +49,16 @@
         return result;
     }
 
+    function openEmbeddedEditor(setterName) {
+        try {
+            if (typeof window[setterName] === 'function') {
+                window[setterName]('editor');
+                return true;
+            }
+        } catch (_) {}
+        return false;
+    }
+
     var api = {
         play_sound: function (name) {
             return call('sound.play', { name: String(name || '') });
@@ -128,6 +138,30 @@
         },
         start_auto_key_import_picker: function (path) {
             return call('autokey.import_picker.start', { path: String(path || '') }).then(normalizeOk);
+        },
+        toggle_autokey_editor: function () {
+            var localHandled = openEmbeddedEditor('_akSetTab');
+            return call('ui.menu_action', {
+                action: 'toggle_autokey_editor',
+                local_handled: localHandled
+            }).then(normalizeOk).catch(function (e) {
+                if (localHandled) {
+                    return { ok: true, command: 'menu_action', local_handled: true, bridge_error: String(e || '') };
+                }
+                throw e;
+            });
+        },
+        toggle_raid_editor: function () {
+            var localHandled = openEmbeddedEditor('_brSetTab');
+            return call('ui.menu_action', {
+                action: 'toggle_raid_editor',
+                local_handled: localHandled
+            }).then(normalizeOk).catch(function (e) {
+                if (localHandled) {
+                    return { ok: true, command: 'menu_action', local_handled: true, bridge_error: String(e || '') };
+                }
+                throw e;
+            });
         },
         toggle_menu: function () {
             return call('ui.toggle_menu', {});

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.11: WebView2 编辑器切换按钮兼容修复.
+
+  1) `web/pywebview-shim.js` 补齐 `toggle_autokey_editor()`。
+     WebView2 路径下优先打开 `menu.html` 内置 AutoKey Editor tab, 并继续上报
+     `ui.menu_action` 便于 native 侧后续接真 overlay, 修复按钮无反馈的问题。
+
+  2) `web/pywebview-shim.js` 补齐 `toggle_raid_editor()`。
+     WebView2 路径下优先打开内置 BossRaid Editor tab, 同时保留 `ui.menu_action`
+     观测事件, 修复可视化面板按钮静默失效的问题。
+
 ## v4.5.10: WebView2 AutoKey/BossRaid 菜单状态桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `get_auto_key_state()` 并新增

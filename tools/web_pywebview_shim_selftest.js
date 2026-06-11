@@ -240,6 +240,24 @@ function assert(cond, message) {
   assert(last.name === "autokey.import_picker.start", "start_auto_key_import_picker command mismatch");
   assert(last.payload.path === "D:\\profiles", "start_auto_key_import_picker path was not forwarded");
 
+  let autoKeyEditorTab = "";
+  window._akSetTab = function (tab) { autoKeyEditorTab = tab; };
+  await window.pywebview.api.toggle_autokey_editor();
+  last = calls[calls.length - 1];
+  assert(last.name === "ui.menu_action", "toggle_autokey_editor command mismatch");
+  assert(last.payload.action === "toggle_autokey_editor", "toggle_autokey_editor action was not forwarded");
+  assert(last.payload.local_handled === true, "toggle_autokey_editor should mark embedded tab fallback");
+  assert(autoKeyEditorTab === "editor", "toggle_autokey_editor should open the embedded editor tab");
+
+  let raidEditorTab = "";
+  window._brSetTab = function (tab) { raidEditorTab = tab; };
+  await window.pywebview.api.toggle_raid_editor();
+  last = calls[calls.length - 1];
+  assert(last.name === "ui.menu_action", "toggle_raid_editor command mismatch");
+  assert(last.payload.action === "toggle_raid_editor", "toggle_raid_editor action was not forwarded");
+  assert(last.payload.local_handled === true, "toggle_raid_editor should mark embedded tab fallback");
+  assert(raidEditorTab === "editor", "toggle_raid_editor should open the embedded editor tab");
+
   await window.pywebview.api.toggle_mem_scope();
   last = calls[calls.length - 1];
   assert(last.name === "ui.menu_action", "toggle_mem_scope command mismatch");
