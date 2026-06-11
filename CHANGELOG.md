@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.45: Tk Live 面板签名与数值渲染修复.
+
+  1) `gui_modules/sao_gui_bossraid.py` 修复 BossRaid Tk 实体列表渲染签名。
+     实体名称现在纳入签名, 名称解析或目标切换后即使 HP/伤害不变也会重绘,
+     避免面板继续显示旧 Boss/实体名。
+
+  2) `gui_modules/sao_gui_bossraid.py` 与 `gui_modules/sao_gui_autokey.py` 修复非有限数值处理。
+     HP 百分比、DPS、阶段、技能冷却、剩余时间和充能数现在统一过滤 `NaN`/`Infinity` 并夹到可渲染范围,
+     避免轮询期间重复整页重绘、条形宽度异常或 Tk 渲染中断。
+
 ## v4.5.44: Boss HP 主条数值渲染修复.
 
   1) `web/boss_hp.html` 修复主 Boss HP/Shield 百分比和文本渲染。

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -34,11 +35,47 @@ from sao_web_panel_common import (
 )
 
 
-def _fmt_num(value: Any) -> str:
+def _finite_float(
+    value: Any,
+    default: float = 0.0,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> float:
     try:
-        num = float(value or 0)
+        num = float(default if value is None or value == '' else value)
     except Exception:
-        return '0'
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _finite_int(
+    value: Any,
+    default: int = 0,
+    *,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> int:
+    num = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        num = max(int(lo), num)
+    if hi is not None:
+        num = min(int(hi), num)
+    return num
+
+
+def _unit_pct(value: Any, default: float = 0.0) -> float:
+    return _finite_float(value, default, lo=0.0, hi=1.0)
+
+
+def _fmt_num(value: Any) -> str:
+    num = _finite_float(value, 0.0)
     if num >= 1_000_000_000:
         return f'{num / 1_000_000_000:.1f}B'
     if num >= 1_000_000:
@@ -64,9 +101,9 @@ def _trigger_text(trigger: Optional[Dict[str, Any]]) -> str:
     if trigger_type == 'manual':
         return 'Manual (F8)'
     if trigger_type == 'time':
-        return f'{int(float(value or 0))}s elapsed'
+        return f'{_finite_int(value, 0, lo=0)}s elapsed'
     if trigger_type == 'hp_pct':
-        return f'HP ≤ {int(float(value or 0))}%'
+        return f'HP ≤ {_finite_int(value, 0, lo=0, hi=100)}%'
     if trigger_type == 'dps_total':
         return f'DMG ≥ {_fmt_num(value)}'
     if trigger_type == 'breaking':
@@ -76,9 +113,9 @@ def _trigger_text(trigger: Optional[Dict[str, Any]]) -> str:
     if trigger_type == 'overdrive':
         return 'Overdrive'
     if trigger_type == 'extinction_pct':
-        return f'Break bar ≥ {int(float(value or 0))}%'
+        return f'Break bar ≥ {_finite_int(value, 0, lo=0, hi=100)}%'
     if trigger_type == 'breaking_stage':
-        return f'Break stage ≥ {int(float(value or 0))}'
+        return f'Break stage ≥ {_finite_int(value, 0, lo=0)}'
     if trigger_type == 'boss_mechanic':
         return f'Mechanic: {value}'
     if trigger_type == 'boss_mechanic_family':
@@ -1370,7 +1407,7 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
         if self._status_dps is not None:
             self._status_dps.configure(text=f'{_fmt_num(self._status.get("dps") or 0)} DPS')
         if self._status_phase is not None:
-            phase_name = self._status.get('phase_name') or f'P{int(self._status.get("phase_idx") or 0) + 1}'
+            phase_name = self._status.get('phase_name') or f'P{_finite_int(self._status.get("phase_idx"), 0, lo=0) + 1}'
             self._status_phase.configure(text=str(phase_name))
 
     def _render_if_needed(self, force: bool = False) -> None:
@@ -1410,12 +1447,13 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
         entities = list(self._status.get('entities') or [])
         entity_sig = tuple(
             (
-                int(item.get('uuid') or 0),
+                _finite_int(item.get('uuid'), 0),
+                str(item.get('name') or ''),
                 str(item.get('role') or ''),
-                round(float(item.get('hp_pct') or 0.0), 3),
-                int(item.get('damage_dealt') or 0),
+                round(_unit_pct(item.get('hp_pct')), 3),
+                _finite_int(item.get('damage_dealt'), 0, lo=0),
                 bool(item.get('shield_active')),
-                int(item.get('breaking_stage') or 0),
+                _finite_int(item.get('breaking_stage'), 0, lo=0),
                 bool(item.get('in_overdrive')),
             )
             for item in entities
@@ -1427,7 +1465,7 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
                 (phase.get('trigger') or {}).get('value') or 0,
                 tuple(
                     (
-                        round(float(timeline.get('time_s') or 0.0), 1),
+                        round(_finite_float(timeline.get('time_s'), 0.0, lo=0.0), 1),
                         str(timeline.get('label') or ''),
                         str(timeline.get('alert_type') or ''),
                     )
@@ -1439,9 +1477,9 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
         return (
             self._current_tab,
             str(self._status.get('state') or ''),
-            int(self._status.get('phase_idx') or 0),
-            round(float(self._status.get('elapsed_s') or 0.0), 1),
-            int(self._status.get('dps') or 0),
+            _finite_int(self._status.get('phase_idx'), 0, lo=0),
+            round(_finite_float(self._status.get('elapsed_s'), 0.0, lo=0.0), 1),
+            _finite_int(self._status.get('dps'), 0, lo=0),
             entity_sig,
             phase_sig,
         )
@@ -1498,15 +1536,16 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
 
             info = tk.Frame(card, bg=PANEL_CARD)
             info.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            name = str(entity.get('name') or f'Entity {int(entity.get("uuid") or 0) & 0xFFFF}')
+            uuid = _finite_int(entity.get('uuid'), 0)
+            name = str(entity.get('name') or f'Entity {uuid & 0xFFFF}')
             tk.Label(info, text=name, bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(10, bold=True), anchor='w').pack(fill=tk.X)
-            hp_pct = int(round(float(entity.get('hp_pct') or 0.0) * 100.0))
+            hp_pct = int(round(_unit_pct(entity.get('hp_pct')) * 100.0))
             parts = [f'DMG: {_fmt_num(entity.get("damage_dealt") or 0)}', f'HP: {hp_pct}%']
             if entity.get('shield_active'):
                 parts.append('Shield')
             if entity.get('in_overdrive'):
                 parts.append('OD')
-            if int(entity.get('breaking_stage') or 0) > 0:
+            if _finite_int(entity.get('breaking_stage'), 0, lo=0) > 0:
                 parts.append('Break')
             tk.Label(info, text=' · '.join(parts), bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8), anchor='w').pack(fill=tk.X, pady=(1, 0))
 
@@ -1532,7 +1571,7 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
             apply_badge(role_btn, role_text, 'running' if is_boss else 'active')
             role_btn.bind(
                 '<Button-1>',
-                lambda _event, uuid=int(entity.get('uuid') or 0), current=role: self._toggle_role(uuid, current),
+                lambda _event, uuid=uuid, current=role: self._toggle_role(uuid, current),
             )
 
     def _render_reactions_tab(self) -> None:
@@ -1546,7 +1585,7 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
         if not phases:
             self._render_empty('No phases configured', 'Create or download a raid profile first')
             return
-        current_idx = int(self._status.get('phase_idx') or 0)
+        current_idx = _finite_int(self._status.get('phase_idx'), 0, lo=0)
         for idx, phase in enumerate(phases):
             current = idx == current_idx
             bg = PANEL_CARD_ALT if current else PANEL_CARD
@@ -1562,7 +1601,7 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
     def _render_timeline_tab(self) -> None:
         profile = self._active_profile()
         phases = list((profile or {}).get('phases') or [])
-        current_idx = int(self._status.get('phase_idx') or 0)
+        current_idx = _finite_int(self._status.get('phase_idx'), 0, lo=0)
         current_phase = phases[current_idx] if 0 <= current_idx < len(phases) else None
         timelines = list((current_phase or {}).get('timelines') or [])
         if not timelines:
@@ -1575,7 +1614,7 @@ class BossRaidPanel(_MechanicsEditorMixin, _BossReactionsEditorMixin):
             row.pack(fill=tk.X, pady=(0, 4))
             apply_surface_chrome(row, accent=CYAN)
             tk.Label(row, text=f'{idx}.', bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8, bold=True), width=3).pack(side=tk.LEFT)
-            tk.Label(row, text=f'{round(float(timeline.get("time_s") or 0.0), 1)}s', bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(9, bold=True), width=6).pack(side=tk.LEFT)
+            tk.Label(row, text=f'{round(_finite_float(timeline.get("time_s"), 0.0, lo=0.0), 1)}s', bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(9, bold=True), width=6).pack(side=tk.LEFT)
             tk.Label(row, text=str(timeline.get('label') or 'Alert'), bg=PANEL_CARD, fg=TEXT_MAIN, font=panel_font(9), anchor='w').pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
             tk.Label(row, text=str(timeline.get('alert_type') or 'both').upper(), bg=PANEL_CARD, fg=TEXT_MUTED, font=panel_font(8)).pack(side=tk.RIGHT)
 

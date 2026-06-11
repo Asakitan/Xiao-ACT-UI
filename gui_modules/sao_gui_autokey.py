@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 import tkinter as tk
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -32,6 +33,45 @@ from sao_web_panel_common import (
     place_corner_accents,
     set_action_button_kind,
 )
+
+
+def _finite_float(
+    value: Any,
+    default: float = 0.0,
+    *,
+    lo: Optional[float] = None,
+    hi: Optional[float] = None,
+) -> float:
+    try:
+        num = float(default if value is None or value == '' else value)
+    except Exception:
+        num = float(default or 0.0)
+    if not math.isfinite(num):
+        num = float(default or 0.0)
+    if lo is not None:
+        num = max(float(lo), num)
+    if hi is not None:
+        num = min(float(hi), num)
+    return num
+
+
+def _finite_int(
+    value: Any,
+    default: int = 0,
+    *,
+    lo: Optional[int] = None,
+    hi: Optional[int] = None,
+) -> int:
+    num = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        num = max(int(lo), num)
+    if hi is not None:
+        num = min(int(hi), num)
+    return num
+
+
+def _unit_pct(value: Any, default: float = 0.0) -> float:
+    return _finite_float(value, default, lo=0.0, hi=1.0)
 
 
 class AutoKeyPanel:
@@ -271,16 +311,16 @@ class AutoKeyPanel:
         for raw in list(slots or []):
             if not isinstance(raw, dict):
                 continue
-            index = int(raw.get('index') or raw.get('slot_index') or 0)
+            index = _finite_int(raw.get('index') or raw.get('slot_index'), 0, lo=0)
             if index <= 0:
                 continue
             result.append({
                 'index': index,
                 'name': raw.get('skill_name') or raw.get('name') or f'Slot {index}',
                 'state': str(raw.get('state') or 'ready').lower(),
-                'cooldown_pct': float(raw.get('cooldown_pct') or 0.0),
-                'remaining_ms': float(raw.get('remaining_ms') or 0.0),
-                'charge_count': int(raw.get('charge_count') or 0),
+                'cooldown_pct': _unit_pct(raw.get('cooldown_pct')),
+                'remaining_ms': _finite_float(raw.get('remaining_ms'), 0.0, lo=0.0),
+                'charge_count': _finite_int(raw.get('charge_count'), 0, lo=0),
             })
         result.sort(key=lambda item: item['index'])
         return result
@@ -289,7 +329,9 @@ class AutoKeyPanel:
         now = time.time()
         seen = set()
         for slot in self._slots:
-            index = int(slot['index'])
+            index = _finite_int(slot.get('index'), 0, lo=0)
+            if index <= 0:
+                continue
             state = str(slot.get('state') or 'ready')
             prev = self._slot_prev_states.get(index)
             if prev == 'cooldown' and state == 'ready':
@@ -334,13 +376,13 @@ class AutoKeyPanel:
             self._recording_trigger_slot,
             tuple(
                 (
-                    int(slot['index']),
+                    _finite_int(slot.get('index'), 0, lo=0),
                     str(slot.get('name') or ''),
                     str(slot.get('state') or ''),
-                    round(float(slot.get('cooldown_pct') or 0.0), 3),
-                    int(float(slot.get('remaining_ms') or 0.0)),
-                    int(slot.get('charge_count') or 0),
-                    int(self._ready_flash_until.get(int(slot['index']), 0) > time.time()),
+                    round(_unit_pct(slot.get('cooldown_pct')), 3),
+                    _finite_int(slot.get('remaining_ms'), 0, lo=0),
+                    _finite_int(slot.get('charge_count'), 0, lo=0),
+                    int(self._ready_flash_until.get(_finite_int(slot.get('index'), 0, lo=0), 0) > time.time()),
                 )
                 for slot in self._slots
             ),
@@ -414,7 +456,7 @@ class AutoKeyPanel:
 
     def _make_skill_card(self, parent: tk.Widget, slot: Dict[str, Any]) -> tk.Frame:
         state = str(slot.get('state') or 'ready')
-        index = int(slot.get('index') or 0)
+        index = _finite_int(slot.get('index'), 0, lo=0)
         selected = self._selected_slot == index
         flash = self._ready_flash_until.get(index, 0.0) > time.time()
 
@@ -441,7 +483,7 @@ class AutoKeyPanel:
         apply_surface_chrome(frame, accent=left_color)
 
         slot_label = f'Slot {index}'
-        charges = int(slot.get('charge_count') or 0)
+        charges = _finite_int(slot.get('charge_count'), 0, lo=0)
         if charges > 0:
             slot_label += f' ×{charges}'
         tk.Label(frame, text=slot_label, bg=frame.cget('bg'), fg=TEXT_MUTED, font=panel_font(8)).pack(anchor='w')
@@ -452,7 +494,7 @@ class AutoKeyPanel:
         dot = tk.Frame(state_row, bg=left_color, width=6, height=6)
         dot.pack(side=tk.LEFT)
         dot.pack_propagate(False)
-        remain_ms = float(slot.get('remaining_ms') or 0.0)
+        remain_ms = _finite_float(slot.get('remaining_ms'), 0.0, lo=0.0)
         if state == 'ready':
             state_text = 'Ready'
         elif state == 'active':
@@ -464,7 +506,7 @@ class AutoKeyPanel:
         bar_bg = tk.Frame(frame, bg=PANEL_BG_ALT, height=3)
         bar_bg.pack(fill=tk.X, pady=(4, 0))
         fill = tk.Frame(bar_bg, bg=COOLDOWN, height=3)
-        fill.place(relwidth=max(0.0, min(1.0, float(slot.get('cooldown_pct') or 0.0))), relheight=1.0)
+        fill.place(relwidth=_unit_pct(slot.get('cooldown_pct')), relheight=1.0)
 
         def _bind_all(widget: tk.Widget) -> None:
             widget.bind('<Button-1>', lambda _event, idx=index: self._on_slot_click(idx))
@@ -498,7 +540,7 @@ class AutoKeyPanel:
 
     def _find_slot(self, index: int) -> Optional[Dict[str, Any]]:
         for slot in self._slots:
-            if int(slot.get('index') or 0) == int(index):
+            if _finite_int(slot.get('index'), 0, lo=0) == _finite_int(index, 0, lo=0):
                 return slot
         return None
 
