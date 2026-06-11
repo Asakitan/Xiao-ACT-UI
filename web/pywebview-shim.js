@@ -373,9 +373,6 @@
         get_report_export_status: function (limit, fmt) {
             return call('act.report.status', { limit: limit || 20, fmt: String(fmt || 'json') });
         },
-        export_last_report: function (fmt) {
-            return call('act.report.export', { fmt: String(fmt || 'json') });
-        },
         copy_report_export: function (fmt) {
             return call('act.report.copy', { fmt: String(fmt || 'json') });
         },

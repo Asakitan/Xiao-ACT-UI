@@ -34,6 +34,9 @@ function assert(cond, message) {
 
 (async function main() {
   assert(window.pywebview && window.pywebview.api, "pywebview api was not installed");
+  const apiNames = Array.from(shim.matchAll(/^\s*([A-Za-z0-9_]+):\s*function\s*\(/gm), (match) => match[1]);
+  const duplicateNames = Array.from(new Set(apiNames.filter((name, index) => apiNames.indexOf(name) !== index)));
+  assert(duplicateNames.length === 0, "duplicate pywebview api methods: " + duplicateNames.join(", "));
 
   await window.pywebview.api.get_aggregate_status(1000, "hit", "history", 500, 7, "enc-1", "field", "skill_id");
   let last = calls[calls.length - 1];

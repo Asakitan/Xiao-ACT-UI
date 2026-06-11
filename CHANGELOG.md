@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.23: Web 编辑器乱码与 shim 重复 API 修复.
+
+  1) `web/autokey_editor.html` 和 `web/raid_editor.html` 清理用户可见 mojibake。
+     AutoKey 编辑器的 Burst/Recording/状态栏标签恢复为有效 HTML,
+     Raid 编辑器阶段按钮、实体分隔符和触发条件比较符恢复可读文本。
+
+  2) `web/pywebview-shim.js` 移除重复的 `export_last_report` 定义。
+     避免后定义覆盖前定义导致 normalize 行为丢失, 并新增 shim API 唯一性自测。
+
 ## v4.5.22: ACT Action Log 兜底名称与退出清理修复.
 
   1) `act_platform/runtime.py` 修复 Action Log 未解析怪物/目标的显示兜底。
