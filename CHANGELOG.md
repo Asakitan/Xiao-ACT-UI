@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.73: ACT Death Recap Tk payload 渲染修复.
+
+  1) `gui_modules/sao_gui_death_recap.py` 修复 rows payload 形状处理。
+     Death Recap Tk 现在只统计和渲染列表中的 Mapping 行,
+     避免字符串/dict payload 被拆成字符或键后显示错误事件数。
+
+  2) `gui_modules/sao_gui_death_recap.py` 修复 summary 数值渲染。
+     伤害、治疗、death event、relative time 和格式化数值现在过滤非有限值,
+     避免异常 ACT payload 造成面板渲染中断。
+
 ## v4.5.72: ACT Timeline Tk 数值边界修复.
 
   1) `gui_modules/sao_gui_timeline_vcr.py` 修复 VCR speed 控制参数。

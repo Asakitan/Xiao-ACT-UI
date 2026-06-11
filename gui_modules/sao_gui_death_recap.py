@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
@@ -37,6 +38,30 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        number = float(value)
+    except Exception:
+        number = float(default)
+    if not math.isfinite(number):
+        number = float(default)
+    if lo is not None:
+        number = max(lo, number)
+    if hi is not None:
+        number = min(hi, number)
+    return number
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    return int(_finite_float(value, float(default), lo=lo, hi=hi))
+
+
+def _mapping_rows(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [row for row in value if isinstance(row, Mapping)]
 
 
 class DeathRecapPanel:
@@ -195,11 +220,11 @@ class DeathRecapPanel:
         win.protocol('WM_DELETE_WINDOW', self.hide)
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
-        rows = list(status.get('rows') or [])
+        rows = _mapping_rows(status.get('rows'))
         summary = status.get('summary') if isinstance(status.get('summary'), Mapping) else {}
         death = status.get('death') if isinstance(status.get('death'), Mapping) else {}
         self._summary_var.set(
-            f"{len(rows)} EVENTS · DMG {int(summary.get('incoming_damage') or 0)} · HEAL {int(summary.get('healing') or 0)}"
+            f"{len(rows)} EVENTS · DMG {_finite_int(summary.get('incoming_damage'), 0, lo=0)} · HEAL {_finite_int(summary.get('healing'), 0, lo=0)}"
         )
         self._status_var.set(
             f"death={death.get('name') or death.get('entity_id') or '-'} · encounter={status.get('encounter_id') or 'live'}"
@@ -230,7 +255,7 @@ class DeathRecapPanel:
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 8))
         items = (
-            ('Incoming', self._fmt(summary.get('incoming_damage')), f"{int(summary.get('death_events') or 0)} death", 'danger'),
+            ('Incoming', self._fmt(summary.get('incoming_damage')), f"{_finite_int(summary.get('death_events'), 0, lo=0)} death", 'danger'),
             ('Healing', self._fmt(summary.get('healing')), f"shield {self._fmt(summary.get('shield'))}", 'heal'),
             ('Rows', len(rows), f"window {fmt_dur(window.get('before_ms'))}", 'cyan'),
             ('Death', death.get('name') or death.get('entity_id') or '-', f"@ {fmt_clock(death.get('time_ms'))}", 'gold'),
@@ -248,7 +273,7 @@ class DeathRecapPanel:
             return
         row_id = str(row.get('id') or f"{row.get('kind')}:{row.get('time_ms')}:{row.get('index')}")
         open_row = row_id in self._expanded_rows
-        rel = int(row.get('relative_ms') or 0)
+        rel = _finite_int(row.get('relative_ms'), 0)
         detail = f"{row.get('actor') or '-'} -> {row.get('target') or '-'} · {row.get('label') or ''}"
         kind = str(row.get('kind') or row.get('topic') or 'event')
         accent = 'danger' if row.get('is_death') or kind == 'incoming_damage' else ('heal' if kind == 'healing' else 'gold')
@@ -320,6 +345,8 @@ class DeathRecapPanel:
             number = float(value or 0.0)
         except Exception:
             return str(value or '')
+        if not math.isfinite(number):
+            number = 0.0
         if abs(number) >= 1_000_000:
             return f"{number / 1_000_000:.2f}m"
         if abs(number) >= 1_000:

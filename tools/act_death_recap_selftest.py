@@ -164,6 +164,36 @@ class ActDeathRecapRuntimeTests(unittest.TestCase):
             DeathRecapPanel._render_signature(changed_payload, changed_payload["rows"], {"row-1"}),
         )
 
+    def test_tk_render_status_ignores_malformed_rows_shape(self) -> None:
+        panel = DeathRecapPanel.__new__(DeathRecapPanel)
+        panel._summary_var = FakeVar()
+        panel._status_var = FakeVar()
+        panel._rows = None
+
+        panel._render_status({
+            "rows": "not-a-list",
+            "summary": {"incoming_damage": 0, "healing": 0},
+            "death": None,
+            "encounter_id": "enc-1",
+        })
+
+        self.assertEqual(panel._summary_var.value, "0 EVENTS · DMG 0 · HEAL 0")
+
+    def test_tk_render_status_normalizes_malformed_summary_numbers(self) -> None:
+        panel = DeathRecapPanel.__new__(DeathRecapPanel)
+        panel._summary_var = FakeVar()
+        panel._status_var = FakeVar()
+        panel._rows = None
+
+        panel._render_status({
+            "rows": [],
+            "summary": {"incoming_damage": "oops", "healing": float("inf")},
+            "death": None,
+            "encounter_id": "enc-1",
+        })
+
+        self.assertEqual(panel._summary_var.value, "0 EVENTS · DMG 0 · HEAL 0")
+
 
 if __name__ == "__main__":
     unittest.main()
