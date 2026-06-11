@@ -952,6 +952,12 @@ class _MechanicsEditorMixin:
             tk.Label(mv2, text='挪到离目标这么远即停 (越大越安全/越远离输出位)',
                      bg=PANEL_CARD_ALT, fg=TEXT_DIM, font=panel_font(8)).pack(side=tk.LEFT)
         elif cur_dir.startswith('goto') or cur_dir.startswith('walk'):  # 走向类: 到位半径
+            walk_master_on = bool((self._mech_state.get('master') or {})
+                                  .get('auto_walk_enabled', False))
+            if not walk_master_on:   # 与 Web 一致的醒目警告 (审查 #6 UI parity)
+                tk.Label(form, text='● 顶部「自动走位」总开关未开 — 走向类不会执行 (仅保存配置)',
+                         bg=PANEL_CARD_ALT, fg=GOLD, font=panel_font(8),
+                         anchor='w', wraplength=380, justify='left').pack(fill=tk.X, pady=(0, 2))
             mv2 = _row(form)
             _field(mv2, '到位半径(m)', 'arrive_m', inline.get('arrive_m', 2.0), 6)
             tk.Label(mv2, text='走到离目标这么近即停 (需「自动走位」总开关; 读不到目标位直接停)',

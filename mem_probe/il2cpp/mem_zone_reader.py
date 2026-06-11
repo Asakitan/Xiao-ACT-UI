@@ -19,6 +19,7 @@ ZONE_DICT_OFF = 0xA8 - 0x18      # ZEntityMgr.zoneDict_ 实测 0x90
 ENT_COMPLIST_OFF = 0x60         # ZEntity.compList_ (ZComponent[])
 ENT_ZONETYPE_OFF = 0x118        # ZoneEnt.zoneType_ (fallback)
 ENT_UUID_OFF = 0xC0             # ZEntity.Uuid (fallback)
+ENT_BASEID_OFF = 0xE0          # ZoneEnt(:ZEntity).BaseId (fallback, auto-offset 优先)
 ZONECOMP_ENTSINZONE_OFF = 0x70  # ZoneComp.entitiesIdInZone_ (fallback, auto-offset 优先)
 # ZList<T> 布局: 前有 recyclePooledObj_(bool), items_@0x18, size_@0x20
 ZLIST_ITEMS_OFF = 0x18
@@ -128,13 +129,15 @@ class ZoneReader:
         try:
             from mem_probe.il2cpp.mem_entity_mgr import EntityMgrReader
             emr = EntityMgrReader(self._src)
+            emr.locate(0)        # 触发 off_ent_baseid 等 auto-offset 解析
+            baseid_off = int(getattr(emr, "off_ent_baseid", ENT_BASEID_OFF) or ENT_BASEID_OFF)
             d = self._pm.read_u64(mgr_addr + zone_dict_off) or 0
             for key, zone in emr._read_dict_entries(d, max_entries=64):
                 zc = self._zone_comp(zone)
                 if not zc:
                     continue
                 members = self._read_member_uuids(zc)
-                base_id = self._pm.read_i64(zone + 0xE0)
+                base_id = self._pm.read_i64(zone + baseid_off)
                 gid = self._pm.read_i32(zc + self._resolve_group_off(zc))
                 zt = self._pm.read_i32(zone + ENT_ZONETYPE_OFF)
                 out.append({"zone_uuid": int(key), "zone_obj": int(zone),

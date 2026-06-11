@@ -273,6 +273,21 @@ class DispatchTest(unittest.TestCase):
         self.assertGreaterEqual(prog["idx"], len(targets))   # 走完了序列
         self.assertEqual(d._held, [])
 
+    def test_walk_to_extra_gate_stops(self):
+        # 审查#8: extra_gate 返回 False (如 auto_walk_enabled 关) → 走位即停
+        events = []
+        gate_state = {"on": True}
+        d = AutoDodgeDirector(
+            lambda k, down: events.append((k, down)),
+            get_cam_basis=lambda: {"forward": (0.0, -1.0), "right": (-1.0, 0.0)},
+            get_player_pos=lambda: (0.0, 0.0, 0.0), gate=lambda: True)
+        d.walk_to(lambda: (0.0, 0.0, 99.0), arrive_m=1.0, max_ms=3000,
+                  extra_gate=lambda: gate_state["on"])
+        time.sleep(0.15)
+        gate_state["on"] = False        # 关掉总开关
+        time.sleep(0.2)
+        self.assertEqual(d._held, [])   # 即时松键停
+
     def test_walk_to_release_all_stops(self):
         events = []
         d = AutoDodgeDirector(

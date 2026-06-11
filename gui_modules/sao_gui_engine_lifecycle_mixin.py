@@ -669,9 +669,13 @@ class SAOPlayerGUIEngineLifecycleMixin:
           walk_sequence          按编号顺序走完全部编号圈 (进圈靠区域成员判定推进)
         ★安全: 目标位置读不到 → director.walk_to 内部直接停, 绝不盲走。"""
         try:
+            if ctx is None or director is None:
+                return                 # 审查 #12: 引擎已停/ctx 失效 → 不走
             if not bool(self._get_setting('auto_walk_enabled', False)):
                 return
-            arrive_m = float(inline.get('arrive_m') or 2.0)
+            # 审查 #8: 走位中关掉「自动走位」总开关即时停 (每 tick 复查)
+            walk_gate = lambda: bool(self._get_setting('auto_walk_enabled', False))
+            arrive_m = float(inline.get('arrive_m') or 2.0)   # 审查 #13: 统一默认 2.0
             move_ms = int(inline.get('move_ms') or 8000)
             if direction.startswith('goto_teammate'):
                 obj = ctx.lock_nearest_teammate()
@@ -679,8 +683,8 @@ class SAOPlayerGUIEngineLifecycleMixin:
                     print('[走位] 没找到可靠队友坐标, 取消靠拢')
                     return
                 director.walk_to(lambda _o=obj: ctx.read_obj_pos(_o),
-                                 arrive_m=max(arrive_m, 2.0), max_ms=move_ms,
-                                 label='靠拢队友')
+                                 arrive_m=arrive_m, max_ms=move_ms,
+                                 extra_gate=walk_gate, label='靠拢队友')
             elif direction.startswith('goto_point'):
                 try:
                     x, z = [float(v) for v in direction.split(':', 1)[1].split(',')[:2]]
@@ -689,28 +693,31 @@ class SAOPlayerGUIEngineLifecycleMixin:
                     return
                 py = (ctx.get_player_pos() or (0, 0, 0))[1]
                 director.walk_to(lambda: (x, py, z), arrive_m=arrive_m,
-                                 max_ms=move_ms, label='走向指定点')
+                                 max_ms=move_ms, extra_gate=walk_gate, label='走向指定点')
             elif direction.startswith('goto_circle') or direction.startswith('walk_sequence'):
-                self._walk_numbered_sequence(director, ctx, inline,
+                self._walk_numbered_sequence(director, ctx, inline, walk_gate,
                                              single=direction.startswith('goto_circle'))
         except Exception as e:
             print(f'[走位] auto-walk failed: {e}')
 
-    def _walk_numbered_sequence(self, director, ctx, inline, single=False):
+    def _walk_numbered_sequence(self, director, ctx, inline, walk_gate=None,
+                                single=False):
         """按编号顺序走完编号圈: 一个闭环走向当前目标圈; 玩家进圈(区域成员判定)→推进到
         下一个; 全部走完或超时即停。圈位置取自追踪器(炸圈 DamagePos 补), 未知则该 tick 停。"""
         tracker = getattr(self, '_numbered_zone_tracker', None)
         if tracker is None:
             print('[走位] 编号圈追踪器未就绪(尚未遇到机制圈)')
             return
-        try:
-            pm = self._dodge_context._src.sr.pm
-            mgr = self._dodge_context._entity_mgr().locate(0)
-            me = pm.read_u64(mgr + 0x18) if mgr else 0
-            my_uuid = pm.read_i64(me + 0xC0) if me else 0
-        except Exception:
-            my_uuid = 0
         state = {'idx': 0}
+
+        def _my_uuid():
+            # 每次实时读 (auto-offset): 死亡/复活换 uuid 时不会卡在旧值
+            try:
+                pm = ctx._src.sr.pm
+                me = ctx._player()
+                return pm.read_i64(me + ctx._off_uuid()) if me else 0
+            except Exception:
+                return 0
 
         def current_target():
             seq = tracker.active_sequence()
@@ -725,14 +732,17 @@ class SAOPlayerGUIEngineLifecycleMixin:
             if i >= len(seq):
                 return True
             z = seq[i]
+            if z.pos is None:
+                return False        # 位置未知就不算到位, 不提前推进 (审查 #14)
+            my_uuid = _my_uuid()
             if my_uuid and my_uuid in z.members_now:
                 print('[走位] 已进编号圈#%d(组%d), 推进下一个' % (z.seq_in_group, z.group_id))
                 state['idx'] = i + 1
                 return single or state['idx'] >= len(seq)
             return False
-        director.walk_to(current_target, arrive_m=float(inline.get('arrive_m') or 1.5),
+        director.walk_to(current_target, arrive_m=float(inline.get('arrive_m') or 2.0),
                          max_ms=int(inline.get('move_ms') or 12000),
-                         is_arrived=is_arrived,
+                         is_arrived=is_arrived, extra_gate=walk_gate,
                          label='走向编号圈' if single else '按序走完编号圈')
 
     # ────────────────────────────────────────────

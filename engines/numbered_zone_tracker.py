@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -49,6 +50,9 @@ class NumberedZoneTracker:
         self._seq_counter = 0
         self._group_counter: Dict[int, int] = {}      # group_id → 已出现数
         self._ignore_persistent = ignore_persistent
+        # 采样线程写 observe/prune, 主线程读 summary/active_sequence, 包线程 observe_damage
+        # → 同一 _zones dict 跨线程访问必须加锁 (审查 #3: 防"dict changed size during iter")
+        self._lock = threading.RLock()
 
     def _is_circle(self, z: Dict) -> bool:
         if z.get("base_id", 0) in self.IGNORE_BASE_IDS:
@@ -61,52 +65,54 @@ class NumberedZoneTracker:
         """吃一帧区域快照。返回本帧**新出现**的编号圈(已分配序号)。"""
         live_uuids = set()
         new_zones: List[TrackedZone] = []
-        for z in snapshot or []:
-            if not self._is_circle(z):
-                continue
-            uuid = int(z.get("zone_uuid", 0))
-            if not uuid:
-                continue
-            live_uuids.add(uuid)
-            members = set(z.get("members") or ())
-            gid = int(z.get("group_id", 0))
-            tz = self._zones.get(uuid)
-            if tz is None:
-                self._seq_counter += 1
-                self._group_counter[gid] = self._group_counter.get(gid, 0) + 1
-                tz = TrackedZone(
-                    zone_uuid=uuid, base_id=int(z.get("base_id", 0)), group_id=gid,
-                    seq=self._seq_counter, seq_in_group=self._group_counter[gid],
-                    first_seen=now, last_seen=now)
-                self._zones[uuid] = tz
-                new_zones.append(tz)
-            tz.alive = True
-            tz.last_seen = now
-            tz.members_now = members
-            tz.members_ever |= members
-        # 不在本帧快照里的 → 标记消失(保留做统计)
-        for uuid, tz in self._zones.items():
-            if uuid not in live_uuids:
-                tz.alive = False
-                tz.members_now = set()
+        with self._lock:
+            for z in snapshot or []:
+                if not self._is_circle(z):
+                    continue
+                uuid = int(z.get("zone_uuid", 0))
+                if not uuid:
+                    continue
+                live_uuids.add(uuid)
+                members = set(z.get("members") or ())
+                gid = int(z.get("group_id", 0))
+                tz = self._zones.get(uuid)
+                if tz is None:
+                    self._seq_counter += 1
+                    self._group_counter[gid] = self._group_counter.get(gid, 0) + 1
+                    tz = TrackedZone(
+                        zone_uuid=uuid, base_id=int(z.get("base_id", 0)), group_id=gid,
+                        seq=self._seq_counter, seq_in_group=self._group_counter[gid],
+                        first_seen=now, last_seen=now)
+                    self._zones[uuid] = tz
+                    new_zones.append(tz)
+                tz.alive = True
+                tz.last_seen = now
+                tz.members_now = members
+                tz.members_ever |= members
+            # 不在本帧快照里的 → 标记消失(保留做统计)
+            for uuid, tz in self._zones.items():
+                if uuid not in live_uuids:
+                    tz.alive = False
+                    tz.members_now = set()
         return new_zones
 
     def observe_damage(self, skill_id: int, target_uuid: int,
                        pos: Optional[Vec3], now: float) -> Optional[TrackedZone]:
         """把一次伤害归到目标当前所在的存活编号圈(成员判定优先, 退而求其次按 pos)。"""
-        best: Optional[TrackedZone] = None
-        for tz in self._zones.values():
-            if tz.alive and target_uuid and target_uuid in tz.members_now:
-                # 多个圈都含该目标时, 取最近出现的(编号最大)
-                if best is None or tz.seq > best.seq:
-                    best = tz
-        if best is None and pos is not None:
-            best = self._nearest_alive_zone(pos)
-        if best is not None:
-            best.hits.append((int(skill_id or 0), int(target_uuid or 0), now))
-            if pos is not None and best.pos is None:
-                best.pos = pos
-        return best
+        with self._lock:
+            best: Optional[TrackedZone] = None
+            for tz in self._zones.values():
+                if tz.alive and target_uuid and target_uuid in tz.members_now:
+                    # 多个圈都含该目标时, 取最近出现的(编号最大)
+                    if best is None or tz.seq > best.seq:
+                        best = tz
+            if best is None and pos is not None:
+                best = self._nearest_alive_zone(pos)
+            if best is not None:
+                best.hits.append((int(skill_id or 0), int(target_uuid or 0), now))
+                if pos is not None and best.pos is None:
+                    best.pos = pos
+            return best
 
     def _nearest_alive_zone(self, pos: Vec3) -> Optional[TrackedZone]:
         import math
@@ -120,12 +126,13 @@ class NumberedZoneTracker:
 
     def active_sequence(self) -> List[TrackedZone]:
         """当前存活编号圈按出现顺序 → "1/2/3" 该走/该躲的顺序。"""
-        return sorted((z for z in self._zones.values() if z.alive),
-                      key=lambda z: z.seq)
+        with self._lock:
+            return sorted((z for z in self._zones.values() if z.alive),
+                          key=lambda z: z.seq)
 
     def active_groups(self) -> Dict[int, List[TrackedZone]]:
         groups: Dict[int, List[TrackedZone]] = {}
-        for z in self.active_sequence():
+        for z in self.active_sequence():        # active_sequence 自带锁
             groups.setdefault(z.group_id, []).append(z)
         for g in groups.values():
             g.sort(key=lambda z: z.seq_in_group)
@@ -134,28 +141,31 @@ class NumberedZoneTracker:
     def summary(self) -> List[Dict]:
         """每个追踪过的编号圈一条统计(含已消失的), 按出现序。"""
         out = []
-        for z in sorted(self._zones.values(), key=lambda z: z.seq):
-            out.append({
-                "seq": z.seq, "no": z.seq_in_group, "group_id": z.group_id,
-                "zone_uuid": z.zone_uuid, "base_id": z.base_id, "alive": z.alive,
-                "members_now": sorted(z.members_now),
-                "members_ever": sorted(z.members_ever),
-                "hit_count": len(z.hits), "pos": z.pos,
-                "lifetime_s": round(z.lifetime(), 2),
-            })
+        with self._lock:
+            for z in sorted(self._zones.values(), key=lambda z: z.seq):
+                out.append({
+                    "seq": z.seq, "no": z.seq_in_group, "group_id": z.group_id,
+                    "zone_uuid": z.zone_uuid, "base_id": z.base_id, "alive": z.alive,
+                    "members_now": sorted(z.members_now),
+                    "members_ever": sorted(z.members_ever),
+                    "hit_count": len(z.hits), "pos": z.pos,
+                    "lifetime_s": round(z.lifetime(), 2),
+                })
         return out
 
     def reset(self) -> None:
-        self._zones.clear()
-        self._seq_counter = 0
-        self._group_counter.clear()
+        with self._lock:
+            self._zones.clear()
+            self._seq_counter = 0
+            self._group_counter.clear()
 
     def prune(self, now: float, keep_s: float = 30.0) -> None:
         """清掉消失超过 keep_s 的圈, 防内存涨。战斗中低频调用。"""
-        dead = [u for u, z in self._zones.items()
-                if not z.alive and (now - z.last_seen) > keep_s]
-        for u in dead:
-            self._zones.pop(u, None)
+        with self._lock:
+            dead = [u for u, z in self._zones.items()
+                    if not z.alive and (now - z.last_seen) > keep_s]
+            for u in dead:
+                self._zones.pop(u, None)
 
 
 __all__ = ["NumberedZoneTracker", "TrackedZone"]

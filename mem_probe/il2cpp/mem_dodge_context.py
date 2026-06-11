@@ -48,8 +48,17 @@ class DodgeContext:
             self._emr = EntityMgrReader(self._src)
         return self._emr
 
+    def _off_player_ent(self) -> int:
+        """ZEntityMgr.playerEnt_ 偏移: 复用 EntityMgrReader 的 auto-offset (字段表解,
+        0x18 字面量兜底); 不裸写死。"""
+        return int(getattr(self._entity_mgr(), "off_player_ent", 0x18) or 0x18)
+
+    def _off_uuid(self) -> int:
+        """ZEntity.Uuid 偏移: 复用 EntityMgrReader auto-offset (0xC0 兜底)。"""
+        return int(getattr(self._entity_mgr(), "off_ent_uuid", 0xC0) or 0xC0)
+
     def _player(self) -> int:
-        """玩家实体对象 (ZEntityMgr.playerEnt_ @ +0x18), 缓存 + 失效重取。"""
+        """玩家实体对象 (ZEntityMgr.playerEnt_, auto-offset), 缓存 + 失效重取。"""
         pm = self._src.sr.pm
         if self._player_obj:
             try:
@@ -60,7 +69,7 @@ class DodgeContext:
         try:
             mgr = self._entity_mgr().locate(0)
             if mgr:
-                self._player_obj = pm.read_u64(mgr + 0x18) or 0
+                self._player_obj = pm.read_u64(mgr + self._off_player_ent()) or 0
         except Exception:
             self._player_obj = 0
         return self._player_obj
@@ -127,8 +136,8 @@ class DodgeContext:
         try:
             mgr = self._entity_mgr().locate(0)
             pm = self._src.sr.pm
-            player = pm.read_u64(mgr + 0x18) if mgr else 0
-            puuid = pm.read_i64(player + 0xC0) if player else 0
+            player = pm.read_u64(mgr + self._off_player_ent()) if mgr else 0
+            puuid = pm.read_i64(player + self._off_uuid()) if player else 0
             if not mgr or not puuid:
                 return lambda: False
             zr = self._zone()
@@ -156,10 +165,10 @@ class DodgeContext:
             if not mgr:
                 return 0
             me = self._player()
-            my_uuid = pm.read_i64(me + 0xC0) if me else 0
+            my_uuid = pm.read_i64(me + self._off_uuid()) if me else 0
             pp = self.get_player_pos()
             emr = self._entity_mgr()
-            ed = pm.read_u64(mgr + 0x28) or 0       # entityDict_ (含玩家)
+            ed = pm.read_u64(mgr + int(getattr(emr, "off_entity_dict", 0x28) or 0x28)) or 0
             rd = self._position()
             best, best_d = 0, 1e18
             for key, obj in emr._read_dict_entries(ed, max_entries=128):

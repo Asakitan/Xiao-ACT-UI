@@ -94,6 +94,36 @@ class NumberedZoneTest(unittest.TestCase):
         t.prune(now=40.0, keep_s=30.0)            # 38s 后清掉
         self.assertEqual(t.summary(), [])
 
+    def test_concurrent_observe_summary_no_crash(self):
+        # 审查#3: 采样线程 observe/prune 与主线程 summary/active_sequence 并发不崩
+        import threading
+        t = NumberedZoneTracker()
+        errors = []
+
+        def writer():
+            try:
+                for i in range(400):
+                    t.observe([_z(100 + (i % 7), [i, i + 1], group_id=i % 3)], now=float(i))
+                    t.prune(now=float(i), keep_s=2.0)
+            except Exception as e:
+                errors.append(('writer', repr(e)))
+
+        def reader():
+            try:
+                for i in range(400):
+                    t.summary()
+                    t.active_sequence()
+                    t.observe_damage(1, i, (float(i), 0.0, 0.0), now=float(i))
+            except Exception as e:
+                errors.append(('reader', repr(e)))
+        ths = [threading.Thread(target=writer) for _ in range(2)] + \
+              [threading.Thread(target=reader) for _ in range(2)]
+        for th in ths:
+            th.start()
+        for th in ths:
+            th.join()
+        self.assertEqual(errors, [])               # 无 "dict changed size during iteration"
+
 
 if __name__ == "__main__":
     suite = unittest.TestLoader().loadTestsFromTestCase(NumberedZoneTest)

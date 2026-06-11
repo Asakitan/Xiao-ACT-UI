@@ -149,7 +149,9 @@ class AutoDodgeDirector:
         self._pos = get_player_pos
         self._gate = gate
         self._held: List[str] = []
-        self._lock = threading.Lock()
+        self._held_epoch = 0     # 哪个 epoch 按下了当前 _held (审查 #10: 防旧epoch误松新键)
+        self._lock = threading.Lock()       # 只护 _epoch (轻, 不含按键 I/O)
+        self._io_lock = threading.Lock()    # 护 _held + SendInput I/O (审查 #2: 与epoch锁分离)
         self._epoch = 0          # 单飞: 每次新 dodge +1, 旧循环检测到不等即退出
 
     def _blocked(self) -> bool:
@@ -205,9 +207,13 @@ class AutoDodgeDirector:
 
     def walk_to(self, get_target_pos: Callable, *, arrive_m: float = 2.0,
                 max_ms: int = 8000, is_arrived: Optional[Callable] = None,
+                extra_gate: Optional[Callable] = None,
                 label: str = "自动走位") -> Dict:
         """闭环走向一个世界坐标点 (与 dodge 的"远离"相反): 每 tick 读玩家位+目标位+相机
         基 → 朝目标的 WASD, 水平距 ≤ arrive_m 或 is_arrived() 即停。
+
+        extra_gate (可选): 每 tick 额外复查的门 (如 auto_walk_enabled), 返回 False 即停
+        (审查 #8: 走位中关掉总开关能即时停, 不必等超时)。
 
         ★安全: 走位读不到位置/相机/目标时**直接停, 绝不盲按键**(盲走可能走进危险);
         这是与躲避(可降级纯按键后撤)的关键区别。get_target_pos 返回 None → 该 tick 停。"""
@@ -215,19 +221,27 @@ class AutoDodgeDirector:
         max_ms = max(200, min(15000, int(max_ms)))
         arrive_m = max(0.5, float(arrive_m))
         threading.Thread(target=self._run_until_arrive,
-                         args=(epoch, get_target_pos, arrive_m, max_ms, is_arrived),
+                         args=(epoch, get_target_pos, arrive_m, max_ms, is_arrived,
+                               extra_gate),
                          daemon=True).start()
         return {"label": label, "fired": True, "epoch": epoch}
 
     def _run_until_arrive(self, epoch: int, get_target_pos: Callable,
                           arrive_m: float, max_ms: int,
-                          is_arrived: Optional[Callable]) -> None:
+                          is_arrived: Optional[Callable],
+                          extra_gate: Optional[Callable] = None) -> None:
         tick = 0.07
         t0 = time.time()
         try:
             while (time.time() - t0) < max_ms / 1000.0:
                 if self._blocked() or epoch != self._epoch:
                     break
+                if extra_gate is not None:
+                    try:
+                        if not extra_gate():
+                            break          # 审查 #8: 总开关关 / 额外门否决 → 即停
+                    except Exception:
+                        break
                 if is_arrived is not None:
                     try:
                         if is_arrived():
@@ -250,7 +264,7 @@ class AutoDodgeDirector:
                                          cam["forward"], cam["right"])
                 if not keys:
                     break
-                self._apply_keys(keys)
+                self._apply_keys(keys, epoch)
                 time.sleep(tick)
         finally:
             self._release_if_mine(epoch)
@@ -267,9 +281,11 @@ class AutoDodgeDirector:
         except Exception:
             return None
 
-    def _apply_keys(self, target: List[str]) -> None:
-        """把 _held 调整到 target 键集 (只对变化的键 press/release, 不抖)。"""
-        with self._lock:
+    def _apply_keys(self, target: List[str], epoch: int = 0) -> None:
+        """把 _held 调整到 target 键集 (只对变化的键 press/release, 不抖)。
+        用 _io_lock(独立于 epoch 锁): 按键 I/O 不阻塞 _next_epoch (审查 #2);
+        记 _held_epoch 标记按键归属 (审查 #10)。"""
+        with self._io_lock:
             cur = set(self._held)
             want = set(target)
             for k in cur - want:
@@ -277,11 +293,13 @@ class AutoDodgeDirector:
             for k in want - cur:
                 self._press(k, up=False)
             self._held = list(want)
+            if epoch:
+                self._held_epoch = epoch
 
     def _run_move(self, epoch: int, keys: List[str], move_ms: int) -> None:
         if self._blocked() or epoch != self._epoch:
             return
-        self._apply_keys(keys)
+        self._apply_keys(keys, epoch)
         try:
             step = 0.05
             waited = 0.0
@@ -321,7 +339,7 @@ class AutoDodgeDirector:
                     dp = None
                 cam = self._cam_safe()
                 if not pp or not dp or not cam:
-                    self._apply_keys(fallback_keys)   # 降级: 不读内存的纯按键后撤
+                    self._apply_keys(fallback_keys, epoch)   # 降级: 不读内存的纯按键后撤
                     time.sleep(tick)
                     continue
                 if is_clear is None and \
@@ -331,15 +349,15 @@ class AutoDodgeDirector:
                                          cam["forward"], cam["right"])
                 if not keys:
                     keys = fallback_keys
-                self._apply_keys(keys)
+                self._apply_keys(keys, epoch)
                 time.sleep(tick)
         finally:
             self._release_if_mine(epoch)
 
     def _release_if_mine(self, epoch: int) -> None:
-        with self._lock:
-            if epoch != self._epoch:
-                return        # 已被新 dodge 接管, 别松别人按的键
+        with self._io_lock:
+            if epoch != self._epoch or epoch != self._held_epoch:
+                return        # 已被新 dodge 接管, 别松别人按的键 (审查 #10)
             for k in list(self._held):
                 self._press(k, up=True)
             self._held = []
@@ -347,7 +365,8 @@ class AutoDodgeDirector:
     def release_all(self) -> None:
         """急停: 松开所有按住的移动键并作废在途循环 (F12 / panic 调用)。"""
         with self._lock:
-            self._epoch += 1      # 作废所有在飞循环
+            self._epoch += 1      # 作废所有在飞循环 (epoch 锁轻, 不含 I/O)
+        with self._io_lock:
             for k in list(self._held):
                 self._press(k, up=True)
             self._held = []

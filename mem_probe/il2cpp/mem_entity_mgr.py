@@ -166,6 +166,7 @@ class EntityMgrReader:
     def _resolve_offsets(self) -> None:
         mgr = _ao.resolve(self._src, ENTITY_MGR_CLASS, {
             "off_player_uuid": ("playerUuid_", PLAYERUUID_OFF),
+            "off_player_ent": ("playerEnt_", PLAYERENT_OFF),
             "off_entity_dict": ("entityDict_", ENTITY_DICT_OFF),
             "off_boss_dict": ("bossDict_", BOSS_DICT_OFF),
             "off_monster_dict": ("monsterDict_", MONSTER_DICT_OFF),
