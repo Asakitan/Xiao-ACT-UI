@@ -471,6 +471,47 @@ def _assert_report_and_offline_lists_are_guarded() -> None:
             raise AssertionError("missing safe offline import list/object snippet: " + snippet)
 
 
+def _assert_data_source_health_payloads_are_guarded() -> None:
+    health = _read_web("data_source_health.html")
+    for snippet in (
+        "source = source || {};",
+        "var watchers = source.watchers || {};",
+        "var selection = source.parser_adapter_selection || {};",
+        "var self = source.self || {};",
+        "var items = payload.diagnostics || [];",
+        "var errs = payload.errors || [];",
+        "items = errs.map(function (err) { return { level: 'error', message: err }; });",
+        "payload = payload || {};",
+        "var sources = payload.sources || {};",
+        "var summary = sources.summary || {};",
+        "String((payload.errors || []).length)",
+        "if (sources.packet) cards.push",
+    ):
+        if snippet in health:
+            raise AssertionError("data source health must guard payload shapes: " + snippet)
+    for snippet in (
+        "function listItems(value)",
+        "function isObjectValue(value)",
+        "function objectValue(value)",
+        "function diagnosticItem(item, level)",
+        "source = objectValue(source);",
+        "var watchers = objectValue(source.watchers);",
+        "var selection = objectValue(source.parser_adapter_selection);",
+        "var self = objectValue(source.self);",
+        "payload = objectValue(payload);",
+        "var items = listItems(payload.diagnostics).map(function (item) { return diagnosticItem(item, 'info'); });",
+        "var errs = listItems(payload.errors);",
+        "items = errs.map(function (err) { return diagnosticItem(err, 'error'); });",
+        "item = diagnosticItem(item, 'info');",
+        "var sources = objectValue(payload.sources);",
+        "var summary = objectValue(sources.summary);",
+        "var errorCount = listItems(payload.errors).length;",
+        "if (isObjectValue(sources.packet)) cards.push(renderSource('packet', sources.packet));",
+    ):
+        if snippet not in health:
+            raise AssertionError("missing safe data source health snippet: " + snippet)
+
+
 def _assert_boss_hp_additional_units_are_safe() -> None:
     boss_hp = _read_web("boss_hp.html")
     for snippet in (
@@ -613,6 +654,7 @@ def main() -> int:
     _assert_timeline_speed_is_normalized()
     _assert_timeline_and_aggregate_lists_are_guarded()
     _assert_report_and_offline_lists_are_guarded()
+    _assert_data_source_health_payloads_are_guarded()
     _assert_boss_hp_additional_units_are_safe()
     _assert_dps_hit_fx_numbers_are_normalized()
     _assert_trigger_timer_numbers_are_normalized()

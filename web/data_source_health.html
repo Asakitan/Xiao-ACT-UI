@@ -204,6 +204,13 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
         }
         return result || {};
     }
+    function listItems(value) { return Array.isArray(value) ? value : []; }
+    function isObjectValue(value) { return value && typeof value === 'object' && !Array.isArray(value); }
+    function objectValue(value) { return isObjectValue(value) ? value : {}; }
+    function diagnosticItem(item, level) {
+        if (isObjectValue(item)) return item;
+        return { level: level || 'info', message: item };
+    }
 
     function sourcePayload(name, args) {
         args = args || [];
@@ -242,6 +249,7 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
     }
 
     function statusClass(source) {
+        source = objectValue(source);
         if (!source) return 'bad';
         if (source.running || source.alive || source.active || source.started || source.is_memory_active) return 'ok';
         if (source.error_msg || source.last_error) return 'bad';
@@ -249,20 +257,20 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
     }
 
     function renderSource(key, source) {
-        source = source || {};
+        source = objectValue(source);
         var cls = key === 'memory' ? 'card memory' : 'card';
         if (statusClass(source) === 'bad') cls += ' bad';
         var watcherHtml = '';
-        var watchers = source.watchers || {};
+        var watchers = objectValue(source.watchers);
         Object.keys(watchers).forEach(function (name) {
             watcherHtml += badge(name + ': ' + watchers[name], watchers[name] === 'memory_first' ? 'ok' : 'warn');
         });
-        var selection = source.parser_adapter_selection || {};
+        var selection = objectValue(source.parser_adapter_selection);
         var parserId = selection.selected_id || source.parser_adapter_id || '-';
         var requestedParser = selection.requested_id || source.parser_adapter_requested_id || '-';
         var parserMode = selection.mode || source.parser_adapter_mode || '-';
         var parserFallback = selection.fallback_reason || source.parser_adapter_fallback_reason || '-';
-        var self = source.self || {};
+        var self = objectValue(source.self);
         var extra = self.uid ? '<pre>self uid=' + esc(self.uid) + ' hp=' + esc(self.hp) + '/' + esc(self.max_hp) + ' name=' + esc(self.name || '') + '</pre>' : '';
         return '<article class="' + cls + '">' +
             '<div class="card-top"><div><div class="name">' + esc(key.toUpperCase()) + '</div><div class="sub">' + esc(source.data_source || source.mode || '-') + '</div></div>' +
@@ -284,16 +292,18 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
     }
 
     function renderDiagnostics(payload) {
-        var items = payload.diagnostics || [];
-        var errs = payload.errors || [];
+        payload = objectValue(payload);
+        var items = listItems(payload.diagnostics).map(function (item) { return diagnosticItem(item, 'info'); });
+        var errs = listItems(payload.errors);
         if (!items.length && errs.length) {
-            items = errs.map(function (err) { return { level: 'error', message: err }; });
+            items = errs.map(function (err) { return diagnosticItem(err, 'error'); });
         }
         if (!items.length) {
             diagList.innerHTML = '<div class="diag-item">No diagnostics. Click Diagnose for details.</div>';
             return;
         }
         diagList.innerHTML = items.map(function (item) {
+            item = diagnosticItem(item, 'info');
             var level = String(item.level || 'info').toLowerCase();
             var cls = level === 'error' ? 'error' : (level === 'warn' ? 'warn' : '');
             return '<div class="diag-item ' + cls + '"><strong>' + esc(level.toUpperCase()) + '</strong><br/>' + esc(item.message || '') + '</div>';
@@ -301,10 +311,11 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
     }
 
     function render(payload) {
-        payload = payload || {};
+        payload = objectValue(payload);
         lastPayload = payload;
-        var sources = payload.sources || {};
-        var summary = sources.summary || {};
+        var sources = objectValue(payload.sources);
+        var summary = objectValue(sources.summary);
+        var errorCount = listItems(payload.errors).length;
         var status = payload.status || (payload.ok ? 'running' : 'error');
         statusPill.textContent = String(status || '--').toUpperCase();
         statusPill.style.color = status === 'running' ? 'var(--ok)' : (status === 'error' || status === 'missing' ? 'var(--bad)' : 'var(--warn)');
@@ -313,10 +324,10 @@ button:hover{box-shadow:none!important;transform:none!important;background:rgba(
         document.getElementById('sum-source').textContent = summary.data_source || '--';
         document.getElementById('sum-latency').textContent = (payload.latency_ms || 0) + ' ms';
         document.getElementById('sum-event').textContent = (payload.last_event_ms || 0) + ' ms';
-        document.getElementById('sum-errors').textContent = String((payload.errors || []).length);
+        document.getElementById('sum-errors').textContent = String(errorCount);
         var cards = [];
-        if (sources.packet) cards.push(renderSource('packet', sources.packet));
-        if (sources.memory) cards.push(renderSource('memory', sources.memory));
+        if (isObjectValue(sources.packet)) cards.push(renderSource('packet', sources.packet));
+        if (isObjectValue(sources.memory)) cards.push(renderSource('memory', sources.memory));
         if (!cards.length) cards.push('<div class="empty">没有可用的数据源。<br/>Start recognition to initialize PacketBridge.</div>');
         list.innerHTML = cards.join('');
         renderDiagnostics(payload);

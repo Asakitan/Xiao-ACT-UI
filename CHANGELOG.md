@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.84: ACT Data Source Health payload 防护修复.
+
+  1) `web/data_source_health.html` 修复 diagnostics/errors payload 形状处理。
+     Data Source Health Web 现在归一诊断列表与错误列表,
+     避免字符串或坏 payload 造成诊断区域渲染中断或错误数量失真。
+
+  2) `web/data_source_health.html` 修复 sources/watchers payload 形状处理。
+     Data Source Health Web 现在只渲染对象数据源并归一 watcher/selection/self,
+     避免坏数据源 payload 造成来源卡片与运行摘要渲染中断。
+
 ## v4.5.83: ACT Web Graph payload 防护修复.
 
   1) `web/act_graph_timeseries.html` 修复 metrics payload 形状处理。
