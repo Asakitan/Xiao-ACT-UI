@@ -242,13 +242,25 @@ function _akSlotIndex(v) {
     return _akClampInt(v, 0, 0, 99);
 }
 
+function _akIsObjectValue(v) {
+    return v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function _akObjectValue(v) {
+    return _akIsObjectValue(v) ? v : {};
+}
+
+function _akObjectItems(v) {
+    return (Array.isArray(v) ? v : []).filter(_akIsObjectValue);
+}
+
 // Skill slot grid rendering
 function updateSlots(slots) {
-    _slots = slots || [];
+    _slots = _akObjectItems(slots);
     var grid = document.getElementById('skill-grid');
     var html = '';
     for (var i = 0; i < _slots.length; i++) {
-        var s = _slots[i];
+        var s = _akObjectValue(_slots[i]);
         var slotIndex = _akSlotIndex(s.index);
         var state = String(s.state || 'ready');
         var stateKey = /^(ready|active|cooldown|unknown|insufficient_energy)$/.test(state) ? state : 'unknown';
@@ -333,7 +345,7 @@ function _renderActions() {
     }
     var html = '';
     for (var i = 0; i < _actions.length; i++) {
-        var a = _actions[i];
+        var a = _akObjectValue(_actions[i]);
         html += '<div class="record-row">'
             + '<div class="record-trigger">When <b>' + _esc(a.trigger_name) + '</b> is <b>' + _condText(a.trigger_condition) + '</b></div>'
             + '<div class="record-action">-> Press <b>' + _esc(a.action_name) + '</b></div>'
@@ -388,8 +400,9 @@ function saveActions() {
 
 // Status updates
 function updateState(data) {
+    data = _akObjectValue(data);
     var badge = document.getElementById('state-badge');
-    var enabled = data.enabled || false;
+    var enabled = !!data.enabled;
     badge.textContent = enabled ? 'ON' : 'OFF';
     badge.className = 'badge ' + (enabled ? 'on' : 'off');
 
@@ -408,7 +421,7 @@ function updateState(data) {
 
 // Load existing actions from profile
 function loadActions(actions) {
-    _actions = actions || [];
+    _actions = _akObjectItems(actions);
     _renderActions();
 }
 

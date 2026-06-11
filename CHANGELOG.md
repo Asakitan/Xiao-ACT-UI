@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.86: AutoKey Editor payload 防护修复.
+
+  1) `web/autokey_editor.html` 修复 slots payload 与 slot row 形状处理。
+     AutoKey Editor Web 现在只渲染对象技能槽并归一状态 payload,
+     避免字符串或 null 槽位打断技能卡片渲染。
+
+  2) `web/autokey_editor.html` 修复 actions payload 与 action row 形状处理。
+     AutoKey Editor Web 现在只消费对象动作列表并归一每条动作,
+     避免坏动作条目打断录制动作列表渲染或保存前状态。
+
 ## v4.5.85: Buff Coverage payload 防护修复.
 
   1) `web/buff_coverage.html` 修复 update payload 与 buffs 列表形状处理。

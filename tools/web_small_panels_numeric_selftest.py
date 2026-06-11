@@ -318,6 +318,26 @@ def main() -> None:
             "data-index=\"' + s.index",
             "AutoKey editor slot click parameters must not use raw slot indices.",
         ),
+        (
+            "_slots = slots || [];",
+            "AutoKey editor slots payload must guard non-list data.",
+        ),
+        (
+            "var s = _slots[i];",
+            "AutoKey editor slot rows must guard non-object entries.",
+        ),
+        (
+            "_actions = actions || [];",
+            "AutoKey editor actions payload must guard non-list data.",
+        ),
+        (
+            "var a = _actions[i];",
+            "AutoKey editor action rows must guard non-object entries.",
+        ),
+        (
+            "var enabled = data.enabled || false;",
+            "AutoKey editor update state must guard non-object data.",
+        ),
     ]
     for snippet, message in autokey_forbidden:
         _check_absent(autokey, snippet, message)
@@ -350,6 +370,38 @@ def main() -> None:
         (
             "data-index=\"' + slotIndex + '\" onclick=\"onSlotClick(' + slotIndex + ')\"",
             "AutoKey editor inline slot parameters should use normalized indices.",
+        ),
+        (
+            "function _akIsObjectValue(v)",
+            "AutoKey editor should expose object-shape detection.",
+        ),
+        (
+            "function _akObjectValue(v)",
+            "AutoKey editor should normalize object payloads.",
+        ),
+        (
+            "function _akObjectItems(v)",
+            "AutoKey editor should filter object-list payloads.",
+        ),
+        (
+            "_slots = _akObjectItems(slots);",
+            "AutoKey editor should normalize slot list payloads.",
+        ),
+        (
+            "var s = _akObjectValue(_slots[i]);",
+            "AutoKey editor should normalize each slot row.",
+        ),
+        (
+            "var a = _akObjectValue(_actions[i]);",
+            "AutoKey editor should normalize each action row.",
+        ),
+        (
+            "data = _akObjectValue(data);",
+            "AutoKey editor should normalize update state payloads.",
+        ),
+        (
+            "_actions = _akObjectItems(actions);",
+            "AutoKey editor should normalize action list payloads.",
         ),
     ]
     for snippet, message in autokey_required:
