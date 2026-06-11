@@ -350,6 +350,15 @@ function _sameStepMs(a, b) {
     var right = _stepMs(b, 0);
     return left != null && right != null && left === right;
 }
+function _isObjectValue(v) {
+    return v && typeof v === 'object' && !Array.isArray(v);
+}
+function _objectValue(v) {
+    return _isObjectValue(v) ? v : {};
+}
+function _objectItems(v) {
+    return (Array.isArray(v) ? v : []).filter(_isObjectValue);
+}
 function _cssColor(v) {
     var s = String(v == null ? '' : v).trim();
     return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(s) ? s : '#68e4ff';
@@ -1086,7 +1095,7 @@ function mechSaveForm() {
 
 // Entity list rendering
 function updateEntities(entities) {
-    _lastEntities = entities || [];
+    _lastEntities = _objectItems(entities);
     var list = document.getElementById('entity-list');
     var empty = document.getElementById('entity-empty');
     if (!_lastEntities.length) {
@@ -1097,7 +1106,7 @@ function updateEntities(entities) {
     empty.style.display = 'none';
     var html = '';
     for (var i = 0; i < _lastEntities.length; i++) {
-        var e = _lastEntities[i];
+        var e = _objectValue(_lastEntities[i]);
         var isBoss = e.role === 'boss';
         var roleClass = isBoss ? 'is-boss' : 'is-enemy';
         var roleLabel = isBoss ? 'BOSS' : 'ENEMY';
@@ -1143,14 +1152,16 @@ function toggleRole(uuid) {
 
 // Phase list rendering
 function updatePhases(phases, currentIdx) {
+    phases = _objectItems(phases);
+    currentIdx = _clampInt(currentIdx, 0, 0, 999);
     var list = document.getElementById('phase-list');
-    if (!phases || !phases.length) {
+    if (!phases.length) {
         list.innerHTML = '<div class="empty-state">No phases configured</div>';
         return;
     }
     var html = '';
     for (var i = 0; i < phases.length; i++) {
-        var p = phases[i];
+        var p = _objectValue(phases[i]);
         var isCurrent = i === currentIdx;
         html += '<div class="phase-card' + (isCurrent ? ' current' : '') + '">'
             + '<div class="phase-name">' + _esc(p.name || ('P' + (i + 1))) + '</div>'
@@ -1181,7 +1192,8 @@ function _triggerText(trigger) {
 
 // Status update
 function updateStatus(status) {
-    _lastStatus = status || {};
+    status = _objectValue(status);
+    _lastStatus = status;
     var badge = document.getElementById('state-badge');
     var state = status.state || 'idle';
     badge.textContent = state.toUpperCase();
@@ -1197,8 +1209,9 @@ function updateStatus(status) {
 
 // Full state push (status + phases)
 function updateFull(data) {
-    if (data.status) updateStatus(data.status);
-    if (data.phases) updatePhases(data.phases, (data.status || {}).phase_idx || 0);
+    data = _objectValue(data);
+    if (_isObjectValue(data.status)) updateStatus(data.status);
+    if (Array.isArray(data.phases)) updatePhases(data.phases, _clampInt(_objectValue(data.status).phase_idx, 0, 0, 999));
 }
 
 // Actions

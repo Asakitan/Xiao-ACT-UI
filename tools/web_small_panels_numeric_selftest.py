@@ -82,6 +82,30 @@ def main() -> None:
             "Number(s.delay_ms || 0) === Number(seq[1].delay_ms || 0)",
             "Raid editor mechanic dash preset must normalize delay_ms before comparison.",
         ),
+        (
+            "_lastEntities = entities || [];",
+            "Raid editor entity payload must guard non-list data.",
+        ),
+        (
+            "var e = _lastEntities[i];",
+            "Raid editor entity rows must guard non-object entries.",
+        ),
+        (
+            "if (!phases || !phases.length)",
+            "Raid editor phase payload must guard non-list data.",
+        ),
+        (
+            "var p = phases[i];",
+            "Raid editor phase rows must guard non-object entries.",
+        ),
+        (
+            "_lastStatus = status || {};",
+            "Raid editor status payload must guard non-object data.",
+        ),
+        (
+            "if (data.status) updateStatus(data.status);",
+            "Raid editor full-state payload must guard non-object data.",
+        ),
     ]
     for snippet, message in raid_forbidden:
         _check_absent(raid, snippet, message)
@@ -154,6 +178,46 @@ def main() -> None:
         (
             "seq.slice(1).every(function (s) { return _sameStepMs(s.delay_ms, seq[1].delay_ms); });",
             "Raid editor mechanic dash preset should normalize delay_ms.",
+        ),
+        (
+            "function _isObjectValue(v)",
+            "Raid editor should expose object-shape detection.",
+        ),
+        (
+            "function _objectValue(v)",
+            "Raid editor should normalize object payloads.",
+        ),
+        (
+            "function _objectItems(v)",
+            "Raid editor should filter object-list payloads.",
+        ),
+        (
+            "_lastEntities = _objectItems(entities);",
+            "Raid editor should normalize entity list payloads.",
+        ),
+        (
+            "var e = _objectValue(_lastEntities[i]);",
+            "Raid editor should normalize each entity row.",
+        ),
+        (
+            "phases = _objectItems(phases);",
+            "Raid editor should normalize phase list payloads.",
+        ),
+        (
+            "var p = _objectValue(phases[i]);",
+            "Raid editor should normalize each phase row.",
+        ),
+        (
+            "status = _objectValue(status);",
+            "Raid editor should normalize status payloads.",
+        ),
+        (
+            "data = _objectValue(data);",
+            "Raid editor should normalize full-state payloads.",
+        ),
+        (
+            "if (_isObjectValue(data.status)) updateStatus(data.status);",
+            "Raid editor updateFull should guard status payload shape.",
         ),
     ]
     for snippet, message in raid_required:

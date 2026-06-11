@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.87: Raid Editor payload 防护修复.
+
+  1) `web/raid_editor.html` 修复 entities payload 与 entity row 形状处理。
+     Raid Editor Web 现在只渲染对象实体列表,
+     避免字符串或 null 实体打断实体卡片渲染。
+
+  2) `web/raid_editor.html` 修复 phases/status/full-state payload 形状处理。
+     Raid Editor Web 现在归一阶段列表、状态对象与全量推送对象,
+     避免坏 payload 打断阶段列表、状态栏或全量刷新。
+
 ## v4.5.86: AutoKey Editor payload 防护修复.
 
   1) `web/autokey_editor.html` 修复 slots payload 与 slot row 形状处理。
