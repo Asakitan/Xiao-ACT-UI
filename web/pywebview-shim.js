@@ -157,6 +157,10 @@
         start_auto_key_import_picker: function (path) {
             return call('autokey.import_picker.start', { path: String(path || '') }).then(normalizeOk);
         },
+        start_boss_raid_import_picker: function (path) {
+            try { window._pickerConsumer = 'boss_raid'; } catch (_) {}
+            return call('bossraid.import_picker.start', { path: String(path || '') }).then(normalizeOk);
+        },
         select_file: function (path) {
             var consumer = '';
             try { consumer = String(window._pickerConsumer || ''); } catch (_) {}
@@ -164,6 +168,9 @@
                 path: String(path || ''),
                 consumer: consumer
             }).then(normalizeOk);
+        },
+        set_boss_raid_enabled: function (enabled) {
+            return call('bossraid.set_enabled', { enabled: !!enabled }).then(normalizeOk);
         },
         save_autokey_actions: function (actionsJson) {
             return call('autokey.actions.save', {

@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.15: WebView2 BossRaid 导入入口与启用开关修复.
+
+  1) `web/pywebview-shim.js` 补齐 `start_boss_raid_import_picker()`,
+     C# `FilePickerBridge` 新增 `bossraid.import_picker.start`。
+     BossRaid 菜单导入按钮现在能打开文件选择器, 并把后续 `select_file`
+     正确路由为 BossRaid profile 导入。
+
+  2) `web/pywebview-shim.js` 补齐 `set_boss_raid_enabled(enabled)`,
+     C# `MenuStateBridge` 新增 `bossraid.set_enabled`。
+     BossRaid 启用开关现在会持久化 `boss_raid.enabled`, 并返回完整菜单状态。
+
 ## v4.5.14: WebView2 BossRaid 实体角色与菜单阶段按钮修复.
 
   1) C# `BossRaidEngine` 补齐 Python 对齐的 `SetEntityRole(uuid, role)`,
