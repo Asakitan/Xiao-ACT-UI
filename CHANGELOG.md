@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.56: ACT Action Log Tk 数值渲染修复.
+
+  1) `gui_modules/sao_gui_action_log.py` 修复分页/摘要数值渲染。
+     cursor、offset、page 和 total rows 现在过滤非有限数,
+     避免异常 analytics/cursor payload 让 Action Log 面板整体不渲染。
+
+  2) `gui_modules/sao_gui_action_log.py` 修复聚合分组数值渲染。
+     group total/count/uid/time 与格式化值现在统一过滤 `NaN`/`Infinity`,
+     避免异常分组数据导致分组区渲染中断或比例条异常。
+
 ## v4.5.55: 插件 Tk 面板数值渲染修复.
 
   1) `gui_modules/sao_plugin_ui_render.py` 修复插件声明式 UI 数值渲染。

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import sys
 import tempfile
 import unittest
@@ -16,7 +17,7 @@ if ROOT not in sys.path:
 from act_platform import runtime
 from act_platform.runtime import ensure_act_event_bus
 from engines.dps_history import DpsHistoryStore
-from gui_modules.sao_gui_action_log import ActionLogPanel
+from gui_modules.sao_gui_action_log import ActionLogPanel, _finite_float, _finite_int
 
 
 class FakeOwner:
@@ -527,6 +528,41 @@ class ActActionLogRuntimeTests(unittest.TestCase):
             ActionLogPanel._groups_signature([group], {"monster:9001"}),
             ActionLogPanel._groups_signature([changed_detail], {"monster:9001"}),
         )
+
+    def test_panel_summary_filters_non_finite_cursor_and_page_numbers(self) -> None:
+        panel = ActionLogPanel.__new__(ActionLogPanel)
+        panel._summary_var = _FakeVar()
+        panel._status_var = _FakeVar()
+        panel._offset_var = _FakeVar("7")
+        panel._rows = None
+
+        panel._render_status({
+            "rows": [{"id": "r1"}],
+            "filters": {"source": "history", "topic": "damage", "query": "boss"},
+            "source": "history",
+            "analytics": {
+                "total_rows": float("nan"),
+                "page": {"page_index": "bad", "page_count": float("inf"), "offset": float("nan")},
+            },
+            "cursor": {"time_ms": float("inf"), "total_row_count": float("inf")},
+            "errors": [],
+        })
+
+        self.assertIn("1/1 ROWS", panel._summary_var.value)
+        self.assertIn("PAGE 0/0", panel._summary_var.value)
+        self.assertIn("cursor=--", panel._status_var.value)
+        self.assertEqual(panel._offset_var.value, "7")
+        self.assertNotIn("nan", panel._summary_var.value.lower() + panel._status_var.value.lower())
+        self.assertNotIn("inf", panel._summary_var.value.lower() + panel._status_var.value.lower())
+
+    def test_action_log_group_numeric_helpers_filter_bad_values(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "gui_modules" / "sao_gui_action_log.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("max(1.0, *[float(group.get('total_value') or 0.0)", source)
+        self.assertNotIn("int(group.get('count') or 0)", source)
+        self.assertEqual(_finite_float(float("nan"), 3.5, lo=0.0), 3.5)
+        self.assertEqual(_finite_int(float("inf"), 9, lo=0), 9)
+        self.assertEqual(ActionLogPanel._fmt(float("nan")), "0")
 
 
 if __name__ == "__main__":

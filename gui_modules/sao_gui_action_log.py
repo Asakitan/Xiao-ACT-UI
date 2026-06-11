@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
@@ -46,6 +47,29 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        number = float(default if value is None or value == '' else value)
+    except Exception:
+        number = float(default or 0.0)
+    if not math.isfinite(number):
+        number = float(default or 0.0)
+    if lo is not None:
+        number = max(float(lo), number)
+    if hi is not None:
+        number = min(float(hi), number)
+    return number
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    number = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    if lo is not None:
+        number = max(int(lo), number)
+    if hi is not None:
+        number = min(int(hi), number)
+    return number
 
 
 class ActionLogPanel:
@@ -107,10 +131,7 @@ class ActionLogPanel:
 
     def refresh(self) -> Dict[str, Any]:
         now = time.time()
-        try:
-            cursor_ms = int(self._cursor_var.get() or 0)
-        except Exception:
-            cursor_ms = 0
+        cursor_ms = _finite_int(self._cursor_var.get(), 0, lo=0)
         offset = self._current_offset()
         query = self._query_var.get()
         topic = self._topic_var.get()
@@ -173,10 +194,7 @@ class ActionLogPanel:
         ), 'FILTER APPLIED')
 
     def jump_to_time(self) -> Dict[str, Any]:
-        try:
-            cursor_ms = int(self._cursor_var.get() or 0)
-        except Exception:
-            cursor_ms = 0
+        cursor_ms = _finite_int(self._cursor_var.get(), 0, lo=0)
         return self._apply_result(act_action_log_jump_to_time(
             self.owner,
             cursor_ms=cursor_ms,
@@ -212,7 +230,7 @@ class ActionLogPanel:
 
     def previous_page(self) -> Dict[str, Any]:
         cursor = self._last_status.get('cursor') if isinstance(self._last_status.get('cursor'), Mapping) else {}
-        limit = int(cursor.get('limit') or 80)
+        limit = _finite_int(cursor.get('limit'), 80, lo=1)
         self._set_offset(max(0, self._current_offset() - limit))
         return self.force_refresh()
 
@@ -221,7 +239,7 @@ class ActionLogPanel:
         if cursor and cursor.get('has_next') is False:
             self._status_var.set('No next action-log page')
             return self._last_status
-        limit = int(cursor.get('limit') or 80)
+        limit = _finite_int(cursor.get('limit'), 80, lo=1)
         self._set_offset(self._current_offset() + max(1, limit))
         return self.force_refresh()
 
@@ -231,13 +249,13 @@ class ActionLogPanel:
 
     def _current_offset(self) -> int:
         try:
-            return max(0, int(self._offset_var.get() or 0))
+            return _finite_int(self._offset_var.get(), 0, lo=0)
         except Exception:
             return 0
 
     def _set_offset(self, value: int) -> None:
         try:
-            self._offset_var.set(str(max(0, int(value or 0))))
+            self._offset_var.set(str(_finite_int(value, 0, lo=0)))
         except Exception:
             pass
 
@@ -355,15 +373,15 @@ class ActionLogPanel:
         source = str(status.get('source') or filters.get('source') or 'live')
         analytics = status.get('analytics') if isinstance(status.get('analytics'), Mapping) else {}
         page = analytics.get('page') if isinstance(analytics.get('page'), Mapping) else {}
-        total_rows = int(analytics.get('total_rows') or cursor.get('total_row_count') or len(rows))
-        page_index = int(page.get('page_index') or cursor.get('page_index') or 0)
-        page_count = int(page.get('page_count') or cursor.get('page_count') or 0)
-        self._set_offset(int(page.get('offset') or cursor.get('offset') or self._current_offset()))
+        total_rows = _finite_int(analytics.get('total_rows') or cursor.get('total_row_count'), len(rows), lo=0)
+        page_index = _finite_int(page.get('page_index') or cursor.get('page_index'), 0, lo=0)
+        page_count = _finite_int(page.get('page_count') or cursor.get('page_count'), 0, lo=0)
+        self._set_offset(_finite_int(page.get('offset') or cursor.get('offset'), self._current_offset(), lo=0))
         self._summary_var.set(
             f"{len(rows)}/{total_rows} ROWS · {source.upper()} · PAGE {page_index}/{page_count} · {filters.get('topic') or 'ALL'}"
         )
         errors = list(status.get('errors') or [])
-        cursor_ms = int(cursor.get('time_ms') or 0)
+        cursor_ms = _finite_int(cursor.get('time_ms'), 0, lo=0)
         self._status_var.set(
             f"encounter={status.get('encounter_id') or filters.get('encounter_id') or source} · cursor={fmt_clock(cursor_ms) if cursor_ms else '--'} · query={filters.get('query') or '-'} · errors={len(errors)}"
         )
@@ -419,13 +437,17 @@ class ActionLogPanel:
         group_info = analytics.get('groups') if isinstance(analytics.get('groups'), Mapping) else {}
         topic_groups = list(group_info.get('topics') or []) if isinstance(group_info.get('topics'), list) else []
         top_topic = topic_groups[0].get('key') if topic_groups and isinstance(topic_groups[0], Mapping) else '-'
+        total_rows = _finite_int(analytics.get('total_rows') or cursor.get('total_row_count'), len(rows), lo=0)
+        page_index = _finite_int(page.get('page_index') or cursor.get('page_index'), 0, lo=0)
+        page_count = _finite_int(page.get('page_count') or cursor.get('page_count'), 0, lo=0)
+        page_offset = _finite_int(page.get('offset') or cursor.get('offset'), 0, lo=0)
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 8))
         items = (
-            ('Rows', f"{len(rows)}/{int(analytics.get('total_rows') or cursor.get('total_row_count') or len(rows))}", source.upper(), 'cyan'),
+            ('Rows', f"{len(rows)}/{total_rows}", source.upper(), 'cyan'),
             ('Value', self._fmt(totals.get('value')), 'all filtered rows', 'gold'),
             ('Groups', len(groups), f"top {top_topic}", 'gold'),
-            ('Page', f"{int(page.get('page_index') or cursor.get('page_index') or 0)}/{int(page.get('page_count') or cursor.get('page_count') or 0)}", f"offset {int(page.get('offset') or cursor.get('offset') or 0)}", 'cyan'),
+            ('Page', f"{page_index}/{page_count}", f"offset {page_offset}", 'cyan'),
         )
         for label, value, sub, accent in items:
             metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
@@ -446,16 +468,18 @@ class ActionLogPanel:
         if not valid:
             empty_state(body, '暂无聚合分组', '当前筛选条件没有可折叠的语义分组。').pack(fill='x')
             return
-        max_value = max(1.0, *[float(group.get('total_value') or 0.0) for group in valid])
+        max_value = max(1.0, *[_finite_float(group.get('total_value'), 0.0, lo=0.0) for group in valid])
         for idx, group in enumerate(valid[:80]):
             key = str(group.get('key') or idx)
             open_group = key in self._expanded_groups
-            value = float(group.get('total_value') or 0.0)
-            first_ms = int(group.get('first_time_ms') or 0)
-            last_ms = int(group.get('last_time_ms') or 0)
+            value = _finite_float(group.get('total_value'), 0.0, lo=0.0)
+            first_ms = _finite_int(group.get('first_time_ms'), 0, lo=0)
+            last_ms = _finite_int(group.get('last_time_ms'), first_ms, lo=0)
+            count = _finite_int(group.get('count'), 0, lo=0)
+            uid_count = _finite_int(group.get('uid_count'), 0, lo=0)
             meta = (
-                f"{topic_cn(group.get('kind'))} · {int(group.get('count') or 0)} 条 · "
-                f"{int(group.get('uid_count') or 0)} 个UID · {fmt_clock(first_ms)} · {fmt_dur(last_ms - first_ms)}"
+                f"{topic_cn(group.get('kind'))} · {count} 条 · "
+                f"{uid_count} 个UID · {fmt_clock(first_ms)} · {fmt_dur(last_ms - first_ms)}"
             )
             if group.get('dungeons'):
                 meta += f" · {'/'.join(str(x) for x in list(group.get('dungeons') or [])[:3])}"
@@ -463,7 +487,7 @@ class ActionLogPanel:
                 body,
                 title=str(group.get('name') or '-'),
                 meta=meta,
-                value=f"{self._fmt(value)} · {int(group.get('count') or 0)}x",
+                value=f"{self._fmt(value)} · {count}x",
                 ratio=value / max_value if max_value else 0.0,
                 accent=('cyan' if str(group.get('kind') or '') == 'system' else ('danger' if str(group.get('kind') or '') in {'damage', 'monster', 'target'} else 'gold')),
                 zebra=bool(idx % 2),
@@ -516,9 +540,13 @@ class ActionLogPanel:
         top.pack(fill='x')
         toggle = '▾' if open_group else '▸'
         title = f"{toggle} {group.get('name') or '-'}"
+        count = _finite_int(group.get('count'), 0, lo=0)
+        uid_count = _finite_int(group.get('uid_count'), 0, lo=0)
+        first_ms = _finite_int(group.get('first_time_ms'), 0, lo=0)
+        last_ms = _finite_int(group.get('last_time_ms'), first_ms, lo=0)
         meta = (
-            f"{str(group.get('kind') or 'event').upper()} · {int(group.get('count') or 0)} rows · "
-            f"UID {int(group.get('uid_count') or 0)} · {int(group.get('first_time_ms') or 0)}-{int(group.get('last_time_ms') or 0)}ms"
+            f"{str(group.get('kind') or 'event').upper()} · {count} rows · "
+            f"UID {uid_count} · {first_ms}-{last_ms}ms"
         )
         tk.Button(
             top,
@@ -558,7 +586,7 @@ class ActionLogPanel:
         top = tk.Frame(box, bg='#081521')
         top.pack(fill='x', padx=8, pady=(5, 2))
         for text, width, fg in (
-            (f"{int(row.get('time_ms') or 0)}ms", 10, _SAO_PANEL_LABEL_FG),
+            (f"{_finite_int(row.get('time_ms'), 0, lo=0)}ms", 10, _SAO_PANEL_LABEL_FG),
             (str(row.get('topic') or '-'), 10, _SAO_PANEL_GOLD),
             (str(row.get('label') or '-'), 30, _SAO_PANEL_VALUE_FG),
             (str(row.get('value') or ''), 12, _SAO_PANEL_VALUE_FG),
@@ -680,6 +708,8 @@ class ActionLogPanel:
             number = float(value or 0.0)
         except Exception:
             return str(value or '0')
+        if not math.isfinite(number):
+            number = 0.0
         if abs(number) >= 1_000_000:
             return f"{number / 1_000_000:.2f}m"
         if abs(number) >= 1_000:
