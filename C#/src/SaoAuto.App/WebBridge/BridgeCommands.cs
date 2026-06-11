@@ -27,6 +27,8 @@ public static class BridgeCommands
     public const string UpsertAutoKeyProfile = "autokey.profile.upsert";
     public const string ExportAutoKeyProfile = "autokey.profile.export";
     public const string ImportAutoKeyProfile = "autokey.profile.import";
+    // S200 — file-picker entry used by menu.html's AutoKey import flow.
+    public const string StartAutoKeyImportPicker = "autokey.import_picker.start";
     // S177 — cloud script-share endpoints (served by AutoKeyCloudBridge).
     public const string SearchAutoKeyScripts = "autokey.cloud.search";
     public const string GetAutoKeyScript = "autokey.cloud.get";
@@ -90,6 +92,9 @@ public static class BridgeCommands
     public const string SetCtxMenuActive = "ui.set_ctx_menu_active";
     public const string ClosePanel = "ui.close_panel";
     public const string PanelAction = "ui.panel_action";
+
+    // Generic file browser for legacy pywebview menu pickers.
+    public const string BrowseDir = "file.browse_dir";
 
     // HUD settings surfaced by menu.html through the pywebview shim.
     public const string SetWatchedSlots = "settings.set_watched_slots";

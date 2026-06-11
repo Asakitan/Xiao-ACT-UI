@@ -192,6 +192,16 @@ function assert(cond, message) {
   assert(last.name === "bossraid.cloud.set_server_url", "set_boss_raid_server_url command mismatch");
   assert(last.payload.url === "http://raid.local/", "set_boss_raid_server_url url was not forwarded");
 
+  await window.pywebview.api.browse_dir("C:\\temp");
+  last = calls[calls.length - 1];
+  assert(last.name === "file.browse_dir", "browse_dir command mismatch");
+  assert(last.payload.path === "C:\\temp", "browse_dir path was not forwarded");
+
+  await window.pywebview.api.start_auto_key_import_picker("D:\\profiles");
+  last = calls[calls.length - 1];
+  assert(last.name === "autokey.import_picker.start", "start_auto_key_import_picker command mismatch");
+  assert(last.payload.path === "D:\\profiles", "start_auto_key_import_picker path was not forwarded");
+
   await window.pywebview.api.toggle_mem_scope();
   last = calls[calls.length - 1];
   assert(last.name === "ui.menu_action", "toggle_mem_scope command mismatch");

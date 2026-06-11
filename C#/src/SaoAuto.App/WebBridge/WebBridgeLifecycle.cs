@@ -39,6 +39,7 @@ public sealed class WebBridgeLifecycle : IDisposable
     private BossRaidCloudBridge? _bossRaidCloudBridge;
     private SoundBridge? _soundBridge;
     private LegacyUiBridge? _legacyUiBridge;
+    private FilePickerBridge? _filePickerBridge;
     private ActBridge? _actBridge;
     private bool _disposed;
 
@@ -245,6 +246,15 @@ public sealed class WebBridgeLifecycle : IDisposable
         _legacyUiBridge = new LegacyUiBridge(Router, logger, exitAction);
     }
 
+    /// <summary>S200 — attach the legacy file-picker commands used by
+    /// menu.html for AutoKey import browsing. Idempotent.</summary>
+    public void AttachFilePicker(Func<string>? rootProvider = null)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _filePickerBridge?.Dispose();
+        _filePickerBridge = new FilePickerBridge(Router, rootProvider);
+    }
+
     /// <summary>S194 — attach ACT platform command handlers for shared
     /// WebView panels. When <paramref name="handler"/> is null, commands
     /// return structured <c>{error:"act_unavailable"}</c> instead of
@@ -261,6 +271,7 @@ public sealed class WebBridgeLifecycle : IDisposable
         if (_disposed) return;
         _disposed = true;
         _actBridge?.Dispose();
+        _filePickerBridge?.Dispose();
         _legacyUiBridge?.Dispose();
         _soundBridge?.Dispose();
         _bossRaidCloudBridge?.Dispose();

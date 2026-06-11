@@ -144,6 +144,7 @@ public sealed class UiRunner
                 }
                 catch { /* swallow */ }
             });
+        webBridge.AttachFilePicker();
 
         var application = (System.Windows.Application.Current as App) ?? new App();
         application.DispatcherUnhandledException += (_, e) =>

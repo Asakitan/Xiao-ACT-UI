@@ -2,6 +2,19 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.5: WebView2 AutoKey 导入选择器浏览桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `browse_dir(path)` 并新增
+     `file.browse_dir` C# 桥接。
+     修复 WebView2 路径下文件选择器点击目录时没有把路径传入后端、目录列表无法导航的问题。
+
+  2) `web/pywebview-shim.js` 补齐 `start_auto_key_import_picker(path)` 并新增
+     `autokey.import_picker.start` C# 桥接。
+     修复 WebView2 路径下 Auto Key 导入按钮因为缺少 pywebview API 而无法打开文件选择器的问题;
+     返回结构保持 Python 版 `{ok,browser}` 形状, 避免菜单渲染缺字段。
+
+
+
 ## v4.5.4: WebView2 云端服务器地址桥接修复.
 
   1) `web/pywebview-shim.js` 补齐 `set_auto_key_server_url(url)` 并新增
