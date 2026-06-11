@@ -311,6 +311,19 @@ function _api() { return (window.pywebview && window.pywebview.api) || null; }
 function _esc(v) { return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function _escAttr(v) { return _esc(v).replace(/'/g, '&#39;'); }
 function _jsArg(v) { return _escAttr(JSON.stringify(String(v == null ? '' : v))); }
+function _finiteNum(v, fallback) {
+    if (v == null || v === '') return fallback;
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+}
+function _clampNum(v, fallback, lo, hi) {
+    var n = _finiteNum(v, fallback);
+    n = isFinite(n) ? n : fallback;
+    return Math.max(lo, Math.min(hi, n));
+}
+function _clampInt(v, fallback, lo, hi) {
+    return Math.round(_clampNum(v, fallback, lo, hi));
+}
 function _cssColor(v) {
     var s = String(v == null ? '' : v).trim();
     return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(s) ? s : '#68e4ff';
@@ -338,18 +351,18 @@ function loadReactions() {
 }
 
 function _obsLabel(s) {
-    var sid = Number(s.id || 0);
+    var sid = _clampInt(s.id || s.skill_id || 0, 0, 0, 999999999);
     var nm = (s.name || '');
     var dur = (s.last_cast_duration_ms ? (s.last_cast_duration_ms + 'ms') : '?');
     var head = nm ? (nm + ' #' + sid) : ('#' + sid);
-    return head + ' ×' + Number(s.count || 0) + ' · ' + dur;
+    return head + ' ×' + _clampInt(s.count || 0, 0, 0, 999999) + ' · ' + dur;
 }
 
 function _timelineRow(t) {
-    var at = Number(t.at_s || 0);
+    var at = _clampNum(t.at_s || 0, 0, 0, 86400);
     var clock = at >= 60 ? (Math.floor(at / 60) + ':' + ('0' + (Math.floor(at) % 60)).slice(-2)) : (Math.round(at) + 's');
     var prefix = t.is_fixed ? '⏱' : '~';
-    var nm = (t.name || '') || ('#' + Number(t.id || 0));
+    var nm = (t.name || '') || ('#' + _clampInt(t.id || 0, 0, 0, 999999999));
     return '<div class="entity-card" style="display:block;padding:4px 7px;margin:2px 0;">' +
         '<div style="display:flex;gap:6px;align-items:center;font-size:11px;">' +
         '<span style="color:#75cdff;font-weight:600;min-width:48px;">' + _esc(prefix + clock) + '</span>' +
@@ -390,10 +403,11 @@ function renderReactions() {
     // boss selector (scene-scoped)
     var sel = document.getElementById('react-boss');
     var bosses = st.bosses || [];
-    if (!_reactBoss) _reactBoss = Number(st.selected_boss_base_id || (bosses[0] && bosses[0].base_id) || 0);
+    if (!_reactBoss) _reactBoss = _clampInt(st.selected_boss_base_id || (bosses[0] && bosses[0].base_id) || 0, 0, 0, 999999999);
     sel.innerHTML = bosses.map(function (b) {
         var label = (b.name || ('#' + b.base_id)) + ' (' + b.observed_count + ')';
-        return '<option value="' + b.base_id + '"' + (Number(b.base_id) === Number(_reactBoss) ? ' selected' : '') + '>' + _esc(label) + '</option>';
+        var bid = _clampInt(b.base_id || 0, 0, 0, 999999999);
+        return '<option value="' + bid + '"' + (bid === _clampInt(_reactBoss, 0, 0, 999999999) ? ' selected' : '') + '>' + _esc(label) + '</option>';
     }).join('') || '<option value="0">（暂无观测到的 Boss）</option>';
 
     var detail = st.boss_detail || {};
@@ -410,7 +424,7 @@ function renderReactions() {
         list.innerHTML = '<div class="empty-state" style="font-size:10px;">打这个 Boss 时它施放的技能会自动出现在这里。</div>';
     } else {
         list.innerHTML = skills.map(function (s) {
-            var sid = Number(s.skill_id || s.id || 0);
+            var sid = _clampInt(s.skill_id || s.id || 0, 0, 0, 999999999);
             var m = _findMapping('boss_cast', sid, _reactBoss) || {};
             return _reactRow('boss_cast', sid, _obsLabel(s), m, s);
         }).join('');
@@ -440,8 +454,8 @@ function renderReactions() {
 function _reactRow(trig, skillId, label, m, rec) {
     var id = m.id || '';
     var key = m.action_key || '';
-    var delay = m.delay_ms || 0;
-    var cd = (m.cooldown_s != null ? m.cooldown_s : 3);
+    var delay = _clampInt(m.delay_ms, 0, 0, 60000);
+    var cd = _clampNum(m.cooldown_s != null ? m.cooldown_s : 3, 3, 0, 600);
     var en = (m.enabled !== false && !!id);
     var tag = trig + '_' + skillId;
     return '<div class="entity-card" style="display:block;padding:5px 7px;margin:3px 0;">' +
@@ -459,7 +473,7 @@ function _inpCss() { return 'background:rgba(8,14,22,.6);color:#e8f6ff;border:1p
 
 function onReactBossChange() {
     var sel = document.getElementById('react-boss');
-    _reactBoss = Number(sel.value || 0);
+    _reactBoss = _clampInt(sel.value || 0, 0, 0, 999999999);
     loadReactions();   // reload: contract returns the grouped detail for this boss
 }
 
@@ -473,12 +487,12 @@ function onReactSceneChange() {
 function saveReaction(trig, skillId, id) {
     var tag = trig + '_' + skillId;
     var key = (document.getElementById('rk_' + tag).value || '').trim().toUpperCase();
-    var delay = parseInt(document.getElementById('rd_' + tag).value || '0', 10) || 0;
-    var cd = parseFloat(document.getElementById('rc_' + tag).value || '3') || 0;
+    var delay = _clampInt(document.getElementById('rd_' + tag).value || '0', 0, 0, 60000);
+    var cd = _clampNum(document.getElementById('rc_' + tag).value || '0', 0, 0, 600);
     var en = document.getElementById('re_' + tag).checked;
     var m = {
         id: id || '', enabled: en, trigger_type: trig,
-        skill_id: skillId, boss_base_id: _reactBoss,
+        skill_id: _clampInt(skillId, 0, 0, 999999999), boss_base_id: _clampInt(_reactBoss, 0, 0, 999999999),
         action_key: key, delay_ms: delay, cooldown_s: cd,
     };
     var a = _api();
@@ -525,8 +539,8 @@ function renderMechanics() {
         + '<span style="color:#75808d;">提醒</span>'
         + _mSwitch('TTS播报', 'tts_enabled', master.tts_enabled)
         + _mSwitch('横幅提醒', 'banner_enabled', master.banner_enabled)
-        + '<span style="color:#9fc0d8;">音量 <input type="number" min="0" max="100" value="' + Number(master.tts_volume || 80)
-        + '" style="width:46px;" class="mech-input" onchange="mechMaster({tts_volume:this.value})"></span>'
+        + '<span style="color:#9fc0d8;">音量 <input type="number" min="0" max="100" value="' + _clampInt(master.tts_volume, 80, 0, 100)
+        + '" style="width:46px;" class="mech-input" onchange="mechMaster({tts_volume:_clampInt(this.value,80,0,100)})"></span>'
         + '</div>'
         // 高级(默认关): 自动化操作, 有账号风险
         + '<div style="display:flex;align-items:center;gap:8px;font-size:10px;color:#e8f6ff;flex-wrap:wrap;margin-top:3px;">'
@@ -876,8 +890,7 @@ function _mForm(m) {
 function _mNum(id, dflt) {
     var el = document.getElementById(id);
     if (!el) return dflt;
-    var v = parseFloat(el.value);
-    return isNaN(v) ? dflt : v;
+    return _finiteNum(el.value, dflt);
 }
 
 function _mVal(id) {
@@ -896,12 +909,12 @@ function _mCollect() {
     if (notesEl) d.notes = String(notesEl.value || '').trim();
     if (document.getElementById('mf-tts')) alert.tts_text = _mVal('mf-tts');
     if (document.getElementById('mf-banner')) alert.banner_text = _mVal('mf-banner');
-    alert.countdown_s = _mNum('mf-cd', alert.countdown_s != null ? alert.countdown_s : 8);
-    alert.pre_warn_s = _mNum('mf-pre', alert.pre_warn_s != null ? alert.pre_warn_s : 3);
-    alert.cooldown_s = _mNum('mf-cool', alert.cooldown_s != null ? alert.cooldown_s : 5);
+    alert.countdown_s = _clampNum(_mNum('mf-cd', alert.countdown_s != null ? alert.countdown_s : 8), 8, 0, 3600);
+    alert.pre_warn_s = _clampNum(_mNum('mf-pre', alert.pre_warn_s != null ? alert.pre_warn_s : 3), 3, 0, 3600);
+    alert.cooldown_s = _clampNum(_mNum('mf-cool', alert.cooldown_s != null ? alert.cooldown_s : 5), 5, 0, 600);
     var den = document.getElementById('mf-dodge-en');
     if (den) dodge.enabled = !!den.checked;
-    inline.lead_ms = Math.round(_mNum('mf-lead', inline.lead_ms != null ? inline.lead_ms : 300));
+    inline.lead_ms = _clampInt(_mNum('mf-lead', inline.lead_ms != null ? inline.lead_ms : 300), 300, 0, 60000);
     var preset = _mVal('mf-preset') || 'none';
     if (preset === 'tap') {
         inline.press_mode = 'tap';
@@ -910,7 +923,7 @@ function _mCollect() {
     } else if (preset === 'hold') {
         inline.press_mode = 'hold';
         inline.action_key = _mVal('mf-key').toUpperCase();
-        inline.hold_ms = Math.round(_mNum('mf-hold', 600));
+        inline.hold_ms = _clampInt(_mNum('mf-hold', 600), 600, 0, 60000);
         inline.sequence = [];
     } else if (preset === 'dash') {
         inline.sequence = _dashSequence(_mVal('mf-dash-key'),
@@ -926,8 +939,8 @@ function _mCollect() {
             if (!kEl) break;
             var key = String(kEl.value || '').trim().toUpperCase();
             steps.push({ key: key,
-                         delay_ms: Math.round(_mNum('mf-sd-' + i, 0)),
-                         hold_ms: Math.round(_mNum('mf-sh-' + i, 0)) });
+                         delay_ms: _clampInt(_mNum('mf-sd-' + i, 0), 0, 0, 60000),
+                         hold_ms: _clampInt(_mNum('mf-sh-' + i, 0), 0, 0, 60000) });
         }
         inline.sequence = steps;
         inline.action_key = '';
@@ -937,9 +950,9 @@ function _mCollect() {
     }
     var dirEl = document.getElementById('mf-dir');
     if (dirEl) inline.direction = String(dirEl.value || '');
-    if (document.getElementById('mf-move')) inline.move_ms = Math.round(_mNum('mf-move', 600));
-    if (document.getElementById('mf-exit')) inline.exit_margin_m = Math.round(_mNum('mf-exit', 6) * 10) / 10;
-    if (document.getElementById('mf-arrive')) inline.arrive_m = Math.round(_mNum('mf-arrive', 2) * 10) / 10;
+    if (document.getElementById('mf-move')) inline.move_ms = _clampInt(_mNum('mf-move', 600), 600, 80, 6000);
+    if (document.getElementById('mf-exit')) inline.exit_margin_m = Math.round(_clampNum(_mNum('mf-exit', 6), 6, 1, 40) * 10) / 10;
+    if (document.getElementById('mf-arrive')) inline.arrive_m = Math.round(_clampNum(_mNum('mf-arrive', 2), 2, 0.5, 30) * 10) / 10;
     var ph = _mVal('mf-phase');
     d.phase_ids = ph ? [ph] : [];
     return d;
@@ -997,8 +1010,8 @@ function mechCatalogSearch() {
 }
 function _dashSequence(key, count, interval) {
     key = String(key || 'SHIFT').trim().toUpperCase() || 'SHIFT';
-    count = Math.max(1, Math.min(8, Math.round(count || 3)));
-    interval = Math.max(0, Math.round(interval || 300));
+    count = _clampInt(count || 3, 3, 1, 8);
+    interval = _clampInt(interval || 300, 300, 0, 60000);
     var out = [];
     for (var i = 0; i < count; i++) out.push({ key: key, delay_ms: i === 0 ? 0 : interval, hold_ms: 0 });
     return out;

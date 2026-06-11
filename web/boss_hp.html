@@ -1276,8 +1276,26 @@ function _triggerBreakRecovery(mode) {
     _triggerFlash(mode === 'restored' ? 'break-restore' : 'phase-break');
 }
 
+function _finiteNum(v, fallback) {
+    if (v == null || v === '') return fallback;
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+}
+
+function _unitPct(v, fallback) {
+    return Math.max(0, Math.min(1, _finiteNum(v, fallback)));
+}
+
+function _escHtml(v) {
+    return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
 function _pctWidth(pct) {
-    var value = Math.max(0, Math.min(1, Number(pct || 0)));
+    var value = _unitPct(pct, 0);
     if (value <= 0) return '0%';
     if (value >= 0.997) return '100%';
     return 'calc(' + Math.round(value * 100) + '% + 8px)';
@@ -1598,15 +1616,15 @@ function updateBossBar(data) {
             data.additional.forEach(function(u) {
                 var el = document.createElement('div');
                 el.className = 'additional-unit';
-                var hpPct = (u.hp_pct || 0);
-                var breakPct = (u.extinction_pct || 1.0);
+                var hpPct = _unitPct(u.hp_pct, 0);
+                var breakPct = _unitPct(u.extinction_pct, 1.0);
                 var hasBreak = !!u.has_break_data;
                 var pct = Math.round(hpPct * 100);
                 var breakW = Math.round(breakPct * 100);
                 var name = (u.name || 'Unit');
                 var html = 
                     '<div class="mini-hp-row">' +
-                        '<span class="name">' + name + '</span>' +
+                        '<span class="name">' + _escHtml(name) + '</span>' +
                         '<span class="hp">' + pct + '%</span>' +
                     '</div>' +
                     '<div class="mini-break-row">' +

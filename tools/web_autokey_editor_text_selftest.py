@@ -57,6 +57,9 @@ def main() -> int:
         "onclick=\"mechDelete(\\'' + mid",
         "border-left:3px solid ' + _esc(m.color || '#68e4ff')",
         "'<div class=\"phase-trigger\">' + _triggerText(p.trigger) + '</div>'",
+        "Number(master.tts_volume || 80)",
+        "var v = parseFloat(el.value);",
+        "Math.round(_mNum('mf-move', 600))",
     ]
     for pattern in raid_bad_arg_patterns:
         if pattern in raid:
@@ -79,6 +82,12 @@ def main() -> int:
         "onclick=\"mechTest(' + midArg + ',[\\'tts\\'])",
         "onclick=\"mechEdit(' + midArg + ')",
         "onclick=\"mechDelete(' + midArg + ')",
+        "function _finiteNum",
+        "function _clampNum",
+        "function _clampInt",
+        "mechMaster({tts_volume:_clampInt(this.value,80,0,100)})",
+        "var delay = _clampInt(document.getElementById('rd_' + tag).value || '0', 0, 0, 60000);",
+        "inline.move_ms = _clampInt(_mNum('mf-move', 600), 600, 80, 6000);",
         "function _cssColor",
         "border-left:3px solid ' + _cssColor(m.color)",
         "'<div class=\"phase-trigger\">' + _esc(_triggerText(p.trigger)) + '</div>'",

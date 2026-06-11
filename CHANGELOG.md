@@ -2,6 +2,17 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.40: Raid Editor/Boss HP 数值渲染修复.
+
+  1) `web/raid_editor.html` 修复 Boss 反应与机制编辑表单的数值输入。
+     反应延迟/冷却、TTS 音量、自动躲避提前量/按住/序列延迟、
+     移动超时与距离参数现在统一规范为有限数并夹到运行时范围,
+     避免 `Infinity` 被 JSON 写成 `null` 或负数/超大值进入运行时。
+
+  2) `web/boss_hp.html` 修复附属单位小条渲染。
+     附属单位名称现在转义后再写入 HTML, HP/破防小条宽度统一夹到 0..100%,
+     避免异常数据造成渲染溢出、`NaN%` 或文本破坏布局。
+
 ## v4.5.39: ACT Timeline VCR 速度参数修复.
 
   1) `web/act_timeline_vcr.html` 修复播放速度输入。

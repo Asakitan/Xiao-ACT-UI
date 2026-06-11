@@ -242,6 +242,26 @@ def _assert_timeline_speed_is_normalized() -> None:
             raise AssertionError("missing safe timeline speed snippet: " + snippet)
 
 
+def _assert_boss_hp_additional_units_are_safe() -> None:
+    boss_hp = _read_web("boss_hp.html")
+    for snippet in (
+        "var hpPct = (u.hp_pct || 0);",
+        "var breakPct = (u.extinction_pct || 1.0);",
+        "'<span class=\"name\">' + name + '</span>'",
+    ):
+        if snippet in boss_hp:
+            raise AssertionError("boss HP additional units must sanitize/clamp mini-unit rendering: " + snippet)
+    for snippet in (
+        "function _unitPct",
+        "function _escHtml",
+        "var hpPct = _unitPct(u.hp_pct, 0);",
+        "var breakPct = _unitPct(u.extinction_pct, 1.0);",
+        "'<span class=\"name\">' + _escHtml(name) + '</span>'",
+    ):
+        if snippet not in boss_hp:
+            raise AssertionError("missing safe boss HP mini-unit snippet: " + snippet)
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -257,6 +277,7 @@ def main() -> int:
     _assert_graph_numbers_and_jump_topic_are_normalized()
     _assert_action_log_and_death_recap_numbers_are_normalized()
     _assert_timeline_speed_is_normalized()
+    _assert_boss_hp_additional_units_are_safe()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 
