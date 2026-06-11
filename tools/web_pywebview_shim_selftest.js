@@ -217,6 +217,14 @@ function assert(cond, message) {
   assert(last.name === "bossraid.cloud.set_server_url", "set_boss_raid_server_url command mismatch");
   assert(last.payload.url === "http://raid.local/", "set_boss_raid_server_url url was not forwarded");
 
+  await window.pywebview.api.get_auto_key_state();
+  last = calls[calls.length - 1];
+  assert(last.name === "autokey.state.get", "get_auto_key_state command mismatch");
+
+  await window.pywebview.api.get_boss_raid_state();
+  last = calls[calls.length - 1];
+  assert(last.name === "bossraid.state.get", "get_boss_raid_state command mismatch");
+
   await window.pywebview.api.browse_dir("C:\\temp");
   last = calls[calls.length - 1];
   assert(last.name === "file.browse_dir", "browse_dir command mismatch");

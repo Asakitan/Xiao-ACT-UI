@@ -2,6 +2,18 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.10: WebView2 AutoKey/BossRaid 菜单状态桥接修复.
+
+  1) `web/pywebview-shim.js` 补齐 `get_auto_key_state()` 并新增
+     `autokey.state.get` C# 桥接。
+     修复 WebView2 路径下 AutoKey 菜单/编辑器启动时拿不到完整状态,
+     导致 profiles_full、active_profile、identity、upload_auth 与远端搜索缓存无法同步的问题。
+
+  2) `web/pywebview-shim.js` 补齐 `get_boss_raid_state()` 并新增
+     `bossraid.state.get` C# 桥接。
+     修复 BossRaid 菜单/编辑器启动状态缺失问题, 并沿用手写 JSON 序列化保留
+     `time_s` 等 Python 兼容字段, 避免时间轴渲染字段漂移。
+
 ## v4.5.9: 内存冷定位全面 Cython 化 + 共享类索引 + TCP 锚点提速.
 
   目标: 把所有"冷定位"扫堆大计算下放 Cython, 给定位结果加缓存与快速重读,

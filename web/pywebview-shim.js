@@ -114,6 +114,12 @@
         set_boss_raid_server_url: function (url) {
             return call('bossraid.cloud.set_server_url', { url: String(url || '') }).then(normalizeOk);
         },
+        get_auto_key_state: function () {
+            return call('autokey.state.get', {}).then(normalizeOk);
+        },
+        get_boss_raid_state: function () {
+            return call('bossraid.state.get', {}).then(normalizeOk);
+        },
         browse_dir: function (path) {
             return call('file.browse_dir', { path: String(path || '') });
         },

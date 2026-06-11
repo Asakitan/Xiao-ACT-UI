@@ -33,6 +33,7 @@ public sealed class WebBridgeLifecycle : IDisposable
     private BuffMonBridge? _buffMonBridge;
     private DpsBridge? _dpsBridge;
     private HudSettingsBridge? _hudSettingsBridge;
+    private MenuStateBridge? _menuStateBridge;
     private RecognitionStatusBridge? _recognitionBridge;
     private UpdaterBridge? _updaterBridge;
     private AutoKeyCloudBridge? _autoKeyCloudBridge;
@@ -151,6 +152,16 @@ public sealed class WebBridgeLifecycle : IDisposable
         if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
         _hudSettingsBridge?.Dispose();
         _hudSettingsBridge = new HudSettingsBridge(Router, settings);
+    }
+
+    /// <summary>S201 — attach Python-compatible menu state pull commands
+    /// used by menu.html during WebView2 boot.</summary>
+    public void AttachMenuState(SettingsManager settings, GameStateManager? states = null)
+    {
+        if (settings is null) throw new ArgumentNullException(nameof(settings));
+        if (_disposed) throw new ObjectDisposedException(nameof(WebBridgeLifecycle));
+        _menuStateBridge?.Dispose();
+        _menuStateBridge = new MenuStateBridge(Router, settings, states);
     }
 
     /// <summary>
@@ -279,6 +290,7 @@ public sealed class WebBridgeLifecycle : IDisposable
         _autoKeyCloudBridge?.Dispose();
         _updaterBridge?.Dispose();
         _recognitionBridge?.Dispose();
+        _menuStateBridge?.Dispose();
         _hudSettingsBridge?.Dispose();
         _dpsBridge?.Dispose();
         _buffMonBridge?.Dispose();

@@ -27,6 +27,7 @@ public static class BridgeCommands
     public const string UpsertAutoKeyProfile = "autokey.profile.upsert";
     public const string ExportAutoKeyProfile = "autokey.profile.export";
     public const string ImportAutoKeyProfile = "autokey.profile.import";
+    public const string GetAutoKeyState = "autokey.state.get";
     // S200 — file-picker entry used by menu.html's AutoKey import flow.
     public const string StartAutoKeyImportPicker = "autokey.import_picker.start";
     // S177 — cloud script-share endpoints (served by AutoKeyCloudBridge).
@@ -48,6 +49,7 @@ public static class BridgeCommands
     public const string IssueBossRaidUploadToken = "bossraid.cloud.issue_token";
     public const string UploadBossRaid = "bossraid.cloud.upload";
     public const string SetBossRaidServerUrl = "bossraid.cloud.set_server_url";
+    public const string GetBossRaidState = "bossraid.state.get";
 
     // Commander
     public const string OpenCommander = "commander.open";
