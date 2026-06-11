@@ -106,6 +106,38 @@ def main() -> None:
             "if (data.status) updateStatus(data.status);",
             "Raid editor full-state payload must guard non-object data.",
         ),
+        (
+            "var tags = (rec && rec.tags) || [];",
+            "Raid editor badges must guard non-list tag payloads.",
+        ),
+        (
+            "var st = _reactState || {};",
+            "Raid editor reaction state must guard non-object payloads.",
+        ),
+        (
+            "var scenes = st.scenes || [];",
+            "Raid editor reaction scenes must guard non-list payloads.",
+        ),
+        (
+            "var bosses = st.bosses || [];",
+            "Raid editor reaction bosses must guard non-list payloads.",
+        ),
+        (
+            "var detail = st.boss_detail || {};",
+            "Raid editor reaction boss detail must guard non-object payloads.",
+        ),
+        (
+            "var skills = detail.skills || [];",
+            "Raid editor reaction skills must guard non-list payloads.",
+        ),
+        (
+            "var mechs = detail.mechanics || [];",
+            "Raid editor reaction mechanics must guard non-list payloads.",
+        ),
+        (
+            "var tl = detail.timeline || [];",
+            "Raid editor reaction timeline must guard non-list payloads.",
+        ),
     ]
     for snippet, message in raid_forbidden:
         _check_absent(raid, snippet, message)
@@ -218,6 +250,50 @@ def main() -> None:
         (
             "if (_isObjectValue(data.status)) updateStatus(data.status);",
             "Raid editor updateFull should guard status payload shape.",
+        ),
+        (
+            "function _listItems(v)",
+            "Raid editor should expose plain-list payload normalization.",
+        ),
+        (
+            "rec = _objectValue(rec);",
+            "Raid editor badges should normalize record payloads.",
+        ),
+        (
+            "var tags = _listItems(rec.tags);",
+            "Raid editor badges should normalize tag list payloads.",
+        ),
+        (
+            "t = String(t);",
+            "Raid editor badges should normalize tag values.",
+        ),
+        (
+            "var st = _objectValue(_reactState);",
+            "Raid editor reactions should normalize root state payloads.",
+        ),
+        (
+            "var scenes = _objectItems(st.scenes);",
+            "Raid editor reactions should normalize scene list payloads.",
+        ),
+        (
+            "var bosses = _objectItems(st.bosses);",
+            "Raid editor reactions should normalize boss list payloads.",
+        ),
+        (
+            "var detail = _objectValue(st.boss_detail);",
+            "Raid editor reactions should normalize boss detail payloads.",
+        ),
+        (
+            "var skills = _objectItems(detail.skills);",
+            "Raid editor reactions should normalize skill list payloads.",
+        ),
+        (
+            "var mechs = _objectItems(detail.mechanics);",
+            "Raid editor reactions should normalize mechanic list payloads.",
+        ),
+        (
+            "var tl = _objectItems(detail.timeline);",
+            "Raid editor reactions should normalize timeline list payloads.",
         ),
     ]
     for snippet, message in raid_required:

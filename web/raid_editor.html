@@ -356,8 +356,11 @@ function _isObjectValue(v) {
 function _objectValue(v) {
     return _isObjectValue(v) ? v : {};
 }
+function _listItems(v) {
+    return Array.isArray(v) ? v : [];
+}
 function _objectItems(v) {
-    return (Array.isArray(v) ? v : []).filter(_isObjectValue);
+    return _listItems(v).filter(_isObjectValue);
 }
 function _cssColor(v) {
     var s = String(v == null ? '' : v).trim();
@@ -365,9 +368,11 @@ function _cssColor(v) {
 }
 
 function _badges(rec) {
-    var tags = (rec && rec.tags) || [];
+    rec = _objectValue(rec);
+    var tags = _listItems(rec.tags);
     if (!tags.length) return '';
     return '<div style="display:flex;gap:3px;flex-wrap:wrap;margin:2px 0;">' + tags.map(function (t) {
+        t = String(t);
         var d = _TAG_BADGE[t] || [t, '#555a63'];
         var lbl = d[0];
         if (t === 'hp_line' && rec.hp_line_pct != null) {
@@ -391,6 +396,7 @@ function loadReactions() {
 }
 
 function _obsLabel(s) {
+    s = _objectValue(s);
     var sid = _clampInt(s.id || s.skill_id || 0, 0, 0, 999999999);
     var nm = (s.name || '');
     var dur = (s.last_cast_duration_ms ? (s.last_cast_duration_ms + 'ms') : '?');
@@ -399,6 +405,7 @@ function _obsLabel(s) {
 }
 
 function _timelineRow(t) {
+    t = _objectValue(t);
     var at = _clampNum(t.at_s || 0, 0, 0, 86400);
     var clock = at >= 60 ? (Math.floor(at / 60) + ':' + ('0' + (Math.floor(at) % 60)).slice(-2)) : (Math.round(at) + 's');
     var prefix = t.is_fixed ? '⏱' : '~';
@@ -410,9 +417,9 @@ function _timelineRow(t) {
 }
 
 function _findMapping(trig, skillId, baseId) {
-    var ms = (_reactState && _reactState.mappings) || [];
+    var ms = _objectItems(_objectValue(_reactState).mappings);
     for (var i = 0; i < ms.length; i++) {
-        var m = ms[i];
+        var m = _objectValue(ms[i]);
         if (m.trigger_type !== trig) continue;
         if (!_sameId(m.boss_base_id, baseId, 0)) continue;
         if (trig === 'boss_cast' && !_sameId(m.skill_id, skillId, 0)) continue;
@@ -422,7 +429,7 @@ function _findMapping(trig, skillId, baseId) {
 }
 
 function renderReactions() {
-    var st = _reactState || {};
+    var st = _objectValue(_reactState);
     var banner = document.getElementById('react-banner');
     if (!st.mem_available) {
         banner.style.display = 'block';
@@ -434,7 +441,7 @@ function renderReactions() {
     // scene selector
     if (_reactScene == null) _reactScene = String(st.selected_scene_key || '0');
     var ssel = document.getElementById('react-scene');
-    var scenes = st.scenes || [];
+    var scenes = _objectItems(st.scenes);
     if (ssel) ssel.innerHTML = scenes.map(function (s) {
         var nm = (s.name || ('场景#' + s.scene_key)) + ' (' + (s.boss_count || 0) + ')';
         return '<option value="' + _esc(s.scene_key) + '"' + (String(s.scene_key) === String(_reactScene) ? ' selected' : '') + '>' + _esc(nm) + '</option>';
@@ -442,7 +449,7 @@ function renderReactions() {
 
     // boss selector (scene-scoped)
     var sel = document.getElementById('react-boss');
-    var bosses = st.bosses || [];
+    var bosses = _objectItems(st.bosses);
     if (!_reactBoss) _reactBoss = _clampInt(st.selected_boss_base_id || (bosses[0] && bosses[0].base_id) || 0, 0, 0, 999999999);
     sel.innerHTML = bosses.map(function (b) {
         var label = (b.name || ('#' + b.base_id)) + ' (' + b.observed_count + ')';
@@ -450,15 +457,15 @@ function renderReactions() {
         return '<option value="' + bid + '"' + (bid === _clampInt(_reactBoss, 0, 0, 999999999) ? ' selected' : '') + '>' + _esc(label) + '</option>';
     }).join('') || '<option value="0">（暂无观测到的 Boss）</option>';
 
-    var detail = st.boss_detail || {};
-    var sum = detail.summary || {};
+    var detail = _objectValue(st.boss_detail);
+    var sum = _objectValue(detail.summary);
     var sparts = ['技能 ' + (sum.skill_count || 0), '机制 ' + (sum.mechanic_count || 0)];
     if (sum.hp_line_count) sparts.push('血线 ' + sum.hp_line_count);
     if (sum.approx_duration_ms) sparts.push('时长~' + sum.approx_duration_ms + 'ms');
     document.getElementById('react-summary').textContent = detail.base_id ? sparts.join(' · ') : '';
 
     // casts / buffs (reaction-bindable)
-    var skills = detail.skills || [];
+    var skills = _objectItems(detail.skills);
     var list = document.getElementById('react-skill-list');
     if (!skills.length) {
         list.innerHTML = '<div class="empty-state" style="font-size:10px;">打这个 Boss 时它施放的技能会自动出现在这里。</div>';
@@ -471,7 +478,7 @@ function renderReactions() {
     }
 
     // mechanics / states (info + badges)
-    var mechs = detail.mechanics || [];
+    var mechs = _objectItems(detail.mechanics);
     document.getElementById('react-mech-header').style.display = mechs.length ? '' : 'none';
     document.getElementById('react-mech-list').innerHTML = mechs.map(function (s) {
         return '<div class="entity-card" style="display:block;padding:5px 7px;margin:3px 0;">' +
@@ -479,7 +486,7 @@ function renderReactions() {
     }).join('');
 
     // timeline (time-ordered, read-only)
-    var tl = detail.timeline || [];
+    var tl = _objectItems(detail.timeline);
     document.getElementById('react-timeline-header').style.display = tl.length ? '' : 'none';
     document.getElementById('react-timeline-list').innerHTML = tl.map(_timelineRow).join('');
 

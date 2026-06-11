@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.88: Raid Editor reaction payload 防护修复.
+
+  1) `web/raid_editor.html` 修复 reaction badges/tags payload 形状处理。
+     Raid Editor Web 现在归一 badge 记录与 tags 列表,
+     避免字符串或坏 tags payload 打断反应标签渲染。
+
+  2) `web/raid_editor.html` 修复 reaction scenes/bosses/detail 列表形状处理。
+     Raid Editor Web 现在归一反应状态、场景、Boss、技能、机制与时间线列表,
+     避免坏 payload 打断 Boss 反应选择器和明细区域渲染。
+
 ## v4.5.87: Raid Editor payload 防护修复.
 
   1) `web/raid_editor.html` 修复 entities payload 与 entity row 形状处理。
