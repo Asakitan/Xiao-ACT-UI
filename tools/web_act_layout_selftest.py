@@ -70,6 +70,19 @@ def _assert_side_scroll(file_name: str, label: str) -> None:
     _assert_selector_scroll(file_name, ".side", label)
 
 
+def _assert_inline_js_args_are_escaped() -> None:
+    combatant = _read_web("act_combatant_drilldown.html")
+    graph = _read_web("act_graph_timeseries.html")
+    if "openSkill(\\''+esc(String(sid))+'\\')" in combatant:
+        raise AssertionError("combatant skill onclick must not interpolate skill_id through a quoted JS string")
+    if "openLog(' + ms + \",\\'\" + (p.topic || '') + \"\\')\"" in graph:
+        raise AssertionError("graph point onclick must not interpolate topic through a quoted JS string")
+    if "function jsArg" not in combatant or "openSkill('+jsArg(sid)+')" not in combatant:
+        raise AssertionError("combatant drilldown must encode skill_id with jsArg before wiring onclick")
+    if "function jsArg" not in graph or "openLog(' + ms + ',' + jsArg(p.topic || '') + ')" not in graph:
+        raise AssertionError("graph timeseries must encode topic with jsArg before wiring onclick")
+
+
 def main() -> int:
     _assert_graph_points_scroll()
     _assert_side_scroll("act_action_log.html", "action log")
@@ -78,6 +91,7 @@ def main() -> int:
     _assert_side_scroll("data_source_health.html", "data source health")
     _assert_side_scroll("trigger_timer_manager.html", "trigger timer manager")
     _assert_selector_scroll("plugin_manager.html", ".side-panel", "plugin manager")
+    _assert_inline_js_args_are_escaped()
     print("OK ACT web layout: graph points and side panels are scrollable")
     return 0
 

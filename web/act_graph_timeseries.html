@@ -180,6 +180,12 @@
       if (action === 'ui.menu_action') return { action: String(args[0] || '') };
       return { args: args };
     }
+    function esc(value) {
+      return String(value == null ? '' : value).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    }
+    function jsArg(value) {
+      return esc(JSON.stringify(String(value == null ? '' : value)));
+    }
     function fmt(value) {
       const n = Number(value || 0);
       if (!Number.isFinite(n)) return String(value || '0');
@@ -296,11 +302,11 @@
         document.getElementById('pointCount').textContent = String(points.length || 0);
         document.getElementById('rangeValue').textContent = ActTime.fmtDur(status.time_range_ms);
         document.getElementById('status').textContent = status.message || 'OK';
-        document.getElementById('legend').innerHTML = (status.metrics || []).map(m => '<div class="legend-row"><span class="swatch" style="background:var(' + (metricVars[m.id] || '--act-cyan') + ')"></span><span>' + (m.label || m.id) + '</span></div>').join('');
+        document.getElementById('legend').innerHTML = (status.metrics || []).map(m => '<div class="legend-row"><span class="swatch" style="background:var(' + (metricVars[m.id] || '--act-cyan') + ')"></span><span>' + esc(m.label || m.id) + '</span></div>').join('');
         const t0 = points.length ? Math.min.apply(null, points.map(p => Number(p.time_ms || 0))) : 0;
         document.getElementById('points').innerHTML = points.slice(-6).reverse().map(p => {
           const ms = Number(p.time_ms || 0);
-          return '<div class="row" title="' + ActTime.fmtRel(ms, t0) + '" onclick="GraphTimeseries.openLog(' + ms + ",'" + (p.topic || '') + "')\"><span>" + ActTime.fmtClock(ms) + '</span><span>' + (p.topic || '') + '</span><span>' + fmt(p.value) + '</span></div>';
+          return '<div class="row" title="' + esc(ActTime.fmtRel(ms, t0)) + '" onclick="GraphTimeseries.openLog(' + ms + ',' + jsArg(p.topic || '') + ')"><span>' + esc(ActTime.fmtClock(ms)) + '</span><span>' + esc(p.topic || '') + '</span><span>' + esc(fmt(p.value)) + '</span></div>';
         }).join('');
         drawChart(status);
       }

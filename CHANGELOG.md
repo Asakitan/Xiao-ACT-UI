@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.26: ACT Web 点击参数转义修复.
+
+  1) `web/act_combatant_drilldown.html` 修复技能行 `onclick` 的 `skill_id` 拼接。
+     字符串技能 ID 即使包含引号或反斜杠也会通过 `jsArg()` 完整传给
+     `open_skill_drilldown`, 避免点击技能钻取失效或参数截断。
+
+  2) `web/act_graph_timeseries.html` 修复图表点 `onclick` 的 topic 拼接和点列表文本转义。
+     自定义 topic/label 出现引号时不再破坏 inline handler, 点列表也统一 HTML escape。
+
 ## v4.5.25: ACT 面板可见字段刷新修复.
 
   1) `gui_modules/sao_gui_action_log.py` 补全 Action Log 渲染签名。

@@ -116,6 +116,7 @@
       return { args: args };
     }
     function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+    function jsArg(v) { return esc(JSON.stringify(String(v == null ? '' : v))); }
     function fmt(v) { const n = Number(v || 0); if (!Number.isFinite(n)) return esc(v); if (Math.abs(n) >= 1000000) return (n/1000000).toFixed(2)+'m'; if (Math.abs(n) >= 1000) return (n/1000).toFixed(1)+'k'; return String(Math.round(n)); }
     function pct(v) { return (Number(v || 0) * 100).toFixed(1) + '%'; }
     window.CombatantDrilldown = {
@@ -146,7 +147,7 @@
         document.getElementById('skills').innerHTML = skills.length ? skills.map(sk => {
           const w = Math.round(Number(sk.amount || 0) / max * 100);
           const sid = sk.skill_id || sk.source_skill_id || sk.base_skill_id || '';
-          const click = sid ? ' onclick="CombatantDrilldown.openSkill(\''+esc(String(sid))+'\')" style="cursor:pointer;" title="打开技能钻取 / open skill drilldown"' : '';
+          const click = sid ? ' onclick="CombatantDrilldown.openSkill('+jsArg(sid)+')" style="cursor:pointer;" title="打开技能钻取 / open skill drilldown"' : '';
           return '<div class="skill-row '+(sk.kind === 'heal' ? 'heal' : '')+'"'+click+'><div class="bar" style="width:'+w+'%"></div><div class="skill-main"><div><div class="skill-name">'+esc(sk.name)+'</div><div class="skill-extra">'+esc(sk.kind)+' · hits '+esc(sk.hits)+' · crit '+pct(sk.crit_rate)+'</div></div><div class="skill-amount">'+fmt(sk.amount)+'</div></div></div>';
         }).join('') : '<div class="empty">No skill rows</div>';
         const sideRows = [];
