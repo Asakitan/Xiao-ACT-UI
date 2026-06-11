@@ -28,6 +28,9 @@ class _FakeVar:
     def get(self) -> str:
         return self.value
 
+    def set(self, value: object) -> None:
+        self.value = str(value)
+
 
 def _events():
     return [
@@ -250,6 +253,32 @@ class ActAggregateTests(unittest.TestCase):
 
         aggregate_status.assert_not_called()
         self.assertEqual(rendered, [{"ok": True, "cached": True}])
+
+    def test_tk_render_status_normalizes_malformed_counts(self) -> None:
+        panel = ActAggregatePanel.__new__(ActAggregatePanel)
+        panel._summary_var = _FakeVar()
+        panel._status_var = _FakeVar()
+        panel._query_var = _FakeVar("boss")
+        panel._rows = None
+
+        panel._render_status({
+            "overview": {},
+            "raw_counts": {
+                "rows": "oops",
+                "skills": float("inf"),
+                "monsters": float("nan"),
+                "dungeons": "bad",
+            },
+            "errors": [],
+            "source": "live",
+        })
+
+        self.assertEqual(panel._summary_var.value, "DMG 0 · DPS 0 · EVENTS 0 · GROUPS 0/0/0")
+
+    def test_tk_fmt_normalizes_non_finite_values(self) -> None:
+        self.assertEqual(ActAggregatePanel._fmt(float("nan")), "0")
+        self.assertEqual(ActAggregatePanel._fmt(float("inf")), "0")
+        self.assertEqual(ActAggregatePanel._fmt(float("-inf")), "0")
 
 
 if __name__ == "__main__":

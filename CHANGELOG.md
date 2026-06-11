@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.74: ACT Aggregate Tk 数值渲染修复.
+
+  1) `gui_modules/sao_gui_act_aggregate.py` 修复 raw_counts 数值渲染。
+     聚合摘要、Header metrics 和空状态判断现在统一过滤坏 counts,
+     避免异常 payload 造成面板渲染中断。
+
+  2) `gui_modules/sao_gui_act_aggregate.py` 修复聚合值格式化。
+     分组值/count、趋势预览 points、持续时间和 `_fmt` 现在过滤非有限数,
+     避免 `nan`/`inf` 在 Aggregate Tk 面板中崩溃或显示异常文本。
+
 ## v4.5.73: ACT Death Recap Tk payload 渲染修复.
 
   1) `gui_modules/sao_gui_death_recap.py` 修复 rows payload 形状处理。

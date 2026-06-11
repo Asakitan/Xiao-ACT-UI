@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
@@ -46,6 +47,24 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        number = float(value)
+    except Exception:
+        number = float(default)
+    if not math.isfinite(number):
+        number = float(default)
+    if lo is not None:
+        number = max(lo, number)
+    if hi is not None:
+        number = min(hi, number)
+    return number
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    return int(_finite_float(value, float(default), lo=lo, hi=hi))
 
 
 class ActAggregatePanel:
@@ -235,7 +254,7 @@ class ActAggregatePanel:
         errors = list(status.get('errors') or [])
         self._summary_var.set(
             f"DMG {self._fmt(overview.get('damage'))} · DPS {self._fmt(overview.get('dps'))} · "
-            f"EVENTS {int(counts.get('rows') or 0)} · GROUPS {int(counts.get('skills') or 0)}/{int(counts.get('monsters') or 0)}/{int(counts.get('dungeons') or 0)}"
+            f"EVENTS {_finite_int(counts.get('rows'), 0, lo=0)} · GROUPS {_finite_int(counts.get('skills'), 0, lo=0)}/{_finite_int(counts.get('monsters'), 0, lo=0)}/{_finite_int(counts.get('dungeons'), 0, lo=0)}"
         )
         self._status_var.set(
             f"{overview.get('dungeon_name') or overview.get('mode') or 'live'} · source={status.get('source') or 'live'} · "
@@ -250,7 +269,7 @@ class ActAggregatePanel:
         for child in list(self._rows.winfo_children()):
             child.destroy()
         self._render_header_summary(status)
-        if int(counts.get('rows') or 0) <= 0:
+        if _finite_int(counts.get('rows'), 0, lo=0) <= 0:
             empty_state(self._rows, '等待 ACT 事件 / 战斗数据', '聚合驾驶舱会在收到伤害、技能、怪物、地牢或日志事件后自动显示语义分组。').pack(fill='x', padx=4, pady=10)
             return
         # 工作台：只显示当前选中的聚合维度（插件开发者可在工具栏切换"按什么聚合"）。
@@ -270,19 +289,19 @@ class ActAggregatePanel:
         grid = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 10))
         items = (
-            ('总伤害', self._fmt(overview.get('damage')), f"{int(counts.get('rows') or 0)} 次事件", 'gold'),
+            ('总伤害', self._fmt(overview.get('damage')), f"{_finite_int(counts.get('rows'), 0, lo=0)} 次事件", 'gold'),
             ('每秒伤害 DPS', self._fmt(overview.get('dps')), f"持续 {self._fmt(overview.get('elapsed_s'))} 秒", 'cyan'),
             ('治疗 / 每秒治疗', f"{self._fmt(overview.get('heal'))} / {self._fmt(overview.get('hps'))}", '辅助治疗', 'heal'),
-            ('技能种类', int(counts.get('skills') or 0), '种技能', 'gold'),
-            ('怪物数', int(counts.get('monsters') or 0), '个目标', 'danger'),
-            ('地牢 / 场景', int(counts.get('dungeons') or 0), overview.get('dungeon_name') or '当前', 'cyan'),
+            ('技能种类', _finite_int(counts.get('skills'), 0, lo=0), '种技能', 'gold'),
+            ('怪物数', _finite_int(counts.get('monsters'), 0, lo=0), '个目标', 'danger'),
+            ('地牢 / 场景', _finite_int(counts.get('dungeons'), 0, lo=0), overview.get('dungeon_name') or '当前', 'cyan'),
         )
         for label, value, sub, accent in items:
             metric_tile(grid, label, value, sub=str(sub), accent=accent).pack(side='left', fill='x', expand=True, padx=3)
         badges = tk.Frame(self._rows, bg=_SAO_PANEL_BODY_BG)
         badges.pack(fill='x', padx=4, pady=(0, 8))
         status_badge(badges, f"模式 {overview.get('mode') or 'live'}", kind='cyan').pack(side='left', padx=(0, SP_SM))
-        span_s = round(float(overview.get('span_ms') or 0) / 1000.0, 1)
+        span_s = round(_finite_float(overview.get('span_ms'), 0.0, lo=0.0) / 1000.0, 1)
         status_badge(badges, f"战斗时长 {self._fmt(span_s)} 秒", kind='gold').pack(side='left', padx=(0, SP_SM))
         source_badges(badges, status.get('source_mix') or []).pack(side='left')
 
@@ -297,16 +316,16 @@ class ActAggregatePanel:
         if not valid:
             empty_state(body, '暂无聚合数据', '当前筛选条件下没有可展示的语义分组。').pack(fill='x')
             return
-        max_value = max(1.0, *[float(item.get(value_key) or item.get('damage') or item.get('total_value') or 0.0) for item in valid])
+        max_value = max(1.0, *[_finite_float(item.get(value_key) or item.get('damage') or item.get('total_value'), 0.0, lo=0.0) for item in valid])
         for idx, group in enumerate(valid[:20]):
             key = f"{prefix}:{group.get('key') or idx}"
-            value = float(group.get(value_key) or group.get('damage') or group.get('total_value') or 0.0)
+            value = _finite_float(group.get(value_key) or group.get('damage') or group.get('total_value'), 0.0, lo=0.0)
             meta = self._group_meta(group)
             row = aggregate_row(
                 body,
                 title=str(group.get('name') or group.get('key') or '-'),
                 meta=meta,
-                value=f"{self._fmt(value)} · {int(group.get('count') or 0)}x",
+                value=f"{self._fmt(value)} · {_finite_int(group.get('count'), 0, lo=0)}x",
                 ratio=value / max_value if max_value else 0.0,
                 accent=accent,
                 zebra=bool(idx % 2),
@@ -376,7 +395,7 @@ class ActAggregatePanel:
         for metric, title, accent in (('damage', '总伤害', 'gold'), ('heal', '治疗', 'heal'), ('event_count', '事件数', 'cyan')):
             item = series.get(metric) if isinstance(series.get(metric), Mapping) else {}
             points = list(item.get('points') or [])
-            values = [float(p.get('value') or 0.0) for p in points if isinstance(p, Mapping)]
+            values = [_finite_float(p.get('value'), 0.0, lo=0.0) for p in points if isinstance(p, Mapping)]
             latest = values[-1] if values else 0.0
             peak = max(values) if values else 0.0
             ratio = (latest / peak) if peak > 0 else 0.0
@@ -406,7 +425,9 @@ class ActAggregatePanel:
         return ' · '.join(part for part in parts if part)
 
     def _group_meta(self, group: Mapping[str, Any]) -> str:
-        span = int(group.get('duration_ms') or max(0, int(group.get('last_time_ms') or 0) - int(group.get('first_time_ms') or 0)))
+        first_ms = _finite_int(group.get('first_time_ms'), 0, lo=0)
+        last_ms = _finite_int(group.get('last_time_ms'), first_ms, lo=0)
+        span = _finite_int(group.get('duration_ms'), max(0, last_ms - first_ms), lo=0)
         bits = [f"持续 {fmt_dur(span)}"]
         for key, label in (('targets', '个目标'), ('monsters', '个怪物'), ('skills', '种技能'), ('actors', '名参与者'), ('dungeons', '个场景')):
             values = list(group.get(key) or [])
@@ -435,6 +456,8 @@ class ActAggregatePanel:
             number = float(value or 0)
         except Exception:
             return str(value or '0')
+        if not math.isfinite(number):
+            number = 0.0
         if abs(number) >= 1_000_000:
             return f"{number / 1_000_000:.2f}m"
         if abs(number) >= 1_000:
