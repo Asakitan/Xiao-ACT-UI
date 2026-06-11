@@ -637,11 +637,23 @@ class SAOPlayerGUIEngineLifecycleMixin:
                     if obj:
                         danger0 = ctx.read_obj_pos(obj)
                         get_danger = lambda _o=obj: ctx.read_obj_pos(_o)
-                    # ★停止判据(主人: 不要距离兜底, 肯定错): 二者任一满足即停, 无距离 —
-                    #   ① 区域成员判定: 玩家离开 AOE 圈 (圈是 ZoneEnt 的 boss, 零误差)
-                    #   ② 招式生命周期: boss 不再出触发本次躲避的招 (圈是 ECS 的 boss,
-                    #      跟着真实出招走, 锥/线/圆都对)
-                    zone_clear = skill_ended = None
+                    # ★停止判据(主人: 不要距离兜底, 肯定错): 任一满足即停, 无距离 —
+                    #   ① 几何范围判定: 机制壳子填了"实际范围"→ 玩家出范围即停(最精确)
+                    #   ② 区域成员判定: 玩家离开 AOE 圈 (圈是 ZoneEnt 的 boss, 零误差)
+                    #   ③ 招式生命周期: boss 不再出触发本次躲避的招 (圈是 ECS 的 boss)
+                    geo_clear = zone_clear = skill_ended = None
+                    try:
+                        geom = (inline.get('geometry') if isinstance(inline, dict) else None) or {}
+                        # 范围中心: center=self 快照起手玩家位; 否则 Boss/危险位
+                        if str(geom.get('center')) == 'self':
+                            _c0 = ctx.get_player_pos()
+                            get_center = lambda _p=_c0: _p
+                        else:
+                            get_center = get_danger
+                        if get_center is not None:
+                            geo_clear = ctx.make_geometry_clear_check(geom, get_center)
+                    except Exception:
+                        geo_clear = None
                     try:
                         zone_clear = ctx.make_zone_exit_check()
                     except Exception:
@@ -652,13 +664,15 @@ class SAOPlayerGUIEngineLifecycleMixin:
                         skill_ended = None
 
                     def _is_clear():
+                        if geo_clear is not None and geo_clear():
+                            return True
                         if zone_clear is not None and zone_clear():
                             return True
                         if skill_ended is not None and skill_ended():
                             return True
                         return False
-                    # 二者都没有(极少: 无skill_id又无区域)才退 None→exit_margin 距离最后兜底
-                    is_clear = _is_clear if (zone_clear or skill_ended) else None
+                    # 全没有(极少)才退 None→exit_margin 距离最后兜底
+                    is_clear = _is_clear if (geo_clear or zone_clear or skill_ended) else None
                     director.dodge(inline, danger_pos=danger0,
                                    get_danger_pos=get_danger, is_clear=is_clear)
                 elif direction.startswith('goto') or direction.startswith('walk'):

@@ -240,6 +240,45 @@ def make_default_dodge_inline() -> Dict[str, Any]:
         "fallback_direction": "back",  # 世界/away 模式无相机或无目标时的后备相机相对方向
         "exit_margin_m": 6.0,    # away_* 闭环精准出圈: 水平距≥此值即停 ('跑出去一点就行')
         "arrive_m": 2.0,         # goto_*/walk_* 自动走位: 走到离目标≤此值即停
+        # ★机制壳子的"实际范围"占位字段: 智能分析判定需自动躲避的机制留此占位,
+        # 几何到手(运行时实体/离线逆向/手填)后填入 → 自动躲避按精确范围出圈;
+        # source='' 表示未填(用招式生命周期兜底), 非空表示已填可精准判定。
+        "geometry": make_default_geometry(),
+    }
+
+
+def make_default_geometry() -> Dict[str, Any]:
+    """机制实际范围占位 (待填)。shape 空 / source 空 = 未填。"""
+    return {
+        "shape": "",       # circle/ring/cone/line/cross/'' (空=未定)
+        "radius": 0.0,     # 主半径(圆/环外径/锥半径/线长) 米
+        "inner": 0.0,      # 内径(环形) 米
+        "angle": 0.0,      # 锥角 度
+        "width": 0.0,      # 线宽 米
+        "center": "boss",  # 范围中心: boss(以Boss为心) / self(以自己为心,如点名) / hit(命中点)
+        "source": "",      # ''=未填占位 / manual / runtime / reverse
+    }
+
+
+def normalize_geometry(raw: Any) -> Dict[str, Any]:
+    g = raw if isinstance(raw, dict) else {}
+    shape = _string(g.get("shape")).lower()
+    if shape not in ("circle", "ring", "cone", "line", "cross", ""):
+        shape = ""
+    center = _string(g.get("center")).lower()
+    if center not in ("boss", "self", "hit"):
+        center = "boss"
+    src = _string(g.get("source")).lower()
+    if src not in ("manual", "runtime", "reverse", ""):
+        src = ""
+    return {
+        "shape": shape,
+        "radius": _coerce_float(g.get("radius"), 0.0, 0.0, 200.0),
+        "inner": _coerce_float(g.get("inner"), 0.0, 0.0, 200.0),
+        "angle": _coerce_float(g.get("angle"), 0.0, 0.0, 360.0),
+        "width": _coerce_float(g.get("width"), 0.0, 0.0, 200.0),
+        "center": center,
+        "source": src,
     }
 
 
@@ -271,6 +310,7 @@ def normalize_dodge(raw: Any) -> Dict[str, Any]:
             inline_src.get("fallback_direction"), "back"),
         "exit_margin_m": _coerce_float(inline_src.get("exit_margin_m"), 6.0, 1.0, 40.0),
         "arrive_m": _coerce_float(inline_src.get("arrive_m"), 2.0, 0.5, 30.0),
+        "geometry": normalize_geometry(inline_src.get("geometry")),
     }
     return {
         "enabled": _coerce_bool(src.get("enabled"), False),

@@ -134,6 +134,37 @@ class DodgeContext:
             self._skill_reader = BossSkillStateReader(self._src)
         return self._skill_reader
 
+    def make_geometry_clear_check(self, geometry, get_center_pos):
+        """★机制壳子填入"实际范围"后的精准出圈判定。geometry 已填(source非空且 radius>0)时,
+        按形状判玩家在不在范围内: 圆=距中心≥radius即出; 环=≤inner或≥radius即出(环外/内安全);
+        锥/线先按 radius 圆近似(壳子, 待真形状数据精化)。未填则返回 None(用招式生命周期兜底)。
+        get_center_pos(): 范围中心世界坐标回调 (Boss位/快照自身位/命中点, 由宿主按 center 注入)。"""
+        try:
+            import math
+            g = geometry or {}
+            shape = str(g.get("shape") or "")
+            radius = float(g.get("radius") or 0.0)
+            inner = float(g.get("inner") or 0.0)
+            if not shape or radius <= 0 or not g.get("source"):
+                return None        # 未填占位 → 不用 geometry
+
+            def _is_clear():
+                try:
+                    pp = self.get_player_pos()
+                    cp = get_center_pos() if get_center_pos else None
+                    if not pp or not cp:
+                        return False
+                    d = math.hypot(pp[0] - cp[0], pp[2] - cp[2])
+                    if shape == "ring":
+                        return d <= inner or d >= radius
+                    # circle / cone / line / cross: 壳子按外半径圆判定 (出 radius 即清)
+                    return d >= radius
+                except Exception:
+                    return False
+            return _is_clear
+        except Exception:
+            return None
+
     def make_skill_ended_check(self, boss_base_id: int = 0):
         """招式生命周期判停 (主人: 距离兜底肯定错)。boss 的预警圈很多不是 ZoneEnt(在 ECS/
         技能特效里, zone 成员判定无信号), 但 boss **正在出什么招**实时可读
