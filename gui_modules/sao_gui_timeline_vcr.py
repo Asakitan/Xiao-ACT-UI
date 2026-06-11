@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import tkinter as tk
 from typing import Any, Dict, Mapping, Optional
@@ -45,6 +46,25 @@ from gui_modules.sao_panel_ui import (
     _sao_panel_header,
     _sao_pill,
 )
+
+
+def _finite_float(value: Any, default: float = 0.0, *, lo: float | None = None, hi: float | None = None) -> float:
+    try:
+        number = float(value)
+    except Exception:
+        number = float(default)
+    if not math.isfinite(number):
+        number = float(default)
+    if lo is not None:
+        number = max(lo, number)
+    if hi is not None:
+        number = min(hi, number)
+    return number
+
+
+def _finite_int(value: Any, default: int = 0, *, lo: int | None = None, hi: int | None = None) -> int:
+    number = int(_finite_float(value, float(default), lo=lo, hi=hi))
+    return number
 
 
 class TimelineVcrPanel:
@@ -118,10 +138,7 @@ class TimelineVcrPanel:
         return self._last_status
 
     def play(self) -> Dict[str, Any]:
-        try:
-            speed = float(self._speed_var.get() or 1.0)
-        except Exception:
-            speed = 1.0
+        speed = _finite_float(self._speed_var.get(), 1.0, lo=0.1, hi=8.0)
         return self._apply_result(act_timeline_play(self.owner, speed=speed), 'PLAYING')
 
     def pause(self) -> Dict[str, Any]:
@@ -137,10 +154,7 @@ class TimelineVcrPanel:
         return self._apply_result(act_timeline_seek(self.owner, cursor_ms=0), 'SEEK 0ms')
 
     def set_speed(self) -> Dict[str, Any]:
-        try:
-            speed = float(self._speed_var.get() or 1.0)
-        except Exception:
-            speed = 1.0
+        speed = _finite_float(self._speed_var.get(), 1.0, lo=0.1, hi=8.0)
         return self._apply_result(act_timeline_set_speed(self.owner, speed=speed), f'SPEED {speed:g}x')
 
     def apply_filter(self) -> Dict[str, Any]:
@@ -241,8 +255,9 @@ class TimelineVcrPanel:
 
     def _render_status(self, status: Mapping[str, Any]) -> None:
         events = list(status.get('events') or [])
+        speed = _finite_float(status.get('speed'), 1.0, lo=0.1, hi=8.0)
         self._summary_var.set(
-            f"{len(events)} EVENTS · cursor {fmt_dur(status.get('cursor_ms'))} · {float(status.get('speed') or 1.0):g}x"
+            f"{len(events)} EVENTS · cursor {fmt_dur(_finite_int(status.get('cursor_ms'), 0, lo=0))} · {speed:g}x"
         )
         errors = list(status.get('errors') or [])
         self._status_var.set(
@@ -271,8 +286,8 @@ class TimelineVcrPanel:
     def _render_metrics(self, status: Mapping[str, Any], events: list[Any]) -> None:
         if self._events is None:
             return
-        cursor_ms = int(status.get('cursor_ms') or 0)
-        speed = float(status.get('speed') or 1.0)
+        cursor_ms = _finite_int(status.get('cursor_ms'), 0, lo=0)
+        speed = _finite_float(status.get('speed'), 1.0, lo=0.1, hi=8.0)
         topics = sorted({str(event.get('topic') or '-') for event in events if isinstance(event, Mapping)})
         grid = tk.Frame(self._events, bg=_SAO_PANEL_BODY_BG)
         grid.pack(fill='x', padx=4, pady=(0, 8))
@@ -299,14 +314,14 @@ class TimelineVcrPanel:
         box.pack(fill='x', pady=(0, 8), padx=4)
         body = tk.Frame(box, bg=_SAO_PANEL_BODY_BG)
         body.pack(fill='x', padx=8, pady=8)
-        max_value = max(1.0, *[float(item.get('damage') or item.get('total_value') or 0.0) for item in clusters])
+        max_value = max(1.0, *[_finite_float(item.get('damage') or item.get('total_value'), 0.0, lo=0.0) for item in clusters])
         for idx, group in enumerate(clusters[:8]):
             topics = ', '.join(str(item.get('key') or '-') for item in list(group.get('topics_top') or [])[:3] if isinstance(item, Mapping))
-            value = float(group.get('damage') or group.get('total_value') or 0.0)
+            value = _finite_float(group.get('damage') or group.get('total_value'), 0.0, lo=0.0)
             aggregate_row(
                 body,
                 title=str(group.get('name') or group.get('key') or '-'),
-                meta=f"{int(group.get('count') or 0)} events · {topics or 'mixed'}",
+                meta=f"{_finite_int(group.get('count'), 0, lo=0)} events · {topics or 'mixed'}",
                 value=self._fmt(value),
                 ratio=value / max_value if max_value else 0.0,
                 accent='cyan',
@@ -411,6 +426,8 @@ class TimelineVcrPanel:
             number = float(value or 0.0)
         except Exception:
             return str(value or '')
+        if not math.isfinite(number):
+            number = 0.0
         if abs(number) >= 1_000_000:
             return f"{number / 1_000_000:.2f}m"
         if abs(number) >= 1_000:

@@ -2,6 +2,16 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.72: ACT Timeline Tk 数值边界修复.
+
+  1) `gui_modules/sao_gui_timeline_vcr.py` 修复 VCR speed 控制参数。
+     播放与设置速度现在复用有限数夹取到 0.1..8,
+     避免 `nan`/`inf` 从 Tk 输入直传到底层 timeline runtime。
+
+  2) `gui_modules/sao_gui_timeline_vcr.py` 修复 Timeline 数值渲染。
+     cursor、speed、聚合桶值/count 与事件 value 现在过滤非有限数,
+     避免异常 ACT payload 造成 Tk 面板渲染中断或显示 `inf` 文本。
+
 ## v4.5.71: ACT Tk 报表历史参数归一化修复.
 
   1) `gui_modules/sao_gui_report_export.py` 修复 Report Export 预览与历史操作数值防护。

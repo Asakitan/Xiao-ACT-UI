@@ -119,6 +119,26 @@ class TimelineVcrPanelSignatureTests(unittest.TestCase):
         self.assertEqual(panel._last_request_key, ("heal",))
         status_fn.assert_called_once_with(panel.owner, limit=80, query="heal")
 
+    def test_play_and_set_speed_normalize_non_finite_input(self) -> None:
+        panel = self._panel()
+        panel.owner = object()
+        panel._apply_result = lambda result, _message: dict(result)  # type: ignore[method-assign]
+
+        panel._speed_var = FakeVar("nan")
+        with mock.patch("gui_modules.sao_gui_timeline_vcr.act_timeline_play", return_value={"ok": True}) as play_fn:
+            panel.play()
+        play_fn.assert_called_once_with(panel.owner, speed=1.0)
+
+        panel._speed_var.set("inf")
+        with mock.patch("gui_modules.sao_gui_timeline_vcr.act_timeline_set_speed", return_value={"ok": True}) as speed_fn:
+            panel.set_speed()
+        speed_fn.assert_called_once_with(panel.owner, speed=1.0)
+
+    def test_fmt_normalizes_non_finite_values(self) -> None:
+        self.assertEqual(TimelineVcrPanel._fmt(float("nan")), "0")
+        self.assertEqual(TimelineVcrPanel._fmt(float("inf")), "0")
+        self.assertEqual(TimelineVcrPanel._fmt(float("-inf")), "0")
+
 
 if __name__ == "__main__":
     unittest.main()
