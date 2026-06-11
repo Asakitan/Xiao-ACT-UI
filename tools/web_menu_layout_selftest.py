@@ -83,6 +83,16 @@ def main() -> int:
         raise AssertionError("BossRaid select must use _jsAttrArg(p.id)")
     if "_brDownloadRemote(' + _jsAttrArg(remoteId) + ')" not in html:
         raise AssertionError("BossRaid cloud download must use _jsAttrArg(remoteId)")
+    if html.count("function _escAttr") != 1:
+        raise AssertionError("menu.html must define exactly one robust _escAttr helper")
+    if "'<span class=\"lb-rank\">' + (e.rank <= 3" in html:
+        raise AssertionError("leaderboard rank labels must be escaped before innerHTML")
+    if "'<span class=\"lb-lv\">Lv.' + e.level" in html:
+        raise AssertionError("leaderboard level labels must be escaped before innerHTML")
+    if "'<span class=\"lb-stat\">' + _lbStatValue(e)" in html:
+        raise AssertionError("leaderboard stat labels must be escaped before innerHTML")
+    if "function _lbRankLabel" not in html:
+        raise AssertionError("menu.html must provide a safe leaderboard rank label helper")
 
     print(
         f"OK web menu layout: {item_count} items, "

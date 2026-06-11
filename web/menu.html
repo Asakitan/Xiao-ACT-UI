@@ -6390,6 +6390,18 @@ function _lbStatValue(e) {
     return '—';
 }
 
+function _lbRankLabel(e) {
+    var rank = Number(e && e.rank);
+    if (Number.isFinite(rank) && rank >= 1 && rank <= 3) {
+        return ['TOP1', 'TOP2', 'TOP3'][rank - 1];
+    }
+    return '#' + String((e && e.rank) || '--');
+}
+
+function _lbLevelLabel(e) {
+    return 'Lv.' + String((e && e.level) || '--');
+}
+
 function _lbApplyFilter(resetPage) {
     var q = (document.getElementById('lb-search').value || '').trim().toLowerCase();
     _lbFocusRank = null;
@@ -6444,10 +6456,10 @@ function _lbRender() {
         if (e.username && e.username !== (e.player_id || e.device_name)) metaBits.push('@' + _escHtml(e.username));
         if (e.profession) metaBits.push(_escHtml(e.profession));
         row.innerHTML =
-            '<span class="lb-rank">' + (e.rank <= 3 ? ['TOP1','TOP2','TOP3'][e.rank-1] : '#'+e.rank) + '</span>' +
+            '<span class="lb-rank">' + _escHtml(_lbRankLabel(e)) + '</span>' +
             '<span class="lb-name">' + primaryName + (metaBits.length ? '<span class="lb-sub">' + metaBits.join(' · ') + '</span>' : '') + '</span>' +
-            '<span class="lb-lv">Lv.' + e.level + '</span>' +
-            '<span class="lb-stat">' + _lbStatValue(e) + '</span>';
+            '<span class="lb-lv">' + _escHtml(_lbLevelLabel(e)) + '</span>' +
+            '<span class="lb-stat">' + _escHtml(_lbStatValue(e)) + '</span>';
         list.appendChild(row);
     });
     document.getElementById('lb-page').textContent = (_lbPageIndex + 1) + ' / ' + totalPages;
@@ -7314,8 +7326,6 @@ function _renderLinkageMappings() {
     }
     container.innerHTML = html;
 }
-
-function _escAttr(s) { return (s || '').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
 
 function _updateMapping(el) {
     var idx = parseInt(el.getAttribute('data-idx'));

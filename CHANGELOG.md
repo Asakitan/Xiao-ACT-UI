@@ -2,6 +2,15 @@
 
 逐版本变更记录, 最新在前。本文件由 config.py 内联的历史注释迁出。
 
+## v4.5.28: Web 菜单属性转义与排行榜渲染修复.
+
+  1) `web/menu.html` 移除重复的弱版 `_escAttr()` 定义。
+     AutoKey/BossRaid profile 点击参数和 Boss↔AutoKey 联动输入框现在共用同一个完整属性转义 helper,
+     避免后定义覆盖导致 `&quot;` 等实体文本再次破坏 inline handler 参数。
+
+  2) `web/menu.html` 修复排行榜行的 rank、level 和统计值渲染。
+     这些字段现在先生成安全 label 再 HTML escape, 避免异常排行榜数据把行内容截断或注入到 `innerHTML`。
+
 ## v4.5.27: Web 菜单 Profile 点击参数转义修复.
 
   1) `web/menu.html` 修复 AutoKey 本地配置卡与云端下载按钮的 inline `onclick` 参数拼接。
